@@ -8767,8 +8767,9 @@ class SubnetworkLayer(LayerBase):
     return extra_outputs
 
   @classmethod
-  def get_rec_initial_extra_outputs_shape_invariants(cls, encapsulate=False, **kwargs):
+  def get_rec_initial_extra_outputs_shape_invariants(cls, rec_layer, encapsulate=False, **kwargs):
     """
+    :param returnn.tf.layers.rec.RecLayer rec_layer:
     :param bool encapsulate:
     :return: optional shapes for the tensors by get_rec_initial_extra_outputs
     :rtype: dict[str,tf.TensorShape]
@@ -8788,7 +8789,7 @@ class SubnetworkLayer(LayerBase):
       layer_desc = sub_layer.kwargs
       assert issubclass(cl, LayerBase)
       with cl.cls_setup_scope(**layer_desc):
-        d = cl.get_rec_initial_extra_outputs_shape_invariants(**layer_desc)
+        d = cl.get_rec_initial_extra_outputs_shape_invariants(rec_layer=rec_layer, **layer_desc)
         for key, value in d.items():
           shape_invariants["%s/%s" % (layer_name, key)] = value
     return shape_invariants
