@@ -7131,6 +7131,57 @@ def test_MaskedComputationLayer_sub_layers():
           numpy.testing.assert_almost_equal(out_v[b, t], y)
 
 
+def test_MaskedComputationLayer_sub_layers_RecLayer_construct():
+  from test_TFNetworkLayer import make_feed_dict
+  from returnn.tf.layers.rec import _SubnetworkRecCell
+  with make_scope() as session:
+    config = Config({"debug_print_layer_output_template": True})
+    net = TFNetwork(
+      extern_data=ExternData({"data": {"dim": 20, "sparse": True}}),
+      config=config)
+    net_dict = {
+      "output": {
+        "class": "rec",
+        "from": "data",
+        "unit": {
+          "const1": {"class": "constant", "value": 1, "with_batch_dim": True},  # just to broadcast mask
+          "mask": {
+            "class": "eval", "from": [":i", "const1"], "out_type": {"dtype": "bool"},
+            "eval": "tf.equal(source(0) % 2, source(1))"},
+          "in": {"class": "copy", "from": "data:source"},
+          "masked": {
+            "class": "masked_computation", "mask": "mask",
+            "unit": {
+              "class": "subnetwork", "subnetwork": {
+                "sub1": {"class": "linear", "from": "base:prev:output", "n_out": 3},
+                "sub2": {"class": "linear", "from": "base:in", "n_out": 3},
+                "output": {"class": "copy", "from": ["sub1", "sub2"]}  # unused
+              }}},
+          "output": {
+            "class": "eval", "from": ["masked/sub1", "masked/sub2"],
+            "eval": "source(0) * 2 + source(1) * 3"},
+        }
+      }
+    }
+    net.construct_from_dict(net_dict)
+    net.initialize_params(session)
+    rec_layer = net.get_layer("output")
+    assert isinstance(rec_layer, RecLayer)
+    rec_cell = rec_layer.cell
+    assert isinstance(rec_cell, _SubnetworkRecCell)
+    assert set(rec_cell.layers_in_loop).issuperset({"masked", "masked/sub1", "masked/sub2", "output"})
+    in_data = net.get_layer("data").output
+    out_data = net.get_layer("output").output.copy_as_batch_major()
+    print("out:", out_data)
+    assert in_data.get_time_dim_tag() == out_data.get_time_dim_tag()
+    in_v, out_v, out_seq_lens_v = session.run(
+      (in_data.placeholder, out_data.placeholder, out_data.get_sequence_lengths()),
+      feed_dict=make_feed_dict(net.extern_data))
+    print(in_v)
+    print(out_v)
+    print("seq lens:", out_seq_lens_v)
+
+
 def test_att_train_search_loss_prev_beam():
   beam_size = 1
   num_ner_labels = 13
