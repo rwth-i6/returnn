@@ -1810,8 +1810,9 @@ class LayerBase(object):
     return {}
 
   @classmethod
-  def get_rec_initial_extra_outputs_shape_invariants(cls, **kwargs):
+  def get_rec_initial_extra_outputs_shape_invariants(cls, rec_layer, **kwargs):
     """
+    :param returnn.tf.layers.rec.RecLayer|LayerBase|None rec_layer: for the scope
     :return: optional shapes for the tensors by get_rec_initial_extra_outputs
     :rtype: dict[str,tf.TensorShape]
     """

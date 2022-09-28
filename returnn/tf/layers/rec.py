@@ -13,7 +13,7 @@ try:
 except ImportError:
   from tensorflow.python.ops import rnn_cell
 from returnn.tf.network import LayerNotFound, TFNetwork
-from .basic import LayerBase, _ConcatInputLayer, SearchChoices, get_concat_sources_data_template, Loss
+from .basic import LayerBase, InternalLayer, _ConcatInputLayer, SearchChoices, get_concat_sources_data_template, Loss
 from returnn.tf.util.data import Data, Dim, SpatialDim, FeatureDim, SearchBeam
 from returnn.tf.util.basic import reuse_name_scope
 from returnn.tf.util import basic as tf_util
@@ -2046,7 +2046,8 @@ class _SubnetworkRecCell(object):
       # See also _get_init_extra_outputs.
       template_layer = self.layer_data_templates[name]
       cl = template_layer.layer_class_type
-      d = cl.get_rec_initial_extra_outputs_shape_invariants(**self.layer_data_templates[name].kwargs)
+      d = cl.get_rec_initial_extra_outputs_shape_invariants(
+        rec_layer=self.parent_rec_layer, **self.layer_data_templates[name].kwargs)
       for k, shape in d.items():
         assert k in shapes
         # Not merge but replace because we intentionally want to allow relaxation.
@@ -7055,14 +7056,17 @@ class SelfAttentionLayer(_ConcatInputLayer):
       return res
     return {}
 
+  # noinspection PyMethodOverriding
   @classmethod
-  def get_rec_initial_extra_outputs_shape_invariants(cls, num_heads, total_key_dim, n_out, sources, network, **kwargs):
+  def get_rec_initial_extra_outputs_shape_invariants(cls, rec_layer, sources, network,
+                                                     num_heads, total_key_dim, n_out, **kwargs):
     """
+    :param returnn.tf.layers.rec.RecLayer|LayerBase|None rec_layer: for the scope
+    :param list[LayerBase] sources:
+    :param returnn.tf.network.TFNetwork network:
     :param int num_heads:
     :param int total_key_dim:
     :param int n_out:
-    :param list[LayerBase] sources:
-    :param returnn.tf.network.TFNetwork network:
     :rtype: dict[str, tf.TensorShape]
     """
     data = get_concat_sources_data_template(sources)
@@ -8179,6 +8183,9 @@ class MaskedComputationLayer(LayerBase):
       output = output.copy_move_axis(old_axis=axis, new_axis=0)  # time-major
     return output
 
+  class _EncapsulatedSubLayer(InternalLayer):
+    pass
+
   @classmethod
   def get_sub_layer_out_data_from_opts(cls, layer_name, parent_layer_kwargs):
     """
@@ -8205,8 +8212,8 @@ class MaskedComputationLayer(LayerBase):
       queried_sub_layers[layer_name] = res
     sub_out, sub_cls, sub_opts = queried_sub_layers[layer_name]
     # This is all encapsulated. The outside should not check get_rec_initial_extra_outputs or anything on the layer.
-    from returnn.tf.layers.base import WrappedInternalLayer
-    return sub_out, WrappedInternalLayer, {}
+    # We need initial_output for our own get_rec_initial_extra_outputs.
+    return sub_out, cls._EncapsulatedSubLayer, {"initial_output": sub_opts.get("initial_output")}
 
   def get_sub_layer(self, layer_name):
     """
@@ -8332,24 +8339,22 @@ class MaskedComputationLayer(LayerBase):
         batch_dim=batch_dim, rec_layer=rec_layer, output=output, **layer_desc)
       assert "_output" not in d
       d["_output"] = initial_out
-      for layer_name, (sub_out, sub_cls, sub_opts) in kwargs.get("_queried_sub_layers", {}).items():
-        assert isinstance(layer_name, str)
-        assert isinstance(sub_out, Data)
-        assert issubclass(sub_cls, LayerBase)
-        assert isinstance(sub_opts, dict)
-        sub_opts = sub_opts.copy()
-        sub_opts["output"] = sub_out
-        sub_initial_out = sub_cls.get_rec_initial_output(
-          batch_dim=batch_dim, rec_layer=rec_layer,
-          name=name + "/" + layer_name, network=kwargs["network"],
-          **sub_opts)
+      cell = rec_layer.cell
+      assert isinstance(cell, _SubnetworkRecCell)
+      for layer_name, layer_templ in cell.layer_data_templates.items():
+        if not layer_name.startswith(name + "/"):
+          continue
+        layer_name = layer_name[len(name) + 1:]
+        sub_initial_out = layer_templ.layer_class_type.get_rec_initial_output(
+          batch_dim=batch_dim, rec_layer=rec_layer, **layer_templ.kwargs)
         assert "_output/" + layer_name not in d
         d["_output/" + layer_name] = sub_initial_out
       return d
 
   @classmethod
-  def get_rec_initial_extra_outputs_shape_invariants(cls, **kwargs):
+  def get_rec_initial_extra_outputs_shape_invariants(cls, rec_layer, **kwargs):
     """
+    :param returnn.tf.layers.rec.RecLayer rec_layer:
     :return: optional shapes for the tensors by get_rec_initial_extra_outputs
     :rtype: dict[str,tf.TensorShape]
     """
@@ -8362,14 +8367,17 @@ class MaskedComputationLayer(LayerBase):
     assert isinstance(output, Data)
     assert issubclass(layer_class, LayerBase)
     with layer_class.cls_setup_scope(**kwargs):
-      d = layer_class.get_rec_initial_extra_outputs_shape_invariants(**layer_desc)
+      d = layer_class.get_rec_initial_extra_outputs_shape_invariants(rec_layer=rec_layer, **layer_desc)
       assert "_output" not in d
       d["_output"] = tf.TensorShape(output.copy_as_batch_major().batch_shape)
-      for layer_name, (sub_out, _, _) in kwargs.get("_queried_sub_layers", {}).items():
-        assert isinstance(layer_name, str)
-        assert isinstance(sub_out, Data)
+      cell = rec_layer.cell
+      assert isinstance(cell, _SubnetworkRecCell)
+      for layer_name, layer_templ in cell.layer_data_templates.items():
+        if not layer_name.startswith(name + "/"):
+          continue
+        layer_name = layer_name[len(name) + 1:]
         assert "_output/" + layer_name not in d
-        d["_output/" + layer_name] = tf.TensorShape(sub_out.copy_as_batch_major().batch_shape)
+        d["_output/" + layer_name] = tf.TensorShape(layer_templ.output.copy_as_batch_major().batch_shape)
       return d
 
 
@@ -9449,9 +9457,13 @@ class TwoDLSTMLayer(LayerBase):
     else:
       return {}
 
+  # noinspection PyMethodOverriding
   @classmethod
-  def get_rec_initial_extra_outputs_shape_invariants(cls, n_out, sources, **kwargs):
+  def get_rec_initial_extra_outputs_shape_invariants(cls, rec_layer, n_out, sources, **kwargs):
     """
+    :param returnn.tf.layers.rec.RecLayer|LayerBase|None rec_layer: for the scope
+    :param int n_out:
+    :param list[LayerBase] sources:
     :return: optional shapes for the tensors by get_rec_initial_extra_outputs
     :rtype: dict[str,tf.TensorShape]
     """
@@ -9906,9 +9918,11 @@ class CumConcatLayer(_ConcatInputLayer):
     else:
       return {}
 
+  # noinspection PyMethodOverriding
   @classmethod
-  def get_rec_initial_extra_outputs_shape_invariants(cls, network, sources, output, **kwargs):
+  def get_rec_initial_extra_outputs_shape_invariants(cls, rec_layer, network, sources, output, **kwargs):
     """
+    :param returnn.tf.layers.rec.RecLayer|LayerBase|None rec_layer: for the scope
     :param returnn.tf.network.TFNetwork network:
     :param list[LayerBase] sources:
     :param Data output:
