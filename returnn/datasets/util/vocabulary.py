@@ -89,9 +89,9 @@ class Vocabulary(object):
       parts.append("unknown_label=%r" % self.unknown_label)
     if self.bos_label_id is not None:
       parts.append("bos_label=%r" % self.id_to_label(self.bos_label_id))
-    if self.bos_label_id is not None:
+    if self.eos_label_id is not None:
       parts.append("eos_label=%r" % self.id_to_label(self.eos_label_id))
-    if self.bos_label_id is not None:
+    if self.pad_label_id is not None:
       parts.append("pad_label=%r" % self.id_to_label(self.pad_label_id))
     return "%s(%s)" % (self.__class__.__name__, ", ".join(parts))
 
