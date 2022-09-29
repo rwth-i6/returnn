@@ -966,12 +966,13 @@ class ExternSprintDataset(SprintDatasetBase):
           with self.lock:
             self.finish_sprint_epoch(seen_all=False)
         try:
-          print("%s reader failed (%s)" % (self, exc), file=log.v1)
+          print("%s reader failed (%s %s)" % (self, type(exc), exc), file=log.v1)
           sys.excepthook(*sys.exc_info())
           print("")
         finally:
           # Exceptions are fatal. If we can recover, we should handle it in run_inner().
           interrupt_main()
+        raise
 
   def init_seq_order(self, epoch=None, seq_list=None, seq_order=None):
     """
