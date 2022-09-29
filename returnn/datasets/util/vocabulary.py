@@ -154,7 +154,7 @@ class Vocabulary(object):
     return d
 
   @classmethod
-  def create_vocab_from_labels(cls, labels):
+  def create_vocab_from_labels(cls, labels, **kwargs):
     """
     Creates a `Vocabulary` from the given labels. Depending on whether the labels are identified as
     bytes, characters or words a `Utf8ByteTargets`, `CharacterTargets` or `Vocabulary` vocab is created.
@@ -162,12 +162,14 @@ class Vocabulary(object):
     :param list[str] labels:
     :rtype: Vocabulary
     """
+    kwargs = kwargs.copy()
+    kwargs.setdefault("unknown_label", None)
     if len(labels) < 1000 and all([len(label) == 1 for label in labels]):
       # are these actually ordered raw bytes? -> assume utf8
       if all([ord(label) <= 255 and ord(label) == idx for idx, label in enumerate(labels)]):
         return Utf8ByteTargets()
-      return CharacterTargets(vocab_file=None, labels=labels, unknown_label=None)
-    return Vocabulary(vocab_file=None, labels=labels, unknown_label=None)
+      return CharacterTargets(vocab_file=None, labels=labels, **kwargs)
+    return Vocabulary(vocab_file=None, labels=labels, **kwargs)
 
   def tf_get_init_variable_func(self, var):
     """
