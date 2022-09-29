@@ -2148,8 +2148,7 @@ class TFNetwork(object):
         net = net.extra_parent_net
         continue
       # Reuse mostly because some of the test cases currently work that way.
-      with tf_compat.v1.variable_scope(
-            tf_compat.v1.get_variable_scope(), reuse=getattr(tf_compat.v1, "AUTO_REUSE", None)):
+      with tf_util.reuse_name_scope("", absolute=True, reuse=getattr(tf_compat.v1, "AUTO_REUSE", None)):
         net._global_train_step = tf_compat.v1.get_variable(
           name="global_step", shape=(), dtype=tf.int64, initializer=tf_compat.v1.zeros_initializer(tf.int64),
           collections=[tf_compat.v1.GraphKeys.GLOBAL_STEP], trainable=False)
