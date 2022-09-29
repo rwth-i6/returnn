@@ -3,12 +3,14 @@ Main engine for PyTorch
 """
 
 import torch
+import os
 from torch.utils.data import DataLoader
 from random import random
 
 from returnn.log import log
 from returnn.engine.base import EngineBase
 from returnn.datasets.basic import init_dataset
+from returnn.util import basic as util
 from . import data_pipeline
 
 
@@ -23,9 +25,12 @@ class Engine(EngineBase):
     """
     super(Engine, self).__init__()
     self.config = config
+    self.model_filename = self.config.value('model', None)
     self.train_dataset = None
     self.eval_datasets = {}
     self.learning_rate = config.float("learning_rate", 1.)  # TODO LR control...
+
+    self._model_state = None
 
   def init_train_from_config(self, config=None, train_data=None, dev_data=None, eval_data=None):
     """
@@ -51,6 +56,11 @@ class Engine(EngineBase):
     """
     start_epoch, _ = self.get_train_start_epoch_batch(self.config)
     final_epoch = self.config_get_final_epoch(self.config)
+
+    if start_epoch == 1:
+      self._model_state = None
+    else:
+      self._model_state = self._load_model_state_from_file(epoch=start_epoch - 1)
 
     print("Starting training at epoch {}.".format(start_epoch), file=log.v3)
 
@@ -90,6 +100,8 @@ class Engine(EngineBase):
     sentinel_kw = {"__fwd_compatible_random_arg_%i" % int(random() * 100): None}
     model = get_model_func(epoch=self.epoch, **sentinel_kw)
     assert isinstance(model, torch.nn.Module)
+    if self._model_state:
+      model.load_state_dict(self._model_state)
     model.to(device)
     model.train()
     train_step_func = self.config.typed_value("train_step")
@@ -114,6 +126,31 @@ class Engine(EngineBase):
       step_idx += 1
 
     print("Trained %i steps" % step_idx)
+
+    self._model_state = model.state_dict()
+    self._save_model_state_to_file(self._model_state)
+
+  def _load_model_state_from_file(self, epoch=None):
+    """
+    :param int epoch:
+    :return: state saved via previous self._save_model_state_to_file() call for given epoch
+    :rtype: collections.OrderedDict
+    """
+    filename = self.get_epoch_model_filename(epoch=epoch) + util.get_model_filename_postfix()
+    print("Load model %s" % (filename,), file=log.v4)
+    return torch.load(filename)
+
+  def _save_model_state_to_file(self, model_state_dict):
+    """
+    :param collections.OrderedDict model_state_dict: via torch.nn.Module.state_dict()
+    """
+    filename = self.get_epoch_model_filename() + util.get_model_filename_postfix()
+    directory = os.path.dirname(filename)
+    if not os.path.exists(directory):
+      os.makedirs(directory, exist_ok=True)
+
+    print("Save model under %s" % (filename,), file=log.v4)
+    torch.save(model_state_dict, filename)
 
 
 class TrainCtx:

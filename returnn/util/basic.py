@@ -314,6 +314,8 @@ def get_model_filename_postfix():
   if BackendEngine.is_tensorflow_selected():
     # There will be multiple files but a *.meta file will always be present.
     return ".meta"
+  if BackendEngine.is_torch_selected():
+    return ".pt"
   return ""
 
 
@@ -329,6 +331,8 @@ def get_checkpoint_filepattern(filepath):
     return filepath[:-len(".meta")]
   elif filepath.endswith(".index"):
     return filepath[:-len(".index")]
+  elif filepath.endswith(".pt"):
+    return filepath[:-len(".pt")]
   return filepath
 
 

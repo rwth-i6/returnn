@@ -56,6 +56,10 @@ class EngineBase(object):
           if os.path.exists(fn + ".index"):
             file_list[epoch] = fn
             break
+        elif util.BackendEngine.is_torch_selected():
+          if os.path.exists(fn + ".pt"):
+            file_list[epoch] = fn
+            break
     return file_list
 
   @classmethod
