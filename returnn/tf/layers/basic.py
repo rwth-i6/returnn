@@ -7190,7 +7190,12 @@ class DotLayer(LayerBase):
     elif red2 == b_out.sparse_dim:
       assert len(a_reduce_axes) == 1 and len(b_reduce_axes) == 0
     else:
-      assert a_reduce_axes and b_reduce_axes, "%s: sources %r, red1 %r, red2 %r" % (name, sources, red1, red2)
+      if not a_reduce_axes or not b_reduce_axes:
+        if red1 == red2:
+          red_axis_desc = "reduce axis %r" % red1
+        else:
+          red_axis_desc = "reduce axis red1 %r, red2 %r" % (red1, red2)
+        raise Exception("%s %r: " % (cls.__name__, name) + "%s not found in sources %r" % (red_axis_desc, sources))
       assert len(a_reduce_axes) == len(b_reduce_axes), (
         "%s: sources %r, red1 %r, red2 %r, reduce axes must match in count" % (name, sources, red1, red2))
     if BehaviorVersion.get() >= 3 and (var1 is NotSpecified or var2 is NotSpecified):
