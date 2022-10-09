@@ -32,6 +32,21 @@ class StandardBytePairEncoder:
     :param list[str]|None labels: vocab
     """
     self.labels = labels
+    self._load(bpe_codes_file)
+    self._bpe_encode_cache = {}
+    self._bpe_separator = BpeMergeSymbol
+
+  _file_cache = {}  # filename -> bpe_file_version, bpe_codes, bpe_codes_reverse
+
+  def _load(self, bpe_codes_file):
+    """
+    Load BPE codes from file
+
+    :param str bpe_codes_file: codes file
+    """
+    if bpe_codes_file in self._file_cache:
+      self._bpe_file_version, self._bpe_codes, self._bpe_codes_reverse = self._file_cache[bpe_codes_file]
+      return
     # check version information
     bpe_file_first_line = open(bpe_codes_file, "r").readline()
     if bpe_file_first_line.startswith('#version:'):
@@ -43,8 +58,7 @@ class StandardBytePairEncoder:
     # some hacking to deal with duplicates (only consider first instance)
     self._bpe_codes = dict([(code, i) for (i, code) in reversed(list(enumerate(self._bpe_codes)))])
     self._bpe_codes_reverse = dict([(pair[0] + pair[1], pair) for pair, i in self._bpe_codes.items()])
-    self._bpe_encode_cache = {}
-    self._bpe_separator = BpeMergeSymbol
+    self._file_cache[bpe_codes_file] = (self._bpe_file_version, self._bpe_codes, self._bpe_codes_reverse)
 
   @staticmethod
   def _get_pairs(word):
