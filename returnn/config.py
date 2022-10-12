@@ -583,7 +583,7 @@ def _get_or_set_config_via_tf_default_graph(config=None):
 
 def network_json_from_config(config, mask=None):
   """
-  :type config: Config
+  :param Config config:
   :param str mask: "unity", "none" or "dropout"
   :rtype: dict[str]
   """
@@ -615,14 +615,17 @@ def network_json_from_config(config, mask=None):
     assert isinstance(json_content, dict)
     if 'network' in json_content:
       json_content = json_content['network']
-    assert json_content
-  if not json_content:
+    if not json_content:
+      raise Exception("network json is empty: %s" % config.network_topology_json)
+  if not json_content and config.has("hidden_size") and config.has("num_inputs"):  # very old way to define network
     if not mask:
       if sum(config.float_list('dropout', [0])) > 0.0:
         mask = "dropout"
     from returnn.network_description import LayerNetworkDescription
     description = LayerNetworkDescription.from_config(config)
     json_content = description.to_json_content(mask=mask)
+  if not json_content:
+    raise Exception("Network is not defined in config. Define `network`.")
   return json_content
 
 
