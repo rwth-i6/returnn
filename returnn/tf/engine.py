@@ -2327,7 +2327,11 @@ class Engine(EngineBase):
         assert output_file_format == "py", "Text format not supported in the case of multiple output layers."
       assert not os.path.exists(output_file)
       print("Will write outputs to: %s" % output_file, file=log.v2)
-      output_file = open(output_file, "w")
+      if output_file.endswith(".gz"):
+        import gzip
+        output_file = gzip.open(output_file, "wt")
+      else:
+        output_file = open(output_file, "w")
       # corpus-seq-idx -> str|list[(float,str)]|dict[str -> str|list[(float,str)]],
       # depending on output_is_dict and whether output is after decision
       out_cache = {}
