@@ -5871,14 +5871,16 @@ def test_SliceNdLayer_dyn_size():
 
 def test_SliceNdLayer_multidimensional_start():
   with make_scope() as session:
-    n_out = 5
+    from returnn.tf.util.data import batch_dim, SpatialDim, FeatureDim
+    out_dim = FeatureDim("feat", 3)
+    time_dim = SpatialDim("time")
     n_batch = 3
     max_seq_len = 10
     config = Config({
       "debug_print_layer_output_template": True,
       "extern_data": {
-        "data": {"dim": n_out},
-        "classes": {"dim": n_out, "sparse": True}
+        "data": {"dim_tags": [batch_dim, time_dim, out_dim]},
+        "classes": {"dim_tags": [batch_dim, time_dim], "sparse_dim": out_dim}
       }})
     net = TFNetwork(config=config, train_flag=True)
     net.construct_from_dict({
@@ -5902,7 +5904,7 @@ def test_SliceNdLayer_multidimensional_start():
     input_data = feed[net.extern_data.data["data"].placeholder]
     max_size = numpy.amax(seq_lens[:, None] - starts)
     max_size = max(max_size, 0)
-    assert segments.shape == (n_batch, max_seq_len, max_size, n_out)
+    assert segments.shape == (n_batch, max_seq_len, max_size, out_dim.dimension)
     for b in range(n_batch):
       for t in range(max_seq_len):
         s = starts[b, t]
@@ -5911,7 +5913,7 @@ def test_SliceNdLayer_multidimensional_start():
           orig_seq = numpy.pad(orig_seq, [(0, max_size - len(orig_seq)), (0, 0)], "constant")
         elif len(orig_seq) > max_size:
           orig_seq = orig_seq[:max_size]
-        assert orig_seq.shape == (max_size, n_out)
+        assert orig_seq.shape == (max_size, out_dim.dimension)
         orig_seq = numpy.where((numpy.arange(s, s + max_size) >= seq_lens[b])[:, None], 0.0, orig_seq)
         for t2 in range(max_size):
           numpy.testing.assert_equal(orig_seq[t2], segments[b, t, t2])
@@ -5919,14 +5921,16 @@ def test_SliceNdLayer_multidimensional_start():
 
 def test_SliceNdLayer_multidimensional_size():
   with make_scope() as session:
-    n_out = 5
+    from returnn.tf.util.data import batch_dim, SpatialDim, FeatureDim
+    out_dim = FeatureDim("feat", 3)
+    time_dim = SpatialDim("time")
     n_batch = 3
     max_seq_len = 10
     config = Config({
       "debug_print_layer_output_template": True,
       "extern_data": {
-        "data": {"dim": n_out},
-        "classes": {"dim": n_out, "sparse": True}
+        "data": {"dim_tags": [batch_dim, time_dim, out_dim]},
+        "classes": {"dim_tags": [batch_dim, time_dim], "sparse_dim": out_dim}
       }})
     net = TFNetwork(config=config, train_flag=True)
     net.construct_from_dict({
@@ -5954,7 +5958,7 @@ def test_SliceNdLayer_multidimensional_size():
     input_data = feed[net.extern_data.data["data"].placeholder]
     max_size = numpy.amax(sizes)
     max_size = max(max_size, 0)
-    assert segments.shape == (n_batch, max_seq_len, max_size, n_out)
+    assert segments.shape == (n_batch, max_seq_len, max_size, out_dim.dimension)
     for b in range(n_batch):
       for t in range(max_seq_len):
         s = starts[b, t]
@@ -5965,7 +5969,7 @@ def test_SliceNdLayer_multidimensional_size():
           orig_seq = numpy.pad(orig_seq, [(0, max_size - len(orig_seq)), (0, 0)], "constant")
         elif len(orig_seq) > max_size:
           orig_seq = orig_seq[:max_size]
-        assert orig_seq.shape == (max_size, n_out)
+        assert orig_seq.shape == (max_size, out_dim.dimension)
         orig_seq = numpy.where((numpy.arange(s, s + max_size) >= seq_lens[b])[:, None], 0.0, orig_seq)
         for t2 in range(max_size):
           numpy.testing.assert_equal(orig_seq[t2], segments[b, t, t2])

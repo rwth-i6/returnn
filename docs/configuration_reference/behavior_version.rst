@@ -22,6 +22,24 @@ and not listing legacy/deprecated parameters.
 Version History
 ---------------
 
+Behavior version 13 (2022-10-13)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+This enables some extra checks in the :class:`RecLayer` which break some old configs,
+where the old configs where actually broken,
+but those broken parts did not play a role for the training
+and thus it did not matter.
+However, we don't want to allow such broken configs anymore.
+More specifically, an optimized-out ``output`` sub-layer of a :class:`RecLayer`
+must have the same time dim as the :class:`RecLayer` itself.
+For some specific transducer configs, we have this problem
+(`example <https://github.com/rwth-i6/returnn-experiments/blob/264d13aef3321d48f685cc9750fd277fb70cc74e/2020-rnn-transducer/configs/rna-tf2.blank0.enc6l-grow2l.scratch-lm.rdrop02.lm1-1024.attwb5-drop02.l2_1e_4.mlr50.config#L778>`__).
+
+This behavior version might also require
+that the dim tags of ``extern_data`` are properly defined.
+
+See issue `#1140 <https://github.com/rwth-i6/returnn/issues/1140>`__.
+
 Behavior version 12 (2022-01-06)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 

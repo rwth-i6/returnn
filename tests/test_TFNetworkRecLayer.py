@@ -600,11 +600,17 @@ def test_rec_subnet_template_exception_handling_reraise():
 
 
 def test_rec_subnet_with_choice():
+  from returnn.tf.util.data import batch_dim, SpatialDim, FeatureDim
+  in_dim = FeatureDim("feat", 3)
+  out_dim = FeatureDim("classes", 4)
+  time_dim = SpatialDim("time")
   with tf_compat.v1.Session():
     config = Config()
     config.update({
-      "num_outputs": 3,
-      "num_inputs": 4,
+      "extern_data": {
+        "data": {"dim_tags": [batch_dim, time_dim, in_dim]},
+        "classes": {"dim_tags": [batch_dim, time_dim], "sparse_dim": out_dim}
+      },
       "network": {
         "output": {"class": "rec", "from": "data:data", "target": "classes", "unit": {
           "prob": {"class": "softmax", "from": ["prev:output"], "loss": "ce", "target": "classes"},
@@ -1220,12 +1226,16 @@ def test_rec_RecStepInfoLayer_broadcast_moved_out():
       },
     }
   }
+  from returnn.tf.util.data import batch_dim, SpatialDim, FeatureDim
+  in_dim = FeatureDim("feat", 3)
+  out_dim = FeatureDim("classes", 5)
+  time_dim = SpatialDim("time")
   config = Config({
     "debug_print_layer_output_template": True,
     "extern_data": {
-      "data": {"dim": 3},
-      "classes": {"sparse": True, "dim": 5},
-    }
+      "data": {"dim_tags": [batch_dim, time_dim, in_dim]},
+      "classes": {"dim_tags": [batch_dim, time_dim], "sparse_dim": out_dim}
+    },
   })
   from test_TFNetworkLayer import make_feed_dict
   with make_scope() as session:
@@ -6156,6 +6166,93 @@ def test_reclayer_shape_from_initial():
     out = net.get_default_output_layer().output
     from test_TFNetworkLayer import make_feed_dict
     session.run(out.placeholder, feed_dict=make_feed_dict(net.extern_data))
+
+
+def test_reclayer_time_sync_target_diff():
+  # https://github.com/rwth-i6/returnn/issues/1140
+  from returnn.util.basic import BehaviorVersion
+  from returnn.tf.util.data import batch_dim, SpatialDim, FeatureDim
+  from returnn.tf.layers.rec import _SubnetworkRecCell
+  src_dim = FeatureDim("src-feat", 5)
+  tgt_dim = FeatureDim("tgt-classes", 7)
+  tgt_with_blank_dim = tgt_dim + 1
+  src_time_dim = SpatialDim("src-time")
+  tgt_time_dim = SpatialDim("out-spatial")
+
+  config = Config({
+    "extern_data": {
+      "data": {"dim_tags": [batch_dim, src_time_dim, src_dim]},
+      "classes": {"dim_tags": [batch_dim, tgt_time_dim], "sparse_dim": tgt_dim, "available_for_inference": False},
+      "align_classes": {
+        "dim_tags": [batch_dim, src_time_dim], "sparse_dim": tgt_with_blank_dim, "available_for_inference": False},
+    },
+    "network": {
+      "encoder": {"class": "linear", "activation": "tanh", "n_out": 5, "from": "data:data"},
+
+      "output": {"class": "rec", "from": "encoder", "unit": {
+        "output_prob": {"class": "softmax", "from": "data:source", "out_dim": tgt_with_blank_dim},
+
+        # Note: This is actually not correct to have 'classes' here.
+        # In practice, in search, it would use output_prob and then have actually one more label.
+        # classes also has the wrong spatial dim, which actually causes the error.
+        # However, then this output is actually never used.
+        # We had such training configs for transducer, and we want to make sure that they still work.
+        # In that case, in search, the config switched to a different target, so that is why it worked.
+        'output': {'class': 'choice', 'target': 'classes', 'beam_size': 12, 'from': "output_prob",
+                   "initial_output": 0},
+
+        # Would also look different for recognition.
+        "classes_embed": {"class": "linear", "activation": "tanh", "n_out": 5, "from": "base:data:classes"},
+        "joint": {
+          "class": "combine", "from": ["output_prob", "classes_embed"], "kind": "mul",
+          "allow_broadcast_all_sources": True},
+
+        # Dummy loss. In transducer, this would be the full-sum after joint network.
+        # Here we just need sth to trigger the dependencies.
+        "loss": {
+          "class": "eval", "from": "joint",
+          "eval": "tf.reduce_mean(source(0,auto_convert=False))",
+          "out_type": {"shape": (), "dtype": "float32", "batch_dim_axis": None, "time_dim_axis": None},
+          "loss": "as_is"
+        },
+
+      }, "target": "classes"},
+    }})
+
+  print("Constructing train network (old behavior).")
+  with make_scope() as session:
+    net = TFNetwork(train_flag=True, config=config)
+    orig_behavior_version = BehaviorVersion._behavior_version
+    try:
+      BehaviorVersion._behavior_version = 0
+      # The net dict requires an older behavior version. This is important for the test.
+      # We want to make sure such old config still works.
+      net.construct_from_dict(config.typed_value("network"))
+    finally:
+      BehaviorVersion._behavior_version = orig_behavior_version
+    # Check whether we triggered the dim tag bug.
+    assert src_time_dim != tgt_time_dim
+    net.initialize_params(session)
+    rec_layer = net.get_layer("output")
+    assert isinstance(rec_layer, RecLayer)
+    cell = rec_layer.cell
+    assert isinstance(cell, _SubnetworkRecCell)
+    assert_equal(cell.layers_in_loop, [])
+    loss = net.get_total_loss()
+    from test_TFNetworkLayer import make_feed_dict
+    loss_v = session.run(loss, feed_dict=make_feed_dict(net.extern_data))
+    print("Loss:", loss_v)
+
+  print("Constructing train network (new behavior).")
+  with make_scope():
+    net = TFNetwork(train_flag=True, config=config)
+    try:
+      net.construct_from_dict(config.typed_value("network"))
+    except BehaviorVersion.RequirementNotSatisfied as exc:
+      assert "time-dim-tag mismatch" in str(exc)
+      print("Got expected exception:", exc)
+    else:
+      raise Exception("did not get expected exception")
 
 
 def test_convert_lstm_params_save_load():
