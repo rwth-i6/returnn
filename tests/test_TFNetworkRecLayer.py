@@ -600,11 +600,17 @@ def test_rec_subnet_template_exception_handling_reraise():
 
 
 def test_rec_subnet_with_choice():
+  from returnn.tf.util.data import batch_dim, SpatialDim, FeatureDim
+  in_dim = FeatureDim("feat", 3)
+  out_dim = FeatureDim("classes", 4)
+  time_dim = SpatialDim("time")
   with tf_compat.v1.Session():
     config = Config()
     config.update({
-      "num_outputs": 3,
-      "num_inputs": 4,
+      "extern_data": {
+        "data": {"dim_tags": [batch_dim, time_dim, in_dim]},
+        "classes": {"dim_tags": [batch_dim, time_dim], "sparse_dim": out_dim}
+      },
       "network": {
         "output": {"class": "rec", "from": "data:data", "target": "classes", "unit": {
           "prob": {"class": "softmax", "from": ["prev:output"], "loss": "ce", "target": "classes"},
@@ -1220,12 +1226,16 @@ def test_rec_RecStepInfoLayer_broadcast_moved_out():
       },
     }
   }
+  from returnn.tf.util.data import batch_dim, SpatialDim, FeatureDim
+  in_dim = FeatureDim("feat", 3)
+  out_dim = FeatureDim("classes", 5)
+  time_dim = SpatialDim("time")
   config = Config({
     "debug_print_layer_output_template": True,
     "extern_data": {
-      "data": {"dim": 3},
-      "classes": {"sparse": True, "dim": 5},
-    }
+      "data": {"dim_tags": [batch_dim, time_dim, in_dim]},
+      "classes": {"dim_tags": [batch_dim, time_dim], "sparse_dim": out_dim}
+    },
   })
   from test_TFNetworkLayer import make_feed_dict
   with make_scope() as session:
