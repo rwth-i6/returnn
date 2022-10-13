@@ -1,7 +1,5 @@
 class DimensionException(Exception):
-    """ Dimension Exception error, 
-    Raised if the dimension of 2 values are not the same 
-    before performing specific operation"
+    """ Dimension Exception error. Raised if the dimension are not the same"
 
     Attributes:
         dimA : dimensionA
@@ -9,9 +7,8 @@ class DimensionException(Exception):
         message -- explanation of the error
     """
 
-    def __init__(self, dimA,dimB, message="Dimensions are not equals"):
+    def __init__(self, dimA, dimB, message="Dimensions are not equals"):
         self.dimA = dimA
         self.dimB = dimB
         self.message = message
         super().__init__(self.message)
-        
