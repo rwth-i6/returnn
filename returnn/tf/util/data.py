@@ -987,7 +987,7 @@ class Dim(object):
       if self.dyn_size is not other_same_base.dyn_size:
         if self.batch == other_same_base.batch and self.control_flow_ctx == other_same_base.control_flow_ctx:
           if not self.dyn_size == other_same_base:
-            raise DimensionException(self.dyn_size, other_same_base.dyn_size, "dim tags are same with different size placeholders: %r vs %r please check external_data" % (
+            raise DimensionException(self.dyn_size, other_same_base.dyn_size, "Dim tags are same with different size placeholders: %r vs %r please check external_data" % (
               self.dyn_size, other_same_base.dyn_size))
     # If we have a defined source, and this is a dynamic spatial axis, and it was undefined before,
     # maybe we can overtake the size_placeholder now.
