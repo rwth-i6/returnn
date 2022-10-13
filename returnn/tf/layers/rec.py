@@ -2325,6 +2325,7 @@ class _SubnetworkRecCell(object):
     :rtype: tf.Tensor
     """
     from returnn.tf.util.basic import check_input_dim, tensor_array_stack, Dim, get_valid_scope_name_from_str
+    from returnn.util.basic import BehaviorVersion
     assert self.parent_rec_layer
     rec_layer = self.parent_rec_layer
 
@@ -3067,6 +3068,14 @@ class _SubnetworkRecCell(object):
       layer = self.net.layers[name]
       assert layer.search_choices
 
+    for key in (
+          self.net.used_data_keys |
+          (self.input_layers_net.used_data_keys if self.input_layers_net else set()) |
+          (self.output_layers_net.used_data_keys if self.output_layers_net else set())):
+      if key == "source":
+        continue
+      self.parent_net.used_data_keys.add(key)
+
     with tf.name_scope("output"):
       output_layer = None
       if self.input_layers_net and "output" in self.input_layers_net.layers:
@@ -3076,7 +3085,19 @@ class _SubnetworkRecCell(object):
       if output_layer:
         assert isinstance(output_layer, LayerBase)
         output_data = output_layer.output.copy_as_time_major()
-        self.time_dim_tag.declare_same_as(output_data.get_time_dim_tag())
+        if not self.time_dim_tag.is_dim_known():
+          self.time_dim_tag.declare_same_as(output_data.get_time_dim_tag())
+        elif self.time_dim_tag not in output_data.dim_tags:
+          # We allow this for older behavior version to not break some older setups.
+          # https://github.com/rwth-i6/returnn/issues/1140
+          BehaviorVersion.require(
+            False,
+            "%s: time-dim-tag mismatch: self %r vs sub-output-layer %r time-dim-tag %r" % (
+              rec_layer, self.time_dim_tag, output_data, output_data.get_time_dim_tag()), version=13)
+          # No further checks, it would fail anyway.
+          # Replace the actual rec layer output and return.
+          rec_layer.output = output_data
+          return output_data.placeholder
         assert len(rec_layer.output.dim_tags) == len(output_data.dim_tags)
         for tag1, tag2 in zip(rec_layer.output.dim_tags, output_data.dim_tags):
           try:
@@ -3090,23 +3111,13 @@ class _SubnetworkRecCell(object):
           # and then created once for the template layer, and again for the real layer.
           # Make sure they are really the same such that we get all information like dyn sizes.
           tag1.declare_same_as(tag2)
-        output = output_data.placeholder
+        return output_data.placeholder
       else:
         assert seq_len is not None
         rec_layer.output.size_placeholder[0] = seq_len
         assert not self.net.layers["output"].get_search_choices()
-        output = tensor_array_stack(
+        return tensor_array_stack(
           self.final_acc_tas_dict["output_output"], stop=max_seq_len, name="output_stack")  # e.g. (time, batch, dim)
-
-    for key in (
-          self.net.used_data_keys |
-          (self.input_layers_net.used_data_keys if self.input_layers_net else set()) |
-          (self.output_layers_net.used_data_keys if self.output_layers_net else set())):
-      if key == "source":
-        continue
-      self.parent_net.used_data_keys.add(key)
-
-    return output
 
   def _get_search_choice_seq(self, search_choices):
     """
