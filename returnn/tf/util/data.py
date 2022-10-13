@@ -12,10 +12,8 @@ import typing
 import tensorflow as tf
 import traceback
 
-from returnn.exceptions.dimension_exception import DimensionException
 from returnn.util.basic import NotSpecified, Entity
 import returnn.tf.compat as tf_compat
-
 
 
 class Dim(object):
