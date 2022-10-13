@@ -35,6 +35,9 @@ must have the same time dim as the :class:`RecLayer` itself.
 For some specific transducer configs, we have this problem
 (`example <https://github.com/rwth-i6/returnn-experiments/blob/264d13aef3321d48f685cc9750fd277fb70cc74e/2020-rnn-transducer/configs/rna-tf2.blank0.enc6l-grow2l.scratch-lm.rdrop02.lm1-1024.attwb5-drop02.l2_1e_4.mlr50.config#L778>`__).
 
+This behavior version might also require
+that the dim tags of ``extern_data`` are properly defined.
+
 See issue `#1140 <https://github.com/rwth-i6/returnn/issues/1140>`__.
 
 Behavior version 12 (2022-01-06)
