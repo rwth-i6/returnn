@@ -12,8 +12,10 @@ import typing
 import tensorflow as tf
 import traceback
 
+from returnn.exceptions.dimension_exception import DimensionException
 from returnn.util.basic import NotSpecified, Entity
 import returnn.tf.compat as tf_compat
+
 
 
 class Dim(object):
@@ -984,11 +986,8 @@ class Dim(object):
     if self.dyn_size is not None and other_same_base.dyn_size is not None:
       if self.dyn_size is not other_same_base.dyn_size:
         if self.batch == other_same_base.batch and self.control_flow_ctx == other_same_base.control_flow_ctx:
-          # Note: Instead of making this a warning, we could also enforce this at some point.
-          #   The user should be able to fix `extern_data` in the config such that this is correct in the first place.
-          #   Also, in addition to this warning, we might want to add some runtime check on the eq of the dyn sizes.
-          print(
-            "Warning: assuming dim tags are same with different size placeholders: %r vs %r" % (
+          if not self.dyn_size == other_same_base:
+            raise DimensionException(self.dyn_size, other_same_base.dyn_size, "dim tags are same with different size placeholders: %r vs %r please check external_data" % (
               self.dyn_size, other_same_base.dyn_size))
     # If we have a defined source, and this is a dynamic spatial axis, and it was undefined before,
     # maybe we can overtake the size_placeholder now.
