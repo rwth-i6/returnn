@@ -518,7 +518,7 @@ class Dim(object):
     :return: whether the dim is not static. usually means that it has seq lengths
     :rtype: bool
     """
-    return self.dimension is not None
+    return self.dimension is None and not self.is_batch_dim()
 
   def can_be_used_as_dim(self):
     """
