@@ -5419,13 +5419,6 @@ class Data(object):
     """
     return [dim_tag for dim_tag in self._dim_tags if dim_tag.is_dynamic()]
 
-  def get_num_dyn_size_tags(self):
-    """
-    :return: num dyn size tags
-    :rtype: int
-    """
-    return len(self.get_dyn_size_tags())
-
   def get_size_dim_tag(self, number):
     """
     :param int number: index in sorted(size_placeholder.keys())
