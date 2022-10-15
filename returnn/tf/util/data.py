@@ -518,7 +518,7 @@ class Dim(object):
     :return: whether the dim is not static. usually means that it has seq lengths
     :rtype: bool
     """
-    return self.dimension is not None
+    return self.dimension is None and not self.is_batch_dim()
 
   def can_be_used_as_dim(self):
     """
@@ -5412,13 +5412,20 @@ class Data(object):
     assert self.time_dim_axis is not None
     return self.get_dim_tag(self.time_dim_axis)
 
+  def get_dyn_size_tags(self):
+    """
+    :return: all dim tags with dynamic size
+    :rtype: list[Dim]
+    """
+    return [dim_tag for dim_tag in self._dim_tags if dim_tag.is_dynamic()]
+
   def get_size_dim_tag(self, number):
     """
     :param int number: index in sorted(size_placeholder.keys())
     :rtype: Dim
     """
-    axis_wo_batch = sorted(self.size_placeholder.keys())[number]
-    return self.get_dim_tag(self.get_batch_axis(axis_wo_batch))
+    dyn_size_tags = self.get_dyn_size_tags()
+    return dyn_size_tags[number]
 
   def get_batch_shape_dim_tags(self):
     """
