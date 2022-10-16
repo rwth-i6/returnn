@@ -62,12 +62,16 @@ class Vocabulary(object):
       https://github.com/google/sentencepiece/blob/master/doc/special_symbols.md
     :param int num_labels: just for verification
     :param list[int]|None seq_postfix: labels will be added to the seq in self.get_seq
-    :param list[str]|None labels:
+    :param list[str]|(()->list[str])|None labels:
     """
     self.vocab_file = vocab_file
     self.unknown_label = unknown_label
     self.num_labels = None  # type: typing.Optional[int]  # will be set by _parse_vocab
     self._vocab = None  # type: typing.Optional[typing.Dict[str,int]]  # label->idx
+    if labels is not None and callable(labels):
+      labels = labels()
+    if labels is not None:
+      assert isinstance(labels, (list, tuple))
     self._labels = labels
 
     self._parse_vocab()

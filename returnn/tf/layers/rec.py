@@ -1886,9 +1886,7 @@ class _SubnetworkRecCell(object):
         prev_layer = prev_layers[layer_name]
         assert layer.output.batch_shape == prev_layer.output.batch_shape
         assert layer.output.batch_dim_axis == prev_layer.output.batch_dim_axis
-        assert sorted(layer.output.size_placeholder.keys()) == sorted(prev_layer.output.size_placeholder.keys())
-        for i in range(len(layer.output.size_placeholder)):
-          assert layer.output.get_size_dim_tag(i) == prev_layer.output.get_size_dim_tag(i)
+        assert layer.output.get_dyn_size_tags() == prev_layer.output.get_dyn_size_tags()
 
   def get_prev_template_layer(self, layer_name):
     """
