@@ -238,7 +238,7 @@ class BehaviorVersion:
   The version will be set after the config is defined at __main__.init_config() or Engine.__init__()
   """
 
-  _latest_behavior_version = 13
+  _latest_behavior_version = 14
   _behavior_version = None  # type: typing.Optional[int]
 
   @classmethod

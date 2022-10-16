@@ -12,7 +12,7 @@ import typing
 import tensorflow as tf
 import traceback
 
-from returnn.util.basic import NotSpecified, Entity
+from returnn.util.basic import BehaviorVersion, NotSpecified, Entity
 import returnn.tf.compat as tf_compat
 
 
@@ -984,8 +984,8 @@ class Dim(object):
     if self.dyn_size is not None and other_same_base.dyn_size is not None:
       if self.dyn_size is not other_same_base.dyn_size:
         if self.batch == other_same_base.batch and self.control_flow_ctx == other_same_base.control_flow_ctx:
-          raise Exception("Dim tags are same with different size placeholders: %r vs %r please check external_data" % (
-              self.dyn_size, other_same_base.dyn_size))
+            BehaviorVersion.require(False,("Dim tags are same with different size placeholders: %r vs %r please check external_data" % (
+              self.dyn_size, other_same_base.dyn_size)),14)
     # If we have a defined source, and this is a dynamic spatial axis, and it was undefined before,
     # maybe we can overtake the size_placeholder now.
     if other_same_base.dyn_size is not None and self.src_data:
