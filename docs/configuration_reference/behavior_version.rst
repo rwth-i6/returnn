@@ -22,6 +22,13 @@ and not listing legacy/deprecated parameters.
 Version History
 ---------------
 
+Behavior version 14 (2022-10-17)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Dimensions tags were previously assumed to be the same with different size place_holders when processing matrixes. From now on, The dimension tags are now not allowed to be different and it will raise an exception.
+
+See issue `#1141 <https://github.com/rwth-i6/returnn/issues/1141>`__.
+
 Behavior version 13 (2022-10-13)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
