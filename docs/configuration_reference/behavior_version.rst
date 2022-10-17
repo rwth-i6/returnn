@@ -25,7 +25,11 @@ Version History
 Behavior version 14 (2022-10-17)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Dimensions tags were previously assumed to be the same with different size place_holders when processing matrixes. From now on, The dimension tags are now not allowed to be different and it will raise an exception.
+Dimension tags with different dynamic size tensors
+can not be merged anymore via `declare_same_as`.
+This can happen when the user did not set the dim tags
+correctly in `extern_data`.
+Otherwise it is likely a bug.
 
 See issue `#1141 <https://github.com/rwth-i6/returnn/issues/1141>`__.
 
