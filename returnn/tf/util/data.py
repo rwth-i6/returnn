@@ -1,3 +1,4 @@
+
 """
 Provides :class:`Data`, :class:`Dim`, :class:`SearchBeam`.
 
