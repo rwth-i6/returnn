@@ -2320,6 +2320,40 @@ def test_SplitDimsLayer_dyn_dim_tags_with_batch():
     assert y_size.shape == (n_batch,) and max(y_size) == n_time * 2
 
 
+def test_ReshapeLayer():
+  from returnn.tf.util.data import batch_dim, SpatialDim, FeatureDim
+  n_batch, n_time, n_dim = 2, 4, 3
+  time_dim = SpatialDim("time")
+  feat_dim = FeatureDim("feature", dimension=n_dim)
+  config = Config({
+    "extern_data": {
+      "data": {"dim_tags": [batch_dim, time_dim, feat_dim]}  # [B,T,D]
+    }
+  })
+  with make_scope() as session:
+    net = TFNetwork(config=config)
+    net.construct_from_dict({
+      "output": {
+        'class': 'reshape', 'from': 'data',
+        'in_dims': [time_dim, feat_dim],
+        'out_dims': [feat_dim, time_dim]
+      }
+    })
+    out = net.get_default_output_layer().output
+    assert out.dim_tags == (batch_dim, feat_dim, time_dim)
+    in_v = numpy.arange(n_time, dtype="float32")[None, :, None] + numpy.zeros((n_batch, n_time, n_dim), dtype="float32")
+    feed_dict = {
+      net.extern_data.data["data"].placeholder: in_v,
+      net.extern_data.data["data"].size_placeholder[0]: numpy.array([n_time] * n_batch, dtype="int32"),
+      net.extern_data.get_batch_info().dim: n_batch,
+    }
+    out_v = session.run(out.placeholder, feed_dict=feed_dict)
+    print(out_v.shape)
+    print(out_v)
+    assert out_v.shape == (n_batch, n_dim, n_time)
+    numpy.testing.assert_array_equal(in_v.reshape((n_batch, n_dim, n_time)), out_v)
+
+
 def test_out_shape():
   # https://github.com/rwth-i6/returnn/issues/706
   # Note: Using SplitDimsLayer would also be nice to test out_shape. Or any layer which creates a new dim.
