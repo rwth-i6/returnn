@@ -11,7 +11,7 @@ import tensorflow as tf
 from returnn.util.basic import NotSpecified, CollectionReadCheckCovered, BehaviorVersion
 import returnn.tf.compat as tf_compat
 import returnn.tf.util.basic as tf_util
-from returnn.tf.util.data import Data, FeatureDim
+from returnn.tf.util.data import Data, FeatureDim, Dim
 from returnn.tf.util.basic import OutputWithActivation, CustomUpdate, reuse_name_scope
 from returnn.log import log
 
