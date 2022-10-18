@@ -3326,6 +3326,33 @@ def try_get_caller_name(depth=1, fallback=None):
   return fallback
 
 
+_guard_infinite_recursion_cache = threading.local()
+
+
+@contextlib.contextmanager
+def guard_infinite_recursion(*args):
+  """
+  Registers args (could be func + args) in some cache.
+  If those args are already in the cache, it will raise an exception.
+
+  It will use the id of the args as key and not use any hashing
+  to allow that guard_infinite_recursion can be used
+  to guard custom __hash__ implementations as well.
+  """
+  if not args:
+    raise ValueError("guard_infinite_recursion needs at least one arg")
+  key = tuple(id(arg) for arg in args)
+  if not hasattr(_guard_infinite_recursion_cache, "cache"):
+    _guard_infinite_recursion_cache.cache = set()
+  if key in _guard_infinite_recursion_cache.cache:
+    raise Exception("infinite recursion detected")
+  _guard_infinite_recursion_cache.cache.add(key)
+  try:
+    yield
+  finally:
+    _guard_infinite_recursion_cache.cache.remove(key)
+
+
 def camel_case_to_snake_case(name):
   """
   :param str name: e.g. "CamelCase"

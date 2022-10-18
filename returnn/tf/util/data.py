@@ -12,6 +12,7 @@ import typing
 import tensorflow as tf
 import traceback
 
+import returnn.util.basic as util
 from returnn.util.basic import NotSpecified, Entity
 import returnn.tf.compat as tf_compat
 
@@ -834,14 +835,15 @@ class Dim(object):
       return hash(id(self))
     if self.is_batch_dim():
       return hash(())
-    base = self.get_same_base()
-    if base is not self:
-      return hash(base)
-    if self.derived_from_op:
-      return hash(self.derived_from_op)
-    if self.auto_generated:
-      return hash((base.kind, base.dimension, base.description))
-    return hash(id(base))
+    with util.guard_infinite_recursion(Dim.__hash__, self):
+      base = self.get_same_base()
+      if base is not self:
+        return hash(base)
+      if self.derived_from_op:
+        return hash(self.derived_from_op)
+      if self.auto_generated:
+        return hash((base.kind, base.dimension, base.description))
+      return hash(id(base))
 
   def __lt__(self, other):
     """
