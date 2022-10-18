@@ -4103,6 +4103,7 @@ class ReshapeLayer(LayerBase):
       This is to potentially define otherwise unknown out_dims.
     """
     super(ReshapeLayer, self).__init__(**kwargs)
+    self.extra_deps = extra_deps
     data = self.sources[0].output
     out_dims = [data.get_dim_tag_from_description(d) for d in out_dims]
     in_dims_axes = [data.get_axis_from_description(d, allow_int=False) for d in in_dims]
@@ -4118,6 +4119,12 @@ class ReshapeLayer(LayerBase):
     dims = dims[:insert_axis] + out_dims + dims[insert_axis:]
     self.output.placeholder = tf.reshape(
       data.placeholder, [d.get_dim_value() for d in dims])
+
+  def get_dep_layers(self):
+    """
+    :rtype: list[LayerBase]
+    """
+    return super(ReshapeLayer, self).get_dep_layers() + list(self.extra_deps)
 
   @classmethod
   def transform_config_dict(cls, d, network, get_layer):
