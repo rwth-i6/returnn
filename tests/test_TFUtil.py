@@ -1473,6 +1473,21 @@ def test_dim_math_pad_dummy_equal():
   x.verify_out_shape({batch_dim, time__})
 
 
+def test_dim_math_add_dyn_defined():
+  from returnn.tf.util.data import batch_dim, BatchInfo
+  batch = BatchInfo.make_global_batch_info(-1)
+  d = SpatialDim("time")
+  print("d=", d)
+  d.batch = batch
+  d.dyn_size_ext = Data("dyn_size_ext", dim_tags=[batch_dim], batch=batch)
+  print("d=", d)
+  y = sum([d - 1, d])
+  print("y=", y)
+  y = y.get_for_batch_ctx(batch=batch, ctx=None)
+  print("y=", y)
+  assert y.dyn_size_ext and y.dyn_size_ext.dim_tags == (batch_dim,)
+
+
 def test_sequence_mask_len_via_loop():
   seq_len = tf.while_loop(
     cond=lambda x: tf.less(x[0], 2),

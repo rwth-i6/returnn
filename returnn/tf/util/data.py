@@ -402,6 +402,7 @@ class Dim(object):
       if Dim.get_tag_from_size_tensor(dyn_size_ext.placeholder) is None:
         dim_tag.set_tag_on_size_tensor(dyn_size_ext.placeholder, batch=batch)
     same_base._same_for_batch_ctx[(dim_tag.batch, dim_tag.control_flow_ctx)] = dim_tag
+    dim_tag.complete_dyn_size(template_only=True)
     return dim_tag
 
   def set_dyn_size_ext_for_batch_ctx(self, batch, ctx, dyn_size_ext):
@@ -441,7 +442,7 @@ class Dim(object):
       If the dyn size can potentially be of a different shape, directly access dyn_size_ext.
     :rtype: tf.Tensor|None
     """
-    if self.dimension is None and (not self.dyn_size_ext or self.dyn_size_ext.placeholder is None):
+    if self.is_dynamic() and (not self.dyn_size_ext or self.dyn_size_ext.placeholder is None):
       # Try to complete.
       self.complete_dyn_size()
     if self.dyn_size_ext:
@@ -614,13 +615,15 @@ class Dim(object):
     """
     return getattr(x, "_is_size_of_dim_tag", None)
 
-  def complete_dyn_size(self):
+  def complete_dyn_size(self, template_only=False):
     """
     In case we can calculate the dyn size, do that now.
+
+    :param bool template_only:
     """
-    if self.dimension is not None:
+    if not self.is_dynamic():
       return
-    if self.dyn_size_ext and self.dyn_size_ext.placeholder is not None:
+    if self.dyn_size_ext and (self.dyn_size_ext.placeholder is not None or template_only):
       return
     same_base = self.get_same_base()
     op = self.derived_from_op or same_base.derived_from_op
@@ -647,6 +650,8 @@ class Dim(object):
         return False
 
       def _bin_op(a, b):
+        if template_only:
+          return None
         if a is None or b is None:
           return None
         with tf_util.same_control_flow_ctx([a, b]):
@@ -677,7 +682,7 @@ class Dim(object):
             with tf.control_dependencies(None):  # this will reset the context
               y = Data(
                 name=y_name, dim_tags=[], dtype="int32",
-                placeholder=tf.constant(x.dimension))
+                placeholder=None if template_only else tf.constant(x.dimension))
             continue
           y.placeholder = _bin_op(y.placeholder, x.dimension)
           continue

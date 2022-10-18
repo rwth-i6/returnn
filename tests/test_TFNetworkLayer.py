@@ -524,6 +524,22 @@ def test_ConcatLayer():
     session.run(out.output.placeholder, feed_dict=feed_dict)
 
 
+def test_ConcatLayer_range_dyn():
+  with make_scope() as session:
+    net_dict = {
+      "range": {"class": "range_in_axis", "from": "data:data", "axis": "T"},
+      "output": {"class": "concat", "from": [("range", "T"), ("range", "T")]},
+    }
+    config = Config({"extern_data": {"data": {"dim": 2}}})
+    network = TFNetwork(config=config)
+    network.construct_from_dict(net_dict)
+    out = network.get_default_output_layer().output
+    assert_equal(out.batch_shape, (None,))
+    feed_dict = make_feed_dict(network.extern_data, n_time=7)
+    session.run(out.placeholder, feed_dict=feed_dict)
+    assert_equal(session.run(out.dim_tags[0].get_dim_value(), feed_dict=feed_dict), 14)
+
+
 def test_LinearLayer_batch_feature_major():
   with make_scope() as session:
     network = TFNetwork(config=Config(), extern_data=ExternData(), train_flag=True)
