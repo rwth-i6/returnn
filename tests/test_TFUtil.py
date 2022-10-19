@@ -1223,6 +1223,26 @@ def test_Data_copy_feat_with_vocab():
   assert data2.vocab is vocab
 
 
+def test_Data_verify_out_shape_optional_implicit_dim():
+  # https://github.com/rwth-i6/returnn/issues/1153
+  from returnn.tf.util.data import batch_dim, FeatureDim, SpatialDim, BatchInfo, VerifyOutShapeException
+  batch = BatchInfo.make_global_batch_info(-1)
+  time_dim = SpatialDim("time")
+  time_dim.batch = batch
+  time_dim.dyn_size_ext = Data("dyn_size_ext", dim_tags=[batch_dim], dtype="int32", batch=batch)
+  feat_dim = FeatureDim("feat", dimension=3)
+  x = Data("x", dim_tags=[time_dim, feat_dim])
+  try:
+    x.verify_out_shape({time_dim, feat_dim})
+  except VerifyOutShapeException as exc:
+    print("Got expected exception:", exc)
+    assert "Missing dims" in str(exc)
+  else:
+    raise Exception("did not get expected exception")
+  # This should not raise an exception:
+  x.verify_out_shape({time_dim, feat_dim}, allow_missing_implicit_dims=True)
+
+
 def test_Dim_copy():
   # https://github.com/rwth-i6/returnn/issues/860
   import copy
