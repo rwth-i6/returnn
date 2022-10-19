@@ -238,7 +238,7 @@ class BehaviorVersion:
   The version will be set after the config is defined at __main__.init_config() or Engine.__init__()
   """
 
-  _latest_behavior_version = 14
+  _latest_behavior_version = 15
   _behavior_version = None  # type: typing.Optional[int]
 
   @classmethod
@@ -314,6 +314,8 @@ def get_model_filename_postfix():
   if BackendEngine.is_tensorflow_selected():
     # There will be multiple files but a *.meta file will always be present.
     return ".meta"
+  if BackendEngine.is_torch_selected():
+    return ".pt"
   return ""
 
 
@@ -329,6 +331,8 @@ def get_checkpoint_filepattern(filepath):
     return filepath[:-len(".meta")]
   elif filepath.endswith(".index"):
     return filepath[:-len(".index")]
+  elif filepath.endswith(".pt"):
+    return filepath[:-len(".pt")]
   return filepath
 
 
@@ -3320,6 +3324,33 @@ def try_get_caller_name(depth=1, fallback=None):
     from .better_exchook import get_func_str_from_code_object
     return get_func_str_from_code_object(frame.f_code)
   return fallback
+
+
+_guard_infinite_recursion_cache = threading.local()
+
+
+@contextlib.contextmanager
+def guard_infinite_recursion(*args):
+  """
+  Registers args (could be func + args) in some cache.
+  If those args are already in the cache, it will raise an exception.
+
+  It will use the id of the args as key and not use any hashing
+  to allow that guard_infinite_recursion can be used
+  to guard custom __hash__ implementations as well.
+  """
+  if not args:
+    raise ValueError("guard_infinite_recursion needs at least one arg")
+  key = tuple(id(arg) for arg in args)
+  if not hasattr(_guard_infinite_recursion_cache, "cache"):
+    _guard_infinite_recursion_cache.cache = set()
+  if key in _guard_infinite_recursion_cache.cache:
+    raise Exception("infinite recursion detected")
+  _guard_infinite_recursion_cache.cache.add(key)
+  try:
+    yield
+  finally:
+    _guard_infinite_recursion_cache.cache.remove(key)
 
 
 def camel_case_to_snake_case(name):

@@ -3,12 +3,14 @@ Main engine for PyTorch
 """
 
 import torch
+import os
 from torch.utils.data import DataLoader
 from random import random
 
 from returnn.log import log
 from returnn.engine.base import EngineBase
 from returnn.datasets.basic import init_dataset
+from returnn.util import basic as util
 from . import data_pipeline
 
 
@@ -23,9 +25,12 @@ class Engine(EngineBase):
     """
     super(Engine, self).__init__()
     self.config = config
+    self.model_filename = self.config.value('model', None)
     self.train_dataset = None
     self.eval_datasets = {}
     self.learning_rate = config.float("learning_rate", 1.)  # TODO LR control...
+
+    self._model = None  # type: torch.nn.Module
 
   def init_train_from_config(self, config=None, train_data=None, dev_data=None, eval_data=None):
     """
@@ -51,6 +56,8 @@ class Engine(EngineBase):
     """
     start_epoch, _ = self.get_train_start_epoch_batch(self.config)
     final_epoch = self.config_get_final_epoch(self.config)
+
+    self._load_model(epoch=start_epoch)
 
     print("Starting training at epoch {}.".format(start_epoch), file=log.v3)
 
@@ -85,16 +92,11 @@ class Engine(EngineBase):
     )
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    get_model_func = self.config.typed_value("get_model")
-    assert get_model_func, "get_model not defined"
-    sentinel_kw = {"__fwd_compatible_random_arg_%i" % int(random() * 100): None}
-    model = get_model_func(epoch=self.epoch, **sentinel_kw)
-    assert isinstance(model, torch.nn.Module)
-    model.to(device)
-    model.train()
+    self._model.to(device)
+    self._model.train()
     train_step_func = self.config.typed_value("train_step")
     assert train_step_func, "train_step not defined"
-    optimizer = torch.optim.AdamW(model.parameters(), lr=self.learning_rate)
+    optimizer = torch.optim.AdamW(self._model.parameters(), lr=self.learning_rate)
 
     step_idx = 0
     for data in data_loader:
@@ -102,7 +104,8 @@ class Engine(EngineBase):
       data = {k: v.to(device) for (k, v) in data.items()}
 
       train_ctx = TrainCtx()
-      train_step_func(model=model, data=data, train_ctx=train_ctx, **sentinel_kw)
+      sentinel_kw = {"__fwd_compatible_random_arg_%i" % int(random() * 100): None}
+      train_step_func(model=self._model, data=data, train_ctx=train_ctx, **sentinel_kw)
       loss = train_ctx.total_loss()
 
       optimizer.zero_grad()
@@ -114,6 +117,38 @@ class Engine(EngineBase):
       step_idx += 1
 
     print("Trained %i steps" % step_idx)
+
+    self._save_model()
+
+  def _load_model(self, epoch):
+    """
+    Sets self._model to a torch.nn.Module.
+
+    :param int epoch:
+    """
+    get_model_func = self.config.typed_value("get_model")
+    assert get_model_func, "get_model not defined"
+    sentinel_kw = {"__fwd_compatible_random_arg_%i" % int(random() * 100): None}
+    self._model = get_model_func(**sentinel_kw)
+    assert isinstance(self._model, torch.nn.Module)
+
+    if epoch > 1:
+      filename = self.get_epoch_model_filename(epoch=epoch - 1) + util.get_model_filename_postfix()
+      print("Load model %s" % (filename,), file=log.v4)
+      model_state = torch.load(filename)
+      self._model.load_state_dict(model_state)
+
+  def _save_model(self):
+    """
+    Saves the state of self._model to file.
+    """
+    filename = self.get_epoch_model_filename() + util.get_model_filename_postfix()
+    directory = os.path.dirname(filename)
+    if not os.path.exists(directory):
+      os.makedirs(directory, exist_ok=True)
+
+    print("Save model under %s" % (filename,), file=log.v4)
+    torch.save(self._model.state_dict(), filename)
 
 
 class TrainCtx:

@@ -524,6 +524,22 @@ def test_ConcatLayer():
     session.run(out.output.placeholder, feed_dict=feed_dict)
 
 
+def test_ConcatLayer_range_dyn():
+  with make_scope() as session:
+    net_dict = {
+      "range": {"class": "range_in_axis", "from": "data:data", "axis": "T"},
+      "output": {"class": "concat", "from": [("range", "T"), ("range", "T")]},
+    }
+    config = Config({"extern_data": {"data": {"dim": 2}}})
+    network = TFNetwork(config=config)
+    network.construct_from_dict(net_dict)
+    out = network.get_default_output_layer().output
+    assert_equal(out.batch_shape, (None,))
+    feed_dict = make_feed_dict(network.extern_data, n_time=7)
+    session.run(out.placeholder, feed_dict=feed_dict)
+    assert_equal(session.run(out.dim_tags[0].get_dim_value(), feed_dict=feed_dict), 14)
+
+
 def test_LinearLayer_batch_feature_major():
   with make_scope() as session:
     network = TFNetwork(config=Config(), extern_data=ExternData(), train_flag=True)
@@ -2318,6 +2334,40 @@ def test_SplitDimsLayer_dyn_dim_tags_with_batch():
     assert isinstance(y_size, numpy.ndarray)
     assert y.shape == (n_batch, n_time * 2)
     assert y_size.shape == (n_batch,) and max(y_size) == n_time * 2
+
+
+def test_ReshapeLayer():
+  from returnn.tf.util.data import batch_dim, SpatialDim, FeatureDim
+  n_batch, n_time, n_dim = 2, 4, 3
+  time_dim = SpatialDim("time")
+  feat_dim = FeatureDim("feature", dimension=n_dim)
+  config = Config({
+    "extern_data": {
+      "data": {"dim_tags": [batch_dim, time_dim, feat_dim]}  # [B,T,D]
+    }
+  })
+  with make_scope() as session:
+    net = TFNetwork(config=config)
+    net.construct_from_dict({
+      "output": {
+        'class': 'reshape', 'from': 'data',
+        'in_dims': [time_dim, feat_dim],
+        'out_dims': [feat_dim, time_dim]
+      }
+    })
+    out = net.get_default_output_layer().output
+    assert out.dim_tags == (batch_dim, feat_dim, time_dim)
+    in_v = numpy.arange(n_time, dtype="float32")[None, :, None] + numpy.zeros((n_batch, n_time, n_dim), dtype="float32")
+    feed_dict = {
+      net.extern_data.data["data"].placeholder: in_v,
+      net.extern_data.data["data"].size_placeholder[0]: numpy.array([n_time] * n_batch, dtype="int32"),
+      net.extern_data.get_batch_info().dim: n_batch,
+    }
+    out_v = session.run(out.placeholder, feed_dict=feed_dict)
+    print(out_v.shape)
+    print(out_v)
+    assert out_v.shape == (n_batch, n_dim, n_time)
+    numpy.testing.assert_array_equal(in_v.reshape((n_batch, n_dim, n_time)), out_v)
 
 
 def test_out_shape():
@@ -7091,6 +7141,88 @@ def test_DotLayer_sparse_input():
     layer = net.get_default_output_layer()
     assert layer.output.dim_tags == (batch_dim, time_dim, embed_dim)
 
+    feed_dict = make_feed_dict(net.extern_data)
+    session.run(layer.output.placeholder, feed_dict=feed_dict)
+
+
+def test_DotLayer_dim_wrong_matching_same_dim_value():
+  from returnn.tf.util.data import batch_dim, SpatialDim, FeatureDim
+  time_dim = SpatialDim("time")
+  feat_dim = FeatureDim("feat", dimension=5)
+  feat2_dim = FeatureDim("other-feat", dimension=5)
+
+  # First directly check DotLayer.get_out_data_from_opts.
+  # This is more similar like we have it in returnn_common
+  # and might trigger different errors due to the dim matching logic of DotLayer,
+  # which behaves slightly different when there are no size_placeholders set yet,
+  # see Dim.is_equal with unknown_spatial_matches.
+  a = Data("a", dim_tags=[batch_dim, time_dim, feat_dim])
+  b = Data("b", dim_tags=[batch_dim, time_dim, feat2_dim])
+  net = TFNetwork(config=Config(), extern_data=ExternData())
+  out = DotLayer.get_out_data_from_opts(
+    name="dot",
+    sources=[InternalLayer(name="a", network=net, output=a), InternalLayer(name="b", network=net, output=b)],
+    reduce=time_dim)
+  assert out.dim_tags == (batch_dim, feat_dim, feat2_dim)
+
+  # Now full config.
+  config = Config({
+    "extern_data": {
+      "a": {"dim_tags": [batch_dim, time_dim, feat_dim]},
+      "b": {"dim_tags": [batch_dim, time_dim, feat2_dim]},
+    },
+    "network": {
+      "output": {"class": "dot", "from": ["data:a", "data:b"], "reduce": time_dim},
+    },
+    "debug_runtime_sanity_checks": True,
+  })
+  with make_scope() as session:
+    net = TFNetwork(config=config)
+    net.construct_from_dict(config.typed_dict["network"])
+    layer = net.get_default_output_layer()
+    assert layer.output.dim_tags == (batch_dim, feat_dim, feat2_dim)
+    feed_dict = make_feed_dict(net.extern_data)
+    session.run(layer.output.placeholder, feed_dict=feed_dict)
+
+
+def test_DotLayer_dim_wrong_matching_derived():
+  from returnn.tf.util.data import batch_dim, SpatialDim, FeatureDim
+  time_dim = SpatialDim("time")
+  time_dim_2 = time_dim * 2
+  assert time_dim_2.derived_from_tag == time_dim
+  assert time_dim_2.get_same_derived_base() == time_dim
+  feat_dim = FeatureDim("feat", dimension=5)
+
+  # First directly check DotLayer.get_out_data_from_opts.
+  # This is more similar like we have it in returnn_common
+  # and might trigger different errors due to the dim matching logic of DotLayer,
+  # which behaves slightly different when there are no size_placeholders set yet,
+  # see Dim.is_equal with unknown_spatial_matches.
+  a = Data("a", dim_tags=[batch_dim, time_dim, feat_dim])
+  b = Data("b", dim_tags=[batch_dim, time_dim_2, feat_dim])
+  net = TFNetwork(config=Config(), extern_data=ExternData())
+  out = DotLayer.get_out_data_from_opts(
+    name="dot",
+    sources=[InternalLayer(name="a", network=net, output=a), InternalLayer(name="b", network=net, output=b)],
+    reduce=feat_dim)
+  assert out.dim_tags == (batch_dim, time_dim, time_dim_2)
+
+  # Now full config.
+  config = Config({
+    "extern_data": {
+      "a": {"dim_tags": [batch_dim, time_dim, feat_dim]},
+      "b": {"dim_tags": [batch_dim, time_dim_2, feat_dim]},
+    },
+    "network": {
+      "output": {"class": "dot", "from": ["data:a", "data:b"], "reduce": feat_dim},
+    },
+    "debug_runtime_sanity_checks": True,
+  })
+  with make_scope() as session:
+    net = TFNetwork(config=config)
+    net.construct_from_dict(config.typed_dict["network"])
+    layer = net.get_default_output_layer()
+    assert layer.output.dim_tags == (batch_dim, time_dim, time_dim_2)
     feed_dict = make_feed_dict(net.extern_data)
     session.run(layer.output.placeholder, feed_dict=feed_dict)
 

@@ -4080,6 +4080,86 @@ class SplitBatchTimeLayer(_ConcatInputLayer):
     return data.copy("%s_output" % name)
 
 
+class ReshapeLayer(LayerBase):
+  """
+  Allows to reshape (..., in_dims, ...) to (..., out_dims, ...)
+  as long as prod(in_dims) == prod(out_dims).
+
+  in_dims don't need to be directly behind each other or in that order
+  -- internally it will permute it such that it is in the right order.
+  out_dims should be defined.
+
+  This can be used for clever indexing, slicing, padding tricks.
+  It can also be used as an alternative to
+  :class:`SplitDimsLayer` or :class:`MergeDimsLayer`.
+  """
+  layer_class = "reshape"
+
+  def __init__(self, in_dims, out_dims, extra_deps=(), **kwargs):
+    """
+    :param typing.Sequence[Dim|str] in_dims:
+    :param typing.Sequence[Dim|str] out_dims:
+    :param typing.Sequence[LayerBase] extra_deps: Just add as an additional dependency, without really using it.
+      This is to potentially define otherwise unknown out_dims.
+    """
+    super(ReshapeLayer, self).__init__(**kwargs)
+    self.extra_deps = extra_deps
+    data = self.sources[0].output
+    out_dims = [data.get_dim_tag_from_description(d) for d in out_dims]
+    in_dims_axes = [data.get_axis_from_description(d, allow_int=False) for d in in_dims]
+    assert sorted(set(in_dims_axes)) == sorted(in_dims_axes), "%s: invalid in_dims %r" % (self, in_dims)
+    insert_axis = min(in_dims_axes)
+    dims = list(data.dim_tags)
+    permute = list(range(data.batch_ndim))
+    for axis in sorted(set(in_dims_axes), reverse=True):
+      dims.pop(axis)
+      permute.pop(axis)
+    permute = permute[:insert_axis] + in_dims_axes + permute[insert_axis:]
+    data = data.copy_transpose(permute)
+    dims = dims[:insert_axis] + out_dims + dims[insert_axis:]
+    self.output.placeholder = tf.reshape(
+      data.placeholder, [d.get_dim_value() for d in dims])
+
+  def get_dep_layers(self):
+    """
+    :rtype: list[LayerBase]
+    """
+    return super(ReshapeLayer, self).get_dep_layers() + list(self.extra_deps)
+
+  @classmethod
+  def transform_config_dict(cls, d, network, get_layer):
+    """
+    :param dict[str] d: will modify inplace
+    :param returnn.tf.network.TFNetwork network:
+    :param ((str) -> LayerBase) get_layer: function to get or construct another layer
+    """
+    super(ReshapeLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
+    if "extra_deps" in d:
+      extra_deps = d["extra_deps"]
+      if not isinstance(extra_deps, (list, tuple)):
+        extra_deps = [extra_deps]
+      d["extra_deps"] = [get_layer(src_name) for src_name in extra_deps]
+
+  @classmethod
+  def get_out_data_from_opts(cls, name, sources, in_dims, out_dims, **kwargs):
+    """
+    :param str name:
+    :param list[LayerBase] sources:
+    :param typing.Sequence[Dim|str] in_dims:
+    :param typing.Sequence[Dim|str] out_dims:
+    """
+    assert len(sources) == 1, "%s %r: only one source allowed" % (cls.__name__, name)
+    data = sources[0].output.copy_template()
+    out_dims = [data.get_dim_tag_from_description(d) for d in out_dims]
+    in_dims_axes = [data.get_axis_from_description(d, allow_int=False) for d in in_dims]
+    dims = list(data.dim_tags)
+    for axis in sorted(set(in_dims_axes), reverse=True):
+      dims.pop(axis)
+    insert_axis = min(in_dims_axes)
+    dims = dims[:insert_axis] + out_dims + dims[insert_axis:]
+    return data.copy_template_new_dim_tags(dims, name="%s_output" % name)
+
+
 class FlattenBatchLayer(_ConcatInputLayer):
   """
   Merges one axis into the batch axis.
@@ -7057,11 +7137,14 @@ class DotLayer(LayerBase):
     :rtype: (list[int], list[int])
     """
     from returnn.util import BehaviorVersion
-    is_equal_opts = dict(
-      treat_feature_as_spatial=True, allow_same_spatial_dim=True,
-      undefined_matches=True, derived_matches=True)
-    if BehaviorVersion.get() < 11:
-      is_equal_opts["broadcast_matches"] = True
+    if BehaviorVersion.get() >= 14:
+      is_equal_opts = {}
+    else:
+      is_equal_opts = dict(
+        treat_feature_as_spatial=True, allow_same_spatial_dim=True,
+        undefined_matches=True, derived_matches=True)
+      if BehaviorVersion.get() < 11:
+        is_equal_opts["broadcast_matches"] = True
     tags1 = [None if i in red1 else tag for (i, tag) in enumerate(source1.dim_tags)]
     tags2 = [None if i in red2 else tag for (i, tag) in enumerate(source2.dim_tags)]
     var1 = [

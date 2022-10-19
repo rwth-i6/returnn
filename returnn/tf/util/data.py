@@ -12,6 +12,7 @@ import typing
 import tensorflow as tf
 import traceback
 
+import returnn.util.basic as util
 from returnn.util.basic import BehaviorVersion, NotSpecified, Entity
 import returnn.tf.compat as tf_compat
 
@@ -401,6 +402,7 @@ class Dim(object):
       if Dim.get_tag_from_size_tensor(dyn_size_ext.placeholder) is None:
         dim_tag.set_tag_on_size_tensor(dyn_size_ext.placeholder, batch=batch)
     same_base._same_for_batch_ctx[(dim_tag.batch, dim_tag.control_flow_ctx)] = dim_tag
+    dim_tag.complete_dyn_size(template_only=True)
     return dim_tag
 
   def set_dyn_size_ext_for_batch_ctx(self, batch, ctx, dyn_size_ext):
@@ -440,7 +442,7 @@ class Dim(object):
       If the dyn size can potentially be of a different shape, directly access dyn_size_ext.
     :rtype: tf.Tensor|None
     """
-    if self.dimension is None and (not self.dyn_size_ext or self.dyn_size_ext.placeholder is None):
+    if self.is_dynamic() and (not self.dyn_size_ext or self.dyn_size_ext.placeholder is None):
       # Try to complete.
       self.complete_dyn_size()
     if self.dyn_size_ext:
@@ -503,7 +505,7 @@ class Dim(object):
     """
     if self.is_batch_dim():
       return True
-    if self.dimension is not None:
+    if not self.is_dynamic() and self.dimension is not None:
       return True
     if self.dyn_size_ext:
       return True
@@ -613,13 +615,15 @@ class Dim(object):
     """
     return getattr(x, "_is_size_of_dim_tag", None)
 
-  def complete_dyn_size(self):
+  def complete_dyn_size(self, template_only=False):
     """
     In case we can calculate the dyn size, do that now.
+
+    :param bool template_only:
     """
-    if self.dimension is not None:
+    if not self.is_dynamic():
       return
-    if self.dyn_size_ext and self.dyn_size_ext.placeholder is not None:
+    if self.dyn_size_ext and (self.dyn_size_ext.placeholder is not None or template_only):
       return
     same_base = self.get_same_base()
     op = self.derived_from_op or same_base.derived_from_op
@@ -646,6 +650,8 @@ class Dim(object):
         return False
 
       def _bin_op(a, b):
+        if template_only:
+          return None
         if a is None or b is None:
           return None
         with tf_util.same_control_flow_ctx([a, b]):
@@ -676,7 +682,7 @@ class Dim(object):
             with tf.control_dependencies(None):  # this will reset the context
               y = Data(
                 name=y_name, dim_tags=[], dtype="int32",
-                placeholder=tf.constant(x.dimension))
+                placeholder=None if template_only else tf.constant(x.dimension))
             continue
           y.placeholder = _bin_op(y.placeholder, x.dimension)
           continue
@@ -834,14 +840,15 @@ class Dim(object):
       return hash(id(self))
     if self.is_batch_dim():
       return hash(())
-    base = self.get_same_base()
-    if base is not self:
-      return hash(base)
-    if self.derived_from_op:
-      return hash(self.derived_from_op)
-    if self.auto_generated:
-      return hash((base.kind, base.dimension, base.description))
-    return hash(id(base))
+    with util.guard_infinite_recursion(Dim.__hash__, self):
+      base = self.get_same_base()
+      if base is not self:
+        return hash(base)
+      if self.derived_from_op:
+        return hash(self.derived_from_op)
+      if self.auto_generated:
+        return hash((base.kind, base.dimension, base.description))
+      return hash(id(base))
 
   def __lt__(self, other):
     """
@@ -900,22 +907,25 @@ class Dim(object):
       assert base
     return base
 
-  def get_derived_bases_list(self):
+  def get_derived_bases_set(self):
     """
-    :rtype: list[Dim]
+    :rtype: set[Dim]
     """
-    res = [self]
-    base = self
-    visited = {}
-    while base.same_as or base.derived_from_tag:
-      assert id(base) not in visited  # should not have cycles. normally this should never be triggered
-      visited[id(base)] = base
+    res = set()
+    queue = [self]
+    visited = {}  # type: typing.Dict[int,Dim]  # by id
+    while queue:
+      base = queue.pop(-1)
       if base.same_as:
         base = base.same_as
+      if id(base) in visited:
         continue
-      base = base.derived_from_tag
-      assert base
-      res.append(base)
+      visited[id(base)] = base
+      res.add(base)
+      if base.derived_from_op:
+        queue.extend(base.derived_from_op.inputs)
+      elif base.derived_from_tag:
+        queue.append(base.derived_from_tag)
     return res
 
   @property
@@ -957,14 +967,18 @@ class Dim(object):
       # We actually want it to be the other way around.
       other_same_base.declare_same_as(self_same_as)
       return
+    if self.batch:
+      # If self is defined (self.is_dim_known), be fair to other, and adapt it to the right batch,
+      # such that other.is_dim_known is correct, by potentially completing it.
+      other = other.get_for_batch_ctx(self.batch, ctx=self.control_flow_ctx)
     if self.is_dim_known() and not other.is_dim_known():
       if self_same_as._creation_idx < other_same_base._creation_idx:
         # We want to keep self instead.
         # https://github.com/rwth-i6/returnn_common/issues/200
         other_same_base.declare_same_as(self_same_as)
         return
-    other_derived_bases = set(other.get_derived_bases_list())
-    self_derived_bases = set(self.get_derived_bases_list())
+    other_derived_bases = other.get_derived_bases_set()
+    self_derived_bases = self.get_derived_bases_set()
     assert other_derived_bases != self_derived_bases
     if self_derived_bases.issubset(other_derived_bases):
       # Avoid cycles on derived_from_tag. https://github.com/rwth-i6/returnn/issues/1054
@@ -988,7 +1002,7 @@ class Dim(object):
             False,
             "Dim tags are same with different size placeholders (%r vs %r), please check external_data" % (
               self.dyn_size, other_same_base.dyn_size),
-            14)
+            15)
     # If we have a defined source, and this is a dynamic spatial axis, and it was undefined before,
     # maybe we can overtake the size_placeholder now.
     if other_same_base.dyn_size is not None and self.src_data:
@@ -1023,10 +1037,12 @@ class Dim(object):
       other_same_base._vocab = self._vocab
     elif other_same_base._vocab and not self._vocab:
       self._vocab = other_same_base._vocab
-    if self.derived_from_op and not other_same_base.derived_from_op:
-      other_same_base.derived_from_op = self.derived_from_op
-    elif other_same_base.derived_from_op and not self.derived_from_op:
-      self.derived_from_op = other_same_base.derived_from_op
+    # Take over derived_from_op. However, only if this would not introduce cycles!
+    if not self_derived_bases.issuperset(other_derived_bases):
+      if self.derived_from_op and not other_same_base.derived_from_op:
+        other_same_base.derived_from_op = self.derived_from_op
+      elif other_same_base.derived_from_op and not self.derived_from_op:
+        self.derived_from_op = other_same_base.derived_from_op
 
   def _merge_same_for_batch_ctx_dict(self, other):
     """
@@ -1091,7 +1107,7 @@ class Dim(object):
           if unique_separate_axes:
             existing_tag_collection_for_data.remove(existing_tag)  # don't take it again for this data
           replace_existing = existing_tag.undefined and not tag.undefined and tag.dimension == existing_tag.dimension
-          if tag != existing_tag and tag in existing_tag.get_derived_bases_list():
+          if tag != existing_tag and tag in existing_tag.get_derived_bases_set():
             replace_existing = True
           if replace_existing:  # Replace the existing by the new tag.
             tags[tags.index(existing_tag)] = tag
@@ -1649,7 +1665,26 @@ class Dim(object):
       return Dim(
         kind=dim_kind, description="*".join(map(Dim._get_description, self.terms)),
         dimension=self.dimension,
-        derived_from_op=Dim.Op(kind="mul", inputs=list(self.terms)))
+        derived_from_op=Dim.Op(kind="mul", inputs=list(self.terms)),
+        derived_from_tag=self.representative_tag())
+
+    def representative_tag(self):
+      """
+      :rtype: Dim|None
+      """
+      # Also see Dim._OpLinearTerm.representative_tag().
+      # First find any dynamic.
+      for term_ in self.terms:
+        if term_.is_dynamic():
+          return term_
+      # Now find non-unspecified.
+      for term_ in self.terms:
+        if term_.kind != Dim.Types.Unspecified:
+          return term_
+      # Now find any.
+      for term_ in self.terms:
+        return term_
+      return None
 
   @classmethod
   def _get_description(cls, dim, brackets=True):
@@ -1827,7 +1862,7 @@ class Dim(object):
       # First find any dynamic.
       for term in self.terms:
         for term_ in term.terms:
-          if term_.dimension is None:
+          if term_.is_dynamic():
             return term_
       # Now find non-unspecified.
       for term in self.terms:
@@ -3032,7 +3067,7 @@ class Data(object):
           checks += [dyn_size_ext.get_runtime_sanity_check_op()]
     return tf.group(*checks)
 
-  def verify_out_shape(self, out_shape):
+  def verify_out_shape(self, out_shape, allow_missing_implicit_dims=False):
     """
     Verifies that ``out_shape`` matches our shape, i.e. specifically the dim tags.
       https://github.com/rwth-i6/returnn/issues/706
@@ -3041,15 +3076,21 @@ class Data(object):
     :param set[Dim|_MarkedDim]|tuple|list out_shape:
       It must be a set, with the only exception when it is empty (then it doesn't matter).
       See :func:`dim_tags_set`.
+    :param bool allow_missing_implicit_dims:
     """
+    actual_dims_str = "{%s}" % ", ".join(
+      [str(d) for d in list(self.dim_tags) + sorted(self.dim_tags_set_implicit_only_wrapped)])  # noqa
+    expected_dims_str = "{%s}" % ", ".join([str(d) for d in sorted(out_shape)])
     self_dim_tags = self.dim_tags_set_implicit
     self_dim_tags_implicit_only = self.dim_tags_set_implicit_only_wrapped
-    if not out_shape:
+    if not out_shape:  # allow also empty list or empty tuple
       if self_dim_tags:
         raise VerifyOutShapeException(
-          "%s verify_out_shape, with dims %s, does not match empty out_shape %r" % (self, self_dim_tags, out_shape))
+          "%s verify_out_shape:\n" % self +
+          "Actual dims: %s\nExpected empty out_shape: %s" % (actual_dims_str, expected_dims_str))
       return
     if not isinstance(out_shape, set):
+      # out_shape is not empty (tested above), so must be a set
       raise TypeError("%s verify_out_shape: expects a set but got %s" % (self, type(out_shape)))
     remaining = set(self_dim_tags)
     for dim in out_shape:
@@ -3059,8 +3100,8 @@ class Data(object):
         dim_tag = dim.tag
         if dim not in self_dim_tags_implicit_only:
           raise VerifyOutShapeException(
-            "%s verify_out_shape, with dims %s, with out_shape %s, %s is not an implicit dim in self" % (
-              self, self_dim_tags, out_shape, dim))
+            "%s verify_out_shape:\nActual dims: %s\nExpected out_shape: %s\n%s is not an implicit dim in self" % (
+              self, actual_dims_str, expected_dims_str, dim))
       elif isinstance(dim, OptionalDim):
         dim_tag = dim.tag
         if dim_tag not in remaining:
@@ -3071,15 +3112,22 @@ class Data(object):
       if dim_tag not in remaining:
         if dim_tag in self_dim_tags:  # can happen e.g. if specified once as implicit dim and then also as explicit
           raise VerifyOutShapeException(
-            "%s verify_out_shape, with dims %s, does not match out_shape %r, dim %s multiple times in out_shape" % (
-              self, self_dim_tags, out_shape, dim))
+            "%s verify_out_shape does not match:\n" % self +
+            "Actual dims: %s\nExpected out_shape: %s\n" % (actual_dims_str, expected_dims_str) +
+            "Dim %s multiple times in out_shape" % dim)
         raise VerifyOutShapeException(
-          "%s verify_out_shape, with dims %s, does not match out_shape %r, %s not in self" % (
-            self, self_dim_tags, out_shape, dim))
+          "%s verify_out_shape:\n" % self +
+          "Actual dims: %s\nExpected out_shape: %s" % (actual_dims_str, expected_dims_str) +
+          "Dim %s not in self" % dim)
       remaining.discard(dim_tag)
     if remaining:
-      raise VerifyOutShapeException(
-        "%s verify_out_shape, dims %s are not specified in out_shape %s" % (self, remaining, out_shape))
+      if allow_missing_implicit_dims and remaining.issubset(self.dim_tags_set_implicit_only):
+        pass  # ok
+      else:
+        raise VerifyOutShapeException(
+          "%s verify_out_shape missing dims:\n" % self +
+          "Actual dims: %s\nExpected out_shape: %s\n" % (actual_dims_str, expected_dims_str) +
+          "Missing dims: %s" % ", ".join(map(str, sorted(remaining))))
 
   def get_placeholder_kwargs(self, with_batch=True):
     """

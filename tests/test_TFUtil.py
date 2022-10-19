@@ -1223,6 +1223,26 @@ def test_Data_copy_feat_with_vocab():
   assert data2.vocab is vocab
 
 
+def test_Data_verify_out_shape_optional_implicit_dim():
+  # https://github.com/rwth-i6/returnn/issues/1153
+  from returnn.tf.util.data import batch_dim, FeatureDim, SpatialDim, BatchInfo, VerifyOutShapeException
+  batch = BatchInfo.make_global_batch_info(-1)
+  time_dim = SpatialDim("time")
+  time_dim.batch = batch
+  time_dim.dyn_size_ext = Data("dyn_size_ext", dim_tags=[batch_dim], dtype="int32", batch=batch)
+  feat_dim = FeatureDim("feat", dimension=3)
+  x = Data("x", dim_tags=[time_dim, feat_dim])
+  try:
+    x.verify_out_shape({time_dim, feat_dim})
+  except VerifyOutShapeException as exc:
+    print("Got expected exception:", exc)
+    assert "Missing dims" in str(exc)
+  else:
+    raise Exception("did not get expected exception")
+  # This should not raise an exception:
+  x.verify_out_shape({time_dim, feat_dim}, allow_missing_implicit_dims=True)
+
+
 def test_Dim_copy():
   # https://github.com/rwth-i6/returnn/issues/860
   import copy
@@ -1471,6 +1491,92 @@ def test_dim_math_pad_dummy_equal():
   # assert time__ == pad_dim + time  # tricky
   # assert 1 + time == pad_dim + time  # more tricky than the others...
   x.verify_out_shape({batch_dim, time__})
+
+
+def test_dim_math_pad_dummy_equal2():
+  # The same as test_dim_math_pad_dummy_equal but with explicit BatchInfo.
+  # We have had the case where just this aspect caused the test to fail.
+  # Even worse: the declare_same_as really caused different behavior due to this.
+  # More specifically, the batch causes that Data._adapt_batch_consistent_dim_tags
+  # and thus Dim.get_for_batch_ctx gets called, and this makes the difference.
+  # This causes a call to complete_dyn_size, and then the time_ dim is defined.
+  # I.e. in the declare_same_as call, `self.is_dim_known() and not other.is_dim_known()` is True
+  # in contrast to before. This swaps the order of the declare_same_as calls.
+  from returnn.tf.util.data import batch_dim, BatchInfo
+  batch = BatchInfo.make_global_batch_info(-1)
+  time = SpatialDim("time")
+  time.batch = batch
+  time.dyn_size_ext = Data("dyn_size_ext", dim_tags=[batch_dim], dtype="int32", batch=batch)
+  pad_dim = SpatialDim("prefix", 1)
+  x = Data("x", dim_tags=[batch_dim, pad_dim + time], batch=batch)
+  time_ = pad_dim + time
+  time_ = x.get_dim_tag_from_description(time_)
+  time__ = 1 + time
+  assert time_ != time__
+  time_.declare_same_as(time__)
+  assert time_ == time__
+  assert time_ == 1 + time
+  assert time__ == 1 + time
+  # assert time_ == pad_dim + time  # still tricky
+  x.verify_out_shape({batch_dim, time__})
+
+
+def test_dim_math_pad_dummy_equal3():
+  # Again very similar to test_dim_math_pad_dummy_equal2
+  # but more directly testing with Dim.get_for_batch_ctx.
+  # Like test_prev_target_seq from returnn_common.
+  from returnn.tf.util.data import batch_dim, BatchInfo
+  batch = BatchInfo.make_global_batch_info(-1)
+  spatial_dim = SpatialDim("time")
+  spatial_dim.batch = batch
+  spatial_dim.dyn_size_ext = Data("dyn_size_ext", dim_tags=[batch_dim], dtype="int32", batch=batch)
+  pad_dim = SpatialDim("bos-prefix", 1)
+  dim__ = sum([pad_dim, spatial_dim])
+  dim__ = dim__.get_for_batch_ctx(batch=batch, ctx=None)
+  dim__.declare_same_as(1 + spatial_dim)
+  print(dim__)
+  assert dim__ == 1 + spatial_dim
+
+
+def test_dim_math_add_dyn_defined():
+  from returnn.tf.util.data import batch_dim, BatchInfo
+  batch = BatchInfo.make_global_batch_info(-1)
+  d = SpatialDim("time")
+  print("d=", d)
+  d.batch = batch
+  d.dyn_size_ext = Data("dyn_size_ext", dim_tags=[batch_dim], batch=batch)
+  print("d=", d)
+  y = sum([d - 1, d])
+  print("y=", y)
+  y = y.get_for_batch_ctx(batch=batch, ctx=None)
+  print("y=", y)
+  assert y.dyn_size_ext and y.dyn_size_ext.dim_tags == (batch_dim,)
+
+
+def test_dim_math_feat_declare_same_as_circle():
+  # We had this logic in returnn_common relative_positional_encoding,
+  # where we used concat.
+  # The implementation of relative_positional_encoding might change at some point,
+  # however, this logic here should still work.
+  # At some point, this failed because there was an infinite recursion loop
+  # in the Dim.__hash__ function due to the declare_same_as.
+  feat_dim = FeatureDim("feat", 12)
+  feat2_dim = feat_dim // 2
+  feat_dim_ = feat2_dim + feat2_dim
+  print(feat_dim_)
+  feat_dim_.declare_same_as(feat_dim)
+  print(feat_dim_, "==", feat_dim)
+  assert feat_dim_ == feat_dim
+  s = {feat_dim, feat2_dim, feat_dim_}
+  assert s == {feat_dim, feat2_dim}
+
+
+def test_dim_math_derived():
+  from returnn.tf.util.data import SpatialDim
+  time_dim = SpatialDim("time")
+  time_dim_2 = time_dim * 2
+  assert time_dim_2.derived_from_tag == time_dim
+  assert time_dim_2.get_same_derived_base() == time_dim
 
 
 def test_sequence_mask_len_via_loop():
