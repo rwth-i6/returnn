@@ -505,7 +505,7 @@ class Dim(object):
     """
     if self.is_batch_dim():
       return True
-    if self.dimension is not None:
+    if not self.is_dynamic() and self.dimension is not None:
       return True
     if self.dyn_size_ext:
       return True
@@ -964,6 +964,10 @@ class Dim(object):
       # We actually want it to be the other way around.
       other_same_base.declare_same_as(self_same_as)
       return
+    if self.batch:
+      # If self is defined (self.is_dim_known), be fair to other, and adapt it to the right batch,
+      # such that other.is_dim_known is correct, by potentially completing it.
+      other = other.get_for_batch_ctx(self.batch, ctx=self.control_flow_ctx)
     if self.is_dim_known() and not other.is_dim_known():
       if self_same_as._creation_idx < other_same_base._creation_idx:
         # We want to keep self instead.
