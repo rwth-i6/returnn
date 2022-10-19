@@ -2823,9 +2823,6 @@ class Data(object):
       if time_dim_axis is NotSpecified:
         time_dim_axis = _default_time_dim_axis_dim_tags(dim_tags)
       dim_tags = tuple(dim_tags)
-      if batch_dim_axis_ is not None:
-        if dim_tags[batch_dim_axis_].batch and not self._batch:
-          self._batch = dim_tags[batch_dim_axis_].batch
       del shape_
       del batch_dim_axis_
     else:
