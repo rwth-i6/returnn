@@ -280,6 +280,11 @@ jobs:
           pip install --user nose
         fi
 
+        if [[ "${{matrix.tf-version}}" == 2.[0123].* || "${{matrix.tf-version}}" == 1.* ]]; then
+          # Older TF needs older NumPy version.
+          # https://github.com/rwth-i6/returnn/pull/1160#issuecomment-1284537803
+          pip install --user numpy==1.19.5
+        fi
         pip install --user -r requirements.txt | cat
         pip install --user --upgrade tensorflow==${{ matrix.tf-version }} | cat
 
