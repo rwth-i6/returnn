@@ -3049,7 +3049,7 @@ class Data(object):
           checks += [dyn_size_ext.get_runtime_sanity_check_op()]
     return tf.group(*checks)
 
-  def verify_out_shape(self, out_shape):
+  def verify_out_shape(self, out_shape, allow_missing_implicit_dims=False):
     """
     Verifies that ``out_shape`` matches our shape, i.e. specifically the dim tags.
       https://github.com/rwth-i6/returnn/issues/706
@@ -3058,6 +3058,7 @@ class Data(object):
     :param set[Dim|_MarkedDim]|tuple|list out_shape:
       It must be a set, with the only exception when it is empty (then it doesn't matter).
       See :func:`dim_tags_set`.
+    :param bool allow_missing_implicit_dims:
     """
     actual_dims_str = "{%s}" % ", ".join(
       [str(d) for d in list(self.dim_tags) + sorted(self.dim_tags_set_implicit_only_wrapped)])  # noqa
@@ -3102,10 +3103,13 @@ class Data(object):
           "Dim %s not in self" % dim)
       remaining.discard(dim_tag)
     if remaining:
-      raise VerifyOutShapeException(
-        "%s verify_out_shape missing dims:\n" % self +
-        "Actual dims: %s\nExpected out_shape: %s\n" % (actual_dims_str, expected_dims_str) +
-        "Missing dims: %s" % ", ".join(map(str, sorted(remaining))))
+      if allow_missing_implicit_dims and remaining.issubset(self.dim_tags_set_implicit_only):
+        pass  # ok
+      else:
+        raise VerifyOutShapeException(
+          "%s verify_out_shape missing dims:\n" % self +
+          "Actual dims: %s\nExpected out_shape: %s\n" % (actual_dims_str, expected_dims_str) +
+          "Missing dims: %s" % ", ".join(map(str, sorted(remaining))))
 
   def get_placeholder_kwargs(self, with_batch=True):
     """
