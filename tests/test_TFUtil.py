@@ -1509,7 +1509,7 @@ def test_dim_math_pad_dummy_equal3():
   batch = BatchInfo.make_global_batch_info(-1)
   spatial_dim = SpatialDim("time")
   spatial_dim.batch = batch
-  spatial_dim.dyn_size_ext = Data("dyn_size_ext", dim_tags=[batch_dim], dtype="int32")
+  spatial_dim.dyn_size_ext = Data("dyn_size_ext", dim_tags=[batch_dim], dtype="int32", batch=batch)
   pad_dim = SpatialDim("bos-prefix", 1)
   dim__ = sum([pad_dim, spatial_dim])
   dim__ = dim__.get_for_batch_ctx(batch=batch, ctx=None)
