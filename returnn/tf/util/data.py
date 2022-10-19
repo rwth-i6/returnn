@@ -3059,14 +3059,19 @@ class Data(object):
       It must be a set, with the only exception when it is empty (then it doesn't matter).
       See :func:`dim_tags_set`.
     """
+    actual_dims_str = "{%s}" % ", ".join(
+      [str(d) for d in list(self.dim_tags) + sorted(self.dim_tags_set_implicit_only_wrapped)])  # noqa
+    expected_dims_str = "{%s}" % ", ".join([str(d) for d in sorted(out_shape)])
     self_dim_tags = self.dim_tags_set_implicit
     self_dim_tags_implicit_only = self.dim_tags_set_implicit_only_wrapped
-    if not out_shape:
+    if not out_shape:  # allow also empty list or empty tuple
       if self_dim_tags:
         raise VerifyOutShapeException(
-          "%s verify_out_shape:\nActual dims: %s\nExpected empty out_shape: %r" % (self, self_dim_tags, out_shape))
+          "%s verify_out_shape:\n" % self +
+          "Actual dims: %s\nExpected empty out_shape: %s" % (actual_dims_str, expected_dims_str))
       return
     if not isinstance(out_shape, set):
+      # out_shape is not empty (tested above), so must be a set
       raise TypeError("%s verify_out_shape: expects a set but got %s" % (self, type(out_shape)))
     remaining = set(self_dim_tags)
     for dim in out_shape:
@@ -3077,7 +3082,7 @@ class Data(object):
         if dim not in self_dim_tags_implicit_only:
           raise VerifyOutShapeException(
             "%s verify_out_shape:\nActual dims: %s\nExpected out_shape: %s\n%s is not an implicit dim in self" % (
-              self, self_dim_tags, out_shape, dim))
+              self, actual_dims_str, expected_dims_str, dim))
       elif isinstance(dim, OptionalDim):
         dim_tag = dim.tag
         if dim_tag not in remaining:
@@ -3089,17 +3094,18 @@ class Data(object):
         if dim_tag in self_dim_tags:  # can happen e.g. if specified once as implicit dim and then also as explicit
           raise VerifyOutShapeException(
             "%s verify_out_shape does not match:\n" % self +
-            "Actual dims: %s\nExpected out_shape: %r\n" % (self_dim_tags, out_shape) +
+            "Actual dims: %s\nExpected out_shape: %s\n" % (actual_dims_str, expected_dims_str) +
             "Dim %s multiple times in out_shape" % dim)
         raise VerifyOutShapeException(
-          "%s verify_out_shape, with dims %s, does not match out_shape %r, %s not in self" % (
-            self, self_dim_tags, out_shape, dim))
+          "%s verify_out_shape:\n" % self +
+          "Actual dims: %s\nExpected out_shape: %s" % (actual_dims_str, expected_dims_str) +
+          "Dim %s not in self" % dim)
       remaining.discard(dim_tag)
     if remaining:
       raise VerifyOutShapeException(
         "%s verify_out_shape missing dims:\n" % self +
-        "Actual dims: %s\nExpected out_shape: %r\n" % (self_dim_tags, out_shape) +
-        "Missing dims: %s" % (remaining,))
+        "Actual dims: %s\nExpected out_shape: %s\n" % (actual_dims_str, expected_dims_str) +
+        "Missing dims: %s" % ", ".join(map(str, sorted(remaining))))
 
   def get_placeholder_kwargs(self, with_batch=True):
     """
