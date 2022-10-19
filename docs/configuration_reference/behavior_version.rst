@@ -25,17 +25,6 @@ Version History
 Behavior version 15 (2022-10-19)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Dimension tags with different dynamic size tensors
-can not be merged anymore via `declare_same_as`.
-This can happen when the user did not set the dim tags
-correctly in `extern_data`.
-Otherwise it is likely a bug.
-
-See issue `#1141 <https://github.com/rwth-i6/returnn/issues/1141>`__.
-
-Behavior version 14 (2022-10-19)
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
 The dim matching in :class:`DotLayer` is now more strict
 for the case that ``var1`` and ``var2`` are not provided,
 to figure out the common dims.
@@ -45,6 +34,17 @@ e.g. because you are not using dim tags consistently,
 then just specify ``var1`` and ``var2`` explicitly.
 
 See issue `#1154 <https://github.com/rwth-i6/returnn/issues/1154>`__.
+
+Behavior version 14 (2022-10-17)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Dimension tags with different dynamic size tensors
+can not be merged anymore via `declare_same_as`.
+This can happen when the user did not set the dim tags
+correctly in `extern_data`.
+Otherwise it is likely a bug.
+
+See issue `#1141 <https://github.com/rwth-i6/returnn/issues/1141>`__.
 
 Behavior version 13 (2022-10-13)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
