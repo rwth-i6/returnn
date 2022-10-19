@@ -2889,21 +2889,26 @@ class OpCodeCompiler(NativeCodeCompiler):
       return nvcc_opts
     return super(OpCodeCompiler, self)._transform_compiler_opts(opts)
 
-  @classmethod
-  def _cpp_common_opts(cls):
+  @staticmethod
+  def _cpp_std_version_opt():
     tf_gcc_version = get_tf_gcc_version()
     if tf_gcc_version and int(tf_gcc_version[0]) <= 5:
       # GCC4 does not support c++14, needed to support TF 1.14 and earlier
       #   https://github.com/rwth-i6/returnn/pull/875
       # GCC5 also has problems. https://github.com/rwth-i6/returnn/issues/890
-      cpp_version_opt = "-std=c++11"
+      return "-std=c++11"
+    elif have_min_tf_version((2, 10)):
+      # TF >=2.10 uses C++17 by default.
+      # https://github.com/tensorflow/tensorflow/blob/v2.10.0/.bazelrc#L334
+      # This we need to use this as well to avoid any abseil errors such as:
+      #   undefined symbol: _ZN10tensorflow8str_util13StringReplaceB5cxx11EN4absl12lts_2022062311string_viewES3_S3_b
+      return "-std=c++17"
     else:
-      cpp_version_opt = "-std=c++14"
-    return [cpp_version_opt]
+      return "-std=c++14"
 
   def _extra_common_opts(self):
     if self.is_cpp:
-      return self._cpp_common_opts()
+      return [self._cpp_std_version_opt()]
     return []
 
   def load_tf_module(self):
@@ -2949,7 +2954,7 @@ class TFNativeUtilCompiler(NativeCodeCompiler):
   def _extra_common_opts(self):
     if self.is_cpp:
       # noinspection PyProtectedMember
-      return OpCodeCompiler._cpp_common_opts()
+      return [OpCodeCompiler._cpp_std_version_opt()]
     return []
 
   def _make_info_dict(self):

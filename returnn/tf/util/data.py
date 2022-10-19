@@ -2822,11 +2822,6 @@ class Data(object):
       if time_dim_axis is NotSpecified:
         time_dim_axis = _default_time_dim_axis_dim_tags(dim_tags)
       dim_tags = tuple(dim_tags)
-      if auto_create_placeholders:
-        _auto_create_size_placeholders_on_dim_tags(name=name, dim_tags=dim_tags)
-      if batch_dim_axis_ is not None:
-        if dim_tags[batch_dim_axis_].batch and not self._batch:
-          self._batch = dim_tags[batch_dim_axis_].batch
       del shape_
       del batch_dim_axis_
     else:
@@ -2845,7 +2840,7 @@ class Data(object):
       dim_tags = _infer_dim_tags_tuple_from_shape(
         shape, batch_dim_axis=batch_dim_axis, time_dim_axis=time_dim_axis, feature_dim_axis=feature_dim_axis,
         size_placeholder=size_placeholder, name=name,
-        auto_create_placeholders=auto_create_placeholders,
+        extern_data=auto_create_placeholders,
         dim_tags=dim_tags, sparse=sparse)
       del batch_dim_axis
       del shape
@@ -2892,8 +2887,10 @@ class Data(object):
         base_tag = self._dim_tags[_axis]
         if base_tag != _dim_tag:
           base_tag.declare_same_as(_dim_tag)
-          if _dim_tag.dyn_size is not None:
-            self.set_dynamic_size(_axis, _dim_tag.dyn_size)
+        self._dim_tags = self._dim_tags[:_axis] + (_dim_tag,) + self._dim_tags[_axis + 1:]
+    if auto_create_placeholders:
+      # Do that after same_dim_tags_as handling.
+      _auto_create_size_placeholders_on_dim_tags(name=name, dim_tags=self._dim_tags)
     self._adapt_batch_consistent_dim_tags()
     self.sanity_check(assume_complete=False)
 
@@ -5779,7 +5776,7 @@ def _infer_dim_tags_tuple_from_shape(
   size_placeholder,
   dim_tags,
   name,
-  auto_create_placeholders
+  extern_data
 ):
   """
   :param tuple[int|None]|list[int|None] shape: this is without batch-dim-axis
@@ -5789,7 +5786,7 @@ def _infer_dim_tags_tuple_from_shape(
   :param bool sparse:
   :param dict[int,tf.Tensor]|None size_placeholder: key is axis without batch-dim
   :param dict[int,Dim]|None dim_tags: some existing explicitly specified dim tags. key is axis with batch-dim
-  :param bool auto_create_placeholders:
+  :param bool extern_data:
   :param str name:
   :return: dim tags tuple
   :rtype: tuple[Dim]
@@ -5807,8 +5804,6 @@ def _infer_dim_tags_tuple_from_shape(
   dim_tags = dim_tags.copy() if dim_tags else {}
   if batch_dim_axis is not None and batch_dim_axis not in dim_tags:
     dim_tags[batch_dim_axis] = Dim(kind=Dim.Types.Batch, description="batch:%s" % name)
-  # noinspection PyShadowingNames
-  batch_dim = dim_tags[batch_dim_axis] if batch_dim_axis is not None else None
   # Note: Consistent to Data.get_dim_tag,
   # prefer interpretation as spatial axis if there is a dynamic size or this is marked as time axis.
   if size_placeholder:
@@ -5832,7 +5827,7 @@ def _infer_dim_tags_tuple_from_shape(
     axis_wo_b = _get_axis_wo_b(axis, batch_dim_axis=batch_dim_axis)
     dyn_size = size_placeholder.get(axis_wo_b) if (size_placeholder and axis_wo_b is not None) else None
     dim = batch_shape[axis]
-    if auto_create_placeholders and dim is None and dyn_size is None and axis != batch_dim_axis:
+    if extern_data and dim is None and dyn_size is None and axis != batch_dim_axis:
       if not tag:
         if axis == time_dim_axis:
           tag_name = "time"
@@ -5844,7 +5839,6 @@ def _infer_dim_tags_tuple_from_shape(
           # This is such that Dim.is_equal behaves as before, e.g. in Data.get_common_data.
           kind=Dim.Types.Spatial)
         dim_tags[axis] = tag
-      _create_size_placeholder(name=name, axis_wo_b=axis_wo_b, tag=tag, batch_dim=batch_dim)
       dyn_size = tag.dyn_size
     if tag:
       # Just some sanity checks.
