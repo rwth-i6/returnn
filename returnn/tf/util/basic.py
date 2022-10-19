@@ -2954,7 +2954,7 @@ class TFNativeUtilCompiler(NativeCodeCompiler):
   def _extra_common_opts(self):
     if self.is_cpp:
       # noinspection PyProtectedMember
-      return OpCodeCompiler._cpp_common_opts()
+      return [OpCodeCompiler._cpp_std_version_opt()]
     return []
 
   def _make_info_dict(self):
