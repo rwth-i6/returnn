@@ -22,6 +22,19 @@ and not listing legacy/deprecated parameters.
 Version History
 ---------------
 
+Behavior version 14 (2022-10-19)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The dim matching in :class:`DotLayer` is now more strict
+for the case that ``var1`` and ``var2`` are not provided,
+to figure out the common dims.
+
+If this causes problems to you,
+e.g. because you are not using dim tags consistently,
+then just specify ``var1`` and ``var2`` explicitly.
+
+See issue `#1154 <https://github.com/rwth-i6/returnn/issues/1154>`__.
+
 Behavior version 13 (2022-10-13)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
