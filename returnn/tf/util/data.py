@@ -907,22 +907,25 @@ class Dim(object):
       assert base
     return base
 
-  def get_derived_bases_list(self):
+  def get_derived_bases_set(self):
     """
-    :rtype: list[Dim]
+    :rtype: set[Dim]
     """
-    res = [self]
-    base = self
-    visited = {}
-    while base.same_as or base.derived_from_tag:
-      assert id(base) not in visited  # should not have cycles. normally this should never be triggered
-      visited[id(base)] = base
+    res = set()
+    queue = [self]
+    visited = {}  # type: typing.Dict[int,Dim]  # by id
+    while queue:
+      base = queue.pop(-1)
       if base.same_as:
         base = base.same_as
+      if id(base) in visited:
         continue
-      base = base.derived_from_tag
-      assert base
-      res.append(base)
+      visited[id(base)] = base
+      res.add(base)
+      if base.derived_from_op:
+        queue.extend(base.derived_from_op.inputs)
+      elif base.derived_from_tag:
+        queue.append(base.derived_from_tag)
     return res
 
   @property
@@ -974,8 +977,8 @@ class Dim(object):
         # https://github.com/rwth-i6/returnn_common/issues/200
         other_same_base.declare_same_as(self_same_as)
         return
-    other_derived_bases = set(other.get_derived_bases_list())
-    self_derived_bases = set(self.get_derived_bases_list())
+    other_derived_bases = other.get_derived_bases_set()
+    self_derived_bases = self.get_derived_bases_set()
     assert other_derived_bases != self_derived_bases
     if self_derived_bases.issubset(other_derived_bases):
       # Avoid cycles on derived_from_tag. https://github.com/rwth-i6/returnn/issues/1054
@@ -1035,10 +1038,12 @@ class Dim(object):
       other_same_base._vocab = self._vocab
     elif other_same_base._vocab and not self._vocab:
       self._vocab = other_same_base._vocab
-    if self.derived_from_op and not other_same_base.derived_from_op:
-      other_same_base.derived_from_op = self.derived_from_op
-    elif other_same_base.derived_from_op and not self.derived_from_op:
-      self.derived_from_op = other_same_base.derived_from_op
+    # Take over derived_from_op. However, only if this would not introduce cycles!
+    if not self_derived_bases.issuperset(other_derived_bases):
+      if self.derived_from_op and not other_same_base.derived_from_op:
+        other_same_base.derived_from_op = self.derived_from_op
+      elif other_same_base.derived_from_op and not self.derived_from_op:
+        self.derived_from_op = other_same_base.derived_from_op
 
   def _merge_same_for_batch_ctx_dict(self, other):
     """
@@ -1103,7 +1108,7 @@ class Dim(object):
           if unique_separate_axes:
             existing_tag_collection_for_data.remove(existing_tag)  # don't take it again for this data
           replace_existing = existing_tag.undefined and not tag.undefined and tag.dimension == existing_tag.dimension
-          if tag != existing_tag and tag in existing_tag.get_derived_bases_list():
+          if tag != existing_tag and tag in existing_tag.get_derived_bases_set():
             replace_existing = True
           if replace_existing:  # Replace the existing by the new tag.
             tags[tags.index(existing_tag)] = tag
