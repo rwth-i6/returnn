@@ -1533,6 +1533,24 @@ def test_dim_math_add_dyn_defined():
   assert y.dyn_size_ext and y.dyn_size_ext.dim_tags == (batch_dim,)
 
 
+def test_dim_math_feat_declare_same_as_circle():
+  # We had this logic in returnn_common relative_positional_encoding,
+  # where we used concat.
+  # The implementation of relative_positional_encoding might change at some point,
+  # however, this logic here should still work.
+  # At some point, this failed because there was an infinite recursion loop
+  # in the Dim.__hash__ function due to the declare_same_as.
+  feat_dim = FeatureDim("feat", 12)
+  feat2_dim = feat_dim // 2
+  feat_dim_ = feat2_dim + feat2_dim
+  print(feat_dim_)
+  feat_dim_.declare_same_as(feat_dim)
+  print(feat_dim_, "==", feat_dim)
+  assert feat_dim_ == feat_dim
+  s = {feat_dim, feat2_dim, feat_dim_}
+  assert s == {feat_dim, feat2_dim}
+
+
 def test_sequence_mask_len_via_loop():
   seq_len = tf.while_loop(
     cond=lambda x: tf.less(x[0], 2),
