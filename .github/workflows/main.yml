@@ -17,7 +17,10 @@ jobs:
         python-version:
           - 3.7
         tf-version:
-          - 2.10.0
+          # Below we have a newer TF version for the TF tests.
+          # However, it seems somewhat broken for the inspections,
+          # so we keep this older TF version for now just for the inspections.
+          - 2.4.2
 
     steps:
     - uses: actions/checkout@v3
