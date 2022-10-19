@@ -1249,6 +1249,8 @@ class SliceNdLayer(_ConcatInputLayer):
       size = None
     if isinstance(size, Dim):
       if out_spatial_dim:
+        if not out_spatial_dim.is_dim_known():
+          out_spatial_dim.declare_same_as(size)
         assert size == out_spatial_dim
       else:
         out_spatial_dim = size
