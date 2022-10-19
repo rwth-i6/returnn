@@ -1243,6 +1243,22 @@ def test_Data_verify_out_shape_optional_implicit_dim():
   x.verify_out_shape({time_dim, feat_dim}, allow_missing_implicit_dims=True)
 
 
+def test_Data_auto_create_placeholders_same_dim_tags_as_existing():
+  # Came up via: https://github.com/rwth-i6/returnn/pull/1143
+  n_out = 3
+  time_tag = SpatialDim("time")
+  with tf.Graph().as_default() as graph, tf_compat.v1.Session(graph=graph) as session:
+    assert isinstance(graph, tf.Graph)
+    data = Data("data", dim=n_out, same_dim_tags_as={"t": time_tag}, auto_create_placeholders=True)
+    classes = Data("classes", dim=n_out, sparse=True, same_dim_tags_as={"t": time_tag}, auto_create_placeholders=True)
+    assert time_tag.dyn_size is not None  # this is not so relevant and might change
+    seq_len = time_tag.dyn_size
+    assert seq_len is data.get_sequence_lengths() is classes.get_sequence_lengths()
+    assert seq_len.op.type == "Placeholder"
+    placeholder_ops = [op for op in graph.get_operations() if op.type == "Placeholder"]
+    assert_equal(set(placeholder_ops), {data.placeholder.op, classes.placeholder.op, time_tag.dyn_size.op})
+
+
 def test_Dim_copy():
   # https://github.com/rwth-i6/returnn/issues/860
   import copy

@@ -2223,12 +2223,13 @@ def test_SplitDimsLayer_dim_tags():
     feat_dim = FeatureDim("feat", 3)
     config = Config({
       "extern_data": {"data": {"dim_tags": [batch_dim, time_dim, feat_dim]}}})
-    net = TFNetwork(config=config)
-    net.construct_from_dict({
-      "output": {
-        'class': 'split_dims', 'from': 'data', 'axis': time_dim, 'dims': [rem_dim, window_dim],
-        'out_shape': {batch_dim, rem_dim, window_dim, feat_dim}}
-    })
+    with make_scope():
+      net = TFNetwork(config=config)
+      net.construct_from_dict({
+        "output": {
+          'class': 'split_dims', 'from': 'data', 'axis': time_dim, 'dims': [rem_dim, window_dim],
+          'out_shape': {batch_dim, rem_dim, window_dim, feat_dim}}
+      })
 
 
 def test_SplitDimsLayer_dim_tags_expand():
@@ -2238,12 +2239,13 @@ def test_SplitDimsLayer_dim_tags_expand():
   expand_dim = SpatialDim("expand_dim", 1)
   config = Config({
     "extern_data": {"data": {"dim_tags": [batch_dim, time_dim, feat_dim]}}})
-  net = TFNetwork(config=config)
-  net.construct_from_dict({
-    "output": {
-      'class': 'split_dims', 'from': 'data', 'axis': feat_dim, 'dims': [feat_dim, expand_dim],
-      'out_shape': {batch_dim, time_dim, feat_dim, expand_dim}}
-  })
+  with make_scope():
+    net = TFNetwork(config=config)
+    net.construct_from_dict({
+      "output": {
+        'class': 'split_dims', 'from': 'data', 'axis': feat_dim, 'dims': [feat_dim, expand_dim],
+        'out_shape': {batch_dim, time_dim, feat_dim, expand_dim}}
+    })
 
 
 def test_SplitDimsLayer_dim_tags_split_batch_simple():
