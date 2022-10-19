@@ -1666,7 +1666,26 @@ class Dim(object):
       return Dim(
         kind=dim_kind, description="*".join(map(Dim._get_description, self.terms)),
         dimension=self.dimension,
-        derived_from_op=Dim.Op(kind="mul", inputs=list(self.terms)))
+        derived_from_op=Dim.Op(kind="mul", inputs=list(self.terms)),
+        derived_from_tag=self.representative_tag())
+
+    def representative_tag(self):
+      """
+      :rtype: Dim|None
+      """
+      # Also see Dim._OpLinearTerm.representative_tag().
+      # First find any dynamic.
+      for term_ in self.terms:
+        if term_.is_dynamic():
+          return term_
+      # Now find non-unspecified.
+      for term_ in self.terms:
+        if term_.kind != Dim.Types.Unspecified:
+          return term_
+      # Now find any.
+      for term_ in self.terms:
+        return term_
+      return None
 
   @classmethod
   def _get_description(cls, dim, brackets=True):
@@ -1844,7 +1863,7 @@ class Dim(object):
       # First find any dynamic.
       for term in self.terms:
         for term_ in term.terms:
-          if term_.dimension is None:
+          if term_.is_dynamic():
             return term_
       # Now find non-unspecified.
       for term in self.terms:
