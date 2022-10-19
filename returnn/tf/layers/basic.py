@@ -7137,11 +7137,14 @@ class DotLayer(LayerBase):
     :rtype: (list[int], list[int])
     """
     from returnn.util import BehaviorVersion
-    is_equal_opts = dict(
-      treat_feature_as_spatial=True, allow_same_spatial_dim=True,
-      undefined_matches=True, derived_matches=True)
-    if BehaviorVersion.get() < 11:
-      is_equal_opts["broadcast_matches"] = True
+    if BehaviorVersion.get() >= 14:
+      is_equal_opts = {}
+    else:
+      is_equal_opts = dict(
+        treat_feature_as_spatial=True, allow_same_spatial_dim=True,
+        undefined_matches=True, derived_matches=True)
+      if BehaviorVersion.get() < 11:
+        is_equal_opts["broadcast_matches"] = True
     tags1 = [None if i in red1 else tag for (i, tag) in enumerate(source1.dim_tags)]
     tags2 = [None if i in red2 else tag for (i, tag) in enumerate(source2.dim_tags)]
     var1 = [

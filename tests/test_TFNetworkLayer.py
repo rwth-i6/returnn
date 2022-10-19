@@ -7145,6 +7145,88 @@ def test_DotLayer_sparse_input():
     session.run(layer.output.placeholder, feed_dict=feed_dict)
 
 
+def test_DotLayer_dim_wrong_matching_same_dim_value():
+  from returnn.tf.util.data import batch_dim, SpatialDim, FeatureDim
+  time_dim = SpatialDim("time")
+  feat_dim = FeatureDim("feat", dimension=5)
+  feat2_dim = FeatureDim("other-feat", dimension=5)
+
+  # First directly check DotLayer.get_out_data_from_opts.
+  # This is more similar like we have it in returnn_common
+  # and might trigger different errors due to the dim matching logic of DotLayer,
+  # which behaves slightly different when there are no size_placeholders set yet,
+  # see Dim.is_equal with unknown_spatial_matches.
+  a = Data("a", dim_tags=[batch_dim, time_dim, feat_dim])
+  b = Data("b", dim_tags=[batch_dim, time_dim, feat2_dim])
+  net = TFNetwork(config=Config(), extern_data=ExternData())
+  out = DotLayer.get_out_data_from_opts(
+    name="dot",
+    sources=[InternalLayer(name="a", network=net, output=a), InternalLayer(name="b", network=net, output=b)],
+    reduce=time_dim)
+  assert out.dim_tags == (batch_dim, feat_dim, feat2_dim)
+
+  # Now full config.
+  config = Config({
+    "extern_data": {
+      "a": {"dim_tags": [batch_dim, time_dim, feat_dim]},
+      "b": {"dim_tags": [batch_dim, time_dim, feat2_dim]},
+    },
+    "network": {
+      "output": {"class": "dot", "from": ["data:a", "data:b"], "reduce": time_dim},
+    },
+    "debug_runtime_sanity_checks": True,
+  })
+  with make_scope() as session:
+    net = TFNetwork(config=config)
+    net.construct_from_dict(config.typed_dict["network"])
+    layer = net.get_default_output_layer()
+    assert layer.output.dim_tags == (batch_dim, feat_dim, feat2_dim)
+    feed_dict = make_feed_dict(net.extern_data)
+    session.run(layer.output.placeholder, feed_dict=feed_dict)
+
+
+def test_DotLayer_dim_wrong_matching_derived():
+  from returnn.tf.util.data import batch_dim, SpatialDim, FeatureDim
+  time_dim = SpatialDim("time")
+  time_dim_2 = time_dim * 2
+  assert time_dim_2.derived_from_tag == time_dim
+  assert time_dim_2.get_same_derived_base() == time_dim
+  feat_dim = FeatureDim("feat", dimension=5)
+
+  # First directly check DotLayer.get_out_data_from_opts.
+  # This is more similar like we have it in returnn_common
+  # and might trigger different errors due to the dim matching logic of DotLayer,
+  # which behaves slightly different when there are no size_placeholders set yet,
+  # see Dim.is_equal with unknown_spatial_matches.
+  a = Data("a", dim_tags=[batch_dim, time_dim, feat_dim])
+  b = Data("b", dim_tags=[batch_dim, time_dim_2, feat_dim])
+  net = TFNetwork(config=Config(), extern_data=ExternData())
+  out = DotLayer.get_out_data_from_opts(
+    name="dot",
+    sources=[InternalLayer(name="a", network=net, output=a), InternalLayer(name="b", network=net, output=b)],
+    reduce=feat_dim)
+  assert out.dim_tags == (batch_dim, time_dim, time_dim_2)
+
+  # Now full config.
+  config = Config({
+    "extern_data": {
+      "a": {"dim_tags": [batch_dim, time_dim, feat_dim]},
+      "b": {"dim_tags": [batch_dim, time_dim_2, feat_dim]},
+    },
+    "network": {
+      "output": {"class": "dot", "from": ["data:a", "data:b"], "reduce": feat_dim},
+    },
+    "debug_runtime_sanity_checks": True,
+  })
+  with make_scope() as session:
+    net = TFNetwork(config=config)
+    net.construct_from_dict(config.typed_dict["network"])
+    layer = net.get_default_output_layer()
+    assert layer.output.dim_tags == (batch_dim, time_dim, time_dim_2)
+    feed_dict = make_feed_dict(net.extern_data)
+    session.run(layer.output.placeholder, feed_dict=feed_dict)
+
+
 def test_subnet_load_on_init():
   import tempfile
   model_tmp_dir = tempfile.mkdtemp("tmp-checkpoint")
