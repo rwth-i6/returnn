@@ -3064,7 +3064,7 @@ class Data(object):
     if not out_shape:
       if self_dim_tags:
         raise VerifyOutShapeException(
-          "%s verify_out_shape, with dims %s, does not match empty out_shape %r" % (self, self_dim_tags, out_shape))
+          "%s verify_out_shape:\nActual dims: %s\nExpected empty out_shape: %r" % (self, self_dim_tags, out_shape))
       return
     if not isinstance(out_shape, set):
       raise TypeError("%s verify_out_shape: expects a set but got %s" % (self, type(out_shape)))
@@ -3076,7 +3076,7 @@ class Data(object):
         dim_tag = dim.tag
         if dim not in self_dim_tags_implicit_only:
           raise VerifyOutShapeException(
-            "%s verify_out_shape, with dims %s, with out_shape %s, %s is not an implicit dim in self" % (
+            "%s verify_out_shape:\nActual dims: %s\nExpected out_shape: %s\n%s is not an implicit dim in self" % (
               self, self_dim_tags, out_shape, dim))
       elif isinstance(dim, OptionalDim):
         dim_tag = dim.tag
@@ -3088,15 +3088,18 @@ class Data(object):
       if dim_tag not in remaining:
         if dim_tag in self_dim_tags:  # can happen e.g. if specified once as implicit dim and then also as explicit
           raise VerifyOutShapeException(
-            "%s verify_out_shape, with dims %s, does not match out_shape %r, dim %s multiple times in out_shape" % (
-              self, self_dim_tags, out_shape, dim))
+            "%s verify_out_shape does not match:\n" % self +
+            "Actual dims: %s\nExpected out_shape: %r\n" % (self_dim_tags, out_shape) +
+            "Dim %s multiple times in out_shape" % dim)
         raise VerifyOutShapeException(
           "%s verify_out_shape, with dims %s, does not match out_shape %r, %s not in self" % (
             self, self_dim_tags, out_shape, dim))
       remaining.discard(dim_tag)
     if remaining:
       raise VerifyOutShapeException(
-        "%s verify_out_shape, dims %s are not specified in out_shape %s" % (self, remaining, out_shape))
+        "%s verify_out_shape missing dims:\n" % self +
+        "Actual dims: %s\nExpected out_shape: %r\n" % (self_dim_tags, out_shape) +
+        "Missing dims: %s" % (remaining,))
 
   def get_placeholder_kwargs(self, with_batch=True):
     """
