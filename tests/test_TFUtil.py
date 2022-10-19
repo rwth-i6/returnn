@@ -1571,6 +1571,14 @@ def test_dim_math_feat_declare_same_as_circle():
   assert s == {feat_dim, feat2_dim}
 
 
+def test_dim_math_derived():
+  from returnn.tf.util.data import SpatialDim
+  time_dim = SpatialDim("time")
+  time_dim_2 = time_dim * 2
+  assert time_dim_2.derived_from_tag == time_dim
+  assert time_dim_2.get_same_derived_base() == time_dim
+
+
 def test_sequence_mask_len_via_loop():
   seq_len = tf.while_loop(
     cond=lambda x: tf.less(x[0], 2),
