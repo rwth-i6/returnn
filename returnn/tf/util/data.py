@@ -985,15 +985,17 @@ class Dim(object):
       return other.declare_same_as(self)
     self._maybe_update()
     other._maybe_update()
-    if any(
-          self._same_for_batch_ctx[key].dyn_size is not None and
-          other._same_for_batch_ctx[key].dyn_size is not None and
-          self._same_for_batch_ctx[key].dyn_size is not other._same_for_batch_ctx[key].dyn_size
-          for key in set(self._same_for_batch_ctx.keys()).intersection(other._same_for_batch_ctx.keys())):
+    for key in set(self._same_for_batch_ctx.keys()).intersection(other._same_for_batch_ctx.keys()):
+      self_ = self._same_for_batch_ctx[key]
+      other_ = other._same_for_batch_ctx[key]
+      if not self_._validate_in_current_graph() or not other_._validate_in_current_graph():
+        continue
+      if self_.dyn_size is None or other_.dyn_size is None:
+        continue
       BehaviorVersion.require(
-        False,
-        "%s declare_same_as %s: Invalid with different size placeholders, please check external_data" % (
-          self, other_same_base),
+        self_.dyn_size is other_.dyn_size,
+        "%s declare_same_as %s: Invalid with different size placeholders (%r vs %r), please check external_data" % (
+          self, other, self_.dyn_size, other_.dyn_size),
         15)
     if self_same_as is not self:
       assert not self_same_as.same_as
