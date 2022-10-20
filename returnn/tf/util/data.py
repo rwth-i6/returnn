@@ -983,6 +983,8 @@ class Dim(object):
     if self_derived_bases.issubset(other_derived_bases):
       # Avoid cycles on derived_from_tag. https://github.com/rwth-i6/returnn/issues/1054
       return other.declare_same_as(self)
+    self._maybe_update()
+    other._maybe_update()
     if any(
           self._same_for_batch_ctx[key].dyn_size is not None and
           other._same_for_batch_ctx[key].dyn_size is not None and
