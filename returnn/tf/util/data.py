@@ -983,14 +983,16 @@ class Dim(object):
     if self_derived_bases.issubset(other_derived_bases):
       # Avoid cycles on derived_from_tag. https://github.com/rwth-i6/returnn/issues/1054
       return other.declare_same_as(self)
-    if self.dyn_size is not None and other_same_base.dyn_size is not None:
-      if self.dyn_size is not other_same_base.dyn_size:
-        if self.batch == other_same_base.batch and self.control_flow_ctx == other_same_base.control_flow_ctx:
-          BehaviorVersion.require(
-            False,
-            "Dim tags are same with different size placeholders (%r vs %r), please check external_data" % (
-              self.dyn_size, other_same_base.dyn_size),
-            15)
+    if any(
+          self._same_for_batch_ctx[key].dyn_size is not None and
+          other._same_for_batch_ctx[key].dyn_size is not None and
+          self._same_for_batch_ctx[key].dyn_size is not other._same_for_batch_ctx[key].dyn_size
+          for key in set(self._same_for_batch_ctx.keys()).intersection(other._same_for_batch_ctx.keys())):
+      BehaviorVersion.require(
+        False,
+        "%s declare_same_as %s: Invalid with different size placeholders, please check external_data" % (
+          self, other_same_base),
+        15)
     if self_same_as is not self:
       assert not self_same_as.same_as
       if self_same_as is other_same_base:
