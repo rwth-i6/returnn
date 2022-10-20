@@ -983,6 +983,16 @@ class Dim(object):
     if self_derived_bases.issubset(other_derived_bases):
       # Avoid cycles on derived_from_tag. https://github.com/rwth-i6/returnn/issues/1054
       return other.declare_same_as(self)
+    if self.dyn_size is not None and other_same_base.dyn_size is not None:
+      if self.dyn_size is not other_same_base.dyn_size:
+        if self.batch == other_same_base.batch and self.control_flow_ctx == other_same_base.control_flow_ctx:
+          BehaviorVersion.require(
+            False,
+            "Dim tags are same with different size placeholders (%r vs %r), please check external_data" % (
+              self.dyn_size, other_same_base.dyn_size),
+            15)
+    # If we have a defined source, and this is a dynamic spatial axis, and it was undefined before,
+    # maybe we can overtake the size_placeholder now.
     if self_same_as is not self:
       assert not self_same_as.same_as
       if self_same_as is other_same_base:
@@ -995,16 +1005,6 @@ class Dim(object):
     self.same_as = other_same_base
     self._same_as_tb = traceback.extract_stack()
     self._maybe_update()
-    if self.dyn_size is not None and other_same_base.dyn_size is not None:
-      if self.dyn_size is not other_same_base.dyn_size:
-        if self.batch == other_same_base.batch and self.control_flow_ctx == other_same_base.control_flow_ctx:
-          BehaviorVersion.require(
-            False,
-            "Dim tags are same with different size placeholders (%r vs %r), please check external_data" % (
-              self.dyn_size, other_same_base.dyn_size),
-            15)
-    # If we have a defined source, and this is a dynamic spatial axis, and it was undefined before,
-    # maybe we can overtake the size_placeholder now.
     if other_same_base.dyn_size is not None and self.src_data:
       assert isinstance(self.src_axis, int)
       # Maybe it changed in the meanwhile, so check.
