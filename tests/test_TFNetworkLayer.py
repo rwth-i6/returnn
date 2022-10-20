@@ -1178,15 +1178,13 @@ def test_CombineLayer_two_time_dims():
       name="in0", shape=(None, None, n_dim), batch_dim_axis=1, auto_create_placeholders=True)
     in1 = Data(
       # same time as first in in0
-      name="in1", shape=(None, n_dim), auto_create_placeholders=True)
+      name="in1", dim_tags=[in0.dim_tags[i] for i in (1, 0, 3)], auto_create_placeholders=True)
     in2 = Data(
       # same time as in second in in0
-      name="in2", shape=(None, n_dim), batch_dim_axis=1, auto_create_placeholders=True)
+      name="in2", dim_tags=[in0.dim_tags[i] for i in (2, 1, 3)], auto_create_placeholders=True)
     extern_data.register_data(in0)
     extern_data.register_data(in1)
     extern_data.register_data(in2)
-    in1.get_size_dim_tag(0).declare_same_as(in0.get_size_dim_tag(0))
-    in2.get_size_dim_tag(0).declare_same_as(in0.get_size_dim_tag(1))
     print("ExternData all dimension tags (allow_same_feature_dim=True):")
     pprint(extern_data.get_all_dimension_tags(allow_same_feature_dim=True))
     network = TFNetwork(config=config, extern_data=extern_data, train_flag=True)
@@ -1232,15 +1230,13 @@ def test_CombineLayer_two_time_dims_first_not_most_generic():
       name="in0", shape=(None, None, n_dim), batch_dim_axis=1, auto_create_placeholders=True)
     in1 = Data(
       # same time as first in in0
-      name="in1", shape=(None, n_dim), auto_create_placeholders=True)
+      name="in1", dim_tags=[in0.dim_tags[i] for i in (1, 0, 3)], auto_create_placeholders=True)
     in2 = Data(
       # same time as in second in in0
-      name="in2", shape=(None, n_dim), batch_dim_axis=1, auto_create_placeholders=True)
+      name="in2", dim_tags=[in0.dim_tags[i] for i in (2, 1, 3)], auto_create_placeholders=True)
     extern_data.register_data(in0)
     extern_data.register_data(in1)
     extern_data.register_data(in2)
-    in1.get_size_dim_tag(0).declare_same_as(in0.get_size_dim_tag(0))
-    in2.get_size_dim_tag(0).declare_same_as(in0.get_size_dim_tag(1))
     print("ExternData all dimension tags (allow_same_feature_dim=True):")
     pprint(extern_data.get_all_dimension_tags(allow_same_feature_dim=True))
     network = TFNetwork(config=config, extern_data=extern_data, train_flag=True)
@@ -1286,15 +1282,13 @@ def test_CombineLayer_two_time_dims_first_not_most_generic_with_n_out():
       name="in0", shape=(None, None, n_dim), batch_dim_axis=1, auto_create_placeholders=True)
     in1 = Data(
       # same time as first in in0
-      name="in1", shape=(None, n_dim), auto_create_placeholders=True)
+      name="in1", dim_tags=[in0.dim_tags[i] for i in (1, 0, 3)], auto_create_placeholders=True)
     in2 = Data(
       # same time as in second in in0
-      name="in2", shape=(None, n_dim), batch_dim_axis=1, auto_create_placeholders=True)
+      name="in2", dim_tags=[in0.dim_tags[i] for i in (2, 1, 3)], auto_create_placeholders=True)
     extern_data.register_data(in0)
     extern_data.register_data(in1)
     extern_data.register_data(in2)
-    in1.get_size_dim_tag(0).declare_same_as(in0.get_size_dim_tag(0))
-    in2.get_size_dim_tag(0).declare_same_as(in0.get_size_dim_tag(1))
     print("ExternData all dimension tags (allow_same_feature_dim=True):")
     pprint(extern_data.get_all_dimension_tags(allow_same_feature_dim=True))
     network = TFNetwork(config=config, extern_data=extern_data, train_flag=True)
