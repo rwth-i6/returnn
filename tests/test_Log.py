@@ -1,3 +1,6 @@
+"""
+test logging
+"""
 
 from __future__ import print_function
 
@@ -6,23 +9,27 @@ from subprocess import Popen, PIPE, STDOUT, CalledProcessError
 import re
 import os
 import sys
-from glob import glob
 from pprint import pprint
 import unittest
 from nose.tools import assert_less, assert_in, assert_equal
 from returnn.util import better_exchook
 
 
+__my_dir__ = os.path.dirname(os.path.abspath(__file__))
+__base_dir__ = os.path.dirname(__my_dir__)
+__main_entry__ = __base_dir__ + "/rnn.py"
 py = sys.executable
 PY3 = sys.version_info[0] >= 3
 
 
 def build_env():
+  """build env"""
   env_update = os.environ.copy()
   return env_update
 
 
 def run(args, input=None):
+  """run subproc"""
   args = list(args)
   print("run:", args)
   # RETURNN by default outputs on stderr, so just merge both together
@@ -46,7 +53,7 @@ def filter_out(ls):
   i = 0
   while i < len(ls):
     s = ls[i]
-    if "tensorflow/core/" in s:  # some TF warnings
+    if "tensorflow/core/" in s or "tensorflow/stream_executor/" in s:  # some TF warnings
       i += 1
       continue
     # RuntimeWarning|FutureWarning are warnings and they include the code-line in the next output line
@@ -54,6 +61,24 @@ def filter_out(ls):
       if re.match(".*:\\d+: RuntimeWarning: numpy.*", s) or re.match(".*:\\d+: FutureWarning: .*", s):
         i += 2
         continue
+    if any(
+          msg in s for msg in [
+            "Setup TF inter and intra global thread pools",
+            "Collecting TensorFlow device list",
+            "CUDA_VISIBLE_DEVICES is not set",
+          ]):
+      i += 1
+      continue
+    if "Local devices available to TensorFlow:" in s:
+      i += 1
+      while i < len(ls) and re.match("^ {2}\\d+/\\d+: name:.*", ls[i]):
+        i += 1
+        while i < len(ls) and re.match("^ {4}.*", ls[i]):
+          i += 1
+      continue
+    if s.startswith("systemMemory:") or s.startswith("maxCacheSize:"):
+      i += 1
+      continue
     res.append(ls[i])
     i += 1
   return res
@@ -91,33 +116,26 @@ elapsed: 0:00:00.0001
 
 
 def test_returnn_startup():
-  out = run([py, "rnn.py", "-x", "nop"])
+  out = run([py, __main_entry__, "-x", "nop", "++use_tensorflow", "1"])
   ls = out.splitlines()
   ls = filter_out(ls)
-  assert 3 <= len(ls) <= 10  # not fixed because might change
+  if not 3 <= len(ls) <= 10:  # not fixed because might change
+    print("output:\n%s\n\nNum lines: %i" % ("\n".join(ls), len(ls)))
+    raise Exception("unexpected output number of lines")
   assert_equal(count_start_with(ls, "RETURNN starting up, version "), 1)
-  assert_equal(count_start_with(ls, "Theano: "), 1)
+  assert_equal(count_start_with(ls, "TensorFlow: "), 1)
   assert_in("Task: No-operation", ls)
 
 
 def test_returnn_startup_verbose():
-  out = run([py, "rnn.py", "-x", "nop", "++log_verbosity", "5"])
+  out = run([py, __main_entry__, "-x", "nop", "++use_tensorflow", "1", "++log_verbosity", "5"])
   ls = out.splitlines()
   ls = filter_out(ls)
-  assert 3 <= len(ls) <= 10  # not fixed because might change
+  if not 3 <= len(ls) <= 15:  # not fixed because might change
+    print("output:\n%s\n\nNum lines: %i" % ("\n".join(ls), len(ls)))
+    raise Exception("unexpected output number of lines")
   assert_equal(count_start_with(ls, "RETURNN starting up, version "), 1)
   assert_equal(count_start_with(ls, "RETURNN command line options: "), 1)
-  assert_equal(count_start_with(ls, "Theano: "), 1)
-  assert_in("Task: No-operation", ls)
-  assert_in("Quitting", ls)
-
-
-def test_returnn_tf_startup():
-  out = run([py, "rnn.py", "-x", "nop", "++use_tensorflow", "1", "++log_verbosity", "5"])
-  ls = out.splitlines()
-  ls = filter_out(ls)
-  assert 3 <= len(ls) <= 100, "output:\n%s\n\nNum lines: %i" % ("\n".join(ls), len(ls))  # might change
-  assert_equal(count_start_with(ls, "RETURNN starting up, version "), 1)
   assert_equal(count_start_with(ls, "TensorFlow: "), 1)
   assert_in("Task: No-operation", ls)
   assert_in("Quitting", ls)
