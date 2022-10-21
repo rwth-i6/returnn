@@ -1536,8 +1536,19 @@ def random_orthogonal(shape, gain=1., seed=None):
   return gain * q[:shape[0], :shape[1]]
 
 
-_have_inplace_increment = None
-_native_inplace_increment = None  # type: typing.Optional[typing.Callable[[np.ndarray,np.ndarray,np.ndarray],np.ndarray]]  # nopep8
+def inplace_increment(x, idx, y):
+  """
+  This basically does `x[idx] += y`.
+  The difference to the Numpy version is that in case some index is there multiple
+  times, it will only be incremented once (and it is not specified which one).
+  See also theano.tensor.subtensor.AdvancedIncSubtensor documentation.
+
+  :param numpy.ndarray x:
+  :param numpy.ndarray idx:
+  :param numpy.ndarray y:
+  :rtype: numpy.ndarray
+  """
+  raise NotImplementedError("This feature was removed with dropped Theano support")
 
 
 def prod(ls):
