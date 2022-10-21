@@ -288,6 +288,7 @@ jobs:
           fi
         fi
         pip install --user -r requirements.txt | cat
+        pip install --user scipy | cat  # for some tests
         pip install --user --upgrade tensorflow==${{ matrix.tf-version }} | cat
 
     - name: Test Python/Numpy/TF/Theano versions.
