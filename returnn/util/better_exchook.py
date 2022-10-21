@@ -1456,7 +1456,10 @@ def get_func_from_code_object(co, frame=None):
             candidate = getattr(frame.f_locals["self"].__class__, func_name, None)
             if candidate and (getattr(candidate, _attr_name, None) is co or isinstance(co, DummyFrame)):
                 return candidate
-    candidate = getattr(_get_loaded_module_from_filename(co.co_filename), co.co_name, None)
+    try:
+        candidate = getattr(_get_loaded_module_from_filename(co.co_filename), co.co_name, None)
+    except ImportError:  # some modules have lazy loaders, but those might fail here
+        candidate = None
     if candidate and (getattr(candidate, _attr_name, None) is co or isinstance(co, DummyFrame)):
         return candidate
     if isinstance(co, DummyFrame):
