@@ -333,22 +333,6 @@ class LstmGenericBase(NativeOpGenBase):
     """
     return V_h, c, i,  Y, H,  DY, Dd
 
-  # noinspection PyPep8Naming
-  @classmethod
-  def map_layer_inputs_to_op(cls, Z, V_h, i):
-    """
-    Map.
-    """
-    import returnn.util.basic
-    import theano.tensor as T  # noqa
-    assert Z.ndim == 3
-    assert V_h.ndim == 2
-    assert i.ndim == 2
-    n_batch = Z.shape[1]
-    n_out = V_h.shape[0]
-    c = T.zeros((n_batch, n_out), dtype="float32")
-    return Z, V_h, c, i
-
   c_extra_support_code = {
     "lstm_kernel": """
       DEF_KERNEL

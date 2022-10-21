@@ -146,6 +146,7 @@ class BackendEngine:
       if config is None:
         from returnn.config import get_global_config
         config = get_global_config()
+      engine = None
       if config.bool("use_tensorflow", False):
         engine = cls.TensorFlow
       if config.value("backend", None):
