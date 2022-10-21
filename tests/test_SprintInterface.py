@@ -1,22 +1,15 @@
-
 from __future__ import print_function
 
 import sys
 import os
 
 import _setup_test_env  # noqa
-from nose.tools import assert_equal, assert_is_instance, assert_in, assert_not_in, assert_true, assert_false
+from nose.tools import assert_equal
 import returnn.sprint.interface as SprintAPI
 from tempfile import mkdtemp
-from returnn.theano.engine import Engine
 from returnn.config import Config
-from returnn.theano.network import LayerNetwork
-import returnn.theano.util as theano_util
 import shutil
 import numpy
-
-
-theano_util.monkey_patches()
 
 
 def install_sigint_handler():

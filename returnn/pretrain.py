@@ -462,45 +462,6 @@ class Pretrain:
       epoch = len(self._step_net_jsons)  # take the last, which is the original
     return self._step_net_jsons[epoch - 1]
 
-  def get_network_for_epoch(self, epoch, mask=None):
-    """
-    :type epoch: int
-    :param mask:
-    :rtype: Network.LayerNetwork
-    """
-    from returnn.theano.network import LayerNetwork
-    from returnn.theano.layers.base import Layer
-    json_content = self.get_network_json_for_epoch(epoch)
-    Layer.rng_seed = epoch
-    return LayerNetwork.from_json(json_content, mask=mask, **self.network_init_args)
-
-  def copy_params_from_old_network(self, new_network, old_network):
-    """
-    :type new_network: LayerNetwork
-    :type old_network: LayerNetwork
-    :returns the remaining hidden layer names which exist only in the new network.
-    :rtype: set[str]
-    """
-    # network.hidden are the input + all hidden layers.
-    for layer_name, layer in old_network.hidden.items():
-      new_network.hidden[layer_name].set_params_by_dict(layer.get_params_dict())
-
-    # network.output is the remaining output layer.
-    if self.copy_output_layer:
-      from returnn.theano.network_copy_utils import intelli_copy_layer, LayerDoNotMatchForCopy
-      for layer_name in new_network.output.keys():
-        assert layer_name in old_network.output
-        try:
-          intelli_copy_layer(old_network.output[layer_name], new_network.output[layer_name])
-        except LayerDoNotMatchForCopy:
-          if self.copy_output_layer == "ifpossible":
-            print("Pretrain: Can not copy output layer %s, will leave it randomly initialized" % layer_name,
-                  file=log.v4)
-          else:
-            raise
-    else:
-      print("Pretrain: Will not copy output layer", file=log.v4)
-
   def get_train_param_args_for_epoch(self, epoch):
     """
     :type epoch: int
@@ -511,13 +472,7 @@ class Pretrain:
       return {}  # This implies all available args.
     if epoch == 1:
       return {}  # This implies all available args.
-    prev_network = self.get_network_for_epoch(epoch - 1)
-    cur_network = self.get_network_for_epoch(epoch)
-    prev_network_layer_names = prev_network.hidden.keys()
-    cur_network_layer_names_set = set(cur_network.hidden.keys())
-    assert cur_network_layer_names_set.issuperset(prev_network_layer_names)
-    new_hidden_layer_names = cur_network_layer_names_set.difference(prev_network_layer_names)
-    return {"hidden_layer_selection": new_hidden_layer_names, "with_output": True}
+    raise NotImplementedError("This feature was removed with dropped Theano support")
 
 
 def pretrain_from_config(config):
@@ -525,7 +480,6 @@ def pretrain_from_config(config):
   :type config: returnn.config.Config
   :rtype: Pretrain | None
   """
-  from returnn.util import BackendEngine
   from returnn.config import network_json_from_config
   pretrain_type = config.bool_or_other("pretrain", None)
   if pretrain_type == "default" or (isinstance(pretrain_type, dict) and pretrain_type) or pretrain_type is True:
