@@ -323,7 +323,7 @@ class Dim(object):
       if self.batch == batch:
         return self
       return Dim(kind=Dim.Types.Batch, description="batch:%s" % batch.short_repr(), batch=batch)
-    if self.dimension is not None:
+    if not self.is_dynamic():
       # If static dim, no effect.
       assert not self.batch
       return self
