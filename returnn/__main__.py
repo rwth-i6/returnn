@@ -29,7 +29,6 @@ from returnn.log import log
 from returnn.config import Config
 from returnn.datasets import Dataset, init_dataset, init_dataset_via_str
 from returnn.datasets.hdf import HDFDataset
-<<<<<<< HEAD
 from returnn.util import debug as debug_util
 from returnn.util import basic as util
 from returnn.util.basic import BackendEngine, BehaviorVersion
@@ -38,23 +37,16 @@ from returnn.util.basic import BackendEngine, BehaviorVersion
 from returnn.util.debug import init_ipython_kernel, init_better_exchook, init_faulthandler
 # noinspection PyUnresolvedReferences
 from returnn.util.basic import init_thread_join_hack, describe_returnn_version
-=======
-from returnn.util.debug import init_ipython_kernel, init_better_exchook, init_faulthandler, \
-  init_cuda_not_in_main_proc_check
-from returnn.util.basic import init_thread_join_hack, describe_returnn_version, \
-  describe_tensorflow_version, BackendEngine, get_tensorflow_version_tuple, BehaviorVersion
->>>>>>> 3a35c4f82 (remove theano backend engine)
 
 if typing.TYPE_CHECKING:
   import returnn.tf.engine
 
 config = None  # type: typing.Optional[Config]
-engine = None  # type: typing.Optional[typing.Union[returnn.tf.engine.Engine,returnn.theano.engine.Engine]]
+engine = None  # type: typing.Optional[typing.Union[returnn.tf.engine.Engine]]
 train_data = None  # type: typing.Optional[Dataset]
 dev_data = None  # type: typing.Optional[Dataset]
 eval_data = None  # type: typing.Optional[Dataset]
 quit_returnn = False
-server = None  # type: typing.Optional[returnn.theano.server.Server]
 
 
 def init_config(config_filename=None, command_line_options=(), default_config=None, extra_updates=None):
@@ -350,14 +342,6 @@ def init(config_filename=None, command_line_options=(), config_updates=None, ext
   returnn_greeting(config_filename=config_filename, command_line_options=command_line_options)
   debug_util.init_faulthandler()
   init_backend_engine()
-<<<<<<< HEAD
-  if BackendEngine.is_theano_selected():
-    if config.value('task', 'train') == "theano_graph":
-      config.set("multiprocessing", False)
-    if config.bool('multiprocessing', True):
-      debug_util.init_cuda_not_in_main_proc_check()
-=======
->>>>>>> 3a35c4f82 (remove theano backend engine)
   if config.bool('ipython', False):
     debug_util.init_ipython_kernel()
   init_config_json_network()
@@ -464,52 +448,18 @@ def execute_main_task():
     assert train_data is not None, 'train data for priors should be provided'
     engine.init_network_from_config(config)
     engine.compute_priors(dataset=train_data, config=config)
-  elif task == 'theano_graph':
-    # noinspection PyPackageRequirements,PyUnresolvedReferences
-    import theano.printing
-    # noinspection PyPackageRequirements,PyUnresolvedReferences
-    import theano.compile.io
-    # noinspection PyPackageRequirements,PyUnresolvedReferences
-    import theano.compile.function_module
-    engine.start_epoch = 1
-    engine.init_network_from_config(config)
-    for task in config.list('theano_graph.task', ['train']):
-      func = engine.devices[-1].get_compute_func(task)
-      prefix = config.value("theano_graph.prefix", "current") + ".task"
-      print("dumping to %s.* ..." % prefix, file=log.v1)
-      theano.printing.debugprint(func, file=open("%s.optimized_func.txt" % prefix, "w"))
-      assert isinstance(func.maker, theano.compile.function_module.FunctionMaker)
-      for inp in func.maker.inputs:
-        assert isinstance(inp, theano.compile.io.In)
-        if inp.update:
-          theano.printing.debugprint(
-            inp.update, file=open("%s.unoptimized.var_%s_update.txt" % (prefix, inp.name), "w"))
-      theano.printing.pydotprint(func, format='png', var_with_name_simple=True,
-                                 outfile="%s.png" % prefix)
   elif task == 'analyze':  # anything based on the network + Device
     statistics = config.list('statistics', None)
     engine.init_network_from_config(config)
     engine.analyze(data=eval_data or dev_data, statistics=statistics)
   elif task == "analyze_data":  # anything just based on the data
     analyze_data(config)
-  elif task == "classify":
-    assert eval_data is not None, 'no eval data provided'
-    assert config.has('label_file'), 'no output file provided'
-    label_file = config.value('label_file', '')
-    engine.init_network_from_config(config)
-    engine.classify(eval_data, label_file)
   elif task == "hyper_param_tuning":
     import returnn.tf.hyper_param_tuning
     tuner = returnn.tf.hyper_param_tuning.Optimization(config=config, train_data=train_data)
     tuner.work()
   elif task == "cleanup_old_models":
     engine.cleanup_old_models(ask_for_confirmation=True)
-  elif task == "daemon":
-    engine.init_network_from_config(config)
-    engine.daemon(config)
-  elif task == "server":
-    print("Server Initiating", file=log.v1)
-    server.run()
   elif task == "search_server":
     engine.use_search_flag = True
     engine.init_network_from_config(config)
