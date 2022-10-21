@@ -263,21 +263,6 @@ class NativeOpGenBase:
   theano_custom_grad = None
   cpu_support = True
 
-  def make_theano_op(self):
-    """
-    :rtype: returnn.theano.native_op.TheanoNativeOp
-    """
-    from returnn.theano.native_op import TheanoNativeOp
-    assert self.in_info is not None
-    assert self.out_info is not None
-    assert self.c_fw_code is not None
-    return TheanoNativeOp(in_info=self.in_info, out_info=self.out_info,
-                          c_fw_code=self.c_fw_code, c_bw_code=self.c_bw_code,
-                          c_extra_support_code=self.c_extra_support_code,
-                          grad_input_map=self.grad_input_map,
-                          name=self.__class__.__name__,
-                          custom_grad=self.theano_custom_grad)
-
   @classmethod
   def map_layer_inputs_to_op(cls, *inputs):
     """
@@ -2324,38 +2309,6 @@ class Chunking(NativeOpGenBase):
       t += chunk_step
     return chunk_start_frames
 
-  @classmethod
-  def theano_custom_grad(cls, op, inputs, output_grads):
-    """
-    :param op:
-    :param inputs:
-    :param output_grads:
-    :return: grads
-    """
-    from theano import tensor as T  # noqa
-    from returnn.theano.native_op import unchunk
-    assert len(op.in_info) == len(inputs)
-    assert len(op.out_info) == len(output_grads)
-
-    x, index, _, _, chunk_params = inputs
-    d_out, _ = output_grads
-
-    assert x.ndim == 3
-    n_time = x.shape[0]
-    n_batch = x.shape[1]
-    chunk_size = chunk_params[0]
-    chunk_step = chunk_params[1]
-    out, oindex = op(*inputs)
-    d_input, _, factors = unchunk(
-      d_out, index=oindex, chunk_size=chunk_size, chunk_step=chunk_step, n_time=n_time, n_batch=n_batch)
-    # We applied the factor in unchunk, but for this gradient, we actually don't want that, so undo it.
-    d_input /= factors.dimshuffle(0, 1, 'x')
-
-    # noinspection PyCallingNonCallable
-    grads = [d_input] + [T.DisconnectedType()() for _ in inputs[1:]]
-    assert len(grads) == len(inputs)
-    return grads
-
 
 class UnChunking(NativeOpGenBase):
   """
@@ -2520,33 +2473,6 @@ class UnChunking(NativeOpGenBase):
   """
 
   code_version = ()
-
-  @classmethod
-  def theano_custom_grad(cls, op, inputs, output_grads):
-    """
-    :param op:
-    :param inputs:
-    :param output_grads:
-    :return: grads
-    """
-    import theano.tensor as T  # noqa
-    from returnn.theano.native_op import chunk
-    assert len(op.in_info) == len(inputs)
-    assert len(op.out_info) == len(output_grads)
-
-    x, index, _, _, _, chunk_params = inputs
-    d_out, _, _ = output_grads
-
-    chunk_size = chunk_params[0]
-    chunk_step = chunk_params[1]
-    out, oindex, factors = op(*inputs)
-    d_out *= factors.dimshuffle(0, 1, 'x')
-    d_input, _ = chunk(d_out, index=oindex, chunk_size=chunk_size, chunk_step=chunk_step)
-
-    # noinspection PyCallingNonCallable
-    grads = [d_input] + [T.DisconnectedType()() for _ in inputs[1:]]
-    assert len(grads) == len(inputs)
-    return grads
 
 
 class SubtensorBatchedIndex(NativeOpGenBase):

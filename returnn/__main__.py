@@ -221,6 +221,9 @@ def init_data():
 
 
 def print_task_properties():
+  """
+  print information about used data
+  """
   if train_data:
     print("Train data:", file=log.v2)
     print("  input:", train_data.num_inputs, "x", train_data.window, file=log.v2)
