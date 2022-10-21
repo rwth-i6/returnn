@@ -83,7 +83,6 @@ jobs:
         python-version:
           - 3.7
         action:
-          - TEST=Config
           - TEST=Dataset
           - TEST=fork_exec
           - TEST=GeneratingDataset
@@ -181,6 +180,7 @@ jobs:
         tf-version:
           - 2.10.0
         action:
+          - TEST=Config
           - TEST=Fsa
           - TEST=Log
           - TEST=TFEngine
