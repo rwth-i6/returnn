@@ -152,7 +152,6 @@ class BackendEngine:
       if config.value("backend", None):
         backend = config.value("backend", None)
         engine = {
-          "theano": cls.Theano,
           "tensorflow": cls.TensorFlow,
           "torch": cls.Torch,
         }[backend]
@@ -163,11 +162,7 @@ class BackendEngine:
   @classmethod
   def _get_default_engine(cls):
     """
-    For backward compatibility, we still keep Theano the default.
-    However, we can do it slightly more clever.
-    If TensorFlow is already imported but Theano is not, allow TF as the default.
-    Also, if theano cannot be imported, allow for TF as the default.
-
+    Select the backend engine. If both are installed Tensorflow is the default.
     :rtype: int
     """
     if "tensorflow" in sys.modules:
@@ -429,36 +424,6 @@ def describe_returnn_version():
   """
   from returnn import __long_version__
   return __long_version__
-
-
-def describe_theano_version():
-  """
-  :rtype: str
-  """
-  # noinspection PyUnresolvedReferences,PyPackageRequirements
-  import theano
-  try:
-    theano_dir = os.path.dirname(theano.__file__)
-  except Exception as e:
-    theano_dir = "<unknown(exception: %r)>" % e
-  try:
-    version = theano.__version__
-    if len(version) > 20:
-      version = version[:20] + "..."
-  except Exception as e:
-    version = "<unknown(exception: %r)>" % e
-  try:
-    if theano_dir.startswith("<"):
-      git_info = "<unknown-dir>"
-    elif os.path.exists(theano_dir + "/../.git"):
-      git_info = "git:" + git_describe_head_version(git_dir=theano_dir)
-    elif "/site-packages/" in theano_dir:
-      git_info = "<site-package>"
-    else:
-      git_info = "<not-under-git>"
-  except Exception as e:
-    git_info = "<unknown(git exception: %r)>" % e
-  return "%s (%s in %s)" % (version, git_info, theano_dir)
 
 
 def describe_tensorflow_version():
@@ -1573,42 +1538,6 @@ def random_orthogonal(shape, gain=1., seed=None):
 
 _have_inplace_increment = None
 _native_inplace_increment = None  # type: typing.Optional[typing.Callable[[np.ndarray,np.ndarray,np.ndarray],np.ndarray]]  # nopep8
-
-
-def inplace_increment(x, idx, y):
-  """
-  This basically does `x[idx] += y`.
-  The difference to the Numpy version is that in case some index is there multiple
-  times, it will only be incremented once (and it is not specified which one).
-  See also theano.tensor.subtensor.AdvancedIncSubtensor documentation.
-
-  :param numpy.ndarray x:
-  :param numpy.ndarray idx:
-  :param numpy.ndarray y:
-  :rtype: numpy.ndarray
-  """
-  # https://youtrack.jetbrains.com/issue/PY-28498
-  global _have_inplace_increment, inplace_increment, _native_inplace_increment  # noqa
-  if _have_inplace_increment is None:
-    native_inpl_incr = None
-    # noinspection PyPackageRequirements,PyUnresolvedReferences
-    import theano
-    if theano.config.cxx:
-      # noinspection PyPackageRequirements,PyUnresolvedReferences
-      import theano.gof.cutils  # needed to import cutils_ext
-      try:
-        from cutils_ext.cutils_ext import inplace_increment as native_inpl_incr  # noqa
-      except ImportError:
-        pass
-    if native_inpl_incr:
-      _have_inplace_increment = True
-      _native_inplace_increment = native_inpl_incr
-      inplace_increment = native_inpl_incr  # replace myself
-      return inplace_increment(x, idx, y)  # noqa
-    _have_inplace_increment = False
-  if _have_inplace_increment is True:
-    return _native_inplace_increment(x, idx, y)  # noqa
-  raise NotImplementedError("need Numpy 1.8 or later")
 
 
 def prod(ls):
