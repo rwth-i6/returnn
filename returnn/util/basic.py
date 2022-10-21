@@ -123,7 +123,7 @@ def is_64bit_platform():
 class BackendEngine:
   """
   Stores which backend engine we use in RETURNN.
-  Currently only TensorFlow.
+  E.g. TensorFlow or PyTorch.
   """
 
   TensorFlow = 1

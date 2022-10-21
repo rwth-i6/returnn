@@ -442,7 +442,7 @@ class SprintInstancePool:
       jobs[j].append(i)
       joblen[j] += l
 
-    if BackendEngine.is_tensorflow_selected() and self.max_num_instances > 1:
+    if self.max_num_instances > 1:
       threads = [
         ReaderThread(
           self._get_instance(i), i, jobs[i], tags, seq_lengths, log_posteriors, batch_loss, batch_error_signal)
