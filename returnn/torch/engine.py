@@ -2,6 +2,8 @@
 Main engine for PyTorch
 """
 
+from typing import Optional
+
 import torch
 import os
 from torch.utils.data import DataLoader
@@ -30,7 +32,7 @@ class Engine(EngineBase):
     self.eval_datasets = {}
     self.learning_rate = config.float("learning_rate", 1.)  # TODO LR control...
 
-    self._model = None  # type: torch.nn.Module
+    self._model = None  # type: Optional[torch.nn.Module]
 
   def init_train_from_config(self, config=None, train_data=None, dev_data=None, eval_data=None):
     """
