@@ -86,22 +86,17 @@ jobs:
           - TEST=Config
           - TEST=Dataset
           - TEST=fork_exec
-          - TEST=Fsa
           - TEST=GeneratingDataset
           - TEST=hdf_dump
           - TEST=HDFDataset
           - TEST=TranslationDataset
           - TEST=LearningRateControl
-          - TEST=Log
           - TEST=SprintDataset
-          - TEST=SprintInterface
           - TEST=TaskSystem
           - TEST=TaskSystem_SharedMem
           - TEST=Util
         include:
           - action: TEST=SprintDataset
-            python-version: 2.7
-          - action: TEST=SprintInterface
             python-version: 2.7
 
     steps:
@@ -186,6 +181,8 @@ jobs:
         tf-version:
           - 2.10.0
         action:
+          - TEST=Fsa
+          - TEST=Log
           - TEST=TFEngine
           - TEST=TFNativeOp
           - TEST=TFNetworkLayer
@@ -337,15 +334,17 @@ jobs:
           - TEST=NetworkDescription
           - TEST=NetworkLayer
           - TEST=Pretrain
+          - TEST=SprintInterface
           - TEST=TheanoUtil
         include:
           - action: TEST=MultiBatchBeam
             python-version: 3.6
           - action: TEST=NativeOp
             python-version: 3.6
+          - action: TEST=SprintInterface
+            python-version: 2.7
           - action: TEST=theano_demos
             python-version: 3.6
-            tf-version: 2.3.0
 
     steps:
     - uses: actions/checkout@v3
