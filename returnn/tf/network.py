@@ -3179,6 +3179,7 @@ class Subnetwork:
       layer_desc["network"] = subnet
       if "output" not in layer_desc:
         layer_desc["output"] = layer_class.get_out_data_from_opts(**layer_desc)
+        layer_desc["output"] = layer_class.fixup_out_data(**layer_desc)
       layer_.init(layer_class=layer_class, **layer_desc)
       if layer_class.recurrent:
         subnet.recurrent = True
