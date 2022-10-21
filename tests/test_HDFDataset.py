@@ -1,3 +1,6 @@
+"""
+tests for HDF dataset
+"""
 
 from __future__ import print_function
 
@@ -22,50 +25,15 @@ from returnn.util import better_exchook
 my_dir = os.path.dirname(os.path.abspath(__file__))
 
 
-class TestHDFDataset(object):
-  @classmethod
-  def setup_class(cls):
-    """
-    :return:
-     This method is run once before starting testing
-    """
-
-  @classmethod
-  def teardown_class(cls):
-    """
-    This method is run once after completing all tests
-    :return:
-    """
-
-  def setup(self):
-    """
-    This method is run before each test is going to be started
-    :return:
-    """
-
-  def teardown(self):
-    """
-    This method is run after finishing of each test
-    :return:
-    """
-
-  def test_init(self):
-    """
-    This method tests initialization of the HDFDataset class
-    """
-    toy_dataset = HDFDataset()
-    assert_equal(toy_dataset.file_start, [0], "self.file_start init problem, should be [0]")
-    assert_equal(toy_dataset.files, [], "self.files init problem, should be []")
-    assert_equal(toy_dataset.file_seq_start, [], "self.file_seq_start init problem, should be []")
-    return toy_dataset
-
-  def test_addfile(self):
-    """
-    This method tests self.addfile function
-    """
-    toy_dataset = self.test_init()
-    # TODO: auto-generate file, then use here
-    #toy_dataset.add_file("/u/kulikov/develop/crnn/tests/toy_set.hdf")
+def test_HDFDataset_init():
+  """
+  This method tests initialization of the HDFDataset class
+  """
+  toy_dataset = HDFDataset()
+  assert_equal(toy_dataset.file_start, [0], "self.file_start init problem, should be [0]")
+  assert_equal(toy_dataset.files, [], "self.files init problem, should be []")
+  assert_equal(toy_dataset.file_seq_start, [], "self.file_seq_start init problem, should be []")
+  return toy_dataset
 
 
 def generate_dummy_hdf(num_datasets=1):
@@ -85,7 +53,7 @@ def generate_dummy_hdf(num_datasets=1):
     dataset['streams']['classes'].create_group('data')
 
     import string
-    random = np.random.RandomState()
+    random = np.random.RandomState(42)
     feature_size = 13
     seq_names = ['dataset_%d_sequence_%d' % (idx, i) for i in range(100)]
     class_names = list(string.ascii_lowercase)
@@ -177,7 +145,7 @@ class DatasetTestReader:
     self.data_sparse = {}  # key -> bool
     self.data_dtype = {}  # key -> str
     self.data = {}  # type: typing.Dict[str,typing.List[numpy.ndarray]]  # key -> list
-    self.seq_lens = []  # type: typing.List[Util.NumbersDict]
+    self.seq_lens = []  # type: typing.List[util.NumbersDict]
     self.seq_tags = []
     self.num_seqs = 0
 
