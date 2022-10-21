@@ -90,6 +90,8 @@ jobs:
           - TEST=HDFDataset
           - TEST=TranslationDataset
           - TEST=LearningRateControl
+          - TEST=Log
+          - TEST=Pretrain
           - TEST=SprintDataset
           - TEST=TaskSystem
           - TEST=TaskSystem_SharedMem
@@ -334,8 +336,6 @@ jobs:
           - TEST=NetworkBaseLayer
           - TEST=NetworkDescription
           - TEST=NetworkLayer
-          - TEST=Pretrain
-          - TEST=SprintInterface
           - TEST=TheanoUtil
         include:
           - action: TEST=MultiBatchBeam
