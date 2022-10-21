@@ -413,6 +413,7 @@ class Dim(object):
     """
     assert self.can_be_used_as_dim()
     same = self.get_for_batch_ctx(batch, ctx)
+    assert dyn_size_ext.batch == batch and dyn_size_ext.control_flow_ctx == ctx
     same.dyn_size_ext = dyn_size_ext
     self._maybe_update()
 
