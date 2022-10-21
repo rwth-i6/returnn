@@ -6,10 +6,6 @@ This file is going to be imported by Debug.debug_shell() and available as intera
 import sys
 import numpy
 import h5py
-from returnn.util import BackendEngine
-
-
-theano = None
 
 
 def find_obj_in_stack(cls, stack=None, all_threads=True):
@@ -54,21 +50,6 @@ def find_obj_in_stack(cls, stack=None, all_threads=True):
       _tb = _tb.tb_next
 
   return None
-
-
-_device = None
-
-
-def get_device():
-  """
-  :rtype: Device.Device
-  """
-  global _device
-  if _device:
-    return _device
-  from returnn.theano.device import Device
-  _device = find_obj_in_stack(Device)
-  return _device
 
 
 class SimpleHdf:
