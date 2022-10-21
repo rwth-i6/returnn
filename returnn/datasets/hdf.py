@@ -777,8 +777,8 @@ class SiameseHDFDataset(CachedDataset2):
       self.class_probs = numpy.load(class_distribution)['arr_0']
     else:
       self.class_probs = None
-    self.files = []
-    self.h5_files = []
+    self.files = []  # type: typing.List[str]
+    self.h5_files = []  # type: typing.List[h5py.File]
     self.all_seq_names = []  # all_seq_names[(int)seq_index] = (string) sequence_name
     self.seq_name_to_idx = {}  # (string) sequence_name -> seq_index (int)
     self.file_indices = []  # file_indices[(int)seq_index] = file_index => indices of files to which seqs belongs to
@@ -795,14 +795,16 @@ class SiameseHDFDataset(CachedDataset2):
   def add_file(self, path):
     """
     register input files and sequences
-    :param path: path to single .hdf file
+
+    :param str path: path to single .hdf file
     """
     self.files.append(path)
     self.h5_files.append(h5py.File(path, "r"))
     cur_file = self.h5_files[-1]
     assert {'seq_names', 'streams'}.issubset(set(cur_file.keys())), (
       "%s does not contain all required datasets/groups" % path)
-    seqs = list(cur_file['seq_names'])
+    # noinspection PyProtectedMember
+    seqs = [HDFDataset._decode(s) for s in cur_file['seq_names']]
     norm_seqs = [self._normalize_seq_name(s) for s in seqs]
 
     prev_no_seqs = len(self.all_seq_names)
@@ -844,7 +846,7 @@ class SiameseHDFDataset(CachedDataset2):
     for cur_file in self.h5_files:
       sequences = cur_file['streams'][self.targets_stream]['data']  # (string) seq_name -> (int) word_id
       for seq_name, value in sequences.items():
-        seq_targ = int(value.value[0])
+        seq_targ = int(value[0])
         if seq_targ in self.target_to_seqs.keys():
           self.target_to_seqs[seq_targ].append(seq_name)
         else:
@@ -966,8 +968,9 @@ class SiameseHDFDataset(CachedDataset2):
     """
     HDF Datasets cannot contain '/' in their name (this would create subgroups), we do not
     want this and thus replace it with '\' when asking for data from the parsers
-    :type name: string
-    :rtype: string
+
+    :type name: str|bytes
+    :rtype: str
     """
     return name.replace('/', '\\')
 
