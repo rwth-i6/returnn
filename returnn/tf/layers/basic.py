@@ -8428,20 +8428,19 @@ class TopKLayer(LayerBase):
     assert len(sources) == 1
     in_data = sources[0].output
     assert isinstance(k_dim, Dim)  # via transform_config_dict
-    if k_dim.dimension is None:
-      k_data = k.output if isinstance(k, LayerBase) else Data.template_from_constant(k, name="static-k")
-      if k_data.batch:
-        k_dim = k_dim.get_for_batch_ctx(k_data.batch, k_data.control_flow_ctx)
-      if not k_dim.dyn_size_ext or k_dim.dyn_size_ext.placeholder is None:
-        k_dim.dyn_size_ext = k_data.copy()
-        if k_dim.dyn_size_ext.placeholder is not None:
-          tag = Dim.get_tag_from_size_tensor(k_dim.dyn_size_ext.placeholder)
-          if tag:
-            k_dim.declare_same_as(tag)
-          else:
-            k_dim.set_tag_on_size_tensor(k_dim.dyn_size_ext.placeholder)
-      if isinstance(k, int):
-        k_dim.dimension = k
+    if isinstance(k, int) and not k_dim.is_dim_known():
+      k_dim.dimension = k
+    k_data = k.output if isinstance(k, LayerBase) else Data.template_from_constant(k, name="static-k")
+    if k_data.batch:
+      k_dim = k_dim.get_for_batch_ctx(k_data.batch, k_data.control_flow_ctx)
+    if not k_dim.dyn_size_ext or k_dim.dyn_size_ext.placeholder is None:
+      k_dim.dyn_size_ext = k_data.copy()
+      if k_dim.dyn_size_ext.placeholder is not None:
+        tag = Dim.get_tag_from_size_tensor(k_dim.dyn_size_ext.placeholder)
+        if tag:
+          k_dim.declare_same_as(tag)
+        else:
+          k_dim.set_tag_on_size_tensor(k_dim.dyn_size_ext.placeholder)
     return cls._get_out_data(name=name + "_output", in_data=in_data, axis=axis, k_dim=k_dim, for_indices=None)
 
   def get_sub_layer(self, layer_name):
