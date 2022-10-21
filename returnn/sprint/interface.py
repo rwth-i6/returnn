@@ -23,16 +23,12 @@ from returnn.datasets.sprint import SprintDatasetBase
 from returnn.engine.base import EngineBase
 from returnn.log import log
 import returnn.util.debug as debug
-from returnn.util.basic import get_gpu_names, interrupt_main, to_bool, BackendEngine
+from returnn.util.basic import interrupt_main, to_bool, BackendEngine
 import returnn.util.task_system as task_system
 import returnn.__main__ as rnn
 
 if typing.TYPE_CHECKING:
   import returnn.tf.engine
-  try:
-    import returnn.theano.engine  # noqa
-  except ImportError:
-    pass
 
 _rnn_file = rnn.__file__
 _main_file = getattr(sys.modules["__main__"], "__file__", "")
@@ -56,11 +52,11 @@ MaxSegmentLength = 1
 TargetMode = None  # type: typing.Optional[str]
 Task = "train"
 
-Engine = None  # type: typing.Optional[typing.Union[typing.Type[returnn.tf.engine.Engine],typing.Type[returnn.theano.engine.Engine]]]  # nopep8
+Engine = None  # type: typing.Optional[typing.Union[typing.Type[returnn.tf.engine.Engine]]]  # nopep8
 config = None  # type: typing.Optional[rnn.Config]
 sprintDataset = None  # type: typing.Optional[SprintDatasetBase]
 customDataset = None  # type: typing.Optional[Dataset]
-engine = None  # type: typing.Optional[typing.Union[returnn.tf.engine.Engine,returnn.theano.engine.Engine,Engine]]
+engine = None  # type: typing.Optional[typing.Union[returnn.tf.engine.Engine]]
 
 
 # <editor-fold desc="generic init">
@@ -736,9 +732,8 @@ def _init_base(configfile=None, target_mode=None, epoch=None, sprint_opts=None):
 
   global engine
   if not engine:
-    devices = rnn.init_theano_devices()
-    rnn.print_task_properties(devices)
-    rnn.init_engine(devices)
+    rnn.print_task_properties()
+    rnn.init_engine()
     engine = rnn.engine
     assert isinstance(engine, Engine)
 
