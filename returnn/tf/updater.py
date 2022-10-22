@@ -810,6 +810,8 @@ class Updater(object):
       if grad_ext is not None:
         grad += grad_ext
 
+    if accum_grad_multiple_num_steps is None:
+      accum_grad_multiple_num_steps = 0
     if accum_grad_multiple_num_steps >= 1:
       grad = accum_grad_multiple_step(
         grad, var, train_step=self.global_train_step, num_accum_steps=accum_grad_multiple_num_steps)
