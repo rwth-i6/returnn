@@ -40,20 +40,13 @@ from returnn.util.basic import init_thread_join_hack, describe_returnn_version
 
 if typing.TYPE_CHECKING:
   import returnn.tf.engine
-  try:
-    # Try to import. Name does not matter, we will use full package name below.
-    import returnn.theano.engine as _
-    import returnn.theano.server as _
-  except ImportError:
-    _ = None
 
 config = None  # type: typing.Optional[Config]
-engine = None  # type: typing.Optional[typing.Union[returnn.tf.engine.Engine,returnn.theano.engine.Engine]]
+engine = None  # type: typing.Optional[typing.Union[returnn.tf.engine.Engine]]
 train_data = None  # type: typing.Optional[Dataset]
 dev_data = None  # type: typing.Optional[Dataset]
 eval_data = None  # type: typing.Optional[Dataset]
 quit_returnn = False
-server = None  # type: typing.Optional[returnn.theano.server.Server]
 
 
 def init_config(config_filename=None, command_line_options=(), default_config=None, extra_updates=None):
@@ -147,37 +140,6 @@ def init_config_json_network():
     config.network_topology_json = open(json_file).read()
 
 
-def init_theano_devices():
-  """
-  Only for Theano.
-
-  :rtype: list[Device.Device]|None
-  """
-  if not BackendEngine.is_theano_selected():
-    return None
-  from returnn.util.basic import TheanoFlags
-  from returnn.config import get_devices_init_args
-  from returnn.theano.device import Device
-  old_device_config = ",".join(config.list('device', ['default']))
-  if config.value("task", "train") == "nop":
-    return []
-  if "device" in TheanoFlags:
-    # This is important because Theano likely already has initialized that device.
-    config.set("device", TheanoFlags["device"])
-    print("Devices: Use %s via THEANO_FLAGS instead of %s." % (TheanoFlags["device"], old_device_config), file=log.v4)
-  dev_args = get_devices_init_args(config)
-  assert len(dev_args) > 0
-  devices = [Device(**kwargs) for kwargs in dev_args]
-  for device in devices:
-    while not device.initialized:
-      time.sleep(0.25)
-  if devices[0].blocking:
-    print("Devices: Used in blocking / single proc mode.", file=log.v4)
-  else:
-    print("Devices: Used in multiprocessing mode.", file=log.v4)
-  return devices
-
-
 def get_cache_byte_sizes():
   """
   :rtype: (int,int,int)
@@ -258,11 +220,10 @@ def init_data():
   train_data, extra_train = load_data(config, train_cache_bytes, 'train')
 
 
-def print_task_properties(devices=None):
+def print_task_properties():
   """
-  :type devices: list[Device.Device]|None
+  print information about used data
   """
-
   if train_data:
     print("Train data:", file=log.v2)
     print("  input:", train_data.num_inputs, "x", train_data.window, file=log.v2)
@@ -275,28 +236,13 @@ def print_task_properties(devices=None):
     print("Eval data:", file=log.v2)
     print(" ", eval_data.len_info() or "no info", file=log.v2)
 
-  if devices:
-    print("Devices:", file=log.v3)
-    for device in devices:
-      print("  %s: %s" % (device.name, device.device_name), end=' ', file=log.v3)
-      print("(units:", device.get_device_shaders(),
-            "clock: %.02fGhz" % (device.get_device_clock() / 1024.0),
-            "memory: %.01f" % (device.get_device_memory() / float(1024 * 1024 * 1024)) + "GB)", end=' ', file=log.v3)
-      print("working on", device.num_batches, "batches" if device.num_batches > 1 else "batch", end=' ', file=log.v3)
-      print("(update on device)" if device.update_specs['update_rule'] != 'none' else "(update on host)", file=log.v3)
 
-
-def init_engine(devices):
+def init_engine():
   """
   Initializes global ``engine``, for example :class:`returnn.tf.engine.Engine`.
-
-  :param list[returnn.theano.device.Device]|None devices:
   """
   global engine
-  if BackendEngine.is_theano_selected():
-    from returnn.theano.engine import Engine
-    engine = Engine(devices)
-  elif BackendEngine.is_tensorflow_selected():
+  if BackendEngine.is_tensorflow_selected():
     from returnn.tf.engine import Engine
     engine = Engine(config=config)
   elif BackendEngine.is_torch_selected():
@@ -337,11 +283,7 @@ def init_backend_engine():
   See :func:`init_engine` for that.
   """
   BackendEngine.select_engine(config=config)
-  if BackendEngine.is_theano_selected():
-    print("Theano:", util.describe_theano_version(), file=log.v3)
-    import returnn.theano.util
-    returnn.theano.util.monkey_patches()
-  elif BackendEngine.is_tensorflow_selected():
+  if BackendEngine.is_tensorflow_selected():
     print("TensorFlow:", util.describe_tensorflow_version(), file=log.v3)
     if util.get_tensorflow_version_tuple()[0] == 0:
       print("Warning: TF <1.0 is not supported and likely broken.", file=log.v2)
@@ -403,24 +345,13 @@ def init(config_filename=None, command_line_options=(), config_updates=None, ext
   returnn_greeting(config_filename=config_filename, command_line_options=command_line_options)
   debug_util.init_faulthandler()
   init_backend_engine()
-  if BackendEngine.is_theano_selected():
-    if config.value('task', 'train') == "theano_graph":
-      config.set("multiprocessing", False)
-    if config.bool('multiprocessing', True):
-      debug_util.init_cuda_not_in_main_proc_check()
   if config.bool('ipython', False):
     debug_util.init_ipython_kernel()
   init_config_json_network()
-  devices = init_theano_devices()
   if need_data():
     init_data()
-  print_task_properties(devices)
-  if config.value('task', 'train') == 'server':
-    from returnn.theano.server import Server
-    global server
-    server = Server(config)
-  else:
-    init_engine(devices)
+  print_task_properties()
+  init_engine()
 
 
 def finalize(error_occurred=False):
@@ -434,10 +365,7 @@ def finalize(error_occurred=False):
   quit_returnn = True
   sys.exited = True
   if engine:
-    if BackendEngine.is_theano_selected():
-      for device in engine.devices:
-        device.terminate()
-    elif BackendEngine.is_tensorflow_selected():
+    if BackendEngine.is_tensorflow_selected():
       engine.finalize(error_occurred=error_occurred)
 
 
@@ -449,7 +377,7 @@ def need_data():
   if config.has("need_data") and not config.bool("need_data", True):
     return False
   task = config.value('task', 'train')
-  if task in ['theano_graph', "nop", "cleanup_old_models"]:
+  if task in ["nop", "cleanup_old_models"]:
     return False
   return True
 
@@ -523,52 +451,18 @@ def execute_main_task():
     assert train_data is not None, 'train data for priors should be provided'
     engine.init_network_from_config(config)
     engine.compute_priors(dataset=train_data, config=config)
-  elif task == 'theano_graph':
-    # noinspection PyPackageRequirements,PyUnresolvedReferences
-    import theano.printing
-    # noinspection PyPackageRequirements,PyUnresolvedReferences
-    import theano.compile.io
-    # noinspection PyPackageRequirements,PyUnresolvedReferences
-    import theano.compile.function_module
-    engine.start_epoch = 1
-    engine.init_network_from_config(config)
-    for task in config.list('theano_graph.task', ['train']):
-      func = engine.devices[-1].get_compute_func(task)
-      prefix = config.value("theano_graph.prefix", "current") + ".task"
-      print("dumping to %s.* ..." % prefix, file=log.v1)
-      theano.printing.debugprint(func, file=open("%s.optimized_func.txt" % prefix, "w"))
-      assert isinstance(func.maker, theano.compile.function_module.FunctionMaker)
-      for inp in func.maker.inputs:
-        assert isinstance(inp, theano.compile.io.In)
-        if inp.update:
-          theano.printing.debugprint(
-            inp.update, file=open("%s.unoptimized.var_%s_update.txt" % (prefix, inp.name), "w"))
-      theano.printing.pydotprint(func, format='png', var_with_name_simple=True,
-                                 outfile="%s.png" % prefix)
   elif task == 'analyze':  # anything based on the network + Device
     statistics = config.list('statistics', None)
     engine.init_network_from_config(config)
     engine.analyze(data=eval_data or dev_data, statistics=statistics)
   elif task == "analyze_data":  # anything just based on the data
     analyze_data(config)
-  elif task == "classify":
-    assert eval_data is not None, 'no eval data provided'
-    assert config.has('label_file'), 'no output file provided'
-    label_file = config.value('label_file', '')
-    engine.init_network_from_config(config)
-    engine.classify(eval_data, label_file)
   elif task == "hyper_param_tuning":
     import returnn.tf.hyper_param_tuning
     tuner = returnn.tf.hyper_param_tuning.Optimization(config=config, train_data=train_data)
     tuner.work()
   elif task == "cleanup_old_models":
     engine.cleanup_old_models(ask_for_confirmation=True)
-  elif task == "daemon":
-    engine.init_network_from_config(config)
-    engine.daemon(config)
-  elif task == "server":
-    print("Server Initiating", file=log.v1)
-    server.run()
   elif task == "search_server":
     engine.use_search_flag = True
     engine.init_network_from_config(config)

@@ -123,10 +123,9 @@ def is_64bit_platform():
 class BackendEngine:
   """
   Stores which backend engine we use in RETURNN.
-  E.g. Theano or TensorFlow.
+  E.g. TensorFlow or PyTorch.
   """
 
-  Theano = 0
   TensorFlow = 1
   Torch = 2  # PyTorch
   selected_engine = None  # type: typing.Optional[int]  # One of the possible engines.
@@ -148,14 +147,11 @@ class BackendEngine:
         from returnn.config import get_global_config
         config = get_global_config()
       engine = None
-      if config.bool("use_theano", False):
-        engine = cls.Theano
       if config.bool("use_tensorflow", False):
         engine = cls.TensorFlow
       if config.value("backend", None):
         backend = config.value("backend", None)
         engine = {
-          "theano": cls.Theano,
           "tensorflow": cls.TensorFlow,
           "torch": cls.Torch,
         }[backend]
@@ -166,25 +162,13 @@ class BackendEngine:
   @classmethod
   def _get_default_engine(cls):
     """
-    For backward compatibility, we still keep Theano the default.
-    However, we can do it slightly more clever.
-    If TensorFlow is already imported but Theano is not, allow TF as the default.
-    Also, if theano cannot be imported, allow for TF as the default.
-
+    Select the backend engine. If both are installed Tensorflow is the default.
     :rtype: int
     """
-    if "theano" in sys.modules:
-      return cls.Theano
     if "tensorflow" in sys.modules:
       return cls.TensorFlow
     if "torch" in sys.modules:
       return cls.Torch
-    try:
-      # noinspection PyPackageRequirements
-      import theano
-      return cls.Theano
-    except ImportError:
-      pass
     try:
       import tensorflow
       return cls.TensorFlow
@@ -196,7 +180,7 @@ class BackendEngine:
       return cls.Torch
     except ImportError:
       pass
-    raise cls.CannotSelectEngine("Neither TensorFlow, PyTorch nor Theano available.")
+    raise cls.CannotSelectEngine("Neither TensorFlow or PyTorch available.")
 
   @classmethod
   def get_selected_engine(cls):
@@ -208,13 +192,6 @@ class BackendEngine:
     else:
       print("WARNING: BackendEngine.get_selected_engine() called before select_engine().", file=log.v3)
       return cls._get_default_engine()
-
-  @classmethod
-  def is_theano_selected(cls):
-    """
-    :rtype: bool
-    """
-    return cls.get_selected_engine() == cls.Theano
 
   @classmethod
   def is_tensorflow_selected(cls):
@@ -449,36 +426,6 @@ def describe_returnn_version():
   return __long_version__
 
 
-def describe_theano_version():
-  """
-  :rtype: str
-  """
-  # noinspection PyUnresolvedReferences,PyPackageRequirements
-  import theano
-  try:
-    theano_dir = os.path.dirname(theano.__file__)
-  except Exception as e:
-    theano_dir = "<unknown(exception: %r)>" % e
-  try:
-    version = theano.__version__
-    if len(version) > 20:
-      version = version[:20] + "..."
-  except Exception as e:
-    version = "<unknown(exception: %r)>" % e
-  try:
-    if theano_dir.startswith("<"):
-      git_info = "<unknown-dir>"
-    elif os.path.exists(theano_dir + "/../.git"):
-      git_info = "git:" + git_describe_head_version(git_dir=theano_dir)
-    elif "/site-packages/" in theano_dir:
-      git_info = "<site-package>"
-    else:
-      git_info = "<not-under-git>"
-  except Exception as e:
-    git_info = "<unknown(git exception: %r)>" % e
-  return "%s (%s in %s)" % (version, git_info, theano_dir)
-
-
 def describe_tensorflow_version():
   """
   :rtype: str
@@ -649,27 +596,24 @@ def model_epoch_from_filename(filename):
   :return: epoch number
   :rtype: int
   """
-  if BackendEngine.is_theano_selected():
-    return hdf5_dimension(filename, 'epoch')
-  else:
-    # We could check via:
-    # tf.contrib.framework.python.framework.checkpoint_utils.load_variable()
-    # once we save that in the model.
-    # See TFNetwork.Network._create_saver().
-    # We don't have it in the model, though.
-    # For now, just parse it from filename.
-    # If TF, and symlink, resolve until no symlink anymore (e.g. if we symlinked the best epoch).
-    while True:
-      tf_meta_fn = "%s.meta" % filename
-      if os.path.exists(tf_meta_fn) and os.path.islink(tf_meta_fn):
-        tf_meta_fn_ = os.readlink(tf_meta_fn)
-        assert tf_meta_fn_.endswith(".meta"), "strange? %s, %s" % (filename, tf_meta_fn)
-        filename = tf_meta_fn_[:-len(".meta")]
-      else:
-        break
-    m = re.match(".*\\.([0-9]+)", filename)
-    assert m, "no match for %r" % filename
-    return int(m.groups()[0])
+  # We could check via:
+  # tf.contrib.framework.python.framework.checkpoint_utils.load_variable()
+  # once we save that in the model.
+  # See TFNetwork.Network._create_saver().
+  # We don't have it in the model, though.
+  # For now, just parse it from filename.
+  # If TF, and symlink, resolve until no symlink anymore (e.g. if we symlinked the best epoch).
+  while True:
+    tf_meta_fn = "%s.meta" % filename
+    if os.path.exists(tf_meta_fn) and os.path.islink(tf_meta_fn):
+      tf_meta_fn_ = os.readlink(tf_meta_fn)
+      assert tf_meta_fn_.endswith(".meta"), "strange? %s, %s" % (filename, tf_meta_fn)
+      filename = tf_meta_fn_[:-len(".meta")]
+    else:
+      break
+  m = re.match(".*\\.([0-9]+)", filename)
+  assert m, "no match for %r" % filename
+  return int(m.groups()[0])
 
 
 def deep_update_dict_values(d, key, new_value):
@@ -1592,10 +1536,7 @@ def random_orthogonal(shape, gain=1., seed=None):
   return gain * q[:shape[0], :shape[1]]
 
 
-_have_inplace_increment = None
-_native_inplace_increment = None  # type: typing.Optional[typing.Callable[[np.ndarray,np.ndarray,np.ndarray],np.ndarray]]  # nopep8
-
-
+# noinspection PyUnusedLocal
 def inplace_increment(x, idx, y):
   """
   This basically does `x[idx] += y`.
@@ -1608,28 +1549,7 @@ def inplace_increment(x, idx, y):
   :param numpy.ndarray y:
   :rtype: numpy.ndarray
   """
-  # https://youtrack.jetbrains.com/issue/PY-28498
-  global _have_inplace_increment, inplace_increment, _native_inplace_increment  # noqa
-  if _have_inplace_increment is None:
-    native_inpl_incr = None
-    # noinspection PyPackageRequirements,PyUnresolvedReferences
-    import theano
-    if theano.config.cxx:
-      # noinspection PyPackageRequirements,PyUnresolvedReferences
-      import theano.gof.cutils  # needed to import cutils_ext
-      try:
-        from cutils_ext.cutils_ext import inplace_increment as native_inpl_incr  # noqa
-      except ImportError:
-        pass
-    if native_inpl_incr:
-      _have_inplace_increment = True
-      _native_inplace_increment = native_inpl_incr
-      inplace_increment = native_inpl_incr  # replace myself
-      return inplace_increment(x, idx, y)  # noqa
-    _have_inplace_increment = False
-  if _have_inplace_increment is True:
-    return _native_inplace_increment(x, idx, y)  # noqa
-  raise NotImplementedError("need Numpy 1.8 or later")
+  raise NotImplementedError("This feature was removed with dropped Theano support")
 
 
 def prod(ls):

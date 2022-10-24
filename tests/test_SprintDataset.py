@@ -1,31 +1,14 @@
 
 import _setup_test_env  # noqa
-from nose.tools import assert_equal, assert_is_instance, assert_in, assert_not_in, assert_true, assert_false
-from returnn.theano.engine_util import assign_dev_data, assign_dev_data_single_seq
+from nose.tools import assert_equal, assert_true
 from returnn.engine.batch import Batch
-from returnn.log import log
 from returnn.config import Config
 import returnn.util.basic as util
-from returnn.datasets.generating import GeneratingDataset
-from returnn.datasets.basic import DatasetSeq
 from returnn.datasets.sprint import ExternSprintDataset
-import numpy as np
 import os
 import sys
 import unittest
 from returnn.util import better_exchook
-
-try:
-  import theano
-except ImportError:
-  theano = None
-
-if theano:
-  from returnn.theano.device import Device
-  import returnn.theano.util as theano_util
-
-  theano_util.monkey_patches()
-
 
 dummyconfig_dict = {
   "num_inputs": 2,
@@ -40,19 +23,6 @@ dummyconfig_dict = {
 os.chdir((os.path.dirname(__file__) or ".") + "/..")
 assert os.path.exists("rnn.py")
 sprintExecPath = "tests/DummySprintExec.py"
-
-
-if theano:
-  class DummyDevice(Device):
-
-    def __init__(self, config=None, blocking=True):
-      if not config:
-        config = Config()
-        config.update(dummyconfig_dict)
-      super(DummyDevice, self).__init__(device="cpu", config=config, blocking=blocking)
-
-else:
-  DummyDevice = None
 
 
 def generate_batch(seq_idx, dataset):
@@ -97,12 +67,6 @@ def test_assign_dev_data():
   batch_generator = dataset.generate_batches(recurrent_net=recurrent, batch_size=5)
   batches = batch_generator.peek_next_n(2)
   assert_equal(len(batches), 2)
-  if theano:
-    print("Create Device")
-    device = DummyDevice(config=config)
-    success, num_batches = assign_dev_data(device, dataset, batches)
-    assert_true(success)
-    assert_equal(num_batches, len(batches))
 
 
 def test_window():

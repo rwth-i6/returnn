@@ -95,9 +95,9 @@ def test_demo_tf_task12ax_no_test_env():
 
 
 def test_demo_iter_dataset_task12ax():
-  cleanup_tmp_models("demos/demo-theano-task12ax.config")
-  # While the config is for Theano, it should not matter for demo-iter-dataset
-  out = run(py, "demos/demo-iter-dataset.py", "demos/demo-theano-task12ax.config")
+  cleanup_tmp_models("demos/demo-tf-vanilla-lstm.12ax.config")
+  # pick any 12ax config for the dataset test
+  out = run(py, "demos/demo-iter-dataset.py", "demos/demo-tf-vanilla-lstm.12ax.config")
   assert_in("Epoch 5.", out.splitlines())
 
 

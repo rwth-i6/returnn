@@ -49,11 +49,10 @@ def main(argv):
 
   pretrain = pretrain_from_config(config)
   if pretrain:
-    network = pretrain.get_network_for_epoch(args.epoch)
+    json_data = pretrain.get_network_json_for_epoch(args.epoch)
   else:
-    network = network_json_from_config(config)
+    json_data = network_json_from_config(config)
 
-  json_data = network.to_json_content()
   f = open(args.out, 'w')
   print(json.dumps(json_data, indent=2, sort_keys=True), file=f)
   f.close()

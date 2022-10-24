@@ -251,12 +251,6 @@ class LayerNetworkDescription:
         assert num_outputs == _num_outputs
       num_inputs = _num_inputs
       num_outputs = _num_outputs
-    if not num_inputs and not num_outputs and config.has("load") and BackendEngine.is_theano_selected():
-      from returnn.theano.network import LayerNetwork
-      import h5py
-      model = h5py.File(config.value("load", ""), "r")
-      # noinspection PyProtectedMember
-      num_inputs, num_outputs = LayerNetwork._n_in_out_from_hdf_model(model)
     assert num_inputs and num_outputs, "provide num_inputs/num_outputs directly or via train"
     return num_inputs, num_outputs
 
@@ -288,9 +282,7 @@ class LayerNetworkDescription:
     :rtype: dict[str]
     """
     from returnn.util.basic import BackendEngine, getargspec
-    if BackendEngine.is_theano_selected():
-      from returnn.theano.layers.basic import get_layer_class
-    elif BackendEngine.is_tensorflow_selected():
+    if BackendEngine.is_tensorflow_selected():
       from returnn.tf.layers.basic import get_layer_class
     else:
       raise NotImplementedError

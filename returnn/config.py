@@ -530,17 +530,6 @@ def get_global_config(raise_exception=True, auto_create=False):
     return config
   if _global_config:
     return _global_config
-  import returnn.util.task_system
-  from returnn.util.basic import BackendEngine
-  if not returnn.util.task_system.isMainProcess:
-    try:
-      if BackendEngine.is_theano_selected():
-        import returnn.theano.device
-        # We expect that we are a Device subprocess.
-        assert returnn.theano.device.asyncChildGlobalDevice is not None
-        return returnn.theano.device.asyncChildGlobalDevice.config
-    except BackendEngine.CannotSelectEngine:
-      pass  # ignore
   # We are the main process.
   import sys
   main_mod = sys.modules["__main__"]  # should be rnn.py
