@@ -34,8 +34,6 @@ class CachedDataset(Dataset):
     self.cache_num_frames_free = 0
     self.preload_set = set([])
     self.preload_end = 0
-    self.max_ctc_length = 0
-    self.ctc_targets = None
     self.alloc_intervals = None  # type: typing.Optional[list]
     self._seq_start = []  # [numpy.array([0,0])]  # uses sorted seq idx, see set_batching()
     self._seq_index = []  # type: typing.List[int]  # Via init_seq_order(). seq_index idx -> hdf seq idx
@@ -533,13 +531,6 @@ class CachedDataset(Dataset):
 
   def get_target_list(self):
     return list(self.targets.keys())
-
-  def get_ctc_targets(self, sorted_seq_idx):
-    ids = self._seq_index[self._index_map[sorted_seq_idx]]
-    return self.ctc_targets[ids]
-
-  def has_ctc_targets(self):
-    return self.ctc_targets is not None
 
   def get_tag(self, sorted_seq_idx):
     raise NotImplementedError

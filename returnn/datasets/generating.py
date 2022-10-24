@@ -185,14 +185,6 @@ class GeneratingDataset(Dataset):
     """
     return self.get_data(seq_idx, target)
 
-  def get_ctc_targets(self, sorted_seq_idx):
-    """
-    :param int sorted_seq_idx:
-    :rtype: typing.Optional[numpy.ndarray]
-    """
-    self._check_loaded_seq_idx(sorted_seq_idx)
-    assert self._get_seq(sorted_seq_idx).ctc_targets
-
   def get_tag(self, seq_idx):
     """
     :param int seq_idx:

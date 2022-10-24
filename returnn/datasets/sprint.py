@@ -594,12 +594,6 @@ class SprintDatasetBase(Dataset):
       self._wait_for_seq(sorted_seq_idx)
       return self._get_seq(sorted_seq_idx).features.get(target, None)
 
-  def get_ctc_targets(self, sorted_seq_idx):
-    """
-    :param int sorted_seq_idx:
-    """
-    assert False, "No CTC targets."
-
   def get_tag(self, sorted_seq_idx):
     """
     :param int sorted_seq_idx:

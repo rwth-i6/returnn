@@ -200,13 +200,6 @@ class CachedDataset2(Dataset):
     """
     return self.get_data(seq_idx, target)
 
-  def get_ctc_targets(self, sorted_seq_idx):
-    """
-    :param int sorted_seq_idx:
-    :rtype: numpy.ndarray|None
-    """
-    return self._get_seq(sorted_seq_idx).ctc_targets
-
   def get_tag(self, sorted_seq_idx):
     """
     :param int sorted_seq_idx:
