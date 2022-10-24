@@ -88,10 +88,8 @@ jobs:
           - TEST=HDFDataset
           - TEST=TranslationDataset
           - TEST=LearningRateControl
-          - TEST=Log
           - TEST=Pretrain
           - TEST=SprintDataset
-          - TEST=SprintInterface
           - TEST=TaskSystem
           - TEST=TaskSystem_SharedMem
           - TEST=Util
@@ -184,6 +182,7 @@ jobs:
           - TEST=Config
           - TEST=Fsa
           - TEST=Log
+          - TEST=SprintInterface
           - TEST=TFEngine
           - TEST=TFNativeOp
           - TEST=TFNetworkLayer
