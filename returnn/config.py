@@ -570,10 +570,9 @@ def _get_or_set_config_via_tf_default_graph(config=None):
   return getattr(graph, attrib_name, None)
 
 
-def network_json_from_config(config, mask=None):
+def network_json_from_config(config):
   """
   :param Config config:
-  :param str mask: "unity", "none" or "dropout"
   :rtype: dict[str]
   """
   from returnn.log import log
