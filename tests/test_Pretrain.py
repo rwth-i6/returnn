@@ -13,26 +13,6 @@ config_dict = {
 }
 
 
-config_json = """
-{
-"lstm0_fw" : { "class" : "lstm_opt", "n_out" : 500, "dropout": 0.1, "sampling" : 1, "reverse" : false },
-"lstm0_bw" : { "class" : "lstm_opt", "n_out" : 500, "dropout": 0.1, "sampling" : 1, "reverse" : true },
-
-"lstm1_fw" : { "class" : "lstm_opt", "n_out" : 500, "dropout": 0.1, "sampling" : 1, "reverse" : false,
-  "from" : ["lstm0_fw", "lstm0_bw"] },
-"lstm1_bw" : { "class" : "lstm_opt", "n_out" : 500, "dropout": 0.1, "sampling" : 1, "reverse" : true,
-  "from" : ["lstm0_fw", "lstm0_bw"] },
-
-"lstm2_fw" : { "class" : "lstm_opt", "n_out" : 500, "dropout": 0.1, "sampling" : 1, "reverse" : false,
-  "from" : ["lstm1_fw", "lstm1_bw"] },
-"lstm2_bw" : { "class" : "lstm_opt", "n_out" : 500, "dropout": 0.1, "sampling" : 1, "reverse" : true,
-  "from" : ["lstm1_fw", "lstm1_bw"] },
-
-"output" :   { "class" : "softmax", "loss" : "ce", "from" : ["lstm2_fw", "lstm2_bw"] }
-}
-"""
-
-
 net_dict = {
   "hidden_0": {"class": "linear", "n_out": 7, "dropout": 0.1, "activation": "relu"},
   "hidden_1": {"class": "linear", "n_out": 8, "dropout": 0.1, "activation": "relu",
@@ -54,14 +34,6 @@ net_dict2 = {
                "from": ["lstm1_fw", "lstm1_bw"]},
   "output":   {"class": "softmax", "loss": "ce", "from": ["lstm2_fw", "lstm2_bw"]}
 }
-
-
-def test_config_topology_json():
-  config = Config()
-  config.update(config_dict)
-  config.network_topology_json = config_json
-  pretrain = pretrain_from_config(config)
-  assert_equal(pretrain.get_train_num_epochs(), 3)
 
 
 def test_config_net_dict1():
