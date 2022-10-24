@@ -93,6 +93,7 @@ jobs:
           - TEST=Log
           - TEST=Pretrain
           - TEST=SprintDataset
+          - TEST=SprintInterface
           - TEST=TaskSystem
           - TEST=TaskSystem_SharedMem
           - TEST=Util

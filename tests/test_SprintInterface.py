@@ -3,9 +3,9 @@ from __future__ import print_function
 import sys
 import os
 
-import _setup_test_env  # noqa
 from nose.tools import assert_equal
 import returnn.sprint.interface as SprintAPI
+from returnn.tf.engine import Engine
 from tempfile import mkdtemp
 from returnn.config import Config
 import shutil
@@ -43,34 +43,43 @@ def install_sigint_handler():
 install_sigint_handler()
 
 
-def create_first_epoch(config_filename):
-  config = Config()
-  config.load_file(config_filename)
-  engine = Engine([])
-  engine.init_train_from_config(config=config, train_data=None)
-  engine.epoch = 1
-  engine.save_model(engine.get_epoch_model_filename(), epoch=engine.epoch)
-  Engine._epoch_model = None
-
-
 def test_forward():
   tmpdir = mkdtemp("returnn-test-sprint")
   olddir = os.getcwd()
   os.chdir(tmpdir)
 
-  open("config", "w").write(
-    """
-    num_inputs 2
-    num_outputs 3
-    hidden_size 1
-    hidden_type forward
-    activation relu
-    bidirectional false
-    model model
-    log_verbosity 5
-    """)
+  from returnn.datasets.generating import DummyDataset
+  seq_len = 5
+  n_data_dim = 2
+  n_classes_dim = 3
+  train_data = DummyDataset(input_dim=n_data_dim, output_dim=n_classes_dim, num_seqs=4, seq_len=seq_len)
+  train_data.init_seq_order(epoch=1)
+  cv_data = DummyDataset(input_dim=n_data_dim, output_dim=n_classes_dim, num_seqs=2, seq_len=seq_len)
+  cv_data.init_seq_order(epoch=1)
 
-  create_first_epoch("config")
+  config = "\n".join([
+    "#!rnn.py",
+    "model = '%s/model'" % tmpdir,
+    "num_outputs = %i" % n_classes_dim,
+    "num_inputs = %i" % n_data_dim,
+    'network = {"output": {"class": "softmax", "loss": "ce", "from": "data:data"}}',
+    "num_epochs = 2",
+  ])
+
+  open("config_write", "w").write(config)
+  open("config", "w").write(config + "\nload= '%s/model'" % tmpdir)
+
+  config = Config()
+  config.load_file("config_write")
+  engine = Engine(config=config)
+  engine.init_train_from_config(config=config, train_data=train_data, dev_data=cv_data, eval_data=None)
+  engine.epoch = 1
+  engine.save_model(engine.get_epoch_model_filename())
+  Engine._epoch_model = None
+
+  # Reset engine
+  from returnn.util.basic import BackendEngine
+  BackendEngine.selected_engine = None
 
   inputDim = 2
   outputDim = 3
@@ -78,9 +87,7 @@ def test_forward():
                  config="action:forward,configfile:config,epoch:1",
                  targetMode="forward-only")
   assert isinstance(SprintAPI.engine, Engine)
-  assert isinstance(SprintAPI.engine.network, LayerNetwork)
   print("used data keys via net:", SprintAPI.engine.network.get_used_data_keys())
-  print("used data keys via dev:", SprintAPI.engine.devices[0].used_data_keys)
 
   features = numpy.array([[0.1, 0.2], [0.2, 0.3], [0.3, 0.4], [0.4, 0.5]])
   seq_len = features.shape[0]
@@ -91,4 +98,3 @@ def test_forward():
 
   os.chdir(olddir)
   shutil.rmtree(tmpdir)
-
