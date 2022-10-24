@@ -53,16 +53,14 @@ jobs:
 
         pip install --user -r requirements.txt | cat
         pip install --user --upgrade tensorflow==${{ matrix.tf-version }} | cat
-        pip install --user theano==0.9 | cat
         pip install --user torch==1.12 | cat
 
-    - name: Test Python/Numpy/TF/Theano versions.
+    - name: Test Python/Numpy/TF versions.
       run: |
         echo "Python env: $(type python) $(python --version)"
         python -c "import numpy; print('NumPy:', numpy.version.full_version)"
         python -c "import tensorflow as tf; print('TensorFlow:', tf.__git_version__, tf.__version__, tf.__file__)"
         python -c "import tensorflow as tf; assert tf.__version__ == '${{ matrix.tf-version }}'"
-        python -c "import theano; print('Theano:', theano.__version__)"
 
     - name: Cache PyCharm
       uses: actions/cache@v2
@@ -151,7 +149,7 @@ jobs:
 
         pip install --user -r requirements.txt | cat
 
-    - name: Test Python/Numpy/TF/Theano versions.
+    - name: Test Python/Numpy/TF versions.
       run: |
         echo "Python env: $(type python) $(python --version)"
         python -c "import numpy; print('NumPy:', numpy.version.full_version)"
@@ -294,7 +292,7 @@ jobs:
         pip install --user scipy | cat  # for some tests
         pip install --user --upgrade tensorflow==${{ matrix.tf-version }} | cat
 
-    - name: Test Python/Numpy/TF/Theano versions.
+    - name: Test Python/Numpy/TF versions.
       run: |
         echo "Python env: $(type python) $(python --version)"
         python -c "import numpy; print('NumPy:', numpy.version.full_version)"
