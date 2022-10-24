@@ -277,8 +277,6 @@ def setup_pycharm_python_interpreter(pycharm_dir):
     fold_start("script.opt_install_further_py_deps")
     if not pip_check_is_installed("tensorflow") and not pip_check_is_installed("tensorflow-gpu"):
       pip_install("tensorflow")
-    if not pip_check_is_installed("Theano"):
-      pip_install("theano==0.9")
     # Note: Horovod will usually fail to install in this env.
     for pkg in ["typing", "librosa==0.8.1", "PySoundFile", "nltk", "matplotlib", "mpi4py", "pycodestyle"]:
       if not pip_check_is_installed(pkg):
