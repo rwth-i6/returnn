@@ -386,7 +386,6 @@ class ExternData(object):
       else:
         assert ndim >= 3
         init_args["shape"] = (None,) * (ndim - 1) + (dim,)
-      # In Returnn with Theano, we usually have the shape (time,batch,feature).
       # In TensorFlow, the default is (batch,time,feature).
       # This is also what we use here, i.e.:
       # batch_dim_axis=0, time_dim_axis=1. See TFEngine.DataProvider._get_next_batch().
@@ -411,7 +410,6 @@ class ExternData(object):
          i.e. ndim=1 means usually sparse data and ndim=2 means dense data.
     :rtype: (int,dict[str,(int,int)])
     """
-    from returnn.util.basic import BackendEngine
     num_inputs = config.int('num_inputs', 0)
     target = config.value('target', 'classes')
     if config.is_typed('num_outputs'):
@@ -420,7 +418,7 @@ class ExternData(object):
         num_outputs = {target: num_outputs}
       num_outputs = num_outputs.copy()
       from returnn.datasets.basic import convert_data_dims
-      num_outputs = convert_data_dims(num_outputs, leave_dict_as_is=BackendEngine.is_tensorflow_selected())
+      num_outputs = convert_data_dims(num_outputs, leave_dict_as_is=True)
       if "data" in num_outputs:
         num_inputs = num_outputs["data"]
         if isinstance(num_inputs, (list, tuple)):
