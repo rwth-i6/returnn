@@ -7,6 +7,7 @@ import _setup_test_env  # noqa
 import tensorflow as tf
 from returnn.tf.util.basic import *
 from returnn.tf.util.data import SpatialDim, FeatureDim
+from returnn.tf.network import ExternData
 import returnn.tf.compat as tf_compat
 from nose.tools import assert_equal, assert_not_equal, assert_is_instance, assert_is, assert_in, assert_true
 from numpy.testing.utils import assert_almost_equal, assert_allclose
@@ -479,8 +480,7 @@ def test_ExternData_via_config():
       "att_weights": {"shape": (None, None, 1)},
       "att_weights_sizes": {"shape": (None,), "dtype": "int32"}
     }})
-  from returnn.network_description import LayerNetworkDescription
-  data_dims = LayerNetworkDescription.tf_extern_data_types_from_config(config)
+  data_dims = ExternData.extern_data_types_from_config(config)
   data = {}
   for key, init_args in data_dims.items():
     data[key] = Data(name=key, auto_create_placeholders=True, **init_args)

@@ -606,13 +606,6 @@ def network_json_from_config(config, mask=None):
       json_content = json_content['network']
     if not json_content:
       raise Exception("network json is empty: %s" % config.network_topology_json)
-  if not json_content and config.has("hidden_size") and config.has("num_inputs"):  # very old way to define network
-    if not mask:
-      if sum(config.float_list('dropout', [0])) > 0.0:
-        mask = "dropout"
-    from returnn.network_description import LayerNetworkDescription
-    description = LayerNetworkDescription.from_config(config)
-    json_content = description.to_json_content(mask=mask)
   if not json_content:
     raise Exception("Network is not defined in config. Define `network`.")
   return json_content
