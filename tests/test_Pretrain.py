@@ -1,41 +1,17 @@
 
 from __future__ import print_function
 import _setup_test_env  # noqa
-from nose.tools import assert_equal, assert_in, assert_not_in, assert_true
+from nose.tools import assert_equal, assert_in, assert_not_in
 from returnn.pretrain import pretrain_from_config
 from returnn.config import Config
 
-
-config1_dict = {
-  "pretrain": "default",
-  "num_inputs": 5,
-  "num_outputs": 10,
-  "hidden_size": (7, 8,),
-  "hidden_type": "forward",
-  "activation": "relu",
-  "bidirectional": False,
-}
-
-config2_dict = {
-  "use_tensorflow": True,
-  "pretrain": "default",
-  "num_inputs": 40,
-  "num_outputs": 4498,
-  "bidirectional": True,
-  "hidden_size": (500, 500, 500),
-  "hidden_type": "rec",
-  "activation": "sigmoid",
-  "dropout": 0.1,
-}
-
-config3_dict = {
-  "use_theano": True,
+config_dict = {
   "pretrain": "default",
   "num_inputs": 40,
   "num_outputs": 4498,
 }
 
-config3_json = """
+config_json = """
 {
 "lstm0_fw" : { "class" : "lstm_opt", "n_out" : 500, "dropout": 0.1, "sampling" : 1, "reverse" : false },
 "lstm0_bw" : { "class" : "lstm_opt", "n_out" : 500, "dropout": 0.1, "sampling" : 1, "reverse" : true },
@@ -54,17 +30,40 @@ config3_json = """
 }
 """
 
+net_dict = {
+  "hidden_0": {"class": "linear", "n_out": 7, "dropout": 0.1, "activation": "relu"},
+  "hidden_1": {"class": "linear", "n_out": 8, "dropout": 0.1, "activation": "relu",
+               "from": ["hidden_0"]},
+  "output":   {"class": "softmax", "loss": "ce", "from": ["hidden_1"]}
+}
 
-def test_init_config1():
+net_dict2 = {
+  "lstm0_fw": {"class": "lstm_opt", "n_out": 500, "dropout": 0.1, "sampling": 1, "reverse": False},
+  "lstm0_bw": {"class": "lstm_opt", "n_out": 500, "dropout": 0.1, "sampling": 1, "reverse": True},
+  "lstm1_fw": {"class": "lstm_opt", "n_out": 500, "dropout": 0.1, "sampling": 1, "reverse": False,
+               "from": ["lstm0_fw", "lstm0_bw"]},
+  "lstm1_bw": {"class": "lstm_opt", "n_out": 500, "dropout": 0.1, "sampling": 1, "reverse": True,
+               "from": ["lstm0_fw", "lstm0_bw"]},
+  "lstm2_fw": {"class": "lstm_opt", "n_out": 500, "dropout": 0.1, "sampling": 1, "reverse": False,
+               "from": ["lstm1_fw", "lstm1_bw"]},
+  "lstm2_bw": {"class": "lstm_opt", "n_out": 500, "dropout": 0.1, "sampling": 1, "reverse": True,
+               "from": ["lstm1_fw", "lstm1_bw"]},
+  "output":   {"class": "softmax", "loss": "ce", "from": ["lstm2_fw", "lstm2_bw"]}
+}
+
+
+def test_config_topology_json():
   config = Config()
-  config.update(config1_dict)
+  config.update(config_dict)
+  config.network_topology_json = config_json
   pretrain = pretrain_from_config(config)
-  assert_true(pretrain)
+  assert_equal(pretrain.get_train_num_epochs(), 3)
 
 
-def test_config1():
+def test_config_net_dict1():
   config = Config()
-  config.update(config1_dict)
+  config.update(config_dict)
+  config.typed_dict["network"] = net_dict
   pretrain = pretrain_from_config(config)
   assert_equal(pretrain.get_train_num_epochs(), 2)
   net1_json = pretrain.get_network_json_for_epoch(1)
@@ -76,17 +75,9 @@ def test_config1():
   assert_in("hidden_1", net2_json)
   assert_equal(net2_json, net3_json)
 
-
-def test_config2():
+def test_config_net_dict2():
   config = Config()
-  config.update(config2_dict)
-  pretrain = pretrain_from_config(config)
-  assert_equal(pretrain.get_train_num_epochs(), 3)
-
-
-def test_config3():
-  config = Config()
-  config.update(config3_dict)
-  config.network_topology_json = config3_json
+  config.update(config_dict)
+  config.typed_dict["network"] = net_dict2
   pretrain = pretrain_from_config(config)
   assert_equal(pretrain.get_train_num_epochs(), 3)

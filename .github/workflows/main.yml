@@ -86,11 +86,12 @@ jobs:
           - TEST=GeneratingDataset
           - TEST=hdf_dump
           - TEST=HDFDataset
-          - TEST=TranslationDataset
           - TEST=LearningRateControl
+          - TEST=Pretrain
           - TEST=SprintDataset
           - TEST=TaskSystem
           - TEST=TaskSystem_SharedMem
+          - TEST=TranslationDataset
           - TEST=Util
         include:
           - action: TEST=SprintDataset
@@ -181,7 +182,6 @@ jobs:
           - TEST=Config
           - TEST=Fsa
           - TEST=Log
-          - TEST=Pretrain
           - TEST=SprintInterface
           - TEST=TFEngine
           - TEST=TFNativeOp
