@@ -42,7 +42,6 @@ old_to_new_mod_mapping = {
   "Log": "log",
   "MetaDataset": "datasets.meta",
   "NativeOp": "native_op",
-  "NetworkDescription": "network_description",
   "NormalizationData": "datasets.normalization_data",
   "NumpyDumpDataset": "datasets.numpy_dump",
   "Pretrain": "pretrain",
