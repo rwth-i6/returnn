@@ -3,6 +3,7 @@ from __future__ import print_function
 import sys
 import os
 
+import _setup_test_env  # noqa
 from nose.tools import assert_equal
 import returnn.sprint.interface as SprintAPI
 from returnn.tf.engine import Engine
