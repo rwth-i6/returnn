@@ -5,11 +5,13 @@ from nose.tools import assert_equal, assert_in, assert_not_in
 from returnn.pretrain import pretrain_from_config
 from returnn.config import Config
 
+
 config_dict = {
   "pretrain": "default",
   "num_inputs": 40,
   "num_outputs": 4498,
 }
+
 
 config_json = """
 {
@@ -30,12 +32,14 @@ config_json = """
 }
 """
 
+
 net_dict = {
   "hidden_0": {"class": "linear", "n_out": 7, "dropout": 0.1, "activation": "relu"},
   "hidden_1": {"class": "linear", "n_out": 8, "dropout": 0.1, "activation": "relu",
                "from": ["hidden_0"]},
   "output":   {"class": "softmax", "loss": "ce", "from": ["hidden_1"]}
 }
+
 
 net_dict2 = {
   "lstm0_fw": {"class": "lstm_opt", "n_out": 500, "dropout": 0.1, "sampling": 1, "reverse": False},
@@ -74,6 +78,7 @@ def test_config_net_dict1():
   assert_in("hidden_0", net2_json)
   assert_in("hidden_1", net2_json)
   assert_equal(net2_json, net3_json)
+
 
 def test_config_net_dict2():
   config = Config()
