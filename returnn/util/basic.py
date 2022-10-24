@@ -1536,6 +1536,7 @@ def random_orthogonal(shape, gain=1., seed=None):
   return gain * q[:shape[0], :shape[1]]
 
 
+# noinspection PyUnusedLocal
 def inplace_increment(x, idx, y):
   """
   This basically does `x[idx] += y`.
