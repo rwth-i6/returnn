@@ -634,7 +634,7 @@ class RecLayer(_ConcatInputLayer):
         name = m[name.lower()]
     if name.lower() in ["lstmp", "lstm"]:
       name = cls._default_lstm_unit
-    if not tf_compat.have_contrib and name.lower() in ["LSTMBlock".lower(), "LSTMBlockFused".lower()]:
+    if tf_util.have_min_tf_version((2, 0)) and name.lower() in ["LSTMBlock".lower(), "LSTMBlockFused".lower()]:
       # E.g. TF 2 does not have the contrib module and also does not have LSTMBlock anymore.
       # (Actually, the raw op is still there, but not the wrapper class...)
       if cell_only:

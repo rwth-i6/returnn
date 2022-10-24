@@ -36,12 +36,6 @@ if v2 and tf.__version__.startswith("2."):
   # including control flow, eager execution, etc.,
   # but we want to make use of TF2 features as much as possible.
 
-try:
-  import tensorflow.contrib
-  have_contrib = True
-except ImportError:
-  have_contrib = False
-
 
 def executing_eagerly():
   """
