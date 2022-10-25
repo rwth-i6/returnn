@@ -613,14 +613,17 @@ class NewbobMultiEpoch(LearningRateControl):
       "num_epochs": config.int("newbob_multi_num_epochs", 5),
       "update_interval": config.int("newbob_multi_update_interval", config.int("newbob_multi_num_epochs", 5)),
       "relative_error_threshold": config.float('newbob_relative_error_threshold', -0.01),
+      "relative_error_grow_threshold": config.float(
+        'newbob_relative_error_grow_threshold', config.float('newbob_relative_error_threshold', -0.01)),
     })
     return kwargs
 
-  def __init__(self, num_epochs, update_interval, relative_error_threshold, **kwargs):
+  def __init__(self, num_epochs, update_interval, relative_error_threshold, relative_error_grow_threshold, **kwargs):
     """
     :param int num_epochs:
     :param int update_interval:
     :param float relative_error_threshold:
+    :param float relative_error_grow_threshold:
     """
     super(NewbobMultiEpoch, self).__init__(**kwargs)
     self.num_epochs = num_epochs
@@ -628,6 +631,7 @@ class NewbobMultiEpoch(LearningRateControl):
     self.update_interval = update_interval
     assert self.update_interval >= 1
     self.relative_error_threshold = relative_error_threshold
+    self.relative_error_grow_threshold = relative_error_grow_threshold
 
   def _calc_mean_relative_error(self, epochs):
     """
@@ -671,7 +675,9 @@ class NewbobMultiEpoch(LearningRateControl):
     if mean_relative_error is None:
       return learning_rate
     learning_rate = self.calc_learning_rate_decay_or_grow(
-      learning_rate, decay=mean_relative_error > self.relative_error_threshold)
+      learning_rate,
+      decay=mean_relative_error > self.relative_error_threshold,
+      grow=mean_relative_error < self.relative_error_grow_threshold)
     return learning_rate
 
 
