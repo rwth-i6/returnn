@@ -1415,7 +1415,9 @@ class Engine(EngineBase):
     if self._num_trained_epochs > 0:
       if self.config.typed_dict.get("restart_after_num_net_reinit", None) is not None:
         if self._num_net_reinit >= self.config.typed_dict["restart_after_num_net_reinit"]:
-          print("reinit network too often, %i times, restart" % self._num_net_reinit, file=log.v2)
+          print(
+            "reinit network too often, %i times after %i training epochs, restart" % (
+              self._num_net_reinit, self._num_trained_epochs), file=log.v2)
           self.finalize()
           from returnn.util.basic import restart_returnn
           restart_returnn()
