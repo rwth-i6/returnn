@@ -1545,10 +1545,8 @@ class Engine(EngineBase):
            <= opts.get("filter_score", float("inf")):
         return
     # Check if the previous epoch model is the best and otherwise take the best last model params.
-    last_best_epoch = self.learning_rate_control.get_last_best_epoch(
-      last_epoch=self.epoch - 1,
-      first_epoch=self.pretrain.get_train_num_epochs() if self.pretrain else 1,
-      **opts)
+    opts.setdefault("first_epoch", self.pretrain.get_train_num_epochs() if self.pretrain else 1)
+    last_best_epoch = self.learning_rate_control.get_last_best_epoch(last_epoch=self.epoch - 1, **opts)
     if last_best_epoch and last_best_epoch != self.epoch - 1:
       print("Last epoch %i (score: %f) is not the optimal model" %
             (self.epoch - 1, self.learning_rate_control.get_epoch_error_value(self.epoch - 1))
