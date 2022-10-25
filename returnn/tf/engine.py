@@ -1401,7 +1401,7 @@ class Engine(EngineBase):
       net_desc = self.network.layers_desc
       print("reinit network", file=log.v3)
     else:
-      print("reinit because network description differs. Diff:", log.v3)
+      print("reinit because network description differs. Diff:", file=log.v3)
       diff = self._net_dict_diff(self.network.layers_desc, net_desc)
       if not diff:
         print("None?", file=log.v3)
