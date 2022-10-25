@@ -835,8 +835,11 @@ class Engine(EngineBase):
 
   def finalize(self, error_occurred=False):
     """
-    Finalizes the TF session, network, graph.
+    Finalizes the datasets, TF session, network, graph.
     """
+    for dataset in [self.train_data] + list(self.eval_datasets.values()):
+      if dataset:
+        dataset.finish_epoch()
     self._close_tf_session()
     self._reset_graph(error_occurred=error_occurred)
 
