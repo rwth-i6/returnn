@@ -17,7 +17,7 @@ from __future__ import absolute_import  # fix "import theano" in Python 2
 import copy
 import numpy
 import typing
-from returnn.util.basic import make_hashable, unicode, long
+from returnn.util.basic import make_hashable, unicode
 
 
 class NativeOpBaseMixin(object):
