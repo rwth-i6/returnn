@@ -72,14 +72,17 @@ The common process of a change would be like:
 
 * Make sure you read [the documentation](https://returnn.readthedocs.io/).
   And also watched the introduction video.
-* If you are new to the project, make a pull request.
 * If you are unsure about some change / extension
   (e.g. how to implement it, or how to fix it),
   talk to some of us first
   (e.g. our internal Slack RETURNN channel, or via mail),
-  or make a pull request, or an issue.
+  and/or make an issue.
+* In general, make a pull request.
+  For that, create a branch inside the main repo,
+  named in the scheme `<your-name>-<short-description>-<issue-nr>`.
+  Then make a pull request using that branch.
 * Only if you are very sure about your change, and it is not too big,
   or only likely used by yourself (for now) and cannot possibly break anyones else setup,
-  then you can directly commit it.
+  then you can directly commit it to `master`.
   (Always check the tests.)
 
