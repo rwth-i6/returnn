@@ -1417,6 +1417,8 @@ class Engine(EngineBase):
     self._num_net_reinit += 1
     if self._num_trained_epochs > 0:
       if self.config.typed_dict.get("restart_after_num_net_reinit", None) is not None:
+        # This option was introduced as a workaround because we saw memleaks after a number of net reinits.
+        # https://github.com/rwth-i6/returnn/issues/990
         if self._num_net_reinit >= self.config.typed_dict["restart_after_num_net_reinit"]:
           print(
             "reinit network too often, %i times after %i training epochs, restart" % (
