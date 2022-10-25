@@ -621,15 +621,6 @@ class Dataset(object):
     # For new-style subclasses, which just provide get_data.
     return self.get_data(sorted_seq_idx, target)
 
-  def get_ctc_targets(self, sorted_seq_idx):
-    """
-    Warning: This is deprecated/obsolete.
-
-    :param int sorted_seq_idx:
-    :rtype: numpy.ndarray|None
-    """
-    return None
-
   def get_data_slice(self, seq_idx, key, start_frame, end_frame):
     """
     :param int seq_idx:
@@ -712,13 +703,6 @@ class Dataset(object):
       return seq_idx
     assert self.have_corpus_seq_idx()
     raise NotImplemented
-
-  def has_ctc_targets(self):
-    """
-    :return: whether we have get_ctc_targets implemented
-    :rtype: bool
-    """
-    return False
 
   @classmethod
   def generic_complete_frac(cls, seq_idx, num_seqs):
@@ -893,20 +877,6 @@ class Dataset(object):
       return vocab.labels[data]
     return vocab.get_seq_labels(data)
 
-  def calculate_priori(self, target="classes"):
-    """
-    :param str target:
-    :rtype: numpy.ndarray
-    """
-    priori = numpy.zeros((self.num_outputs[target][0],), dtype=numpy.float32)
-    i = 0
-    while self.is_less_than_num_seqs(i):
-      self.load_seqs(i, i + 1)
-      for t in self.get_targets(target, i):
-        priori[t] += 1
-      i += 1
-    return numpy.array(priori / self.get_num_timesteps(), dtype=numpy.float32)
-
   def iterate_seqs(self, recurrent_net=True, used_data_keys=None):
     """
     Takes chunking into consideration.
@@ -1026,14 +996,6 @@ class Dataset(object):
       weight = self.weights[seq_idx]
       return weight[0] >= weight[1]
     return True
-
-  def update_weights(self, seqs, weights):
-    """
-    :param list[EngineBatch.BatchSeqCopyPart] seqs:
-    :param list[float] weights:
-    """
-    for seq, weight in zip(seqs, weights):
-      self.weights[seq.seq_idx] = [weight, 0]
 
   def _generate_batches(self, recurrent_net,
                         batch_size, max_seqs=-1, max_seq_length=sys.maxsize,
@@ -1170,12 +1132,11 @@ class DatasetSeq:
   Encapsulates all data for one sequence.
   """
 
-  def __init__(self, seq_idx, features, targets=None, ctc_targets=None, seq_tag=None):
+  def __init__(self, seq_idx, features, targets=None, seq_tag=None):
     """
     :param int seq_idx: sorted seq idx in the Dataset
     :param numpy.ndarray|dict[str,numpy.ndarray] features: format 2d (time,feature) (float)
     :param dict[str,numpy.ndarray]|numpy.ndarray|None targets: name -> format 1d (time) (idx of output-feature)
-    :param numpy.ndarray|None ctc_targets: format 1d (time) (idx of output-feature)
     :param str seq_tag: sequence name / tag
     """
     assert isinstance(seq_idx, int)
@@ -1195,7 +1156,6 @@ class DatasetSeq:
     for v in features.values():
       assert isinstance(v, numpy.ndarray)
     self.features = features
-    self.ctc_targets = ctc_targets
 
   @property
   def num_frames(self):

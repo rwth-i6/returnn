@@ -106,14 +106,6 @@ class NumpyDumpDataset(Dataset):
     """
     return self._get_cache_seq(seq_idx).get_data(target)
 
-  def get_ctc_targets(self, seq_idx):
-    """
-    Not implemented.
-
-    :param int seq_idx:
-    """
-    assert False, "No CTC targets."
-
   def get_seq_length(self, seq_idx):
     """
     :param int seq_idx:

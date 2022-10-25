@@ -157,8 +157,6 @@ class HDFDataset(CachedDataset):
     self._num_seqs += nseqs
     self.file_start.append(self.file_start[-1] + nseqs)
 
-    if 'maxCTCIndexTranscriptionLength' in fin.attrs:
-      self.max_ctc_length = max(self.max_ctc_length, fin.attrs['maxCTCIndexTranscriptionLength'])
     if 'inputs' in fin:
       assert "data" not in self.target_keys, "Cannot use 'data' key for both a target and 'inputs'."
       if len(fin['inputs'].shape) == 1:  # sparse
@@ -185,16 +183,7 @@ class HDFDataset(CachedDataset):
       self.num_outputs = num_outputs
     assert self.num_outputs == num_outputs, "wrong dimensions in file %s (expected %s got %s)" % (
                                             filename, self.num_outputs, num_outputs)
-    if 'ctcIndexTranscription' in fin:
-      if self.ctc_targets is None:
-        self.ctc_targets = fin['ctcIndexTranscription'][...]
-      else:
-        tmp = fin['ctcIndexTranscription'][...]
-        pad_width = self.max_ctc_length - tmp.shape[1]
-        tmp = numpy.pad(tmp, ((0, 0), (0, pad_width)), 'constant', constant_values=-1)
-        pad_width = self.max_ctc_length - self.ctc_targets.shape[1]
-        self.ctc_targets = numpy.pad(self.ctc_targets, ((0, 0), (0, pad_width)), 'constant', constant_values=-1)
-        self.ctc_targets = numpy.concatenate((self.ctc_targets, tmp))
+
     if 'targets' in fin:
       for name in self.target_keys:
         self.data_dtype[str(name)] = str(fin['targets/data'][name].dtype)
