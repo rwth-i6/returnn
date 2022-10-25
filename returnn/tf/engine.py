@@ -1409,8 +1409,11 @@ class Engine(EngineBase):
       if not diff:
         print("None?", file=log.v3)
       else:
-        for line in diff:
+        diff_limit = 50
+        for line in diff[:diff_limit]:
           print(line, file=log.v3)
+        if len(diff) > diff_limit:
+          print("... (%i diffs not shown)" % (len(diff) - diff_limit), file=log.v3)
     self._num_net_reinit += 1
     if self._num_trained_epochs > 0:
       if self.config.typed_dict.get("restart_after_num_net_reinit", None) is not None:
