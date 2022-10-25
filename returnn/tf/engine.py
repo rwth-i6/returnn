@@ -823,6 +823,8 @@ class Engine(EngineBase):
     self.train_data = None  # type: typing.Optional[Dataset]
     self.eval_datasets = {}  # type: typing.Dict[str,Dataset]
     self.start_epoch = None  # type: typing.Optional[int]
+    self._num_trained_epochs = 0  # type: int  # just a counter
+    self._num_net_reinit = 0  # type: int
     self.use_dynamic_train_flag = False
     self.use_search_flag = config.value("task", None) == "search"
     self.use_eval_flag = config.value("task", None) != "forward"
@@ -1406,6 +1408,13 @@ class Engine(EngineBase):
       else:
         for line in diff:
           print(line, file=log.v3)
+    self._num_net_reinit += 1
+    if self._num_trained_epochs > 0:
+      if self.config.typed_dict.get("restart_after_num_net_reinit", None) is not None:
+        if self._num_net_reinit >= self.config.typed_dict["restart_after_num_net_reinit"]:
+          print("reinit network too often, %i times, restart" % self._num_net_reinit, file=log.v2)
+          from returnn.util.basic import restart_returnn
+          restart_returnn()
     old_network_params = self.network.get_params_serialized(self.tf_session)
     self._init_network(net_desc)
     if self.is_pretrain_epoch() and not self.pretrain.copy_output_layer:
@@ -1590,6 +1599,8 @@ class Engine(EngineBase):
           self.save_model(self.get_epoch_model_filename() + ".crash_%i" % trainer.device_crash_batch)
       print("Trainer not finalized, quitting. (pid %i)" % os.getpid(), file=log.v1)
       trainer.exit_due_to_error()
+
+    self._num_trained_epochs += 1
 
     if any(numpy.isinf(list(trainer.score.values()))) or any(numpy.isnan(list(trainer.score.values()))):
       print("Model seems broken, got inf or nan final score: %s" % trainer.score, file=log.v1)

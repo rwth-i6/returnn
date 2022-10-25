@@ -3767,6 +3767,16 @@ def get_patch_atfork_lib():
   return fn
 
 
+def restart_returnn():
+  """
+  Restarts RETURNN.
+  """
+  # https://stackoverflow.com/questions/72335904/simple-way-to-restart-application
+  close_all_fds_except({0, 1, 2})
+  os.execv(sys.executable, [sys.executable] + sys.argv)
+  raise Exception("restart_returnn: execv failed")
+
+
 def maybe_restart_returnn_with_atfork_patch():
   """
   What we want: subprocess.Popen to always work.
