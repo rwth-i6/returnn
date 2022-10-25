@@ -3771,6 +3771,9 @@ def restart_returnn():
   """
   Restarts RETURNN.
   """
+  log.flush()
+  sys.stdout.flush()
+  sys.stderr.flush()
   # https://stackoverflow.com/questions/72335904/simple-way-to-restart-application
   close_all_fds_except({0, 1, 2})
   os.execv(sys.executable, [sys.executable] + sys.argv)

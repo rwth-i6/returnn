@@ -223,6 +223,14 @@ class Log:
       behavior_text = "This might be disallowed with a future behavior_version."
     self.print_warning(text, prefix_text="DEPRECATION WARNING:", extra_text=behavior_text)
 
+  def flush(self):
+    """
+    Flush all streams.
+    """
+    for stream in [self.v1, self.v2, self.v3, self.v4, self.v5]:
+      if stream:
+        stream.flush()
+
 
 log = Log()
 
