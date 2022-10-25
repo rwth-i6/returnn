@@ -17,7 +17,7 @@ from __future__ import absolute_import  # fix "import theano" in Python 2
 import copy
 import numpy
 import typing
-from returnn.util.basic import make_hashable, unicode, long
+from returnn.util.basic import make_hashable, unicode
 
 
 class NativeOpBaseMixin(object):
@@ -69,7 +69,6 @@ class NativeOpBaseMixin(object):
     self.cpu_support = cpu_support
     self.name = name or "<anonNativeOp>"
     self.grad_input_map = self._convert_grad_input_map(grad_input_map, len(in_info) + len(out_info) * 2)
-    self.destroy_map = self._construct_destroy_map(in_info)
 
   @classmethod
   def _resolve_want_inplace_dummy(cls, in_info, out_info):
@@ -98,22 +97,6 @@ class NativeOpBaseMixin(object):
       c = "\n".join([v + "\n\n" for v in c])
     assert isinstance(c, (str, unicode))
     return c
-
-  @classmethod
-  def _construct_destroy_map(cls, in_info):
-    destroy_map = {}
-    for in_idx, info in enumerate(in_info):
-      want_inplace = info.get("want_inplace", -1)
-      assert isinstance(want_inplace, (int, long))
-      if want_inplace >= 0 and info.get("is_inplace", False):
-        out_idx = want_inplace
-        # https://deeplearning.net/software/theano/extending/inplace.html
-        # https://github.com/Theano/Theano/issues/3506
-        # It's strange that we must mark which output operates on which input -
-        # I would expect that it must only know which inputs are destroyed.
-        assert out_idx not in destroy_map, "Theano cannot handle that yet"
-        destroy_map[out_idx] = [in_idx]
-    return destroy_map
 
   @classmethod
   def _convert_grad_input_map(cls, gi_map, num_params):
