@@ -634,4 +634,4 @@ def tf_should_use_gpu(config):
       config.set("device", "cpu")
       return False
   else:
-    raise AssertionError("Currently unsupported TF device %s specified" % cfg_dev)
+    raise ValueError("Currently unsupported TF device %r specified" % (cfg_dev,))
