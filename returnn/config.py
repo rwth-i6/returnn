@@ -610,102 +610,6 @@ def network_json_from_config(config):
   return json_content
 
 
-def get_devices_init_args(config):
-  """
-  :param Config config:
-  :rtype: list[dict[str]]
-  """
-  import re
-  multiproc = config.bool('multiprocessing', True)
-  if config.value('task', 'train') == "theano_graph":
-    # Should have been reset earlier. See init() which handles this case.
-    assert not multiproc, "set multiprocessing = False to use theano_graph"
-  device_info = config.list('device', ['cpu0'])
-  if len(device_info) == 1 and device_info[0] == 'json':
-    try:
-      import json
-      specs = (
-        json.loads(
-          open(config.value('initialize_from_json', ''))
-          .read().replace('(', '\"').replace(')', '\"'))['worker'])
-    except Exception:
-      raise Exception('Unable to parse worker information from json content')
-    devices = [
-      {
-        'device': specs[key]['device'],
-        'config': config,
-        'blocking': False,
-        'num_batches': specs[key].pop('num_batches', 1),
-        "update_specs": specs[key].pop('update_specs', {})}
-      for key in specs]
-  else:
-    device_tags = {}
-    ngpux = 0
-    from returnn.util.basic import get_num_gpu_devices
-    ncpus, ngpus = get_num_gpu_devices()
-    if "all" in device_info:
-      device_tags = {
-        tag: [1, True] for tag in ["cpu" + str(i) for i in range(ncpus)] + ["gpu" + str(i) for i in range(ngpus)]}
-    else:
-      for info in device_info:
-        device_update = True
-        num_batches = 1
-        if info[0] == '_':
-          device_update = False
-          info = info[1:]
-        if ':' in info:
-          num_batches = int(info.split(':')[1])
-          info = info.split(':')[0]
-        if len(info) == 3:
-          info += "X"
-        assert len(info) > 3, "invalid device: " + str(info)
-        utype = info[0:3]
-        uid = info[3:]
-        if uid == '*':
-          uid = "[0-9]*"
-        if uid == 'X':
-          ngpux += 1
-          device_tags[info] = [num_batches, True]
-        else:
-          if utype == 'cpu':
-            np = ncpus
-          elif utype == 'gpu':
-            np = ngpus
-          else:
-            np = 0
-          match = False
-          for p in range(np):
-            if re.match(uid, str(p)):
-              device_tags[utype + str(p)] = [num_batches, device_update]
-              match = True
-          assert match, "invalid device specified: " + info
-    tags = sorted(device_tags.keys())
-    if multiproc:
-      assert len(tags) > 0
-      if len(tags) == 1 and tags[0][-1] == 'X':
-        newtag = tags[0][:-1] + 'Z'
-        device_tags[newtag] = device_tags[tags[0]]
-        tags[0] = newtag
-      devices = [
-        {
-          "device": tag,
-          "config": config,
-          "num_batches": device_tags[tag][0],
-          "update_specs": {'update_rule': 'global' if device_tags[tag][1] else 'none'}}
-        for tag in tags]
-      if len(devices) == 1 and ngpux > 1:
-        devices = devices * ngpux
-      import returnn.util.task_system
-      if returnn.util.task_system.isMainProcess:  # On a child process, we can have the gpu device.
-        from returnn.util.basic import TheanoFlags
-        assert not TheanoFlags.get("device", "").startswith("gpu"), (
-          "The main proc is not supposed to use the GPU in multiprocessing mode. "
-          "Do not set device=gpu in THEANO_FLAGS.")
-    else:
-      devices = [{"device": tags[0], "config": config, "blocking": True}]
-  return devices
-
-
 def tf_should_use_gpu(config):
   """
   :param Config config:
@@ -724,9 +628,10 @@ def tf_should_use_gpu(config):
     if is_gpu_available():
       print("Device not set explicitly, and we found a GPU, which we will use.", file=log.v2)
       config.set("device", "gpu")
+      return True
     else:
       print("Device not set explicitly, and no GPU found.", file=log.v2)
       config.set("device", "cpu")
-  devs = get_devices_init_args(config)
-  assert len(devs) == 1, "multiple devices not supported yet for TF"
-  return any([d["device"].startswith("gpu") for d in devs])
+      return False
+  else:
+    raise AssertionError("Currently unsupported TF device %s specified" % cfg_dev)
