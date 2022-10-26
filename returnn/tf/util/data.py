@@ -10,7 +10,6 @@ from __future__ import print_function, division
 import os
 import typing
 import tensorflow as tf
-import traceback
 
 import returnn.util.basic as util
 from returnn.util.basic import NotSpecified, Entity
@@ -105,7 +104,6 @@ class Dim(object):
     self.dimension = dimension
     self._vocab = vocab
     self.same_as = None  # type: typing.Optional[Dim]
-    self._same_as_tb = None  # type: typing.Optional[traceback.StackSummary]  # for debugging
     self.derived_from_tag = derived_from_tag
     self.derived_from_op = derived_from_op
     if derived_from_op and not derived_from_op.output:
@@ -167,7 +165,6 @@ class Dim(object):
   def __getstate__(self):
     d = vars(self).copy()
     d["batch"] = None
-    d["_same_as_tb"] = None
     d["_same_for_batch_ctx"] = {}
     d["dyn_size_ext"] = None
     d["kind"] = self.kind.name if self.kind else None
@@ -225,7 +222,6 @@ class Dim(object):
       src_data=self.src_data, src_axis=self.src_axis)
     if same_as_self:
       tag.same_as = self  # not declare_same_as, none of the extra checks needed
-      tag._same_as_tb = traceback.extract_stack()
     return tag
 
   def _can_use_in_ctx(self, ctx):
@@ -397,7 +393,6 @@ class Dim(object):
       batch=batch, control_flow_ctx=dyn_size_ext.control_flow_ctx if dyn_size_ext else ctx,
       dyn_size_ext=dyn_size_ext)
     dim_tag.same_as = same_base
-    dim_tag._same_as_tb = traceback.extract_stack()
     if dyn_size_ext and dyn_size_ext.placeholder is not None:
       if Dim.get_tag_from_size_tensor(dyn_size_ext.placeholder) is None:
         dim_tag.set_tag_on_size_tensor(dyn_size_ext.placeholder, batch=batch)
@@ -594,8 +589,8 @@ class Dim(object):
             self, self.description, self.dyn_size, x, batch),
           "\nNew size computation graph:",
           format_graph_output(x, max_depth=3),
-          "\nThis is maybe the result of an incorrect declare_same_as. Traceback of declare_same_as:",
-          "".join(self._same_as_tb.format()) if self._same_as_tb else ("same_as = %s" % self.same_as)]))
+          "\nThis is maybe the result of an incorrect declare_same_as. ",
+          "same_as = %s" % self.same_as]))
     if batch and getattr(x, "_RETURNN_dyn_size_beam", None):
       assert batch.beam == getattr(x, "_RETURNN_dyn_size_beam")
     if self.batch and batch:
@@ -994,7 +989,6 @@ class Dim(object):
     other_same_base._merge_same_for_batch_ctx_dict(self)
     other._maybe_update()
     self.same_as = other_same_base
-    self._same_as_tb = traceback.extract_stack()
     self._maybe_update()
     if self.dyn_size is not None and other_same_base.dyn_size is not None:
       if self.dyn_size is not other_same_base.dyn_size:
