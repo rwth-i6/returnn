@@ -5,12 +5,11 @@ most of them quite low level.
 """
 
 from __future__ import print_function
-from threading import Lock, currentThread
+from threading import Lock
 import sys
 
 import os
 import io
-from contextlib import contextmanager
 import pickle
 import types
 import struct
@@ -23,6 +22,13 @@ except ImportError:
   from multiprocessing.connection import Connection
 
 PY3 = sys.version_info[0] >= 3
+
+if PY3:
+  from io import BytesIO
+else:
+  # noinspection PyUnresolvedReferences,PyCompatibility
+  from StringIO import StringIO as BytesIO
+
 
 _abs_mod_file = os.path.abspath(__file__)
 
