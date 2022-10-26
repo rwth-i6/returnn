@@ -385,7 +385,7 @@ class Dim(object):
             if batch.beam:
               dyn_size_ext.placeholder._RETURNN_dyn_size_beam = batch.beam
               dyn_size_ext.placeholder._RETURNN_beam_expanded_base_data = beam_expanded_base_data
-    if not dyn_size_ext and allow_none:
+    if not dyn_size_ext and allow_none and not same_base.derived_from_op:
       return None
     dim_tag = Dim(
       kind=self.kind, description=self.description, dimension=self.dimension,
@@ -412,10 +412,11 @@ class Dim(object):
     same.dyn_size_ext = dyn_size_ext
     self._maybe_update()
 
-  def get_dyn_size_ext_for_batch_ctx(self, batch, ctx):
+  def get_dyn_size_ext_for_batch_ctx(self, batch, ctx, template_only=False):
     """
     :param BatchInfo|None batch:
     :param ControlFlowContext|None ctx:
+    :param bool template_only:
     :rtype: Data|None
     """
     assert self.can_be_used_as_dim()
@@ -429,6 +430,7 @@ class Dim(object):
     same = self.get_for_batch_ctx(batch, ctx, allow_none=True)
     if not same:
       return None
+    same.complete_dyn_size(template_only=template_only)
     return same.dyn_size_ext
 
   @property
@@ -985,7 +987,8 @@ class Dim(object):
         return
       self_same_as.declare_same_as(other_same_base)
       if (self.dyn_size_ext is None or not self._validate_in_current_graph()) and self_same_as.dyn_size_ext:
-        self.dyn_size_ext = self_same_as.get_dyn_size_ext_for_batch_ctx(self.batch, self.control_flow_ctx)
+        self.dyn_size_ext = self_same_as.get_dyn_size_ext_for_batch_ctx(
+          self.batch, self.control_flow_ctx, template_only=True)
     other_same_base._merge_same_for_batch_ctx_dict(self)
     other._maybe_update()
     self.same_as = other_same_base
@@ -1006,7 +1009,7 @@ class Dim(object):
       # Maybe it changed in the meanwhile, so check.
       tag = self.src_data.get_dim_tag(self.src_axis)
       if tag.description == self.description and (not tag.dyn_size_ext or not tag._validate_in_current_graph()):
-        tag.dyn_size_ext = self.get_dyn_size_ext_for_batch_ctx(tag.batch, tag.control_flow_ctx)
+        tag.dyn_size_ext = self.get_dyn_size_ext_for_batch_ctx(tag.batch, tag.control_flow_ctx, template_only=True)
         tag._maybe_update()
     # If others dyn_size is None but we have a dyn_size, maybe update others dyn_size.
     if self.dyn_size is not None and other_same_base.dyn_size is not self.dyn_size:
@@ -1014,14 +1017,15 @@ class Dim(object):
       # This is important such that self.can_compare() is sane.
       if other_same_base.dyn_size is None or not other_same_base._validate_in_current_graph():
         other_same_base.dyn_size_ext = self.get_dyn_size_ext_for_batch_ctx(
-          other_same_base.batch, other_same_base.control_flow_ctx)
+          other_same_base.batch, other_same_base.control_flow_ctx, template_only=True)
         other_same_base._maybe_update()
     if not self.dyn_size_ext or not self._validate_in_current_graph():
-      self.dyn_size_ext = other_same_base.get_dyn_size_ext_for_batch_ctx(self.batch, self.control_flow_ctx)
+      self.dyn_size_ext = other_same_base.get_dyn_size_ext_for_batch_ctx(
+        self.batch, self.control_flow_ctx, template_only=True)
       self._maybe_update()
     elif other_same_base.dyn_size_ext is None or not other_same_base._validate_in_current_graph():
       other_same_base.dyn_size_ext = self.get_dyn_size_ext_for_batch_ctx(
-        other_same_base.batch, other_same_base.control_flow_ctx)
+        other_same_base.batch, other_same_base.control_flow_ctx, template_only=True)
       other_same_base._maybe_update()
     if self.is_dim_known() and other.is_dim_known():
       assert self.dimension == other.dimension
