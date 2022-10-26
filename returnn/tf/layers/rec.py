@@ -6998,7 +6998,6 @@ class SelfAttentionLayer(_ConcatInputLayer):
     :rtype: Data
     """
     assert sources
-    import numpy
     out = sources[0].output.copy_template(name="%s_output" % name)
     out = out.copy_as_batch_major().copy_with_feature_last()
     batch_dim_tag = out.dim_tags[out.batch_dim_axis]
