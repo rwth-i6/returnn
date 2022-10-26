@@ -6975,7 +6975,6 @@ class SelfAttentionLayer(_ConcatInputLayer):
       # Squeeze away the time-dim, which should be 1.
       v = tf.squeeze(v, axis=1)
     self.output.placeholder = v
-    self.output.size_placeholder = input_data.size_placeholder.copy()
 
   @classmethod
   def transform_config_dict(cls, d, network, get_layer):
@@ -7011,13 +7010,8 @@ class SelfAttentionLayer(_ConcatInputLayer):
       feat_tag = FeatureDim("%s_self_att_feat" % name, dimension=n_out, auto_generated=True)
     else:
       raise Exception("%s %r: need to specify out_dim or n_out" % (cls.__name__, name))
-    if len(out.shape_dense) >= 2:
-      if all(out.shape_dense[:-1]):
-        time_dim = int(numpy.prod(out.shape[:-1]))
-      else:
-        time_dim = None
-      time_tag = Dim(
-        kind=Dim.Types.Spatial, description="%s_self_att_time" % name, dimension=time_dim, auto_generated=True)
+    if out.have_time_axis():
+      time_tag = out.get_time_dim_tag()
       dim_tags = (batch_dim_tag, time_tag, feat_tag)
     else:
       dim_tags = (batch_dim_tag, feat_tag)
