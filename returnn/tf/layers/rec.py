@@ -6989,11 +6989,13 @@ class SelfAttentionLayer(_ConcatInputLayer):
       d["key_shift"] = get_layer(d["key_shift"])
 
   @classmethod
-  def get_out_data_from_opts(cls, n_out, name, sources, **kwargs):
+  def get_out_data_from_opts(cls, name, sources, n_out=NotSpecified, out_dim=NotSpecified, **kwargs):
     """
     :param int n_out:
     :param str name:
     :param list[LayerBase] sources:
+    :param int|NotSpecified n_out:
+    :param Dim|NotSpecified out_dim:
     :rtype: Data
     """
     assert sources
@@ -7001,7 +7003,14 @@ class SelfAttentionLayer(_ConcatInputLayer):
     out = sources[0].output.copy_template(name="%s_output" % name)
     out = out.copy_as_batch_major().copy_with_feature_last()
     batch_dim_tag = out.dim_tags[out.batch_dim_axis]
-    feat_tag = FeatureDim("%s_self_att_feat" % name, dimension=n_out, auto_generated=True)
+    if out_dim is not NotSpecified:
+      assert isinstance(out_dim, Dim)
+      feat_tag = out_dim
+    elif n_out is not NotSpecified:
+      assert isinstance(n_out, int)
+      feat_tag = FeatureDim("%s_self_att_feat" % name, dimension=n_out, auto_generated=True)
+    else:
+      raise Exception("%s %r: need to specify out_dim or n_out" % (cls.__name__, name))
     if len(out.shape_dense) >= 2:
       if all(out.shape_dense[:-1]):
         time_dim = int(numpy.prod(out.shape[:-1]))
