@@ -54,7 +54,6 @@ old_to_new_mod_mapping = {
   "SprintInterface": "sprint.interface",
   "StereoDataset": "datasets.stereo",
   "TaskSystem": "util.task_system",
-  "TaskSystem_example": "util.task_system_example",
   "TFCompat": "tf.compat",
   "TFDataPipeline": "tf.data_pipeline",
   "TFDistributed": "tf.distributed",
