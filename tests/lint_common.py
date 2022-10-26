@@ -103,7 +103,6 @@ assert os.path.exists("%s/rnn.py" % _root_dir)
 ignore_count_for_files = {
   'returnn/util/fsa.py',
   'returnn/util/task_system.py',
-  'returnn/util/task_system_example.py',
   'returnn/datasets/bundle_file.py',
   'returnn/datasets/cached.py',
   'returnn/datasets/normalization_data.py',
