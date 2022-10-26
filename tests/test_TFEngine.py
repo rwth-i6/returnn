@@ -3764,7 +3764,7 @@ def test_unflatten_2d():
   # See also test_SimpleHDFWriter_ndim1_var_len.
   # And unflatten_nd, and UnflattenNdLayer.
   from returnn.datasets.hdf import HDFDataset, SimpleHDFWriter
-  from returnn.datasets.basic import set_config_num_inputs_outputs_from_dataset
+  from returnn.datasets.basic import set_config_extern_data_from_dataset
   # E.g. attention weights, shape (dec-time,enc-time) per seq.
   fn = _get_tmp_file(suffix=".hdf")
   os.remove(fn)  # SimpleHDFWriter expects that the file does not exist
@@ -3798,7 +3798,7 @@ def test_unflatten_2d():
     },
     "debug_print_layer_output_template": True
   }))
-  set_config_num_inputs_outputs_from_dataset(config=engine.config, dataset=dataset)
+  set_config_extern_data_from_dataset(config=engine.config, dataset=dataset)
   print("extern data:", engine.config.typed_value("extern_data"))
 
   engine.init_train_from_config()
@@ -3849,7 +3849,7 @@ def test_attention_forward_hdf_then_unflatten_2d():
   # See also test_SimpleHDFWriter_ndim1_var_len.
   # And unflatten_nd, and UnflattenNdLayer.
   from returnn.datasets.hdf import HDFDataset
-  from returnn.datasets.basic import set_config_num_inputs_outputs_from_dataset
+  from returnn.datasets.basic import set_config_extern_data_from_dataset
   from returnn.datasets.generating import TaskNumberBaseConvertDataset
   from returnn.tf.layers.rec import RecLayer, _SubnetworkRecCell
 
@@ -3897,7 +3897,7 @@ def test_attention_forward_hdf_then_unflatten_2d():
   task_dataset = TaskNumberBaseConvertDataset(num_seqs=17)
   task_dataset.initialize()
   task_dataset.init_seq_order(epoch=1)
-  set_config_num_inputs_outputs_from_dataset(config=config, dataset=task_dataset)
+  set_config_extern_data_from_dataset(config=config, dataset=task_dataset)
   print("task extern data:", config.typed_value("extern_data"))
 
   att_engine = Engine(config=config)
@@ -3944,7 +3944,7 @@ def test_attention_forward_hdf_then_unflatten_2d():
     },
     "debug_print_layer_output_template": True
   }))
-  set_config_num_inputs_outputs_from_dataset(config=unflatten_engine.config, dataset=hdf_dataset)
+  set_config_extern_data_from_dataset(config=unflatten_engine.config, dataset=hdf_dataset)
   print("hdf extern data:", unflatten_engine.config.typed_value("extern_data"))
 
   unflatten_engine.init_train_from_config()

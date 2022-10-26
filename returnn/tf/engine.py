@@ -1013,8 +1013,8 @@ class Engine(EngineBase):
       config = self.config
     if not config.has("num_inputs") and not config.has("num_outputs") and not config.has("extern_data") and (
           train_data or dev_data or eval_data):
-      from returnn.datasets.basic import set_config_num_inputs_outputs_from_dataset
-      set_config_num_inputs_outputs_from_dataset(config=config, dataset=train_data or dev_data or eval_data)
+      from returnn.datasets.basic import set_config_extern_data_from_dataset
+      set_config_extern_data_from_dataset(config=config, dataset=train_data or dev_data or eval_data)
     self.use_dynamic_train_flag = True
     self.train_data = train_data
     self.eval_datasets.clear()
