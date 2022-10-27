@@ -953,9 +953,6 @@ class Dataset(object):
           else:
             limit = self.min_chunk_size[key] or 1
             limit_default = self.min_chunk_size[default_key] or 1
-            if self.min_chunk_size[default_key] == chunk_size[default_key]:
-              limit = chunk_size[key]
-              limit_default = chunk_size[default_key]
             nr_of_chunks = (length[key] - limit) // chunk_step[key] + 1
             nr_of_chunks_default = (length[default_key] - limit_default) // chunk_step[default_key] + 1
             assert nr_of_chunks == nr_of_chunks_default, (
