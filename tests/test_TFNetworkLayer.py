@@ -5315,6 +5315,37 @@ def test_RandomLayer_in_loop():
     assert not (out0_np == out_np).all()  # not all the same
 
 
+def test_RandomLayer_zero_shape():
+  # https://github.com/rwth-i6/returnn/issues/1190
+  from returnn.tf.util.data import batch_dim, SpatialDim, FeatureDim
+  time_dim = SpatialDim('time')
+  input_dim = FeatureDim('input', 3)
+  config = Config({"extern_data": {"data": {"dim_tags": (batch_dim, time_dim, input_dim)}}})
+  net_dict = {
+    'random': {
+      'class': 'random',
+      'shape': [batch_dim, time_dim, FeatureDim("zero", 0)],
+      "shape_deps": ["data"],
+      'distribution': 'normal',
+      'mean': 0.0,
+      'stddev': 1.0,
+    },
+    'output': {
+      'class': 'copy', 'from': ['data', 'random'],
+    }
+  }
+  with make_scope() as session:
+    net = TFNetwork(config=config)
+    net.construct_from_dict(net_dict)
+    net.initialize_params(session)
+    in_ = net.extern_data.get_default_input_data()
+    out = net.get_default_output_layer().output
+    in_np, out_np = session.run((in_.placeholder, out.placeholder), feed_dict=make_feed_dict(net.extern_data))
+    print(in_np.shape, out_np.shape)
+    print(out_np)
+    assert in_np.shape == out_np.shape
+
+
 def test_untrainable_params():
   with make_scope() as session:
     config = Config()

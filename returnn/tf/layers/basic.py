@@ -2556,6 +2556,24 @@ class RandomLayer(LayerBase):
     self._distribution_attribs = (mean, stddev, bound, minval, maxval)
     mean, stddev, bound, minval, maxval = [_attrib_value(attrib) for attrib in self._distribution_attribs]
     shape_ = [d.get_dim_value() for d in self.output.dim_tags]
+
+    def _safe_call(f):
+      """
+      :param ()->tf.Tensor f:
+      :rtype: tf.Tensor
+      """
+      # https://github.com/rwth-i6/returnn/issues/1190
+      # https://github.com/tensorflow/tensorflow/issues/51803
+      # Make sure we recheck this for later TF versions, whether it is still needed.
+      assert tf_util.tf_version_tuple()[:2] <= (2, 10)
+      if all(isinstance(d, int) and d > 0 for d in shape_):
+        return f()
+      if any(isinstance(d, int) and d == 0 for d in shape_):
+        return tf.zeros(shape=shape_, dtype=self.output.dtype)
+      return tf_util.cond(
+        tf.greater(tf.reduce_prod(shape_), 0),
+        f, lambda: tf.zeros(shape=shape_, dtype=self.output.dtype))
+
     if distribution == "uniform":
       if minval is not None or maxval is not None:
         assert maxval is not None
@@ -2574,7 +2592,7 @@ class RandomLayer(LayerBase):
         minval, maxval = -_b + mean, _b + mean
       else:
         raise ValueError("%s: uniform distribution needs either mean, stddev, bound or minval, maxval" % self)
-      out = gen.uniform(shape=shape_, minval=minval, maxval=maxval, dtype=dtype)
+      out = _safe_call(lambda: gen.uniform(shape=shape_, minval=minval, maxval=maxval, dtype=dtype))
     elif distribution in {"normal", "truncated_normal"}:
       assert minval is None and maxval is None and bound is None
       if mean is None:
@@ -2582,9 +2600,9 @@ class RandomLayer(LayerBase):
       if stddev is None:
         stddev = 1
       if distribution == "normal":
-        out = gen.normal(shape=shape_, mean=mean, stddev=stddev, dtype=dtype)
+        out = _safe_call(lambda: gen.normal(shape=shape_, mean=mean, stddev=stddev, dtype=dtype))
       elif distribution == "truncated_normal":
-        out = gen.truncated_normal(shape=shape_, mean=mean, stddev=stddev, dtype=dtype)
+        out = _safe_call(lambda: gen.truncated_normal(shape=shape_, mean=mean, stddev=stddev, dtype=dtype))
       else:
         assert False, distribution  # should not get here
     else:
