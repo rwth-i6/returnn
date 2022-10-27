@@ -54,7 +54,7 @@ class Dataset(object):
     set_or_remove("chunking", config.opt_typed_value("chunking", None))
     set_or_remove("seq_ordering", config.value("batching", None))
     set_or_remove("shuffle_frames_of_nseqs", config.int('shuffle_frames_of_nseqs', 0) or None)
-    set_or_remove("min_chunk_size", config.int('min_chunk_size', 0) or None)
+    set_or_remove("min_chunk_size", config.opt_typed_value('min_chunk_size', 0) or None)
     set_or_remove("chunking_variance", config.float("chunking_variance", 0))
 
   @staticmethod
@@ -134,7 +134,7 @@ class Dataset(object):
     self._num_timesteps = 0
     self._num_seqs = 0
     self._estimated_num_seqs = estimated_num_seqs
-    self.min_chunk_size = min_chunk_size
+    self.min_chunk_size = NumbersDict(min_chunk_size)
     self.chunking_variance = chunking_variance
     self.chunk_size, self.chunk_step, self.custom_chunking_func = self._parse_chunking(chunking)
     if isinstance(context_window, (tuple, list)):
@@ -951,10 +951,8 @@ class Dataset(object):
           if chunk_step[key] == chunk_step[default_key]:
             raise Exception("Chunking with multiple data-keys of different length: %r" % length)
           else:
-            limit = limit_default = 1
-            if self.min_chunk_size == chunk_size[default_key]:
-              limit = chunk_size[key]
-              limit_default = chunk_size[default_key]
+            limit = self.min_chunk_size[key] or 1
+            limit_default = self.min_chunk_size[default_key] or 1
             nr_of_chunks = (length[key] - limit) // chunk_step[key] + 1
             nr_of_chunks_default = (length[default_key] - limit_default) // chunk_step[default_key] + 1
             assert nr_of_chunks == nr_of_chunks_default, (
@@ -971,7 +969,7 @@ class Dataset(object):
             chunk_end.value = None
           yield s, chunk_start, chunk_end
           t += chunk_step
-          if length[default_key] - t[default_key] <= self.min_chunk_size:
+          if any([length[key] - t[key] <= self.min_chunk_size[key] for key in length.keys()]):
             break
       s += 1
 
