@@ -448,14 +448,10 @@ class MultiChannelMultiResolutionStftLayer(_ConcatInputLayer):
 
     def _compute_size_placeholder():
       size_placeholder_dict = {}
-      nr_of_full_frames = (self.input_data.size_placeholder[0] - self._reference_frame_size) // self._frame_shift + 1
-      nf_of_paded_frames = 0
-      if (
-        self._pad_last_frame and
-        ((self.input_data.size_placeholder[0] - self._reference_frame_size) -
-         (nr_of_full_frames - 1) * self._frame_shift > 0)):
-        nf_of_paded_frames = 1
-      new_size = nr_of_full_frames + nf_of_paded_frames
+      if self._pad_last_frame:
+        new_size = (self.input_data.size_placeholder[0] - self._reference_frame_size - 1) // self._frame_shift + 2
+      else:
+        new_size = (self.input_data.size_placeholder[0] - self._reference_frame_size) // self._frame_shift + 1
       from ..util.data import Dim
       Dim(
         kind=Dim.Types.Spatial, description="%s:MultiChannelMultiResolutionStft" % self.name,
