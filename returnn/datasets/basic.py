@@ -134,10 +134,7 @@ class Dataset(object):
     self._num_timesteps = 0
     self._num_seqs = 0
     self._estimated_num_seqs = estimated_num_seqs
-    if isinstance(min_chunk_size, int):
-      self.min_chunk_size = NumbersDict(broadcast_value=min_chunk_size)
-    else:
-      self.min_chunk_size = NumbersDict(min_chunk_size)
+    self.min_chunk_size = NumbersDict(min_chunk_size)
     self.chunking_variance = chunking_variance
     self.chunk_size, self.chunk_step, self.custom_chunking_func = self._parse_chunking(chunking)
     if isinstance(context_window, (tuple, list)):
