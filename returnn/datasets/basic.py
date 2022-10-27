@@ -1376,19 +1376,14 @@ def shapes_for_batches(batches, data_keys, dataset=None, extern_data=None, enfor
   return d
 
 
-def set_config_num_inputs_outputs_from_dataset(config, dataset):
+def set_config_extern_data_from_dataset(config, dataset):
   """
   :param returnn.config.Config config:
   :param Dataset dataset:
   """
-  from returnn.util import BackendEngine
-  if BackendEngine.is_tensorflow_selected():
-    # TF supports more fine-grained specification,
-    # however the dataset does not store that in num_outputs.
-    from returnn.tf.network import ExternData
-    config.set("extern_data", {
-      key: ExternData.data_kwargs_from_dataset_key(dataset=dataset, key=key)
-      for key in dataset.get_data_keys()})
-  else:
-    config.set("num_inputs", dataset.num_inputs)
-    config.set("num_outputs", dataset.num_outputs)
+  # ExternData supports more fine-grained specification,
+  # however the dataset does not store that in num_outputs.
+  from returnn.tf.network import ExternData
+  config.set("extern_data", {
+    key: ExternData.data_kwargs_from_dataset_key(dataset=dataset, key=key)
+    for key in dataset.get_data_keys()})
