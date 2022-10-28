@@ -1346,6 +1346,19 @@ class GatherLayer(_ConcatInputLayer):
     # (BatchAxes.., InputAxesBeforeGatherAxis, PositionAxes.., InputAxesAfterGatherAxis..)
     self.output.placeholder = tf.gather(params=params, indices=indices, axis=gather_axis, batch_dims=batch_dims)
 
+    if input_data.dim_tags[old_gather_axis].is_batch_dim():
+      for dim_tag in self.output.dim_tags:
+        if dim_tag.is_spatial_dim():
+          axis = self.output.get_batch_axis_excluding_batch(self.output.get_axis_by_tag_name(dim_tag.description))
+          new_size = tf.gather(params=self.output.size_placeholder[axis], indices=position_data.placeholder)
+          from ..util.data import Dim
+          Dim(
+            kind=Dim.Types.Spatial, description="%s_gather_axis" % self.name,
+            dyn_size=new_size, batch=self.output.batch,
+            src_data=self.output, src_axis=axis, auto_generated=True)
+          self.output.size_placeholder[axis] = new_size
+
+
   @classmethod
   def _get_common_input_position_axes(cls, input_data, position_data, old_gather_axis):
     """
