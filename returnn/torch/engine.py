@@ -35,6 +35,7 @@ class Engine(EngineBase):
     self._start_epoch = None  # type: Optional[int]
     self._final_epoch = None  # type: Optional[int]
     self._model = None  # type: Optional[torch.nn.Module]
+    self._save_model_epoch_interval = 1
 
   def init_train_from_config(self, config=None, train_data=None, dev_data=None, eval_data=None):
     """
@@ -58,6 +59,7 @@ class Engine(EngineBase):
     self._final_epoch = self.config_get_final_epoch(self.config)
 
     self._load_model(epoch=self._start_epoch)
+    self._save_model_epoch_interval = config.int('save_interval', 1)
 
   def train(self):
     """
@@ -124,7 +126,8 @@ class Engine(EngineBase):
 
     print("Trained %i steps" % step_idx)
 
-    self._save_model()
+    if self.epoch % self._save_model_epoch_interval == 0 or self.epoch == self._final_epoch:
+      self._save_model()
 
   def _load_model(self, epoch):
     """
