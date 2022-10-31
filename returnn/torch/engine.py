@@ -32,6 +32,8 @@ class Engine(EngineBase):
     self.eval_datasets = {}
     self.learning_rate = config.float("learning_rate", 1.)  # TODO LR control...
 
+    self._start_epoch = None  # type: Optional[int]
+    self._final_epoch = None  # type: Optional[int]
     self._model = None  # type: Optional[torch.nn.Module]
 
   def init_train_from_config(self, config=None, train_data=None, dev_data=None, eval_data=None):
@@ -52,19 +54,21 @@ class Engine(EngineBase):
       for dataset_name, dataset_opts in config.typed_value("eval_datasets", {}).items():
         self.eval_datasets[dataset_name] = init_dataset(dataset_opts, default_kwargs={"name": dataset_name})
 
+    self._start_epoch, _ = self.get_train_start_epoch_batch(self.config)
+    self._final_epoch = self.config_get_final_epoch(self.config)
+
+    self._load_model(epoch=self._start_epoch)
+
   def train(self):
     """
     Main training loop.
     """
-    start_epoch, _ = self.get_train_start_epoch_batch(self.config)
-    final_epoch = self.config_get_final_epoch(self.config)
 
-    self._load_model(epoch=start_epoch)
+    print("Starting training at epoch {}.".format(self._start_epoch), file=log.v3)
+    assert self._model, "Model not initialized, call init_train_from_config()."
 
-    print("Starting training at epoch {}.".format(start_epoch), file=log.v3)
-
-    self.epoch = start_epoch
-    while self.epoch <= final_epoch:
+    self.epoch = self._start_epoch
+    while self.epoch <= self._final_epoch:
       self.init_train_epoch()
       self.train_epoch()
 
