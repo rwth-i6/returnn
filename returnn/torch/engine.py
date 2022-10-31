@@ -12,6 +12,7 @@ from random import random
 
 from returnn.log import log
 from returnn.engine.base import EngineBase
+from returnn.learning_rate_control import load_learning_rate_control_from_config, LearningRateControl
 from returnn.datasets.basic import init_dataset
 from returnn.util import basic as util
 from . import data_pipeline
@@ -31,13 +32,14 @@ class Engine(EngineBase):
     self.model_filename = self.config.value('model', None)
     self.train_dataset = None
     self.eval_datasets = {}
-    self.learning_rate = config.float("learning_rate", 1.)  # TODO LR control...
 
     self._start_epoch = None  # type: Optional[int]
     self._final_epoch = None  # type: Optional[int]
     self._model = None  # type: Optional[torch.nn.Module]
-    self._save_model_epoch_interval = 1
     self._train_step_func = None  # type: Optional[Callable]
+    self._learning_rate = 0.0
+    self._learning_rate_control = None  # type: Optional[LearningRateControl]
+    self._save_model_epoch_interval = 1
 
     self._device = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -63,6 +65,7 @@ class Engine(EngineBase):
     self._final_epoch = self.config_get_final_epoch(self.config)
 
     self._load_model(epoch=self._start_epoch)
+    self._learning_rate_control = load_learning_rate_control_from_config(config)
     self._save_model_epoch_interval = config.int('save_interval', 1)
 
     self._train_step_func = self.config.typed_value("train_step")
@@ -89,18 +92,18 @@ class Engine(EngineBase):
     """
     init train (sub)epoch. LR etc
     """
-    pass
+    self._learning_rate = self._learning_rate_control.get_learning_rate_for_epoch(self.epoch)
 
   def train_epoch(self):
     """
     train one (sub)epoch
     """
-    print("start", self.get_epoch_str(), "with learning rate", self.learning_rate, "...", file=log.v4)
+    print("start", self.get_epoch_str(), "with learning rate", self._learning_rate, "...", file=log.v4)
 
     data_loader = self._create_data_loader(self.train_dataset)
 
     self._model.train()
-    optimizer = torch.optim.AdamW(self._model.parameters(), lr=self.learning_rate)
+    optimizer = torch.optim.AdamW(self._model.parameters(), lr=self._learning_rate)
 
     step_idx = 0
     for data in data_loader:
@@ -145,6 +148,9 @@ class Engine(EngineBase):
           step_idx += 1
 
       total_loss = accumulated_loss / step_idx if step_idx else 0.0
+
+      self._learning_rate_control.set_epoch_error(self.epoch, {"%s_score" % dataset_name: float(total_loss)})
+      self._learning_rate_control.save()
 
       print("Total loss for '{}': {:.6}".format(dataset_name, total_loss), file=log.v3)
 
