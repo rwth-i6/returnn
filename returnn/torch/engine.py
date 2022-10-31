@@ -2,9 +2,10 @@
 Main engine for PyTorch
 """
 
-from typing import Optional
+from typing import Optional, Callable
 
 import torch
+import numpy
 import os
 from torch.utils.data import DataLoader
 from random import random
@@ -36,6 +37,9 @@ class Engine(EngineBase):
     self._final_epoch = None  # type: Optional[int]
     self._model = None  # type: Optional[torch.nn.Module]
     self._save_model_epoch_interval = 1
+    self._train_step_func = None  # type: Optional[Callable]
+
+    self._device = "cuda" if torch.cuda.is_available() else "cpu"
 
   def init_train_from_config(self, config=None, train_data=None, dev_data=None, eval_data=None):
     """
@@ -60,6 +64,9 @@ class Engine(EngineBase):
 
     self._load_model(epoch=self._start_epoch)
     self._save_model_epoch_interval = config.int('save_interval', 1)
+
+    self._train_step_func = self.config.typed_value("train_step")
+    assert self._train_step_func, "train_step not defined"
 
   def train(self):
     """
@@ -90,31 +97,14 @@ class Engine(EngineBase):
     """
     print("start", self.get_epoch_str(), "with learning rate", self.learning_rate, "...", file=log.v4)
 
-    train_data = data_pipeline.DatasetWrapper(self.train_dataset, epoch=self.epoch)
+    data_loader = self._create_data_loader(self.train_dataset)
 
-    batch_max_seqs = self.config.int('max_seqs', 1)  # TODO wrong default, actually -1, no limit (limit via batch_size)
-    data_loader = DataLoader(
-      train_data,
-      batch_size=batch_max_seqs,
-      collate_fn=data_pipeline.collate_batch,
-    )
-
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    self._model.to(device)
     self._model.train()
-    train_step_func = self.config.typed_value("train_step")
-    assert train_step_func, "train_step not defined"
     optimizer = torch.optim.AdamW(self._model.parameters(), lr=self.learning_rate)
 
     step_idx = 0
     for data in data_loader:
-      assert isinstance(data, dict) and data
-      data = {k: v.to(device) for (k, v) in data.items()}
-
-      train_ctx = TrainCtx()
-      sentinel_kw = {"__fwd_compatible_random_arg_%i" % int(random() * 100): None}
-      train_step_func(model=self._model, data=data, train_ctx=train_ctx, **sentinel_kw)
-      loss = train_ctx.total_loss()
+      loss = self._run_step(data)
 
       optimizer.zero_grad()
       loss.backward()
@@ -128,6 +118,68 @@ class Engine(EngineBase):
 
     if self.epoch % self._save_model_epoch_interval == 0 or self.epoch == self._final_epoch:
       self._save_model()
+
+    self.eval_model()
+
+  def eval_model(self):
+    """
+    Runs model on all eval datasets and calculates the loss.
+    """
+    self._model.eval()
+
+    for dataset_name, dataset in self.eval_datasets.items():
+      print("Evaluating dataset '{}'...".format(dataset_name), file=log.v3)
+
+      data_loader = self._create_data_loader(dataset)
+
+      accumulated_loss = 0.0
+      step_idx = 0
+
+      with torch.no_grad():
+        for data in data_loader:
+
+          loss = self._run_step(data).detach().cpu().numpy()
+          print("step %i, loss: %f" % (step_idx, loss), file=log.v4)
+
+          accumulated_loss += loss
+          step_idx += 1
+
+      total_loss = accumulated_loss / step_idx if step_idx else 0.0
+
+      print("Total loss for '{}': {:.6}".format(dataset_name, total_loss), file=log.v3)
+
+  def _create_data_loader(self, dataset):
+    """
+    :param returnn.datasets.basic.Dataset dataset:
+    :return: PyTorch data loader created from given RETURNN dataset
+    :rtype: DataLoader
+    """
+    wrapped_dataset = data_pipeline.DatasetWrapper(dataset, epoch=self.epoch)
+
+    batch_max_seqs = self.config.int('max_seqs', 1)  # TODO wrong default, actually -1, no limit (limit via batch_size)
+    data_loader = DataLoader(
+      wrapped_dataset,
+      batch_size=batch_max_seqs,
+      collate_fn=data_pipeline.collate_batch,
+    )
+
+    return data_loader
+
+  def _run_step(self, data):
+    """
+    :param dict[str, numpy.ndarray] data: model inputs for the step
+    :return: model loss calculated for the step
+    :rtype: torch.Tensor
+    """
+    assert isinstance(data, dict) and data
+    data = {k: v.to(self._device) for (k, v) in data.items()}
+
+    train_ctx = TrainCtx()
+    sentinel_kw = {"__fwd_compatible_random_arg_%i" % int(random() * 100): None}
+    self._train_step_func(model=self._model, data=data, train_ctx=train_ctx, **sentinel_kw)
+    loss = train_ctx.total_loss()
+
+    return loss
 
   def _load_model(self, epoch):
     """
@@ -146,6 +198,8 @@ class Engine(EngineBase):
       print("Load model %s" % (filename,), file=log.v4)
       model_state = torch.load(filename)
       self._model.load_state_dict(model_state)
+
+    self._model.to(self._device)
 
   def _save_model(self):
     """
