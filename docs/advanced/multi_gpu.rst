@@ -37,7 +37,7 @@ Check that you can run ``mpirun``.
 
 You need to install to install Horovod. This usually can be installed via pip::
 
-    pip3 install horovod
+    pip3 install horovod[tensorflow]
 
 For further information, please refer to the
 `Horovod documentation <https://github.com/horovod/horovod>`__.
