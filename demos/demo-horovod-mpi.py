@@ -25,26 +25,32 @@ def main():
       print("PE_HOSTFILE, %s:" % os.environ["PE_HOSTFILE"])
       with open(os.environ["PE_HOSTFILE"], "r") as f:
         print(f.read())
-    except FileNotFoundError as exc:
+    except Exception as exc:
       print(exc)
 
   if os.environ.get("SGE_JOB_SPOOL_DIR", ""):
     print("SGE_JOB_SPOOL_DIR, %s:" % os.environ["SGE_JOB_SPOOL_DIR"])
-    for name in os.listdir(os.environ["SGE_JOB_SPOOL_DIR"]):
-      print(name)
-    print()
+    try:
+      for name in os.listdir(os.environ["SGE_JOB_SPOOL_DIR"]):
+        print(name)
+      print()
+    except Exception as exc:
+      print(exc)
 
   if os.environ.get("OMPI_FILE_LOCATION", ""):
     print("OMPI_FILE_LOCATION, %s:" % os.environ["OMPI_FILE_LOCATION"])
     d = os.path.dirname(os.path.dirname(os.environ["OMPI_FILE_LOCATION"]))
-    print("dir:", d)
-    for name in os.listdir(d):
-      print(name)
-    print()
-    print("contact.txt:")
-    with open("%s/contact.txt" % d, "r") as f:
-      print(f.read())
-    print()
+    try:
+      print("dir:", d)
+      for name in os.listdir(d):
+        print(name)
+      print()
+      print("contact.txt:")
+      with open("%s/contact.txt" % d, "r") as f:
+        print(f.read())
+      print()
+    except Exception as exc:
+      print(exc)
 
   # https://github.com/horovod/horovod/issues/1123
   try:
@@ -54,14 +60,8 @@ def main():
     print("Exception while loading libhwloc.so, ignoring...", exc)
 
   print("sys.path:")
-  i = 0
   for p in list(sys.path):
     print(p)
-    if "/.local/lib/" in p:
-      # small workaround if the order is messed up... prefer from .local/lib
-      print("(insert at position %i)" % i)
-      sys.path.insert(i, p)
-      i += 1
   print()
 
   try:
