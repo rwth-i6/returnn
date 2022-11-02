@@ -33,6 +33,9 @@ class HorovodContext:
     :param Config config:
     """
     # noinspection PyUnresolvedReferences,PyPackageRequirements
+    import horovod
+    print("Horovod:", horovod.__version__, horovod.__file__)
+    # noinspection PyUnresolvedReferences,PyPackageRequirements
     import horovod.tensorflow as hvd
     hvd.init()
     print(
