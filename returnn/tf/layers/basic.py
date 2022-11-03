@@ -4391,6 +4391,7 @@ class ExpandDimsLayer(_ConcatInputLayer):
     if isinstance(axis, int):
       data = data.copy_as_batch_major()
     axis = self._get_axis(data=data, axis=axis)
+    dim = LengthLayer.fixup_dim(dim, sources=self.sources)
     from returnn.tf.util.basic import expand_dims_unbroadcast
     self.output.placeholder = expand_dims_unbroadcast(
       data.placeholder, axis=axis, dim=dim.get_dim_value() if isinstance(dim, Dim) else dim)
