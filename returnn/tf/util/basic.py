@@ -291,6 +291,35 @@ def mask_dyn_seq_len_nd(x, pad_value, axes):
   return x_
 
 
+def copy_compatible_reduce(source, target, reduce_type):
+  """
+  Extension of Data.copy_compatible_to which also reduces additional dims.
+
+  :param Data source:
+  :param Data target:
+  :param str reduce_type: eg "max"
+  :return: source with broadcast-compatible shape to target
+  :rtype: Data
+  """
+  common = Data.get_common_data([target, source])
+  extra_dims = list(common.dim_tags)
+  for d in target.dim_tags:
+    extra_dims.remove(d)
+  if not extra_dims:
+    return source.copy_compatible_to(target, check_sparse=False, check_dtype=False)
+  # extra_dims now contains dims only in source but not in target
+  for d in extra_dims:
+    assert not d.is_dynamic(), (
+      "%r, %r, cannot reduce dynamic dim %r (just not implemented here...)" % (source, target, d))
+    assert reduce_type == "max", "only max implemented currently"
+    axis = source.get_axis_from_description(d)
+    x = tf.reduce_max(source.placeholder, axis=axis)
+    dim_tags = source.dim_tags[:axis] + source.dim_tags[axis + 1:]
+    source = Data(source.name, dim_tags=dim_tags, dtype=source.dtype, placeholder=x)
+  # Now this should work.
+  return source.copy_compatible_to(target, check_sparse=False, check_dtype=False)
+
+
 class OutputWithActivation(object):
   """
   Stores some tensor before and after some activation function,
