@@ -1110,13 +1110,15 @@ class LayerBase(object):
       with inner() as scope:
         yield scope
 
-  def add_param(self, param, custom_update=None, trainable=None, saveable=None, axes_split_info=None):
+  def add_param(self, param, custom_update=None, trainable=None, saveable=None, axes_split_info=None,
+                non_critical_for_restore=False):
     """
     :param tf.Variable|tf.Tensor param:
     :param None|CustomUpdate custom_update: will be applied in training, instead of taking the gradient
     :param bool|None trainable:
     :param bool|None saveable:
     :param list[list[int]]|None axes_split_info: e.g. [[n],[n]*4] for LSTM matrices
+    :param bool non_critical_for_restore: if True, and it cannot be found in a checkpoint, it will not be an error
     :return: param
     :rtype tf.Variable
     """
@@ -1175,6 +1177,8 @@ class LayerBase(object):
       param.RETURNN_layer = self
     if getattr(param, "RETURNN_updater_opts", None) is None and self.updater_opts.truth_value:
       param.RETURNN_updater_opts = self.updater_opts
+    if non_critical_for_restore:
+      param.RETURNN_non_critical_for_restore = True
     # Note that any further postprocessing on the parameter should not be done here,
     # as we cannot guarantee that the result from this method is really used,
     # e.g. when we use official TF code such as the official LSTM cell.

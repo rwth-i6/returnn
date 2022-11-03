@@ -2375,11 +2375,14 @@ class TFNetwork(object):
         loader = CustomCheckpointLoader(
           filename=filename, saveable_params=saveable_params, network=self,
           ignore_missing=self.get_config().bool("load_ignore_missing_vars", False))
-        if not loader.missing_var_names:
+        if loader.missing_non_critical_var_names:
+          print("Did not found non-critical-to-restore vars:", loader.missing_non_critical_var_names, file=log.v2)
+        elif not loader.missing_var_names:
           print("Strange, nothing missing? Pre-loaded missing variables from other checkpoints?", file=log.v2)
         loader.load_now(session=session)
       except tf.errors.NotFoundError:
-        print("Error, some entry is missing in the checkpoint %r: %s: %s" % (filename, type(exc), exc), file=log.v1)
+        print("Error, some entry is missing in the checkpoint %r: %s: %s" % (filename, type(exc).__name__, exc),
+              file=log.v1)
         print("CustomCheckpointLoader was not able to recover.", file=log.v2)
         raise
 
@@ -4117,11 +4120,21 @@ class CustomCheckpointLoader:
     self.net_vars = [v for v in self.saveable_params if isinstance(v, tf.Variable)]
     self.net_saveables = [v for v in self.saveable_params if not isinstance(v, tf.Variable)]
     # All variables in the checkpoint:
-    self.var_ckpt_names = set(self.reader.get_variable_to_shape_map())
+    self.var_ckpt_names = set(self.reader.get_variable_to_shape_map())  # type: typing.Set[str]
     # All variables of the model to be loaded:
-    self.var_net_names = set([self._get_param_name(v) for v in self.saveable_params])
+    self.var_net_names = {
+      self._get_param_name(v): v for v in self.saveable_params
+    }  # type: typing.Dict[str,typing.Union[tf.Variable,typing.Any]]
     # Model variables missing in the checkpoint:
-    self.missing_var_names = [v for v in sorted(self.var_net_names) if v not in self.var_ckpt_names]
+    self.missing_var_names = []  # type: typing.List[str]
+    self.missing_non_critical_var_names = []  # type: typing.List[str]
+    for name, v in sorted(self.var_net_names.items()):
+      if name in self.var_ckpt_names:
+        continue
+      if getattr(v, "RETURNN_non_critical_for_restore", False):
+        self.missing_non_critical_var_names.append(name)
+        continue
+      self.missing_var_names.append(name)
     # Checkpoint variables which are not used in this model:
     self.obsolete_var_names = [v for v in sorted(self.var_ckpt_names) if v not in self.var_net_names]
     self.custom_param_importers = [
@@ -4257,6 +4270,10 @@ class CustomCheckpointLoader:
       for v in self.saveable_params:
         assert isinstance(v, tf.Variable), "not yet implemented otherwise..."
         v_name = self._get_param_name(v)
+        if not self.reader.has_tensor(v_name):
+          if getattr(v, "RETURNN_non_critical_for_restore", False):
+            continue  # non-critical for restore
+          raise tf.errors.NotFoundError(None, None, "var %r not found in checkpoint" % v_name)
         value = self.reader.get_tensor(v_name)
         variable_values[v] = self.VariableValue(value=value)
       return variable_values

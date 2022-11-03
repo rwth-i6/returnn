@@ -1163,8 +1163,9 @@ class Engine(EngineBase):
       print("loading weights from", model_epoch_filename, file=log.v2)
       try:
         self.network.load_params_from_file(model_epoch_filename, session=self.tf_session)
-      except tf.errors.NotFoundError:
+      except tf.errors.NotFoundError as exc:
         print("Exiting now because model cannot be loaded.", file=log.v1)
+        print("%s:" % type(exc).__name__, exc, file=log.v1)
         sys.exit(1)
 
   def _maybe_update_config(self, net_desc, epoch):
