@@ -78,7 +78,9 @@ class EngineBase(object):
 
     load_model_epoch_filename = util.get_checkpoint_filepattern(config.value('load', ''))
     if load_model_epoch_filename:
-      assert os.path.exists(load_model_epoch_filename + util.get_model_filename_postfix())
+      assert os.path.exists(load_model_epoch_filename + util.get_model_filename_postfix()), (
+        "load option %r, file %r does not exist" % (
+          config.value('load', ''), load_model_epoch_filename + util.get_model_filename_postfix()))
 
     import_model_train_epoch1 = util.get_checkpoint_filepattern(config.value('import_model_train_epoch1', ''))
     if import_model_train_epoch1:
