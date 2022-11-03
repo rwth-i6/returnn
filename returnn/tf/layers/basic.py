@@ -8919,7 +8919,7 @@ class VariableLayer(LayerBase):
 
   def __init__(self, shape, dtype="float32",
                add_batch_axis=False, add_time_axis=False,
-               trainable=True,
+               trainable=True, non_critical_for_restore=False,
                init=None, init_by_layer=None,
                param_name=None,
                **kwargs):
@@ -8929,6 +8929,7 @@ class VariableLayer(LayerBase):
     :param bool add_batch_axis:
     :param bool add_time_axis:
     :param bool trainable:
+    :param bool non_critical_for_restore:
     :param str|float|int|None init: see :func:`returnn.tf.util.basic.get_initializer`. 0 by default.
       Alternatively, you can also use option `init_by_layer`.
     :param LayerBase|None init_by_layer:
@@ -8958,10 +8959,12 @@ class VariableLayer(LayerBase):
         out_data_base = Data(name=self.output.name, dim_tags=dim_tags, dtype=dtype)
         initializer = init_by_layer.output.copy_compatible_to(out_data_base).placeholder
         shape_ = None  # get_variable requires shape to be not defined when the initializer is another tensor
-      var = self.add_param(tf_compat.v1.get_variable(
-        name=param_name or self.name, shape=shape_, dtype=dtype,
-        initializer=initializer, trainable=trainable),
-        axes_split_info=[d.axis_split_info() for d in dim_tags])
+      var = self.add_param(
+        tf_compat.v1.get_variable(
+          name=param_name or self.name, shape=shape_, dtype=dtype,
+          initializer=initializer, trainable=trainable),
+        axes_split_info=[d.axis_split_info() for d in dim_tags],
+        non_critical_for_restore=non_critical_for_restore)
       out = var
       if add_time_axis:
         out = tf.expand_dims(out, axis=0)
