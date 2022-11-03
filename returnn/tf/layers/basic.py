@@ -1180,10 +1180,7 @@ class SliceNdLayer(_ConcatInputLayer):
       # [start+0, start+1, ...]
       gather_positions = tf.expand_dims(start_t, -1) + tf.range(0, size)  # e.g. (B, size) or (B, T, size)
       if seq_lens_data:
-        # TODO: If seq_lens_data has more/other dims than start_data, we need to reduce_max those.
-        seq_lens_t = seq_lens_data.copy_compatible_to(
-          gather_positions_data,
-          check_sparse=False).placeholder
+        seq_lens_t = tf_util.copy_compatible_reduce(seq_lens_data, gather_positions_data, "max").placeholder
         pad_mask = tf.logical_or(  # shape like gather_positions
           tf.greater(gather_positions, seq_lens_t - 1),
           tf.less(gather_positions, 0))
@@ -1194,8 +1191,7 @@ class SliceNdLayer(_ConcatInputLayer):
           tf.less(gather_positions, 0))
         gather_positions = tf.clip_by_value(gather_positions, 0, x.batch_shape[1] - 1)
       if size_data:
-        # TODO: If size_data has more/other dims than start_data, we need to reduce_max those.
-        size_t = size_data.copy_compatible_to(start_data, check_sparse=False).placeholder
+        size_t = tf_util.copy_compatible_reduce(size_data, start_data, "max").placeholder
         pad_mask = tf.logical_or(tf.greater(gather_positions, tf.expand_dims(start_t + size_t - 1, -1)), pad_mask)
       pad_mask_data = gather_positions_data.copy_template(
         name="%s_gather_positions" % self.name,
