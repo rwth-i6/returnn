@@ -1127,6 +1127,7 @@ class SliceNdLayer(_ConcatInputLayer):
         size_t = tf.maximum(size_t, min_size)
       size = tf.reduce_max(size_t)  # scalar
     elif isinstance(size, Dim):
+      size = LengthLayer.fixup_dim(size, self.sources)
       size_data = size.dyn_size_ext  # might be None
       if size.dimension is not None:
         size = size.dimension
@@ -1135,7 +1136,7 @@ class SliceNdLayer(_ConcatInputLayer):
         else:
           slice_tag = size
       else:
-        assert size.dyn_size_ext
+        assert size.dyn_size_ext and size.dyn_size_ext.placeholder is not None
         size_t = size.dyn_size_ext.placeholder  # assume already >=0
         if min_size:
           size_t = tf.maximum(size_t, min_size)
