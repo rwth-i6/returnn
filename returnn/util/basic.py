@@ -3246,6 +3246,12 @@ def try_get_caller_name(depth=1, fallback=None):
   return fallback
 
 
+class InfiniteRecursionDetected(Exception):
+  """
+  Raised when an infinite recursion is detected, by guard_infinite_recursion.
+  """
+
+
 _guard_infinite_recursion_cache = threading.local()
 
 
@@ -3265,7 +3271,7 @@ def guard_infinite_recursion(*args):
   if not hasattr(_guard_infinite_recursion_cache, "cache"):
     _guard_infinite_recursion_cache.cache = set()
   if key in _guard_infinite_recursion_cache.cache:
-    raise Exception("infinite recursion detected")
+    raise InfiniteRecursionDetected("infinite recursion detected")
   _guard_infinite_recursion_cache.cache.add(key)
   try:
     yield
