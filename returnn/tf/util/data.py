@@ -343,6 +343,7 @@ class Dim(object):
     for ctx_ in ControlFlowContext.abs_ctx_stack_with_root(ctx):
       tag = same_base._same_for_batch_ctx.get((batch, ctx_), None)
       if tag and tag._can_use_in_ctx(ctx) and tag._validate_in_current_graph():
+        assert tag.batch == batch  # some code updated batch directly (incorrectly) and could trigger this
         return tag
     if same_base.batch == batch and same_base._can_use_in_ctx(ctx) and same_base.dyn_size_ext:
       return same_base
