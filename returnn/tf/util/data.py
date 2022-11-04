@@ -389,16 +389,13 @@ class Dim(object):
     if not dyn_size_ext and allow_none and not same_base.derived_from_op:
       return None
     ctx = dyn_size_ext.control_flow_ctx if dyn_size_ext else ctx
-    if (same_base.batch or batch) == batch and (same_base.control_flow_ctx or ctx) == ctx:
+    if (same_base.batch or batch) == batch and not same_base.control_flow_ctx and not ctx:
       # The same_base instance is either undefined (no batch, no ctx) or it is defined for the same batch and ctx.
       # In any case, reuse it then.
       same_base.batch = batch
-      if not ctx:
-        same_base.control_flow_ctx = None
       if dyn_size_ext:
         same_base.dyn_size_ext = dyn_size_ext
-        if same_base.dyn_size_ext.control_flow_ctx:
-          same_base.control_flow_ctx = same_base.dyn_size_ext.control_flow_ctx
+        assert not same_base.dyn_size_ext.control_flow_ctx
       same_base.complete_dyn_size(template_only=True)
       return same_base
     dim_tag = Dim(
