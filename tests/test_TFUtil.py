@@ -1302,7 +1302,11 @@ def test_ExternData_ext_Data_batch_info():
   # This is how it is done in returnn-common construction, to set a custom dummy batch info.
   # There is no reason why this should not be fine; we want that this is supported.
   x.batch = BatchInfo.make_global_batch_info(-1)
+  x.dim_tags[1].dyn_size_ext = Data(
+    name="x_default_dyn_size_ext", dim_tags=[batch_dim], dtype=Data.size_dtype, batch=x.batch)
   x.sanity_check()  # still fine
+  x.dim_tags[1]._maybe_update()  # might trigger some error
+  print("(1) x:", x)
 
   with tf.Graph().as_default() as graph, tf_compat.v1.Session(graph=graph) as session:
     data = Data("x", dim_tags=[batch_dim, time_dim, in_dim], auto_create_placeholders=True)
@@ -1312,8 +1316,29 @@ def test_ExternData_ext_Data_batch_info():
     data.sanity_check()
     assert data.batch != x.batch
 
-    x.sanity_check()  # failed earlier due to dim tag batch info mismatch
-    assert not x.dim_tags[1].dyn_size_ext
+    # x.sanity_check() might fail now. but this is not really relevant. x.copy() matters.
+    y = x.copy()  # failed earlier due to dim tag batch info mismatch
+    y.sanity_check()
+    assert data.dim_tags[1].dyn_size_ext
+    x.dim_tags[1]._maybe_update()  # might trigger some error
+
+    # In returnn_common, when get_network is called again,
+    # it will still have the old graph and session active,
+    # and then call nn.get_extern_data, ...
+    print("(2) x:", x, x.batch, x.dim_tags[0].batch, x.batch == x.dim_tags[0].batch, x.batch == x.dim_tags[1].batch)
+    x.batch = x.dim_tags[0].batch
+    print("(3) x:", x,
+          x.batch, x.dim_tags[0].batch, x.batch == x.dim_tags[0].batch, x.batch == x.dim_tags[1].batch,
+          x.dim_tags[1].dyn_size_ext)
+    if not x.dim_tags[1].dyn_size_ext:
+      x.dim_tags[1].dyn_size_ext = Data(
+        name="x_default_dyn_size_ext_new", dim_tags=[batch_dim], dtype=Data.size_dtype, batch=x.batch)
+      print("(3a) x:", x)
+
+    # Check again.
+    # x.sanity_check() might fail now. but this is not really relevant. x.copy() matters.
+    y = x.copy()  # failed earlier due to dim tag batch info mismatch
+    y.sanity_check()
     assert data.dim_tags[1].dyn_size_ext
 
 
