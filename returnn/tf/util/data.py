@@ -411,6 +411,14 @@ class Dim(object):
     dim_tag.complete_dyn_size(template_only=True)
     return dim_tag
 
+  def reset_batch_ctx(self):
+    """
+    For the self instance, reset batch and context.
+    """
+    self._same_for_batch_ctx.pop((self.batch, self.control_flow_ctx), None)
+    self.batch = None
+    self.control_flow_ctx = None
+
   def set_dyn_size_ext_for_batch_ctx(self, batch, ctx, dyn_size_ext):
     """
     :param BatchInfo batch:
@@ -5775,7 +5783,7 @@ def _create_size_placeholder(name, axis_wo_b, tag, batch_dim):
         batch=dyn_size_ext.batch, ctx=dyn_size_ext.control_flow_ctx, dyn_size_ext=dyn_size_ext)
       # Do not set tag.batch. set_dyn_size_ext_for_batch_ctx should cover this.
     else:
-      tag.batch = None  # reset, it is anyway invalid, see above
+      tag.reset_batch_ctx()  # reset, it is anyway invalid, see above
       tag.dyn_size_ext = dyn_size_ext
     tag.set_tag_on_size_tensor(dyn_size)
 
