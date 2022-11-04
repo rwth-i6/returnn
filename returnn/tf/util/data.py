@@ -393,9 +393,12 @@ class Dim(object):
       # The same_base instance is either undefined (no batch, no ctx) or it is defined for the same batch and ctx.
       # In any case, reuse it then.
       same_base.batch = batch
-      same_base.control_flow_ctx = ctx
+      if not ctx:
+        same_base.control_flow_ctx = None
       if dyn_size_ext:
         same_base.dyn_size_ext = dyn_size_ext
+        if same_base.dyn_size_ext.control_flow_ctx:
+          same_base.control_flow_ctx = same_base.dyn_size_ext.control_flow_ctx
       same_base.complete_dyn_size(template_only=True)
       return same_base
     dim_tag = Dim(
