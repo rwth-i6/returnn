@@ -22,6 +22,17 @@ and not listing legacy/deprecated parameters.
 Version History
 ---------------
 
+Behavior version 15 (2022-10-19)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Dimension tags with different dynamic size tensors
+can not be merged anymore via `declare_same_as`.
+This can happen when the user did not set the dim tags
+correctly in `extern_data`.
+Otherwise it is likely a bug.
+
+See issue `#1141 <https://github.com/rwth-i6/returnn/issues/1141>`__.
+
 Behavior version 14 (2022-10-19)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 

@@ -12,7 +12,7 @@ import typing
 import tensorflow as tf
 
 import returnn.util.basic as util
-from returnn.util.basic import NotSpecified, Entity
+from returnn.util.basic import BehaviorVersion, NotSpecified, Entity
 import returnn.tf.compat as tf_compat
 
 
@@ -1000,6 +1000,20 @@ class Dim(object):
     if self_derived_bases.issubset(other_derived_bases):
       # Avoid cycles on derived_from_tag. https://github.com/rwth-i6/returnn/issues/1054
       return other.declare_same_as(self)
+    self._maybe_update()
+    other._maybe_update()
+    for key in set(self._same_for_batch_ctx.keys()).intersection(other._same_for_batch_ctx.keys()):
+      self_ = self._same_for_batch_ctx[key]
+      other_ = other._same_for_batch_ctx[key]
+      if not self_._validate_in_current_graph() or not other_._validate_in_current_graph():
+        continue
+      if self_.dyn_size is None or other_.dyn_size is None:
+        continue
+      BehaviorVersion.require(
+        self_.dyn_size is other_.dyn_size,
+        "%s declare_same_as %s: Invalid with different size placeholders (%r vs %r), please check external_data" % (
+          self, other, self_.dyn_size, other_.dyn_size),
+        15)
     if self_same_as is not self:
       assert not self_same_as.same_as
       if self_same_as is other_same_base:
@@ -1012,15 +1026,6 @@ class Dim(object):
     other._maybe_update()
     self.same_as = other_same_base
     self._maybe_update()
-    if self.dyn_size is not None and other_same_base.dyn_size is not None:
-      if self.dyn_size is not other_same_base.dyn_size:
-        if self.batch == other_same_base.batch and self.control_flow_ctx == other_same_base.control_flow_ctx:
-          # Note: Instead of making this a warning, we could also enforce this at some point.
-          #   The user should be able to fix `extern_data` in the config such that this is correct in the first place.
-          #   Also, in addition to this warning, we might want to add some runtime check on the eq of the dyn sizes.
-          print(
-            "Warning: assuming dim tags are same with different size placeholders: %r vs %r" % (
-              self.dyn_size, other_same_base.dyn_size))
     # If we have a defined source, and this is a dynamic spatial axis, and it was undefined before,
     # maybe we can overtake the size_placeholder now.
     if other_same_base.dyn_size is not None and self.src_data:

@@ -663,8 +663,8 @@ def test_Data_copy_compatible_to_bias_to_batch_time_spatial_feature():
 
 
 def test_Data_get_common_data_extra_static_spatial():
-  d1 = Data(name='t', shape=(None, 32, 128), dtype='float32', auto_create_placeholders=True)
-  d2 = Data(name='r', shape=(None, 32, 128), dtype='float32', auto_create_placeholders=True)
+  d1 = Data(name='t', shape=(None, 32, 128), dtype='float32')
+  d2 = Data(name='r', shape=(None, 32, 128), dtype='float32')
   d2.get_size_dim_tag(0).declare_same_as(d1.get_size_dim_tag(0))
   common = Data.get_common_data([d1, d2])
   assert d1.shape == common.shape
@@ -678,8 +678,8 @@ def test_Data_get_common_data_broadcast_multiple():
 
 
 def test_Data_get_common_data_extra2_static_spatial():
-  d1 = Data(name='t', shape=(None, 32, 32, 128), dtype='float32', auto_create_placeholders=True)
-  d2 = Data(name='r', shape=(None, 32, 32, 128), dtype='float32', auto_create_placeholders=True)
+  d1 = Data(name='t', shape=(None, 32, 32, 128), dtype='float32')
+  d2 = Data(name='r', shape=(None, 32, 32, 128), dtype='float32')
   d2.get_size_dim_tag(0).declare_same_as(d1.get_size_dim_tag(0))
   common = Data.get_common_data([d1, d2])
   assert d1.shape == common.shape
