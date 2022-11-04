@@ -49,14 +49,18 @@ class ExternData(object):
   def __repr__(self):
     return "<ExternData data=%r>" % self.data
 
-  def init_from_config(self, config, auto_create_placeholders=True):
+  def init_from_config(self, config, auto_create_placeholders=True, reset_batch=True):
     """
     It reads ``extern_data`` from the config,
     which defines the :class:`Data` instance options to be created.
 
     :param returnn.config.Config config:
     :param bool auto_create_placeholders:
+    :param bool reset_batch:
     """
+    from returnn.tf.util.data import batch_dim
+    if reset_batch:
+      batch_dim.batch = None  # make sure it is reset
     self._config = config
     data_dims = self.extern_data_types_from_config(config)
     for key, init_args in data_dims.items():
@@ -64,6 +68,12 @@ class ExternData(object):
       # In TensorFlow, the default is (batch,time,feature).
       # This is also what we use here, i.e.:
       # batch_dim_axis=0, time_dim_axis=1. See TFEngine.DataProvider._get_next_batch().
+      if reset_batch:
+        init_args = init_args.copy()
+        if init_args.get("dim_tags"):
+          for tag in init_args["dim_tags"]:
+            assert isinstance(tag, Dim)
+            tag.reset_batch_ctx()
       self.data[key] = Data(name=key, auto_create_placeholders=auto_create_placeholders, **init_args)
     # The default input has an effect on the order of data keys,
     # and thus this will be preferred for some global information like batch info.
