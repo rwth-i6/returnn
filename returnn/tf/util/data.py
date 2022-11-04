@@ -5906,7 +5906,7 @@ def _auto_create_size_placeholders_on_dim_tags(name, dim_tags):
     tag._validate_in_current_graph()
     if tag.is_batch_dim():
       continue
-    if tag.dimension is not None:
+    if not tag.is_dynamic():
       continue
     if tag.dyn_size is not None:
       continue
