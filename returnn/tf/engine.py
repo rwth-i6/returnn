@@ -1299,8 +1299,6 @@ class Engine(EngineBase):
     use_dataset_pipeline = False
     if self.config.is_true("dataset_pipeline"):
       use_dataset_pipeline = True
-    from returnn.tf.util.data import batch_dim
-    batch_dim.batch = None  # make sure it is reset
     extern_data = ExternData()
     extern_data.init_from_config(config=self.config, auto_create_placeholders=not use_dataset_pipeline)
     if use_dataset_pipeline:
