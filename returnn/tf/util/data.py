@@ -6128,7 +6128,12 @@ class ControlFlowContext:
     """
     s = self.kind
     if self.is_loop() and self.loop_spatial_dim:
-      s += "(%s)" % self.loop_spatial_dim.short_repr()
+      try:
+        with util.guard_infinite_recursion(ControlFlowContext._repr_single, self):
+          s += "(%s)" % self.loop_spatial_dim.short_repr()
+      except util.InfiniteRecursionDetected as exc:
+        # repr should always return and not throw errors
+        s += ("(%s for loop_spatial_dim?)" % exc)
     return s
 
   def _abs_ctx_stack(self):
