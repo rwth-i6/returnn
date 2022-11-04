@@ -418,6 +418,9 @@ class Dim(object):
     self._same_for_batch_ctx.pop((self.batch, self.control_flow_ctx), None)
     self.batch = None
     self.control_flow_ctx = None
+    if self.dyn_size_ext and self.dyn_size_ext.batch:
+      self.dyn_size_ext = self.dyn_size_ext.copy_template()
+      self.dyn_size_ext.batch = None
 
   def set_dyn_size_ext_for_batch_ctx(self, batch, ctx, dyn_size_ext):
     """
