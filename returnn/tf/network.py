@@ -205,6 +205,8 @@ class ExternData(object):
               not tag.dyn_size_ext.batch):
           tag.dyn_size_ext.batch = batch_info
           tag.batch = batch_info
+          # noinspection PyProtectedMember
+          tag._maybe_update()
       # Set this last because this will trigger _adapt_batch_consistent_dim_tags
       # which might reset the dyn_size_ext when it does not match the batch info.
       data.batch = batch_info
