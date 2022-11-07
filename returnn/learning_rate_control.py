@@ -415,17 +415,22 @@ class LearningRateControl(object):
       (key, error, 'learning_rate_control_error_measure', 'dev_error'))
     return key, error[key]
 
-  def get_last_best_epoch(self, last_epoch, first_epoch=1, filter_score=float("inf"), only_last_n=-1,
+  def get_last_best_epoch(self, last_epoch, first_epoch=1, only_last_epochs=None,
+                          filter_score=float("inf"),
+                          only_last_n=-1,
                           min_score_dist=0.0):
     """
     :param int first_epoch: will check all epochs >= first_epoch
     :param int last_epoch: inclusive. will check all epochs <= last_epoch
+    :param int|None only_last_epochs: if set, will only check the last N epochs, inclusive
     :param float filter_score: all epochs which values over this score are not considered
-    :param int only_last_n: if set (>=1), from the resulting list, we consider only the last only_last_n
+    :param int only_last_n: if set (>=1), *from the resulting list*, we consider only the last only_last_n
     :param float min_score_dist: filter out epochs where the diff to the most recent is not big enough
     :return: the last best epoch. to get the details then, you might want to use getEpochErrorDict.
     :rtype: int|None
     """
+    if only_last_epochs:
+      first_epoch = max(first_epoch, last_epoch - only_last_epochs + 1)
     if first_epoch > last_epoch:
       return None
     values = [(self.get_epoch_error_key_value(ep), ep) for ep in range(first_epoch, last_epoch + 1)]
