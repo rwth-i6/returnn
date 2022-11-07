@@ -1144,6 +1144,7 @@ def print_available_devices(tf_session_opts=None, file=None):
   :param dict[str]|None tf_session_opts: if given, will init a temp Session with these opts
   :param typing.TextIO|None file: file stream for print statements, defaults to sys.stdout
   """
+  from returnn.util import basic as util
   if file is None:
     file = sys.stdout
   cuda_visible_devs = None
@@ -1170,6 +1171,11 @@ def print_available_devices(tf_session_opts=None, file=None):
         dev_id = cuda_visible_devs[dev_id]
       dev_name = d["name"]
       print("Using gpu device %i: %s" % (dev_id, dev_name), file=file)
+      # Also print in a custom different format, with hostname, and also memory
+      # -- more useful for multi-GPU debugging.
+      print(
+        "Hostname %r, GPU %i, GPU-dev-name %r, GPU-memory %s" % (
+          util.get_hostname(), dev_id, dev_name, util.human_bytes_size(dev.memory_limit_bytes)), file=file)
 
 
 def is_gpu_available():
