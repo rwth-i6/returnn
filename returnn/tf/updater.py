@@ -221,7 +221,7 @@ class Updater(object):
         "please specify **kwargs in dynamic_learning_rate for future compatibility")
       lr = learning_rate_function(
         network=self.network,
-        global_train_step=self.network.global_train_step,
+        global_train_step=self.global_train_step,
         learning_rate=lr)
     elif self.config.typed_dict.get("dynamic_learning_rate"):
       # To implement any kind of cyclic learning rate during the epoch. E.g.: https://arxiv.org/abs/1608.03983
@@ -229,8 +229,8 @@ class Updater(object):
         from returnn.util.basic import CollectionReadCheckCovered
         opts = CollectionReadCheckCovered(self.config.typed_dict["dynamic_learning_rate"])
         # Currently all intervals of same step size.
-        interval_steps = tf.constant(opts["interval"], name="interval", dtype=self.network.global_train_step.dtype)
-        step_in_interval = tf_compat.v1.mod(self.network.global_train_step, interval_steps, name="step_in_interval")
+        interval_steps = tf.constant(opts["interval"], name="interval", dtype=self.global_train_step.dtype)
+        step_in_interval = tf_compat.v1.mod(self.global_train_step, interval_steps, name="step_in_interval")
         factor = tf.pow(
           tf.constant(opts["decay"], name="decay", dtype=tf.float32),
           tf.cast(step_in_interval, dtype=tf.float32, name="step_in_interval_float"), name="factor")
