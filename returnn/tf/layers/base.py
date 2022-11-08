@@ -1438,9 +1438,16 @@ class LayerBase(object):
     :return: None or scalar
     :rtype: tf.Tensor|None
     """
+    decouple_constraints = self.network.get_config().bool("decouple_constraints", False)
     c = 0
     if self.L2:
-      c += self.L2 * self.get_params_l2_norm()
+      if decouple_constraints:
+        # Keep this logic in sync with TFUpdater.
+        for _, param in self.params.items():
+          assert isinstance(param, tf.Variable)
+          setattr(param, "RETURNN_constraint_L2", self.L2)
+      else:
+        c += self.L2 * self.get_params_l2_norm()
     if self.spatial_smoothing:
       c += self.spatial_smoothing * self.get_output_spatial_smoothing_energy()
     if self.darc1:

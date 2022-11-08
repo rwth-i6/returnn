@@ -257,7 +257,7 @@ def test_Updater_decouple_constraints():
     updater.set_trainable_vars(network.get_trainable_params())
     updater.init_optimizer_vars(session=session)
     update_op = updater.get_optim_op()
-    assert updater.decoupled_constraints is not None
+    assert updater.decouple_constraints
 
     from returnn.tf.data_pipeline import FeedDictDataProvider
     batches = dataset.generate_batches(
@@ -301,7 +301,7 @@ def test_Updater_decouple_constraints_simple_graph():
     updater.set_trainable_vars(network.get_trainable_params())
     updater.init_optimizer_vars(session=session)
     update_op = updater.get_optim_op()
-    assert updater.decoupled_constraints is not None
+    assert updater.decouple_constraints
 
     tf_util.print_graph_output(update_op)
 
@@ -339,7 +339,7 @@ def test_Updater_decouple_constraints_simple_graph_grad_accum():
     updater.set_trainable_vars(network.get_trainable_params())
     updater.init_optimizer_vars(session=session)
     update_op = updater.get_optim_op()
-    assert updater.decoupled_constraints is not None
+    assert updater.decouple_constraints
 
     session.run(
       update_op, feed_dict={
