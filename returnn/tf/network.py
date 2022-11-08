@@ -616,7 +616,8 @@ class TFNetwork(object):
     self.total_loss = None  # type: typing.Optional[tf.Tensor]
     self.total_constraints = None  # type: typing.Optional[tf.Tensor]
     self.total_objective = None  # type: typing.Optional[tf.Tensor]
-    self._global_train_step = None  # type: typing.Optional[typing.Union[tf.Variable,tf.Tensor]]
+    self._global_train_step = None  # type: typing.Optional[tf.Tensor]
+    self._global_train_step_var = None  # type: typing.Optional[tf.Variable]
     self.epoch_step = None
     self.saver = None  # type: typing.Optional[tf.compat.v1.train.Saver]
     self.extra_vars_to_save = []  # type: typing.List[tf.Variable]
@@ -2232,7 +2233,7 @@ class TFNetwork(object):
     """
     :rtype: list[tf.Variable]
     """
-    return [self.global_train_step]
+    return [self.global_train_step_var]
 
   def get_params_serialized(self, session):
     """
@@ -2253,10 +2254,34 @@ class TFNetwork(object):
     self.set_global_train_step(serialized.global_train_step, session=session)
 
   @property
+  def global_train_step_var(self):
+    """
+    :rtype: tf.Variable
+    """
+    net = self
+    while True:
+      if net._global_train_step_var is not None:
+        return net._global_train_step_var
+      if net.parent_net:
+        net = net.parent_net
+        continue
+      if net.extra_parent_net:
+        net = net.extra_parent_net
+        continue
+      # Reuse mostly because some of the test cases currently work that way.
+      with tf_util.reuse_name_scope("", absolute=True, reuse=getattr(tf_compat.v1, "AUTO_REUSE", None)):
+        with tf.device("/cpu:0"):
+          net._global_train_step_var = tf_compat.v1.get_variable(
+            name="global_step", shape=(), dtype=tf.int64, initializer=tf_compat.v1.zeros_initializer(tf.int64),
+            collections=[tf_compat.v1.GraphKeys.GLOBAL_STEP], trainable=False)
+      return net._global_train_step_var
+
+  @property
   def global_train_step(self):
     """
-    :rtype: tf.Variable|tf.Tensor
+    :rtype: tf.Tensor|tf.Variable
     """
+    from returnn.util import BehaviorVersion
     net = self
     while True:
       if net._global_train_step is not None:
@@ -2267,12 +2292,10 @@ class TFNetwork(object):
       if net.extra_parent_net:
         net = net.extra_parent_net
         continue
-      # Reuse mostly because some of the test cases currently work that way.
-      with tf_util.reuse_name_scope("", absolute=True, reuse=getattr(tf_compat.v1, "AUTO_REUSE", None)):
-        with tf.device("/cpu:0"):
-          net._global_train_step = tf_compat.v1.get_variable(
-            name="global_step", shape=(), dtype=tf.int64, initializer=tf_compat.v1.zeros_initializer(tf.int64),
-            collections=[tf_compat.v1.GraphKeys.GLOBAL_STEP], trainable=False)
+      if BehaviorVersion.get() <= 14:
+        return net.global_train_step_var
+      with tf_util.reuse_name_scope("", absolute=True), tf.device("/cpu:0"):
+        net._global_train_step = net.global_train_step_var.read_value()
       return net._global_train_step
 
   def set_global_train_step(self, step, session):
@@ -2280,14 +2303,14 @@ class TFNetwork(object):
     :param int step:
     :param tf.compat.v1.Session session:
     """
-    self.get_var_assigner(self.global_train_step).assign(step, session=session)
+    self.get_var_assigner(self.global_train_step_var).assign(step, session=session)
 
   def get_global_train_step(self, session):
     """
     :param tf.compat.v1.Session session:
     :rtype: int
     """
-    return self.global_train_step.eval(session=session)
+    return self.global_train_step_var.eval(session=session)
 
   def get_epoch_step(self):
     """

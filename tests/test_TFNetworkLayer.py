@@ -5047,7 +5047,7 @@ def test_ScatterNdLayer_RangeLayer():
     assert out_layer.output.feature_dim_axis_or_unspecified is NotSpecified and out_layer.output.feature_dim_axis == 2
     assert out_layer.output.time_dim_axis == 1
 
-    session.run(tf_compat.v1.variables_initializer(tf_compat.v1.global_variables() + [network.global_train_step]))
+    session.run(tf_compat.v1.variables_initializer(tf_compat.v1.global_variables() + [network.global_train_step_var]))
     info, out = session.run(
       (fetches, out_layer.output.placeholder),
       feed_dict={
@@ -5279,7 +5279,7 @@ def test_ScatterNdLayer_RangeLayer_RangeInAxisLayer():
     assert out_layer.output.feature_dim_axis_or_unspecified is NotSpecified and out_layer.output.feature_dim_axis == 2
     assert out_layer.output.time_dim_axis == 0
 
-    session.run(tf_compat.v1.variables_initializer(tf_compat.v1.global_variables() + [network.global_train_step]))
+    session.run(tf_compat.v1.variables_initializer(tf_compat.v1.global_variables() + [network.global_train_step_var]))
     info, out = session.run(
       (fetches, out_layer.output.placeholder),
       feed_dict={
@@ -8595,7 +8595,7 @@ def test_SyntheticGradientLayer():
     n_time = 11
     rnd = numpy.random.RandomState(42)
     with tf_compat.v1.Session() as session:
-      session.run(tf_compat.v1.variables_initializer(tf_compat.v1.global_variables() + [network.global_train_step]))
+      session.run(tf_compat.v1.variables_initializer(tf_compat.v1.global_variables() + [network.global_train_step_var]))
       for step in range(5):
         info, _ = session.run(
           (fetches, update_op),
@@ -8660,7 +8660,7 @@ def test_TikhonovRegularizationLayer():
     n_time = 11
     rnd = numpy.random.RandomState(42)
     with tf_compat.v1.Session() as session:
-      session.run(tf_compat.v1.variables_initializer(tf_compat.v1.global_variables() + [network.global_train_step]))
+      session.run(tf_compat.v1.variables_initializer(tf_compat.v1.global_variables() + [network.global_train_step_var]))
       for step in range(5):
         info, _ = session.run(
           (fetches, update_op),
@@ -8789,7 +8789,7 @@ def test_extra1():
     assert len(params) == 2  # W + b
 
     feed_dict = make_feed_dict(network.extern_data)
-    session.run(tf_compat.v1.variables_initializer(tf_compat.v1.global_variables() + [network.global_train_step]))
+    session.run(tf_compat.v1.variables_initializer(tf_compat.v1.global_variables() + [network.global_train_step_var]))
     out1 = session.run(network.layers["output1"].output.placeholder, feed_dict=feed_dict)
     out2 = session.run(network.layers["output2"].output.placeholder, feed_dict=feed_dict)
     out3 = session.run(network.layers["output3"].output.placeholder, feed_dict=feed_dict)
@@ -8840,7 +8840,7 @@ def test_extra_subnet():
     assert len(params) == 4
 
     feed_dict = make_feed_dict(network.extern_data)
-    session.run(tf_compat.v1.variables_initializer(tf_compat.v1.global_variables() + [network.global_train_step]))
+    session.run(tf_compat.v1.variables_initializer(tf_compat.v1.global_variables() + [network.global_train_step_var]))
     in_ = feed_dict[network.extern_data.data["data"].placeholder]
     sub1_out1 = session.run(network.layers["sub1_output1"].output.placeholder, feed_dict=feed_dict)
     sub1_out2 = session.run(network.layers["sub1_output2"].output.placeholder, feed_dict=feed_dict)
@@ -9034,7 +9034,7 @@ def test_extra_search():
     fetches = network.get_fetches_dict()
     data_input = network.extern_data.data["data"]
 
-    session.run(tf_compat.v1.variables_initializer(tf_compat.v1.global_variables() + [network.global_train_step]))
+    session.run(tf_compat.v1.variables_initializer(tf_compat.v1.global_variables() + [network.global_train_step_var]))
     info, out = session.run(
       (fetches, layer_output.output.placeholder),
       feed_dict={

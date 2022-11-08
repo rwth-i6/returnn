@@ -22,6 +22,18 @@ and not listing legacy/deprecated parameters.
 Version History
 ---------------
 
+Behavior version 15 (2022-11-08)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The ``TFNetwork.global_train_step`` should deterministically
+always return the initial value of the current step.
+Before, it could non-deterministically return the current step or the next step.
+This has an influence on any code which makes use of it.
+The biggest effect is on gradient accumulation
+where the old non-deterministic behavior likely was wrong.
+
+See issue `#1205 <https://github.com/rwth-i6/returnn/issues/1205>`__.
+
 Behavior version 14 (2022-10-19)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
