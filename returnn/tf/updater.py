@@ -906,7 +906,7 @@ class Updater(object):
         with tf_compat.v1.variable_scope("factor"):
           factor = (self.learning_rate / float(self.initial_learning_rate))
           factor *= self.config.float("decouple_constraints_factor", 0.025)
-        for _, grads_and_vars_per_opts in grads_per_apply_grad_opts.items():
+        for apply_grad_opts, grads_and_vars_per_opts in grads_per_apply_grad_opts.items():
           for i, (grad, var) in enumerate(grads_and_vars_per_opts):
             # See LayerBase.get_constraints_value().
             assert isinstance(var, tf.Variable)
@@ -916,7 +916,19 @@ class Updater(object):
             with tf.control_dependencies([grad]):
               # Don't just add the diff to the var because we want to have it decoupled,
               # which would not be the case with apply_gradients below.
-              apply_constraint = var.assign_sub(var * (l2 * 2.), use_locking=self.use_locking, read_value=False)
+              def _get_apply_constraints_op(multiplier=1.):
+                return var.assign_sub(var * (l2 * 2. * multiplier), use_locking=self.use_locking, read_value=False)
+              accum_grad_multiple_num_steps = apply_grad_opts.get("accum_grad_multiple_num_steps", 0)
+              if accum_grad_multiple_num_steps > 1:
+                apply_constraint = tf.cond(
+                  tf.equal(
+                    tf_compat.v1.mod(self.global_train_step, accum_grad_multiple_num_steps),
+                    accum_grad_multiple_num_steps - 1),
+                  true_fn=lambda: _get_apply_constraints_op(multiplier=float(accum_grad_multiple_num_steps)),
+                  false_fn=lambda: tf.no_op(),
+                  name="apply_decoupled_constraints/accum_grad_multiple_step")
+              else:
+                apply_constraint = _get_apply_constraints_op()
             with tf.control_dependencies([apply_constraint]):
               grad = tf.identity(grad)
             grads_and_vars_per_opts[i] = (grad, var)
