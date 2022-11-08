@@ -169,13 +169,9 @@ class Updater(object):
     self.network = network
     self.global_train_step = self.network.global_train_step
     self.use_locking = self.config.bool("optimizer_use_locking", False)
-    if self.config.bool("decouple_constraints", False):
-      # https://arxiv.org/abs/1711.05101, Fixing Weight Decay Regularization in Adam
-      self.loss = network.get_total_loss()
-      self.decoupled_constraints = network.get_total_constraints()
-    else:
-      self.loss = network.get_objective()
-      self.decoupled_constraints = None
+    self.loss = network.get_objective()
+    # https://arxiv.org/abs/1711.05101, Fixing Weight Decay Regularization in Adam
+    self.decouple_constraints = self.config.bool("decouple_constraints", False)
     self.optimizers = OrderedDict()  # optimizer_opts|None -> tf.compat.v1.train.Optimizer
     self.optim_op = None  # type: typing.Optional[tf.Operation]
     self.optim_meta_losses_dict = None  # type: typing.Optional[typing.Dict[str,tf.Tensor]]
@@ -897,7 +893,7 @@ class Updater(object):
       new_grad, apply_grad_opts = self._post_process_grad(grad=grad, var=var, global_info=global_info)
       grads_per_apply_grad_opts.setdefault(make_hashable(apply_grad_opts), []).append((new_grad, var))
 
-    if self.decoupled_constraints is not None and not isinstance(self.decoupled_constraints, (int, float)):
+    if self.decouple_constraints:
       # Note: We want to perform the decoupled constraint updates after all the gradients (and post processing)
       # is calculated (i.e. forward + backprop used the original variable, not any weight decayed version).
       # We want to perform the decoupled constraint updates before we do the gradient update.
@@ -910,17 +906,17 @@ class Updater(object):
         with tf_compat.v1.variable_scope("factor"):
           factor = (self.learning_rate / float(self.initial_learning_rate))
           factor *= self.config.float("decouple_constraints_factor", 0.025)
-        constraint_grad_descent_optimizer = tf_compat.v1.train.GradientDescentOptimizer(
-          learning_rate=factor, use_locking=self.use_locking)
         for _, grads_and_vars_per_opts in grads_per_apply_grad_opts.items():
           for i, (grad, var) in enumerate(grads_and_vars_per_opts):
-            (constraint_grad, var_), = constraint_grad_descent_optimizer.compute_gradients(
-              self.decoupled_constraints, var_list=[var])
-            assert var_ is var
-            if constraint_grad is None:  # no constraint on this var
+            # See LayerBase.get_constraints_value().
+            assert isinstance(var, tf.Variable)
+            l2 = getattr(var, "RETURNN_constraint_L2", None)
+            if not l2:
               continue
             with tf.control_dependencies([grad]):
-              apply_constraint = constraint_grad_descent_optimizer.apply_gradients([(constraint_grad, var)])
+              # Don't just add the diff to the var because we want to have it decoupled,
+              # which would not be the case with apply_gradients below.
+              apply_constraint = var.assign_sub(var * (l2 * 2.), use_locking=self.use_locking, read_value=False)
             with tf.control_dependencies([apply_constraint]):
               grad = tf.identity(grad)
             grads_and_vars_per_opts[i] = (grad, var)
