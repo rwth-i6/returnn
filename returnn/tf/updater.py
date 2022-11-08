@@ -916,15 +916,15 @@ class Updater(object):
             with tf.control_dependencies([grad]):
               # Don't just add the diff to the var because we want to have it decoupled,
               # which would not be the case with apply_gradients below.
-              def _get_apply_constraints_op(multiplier=1.):
-                return var.assign_sub(var * (l2 * 2. * multiplier), use_locking=self.use_locking, read_value=False)
+              def _get_apply_constraints_op():
+                return var.assign_sub(var * (l2 * 2.), use_locking=self.use_locking, read_value=False)
               accum_grad_multiple_num_steps = apply_grad_opts.get("accum_grad_multiple_num_steps", 0)
               if accum_grad_multiple_num_steps > 1:
                 apply_constraint = tf.cond(
                   tf.equal(
                     tf_compat.v1.mod(self.global_train_step, accum_grad_multiple_num_steps),
                     accum_grad_multiple_num_steps - 1),
-                  true_fn=lambda: _get_apply_constraints_op(multiplier=float(accum_grad_multiple_num_steps)),
+                  true_fn=_get_apply_constraints_op,
                   false_fn=lambda: tf.no_op(),
                   name="apply_decoupled_constraints/accum_grad_multiple_step")
               else:
