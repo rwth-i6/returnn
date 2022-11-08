@@ -6604,7 +6604,8 @@ class DotAttentionLayer(GlobalAttentionContextBaseLayer):
         energy *= energy_factor
       # We must mask all values behind base_seq_lens. Set them to -inf, because we use softmax afterwards.
       energy_mask = tf.sequence_mask(base_seq_lens, maxlen=tf.shape(energy)[1])
-      energy = tf.where(energy_mask, energy, float("-inf") * tf.ones_like(energy))
+      inf_value = self.network.get_config().typed_value("inf_value", float("inf"))
+      energy = tf.where(energy_mask, energy, -inf_value * tf.ones_like(energy))
       self.base_weights = tf.nn.softmax(energy)  # (batch, base_time)
       base_weights_bc = tf.expand_dims(self.base_weights, axis=1)  # (batch, 1, base_time)
       out = tf.matmul(base_weights_bc, base)  # (batch, 1, n_out)
@@ -6649,7 +6650,8 @@ class ConcatAttentionLayer(GlobalAttentionContextBaseLayer):
       energy.set_shape(tf.TensorShape([None, None]))
       # We must mask all values behind base_seq_lens. Set them to -inf, because we use softmax afterwards.
       energy_mask = tf.sequence_mask(base_seq_lens, maxlen=tf.shape(energy)[1])
-      energy = tf.where(energy_mask, energy, float("-inf") * tf.ones_like(energy))
+      inf_value = self.network.get_config().typed_value("inf_value", float("inf"))
+      energy = tf.where(energy_mask, energy, -inf_value * tf.ones_like(energy))
       self.base_weights = tf.nn.softmax(energy)  # (batch, base_time)
       base_weights_bc = tf.expand_dims(self.base_weights, axis=1)  # (batch, 1, base_time)
       out = tf.matmul(base_weights_bc, base)  # (batch, 1, n_out)
@@ -6921,6 +6923,7 @@ class SelfAttentionLayer(_ConcatInputLayer):
         energy_, [tf.shape(q_t)[0], batch_dim, num_heads, tf.shape(energy)[-1]])  # [num_queries|1,batch,heads,num_keys]
       energy_ = tf.transpose(energy_, [1, 2, 0, 3])  # [batch,heads,num_queries|1,num_keys]
       energy += energy_
+    inf_value = self.network.get_config().typed_value("inf_value", float("inf"))
     if input_data.time_dim_axis is not None:
       if attention_left_only:
         # We also ignore the input data sequence length, because we expect that frames outside the seq length
@@ -6948,7 +6951,7 @@ class SelfAttentionLayer(_ConcatInputLayer):
         # shape: (batch,1,1,time)
         inverted_prefix_mask = tf.reshape(inverted_prefix_mask, [tf.shape(energy)[0], 1, 1, tf.shape(energy)[-1]])
         energy_mask = tf.math.logical_xor(energy_mask, inverted_prefix_mask)
-      energy = where_bc(energy_mask, energy, float("-inf") * tf.ones_like(energy), name="energy_masked")
+      energy = where_bc(energy_mask, energy, -inf_value * tf.ones_like(energy), name="energy_masked")
     elif prev_mask is not None:
       assert self._rec_previous_layer and have_prev_kv_left
       mask = tf.concat([prev_mask, tf.ones([batch_dim, 1], dtype=tf.bool)], axis=1)  # B,T
@@ -6956,7 +6959,7 @@ class SelfAttentionLayer(_ConcatInputLayer):
       self.rec_vars_outputs["mask_left"] = mask
       energy = where_bc(
         mask[:, None, None, :],  # (B,1(H),1(num_queries),num_keys|T)
-        energy, float("-inf") * tf.ones_like(energy), name="energy_masked_history")
+        energy, -inf_value * tf.ones_like(energy), name="energy_masked_history")
       self._assign_masked_comp_state_transform_func_callback(k, v, mask)
     weights = tf.nn.softmax(energy, name="weights")  # (batch,heads,num_queries|time,num_keys|time)
     if attention_dropout:
