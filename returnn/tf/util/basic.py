@@ -4900,7 +4900,13 @@ def softmax_cross_entropy_over_size(logits, labels, stable_gradient=True):
   assert (any([dim is n_batch for dim in mask_expand_dims_shape]) and
           any([dim is enc_time_dim for dim in mask_expand_dims_shape]))
   mask = tf.reshape(mask, mask_expand_dims_shape)  # (...,B,...,enc-T), just like logits/labels
-  logits_t = where_bc(mask, logits_t, float("-inf") * tf.ones_like(logits_t))
+  import returnn.config
+  config = returnn.config.get_global_config(raise_exception=False)
+  if config:
+    inf_value = config.typed_value("inf_value", float("inf"))
+  else:
+    inf_value = float("inf")
+  logits_t = where_bc(mask, logits_t, -inf_value * tf.ones_like(logits_t))
   # We only apply the mask to the logits. We expect that we already have it zeroed for labels.
   # Unfortunately we cannot use tf.nn.softmax_cross_entropy_with_logits because we would get inf loss.
   log_probs_t = tf.nn.log_softmax(logits_t, axis=logits_enc_time_axis)

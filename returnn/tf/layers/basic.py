@@ -2104,7 +2104,8 @@ class SoftmaxOverSpatialLayer(_ConcatInputLayer):
         start=start.output if start else None,
         window_start=window_start.output if isinstance(window_start, LayerBase) else window_start,
         window_size=window_size.output if isinstance(window_size, LayerBase) else window_size)
-      energy = where_bc(energy_mask, energy, float("-inf"), name="energy_masked")
+      inf_value = self.network.get_config().typed_value("inf_value", float("inf"))
+      energy = where_bc(energy_mask, energy, -inf_value, name="energy_masked")
     if energy_factor:
       energy = tf.multiply(energy, energy_factor, name="energy_scaled")
     self.output_before_activation = OutputWithActivation(

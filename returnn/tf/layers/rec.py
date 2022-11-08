@@ -6604,7 +6604,8 @@ class DotAttentionLayer(GlobalAttentionContextBaseLayer):
         energy *= energy_factor
       # We must mask all values behind base_seq_lens. Set them to -inf, because we use softmax afterwards.
       energy_mask = tf.sequence_mask(base_seq_lens, maxlen=tf.shape(energy)[1])
-      energy = tf.where(energy_mask, energy, float("-inf") * tf.ones_like(energy))
+      inf_value = self.network.get_config().typed_value("inf_value", float("inf"))
+      energy = tf.where(energy_mask, energy, -inf_value * tf.ones_like(energy))
       self.base_weights = tf.nn.softmax(energy)  # (batch, base_time)
       base_weights_bc = tf.expand_dims(self.base_weights, axis=1)  # (batch, 1, base_time)
       out = tf.matmul(base_weights_bc, base)  # (batch, 1, n_out)
@@ -6649,7 +6650,8 @@ class ConcatAttentionLayer(GlobalAttentionContextBaseLayer):
       energy.set_shape(tf.TensorShape([None, None]))
       # We must mask all values behind base_seq_lens. Set them to -inf, because we use softmax afterwards.
       energy_mask = tf.sequence_mask(base_seq_lens, maxlen=tf.shape(energy)[1])
-      energy = tf.where(energy_mask, energy, float("-inf") * tf.ones_like(energy))
+      inf_value = self.network.get_config().typed_value("inf_value", float("inf"))
+      energy = tf.where(energy_mask, energy, -inf_value * tf.ones_like(energy))
       self.base_weights = tf.nn.softmax(energy)  # (batch, base_time)
       base_weights_bc = tf.expand_dims(self.base_weights, axis=1)  # (batch, 1, base_time)
       out = tf.matmul(base_weights_bc, base)  # (batch, 1, n_out)
