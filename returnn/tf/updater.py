@@ -925,7 +925,7 @@ class Updater(object):
                     tf_compat.v1.mod(self.global_train_step, accum_grad_multiple_num_steps),
                     accum_grad_multiple_num_steps - 1),
                   true_fn=_get_apply_constraints_op,
-                  false_fn=lambda: tf.no_op(),
+                  false_fn=tf.no_op,
                   name="apply_decoupled_constraints/accum_grad_multiple_step")
               else:
                 apply_constraint = _get_apply_constraints_op()
