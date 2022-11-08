@@ -897,7 +897,7 @@ class Updater(object):
       new_grad, apply_grad_opts = self._post_process_grad(grad=grad, var=var, global_info=global_info)
       grads_per_apply_grad_opts.setdefault(make_hashable(apply_grad_opts), []).append((new_grad, var))
 
-    if self.decoupled_constraints is not None:
+    if self.decoupled_constraints is not None and not isinstance(self.decoupled_constraints, (int, float)):
       # Note: We want to perform the decoupled constraint updates after all the gradients (and post processing)
       # is calculated (i.e. forward + backprop used the original variable, not any weight decayed version).
       # We want to perform the decoupled constraint updates before we do the gradient update.
