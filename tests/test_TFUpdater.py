@@ -311,6 +311,46 @@ def test_Updater_decouple_constraints_simple_graph():
     assert_almost_equal(session.run(var), 1. - 2. * 0.01)
 
 
+def test_Updater_decouple_constraints_simple_graph_grad_accum():
+  with make_scope() as session:
+    from returnn.tf.network import TFNetwork, ExternData
+    from returnn.config import Config
+
+    config = Config({
+      "decouple_constraints": True,
+      "decouple_constraints_factor": 1.,
+      "accum_grad_multiple_step": 2,
+    })
+    extern_data = ExternData({"data": dict(shape=(), dtype="float32")})
+    network = TFNetwork(config=config, extern_data=extern_data, train_flag=True)
+    network.construct_from_dict({
+      "var": {"class": "variable", "shape": (), "init": 1., "L2": 0.01},
+      "loss": {
+        "class": "eval", "from": ["data", "var"],
+        "eval": "source(0, auto_convert=False) * source(1, auto_convert=False)",
+        "loss": "as_is"},
+    })
+    network.initialize_params(session=session)
+    var = network.get_layer("var").output.placeholder
+    assert_equal(session.run(var), 1.)
+
+    updater = Updater(config=config, network=network, initial_learning_rate=1.)
+    updater.set_learning_rate(1.0, session=session)
+    updater.set_trainable_vars(network.get_trainable_params())
+    updater.init_optimizer_vars(session=session)
+    update_op = updater.get_optim_op()
+    assert updater.decoupled_constraints is not None
+
+    session.run(
+      update_op, feed_dict={
+        extern_data.data["data"].placeholder: [0.0, 0.0, 0.0], extern_data.get_batch_info().dim: 3})
+    assert_almost_equal(session.run(var), 1.)
+    session.run(
+      update_op, feed_dict={
+        extern_data.data["data"].placeholder: [0.0, 0.0, 0.0], extern_data.get_batch_info().dim: 3})
+    assert_almost_equal(session.run(var), 1. - 4. * 0.01)
+
+
 def test_Updater_multiple_optimizers():
   with make_scope() as session:
     from returnn.tf.network import TFNetwork, ExternData
