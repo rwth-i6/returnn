@@ -8596,7 +8596,7 @@ def test_extra_scatter_nd_search_train():
     assert isinstance(train3_out_layer_cell, _SubnetworkRecCell)
     assert not train3_out_layer_cell.layers_in_loop, "all should be moved out"
 
-    session.run(tf_compat.v1.variables_initializer(tf_compat.v1.global_variables() + [network.global_train_step]))
+    session.run(tf_compat.v1.variables_initializer(tf_compat.v1.global_variables() + [network.global_train_step_var]))
     outputs = [train1_search_out.placeholder, train1_out.placeholder,
                train2_search_out.placeholder, train2_out.placeholder, train3_out.placeholder]
     info, out = session.run(
@@ -8750,7 +8750,7 @@ def test_trafo_search_lm():
     print(input_seqs)
     print("lens:", input_seq_lens)
 
-    session.run(tf_compat.v1.variables_initializer(tf_compat.v1.global_variables() + [network.global_train_step]))
+    session.run(tf_compat.v1.variables_initializer(tf_compat.v1.global_variables() + [network.global_train_step_var]))
     fetches = (fetches, output_out.placeholder, output_out.get_sequence_lengths())
     feed_dict = {
       network.extern_data.get_batch_info().dim: len(input_seq_lens),
@@ -8840,7 +8840,7 @@ def test_self_att_rec_state():
     print(input_seqs)
     print("lens:", input_seq_lens)
 
-    session.run(tf_compat.v1.variables_initializer(tf_compat.v1.global_variables() + [network.global_train_step]))
+    session.run(tf_compat.v1.variables_initializer(tf_compat.v1.global_variables() + [network.global_train_step_var]))
     fetches = (output_out.placeholder, output_out.get_sequence_lengths())
     feed_dict = {
       network.extern_data.get_batch_info().dim: len(input_seq_lens),
@@ -8921,7 +8921,7 @@ def test_generalized_non_rec_self_attention():
     assert new_dim in net.get_layer("v_").output.dim_tags
     assert set(net.get_layer("energy").output.dim_tags).issuperset({new_dim, time_dim})
     assert time_dim in net.get_layer("att").output.dim_tags
-    session.run(tf_compat.v1.variables_initializer(tf_compat.v1.global_variables() + [net.global_train_step]))
+    session.run(tf_compat.v1.variables_initializer(tf_compat.v1.global_variables() + [net.global_train_step_var]))
     from test_TFNetworkLayer import make_feed_dict
     feed_dict = make_feed_dict(net.extern_data)
     out_old_data = net.get_layer("att_old").output
@@ -9013,7 +9013,7 @@ def test_cumulated_attention_weights_search():
       print(input_seqs)
       print("lens:", input_seq_lens)
 
-      session.run(tf_compat.v1.variables_initializer(tf_compat.v1.global_variables() + [network.global_train_step]))
+      session.run(tf_compat.v1.variables_initializer(tf_compat.v1.global_variables() + [network.global_train_step_var]))
       fetches = (fetches, output_out.placeholder, output_out.get_sequence_lengths())
       feed_dict = {
         network.extern_data.get_batch_info().dim: len(input_seq_lens),
@@ -9065,7 +9065,7 @@ def test_PositionalEncodingLayer_offset_no_rec():
     assert data_input.batch_shape == (None, None)
 
     train_out = network.get_layer("output").output
-    session.run(tf_compat.v1.variables_initializer(tf_compat.v1.global_variables() + [network.global_train_step]))
+    session.run(tf_compat.v1.variables_initializer(tf_compat.v1.global_variables() + [network.global_train_step_var]))
     rand_data = rnd.randint(0, n_out, size=(n_batch, n_time,), dtype="int32")
     outputs = [train_out.placeholder]
     info, out = session.run(
@@ -9137,7 +9137,7 @@ def test_PositionalEncodingLayer_offset_in_rec():
     assert data_input.batch_shape == (None, None)
 
     train_out = network.get_layer("output").output
-    session.run(tf_compat.v1.variables_initializer(tf_compat.v1.global_variables() + [network.global_train_step]))
+    session.run(tf_compat.v1.variables_initializer(tf_compat.v1.global_variables() + [network.global_train_step_var]))
     rand_data = rnd.randint(0, n_out, size=(n_batch, n_time,), dtype="int32")
     outputs = [train_out.placeholder]
     info, out = session.run(
@@ -9186,7 +9186,7 @@ def test_RelativePositionalEncodingLayer():
     data_input = network.extern_data.data["data"]
     assert data_input.batch_shape == (None, None, n_out)
     train_out = network.get_layer("output").output
-    session.run(tf_compat.v1.variables_initializer(tf_compat.v1.global_variables() + [network.global_train_step]))
+    session.run(tf_compat.v1.variables_initializer(tf_compat.v1.global_variables() + [network.global_train_step_var]))
     rand_data = rnd.rand(n_batch, n_time, n_out)
     outputs = [train_out.placeholder]
     info, out = session.run(
@@ -9400,7 +9400,7 @@ def test_CumConcatLayer_search():
     print(input_seqs)
     print("lens:", input_seq_lens)
 
-    session.run(tf_compat.v1.variables_initializer(tf_compat.v1.global_variables() + [network.global_train_step]))
+    session.run(tf_compat.v1.variables_initializer(tf_compat.v1.global_variables() + [network.global_train_step_var]))
     fetches = (fetches, output_out.placeholder, output_out.get_sequence_lengths())
     feed_dict = {
       network.extern_data.get_batch_info().dim: len(input_seq_lens),
