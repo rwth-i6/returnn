@@ -6480,9 +6480,11 @@ def get_variable_from_tensor(var):
 def add_control_input(op, control_input):
   """
   :param tf.Operation op:
-  :param tf.Operation control_input:
+  :param tf.Operation|tf.Tensor control_input:
   """
   assert isinstance(op, tf.Operation)
+  if isinstance(control_input, tf.Tensor):
+    control_input = control_input.op
   assert isinstance(control_input, tf.Operation)
   if hasattr(op, "_add_control_input"):  # some later TF version
     # noinspection PyProtectedMember
