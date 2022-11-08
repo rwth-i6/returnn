@@ -341,14 +341,21 @@ def test_Updater_decouple_constraints_simple_graph_grad_accum():
     update_op = updater.get_optim_op()
     assert updater.decouple_constraints
 
-    session.run(
-      update_op, feed_dict={
-        extern_data.data["data"].placeholder: [0.0, 0.0, 0.0], extern_data.get_batch_info().dim: 3})
-    assert_almost_equal(session.run(var), 1.)
-    session.run(
-      update_op, feed_dict={
-        extern_data.data["data"].placeholder: [0.0, 0.0, 0.0], extern_data.get_batch_info().dim: 3})
-    assert_almost_equal(session.run(var), 1. - 4. * 0.01)
+    tf_util.print_graph_output(update_op)
+
+    assert_equal(session.run(updater.global_train_step), 0)
+    expected_var = 1.
+    for i in range(10):
+      print("Run step", i)
+      session.run(
+        update_op, feed_dict={
+          extern_data.data["data"].placeholder: [0.0, 0.0, 0.0], extern_data.get_batch_info().dim: 3})
+      assert_equal(session.run(updater.global_train_step), i + 1)
+      var_value = session.run(var)
+      print("var:", var_value)
+      if i % 2 == 1:
+        expected_var -= 2. * 0.01 * expected_var
+      assert_almost_equal(var_value, expected_var)
 
 
 def test_Updater_multiple_optimizers():
