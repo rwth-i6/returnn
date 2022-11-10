@@ -285,6 +285,9 @@ jobs:
             # Older TF needs older NumPy version.
             # https://github.com/rwth-i6/returnn/pull/1160#issuecomment-1284537803
             pip install --user numpy==1.19.5
+            # Older TF needs also older protobuf version.
+            # https://github.com/rwth-i6/returnn/issues/1209
+            pip install --user protobuf==3.20.1
           fi
         fi
         pip install --user -r requirements.txt | cat
