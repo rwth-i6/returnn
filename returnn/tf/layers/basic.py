@@ -8187,11 +8187,6 @@ class CondLayer(LayerBase):
     """
     out = layer.output
     out_template = self.output.copy_template()
-    assert len(out.size_placeholder) == len(out_template.size_placeholder) <= 1  # not implemented yet...
-    if len(out.size_placeholder) == len(out_template.size_placeholder) == 1:
-      # Make sure that it is the same dynamic size, so that copy_compatible_to accepts it.
-      out_template.size_placeholder[list(out_template.size_placeholder.keys())[0]] = (
-        list(out.size_placeholder.values())[0])
     out = out.copy_compatible_to(out_template)
     return out.placeholder, [out.size_placeholder[i] for i in sorted(out_template.size_placeholder.keys())]
 

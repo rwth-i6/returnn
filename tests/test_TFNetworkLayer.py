@@ -4742,6 +4742,98 @@ def test_CondLayer_data_access():
     session.run(network.get_default_output_layer().output.placeholder, feed_dict=make_feed_dict(network.extern_data))
 
 
+def test_CondLayer_mult_dyn_axes():
+  # https://github.com/rwth-i6/returnn/issues/1207
+  from returnn.tf.util.data import batch_dim, SpatialDim, FeatureDim
+
+  time_dim = SpatialDim('time')
+  input_dim = FeatureDim('input', 13)
+  extra_time_dim = SpatialDim('extra_time')
+
+  config = Config(dict(extern_data={
+    'data': {'dim_tags': (batch_dim, time_dim, input_dim)}
+  }))
+  net_dict = {
+    'cond': {
+      'class': 'eval',
+      'from': 'data',
+      'eval': 'tf.equal(tf.shape(source(0, auto_convert=False))[0] % 2, 0)',
+      'out_type': {'shape': (), 'dtype': 'bool', 'batch_dim_axis': None, 'time_dim_axis': None},
+    },
+    'new_dim': {
+      'class': 'reinterpret_data',
+      'from': 'data',
+      'set_dim_tags': {time_dim: extra_time_dim},
+    },
+    'pool': {
+      'class': 'pool',
+      'from': 'new_dim',
+      'mode': 'max',
+      'padding': 'same',
+      'pool_size': [2],
+    },
+    'combine': {
+      "class": "combine",
+      "from": ["data", "pool"],
+      "kind": "mul",
+      "out_shape": {batch_dim, time_dim, extra_time_dim.ceildiv_right(2), input_dim},
+    },
+    'conv': {
+      'class': 'conv',
+      'from': 'combine',
+      'filter_size': [3, 3],
+      'strides': 2,
+      'padding': 'same',
+      'in_spatial_dims': (time_dim, extra_time_dim.ceildiv_right(2)),
+      'n_out': 7,
+    },
+    'output': {
+      'class': 'cond',
+      'from': [],
+      'condition': 'cond',
+      'true_layer': {
+        'class': 'subnetwork',
+        'from': [],
+        'subnetwork': {
+          'output': {
+            'class': 'eval',
+            'from': 'base:conv',
+            'eval': 'source(0) * 1.5',
+          },
+        }
+      },
+      'false_layer': {
+        'class': 'subnetwork',
+        'from': [],
+        'subnetwork': {
+          'output': {
+            'class': 'copy',
+            'from': 'base:conv',
+          },
+        }
+      },
+    },
+  }
+  with make_scope() as session:
+    network = TFNetwork(config=config, train_flag=True)
+    network.construct_from_dict(net_dict)
+    network.initialize_params(session)
+    in_ = network.extern_data.get_default_input_data()
+    out = network.get_default_output_layer().output
+    t1, _, t2, t3 = session.run(
+      (in_.get_time_dim_tag().dyn_size_ext.placeholder,
+       out.placeholder,
+       out.get_dyn_size_tags()[0].dyn_size_ext.placeholder,
+       out.get_dyn_size_tags()[1].dyn_size_ext.placeholder),
+      feed_dict=make_feed_dict(network.extern_data))
+
+    def _ceildiv(a, b):
+      return -(a // -b)
+
+    numpy.testing.assert_array_equal(t2, _ceildiv(t1, 2))
+    numpy.testing.assert_array_equal(t3, _ceildiv(t1, 4))
+
+
 def test_ScatterNdLayer_RangeLayer():
   from returnn.tf.util.data import batch_dim, Dim
   n_batch, n_time, n_ts, n_out = 2, 3, 6, 11
