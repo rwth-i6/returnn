@@ -2270,7 +2270,7 @@ class TFNetwork(object):
         continue
       # Reuse mostly because some of the test cases currently work that way.
       with tf_util.reuse_name_scope("", absolute=True, reuse=getattr(tf_compat.v1, "AUTO_REUSE", None)):
-        with tf.device("/cpu:0"):
+        with tf_util.default_control_flow_ctx(), tf.device("/cpu:0"):
           net._global_train_step_var = tf_compat.v1.get_variable(
             name="global_step", shape=(), dtype=tf.int64, initializer=tf_compat.v1.zeros_initializer(tf.int64),
             collections=[tf_compat.v1.GraphKeys.GLOBAL_STEP], trainable=False)
