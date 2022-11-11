@@ -2294,7 +2294,7 @@ class TFNetwork(object):
         continue
       if BehaviorVersion.get() <= 14:
         return net.global_train_step_var
-      with tf_util.reuse_name_scope("", absolute=True), tf.device("/cpu:0"):
+      with tf_util.default_control_flow_ctx(), tf_util.reuse_name_scope("", absolute=True), tf.device("/cpu:0"):
         net._global_train_step = net.global_train_step_var.read_value()
       return net._global_train_step
 
