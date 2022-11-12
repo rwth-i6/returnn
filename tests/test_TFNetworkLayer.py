@@ -4834,6 +4834,115 @@ def test_CondLayer_mult_dyn_axes():
     numpy.testing.assert_array_equal(t3, _ceildiv(t1, 4))
 
 
+def test_CondLayer_variational_weight_noise():
+  from returnn.tf.util.data import batch_dim, SpatialDim, FeatureDim
+
+  time_dim = SpatialDim('time')
+  in_dim = FeatureDim('in', 3)
+
+  config = Config(dict(extern_data={
+    'data': {
+      'dim_tags': (batch_dim, time_dim, in_dim),
+    }}))
+
+  out_dim = FeatureDim('out', 5)
+  random_state_dim = FeatureDim('random-state', 3)
+
+  net_dict = {
+    'output': {
+      'class': 'copy',
+      'from': 'add',
+      'out_shape': {batch_dim, time_dim, out_dim}
+    },
+    'bias': {
+      'class': 'variable',
+      'shape': [out_dim],
+      'param_name': 'param',
+      'init': 0.0
+    },
+    'weight_raw': {
+      'class': 'variable',
+      'shape': [in_dim, out_dim],
+      'param_name': 'param',
+    },
+    'train_flag': {
+      'class': 'train_flag',
+      'out_shape': {}
+    },
+    'weight': {
+      'class': 'cond',
+      'from': [],
+      'condition': 'train_flag',
+      'true_layer': {
+        'class': 'subnetwork',
+        'from': [],
+        'subnetwork': {
+          'random': {
+            'class': 'random',
+            'shape': (in_dim, out_dim),
+            'distribution': 'normal',
+            'mean': 0.0,
+            'stddev': 0.075,
+            'dtype': 'float32',
+          },
+          'output': {
+            'class': 'combine',
+            'from': ['base:weight_raw', 'random'],
+            'kind': 'add',
+            'out_shape': {in_dim, out_dim}
+          },
+        }
+      },
+      'false_layer': {
+        'class': 'subnetwork',
+        'from': [],
+        'subnetwork': {
+          'output': {
+            'class': 'copy',
+            'from': 'base:weight_raw',
+            'out_shape': {in_dim, out_dim}
+          }
+        }
+      },
+      'out_shape': {in_dim, out_dim},
+      'name_scope': ''
+    },
+    'dot': {
+      'class': 'dot',
+      'from': ['data:data', 'weight'],
+      'reduce': in_dim,
+      'out_shape': {batch_dim, time_dim, out_dim}
+    },
+    'add': {
+      'class': 'combine',
+      'from': ['dot', 'bias'],
+      'kind': 'add',
+      'out_shape': {batch_dim, time_dim, out_dim}
+    },
+  }
+
+  print("* Test with dynamic train flag")
+  with make_scope() as session:
+    train_flag = tf_compat.v1.placeholder(tf.bool, shape=(), name="train_flag")
+    network = TFNetwork(config=config)
+    network.construct_from_dict(net_dict)
+    network.initialize_params(session)
+    feed_dict = make_feed_dict(network.extern_data)
+    feed_dict[train_flag] = True
+    session.run(network.get_default_output_layer().output.placeholder, feed_dict=feed_dict)
+    feed_dict[train_flag] = False
+    session.run(network.get_default_output_layer().output.placeholder, feed_dict=feed_dict)
+
+  for train_flag in [True, False]:
+    print("* Test with static train flag", train_flag)
+    with make_scope() as session:
+      network = TFNetwork(config=config, train_flag=train_flag)
+      network.construct_from_dict(net_dict)
+      network.initialize_params(session)
+      feed_dict = make_feed_dict(network.extern_data)
+      session.run(network.get_default_output_layer().output.placeholder, feed_dict=feed_dict)
+
+
 def test_ScatterNdLayer_RangeLayer():
   from returnn.tf.util.data import batch_dim, Dim
   n_batch, n_time, n_ts, n_out = 2, 3, 6, 11
