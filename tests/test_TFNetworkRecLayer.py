@@ -2398,6 +2398,73 @@ def test_search_SplitBatchBeamLayer():
     assert den_beam_scores_split_np.shape == (n_batch, beam_dim.dimension) and log_prob_np.shape == (n_batch,)
 
 
+def test_ChoiceLayer_no_loop_dep():
+  from returnn.tf.util.data import batch_dim, SpatialDim, FeatureDim, ImplicitSparseDim
+
+  time_dim = SpatialDim('time')
+  feat_dim = FeatureDim('feat', 5)
+
+  config = Config(dict(extern_data={
+    'data': {'dim_tags': (batch_dim, time_dim, feat_dim)}
+  }))
+
+  enc_dim = FeatureDim('enc', 10)
+  classes_dim = FeatureDim('classes', 3)
+
+  net_dict = {
+    'encoder': {"class": "linear", "from": "data", "out_dim": enc_dim},
+    'loop': {
+      'class': 'rec',
+      'from': [],
+      'unit': {
+        'rec_unstack': {
+          'class': 'rec_unstack',
+          'from': 'base:encoder',
+          'axis': time_dim,
+          'out_shape': {batch_dim, enc_dim}
+        },
+        'log_prob': {
+          'class': 'linear',
+          'from': "rec_unstack",
+          'out_dim': classes_dim,
+          "activation": "log_softmax",
+        },
+        'choice': {
+          'class': 'choice',
+          'from': 'log_prob',
+          'target': None,
+          'beam_size': 3,
+          'search': True,
+          'input_type': 'log_prob',
+          'length_normalization': False,
+          'out_shape': {batch_dim, ImplicitSparseDim(classes_dim)}
+        },
+        'output': {
+          'class': 'copy',
+          'from': 'choice',
+          'out_shape': {batch_dim, ImplicitSparseDim(classes_dim)}
+        }
+      },
+      'axis': time_dim,
+      'out_shape': {batch_dim, time_dim, ImplicitSparseDim(classes_dim)},
+      'name_scope': ''
+    },
+    'output': {
+      'class': 'copy',
+      'from': 'loop/output',
+      'out_shape': {batch_dim, time_dim, ImplicitSparseDim(classes_dim)}
+    },
+  }
+
+  with make_scope() as session:
+    net = TFNetwork(config=config, search_flag=True)
+    net.construct_from_dict(net_dict)
+    net.initialize_params(session)
+    output = net.get_default_output_layer().output
+    from test_TFNetworkLayer import make_feed_dict
+    session.run(output.placeholder, feed_dict=make_feed_dict(net.extern_data))
+
+
 def test_target_with_beam():
   beam_size = 4
   teacher_target = "classes"
