@@ -5777,7 +5777,7 @@ class ChoiceLayer(BaseChoiceLayer):
         d["explicit_search_sources"] = []
     super(ChoiceLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
 
-    if network.is_inside_rec_layer():
+    if network.is_inside_rec_layer() and search:
       # We want to have a dependency on the prev search choices to correctly perform beam-search over it,
       # even if there would be no other dependency to it otherwise.
       # https://github.com/rwth-i6/returnn/pull/1213
