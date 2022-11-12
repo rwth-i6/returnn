@@ -2213,7 +2213,7 @@ class SearchChoices(object):
     self.is_decided = is_decided
     self.keep_raw = keep_raw
     if not owner.output.beam:
-      assert beam_size == 1
+      assert beam_size == 1, "owner %s has output %s without beam" % (owner, owner.output)
     else:
       assert owner.output.beam.beam_size == beam_size
       owner.network.register_search_choices_for_beam(beam=owner.output.beam, search_choices=self)
