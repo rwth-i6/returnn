@@ -1664,6 +1664,78 @@ def test_DropoutLayer_axis():
     session.run(network.get_default_output_layer().output.placeholder, feed_dict=make_feed_dict(network.extern_data))
 
 
+def test_ScaledGradientLayer_tensor():
+  from returnn.tf.util.data import batch_dim, SpatialDim, FeatureDim
+
+  time_dim = SpatialDim('time')
+  input_dim = FeatureDim('input', 3)
+  out_dim = FeatureDim('out', 5)
+
+  config = Config(dict(extern_data={
+    'data': {'dim_tags': (batch_dim, time_dim, input_dim)},
+    'classes': {'dim_tags': (batch_dim, time_dim), 'sparse_dim': out_dim},
+  }))
+
+  net_dict = {
+    'weight_raw': {
+      'class': 'variable',
+      'shape': [input_dim, out_dim],
+      'param_name': 'param',
+    },
+    'scales': {
+      'class': 'random', 'from': [], 'shape': [out_dim],
+      'distribution': 'uniform', 'minval': 0.1, 'maxval': 1.5,
+    },
+    'weight': {
+      'class': 'scaled_grad', 'from': 'weight_raw', 'scale': 'scales',
+    },
+    'bias_raw': {
+      'class': 'variable',
+      'shape': [out_dim],
+      'param_name': 'param',
+    },
+    'bias': {
+      'class': 'scaled_grad', 'from': 'bias_raw', 'scale': 'scales',
+    },
+    'dot': {
+      'class': 'dot',
+      'from': ['data:data', 'weight'],
+      'reduce': input_dim,
+      'out_shape': {batch_dim, time_dim, out_dim}
+    },
+    'add': {
+      'class': 'combine',
+      'from': ['dot', 'bias'],
+      'kind': 'add',
+      'out_shape': {batch_dim, time_dim, out_dim}
+    },
+    'ce': {
+      'class': 'sparse_softmax_cross_entropy_with_logits',
+      'logits': 'add',
+      'targets': 'data:classes',
+      'axis': out_dim,
+      'loss': 'as_is',
+      'out_shape': {batch_dim, time_dim}
+    },
+  }
+
+  with make_scope() as session:
+    network = TFNetwork(config=config, train_flag=True)
+    network.construct_from_dict(net_dict)
+    optimizer = tf_compat.v1.train.AdamOptimizer(0.1)
+    loss = network.get_total_loss()
+    optim_op = optimizer.minimize(network.get_objective())
+    session.run(tf_compat.v1.global_variables_initializer())
+    feed_dict = make_feed_dict(network.extern_data)
+    last_loss_v = None
+    for step in range(10):
+      loss_v, _ = session.run((loss, optim_op), feed_dict=feed_dict)
+      print("Step %i, loss %f" % (step, loss_v))
+      if last_loss_v is not None:
+        assert loss_v < last_loss_v
+      last_loss_v = loss_v
+
+
 def test_subnetwork_layer_net_construct():
   with make_scope() as session:
     net_dict = {
