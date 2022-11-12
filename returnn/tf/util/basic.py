@@ -659,7 +659,8 @@ class _ScaledGradientBuilder(object):
   """
   Use the ``scaled_gradient`` instance.
   tf.identity in forward pass, but scales the gradient in backprop.
-  Can be used as gradient reversal layer (with negative scale).
+  Can be used as gradient reversal layer (with negative scale)
+  ("flip gradients").
 
   Discussion:
     https://github.com/fchollet/keras/issues/3119
@@ -670,29 +671,30 @@ class _ScaledGradientBuilder(object):
   Also see :class:`CustomGradient` which is more generic.
   """
 
-  def __init__(self):
-    self.num_calls = 0
+  # Needs unique grad_name (op name) per each call, thus just use a counter.
+  num_calls = 0
 
   def __call__(self, x, scale=1.0):
     """
     :param tf.Tensor x:
-    :param float scale:
+    :param float|tf.Tensor scale:
     :rtype: tf.Tensor
     """
-    grad_name = "ScaledGradient%d" % self.num_calls
+    grad_name = "RETURNN_ScaledGradient%d" % _ScaledGradientBuilder.num_calls
 
     from tensorflow.python.framework import ops
 
     # noinspection PyUnusedLocal
     @ops.RegisterGradient(grad_name)
-    def _flip_gradients(op, grad):
+    def _scale_gradients(op, grad):
       return [grad * scale]
 
     g = tf_compat.v1.get_default_graph()
     with g.gradient_override_map({"Identity": grad_name}):
       y = tf.identity(x, name="scaled_gradient_identity")
+      assert y.op.type == "Identity"
 
-    self.num_calls += 1
+    _ScaledGradientBuilder.num_calls += 1
     return y
 
 
