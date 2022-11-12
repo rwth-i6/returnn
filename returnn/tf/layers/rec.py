@@ -3459,7 +3459,7 @@ class _SubnetworkRecCell(object):
       if layer.name == "end":
         return False
       if layer.search_choices:
-        return False  # need to perform the search inside the loop currently
+        return False  # need to perform the search inside the loop
       if layer in layer.dependencies:  # recursive on itself
         return False
       # layer.output is used by other layers?
@@ -3501,7 +3501,7 @@ class _SubnetworkRecCell(object):
       if layer.name in [":i", "end"]:  # currently not fully implemented
         return False
       if layer.search_choices:
-        return False  # need to perform the search inside the loop currently
+        return False  # need to perform the search inside the loop
       layer_deps = layer.dependencies
       # We depend on other layers from this sub-network?
       for other_layer in layers_in_loop:
@@ -5777,6 +5777,12 @@ class ChoiceLayer(BaseChoiceLayer):
         d["explicit_search_sources"] = []
     super(ChoiceLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
 
+    if network.is_inside_rec_layer():
+      # We want to have a dependency on the prev search choices to correctly perform beam-search over it,
+      # even if there would be no other dependency to it otherwise.
+      # https://github.com/rwth-i6/returnn/pull/1213
+      d["rec_previous_layer"] = get_layer("prev:%s" % d["_name"])
+
   @classmethod
   def _create_search_beam(cls, name, beam_size, sources, network):
     """
@@ -5891,6 +5897,8 @@ class ChoiceLayer(BaseChoiceLayer):
     """
     # See also self.transform_config_dict where we might strip away the sources.
     ls = super(ChoiceLayer, self).get_dep_layers()
+    if self._rec_previous_layer:
+      ls.append(self._rec_previous_layer)
     if self.explicit_search_sources:
       if isinstance(self.explicit_search_sources, dict):
         additional_sources = [src for _, src in sorted(self.explicit_search_sources.items())]
@@ -5898,6 +5906,34 @@ class ChoiceLayer(BaseChoiceLayer):
         additional_sources = self.explicit_search_sources
       ls.extend(additional_sources)
     return ls
+
+  @classmethod
+  def get_rec_initial_output(cls, batch_dim, name, output, rec_layer, initial_output=None, **kwargs):
+    """
+    :param tf.Tensor batch_dim: including beam size in beam search
+    :param str name: layer name
+    :param Data output: template
+    :param returnn.tf.layers.rec.RecLayer rec_layer:
+    :param str|float|int|tf.Tensor|None initial_output:
+    :rtype: tf.Tensor
+    """
+    cell = rec_layer.cell
+    assert isinstance(cell, _SubnetworkRecCell)
+    choice_layer_template = cell.layer_data_templates[name]
+    have_other_prev_dependencies = False
+    for layer in cell.layer_data_templates.values():
+      if layer is choice_layer_template:
+        continue
+      if choice_layer_template in layer.prev_frame_dependencies:
+        have_other_prev_dependencies = True
+        break
+    if not have_other_prev_dependencies and initial_output is None:
+      # In this case, the only prev-dependency is the choice-layer itself, because we added it explicitly.
+      # In this case, the initial output does not matter, so just set any value.
+      # https://github.com/rwth-i6/returnn/pull/1213
+      initial_output = 0
+    return super(ChoiceLayer, cls).get_rec_initial_output(
+      batch_dim=batch_dim, name=name, output=output, rec_layer=rec_layer, initial_output=initial_output, **kwargs)
 
   def post_process_final_rec_vars_outputs(self, rec_vars_outputs, seq_len):
     """
