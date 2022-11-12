@@ -5778,10 +5778,12 @@ class ChoiceLayer(BaseChoiceLayer):
     super(ChoiceLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
 
     if network.is_inside_rec_layer() and search:
-      # We want to have a dependency on the prev search choices to correctly perform beam-search over it,
-      # even if there would be no other dependency to it otherwise.
-      # https://github.com/rwth-i6/returnn/pull/1213
-      d["rec_previous_layer"] = get_layer("prev:%s" % d["_name"])
+      sources = d["sources"]  # type: typing.List[LayerBase]
+      if all(s.output.beam is None for s in sources):
+        # We want to have a dependency on the prev search choices to correctly perform beam-search over it,
+        # even if there would be no other dependency to it otherwise.
+        # https://github.com/rwth-i6/returnn/pull/1213
+        d["rec_previous_layer"] = get_layer("prev:%s" % d["_name"])
 
   @classmethod
   def _create_search_beam(cls, name, beam_size, sources, network):
