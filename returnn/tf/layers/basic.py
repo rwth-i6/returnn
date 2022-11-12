@@ -468,7 +468,7 @@ class DropoutLayer(CopyLayer):
 
 class ScaledGradientLayer(CopyLayer):
   """
-  Just tf.identity in the forward pass.
+  Just :func:`tf.identity` in the forward pass.
   Scales the gradient by some factor in backprop.
   Can be used as gradient reversal layer (with negative factor).
   Uses :func:`returnn.tf.util.basic.scaled_gradient`, or :func:`tf.stop_gradient`
@@ -477,14 +477,40 @@ class ScaledGradientLayer(CopyLayer):
 
   def __init__(self, scale, **kwargs):
     """
-    :param float scale: if 0., will use tf.stop_gradient
+    :param float|LayerBase scale: if 0., will use tf.stop_gradient
     """
     super(ScaledGradientLayer, self).__init__(**kwargs)
+    self.scale = scale
     from returnn.tf.util.basic import scaled_gradient
-    if scale == 0.:
+    if isinstance(scale, (int, float)) and scale == 0.:
       self.output.placeholder = tf.stop_gradient(self.output.placeholder)
-    else:
+    elif isinstance(scale, (int, float)):
       self.output.placeholder = scaled_gradient(self.output.placeholder, scale=scale)
+    elif isinstance(scale, LayerBase):
+      self.output.placeholder = scaled_gradient(
+        self.output.placeholder, scale=scale.output.copy_compatible_to(self.output).placeholder)
+    else:
+      raise TypeError("%s: invalid type %r for scale: %r" % (self, type(scale), scale))
+
+  def get_dep_layers(self):
+    """
+    :rtype: list[LayerBase]
+    """
+    deps = super(ScaledGradientLayer, self).get_dep_layers()
+    if isinstance(self.scale, LayerBase):
+      deps.append(self.scale)
+    return deps
+
+  @classmethod
+  def transform_config_dict(cls, d, network, get_layer):
+    """
+    :param dict[str] d: will modify inplace
+    :param returnn.tf.network.TFNetwork network:
+    :param ((str) -> LayerBase) get_layer: function to get or construct another layer
+    """
+    super(ScaledGradientLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
+    if isinstance(d.get("scale"), str):
+      d["scale"] = get_layer(d["scale"])
 
 
 class SelectSearchSourcesLayer(InternalLayer):
