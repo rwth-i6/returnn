@@ -8168,7 +8168,7 @@ class CondLayer(LayerBase):
       pred=self.condition_layer.output.placeholder,
       true_fn=self._true_fn,
       false_fn=self._false_fn)
-    assert isinstance(x, tf.Tensor)
+    assert isinstance(x, (tf.Tensor, tf.Variable))
     self.output.placeholder = x
     assert len(sizes) == len(self.output.size_placeholder)
     for i, size in zip(sorted(self.output.size_placeholder.keys()), sizes):
