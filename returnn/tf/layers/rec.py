@@ -1549,7 +1549,10 @@ class _SubnetworkRecCell(object):
             # We can trust the initial output, and even ignore whatever else we got from the construct_layer above.
             # The construct_layer is just to setup the deps and kwargs.
             assert layer_.kwargs
-            layer_.kwargs["output"] = initial_output_layer.output.copy_template(name="%s_output" % name)
+            initial_output = initial_output_layer.output.copy_template(name="%s_output" % name)
+            initial_output.beam = layer_.output.beam
+            initial_output.batch = layer_.output.batch
+            layer_.kwargs["output"] = initial_output
             last_get_layer.add_templated_layer(
               layer_class=layer_.layer_class_type, **layer_.kwargs)
 
