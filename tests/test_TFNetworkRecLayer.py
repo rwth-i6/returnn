@@ -3935,6 +3935,10 @@ def test_reclayer_optimize_out_rnncell():
   check_reclayer_optimize_out({"class": "rnn_cell", "unit": "BasicLSTM"})
 
 
+def test_reclayer_optimize_out_rec_zoneout():
+  check_reclayer_optimize_out({"class": "rec", "unit": "ZoneoutLSTM"})
+
+
 def test_reclayer_optimize_out_rec_nativelstm2():
   check_reclayer_optimize_out({"class": "rec", "unit": "NativeLstm2"})
 
