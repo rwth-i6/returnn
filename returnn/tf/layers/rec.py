@@ -859,7 +859,8 @@ class RecLayer(_ConcatInputLayer):
         assert self._max_seq_len is None
         y, final_state = rnn.dynamic_rnn(
           cell=cell, inputs=x, time_major=True, sequence_length=seq_len, dtype=tf.float32,
-          initial_state=self._initial_state)
+          initial_state=self._initial_state,
+          scope=tf_compat.v1.get_variable_scope())
       self._last_hidden_state = final_state
     elif rnn_contrib and isinstance(cell, (rnn_contrib.FusedRNNCell, rnn_contrib.LSTMBlockWrapper)):  # noqa # e.g. LSTMBlockFusedCell
       # Will get (time,batch,ydim).
