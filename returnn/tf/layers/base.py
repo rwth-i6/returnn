@@ -2151,13 +2151,14 @@ class ReuseParams:
 
     :param LayerBase base_layer: we expect that this is the prefix of ``name``
     :param str name: absolute param name
-    :param tuple[int] shape:
+    :param tuple[int]|list[int] shape:
     :param tensorflow.DType dtype:
     :param (...)->tf.Variable getter:
     :rtype: tf.Variable|tf.Tensor
     """
     if self.shape is not None:
-      assert shape == tuple(d.dimension for d in self.shape), "unexpected shape %r for param %r" % (shape, name)
+      assert tuple(shape) == tuple(d.dimension for d in self.shape), (
+        "%s: unexpected shape %r for param %r, expected %r" % (self, shape, name, self.shape))
     abs_scope_prefix = base_layer.get_absolute_name_scope_prefix()
     assert not abs_scope_prefix or abs_scope_prefix.endswith("/")
     assert name.startswith(abs_scope_prefix)
