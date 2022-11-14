@@ -849,7 +849,8 @@ class RecLayer(_ConcatInputLayer):
         x = tf.unstack(x, axis=0, num=self._max_seq_len)
         y, final_state = rnn.static_rnn(
           cell=cell, dtype=tf.float32, inputs=x, sequence_length=seq_len,
-          initial_state=self._initial_state)
+          initial_state=self._initial_state,
+          scope=tf_compat.v1.get_variable_scope())
         y = tf.stack(y, axis=0)
         y.set_shape([self._max_seq_len, None, self.output.dim])  # (time,batch,ydim)
         # Now, recover the original len.
