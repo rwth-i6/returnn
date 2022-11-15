@@ -1175,9 +1175,10 @@ def print_available_devices(tf_session_opts=None, file=None):
       print("Using gpu device %i: %s" % (dev_id, dev_name), file=file)
       # Also print in a custom different format, with hostname, and also memory
       # -- more useful for multi-GPU debugging.
+      memory_limit_bytes = dev.memory_limit_bytes if hasattr(dev, "memory_limit_bytes") else dev.memory_limit
       print(
         "Hostname %r, GPU %i, GPU-dev-name %r, GPU-memory %s" % (
-          util.get_hostname(), dev_id, dev_name, util.human_bytes_size(dev.memory_limit_bytes)), file=file)
+          util.get_hostname(), dev_id, dev_name, util.human_bytes_size(memory_limit_bytes)), file=file)
 
 
 def is_gpu_available():
