@@ -5708,6 +5708,10 @@ def test_reclayer_att_weights_output_layer():
     },
   }})
 
+  att_heads = Dim(kind=Dim.Types.Spatial, description="att_heads", dimension=1)
+  att_t = Dim(kind=Dim.Types.Spatial, description="att_t")
+  label_axis = Dim(kind=Dim.Types.Spatial, description="label-axis")
+
   net_dict = {
     "encoder": {"class": "copy", "from": "data"},
     "existing_alignment": {"class": "copy", "from": "data:alignment"},
@@ -5762,9 +5766,7 @@ def test_reclayer_att_weights_output_layer():
           "from": "att_energy0",
           "is_output_layer": False,
           "set_dim_tags": {
-            "f": Dim(
-              kind=Dim.Types.Spatial, description="att_heads", dimension=1
-            )
+            "f": att_heads
           },
         },
         "att_energy0": {
@@ -5794,9 +5796,7 @@ def test_reclayer_att_weights_output_layer():
           "class": "reinterpret_data",
           "from": "att_val_split0",
           "set_dim_tags": {
-            "dim:1": Dim(
-              kind=Dim.Types.Spatial, description="att_heads", dimension=1
-            )
+            "dim:1": att_heads
           },
         },
         "att_val_split0": {
@@ -5858,9 +5858,7 @@ def test_reclayer_att_weights_output_layer():
           "class": "reinterpret_data",
           "from": "segments0",
           "set_dim_tags": {
-            "stag:sliced-time:segments": Dim(
-              kind=Dim.Types.Spatial, description="att_t"
-            )
+            "stag:sliced-time:segments": att_t
           },
         },
         "segments0": {
@@ -5931,7 +5929,7 @@ def test_reclayer_att_weights_output_layer():
       "class": "masked_computation",
       "from": "output/segment_lens",
       "mask": "is_label",
-      "out_spatial_dim": Dim(kind=Dim.Types.Spatial, description="label-axis"),
+      "out_spatial_dim": label_axis,
       "register_as_extern_data": "segment_lens_masked",
       "unit": {"class": "copy", "from": "data"},
     },
@@ -5939,7 +5937,7 @@ def test_reclayer_att_weights_output_layer():
       "class": "masked_computation",
       "from": "output/segment_starts",
       "mask": "is_label",
-      "out_spatial_dim": Dim(kind=Dim.Types.Spatial, description="label-axis"),
+      "out_spatial_dim": label_axis,
       "register_as_extern_data": "segment_starts_masked",
       "unit": {"class": "copy", "from": "data"},
     },
