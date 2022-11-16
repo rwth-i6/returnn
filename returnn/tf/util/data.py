@@ -806,6 +806,15 @@ class Dim(object):
       # or when we used MergeDimsLayer on the batch axis, or so.
       # We might need to extend the logic here later.
       return True
+    # Either self or other is some dim tag explicitly created by the user,
+    # and they are not the same, so we never treat them as equal.
+    if not self.auto_generated or not other.auto_generated:
+      if broadcast_matches and (
+            (self.dimension == 1 and self.auto_generated) or
+            (other.dimension == 1 and other.auto_generated)):
+        pass  # exception, allow broadcast logic
+      else:
+        return False
     if self_kind == other_kind == self.Types.Feature:
       if allow_same_feature_dim:
         return True
