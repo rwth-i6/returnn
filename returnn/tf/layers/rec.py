@@ -7904,7 +7904,9 @@ class MaskedComputationLayer(LayerBase):
           new_size = masked_from.output.get_sequence_lengths()
         else:
           new_size = idxs[-1]  # [B]
-          out_spatial_dim.get_for_batch_ctx(self.output.batch, self.output.control_flow_ctx).dyn_size = new_size
+          out_spatial_dim = out_spatial_dim.get_for_batch_ctx(self.output.batch, self.output.control_flow_ctx)
+          if out_spatial_dim.dyn_size is None:
+            out_spatial_dim.dyn_size = new_size
         new_time = tf.reduce_max(new_size)  # T'
         idxs = where_bc(mask_t, idxs - 1, new_time)
 
