@@ -5620,8 +5620,8 @@ class Data(object):
             other_axes, other, self, other_axis, opt)
         if matching:
           break
-      assert matching, 'cannot match the axes %s from %s to %s. Failing at axis %s' % (
-        other_axes, other, self, other_axis)
+      assert matching, 'cannot match the axes %s from %s to %s. Failing at axis %s, tag %s' % (
+        other_axes, other, self, other_axis, other.dim_tags[other_axis])
       # If there are multiple matches (e.g. because two axes have the same feature dim), leave their order intact.
       # We do this by always choosing the first unused match which is the smallest axes
       return matching[0]
