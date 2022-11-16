@@ -6139,6 +6139,7 @@ def test_GatherLayer_broadcast_dim():
 
 
 def test_GatherLayer_different_static_dims():
+  # https://github.com/rwth-i6/returnn/issues/1219
   from returnn.tf.util.data import batch_dim
   head_dim = SpatialDim("head", 2)
   round_dim = SpatialDim("round", 2)
