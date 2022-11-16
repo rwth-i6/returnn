@@ -674,10 +674,11 @@ class _ScaledGradientBuilder(object):
   # Needs unique grad_name (op name) per each call, thus just use a counter.
   num_calls = 0
 
-  def __call__(self, x, scale=1.0):
+  def __call__(self, x, scale=1.0, shift=0.0):
     """
     :param tf.Tensor x:
     :param float|tf.Tensor scale:
+    :param float|tf.Tensor|None shift:
     :rtype: tf.Tensor
     """
     grad_name = "RETURNN_ScaledGradient%d" % _ScaledGradientBuilder.num_calls
@@ -687,7 +688,11 @@ class _ScaledGradientBuilder(object):
     # noinspection PyUnusedLocal
     @ops.RegisterGradient(grad_name)
     def _scale_gradients(op, grad):
-      return [grad * scale]
+      if isinstance(scale, tf.Tensor) or scale != 1.0:
+        grad = grad * scale
+      if isinstance(shift, tf.Tensor) or shift:
+        grad = grad + shift
+      return [grad]
 
     g = tf_compat.v1.get_default_graph()
     with g.gradient_override_map({"Identity": grad_name}):

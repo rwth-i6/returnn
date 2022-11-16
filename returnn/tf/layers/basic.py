@@ -475,22 +475,21 @@ class ScaledGradientLayer(CopyLayer):
   """
   layer_class = "scaled_grad"
 
-  def __init__(self, scale, **kwargs):
+  def __init__(self, scale, shift=None, **kwargs):
     """
-    :param float|LayerBase scale: if 0., will use tf.stop_gradient
+    :param float|LayerBase scale: if 0. and no shift, will use tf.stop_gradient
+    :param float|LayerBase|None shift:
     """
     super(ScaledGradientLayer, self).__init__(**kwargs)
     self.scale = scale
+    self.shift = shift
     from returnn.tf.util.basic import scaled_gradient
-    if isinstance(scale, (int, float)) and scale == 0.:
+    if isinstance(scale, (int, float)) and scale == 0. and shift is None:
       self.output.placeholder = tf.stop_gradient(self.output.placeholder)
-    elif isinstance(scale, (int, float)):
-      self.output.placeholder = scaled_gradient(self.output.placeholder, scale=scale)
-    elif isinstance(scale, LayerBase):
-      self.output.placeholder = scaled_gradient(
-        self.output.placeholder, scale=scale.output.copy_compatible_to(self.output).placeholder)
     else:
-      raise TypeError("%s: invalid type %r for scale: %r" % (self, type(scale), scale))
+      scale_t = scale.output.copy_compatible_to(self.output).placeholder if isinstance(scale, LayerBase) else scale
+      shift_t = shift.output.copy_compatible_to(self.output).placeholder if isinstance(shift, LayerBase) else shift
+      self.output.placeholder = scaled_gradient(self.output.placeholder, scale=scale_t, shift=shift_t)
 
   def get_dep_layers(self):
     """
@@ -499,6 +498,8 @@ class ScaledGradientLayer(CopyLayer):
     deps = super(ScaledGradientLayer, self).get_dep_layers()
     if isinstance(self.scale, LayerBase):
       deps.append(self.scale)
+    if isinstance(self.shift, LayerBase):
+      deps.append(self.shift)
     return deps
 
   @classmethod
@@ -511,6 +512,8 @@ class ScaledGradientLayer(CopyLayer):
     super(ScaledGradientLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
     if isinstance(d.get("scale"), str):
       d["scale"] = get_layer(d["scale"])
+    if isinstance(d.get("scale"), str):
+      d["shift"] = get_layer(d["shift"])
 
 
 class SelectSearchSourcesLayer(InternalLayer):
