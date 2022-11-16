@@ -674,11 +674,13 @@ class _ScaledGradientBuilder(object):
   # Needs unique grad_name (op name) per each call, thus just use a counter.
   num_calls = 0
 
-  def __call__(self, x, scale=1.0, shift=0.0):
+  def __call__(self, x, scale=1.0, shift=0.0, clip_max_axis=None):
     """
     :param tf.Tensor x:
     :param float|tf.Tensor scale:
     :param float|tf.Tensor|None shift:
+    :param int|None clip_max_axis: if given, clips the gradient to the abs max value in this axis
+      before the transformation, for all values in the axis
     :rtype: tf.Tensor
     """
     grad_name = "RETURNN_ScaledGradient%d" % _ScaledGradientBuilder.num_calls
@@ -688,11 +690,15 @@ class _ScaledGradientBuilder(object):
     # noinspection PyUnusedLocal
     @ops.RegisterGradient(grad_name)
     def _scale_gradients(op, grad):
+      grad_out = grad
       if isinstance(scale, tf.Tensor) or scale != 1.0:
-        grad = grad * scale
+        grad_out = grad_out * scale
       if isinstance(shift, tf.Tensor) or shift:
-        grad = grad + shift
-      return [grad]
+        grad_out = grad_out + shift
+      if clip_max_axis is not None:
+        m = tf.reduce_max(tf.abs(grad), axis=clip_max_axis, keepdims=True)
+        grad_out = tf.clip_by_value(grad_out, -m, m)
+      return [grad_out]
 
     g = tf_compat.v1.get_default_graph()
     with g.gradient_override_map({"Identity": grad_name}):
