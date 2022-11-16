@@ -126,6 +126,8 @@ class Dim(object):
     self._undefined = undefined
     self.generic = generic
     self.special = special
+    if derived_from_tag:
+      auto_generated = derived_from_tag.auto_generated
     self.auto_generated = auto_generated
     # We can have different tag variants per batch info (e.g. with beam), or per control flow ctx.
     # They each have same_as = self. The same_base should have the base (global) batch info.
@@ -1068,6 +1070,7 @@ class Dim(object):
       other_same_base._vocab = self._vocab
     elif other_same_base._vocab and not self._vocab:
       self._vocab = other_same_base._vocab
+    self.auto_generated = self_same_as.auto_generated = other_same_base.auto_generated
     # Take over derived_from_op. However, only if this would not introduce cycles!
     if not self_derived_bases.issuperset(other_derived_bases):
       if self.derived_from_op and not other_same_base.derived_from_op:
