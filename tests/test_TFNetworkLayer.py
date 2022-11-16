@@ -1072,6 +1072,39 @@ def test_CombineLayer_broadcast_multiple():
     assert out_v.shape == out.output.batch_shape
 
 
+def test_CombineLayer_broadcast_same_dim_diff_tag():
+  from returnn.tf.util.data import batch_dim, FeatureDim, SpatialDim
+  time_dim = SpatialDim("time")
+  input_dim = FeatureDim("input", 3)
+  feat_dim = FeatureDim("feat", 3)
+
+  template_net = TFNetwork(config=Config(), extern_data=ExternData())
+  out = CombineLayer.get_out_data_from_opts(
+    network=template_net, name="template_combine", kind="add",
+    sources=[
+      InternalLayer(name="a", network=template_net, output=Data("a", dim_tags=[batch_dim, time_dim, input_dim])),
+      InternalLayer(name="b", network=template_net, output=Data("b", dim_tags=[feat_dim])),
+    ],
+    allow_broadcast_all_sources=True)
+  assert out.dim_tags == (batch_dim, time_dim, input_dim, feat_dim)
+
+  with make_scope() as session:
+    net_dict = {
+      "p": {"class": "variable", "shape": [feat_dim], "add_batch_axis": False},
+      "output": {"class": "combine", "kind": "add", "from": ["data", "p"], "allow_broadcast_all_sources": True},
+    }
+    config = Config({
+      "extern_data": {"data": {"dim_tags": [batch_dim, time_dim, input_dim]}}})
+    network = TFNetwork(config=config)
+    network.construct_from_dict(net_dict)
+    out = network.get_default_output_layer()
+    assert out.output.dim_tags == (batch_dim, time_dim, input_dim, feat_dim)
+    feed_dict = make_feed_dict(network.extern_data, n_batch=2, n_time=5)
+    session.run(tf_compat.v1.global_variables_initializer())
+    out_v = session.run(out.output.placeholder, feed_dict=feed_dict)
+    assert out_v.shape == (2, 5, 3, 3)
+
+
 def test_CombineLayer_match_unknown():
   with make_scope() as session:
     dat1 = Data(name="undefined", shape=(None, 3))
