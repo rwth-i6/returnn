@@ -8476,7 +8476,7 @@ def test_extra_scatter_nd_search_train():
       "unit": {
         "s_transformed": {"class": "linear", "activation": None, "with_bias": False, "from": ["s"],
                           "n_out": EncKeyTotalDim},
-        "t_rel_var": {"class": "variable", "shape": (6, EncKeyTotalDim)},
+        "t_rel_var": {"class": "variable", "shape": (t_rel_idxs_dim, EncKeyTotalDim)},
         "t_rel_idxs_": {"class": "range", "limit": 6, "out_spatial_dim": t_rel_idxs_dim},
         "prev_t_": {"class": "reinterpret_data", "set_sparse": False, "from": "prev:t"},
         "t_rel_idxs": {"class": "combine", "kind": "add", "from": ["prev_t_", "t_rel_idxs_"],
