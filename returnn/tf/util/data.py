@@ -3136,7 +3136,7 @@ class Data(object):
             "Dim %s multiple times in out_shape" % dim)
         raise VerifyOutShapeException(
           "%s verify_out_shape:\n" % self +
-          "Actual dims: %s\nExpected out_shape: %s" % (actual_dims_str, expected_dims_str) +
+          "Actual dims: %s\nExpected out_shape: %s\n" % (actual_dims_str, expected_dims_str) +
           "Dim %s not in self" % dim)
       remaining.discard(dim_tag)
     if remaining:
