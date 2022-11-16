@@ -1395,9 +1395,12 @@ class GatherLayer(_ConcatInputLayer):
     batch dim.
     """
     from returnn.util import BehaviorVersion
-    is_equal_opts = dict(allow_same_spatial_dim=True)
-    if BehaviorVersion.get() < 11:
-      is_equal_opts["broadcast_matches"] = True
+    if BehaviorVersion.get() >= 16:
+      is_equal_opts = {}
+    elif BehaviorVersion.get() >= 11:
+      is_equal_opts = dict(allow_same_spatial_dim=True)
+    else:
+      is_equal_opts = dict(allow_same_spatial_dim=True, broadcast_matches=True)
     all_dim_tags, tags_dict = Dim.get_all_dimension_tags([input_data, position_data], is_equal_opts=is_equal_opts)
     input_tags, pos_tags = tags_dict[input_data], tags_dict[position_data]
     specific_input_axes = [i for i, tag in enumerate(input_tags) if tag not in pos_tags and i != old_gather_axis]
@@ -1764,14 +1767,18 @@ class ScatterNdLayer(_ConcatInputLayer):
     :return: common, output, axis, input_extra_axes
     """
     from returnn.tf.util.basic import Dim
+    from returnn.util import BehaviorVersion
     # Construct `common` manually, not via Data.get_common_data, such that we can control the axis order.
     # We want the same axis from `position`, and all further axes should be added behind that.
     common = position.copy_template()
     common.dtype = input_data.dtype
     common.sparse_dim = input_data.sparse_dim
     common.sanity_check()
-    dim_tags, tags_dict = Dim.get_all_dimension_tags(
-      [common, input_data], dict(allow_same_feature_dim=True, treat_feature_as_spatial=True))
+    if BehaviorVersion.get() >= 16:
+      is_equal_opts = {}
+    else:
+      is_equal_opts = dict(allow_same_feature_dim=True, treat_feature_as_spatial=True)
+    dim_tags, tags_dict = Dim.get_all_dimension_tags([common, input_data], is_equal_opts)
     common_dim_tags = tags_dict[common]
     input_extra_dim_tags = list(tags_dict[input_data])
     input_extra_axes = []

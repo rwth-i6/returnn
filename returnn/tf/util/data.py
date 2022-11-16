@@ -5576,8 +5576,12 @@ class Data(object):
     :rtype: dict[int,int]
     """
     if is_equal_opts is None:
-      is_equal_opts = dict(
-        allow_same_feature_dim=True, allow_same_spatial_dim=True, treat_feature_as_spatial=True)
+      from returnn.util import BehaviorVersion
+      if BehaviorVersion.get() >= 16:
+        is_equal_opts = {}
+      else:
+        is_equal_opts = dict(
+          allow_same_feature_dim=True, allow_same_spatial_dim=True, treat_feature_as_spatial=True)
 
     def map_other_axis_to_self(other_axis, taken_self_axes):
       """
