@@ -5031,7 +5031,7 @@ def test_ScatterNdLayer_RangeLayer():
           "out_type": {"shape": (), "dtype": "int32"}},  # (B,)
     "range": {"class": "range", "limit": n_ts, "out_spatial_dim": ts_dim},  # (Ts,)
     "add_t": {"class": "combine", "kind": "add", "from": ["t", "range"], "out_shape": {batch_dim, ts_dim}},  # (B,Ts)
-    "t_rel_var": {"class": "variable", "shape": (n_ts, n_out), "init": "glorot_uniform"},  # (B,Ts,D)
+    "t_rel_var": {"class": "variable", "shape": (ts_dim, n_out), "init": "glorot_uniform"},  # (B,Ts,D)
     "output": {"class": "scatter_nd", "from": "t_rel_var", "position": "add_t", "position_axis": ts_dim,
                "output_dim_via_time_from": "data", "filter_invalid_indices": True}
   }
