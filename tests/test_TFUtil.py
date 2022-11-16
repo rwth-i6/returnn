@@ -677,6 +677,17 @@ def test_Data_get_common_data_broadcast_multiple():
   assert d1.shape == common.shape
 
 
+def test_Data_get_common_data_broadcast_multiple_dim_tags():
+  from returnn.tf.util.data import batch_dim
+  time_dim = SpatialDim("time")
+  input_dim = FeatureDim("input", 3)
+  feat_dim = FeatureDim("feat", 3)
+  a = Data("a", dim_tags=[batch_dim, time_dim, input_dim])
+  b = Data("b", dim_tags=[feat_dim])
+  out = Data.get_common_data([a, b], allow_broadcast_all_sources=True)
+  assert out.dim_tags == (batch_dim, time_dim, input_dim, feat_dim)
+
+
 def test_Data_get_common_data_extra2_static_spatial():
   d1 = Data(name='t', shape=(None, 32, 32, 128), dtype='float32', auto_create_placeholders=True)
   d2 = Data(name='r', shape=(None, 32, 32, 128), dtype='float32', auto_create_placeholders=True)

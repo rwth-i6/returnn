@@ -431,8 +431,9 @@ class LayerBase(object):
       out_type.setdefault("dim", out_dim.dimension)  # e.g. needed when sparse
     output = Data(**out_type)
     if not out_dim and sources_data and sources_data.feature_dim_or_sparse_dim and sources_data.dim == output.dim:
-      # Special case: Input feature or sparse dim looks the same, so overtake it.
-      out_dim = sources_data.feature_dim_or_sparse_dim
+      if output.feature_dim_or_sparse_dim.auto_generated:
+        # Special case: Input feature or sparse dim looks the same, so overtake it.
+        out_dim = sources_data.feature_dim_or_sparse_dim
     if out_dim:
       assert out_dim.dimension == output.dim, (
         "Layer %r out_dim %s does not match Data via out_type %s" % (name, out_dim, output))
