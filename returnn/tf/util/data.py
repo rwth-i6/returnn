@@ -5868,7 +5868,8 @@ def _infer_dim_tags_tuple_from_shape(
           description="%s:var:extern_data:%s" % (tag_name, name),
           # Spatial dim tag, even if axis == feature_dim_axis. This is to keep the old behavior.
           # This is such that Dim.is_equal behaves as before, e.g. in Data.get_common_data.
-          kind=Dim.Types.Spatial)
+          kind=Dim.Types.Spatial,
+          auto_generated=True)
         dim_tags[axis] = tag
       dyn_size = tag.dyn_size
     if tag:
