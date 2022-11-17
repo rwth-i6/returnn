@@ -184,7 +184,12 @@ class Engine(EngineBase):
     :rtype: torch.Tensor
     """
     assert isinstance(data, dict) and data
-    data = {k: v.to(self._device) for (k, v) in data.items()}
+    data = {
+      k:
+      v.cpu() if k.endswith(":seq_len")
+      else v.to(self._device)
+      for (k, v) in data.items()
+    }  # Sequence lengths have to be on CPU for the later call to rnn.pack_padded_sequence
 
     train_ctx = TrainCtx()
     sentinel_kw = {"__fwd_compatible_random_arg_%i" % int(random() * 100): None}
