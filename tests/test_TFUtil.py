@@ -3949,9 +3949,8 @@ def test_FetchHelper_loop_invalid_vars_switch():
 
 
 def test_mem_usage_for_dev_via_tf_log_memory_usage():
-  if not is_tf_cuda_build():
-    print("TF without CUDA not supported.")
-    return
+  if not OpCodeCompiler.cuda_available():
+    raise unittest.SkipTest("CUDA not available")
   d = {}
   gpu_dev = None
   for dev in get_tf_list_local_devices():

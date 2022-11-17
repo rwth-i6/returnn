@@ -1718,7 +1718,7 @@ def have_blocksparse_requirements():
   """
   if not tf_util.is_gpu_available():
     return False
-  if not tf_util.is_tf_cuda_build():
+  if not tf_util.OpCodeCompiler.cuda_available():
     return False
   min_compute_capability = tf_util.get_available_gpu_cuda_min_compute_capability()
   if min_compute_capability < 3.5:
@@ -1735,7 +1735,7 @@ def init_blocksparse(with_native_module=True):
   """
   if with_native_module:
     assert tf_util.is_gpu_available(), "we currently need a GPU"
-    assert tf_util.is_tf_cuda_build(), "we need TF with CUDA support"
+    assert tf_util.OpCodeCompiler.cuda_available(), "CUDA not available"
     min_compute_capability = tf_util.get_available_gpu_cuda_min_compute_capability()
     assert min_compute_capability and min_compute_capability >= 3.5, "we need at least compute capability 3.5"
   path = os.path.dirname(__file__) + "/extern/blocksparse"

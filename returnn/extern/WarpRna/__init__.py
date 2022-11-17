@@ -36,7 +36,7 @@ def init_warprna(verbose=False):
   if _tf_mod:
     return
   assert is_checked_out(), "submodule not checked out? Run `git submodule update --init --recursive`"
-  enable_gpu = is_tf_cuda_build()
+  enable_gpu = OpCodeCompiler.cuda_available()
   enable_cpu = os.path.exists("%s/core_cpu.cpp" % submodule_dir)
 
   src_files = ['%s/tensorflow_binding/src/warp_rna_op.cc' % submodule_dir]

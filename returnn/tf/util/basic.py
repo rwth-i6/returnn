@@ -2869,7 +2869,7 @@ class OpCodeCompiler(NativeCodeCompiler):
 
   def __init__(self, use_cuda_if_available=True, cuda_auto_min_compute_capability=True,
                include_paths=(), ld_flags=(), c_macro_defines=None, **kwargs):
-    self._cuda_env = use_cuda_if_available and CudaEnv.get_instance()
+    self._cuda_env = use_cuda_if_available and is_tf_cuda_build() and CudaEnv.get_instance()
     if use_cuda_if_available and is_gpu_available() and is_tf_cuda_build():
       # Currently we assume that if we provide CUDA code (thus set use_cuda_if_available=True),
       # that if there is a GPU available (as TF reports it),
@@ -2904,6 +2904,9 @@ class OpCodeCompiler(NativeCodeCompiler):
       **kwargs)
     self._tf_mod = None
 
+  def __repr__(self):
+    return "<%s %r CUDA %s in %r>" % (self.__class__.__name__, self.base_name, self._with_cuda(), self._mod_path)
+
   _relevant_info_keys = NativeCodeCompiler._relevant_info_keys + ("tf_version", "with_cuda", "cuda_path", "nvcc_opts")
 
   def _make_info_dict(self):
@@ -2916,6 +2919,18 @@ class OpCodeCompiler(NativeCodeCompiler):
       "nvcc_opts": (tuple(self._cuda_env.get_compiler_opts()) + tuple(self._nvcc_opts)) if self._with_cuda() else None,
     })
     return d
+
+  @classmethod
+  def cuda_available(cls):
+    """
+    :return: whether CUDA is available. if True, and you initiate with use_cuda_if_available=True,
+      then _with_cuda() should also be True.
+    :rtype: bool
+    """
+    if not is_tf_cuda_build():
+      return False
+    cuda_env = CudaEnv.get_instance()
+    return cuda_env.is_available()
 
   def _with_cuda(self):
     return bool(self._cuda_env and self._cuda_env.is_available())
