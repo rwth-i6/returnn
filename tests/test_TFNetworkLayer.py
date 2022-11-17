@@ -6858,6 +6858,34 @@ def test_ConvLayer_empty_out():
     assert out.shape == (1, 0, 7)
 
 
+def test_ConvLayer_stride_dilation():
+  with make_scope() as session:
+    net = TFNetwork(config=Config({"extern_data": {"data": {"dim": 5}}}))
+    net.construct_from_dict({
+      "output": {
+        "class": "conv", "n_out": 7, "with_bias": False,
+        "filter_size": (2,), "strides": (2,), "dilation_rate": (2,),
+        "padding": "valid", "from": "data", "forward_weights_init": 1.0},
+    })
+    input = numpy.random.randint(low=0, high=10, size=(3, 20, 5))
+    out_ = net.layers["output"].output.copy_as_batch_spatial_major()
+    print(out_)
+    net.initialize_params(session)
+    out, seq_lens = session.run(
+      [out_.placeholder, out_.size_placeholder[0]],
+      feed_dict={
+        net.extern_data.data["data"].size_placeholder[0]: numpy.array([20, 18, 17]),
+        net.extern_data.data["data"].placeholder: input,
+      }
+    )
+    print(out.shape)
+    print(seq_lens)
+    assert isinstance(out, numpy.ndarray)
+    assert isinstance(seq_lens, numpy.ndarray)
+    assert out.shape == (3, 9, 7)
+    assert (seq_lens == [9, 8, 8]).all()
+
+
 def test_pool_layer_NCHW():
   with make_scope() as session:
     import numpy as np
