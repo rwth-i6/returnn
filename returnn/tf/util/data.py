@@ -699,7 +699,8 @@ class Dim(object):
       assert inputs
       while inputs:
         x = inputs.pop(0)
-        if x.dimension is not None:
+        if not x.is_dynamic():  # static
+          assert x.dimension is not None
           if y is None:
             with tf.control_dependencies(None):  # this will reset the context
               y = Data(
@@ -710,7 +711,7 @@ class Dim(object):
           continue
         if self.batch:
           x = x.get_for_batch_ctx(self.batch, self.control_flow_ctx)
-        x.complete_dyn_size()
+        x.complete_dyn_size(template_only=template_only)
         if not x.dyn_size_ext:
           return
         x = x.dyn_size_ext

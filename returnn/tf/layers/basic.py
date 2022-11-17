@@ -4166,7 +4166,8 @@ class ReshapeLayer(LayerBase):
     super(ReshapeLayer, self).__init__(**kwargs)
     self.extra_deps = extra_deps
     data = self.sources[0].output
-    out_dims = [data.get_dim_tag_from_description(d) for d in out_dims]
+    out_dims = [data.get_dim_tag_from_description(d) if isinstance(d, str) else d for d in out_dims]
+    out_dims = [d.get_for_batch_ctx(data.batch, data.control_flow_ctx) for d in out_dims]
     in_dims_axes = [data.get_axis_from_description(d, allow_int=False) for d in in_dims]
     assert sorted(set(in_dims_axes)) == sorted(in_dims_axes), "%s: invalid in_dims %r" % (self, in_dims)
     insert_axis = min(in_dims_axes)
@@ -4211,7 +4212,7 @@ class ReshapeLayer(LayerBase):
     """
     assert len(sources) == 1, "%s %r: only one source allowed" % (cls.__name__, name)
     data = sources[0].output.copy_template()
-    out_dims = [data.get_dim_tag_from_description(d) for d in out_dims]
+    out_dims = [data.get_dim_tag_from_description(d) if isinstance(d, str) else d for d in out_dims]
     in_dims_axes = [data.get_axis_from_description(d, allow_int=False) for d in in_dims]
     dims = list(data.dim_tags)
     for axis in sorted(set(in_dims_axes), reverse=True):
