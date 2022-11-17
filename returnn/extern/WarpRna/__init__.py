@@ -9,7 +9,7 @@ import os
 import typing
 import tensorflow as tf
 from tensorflow.python.framework import ops
-from returnn.tf.util.basic import OpCodeCompiler, is_tf_cuda_build
+from returnn.tf.util.basic import OpCodeCompiler
 
 
 warprna_dir = os.path.dirname(os.path.abspath(__file__))
