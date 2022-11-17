@@ -371,6 +371,155 @@ def test_PadLayer_no_op():
     numpy.testing.assert_array_equal(in_v, out_v)
 
 
+def test_PadLayer_window():
+  # https://github.com/rwth-i6/returnn/issues/1224
+  from returnn.config import Config
+  from returnn.tf.engine import Engine
+  from returnn.datasets import init_dataset
+  from returnn.tf.util.data import batch_dim, SpatialDim, FeatureDim
+
+  time_dim = SpatialDim('time')
+  in_dim = FeatureDim('in', 3)
+  out_dim = FeatureDim('out', 4)
+
+  def _config_get_network(epoch, **_kwargs):
+    window_dim = SpatialDim('window', 3)
+    time_dim_ = (window_dim // 2) + time_dim + window_dim.ceildiv_right(2) + (-1)
+    flat_dim = window_dim * time_dim_
+    flat_dim_ = flat_dim + window_dim
+    time_window_dim = time_dim + window_dim
+
+    # This is what PadLayer.get_out_data_from_opts() does.
+    # In returnn-common, we would execute that.
+    # This should be fine. But this triggers the bug.
+    time_dim__ = 1 + time_dim + 1
+    time_dim__.declare_same_as(time_dim_)
+    flat_dim__ = 0 + flat_dim + 3
+    flat_dim__.declare_same_as(flat_dim_)
+
+    net_dict = {
+      "#epoch": epoch,  # trigger reinit
+      'window': {
+        'class': 'subnetwork',
+        'from': [],
+        'subnetwork': {
+          'pad': {
+            'class': 'pad',
+            'from': 'base:data:data',
+            'axes': time_dim,
+            'padding': (1, 1),
+            'out_dims': time_dim_,
+            'out_shape': {batch_dim, in_dim, time_dim_}
+          },
+          'expand_dim': {
+            'class': 'expand_dims',
+            'from': 'pad',
+            'axis': 'spatial',
+            'dim': window_dim,
+            'out_shape': {batch_dim, in_dim, window_dim, time_dim_}
+          },
+          'merge_dims': {
+            'class': 'merge_dims',
+            'from': 'expand_dim',
+            'axes': (
+              window_dim,
+              time_dim_
+            ),
+            'out_dim': flat_dim,
+            'out_shape': {batch_dim, in_dim, flat_dim}
+          },
+          'pad_0': {
+            'class': 'pad',
+            'from': 'merge_dims',
+            'axes': flat_dim,
+            'padding': (0, 3),
+            'out_dims': flat_dim_,
+            'out_shape': {batch_dim, in_dim, flat_dim_}
+          },
+          'reshape': {
+            'class': 'reshape',
+            'from': 'pad_0',
+            'in_dims': [
+              flat_dim_
+            ],
+            'out_dims': [
+              window_dim,
+              time_window_dim
+            ],
+            'extra_deps': ['base:data:data'],
+            'out_shape': {batch_dim, in_dim, window_dim, time_window_dim}
+          },
+          'slice_nd': {
+            'class': 'slice_nd',
+            'from': 'reshape',
+            'size': time_dim,
+            'axis': time_window_dim,
+            'out_spatial_dim': time_dim,
+            'out_shape': {batch_dim, time_dim, in_dim, window_dim}
+          },
+          'output': {
+            'class': 'copy',
+            'from': 'slice_nd',
+            'out_shape': {batch_dim, time_dim, in_dim, window_dim}
+          }
+        }
+      },
+      'reduce': {
+        'class': 'reduce',
+        'from': 'window',
+        'mode': 'mean',
+        'axis': (window_dim, in_dim),
+        'out_shape': {batch_dim, time_dim}
+      },
+      'add': {
+        'class': 'combine',
+        'from': ['dot', 'reduce'],
+        'kind': 'add',
+        'is_output_layer': True,
+        'out_shape': {batch_dim, time_dim, out_dim}
+      },
+      'reduce_0': {
+        'class': 'reduce',
+        'from': 'add',
+        'mode': 'mean',
+        'axis': out_dim,
+        'out_shape': {batch_dim, time_dim}
+      },
+      'dummy': {
+        'class': 'copy',
+        'from': 'reduce_0',
+        'loss': 'as_is',
+        'out_shape': {batch_dim, time_dim}
+      },
+      'weight': {
+        'class': 'variable',
+        'shape': [
+          in_dim,
+          out_dim
+        ],
+        'param_name': 'param',
+      },
+      'dot': {
+        'class': 'dot',
+        'from': ['data:data', 'weight'],
+        'reduce': in_dim,
+        'out_shape': {batch_dim, time_dim, out_dim}
+      },
+    }
+    return net_dict
+
+  config = Config({
+    "task": "train", "num_epochs": 2, "start_epoch": 1,
+    "get_network": _config_get_network,
+    "extern_data": {"data": {"dim_tags": (batch_dim, time_dim, in_dim)}},
+  })
+  train_dataset = init_dataset(
+    {"class": "DummyDataset", "input_dim": in_dim.dimension, "output_dim": 5, "num_seqs": 3})
+  engine = Engine(config)
+  engine.init_train_from_config(config, train_data=train_dataset)
+  engine.train()
+
+
 def test_concat_sources():
   with make_scope() as session:
     network = TFNetwork(train_flag=True, extern_data=ExternData())

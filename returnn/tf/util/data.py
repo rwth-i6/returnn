@@ -645,6 +645,7 @@ class Dim(object):
     """
     if not self.is_dynamic():
       return
+    self._validate_in_current_graph()
     if self.dyn_size_ext and (self.dyn_size_ext.placeholder is not None or template_only):
       return
     same_base = self.get_same_base()
@@ -989,6 +990,7 @@ class Dim(object):
     assert self.can_be_used_as_dim() and other.can_be_used_as_dim()  # declare_same_as does not make sense otherwise
     self._maybe_update()
     self._validate_in_current_graph()
+    other._validate_in_current_graph()
     if self == other:
       return
     other_same_base = other.get_same_base()
