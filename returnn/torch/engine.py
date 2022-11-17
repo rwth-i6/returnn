@@ -40,6 +40,7 @@ class Engine(EngineBase):
     self._learning_rate = 0.0
     self._learning_rate_control = None  # type: Optional[LearningRateControl]
     self._save_model_epoch_interval = 1
+    self._optimizer = None  # type: Optional[torch.optim.Optimizer]
 
     self._device = "cuda" if torch.cuda.is_available() else "cpu"
 
