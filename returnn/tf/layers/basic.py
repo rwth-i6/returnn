@@ -5217,28 +5217,28 @@ class ConvLayer(_ConcatInputLayer):
         y = tf.squeeze(y, axis=-1 if out_batch_feature_major else -2)
         strides = strides[:-1]
         dilation_rate = dilation_rate[:-1]
+    elif max(strides) > 1 and max(dilation_rate) > 1:
+      # tf.nn.convolution does not support this, therefore resort to tf.nn.conv2d which requires some adaptations
+      squeeze_axis = None
+      if len(filter_size) == 1 and self.output.batch_dim_axis == 0:
+        if data_format == "NCW":
+          data_format = "NCHW"
+          filters = tf.expand_dims(filters, axis=0)
+          x = tf.expand_dims(x, axis=-2)
+          squeeze_axis = -2
+        else:  # we are in the case NWC
+          data_format = "NHWC"
+          filters = tf.expand_dims(filters, axis=0)
+          x = tf.expand_dims(x, axis=-3)  # data format is NHWC
+          squeeze_axis = -3
+      assert data_format in ["NCHW", "NHWC"], "not implemented otherwise"
+      y = tf_compat.v1.nn.conv2d(x, data_format=data_format, filter=filters, padding=padding, 
+                                 strides=strides, dilations=dilation_rate)
+      if squeeze_axis is not None:
+        y = tf.squeeze(y, axis=squeeze_axis)
     else:
-      if max(strides) > 1 and max(dilation_rate) > 1:
-        # tf.nn.convolution does not support this, therefore resort to tf.nn.conv2d which requires some adaptations
-        from_conv1d = False
-        if len(filter_size) == 1 and self.output.batch_dim_axis == 0:
-          from_conv1d = True
-          if data_format == "NCW":
-            data_format = "NCHW"
-            filters = tf.expand_dims(filters, axis=0)
-            x = tf.expand_dims(x, axis=-2)
-            squeeze_axis = -2
-          else:   # we are in the case NWC
-            data_format = "NHWC"
-            filters = tf.expand_dims(filters, axis=0)
-            x = tf.expand_dims(x, axis=-3) # data format is NHWC
-            squeeze_axis = -3
-        assert data_format in ["NCHW", "NHWC"], "not implemented otherwise"
-        y = tf_compat.v1.nn.conv2d(x, data_format=data_format, filter=filters, padding=padding, strides=strides, dilations=dilation_rate)
-        if from_conv1d:
-          y = tf.squeeze(y, axis=squeeze_axis)
-      else:
-        y = tf_compat.v1.nn.convolution(x, data_format=data_format, filter=filters, padding=padding, strides=strides, dilation_rate=dilation_rate)
+      y = tf_compat.v1.nn.convolution(x, data_format=data_format, filter=filters, padding=padding, 
+                                      strides=strides, dilation_rate=dilation_rate)
     if num_batch_dims > 1:
       y = tf.reshape(y, tf.concat([extended_batch_shape, tf.shape(y)[1:]], axis=0))
     # y shape is [batch] + dynamic_dims + [n_out].
