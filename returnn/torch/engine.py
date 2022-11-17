@@ -68,6 +68,8 @@ class Engine(EngineBase):
     self._learning_rate_control = load_learning_rate_control_from_config(config)
     self._save_model_epoch_interval = config.int('save_interval', 1)
 
+    self._optimizer = torch.optim.Adam(self._model.parameters(), lr=self._learning_rate)
+
     self._train_step_func = self.config.typed_value("train_step")
     assert self._train_step_func, "train_step not defined"
 
@@ -94,6 +96,10 @@ class Engine(EngineBase):
     """
     self._learning_rate = self._learning_rate_control.get_learning_rate_for_epoch(self.epoch)
 
+    # Update learning rate
+    for param_group in self._optimizer.param_groups:
+      param_group["lr"] = self._learning_rate
+
   def train_epoch(self):
     """
     train one (sub)epoch
@@ -103,15 +109,14 @@ class Engine(EngineBase):
     data_loader = self._create_data_loader(self.train_dataset)
 
     self._model.train()
-    optimizer = torch.optim.AdamW(self._model.parameters(), lr=self._learning_rate)
 
     step_idx = 0
     for data in data_loader:
       loss = self._run_step(data)
 
-      optimizer.zero_grad()
+      self._optimizer.zero_grad()
       loss.backward()
-      optimizer.step()
+      self._optimizer.step()
 
       print("step %i, loss: %f" % (step_idx, loss.detach().cpu().numpy()), file=log.v4)
 
