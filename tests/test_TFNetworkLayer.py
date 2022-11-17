@@ -6807,7 +6807,6 @@ def test_ConvLayer_empty_out():
 
 
 def test_ConvLayer_stride_dilation():
-  import numpy as np
   with make_scope() as session:
     net = TFNetwork(config=Config({"extern_data": {"data": {"dim": 5}}}))
     net.construct_from_dict({
@@ -6816,14 +6815,14 @@ def test_ConvLayer_stride_dilation():
         "filter_size": (2,), "strides": (2,), "dilation_rate": (2,),
         "padding": "valid", "from": "data", "forward_weights_init": 1.0},
     })
-    input = np.random.randint(low=0, high=10, size=(3, 20, 5))
+    input = numpy.random.randint(low=0, high=10, size=(3, 20, 5))
     out_ = net.layers["output"].output.copy_as_batch_spatial_major()
     print(out_)
     net.initialize_params(session)
     out, seq_lens = session.run(
       [out_.placeholder, out_.size_placeholder[0]],
       feed_dict={
-        net.extern_data.data["data"].size_placeholder[0]: np.array([20, 18, 17]),
+        net.extern_data.data["data"].size_placeholder[0]: numpy.array([20, 18, 17]),
         net.extern_data.data["data"].placeholder: input,
       }
     )

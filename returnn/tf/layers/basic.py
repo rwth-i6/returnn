@@ -5232,13 +5232,15 @@ class ConvLayer(_ConcatInputLayer):
           x = tf.expand_dims(x, axis=-3)  # data format is NHWC
           squeeze_axis = -3
       assert data_format in ["NCHW", "NHWC"], "not implemented otherwise"
-      y = tf_compat.v1.nn.conv2d(x, data_format=data_format, filter=filters, padding=padding, 
-                                 strides=strides, dilations=dilation_rate)
+      y = tf_compat.v1.nn.conv2d(
+        x, data_format=data_format, filter=filters, padding=padding,
+        strides=strides, dilations=dilation_rate)
       if squeeze_axis is not None:
         y = tf.squeeze(y, axis=squeeze_axis)
     else:
-      y = tf_compat.v1.nn.convolution(x, data_format=data_format, filter=filters, padding=padding, 
-                                      strides=strides, dilation_rate=dilation_rate)
+      y = tf_compat.v1.nn.convolution(
+        x, data_format=data_format, filter=filters, padding=padding,
+        strides=strides, dilation_rate=dilation_rate)
     if num_batch_dims > 1:
       y = tf.reshape(y, tf.concat([extended_batch_shape, tf.shape(y)[1:]], axis=0))
     # y shape is [batch] + dynamic_dims + [n_out].
