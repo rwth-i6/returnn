@@ -559,6 +559,9 @@ class Dim(object):
     """
     if x is self.dyn_size:
       return True
+    tag = Dim.get_tag_from_size_tensor(x)
+    if tag and tag == self:
+      return True
     from .basic import TensorRef
     if TensorRef(x) in self._dyn_size_same:
       return True
