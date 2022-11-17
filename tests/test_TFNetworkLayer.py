@@ -6808,7 +6808,6 @@ def test_ConvLayer_empty_out():
 
 def test_ConvLayer_stride_dilation():
   import numpy as np
-  import torch
   with make_scope() as session:
     net = TFNetwork(config=Config({"extern_data": {"data": {"dim": 5}}}))
     net.construct_from_dict({
@@ -6828,11 +6827,6 @@ def test_ConvLayer_stride_dilation():
         net.extern_data.data["data"].placeholder: input,
       }
     )
-    torch_input = torch.Tensor(input)
-    conv_weight = torch.ones(7, 5, 2)
-    torch_out = torch.nn.functional.conv1d(
-      torch_input.transpose(1,2), conv_weight, bias=None, stride=2, padding=0, dilation=2
-    ).transpose(1,2).numpy()
     print(out.shape)
     print(seq_lens)
     assert isinstance(out, numpy.ndarray)
