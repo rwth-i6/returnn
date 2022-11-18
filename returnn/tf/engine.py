@@ -1423,6 +1423,9 @@ class Engine(EngineBase):
             "reinit network too often, %i times after %i training epochs, restart" % (
               self._num_net_reinit, self._num_trained_epochs), file=log.v2)
           self.finalize()
+          if self.config.is_true("use_horovod"):
+            import horovod.tensorflow as hvd
+            hvd.shutdown()
           from returnn.util.basic import restart_returnn
           restart_returnn()
     old_network_params = self.network.get_params_serialized(self.tf_session)
