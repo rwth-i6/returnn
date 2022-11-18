@@ -368,7 +368,7 @@ def finalize(error_occurred=False):
     if BackendEngine.is_tensorflow_selected():
       engine.finalize(error_occurred=error_occurred)
       if config.is_true("use_horovod"):
-        import horovod.tensorflow as hvd
+        import horovod.tensorflow as hvd  # noqa
         hvd.shutdown()
 
 

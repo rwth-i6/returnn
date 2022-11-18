@@ -1424,7 +1424,7 @@ class Engine(EngineBase):
               self._num_net_reinit, self._num_trained_epochs), file=log.v2)
           self.finalize()
           if self.config.is_true("use_horovod"):
-            import horovod.tensorflow as hvd
+            import horovod.tensorflow as hvd  # noqa
             hvd.shutdown()
           from returnn.util.basic import restart_returnn
           restart_returnn()
