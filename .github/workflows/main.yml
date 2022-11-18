@@ -74,7 +74,9 @@ jobs:
         tests/pycharm-inspect.py
 
   base-tests:
-    runs-on: ubuntu-latest
+    # As long as we need Python 2.7 here in the test, we can only use up to Ubuntu 20.
+    # https://github.com/rwth-i6/returnn/issues/1226
+    runs-on: ubuntu-20.04
     strategy:
       fail-fast: false
       matrix:
@@ -170,7 +172,9 @@ jobs:
         fi
 
   tf-tests:
-    runs-on: ubuntu-latest
+    # As long as we want to test Python 2.7 here in the test, we can only use up to Ubuntu 20.
+    # https://github.com/rwth-i6/returnn/issues/1226
+    runs-on: ubuntu-20.04
     strategy:
       fail-fast: false
       matrix:
