@@ -1425,7 +1425,7 @@ class Engine(EngineBase):
           if self.config.is_true("use_horovod"):
             # Make sure they are all synced.
             import horovod.tensorflow as hvd  # noqa
-            barrier = barrier = hvd.allreduce(tf_compat.v1.random_normal(shape=[1]))
+            barrier = hvd.allreduce(tf_compat.v1.random_normal(shape=[1]))
             self.tf_session.run(barrier)
           self.finalize()
           from returnn.util.basic import restart_returnn
