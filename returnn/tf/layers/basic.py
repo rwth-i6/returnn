@@ -475,10 +475,12 @@ class ScaledGradientLayer(CopyLayer):
   """
   layer_class = "scaled_grad"
 
-  def __init__(self, scale, shift=None, clip_max_axis=None, **kwargs):
+  def __init__(self, scale, shift=None, scale_shift_by_sum_over_axis=None, clip_max_axis=None, **kwargs):
     """
     :param float|LayerBase scale: if 0. and no shift, will use tf.stop_gradient
     :param float|LayerBase|None shift:
+    :param Dim|str|None scale_shift_by_sum_over_axis: if given, calculates the sum over this axis (absolute values)
+      and multiplies the shift value by this sum.
     :param Dim|str|None clip_max_axis: if given, clips the gradient to the max value in this axis
       before the transformation, for all values in the axis
     """
@@ -491,10 +493,14 @@ class ScaledGradientLayer(CopyLayer):
     else:
       scale_t = scale.output.copy_compatible_to(self.output).placeholder if isinstance(scale, LayerBase) else scale
       shift_t = shift.output.copy_compatible_to(self.output).placeholder if isinstance(shift, LayerBase) else shift
+      if scale_shift_by_sum_over_axis is not None:
+        scale_shift_by_sum_over_axis = self.output.get_axis_from_description(
+          scale_shift_by_sum_over_axis, allow_int=False)
       if clip_max_axis is not None:
         clip_max_axis = self.output.get_axis_from_description(clip_max_axis, allow_int=False)
       self.output.placeholder = scaled_gradient(
-        self.output.placeholder, scale=scale_t, shift=shift_t, clip_max_axis=clip_max_axis)
+        self.output.placeholder, scale=scale_t, shift=shift_t,
+        scale_shift_by_sum_over_axis=scale_shift_by_sum_over_axis, clip_max_axis=clip_max_axis)
 
   def get_dep_layers(self):
     """

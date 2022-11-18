@@ -674,11 +674,13 @@ class _ScaledGradientBuilder(object):
   # Needs unique grad_name (op name) per each call, thus just use a counter.
   num_calls = 0
 
-  def __call__(self, x, scale=1.0, shift=0.0, clip_max_axis=None):
+  def __call__(self, x, scale=1.0, shift=0.0, scale_shift_by_sum_over_axis=None, clip_max_axis=None):
     """
     :param tf.Tensor x:
     :param float|tf.Tensor scale:
     :param float|tf.Tensor|None shift:
+    :param int|None scale_shift_by_sum_over_axis: if given, calculates the sum over this axis (absolute values)
+      and multiplies the shift value by this sum.
     :param int|None clip_max_axis: if given, clips the gradient to the abs max value in this axis
       before the transformation, for all values in the axis
     :rtype: tf.Tensor
@@ -694,7 +696,11 @@ class _ScaledGradientBuilder(object):
       if isinstance(scale, tf.Tensor) or scale != 1.0:
         grad_out = grad_out * scale
       if isinstance(shift, tf.Tensor) or shift:
-        grad_out = grad_out + shift
+        if scale_shift_by_sum_over_axis is not None:
+          m = tf.reduce_sum(tf.abs(grad), axis=scale_shift_by_sum_over_axis, keepdims=True)
+          grad_out = grad_out + shift * m
+        else:
+          grad_out = grad_out + shift
       if clip_max_axis is not None:
         m = tf.reduce_max(tf.abs(grad), axis=clip_max_axis, keepdims=True)
         grad_out = tf.clip_by_value(grad_out, -m, m)
