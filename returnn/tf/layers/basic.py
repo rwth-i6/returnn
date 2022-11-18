@@ -517,7 +517,7 @@ class ScaledGradientLayer(CopyLayer):
     super(ScaledGradientLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
     if isinstance(d.get("scale"), str):
       d["scale"] = get_layer(d["scale"])
-    if isinstance(d.get("scale"), str):
+    if isinstance(d.get("shift"), str):
       d["shift"] = get_layer(d["shift"])
 
 
