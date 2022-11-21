@@ -2130,6 +2130,28 @@ def test_ReduceLayer_reduce4d():
   print("layer:", layer)
 
 
+def test_ReduceLayer_mean():
+  net_dict = {
+    "output": {"class": "reduce", "mode": "mean", "from": "data", "axis": "T"}
+  }
+  config = Config(dict(
+    extern_data={"data": {"shape": (None, 4)}}
+  ))
+  with make_scope() as session:
+    network = TFNetwork(config=config)
+    network.construct_from_dict(net_dict)
+    in_ = network.extern_data.get_default_input_data()
+    out = network.get_default_output_layer().output
+    assert out.batch_dim_axis == 0 and out.shape == (4,)
+    in_v, seq_len, out_v = session.run(
+      (in_.placeholder, in_.get_sequence_lengths(), out.placeholder),
+      feed_dict=make_feed_dict(network.extern_data))
+    n_batch = in_v.shape[0]
+    assert n_batch == seq_len.shape[0] == out_v.shape[0]
+    for b in range(n_batch):
+      numpy.testing.assert_almost_equal(out_v[b], in_v[b, :seq_len[b]].mean(axis=0))
+
+
 def test_reduce_repeat_1102():
   # https://github.com/rwth-i6/returnn/issues/1102
   from returnn.tf.util.data import batch_dim, SpatialDim, FeatureDim
