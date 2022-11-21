@@ -5266,9 +5266,8 @@ class Data(object):
         else:  # axis < batch_dim_axis
           seq_mask = sequence_mask_time_major(size)  # (T,B)
         shape = [1] * self.batch_ndim  # type: typing.List[typing.Union[int,tf.Tensor]]
-        placeholder_shape = tf.shape(self.placeholder)
-        shape[self.batch_dim_axis] = placeholder_shape[self.batch_dim_axis]
-        shape[axis] = placeholder_shape[axis]
+        shape[self.batch_dim_axis] = self.get_batch_dim()
+        shape[axis] = tag.get_dim_value()
         seq_mask = tf.reshape(seq_mask, shape, name="seq_mask_reshape")
         assert seq_mask.get_shape().ndims == self.batch_ndim
       else:  # size is something unusual, not just [B], but e.g. [B,S] or so
