@@ -5213,7 +5213,7 @@ class ConvLayer(_ConcatInputLayer):
       if len(filter_size) == 1:
         filters = tf.reshape(filters, [filter_size[0], 1, n_in, n_out // n_in])  # [1,K,n_in,n_out//n_in]
         x = tf.expand_dims(x, axis=-1 if out_batch_feature_major else -2)  # [B,T,1,n_in]
-        strides = strides + [1]
+        strides = strides * 2
         dilation_rate = dilation_rate + [1]
       else:
         filters = tf.reshape(filters, list(filter_size) + [n_in, n_out // n_in])  # K+[n_in,n_out//n_in]
@@ -5221,7 +5221,7 @@ class ConvLayer(_ConcatInputLayer):
         x, data_format="NCHW" if out_batch_feature_major else "NHWC",
         filter=filters,
         padding=padding,
-        strides=([1] + strides + [1]) if out_batch_feature_major else ([1, 1] + strides),
+        strides=([1, 1] + strides) if out_batch_feature_major else ([1] + strides + [1]),
         dilations=dilation_rate)
       if len(filter_size) == 1:
         y = tf.squeeze(y, axis=-1 if out_batch_feature_major else -2)
