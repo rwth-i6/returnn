@@ -3,7 +3,7 @@ scipy
 h5py
 theano==0.9
 nose
-tensorflow==2.7.2
+tensorflow==2.9.3
 numpydoc
 better_exchook
 sphinx_rtd_theme
