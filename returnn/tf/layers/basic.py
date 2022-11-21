@@ -6220,6 +6220,7 @@ class ReduceLayer(_ConcatInputLayer):
               x.dim_tags[axis].dyn_size_ext
               .copy_compatible_to(out_data, check_sparse=False, check_dtype=False)
               .placeholder)
+            seq_len_bc = tf.maximum(seq_len_bc, 1)  # avoid nan
             correction_factor_ = tf.cast(tf.shape(x.placeholder)[axis], tf.float32) / tf.cast(seq_len_bc, tf.float32)
             correction_factor = tf_util.optional_mul(correction_factor, correction_factor_)
     if mode in arg_funcs:
