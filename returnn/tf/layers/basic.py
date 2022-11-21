@@ -6156,6 +6156,10 @@ class ReduceLayer(_ConcatInputLayer):
     axes = cls.get_axes(axes, input_data=x)
     if use_time_mask is None:
       use_time_mask = any(x.has_dynamic_size(a) for a in axes)
+    out_data = x.copy_template()
+    if not keep_dims:
+      dim_tags = [dim_tag for i, dim_tag in enumerate(x.dim_tags) if i not in axes]
+      out_data = out_data.copy_template_new_dim_tags(dim_tags)
     assert isinstance(use_time_mask, bool)
     mode = mode.lower()
     if mode == "avg":  # alias
@@ -6169,9 +6173,19 @@ class ReduceLayer(_ConcatInputLayer):
     f = funcs[mode]
     x_ = x.placeholder
     # Check if we should ignore some frames, e.g. via masking.
-    if use_time_mask:
-      if mode in reduce_abs_funcs or (mode in reduce_rel_func and axes == [x.time_dim_axis]):
-        # For sum, the fastest and simplest way is masking.
+    correction_factor = None
+    if use_time_mask and any(x.has_dynamic_size(a) for a in axes):
+      if x.batch_dim_axis in axes and x.time_dim_axis in axes and len(axes) == 2:
+        assert mode not in arg_funcs, "unexpected arg reduce for multiple axes"
+        # Flattening.
+        assert not keep_dims, "not yet implemented otherwise"
+        axes = [a if (a < x.time_dim_axis) else (a - 1)
+                for a in axes if a != x.time_dim_axis]
+        x = x.copy_time_flattened()
+        x_ = x.placeholder
+
+      else:
+        # Fhe fastest and simplest way is masking.
         for axis in axes:
           if axis == x.batch_dim_axis:
             continue
@@ -6182,33 +6196,32 @@ class ReduceLayer(_ConcatInputLayer):
           zeros = tf.zeros((), dtype=x.placeholder.dtype)
           # Cannot call x.placeholder.dtype.{min,max} in case input is e.g. a bool
           if x.placeholder.dtype.is_floating or x.placeholder.dtype.is_integer:
-            replacement_value = {
-              tf.reduce_mean: zeros,
-              tf.reduce_sum: zeros,
-              tf.reduce_logsumexp: zeros + x.placeholder.dtype.min,
-              tf.reduce_min: zeros + x.placeholder.dtype.max,
-              tf.reduce_max: zeros + x.placeholder.dtype.min}[f]
+            if f in (tf.reduce_mean, tf.reduce_sum):
+              replacement_value = zeros
+            elif f in (tf.reduce_max, tf.reduce_logsumexp, tf.argmax):
+              replacement_value = zeros + x.placeholder.dtype.min
+            elif f in (tf.reduce_min, tf.argmin):
+              replacement_value = zeros + x.placeholder.dtype.max
+            else:
+              raise ValueError("unexpected reduce function %r" % f)
           elif x.placeholder.dtype.is_bool:
-            replacement_value = {
-              tf.reduce_any: zeros,
-              tf.reduce_all: tf.ones((), dtype=x.placeholder.dtype)}[f]
+            if f in (tf.reduce_any,):
+              replacement_value = zeros
+            elif f in (tf.reduce_all,):
+              replacement_value = tf.ones((), dtype=x.placeholder.dtype)
+            else:
+              raise ValueError("unexpected reduce function %r" % f)
           else:
             raise TypeError("reduce: unexpected input type %r from input %s" % (x.placeholder.dtype, input_data))
 
           x_ = tf_util.where_bc(mask, x_, replacement_value, name="x_masked_axis_%i" % axis)
           if f == tf.reduce_mean:
-            seq_len_bc = x.get_sequence_lengths_broadcast(axis=axis)
-            x_ = x_ / tf.cast(seq_len_bc, tf.float32)
-            f = tf.reduce_sum
-      elif f == tf.reduce_mean:
-        # Flattening.
-        if x.time_dim_axis in axes:
-          assert not keep_dims, "not yet implemented otherwise"
-          assert x.batch_dim_axis in axes, "not yet implemented otherwise"
-          axes = [a if (a < x.time_dim_axis) else (a - 1)
-                  for a in axes if a != x.time_dim_axis]
-          x = x.copy_time_flattened()
-          x_ = x.placeholder
+            seq_len_bc = (
+              x.dim_tags[axis].dyn_size_ext
+              .copy_compatible_to(out_data, check_sparse=False, check_dtype=False)
+              .placeholder)
+            correction_factor_ = tf.cast(tf.shape(x.placeholder)[axis], tf.float32) / tf.cast(seq_len_bc, tf.float32)
+            correction_factor = tf_util.optional_mul(correction_factor, correction_factor_)
     if mode in arg_funcs:
       assert len(axes) == 1, "For argmax/argmin, only one reduction axis is supported"
       y = f(x_, axis=axes[0], output_type=tf.int32)
@@ -6218,6 +6231,7 @@ class ReduceLayer(_ConcatInputLayer):
         y = expand_multiple_dims(y, axes=axes)
     else:
       y = f(x_, axis=axes, keepdims=keep_dims)
+      y = tf_util.optional_mul(y, correction_factor)
     return y
 
   @classmethod
