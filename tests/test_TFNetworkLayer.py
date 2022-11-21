@@ -2229,7 +2229,7 @@ def test_reduce_repeat_1102():
 
 def test_SoftmaxOverSpatialLayer_start():
   with make_scope() as session:
-    net = TFNetwork(extern_data=ExternData())
+    net = TFNetwork(extern_data=ExternData({"data": {"shape": (None, 5)}}), config=Config())
     rnd = numpy.random.RandomState(42)
     n_batch = 3
     n_time = 4
@@ -2253,7 +2253,13 @@ def test_SoftmaxOverSpatialLayer_start():
     assert_equal(out_data.shape, (n_dim, None))  # layer moves time-dim to back
     layer = SoftmaxOverSpatialLayer(output=out_data, **opts)
     assert_equal(layer.output.shape, (n_dim, None))
-    out_np = session.run(layer.output.placeholder)
+    try:
+      out_np = session.run(
+        layer.output.placeholder, feed_dict={net.extern_data.get_batch_info().dim: n_batch})
+    except Exception as exc:
+      from returnn.tf.network import help_on_tf_exception
+      help_on_tf_exception(session=session, exception=exc, fetches=layer.output.placeholder)
+      raise
     assert_equal(out_np.shape, (n_batch, n_dim, n_time))
     # check if masking worked
     range_idxs = numpy.ones_like(start_idxs) * numpy.expand_dims(numpy.arange(n_time), axis=0)
@@ -2266,7 +2272,7 @@ def test_SoftmaxOverSpatialLayer_start():
 
 def test_SoftmaxOverSpatialLayer_window():
   with make_scope() as session:
-    net = TFNetwork(extern_data=ExternData())
+    net = TFNetwork(extern_data=ExternData({"data": {"shape": (None, 5)}}), config=Config())
     rnd = numpy.random.RandomState(42)
     n_batch = 4
     n_time = 9
@@ -2293,7 +2299,7 @@ def test_SoftmaxOverSpatialLayer_window():
     layer = SoftmaxOverSpatialLayer(output=out_data, **opts)
     layer.output.sanity_check()
     assert_equal(layer.output.shape, (n_dim, None))
-    out_np = session.run(layer.output.placeholder)
+    out_np = session.run(layer.output.placeholder, feed_dict=make_feed_dict(net.extern_data, n_batch=n_batch))
     assert_equal(out_np.shape, (n_batch, n_dim, n_time))
     # check if window masking worked:
     # handle edge cases correctly: (start is 0-based)
@@ -4716,7 +4722,7 @@ def test_SearchSortedLayer():
   n_batch, n_time, n_in, n_out = 2, 10, 3, 5
   random = numpy.random.RandomState(seed=1)
   with make_scope() as session:
-    net = TFNetwork(extern_data=ExternData())
+    net = TFNetwork(extern_data=ExternData({"data": {"shape": (None, 3)}}))
     sorted_layer = InternalLayer(
       name="sorted_sequence", network=net,
       output=Data(name="sorted_sequence", shape=(None, n_in)))  # [B,T,F]
@@ -4743,7 +4749,7 @@ def test_SearchSortedLayer():
       out_data.sanity_check()
       print(search_layer.output)
 
-      output = session.run(search_layer.output.placeholder, feed_dict=make_feed_dict(net.extern_data))
+      output = session.run(search_layer.output.placeholder, feed_dict=make_feed_dict(net.extern_data, n_batch=n_batch))
       assert output.dtype == "int32"
       assert out_data.batch_shape == (None, n_in, n_out)
       assert out_data.batch_dim_axis == 0
@@ -5295,7 +5301,7 @@ def _run_repeat_layer(session, net, input_data_layer):
 
 def test_RepeatLayerBTF():
   with make_scope() as session:
-    net = TFNetwork(extern_data=ExternData())
+    net = TFNetwork(extern_data=ExternData({"data": {"shape": (None, 3)}}))
     input_data_layer = InternalLayer(name="src", network=net, output=Data(name="src", shape=(None, 5), dim=5))
     input_data_layer.output.size_placeholder = {0: tf.constant([10, 7])}  # [B]
     input_data_layer.output.placeholder = tf_compat.v1.random_uniform((2, 10, 5))  # [B, T, F]
@@ -5305,7 +5311,7 @@ def test_RepeatLayerBTF():
 
 def test_RepeatLayerTBF():
   with make_scope() as session:
-    net = TFNetwork(extern_data=ExternData())
+    net = TFNetwork(extern_data=ExternData({"data": {"shape": (None, 3)}}))
     input_data_layer = InternalLayer(
       name="src", network=net,
       output=Data(**{'name': "src", 'shape': (None, 5), 'dim': 5, 'batch_dim_axis': 1, 'time_dim_axis': 0}))
@@ -5317,7 +5323,7 @@ def test_RepeatLayerTBF():
 
 def test_RepeatLayerBFT():
   with make_scope() as session:
-    net = TFNetwork(extern_data=ExternData())
+    net = TFNetwork(extern_data=ExternData({"data": {"shape": (None, 3)}}))
     input_data_layer = InternalLayer(
       name="src", network=net,
       output=Data(**{'name': 'src', 'shape': (5, None), 'dim': 5, 'time_dim_axis': 2, 'feature_dim_axis': 1}))
