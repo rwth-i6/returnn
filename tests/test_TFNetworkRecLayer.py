@@ -6801,7 +6801,7 @@ def test_onlineblstm():
 
 def test_GenericAttentionLayer_basic0():
   from returnn.tf.layers.base import InternalLayer
-  net = TFNetwork(extern_data=ExternData(), config=Config({"debug_print_layer_output_template": True}))
+  net = TFNetwork(extern_data=ExternData({"data": {"shape": (None, 5)}}), config=Config())
   time = SpatialDim("time")
   kwargs = dict(
     name="att", network=net,
@@ -6824,7 +6824,7 @@ def test_GenericAttentionLayer_basic0():
 
 def test_GenericAttentionLayer_basic():
   from returnn.tf.layers.base import InternalLayer
-  net = TFNetwork(extern_data=ExternData(), config=Config({"debug_print_layer_output_template": True}))
+  net = TFNetwork(extern_data=ExternData({"data": {"shape": (None, 5)}}), config=Config())
   # This is a common situation when the GenericAttentionLayer is inside a recurrent loop,
   # and it gets the encoder values from outside ("base:enc_value" or so),
   # and the attention weights from inside the loop, and they have the same time dim axis as the encoder values.
@@ -6850,7 +6850,7 @@ def test_GenericAttentionLayer_basic():
 
 def test_GenericAttentionLayer_basic_multi_head():
   from returnn.tf.layers.base import InternalLayer
-  net = TFNetwork(extern_data=ExternData(), config=Config({"debug_print_layer_output_template": True}))
+  net = TFNetwork(extern_data=ExternData({"data": {"shape": (None, 5)}}), config=Config())
   time = SpatialDim("time")
   num_heads = 8
   kwargs = dict(
@@ -6874,7 +6874,7 @@ def test_GenericAttentionLayer_basic_multi_head():
 def test_GenericAttentionLayer_weights_auto_squeeze_time_end():
   # Example: weights (B,1,T), base (B,T,V)
   from returnn.tf.layers.base import InternalLayer
-  net = TFNetwork(extern_data=ExternData(), config=Config({"debug_print_layer_output_template": True}))
+  net = TFNetwork(extern_data=ExternData({"data": {"shape": (None, 5)}}), config=Config())
   time = SpatialDim("time")
   kwargs = dict(
     name="att", network=net,
@@ -6900,7 +6900,7 @@ def test_GenericAttentionLayer_weights_static_time_axis():
   # Example: weights (B,1,W), base (B,W,V), where W: window_size (static)
   window_size = 10
   from returnn.tf.layers.base import InternalLayer
-  net = TFNetwork(extern_data=ExternData(), config=Config({"debug_print_layer_output_template": True}))
+  net = TFNetwork(extern_data=ExternData({"data": {"shape": (None, 5)}}), config=Config())
   time = SpatialDim("time")
   kwargs = dict(
     name="att", network=net,
@@ -6926,7 +6926,7 @@ def test_GenericAttentionLayer_weights_static_time_axis():
 def test_GenericAttentionLayer_weights_heads_time_end():
   # Example: weights (B,H,T), base (B,T,H,V)
   from returnn.tf.layers.base import InternalLayer
-  net = TFNetwork(extern_data=ExternData(), config=Config({"debug_print_layer_output_template": True}))
+  net = TFNetwork(extern_data=ExternData({"data": {"shape": (None, 5)}}), config=Config())
   time = SpatialDim("time")
   num_heads = 8
   kwargs = dict(
@@ -6952,7 +6952,7 @@ def test_GenericAttentionLayer_weights_heads_time_end():
 def test_GenericAttentionLayer_weights_heads_auto_squeeze_time_end():
   # Example: weights (B,H,1,T), base (B,T,H,V)
   from returnn.tf.layers.base import InternalLayer
-  net = TFNetwork(extern_data=ExternData(), config=Config({"debug_print_layer_output_template": True}))
+  net = TFNetwork(extern_data=ExternData({"data": {"shape": (None, 5)}}), config=Config())
   time = SpatialDim("time")
   num_heads = 8
   kwargs = dict(
@@ -6979,7 +6979,7 @@ def test_GenericAttentionLayer_weights_heads_auto_squeeze_time_end():
 def test_GenericAttentionLayer_extra_spatial():
   from returnn.tf.util.data import batch_dim
   from returnn.tf.layers.base import InternalLayer
-  net = TFNetwork(extern_data=ExternData(), config=Config({"debug_print_layer_output_template": True}))
+  net = TFNetwork(extern_data=ExternData({"data": {"shape": (None, 5)}}), config=Config())
   # This is the situation when the GenericAttentionLayer is outside the recurrent loop,
   # and it gets some encoder values (with different time axis),
   # and the attention weights, which has two spatial axis, one of the decoder, and one of the encoder.
@@ -7010,7 +7010,7 @@ def test_GenericAttentionLayer_extra_spatial():
 def test_GenericAttentionLayer_extra_spatial_multi_head():
   from returnn.tf.util.data import batch_dim
   from returnn.tf.layers.base import InternalLayer
-  net = TFNetwork(extern_data=ExternData(), config=Config({"debug_print_layer_output_template": True}))
+  net = TFNetwork(extern_data=ExternData({"data": {"shape": (None, 5)}}), config=Config())
   dec_time = SpatialDim("dec time")
   enc_time = SpatialDim("enc time")
   heads_dim = FeatureDim("heads", dimension=8)
