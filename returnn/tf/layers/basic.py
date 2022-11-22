@@ -5045,7 +5045,12 @@ class ReinterpretDataLayer(_ConcatInputLayer):
         old_tag = out.dim_tags[axis_int]
         if old_tag.is_dim_known() and not new_tag.is_dim_known():
           new_tag.dimension = old_tag.dimension
-        new_tag = new_tag.get_for_batch_ctx(out.batch, out.control_flow_ctx)
+        # The new tag might not have the same control flow context or batch as our output
+        # but maybe a more simplified case (e.g. no control flow context).
+        # As this is a copy of the old tag, see what simplified variant we get for the old tag,
+        # and then use that batch and control flow context.
+        old_tag = old_tag.get_for_batch_ctx(out.batch, out.control_flow_ctx)
+        new_tag = new_tag.get_for_batch_ctx(old_tag.batch, old_tag.control_flow_ctx)
         if old_tag.is_dim_known() and not new_tag.is_dim_known():
           assert not new_tag.dyn_size_ext
           if old_tag.dyn_size_ext:
