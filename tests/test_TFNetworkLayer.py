@@ -967,6 +967,108 @@ def test_batch_norm_unequal_seq_len():
     numpy.testing.assert_array_almost_equal(np_bn1, out_1, decimal=5)
 
 
+def test_BatchNormLayer_CondLayer():
+  from returnn.tf.util.data import batch_dim, SpatialDim, FeatureDim
+
+  time_dim = SpatialDim('time')
+  in_dim = FeatureDim('in', 12)
+
+  config = Config(dict(extern_data={
+    'data': {
+      'dim_tags': (batch_dim, time_dim, in_dim),
+    }
+  }))
+
+  net_dict = {
+    'length': {
+      'class': 'length',
+      'from': ['data:data'],
+      'axis': batch_dim,
+      'out_shape': {}
+    },
+    'mod': {
+      'class': 'eval',
+      'from': 'length',
+      'eval': 'source(0) % 2',
+      'out_shape': {}
+    },
+    'compare': {
+      'class': 'compare',
+      'from': 'mod',
+      'kind': 'equal',
+      'value': 0,
+      'out_shape': {}
+    },
+    'cond': {
+      'class': 'cond',
+      'from': [],
+      'condition': 'compare',
+      'true_layer': {
+        'class': 'subnetwork',
+        'from': [],
+        'subnetwork': {
+          'batch_norm': {
+            'class': 'subnetwork',
+            'from': [],
+            'subnetwork': {
+              'batch_norm': {
+                'class': 'batch_norm',
+                'from': 'base:base:data:data',
+                'in_dim': in_dim,
+                'use_std': True,
+                'use_shift': True,
+                'param_version': 2,
+                'momentum': 0.1,
+                'epsilon': 0.001,
+                'masked_time': True,
+                'out_shape': {batch_dim, time_dim, in_dim}
+              },
+              'output': {
+                'class': 'copy',
+                'from': 'batch_norm',
+                'out_shape': {batch_dim, time_dim, in_dim}
+              }
+            },
+            'name_scope': ''
+          },
+          'output': {
+            'class': 'copy',
+            'from': 'batch_norm',
+            'out_shape': {batch_dim, time_dim, in_dim}
+          }
+        }
+      },
+      'false_layer': {
+        'class': 'subnetwork',
+        'from': [],
+        'subnetwork': {
+          'output': {
+            'class': 'copy',
+            'from': 'base:data:data',
+            'out_shape': {batch_dim, time_dim, in_dim}
+          }
+        }
+      },
+      'out_shape': {batch_dim, time_dim, in_dim},
+      'name_scope': ''
+    },
+    'output': {
+      'class': 'copy',
+      'from': 'cond',
+      'out_shape': {batch_dim, time_dim, in_dim}
+    },
+  }
+
+  with make_scope() as session:
+    net = TFNetwork(config=config, train_flag=True)
+    net.construct_from_dict(net_dict)
+    net.initialize_params(session)
+    out = net.get_default_output_layer().output
+    fetches = net.get_fetches_dict()
+    fetches["out"] = out.placeholder
+    session.run(fetches, feed_dict=make_feed_dict(net.extern_data))
+
+
 def test_activation_layer_net_construct():
   with make_scope() as session:
     num_inputs = 2
