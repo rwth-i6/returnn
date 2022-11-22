@@ -1663,7 +1663,14 @@ class LayerBase(object):
       # Make sure we update after we calculated the batch norm.
       if not tf_compat.executing_eagerly():
         tf_util.add_control_input(op, control_input=bn.op)
-      self.network.register_post_control_dependencies([op])
+      # noinspection PyProtectedMember
+      if op._control_flow_context:
+        # Cannot use register_post_control_dependencies
+        # because the op must be executed in the same control flow context.
+        with tf.control_dependencies([op]):
+          bn = tf.identity(bn)
+      else:
+        self.network.register_post_control_dependencies([op])
       if not use_fused:
         if use_std:
           if param_version >= 2:
