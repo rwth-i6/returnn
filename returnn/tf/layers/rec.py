@@ -1106,6 +1106,23 @@ class RecLayer(_ConcatInputLayer):
       return self.cell.get_layer_from_outside(layer_name)
     return None
 
+  @classmethod
+  def get_available_sub_layer_names(cls, parent_layer_kwargs):
+    """
+    :param dict[str] parent_layer_kwargs:
+    :rtype: list[str]
+    """
+    unit = parent_layer_kwargs["unit"]
+    if isinstance(unit, _SubnetworkRecCell):  # subnet
+      subnet = unit
+      names = []
+      for layer_name, template_layer in sorted(subnet.layer_data_templates.items()):
+        assert isinstance(template_layer, _TemplateLayer)
+        if template_layer.is_output_layer():
+          names.append(layer_name)
+      return names
+    return []
+
   def get_sub_networks(self):
     """
     :rtype: list[returnn.tf.network.TFNetwork]
@@ -3960,7 +3977,7 @@ class _TemplateLayer(LayerBase):
 
     :param str layer_name: name of the sub_layer (right part of '/' separated path)
     :return: template for the sub-layer
-    :rtype: _TemplateLayer
+    :rtype: _TemplateLayer|None
     """
     full_layer_name = self.name + '/' + layer_name
 
@@ -3968,9 +3985,7 @@ class _TemplateLayer(LayerBase):
     # from the parent layer.
     res = self.layer_class_type.get_sub_layer_out_data_from_opts(layer_name, self.kwargs)
     if not res:
-      raise LayerNotFound(
-        "%s: Could not get out data template for sub-layer %r" % (self, layer_name),
-        layer_name=full_layer_name, network=self.network)
+      return None
     output, sub_layer_class, opts = res
     assert isinstance(output, Data)
     assert isinstance(sub_layer_class, type) and issubclass(sub_layer_class, LayerBase)
@@ -3996,6 +4011,14 @@ class _TemplateLayer(LayerBase):
     sub_layer_template = _TemplateLayer(network=opts["network"], name=opts["name"])
     sub_layer_template.init(layer_class=sub_layer_class, **opts)
     return sub_layer_template
+
+  @classmethod
+  def get_available_sub_layer_names(cls, parent_layer_kwargs):
+    """
+    :param dict[str] parent_layer_kwargs: kwargs of the parent layer
+    :rtype: list[str]
+    """
+    raise Exception("get_available_sub_layer_names not expected to be called for _TemplateLayer")
 
   def copy_as_prev_time_frame(self, prev_output=None, rec_vars_prev_outputs=None):
     """
@@ -5852,14 +5875,25 @@ class ChoiceLayer(BaseChoiceLayer):
 
     :param str layer_name: name of the sub_layer (e.g. 'out_0')
     :return: internal layer that outputs labels for the target corresponding to layer_name
-    :rtype: InternalLayer
+    :rtype: InternalLayer|None
     """
     from .base import InternalLayer
-    assert layer_name.startswith("out_")
+    if not layer_name.startswith("out_"):
+      return None
     index = int(layer_name[len("out_"):])
     sub_layer = InternalLayer(
       name="%s/%s" % (self.name, layer_name), network=self.network, output=self.output_list[index], sources=[self])
     return sub_layer
+
+  @classmethod
+  def get_available_sub_layer_names(cls, parent_layer_kwargs):
+    """
+    :param dict[str] parent_layer_kwargs:
+    :rtype: list[str]
+    """
+    if len(parent_layer_kwargs["sources"]) > 1:
+      return ["out_%i" % i for i in range(len(parent_layer_kwargs["sources"]))]
+    return []
 
   @classmethod
   def get_sub_layer_out_data_from_opts(cls, layer_name, parent_layer_kwargs):
@@ -5869,7 +5903,8 @@ class ChoiceLayer(BaseChoiceLayer):
     :return: Data template, class type of sub-layer, layer opts (transformed)
     :rtype: (Data, type, dict[str])|None
     """
-    assert layer_name.startswith("out_")
+    if not layer_name.startswith("out_"):
+      return None
     index = int(layer_name[len("out_"):])
 
     targets = parent_layer_kwargs["target"]
@@ -8328,6 +8363,16 @@ class MaskedComputationLayer(LayerBase):
     else:
       return WrappedInternalLayer(
         base_layer=layer, name=full_layer_name, network=self.network, output=layer.output)
+
+  @classmethod
+  def get_available_sub_layer_names(cls, parent_layer_kwargs):
+    """
+    :param dict[str] parent_layer_kwargs:
+    :rtype: list[str]
+    """
+    sub_cls, sub_layer_kwargs = parent_layer_kwargs["_layer_class"], parent_layer_kwargs["_layer_desc"]
+    assert issubclass(sub_cls, LayerBase)
+    return sub_cls.get_available_sub_layer_names(sub_layer_kwargs)
 
   def get_constraints_value(self):
     """

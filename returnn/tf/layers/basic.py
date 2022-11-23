@@ -3778,6 +3778,21 @@ class SplitLayer(_ConcatInputLayer):
     return self._sub_layers.get(layer_name, None)
 
   @classmethod
+  def get_available_sub_layer_names(cls, parent_layer_kwargs):
+    """
+    :param dict[str] parent_layer_kwargs:
+    :rtype: list[str]
+    """
+    num_splits = parent_layer_kwargs.get("num_splits")
+    if not num_splits and parent_layer_kwargs.get("size_splits"):
+      num_splits = len(parent_layer_kwargs["size_splits"])
+    if not num_splits and parent_layer_kwargs.get("out_dims"):
+      num_splits = len(parent_layer_kwargs["out_dims"])
+    if not num_splits:
+      return []
+    return [int(i) for i in range(num_splits)]
+
+  @classmethod
   def get_out_data_from_opts(cls, sources, **kwargs):
     """
     :param list[LayerBase] sources:
@@ -8556,6 +8571,25 @@ class TopKLayer(LayerBase):
     return self._sub_layers.get(layer_name, None)
 
   @classmethod
+  def get_available_sub_layer_names(cls, parent_layer_kwargs):
+    """
+    :param dict[str] parent_layer_kwargs:
+    :rtype: list[str]
+    """
+    axis = parent_layer_kwargs["axis"]
+    if isinstance(axis, (str, Dim)):
+      single_axis = True
+      num_axes = 1
+    else:
+      assert len(axis) > 0
+      single_axis = False
+      num_axes = len(axis)
+    if single_axis:
+      return ["indices"]
+    else:
+      return ["indices%i" % i for i in range(num_axes)]
+
+  @classmethod
   def get_sub_layer_out_data_from_opts(cls, layer_name, parent_layer_kwargs):
     """
     :param str layer_name: sub layer name
@@ -8902,6 +8936,22 @@ class SubnetworkLayer(LayerBase):
       return self.subnetwork.get_layer(layer_name)
     except LayerNotFound:
       return None
+
+  @classmethod
+  def get_available_sub_layer_names(cls, parent_layer_kwargs):
+    """
+    :param dict[str] parent_layer_kwargs:
+    :rtype: list[str]
+    """
+    names = []
+    subnet_ = parent_layer_kwargs["_subnet"]
+    from returnn.tf.network import Subnetwork
+    assert isinstance(subnet_, Subnetwork)
+    subnet = subnet_.net
+    for layer_name, sub_layer in sorted(subnet.layers.items()):
+      if sub_layer.is_output_layer():
+        names.append(layer_name)
+    return names
 
   def get_sub_networks(self):
     """
@@ -9312,6 +9362,14 @@ class LossLayer(LayerBase):
       raise Exception("%s: invalid sub layer %r" % (self, layer_name))
 
   @classmethod
+  def get_available_sub_layer_names(cls, parent_layer_kwargs):
+    """
+    :param dict[str] parent_layer_kwargs:
+    :rtype: list[str]
+    """
+    return ["loss", "error"]
+
+  @classmethod
   def get_sub_layer_out_data_from_opts(cls, layer_name, parent_layer_kwargs):
     """
     :param str layer_name: sub layer name
@@ -9446,6 +9504,14 @@ class ForcedAlignmentLayer(_ConcatInputLayer):
         name="%s_scores" % self.name, network=self.network,
         output=Data(name="%s_scores_output" % self.name, shape=(), dtype="float32", placeholder=self.scores))
     return None
+
+  @classmethod
+  def get_available_sub_layer_names(cls, parent_layer_kwargs):
+    """
+    :param dict[str] parent_layer_kwargs:
+    :rtype: list[str]
+    """
+    return ["scores"]
 
   def get_dep_layers(self):
     """
