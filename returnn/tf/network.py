@@ -927,8 +927,7 @@ class TFNetwork(object):
         # Call via base to make sure any custom getter sees this...
         return base_get_layer(explicit_extra_layer_name)
       if dep_layers_in_extra:
-        return extra_net.construct_layer(
-          net_dict=net_dict, name=src_name, get_layer=get_layer, add_layer=base_add_layer)
+        return base_get_layer(explicit_extra_layer_name)
       return base_get_layer(src_name)
 
     created_layers = []
@@ -1021,6 +1020,10 @@ class TFNetwork(object):
       explicit_extra_layer_name = "%s:%s" % (self.extra_name_prefix, name)
       if explicit_extra_layer_name in net_dict:
         layer_desc = net_dict[explicit_extra_layer_name]
+      else:
+        return self.extra_parent_net.construct_layer(
+          self.extra_parent_net.layers_desc, name=full_name,
+          get_layer=get_layer, add_layer=add_layer, check_existing=check_existing)
       # Pass on here to construct the layer here in this extra net, as this was explicitly called.
     if not layer_desc:
       if name not in net_dict:
