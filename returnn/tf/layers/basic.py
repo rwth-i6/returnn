@@ -8766,7 +8766,10 @@ class SubnetworkLayer(LayerBase):
           **kwargs))
       assert not _subnet.template, "%s, net %s, subnet %r" % (self, self.network, _subnet)
       self._update_for_rec_previous_layer(self._rec_previous_layer, subnetwork, _subnet.net)
-      _subnet.construct_layer("output")
+      if self._encapsulate:
+        _subnet.construct_all()
+      else:
+        _subnet.construct_layer("output")
     net = _subnet.net
     if _parent_layer_cache:
       net.layers.update({"base:%s" % name: layer for (name, layer) in _parent_layer_cache.items()})
