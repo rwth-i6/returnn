@@ -6214,7 +6214,6 @@ def test_CondLayer_outside_layer_access():
         }
       },
       'axis': time_dim,
-      'max_seq_len_via': 'mul',
       'out_shape': {batch_dim, time_dim, ImplicitSparseDim(labels_1_dim)},
       'name_scope': ''
     },
