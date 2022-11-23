@@ -5327,6 +5327,998 @@ def test_CondLayer_variational_weight_noise():
       session.run(network.get_default_output_layer().output.placeholder, feed_dict=feed_dict)
 
 
+def test_CondLayer_outside_layer_access():
+  from returnn.tf.util.data import batch_dim, SpatialDim, FeatureDim, ImplicitDynSizeDim, ImplicitSparseDim
+
+  time_dim = SpatialDim('time')
+  input_dim = FeatureDim('input', 10)
+
+  config = Config(dict(extern_data={
+    'data': {
+      'dim_tags': (
+        batch_dim,
+        time_dim,
+        input_dim
+      ),
+      'dtype': 'float32',
+      'available_for_inference': True
+    }
+  }))
+
+  labels_dim = FeatureDim('labels', 5)
+  labels_1_dim = labels_dim + 1
+  keys_dim = FeatureDim('keys', 2)
+  _2_keys_input_dim = (2 * keys_dim) + input_dim
+  num_heads_dim = SpatialDim('num_heads', 1)
+  truediv_left_keys__num_heads__dim = keys_dim.div_left(num_heads_dim)
+  time__1_dim = time_dim + (-1)
+  time__1_time_dim = time_dim + (-1) + time_dim
+  truediv_left_input__2__dim = input_dim.div_left(2)
+  truediv_left_input__num_heads__dim = input_dim.div_left(num_heads_dim)
+  _2__truediv_left_keys__num_heads_____truediv_left_input__num_heads___dim = (
+    2 * truediv_left_keys__num_heads__dim + truediv_left_input__num_heads__dim)
+  time_kv_dim = SpatialDim('time:kv')
+  _1_time__1_time_dim = 1 + time_dim + (-1) + time_dim
+  time_kv_0_dim = SpatialDim('time:kv')
+
+  net_dict = {
+    'output': {
+      'class': 'copy',
+      'from': 'loop/output',
+      'out_shape': {batch_dim, time_dim, ImplicitSparseDim(labels_1_dim)}
+    },
+    'encoder': {
+      'class': 'subnetwork',
+      'from': [],
+      'subnetwork': {
+        'self_att': {
+          'class': 'subnetwork',
+          'from': [],
+          'subnetwork': {
+            'qkv': {
+              'class': 'subnetwork',
+              'from': [],
+              'subnetwork': {
+                'weight': {
+                  'class': 'variable',
+                  'shape': [
+                    input_dim,
+                    _2_keys_input_dim
+                  ],
+                  'param_name': 'param',
+                  'init_by_layer': 'Parameter.initial'
+                },
+                'Parameter.initial': {
+                  'class': 'random',
+                  'shape': (
+                    input_dim,
+                    _2_keys_input_dim
+                  ),
+                  'distribution': 'uniform',
+                  'minval': -0.5,
+                  'maxval': 0.5,
+                  'dtype': 'float32',
+                  'static': True,
+                  'shape_deps': []
+                },
+                'bias': {
+                  'class': 'variable',
+                  'shape': [
+                    _2_keys_input_dim
+                  ],
+                  'param_name': 'param',
+                  'init': 0.0
+                },
+                'output': {
+                  'class': 'copy',
+                  'from': 'bias',
+                  'out_shape': {_2_keys_input_dim}
+                }
+              }
+            },
+            'linear_pos': {
+              'class': 'subnetwork',
+              'from': [],
+              'subnetwork': {
+                'weight': {
+                  'class': 'variable',
+                  'shape': [
+                    input_dim,
+                    keys_dim
+                  ],
+                  'param_name': 'param',
+                  'init_by_layer': 'Parameter.initial'
+                },
+                'Parameter.initial': {
+                  'class': 'random',
+                  'shape': (
+                    input_dim,
+                    keys_dim
+                  ),
+                  'distribution': 'uniform',
+                  'minval': -0.7071067811865476,
+                  'maxval': 0.7071067811865476,
+                  'dtype': 'float32',
+                  'static': True,
+                  'shape_deps': []
+                },
+                'output': {
+                  'class': 'copy',
+                  'from': 'weight',
+                  'out_shape': {input_dim, keys_dim}
+                }
+              }
+            },
+            'pos_bias_u': {
+              'class': 'variable',
+              'shape': [
+                num_heads_dim,
+                truediv_left_keys__num_heads__dim
+              ],
+              'param_name': 'param',
+              'init_by_layer': 'Parameter.initial'
+            },
+            'pos_bias_v': {
+              'class': 'variable',
+              'shape': [
+                num_heads_dim,
+                truediv_left_keys__num_heads__dim
+              ],
+              'param_name': 'param',
+              'init_by_layer': 'Parameter.initial_0'
+            },
+            'Parameter.initial': {
+              'class': 'random',
+              'shape': (
+                num_heads_dim,
+                truediv_left_keys__num_heads__dim
+              ),
+              'distribution': 'uniform',
+              'minval': -1.4142135623730951,
+              'maxval': 1.4142135623730951,
+              'dtype': 'float32',
+              'static': True,
+              'shape_deps': []
+            },
+            'Parameter.initial_0': {
+              'class': 'random',
+              'shape': (
+                num_heads_dim,
+                truediv_left_keys__num_heads__dim
+              ),
+              'distribution': 'uniform',
+              'minval': -1.4142135623730951,
+              'maxval': 1.4142135623730951,
+              'dtype': 'float32',
+              'static': True,
+              'shape_deps': []
+            },
+            'range_over_dim': {
+              'class': 'range_in_axis',
+              'from': ['base:base:data:data'],
+              'axis': time_dim,
+              'dtype': 'float32',
+              'out_shape': {ImplicitDynSizeDim(batch_dim), time_dim}
+            },
+            'relative_positional_encoding': {
+              'class': 'subnetwork',
+              'from': [],
+              'subnetwork': {
+                'length': {
+                  'class': 'length',
+                  'from': ['base:base:base:data:data'],
+                  'axis': time_dim,
+                  'out_shape': {batch_dim}
+                },
+                'dim_value': {
+                  'class': 'subnetwork',
+                  'from': [],
+                  'subnetwork': {
+                    'reduce': {
+                      'class': 'reduce',
+                      'from': 'base:length',
+                      'mode': 'max',
+                      'axis': (batch_dim,),
+                      'out_shape': {}
+                    },
+                    'reduce_0': {
+                      'class': 'reduce',
+                      'from': 'base:base:base:base:length',
+                      'mode': 'max',
+                      'axis': (batch_dim,),
+                      'out_shape': {}
+                    },
+                    'output': {
+                      'class': 'copy',
+                      'from': 'reduce_0',
+                      'out_shape': {}
+                    }
+                  }
+                },
+                'neg': {
+                  'class': 'activation',
+                  'from': 'dim_value/reduce',
+                  'activation': 'negative',
+                  'out_shape': {}
+                },
+                'range_over_dim': {
+                  'class': 'range_in_axis',
+                  'from': ['base:base:base:data:data'],
+                  'axis': time__1_dim,
+                  'out_shape': {ImplicitDynSizeDim(batch_dim), time__1_dim}
+                },
+                'add': {
+                  'class': 'combine',
+                  'from': ['neg', 'range_over_dim'],
+                  'kind': 'add',
+                  'out_shape': {ImplicitDynSizeDim(batch_dim), time__1_dim}
+                },
+                'add_0': {
+                  'class': 'eval',
+                  'from': 'add',
+                  'eval': 'source(0) + 1',
+                  'out_shape': {ImplicitDynSizeDim(batch_dim), time__1_dim}
+                },
+                'cast': {
+                  'class': 'cast',
+                  'from': 'add_0',
+                  'dtype': 'float32',
+                  'out_shape': {ImplicitDynSizeDim(batch_dim), time__1_dim}
+                },
+                'concat': {
+                  'class': 'concat',
+                  'from': (
+                    (
+                      'cast',
+                      time__1_dim
+                    ),
+                    (
+                      'base:range_over_dim',
+                      time_dim
+                    )
+                  ),
+                  'out_dim': time__1_time_dim,
+                  'out_shape': {ImplicitDynSizeDim(batch_dim), time__1_time_dim}
+                },
+                'range_over_dim_0': {
+                  'class': 'range_in_axis',
+                  'from': [],
+                  'axis': truediv_left_input__2__dim,
+                  'dtype': 'float32',
+                  'out_shape': {truediv_left_input__2__dim}
+                },
+                'mul': {
+                  'class': 'eval',
+                  'from': 'range_over_dim_0',
+                  'eval': 'source(0) * -1.8420680743952367',
+                  'out_shape': {truediv_left_input__2__dim}
+                },
+                'exp': {
+                  'class': 'activation',
+                  'from': 'mul',
+                  'activation': 'exp',
+                  'out_shape': {truediv_left_input__2__dim}
+                },
+                'combine_bc': {
+                  'class': 'combine',
+                  'from': ['concat', 'exp'],
+                  'kind': '*',
+                  'allow_broadcast_all_sources': True,
+                  'out_shape': {ImplicitDynSizeDim(batch_dim), time__1_time_dim, truediv_left_input__2__dim}
+                },
+                'add_1': {
+                  'class': 'eval',
+                  'from': 'combine_bc',
+                  'eval': 'source(0) + 1.5707963267948966',
+                  'out_shape': {ImplicitDynSizeDim(batch_dim), time__1_time_dim, truediv_left_input__2__dim}
+                },
+                'concat_0': {
+                  'class': 'concat',
+                  'from': (
+                    (
+                      'combine_bc',
+                      truediv_left_input__2__dim
+                    ),
+                    (
+                      'add_1',
+                      truediv_left_input__2__dim
+                    )
+                  ),
+                  'out_dim': input_dim,
+                  'out_shape': {ImplicitDynSizeDim(batch_dim), input_dim, time__1_time_dim}
+                },
+                'sin': {
+                  'class': 'activation',
+                  'from': 'concat_0',
+                  'activation': 'sin',
+                  'out_shape': {ImplicitDynSizeDim(batch_dim), input_dim, time__1_time_dim}
+                },
+                'output': {
+                  'class': 'copy',
+                  'from': 'dim_value',
+                  'out_shape': {}
+                }
+              }
+            },
+            'output': {
+              'class': 'copy',
+              'from': 'relative_positional_encoding',
+              'out_shape': {}
+            }
+          }
+        },
+        'output': {
+          'class': 'copy',
+          'from': 'self_att',
+          'out_shape': {}
+        }
+      }
+    },
+    'out_label_logits': {
+      'class': 'subnetwork',
+      'from': [],
+      'subnetwork': {
+        'weight': {
+          'class': 'variable',
+          'shape': [
+            input_dim,
+            labels_1_dim
+          ],
+          'param_name': 'param',
+          'init_by_layer': 'Parameter.initial'
+        },
+        'Parameter.initial': {
+          'class': 'random',
+          'shape': (
+            input_dim,
+            labels_1_dim
+          ),
+          'distribution': 'uniform',
+          'minval': -0.6123724356957945,
+          'maxval': 0.6123724356957945,
+          'dtype': 'float32',
+          'static': True,
+          'shape_deps': []
+        },
+        'bias': {
+          'class': 'variable',
+          'shape': [
+            labels_1_dim
+          ],
+          'param_name': 'param',
+          'init': 0.0
+        },
+        'output': {
+          'class': 'copy',
+          'from': 'bias',
+          'out_shape': {labels_1_dim}
+        }
+      }
+    },
+    'train_flag': {
+      'class': 'train_flag',
+      'out_shape': {}
+    },
+    'cond': {
+      'class': 'cond',
+      'from': [],
+      'condition': 'train_flag',
+      'true_layer': {
+        'class': 'subnetwork',
+        'from': [],
+        'subnetwork': {
+          'encoder': {
+            'class': 'subnetwork',
+            'from': [],
+            'subnetwork': {
+              'self_att': {
+                'class': 'subnetwork',
+                'from': [],
+                'subnetwork': {
+                  'linear_pos': {
+                    'class': 'subnetwork',
+                    'from': [],
+                    'subnetwork': {
+                      'dot': {
+                        'class': 'dot',
+                        'from': [
+                          'base:base:base:base:encoder/self_att/relative_positional_encoding/sin',
+                          'base:base:base:base:encoder/self_att/linear_pos'
+                        ],
+                        'reduce': input_dim,
+                        'out_shape': {ImplicitDynSizeDim(batch_dim), keys_dim, time__1_time_dim}
+                      },
+                      'output': {
+                        'class': 'copy',
+                        'from': 'dot',
+                        'out_shape': {ImplicitDynSizeDim(batch_dim), keys_dim, time__1_time_dim}
+                      }
+                    }
+                  },
+                  'split_dims': {
+                    'class': 'split_dims',
+                    'from': 'linear_pos',
+                    'axis': keys_dim,
+                    'dims': (
+                      num_heads_dim,
+                      truediv_left_keys__num_heads__dim
+                    ),
+                    'out_shape': {ImplicitDynSizeDim(batch_dim), num_heads_dim, truediv_left_keys__num_heads__dim,
+                                  time__1_time_dim}
+                  },
+                  'qkv': {
+                    'class': 'subnetwork',
+                    'from': [],
+                    'subnetwork': {
+                      'dot': {
+                        'class': 'dot',
+                        'from': ['base:base:base:base:data:data', 'base:base:base:base:encoder/self_att/qkv/weight'],
+                        'reduce': input_dim,
+                        'out_shape': {batch_dim, time_dim, _2_keys_input_dim}
+                      },
+                      'add': {
+                        'class': 'combine',
+                        'from': ['dot', 'base:base:base:base:encoder/self_att/qkv'],
+                        'kind': 'add',
+                        'out_shape': {batch_dim, time_dim, _2_keys_input_dim}
+                      },
+                      'output': {
+                        'class': 'copy',
+                        'from': 'add',
+                        'out_shape': {batch_dim, time_dim, _2_keys_input_dim}
+                      }
+                    }
+                  },
+                  'qkv_split_dims': {
+                    'class': 'split_dims',
+                    'from': 'qkv',
+                    'axis': _2_keys_input_dim,
+                    'dims': (
+                      num_heads_dim,
+                      _2__truediv_left_keys__num_heads_____truediv_left_input__num_heads___dim
+                    ),
+                    'out_shape': {batch_dim, time_dim, num_heads_dim,
+                                  _2__truediv_left_keys__num_heads_____truediv_left_input__num_heads___dim}
+                  },
+                  'split': {
+                    'class': 'split',
+                    'from': 'qkv_split_dims',
+                    'axis': _2__truediv_left_keys__num_heads_____truediv_left_input__num_heads___dim,
+                    'out_dims': (
+                      truediv_left_keys__num_heads__dim,
+                      truediv_left_keys__num_heads__dim,
+                      truediv_left_input__num_heads__dim
+                    ),
+                    'out_shape': {batch_dim, time_dim, num_heads_dim,
+                                  _2__truediv_left_keys__num_heads_____truediv_left_input__num_heads___dim}
+                  },
+                  'reinterpret_new_dim': {
+                    'class': 'reinterpret_data',
+                    'set_dim_tags': {
+                      time_dim: time_kv_dim
+                    },
+                    'from': 'split/1',
+                    'out_shape': {batch_dim, num_heads_dim, truediv_left_keys__num_heads__dim, time_kv_dim}
+                  },
+                  'reinterpret_new_dim_0': {
+                    'class': 'reinterpret_data',
+                    'set_dim_tags': {
+                      time_dim: time_kv_dim
+                    },
+                    'from': 'split/2',
+                    'out_shape': {batch_dim, num_heads_dim, truediv_left_input__num_heads__dim, time_kv_dim}
+                  },
+                  'add': {
+                    'class': 'combine',
+                    'from': ['split/0', 'base:base:base:encoder/self_att/pos_bias_u'],
+                    'kind': 'add',
+                    'out_shape': {batch_dim, time_dim, num_heads_dim, truediv_left_keys__num_heads__dim}
+                  },
+                  'add_0': {
+                    'class': 'combine',
+                    'from': ['split/0', 'base:base:base:encoder/self_att/pos_bias_v'],
+                    'kind': 'add',
+                    'out_shape': {batch_dim, time_dim, num_heads_dim, truediv_left_keys__num_heads__dim}
+                  },
+                  'dot': {
+                    'class': 'dot',
+                    'from': ['add', 'reinterpret_new_dim'],
+                    'reduce': truediv_left_keys__num_heads__dim,
+                    'out_shape': {batch_dim, time_dim, num_heads_dim, time_kv_dim}
+                  },
+                  'dot_0': {
+                    'class': 'dot',
+                    'from': ['add_0', 'split_dims'],
+                    'reduce': truediv_left_keys__num_heads__dim,
+                    'out_shape': {batch_dim, time_dim, num_heads_dim, time__1_time_dim}
+                  },
+                  'RelPosSelfAttention._rel_shift': {
+                    'class': 'subnetwork',
+                    'from': [],
+                    'subnetwork': {
+                      'pad': {
+                        'class': 'pad',
+                        'from': 'base:dot_0',
+                        'axes': time__1_time_dim,
+                        'padding': (1, 0),
+                        'value': 0.0,
+                        'out_shape': {batch_dim, time_dim, num_heads_dim, _1_time__1_time_dim}
+                      },
+                      'reshape': {
+                        'class': 'reshape',
+                        'from': 'pad',
+                        'in_dims': (
+                          time_dim,
+                          _1_time__1_time_dim
+                        ),
+                        'out_dims': (
+                          _1_time__1_time_dim,
+                          time_dim
+                        ),
+                        'extra_deps': ['pad', 'base:base:base:base:data:data'],
+                        'out_shape': {batch_dim, time_dim, num_heads_dim, _1_time__1_time_dim}
+                      },
+                      'slice': {
+                        'class': 'slice',
+                        'from': 'reshape',
+                        'axis': _1_time__1_time_dim,
+                        'slice_start': 1,
+                        'out_dim': time__1_time_dim,
+                        'out_shape': {batch_dim, time_dim, num_heads_dim, time__1_time_dim}
+                      },
+                      'reshape_0': {
+                        'class': 'reshape',
+                        'from': 'slice',
+                        'in_dims': (
+                          time__1_time_dim,
+                          time_dim
+                        ),
+                        'out_dims': (
+                          time_dim,
+                          time__1_time_dim
+                        ),
+                        'extra_deps': ['base:base:base:base:data:data'],
+                        'out_shape': {batch_dim, time_dim, num_heads_dim, time__1_time_dim}
+                      },
+                      'slice_nd': {
+                        'class': 'slice_nd',
+                        'from': 'reshape_0',
+                        'size': time_kv_dim,
+                        'axis': time__1_time_dim,
+                        'out_spatial_dim': time_kv_dim,
+                        'out_shape': {batch_dim, time_dim, num_heads_dim, time_kv_dim}
+                      },
+                      'output': {
+                        'class': 'copy',
+                        'from': 'slice_nd',
+                        'out_shape': {batch_dim, time_dim, num_heads_dim, time_kv_dim}
+                      }
+                    }
+                  },
+                  'add_1': {
+                    'class': 'combine',
+                    'from': ['dot', 'RelPosSelfAttention._rel_shift'],
+                    'kind': 'add',
+                    'out_shape': {batch_dim, time_dim, num_heads_dim, time_kv_dim}
+                  },
+                  'mul': {
+                    'class': 'eval',
+                    'from': 'add_1',
+                    'eval': 'source(0) * 0.7071067811865476',
+                    'out_shape': {batch_dim, time_dim, num_heads_dim, time_kv_dim}
+                  },
+                  'att_weights': {
+                    'class': 'softmax_over_spatial',
+                    'from': 'mul',
+                    'axis': time_kv_dim,
+                    'out_shape': {batch_dim, time_dim, num_heads_dim, time_kv_dim}
+                  },
+                  'dropout': {
+                    'class': 'dropout',
+                    'from': 'att_weights',
+                    'dropout': 0.1,
+                    'dropout_axis': time_kv_dim,
+                    'out_shape': {batch_dim, time_dim, num_heads_dim, time_kv_dim}
+                  },
+                  'att': {
+                    'class': 'dot',
+                    'from': ['dropout', 'reinterpret_new_dim_0'],
+                    'reduce': time_kv_dim,
+                    'out_shape': {batch_dim, time_dim, num_heads_dim, truediv_left_input__num_heads__dim}
+                  },
+                  'output_0': {
+                    'class': 'merge_dims',
+                    'from': 'att',
+                    'axes': (
+                      num_heads_dim,
+                      truediv_left_input__num_heads__dim
+                    ),
+                    'out_dim': input_dim,
+                    'out_shape': {batch_dim, time_dim, input_dim}
+                  },
+                  'output': {
+                    'class': 'copy',
+                    'from': 'output_0',
+                    'out_shape': {batch_dim, time_dim, input_dim}
+                  }
+                }
+              },
+              'output': {
+                'class': 'copy',
+                'from': 'self_att',
+                'out_shape': {batch_dim, time_dim, input_dim}
+              }
+            }
+          },
+          'output': {
+            'class': 'copy',
+            'from': 'encoder',
+            'out_shape': {batch_dim, time_dim, input_dim}
+          }
+        }
+      },
+      'false_layer': {
+        'class': 'subnetwork',
+        'from': [],
+        'subnetwork': {
+          'encoder': {
+            'class': 'subnetwork',
+            'from': [],
+            'subnetwork': {
+              'self_att': {
+                'class': 'subnetwork',
+                'from': [],
+                'subnetwork': {
+                  'linear_pos': {
+                    'class': 'subnetwork',
+                    'from': [],
+                    'subnetwork': {
+                      'dot': {
+                        'class': 'dot',
+                        'from': [
+                          'base:base:base:base:encoder/self_att/relative_positional_encoding/sin',
+                          'base:base:base:base:encoder/self_att/linear_pos'
+                        ],
+                        'reduce': input_dim,
+                        'out_shape': {ImplicitDynSizeDim(batch_dim), keys_dim, time__1_time_dim}
+                      },
+                      'output': {
+                        'class': 'copy',
+                        'from': 'dot',
+                        'out_shape': {ImplicitDynSizeDim(batch_dim), keys_dim, time__1_time_dim}
+                      }
+                    }
+                  },
+                  'split_dims': {
+                    'class': 'split_dims',
+                    'from': 'linear_pos',
+                    'axis': keys_dim,
+                    'dims': (
+                      num_heads_dim,
+                      truediv_left_keys__num_heads__dim
+                    ),
+                    'out_shape': {ImplicitDynSizeDim(batch_dim), num_heads_dim, truediv_left_keys__num_heads__dim,
+                                  time__1_time_dim}
+                  },
+                  'qkv': {
+                    'class': 'subnetwork',
+                    'from': [],
+                    'subnetwork': {
+                      'dot': {
+                        'class': 'dot',
+                        'from': ['base:base:base:base:data:data', 'base:base:base:base:encoder/self_att/qkv/weight'],
+                        'reduce': input_dim,
+                        'out_shape': {batch_dim, time_dim, _2_keys_input_dim}
+                      },
+                      'add': {
+                        'class': 'combine',
+                        'from': ['dot', 'base:base:base:base:encoder/self_att/qkv'],
+                        'kind': 'add',
+                        'out_shape': {batch_dim, time_dim, _2_keys_input_dim}
+                      },
+                      'output': {
+                        'class': 'copy',
+                        'from': 'add',
+                        'out_shape': {batch_dim, time_dim, _2_keys_input_dim}
+                      }
+                    }
+                  },
+                  'qkv_split_dims': {
+                    'class': 'split_dims',
+                    'from': 'qkv',
+                    'axis': _2_keys_input_dim,
+                    'dims': (
+                      num_heads_dim,
+                      _2__truediv_left_keys__num_heads_____truediv_left_input__num_heads___dim
+                    ),
+                    'out_shape': {batch_dim, time_dim, num_heads_dim,
+                                  _2__truediv_left_keys__num_heads_____truediv_left_input__num_heads___dim}
+                  },
+                  'split': {
+                    'class': 'split',
+                    'from': 'qkv_split_dims',
+                    'axis': _2__truediv_left_keys__num_heads_____truediv_left_input__num_heads___dim,
+                    'out_dims': (
+                      truediv_left_keys__num_heads__dim,
+                      truediv_left_keys__num_heads__dim,
+                      truediv_left_input__num_heads__dim
+                    ),
+                    'out_shape': {batch_dim, time_dim, num_heads_dim,
+                                  _2__truediv_left_keys__num_heads_____truediv_left_input__num_heads___dim}
+                  },
+                  'reinterpret_new_dim': {
+                    'class': 'reinterpret_data',
+                    'set_dim_tags': {
+                      time_dim: time_kv_0_dim
+                    },
+                    'from': 'split/1',
+                    'out_shape': {batch_dim, num_heads_dim, truediv_left_keys__num_heads__dim, time_kv_0_dim}
+                  },
+                  'reinterpret_new_dim_0': {
+                    'class': 'reinterpret_data',
+                    'set_dim_tags': {
+                      time_dim: time_kv_0_dim
+                    },
+                    'from': 'split/2',
+                    'out_shape': {batch_dim, num_heads_dim, truediv_left_input__num_heads__dim, time_kv_0_dim}
+                  },
+                  'add': {
+                    'class': 'combine',
+                    'from': ['split/0', 'base:base:base:encoder/self_att/pos_bias_u'],
+                    'kind': 'add',
+                    'out_shape': {batch_dim, time_dim, num_heads_dim, truediv_left_keys__num_heads__dim}
+                  },
+                  'add_0': {
+                    'class': 'combine',
+                    'from': ['split/0', 'base:base:base:encoder/self_att/pos_bias_v'],
+                    'kind': 'add',
+                    'out_shape': {batch_dim, time_dim, num_heads_dim, truediv_left_keys__num_heads__dim}
+                  },
+                  'dot': {
+                    'class': 'dot',
+                    'from': ['add', 'reinterpret_new_dim'],
+                    'reduce': truediv_left_keys__num_heads__dim,
+                    'out_shape': {batch_dim, time_dim, num_heads_dim, time_kv_0_dim}
+                  },
+                  'dot_0': {
+                    'class': 'dot',
+                    'from': ['add_0', 'split_dims'],
+                    'reduce': truediv_left_keys__num_heads__dim,
+                    'out_shape': {batch_dim, time_dim, num_heads_dim, time__1_time_dim}
+                  },
+                  'RelPosSelfAttention._rel_shift': {
+                    'class': 'subnetwork',
+                    'from': [],
+                    'subnetwork': {
+                      'pad': {
+                        'class': 'pad',
+                        'from': 'base:dot_0',
+                        'axes': time__1_time_dim,
+                        'padding': (1, 0),
+                        'value': 0.0,
+                        'out_shape': {batch_dim, time_dim, num_heads_dim, _1_time__1_time_dim}
+                      },
+                      'reshape': {
+                        'class': 'reshape',
+                        'from': 'pad',
+                        'in_dims': (
+                          time_dim,
+                          _1_time__1_time_dim
+                        ),
+                        'out_dims': (
+                          _1_time__1_time_dim,
+                          time_dim
+                        ),
+                        'extra_deps': ['base:base:base:encoder/self_att/RelPosSelfAttention._rel_shift/pad',
+                                       'base:base:base:base:data:data'],
+                        'out_shape': {batch_dim, time_dim, num_heads_dim, _1_time__1_time_dim}
+                      },
+                      'slice': {
+                        'class': 'slice',
+                        'from': 'reshape',
+                        'axis': _1_time__1_time_dim,
+                        'slice_start': 1,
+                        'out_dim': time__1_time_dim,
+                        'out_shape': {batch_dim, time_dim, num_heads_dim, time__1_time_dim}
+                      },
+                      'reshape_0': {
+                        'class': 'reshape',
+                        'from': 'slice',
+                        'in_dims': (
+                          time__1_time_dim,
+                          time_dim
+                        ),
+                        'out_dims': (
+                          time_dim,
+                          time__1_time_dim
+                        ),
+                        'extra_deps': ['base:base:base:base:data:data'],
+                        'out_shape': {batch_dim, time_dim, num_heads_dim, time__1_time_dim}
+                      },
+                      'slice_nd': {
+                        'class': 'slice_nd',
+                        'from': 'reshape_0',
+                        'size': time_kv_0_dim,
+                        'axis': time__1_time_dim,
+                        'out_spatial_dim': time_kv_0_dim,
+                        'out_shape': {batch_dim, time_dim, num_heads_dim, time_kv_0_dim}
+                      },
+                      'output': {
+                        'class': 'copy',
+                        'from': 'slice_nd',
+                        'out_shape': {batch_dim, time_dim, num_heads_dim, time_kv_0_dim}
+                      }
+                    }
+                  },
+                  'add_1': {
+                    'class': 'combine',
+                    'from': ['dot', 'RelPosSelfAttention._rel_shift'],
+                    'kind': 'add',
+                    'out_shape': {batch_dim, time_dim, num_heads_dim, time_kv_0_dim}
+                  },
+                  'mul': {
+                    'class': 'eval',
+                    'from': 'add_1',
+                    'eval': 'source(0) * 0.7071067811865476',
+                    'out_shape': {batch_dim, time_dim, num_heads_dim, time_kv_0_dim}
+                  },
+                  'att_weights': {
+                    'class': 'softmax_over_spatial',
+                    'from': 'mul',
+                    'axis': time_kv_0_dim,
+                    'out_shape': {batch_dim, time_dim, num_heads_dim, time_kv_0_dim}
+                  },
+                  'dropout': {
+                    'class': 'dropout',
+                    'from': 'att_weights',
+                    'dropout': 0.1,
+                    'dropout_axis': time_kv_0_dim,
+                    'out_shape': {batch_dim, time_dim, num_heads_dim, time_kv_0_dim}
+                  },
+                  'att': {
+                    'class': 'dot',
+                    'from': ['dropout', 'reinterpret_new_dim_0'],
+                    'reduce': time_kv_0_dim,
+                    'out_shape': {batch_dim, time_dim, num_heads_dim, truediv_left_input__num_heads__dim}
+                  },
+                  'output_0': {
+                    'class': 'merge_dims',
+                    'from': 'att',
+                    'axes': (
+                      num_heads_dim,
+                      truediv_left_input__num_heads__dim
+                    ),
+                    'out_dim': input_dim,
+                    'out_shape': {batch_dim, time_dim, input_dim}
+                  },
+                  'output': {
+                    'class': 'copy',
+                    'from': 'output_0',
+                    'out_shape': {batch_dim, time_dim, input_dim}
+                  }
+                }
+              },
+              'output': {
+                'class': 'copy',
+                'from': 'self_att',
+                'out_shape': {batch_dim, time_dim, input_dim}
+              }
+            }
+          },
+          'output': {
+            'class': 'copy',
+            'from': 'encoder',
+            'out_shape': {batch_dim, time_dim, input_dim}
+          }
+        }
+      },
+      'out_shape': {batch_dim, time_dim, input_dim},
+      'name_scope': ''
+    },
+    'loop': {
+      'class': 'rec',
+      'from': [],
+      'unit': {
+        'rec_unstack': {
+          'class': 'rec_unstack',
+          'from': 'base:cond',
+          'axis': time_dim,
+          'out_shape': {batch_dim, input_dim}
+        },
+        'model': {
+          'class': 'subnetwork',
+          'from': [],
+          'subnetwork': {
+            'out_label_logits': {
+              'class': 'subnetwork',
+              'from': [],
+              'subnetwork': {
+                'dot': {
+                  'class': 'dot',
+                  'from': ['base:base:rec_unstack', 'base:base:base:out_label_logits/weight'],
+                  'reduce': input_dim,
+                  'out_shape': {batch_dim, labels_1_dim}
+                },
+                'add': {
+                  'class': 'combine',
+                  'from': ['dot', 'base:base:base:out_label_logits'],
+                  'kind': 'add',
+                  'out_shape': {batch_dim, labels_1_dim}
+                },
+                'output': {
+                  'class': 'copy',
+                  'from': 'add',
+                  'out_shape': {batch_dim, labels_1_dim}
+                }
+              }
+            },
+            'output': {
+              'class': 'copy',
+              'from': 'out_label_logits',
+              'out_shape': {batch_dim, labels_1_dim}
+            }
+          },
+          'name_scope': ''
+        },
+        'softmax': {
+          'class': 'softmax_over_spatial',
+          'from': 'model',
+          'axis': labels_1_dim,
+          'log_space': True,
+          'out_shape': {batch_dim, labels_1_dim}
+        },
+        'choice': {
+          'class': 'choice',
+          'from': 'softmax',
+          'target': None,
+          'beam_size': 3,
+          'search': True,
+          'input_type': 'log_prob',
+          'length_normalization': False,
+          'initial_output': 'base:constant',
+          'out_shape': {batch_dim, ImplicitSparseDim(labels_1_dim)}
+        },
+        'output': {
+          'class': 'copy',
+          'from': 'choice',
+          'out_shape': {batch_dim, ImplicitSparseDim(labels_1_dim)}
+        }
+      },
+      'axis': time_dim,
+      'max_seq_len_via': 'mul',
+      'out_shape': {batch_dim, time_dim, ImplicitSparseDim(labels_1_dim)},
+      'name_scope': ''
+    },
+    'length': {
+      'class': 'length',
+      'from': ['data:data'],
+      'axis': time_dim,
+      'out_shape': {batch_dim}
+    },
+    'mul': {
+      'class': 'eval',
+      'from': 'encoder',
+      'eval': 'source(0) * 2',
+      'out_shape': {}
+    },
+    'constant': {
+      'class': 'constant',
+      'value': 5,
+      'shape': [
+        batch_dim
+      ],
+      'sparse_dim': labels_1_dim,
+      'shape_deps': ['data:data']
+    }
+  }
+  with make_scope() as session:
+    net = TFNetwork(config=config)
+    net.construct_from_dict(net_dict)
+    net.initialize_params(session=session)
+    out = net.get_default_output_layer()
+    session.run(out.output.placeholder, feed_dict=make_feed_dict(net.extern_data))
+
+
 def test_ScatterNdLayer_RangeLayer():
   from returnn.tf.util.data import batch_dim, Dim
   n_batch, n_time, n_ts, n_out = 2, 3, 6, 11
