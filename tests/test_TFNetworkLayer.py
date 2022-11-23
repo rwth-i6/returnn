@@ -5348,17 +5348,16 @@ def test_CondLayer_outside_layer_access():
   labels_dim = FeatureDim('labels', 5)
   labels_1_dim = labels_dim + 1
   keys_dim = FeatureDim('keys', 2)
-  _2_keys_input_dim = (2 * keys_dim) + input_dim
+  qkv_dim_ = (2 * keys_dim) + input_dim
   num_heads_dim = SpatialDim('num_heads', 1)
-  truediv_left_keys__num_heads__dim = keys_dim.div_left(num_heads_dim)
+  keys_h_dim = keys_dim.div_left(num_heads_dim)
   time__1_dim = time_dim + (-1)
   time__1_time_dim = time_dim + (-1) + time_dim
-  truediv_left_input__2__dim = input_dim.div_left(2)
-  truediv_left_input__num_heads__dim = input_dim.div_left(num_heads_dim)
-  _2__truediv_left_keys__num_heads_____truediv_left_input__num_heads___dim = (
-    2 * truediv_left_keys__num_heads__dim + truediv_left_input__num_heads__dim)
+  input_dim_ = input_dim.div_left(2)
+  value_h_dim = input_dim.div_left(num_heads_dim)
+  qkv_dim = 2 * keys_h_dim + value_h_dim
   time_kv_dim = SpatialDim('time:kv')
-  _1_time__1_time_dim = 1 + time_dim + (-1) + time_dim
+  time_dim_ = 1 + time_dim + (-1) + time_dim
   time_kv_0_dim = SpatialDim('time:kv')
 
   net_dict = {
@@ -5383,28 +5382,14 @@ def test_CondLayer_outside_layer_access():
                   'class': 'variable',
                   'shape': [
                     input_dim,
-                    _2_keys_input_dim
+                    qkv_dim_
                   ],
                   'param_name': 'param',
-                  'init_by_layer': 'Parameter.initial'
-                },
-                'Parameter.initial': {
-                  'class': 'random',
-                  'shape': (
-                    input_dim,
-                    _2_keys_input_dim
-                  ),
-                  'distribution': 'uniform',
-                  'minval': -0.5,
-                  'maxval': 0.5,
-                  'dtype': 'float32',
-                  'static': True,
-                  'shape_deps': []
                 },
                 'bias': {
                   'class': 'variable',
                   'shape': [
-                    _2_keys_input_dim
+                    qkv_dim_
                   ],
                   'param_name': 'param',
                   'init': 0.0
@@ -5412,7 +5397,7 @@ def test_CondLayer_outside_layer_access():
                 'output': {
                   'class': 'copy',
                   'from': 'bias',
-                  'out_shape': {_2_keys_input_dim}
+                  'out_shape': {qkv_dim_}
                 }
               }
             },
@@ -5427,20 +5412,6 @@ def test_CondLayer_outside_layer_access():
                     keys_dim
                   ],
                   'param_name': 'param',
-                  'init_by_layer': 'Parameter.initial'
-                },
-                'Parameter.initial': {
-                  'class': 'random',
-                  'shape': (
-                    input_dim,
-                    keys_dim
-                  ),
-                  'distribution': 'uniform',
-                  'minval': -0.7071067811865476,
-                  'maxval': 0.7071067811865476,
-                  'dtype': 'float32',
-                  'static': True,
-                  'shape_deps': []
                 },
                 'output': {
                   'class': 'copy',
@@ -5453,45 +5424,17 @@ def test_CondLayer_outside_layer_access():
               'class': 'variable',
               'shape': [
                 num_heads_dim,
-                truediv_left_keys__num_heads__dim
+                keys_h_dim
               ],
               'param_name': 'param',
-              'init_by_layer': 'Parameter.initial'
             },
             'pos_bias_v': {
               'class': 'variable',
               'shape': [
                 num_heads_dim,
-                truediv_left_keys__num_heads__dim
+                keys_h_dim
               ],
               'param_name': 'param',
-              'init_by_layer': 'Parameter.initial_0'
-            },
-            'Parameter.initial': {
-              'class': 'random',
-              'shape': (
-                num_heads_dim,
-                truediv_left_keys__num_heads__dim
-              ),
-              'distribution': 'uniform',
-              'minval': -1.4142135623730951,
-              'maxval': 1.4142135623730951,
-              'dtype': 'float32',
-              'static': True,
-              'shape_deps': []
-            },
-            'Parameter.initial_0': {
-              'class': 'random',
-              'shape': (
-                num_heads_dim,
-                truediv_left_keys__num_heads__dim
-              ),
-              'distribution': 'uniform',
-              'minval': -1.4142135623730951,
-              'maxval': 1.4142135623730951,
-              'dtype': 'float32',
-              'static': True,
-              'shape_deps': []
             },
             'range_over_dim': {
               'class': 'range_in_axis',
@@ -5583,45 +5526,45 @@ def test_CondLayer_outside_layer_access():
                 'range_over_dim_0': {
                   'class': 'range_in_axis',
                   'from': [],
-                  'axis': truediv_left_input__2__dim,
+                  'axis': input_dim_,
                   'dtype': 'float32',
-                  'out_shape': {truediv_left_input__2__dim}
+                  'out_shape': {input_dim_}
                 },
                 'mul': {
                   'class': 'eval',
                   'from': 'range_over_dim_0',
                   'eval': 'source(0) * -1.8420680743952367',
-                  'out_shape': {truediv_left_input__2__dim}
+                  'out_shape': {input_dim_}
                 },
                 'exp': {
                   'class': 'activation',
                   'from': 'mul',
                   'activation': 'exp',
-                  'out_shape': {truediv_left_input__2__dim}
+                  'out_shape': {input_dim_}
                 },
                 'combine_bc': {
                   'class': 'combine',
                   'from': ['concat', 'exp'],
                   'kind': '*',
                   'allow_broadcast_all_sources': True,
-                  'out_shape': {ImplicitDynSizeDim(batch_dim), time__1_time_dim, truediv_left_input__2__dim}
+                  'out_shape': {ImplicitDynSizeDim(batch_dim), time__1_time_dim, input_dim_}
                 },
                 'add_1': {
                   'class': 'eval',
                   'from': 'combine_bc',
                   'eval': 'source(0) + 1.5707963267948966',
-                  'out_shape': {ImplicitDynSizeDim(batch_dim), time__1_time_dim, truediv_left_input__2__dim}
+                  'out_shape': {ImplicitDynSizeDim(batch_dim), time__1_time_dim, input_dim_}
                 },
                 'concat_0': {
                   'class': 'concat',
                   'from': (
                     (
                       'combine_bc',
-                      truediv_left_input__2__dim
+                      input_dim_
                     ),
                     (
                       'add_1',
-                      truediv_left_input__2__dim
+                      input_dim_
                     )
                   ),
                   'out_dim': input_dim,
@@ -5665,20 +5608,6 @@ def test_CondLayer_outside_layer_access():
             labels_1_dim
           ],
           'param_name': 'param',
-          'init_by_layer': 'Parameter.initial'
-        },
-        'Parameter.initial': {
-          'class': 'random',
-          'shape': (
-            input_dim,
-            labels_1_dim
-          ),
-          'distribution': 'uniform',
-          'minval': -0.6123724356957945,
-          'maxval': 0.6123724356957945,
-          'dtype': 'float32',
-          'static': True,
-          'shape_deps': []
         },
         'bias': {
           'class': 'variable',
@@ -5741,9 +5670,9 @@ def test_CondLayer_outside_layer_access():
                     'axis': keys_dim,
                     'dims': (
                       num_heads_dim,
-                      truediv_left_keys__num_heads__dim
+                      keys_h_dim
                     ),
-                    'out_shape': {ImplicitDynSizeDim(batch_dim), num_heads_dim, truediv_left_keys__num_heads__dim,
+                    'out_shape': {ImplicitDynSizeDim(batch_dim), num_heads_dim, keys_h_dim,
                                   time__1_time_dim}
                   },
                   'qkv': {
@@ -5754,43 +5683,43 @@ def test_CondLayer_outside_layer_access():
                         'class': 'dot',
                         'from': ['base:base:base:base:data:data', 'base:base:base:base:encoder/self_att/qkv/weight'],
                         'reduce': input_dim,
-                        'out_shape': {batch_dim, time_dim, _2_keys_input_dim}
+                        'out_shape': {batch_dim, time_dim, qkv_dim_}
                       },
                       'add': {
                         'class': 'combine',
                         'from': ['dot', 'base:base:base:base:encoder/self_att/qkv'],
                         'kind': 'add',
-                        'out_shape': {batch_dim, time_dim, _2_keys_input_dim}
+                        'out_shape': {batch_dim, time_dim, qkv_dim_}
                       },
                       'output': {
                         'class': 'copy',
                         'from': 'add',
-                        'out_shape': {batch_dim, time_dim, _2_keys_input_dim}
+                        'out_shape': {batch_dim, time_dim, qkv_dim_}
                       }
                     }
                   },
                   'qkv_split_dims': {
                     'class': 'split_dims',
                     'from': 'qkv',
-                    'axis': _2_keys_input_dim,
+                    'axis': qkv_dim_,
                     'dims': (
                       num_heads_dim,
-                      _2__truediv_left_keys__num_heads_____truediv_left_input__num_heads___dim
+                      qkv_dim
                     ),
                     'out_shape': {batch_dim, time_dim, num_heads_dim,
-                                  _2__truediv_left_keys__num_heads_____truediv_left_input__num_heads___dim}
+                                  qkv_dim}
                   },
                   'split': {
                     'class': 'split',
                     'from': 'qkv_split_dims',
-                    'axis': _2__truediv_left_keys__num_heads_____truediv_left_input__num_heads___dim,
+                    'axis': qkv_dim,
                     'out_dims': (
-                      truediv_left_keys__num_heads__dim,
-                      truediv_left_keys__num_heads__dim,
-                      truediv_left_input__num_heads__dim
+                      keys_h_dim,
+                      keys_h_dim,
+                      value_h_dim
                     ),
                     'out_shape': {batch_dim, time_dim, num_heads_dim,
-                                  _2__truediv_left_keys__num_heads_____truediv_left_input__num_heads___dim}
+                                  qkv_dim}
                   },
                   'reinterpret_new_dim': {
                     'class': 'reinterpret_data',
@@ -5798,7 +5727,7 @@ def test_CondLayer_outside_layer_access():
                       time_dim: time_kv_dim
                     },
                     'from': 'split/1',
-                    'out_shape': {batch_dim, num_heads_dim, truediv_left_keys__num_heads__dim, time_kv_dim}
+                    'out_shape': {batch_dim, num_heads_dim, keys_h_dim, time_kv_dim}
                   },
                   'reinterpret_new_dim_0': {
                     'class': 'reinterpret_data',
@@ -5806,30 +5735,30 @@ def test_CondLayer_outside_layer_access():
                       time_dim: time_kv_dim
                     },
                     'from': 'split/2',
-                    'out_shape': {batch_dim, num_heads_dim, truediv_left_input__num_heads__dim, time_kv_dim}
+                    'out_shape': {batch_dim, num_heads_dim, value_h_dim, time_kv_dim}
                   },
                   'add': {
                     'class': 'combine',
                     'from': ['split/0', 'base:base:base:encoder/self_att/pos_bias_u'],
                     'kind': 'add',
-                    'out_shape': {batch_dim, time_dim, num_heads_dim, truediv_left_keys__num_heads__dim}
+                    'out_shape': {batch_dim, time_dim, num_heads_dim, keys_h_dim}
                   },
                   'add_0': {
                     'class': 'combine',
                     'from': ['split/0', 'base:base:base:encoder/self_att/pos_bias_v'],
                     'kind': 'add',
-                    'out_shape': {batch_dim, time_dim, num_heads_dim, truediv_left_keys__num_heads__dim}
+                    'out_shape': {batch_dim, time_dim, num_heads_dim, keys_h_dim}
                   },
                   'dot': {
                     'class': 'dot',
                     'from': ['add', 'reinterpret_new_dim'],
-                    'reduce': truediv_left_keys__num_heads__dim,
+                    'reduce': keys_h_dim,
                     'out_shape': {batch_dim, time_dim, num_heads_dim, time_kv_dim}
                   },
                   'dot_0': {
                     'class': 'dot',
                     'from': ['add_0', 'split_dims'],
-                    'reduce': truediv_left_keys__num_heads__dim,
+                    'reduce': keys_h_dim,
                     'out_shape': {batch_dim, time_dim, num_heads_dim, time__1_time_dim}
                   },
                   'RelPosSelfAttention._rel_shift': {
@@ -5842,26 +5771,26 @@ def test_CondLayer_outside_layer_access():
                         'axes': time__1_time_dim,
                         'padding': (1, 0),
                         'value': 0.0,
-                        'out_shape': {batch_dim, time_dim, num_heads_dim, _1_time__1_time_dim}
+                        'out_shape': {batch_dim, time_dim, num_heads_dim, time_dim_}
                       },
                       'reshape': {
                         'class': 'reshape',
                         'from': 'pad',
                         'in_dims': (
                           time_dim,
-                          _1_time__1_time_dim
+                          time_dim_
                         ),
                         'out_dims': (
-                          _1_time__1_time_dim,
+                          time_dim_,
                           time_dim
                         ),
                         'extra_deps': ['pad', 'base:base:base:base:data:data'],
-                        'out_shape': {batch_dim, time_dim, num_heads_dim, _1_time__1_time_dim}
+                        'out_shape': {batch_dim, time_dim, num_heads_dim, time_dim_}
                       },
                       'slice': {
                         'class': 'slice',
                         'from': 'reshape',
-                        'axis': _1_time__1_time_dim,
+                        'axis': time_dim_,
                         'slice_start': 1,
                         'out_dim': time__1_time_dim,
                         'out_shape': {batch_dim, time_dim, num_heads_dim, time__1_time_dim}
@@ -5924,14 +5853,14 @@ def test_CondLayer_outside_layer_access():
                     'class': 'dot',
                     'from': ['dropout', 'reinterpret_new_dim_0'],
                     'reduce': time_kv_dim,
-                    'out_shape': {batch_dim, time_dim, num_heads_dim, truediv_left_input__num_heads__dim}
+                    'out_shape': {batch_dim, time_dim, num_heads_dim, value_h_dim}
                   },
                   'output_0': {
                     'class': 'merge_dims',
                     'from': 'att',
                     'axes': (
                       num_heads_dim,
-                      truediv_left_input__num_heads__dim
+                      value_h_dim
                     ),
                     'out_dim': input_dim,
                     'out_shape': {batch_dim, time_dim, input_dim}
@@ -5995,9 +5924,9 @@ def test_CondLayer_outside_layer_access():
                     'axis': keys_dim,
                     'dims': (
                       num_heads_dim,
-                      truediv_left_keys__num_heads__dim
+                      keys_h_dim
                     ),
-                    'out_shape': {ImplicitDynSizeDim(batch_dim), num_heads_dim, truediv_left_keys__num_heads__dim,
+                    'out_shape': {ImplicitDynSizeDim(batch_dim), num_heads_dim, keys_h_dim,
                                   time__1_time_dim}
                   },
                   'qkv': {
@@ -6008,43 +5937,43 @@ def test_CondLayer_outside_layer_access():
                         'class': 'dot',
                         'from': ['base:base:base:base:data:data', 'base:base:base:base:encoder/self_att/qkv/weight'],
                         'reduce': input_dim,
-                        'out_shape': {batch_dim, time_dim, _2_keys_input_dim}
+                        'out_shape': {batch_dim, time_dim, qkv_dim_}
                       },
                       'add': {
                         'class': 'combine',
                         'from': ['dot', 'base:base:base:base:encoder/self_att/qkv'],
                         'kind': 'add',
-                        'out_shape': {batch_dim, time_dim, _2_keys_input_dim}
+                        'out_shape': {batch_dim, time_dim, qkv_dim_}
                       },
                       'output': {
                         'class': 'copy',
                         'from': 'add',
-                        'out_shape': {batch_dim, time_dim, _2_keys_input_dim}
+                        'out_shape': {batch_dim, time_dim, qkv_dim_}
                       }
                     }
                   },
                   'qkv_split_dims': {
                     'class': 'split_dims',
                     'from': 'qkv',
-                    'axis': _2_keys_input_dim,
+                    'axis': qkv_dim_,
                     'dims': (
                       num_heads_dim,
-                      _2__truediv_left_keys__num_heads_____truediv_left_input__num_heads___dim
+                      qkv_dim
                     ),
                     'out_shape': {batch_dim, time_dim, num_heads_dim,
-                                  _2__truediv_left_keys__num_heads_____truediv_left_input__num_heads___dim}
+                                  qkv_dim}
                   },
                   'split': {
                     'class': 'split',
                     'from': 'qkv_split_dims',
-                    'axis': _2__truediv_left_keys__num_heads_____truediv_left_input__num_heads___dim,
+                    'axis': qkv_dim,
                     'out_dims': (
-                      truediv_left_keys__num_heads__dim,
-                      truediv_left_keys__num_heads__dim,
-                      truediv_left_input__num_heads__dim
+                      keys_h_dim,
+                      keys_h_dim,
+                      value_h_dim
                     ),
                     'out_shape': {batch_dim, time_dim, num_heads_dim,
-                                  _2__truediv_left_keys__num_heads_____truediv_left_input__num_heads___dim}
+                                  qkv_dim}
                   },
                   'reinterpret_new_dim': {
                     'class': 'reinterpret_data',
@@ -6052,7 +5981,7 @@ def test_CondLayer_outside_layer_access():
                       time_dim: time_kv_0_dim
                     },
                     'from': 'split/1',
-                    'out_shape': {batch_dim, num_heads_dim, truediv_left_keys__num_heads__dim, time_kv_0_dim}
+                    'out_shape': {batch_dim, num_heads_dim, keys_h_dim, time_kv_0_dim}
                   },
                   'reinterpret_new_dim_0': {
                     'class': 'reinterpret_data',
@@ -6060,30 +5989,30 @@ def test_CondLayer_outside_layer_access():
                       time_dim: time_kv_0_dim
                     },
                     'from': 'split/2',
-                    'out_shape': {batch_dim, num_heads_dim, truediv_left_input__num_heads__dim, time_kv_0_dim}
+                    'out_shape': {batch_dim, num_heads_dim, value_h_dim, time_kv_0_dim}
                   },
                   'add': {
                     'class': 'combine',
                     'from': ['split/0', 'base:base:base:encoder/self_att/pos_bias_u'],
                     'kind': 'add',
-                    'out_shape': {batch_dim, time_dim, num_heads_dim, truediv_left_keys__num_heads__dim}
+                    'out_shape': {batch_dim, time_dim, num_heads_dim, keys_h_dim}
                   },
                   'add_0': {
                     'class': 'combine',
                     'from': ['split/0', 'base:base:base:encoder/self_att/pos_bias_v'],
                     'kind': 'add',
-                    'out_shape': {batch_dim, time_dim, num_heads_dim, truediv_left_keys__num_heads__dim}
+                    'out_shape': {batch_dim, time_dim, num_heads_dim, keys_h_dim}
                   },
                   'dot': {
                     'class': 'dot',
                     'from': ['add', 'reinterpret_new_dim'],
-                    'reduce': truediv_left_keys__num_heads__dim,
+                    'reduce': keys_h_dim,
                     'out_shape': {batch_dim, time_dim, num_heads_dim, time_kv_0_dim}
                   },
                   'dot_0': {
                     'class': 'dot',
                     'from': ['add_0', 'split_dims'],
-                    'reduce': truediv_left_keys__num_heads__dim,
+                    'reduce': keys_h_dim,
                     'out_shape': {batch_dim, time_dim, num_heads_dim, time__1_time_dim}
                   },
                   'RelPosSelfAttention._rel_shift': {
@@ -6096,27 +6025,27 @@ def test_CondLayer_outside_layer_access():
                         'axes': time__1_time_dim,
                         'padding': (1, 0),
                         'value': 0.0,
-                        'out_shape': {batch_dim, time_dim, num_heads_dim, _1_time__1_time_dim}
+                        'out_shape': {batch_dim, time_dim, num_heads_dim, time_dim_}
                       },
                       'reshape': {
                         'class': 'reshape',
                         'from': 'pad',
                         'in_dims': (
                           time_dim,
-                          _1_time__1_time_dim
+                          time_dim_
                         ),
                         'out_dims': (
-                          _1_time__1_time_dim,
+                          time_dim_,
                           time_dim
                         ),
                         'extra_deps': ['base:base:base:encoder/self_att/RelPosSelfAttention._rel_shift/pad',
                                        'base:base:base:base:data:data'],
-                        'out_shape': {batch_dim, time_dim, num_heads_dim, _1_time__1_time_dim}
+                        'out_shape': {batch_dim, time_dim, num_heads_dim, time_dim_}
                       },
                       'slice': {
                         'class': 'slice',
                         'from': 'reshape',
-                        'axis': _1_time__1_time_dim,
+                        'axis': time_dim_,
                         'slice_start': 1,
                         'out_dim': time__1_time_dim,
                         'out_shape': {batch_dim, time_dim, num_heads_dim, time__1_time_dim}
@@ -6179,14 +6108,14 @@ def test_CondLayer_outside_layer_access():
                     'class': 'dot',
                     'from': ['dropout', 'reinterpret_new_dim_0'],
                     'reduce': time_kv_0_dim,
-                    'out_shape': {batch_dim, time_dim, num_heads_dim, truediv_left_input__num_heads__dim}
+                    'out_shape': {batch_dim, time_dim, num_heads_dim, value_h_dim}
                   },
                   'output_0': {
                     'class': 'merge_dims',
                     'from': 'att',
                     'axes': (
                       num_heads_dim,
-                      truediv_left_input__num_heads__dim
+                      value_h_dim
                     ),
                     'out_dim': input_dim,
                     'out_shape': {batch_dim, time_dim, input_dim}
