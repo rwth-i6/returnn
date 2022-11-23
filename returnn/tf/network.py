@@ -1021,7 +1021,8 @@ class TFNetwork(object):
       if explicit_extra_layer_name in net_dict:
         layer_desc = net_dict[explicit_extra_layer_name]
       else:
-        raise Exception("XXX do we really want this????")
+        return self.extra_parent_net.construct_layer(
+          net_dict, name=name, get_layer=get_layer, add_layer=add_layer, check_existing=check_existing)
       # Pass on here to construct the layer here in this extra net, as this was explicitly called.
     if not layer_desc:
       if name not in net_dict:
