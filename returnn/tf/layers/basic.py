@@ -8246,11 +8246,13 @@ class CondLayer(LayerBase):
 
   def __init__(self, condition, true_layer, false_layer,
                _condition_network=None, _true_layer_network=None, _false_layer_network=None,
+               _extra_out=None,
                **kwargs):
     """
     :param LayerBase|dict[str] condition:
     :param LayerBase|dict[str] true_layer:
     :param LayerBase|dict[str] false_layer:
+    :param dict[str,Data] _extra_out:
     """
     import os
     from ..util.data import Dim
@@ -8263,7 +8265,8 @@ class CondLayer(LayerBase):
     self.false_layer_desc = false_layer
     self.false_layer = None  # type: typing.Optional[LayerBase]
     assert self.condition_layer.output.batch_ndim == 0 and self.condition_layer.output.dtype == "bool"
-    x, sizes = tf_util.cond(
+    self._extra_out_templates = _extra_out
+    x, extra_out, sizes = tf_util.cond(
       pred=self.condition_layer.output.placeholder,
       true_fn=self._true_fn,
       false_fn=self._false_fn)
@@ -8278,24 +8281,36 @@ class CondLayer(LayerBase):
       assert old_tag
       old_tag.set_tag_on_size_tensor(size, batch=self.output.batch, same_as_before=True)
       self.output.size_placeholder[i] = size
+    self._extra_out_layers = {}
+    for name, out_t in extra_out.items():
+      out = self._extra_out_templates[name].copy_template("%s_%s_output" % (self.name, name))
+      out.placeholder = out_t
+      self._extra_out_layers[name] = InternalLayer(
+        name="%s/%s" % (self.name, name), network=self.network, output=out, sources=self.sources)
 
-  def _cond_layer_return(self, layer):
+  def _cond_layer_return(self, layer, net_name):
     """
     :param LayerBase layer:
+    :param str net_name:
     :return: for tf.cond
     """
     out = layer.output
     out_template = self.output.copy_template()
     out = out.copy_compatible_to(out_template)
-    return out.placeholder, [out.size_placeholder[i] for i in sorted(out_template.size_placeholder.keys())]
+    extra_out = {}
+    for name, template in self._extra_out_templates.items():
+      sub_layer = layer.get_sub_layer(name)
+      assert sub_layer, "%s: expected sub-layer %r missing in %s %r" % (self, name, net_name, layer)
+      extra_out[name] = sub_layer.output.copy_compatible_to(template).placeholder
+    return out.placeholder, extra_out, [out.size_placeholder[i] for i in sorted(out_template.size_placeholder.keys())]
 
   def _true_fn(self):
     self.true_layer = self._make_layer("true_layer", self.true_layer_desc)
-    return self._cond_layer_return(self.true_layer)
+    return self._cond_layer_return(self.true_layer, "true_layer")
 
   def _false_fn(self):
     self.false_layer = self._make_layer("false_layer", self.false_layer_desc)
-    return self._cond_layer_return(self.false_layer)
+    return self._cond_layer_return(self.false_layer, "false_layer")
 
   def _make_layer(self, net_name, layer_desc):
     """
@@ -8326,11 +8341,12 @@ class CondLayer(LayerBase):
   @classmethod
   def _transform_layer(cls, d, key, network, get_layer):
     """
-    :param dict[str] d:
+    :param dict[str] d: updates inplace
     :param str key: e.g. "true_layer"
     :param returnn.tf.network.TFNetwork network:
     :param (str)->LayerBase get_layer:
-    :return: nothing, will replace inplace in ``d``
+    :return: will replace inplace in ``d``; returns the sublayer class and desc
+    :rtype: (type[LayerBase], dict[str])
     """
     layer_desc = d[key]
     if isinstance(layer_desc, str):
@@ -8351,6 +8367,7 @@ class CondLayer(LayerBase):
     layer_class.transform_config_dict(layer_desc, network=extra_net, get_layer=get_layer)
     layer_desc["class"] = layer_class  # will later pop again
     d[key] = layer_desc
+    return layer_class, layer_desc
 
   @classmethod
   def transform_config_dict(cls, d, network, get_layer):
@@ -8361,8 +8378,20 @@ class CondLayer(LayerBase):
     """
     super(CondLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
     cls._transform_layer(d, "condition", network=network, get_layer=get_layer)
-    cls._transform_layer(d, "true_layer", network=network, get_layer=get_layer)
-    cls._transform_layer(d, "false_layer", network=network, get_layer=get_layer)
+    true_layer_class, true_layer_desc = cls._transform_layer(d, "true_layer", network=network, get_layer=get_layer)
+    false_layer_class, false_layer_desc = cls._transform_layer(d, "false_layer", network=network, get_layer=get_layer)
+    assert issubclass(true_layer_class, LayerBase) and issubclass(false_layer_class, LayerBase)
+    true_sub_layer_names = true_layer_class.get_available_sub_layer_names(true_layer_desc)
+    false_sub_layer_names = false_layer_class.get_available_sub_layer_names(false_layer_desc)
+    extra_out = {}
+    for name in sorted(set(true_sub_layer_names).intersection(false_sub_layer_names)):
+      sub_out = true_layer_class.get_sub_layer_out_data_from_opts(name, true_layer_desc)
+      assert sub_out, "%s %r: expected sub-layer %r missing in true_layer %s" % (
+        cls.__name__, d["_name"], name, true_layer_class.__name__)
+      sub_out_, _, _ = sub_out
+      assert isinstance(sub_out_, Data), "unexpected sub_out %r" % (sub_out,)
+      extra_out[name] = sub_out_
+    d["_extra_out"] = extra_out
 
   @classmethod
   def _get_out_data_from_layer(cls, layer, name, network):
@@ -8396,6 +8425,21 @@ class CondLayer(LayerBase):
     # So Data.get_common_data would not work.
     true_out = cls._get_out_data_from_layer(true_layer, name="%s/true" % name, network=network)
     return true_out
+
+  def get_sub_layer(self, layer_name):
+    """
+    :param str layer_name:
+    :rtype: LayerBase|None
+    """
+    return self._extra_out_layers.get(layer_name)
+
+  @classmethod
+  def get_available_sub_layer_names(cls, parent_layer_kwargs):
+    """
+    :param dict[str] parent_layer_kwargs:
+    :rtype: list[str]
+    """
+    return sorted(parent_layer_kwargs["_extra_out"].keys())
 
   def get_sub_layers(self):
     """
