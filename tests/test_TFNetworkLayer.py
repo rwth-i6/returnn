@@ -5802,6 +5802,39 @@ def test_CondLayer_outside_layer_access():
     session.run(out.output.placeholder, feed_dict=make_feed_dict(net.extern_data))
 
 
+def test_CondLayer_multiple_outputs():
+  net_dict = {
+    "cond": {
+      "class": "cond", "from": [],
+      "condition": "data:cond",
+      "true_layer": {
+        "class": "subnetwork", "from": [], "subnetwork": {
+          "a": {"class": "constant", "value": 2, "is_output_layer": True},
+          "b": {"class": "constant", "value": 3, "is_output_layer": True},
+          "output": {"class": "copy", "from": "a"}
+        }
+      },
+      "false_layer": {
+        "class": "subnetwork", "from": [], "subnetwork": {
+          "a": {"class": "constant", "value": 5, "is_output_layer": True},
+          "b": {"class": "constant", "value": 7, "is_output_layer": True},
+          "output": {"class": "copy", "from": "a"}
+        }
+      }
+    },
+    "output": {
+      "class": "combine", "kind": "mul", "from": ["cond/a", "cond/b"]
+    }
+  }
+  config = Config(dict(extern_data={"cond": {"dim_tags": (), "dtype": "bool", "available_for_inference": True}}))
+  with make_scope() as session:
+    net = TFNetwork(config=config)
+    net.construct_from_dict(net_dict)
+    out_t = net.get_default_output_layer().output.placeholder
+    assert_equal(session.run(out_t, feed_dict={net.extern_data.data["cond"].placeholder: True}), 6)
+    assert_equal(session.run(out_t, feed_dict={net.extern_data.data["cond"].placeholder: False}), 35)
+
+
 def test_ScatterNdLayer_RangeLayer():
   from returnn.tf.util.data import batch_dim, Dim
   n_batch, n_time, n_ts, n_out = 2, 3, 6, 11
