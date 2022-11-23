@@ -5395,14 +5395,12 @@ def test_CondLayer_outside_layer_access():
             'output': {
               'class': 'copy',
               'from': 'qkv',
-              'out_shape': {}
             }
           }
         },
         'output': {
           'class': 'copy',
           'from': 'self_att',
-          'out_shape': {}
         }
       }
     },
@@ -5412,17 +5410,12 @@ def test_CondLayer_outside_layer_access():
       'subnetwork': {
         'weight': {
           'class': 'variable',
-          'shape': [
-            input_dim,
-            labels_1_dim
-          ],
+          'shape': [input_dim, labels_1_dim],
           'param_name': 'param',
         },
         'bias': {
           'class': 'variable',
-          'shape': [
-            labels_1_dim
-          ],
+          'shape': [labels_1_dim],
           'param_name': 'param',
           'init': 0.0
         },
