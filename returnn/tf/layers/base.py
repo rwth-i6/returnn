@@ -926,11 +926,22 @@ class LayerBase(object):
 
     Also see :func:`LayerBase.cls_get_sub_network`.
 
+    Also see :func:`get_available_sub_layer_names`.
+
     :param str layer_name: name of the sub_layer (right part of '/' separated path)
     :return: the sub_layer addressed in layer_name or None if no sub_layer exists
     :rtype: LayerBase|None
     """
     return None
+
+  @classmethod
+  def get_available_sub_layer_names(cls, parent_layer_kwargs):
+    """
+    :param dict[str] parent_layer_kwargs: kwargs for the parent layer (as kwargs in cls.get_out_data_from_opts())
+    :return: list of layer names which can be accessed via :func:`get_sub_layer`
+    :rtype: list[str]
+    """
+    return []
 
   @classmethod
   def get_sub_layer_out_data_from_opts(cls, layer_name, parent_layer_kwargs):
