@@ -135,17 +135,21 @@ class LmDataset(CachedDataset2):
       self.seq_gen = None
     elif orth_symbols_map_file:
       assert not phone_info
-      try:
-        d = eval(open(orth_symbols_map_file, "r").read())
-        orth_symbols_imap_list = [(int(v), k) for k, v in d.items()]
-        orth_symbols_imap_list.sort()
-      except SyntaxError:
-        orth_symbols_imap_list = [
-          (int(b), a)
-          for (a, b) in [
-            line.split(None, 1)
-            for line in open(orth_symbols_map_file).read().splitlines()]]
-        orth_symbols_imap_list.sort()
+      with open(orth_symbols_map_file, "r") as f:
+        dict_pattern = re.compile("[\"'].*[\"'][ ]*:[ ]*[0-9]*[ ]*,")
+        match = dict_pattern.search(f.read())
+        f.seek(0)
+        if match is not None:
+          d = eval(f.read())
+          orth_symbols_imap_list = [(int(v), k) for k, v in d.items()]
+          orth_symbols_imap_list.sort()
+        else:
+          orth_symbols_imap_list = [
+            (int(b), a)
+            for (a, b) in [
+              line.split(None, 1)
+              for line in f.read().splitlines()]]
+          orth_symbols_imap_list.sort()
       assert orth_symbols_imap_list[0][0] == 0
       self.orth_symbols_map = {sym: i for (i, sym) in orth_symbols_imap_list}
       self.orth_symbols = [sym for (i, sym) in orth_symbols_imap_list]
