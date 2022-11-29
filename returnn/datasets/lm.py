@@ -136,10 +136,10 @@ class LmDataset(CachedDataset2):
     elif orth_symbols_map_file:
       assert not phone_info
       try:
-        d = eval(open(orth_replace_map_file, "r").read())
-        orth_symbols_imap_list = [(int(v), k) for k, v in d.values()]
+        d = eval(open(orth_symbols_map_file, "r").read())
+        orth_symbols_imap_list = [(int(v), k) for k, v in d.items()]
         orth_symbols_imap_list.sort()
-      except Exception:
+      except SyntaxError:
         orth_symbols_imap_list = [
           (int(b), a)
           for (a, b) in [
@@ -147,7 +147,6 @@ class LmDataset(CachedDataset2):
             for line in open(orth_symbols_map_file).read().splitlines()]]
         orth_symbols_imap_list.sort()
       assert orth_symbols_imap_list[0][0] == 0
-      assert orth_symbols_imap_list[-1][0] == len(orth_symbols_imap_list) - 1
       self.orth_symbols_map = {sym: i for (i, sym) in orth_symbols_imap_list}
       self.orth_symbols = [sym for (i, sym) in orth_symbols_imap_list]
       self.labels["data"] = self.orth_symbols
