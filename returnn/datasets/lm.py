@@ -14,6 +14,7 @@ from .cached2 import CachedDataset2
 import gzip
 import xml.etree.ElementTree as ElementTree
 from returnn.util.basic import parse_orthography, parse_orthography_into_symbols, load_json, BackendEngine, unicode
+from returnn.util.literal_py_to_pickle import literal_eval
 from returnn.log import log
 import numpy
 import time
@@ -136,11 +137,11 @@ class LmDataset(CachedDataset2):
     elif orth_symbols_map_file:
       assert not phone_info
       with open(orth_symbols_map_file, "r") as f:
-        dict_pattern = re.compile("[\"'].*[\"'][ ]*:[ ]*[0-9]*[ ]*,")
-        match = dict_pattern.search(f.read())
+        test_string = f.read(1024).replace(" ", "").replace("\n", "")
+        match = re.search("^{[\"'].*[\"']:[0-9]*,", test_string)
         f.seek(0)
         if match is not None:
-          d = eval(f.read())
+          d = literal_eval(f.read())
           orth_symbols_imap_list = [(int(v), k) for k, v in d.items()]
           orth_symbols_imap_list.sort()
         else:
