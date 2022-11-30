@@ -138,7 +138,7 @@ class LmDataset(CachedDataset2):
       assert not phone_info
       with open(orth_symbols_map_file, "r") as f:
         test_string = f.read(1024).replace(" ", "").replace("\n", "")
-        match = re.search("^{[\"'].*[\"']:[0-9]*,", test_string)
+        match = re.search("^{[\"'].+[\"']:[0-9]+,", test_string)
         f.seek(0)
         if match is not None:
           d = literal_eval(f.read())
