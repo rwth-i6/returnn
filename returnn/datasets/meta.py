@@ -286,7 +286,13 @@ class MetaDataset(CachedDataset2):
       assert isinstance(default_dataset, Dataset)
       print("Reading sequence list for MetaDataset %r from sub-dataset %r" % (self.name, default_dataset.name),
             file=log.v3)
-      seq_list = default_dataset.get_all_tags()
+      try:
+        seq_list = default_dataset.get_all_tags()
+      except NotImplementedError:
+        raise NotImplementedError(
+          "Unsupported %s used as default in MetaDataset. Only datasets with known and tagged sequences can be used." %
+          type(default_dataset))
+
       # Catch index out of bounds errors. Whether the tags are actually valid will be checked in _check_dataset_seq().
       for key in self.dataset_keys:
         if key == self.default_dataset_key:
