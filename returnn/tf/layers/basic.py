@@ -7665,6 +7665,7 @@ class ResizeLayer(_ConcatInputLayer):
         else:
           raise TypeError("%s: unexpected factor_t %s" % (self, factor_t))
         self.output.dim_tags[axis].dyn_size_ext = dyn_size_ext
+        self.output.dim_tags[axis].set_tag_on_size_tensor(dyn_size_ext.placeholder, batch=dyn_size_ext.batch)
     self.output.placeholder = x
 
   def get_dep_layers(self):
