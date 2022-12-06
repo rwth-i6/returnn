@@ -1167,6 +1167,12 @@ def obj_diff_list(self, other, **kwargs):
       return ["%sdict diff:" % prefix] + s
     return []
 
+  if isinstance(self, np.ndarray):
+    assert isinstance(other, np.ndarray)
+    if not np.array_equal(self, other):
+      return ["%sself: %r != other: %r" % (prefix, self, other)]
+    return []
+
   if allowed_mapping and self != other and allowed_mapping(self, other):
     if self in equal_map_s2o:
       self = equal_map_s2o[self]
