@@ -1917,6 +1917,10 @@ class Engine(EngineBase):
 
   def cleanup_old_models(self, ask_for_confirmation=False):
     """
+    Behavior of this can be set in the config. Either cleanup_old_models=True for default behavior
+    or e.g. cleanup_old_models={'keep': [20, 40, 60], 'keep_last_n': 5, 'keep_best_n': 2} for fine grained control.
+    Defaults: 'keep_last_n': 2, 'keep_best_n': 4, 'keep' based on num_epochs and default_keep_pattern below.
+
     :param bool ask_for_confirmation: if True, will ask the user interactively to confirm
     """
     if not self._do_save():
