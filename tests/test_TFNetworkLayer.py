@@ -10567,6 +10567,29 @@ def test_reduce_mean_batch_time():
     numpy.testing.assert_allclose(ref, v, rtol=1e-5)
 
 
+def test_ReduceLayer_mean_btf():
+  # https://github.com/rwth-i6/returnn/issues/1242
+  net_dict = {
+    "output": {"class": "reduce", "mode": "mean", "from": "data", "axis": ["B", "T", "F"]}
+  }
+  config = Config(dict(
+    extern_data={"data": {"shape": (None, 4)}}
+  ))
+  with make_scope() as session:
+    network = TFNetwork(config=config)
+    network.construct_from_dict(net_dict)
+    in_ = network.extern_data.get_default_input_data()
+    out = network.get_default_output_layer().output
+    in_v, seq_len, out_v = session.run(
+      (in_.placeholder, in_.get_sequence_lengths(), out.placeholder),
+      feed_dict=make_feed_dict(network.extern_data))
+    n_batch = in_v.shape[0]
+    assert n_batch == seq_len.shape[0]
+    for b in range(n_batch):
+      in_v[b, seq_len[b]:, :] = numpy.nan
+    numpy.testing.assert_almost_equal(out_v, numpy.nanmean(in_v))
+
+
 def test_automatic_seq_lengths():
   with make_scope() as session:
     n_out = 5

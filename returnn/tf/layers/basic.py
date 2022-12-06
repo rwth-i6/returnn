@@ -6236,12 +6236,24 @@ class ReduceLayer(_ConcatInputLayer):
 
           x_ = tf_util.where_bc(mask, x_, replacement_value, name="x_masked_axis_%i" % axis)
           if f == tf.reduce_mean:
+            tag = x.dim_tags[axis]
+            assert tag.dyn_size_ext is not None  # checked above
+            size_all = tf.shape(x.placeholder)[axis]
+            size_actual = tag.dyn_size_ext
+            while any(d not in out_data.dim_tags for d in size_actual.dim_tags):
+              # We have some axis (e.g. B) which is not in the output.
+              # We need to remove this.
+              # https://github.com/rwth-i6/returnn/issues/1242
+              i, d = [(i, d) for i, d in enumerate(size_actual.dim_tags) if d not in out_data.dim_tags][0]
+              assert not d.is_dynamic()  # not implemented
+              size_all *= d.get_dim_value()
+              s = tf.reduce_sum(size_actual.placeholder, axis=i)
+              size_actual = size_actual.copy_template_excluding_axis(i)
+              size_actual.placeholder = s
             seq_len_bc = (
-              x.dim_tags[axis].dyn_size_ext
-              .copy_compatible_to(out_data, check_sparse=False, check_dtype=False)
-              .placeholder)
+              size_actual.copy_compatible_to(out_data, check_sparse=False, check_dtype=False).placeholder)
             seq_len_bc = tf.maximum(seq_len_bc, 1)  # avoid nan
-            correction_factor_ = tf.cast(tf.shape(x.placeholder)[axis], tf.float32) / tf.cast(seq_len_bc, tf.float32)
+            correction_factor_ = tf.cast(size_all, tf.float32) / tf.cast(seq_len_bc, tf.float32)
             correction_factor = tf_util.optional_mul(correction_factor, correction_factor_)
     if mode in arg_funcs:
       assert len(axes) == 1, "For argmax/argmin, only one reduction axis is supported"
