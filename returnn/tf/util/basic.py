@@ -3883,7 +3883,7 @@ def optional_mul(*args):
   """
   :param tf.Tensor|None|int|float args:
   :rtype: tf.Tensor|int|float|None
-  :return: sums all non-None values, or returns None if there are none
+  :return: multiplies all non-None values, or returns None if there are none
   """
   y = None
   for v in args:
