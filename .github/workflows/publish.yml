@@ -40,7 +40,7 @@ jobs:
     # https://github.com/marketplace/actions/pypi-publish
     - name: Publish to PyPI
       # https://github.com/pypa/gh-action-pypi-publish/issues/112
-      uses: pypa/gh-action-pypi-publish@fedca4a9a83c
+      uses: pypa/gh-action-pypi-publish@fedca4a9a83c83baf9a426a681a2aab0d5c97e30
       with:
         user: __token__
         password: ${{ secrets.pypi_password }}
