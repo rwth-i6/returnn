@@ -30,7 +30,7 @@ jobs:
 
     - name: Install Python deps
       run: |
-        echo "PATH=$PATH:~/.local/bin" >> $GITHUB_ENV
+        echo "PATH=$PATH:$HOME/.local/bin" >> $GITHUB_ENV
         pip3 install --user --upgrade pip setuptools wheel twine
         pip3 install --user typing  # needed for Python 2 in some cases
         pip3 install --user -r requirements.txt
@@ -40,7 +40,7 @@ jobs:
     # https://github.com/marketplace/actions/pypi-publish
     - name: Publish to PyPI
       # https://github.com/pypa/gh-action-pypi-publish/issues/112
-      uses: pypa/gh-action-pypi-publish@release/v1.4
+      uses: pypa/gh-action-pypi-publish@fedca4a9a83c
       with:
         user: __token__
         password: ${{ secrets.pypi_password }}
