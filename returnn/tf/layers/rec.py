@@ -4876,7 +4876,8 @@ class RnnCellLayer(_ConcatInputLayer):
     elif initial_state == "placeholder":
       assert rec_layer is not None
       with rec_layer.var_creation_scope():
-        ph = tf_compat.v1.placeholder(tf.float32, shape=shape_invariant, name="placeholder_%s" % key_name)
+        ph = tf_compat.v1.placeholder(
+          tf.float32, shape=shape_invariant, name="initial_state_placeholder_%s" % key_name)
       return ph
     else:
       raise Exception("invalid initial state type %r for sub-layer %r, key %r" % (initial_state, name, key))
