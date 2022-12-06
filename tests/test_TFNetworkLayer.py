@@ -8047,6 +8047,35 @@ def test_ResizeLayer_BFT():
     assert out_v.shape == (n_batch, n_in, n_time * 2)
 
 
+def test_ResizeLayer_dynamic():
+  n_batch, n_time, n_in = 2, 5, 3
+  in_v = numpy.arange(0, n_batch * n_time * n_in).astype("float32").reshape((n_batch, n_time, n_in))
+  in_seq_lens = numpy.array([5, 4])
+  config = Config({
+    "extern_data": {
+      "data": {"shape": (None, n_in)},
+      "factor": {"shape": (), "batch_dim_axis": None, "dtype": "float32"},
+    }
+  })
+  with make_scope() as session:
+    net = TFNetwork(config=config)
+    net.construct_from_dict({
+      "output": {"class": "resize", "axis": "T", "factor": "data:factor", "kind": "nn", "from": "data"}
+    })
+    out = net.get_default_output_layer().output
+    for factor in [0.5, 2.0]:
+      out_v, out_lens = session.run(
+        (out.placeholder, out.get_sequence_lengths()), feed_dict={
+          net.extern_data.get_batch_info().dim: n_batch,
+          net.extern_data.data["data"].placeholder: in_v,
+          net.extern_data.data["data"].get_sequence_lengths(): in_seq_lens,
+          net.extern_data.data["factor"].placeholder: factor,
+        })
+      assert isinstance(out_v, numpy.ndarray)
+      assert out_v.shape == (n_batch, numpy.ceil(n_time * factor), n_in)
+      numpy.testing.assert_equal(out_lens, numpy.ceil(in_seq_lens * factor).astype("int32"))
+
+
 def test_PostfixInTimeLayer():
   with make_scope() as session:
     import numpy as np
