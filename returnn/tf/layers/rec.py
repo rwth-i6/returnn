@@ -4873,6 +4873,12 @@ class RnnCellLayer(_ConcatInputLayer):
         s = tf.cond(tf.equal(step, 0), lambda: tf.zeros(initial_shape), lambda: var.value())
         s.set_shape(shape_invariant)
         return s
+    elif initial_state == "placeholder":
+      assert rec_layer is not None
+      with rec_layer.var_creation_scope():
+        ph = tf_compat.v1.placeholder(
+          tf.float32, shape=shape_invariant, name="initial_state_placeholder_%s" % key_name)
+      return ph
     else:
       raise Exception("invalid initial state type %r for sub-layer %r, key %r" % (initial_state, name, key))
 
@@ -4908,7 +4914,7 @@ class RnnCellLayer(_ConcatInputLayer):
       :return:
       """
       if isinstance(v, str):
-        if v in ["zeros", "ones", "var", "keep_over_epoch", "keep_over_epoch_no_init"]:
+        if v in ["zeros", "ones", "var", "keep_over_epoch", "keep_over_epoch_no_init", "placeholder"]:
           return v
         return get_layer(v)
       if isinstance(v, (tuple, list)):
