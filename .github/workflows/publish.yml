@@ -14,7 +14,7 @@ jobs:
       github.event.workflow_run.head_branch == 'master' &&
       github.event.workflow_run.event == 'push' &&
       github.repository == 'rwth-i6/returnn'
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-latest
 
     steps:
     - uses: actions/checkout@v3
@@ -31,7 +31,7 @@ jobs:
     - name: Install Python deps
       run: |
         echo "PATH=$PATH:~/.local/bin" >> $GITHUB_ENV
-        pip3 install --user --upgrade pip setuptools wheel
+        pip3 install --user --upgrade pip setuptools wheel twine
         pip3 install --user typing  # needed for Python 2 in some cases
         pip3 install --user -r requirements.txt
 
