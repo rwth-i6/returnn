@@ -4907,6 +4907,8 @@ class Data(object):
         _, idx_s, name = axes.split(":", 2)  # stag-single:<idx>:<name>
         idx = int(idx_s)
         return [self.get_axes_by_tag_name(name, spatial_only=True)[idx]]
+      elif axes.startswith("tag:"):  # any tag
+        return [self.get_axis_by_tag_name(axes[len("tag:"):])]
       raise Exception("invalid axis mode %r" % axes)
     assert isinstance(axes, (tuple, list, typing.Sequence)), "invalid axes %r" % axes
     flat_axes = []
