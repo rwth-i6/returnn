@@ -1438,7 +1438,8 @@ class _SubnetworkRecCell(object):
             pass  # ignore in this case
           else:
             raise
-        layer_.kwargs["output"].sanity_check(ignore_placeholder=True)  # placeholder might be overwritten later
+        if lself.got_uninitialized_deps_count == 0:
+          layer_.kwargs["output"].sanity_check(ignore_placeholder=True)  # placeholder might be overwritten later
         layer_.init(layer_class=layer_class, **layer_.kwargs)
         if layer_.need_last:
           self.prev_layers_needed.add(name)
