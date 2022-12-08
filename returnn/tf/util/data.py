@@ -1123,13 +1123,16 @@ class Dim(object):
       assert self_base.derived_from_tag == base
     else:
       self_base.derived_from_tag = base
-    if self.is_dynamic():
-      if not self.batch:
-        self.batch = base.batch
-      if not self.control_flow_ctx:
-        self.control_flow_ctx = base.control_flow_ctx
+    if not self.batch:
+      self.batch = base.batch
+    if not self.control_flow_ctx:
+      self.control_flow_ctx = base.control_flow_ctx
+    if self.is_dynamic() or not self.is_dim_known():
       if not self.dyn_size_ext:
-        self.dyn_size_ext = base.dyn_size_ext.copy_template(name="%s:size" % self_base.description)
+        if base.dyn_size_ext:
+          self.dyn_size_ext = base.dyn_size_ext.copy_template(name="%s:size" % self_base.description)
+        elif base.is_batch_dim():
+          self.dyn_size_ext = Data("%s:batch" % self_base.description, shape=(), dtype="int32", batch_dim_axis=None)
 
   @classmethod
   def get_existing_tag_from_collection(cls, other, tags, is_equal_opts=None):
