@@ -3057,8 +3057,8 @@ class Data(object):
           if not ignore_placeholder:
             if tag.dyn_size_ext.placeholder is None:
               tag.complete_dyn_size()
-            assert tag.dyn_size_ext.placeholder is not None
-        assert not tag.undefined
+            if self.placeholder is not None:
+              assert tag.dyn_size_ext.placeholder is not None
         assert tag.is_dim_known()
 
   def get_runtime_sanity_check_op(self):
