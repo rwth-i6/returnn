@@ -1200,6 +1200,13 @@ class _SubnetworkRecCell(object):
     self.prev_layer_templates = {}  # type: typing.Dict[str,_TemplateLayer]
     self._template_construction_exceptions = None  # type: typing.Optional[typing.List[str]]
     self._construct_template(parent_get_layer=parent_get_layer)
+    if not time_dim_tag.is_dim_known() and "end" in self.layer_data_templates:
+      end_data = self.layer_data_templates["end"].output
+      time_dim_tag.batch = end_data.batch
+      time_dim_tag.control_flow_ctx = parent_net.get_control_flow_ctx()
+      time_dim_tag.dyn_size_ext = end_data.copy_template("%s:dyn-size" % rec_layer_name)
+      time_dim_tag.dyn_size_ext.control_flow_ctx = parent_net.get_control_flow_ctx()
+      time_dim_tag.dyn_size_ext.dtype = Data.size_dtype
     self._last_frames = {}  # type: typing.Dict[str,Data]
     self._initial_outputs = None  # type: typing.Optional[typing.Dict[str,tf.Tensor]]
     self._initial_extra_outputs = None  # type: typing.Optional[typing.Dict[str,typing.Dict[str,typing.Union[tf.Tensor,typing.Tuple[tf.Tensor,...]]]]]  # nopep8
