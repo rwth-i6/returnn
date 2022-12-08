@@ -1284,6 +1284,8 @@ class SliceNdLayer(_ConcatInputLayer):
     :param Dim|None out_spatial_dim:
     :rtype: Data
     """
+    input_data = get_concat_sources_data_template(sources)
+    axis_int = input_data.get_axis_from_description(axis, allow_int=False)
     if start is None:
       start = 0
     if isinstance(start, int):
@@ -1307,6 +1309,7 @@ class SliceNdLayer(_ConcatInputLayer):
         kind=Dim.Types.Spatial,
         description="sliced-time:%s" % name,
         dimension=size, auto_generated=True)
+      out_spatial_dim_.derive_from(input_data.dim_tags[axis_int])
       if out_spatial_dim:
         out_spatial_dim_.declare_same_as(out_spatial_dim)
       else:
