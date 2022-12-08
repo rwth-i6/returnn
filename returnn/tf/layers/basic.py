@@ -7553,9 +7553,10 @@ class ShiftAxisLayer(_ConcatInputLayer):
       return out
     assert isinstance(amount, int)
     axis = out.get_axis_from_description(axis)
-    tag = out.dim_tags[axis]
-    dim = None if tag.dimension is None else max(0, tag.dimension - abs(amount))
-    tag = Dim(kind=tag.kind, description="%s_shift_axis" % name, dimension=dim, auto_generated=True)
+    old_tag = out.dim_tags[axis]
+    dim = None if old_tag.dimension is None else max(0, old_tag.dimension - abs(amount))
+    tag = Dim(kind=old_tag.kind, description="%s_shift_axis" % name, dimension=dim, auto_generated=True)
+    tag.derive_from(old_tag)
     return out.copy_template_replace_dim_tag(axis=axis, new_dim_tag=tag)
 
 
