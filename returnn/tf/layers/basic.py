@@ -5068,10 +5068,7 @@ class ReinterpretDataLayer(_ConcatInputLayer):
         new_tag = new_tag.get_for_batch_ctx(old_tag.batch, old_tag.control_flow_ctx)
         if old_tag.is_dim_known() and not new_tag.is_dim_known():
           assert not new_tag.dyn_size_ext
-          if old_tag.dyn_size_ext:
-            # Copy the template so that we know about implicit dims.
-            # The sizes itself will be setup in __init__.
-            new_tag.dyn_size_ext = old_tag.dyn_size_ext.copy_template()
+          new_tag.derive_from(old_tag)
         out = out.copy_template_replace_dim_tag(axis=axis_int, new_dim_tag=new_tag)
     if set_sparse is not None:
       assert isinstance(set_sparse, bool)
