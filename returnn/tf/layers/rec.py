@@ -3750,17 +3750,12 @@ class _SubnetworkRecCell(object):
           search_choices_cache=search_choices_cache)
         # Use the output Data from the in-loop layer,
         # as this might have set dyn sizes on dim tags.
-        is_out_time_dim = search_choices == self.layer_data_templates["output"].get_search_choices()
         time_dim_tag = Dim.get_tag_from_size_tensor(resolved_seq_len)
         if not time_dim_tag:
-          if is_out_time_dim:
-            time_dim_tag = self.time_dim_tag
-          else:
-            time_dim_tag = Dim(
-              kind=Dim.Types.Spatial,
-              description="dyn-time:%s/%s" % (self.parent_rec_layer.get_full_ctx_name(), search_choices),
-              auto_generated=True)
-        elif is_out_time_dim:
+          time_dim_tag = self.time_dim_tag.get_for_batch_ctx(
+            in_loop_layer.output.batch, self.parent_net.get_control_flow_ctx())
+          time_dim_tag.set_tag_on_size_tensor(resolved_seq_len, batch=in_loop_layer.output.batch)
+        else:
           self.time_dim_tag.declare_same_as(time_dim_tag)
         output = (
           in_loop_layer.output
