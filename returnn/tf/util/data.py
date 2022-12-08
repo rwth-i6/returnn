@@ -390,6 +390,15 @@ class Dim(object):
               dyn_size_ext.placeholder._RETURNN_beam_expanded_base_data = beam_expanded_base_data
     if not dyn_size_ext and allow_none and not same_base.derived_from_op:
       return None
+    if not dyn_size_ext and same_base._same_for_batch_ctx and batch.is_global_batch() and not ctx:
+      # There are earlier entries in _same_for_batch_ctx
+      # -- maybe we can infer dyn_size_ext, even with different batch.
+      for (batch_, ctx_), other in same_base._same_for_batch_ctx.items():
+        if batch_.is_global_batch() and not ctx_:
+          if other.dyn_size_ext:
+            dyn_size_ext = other.dyn_size_ext.copy_template()
+            dyn_size_ext.batch = batch
+            break
     ctx = dyn_size_ext.control_flow_ctx if dyn_size_ext else ctx
     if (same_base.batch or batch) == batch and not same_base.control_flow_ctx and not ctx:
       # The same_base instance is either undefined (no batch, no ctx) or it is defined for the same batch and ctx.
