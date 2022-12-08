@@ -5884,6 +5884,7 @@ def _infer_dim_tags_tuple_from_shape(
           # This is such that Dim.is_equal behaves as before, e.g. in Data.get_common_data.
           kind=Dim.Types.Spatial,
           auto_generated=True)
+        tag.dyn_size_ext = Data("%s_dim%i_size" % (name, axis_wo_b), dtype=Data.size_dtype, shape=())
         dim_tags[axis] = tag
       dyn_size = tag.dyn_size
     if tag:
@@ -5896,6 +5897,8 @@ def _infer_dim_tags_tuple_from_shape(
       tag = Dim(
         kind=Dim.Types.Feature, dimension=dim, description="feature:%s" % name,
         undefined=dim is None, auto_generated=True)
+      if dim is None:
+        tag.dyn_size_ext = Data("%s_dim%i_size" % (name, axis_wo_b), dtype=Data.size_dtype, shape=())
     else:
       assert axis in spatial_axes
       description = "time" if axis == time_dim_axis else "spatial%i" % spatial_axes.index(axis)
@@ -5911,6 +5914,8 @@ def _infer_dim_tags_tuple_from_shape(
       tag = Dim(
         kind=Dim.Types.Spatial, description=description, dimension=dim, dyn_size=dyn_size,
         undefined=dim is None and dyn_size is None, auto_generated=True)
+      if dim is None:
+        tag.dyn_size_ext = Data("%s_dim%i_size" % (name, axis_wo_b), dtype=Data.size_dtype, shape=())
     dim_tags[axis] = tag
   assert sorted(dim_tags.keys()) == list(range(len(batch_shape)))
   return tuple(dim_tags[axis] for axis in range(len(batch_shape)))
