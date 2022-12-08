@@ -8215,13 +8215,8 @@ class MaskedComputationLayer(LayerBase):
         # Create own time dim tag, to make sure we have some own custom.
         if not _Locals.out_spatial_dim_:
           _Locals.out_spatial_dim_ = Dim(
-            kind=Dim.Types.Spatial, description="%s:masked:time" % name,
-            derived_from_tag=_Locals.in_spatial_dim_, auto_generated=True)
-          _Locals.out_spatial_dim_.batch = _Locals.in_spatial_dim_.batch
-          _Locals.out_spatial_dim_.control_flow_ctx = _Locals.in_spatial_dim_.control_flow_ctx
-          if _Locals.in_spatial_dim_.dyn_size_ext:
-            _Locals.out_spatial_dim_.dyn_size_ext = _Locals.in_spatial_dim_.dyn_size_ext.copy_template(
-              name="%s:masked:time" % name)
+            kind=Dim.Types.Spatial, description="%s:masked:time" % name, auto_generated=True)
+          _Locals.out_spatial_dim_.derive_from(_Locals.in_spatial_dim_)
           if _Locals.in_spatial_dim_ == over_rec_time_dim and over_rec_time_dim and not inside_rec_time_dim:
             if extra_net:
               # Optimized out, so any sub layers will effectively operate on the out spatial dim.
@@ -8257,6 +8252,7 @@ class MaskedComputationLayer(LayerBase):
     layer_class.transform_config_dict(layer_desc, network=extra_net, get_layer=sub_get_layer)
     # noinspection PyProtectedMember
     layer_desc = extra_net._create_layer_layer_desc(name=name, layer_desc=layer_desc)
+    _Locals.out_spatial_dim_.derive_from(_Locals.in_spatial_dim_)
     return layer_class, layer_desc, _Locals.in_spatial_dim_, _Locals.out_spatial_dim_
 
   @classmethod
