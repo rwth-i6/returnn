@@ -227,6 +227,7 @@ def test_Data_copy_with_feature_dim_axis_case_1():
   d = Data(name='test_data', shape=(None, 13, 17), dtype='float32',
            size_placeholder={0: size_placeholder}, batch_dim_axis=0,
            time_dim_axis=1, feature_dim_axis=3)
+  assert list(d.size_placeholder.keys()) == [0]
   d_copy = d.copy_with_feature_dim_axis(1)
   assert d_copy.shape == (17, None, 13)
   assert d_copy.batch_dim_axis == 0
