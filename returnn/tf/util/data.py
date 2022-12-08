@@ -5137,7 +5137,7 @@ class Data(object):
     if sizes_tag:
       assert sizes_tag.is_same_size_tensor(sizes)
     tag = self.dim_tags[axis]
-    assert tag.dimension is None  # dynamic axis
+    assert tag.is_dynamic()
     if tag.is_same_size_tensor(sizes):
       return  # nothing to do
     if tag.dyn_size is None:
@@ -5897,8 +5897,6 @@ def _infer_dim_tags_tuple_from_shape(
       tag = Dim(
         kind=Dim.Types.Feature, dimension=dim, description="feature:%s" % name,
         undefined=dim is None, auto_generated=True)
-      if dim is None:
-        tag.dyn_size_ext = Data("%s_dim%i_size" % (name, axis_wo_b), dtype=Data.size_dtype, shape=())
     else:
       assert axis in spatial_axes
       description = "time" if axis == time_dim_axis else "spatial%i" % spatial_axes.index(axis)
@@ -5914,8 +5912,10 @@ def _infer_dim_tags_tuple_from_shape(
       tag = Dim(
         kind=Dim.Types.Spatial, description=description, dimension=dim, dyn_size=dyn_size,
         undefined=dim is None and dyn_size is None, auto_generated=True)
-      if dim is None:
-        tag.dyn_size_ext = Data("%s_dim%i_size" % (name, axis_wo_b), dtype=Data.size_dtype, shape=())
+    if dim is None and tag.dyn_size_ext is None:
+      tag.dyn_size_ext = Data("%s_dim%i_size" % (name, axis_wo_b), dtype=Data.size_dtype, shape=())
+      if dyn_size is not None:
+        tag.dyn_size_ext.placeholder = dyn_size
     dim_tags[axis] = tag
   assert sorted(dim_tags.keys()) == list(range(len(batch_shape)))
   return tuple(dim_tags[axis] for axis in range(len(batch_shape)))
