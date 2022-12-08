@@ -23,13 +23,13 @@ def run(*args):
   print("run:", args)
   global _run_count
   if _run_count == 0:
+    _run_count += 1
     # For the first run, as a special case, directly run the script in the current env.
     # This is easier for debugging.
     from returnn.util.basic import generic_import_module
     mod = generic_import_module(os.path.join(base_dir, args[0]))
     # noinspection PyUnresolvedReferences
     mod.main(args)
-    _run_count += 1
     return
   _run_count += 1
   # RETURNN by default outputs on stderr, so just merge both together
