@@ -1114,6 +1114,23 @@ class Dim(object):
       self._same_for_batch_ctx[key] = dim
     other._same_for_batch_ctx.clear()  # we only want to have it once
 
+  def derive_from(self, base):
+    """
+    :param Dim base:
+    """
+    self_base = self.get_same_base()
+    if self_base.derived_from_tag:
+      assert self_base.derived_from_tag == base
+    else:
+      self_base.derived_from_tag = base
+    if self.is_dynamic():
+      if not self.batch:
+        self.batch = base.batch
+      if not self.control_flow_ctx:
+        self.control_flow_ctx = base.control_flow_ctx
+      if not self.dyn_size_ext:
+        self.dyn_size_ext = base.dyn_size_ext.copy_template(name="%s:size" % self_base.description)
+
   @classmethod
   def get_existing_tag_from_collection(cls, other, tags, is_equal_opts=None):
     """
