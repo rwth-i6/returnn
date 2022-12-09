@@ -4065,7 +4065,8 @@ class _TemplateLayer(LayerBase):
     # this is a problem and not supported currently.
     # In case the seq len is the same always, it just means that we did not fix the specific layer implementation yet.
     # This is work-in-progress.
-    layer.output.sanity_check()
+    layer.output.sanity_check(
+      assume_complete=prev_output is not None or rec_vars_prev_outputs is not None)
     if layer.output.placeholder is not None and self.network.get_config().bool("debug_runtime_sanity_checks", False):
       with layer.cls_setup_scope(**layer.kwargs):
         layer.output.placeholder = layer.output.get_placeholder_with_runtime_sanity_checks()
