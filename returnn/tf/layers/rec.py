@@ -6082,7 +6082,7 @@ class DecideLayer(BaseChoiceLayer):
     output.size_placeholder = {}
     for i, size in src_data.size_placeholder.items():
       tag = Dim.get_tag_from_size_tensor(size)
-      assert tag
+      assert tag, "%s: no dim tag found for size %s from source %r" % (owner or name, size, src)
       tag = tag.get_for_batch_ctx(batch=output.batch, ctx=output.control_flow_ctx)
       if tag.dyn_size is None:
         size = tf.reshape(size, [batch_dim, beam_size])  # (batch, beam)
