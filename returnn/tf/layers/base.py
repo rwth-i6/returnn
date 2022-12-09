@@ -441,7 +441,7 @@ class LayerBase(object):
         output.sparse_dim = out_dim
       else:
         output = output.copy_template_replace_dim_tag(axis=output.feature_dim_axis, new_dim_tag=out_dim)
-    cls._post_init_output(
+    output = cls._post_init_output(
       output=output, network=network, target=target, size_target=size_target, _target_layers=_target_layers,
       sources=sources, **kwargs)
     return output
@@ -459,33 +459,40 @@ class LayerBase(object):
     :param dict[str,LayerBase]|None _target_layers: if target.startswith("layer:"), then this is target -> layer
     :param None|SearchChoices _src_common_search_choices: set via :func:`SearchChoices.translate_to_common_search_beam`
     :param list[LayerBase] sources:
+    :return: output, maybe changed
+    :rtype: Data
     """
     # You are supposed to set self.output.placeholder to the value which you want to return by the layer.
-    # Normally you are also supposed to set self.output.size_placeholder explicitly, just like self.output.placeholder.
-    # However, in many cases, this will just be {0: time-lengths} and the same as from the input.
-    # We check for this case and preset it by that if possible.
-    # If you want to have it different in your layer, just overwrite it.
-    common_source = Data.get_common_data(
-      [s.output for s in sources if s], ignore_feature_dim=True, allow_broadcast_all_sources=True)
-    if not output.size_placeholder:
-      if network.eval_flag and size_target:
-        output.size_placeholder = cls._static_get_target_value(
-          target=size_target,
-          _target_layers=_target_layers,
-          search_choices=_src_common_search_choices,
-          network=network, mark_data_key_as_used=network.eval_flag).size_placeholder.copy()
-      elif common_source and common_source.matches_var_dim_pattern(output):
-        output.size_placeholder = common_source.size_placeholder.copy() if common_source.size_placeholder else {}
-      elif network.train_flag is not False and target:
-        # TODO: In training, this is ok. Maybe as well as for eval but not clear.
-        # In forward, mark_data_key_as_used=False should be used and anyway that target value is not available.
-        output.size_placeholder = cls._static_get_target_value(
-          target=(target[0] if (target and isinstance(target, list)) else target),
-          _target_layers=_target_layers,
-          search_choices=_src_common_search_choices,
-          network=network, mark_data_key_as_used=network.train_flag is not False).size_placeholder.copy()
+    # Check if there are any undefined dims in the output,
+    # e.g. when only the shape was specified in out_type but not the dim tags,
+    # and if we can take over fitting dim tags from the sources.
+    sources_data = [output]
+    if network.eval_flag and size_target:
+      sources_data.append(cls._static_get_target_value(
+        target=size_target,
+        _target_layers=_target_layers,
+        search_choices=_src_common_search_choices,
+        network=network, mark_data_key_as_used=network.eval_flag))
+    elif network.train_flag is not False and target:
+      sources_data.append(cls._static_get_target_value(
+        target=(target[0] if (target and isinstance(target, list)) else target),
+        _target_layers=_target_layers,
+        search_choices=_src_common_search_choices,
+        network=network, mark_data_key_as_used=network.train_flag is not False))
+    sources_data += [s.output for s in sources if s]
+    is_equal_opts = dict(
+      treat_feature_as_spatial=True, allow_same_spatial_dim=True,
+      undefined_matches=True, derived_matches=True)
+    _, tags_dict = Dim.get_all_dimension_tags(sources_data, is_equal_opts=is_equal_opts)
+    new_dim_tags = tags_dict[output]
+    if tuple(new_dim_tags) != output.dim_tags:
+      output_ = output.copy_template_new_dim_tags(new_dim_tags, keep_special_axes=True)
+      if output.placeholder is not None:
+        output_.placeholder = output.placeholder
+      output = output_
     if any([(src and not src.output.available_for_inference) for src in sources if src]):
       output.available_for_inference = False
+    return output
 
   @classmethod
   def fixup_out_data(cls, output, network, out_shape=None, **kwargs):
