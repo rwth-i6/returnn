@@ -1201,6 +1201,8 @@ class Dim(object):
             replace_existing = True
           if replace_existing:  # Replace the existing by the new tag.
             tags[tags.index(existing_tag)] = tag
+            for _, dims_ in data_axes_dict.items():
+              dims_[:] = [tag if d == existing_tag else d for d in dims_]
             existing_tag = tag
         else:  # no existing tag
           tags.append(tag)
