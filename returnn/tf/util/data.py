@@ -1023,7 +1023,7 @@ class Dim(object):
       # If self is defined (self.is_dim_known), be fair to other, and adapt it to the right batch,
       # such that other.is_dim_known is correct, by potentially completing it.
       other = other.get_for_batch_ctx(self.batch, ctx=self.control_flow_ctx)
-    if self.is_dim_known() and not other.is_dim_known():
+    if (self.is_dim_known() and not other.is_dim_known()) or (self.undefined and not other.undefined):
       if self_same_as._creation_idx < other_same_base._creation_idx:
         # We want to keep self instead.
         # https://github.com/rwth-i6/returnn_common/issues/200
