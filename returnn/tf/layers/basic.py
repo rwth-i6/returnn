@@ -3659,6 +3659,7 @@ class MergeDimsLayer(_ConcatInputLayer):
     out_dim_ = prod(merge_dim_tags)
     assert isinstance(out_dim_, Dim)
     assert out_dim_.dimension == res_dim
+    out_dim_.complete_dyn_size(template_only=True)
     if out_dim:
       out_dim_.declare_same_as(out_dim)
     new_dim_tags = [d for (i, d) in enumerate(data.dim_tags) if i not in axes]
