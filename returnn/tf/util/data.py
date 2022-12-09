@@ -329,19 +329,6 @@ class Dim(object):
       return self  # just leave as-is. should not matter.
     same_base = self.get_same_base()
     same_base._validate_in_current_graph()
-    # Might be uninitialized in some cases. Assume batch is global.
-    if not same_base.batch:
-      batch_base = batch.get_global_base()
-      if same_base.dyn_size_ext:
-        assert batch == batch_base
-        same_base.batch = batch
-        assert not same_base.dyn_size_ext.batch or same_base.dyn_size_ext.batch == batch
-        same_base.dyn_size_ext.batch = batch
-      else:
-        same_base.batch = batch_base
-    if same_base.dyn_size_ext:
-      assert same_base.batch == same_base.dyn_size_ext.batch
-      assert same_base.control_flow_ctx == same_base.dyn_size_ext.control_flow_ctx
     for ctx_ in ControlFlowContext.abs_ctx_stack_with_root(ctx):
       tag = same_base._same_for_batch_ctx.get((batch, ctx_), None)
       if tag and tag._can_use_in_ctx(ctx) and tag._validate_in_current_graph():
