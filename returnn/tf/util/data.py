@@ -487,25 +487,38 @@ class Dim(object):
 
     :param tf.Tensor dyn_size:
     """
+    if self.dyn_size_ext and self.dyn_size_ext.placeholder is dyn_size:  # fast path check
+      return
     assert self.can_be_used_as_dim()
     assert isinstance(dyn_size, tf.Tensor) and dyn_size.shape.ndims == 1
-    if self.dyn_size_ext:
-      if self.dyn_size_ext.placeholder is None:
-        self.dyn_size_ext.placeholder = dyn_size
-        return
-      # Do not allow resetting it to sth different.
-      assert self.dyn_size_ext.placeholder is dyn_size
-      return
-    beam = getattr(dyn_size, "_RETURNN_dyn_size_beam", None)
-    self.dyn_size_ext = Data(
-      name=("%s:dyn_size" % self.description) if self.description else dyn_size.op.name,
-      dtype=Data.size_dtype, placeholder=dyn_size, shape=(), batch_dim_axis=0,
-      batch=self.batch, beam=beam, control_flow_ctx=self.control_flow_ctx)
     other = Dim.get_tag_from_size_tensor(dyn_size)
     if other:
       self.declare_same_as(other)
+      if self.batch:
+        assert self.batch == other.batch and self.control_flow_ctx == other.control_flow_ctx
+      else:
+        self.batch = other.batch
+        self.control_flow_ctx = other.control_flow_ctx
+      self.dyn_size_ext = other.dyn_size_ext
+      return
+    self._init_default_dyn_size_ext(dyn_size)
+    self.set_tag_on_size_tensor(dyn_size)
+
+  def _init_default_dyn_size_ext(self, dyn_size):
+    """
+    :param tf.Tensor dyn_size:
+    """
+    if self.dyn_size_ext:
+      if self.dyn_size_ext.placeholder is not None:
+        # Do not allow resetting it to sth different.
+        assert self.dyn_size_ext.placeholder is dyn_size
     else:
-      self.set_tag_on_size_tensor(dyn_size)
+      beam = getattr(dyn_size, "_RETURNN_dyn_size_beam", None)
+      self.dyn_size_ext = Data(
+        name=("%s:dyn_size" % self.description) if self.description else dyn_size.op.name,
+        dtype=Data.size_dtype, shape=(), batch_dim_axis=0,
+        batch=self.batch, beam=beam, control_flow_ctx=self.control_flow_ctx)
+    self.dyn_size_ext.placeholder = dyn_size
 
   def is_batch_dim(self):
     """
@@ -635,10 +648,14 @@ class Dim(object):
       assert self.batch == batch
     elif batch and not self.batch:
       self.batch = batch  # overtake
+    if not self.is_batch_dim() and self.is_dynamic():
+      if same_as_before:
+        assert self.dyn_size_ext and self.dyn_size_ext.placeholder is not None
+        # Do not overwrite it.
+      else:
+        self._init_default_dyn_size_ext(x)
     if getattr(x, "_is_size_of_dim_tag", None) is None:
       setattr(x, "_is_size_of_dim_tag", self)
-    if not self.is_batch_dim() and self.dyn_size is None:
-      self.dyn_size = x
     return self
 
   @classmethod
