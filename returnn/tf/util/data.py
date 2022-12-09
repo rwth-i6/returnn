@@ -2920,7 +2920,7 @@ class Data(object):
         shape, batch_dim_axis=batch_dim_axis, time_dim_axis=time_dim_axis, feature_dim_axis=feature_dim_axis,
         size_placeholder=size_placeholder, name=name,
         extern_data=auto_create_placeholders,
-        dim_tags=dim_tags, sparse=sparse)
+        dim_tags=dim_tags, sparse=sparse, batch=self.batch)
       del batch_dim_axis
       del shape
     self._dim_tags = dim_tags  # type: typing.Tuple[Dim]
@@ -5855,6 +5855,7 @@ def _infer_dim_tags_tuple_from_shape(
   shape,
   batch_dim_axis, time_dim_axis, feature_dim_axis,
   sparse,
+  batch,
   size_placeholder,
   dim_tags,
   name,
@@ -5866,6 +5867,7 @@ def _infer_dim_tags_tuple_from_shape(
   :param int|None time_dim_axis:
   :param int|None|NotSpecified feature_dim_axis:
   :param bool sparse:
+  :param BatchInfo|None batch:
   :param dict[int,tf.Tensor]|None size_placeholder: key is axis without batch-dim
   :param dict[int,Dim]|None dim_tags: some existing explicitly specified dim tags. key is axis with batch-dim
   :param bool extern_data:
@@ -5919,9 +5921,9 @@ def _infer_dim_tags_tuple_from_shape(
           description="%s:var:extern_data:%s" % (tag_name, name),
           # Spatial dim tag, even if axis == feature_dim_axis. This is to keep the old behavior.
           # This is such that Dim.is_equal behaves as before, e.g. in Data.get_common_data.
-          kind=Dim.Types.Spatial,
+          kind=Dim.Types.Spatial, batch=batch,
           auto_generated=True)
-        tag.dyn_size_ext = Data("%s_dim%i_size" % (name, axis_wo_b), dtype=Data.size_dtype, shape=())
+        tag.dyn_size_ext = Data("%s_dim%i_size" % (name, axis_wo_b), dtype=Data.size_dtype, shape=(), batch=batch)
         dim_tags[axis] = tag
       dyn_size = tag.dyn_size
     if tag:
@@ -5933,6 +5935,7 @@ def _infer_dim_tags_tuple_from_shape(
     if axis == feature_dim_axis and dyn_size is None and axis != time_dim_axis:
       tag = Dim(
         kind=Dim.Types.Feature, dimension=dim, description="feature:%s" % name,
+        batch=batch if dim is None else None,
         undefined=dim is None, auto_generated=True)
     else:
       assert axis in spatial_axes
@@ -5948,9 +5951,10 @@ def _infer_dim_tags_tuple_from_shape(
       description += ":%s" % name
       tag = Dim(
         kind=Dim.Types.Spatial, description=description, dimension=dim, dyn_size=dyn_size,
+        batch=batch if dim is None else None,
         undefined=dim is None and dyn_size is None, auto_generated=True)
     if dim is None and tag.dyn_size_ext is None:
-      tag.dyn_size_ext = Data("%s_dim%i_size" % (name, axis_wo_b), dtype=Data.size_dtype, shape=())
+      tag.dyn_size_ext = Data("%s_dim%i_size" % (name, axis_wo_b), dtype=Data.size_dtype, shape=(), batch=batch)
       if dyn_size is not None:
         tag.dyn_size_ext.placeholder = dyn_size
     dim_tags[axis] = tag
