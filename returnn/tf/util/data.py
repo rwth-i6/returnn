@@ -1038,6 +1038,8 @@ class Dim(object):
     if self_derived_bases.issubset(other_derived_bases):
       # Avoid cycles on derived_from_tag. https://github.com/rwth-i6/returnn/issues/1054
       return other.declare_same_as(self)
+    self.derived_from_op = None
+    self.derived_from_tag = None
     if self_same_as is not self:
       assert not self_same_as.same_as
       if self_same_as is other_same_base:
@@ -1046,6 +1048,10 @@ class Dim(object):
       if (self.dyn_size_ext is None or not self._validate_in_current_graph()) and self_same_as.dyn_size_ext:
         self.dyn_size_ext = self_same_as.get_dyn_size_ext_for_batch_ctx(
           self.batch, self.control_flow_ctx, template_only=True)
+    else:
+      for dim_ in self._same_for_batch_ctx.values():
+        dim_.derived_from_op = None
+        dim_.derived_from_tag = None
     other_same_base._merge_same_for_batch_ctx_dict(self)
     other._maybe_update()
     self.same_as = other_same_base
