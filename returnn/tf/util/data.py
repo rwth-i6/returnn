@@ -394,7 +394,10 @@ class Dim(object):
       if dyn_size_ext:
         same_base.dyn_size_ext = dyn_size_ext
         assert not same_base.dyn_size_ext.control_flow_ctx
-      same_base.complete_dyn_size(template_only=True)
+      elif same_base.dyn_size_ext:
+        same_base.dyn_size_ext.batch = batch
+      else:
+        same_base.complete_dyn_size(template_only=True)
       return same_base
     dim_tag = Dim(
       kind=self.kind, description=self.description, dimension=self.dimension,
@@ -4560,6 +4563,8 @@ class Data(object):
     """
     if batch:
       assert batch.beam == self.beam
+    if self._batch == batch:  # fast path
+      return
     self._batch = batch
     self._adapt_batch_consistent_dim_tags()
 
