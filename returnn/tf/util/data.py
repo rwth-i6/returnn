@@ -1131,15 +1131,17 @@ class Dim(object):
       self._same_for_batch_ctx[key] = dim
     other._same_for_batch_ctx.clear()  # we only want to have it once
 
-  def derive_from(self, base):
+  def derive_from(self, base, set_derived_from_flag=True):
     """
     :param Dim base:
+    :param bool set_derived_from_flag:
     """
     self_base = self.get_same_base()
-    if self_base.derived_from_tag:
-      assert self_base.derived_from_tag == base
-    else:
-      self_base.derived_from_tag = base
+    if set_derived_from_flag:
+      if self_base.derived_from_tag:
+        assert self_base.derived_from_tag == base
+      else:
+        self_base.derived_from_tag = base
     if not self.batch:
       self.batch = base.batch
     if not self.control_flow_ctx:
