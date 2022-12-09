@@ -337,6 +337,23 @@ class Dim(object):
     if same_base.batch == batch and same_base._can_use_in_ctx(ctx) and same_base.dyn_size_ext:
       return same_base
     # Ok, nothing matching found.
+    if ctx:
+      # Check if the ctx is really relevant, when this is derived from other tags.
+      derived_bases = same_base.get_derived_bases_set()
+      derived_bases.remove(same_base)
+      if derived_bases:
+        derived_ctxs = set()
+        for d in derived_bases:
+          with util.guard_infinite_recursion(Dim.get_for_batch_ctx, d):
+            d = d.get_for_batch_ctx(batch=batch, ctx=ctx)
+          if d.control_flow_ctx:
+            derived_ctxs.add(d.control_flow_ctx)
+        if not derived_ctxs:
+          ctx = None
+        elif len(derived_ctxs) == 1:
+          ctx = derived_ctxs.pop()
+        else:
+          raise NotImplementedError("not yet implemented: multiple derived ctxs: %r" % (derived_ctxs,))
     dyn_size_ext = None
     # Maybe we have sth with the base batch without beam or padded batch which we can extend.
     if batch != batch.get_global_base():
