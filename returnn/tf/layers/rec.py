@@ -8255,7 +8255,8 @@ class MaskedComputationLayer(LayerBase):
     layer_class.transform_config_dict(layer_desc, network=extra_net, get_layer=sub_get_layer)
     # noinspection PyProtectedMember
     layer_desc = extra_net._create_layer_layer_desc(name=name, layer_desc=layer_desc)
-    _Locals.out_spatial_dim_.derive_from(_Locals.in_spatial_dim_)
+    if _Locals.out_spatial_dim_ and _Locals.in_spatial_dim_:
+      _Locals.out_spatial_dim_.derive_from(_Locals.in_spatial_dim_)
     return layer_class, layer_desc, _Locals.in_spatial_dim_, _Locals.out_spatial_dim_
 
   @classmethod
