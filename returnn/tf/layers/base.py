@@ -529,6 +529,7 @@ class LayerBase(object):
         assert data.available_for_inference
         extern_data.init_batch_info()  # this should create it and also set it
         assert data.batch
+        network.get_root_network().extern_data.set_batch_info(data.batch)
         return data.batch
 
       # Some heuristic for now to fix missing batch info. We should try to fix get_out_data_from_opts though...

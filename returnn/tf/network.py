@@ -39,6 +39,7 @@ class ExternData(object):
     :param None|dict[str,dict[str]] data: optional init kwargs for Data
     """
     self._config = None  # type: typing.Optional["returnn.config.Config"]
+    self._batch_info = None  # type: typing.Optional["returnn.tf.util.data.BatchInfo"]
     self.data = {}  # type: typing.Dict[str,Data]
     self.default_input = default_input
     self.default_target = default_target
@@ -141,13 +142,14 @@ class ExternData(object):
     """
     from returnn.tf.util.data import BatchInfo
     from returnn.tf.util.data import batch_dim as global_batch_dim_tag
-    batch_info = None  # type: typing.Optional[BatchInfo]
+    batch_info = self._batch_info  # type: typing.Optional[BatchInfo]
     # Maybe we already set it, and then added new data items.
-    for key, data in self.get_sorted_data_items():
-      assert isinstance(data, Data)
-      if data.available_for_inference and data.batch and data.batch.is_global_batch():
-        batch_info = data.batch
-        break
+    if not batch_info:
+      for key, data in self.get_sorted_data_items():
+        assert isinstance(data, Data)
+        if data.available_for_inference and data.batch and data.batch.is_global_batch():
+          batch_info = data.batch
+          break
     if not batch_info or batch_info.static_dim == -1:
       batch_dim_value = None  # type: typing.Union[tf.Tensor,int,None]
       for key, data in self.get_sorted_data_items():
@@ -190,6 +192,7 @@ class ExternData(object):
         batch_info = BatchInfo.make_global_batch_info(batch_dim=batch_dim_value)
       else:
         batch_info.dim = batch_dim_value
+    self._batch_info = batch_info
     # Set batch info on global batch dim tag. We should probably change this at some point to not modify the global tag.
     global_batch_dim_tag.batch = batch_info
     # Set batch info on extern data.
@@ -348,11 +351,22 @@ class ExternData(object):
       dict(allow_same_feature_dim=allow_same_feature_dim))
     return tags
 
+  def set_batch_info(self, batch_info):
+    """
+    :param returnn.tf.util.data.BatchInfo batch_info:
+    """
+    from returnn.tf.util.data import BatchInfo
+    assert isinstance(batch_info, BatchInfo)
+    self._batch_info = batch_info
+    self.init_batch_info()
+
   def get_batch_info(self, allow_none=False):
     """
     :param bool allow_none:
     :rtype: returnn.tf.util.data.BatchInfo|None
     """
+    if self._batch_info:
+      return self._batch_info
     for key, data in self.get_sorted_data_items():
       assert isinstance(data, Data)
       if data.available_for_inference and data.have_batch_axis():
