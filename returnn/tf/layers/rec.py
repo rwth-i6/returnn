@@ -2424,7 +2424,7 @@ class _SubnetworkRecCell(object):
         fixed_seq_len = input_seq_len
       if fixed_seq_len is not None:
         time_dim_tag = Dim.get_tag_from_size_tensor(fixed_seq_len)
-        assert time_dim_tag == self.time_dim_tag
+        assert time_dim_tag == self.time_dim_tag, "%s: fixed_seq_len %s without dim tag?" % (self, fixed_seq_len)
         if fixed_seq_len.get_shape().ndims > 0:
           assert fixed_seq_len.get_shape().ndims == 1
           with tf.name_scope("check_seq_len_batch_size"):
