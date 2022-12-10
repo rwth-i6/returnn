@@ -7533,27 +7533,27 @@ def test_conv_layer_NCHW():
         name="src_nhwc", network=net,
         output=Data(**{
           "name": "src_nhwc_output",
+          "placeholder": tf_compat.v1.placeholder(shape=(None, None, 16, 17), dtype=tf.float32),
+          "size_placeholder": {0: tf_compat.v1.placeholder(shape=(None,), dtype=tf.int32)},
           "dim": 17,
           "shape": (None, 16, 17),
           "batch_dim_axis": 0,
           "time_dim_axis": 1,
           "feature_dim_axis": 3,
           "sparse": False}))
-      src_nhwc.output.placeholder = tf_compat.v1.placeholder(shape=(None, None, 16, 17), dtype=tf.float32)
-      src_nhwc.output.size_placeholder = {0: tf_compat.v1.placeholder(shape=(None,), dtype=tf.int32)}
     with tf_compat.v1.variable_scope("src_nchw"):
       src_nchw = InternalLayer(
         name="src_nchw", network=net,
         output=Data(**{
           "name": "src_nchw_output",
+          "placeholder": tf_compat.v1.placeholder(shape=(None, 17, None, 16), dtype=tf.float32),
+          "size_placeholder": {1: tf_compat.v1.placeholder(shape=(None,), dtype=tf.int32)},
           "dim": 17,
           "shape": (17, None, 16),
           "batch_dim_axis": 0,
           "time_dim_axis": 2,
           "feature_dim_axis": 1,
           "sparse": False}))
-      src_nchw.output.placeholder = tf_compat.v1.placeholder(shape=(None, 17, None, 16), dtype=tf.float32)
-      src_nchw.output.size_placeholder = {1: tf_compat.v1.placeholder(shape=(None,), dtype=tf.int32)}
 
     filters = 64
     filter_size = (5, 5)
