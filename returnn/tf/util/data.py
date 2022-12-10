@@ -489,9 +489,6 @@ class Dim(object):
       If the dyn size can potentially be of a different shape, directly access dyn_size_ext.
     :rtype: tf.Tensor|None
     """
-    if self.is_dynamic() and (not self.dyn_size_ext or self.dyn_size_ext.placeholder is None):
-      # Try to complete.
-      self.complete_dyn_size()
     if self.dyn_size_ext:
       return self.dyn_size_ext.placeholder
     return None
