@@ -113,6 +113,12 @@ class Dim(object):
       assert isinstance(src_data, Data) and isinstance(src_axis, int)
     if not batch and dyn_size_ext:
       batch = dyn_size_ext.batch
+      if not control_flow_ctx:
+        control_flow_ctx = dyn_size_ext.control_flow_ctx
+    if not batch and derived_from_tag:
+      batch = derived_from_tag.batch
+      if not control_flow_ctx:
+        control_flow_ctx = derived_from_tag.control_flow_ctx
     self.batch = batch
     self.control_flow_ctx = control_flow_ctx
     self.src_data = src_data
