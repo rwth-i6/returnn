@@ -1045,18 +1045,24 @@ class Dim(object):
       return
     if other_same_base.get_same_derived_base() is self_same_as:
       # We actually want it to be the other way around.
-      other_same_base.declare_same_as(self_same_as)
+      other.declare_same_as(self)
       return
     if self.batch:
       # If self is defined (self.is_dim_known), be fair to other, and adapt it to the right batch,
       # such that other.is_dim_known is correct, by potentially completing it.
-      other = other.get_for_batch_ctx(self.batch, ctx=self.control_flow_ctx)
-    if (self.is_dim_known() and not other.is_dim_known()) or (self.undefined and not other.undefined):
-      if self_same_as._creation_idx < other_same_base._creation_idx:
-        # We want to keep self instead.
+      other_ = other.get_for_batch_ctx(self.batch, ctx=self.control_flow_ctx)
+    else:
+      other_ = other
+    if (self.is_dim_known() and not other_.is_dim_known()) or (not self.undefined and other_.undefined):
+      if self_same_as._creation_idx > other_same_base._creation_idx:
+        # We want to keep other instead.
         # https://github.com/rwth-i6/returnn_common/issues/200
-        other_same_base.declare_same_as(self_same_as)
-        return
+        self_same_as.description = other_same_base.description
+        # Set new description, because in case of auto_generated,
+        # they would evaluate to be the same dim otherwise.
+        other_same_base.description = other_same_base.description + "{to-be-replaced}"
+      other.declare_same_as(self)
+      return
     other_derived_bases = other.get_derived_bases_set()
     self_derived_bases = self.get_derived_bases_set()
     assert other_derived_bases != self_derived_bases
@@ -1132,6 +1138,11 @@ class Dim(object):
         other_same_base.derived_from_op = self.derived_from_op
       elif other_same_base.derived_from_op and not self.derived_from_op:
         self.derived_from_op = other_same_base.derived_from_op
+    if self.batch:
+      self_ = self.get_for_batch_ctx(batch=self.batch, ctx=self.control_flow_ctx)
+      if self_ is not self:
+        self.control_flow_ctx = self_.control_flow_ctx  # might be different
+        self.dyn_size_ext = self_.dyn_size_ext  # might be unset
 
   def _merge_same_for_batch_ctx_dict(self, other):
     """
