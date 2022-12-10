@@ -1864,6 +1864,13 @@ class InternalLayer(LayerBase):
   This is not supposed to be used by the user.
   It is used by some code to construct a wrapper layer or so.
   """
+  def __init__(self, output, **kwargs):
+    """
+    :param Data output:
+    """
+    # Explicit call to fixup_out_data as this might be missing by some direct construction.
+    output = self.fixup_out_data(output=output, **kwargs)
+    super().__init__(output=output, **kwargs)
 
 
 class DataNotAvailableLayer(InternalLayer):
