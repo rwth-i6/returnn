@@ -537,7 +537,9 @@ class LayerBase(object):
       dep_batches = [dep.output.batch for dep in dep_layers if dep.output.batch]
       dyn_dim_tags_with_batch = [
         dim_tag for dim_tag in output.dim_tags
-        if dim_tag.dyn_size_ext and dim_tag.dyn_size_ext.have_batch_axis()]
+        if dim_tag.dyn_size_ext
+        and dim_tag.dyn_size_ext.have_batch_axis()
+        and dim_tag.dyn_size_ext.placeholder is not None]
       dim_tags_with_batch_info = [dim_tag for dim_tag in output.dim_tags if dim_tag.batch]
       if dep_batches:
         output.batch = BatchInfo.get_common_batch_info(dep_batches).copy_set_beam(output.beam)
