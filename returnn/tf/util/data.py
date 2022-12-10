@@ -423,13 +423,14 @@ class Dim(object):
         same_base.dyn_size_ext.batch = batch
       else:
         same_base.complete_dyn_size(template_only=True)
-      return same_base
-    dim_tag = Dim(
-      kind=self.kind, description=self.description, dimension=self.dimension,
-      auto_generated=self.auto_generated,
-      batch=batch, control_flow_ctx=ctx,
-      dyn_size_ext=dyn_size_ext)
-    dim_tag.same_as = same_base
+      dim_tag = same_base
+    else:
+      dim_tag = Dim(
+        kind=self.kind, description=self.description, dimension=self.dimension,
+        auto_generated=self.auto_generated,
+        batch=batch, control_flow_ctx=ctx,
+        dyn_size_ext=dyn_size_ext)
+      dim_tag.same_as = same_base
     if dyn_size_ext and dyn_size_ext.placeholder is not None:
       if Dim.get_tag_from_size_tensor(dyn_size_ext.placeholder) is None:
         dim_tag.set_tag_on_size_tensor(dyn_size_ext.placeholder, batch=batch)
