@@ -143,6 +143,8 @@ class Dim(object):
       self.dyn_size = dyn_size
     self._creation_idx = Dim._creation_counter
     Dim._creation_counter += 1
+    if self.derived_from_op:
+      self.complete_dyn_size(template_only=True)
 
   def __repr__(self):
     return "Dim{%s}" % self.short_repr()
