@@ -656,7 +656,8 @@ class Dim(object):
           "\nThis is maybe the result of an incorrect declare_same_as. ",
           "same_as = %s" % self.same_as]))
     if batch and getattr(x, "_RETURNN_dyn_size_beam", None):
-      assert batch.beam == getattr(x, "_RETURNN_dyn_size_beam")
+      assert batch.beam == getattr(x, "_RETURNN_dyn_size_beam"), (
+        "%s: dyn size %s has unexpected batch %s, expected %s" % (self, x, batch, getattr(x, "_RETURNN_dyn_size_beam")))
     if self.batch and batch:
       assert self.batch == batch
     elif batch and not self.batch:
