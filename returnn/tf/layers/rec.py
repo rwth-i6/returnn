@@ -3752,7 +3752,9 @@ class _SubnetworkRecCell(object):
         # as this might have set dyn sizes on dim tags.
         time_dim_tag = Dim.get_tag_from_size_tensor(resolved_seq_len)
         if not time_dim_tag:
-          batch = in_loop_layer.output.batch.copy_set_beam(search_choices.get_beam_info())
+          batch = in_loop_layer.output.batch
+          if search_choices:
+            batch = batch.copy_set_beam(search_choices.get_beam_info())
           time_dim_tag = self.time_dim_tag.get_for_batch_ctx(batch=batch, ctx=self.parent_net.get_control_flow_ctx())
           time_dim_tag.set_tag_on_size_tensor(resolved_seq_len, batch=batch)
         else:
