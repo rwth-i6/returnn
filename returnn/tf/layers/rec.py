@@ -1202,11 +1202,15 @@ class _SubnetworkRecCell(object):
     self._construct_template(parent_get_layer=parent_get_layer)
     if not time_dim_tag.is_dim_known() and "end" in self.layer_data_templates:
       end_data = self.layer_data_templates["end"].output
-      time_dim_tag.batch = end_data.batch
-      time_dim_tag.control_flow_ctx = parent_net.get_control_flow_ctx()
-      time_dim_tag.dyn_size_ext = end_data.copy_template("%s:dyn-size" % rec_layer_name)
-      time_dim_tag.dyn_size_ext.control_flow_ctx = parent_net.get_control_flow_ctx()
-      time_dim_tag.dyn_size_ext.dtype = Data.size_dtype
+      dyn_size_ext = end_data.copy_template("%s:dyn-size" % rec_layer_name)
+      dyn_size_ext.control_flow_ctx = parent_net.get_control_flow_ctx()
+      dyn_size_ext.dtype = Data.size_dtype
+      # This will get resolved to fit the final output. See _op_search_resolve().
+      output_data = self.layer_data_templates["output"].output
+      dyn_size_ext.beam = output_data.beam
+      dyn_size_ext.batch = output_data.batch
+      time_dim_tag.set_dyn_size_ext_for_batch_ctx(
+        batch=dyn_size_ext.batch, ctx=dyn_size_ext.control_flow_ctx, dyn_size_ext=dyn_size_ext)
     self._last_frames = {}  # type: typing.Dict[str,Data]
     self._initial_outputs = None  # type: typing.Optional[typing.Dict[str,tf.Tensor]]
     self._initial_extra_outputs = None  # type: typing.Optional[typing.Dict[str,typing.Dict[str,typing.Union[tf.Tensor,typing.Tuple[tf.Tensor,...]]]]]  # nopep8
@@ -3251,6 +3255,9 @@ class _SubnetworkRecCell(object):
 
     choice_seq_in_frame = self._get_search_choice_seq(search_choices)
     latest_layer_choice = choice_seq_in_frame[0]
+    latest_batch = (
+      latest_layer_choice.output.batch
+      or self.parent_rec_layer.output.batch.copy_set_beam(latest_layer_choice.output.beam))
 
     # The max_seq_len might actually be one more, as it includes the EOS, but that does not matter;
     # we just want to create a new acc_ta with the same length.
@@ -3271,7 +3278,14 @@ class _SubnetworkRecCell(object):
       # This means have_known_seq_len=True.
       end_layer = None
 
-    if end_layer:
+    # First see if we already calculated this earlier.
+    time_dim_tag = self.time_dim_tag.get_for_batch_ctx(
+      batch=latest_batch,
+      ctx=rec_layer.network.get_control_flow_ctx())
+    if time_dim_tag.dyn_size_ext and time_dim_tag.dyn_size_ext.placeholder is not None:
+      assert time_dim_tag.dyn_size_ext.batch == latest_batch
+      seq_len = time_dim_tag.dyn_size_ext.placeholder
+    elif end_layer:
       # seq_len is determined from the end-layer. We need to translate it to the right beam.
       end_layer_choice = self.net.get_search_choices(src=end_layer)
       assert end_layer_choice and end_layer_choice.search_choices
@@ -3284,6 +3298,10 @@ class _SubnetworkRecCell(object):
       end_layer_choice_index = choice_seq_in_frame.index(end_layer_choice)
       choices_seq_until_end_layer = choice_seq_in_frame[:end_layer_choice_index]
 
+      assert (
+        getattr(seq_len, "_RETURNN_dyn_size_beam", NotSpecified) in (NotSpecified, end_layer_choice.output.batch.beam))
+      seq_len._RETURNN_dyn_size_beam = end_layer_choice.output.batch.beam
+
       for choice_ in reversed(choices_seq_until_end_layer):
         src_choice_beams = self.final_acc_tas_dict["choice_%s" % choice_.name].read(
           max_seq_len - 1, name="ta_read_choice")  # (batch, beam) -> beam_in idx
@@ -3292,15 +3310,15 @@ class _SubnetworkRecCell(object):
         assert getattr(seq_len, "_RETURNN_dyn_size_beam", NotSpecified) in (NotSpecified, choice_.output.batch.beam)
         seq_len._RETURNN_dyn_size_beam = choice_.output.batch.beam
 
+      assert time_dim_tag.dyn_size_ext
+      time_dim_tag.dyn_size_ext.placeholder = seq_len
+
     else:  # not end_layer
       # Here we don't need to resolve anything, as the sequence length is the same for all hyps in the beam.
       # However, beam size for the current output may be different from the "output" layer.
       tag = Dim.get_tag_from_size_tensor(seq_len)
       assert tag
-      latest_batch = (
-        latest_layer_choice.output.batch
-        or self.parent_rec_layer.output.batch.copy_set_beam(latest_layer_choice.output.beam))
-      tag = tag.get_for_batch_ctx(batch=latest_batch, ctx=self.net.control_flow_ctx)
+      tag = tag.get_for_batch_ctx(batch=latest_batch, ctx=rec_layer.network.get_control_flow_ctx())
       assert tag.dyn_size is not None
       assert tag.batch == latest_batch and tag.batch.beam == latest_layer_choice.output.beam
       seq_len = tag.dyn_size
@@ -3748,13 +3766,18 @@ class _SubnetworkRecCell(object):
         acc_ta, latest_layer_choice_name, search_choices, resolved_seq_len = self._opt_search_resolve(
           layer_name=name, acc_ta=acc_ta, final_net_vars=final_net_vars, seq_len=seq_len,
           search_choices_cache=search_choices_cache)
+        if latest_layer_choice_name:
+          beam = self.net.layers[latest_layer_choice_name].search_choices.get_beam_info()
+        elif search_choices:
+          beam = search_choices.get_beam_info()
+        else:
+          beam = None
         # Use the output Data from the in-loop layer,
         # as this might have set dyn sizes on dim tags.
         time_dim_tag = Dim.get_tag_from_size_tensor(resolved_seq_len)
         if not time_dim_tag:
           batch = in_loop_layer.output.batch
-          if search_choices:
-            batch = batch.copy_set_beam(search_choices.get_beam_info())
+          batch = batch.copy_set_beam(beam)
           time_dim_tag = self.time_dim_tag.get_for_batch_ctx(batch=batch, ctx=self.parent_net.get_control_flow_ctx())
           time_dim_tag.set_tag_on_size_tensor(resolved_seq_len, batch=batch)
         else:
@@ -3764,12 +3787,7 @@ class _SubnetworkRecCell(object):
           .copy_template()
           .copy_add_dim_by_tag(time_dim_tag, unbroadcast=True, axis=0)
           .copy_template_set_ctx(self.parent_net.get_control_flow_ctx()))
-        if latest_layer_choice_name:
-          output.beam = self.net.layers[latest_layer_choice_name].search_choices.get_beam_info()
-        elif search_choices:
-          output.beam = search_choices.get_beam_info()
-        else:
-          output.beam = None
+        output.beam = beam
         if output.batch:
           output.batch = output.batch.copy_set_beam(output.beam)
         output.set_dynamic_size(axis=0, sizes=resolved_seq_len)
