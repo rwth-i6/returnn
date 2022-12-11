@@ -1873,7 +1873,7 @@ class InternalLayer(LayerBase):
     """
     # Explicit call to fixup_out_data as this might be missing by some direct construction.
     output = self.fixup_out_data(output=output, **kwargs)
-    super().__init__(output=output, **kwargs)
+    super(InternalLayer, self).__init__(output=output, **kwargs)
 
 
 class DataNotAvailableLayer(InternalLayer):
