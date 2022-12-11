@@ -8014,7 +8014,8 @@ def test_ResizeLayer_fill_dropout():
       name="resize", network=net,
       factor=factor, axis="T", kind="fill", fill_value=fill_value, fill_dropout=0.5, sources=[src],
       output=ResizeLayer.get_out_data_from_opts(
-        name="resize", network=net, factor=factor, axis="T", kind="fill", sources=[src]))
+        name="resize", network=net,
+        factor=factor, axis="T", kind="fill", fill_value=fill_value, fill_dropout=0.5, sources=[src]))
     out, seq_lens = session.run([layer.output.placeholder, layer.output.size_placeholder[0]])
     print(out)
     print(seq_lens)
