@@ -4428,7 +4428,10 @@ class UnflattenNdLayer(_ConcatInputLayer):
       assert not declare_same_sizes_as
     else:
       out_dims = [
-        SpatialDim("%s:unflatten-nd:%i" % (name, i), auto_generated=True)
+        SpatialDim(
+          "%s:unflatten-nd:%i" % (name, i), auto_generated=True,
+          dyn_size_ext=Data(
+            "%s:unflatten-nd:%i" % (name, i), shape=(), dtype=Data.size_dtype))
         for i in range(num_axes)]
       if declare_same_sizes_as:
         for i, other in declare_same_sizes_as.items():
