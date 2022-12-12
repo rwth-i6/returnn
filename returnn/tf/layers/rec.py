@@ -8217,11 +8217,6 @@ class MaskedComputationLayer(LayerBase):
           _Locals.out_spatial_dim_ = Dim(
             kind=Dim.Types.Spatial, description="%s:masked:time" % name,
             derived_from_tag=_Locals.in_spatial_dim_, auto_generated=True)
-          _Locals.out_spatial_dim_.batch = _Locals.in_spatial_dim_.batch
-          _Locals.out_spatial_dim_.control_flow_ctx = _Locals.in_spatial_dim_.control_flow_ctx
-          if _Locals.in_spatial_dim_.dyn_size_ext:
-            _Locals.out_spatial_dim_.dyn_size_ext = _Locals.in_spatial_dim_.dyn_size_ext.copy_template(
-              name="%s:masked:time" % name)
           if _Locals.in_spatial_dim_ == over_rec_time_dim and over_rec_time_dim and not inside_rec_time_dim:
             if extra_net:
               # Optimized out, so any sub layers will effectively operate on the out spatial dim.
