@@ -412,19 +412,26 @@ class Dim(object):
           dyn_size_ext.batch = batch
           break
     ctx = dyn_size_ext.control_flow_ctx if dyn_size_ext else ctx
-    if (same_base.batch or batch) == batch and not same_base.control_flow_ctx and not ctx:
-      # The same_base instance is either undefined (no batch, no ctx) or it is defined for the same batch and ctx.
-      # In any case, reuse it then.
-      same_base.batch = batch
-      if dyn_size_ext:
-        same_base.dyn_size_ext = dyn_size_ext
-        assert not same_base.dyn_size_ext.control_flow_ctx
-      elif same_base.dyn_size_ext:
-        same_base.dyn_size_ext.batch = batch
-      else:
-        same_base.complete_dyn_size(template_only=True)
-      dim_tag = same_base
-    else:
+    dim_tag = None
+    for candidate in [self, same_base]:
+      if (candidate.batch or batch) == batch and not candidate.control_flow_ctx and not ctx:
+        # The same_base instance is either undefined (no batch, no ctx) or it is defined for the same batch and ctx.
+        # In any case, reuse it then.
+        candidate.batch = batch
+        if dyn_size_ext:
+          if candidate.dyn_size_ext:
+            candidate.dyn_size_ext.batch = batch
+            assert candidate.dyn_size_ext.dim_tags == dyn_size_ext.dim_tags
+          else:
+            candidate.dyn_size_ext = dyn_size_ext
+          assert not candidate.dyn_size_ext.control_flow_ctx
+        elif candidate.dyn_size_ext:
+          candidate.dyn_size_ext.batch = batch
+        else:
+          candidate.complete_dyn_size(template_only=True)
+        dim_tag = candidate
+        break
+    if not dim_tag:
       dim_tag = Dim(
         kind=self.kind, description=self.description, dimension=self.dimension,
         auto_generated=self.auto_generated,
