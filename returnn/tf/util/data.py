@@ -1052,7 +1052,12 @@ class Dim(object):
       other_ = other.get_for_batch_ctx(self.batch, ctx=self.control_flow_ctx)
     else:
       other_ = other
-    if (self.is_dim_known() and not other_.is_dim_known()) or (not self.undefined and other_.undefined):
+    if (
+          (self.is_dim_known() and not other_.is_dim_known()) or
+          # Like is_dim_known but for static dims, we might know both,
+          # but the derived_from_op still would provide more information.
+          (self.derived_from_op and not other_.derived_from_op and other_ not in self.get_derived_bases_set()) or
+          (not self.undefined and other_.undefined)):
       if self_same_as._creation_idx > other_same_base._creation_idx:
         # We want to keep other instead.
         # https://github.com/rwth-i6/returnn_common/issues/200
