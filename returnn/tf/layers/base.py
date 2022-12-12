@@ -517,6 +517,10 @@ class LayerBase(object):
       # In all cases set output.batch, even if the output has no batch dim,
       # as this is important in Data._adapt_batch_consistent_dim_tags().
 
+      global_batch = network.get_root_network().extern_data.get_batch_info(allow_none=True)
+      if global_batch:
+        assert global_batch.is_global_batch()
+
       def _set_global_batch_by_data(data):
         """
         :param Data data:
@@ -540,6 +544,10 @@ class LayerBase(object):
         if dim_tag.dyn_size_ext
         and dim_tag.dyn_size_ext.have_batch_axis()
         and dim_tag.dyn_size_ext.placeholder is not None]
+      for dim_tag in output.dim_tags:
+        # make sure the batch is valid, if we take it from there
+        # noinspection PyProtectedMember
+        dim_tag._validate_in_current_graph()
       dim_tags_with_batch_info = [dim_tag for dim_tag in output.dim_tags if dim_tag.batch]
       if dep_batches:
         output.batch = BatchInfo.get_common_batch_info(dep_batches).copy_set_beam(output.beam)
@@ -563,6 +571,8 @@ class LayerBase(object):
       elif output.placeholder is not None and output.have_batch_axis():
         # No layers at all yet. This implies that the output must already have a placeholder.
         output.batch = _set_global_batch_by_data(output)
+      if output.batch and global_batch:
+        assert global_batch == output.batch.get_global_base()
     if output.batch:
       output.batch = output.batch.copy_set_beam(output.beam)
     if output.control_flow_ctx != network.get_control_flow_ctx():
