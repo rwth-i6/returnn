@@ -475,6 +475,13 @@ class RecLayer(_ConcatInputLayer):
       if axis != single_step_dim:
         out = out.copy_add_dim_by_tag(dim_tag=axis, axis=0, unbroadcast=True)
         out.time_dim_axis = 0
+      for tag in out.dim_tags:
+        if tag.control_flow_ctx == subnet.net.control_flow_ctx:
+          outside_size = tag.dyn_size_ext.copy_template_set_ctx(network.get_control_flow_ctx())
+          outside_size = outside_size.copy_add_dim_by_tag(axis, unbroadcast=True, axis=0)
+          outside_size.time_dim_axis = 0
+          tag.set_dyn_size_ext_for_batch_ctx(
+            batch=outside_size.batch, ctx=outside_size.control_flow_ctx, dyn_size_ext=outside_size)
       out = out.copy_template_set_ctx(network.get_control_flow_ctx())
       deps += subnet.get_parent_deps()
     elif out_type or n_out is not NotSpecified or out_dim or loss:
@@ -3804,9 +3811,10 @@ class _SubnetworkRecCell(object):
           loop_acc_layers_search_choices[name] = latest_layer_choice_name
         loop_acc_layers[name] = layer_
         if isinstance(in_loop_layer, LengthLayer):
-          tag = in_loop_layer.dim_tag.get_for_batch_ctx(layer_.output.batch, layer_.output.control_flow_ctx)
-          if not tag.dyn_size_ext:
-            tag.dyn_size_ext = layer_.output
+          # We also use LengthLayer to accumulate dim tags dyn_size_ext.
+          # Those are added helper layers named ":dyn-tag-accum:...".
+          in_loop_layer.dim_tag.set_dyn_size_ext_for_batch_ctx(
+            batch=layer_.output.batch, ctx=layer_.output.control_flow_ctx, dyn_size_ext=layer_.output)
         return layer_
 
     # noinspection PyShadowingNames
