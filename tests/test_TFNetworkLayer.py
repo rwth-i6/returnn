@@ -1777,6 +1777,21 @@ def test_CompareLayer_allow_broadcast_all_sources():
     })
 
 
+def test_CombineLayer_time_dim_no_session_after_session():
+  from returnn.tf.util.data import batch_dim, FeatureDim, SpatialDim
+  input_dim = FeatureDim("input", 3)
+
+  with make_scope():
+    time_dim = SpatialDim("time")
+    net = TFNetwork(config=Config(), extern_data=ExternData({"data": {"dim_tags": [batch_dim, time_dim, input_dim]}}))
+    net.construct_from_dict({"output": {"class": "copy", "from": "data"}})
+
+  # This has messed up the time dim or batch info at some point.
+  # It is only triggered by executing the code above,
+  # otherwise it ran fine in isolation.
+  test_CombineLayer_broadcast_same_dim_diff_tag()
+
+
 def test_RangeFromLength_over_batch():
   # https://github.com/rwth-i6/pytorch-to-returnn/issues/100
   net_dict = {
