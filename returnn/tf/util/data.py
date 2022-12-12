@@ -414,7 +414,9 @@ class Dim(object):
     ctx = dyn_size_ext.control_flow_ctx if dyn_size_ext else ctx
     dim_tag = None
     for candidate in [self, same_base]:
-      if (candidate.batch or batch) == batch and not candidate.control_flow_ctx and not ctx:
+      if (
+            (candidate.batch == batch or (not candidate.batch and batch.is_global_batch())) and
+            not candidate.control_flow_ctx and not ctx):
         # The same_base instance is either undefined (no batch, no ctx) or it is defined for the same batch and ctx.
         # In any case, reuse it then.
         candidate.batch = batch
