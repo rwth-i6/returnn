@@ -3159,6 +3159,7 @@ class Subnetwork:
     subnet_layer_dict.pop("sources", None)
     subnet_layer_dict.pop("n_out", None)
     subnet_layer_dict.pop("out_type", None)
+    subnet_layer_dict.pop("out_shape", None)
 
     # The SubnetworkLayer is created only later (if at all).
     # But it doesn't really matter which layer we have as the parent layer for our subnetwork,
