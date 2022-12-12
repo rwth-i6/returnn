@@ -674,8 +674,8 @@ class SelectSearchSourcesLayer(InternalLayer):
             out_tag.dyn_size_ext = out_tag.dyn_size_ext.copy_extend_with_beam(self.output.beam)
           else:
             out_tag.dyn_size_ext = src_tag.dyn_size_ext.copy()
-        if out_tag.dyn_size_ext.placeholder is None:
-          assert out_tag.dyn_size_ext.have_batch_axis() and out_tag.dyn_size_ext.is_batch_major
+        if out_tag.dyn_size_ext.placeholder is None and out_tag.dyn_size_ext.have_batch_axis():
+          assert out_tag.dyn_size_ext.is_batch_major
           out_tag.dyn_size_ext.placeholder = transform(src_tag.dyn_size_ext.placeholder)
         if out_tag.dyn_size_ext.have_batch_axis():
           assert out_tag.dyn_size_ext.batch == out_tag.batch == self.output.batch
