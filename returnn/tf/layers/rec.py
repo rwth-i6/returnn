@@ -1200,6 +1200,9 @@ class _SubnetworkRecCell(object):
     self.prev_layer_templates = {}  # type: typing.Dict[str,_TemplateLayer]
     self._template_construction_exceptions = None  # type: typing.Optional[typing.List[str]]
     self._construct_template(parent_get_layer=parent_get_layer)
+    if not time_dim_tag.is_dim_known() and self.net.used_data_keys:
+      data = self.parent_net.get_extern_data(min(self.net.used_data_keys), mark_data_key_as_used=False)
+      time_dim_tag.declare_same_as(data.get_time_dim_tag())
     if not time_dim_tag.is_dim_known() and "end" in self.layer_data_templates:
       end_data = self.layer_data_templates["end"].output
       dyn_size_ext = end_data.copy_template("%s:dyn-size" % rec_layer_name)
