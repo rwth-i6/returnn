@@ -9968,19 +9968,14 @@ class CumConcatLayer(_ConcatInputLayer):
       self.rec_vars_outputs["state"] = concat_frames
       self.output.placeholder = concat_frames
 
-      if not new_dim_.dyn_size_ext or new_dim_.dyn_size_ext.placeholder is None:
+      if new_dim_.dyn_size_ext.placeholder is None:
         # Unbroadcasting to [B] is not needed because any layers operating on this
         # should be able to handle extended dyn sizes.
         # Clipping it to the max length for sequences in the loop which are already ended
         # (i.e. considering the end flag)
         # is also not needed because any calculations after the end are irrelevant.
         # Note: In case we have some initial state/output, this can be extended.
-        dyn_size = self.network.get_rec_step_index() + 1  # scalar
-        new_dim_.dyn_size_ext = Data(
-          name="%s:cum-concat:size-inside" % self.name,
-          dim_tags=[],  # scalar
-          placeholder=dyn_size, dtype="int32",
-          batch=self.output.batch, control_flow_ctx=self.network.get_control_flow_ctx())
+        new_dim_.dyn_size_ext.placeholder = self.network.get_rec_step_index() + 1  # scalar
 
     else:  # outside loop
       # If not inside a rec loop, this layer is a no-op on the tensor.
@@ -9988,15 +9983,10 @@ class CumConcatLayer(_ConcatInputLayer):
 
       # However, we used new dim tags, which were already prepared.
       # We now must fill in the extended dynamic size information.
-      if not new_dim_.dyn_size_ext:
+      if new_dim_.dyn_size_ext.placeholder is None:
         # This must match the logic above for inside the loop.
         # Note: In case we have some initial state/output, this can be extended.
-        dyn_size = tf.range(tf.math.reduce_max(rec_layer.time_dim_tag.dyn_size)) + 1  # [T]
-        new_dim_.dyn_size_ext = Data(
-          name="%s:cum-concat:size-outside" % self.name,
-          dim_tags=[rec_layer.time_dim_tag],
-          placeholder=dyn_size, dtype="int32",
-          batch=self.output.batch, control_flow_ctx=self.network.get_control_flow_ctx())
+        new_dim_.dyn_size_ext.placeholder = tf.range(tf.math.reduce_max(rec_layer.time_dim_tag.dyn_size)) + 1  # [T]
 
   @classmethod
   def get_out_data_from_opts(cls, name, network, sources, out_spatial_dim, **kwargs):
@@ -10013,11 +10003,11 @@ class CumConcatLayer(_ConcatInputLayer):
     assert rec_time_dim
     ctx = network.get_control_flow_ctx()
     assert ctx == input_data.control_flow_ctx
-    new_dim_in_ctx = out_spatial_dim.get_for_batch_ctx(batch=input_data.batch, ctx=ctx)
 
     if not input_data.has_axis(rec_time_dim):  # inside loop
       assert ctx and ctx.is_loop() and ctx.loop_spatial_dim == rec_time_dim
 
+      new_dim_in_ctx = out_spatial_dim.get_for_batch_ctx(batch=input_data.batch, ctx=ctx)
       new_dim_in_ctx.dyn_size_ext = Data(
         name="%s:cum-concat:size-inside" % name,
         dim_tags=[],  # scalar
@@ -10035,6 +10025,12 @@ class CumConcatLayer(_ConcatInputLayer):
     else:  # outside loop
       # Assume that the input has the time dim from the rec layer.
       axis = input_data.get_axis_from_description(rec_time_dim)
+      new_dim_in_ctx = out_spatial_dim.get_for_batch_ctx(batch=input_data.batch, ctx=ctx)
+      new_dim_in_ctx.dyn_size_ext = Data(
+        name="%s:cum-concat:size-outside" % name,
+        dim_tags=[rec_time_dim],
+        dtype="int32",
+        batch=input_data.batch, control_flow_ctx=ctx)
       return input_data.copy_template_replace_dim_tag(axis=axis, new_dim_tag=new_dim_in_ctx)
 
   # noinspection PyMethodOverriding
