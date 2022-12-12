@@ -3048,16 +3048,16 @@ class Data(object):
         assert self.placeholder.shape[i].value == self.batch_shape[i]
       self.placeholder.set_shape(self.batch_shape)
       assert self.placeholder.dtype.base_dtype.name == self.dtype
-      # Currently only if placeholder is set.
-      # We can later always do the check even without placeholder.
-      if assume_complete:
-        for tag in self.dim_tags:
-          if tag.dimension is None:
-            if tag.is_batch_dim():
-              continue
-            if not tag.dyn_size_ext or tag.dyn_size_ext.placeholder is None:
+    if assume_complete:
+      for tag in self.dim_tags:
+        if tag.is_batch_dim():
+          continue
+        if tag.is_dynamic():
+          assert tag.dyn_size_ext
+          if not ignore_placeholder:
+            if tag.dyn_size_ext.placeholder is None:
               tag.complete_dyn_size()
-            assert tag.dyn_size is not None
+            assert tag.dyn_size_ext.placeholder is not None
 
   def get_runtime_sanity_check_op(self):
     """
