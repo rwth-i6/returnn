@@ -1197,6 +1197,7 @@ class SliceNdLayer(_ConcatInputLayer):
       if size_data and (not slice_tag.dyn_size_ext or slice_tag.dyn_size_ext.placeholder is None):
         # in this case, size is not known before runtime and becomes dynamic and we need to set dyn_size
         assert slice_tag.is_dynamic()
+        slice_tag = slice_tag.get_for_batch_ctx(batch=size_data.batch, ctx=size_data.control_flow_ctx)
         slice_tag.dyn_size_ext = size_data
         slice_tag.set_tag_on_size_tensor(size_data.placeholder)
 
@@ -1294,8 +1295,21 @@ class SliceNdLayer(_ConcatInputLayer):
       start_data = start.output.copy()
     gather_positions_data = start_data.copy_template(name="%s_gather_positions" % name)
     if isinstance(size, LayerBase):
-      size = None
-    if isinstance(size, Dim):
+      out_spatial_dim_ = None
+      if size.output.placeholder is not None:
+        out_spatial_dim_ = Dim.get_tag_from_size_tensor(size.output.placeholder)
+      if not out_spatial_dim_:
+        out_spatial_dim_ = Dim(
+          kind=Dim.Types.Spatial,
+          description="sliced-time:%s" % name,
+          dimension=None, auto_generated=True)
+      out_spatial_dim_.set_dyn_size_ext_for_batch_ctx(
+        batch=size.output.batch, ctx=size.output.control_flow_ctx, dyn_size_ext=size.output)
+      if out_spatial_dim:
+        out_spatial_dim_.declare_same_as(out_spatial_dim)
+      else:
+        out_spatial_dim = out_spatial_dim_
+    elif isinstance(size, Dim):
       if out_spatial_dim:
         if not out_spatial_dim.is_dim_known():
           out_spatial_dim.declare_same_as(size)
