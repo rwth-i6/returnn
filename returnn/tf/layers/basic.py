@@ -4976,7 +4976,7 @@ class ReinterpretDataLayer(_ConcatInputLayer):
         new_dyn_size_ext.placeholder = tf.identity(
           new_dyn_size_ext.placeholder, name=get_valid_scope_name_from_str(new_dyn_size_ext.name))
         if new_tag.dyn_size_ext:
-          assert new_dyn_size_ext.dim_tags == new_dyn_size_ext.dim_tags
+          assert new_dyn_size_ext.dim_tags == new_tag.dyn_size_ext.dim_tags
         new_tag.dyn_size_ext = new_dyn_size_ext
         new_tag.set_tag_on_size_tensor(new_dyn_size_ext.placeholder)
     self.output.placeholder = input_data.placeholder
