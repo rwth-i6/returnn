@@ -458,7 +458,12 @@ class Dim(object):
     assert self.can_be_used_as_dim()
     same = self.get_for_batch_ctx(batch, ctx)
     assert dyn_size_ext.batch == batch and dyn_size_ext.control_flow_ctx == ctx
-    same.dyn_size_ext = dyn_size_ext
+    if same.dyn_size_ext:
+      assert same.dyn_size_ext.dim_tags == dyn_size_ext.dim_tags
+      if dyn_size_ext.placeholder is not None:
+        same.dyn_size_ext.placeholder = dyn_size_ext.placeholder
+    else:
+      same.dyn_size_ext = dyn_size_ext
     self._maybe_update()
 
   def get_dyn_size_ext_for_batch_ctx(self, batch, ctx, template_only=False):
