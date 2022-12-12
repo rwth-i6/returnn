@@ -1192,14 +1192,17 @@ class Dim(object):
         assert self_base.derived_from_tag == base
       else:
         self_base.derived_from_tag = base
-    if not self.batch:
+    if not self.batch and base.batch:
       self.batch = base.batch
-    if not self.control_flow_ctx:
       self.control_flow_ctx = base.control_flow_ctx
+      key = base.batch, base.control_flow_ctx
+      assert key not in self_base._same_for_batch_ctx
+      self_base._same_for_batch_ctx[key] = self
     if self.is_dynamic() or not self.is_dim_known():
       if not self.dyn_size_ext:
         if base.dyn_size_ext:
-          self.dyn_size_ext = base.dyn_size_ext.copy_template(name="%s:size" % self_base.description)
+          if base.batch and base.batch == self.batch and base.control_flow_ctx == self.control_flow_ctx:
+            self.dyn_size_ext = base.dyn_size_ext.copy_template(name="%s:size" % self_base.description)
         elif base.is_batch_dim():
           self.dyn_size_ext = Data("%s:batch" % self_base.description, shape=(), dtype="int32", batch_dim_axis=None)
 
