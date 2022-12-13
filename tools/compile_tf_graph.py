@@ -190,6 +190,7 @@ class SubnetworkRecCellSingleStep(_SubnetworkRecCell):
     dim_tag_ = Dim(
       kind=dim_tag.kind, description=dim_tag.description + "_base_state_var",
       dimension=None, dyn_size_ext=dim_tag_dyn_size_ext,
+      auto_generated=dim_tag.auto_generated,  # keep same is_equal behavior
       batch=dim_tag.batch)
     dim_tag_.set_tag_on_size_tensor(dim_tag_dyn_size_ext.placeholder)
     self._maybe_delay_tiled(state_var, dim_tag_.dyn_size_ext)
