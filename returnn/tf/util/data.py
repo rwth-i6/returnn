@@ -1058,8 +1058,8 @@ class Dim(object):
       return
     if other_same_base.get_same_derived_base() is self_same_as:
       # We actually want it to be the other way around.
-      other.declare_same_as(self)
-      return
+      with util.guard_infinite_recursion(Dim.declare_same_as, other, self):
+        return other.declare_same_as(self)
     if self.batch:
       # If self is defined (self.is_dim_known), be fair to other, and adapt it to the right batch,
       # such that other.is_dim_known is correct, by potentially completing it.
@@ -1079,21 +1079,23 @@ class Dim(object):
         # Set new description, because in case of auto_generated,
         # they would evaluate to be the same dim otherwise.
         other_same_base.description = other_same_base.description + "{to-be-replaced}"
-      other.declare_same_as(self)
-      return
+      with util.guard_infinite_recursion(Dim.declare_same_as, other, self):
+        return other.declare_same_as(self)
     other_derived_bases = other.get_derived_bases_set()
     self_derived_bases = self.get_derived_bases_set()
     assert other_derived_bases != self_derived_bases
     if self_derived_bases.issubset(other_derived_bases):
       # Avoid cycles on derived_from_tag. https://github.com/rwth-i6/returnn/issues/1054
-      return other.declare_same_as(self)
+      with util.guard_infinite_recursion(Dim.declare_same_as, other, self):
+        return other.declare_same_as(self)
     self.derived_from_op = None
     self.derived_from_tag = None
     if self_same_as is not self:
       assert not self_same_as.same_as
       if self_same_as is other_same_base:
         return
-      self_same_as.declare_same_as(other_same_base)
+      with util.guard_infinite_recursion(Dim.declare_same_as, self_same_as, other_same_base):
+        self_same_as.declare_same_as(other_same_base)
       if (self.dyn_size_ext is None or not self._validate_in_current_graph()) and self_same_as.dyn_size_ext:
         self.dyn_size_ext = self_same_as.get_dyn_size_ext_for_batch_ctx(
           self.batch, self.control_flow_ctx, template_only=True)
