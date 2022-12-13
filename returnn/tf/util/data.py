@@ -1105,6 +1105,14 @@ class Dim(object):
       for dim_ in self._same_for_batch_ctx.values():
         dim_.derived_from_op = None
         dim_.derived_from_tag = None
+    # Now merge existing variants. But only if not derived via op, because in that case, we can (and should!)
+    # automatically infer it. Note that we only got here when the other is not the same dim, so it means that
+    # the other is really different, the sizes are potentially different, but we want to overtake the other.
+    if other_same_base.derived_from_op:
+      # Cleanup everything, esp potential already computed sizes, as these might be invalid.
+      for dim_ in [self_same_as, self] + list(self._same_for_batch_ctx.values()):
+        if dim_.dyn_size_ext:
+          dim_.dyn_size_ext.placeholder = None
     other_same_base._merge_same_for_batch_ctx_dict(self)
     other._maybe_update()
     self.same_as = other_same_base
