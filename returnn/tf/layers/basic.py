@@ -2895,7 +2895,7 @@ class RangeLayer(LayerBase):
 
 class RangeInAxisLayer(LayerBase):
   """
-  Assume that the input is e.g. (B,T,D), and you specify axis="T", you will get (B=1,T,D=1),
+  Assume that the input is e.g. (B,T,D), and you specify axis="T", you will get (T,),
   where the specified axis is filled with ``tf.range``.
   See also :class:`RangeLayer`.
   """
