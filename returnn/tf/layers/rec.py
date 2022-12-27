@@ -4913,6 +4913,16 @@ class RnnCellLayer(_ConcatInputLayer):
       with rec_layer.var_creation_scope():
         ph = tf_compat.v1.placeholder(
           tf.float32, shape=shape_invariant, name="initial_state_placeholder_%s" % key_name)
+
+      def rename_var():
+        if isinstance(rec_layer, RecLayer) and isinstance(rec_layer.cell, _SubnetworkRecCell):
+          final_rec_vars = rec_layer.cell.get_final_rec_vars(name)
+          last_state = cls.get_state_by_key(final_rec_vars[state_key], key=key, shape=initial_shape)
+        else:
+          last_state = rec_layer.get_last_hidden_state(key=key)
+        tf.identity(last_state, name=key_name)
+
+      rec_layer.post_init_hooks.append(rename_var)
       return ph
     else:
       raise Exception("invalid initial state type %r for sub-layer %r, key %r" % (initial_state, name, key))
@@ -6960,11 +6970,13 @@ class SelfAttentionLayer(_ConcatInputLayer):
           prev_k_left = RnnCellLayer.get_rec_initial_state_inner(
             initial_state=initial_state, name=self.name, rec_layer=self,
             state_key="k_left",
+            key="k_left",
             initial_shape=(batch_dim, num_heads, 0, total_key_dim // num_heads),
             shape_invariant=(None, num_heads, None, total_key_dim // num_heads))
           prev_v_left = RnnCellLayer.get_rec_initial_state_inner(
             initial_state=initial_state, name=self.name, rec_layer=self,
             state_key="v_left",
+            key="v_left",
             initial_shape=(batch_dim, num_heads, 0, total_value_dim // num_heads),
             shape_invariant=(None, num_heads, None, total_value_dim // num_heads))
         else:
