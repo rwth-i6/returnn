@@ -4915,6 +4915,9 @@ class RnnCellLayer(_ConcatInputLayer):
           tf.float32, shape=shape_invariant, name="initial_state_placeholder_%s" % key_name)
 
       def rename_var():
+        """
+        Renames final hidden states to have a readable name.
+        """
         if isinstance(rec_layer, RecLayer) and isinstance(rec_layer.cell, _SubnetworkRecCell):
           final_rec_vars = rec_layer.cell.get_final_rec_vars(name)
           last_state = cls.get_state_by_key(final_rec_vars[state_key], key=key, shape=initial_shape)
