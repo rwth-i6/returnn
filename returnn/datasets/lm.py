@@ -125,8 +125,7 @@ class LmDataset(CachedDataset2):
       orth_symbols = open(orth_symbols_file).read().splitlines()
       self.orth_symbols_map = {sym: i for (i, sym) in enumerate(orth_symbols)}
       self.orth_symbols = orth_symbols
-      reverse_map = {i: sym for (i, sym) in enumerate(orth_symbols)}
-      self.labels["data"] = [sym for (i, sym) in sorted(reverse_map)]
+      self.labels["data"] = orth_symbols
       self.seq_gen = None
     if orth_symbols_map_file and orth_symbols_map_file.endswith('.pkl'):
       import pickle
@@ -181,26 +180,26 @@ class LmDataset(CachedDataset2):
     if word_end_symbol and not word_based:  # Character-based modeling and word_end_symbol is specified.
       self.orth_replace_map[" "] = [word_end_symbol]  # Replace all spaces by word_end_symbol.
 
-    num_indices = len(self.labels["data"])
+    num_labels = len(self.labels["data"])
     use_uint_types = False
     if BackendEngine.is_tensorflow_selected():
       use_uint_types = True
-    if num_indices <= 2 ** 7:
+    if num_labels <= 2 ** 7:
       self.dtype = "int8"
-    elif num_indices <= 2 ** 8 and use_uint_types:
+    elif num_labels <= 2 ** 8 and use_uint_types:
       self.dtype = "uint8"
-    elif num_indices <= 2 ** 31:
+    elif num_labels <= 2 ** 31:
       self.dtype = "int32"
-    elif num_indices <= 2 ** 32 and use_uint_types:
+    elif num_labels <= 2 ** 32 and use_uint_types:
       self.dtype = "uint32"
-    elif num_indices <= 2 ** 61:
+    elif num_labels <= 2 ** 61:
       self.dtype = "int64"
-    elif num_indices <= 2 ** 62 and use_uint_types:
+    elif num_labels <= 2 ** 62 and use_uint_types:
       self.dtype = "uint64"
     else:
-      raise Exception("cannot handle so much labels: %i" % num_indices)
-    self.num_outputs = {"data": [num_indices, 1]}
-    self.num_inputs = num_indices
+      raise Exception("cannot handle so much labels: %i" % num_labels)
+    self.num_outputs = {"data": [num_labels, 1]}
+    self.num_inputs = num_labels
     self.seq_order = None
     self._tag_prefix = "line-"  # sequence tag is "line-n", where n is the line number (to be compatible with translation)  # nopep8
     self.auto_replace_unknown_symbol = auto_replace_unknown_symbol
