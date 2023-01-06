@@ -132,7 +132,8 @@ class LmDataset(CachedDataset2):
       with open(orth_symbols_map_file, 'rb') as f:
         self.orth_symbols_map = pickle.load(f)
       self.orth_symbols = self.orth_symbols_map.keys()
-      self.labels["data"] = list(self.orth_symbols)
+      reverse_map = {i: sym for (sym, i) in sorted(self.orth_symbols_map.items())}
+      self.labels["data"] = [sym for (i, sym) in sorted(reverse_map.items())]
       self.seq_gen = None
     elif orth_symbols_map_file:
       assert not phone_info
@@ -154,7 +155,8 @@ class LmDataset(CachedDataset2):
       assert orth_symbols_imap_list[0][0] == 0
       self.orth_symbols_map = {sym: i for (i, sym) in orth_symbols_imap_list}
       self.orth_symbols = [sym for (i, sym) in orth_symbols_imap_list]
-      self.labels["data"] = self.orth_symbols
+      reverse_map = {i: sym for (i, sym) in orth_symbols_imap_list}
+      self.labels["data"] = [sym for (i, sym) in sorted(reverse_map.items())]
       self.seq_gen = None
     else:
       assert not orth_symbols_file
@@ -196,8 +198,8 @@ class LmDataset(CachedDataset2):
       self.dtype = "uint64"
     else:
       raise Exception("cannot handle so much labels: %i" % num_labels)
-    self.num_outputs = {"data": [len(self.labels["data"]), 1]}
-    self.num_inputs = self.num_outputs["data"][0]
+    self.num_outputs = {"data": [num_labels, 1]}
+    self.num_inputs = num_labels
     self.seq_order = None
     self._tag_prefix = "line-"  # sequence tag is "line-n", where n is the line number (to be compatible with translation)  # nopep8
     self.auto_replace_unknown_symbol = auto_replace_unknown_symbol
