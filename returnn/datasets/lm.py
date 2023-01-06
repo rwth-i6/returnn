@@ -134,7 +134,7 @@ class LmDataset(CachedDataset2):
         self.orth_symbols_map = pickle.load(f)
       self.orth_symbols = self.orth_symbols_map.keys()
       reverse_map = {i: sym for (sym, i) in self.orth_symbols_map.items()}
-      self.labels["data"] = [sym for (i, sym) in sorted(reverse_map)]
+      self.labels["data"] = [sym for (i, sym) in sorted(reverse_map.items())]
       self.seq_gen = None
     elif orth_symbols_map_file:
       assert not phone_info
@@ -157,7 +157,7 @@ class LmDataset(CachedDataset2):
       self.orth_symbols_map = {sym: i for (i, sym) in orth_symbols_imap_list}
       self.orth_symbols = [sym for (i, sym) in orth_symbols_imap_list]
       reverse_map = {i: sym for (i, sym) in orth_symbols_imap_list}
-      self.labels["data"] = [sym for (i, sym) in sorted(reverse_map)]
+      self.labels["data"] = [sym for (i, sym) in sorted(reverse_map.items())]
       self.seq_gen = None
     else:
       assert not orth_symbols_file
