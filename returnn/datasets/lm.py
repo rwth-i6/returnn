@@ -132,7 +132,7 @@ class LmDataset(CachedDataset2):
       with open(orth_symbols_map_file, 'rb') as f:
         self.orth_symbols_map = pickle.load(f)
       self.orth_symbols = self.orth_symbols_map.keys()
-      reverse_map = {i: sym for (sym, i) in self.orth_symbols_map.items()}
+      reverse_map = {i: sym for (sym, i) in sorted(self.orth_symbols_map.items())}
       self.labels["data"] = [sym for (i, sym) in sorted(reverse_map.items())]
       self.seq_gen = None
     elif orth_symbols_map_file:
