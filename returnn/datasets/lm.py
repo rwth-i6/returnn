@@ -125,14 +125,16 @@ class LmDataset(CachedDataset2):
       orth_symbols = open(orth_symbols_file).read().splitlines()
       self.orth_symbols_map = {sym: i for (i, sym) in enumerate(orth_symbols)}
       self.orth_symbols = orth_symbols
-      self.labels["data"] = orth_symbols
+      reverse_map = {i: sym for (i, sym) in enumerate(orth_symbols)}
+      self.labels["data"] = [sym for (i, sym) in sorted(reverse_map)]
       self.seq_gen = None
     if orth_symbols_map_file and orth_symbols_map_file.endswith('.pkl'):
       import pickle
       with open(orth_symbols_map_file, 'rb') as f:
         self.orth_symbols_map = pickle.load(f)
       self.orth_symbols = self.orth_symbols_map.keys()
-      self.labels["data"] = list(self.orth_symbols)
+      reverse_map = {i: sym for (sym, i) in self.orth_symbols_map.items()}
+      self.labels["data"] = [sym for (i, sym) in sorted(reverse_map)]
       self.seq_gen = None
     elif orth_symbols_map_file:
       assert not phone_info
@@ -154,7 +156,8 @@ class LmDataset(CachedDataset2):
       assert orth_symbols_imap_list[0][0] == 0
       self.orth_symbols_map = {sym: i for (i, sym) in orth_symbols_imap_list}
       self.orth_symbols = [sym for (i, sym) in orth_symbols_imap_list]
-      self.labels["data"] = self.orth_symbols
+      reverse_map = {i: sym for (i, sym) in orth_symbols_imap_list}
+      self.labels["data"] = [sym for (i, sym) in sorted(reverse_map)]
       self.seq_gen = None
     else:
       assert not orth_symbols_file
@@ -178,8 +181,7 @@ class LmDataset(CachedDataset2):
     if word_end_symbol and not word_based:  # Character-based modeling and word_end_symbol is specified.
       self.orth_replace_map[" "] = [word_end_symbol]  # Replace all spaces by word_end_symbol.
 
-    num_indices = (
-      max(self.orth_symbols_map.values()) + 1 if self.orth_symbols_map is not None else len(self.labels["data"]))
+    num_indices = len(self.labels["data"])
     use_uint_types = False
     if BackendEngine.is_tensorflow_selected():
       use_uint_types = True
