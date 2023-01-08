@@ -1265,12 +1265,15 @@ class _SubnetworkRecCell(object):
     from collections import OrderedDict
     from returnn.util.basic import StringIO, BehaviorVersion
     from returnn.tf.network import NetworkConstructionDependencyLoopException, DataNotFound
+    from returnn.tf.network import _DelayedConstructionException
     # The stack trace is not so interesting for these exceptions.
     skip_stack_trace_exception_types = (
       NetworkConstructionDependencyLoopException,)
 
     # These Exceptions always indicate incorrect construction, so fail directly instead of collecting them
-    fail_directly_exception_types = (DataNotFound, LayerNotFound, BehaviorVersion.RequirementNotSatisfied)
+    fail_directly_exception_types = (
+      DataNotFound, LayerNotFound, BehaviorVersion.RequirementNotSatisfied,
+      _DelayedConstructionException)
 
     # noinspection PyShadowingNames
     def _parent_get_layer(layer_name):
@@ -1703,8 +1706,11 @@ class _SubnetworkRecCell(object):
       # And keep the remaining ones for potential later reports.
       self._template_construction_exceptions = [s.text for s in ConstructCtx.collected_exceptions.values()]
 
-    except Exception:
-      print("%r: exception constructing template network (for deps and data shapes)" % self)
+    except _DelayedConstructionException:
+      raise
+
+    except Exception as exc:
+      print("%r: %s while constructing template network (for deps and data shapes)" % (self, type(exc).__name__))
       from pprint import pprint
       print("Most recent construction stack:")
       if ConstructCtx.most_recent:
