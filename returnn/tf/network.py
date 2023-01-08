@@ -1843,7 +1843,7 @@ class TFNetwork(object):
     if should_train or should_eval:
       # These values are cached internally and the graph nodes are created on the first call.
       loss = self.get_objective()
-      if loss is 0:
+      if loss == 0:
         loss = tf_util.global_tensor(lambda: tf.constant(0.0), name="zero_loss")
       else:  # non-constant-zero loss
         assert self.losses_dict
