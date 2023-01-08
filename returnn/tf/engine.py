@@ -2339,11 +2339,7 @@ class Engine(EngineBase):
         print("Given output %r has beam %s." % (output_layer, out_beam), file=log.v1)
         output_layer_beam_scores.append(output_layer.get_search_choices().beam_scores)
       out_beam_sizes.append(out_beam.beam_size if out_beam else None)
-      target_key = output_layer.target
-      if output_layer.output.sparse and not target_key:
-        # Use the default target key for sparse outputs
-        target_key = self.network.extern_data.default_target
-      target_keys.append(target_key)
+      target_keys.append(output_layer.target)
 
     out_cache = None
     seq_idx_to_tag = {}
