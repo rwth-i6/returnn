@@ -481,7 +481,7 @@ class Dataset(object):
       seq_index = list(seq_index) * repeat_epoch
     if self.seq_tags_filter is not None:
       # Note: This is as generic as possible, but requires that get_all_tags is implemented.
-      assert seq_index
+      assert len(seq_index)
       all_seq_tags = self.get_all_tags()
       assert len(all_seq_tags) == num_seqs == self.get_total_num_seqs(), "%r vs %r vs %r" % (
         len(all_seq_tags), num_seqs, self.get_total_num_seqs())
