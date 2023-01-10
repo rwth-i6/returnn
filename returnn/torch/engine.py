@@ -69,7 +69,11 @@ class Engine(EngineBase):
     self._learning_rate_control = load_learning_rate_control_from_config(config)
     self._save_model_epoch_interval = config.int('save_interval', 1)
 
-    self._optimizer = torch.optim.Adam(self._model.parameters(), lr=self._learning_rate)
+    if self._start_epoch > 1:
+      self._load_optimizer(epoch=self._start_epoch)
+    else:
+      # TODO: configure according to config
+      self._optimizer = torch.optim.Adam(self._model.parameters(), lr=self._learning_rate)
 
     self._train_step_func = self.config.typed_value("train_step")
     assert self._train_step_func, "train_step not defined"
@@ -127,6 +131,7 @@ class Engine(EngineBase):
 
     if self.epoch % self._save_model_epoch_interval == 0 or self.epoch == self._final_epoch:
       self._save_model()
+      self._save_optimizer()
 
     self.eval_model()
 
@@ -229,6 +234,27 @@ class Engine(EngineBase):
 
     print("Save model under %s" % (filename,), file=log.v4)
     torch.save(self._model.state_dict(), filename)
+
+  def _load_optimizer(self, epoch):
+    """
+    Loads a torch.optim.Optimizer from disk and stores it in self._optimizer.
+    """
+    filename = self.get_epoch_model_filename(epoch=epoch - 1) + ".opt" + util.get_model_filename_postfix()
+    print("Load optimizer %s" % filename, file=log.v4)
+    optimizer_state = torch.load(filename)
+    self._optimizer.load_state_dict(optimizer_state)
+
+  def _save_optimizer(self):
+    """
+    Saves the state of self._optimizer to file.
+    """
+    filename = self.get_epoch_model_filename() + ".opt" + util.get_model_filename_postfix()
+    directory = os.path.dirname(filename)
+    if not os.path.exists(directory):
+      os.makedirs(directory, exist_ok=True)
+
+    print("Save optimizer under %s" % filename, file=log.v4)
+    torch.save(self._optimizer.state_dict(), filename)
 
 
 class TrainCtx:
