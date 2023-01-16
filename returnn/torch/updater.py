@@ -1,4 +1,3 @@
-
 """
 This module covers the optimizer (SGD, Adam, etc) logic,
 and model param update logic in general.
@@ -13,6 +12,7 @@ from returnn.log import log
 
 _OptimizerClassesDictInitialized = False
 _OptimizerClassesDict = {}
+
 
 def _init_optimizer_classes_dict():
   """
@@ -30,6 +30,7 @@ def _init_optimizer_classes_dict():
     assert name not in _OptimizerClassesDict
     _OptimizerClassesDict[name.lower()] = cls
 
+
 def get_optimizer_class(class_name):
   """
   :param str|function|type[torch.optim.Optimizer] class_name: Optimizer data, e.g. "adam", torch.optim.Adam...
@@ -44,8 +45,8 @@ def get_optimizer_class(class_name):
   else:
     assert isinstance(class_name, str)
     assert class_name.lower() in _OptimizerClassesDict, \
-        "%s not found in the available torch optimizers list: %s." \
-        % (class_name.lower(), ", ".join("'%s'" % key for key in _OptimizerClassesDict))
+      "%s not found in the available torch optimizers list: %s." \
+      % (class_name.lower(), ", ".join("'%s'" % key for key in _OptimizerClassesDict))
     class_name = _OptimizerClassesDict[class_name.lower()]
 
   return class_name
@@ -62,23 +63,27 @@ def _possibly_add_opt_param(opt_name, opt_value, opt_kwargs, cls_vars_list):
   :param list[str] cls_vars_list: List of accepted attributes by the optimizer.
   """
   if opt_name in cls_vars_list:
-    opt_kwargs.setdefault(opt_name, opt_value
-    )
+    opt_kwargs.setdefault(opt_name, opt_value)
   else:
     assert not opt_value, "%s not accepted by the chosen optimizer. Accepted values: %s" \
                           % (opt_name, ", ".join("%s" % optim_name for optim_name in cls_vars_list))
 
+
 def _get_class_init_kwargs(optim_class):
   """
+  Obtains the keyword arguments of the class provided as parameter that the user can add to their optimizer.
+
   :param type[torch.optim.Optimizer] optim_class: Optimizer class.
-  :return: Keyword arguments of the class passed as parameter.
+  :return: Keyword arguments of the provided class.
   :rtype: List[str]
   """
   from returnn.util.basic import collect_class_init_kwargs
   optim_class_init_kwargs = collect_class_init_kwargs(optim_class)
+  # We already provide params by default, remove it so that the user doesn't add it to the optimizer dict.
   optim_class_init_kwargs.remove("params")
 
   return optim_class_init_kwargs
+
 
 class Updater(object):
   """
@@ -109,7 +114,7 @@ class Updater(object):
     """
     Obtains an updated learning rate for the current training step inside a (sub)epoch.
     """
-    return NotImplementedError
+    pass
 
   def create_optimizer(self):
     """
@@ -185,7 +190,7 @@ class Updater(object):
       else:
         opt_kwargs.setdefault("eps", epsilon)
     _possibly_add_opt_param("momentum", momentum, opt_kwargs, optim_class_init_kwargs)
-    assert "learning_rate" not in optimizer_opts, "learning_rate should not be set in the optimizer dict but outside of it."
+    assert "learning_rate" not in optimizer_opts, "learning_rate should be set outside of the optimizer dict."
     lr = lr * optimizer_opts.get("learning_rate_multiplier", 1.0)
     opt_kwargs["lr"] = lr
 
