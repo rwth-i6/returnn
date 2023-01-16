@@ -14,6 +14,7 @@ from returnn.log import log
 from returnn.engine.base import EngineBase
 from returnn.learning_rate_control import load_learning_rate_control_from_config, LearningRateControl
 from returnn.datasets.basic import init_dataset
+from returnn.torch.updater import Updater
 from returnn.util import basic as util
 from . import data_pipeline
 
@@ -40,7 +41,7 @@ class Engine(EngineBase):
     self._learning_rate = 0.0
     self._learning_rate_control = None  # type: Optional[LearningRateControl]
     self._save_model_epoch_interval = 1
-    self._optimizer = None  # type: Optional[torch.optim.Optimizer]
+    self._updater = None  # type: Optional[Updater]
 
     self._device = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -67,13 +68,13 @@ class Engine(EngineBase):
 
     self._load_model(epoch=self._start_epoch)
     self._learning_rate_control = load_learning_rate_control_from_config(config)
+    self._learning_rate = self._learning_rate_control.get_learning_rate_for_epoch(self._start_epoch)
     self._save_model_epoch_interval = config.int('save_interval', 1)
 
+    self._updater = Updater(self.config, self._model, self._learning_rate)
+    self._updater.create_optimizer()
     if self._start_epoch > 1:
-      self._load_optimizer(epoch=self._start_epoch)
-    else:
-      # TODO: configure according to config
-      self._optimizer = torch.optim.Adam(self._model.parameters(), lr=self._learning_rate)
+      self._load_optimizer(self._start_epoch)
 
     self._train_step_func = self.config.typed_value("train_step")
     assert self._train_step_func, "train_step not defined"
@@ -102,8 +103,7 @@ class Engine(EngineBase):
     self._learning_rate = self._learning_rate_control.get_learning_rate_for_epoch(self.epoch)
 
     # Update learning rate
-    for param_group in self._optimizer.param_groups:
-      param_group["lr"] = self._learning_rate
+    self._updater.set_learning_rate(self._learning_rate)
 
   def train_epoch(self):
     """
@@ -119,9 +119,9 @@ class Engine(EngineBase):
     for data in data_loader:
       loss = self._run_step(data)
 
-      self._optimizer.zero_grad()
+      self._updater.get_optimizer().zero_grad()
       loss.backward()
-      self._optimizer.step()
+      self._updater.get_optimizer().step()
 
       print("step %i, loss: %f" % (step_idx, loss.detach().cpu().numpy()), file=log.v4)
 
@@ -237,24 +237,25 @@ class Engine(EngineBase):
 
   def _load_optimizer(self, epoch):
     """
-    Loads a torch.optim.Optimizer from disk and stores it in self._optimizer.
+    Loads a torch.optim.Optimizer from disk and uses it as the optimizer.
+    This function is a wrapper to Updater.load_optimizer().
+
+    :param int epoch: Epoch from which to load the optimizer state.
     """
     filename = self.get_epoch_model_filename(epoch=epoch - 1) + ".opt" + util.get_model_filename_postfix()
-    print("Load optimizer %s" % filename, file=log.v4)
-    optimizer_state = torch.load(filename)
-    self._optimizer.load_state_dict(optimizer_state)
+    self._updater.load_optimizer(filename)
 
   def _save_optimizer(self):
     """
-    Saves the state of self._optimizer to file.
+    Saves the optimizer state to a file.
+    This function is a wrapper to Updater.save_optimizer().
     """
     filename = self.get_epoch_model_filename() + ".opt" + util.get_model_filename_postfix()
     directory = os.path.dirname(filename)
     if not os.path.exists(directory):
       os.makedirs(directory, exist_ok=True)
 
-    print("Save optimizer under %s" % filename, file=log.v4)
-    torch.save(self._optimizer.state_dict(), filename)
+    self._updater.save_optimizer(filename)
 
 
 class TrainCtx:
