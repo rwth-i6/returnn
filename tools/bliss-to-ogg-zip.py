@@ -345,8 +345,11 @@ def main():
         rec_filename = seq.recording_filename
         assert os.path.isfile(rec_filename) or args.no_ogg
         assert (seq.start_time < seq.end_time and seq.delta_time > 0) or args.no_ogg
-        duration = seq.delta_time
-        assert duration > 0 or args.no_ogg
+        if args.no_ogg:
+            duration = len(seq.orth.split(" "))
+        else:
+            duration = seq.delta_time
+        assert duration > 0
         total_duration += duration
         assert rec_filename.startswith(rec_filename_common_prefix) and rec_filename.endswith(
             rec_filename_common_postfix
