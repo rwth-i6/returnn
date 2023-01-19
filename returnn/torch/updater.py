@@ -218,9 +218,20 @@ class Updater(object):
         optim_class_init_kwargs = _get_class_init_kwargs(optim_class)
         opt_kwargs = {}
 
+        # If the optimizer option is a float, it represents the decay rate,
+        # specified as rho (Adadelta) or alpha (RMSProp) in the torch optimizers
+        # (rho in TF v2).
         if self.config.is_of_type(opt_name.lower(), float):
           decay = self.config.float(opt_name.lower(), 0.9)
-          _possibly_add_opt_param("weight_decay", decay, opt_kwargs, optim_class_init_kwargs)
+          if optim_class is torch.optim.RMSprop:
+            _possibly_add_opt_param("alpha", decay, opt_kwargs, optim_class_init_kwargs)
+          elif optim_class is torch.optim.Adadelta:
+            _possibly_add_opt_param("rho", decay, opt_kwargs, optim_class_init_kwargs)
+          else:
+            raise ValueError(
+              "The specified optimizer doesn't allow decay rate. Either change the optimizer to one that allows "
+              "decay rate, or don't specify the optimizer as a float option in the config file."
+            )
         _possibly_add_opt_param("momentum", momentum, opt_kwargs, optim_class_init_kwargs)
         _possibly_add_opt_param("eps", epsilon, opt_kwargs, optim_class_init_kwargs)
 
