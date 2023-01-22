@@ -16,6 +16,7 @@ from returnn.learning_rate_control import load_learning_rate_control_from_config
 from returnn.datasets.basic import init_dataset
 from returnn.torch.updater import Updater
 from returnn.util import basic as util
+from returnn.util import NumbersDict
 from . import data_pipeline
 
 
@@ -117,7 +118,7 @@ class Engine(EngineBase):
 
     step_idx = 0
     for data in data_loader:
-      loss = self._run_step(data)
+      loss, _ = self._run_step(data)
 
       self._updater.get_optimizer().zero_grad()
       loss.backward()
@@ -147,23 +148,31 @@ class Engine(EngineBase):
       data_loader = self._create_data_loader(dataset)
 
       accumulated_loss = 0.0
+      accumulated_losses_dict = NumbersDict()
       step_idx = 0
 
       with torch.no_grad():
         for data in data_loader:
 
-          loss = self._run_step(data).detach().cpu().numpy()
-          print("step %i, loss: %f" % (step_idx, loss), file=log.v4)
+          total_loss, losses_dict = self._run_step(data)
+          total_loss = total_loss.detach().cpu().numpy()
+          losses_dict = {
+            dataset_name + "_score_" + name: float(loss.detach().cpu().numpy()) for name, loss in losses_dict.items()}
+          print("step %i, loss: %f" % (step_idx, total_loss), file=log.v4)
 
-          accumulated_loss += loss
+          accumulated_loss += total_loss
+          accumulated_losses_dict += NumbersDict(losses_dict)
           step_idx += 1
 
-      total_loss = accumulated_loss / step_idx if step_idx else 0.0
+      assert step_idx > 0, "No data in dataset '{}'.".format(dataset_name)
+      accumulated_loss = accumulated_loss / step_idx
+      accumulated_losses_dict = accumulated_losses_dict / step_idx
 
-      self._learning_rate_control.set_epoch_error(self.epoch, {"%s_score" % dataset_name: float(total_loss)})
-      self._learning_rate_control.save()
+      self._learning_rate_control.set_epoch_error(self.epoch, dict(accumulated_losses_dict))
 
-      print("Total loss for '{}': {:.6}".format(dataset_name, total_loss), file=log.v3)
+      print("Total loss for '{}': {:.6}".format(dataset_name, accumulated_loss), file=log.v3)
+
+    self._learning_rate_control.save()
 
   def _create_data_loader(self, dataset):
     """
@@ -189,8 +198,8 @@ class Engine(EngineBase):
   def _run_step(self, data):
     """
     :param dict[str, numpy.ndarray] data: model inputs for the step
-    :return: model loss calculated for the step
-    :rtype: torch.Tensor
+    :return: total loss (weighted sum) calculated for the step, and individual losses as a name -> value mapping
+    :rtype: tuple[torch.Tensor, dict[str, torch.Tensor]]
     """
     assert isinstance(data, dict) and data
     data = {
@@ -203,9 +212,10 @@ class Engine(EngineBase):
     train_ctx = TrainCtx()
     sentinel_kw = {"__fwd_compatible_random_arg_%i" % int(random() * 100): None}
     self._train_step_func(model=self._model, data=data, train_ctx=train_ctx, **sentinel_kw)
-    loss = train_ctx.total_loss()
+    losses_dict = train_ctx.losses
+    total_loss = train_ctx.total_loss()
 
-    return loss
+    return total_loss, losses_dict
 
   def _load_model(self, epoch):
     """
@@ -268,18 +278,24 @@ class TrainCtx:
   """
 
   def __init__(self):
-    self.loss = None
+    self.losses = {}  # typing: dict[str, torch.Tensor]
+    self.loss_scales = {}  # typing: dict[str, float]
 
-  def mark_as_loss(self, loss):
+  def mark_as_loss(self, name, loss, scale=1.0):
     """
-    :param torch.Tensor loss:
+    Can be called several times. Total loss will be weighted sum according to 'scale' parameters.
+
+    :param str name:
+    :param torch.Tensor loss: e.g. the output of nn.CrossEntropyLoss
+    :param float scale: optional factor for this loss
     """
-    assert self.loss is None, "don't call multiple times"
-    self.loss = loss
+    assert isinstance(name, str)
+    self.losses[name] = loss
+    self.loss_scales[name] = scale
 
   def total_loss(self):
     """
     :rtype: torch.Tensor
     """
-    assert self.loss is not None, "call train_ctx.mark_as_loss"
-    return self.loss
+    assert self.losses, "call train_ctx.mark_as_loss"
+    return sum([self.losses[name] * self.loss_scales[name] for name in self.losses])
