@@ -8837,8 +8837,8 @@ class SearchSortedLayer(LayerBase):
     output_data = values_data.copy("%s_output" % name).copy_transpose(perm=values_batch_axes + values_non_batch_axes)
     output_data.dtype = "int32"
     return output_data
-  
-  
+
+
 class FakeQuantizeStaticLayer(_ConcatInputLayer):
   """
   Layer for simulated quantization, the output stays of type float32
