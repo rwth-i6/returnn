@@ -8837,6 +8837,45 @@ class SearchSortedLayer(LayerBase):
     output_data = values_data.copy("%s_output" % name).copy_transpose(perm=values_batch_axes + values_non_batch_axes)
     output_data.dtype = "int32"
     return output_data
+  
+  
+class FakeQuantizeStaticLayer(_ConcatInputLayer):
+  """
+  Layer for simulated quantization, the output stays of type float32
+
+  Static, as min and max for the quantization range have to be provided as fixed value.
+
+  It is recommended to include zero in the range.
+  See `https://www.tensorflow.org/api_docs/python/tf/quantization/fake_quant_with_min_max_args`
+
+  Also, will have num_bits*2 - 1 outputs in the default case, centered around 0.
+  """
+  layer_class = "fake_quantize_static"
+
+  def __init__(self, min, max, num_bits, narrow_range=False, **kwargs):
+    """
+    :param float min: minium value for quantization range
+    :param float max: maximum value for quantization range
+    :param int num_bits: bitwidth of the quantization; between 2 and 16, inclusive.
+    :param bool narrow_range: See TF documentation
+    """
+    super(FakeQuantizeStaticLayer, self).__init__(**kwargs)
+    self.output.placeholder = tf.quantization.fake_quant_with_min_max_args(
+      inputs=self.input_data.placeholder,
+      min=min,
+      max=max,
+      num_bits=num_bits,
+      narrow_range=narrow_range,
+    )
+    self.output.size_placeholder = self.input_data.size_placeholder.copy()
+
+  @classmethod
+  def get_out_data_from_opts(cls, **kwargs):
+    """
+    :rtype: Data
+    """
+    out = super(FakeQuantizeStaticLayer, cls).get_out_data_from_opts(**kwargs).copy_template()
+    return out
 
 
 class SubnetworkLayer(LayerBase):
