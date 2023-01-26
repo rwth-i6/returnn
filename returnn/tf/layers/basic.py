@@ -8860,6 +8860,7 @@ class FakeQuantizeStaticLayer(_ConcatInputLayer):
     :param bool narrow_range: See TF documentation
     """
     super(FakeQuantizeStaticLayer, self).__init__(**kwargs)
+    assert self.input_data.sparse == False, "quantization is not allowed for sparse inputs"
     self.output.placeholder = tf.quantization.fake_quant_with_min_max_args(
       inputs=self.input_data.placeholder,
       min=min,
@@ -8870,11 +8871,15 @@ class FakeQuantizeStaticLayer(_ConcatInputLayer):
     self.output.size_placeholder = self.input_data.size_placeholder.copy()
 
   @classmethod
-  def get_out_data_from_opts(cls, **kwargs):
+  def get_out_data_from_opts(cls, name, sources=(), out_dim=None, **kwargs):
     """
+    :param str name:
+    :param list[LayerBase] sources:
+    :param Dim|None out_dim:
     :rtype: Data
     """
-    out = CopyLayer.get_out_data_from_opts(**kwargs)
+    out = get_concat_sources_data_template(
+      sources, out_dim=out_dim, name="%s_output" % name)
     return out
 
 
