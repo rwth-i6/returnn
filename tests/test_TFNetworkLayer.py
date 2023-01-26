@@ -8132,6 +8132,23 @@ def test_PostfixInTimeLayer():
         assert out[0, src_seq_lens[0] + repeat - 1, 0] == -7
 
 
+def test_FakeQuantizeStaticLayer():
+  with make_scope() as session:
+    num_inputs = 3
+    config = Config()
+    config.update({
+      "extern_data": {"data": {"dim": num_inputs}},
+      "network": {
+        "output": {"class": "fake_quantize_static", "min": -6, "max":6, "num_bits":2, "from": "data"}
+      }})
+    network = TFNetwork(config=config, train_flag=True)
+    network.construct_from_dict(config.typed_value("network"))
+    feed = {network.extern_data.get_data("data").placeholder: numpy.asarray([[[-5,0,3]]])}
+    out = network.get_default_output_layer().output.placeholder
+    result = session.run(out, feed_dict=feed)
+    assert numpy.all(numpy.equal(result, numpy.asarray([[[-4, 0, 4]]])))
+
+
 def test_DotLayer():
   with make_scope() as session:
     B = 2

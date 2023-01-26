@@ -8874,7 +8874,7 @@ class FakeQuantizeStaticLayer(_ConcatInputLayer):
     """
     :rtype: Data
     """
-    out = super(FakeQuantizeStaticLayer, cls).get_out_data_from_opts(**kwargs).copy_template()
+    out = CopyLayer.get_out_data_from_opts(**kwargs)
     return out
 
 
