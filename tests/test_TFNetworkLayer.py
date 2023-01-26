@@ -8139,7 +8139,7 @@ def test_FakeQuantizeStaticLayer():
     config.update({
       "extern_data": {"data": {"dim": num_inputs}},
       "network": {
-        "output": {"class": "fake_quantize_static", "min": -6, "max":6, "num_bits":2, "from": "data"}
+        "output": {"class": "fake_quantize_static", "range_min": -6, "range_max":6, "num_bits":2, "from": "data"}
       }})
     network = TFNetwork(config=config, train_flag=True)
     network.construct_from_dict(config.typed_value("network"))

@@ -8852,19 +8852,19 @@ class FakeQuantizeStaticLayer(_ConcatInputLayer):
   """
   layer_class = "fake_quantize_static"
 
-  def __init__(self, min, max, num_bits, narrow_range=False, **kwargs):
+  def __init__(self, range_min, range_max, num_bits, narrow_range=False, **kwargs):
     """
-    :param float min: minium value for quantization range
-    :param float max: maximum value for quantization range
-    :param int num_bits: bitwidth of the quantization; between 2 and 16, inclusive.
+    :param float range_min: minium value for quantization range
+    :param float range_max: maximum value for quantization range
+    :param int num_bits: bit width of the quantization; between 2 and 16, inclusive.
     :param bool narrow_range: See TF documentation
     """
     super(FakeQuantizeStaticLayer, self).__init__(**kwargs)
-    assert self.input_data.sparse == False, "quantization is not allowed for sparse inputs"
+    assert self.input_data.sparse is False, "quantization is not allowed for sparse inputs"
     self.output.placeholder = tf.quantization.fake_quant_with_min_max_args(
       inputs=self.input_data.placeholder,
-      min=min,
-      max=max,
+      min=range_min,
+      max=range_max,
       num_bits=num_bits,
       narrow_range=narrow_range,
     )
