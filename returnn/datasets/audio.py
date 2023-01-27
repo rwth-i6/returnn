@@ -180,7 +180,7 @@ class OggZipDataset(CachedDataset2):
         first_entry = data[0]
         assert isinstance(first_entry, dict)
         assert isinstance(first_entry["text"], str)
-        assert isinstance(first_entry["duration"], float)
+        assert isinstance(first_entry["duration"], (float, int))
         # when 'audio' is None and sequence names are given, this dataset can be used in text-only mode
         if "file" in first_entry:
             assert isinstance(first_entry["file"], str)
