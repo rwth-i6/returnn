@@ -44,9 +44,10 @@ def get_optimizer_class(class_name):
     class_name = class_name()
   else:
     assert isinstance(class_name, str)
-    assert class_name.lower() in _OptimizerClassesDict, \
-      "%s not found in the available torch optimizers list: %s." \
-      % (class_name.lower(), ", ".join("'%s'" % key for key in _OptimizerClassesDict))
+    assert class_name.lower() in _OptimizerClassesDict, (
+      "%s not found in the available torch optimizers list: %s." %
+      (class_name.lower(), ", ".join("'%s'" % key for key in _OptimizerClassesDict))
+    )
     class_name = _OptimizerClassesDict[class_name.lower()]
 
   return class_name
@@ -164,22 +165,27 @@ class Updater(object):
     :return: A valid optimizer.
     :rtype: torch.optim.Optimizer
     """
-    if optimizer_opts is None:
-      return self._create_default_optimizer()
-
     lr = self.learning_rate
     epsilon = self.config.float("optimizer_epsilon", 1e-16)
     momentum = self.config.float("momentum", 0.0)
+    decay = self.config.float("weight_decay", 0.0)
+
+    # If the parameter is already a valid optimizer, return it without further processing
+    if isinstance(optimizer_opts, torch.optim.Optimizer):
+      return optimizer_opts
 
     if isinstance(optimizer_opts, str) or callable(optimizer_opts):
       optimizer_opts = {"class": optimizer_opts}
-    assert isinstance(optimizer_opts, dict), "optimizer_opts must be dict, str or callable."
-
+    assert isinstance(optimizer_opts, dict), (
+      "optimizer_opts must be dict, str, callable or torch.optim.Optimizer instance."
+    )
     assert "class" in optimizer_opts, "A custom optimizer requires a class (SGD, Adam...)"
+
     # Resolve the optimizer class
     optim_class_name = optimizer_opts.pop("class")
     optim_class = get_optimizer_class(optim_class_name)
 
+    # Resolve the optimizer arguments
     opt_kwargs = optimizer_opts.copy()
     optim_class_init_kwargs = _get_class_init_kwargs(optim_class)
     # epsilon is named eps in torch.
@@ -202,51 +208,13 @@ class Updater(object):
 
   def _create_default_optimizer(self):
     """
-    Returns an optimizer given in the config, or SGD (default).
+    :return: SGD optimizer.
+    :rtype: torch.optim.SGD
     """
-    # Same defaults as TF
-    lr = self.learning_rate
-    epsilon = self.config.float("optimizer_epsilon", 1e-16)
-    momentum = self.config.float("momentum", 0.0)
+    print("Create SGD optimizer (default).", file=log.v2)
+    optimizer = torch.optim.SGD(self.network.parameters(), lr=self.learning_rate)
 
-    _init_optimizer_classes_dict()
-
-    for opt_name, optim_class in _OptimizerClassesDict.items():
-      if self.config.is_of_type(opt_name.lower(), float) or self.config.bool(opt_name.lower(), False):
-        # The user specified this optimizer. Create it with learning rate, at least.
-        # Also add the accepted parameters of optim_class.__init__() to opt_kwargs.
-        optim_class_init_kwargs = _get_class_init_kwargs(optim_class)
-        opt_kwargs = {}
-
-        # If the optimizer option is a float, it represents the decay rate,
-        # specified as rho (Adadelta) or alpha (RMSProp) in the torch optimizers
-        # (rho in TF v2).
-        if self.config.is_of_type(opt_name.lower(), float):
-          decay = self.config.float(opt_name.lower(), 0.9)
-          if optim_class is torch.optim.RMSprop:
-            _possibly_add_opt_param("alpha", decay, opt_kwargs, optim_class_init_kwargs)
-          elif optim_class is torch.optim.Adadelta:
-            _possibly_add_opt_param("rho", decay, opt_kwargs, optim_class_init_kwargs)
-          else:
-            raise ValueError(
-              "The specified optimizer doesn't allow decay rate. Either change the optimizer to one that allows "
-              "decay rate, or don't specify the optimizer as a float option in the config file."
-            )
-        _possibly_add_opt_param("momentum", momentum, opt_kwargs, optim_class_init_kwargs)
-        _possibly_add_opt_param("eps", epsilon, opt_kwargs, optim_class_init_kwargs)
-
-        if len(opt_kwargs) > 0:
-          opt_kwargs_str = ", ".join("%s %s" % (key, value) for key, value in opt_kwargs.items())
-          print("Create %s optimizer with %s." % (opt_name, opt_kwargs_str), file=log.v2)
-        else:
-          print("Create %s optimizer." % opt_name, file=log.v2)
-        optimizer = optim_class(self.network.parameters(), lr=lr, **opt_kwargs)
-        return optimizer
-
-    # The user hasn't specified any optimizer. Create SGD, possibly with momentum.
-    if momentum:
-      print("Create SGD optimizer (default) with momentum %f." % momentum, file=log.v2)
-    else:
-      print("Create SGD optimizer (default).", file=log.v2)
-    optimizer = torch.optim.SGD(self.network.parameters(), lr=lr, momentum=momentum)
     return optimizer
+
+        else:
+
