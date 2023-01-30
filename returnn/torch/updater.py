@@ -216,5 +216,3 @@ class Updater(object):
 
     return optimizer
 
-        else:
-
