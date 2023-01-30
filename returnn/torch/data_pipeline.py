@@ -2,6 +2,7 @@
 Code to create PyTorch datasets that can be used with the PyTorch DataLoader.
 """
 
+import sys
 from copy import deepcopy
 
 import torch
@@ -147,3 +148,59 @@ class Chunker(IterableDataset):
     assert sorted(chunk_step.keys()) == sorted(chunk_size.keys())
     assert chunk_step.min_value() > 0, "chunking step must be positive"
     return chunk_size, chunk_step
+
+
+# noinspection PyAbstractClass
+class Batching(IterableDataset):
+  """
+  Converts a dataset yielding sequences (dict data_key -> array per sequence) into a dataset yielding lists of
+  these sequences, i.e. batches. Sequences are grouped in-order according to the 'max_tokens' and 'max_seqs' batch size
+  limits.
+  Note, that batches are not yet merged into a single (padded) data array here, this happens in 'collate_batch()'.
+  """
+  def __init__(self, dataset, batch_size=1, max_seqs=None):
+    """
+    :param torch.IterableDataset dataset: dataset to apply batching to
+    :param int|dict[str,int]|None batch_size: Maximum number of time steps (e.g. audio frames / words) in one
+      batch (padding included). If given as a dict data_key -> value, sets different individual limits per data key.
+      If None, no limit.
+    :param int|None max_seqs: maximum number of sequences in a batch, None means unlimited (also -1 to match TF backend)
+    """
+    self._dataset = dataset
+    self._max_batch_size = NumbersDict(sys.maxsize if batch_size is None else batch_size)
+    self._max_seqs = sys.maxsize if (max_seqs is None or max_seqs == -1) else max_seqs
+
+    assert self._max_batch_size.min_value() > 0
+    assert self._max_seqs > 0
+
+  def __iter__(self):
+    """
+    :return: generator providing batches in the form of lists of sequences, where each sequence is a dict
+      data_key -> data_array.
+    :rtype: Iterable[list[dict[str, numpy.ndarray]]]
+    """
+    current_batch = []
+    current_max_sequence_lengths = NumbersDict(0)  # data_key -> length of longest sequence in current batch
+
+    for data_dict in self._dataset:
+      if len(current_batch) == self._max_seqs:
+        yield current_batch
+        current_batch = []
+        current_max_sequence_lengths = NumbersDict(0)
+
+      # TODO: This assumes all data has time as first dimension. Currently we can't know better..
+      sequence_lengths = NumbersDict({data_key: data.shape[0] for data_key, data in data_dict.items()})
+
+      max_sequence_lengths_if_included = NumbersDict.max([current_max_sequence_lengths, sequence_lengths])
+      batch_size_if_included = max_sequence_lengths_if_included * (len(current_batch) + 1)  # including padding
+
+      if current_batch and batch_size_if_included.any_compare(self._max_batch_size, (lambda a, b: a > b)):
+        yield current_batch
+        current_batch = [data_dict]
+        current_max_sequence_lengths = sequence_lengths
+      else:
+        current_batch.append(data_dict)
+        current_max_sequence_lengths = max_sequence_lengths_if_included
+
+    if current_batch:
+      yield current_batch

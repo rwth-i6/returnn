@@ -186,10 +186,13 @@ class Engine(EngineBase):
     if chunking:
       wrapped_dataset = data_pipeline.Chunker(wrapped_dataset, chunking)
 
-    batch_max_seqs = self.config.int('max_seqs', 1)  # TODO wrong default, actually -1, no limit (limit via batch_size)
+    batch_size = self.config.typed_value('batch_size', 1)
+    max_seqs = self.config.int('max_seqs', -1)
+    batches_dataset = data_pipeline.Batching(wrapped_dataset, batch_size=batch_size, max_seqs=max_seqs)
+
     data_loader = DataLoader(
-      wrapped_dataset,
-      batch_size=batch_max_seqs,
+      batches_dataset,
+      batch_size=None,
       collate_fn=data_pipeline.collate_batch,
     )
 
