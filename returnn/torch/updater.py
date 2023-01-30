@@ -168,7 +168,6 @@ class Updater(object):
     lr = self.learning_rate
     epsilon = self.config.float("optimizer_epsilon", 1e-16)
     momentum = self.config.float("momentum", 0.0)
-    decay = self.config.float("weight_decay", 0.0)
 
     # If the parameter is already a valid optimizer, return it without further processing
     if isinstance(optimizer_opts, torch.optim.Optimizer):
@@ -215,4 +214,3 @@ class Updater(object):
     optimizer = torch.optim.SGD(self.network.parameters(), lr=self.learning_rate)
 
     return optimizer
-
