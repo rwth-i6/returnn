@@ -66,8 +66,10 @@ def _possibly_add_opt_param(opt_name, opt_value, opt_kwargs, cls_vars_list):
   if opt_name in cls_vars_list:
     opt_kwargs.setdefault(opt_name, opt_value)
   else:
-    assert not opt_value, "%s not accepted by the chosen optimizer. Accepted values: %s" \
-                          % (opt_name, ", ".join("%s" % optim_name for optim_name in cls_vars_list))
+    assert not opt_value, (
+      "%s not accepted by the chosen optimizer. Accepted values: %s" %
+      (opt_name, ", ".join("%s" % optim_name for optim_name in cls_vars_list))
+    )
 
 
 def _get_class_init_kwargs(optim_class):
@@ -157,11 +159,9 @@ class Updater(object):
     """
     Returns a valid optimizer considering the dictionary given by the user in the config.
 
-    :param dict[str]|str|None optimizer_opts: Optimizer configuration specified by the user.
+    :param dict[str]|str optimizer_opts: Optimizer configuration specified by the user.
         If it's a dict, it must contain "class" with the optimizer name or callable.
         If it's a str, it must be the optimizer name.
-        If it's None, a default optimizer will be created.
-
     :return: A valid optimizer.
     :rtype: torch.optim.Optimizer
     """
@@ -194,13 +194,19 @@ class Updater(object):
         opt_kwargs["eps"] = opt_kwargs.pop("epsilon")
       else:
         opt_kwargs.setdefault("eps", epsilon)
+    else:
+      assert "eps" not in opt_kwargs, (
+        "epsilon not accepted by the chosen optimizer. Accepted values: %s" %
+        ", ".join("%s" % optim_name for optim_name in optim_class_init_kwargs)
+      )
     _possibly_add_opt_param("momentum", momentum, opt_kwargs, optim_class_init_kwargs)
     assert "learning_rate" not in optimizer_opts, "learning_rate should be set outside of the optimizer dict."
     lr = lr * optimizer_opts.get("learning_rate_multiplier", 1.0)
     opt_kwargs["lr"] = lr
 
-    print("Create optimizer %s with %r." % (optim_class, opt_kwargs), file=log.v2)
-    optimizer = optim_class(self.network.parameters(), **opt_kwargs)
+    param_groups = self._get_optimizer_param_groups(optim_class, opt_kwargs)
+    optimizer = optim_class(param_groups, **opt_kwargs)
+    print("Optimizer: %s" % optimizer)
     assert isinstance(optimizer, torch.optim.Optimizer)
 
     return optimizer
@@ -214,3 +220,59 @@ class Updater(object):
     optimizer = torch.optim.SGD(self.network.parameters(), lr=self.learning_rate)
 
     return optimizer
+
+  def _get_optimizer_param_groups(self, optim_class, optimizer_opts):
+    """
+    The weight_decay parameter from AdamW affects the weights of layers such as LayerNorm and Embedding.
+    This function creates a blacklist of network modules and splits the optimizer groups in two:
+    those who will receive weight decay, and those who won't receive it.
+    The weight_decay parameter of the rest of the optimizers is L2 regularization.
+
+    For further reading, see https://github.com/karpathy/minGPT/pull/24#issuecomment-679316025 and
+    https://discuss.pytorch.org/t/weight-decay-in-the-optimizers-is-a-bad-idea-especially-with-batchnorm/16994.
+
+    This code is based on https://github.com/karpathy/minGPT (MIT license):
+    https://github.com/karpathy/minGPT/blob/3ed14b2cec0dfdad3f4b2831f2b4a86d11aef150/mingpt/model.py#L136.
+
+    :param type[torch.optim.Optimizer] optim_class: Optimizer class.
+    :param dict[str] optimizer_opts: Optimizer configuration specified by the user.
+    :return: List of configurations for the different sets of parameters.
+    :rtype: List[Dict[str]]
+    """
+    network_params = self.network.parameters()
+
+    # Split in parameter groups only if decouple_constraints is set and the optimizer accepts weight_decay.
+    cls_init_kwargs = _get_class_init_kwargs(optim_class)
+    if "weight_decay" not in cls_init_kwargs or self.config.bool("decouple_constraints", False):
+      assert "weight_decay" not in optimizer_opts, (
+        "weight_decay not accepted by the chosen optimizer. Accepted values: %s" %
+        ", ".join("%s" % optim_name for optim_name in cls_init_kwargs)
+      )
+      return [{"params": network_params}]
+
+    weight_decay = optimizer_opts.get("weight_decay", 0.0)
+    if not weight_decay:
+      return [{"params": network_params}]
+
+    # Distinguish between parameters with and without weight_decay/L2 regularization.
+    # Parameters without weight decay: biases + LayerNorm/Embedding layers.
+    wd_params = set()
+    no_wd_params = set()
+    blacklist_wd_modules = (torch.nn.LayerNorm, torch.nn.Embedding)
+    for mn, m in self.network.named_modules():
+      for pn, p in m.named_parameters():
+        fpn = '%s.%s' % (mn, pn) if mn else pn  # Full param name
+        if pn.endswith("bias"):
+          no_wd_params.add(fpn)
+        elif pn.endswith("weight") and isinstance(m, blacklist_wd_modules):
+          no_wd_params.add(fpn)
+        else:
+          wd_params.add(fpn)
+
+    param_dict = {pn: p for pn, p in self.network.named_parameters()}
+    optim_groups = [
+      {"params": [param_dict[pn] for pn in sorted(list(wd_params))], "weight_decay": weight_decay},
+      {"params": [param_dict[pn] for pn in sorted(list(no_wd_params))], "weight_decay": 0.0},
+    ]
+
+    return optim_groups
