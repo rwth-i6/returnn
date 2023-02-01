@@ -5184,6 +5184,27 @@ def test_reclayer_optimize_out_cumsum_unrelated_axis():
     feat_dim=feat_dim, time_dim=time_dim)
 
 
+def test_reclayer_optimize_out_rel_pos_enc_layer():
+  # https://github.com/rwth-i6/returnn/issues/1253
+  time_dim = SpatialDim("time")
+  feat_dim = FeatureDim("feat", dimension=11)
+  check_reclayer_optimize_out(
+    feat_dim=feat_dim, time_dim=time_dim,
+    subnet_layer_dict={"class": "copy", "from": "self_att", "out_dim": feat_dim},
+    other_subnet_layers={
+      "rel_pos": {"class": "relative_positional_encoding", "out_dim": feat_dim, "from": "data:source"},  # [T_new, F]
+      "self_att": {
+        "class": "self_attention",
+        "from": "data:source",
+        "out_dim": feat_dim,
+        "num_heads": 1,
+        "total_key_dim": feat_dim.dimension,
+        "key_shift": "rel_pos",
+        "attention_left_only": True,
+      },
+    })
+
+
 def test_subnet_load_on_init_rec():
   import tempfile
   model_tmp_dir = tempfile.mkdtemp("tmp-checkpoint")
