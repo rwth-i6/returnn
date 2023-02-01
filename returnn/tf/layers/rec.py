@@ -9816,15 +9816,19 @@ class RelativePositionalEncodingLayer(_ConcatInputLayer):
   layer_class = "relative_positional_encoding"
   recurrent = True
 
-  def __init__(self, n_out, forward_weights_init="glorot_uniform", clipping=16, fixed=False, **kwargs):
+  def __init__(self, out_dim=None, n_out=None, forward_weights_init="glorot_uniform", clipping=16, fixed=False,
+               **kwargs):
     """
-    :param int n_out: Feature dimension of encoding.
+    :param Dim|None out_dim: Feature dimension of encoding.
+    :param int|None n_out: Feature dimension of encoding.
     :param int clipping: After which distance to fallback to the last encoding
     :param bool fixed: Uses sinusoid positional encoding instead of learned parameters
     :param str forward_weights_init: see :func:`returnn.tf.util.basic.get_initializer`
     """
     super(RelativePositionalEncodingLayer, self).__init__(**kwargs)
     from returnn.tf.util.basic import get_initializer
+    if out_dim:
+      n_out = out_dim.dimension
 
     if not self.input_data.have_time_axis():
       offset = self.network.get_rec_step_index()
@@ -9869,18 +9873,23 @@ class RelativePositionalEncodingLayer(_ConcatInputLayer):
     self.output.placeholder = encoding
 
   @classmethod
-  def get_out_data_from_opts(cls, name, sources, n_out, network, **kwargs):
+  def get_out_data_from_opts(cls, name, sources, network, out_dim=None, n_out=None, **kwargs):
     """
     :param str name:
     :param list[LayerBase] sources:
-    :param int n_out:
+    :param Dim|None out_dim: Feature dimension of encoding.
+    :param int|None n_out: Feature dimension of encoding.
     :param returnn.tf.network.TFNetwork network:
     :rtype: Data
     """
     data = get_concat_sources_data_template(sources, name="%s_output" % name)
     # The result will be without batch dim.
-    feature_dim_tag = Dim(
-      kind=Dim.Types.Feature, description="%s_rel_pos_enc_feat" % name, dimension=n_out, auto_generated=True)
+    if out_dim:
+      feature_dim_tag = out_dim
+    else:
+      assert n_out is not None, "%s %r: specify out_dim or n_out" % (cls.__name__, name)
+      feature_dim_tag = Dim(
+        kind=Dim.Types.Feature, description="%s_rel_pos_enc_feat" % name, dimension=n_out, auto_generated=True)
     if data.have_time_axis():
       time_dim_tag = data.get_time_dim_tag()
       # TODO using same dim tag twice will not be supported at some future point...
