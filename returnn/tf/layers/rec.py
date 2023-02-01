@@ -7147,7 +7147,8 @@ class SelfAttentionLayer(_ConcatInputLayer):
 
   # noinspection PyMethodOverriding
   @classmethod
-  def get_rec_initial_extra_outputs(cls, batch_dim, rec_layer, network, num_heads, total_key_dim, n_out, name,
+  def get_rec_initial_extra_outputs(cls, batch_dim, rec_layer, network, num_heads, total_key_dim, name,
+                                    out_dim=NotSpecified, n_out=NotSpecified,
                                     initial_state=None, sources=(), **kwargs):
     """
     :param tf.Tensor batch_dim:
@@ -7155,12 +7156,15 @@ class SelfAttentionLayer(_ConcatInputLayer):
     :param returnn.tf.network.TFNetwork network:
     :param int num_heads:
     :param int total_key_dim:
+    :param Dim out_dim:
     :param int n_out:
     :param str name:
     :param str|float|int|None initial_state:
     :param list[LayerBase] sources:
     :rtype: dict[str, tf.Tensor]
     """
+    if out_dim is not NotSpecified:
+      n_out = out_dim.dimension
     data = get_concat_sources_data_template(sources)
     data = data.copy_as_batch_major()
     if data.time_dim_axis is None or initial_state is not None:
@@ -7193,16 +7197,21 @@ class SelfAttentionLayer(_ConcatInputLayer):
   # noinspection PyMethodOverriding
   @classmethod
   def get_rec_initial_extra_outputs_shape_invariants(cls, rec_layer, sources, network,
-                                                     num_heads, total_key_dim, n_out, **kwargs):
+                                                     num_heads, total_key_dim,
+                                                     out_dim=NotSpecified, n_out=NotSpecified,
+                                                     **kwargs):
     """
     :param returnn.tf.layers.rec.RecLayer|LayerBase|None rec_layer: for the scope
     :param list[LayerBase] sources:
     :param returnn.tf.network.TFNetwork network:
     :param int num_heads:
     :param int total_key_dim:
+    :param Dim out_dim:
     :param int n_out:
     :rtype: dict[str, tf.TensorShape]
     """
+    if out_dim is not NotSpecified:
+      n_out = out_dim.dimension
     data = get_concat_sources_data_template(sources)
     data = data.copy_as_batch_major()
     if data.time_dim_axis is None:
