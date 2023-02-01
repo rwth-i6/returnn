@@ -9831,14 +9831,9 @@ class RelativePositionalEncodingLayer(_ConcatInputLayer):
       length = self.network.get_rec_step_index() + 1
       time_dim_tag = self.output.dim_tags[1]
       assert time_dim_tag.dimension is None, "%s: unexpected output time dim tag %r" % (self, time_dim_tag)
+      assert time_dim_tag.dyn_size_ext is not None
       # See CumConcatLayer for similar logic
-      if time_dim_tag.dyn_size_ext is None:
-        time_dim_tag.dyn_size_ext = Data(
-          name="%s:size-inside" % self.name,
-          dim_tags=[],  # scalar
-          placeholder=length, dtype="int32",
-          batch=self.output.batch, control_flow_ctx=self.network.get_control_flow_ctx())
-      elif time_dim_tag.dyn_size_ext.placeholder is None:
+      if time_dim_tag.dyn_size_ext.placeholder is None:
         time_dim_tag.dyn_size_ext.placeholder = length
     else:
       offset = 0
@@ -9874,11 +9869,12 @@ class RelativePositionalEncodingLayer(_ConcatInputLayer):
     self.output.placeholder = encoding
 
   @classmethod
-  def get_out_data_from_opts(cls, name, sources, n_out, **kwargs):
+  def get_out_data_from_opts(cls, name, sources, n_out, network, **kwargs):
     """
     :param str name:
     :param list[LayerBase] sources:
     :param int n_out:
+    :param returnn.tf.network.TFNetwork network:
     :rtype: Data
     """
     data = get_concat_sources_data_template(sources, name="%s_output" % name)
@@ -9895,6 +9891,13 @@ class RelativePositionalEncodingLayer(_ConcatInputLayer):
         kind=Dim.Types.Spatial, description="%s_rel_pos_enc_dummy" % name, dimension=1, auto_generated=True)
       time_dim_tag = Dim(
         kind=Dim.Types.Spatial, description="%s_rel_pos_enc_time" % name, dimension=None, auto_generated=True)
+      time_dim_tag.batch = data.batch
+      time_dim_tag.control_flow_ctx = network.get_control_flow_ctx()
+      time_dim_tag.dyn_size_ext = Data(
+        name="%s:size-inside" % name,
+        dim_tags=[],  # scalar
+        dtype="int32",
+        batch=data.batch, control_flow_ctx=network.get_control_flow_ctx())
       data = data.copy_template_new_dim_tags((dummy_dim_tag, time_dim_tag, feature_dim_tag))
     return data
 
