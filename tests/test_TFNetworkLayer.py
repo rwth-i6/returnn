@@ -6017,8 +6017,13 @@ def test_RepeatLayer_int():
     net.construct_from_dict(net_dict)
     in_ = net.extern_data.data["data"]
     out = net.get_default_output_layer().output
+    in_time = in_.get_time_dim_tag()
+    out_time = out.get_time_dim_tag()
+    assert in_time * 5 == out_time, "in %r vs out %r" % (in_, out)
+    in_seq_len_ = in_time.dyn_size_ext.placeholder
+    out_seq_len_ = out_time.dyn_size_ext.placeholder
     _, in_seq_len, _, out_seq_len = session.run(
-      (in_.placeholder, in_.get_sequence_lengths(), out.placeholder, out.get_sequence_lengths()),
+      (in_.placeholder, in_seq_len_, out.placeholder, out_seq_len_),
       feed_dict=make_feed_dict(net.extern_data))
     assert (in_seq_len * 5 == out_seq_len).all()
 
