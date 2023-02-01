@@ -241,9 +241,16 @@ class Updater(object):
     """
     network_params = self.network.parameters()
 
+    # By default insert the weight_decay constraints in the optimizer, as this is default PyTorch behavior.
+    # If the user doesn't accept this, throw an error message.
+    assert self.config.bool("decouple_constraints", True), (
+      "L2/weight_decay constraints are decoupled in PyTorch, but "
+      "decouple_constraints=False was explicitly specified in the config."
+    )
+
     # Split in parameter groups only if decouple_constraints is set and the optimizer accepts weight_decay.
     cls_init_kwargs = _get_class_init_kwargs(optim_class)
-    if "weight_decay" not in cls_init_kwargs or self.config.bool("decouple_constraints", False):
+    if "weight_decay" not in cls_init_kwargs:
       assert "weight_decay" not in optimizer_opts, (
         "weight_decay not accepted by the chosen optimizer. Accepted values: %s" %
         ", ".join("%s" % optim_name for optim_name in cls_init_kwargs)
