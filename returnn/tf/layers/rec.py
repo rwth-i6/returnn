@@ -2726,7 +2726,7 @@ class _SubnetworkRecCell(object):
                 # The helper layer name does not matter except for debugging and it should not clash with other layers.
                 # The helper layer name matters only on the sense that it must come sorted before other extra layers,
                 # such that we construct it first in _construct_output_layers_moved_out.
-                helper_layer_name = ":dyn-tag-accum:%i:%s" % (len(in_loop_ctx_dim_tags), layer_name)
+                helper_layer_name = ":dyn-tag-accum:%s:tag%i" % (layer_name, len(in_loop_ctx_dim_tags))
                 helper_layer_dict = {"class": "length", "from": layer_name, "axis": tag}
                 self._add_template_layer(helper_layer_name, helper_layer_dict)
                 add_output_to_acc(helper_layer_name)
