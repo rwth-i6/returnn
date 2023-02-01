@@ -1045,11 +1045,13 @@ class Dim(object):
     :param Dim other:
     """
     assert self.can_be_used_as_dim() and other.can_be_used_as_dim()  # declare_same_as does not make sense otherwise
+    # Note: Check `is`, not `==`. `==` can be true even though same_as are not the same instance,
+    # e.g. via auto_generated.
+    if self is other:
+      return
     self._maybe_update()
     self._validate_in_current_graph()
     other._validate_in_current_graph()
-    if self == other:
-      return
     other_same_base = other.get_same_base()
     if self is other_same_base or self.same_as is other_same_base:
       return
@@ -1085,8 +1087,7 @@ class Dim(object):
         return other.declare_same_as(self)
     other_derived_bases = other.get_derived_bases_set()
     self_derived_bases = self.get_derived_bases_set()
-    assert other_derived_bases != self_derived_bases
-    if self_derived_bases.issubset(other_derived_bases):
+    if other_derived_bases != self_derived_bases and self_derived_bases.issubset(other_derived_bases):
       # Avoid cycles on derived_from_tag. https://github.com/rwth-i6/returnn/issues/1054
       with util.guard_infinite_recursion(Dim.declare_same_as, other, self):
         return other.declare_same_as(self)
