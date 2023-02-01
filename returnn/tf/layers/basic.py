@@ -4652,7 +4652,7 @@ class RepeatLayer(_ConcatInputLayer):
     # set size placeholders
     output_axis = self.output.get_batch_axis(0)
     tag = self.output.dim_tags[output_axis]
-    if tag.dimension is None and tag.dyn_size is None:  # dynamic? dyn sizes needed?
+    if tag.is_dynamic() and tag.dyn_size is None:  # dynamic? dyn sizes needed?
       tag.set_tag_on_size_tensor(target_seq_len, batch=self.output.batch)
 
   def get_dep_layers(self):
