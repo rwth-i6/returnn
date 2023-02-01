@@ -2062,6 +2062,14 @@ class LengthLayer(LayerBase):
     :param list[LayerBase] sources:
     :rtype: Dim
     """
+    # During template generation, we might have generated some temporary dim tags.
+    # If we can match the dim to any of the sources (e.g. via Dim.auto_generated),
+    # we can use the dim tag from the source instead,
+    # as the source dim tags should be more up-to-date.
+    for src in sources:
+      if dim in src.output.dim_tags:
+        dim = [d for d in src.output.dim_tags if d == dim][0]
+        break
     dep_batches = [dep.output.batch for dep in sources if dep.output.batch]
     control_flow_ctx = [dep.output.control_flow_ctx for dep in sources if dep.output.control_flow_ctx]
     if dep_batches:
