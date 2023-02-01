@@ -2279,9 +2279,10 @@ class _SubnetworkRecCell(object):
           assert value.dtype == self.data.dtype
           assert value.batch_shape == self.data.batch_shape
           assert value.have_varying_shape_in_ctx() == self.data.have_varying_shape_in_ctx()
+          assert value.placeholder is not None, "%s: self.data %r, value %r" % (self, self.data, value)
           value = value.placeholder
         else:
-          raise TypeError("OutputToAccumulate.get: expected tf.Tensor or Data but got %r" % type(value))
+          raise TypeError("%s.get: expected tf.Tensor or Data but got %r" % (self, type(value)))
         self.get_returned_none = False
         return ta.write(index=index, value=value, name="%s_acc_ta_write" % self.tf_scope_name)
 
