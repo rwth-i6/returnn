@@ -18,7 +18,8 @@ from returnn.log import log
 class LayerBase(object):
     """
     This is the base class for all layers.
-    Every layer by default has a list of source layers `sources` and defines `self.output` which is of type :class:`Data`.
+    Every layer by default has a list of source layers `sources`
+    and defines `self.output` which is of type :class:`Data`.
     It shares some common functionality across all layers, such as explicitly defining the output format,
     some parameter regularization, and more.
 
@@ -108,63 +109,67 @@ class LayerBase(object):
         :param returnn.tf.util.data.Dim|None out_dim: output feature dim tag
         :param dict[str] out_type: kwargs for Data class. more explicit than n_out.
         :param set[returnn.tf.util.data.Dim|returnn.tf.util.data._MarkedDim]|tuple|list|None out_shape:
-          verifies the output shape (dim tags). See :func:`Data.verify_out_shape`.
+            verifies the output shape (dim tags). See :func:`Data.verify_out_shape`.
         :param list[LayerBase] sources: via self.transform_config_dict()
         :param returnn.tf.util.data.Dim|None in_dim: input feature dim tag
         :param str|list[str]|None target: if some loss is set, this is the target data-key,
-          i.e. network.extern_data.get_data(target). alternatively, this also can be a layer name.
+            i.e. network.extern_data.get_data(target). alternatively, this also can be a layer name.
         :param dict[str,LayerBase]|None _target_layers: if target.startswith("layer:"), then this is target -> layer
         :param str|None size_target: like target but this is only used to set our output size in case of training
         :param Loss|None loss: via :func:`transform_config_dict`.
-          Every layer can have one loss (of type :class:`Loss`), or none loss.
-          In the net dict, it is specified as a string.
-          In :class:`TFNetwork`, all losses from all layers will be collected.
-          That is what :class:`TFUpdater.Updater` will use for training.
+            Every layer can have one loss (of type :class:`Loss`), or none loss.
+            In the net dict, it is specified as a string.
+            In :class:`TFNetwork`, all losses from all layers will be collected.
+            That is what :class:`TFUpdater.Updater` will use for training.
         :param ReuseParams|None reuse_params: if given, will opt reuse the params. see :func:`self.var_creation_scope`.
-          See also the ``name_scope`` option as an alternative.
+            See also the ``name_scope`` option as an alternative.
         :param str|None name_scope: If set, uses this custom (relative) name scope.
-          If it starts with a "/", it will be the absolute name scope.
-          It should not end with a "/".
-          It can be empty, in which case it will not consume a new name scope.
-          This can also be used for parameter sharing.
-          The default is the layer name in most cases,
-          but this logic is in :func:`get_absolute_name_scope_prefix` and :func:`TFNetwork.layer_creation_scope`.
+            If it starts with a "/", it will be the absolute name scope.
+            It should not end with a "/".
+            It can be empty, in which case it will not consume a new name scope.
+            This can also be used for parameter sharing.
+            The default is the layer name in most cases,
+            but this logic is in :func:`get_absolute_name_scope_prefix` and :func:`TFNetwork.layer_creation_scope`.
         :param str|None param_device: e.g. "CPU", etc. any valid name for tf.device.
-          see https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/util/device_name_utils.h
+            see https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/util/device_name_utils.h
         :param float|None L2: for constraints
         :param float|None darc1: for constraints. see Generalization in Deep Learning, https://arxiv.org/abs/1710.05468
         :param float|None spatial_smoothing: see :func:`returnn.tf.util.basic.spatial_smoothing_energy`
         :param float|None param_variational_noise: adds variational noise to the params during training
         :param dict[str]|None updater_opts: accepts similar opts as TFUpdater, e.g. "optimizer", "learning_rate", ...
         :param bool|None is_output_layer: triggers the construction of this layer in the root net.
-          Inside a :class:`RecLayer`, it triggers the explicit accumulation of all frames.
-          Also see the ``need_last`` option.
+            Inside a :class:`RecLayer`, it triggers the explicit accumulation of all frames.
+            Also see the ``need_last`` option.
         :param bool only_on_eval: if True, this layer will only be calculated in eval
         :param bool only_on_search: if True, this layer will only be calculated when search is done
         :param int|None copy_output_loss_from_source_idx: if set, will copy output_loss from this source
         :param bool|dict batch_norm: see self.batch_norm()
         :param str|float initial_output: used for recurrent layer, see self.get_rec_initial_output()
-        :param state: explicitly defines the rec state. initial_state would define the initial state (in the first frame)
+        :param state: explicitly defines the rec state.
+            initial_state would define the initial state (in the first frame)
         :param bool need_last: Inside :class:`RecLayer`, make sure that we can access the last frame.
-          Similar to ``is_output_layer, but this is specifically about the last frame,
-          i.e. it does not trigger accumulation.
-        :param LayerBase|None rec_previous_layer: via the recurrent layer, layer (template) which represents the past of us.
-          You would not explicitly set this in a config. This is automatically, internally, via :class:`RecLayer`.
+            Similar to ``is_output_layer, but this is specifically about the last frame,
+            i.e. it does not trigger accumulation.
+        :param LayerBase|None rec_previous_layer: via the recurrent layer,
+            layer (template) which represents the past of us.
+            You would not explicitly set this in a config.
+            This is automatically, internally, via :class:`RecLayer`.
         :param bool encapsulate: mostly relevant for SubnetworkLayer and similar:
-          If True, all sub layers will be created,
-            and covered in functions like :func:`get_rec_initial_extra_outputs`,
-            and the logic in :func:`cls_get_sub_network` will not be used.
-          If False, the logic in :func:`cls_get_sub_network` will be used.
+            If True, all sub layers will be created,
+                and covered in functions like :func:`get_rec_initial_extra_outputs`,
+                and the logic in :func:`cls_get_sub_network` will not be used.
+            If False, the logic in :func:`cls_get_sub_network` will be used.
         :param list[str]|None collocate_with: in the rec layer, collocate with the specified other layers
         :param bool|None trainable: whether the parameters of this layer will be trained.
-          default (None) inherits from the parent layer if there is one, or otherwise True.
+           default (None) inherits from the parent layer if there is one, or otherwise True.
         :param str|callable|None custom_param_importer: used by :func:`set_param_values_by_dict`
         :param str|None register_as_extern_data: registers output in network.extern_data
         :param None|((LayerBase)->list[tf.Operation]) control_dependencies_on_output:
         :param None|bool|dict[str] debug_print_layer_output: same as global config option but per layer
         :param str _name: just for internal construction, should be the same as ``name``
         :param returnn.tf.network.TFNetwork _network: just for internal construction, should be the same as ``network``
-        :param None|SearchChoices _src_common_search_choices: set via :func:`SearchChoices.translate_to_common_search_beam`
+        :param None|SearchChoices _src_common_search_choices:
+            set via :func:`SearchChoices.translate_to_common_search_beam`
         """
         debug_print_layer_output  # noqa  # not used here but in TFNetwork._create_layer
         self.name = name
@@ -530,7 +535,8 @@ class LayerBase(object):
         :param str|list[str]|None target:
         :param str|None size_target:
         :param dict[str,LayerBase]|None _target_layers: if target.startswith("layer:"), then this is target -> layer
-        :param None|SearchChoices _src_common_search_choices: set via :func:`SearchChoices.translate_to_common_search_beam`
+        :param None|SearchChoices _src_common_search_choices:
+            set via :func:`SearchChoices.translate_to_common_search_beam`
         :param list[LayerBase] sources:
         :return: output, maybe changed
         :rtype: Data
@@ -756,8 +762,8 @@ class LayerBase(object):
                         # Check whether the target itself is a layer
                         target_layers[target] = get_layer(target)
                     except LayerNotFound:
-                        # Note: This is a workaround for cases where we need to know about used data keys before the layer
-                        # itself is constructed (e.g. in _SubnetworkRecCell.get_output).
+                        # Note: This is a workaround for cases where we need to know about used data keys
+                        # before the layer itself is constructed (e.g. in _SubnetworkRecCell.get_output).
                         # A nicer solution would be to not modify this here,
                         # but instead lazily handle it in TFNetwork.get_extern_data,
                         # such that we do not need to know in advance which data keys we need.
@@ -2822,9 +2828,11 @@ class Loss(object):
 
     def reduce_func(self, loss):
         """
-        Reduces the frames. Currently the sum, and we do averaging later.
+        Reduces the frames.
+        Currently the sum, and we do averaging later.
         We might change this logic at some point.
-        Also, some code overwrites this function externally, e.g. with returnn.tf.util.basic.identity, to not do reducing.
+        Also, some code overwrites this function externally,
+        e.g. with returnn.tf.util.basic.identity, to not do reducing.
 
         :param tf.Tensor loss: e.g. (batch*time,), or (time_flat,), or (batch*time,dim), etc
         :return: by default just a scalar. but this can be overwritten, to not reduce

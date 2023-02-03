@@ -699,7 +699,7 @@ class SelectSearchSourcesLayer(InternalLayer):
                     assert base_src_choices.src_beams is not None, self.network.debug_search_choices(
                         self.search_choices_layer
                     ) or (
-                        ("Cannot transform %r,\n" "search choices %r,\n" "to search choices %r.\n" "Missing beam idxs.")
+                        "Cannot transform %r,\n" "search choices %r,\n" "to search choices %r.\n" "Missing beam idxs."
                         % (src, src_search_choices, search_choices_seq)
                     )
                     tag = Dim.get_tag_from_size_tensor(v)
@@ -1536,8 +1536,8 @@ class GatherLayer(_ConcatInputLayer):
         :param Data position_data:
         :param int old_gather_axis: gather axis of ``input_data`` counted with batch dim (before any transformation)
         :rtype: (list[int], list[int], list[int], list[int])
-        :return: (common_axes_input, common_axes_position, specific_input_axes, specific_position_axes), all counted with
-        batch dim.
+        :return: (common_axes_input, common_axes_position, specific_input_axes, specific_position_axes),
+            all counted with batch dim.
         """
         from returnn.util import BehaviorVersion
 
@@ -1742,8 +1742,9 @@ class GatherLayer(_ConcatInputLayer):
 class GatherNdLayer(_ConcatInputLayer):
     """
     Warning: This layer is deprecated, use the more general :class:`GatherLayer` instead.
-    :class:`GatherLayer` should be equivalent, but is more general (supports multiple batch dimensions, can specify gather
-     axis) and its name is less misleading.
+    :class:`GatherLayer` should be equivalent, but is more general
+    (supports multiple batch dimensions, can specify gather axis)
+    and its name is less misleading.
 
     This takes out a position from some axis, e.g. ``x[pos]``.
     This layers allows a different position for each batch.
@@ -2647,17 +2648,18 @@ class RandomStateInitLayer(LayerBase):
     def __init__(self, algorithm=None, seed=None, out_dim=None, **kwargs):
         """
         :param str|tf.random.Algorithm|None algorithm: "philox", "three-fry", "auto-select". by default "philox".
-          See :func:`tf.random.stateless_uniform` for some documentation.
-          "auto-select" will automatically select the optimal algorithm based on the device,
-          so it might select a different algorithm depending on the device.
-          Note that the state shape is dependent on the device, so if you want that checkpoints are compatible
-          across devices, do not use "auto-select".
-          We take the default from :class:`tf.random.Generator`.
-        :param int|typing.Sequence[int]|numpy.ndarray|None seed: if given, the state will deterministically depend on this
-          (and the algorithm) and nothing else. If you have multiple random generators (state vars),
-          make sure that you have different seeds for each!
-          If None (default), the seed will be deterministically taken from the network random generator
-          at construction time, which is usually a good idea. You still can change the global network seed.
+            See :func:`tf.random.stateless_uniform` for some documentation.
+            "auto-select" will automatically select the optimal algorithm based on the device,
+            so it might select a different algorithm depending on the device.
+            Note that the state shape is dependent on the device, so if you want that checkpoints are compatible
+            across devices, do not use "auto-select".
+            We take the default from :class:`tf.random.Generator`.
+        :param int|typing.Sequence[int]|numpy.ndarray|None seed:
+            if given, the state will deterministically depend on this
+            (and the algorithm) and nothing else. If you have multiple random generators (state vars),
+            make sure that you have different seeds for each!
+            If None (default), the seed will be deterministically taken from the network random generator
+            at construction time, which is usually a good idea. You still can change the global network seed.
         :param Dim|None out_dim: new dim tag for random state dim
         """
         out_dim  # noqa  # via get_out_data_from_opts
@@ -6148,7 +6150,9 @@ class ConvLayer(_ConcatInputLayer):
         dim_tags = list(data.dim_tags[:num_batch_dims])  # [B]
         if out_spatial_dims:
             assert len(out_spatial_dims) == len(filter_size)
-            # Be relaxed about incorrect input data. Throw errors later. This can also work during template construction.
+            # Be relaxed about incorrect input data.
+            # Throw errors later.
+            # This can also work during template construction.
             dim_tags += out_spatial_dims
         else:
             for i in range(len(filter_size)):
@@ -6271,7 +6275,8 @@ class PoolLayer(_ConcatInputLayer):
         :param tuple[int] pool_size: shape of the window of each reduce
         :param str padding: "valid" or "same"
         :param tuple[int]|int dilation_rate:
-        :param tuple[int]|int|None strides: in contrast to tf.nn.pool, the default (if it is None) will be set to pool_size
+        :param tuple[int]|int|None strides: in contrast to tf.nn.pool, the default (if it is None)
+            will be set to pool_size
         :param Dim|None in_dim:
         :param list[Dim|str]|None in_spatial_dims:
         :param Dim|None out_dim:
@@ -9998,7 +10003,8 @@ class SubnetworkLayer(LayerBase):
         d["_subnet"] = subnet
         if d.get("encapsulate", False):
             subnet.construct_all(parent_get_layer=get_layer)
-        # In case of non-template construction, this will trigger the non-template construction of our "output" sublayer.
+        # In case of non-template construction,
+        # this will trigger the non-template construction of our "output" sublayer.
         d["_output"] = subnet.construct_layer("output", parent_get_layer=get_layer)
         d["_from"] = d.get("from", "data")  # cache this
         d["from"] = []  # disable now. we should get them in the template construction when needed
@@ -11741,7 +11747,8 @@ class CtcLoss(Loss):
         **kwargs,
     ):
         """
-        :param bool target_collapse_repeated: like preprocess_collapse_repeated option for CTC. used for sparse_labels().
+        :param bool target_collapse_repeated: like preprocess_collapse_repeated option for CTC.
+            used for sparse_labels().
         :param bool auto_clip_target_len: see self._get_target_sparse_labels().
         :param bool output_in_log_space: False -> output expected in prob space. see self.get_output_logits
         :param int beam_width: used in eval
@@ -11924,7 +11931,9 @@ class EditDistanceLoss(Loss):
         """
         :param bool debug_print: will tf.Print the sequence
         :param dict[int,int]|None label_map: before calculating the edit-distance, will apply this map
-        :param bool ctc_decode: True -> expects dense output and does CTC decode, False -> expects sparse labels in output
+        :param bool ctc_decode:
+            True -> expects dense output and does CTC decode,
+            False -> expects sparse labels in output
         :param bool output_in_log_space: False -> dense output expected in prob space. see self.get_output_logits
         """
         super(EditDistanceLoss, self).__init__(**kwargs)
@@ -12778,8 +12787,10 @@ class SamplingBasedLoss(Loss):
     https://www.tensorflow.org/api_docs/python/tf/nn/nce_loss.
 
     Must be used in an output linear layer with a weight matrix of shape (num_classes, dim).
-    When using 'log_uniform' sampler (default), optimal performance is typically achieved with the vocabulary list sorted
-    in decreasing order of frequency (https://www.tensorflow.org/api_docs/python/tf/random/log_uniform_candidate_sampler).
+    When using 'log_uniform' sampler (default),
+    optimal performance is typically achieved with the vocabulary list sorted
+    in decreasing order of frequency
+    (https://www.tensorflow.org/api_docs/python/tf/random/log_uniform_candidate_sampler).
     """
 
     class_name = "sampling_loss"
@@ -12797,19 +12808,23 @@ class SamplingBasedLoss(Loss):
         **kwargs,
     ):
         """
-        :param int num_sampled: Number of classes to be sampled. For sampled softmax, this is the number of classes to be
-          used to estimate the sampled softmax. For noise contrastive estimation, this is the number of noise samples.
+        :param int num_sampled: Number of classes to be sampled.
+            For sampled softmax, this is the number of classes to be
+            used to estimate the sampled softmax.
+            For noise contrastive estimation, this is the number of noise samples.
         :param int num_splits: Number of different samples (each with 'num_sampled' classes) to be used per batch.
-        :param str sampler: Specify sampling distribution ("uniform", "log_uniform", "learned_unigram" or "fixed_unigram").
+        :param str sampler: Specify sampling distribution
+            ("uniform", "log_uniform", "learned_unigram" or "fixed_unigram").
         :param bool nce_loss: If True, use noise contrastive estimation loss. Else (default), use the sampled softmax.
-        :param bool use_full_softmax: If True, compute the full softmax instead of sampling (can be used for evaluation).
+        :param bool use_full_softmax: If True, compute the full softmax instead of sampling
+            (can be used for evaluation).
         :param bool|None remove_accidental_hits: If True, remove sampled classes that equal one of the target classes.
-          If not specified (None), the value is determined based on the choosen objective.
-          For sampled softmax this should be set to True; for NCE the default is False.
-          Set this to True in case of NCE training and the objective is equal to sampled logistic loss.
+            If not specified (None), the value is determined based on the choosen objective.
+            For sampled softmax this should be set to True; for NCE the default is False.
+            Set this to True in case of NCE training and the objective is equal to sampled logistic loss.
         :param dict[str] sampler_args: additional arguments for the candidate sampler.
-          This is most relevant to the fixed_unigram sampler.
-          See https://www.tensorflow.org/api_docs/python/tf/random/fixed_unigram_candidate_sampler for details.
+            This is most relevant to the fixed_unigram sampler.
+            See https://www.tensorflow.org/api_docs/python/tf/random/fixed_unigram_candidate_sampler for details.
         :param float nce_log_norm_term: The logarithm of the constant normalization term for NCE.
         """
         super(SamplingBasedLoss, self).__init__(**kwargs)

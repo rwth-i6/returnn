@@ -325,8 +325,8 @@ class RecLayer(_ConcatInputLayer):
             assert p.name.startswith(scope_name_prefix) and p.name.endswith(":0")
             self.add_param(p)
 
-            # Sublayers do not know whether the RecLayer is trainable. If it is not, we need to mark all defined parameters
-            # as untrainable
+            # Sublayers do not know whether the RecLayer is trainable.
+            # If it is not, we need to mark all defined parameters as untrainable
             if not self.trainable:
                 trainable_collection_ref = p.graph.get_collection_ref(tf_compat.v1.GraphKeys.TRAINABLE_VARIABLES)
                 if p in trainable_collection_ref:
@@ -1535,7 +1535,7 @@ class _SubnetworkRecCell(object):
                 while parent and parent.parent:
                     parent_names.insert(0, parent.parent_name or "?")
                     parent = parent.parent
-                return ("<RecLayer construct template GetLayer>(" "allow_uninitialized_template %r, " "parents %r)") % (
+                return "<RecLayer construct template GetLayer>(" "allow_uninitialized_template %r, " "parents %r)" % (
                     lself.allow_uninitialized_template,
                     " <- ".join(parent_names) or None,
                 )
@@ -1723,7 +1723,8 @@ class _SubnetworkRecCell(object):
                         ConstructCtx.collect_exception(layer_name=name)
                         if layer_.is_initialized:
                             # Return anyway. This will be resolved later.
-                            # Also, this is important to not keep trying again and again potentially for a very long time.
+                            # Also, this is important to not keep trying again and again
+                            # potentially for a very long time.
                             # https://github.com/rwth-i6/returnn/issues/1127
                             pass
                         elif lself.iterative_testing or initial_output_layer:
@@ -1750,7 +1751,8 @@ class _SubnetworkRecCell(object):
                                 raise
 
                     if initial_output_layer and layer_ in ConstructCtx.partially_finished:
-                        # We can trust the initial output, and even ignore whatever else we got from the construct_layer above.
+                        # We can trust the initial output,
+                        # and even ignore whatever else we got from the construct_layer above.
                         # The construct_layer is just to setup the deps and kwargs.
                         assert layer_.kwargs
                         initial_output = initial_output_layer.output.copy_template(name="%s_output" % name)
@@ -1790,7 +1792,8 @@ class _SubnetworkRecCell(object):
                             and earlier_layer_output.size_placeholder
                         ):
                             # E.g. during reconstruct, but based on other partially finished / incomplete sources.
-                            # However, maybe we got useful dim tags / size placeholders from a previous (partial) construction.
+                            # However, maybe we got useful dim tags / size placeholders
+                            # from a previous (partial) construction.
                             # Copy if it matches.
                             # Do this even if there was an exception, but with new partial construction.
                             if earlier_layer_output.matches_var_dim_pattern(layer_.output):
@@ -2173,7 +2176,8 @@ class _SubnetworkRecCell(object):
     def get_layer_last_frame(self, layer_name):
         """
         :param str layer_name:
-        :return: the output from the last loop frame. compatible to layer templates. masking correctly taken into account
+        :return: the output from the last loop frame.
+            compatible to layer templates. masking correctly taken into account
         :rtype: Data
         """
         return self._last_frames[layer_name]
@@ -2614,7 +2618,8 @@ class _SubnetworkRecCell(object):
             output_template_search_choices = None
 
         # dict to collect all data that will be fed from outside of the rec_layer. If present, this includes
-        # the input ('source') and the target, but maybe also other additional extern data that is used inside the subnet.
+        # the input ('source') and the target,
+        # but maybe also other additional extern data that is used inside the subnet.
         data_tensor_arrays = {}  # dict[str,tf.TensorArray]
 
         time_dim_tag = None
@@ -3023,8 +3028,10 @@ class _SubnetworkRecCell(object):
                         if tag.control_flow_ctx == self.net.control_flow_ctx:
                             if tag not in in_loop_ctx_dim_tags:
                                 in_loop_ctx_dim_tags.add(tag)
-                                # The helper layer name does not matter except for debugging and it should not clash with other layers.
-                                # The helper layer name matters only on the sense that it must come sorted before other extra layers,
+                                # The helper layer name does not matter except for debugging
+                                # and it should not clash with other layers.
+                                # The helper layer name matters only on the sense
+                                # that it must come sorted before other extra layers,
                                 # such that we construct it first in _construct_output_layers_moved_out.
                                 helper_layer_name = ":dyn-tag-accum:%s:tag%i" % (layer_name, len(in_loop_ctx_dim_tags))
                                 helper_layer_dict = {"class": "length", "from": layer_name, "axis": tag}
@@ -3459,7 +3466,8 @@ class _SubnetworkRecCell(object):
                         self.accumulated_losses[loss.name] = LossHolder(
                             name=loss.name,
                             layer=loss.loss.layer,
-                            layer_output=rec_layer.output,  # not the correct output, but we only use it to check e.g. for time-dim
+                            # not the correct output, but we only use it to check e.g. for time-dim
+                            layer_output=rec_layer.output,
                             loss=loss_wrapped,
                         )
 
@@ -3586,13 +3594,15 @@ class _SubnetworkRecCell(object):
         then we will resolve that to the common final best search choices,
         which is determined by the latest search choice given by the layer.
         This assumes that we also have `self.final_acc_tas_dict["choice_%s" % choice_base.name]` available.
-        In addition, we resolve the sequence lengths (whose beams correspond to the end layer) to the final search choices.
+        In addition, we resolve the sequence lengths (whose beams correspond to the end layer)
+        to the final search choices.
 
         :param str layer_name:
         :param tf.TensorArray acc_ta: accumulated outputs of that layer
         :param final_net_vars:
-        :param tf.Tensor seq_len: shape (batch * beam,), has beam of the "end" layer in case of dynamic sequence lengths,
-          otherwise beam of rec_layer.output
+        :param tf.Tensor seq_len: shape (batch * beam,),
+            has beam of the "end" layer in case of dynamic sequence lengths,
+            otherwise beam of rec_layer.output
         :param dict[str,SearchChoices] search_choices_cache: inner search choices layer -> final search choices
         :return: (new acc_ta, latest layer choice name, search choices, resolved seq_len)
         :rtype: (tf.TensorArray,str|None,SearchChoices|None,tf.Tensor)
@@ -3783,7 +3793,7 @@ class _SubnetworkRecCell(object):
 
                     choice_beams = src_choice_beams
 
-                return (i - 1, src_choice_beams, new_acc_output_ta_)
+                return i - 1, src_choice_beams, new_acc_output_ta_
 
         # noinspection PyUnusedLocal
         def search_resolve_cond(i, *args):
@@ -3853,8 +3863,10 @@ class _SubnetworkRecCell(object):
         """
         Based on the templated network, we can see the dependencies.
         We want to move as much calculation, i.e. subnet layers, as possible out of the loop.
-        E.g. an (input) layer which does not depend on any output from the previous frame can be calculated in advance.
-        And an (output) layer which is not used for other calculations inside the loop can be calculated out-of-the-loop.
+        E.g. an (input) layer which does not depend on any output from the previous frame
+        can be calculated in advance.
+        And an (output) layer which is not used for other calculations inside the loop
+        can be calculated out-of-the-loop.
 
         :param set[str] needed_outputs:
         :return: nothing, will set self.input_layers_moved_out/output_layers_moved_out/layers_in_loop
@@ -4506,7 +4518,8 @@ class _TemplateLayer(LayerBase):
         # (https://github.com/rwth-i6/returnn/wiki/Layers-which-introduce-new-dynamic-sequence-lengths).
         # In case this seq len is different per frame as mentioned in the comment above,
         # this is a problem and not supported currently.
-        # In case the seq len is the same always, it just means that we did not fix the specific layer implementation yet.
+        # In case the seq len is the same always,
+        # it just means that we did not fix the specific layer implementation yet.
         # This is work-in-progress.
         layer.output.sanity_check(assume_complete=prev_output is not None or rec_vars_prev_outputs is not None)
         if layer.output.placeholder is not None and self.network.get_config().bool(
@@ -5330,9 +5343,10 @@ class RnnCellLayer(_ConcatInputLayer):
         :param str name: layer name.
         :param str state_key: key to be used to get the state from final_rec_vars.
         :param str|None key: key/attribute of the state if state is a dictionary/namedtuple
-          (like 'c' and 'h' for LSTM states).
+            (like 'c' and 'h' for LSTM states).
         :param LayerBase|str|int|float|None|list|tuple|namedtuple initial_state: see code
-        :param tuple shape_invariant: If provided, directly used. Otherwise, guessed from initial_shape (see code below).
+        :param tuple shape_invariant: If provided, directly used.
+            Otherwise, guessed from initial_shape (see code below).
         :param RecLayer|LayerBase|None rec_layer: For the scope.
         :rtype: tf.Tensor
         """
@@ -5721,8 +5735,10 @@ class BaseChoiceLayer(LayerBase):
         :param int|None beam_size: the outgoing beam size. i.e. our output will be (batch * beam_size, ...)
         :param NotSpecified|bool search:
         :param NotSpecified|bool add_to_beam_scores:
-        :param None|SearchChoices _src_common_search_choices: set via :func:`SearchChoices.translate_to_common_search_beam`
-        :return: when this layer provides an own choice (search_choices attrib is set), then the corresponding beam size
+        :param None|SearchChoices _src_common_search_choices:
+            set via :func:`SearchChoices.translate_to_common_search_beam`
+        :return: when this layer provides an own choice (search_choices attrib is set),
+            then the corresponding beam size
         :rtype: int|None
         """
         search = NotSpecified.resolve(search, network.search_flag)
@@ -5842,28 +5858,30 @@ class ChoiceLayer(BaseChoiceLayer):
         """
         :param int beam_size: the outgoing beam size. i.e. our output will be (batch * beam_size, ...)
         :param bool keep_beams: specifies that we keep the beam_in entries,
-          i.e. we just expand, i.e. we just search on the dim. beam_size must be a multiple of beam_in.
+            i.e. we just expand, i.e. we just search on the dim. beam_size must be a multiple of beam_in.
         :param NotSpecified|bool search: whether to perform search, or use the ground truth (`target` option).
-          If not specified, it will depend on `network.search_flag`.
+            If not specified, it will depend on `network.search_flag`.
         :param NotSpecified|bool add_to_beam_scores: whether to add the scores to the beam scores.
-          This will be done with search obviously (not supported to not do it).
-          Without search, we can still add the scores of the ground-truth labels to the beam.
-          By default, this is derived from `search or network.search_flag`.
-          So with enabled net search flag, even when `search` is disabled here, it will add the scores.
-        :param str input_type: "prob", "log_prob" or "logits", whether the input is in probability space, log-space, etc.
-          or "regression", if it is a prediction of the data as-is. If there are several inputs, same format
-          for all is assumed.
+            This will be done with search obviously (not supported to not do it).
+            Without search, we can still add the scores of the ground-truth labels to the beam.
+            By default, this is derived from `search or network.search_flag`.
+            So with enabled net search flag, even when `search` is disabled here, it will add the scores.
+        :param str input_type: "prob", "log_prob" or "logits",
+            whether the input is in probability space, log-space, etc.
+            or "regression", if it is a prediction of the data as-is. If there are several inputs, same format
+            for all is assumed.
         :param float prob_scale: factor for prob (score in +log space from source)
         :param float base_beam_score_scale: factor for beam base score (i.e. prev prob scores)
         :param float random_sample_scale: if >0, will add Gumbel scores. you might want to set base_beam_score_scale=0
         :param bool length_normalization: evaluates score_t/len in search
         :param list[int]|None source_beam_sizes: If there are several sources, they are pruned with these beam sizes
-           before combination. If None, 'beam_size' is used for all sources. Has to have same length as number of sources.
+            before combination.
+            If None, 'beam_size' is used for all sources. Has to have same length as number of sources.
         :param dict|None scheduled_sampling:
         :param bool|str cheating: if True, will always add the true target in the beam.
-          if "exclusive", enables cheating_exclusive. see :func:`returnn.tf.util.basic.beam_search`.
+            if "exclusive", enables cheating_exclusive. see :func:`returnn.tf.util.basic.beam_search`.
         :param list[LayerBase]|None explicit_search_sources: will mark it as an additional dependency.
-          You might use these also in custom_score_combine.
+            You might use these also in custom_score_combine.
         :param callable|None custom_score_combine:
         """
         super(ChoiceLayer, self).__init__(beam_size=beam_size, search=search, **kwargs)
@@ -5913,8 +5931,9 @@ class ChoiceLayer(BaseChoiceLayer):
                         source_beam_sizes = [beam_size] * len(self.sources)
                     assert len(source_beam_sizes) == len(self.sources), "Provide exactly one beam size per source."
 
-                    # Combine the incoming scores by adding them up for all possible combinations of target labels. To reduce
-                    # the number of combinations, we separately apply beam pruning to the sources beforehand.
+                    # Combine the incoming scores by adding them up for all possible combinations of target labels.
+                    # To reduce the number of combinations,
+                    # we separately apply beam pruning to the sources beforehand.
                     scores_in, scores_in_dim, pruned_labels = self._prune_and_combine_sources(
                         self.sources, source_beam_sizes, net_batch_dim * beam_size
                     )
@@ -5929,7 +5948,8 @@ class ChoiceLayer(BaseChoiceLayer):
                     pruned_labels = None
 
                 assert self.search_choices.src_layer, self.network.debug_search_choices(base_search_choice=self) or (
-                    "Not implemented yet. In rec-layer, we would always have our prev-frame as one previous search choice. "
+                    "Not implemented yet."
+                    " In rec-layer, we would always have our prev-frame as one previous search choice. "
                     "Our deps: %r" % self.get_dep_layers()
                 )
                 base_search_choices = self.search_choices.src_layer.search_choices
@@ -6082,8 +6102,10 @@ class ChoiceLayer(BaseChoiceLayer):
                 labels = tf.cast(labels, self.output.dtype)
 
                 if len(self.sources) > 1:
-                    # 'labels' in this case do not refer to a target vocabulary, but just represent ids to the labels
-                    # that survived pruning for each of the sources ('pruned_labels'). So as a last step, we get the final
+                    # 'labels' in this case do not refer to a target vocabulary,
+                    # but just represent ids to the labels
+                    # that survived pruning for each of the sources ('pruned_labels').
+                    # So as a last step, we get the final
                     # target labels by indexing pruned_labels with 'labels'.
                     labels = self._get_combined_labels(labels, src_beams, pruned_labels, source_beam_sizes)
                 else:
@@ -6290,8 +6312,9 @@ class ChoiceLayer(BaseChoiceLayer):
 
                 combined_scores_dim *= beam_size
 
-            # We want to compute scores for all possible combination of sources. This is done by putting each source
-            # on a separate axis. This leads to broadcasting of all source-axes over all others when adding up the sources,
+            # We want to compute scores for all possible combination of sources.
+            # This is done by putting each source on a separate axis.
+            # This leads to broadcasting of all source-axes over all others when adding up the sources,
             # thus giving all possible sums of scores. We reshape back afterwards.
             num_sources = len(sources)
             combined_pruned_scores = None
@@ -6327,7 +6350,8 @@ class ChoiceLayer(BaseChoiceLayer):
 
         :param tf.Tensor combined_ids: indices to the flattened scores, see self._prune_and_combine_sources()
         :param tf.Tensor src_beams: the indices of the incoming beam for each outgoing label
-        :param list[tf.Tensor] pruned_labels: labels after pruning of incoming beam, see self._prune_and_combine_sources()
+        :param list[tf.Tensor] pruned_labels: labels after pruning of incoming beam,
+            see self._prune_and_combine_sources()
         :param list[int] beam_sizes: beam sizes used for pruning of the individual sources
         :return: final labels for all sources
         :rtype: list[tf.Tensor]
@@ -6405,7 +6429,8 @@ class ChoiceLayer(BaseChoiceLayer):
         prev_beam_idx = tf.reduce_max(base_search_choices.src_beams)
         # Now find the best possible beam index.
         # Note that we could do this even in the general case.
-        # It also would make sense later to not add the cheating label twice (see returnn.tf.util.basic.beam_search logic);
+        # It also would make sense later to not add the cheating label twice
+        # (see returnn.tf.util.basic.beam_search logic);
         # in that case, we always must use this logic here.
         from returnn.tf.util.basic import get_shape, where_bc, beam_search
 
@@ -6546,8 +6571,10 @@ class ChoiceLayer(BaseChoiceLayer):
 
     def get_sub_layer(self, layer_name):
         """
-        Used to get outputs in case of multiple targets. For all targets we create a sub-layer that can be referred to
-        as "self.name + '/out_' + index" (e.g. output/out_0). These sub-layers can then be used as input to other layers,
+        Used to get outputs in case of multiple targets.
+        For all targets we create a sub-layer that can be referred to
+        as "self.name + '/out_' + index" (e.g. output/out_0).
+        These sub-layers can then be used as input to other layers,
         e.g. "output_0": {"class": "copy", "from": ["output/out_0"].
 
         :param str layer_name: name of the sub_layer (e.g. 'out_0')
@@ -6672,8 +6699,10 @@ class ChoiceLayer(BaseChoiceLayer):
             assert "choice_scores" in rec_vars_outputs
             rec_layer = self.network.get_rec_parent_layer()
             assert rec_layer
-            # Finalize length normalization. During search we keep an extra factor t (recurrent time step) for efficiency
-            # reasons (see self.get_output()). Remove it here.
+            # Finalize length normalization.
+            # During search we keep an extra factor t (recurrent time step) for efficiency reasons
+            # (see self.get_output()).
+            # Remove it here.
             num_time_steps = tf.reduce_max(seq_len)
             if not rec_layer.include_eos:
                 num_time_steps += 1  # + 1 to include sequence end
@@ -7254,7 +7283,8 @@ class GenericAttentionLayer(AttentionBaseLayer):
             return weights.time_dim_axis
         assert dyn_axes, "no dynamic axes in %r" % weights
         # Simple case: Only one dynamic axis.
-        # Do not do any further checks in this case. The runtime will crash if non-matching and this is simple to identify.
+        # Do not do any further checks in this case.
+        # The runtime will crash if non-matching and this is simple to identify.
         if len(dyn_axes) == 1:
             assert dyn_axes == [weights.time_dim_axis]
             return weights.time_dim_axis
@@ -7282,7 +7312,7 @@ class GenericAttentionLayer(AttentionBaseLayer):
         from pprint import pformat
 
         raise Exception(
-            ("no matching time axis found in weights %r with dim tags\n%s;\n" "base %r with time dim tag\n %r")
+            "no matching time axis found in weights %r with dim tags\n%s;\n" "base %r with time dim tag\n %r"
             % (weights, pformat(weights.get_batch_shape_dim_tags()), base, base_time_tag)
         )
 
@@ -7736,9 +7766,11 @@ class SelfAttentionLayer(_ConcatInputLayer):
             v.set_shape((None, num_heads, None, total_value_dim // num_heads))
             if restrict_state_to_last_seq:
                 # 'Last' means the current `k`/`v` here, before the concat with `prev_k_left` / `prev_v_left`.
-                # I.e. we wont update `rec_vars_outputs` to the concatenated variant; it will exclude `prev_k_left` and
-                # `prev_v_left`. Note that this means a difference depending whether we are inside the loop or not.
-                # If we are inside the loop, we should update until the end of the seq, and then restrict to the last seq.
+                # I.e. we wont update `rec_vars_outputs` to the concatenated variant;
+                # it will exclude `prev_k_left` and `prev_v_left`.
+                # Note that this means a difference depending whether we are inside the loop or not.
+                # If we are inside the loop, we should update until the end of the seq,
+                # and then restrict to the last seq.
                 # This is handled in post_process_final_rec_vars_outputs.
                 # Otherwise just leave `rec_vars_outputs` as it is already.
                 if self._rec_previous_layer:
@@ -7747,7 +7779,8 @@ class SelfAttentionLayer(_ConcatInputLayer):
             else:  # this is usually the case
                 self.rec_vars_outputs["k_left"] = k
                 self.rec_vars_outputs["v_left"] = v
-        # Dot-attention. Resulting last time dimension will be used to perform the softmax over, and will the be reduced.
+        # Dot-attention.
+        # Resulting last time dimension will be used to perform the softmax over, and will the be reduced.
         # (batch,heads,num_queries|1,num_keys) e.g. (batch,heads,time|1,time)
         energy = tf.matmul(q, k, transpose_b=True, name="energy")
         if key_shift:
@@ -7926,8 +7959,9 @@ class SelfAttentionLayer(_ConcatInputLayer):
             # Assume inside RecLayer, or initial_state set explicitly.
             # Before, we used a tf.TensorArray.
             # However, that has higher memory consumptions than just using a tensor and concatenating to it.
-            # Still, this is not ideal as we create a new tensor containing the previous t-1 keys/values for every time step
-            # t, thus requiring quadratic memory usage.
+            # Still, this is not ideal as we create a new tensor
+            # containing the previous t-1 keys/values for every time step t,
+            # thus requiring quadratic memory usage.
             # (batch,heads,time,k-dim//heads)
             k_left = RnnCellLayer.get_rec_initial_state_inner(
                 initial_state=initial_state,
@@ -8054,7 +8088,8 @@ class PositionalEncodingLayer(_ConcatInputLayer):
         :param Dim|str|NotSpecified axis: if not specified, check for time_dim_axis, otherwise assume rec step
         :param bool add_to_input: will add the signal to the input
         :param int constant: if positive, always output the corresponding positional encoding.
-        :param None|LayerBase offset: Specify the offset to be added to positions. Expect shape (batch, time) or (batch,).
+        :param None|LayerBase offset: Specify the offset to be added to positions.
+            Expect shape (batch, time) or (batch,).
         """
         from returnn.tf.util.data import single_step_dim
 
@@ -9505,7 +9540,8 @@ class UnmaskLayer(LayerBase):
                 batch_dim=batch_dim, rec_layer=rec_parent_layer, **src_layer_opts
             )  # [B,D']
             if self.network.is_inside_rec_layer():
-                # This UnmaskLayer is inside the rec loop but the source is outside (or at least does not have a time dim).
+                # This UnmaskLayer is inside the rec loop but the source is outside
+                # (or at least does not have a time dim).
                 # The RecLayer will not unroll the source when the dim tag do not match, i.e. when it is masked.
                 with same_control_flow_ctx(src_layer.output.placeholder):
                     src = src_layer.output.copy_as_bt_or_tb_major()
@@ -10406,7 +10442,8 @@ class TwoDLSTMLayer(LayerBase):
         **kwargs,
     ):
         """
-        :param str pooling: defines how the 1D return value is computed based on the 2D lstm result. Either 'last' or 'max'
+        :param str pooling: defines how the 1D return value is computed based on the 2D lstm result.
+            Either 'last' or 'max'
         :param None|dict[str] unit_opts: passed to RNNCell creation
         :param str forward_weights_init: see :func:`returnn.tf.util.basic.get_initializer`
         :param str recurrent_weights_init: see :func:`returnn.tf.util.basic.get_initializer`
@@ -10470,8 +10507,8 @@ class TwoDLSTMLayer(LayerBase):
             with self.var_creation_scope():
                 self.cell = self._get_cell(unit_opts=unit_opts)
 
-            # this must not be part of var_creation_scope - otherwise the used operations appear to TF to be used outside
-            # of the while loop, leading to errors
+            # this must not be part of var_creation_scope
+            # - otherwise the used operations appear to TF to be used outside of the while loop, leading to errors
             y = self._get_output_native_rec_op(self.cell)
 
             self.output.placeholder = y
@@ -10680,7 +10717,8 @@ class TwoDLSTMLayer(LayerBase):
             previous_output = initial_values["output"]  # (batch, 1, src_length, n_hidden)
             iteration = initial_values["iteration"]  # (batch,)
 
-        # to support the selection of the correct previous states and outputs, they have to be stored in batch mayor format
+        # to support the selection of the correct previous states and outputs,
+        # they have to be stored in batch mayor format
         # the c code needs them to be in time mayor (trg, src) format, so we have to swap the axes
         previous_state = tf.transpose(previous_state, perm=[1, 2, 0, 3])  # (1, src_length, batch, n_hidden)
         previous_output = tf.transpose(previous_output, perm=[1, 2, 0, 3])  # (1, src_length, batch, n_hidden)
@@ -10710,7 +10748,8 @@ class TwoDLSTMLayer(LayerBase):
         self.rec_vars_outputs["output"] = complete_output
         self.rec_vars_outputs["iteration"] = iteration + 1
 
-        # during inference, the 2D result has target length 1. This dimension has to be removed to be conform with RETURNN
+        # during inference, the 2D result has target length 1.
+        # This dimension has to be removed to be conform with RETURNN
         if self.network.have_rec_step_info():
             y = y[0]
 
@@ -11060,7 +11099,8 @@ class CumConcatLayer(_ConcatInputLayer):
 
             # Currently SelectSearchSourcesLayer assumes that all rec_vars_outputs are batch-major.
             # Therefore we here copy the input as batch-major, and then add the time axis at axis 1.
-            # In the future, when SelectSearchSourcesLayer has support for this, we can change this to operate on axis 0,
+            # In the future, when SelectSearchSourcesLayer has support for this,
+            # we can change this to operate on axis 0,
             # which should be more efficient
             out = input_data.copy_as_batch_major()
             out = out.copy_add_dim_by_tag(new_dim_in_ctx, unbroadcast=True, axis=1)
