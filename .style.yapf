@@ -4,8 +4,8 @@
 [style]
 # 'yapf' style = derived from Google, derived from PEP8
 based_on_style = yapf
-indent_width = 2
-continuation_indent_width = 2
+indent_width = 4
+continuation_indent_width = 8
 column_limit = 120
 # Not sure...
 # dedent_closing_brackets = False
