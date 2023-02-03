@@ -979,7 +979,8 @@ class Dataset(object):
                                     chunk_step[k] = chunk_step[smallest_key] * ratio
                 assert chunk_step[default_key] > 0
                 t = NumbersDict.constant_like(0, numbers_dict=length)
-                # There are usually the 'data' (input) and 'classes' (targets) data-keys in `length` but there can be others.
+                # There are usually the 'data' (input) and 'classes' (targets) data-keys in `length`
+                # but there can be others.
                 # We expect them all of the same length so that we can do chunking.
                 # In case that some length is 0 or 1,
                 # we treat it special and always return the full seq repeated for every chunk.
@@ -999,9 +1000,9 @@ class Dataset(object):
                         nr_of_chunks = (length[key] - limit) // chunk_step[key] + 1
                         nr_of_chunks_default = (length[default_key] - limit_default) // chunk_step[default_key] + 1
                         assert nr_of_chunks == nr_of_chunks_default, (
-                            "%s: iterate seqs with chunking: length %r, chunk size/step %r/%r (min %r), key %r (default %r)"
-                            % (self, length, chunk_size, chunk_step, self.min_chunk_size, key, default_key)
-                        )
+                            "%s: iterate seqs with chunking:"
+                            " length %r, chunk size/step %r/%r (min %r), key %r (default %r)"
+                        ) % (self, length, chunk_size, chunk_step, self.min_chunk_size, key, default_key)
                 while length[default_key] > t[default_key]:
                     chunk_start = NumbersDict(t)
                     chunk_end = NumbersDict.min([t + chunk_size, length])
