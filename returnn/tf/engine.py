@@ -75,14 +75,18 @@ class Runner(object):
         :param Dataset.Dataset|None dataset:
         :param BatchSetGenerator|None batches:
         :param bool train: whether to do updates on the model
-        :param bool|None train_flag: normally just as train. but e.g. maybe you want to have the train_flag but not train
+        :param bool|None train_flag: normally just as train.
+            but e.g. maybe you want to have the train_flag but not train
         :param bool eval: whether to evaluate (i.e. calculate loss/error)
         :param dict[str,tf.Tensor|Data|LayerBase|(()->tf.Tensor)]|None extra_fetches:
-          additional fetches per step.
-          `extra_fetches_callback` will be called with these. In case of Data/LayerBase, it will return a list,
-          where each item corresponds to the batch-seq.
-          It might also be useful to add `network.get_extern_data("seq_idx")` and `network.get_extern_data("seq_tag")`.
-        :param (**dict[str,numpy.ndarray|str|list[numpy.ndarray|str])->None extra_fetches_callback: called if extra_fetches
+            additional fetches per step.
+            `extra_fetches_callback` will be called with these.
+            In case of Data/LayerBase, it will return a list,
+            where each item corresponds to the batch-seq.
+            It might also be useful to add `network.get_extern_data("seq_idx")`
+            and `network.get_extern_data("seq_tag")`.
+        :param (**dict[str,numpy.ndarray|str|list[numpy.ndarray|str])->None extra_fetches_callback:
+            called if extra_fetches
         """
         from returnn.tf.data_pipeline import DataProviderBase
 
@@ -145,7 +149,8 @@ class Runner(object):
 
     def _get_fetches_dict(self):
         """
-        :return: values and actions which should be calculated and executed in self.run() by the TF session for each step
+        :return: values and actions which should be calculated and executed in self.run()
+            by the TF session for each step
         :rtype: dict[str,tf.Tensor|tf.Operation]
         """
         d = {}
@@ -1280,7 +1285,8 @@ class Engine(EngineBase):
                 self.dataset_batches.pop("train", None)
                 # Note that this might not be 100% correct:
                 # E.g. if the dataset explicitly overwrites chunking.
-                # However, we assume, if the user explicitly specify to overwrite chunking now, that it should be applied.
+                # However, we assume, if the user explicitly specify to overwrite chunking now,
+                # that it should be applied.
                 # Also note, if we overwrite the dataset later, this would be ignored anyway,
                 # but in that case, the newly initialized dataset
                 # would use the right chunking option from the config overwrite.
@@ -2917,7 +2923,8 @@ class Engine(EngineBase):
                 """
                 Called via extra_fetches_callback from the Runner.
 
-                :param numpy.ndarray outputs: shape=(time,data)|(time,), depending if dense or sparse, flattened over batches
+                :param numpy.ndarray outputs: shape=(time,data)|(time,), depending if dense or sparse,
+                    flattened over batches
                 """
                 seq_len = outputs.shape[0]
                 if output_layer.output.sparse:
