@@ -13,10 +13,10 @@ kenlm_dir = returnn_dir + "/extern/kenlm"
 
 
 def kenlm_checked_out():
-  """
-  :rtype: bool
-  """
-  return os.path.exists("%s/lm/test.arpa" % kenlm_dir)
+    """
+    :rtype: bool
+    """
+    return os.path.exists("%s/lm/test.arpa" % kenlm_dir)
 
 
 # https://www.tensorflow.org/guide/extend/op
@@ -355,121 +355,126 @@ _tf_mod = None
 
 
 def get_tf_mod(verbose=False):
-  """
-  :param bool verbose:
-  :return: module
-  """
-  global _tf_mod
-  if _tf_mod:
-    return _tf_mod
-  import platform
-  from glob import glob
-  from returnn.tf.util.basic import OpCodeCompiler
+    """
+    :param bool verbose:
+    :return: module
+    """
+    global _tf_mod
+    if _tf_mod:
+        return _tf_mod
+    import platform
+    from glob import glob
+    from returnn.tf.util.basic import OpCodeCompiler
 
-  # References:
-  # https://github.com/kpu/kenlm/blob/master/setup.py
-  # https://github.com/kpu/kenlm/blob/master/compile_query_only.sh
+    # References:
+    # https://github.com/kpu/kenlm/blob/master/setup.py
+    # https://github.com/kpu/kenlm/blob/master/compile_query_only.sh
 
-  # Collect files.
-  assert kenlm_checked_out(), "submodule in %r not checked out?" % kenlm_dir
-  files = glob('%s/util/*.cc' % kenlm_dir)
-  files += glob('%s/lm/*.cc' % kenlm_dir)
-  files += glob('%s/util/double-conversion/*.cc' % kenlm_dir)
-  files = [fn for fn in files if not (fn.endswith('main.cc') or fn.endswith('test.cc'))]
-  assert files, "submodule in %r not checked out?" % kenlm_dir
-  libs = ["z"]
-  if platform.system() != 'Darwin':
-    libs.append('rt')
+    # Collect files.
+    assert kenlm_checked_out(), "submodule in %r not checked out?" % kenlm_dir
+    files = glob("%s/util/*.cc" % kenlm_dir)
+    files += glob("%s/lm/*.cc" % kenlm_dir)
+    files += glob("%s/util/double-conversion/*.cc" % kenlm_dir)
+    files = [fn for fn in files if not (fn.endswith("main.cc") or fn.endswith("test.cc"))]
+    assert files, "submodule in %r not checked out?" % kenlm_dir
+    libs = ["z"]
+    if platform.system() != "Darwin":
+        libs.append("rt")
 
-  # Put code all together in one big blob.
-  src_code = ""
-  src_code += _kenlm_src_code_workarounds
-  for fn in files:
-    f_code = open(fn).read()
-    f_code = ''.join([x for x in f_code if ord(x) < 128])  # enforce ASCII
-    # We need to do some replacements to not clash symbol names.
-    fn_short = os.path.basename(fn).replace(".", "_")
-    for word in ["kConverter"]:
-      f_code = f_code.replace(word, "%s_%s" % (fn_short, word))
-    src_code += "\n// ------------ %s : BEGIN { ------------\n" % os.path.basename(fn)
-    # https://gcc.gnu.org/onlinedocs/cpp/Line-Control.html#Line-Control
-    src_code += "#line 1 \"%s\"\n" % os.path.basename(fn)
-    src_code += f_code
-    src_code += "\n// ------------ %s : END } --------------\n\n" % os.path.basename(fn)
-  src_code += "\n\n// ------------ our code now: ------------\n\n"
-  src_code += "#line 1 \"<our code>\"\n"
-  src_code += _src_code
+    # Put code all together in one big blob.
+    src_code = ""
+    src_code += _kenlm_src_code_workarounds
+    for fn in files:
+        f_code = open(fn).read()
+        f_code = "".join([x for x in f_code if ord(x) < 128])  # enforce ASCII
+        # We need to do some replacements to not clash symbol names.
+        fn_short = os.path.basename(fn).replace(".", "_")
+        for word in ["kConverter"]:
+            f_code = f_code.replace(word, "%s_%s" % (fn_short, word))
+        src_code += "\n// ------------ %s : BEGIN { ------------\n" % os.path.basename(fn)
+        # https://gcc.gnu.org/onlinedocs/cpp/Line-Control.html#Line-Control
+        src_code += '#line 1 "%s"\n' % os.path.basename(fn)
+        src_code += f_code
+        src_code += "\n// ------------ %s : END } --------------\n\n" % os.path.basename(fn)
+    src_code += "\n\n// ------------ our code now: ------------\n\n"
+    src_code += '#line 1 "<our code>"\n'
+    src_code += _src_code
 
-  compiler = OpCodeCompiler(
-    base_name="KenLM", code_version=1, code=src_code,
-    include_paths=(kenlm_dir, kenlm_dir + "/util/double-conversion"),
-    c_macro_defines={"NDEBUG": 1, "KENLM_MAX_ORDER": 6, "HAVE_ZLIB": 1},
-    ld_flags=["-l%s" % lib for lib in libs],
-    is_cpp=True, use_cuda_if_available=False,
-    verbose=verbose)
-  tf_mod = compiler.load_tf_module()
-  assert hasattr(tf_mod, "ken_lm_abs_score_strings"), "content of mod: %r" % (dir(tf_mod),)
-  _tf_mod = tf_mod
-  return tf_mod
+    compiler = OpCodeCompiler(
+        base_name="KenLM",
+        code_version=1,
+        code=src_code,
+        include_paths=(kenlm_dir, kenlm_dir + "/util/double-conversion"),
+        c_macro_defines={"NDEBUG": 1, "KENLM_MAX_ORDER": 6, "HAVE_ZLIB": 1},
+        ld_flags=["-l%s" % lib for lib in libs],
+        is_cpp=True,
+        use_cuda_if_available=False,
+        verbose=verbose,
+    )
+    tf_mod = compiler.load_tf_module()
+    assert hasattr(tf_mod, "ken_lm_abs_score_strings"), "content of mod: %r" % (dir(tf_mod),)
+    _tf_mod = tf_mod
+    return tf_mod
 
 
 def ken_lm_load(filename):
-  """
-  :param str filename:
-  :return: TF resource handle
-  :rtype: tf.Tensor
-  """
-  return get_tf_mod().ken_lm_load_model(filename=filename)
+    """
+    :param str filename:
+    :return: TF resource handle
+    :rtype: tf.Tensor
+    """
+    return get_tf_mod().ken_lm_load_model(filename=filename)
 
 
 def ken_lm_abs_score_strings(handle, strings):
-  """
-  :param tf.Tensor handle: TF resource handle returned by :func:`ken_lm_load`
-  :param tf.Tensor strings: strings which are being scores. white-space delimited words.
-  :return: same shape as `strings`, float32
-  :rtype: tf.Tensor
-  """
-  return get_tf_mod().ken_lm_abs_score_strings(handle=handle, strings=strings)
+    """
+    :param tf.Tensor handle: TF resource handle returned by :func:`ken_lm_load`
+    :param tf.Tensor strings: strings which are being scores. white-space delimited words.
+    :return: same shape as `strings`, float32
+    :rtype: tf.Tensor
+    """
+    return get_tf_mod().ken_lm_abs_score_strings(handle=handle, strings=strings)
 
 
 def ken_lm_abs_score_bpe_strings(handle, bpe_merge_symbol, strings):
-  """
-  :param tf.Tensor handle: TF resource handle returned by :func:`ken_lm_load`
-  :param str bpe_merge_symbol: e.g. "@@"
-  :param tf.Tensor strings: strings which are being scores. white-space delimited words.
-  :return: same shape as `strings`, float32
-  :rtype: tf.Tensor
-  """
-  return get_tf_mod().ken_lm_abs_score_bpe_strings(
-    handle=handle, bpe_merge_symbol=bpe_merge_symbol, strings=strings)
+    """
+    :param tf.Tensor handle: TF resource handle returned by :func:`ken_lm_load`
+    :param str bpe_merge_symbol: e.g. "@@"
+    :param tf.Tensor strings: strings which are being scores. white-space delimited words.
+    :return: same shape as `strings`, float32
+    :rtype: tf.Tensor
+    """
+    return get_tf_mod().ken_lm_abs_score_bpe_strings(handle=handle, bpe_merge_symbol=bpe_merge_symbol, strings=strings)
 
 
 def ken_lm_abs_score_bpe_strings_dense(handle, bpe_merge_symbol, strings, labels):
-  """
-  :param tf.Tensor handle: TF resource handle returned by :func:`ken_lm_load`
-  :param str bpe_merge_symbol: e.g. "@@"
-  :param tf.Tensor strings: strings which are being scores. white-space delimited words.
-  :param tf.Tensor|tf.Variable labels:
-  :return: same shape as `strings`, float32
-  :rtype: tf.Tensor
-  """
-  return get_tf_mod().ken_lm_abs_score_bpe_strings_dense(
-    handle=handle, bpe_merge_symbol=bpe_merge_symbol, strings=strings, labels=labels)
+    """
+    :param tf.Tensor handle: TF resource handle returned by :func:`ken_lm_load`
+    :param str bpe_merge_symbol: e.g. "@@"
+    :param tf.Tensor strings: strings which are being scores. white-space delimited words.
+    :param tf.Tensor|tf.Variable labels:
+    :return: same shape as `strings`, float32
+    :rtype: tf.Tensor
+    """
+    return get_tf_mod().ken_lm_abs_score_bpe_strings_dense(
+        handle=handle, bpe_merge_symbol=bpe_merge_symbol, strings=strings, labels=labels
+    )
 
 
 if __name__ == "__main__":
-  from returnn.util import better_exchook
-  better_exchook.install()
-  # Try to compile now.
-  get_tf_mod(verbose=True)
-  # Some demo.
-  input_strings = sys.argv[1:] or ["hello world </s>"]
-  test_lm_file = kenlm_dir + "/lm/test.arpa"
-  assert os.path.exists(test_lm_file)
-  lm_tf = ken_lm_load(filename=test_lm_file)
-  input_strings_tf = tf.compat.v1.placeholder(tf.string, [None])
-  output_scores_tf = ken_lm_abs_score_strings(handle=lm_tf, strings=input_strings_tf)
-  with tf.compat.v1.Session() as session:
-    output_scores = session.run(output_scores_tf, feed_dict={input_strings_tf: input_strings})
-    print("input strings:", input_strings, "(sys.argv[1:])")
-    print("output scores:", output_scores)
+    from returnn.util import better_exchook
+
+    better_exchook.install()
+    # Try to compile now.
+    get_tf_mod(verbose=True)
+    # Some demo.
+    input_strings = sys.argv[1:] or ["hello world </s>"]
+    test_lm_file = kenlm_dir + "/lm/test.arpa"
+    assert os.path.exists(test_lm_file)
+    lm_tf = ken_lm_load(filename=test_lm_file)
+    input_strings_tf = tf.compat.v1.placeholder(tf.string, [None])
+    output_scores_tf = ken_lm_abs_score_strings(handle=lm_tf, strings=input_strings_tf)
+    with tf.compat.v1.Session() as session:
+        output_scores = session.run(output_scores_tf, feed_dict={input_strings_tf: input_strings})
+        print("input strings:", input_strings, "(sys.argv[1:])")
+        print("output scores:", output_scores)

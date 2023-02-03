@@ -15,24 +15,25 @@ from returnn.datasets.lm import _iter_bliss
 
 
 def main():
-  """
-  Main entry.
-  """
-  parser = ArgumentParser(description="dump orth from Bliss XML file as-is")
-  parser.add_argument("xml")
-  args = parser.parse_args()
-  corpus_filename = args.xml
-
-  def callback(orth):
     """
-    :param str orth:
+    Main entry.
     """
-    print(orth)
+    parser = ArgumentParser(description="dump orth from Bliss XML file as-is")
+    parser.add_argument("xml")
+    args = parser.parse_args()
+    corpus_filename = args.xml
 
-  _iter_bliss(filename=corpus_filename, callback=callback)
+    def callback(orth):
+        """
+        :param str orth:
+        """
+        print(orth)
+
+    _iter_bliss(filename=corpus_filename, callback=callback)
 
 
-if __name__ == '__main__':
-  from returnn.util import better_exchook
-  better_exchook.install()
-  main()
+if __name__ == "__main__":
+    from returnn.util import better_exchook
+
+    better_exchook.install()
+    main()

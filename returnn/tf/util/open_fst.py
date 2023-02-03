@@ -11,23 +11,23 @@ openfst_dir = returnn_dir + "/extern/openfst"
 
 
 def get_fst(filename):
-  """
-  :param str filename: to OpenFst file
-  :return: TF resource handle representing the FST
-  :rtype: tf.Tensor
-  """
-  return get_tf_mod().open_fst_load(filename=filename)
+    """
+    :param str filename: to OpenFst file
+    :return: TF resource handle representing the FST
+    :rtype: tf.Tensor
+    """
+    return get_tf_mod().open_fst_load(filename=filename)
 
 
 def fst_transition(fst_handle, states, inputs):
-  """
-  :param tf.Tensor fst_handle: via :func:`get_fst`
-  :param tf.Tensor states: [batch], int32
-  :param tf.Tensor inputs: [batch], int32
-  :return: (next_states, output_labels, weights). next_states can be -1 if invalid. all are shape [batch].
-  :rtype: (tf.Tensor,tf.Tensor,tf.Tensor)
-  """
-  return get_tf_mod().open_fst_transition(handle=fst_handle, states=states, inputs=inputs)
+    """
+    :param tf.Tensor fst_handle: via :func:`get_fst`
+    :param tf.Tensor states: [batch], int32
+    :param tf.Tensor inputs: [batch], int32
+    :return: (next_states, output_labels, weights). next_states can be -1 if invalid. all are shape [batch].
+    :rtype: (tf.Tensor,tf.Tensor,tf.Tensor)
+    """
+    return get_tf_mod().open_fst_transition(handle=fst_handle, states=states, inputs=inputs)
 
 
 # https://www.tensorflow.org/guide/extend/op
@@ -237,101 +237,107 @@ REGISTER_KERNEL_BUILDER(Name("OpenFstTransition").Device(DEVICE_CPU), OpenFstTra
 
 
 def openfst_checked_out():
-  """
-  :return: whether the Git submodule is checked out
-  :rtype: bool
-  """
-  return os.path.exists("%s/src/include/fst/fst.h" % openfst_dir)
+    """
+    :return: whether the Git submodule is checked out
+    :rtype: bool
+    """
+    return os.path.exists("%s/src/include/fst/fst.h" % openfst_dir)
 
 
 _tf_mod = None
 
 
 def get_tf_mod(verbose=False):
-  """
-  :param bool verbose:
-  :return: module
-  """
-  global _tf_mod
-  if _tf_mod:
-    return _tf_mod
-  from glob import glob
-  from returnn.tf.util.basic import OpCodeCompiler
+    """
+    :param bool verbose:
+    :return: module
+    """
+    global _tf_mod
+    if _tf_mod:
+        return _tf_mod
+    from glob import glob
+    from returnn.tf.util.basic import OpCodeCompiler
 
-  # Collect files.
-  assert openfst_checked_out(), "submodule in %r not checked out?" % openfst_dir
-  files = glob('%s/src/lib/*.cc' % openfst_dir)
-  assert files, "submodule in %r not checked out?" % openfst_dir
-  files = sorted(files)  # make somewhat deterministic
-  libs = []
-  if platform.system() != 'Darwin':
-    libs.append('rt')
+    # Collect files.
+    assert openfst_checked_out(), "submodule in %r not checked out?" % openfst_dir
+    files = glob("%s/src/lib/*.cc" % openfst_dir)
+    assert files, "submodule in %r not checked out?" % openfst_dir
+    files = sorted(files)  # make somewhat deterministic
+    libs = []
+    if platform.system() != "Darwin":
+        libs.append("rt")
 
-  # Put code all together in one big blob.
-  src_code = ""
-  for fn in files:
-    f_code = open(fn).read()
-    f_code = ''.join([x for x in f_code if ord(x) < 128])  # enforce ASCII
-    src_code += "\n// ------------ %s : BEGIN { ------------\n" % os.path.basename(fn)
-    # https://gcc.gnu.org/onlinedocs/cpp/Line-Control.html#Line-Control
-    src_code += "#line 1 \"%s\"\n" % os.path.basename(fn)
-    src_code += f_code
-    src_code += "\n// ------------ %s : END } --------------\n\n" % os.path.basename(fn)
-  src_code += "\n\n// ------------ our code now: ------------\n\n"
-  src_code += "#line 1 \"returnn/tf/util/open_fst.py:_src_code\"\n"
-  src_code += _src_code
+    # Put code all together in one big blob.
+    src_code = ""
+    for fn in files:
+        f_code = open(fn).read()
+        f_code = "".join([x for x in f_code if ord(x) < 128])  # enforce ASCII
+        src_code += "\n// ------------ %s : BEGIN { ------------\n" % os.path.basename(fn)
+        # https://gcc.gnu.org/onlinedocs/cpp/Line-Control.html#Line-Control
+        src_code += '#line 1 "%s"\n' % os.path.basename(fn)
+        src_code += f_code
+        src_code += "\n// ------------ %s : END } --------------\n\n" % os.path.basename(fn)
+    src_code += "\n\n// ------------ our code now: ------------\n\n"
+    src_code += '#line 1 "returnn/tf/util/open_fst.py:_src_code"\n'
+    src_code += _src_code
 
-  compiler = OpCodeCompiler(
-    base_name="OpenFst", code_version=1, code=src_code,
-    include_paths=("%s/src/include" % openfst_dir,),
-    c_macro_defines={
-      "NDEBUG": 1,  # https://github.com/tensorflow/tensorflow/issues/17316
-    },
-    ld_flags=["-l%s" % lib for lib in libs],
-    is_cpp=True, use_cuda_if_available=False,
-    verbose=verbose)
-  tf_mod = compiler.load_tf_module()
-  assert hasattr(tf_mod, "open_fst_transition"), "content of mod: %r" % (dir(tf_mod),)
-  _tf_mod = tf_mod
-  return tf_mod
+    compiler = OpCodeCompiler(
+        base_name="OpenFst",
+        code_version=1,
+        code=src_code,
+        include_paths=("%s/src/include" % openfst_dir,),
+        c_macro_defines={
+            "NDEBUG": 1,  # https://github.com/tensorflow/tensorflow/issues/17316
+        },
+        ld_flags=["-l%s" % lib for lib in libs],
+        is_cpp=True,
+        use_cuda_if_available=False,
+        verbose=verbose,
+    )
+    tf_mod = compiler.load_tf_module()
+    assert hasattr(tf_mod, "open_fst_transition"), "content of mod: %r" % (dir(tf_mod),)
+    _tf_mod = tf_mod
+    return tf_mod
 
 
 def _demo():
-  def _make_int_list(s):
-    """
-    :param str s:
-    :rtype: list[int]
-    """
-    return [int(s_) for s_ in s.split(",")]
+    def _make_int_list(s):
+        """
+        :param str s:
+        :rtype: list[int]
+        """
+        return [int(s_) for s_ in s.split(",")]
 
-  from returnn.util import better_exchook
-  better_exchook.install()
-  from argparse import ArgumentParser
-  arg_parser = ArgumentParser()
-  arg_parser.add_argument("--states", type=_make_int_list, default=[0])
-  arg_parser.add_argument("--inputs", type=_make_int_list, default=[0])
-  # Other example FST files can be found online, e.g.: https://github.com/placebokkk/gofst/tree/master/ex01
-  # Or: https://github.com/zh794390558/deeplearning/tree/master/kaldi/fst/data/test
-  arg_parser.add_argument("--fst", default=returnn_dir + "/tests/lexicon_opt.fst")
-  args = arg_parser.parse_args()
-  # Try to compile now.
-  get_tf_mod(verbose=True)
-  # Some demo.
-  assert os.path.exists(args.fst)
-  fst_tf = get_fst(filename=args.fst)
-  states_tf = tf.compat.v1.placeholder(tf.int32, [None])
-  inputs_tf = tf.compat.v1.placeholder(tf.int32, [None])
-  output_tf = fst_transition(fst_handle=fst_tf, states=states_tf, inputs=inputs_tf)
-  with tf.compat.v1.Session() as session:
-    out_next_states, out_labels, out_scores = session.run(
-      output_tf, feed_dict={
-        states_tf: args.states, inputs_tf: args.inputs})
-    print("states:", args.states)
-    print("inputs:", args.inputs)
-    print("output next states:", out_next_states)
-    print("output labels:", out_labels)
-    print("output scores:", out_scores)
+    from returnn.util import better_exchook
+
+    better_exchook.install()
+    from argparse import ArgumentParser
+
+    arg_parser = ArgumentParser()
+    arg_parser.add_argument("--states", type=_make_int_list, default=[0])
+    arg_parser.add_argument("--inputs", type=_make_int_list, default=[0])
+    # Other example FST files can be found online, e.g.: https://github.com/placebokkk/gofst/tree/master/ex01
+    # Or: https://github.com/zh794390558/deeplearning/tree/master/kaldi/fst/data/test
+    arg_parser.add_argument("--fst", default=returnn_dir + "/tests/lexicon_opt.fst")
+    args = arg_parser.parse_args()
+    # Try to compile now.
+    get_tf_mod(verbose=True)
+    # Some demo.
+    assert os.path.exists(args.fst)
+    fst_tf = get_fst(filename=args.fst)
+    states_tf = tf.compat.v1.placeholder(tf.int32, [None])
+    inputs_tf = tf.compat.v1.placeholder(tf.int32, [None])
+    output_tf = fst_transition(fst_handle=fst_tf, states=states_tf, inputs=inputs_tf)
+    with tf.compat.v1.Session() as session:
+        out_next_states, out_labels, out_scores = session.run(
+            output_tf, feed_dict={states_tf: args.states, inputs_tf: args.inputs}
+        )
+        print("states:", args.states)
+        print("inputs:", args.inputs)
+        print("output next states:", out_next_states)
+        print("output labels:", out_labels)
+        print("output scores:", out_scores)
 
 
 if __name__ == "__main__":
-  _demo()
+    _demo()

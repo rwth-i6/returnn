@@ -19,27 +19,28 @@ _run_count = 0
 
 
 def run(*args):
-  args = list(args)
-  print("run:", args)
-  global _run_count
-  if _run_count == 0:
+    args = list(args)
+    print("run:", args)
+    global _run_count
+    if _run_count == 0:
+        _run_count += 1
+        # For the first run, as a special case, directly run the script in the current env.
+        # This is easier for debugging.
+        from returnn.util.basic import generic_import_module
+
+        mod = generic_import_module(os.path.join(base_dir, args[0]))
+        # noinspection PyUnresolvedReferences
+        mod.main(args)
+        return
     _run_count += 1
-    # For the first run, as a special case, directly run the script in the current env.
-    # This is easier for debugging.
-    from returnn.util.basic import generic_import_module
-    mod = generic_import_module(os.path.join(base_dir, args[0]))
-    # noinspection PyUnresolvedReferences
-    mod.main(args)
-    return
-  _run_count += 1
-  # RETURNN by default outputs on stderr, so just merge both together
-  p = Popen(args, stdout=PIPE, stderr=STDOUT, cwd=base_dir)
-  out, _ = p.communicate()
-  if p.returncode != 0:
-    print("Return code is %i" % p.returncode)
-    print("std out/err:\n---\n%s\n---\n" % out.decode("utf8"))
-    raise CalledProcessError(cmd=args, returncode=p.returncode, output=out)
-  return out.decode("utf8")
+    # RETURNN by default outputs on stderr, so just merge both together
+    p = Popen(args, stdout=PIPE, stderr=STDOUT, cwd=base_dir)
+    out, _ = p.communicate()
+    if p.returncode != 0:
+        print("Return code is %i" % p.returncode)
+        print("std out/err:\n---\n%s\n---\n" % out.decode("utf8"))
+        raise CalledProcessError(cmd=args, returncode=p.returncode, output=out)
+    return out.decode("utf8")
 
 
 ###############################
@@ -147,81 +148,81 @@ use_tensorflow = True
 
 
 def test_compile_tf_graph_basic():
-  tmp_dir = tempfile.mkdtemp()
-  with open(os.path.join(tmp_dir, "returnn.config"), "wt") as config:
-    config.write(rec_encoder_decoder_simple_config)
-  args = [
-    "tools/compile_tf_graph.py",
-    "--output_file",
-    os.path.join(tmp_dir, "graph.metatxt"),
-    os.path.join(tmp_dir, "returnn.config")
-  ]
-  run(*args)
+    tmp_dir = tempfile.mkdtemp()
+    with open(os.path.join(tmp_dir, "returnn.config"), "wt") as config:
+        config.write(rec_encoder_decoder_simple_config)
+    args = [
+        "tools/compile_tf_graph.py",
+        "--output_file",
+        os.path.join(tmp_dir, "graph.metatxt"),
+        os.path.join(tmp_dir, "returnn.config"),
+    ]
+    run(*args)
 
 
 def test_compile_tf_graph_basic_second_run():
-  # Just to make sure that the second run works as well,
-  # which behaves different due to the debug case of the first run.
-  # See :func:`run` above.
-  test_compile_tf_graph_basic()
+    # Just to make sure that the second run works as well,
+    # which behaves different due to the debug case of the first run.
+    # See :func:`run` above.
+    test_compile_tf_graph_basic()
 
 
 def test_compile_tf_graph_enc_dec_simple_recurrent_step():
-  tmp_dir = tempfile.mkdtemp()
-  with open(os.path.join(tmp_dir, "returnn.config"), "wt") as config:
-    config.write(rec_encoder_decoder_simple_config)
-  args = [
-    "tools/compile_tf_graph.py",
-    "--output_file",
-    os.path.join(tmp_dir, "graph.metatxt"),
-    "--rec_step_by_step",
-    "output",
-    os.path.join(tmp_dir, "returnn.config")
-  ]
-  run(*args)
+    tmp_dir = tempfile.mkdtemp()
+    with open(os.path.join(tmp_dir, "returnn.config"), "wt") as config:
+        config.write(rec_encoder_decoder_simple_config)
+    args = [
+        "tools/compile_tf_graph.py",
+        "--output_file",
+        os.path.join(tmp_dir, "graph.metatxt"),
+        "--rec_step_by_step",
+        "output",
+        os.path.join(tmp_dir, "returnn.config"),
+    ]
+    run(*args)
 
 
 def test_compile_tf_graph_enc_dec_att_recurrent_step():
-  # https://github.com/rwth-i6/returnn/issues/1016
-  tmp_dir = tempfile.mkdtemp()
-  with open(os.path.join(tmp_dir, "returnn.config"), "wt") as config:
-    config.write(rec_encoder_decoder_att_config)
-  args = [
-    "tools/compile_tf_graph.py",
-    "--output_file",
-    os.path.join(tmp_dir, "graph.metatxt"),
-    "--rec_step_by_step",
-    "output",
-    os.path.join(tmp_dir, "returnn.config")
-  ]
-  run(*args)
+    # https://github.com/rwth-i6/returnn/issues/1016
+    tmp_dir = tempfile.mkdtemp()
+    with open(os.path.join(tmp_dir, "returnn.config"), "wt") as config:
+        config.write(rec_encoder_decoder_att_config)
+    args = [
+        "tools/compile_tf_graph.py",
+        "--output_file",
+        os.path.join(tmp_dir, "graph.metatxt"),
+        "--rec_step_by_step",
+        "output",
+        os.path.join(tmp_dir, "returnn.config"),
+    ]
+    run(*args)
 
 
 def test_compile_tf_graph_transducer_time_sync_recurrent_step():
-  tmp_dir = tempfile.mkdtemp()
-  with open(os.path.join(tmp_dir, "returnn.config"), "wt") as config:
-    config.write(rec_transducer_time_sync_config)
-  args = [
-    "tools/compile_tf_graph.py",
-    "--output_file",
-    os.path.join(tmp_dir, "graph.metatxt"),
-    "--rec_step_by_step",
-    "output",
-    os.path.join(tmp_dir, "returnn.config")
-  ]
-  run(*args)
+    tmp_dir = tempfile.mkdtemp()
+    with open(os.path.join(tmp_dir, "returnn.config"), "wt") as config:
+        config.write(rec_transducer_time_sync_config)
+    args = [
+        "tools/compile_tf_graph.py",
+        "--output_file",
+        os.path.join(tmp_dir, "graph.metatxt"),
+        "--rec_step_by_step",
+        "output",
+        os.path.join(tmp_dir, "returnn.config"),
+    ]
+    run(*args)
 
 
 def test_compile_tf_graph_transducer_time_sync_delayed_recurrent_step():
-  tmp_dir = tempfile.mkdtemp()
-  with open(os.path.join(tmp_dir, "returnn.config"), "wt") as config:
-    config.write(rec_transducer_time_sync_delayed_config)
-  args = [
-    "tools/compile_tf_graph.py",
-    "--output_file",
-    os.path.join(tmp_dir, "graph.metatxt"),
-    "--rec_step_by_step",
-    "output",
-    os.path.join(tmp_dir, "returnn.config")
-  ]
-  run(*args)
+    tmp_dir = tempfile.mkdtemp()
+    with open(os.path.join(tmp_dir, "returnn.config"), "wt") as config:
+        config.write(rec_transducer_time_sync_delayed_config)
+    args = [
+        "tools/compile_tf_graph.py",
+        "--output_file",
+        os.path.join(tmp_dir, "graph.metatxt"),
+        "--rec_step_by_step",
+        "output",
+        os.path.join(tmp_dir, "returnn.config"),
+    ]
+    run(*args)

@@ -25,12 +25,14 @@ from .select import *
 from .subgraph import *
 from .transform import *
 from .util import *
+
 # pylint: enable=wildcard-import
 
 # some useful aliases
 # pylint: disable=g-bad-import-order
 from . import subgraph as _subgraph
 from . import util as _util
+
 # pylint: enable=g-bad-import-order
 ph = _util.make_placeholder_from_dtype_and_shape
 sgv = _subgraph.make_view

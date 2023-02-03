@@ -1,4 +1,3 @@
-
 """
 Generic interface which automatically creates:
 
@@ -21,288 +20,320 @@ from returnn.util.basic import make_hashable, unicode
 
 
 class NativeOpBaseMixin(object):
-  """
-  The purpose of having this as a separate base class is to make this independent of any Theano specific
-  functionality so that we can also use this base for example for TensorFlow.
-  """
+    """
+    The purpose of having this as a separate base class is to make this independent of any Theano specific
+    functionality so that we can also use this base for example for TensorFlow.
+    """
 
-  def __init__(self, in_info, out_info,
-               c_fw_code, c_bw_code=None, c_extra_support_code=None, code_version=None, cpu_support=True,
-               grad_input_map=None, name=None):
-    """
-    :param list[dict(str)] in_info: each dict describes one input var.
-      attribs in the dict:
-        int ndim: the ndim.
-        tuple shape: tuple and can contain None for specific dimensions.
-      optional attribs:
-        str dtype: "float32" by default.
-        bool need_contiguous: false by default.
-        int want_inplace: -1 by default. try to optimize to destroy input, on output-index.
-          "dummy_out" is a special value which will add another output.
-        bool is_inplace: false by default. whether the optimization was applied.
-        str gradient: can be "disconnected". see grad().
-        bool bw_input: True by default. add this param to the bw input.
-      other attribs are just ignored.
-    :param list[dict(str)] out_info: like in_info.
-      slightly different behavior for:
-        shape: we also allow refs to the in_info in the form (in-idx,dim). see infer_shape().
-        need_contiguous/want_inplace: used for bw, in case for bw_input == True.
-    :param str c_fw_code: C code for forward pass
-    :param str|dict[str] c_extra_support_code: C support code (for c_support_code)
-    :param str|None c_bw_code: C code for backward pass (for gradient)
-    :param tuple[int] code_version: will be returned by c_code_cache_version.
-    :param bool cpu_support:
-    :param tuple[int]|callable grad_input_map: selection of grad inputs.
-      by default, we get all inputs + all outputs + all grad outputs.
-    :param str name: name
-    """
-    assert isinstance(in_info, (list, tuple))
-    assert isinstance(out_info, (list, tuple))
-    in_info, out_info, num_dummy_outs = self._resolve_want_inplace_dummy(in_info, out_info)
-    self.in_info = make_hashable(in_info)
-    self.out_info = make_hashable(out_info)
-    self.num_dummy_outs = num_dummy_outs
-    self.c_fw_code = c_fw_code
-    self.c_bw_code = c_bw_code
-    self.c_extra_support_code = self._reduce_c_extra_support_code(c_extra_support_code)
-    self.code_version = code_version or ()
-    self.cpu_support = cpu_support
-    self.name = name or "<anonNativeOp>"
-    self.grad_input_map = self._convert_grad_input_map(grad_input_map, len(in_info) + len(out_info) * 2)
+    def __init__(
+        self,
+        in_info,
+        out_info,
+        c_fw_code,
+        c_bw_code=None,
+        c_extra_support_code=None,
+        code_version=None,
+        cpu_support=True,
+        grad_input_map=None,
+        name=None,
+    ):
+        """
+        :param list[dict(str)] in_info: each dict describes one input var.
+          attribs in the dict:
+            int ndim: the ndim.
+            tuple shape: tuple and can contain None for specific dimensions.
+          optional attribs:
+            str dtype: "float32" by default.
+            bool need_contiguous: false by default.
+            int want_inplace: -1 by default. try to optimize to destroy input, on output-index.
+              "dummy_out" is a special value which will add another output.
+            bool is_inplace: false by default. whether the optimization was applied.
+            str gradient: can be "disconnected". see grad().
+            bool bw_input: True by default. add this param to the bw input.
+          other attribs are just ignored.
+        :param list[dict(str)] out_info: like in_info.
+          slightly different behavior for:
+            shape: we also allow refs to the in_info in the form (in-idx,dim). see infer_shape().
+            need_contiguous/want_inplace: used for bw, in case for bw_input == True.
+        :param str c_fw_code: C code for forward pass
+        :param str|dict[str] c_extra_support_code: C support code (for c_support_code)
+        :param str|None c_bw_code: C code for backward pass (for gradient)
+        :param tuple[int] code_version: will be returned by c_code_cache_version.
+        :param bool cpu_support:
+        :param tuple[int]|callable grad_input_map: selection of grad inputs.
+          by default, we get all inputs + all outputs + all grad outputs.
+        :param str name: name
+        """
+        assert isinstance(in_info, (list, tuple))
+        assert isinstance(out_info, (list, tuple))
+        in_info, out_info, num_dummy_outs = self._resolve_want_inplace_dummy(in_info, out_info)
+        self.in_info = make_hashable(in_info)
+        self.out_info = make_hashable(out_info)
+        self.num_dummy_outs = num_dummy_outs
+        self.c_fw_code = c_fw_code
+        self.c_bw_code = c_bw_code
+        self.c_extra_support_code = self._reduce_c_extra_support_code(c_extra_support_code)
+        self.code_version = code_version or ()
+        self.cpu_support = cpu_support
+        self.name = name or "<anonNativeOp>"
+        self.grad_input_map = self._convert_grad_input_map(grad_input_map, len(in_info) + len(out_info) * 2)
 
-  @classmethod
-  def _resolve_want_inplace_dummy(cls, in_info, out_info):
-    in_info = [dict(info) for info in in_info]  # deep copy, don't modify original
-    out_info = list(out_info)  # copying list is enough here
-    num_dummy_outs = 0
-    for in_idx, info in enumerate(in_info):
-      if info.get("want_inplace", None) == "dummy_out":
-        num_dummy_outs += 1
-        dummy_out_idx = len(out_info)
-        dummy_out = {"ndim": info["ndim"],
-                     "shape": [(in_idx, i) for i in range(info["ndim"])],
-                     "dtype": info.get("dtype", "float32"),
-                     "name": "dummy_out_%i" % num_dummy_outs}
-        out_info += [dummy_out]
-        info["want_inplace"] = dummy_out_idx
-    return in_info, out_info, num_dummy_outs
+    @classmethod
+    def _resolve_want_inplace_dummy(cls, in_info, out_info):
+        in_info = [dict(info) for info in in_info]  # deep copy, don't modify original
+        out_info = list(out_info)  # copying list is enough here
+        num_dummy_outs = 0
+        for in_idx, info in enumerate(in_info):
+            if info.get("want_inplace", None) == "dummy_out":
+                num_dummy_outs += 1
+                dummy_out_idx = len(out_info)
+                dummy_out = {
+                    "ndim": info["ndim"],
+                    "shape": [(in_idx, i) for i in range(info["ndim"])],
+                    "dtype": info.get("dtype", "float32"),
+                    "name": "dummy_out_%i" % num_dummy_outs,
+                }
+                out_info += [dummy_out]
+                info["want_inplace"] = dummy_out_idx
+        return in_info, out_info, num_dummy_outs
 
-  @classmethod
-  def _reduce_c_extra_support_code(cls, c):
-    if c is None:
-      return ""
-    if isinstance(c, dict):
-      c = [v for (k, v) in sorted(c.items())]
-    if isinstance(c, (list, tuple)):
-      c = "\n".join([v + "\n\n" for v in c])
-    assert isinstance(c, (str, unicode))
-    return c
+    @classmethod
+    def _reduce_c_extra_support_code(cls, c):
+        if c is None:
+            return ""
+        if isinstance(c, dict):
+            c = [v for (k, v) in sorted(c.items())]
+        if isinstance(c, (list, tuple)):
+            c = "\n".join([v + "\n\n" for v in c])
+        assert isinstance(c, (str, unicode))
+        return c
 
-  @classmethod
-  def _convert_grad_input_map(cls, gi_map, num_params):
-    """
-    :param gi_map: see grad_input_map argument for self.__init__
-    :param int num_params:
-    :return: tuple of int
-    :rtype: tuple[int]
-    """
-    if gi_map is None:
-      gi_map = tuple(range(num_params))
-    if callable(gi_map):
-      gi_map = gi_map(*range(num_params))
-    if isinstance(gi_map, list):
-      gi_map = tuple(gi_map)
-    assert isinstance(gi_map, tuple)
-    return gi_map
+    @classmethod
+    def _convert_grad_input_map(cls, gi_map, num_params):
+        """
+        :param gi_map: see grad_input_map argument for self.__init__
+        :param int num_params:
+        :return: tuple of int
+        :rtype: tuple[int]
+        """
+        if gi_map is None:
+            gi_map = tuple(range(num_params))
+        if callable(gi_map):
+            gi_map = gi_map(*range(num_params))
+        if isinstance(gi_map, list):
+            gi_map = tuple(gi_map)
+        assert isinstance(gi_map, tuple)
+        return gi_map
 
-  def _filter_grad_inputs(self, inputs):
-    """
-    :param list[T] inputs: inputs + outputs + output_grads. can be either symbolic tensors or info dicts
-    :return: filtered list, via self.grad_input_map
-    :rtype: list[T]
-    """
-    assert len(inputs) == len(self.in_info) + len(self.out_info) * 2
-    return [inputs[i] for i in self.grad_input_map]
+    def _filter_grad_inputs(self, inputs):
+        """
+        :param list[T] inputs: inputs + outputs + output_grads. can be either symbolic tensors or info dicts
+        :return: filtered list, via self.grad_input_map
+        :rtype: list[T]
+        """
+        assert len(inputs) == len(self.in_info) + len(self.out_info) * 2
+        return [inputs[i] for i in self.grad_input_map]
 
-  # noinspection PyUnusedLocal
-  def infer_shape(self, node, input_shapes):
-    """
-    :param node:
-    :param input_shapes:
-    :rtype: list[tuple[int]]
-    """
-    assert len(input_shapes) == len(self.in_info)
-    out_shapes = []
-    for info in self.out_info:
-      out_shape = list(info["shape"])
-      for idx, s in enumerate(out_shape):
-        if isinstance(s, tuple):  # we interpret this as a reference to input shapes
-          assert len(s) == 2, "dim %r invalid in info %r" % (s, info)
-          assert 0 <= s[0] < len(input_shapes), "dim %r invalid in info %r" % (s, info)
-          assert 0 <= s[1] < self.in_info[s[0]]["ndim"], (
-            "dim idx %r invalid in input %i %r, info %r" % (s[1], s[0], self.in_info[s[0]], info))
-          out_shape[idx] = input_shapes[s[0]][s[1]]
-      assert not any([s is None for s in out_shape]), "out_shape %r, out_info %r" % (out_shape, self.out_info)
-      out_shapes += [tuple(out_shape)]
-    return out_shapes
+    # noinspection PyUnusedLocal
+    def infer_shape(self, node, input_shapes):
+        """
+        :param node:
+        :param input_shapes:
+        :rtype: list[tuple[int]]
+        """
+        assert len(input_shapes) == len(self.in_info)
+        out_shapes = []
+        for info in self.out_info:
+            out_shape = list(info["shape"])
+            for idx, s in enumerate(out_shape):
+                if isinstance(s, tuple):  # we interpret this as a reference to input shapes
+                    assert len(s) == 2, "dim %r invalid in info %r" % (s, info)
+                    assert 0 <= s[0] < len(input_shapes), "dim %r invalid in info %r" % (s, info)
+                    assert 0 <= s[1] < self.in_info[s[0]]["ndim"], "dim idx %r invalid in input %i %r, info %r" % (
+                        s[1],
+                        s[0],
+                        self.in_info[s[0]],
+                        info,
+                    )
+                    out_shape[idx] = input_shapes[s[0]][s[1]]
+            assert not any([s is None for s in out_shape]), "out_shape %r, out_info %r" % (out_shape, self.out_info)
+            out_shapes += [tuple(out_shape)]
+        return out_shapes
 
-  @classmethod
-  def _bw_in_var_info(cls, info):
-    """
-    :param dict[str] info:
-    :return: updated info dict for the gradient (bwd) as input
-    :rtype: dict[str]
-    """
-    if "bw_in_var" in info:
-      info = dict(info)
-      info.update(info.pop("bw_in_var"))
-    return info
+    @classmethod
+    def _bw_in_var_info(cls, info):
+        """
+        :param dict[str] info:
+        :return: updated info dict for the gradient (bwd) as input
+        :rtype: dict[str]
+        """
+        if "bw_in_var" in info:
+            info = dict(info)
+            info.update(info.pop("bw_in_var"))
+        return info
 
-  @classmethod
-  def _bw_grad_var_info(cls, info):
-    """
-    :param dict[str] info: backward gradient input for one of our outputs
-    :return: updated info dict for the gradient (bwd) as input
-    :rtype: dict[str]
-    """
-    info = dict(info)
-    if "bw_grad_var" in info:
-      info.update(info.pop("bw_grad_var"))
-    if "name" in info:
-      info["name"] = "D_" + info["name"]
-    return info
+    @classmethod
+    def _bw_grad_var_info(cls, info):
+        """
+        :param dict[str] info: backward gradient input for one of our outputs
+        :return: updated info dict for the gradient (bwd) as input
+        :rtype: dict[str]
+        """
+        info = dict(info)
+        if "bw_grad_var" in info:
+            info.update(info.pop("bw_grad_var"))
+        if "name" in info:
+            info["name"] = "D_" + info["name"]
+        return info
 
-  def kwargs_for_grad_op(self):
-    """
-    :returns: the kwargs for creating a NativeOp for the gradient op. e.g. includes in_info, out_info, etc
-    :rtype: dict[str]
+    def kwargs_for_grad_op(self):
+        """
+        :returns: the kwargs for creating a NativeOp for the gradient op. e.g. includes in_info, out_info, etc
+        :rtype: dict[str]
 
-    Note: The inputs of the gradient are by default: fwd_op.inputs + fwd_op.outputs + output_grads.
-    We filter them via self._filter_grad_inputs.
-    """
-    # Inputs: inputs + outputs + output_grads, where outputs = op(inputs),
-    # i.e. we might reuse some of the calculation.
-    in_info = [self._bw_in_var_info(info) for info in self.in_info]
-    in_info += [self._bw_in_var_info(info) for info in self.out_info]
-    in_info += [self._bw_grad_var_info(info) for info in self.out_info]
-    in_info = self._filter_grad_inputs(in_info)
-    in_idx_rev = {v: k for (k, v) in enumerate(self.grad_input_map)}
-    # Outputs: All like original inputs. Filter our the disconnected.
-    out_info = [info.copy() for info in self.in_info]
-    for idx, info in enumerate(out_info):
-      info.pop("shape")
-      if "bw_out_var" in info:
-        info.update(info["bw_out_var"])
-      if "shape" not in info:
-        # Refer to input shapes. See infer_shape().
-        info["shape"] = [(in_idx_rev[idx], i) for i in range(info["ndim"])]
-    out_info = [info for info in out_info if info.get("gradient", "") != "disconnected"]
+        Note: The inputs of the gradient are by default: fwd_op.inputs + fwd_op.outputs + output_grads.
+        We filter them via self._filter_grad_inputs.
+        """
+        # Inputs: inputs + outputs + output_grads, where outputs = op(inputs),
+        # i.e. we might reuse some of the calculation.
+        in_info = [self._bw_in_var_info(info) for info in self.in_info]
+        in_info += [self._bw_in_var_info(info) for info in self.out_info]
+        in_info += [self._bw_grad_var_info(info) for info in self.out_info]
+        in_info = self._filter_grad_inputs(in_info)
+        in_idx_rev = {v: k for (k, v) in enumerate(self.grad_input_map)}
+        # Outputs: All like original inputs. Filter our the disconnected.
+        out_info = [info.copy() for info in self.in_info]
+        for idx, info in enumerate(out_info):
+            info.pop("shape")
+            if "bw_out_var" in info:
+                info.update(info["bw_out_var"])
+            if "shape" not in info:
+                # Refer to input shapes. See infer_shape().
+                info["shape"] = [(in_idx_rev[idx], i) for i in range(info["ndim"])]
+        out_info = [info for info in out_info if info.get("gradient", "") != "disconnected"]
 
-    return dict(
-      name="GradOf%s" % self.name,
-      in_info=in_info,
-      out_info=out_info,
-      c_fw_code=self.c_bw_code,
-      c_extra_support_code=self.c_extra_support_code,
-      code_version=self.code_version,
-      cpu_support=self.cpu_support
-    )
+        return dict(
+            name="GradOf%s" % self.name,
+            in_info=in_info,
+            out_info=out_info,
+            c_fw_code=self.c_bw_code,
+            c_extra_support_code=self.c_extra_support_code,
+            code_version=self.code_version,
+            cpu_support=self.cpu_support,
+        )
 
-  def make_results_of_gradient(self, grad_op_outputs, disconnected_type=None):
-    """
-    :param list[T]|tuple[T] grad_op_outputs: this is already with dummy outputs removed
-    :param S disconnected_type:
-    :return: gradient for each input of our op
-    :rtype: list[T|S]
-    """
-    if disconnected_type is None:
-      def disconnected_type():
-        """Dummy"""
-    grad_op_outputs = list(grad_op_outputs)
-    results = []
-    for info in self.in_info:
-      if info.get("gradient", "") == "disconnected":
-        results += [disconnected_type()]
-      else:
-        results += grad_op_outputs[:1]
-        grad_op_outputs = grad_op_outputs[1:]
-    assert len(grad_op_outputs) == 0
-    assert len(results) == len(self.in_info)
-    return results
+    def make_results_of_gradient(self, grad_op_outputs, disconnected_type=None):
+        """
+        :param list[T]|tuple[T] grad_op_outputs: this is already with dummy outputs removed
+        :param S disconnected_type:
+        :return: gradient for each input of our op
+        :rtype: list[T|S]
+        """
+        if disconnected_type is None:
+
+            def disconnected_type():
+                """Dummy"""
+
+        grad_op_outputs = list(grad_op_outputs)
+        results = []
+        for info in self.in_info:
+            if info.get("gradient", "") == "disconnected":
+                results += [disconnected_type()]
+            else:
+                results += grad_op_outputs[:1]
+                grad_op_outputs = grad_op_outputs[1:]
+        assert len(grad_op_outputs) == 0
+        assert len(results) == len(self.in_info)
+        return results
 
 
 class NativeOpGenBase:
-  """
-  Base interface for op generation.
-  See NativeOp.__init__() for attribs.
-  """
-  in_info = None  # type: typing.Tuple[typing.Dict[str]]
-  out_info = None  # type: typing.Tuple[typing.Dict[str]]
-  c_fw_code = None  # type: str
-  c_bw_code = None  # type: str
-  c_extra_support_code = None  # type: typing.Dict[str,str]
-  code_version = None  # type: typing.Union[typing.Tuple[int], int]
-  grad_input_map = None
-  theano_custom_grad = None
-  cpu_support = True
+    """
+    Base interface for op generation.
+    See NativeOp.__init__() for attribs.
+    """
 
-  @classmethod
-  def map_layer_inputs_to_op(cls, *inputs):
-    """
-    :param inputs:
-    :return: inputs
-    """
-    return inputs
+    in_info = None  # type: typing.Tuple[typing.Dict[str]]
+    out_info = None  # type: typing.Tuple[typing.Dict[str]]
+    c_fw_code = None  # type: str
+    c_bw_code = None  # type: str
+    c_extra_support_code = None  # type: typing.Dict[str,str]
+    code_version = None  # type: typing.Union[typing.Tuple[int], int]
+    grad_input_map = None
+    theano_custom_grad = None
+    cpu_support = True
 
-  @classmethod
-  def map_layer_output_from_op(cls, *outputs):
-    """
-    :param outputs:
-    :return: outputs[0]
-    """
-    return outputs[0]
+    @classmethod
+    def map_layer_inputs_to_op(cls, *inputs):
+        """
+        :param inputs:
+        :return: inputs
+        """
+        return inputs
+
+    @classmethod
+    def map_layer_output_from_op(cls, *outputs):
+        """
+        :param outputs:
+        :return: outputs[0]
+        """
+        return outputs[0]
 
 
 class LstmGenericBase(NativeOpGenBase):
-  # noinspection PyUnresolvedReferences
-  """
-  inputs:
-    :param Z: {input,output,forget} gate + cell state. 3d (time,batch,dim*4)
-    :param V_h: recurrent matrix. 2d (dim,dim*4)
-    :param c: initial cell state. 2d (batch,dim)
-    :param i: index. 2d (time,batch) -> 0 or 1
-  outputs:
-    :param Y: output. 3d (time,batch,dim)
-    :param H: gates and cell state. 3d (time,batch,dim*4)
-    :param d: final cell state. 2d (batch,dim)
-  """
-  in_info = (
-    {"name": "Z", "ndim": 3, "shape": (None, None, None), "need_contiguous": True,
-     "want_inplace": 1,
-     "bw_out_var": {"shape": ((2, 0), (2, 1), (0, 1))}},  # see grad_input_map() for indices
-    {"name": "V_h", "ndim": 2, "shape": (None, None), "need_contiguous": True},
-    {"name": "c", "ndim": 2, "shape": (None, None), "need_contiguous": True},
-    {"name": "i", "ndim": 2, "shape": (None, None), "need_contiguous": True,
-     "gradient": "disconnected"}
-  )
-  out_info = (
-    {"name": "Y", "ndim": 3, "shape": ((0, 0), (0, 1), (1, 0)), "need_contiguous": True,
-     "bw_grad_var": {"want_inplace": "dummy_out"}},
-    {"name": "H", "ndim": 3, "shape": ((0, 0), (0, 1), (0, 2)), "need_contiguous": True,
-     "bw_in_var": {"want_inplace": 0}},
-    {"name": "d", "ndim": 2, "shape": ((2, 0), (2, 1)), "need_contiguous": True}
-  )
-
-  # noinspection PyPep8Naming,PyUnusedLocal
-  @classmethod
-  def grad_input_map(cls, Z, V_h, c, i,  Y, H, d,  DY, DH, Dd):
+    # noinspection PyUnresolvedReferences
     """
-    Map grads.
+    inputs:
+      :param Z: {input,output,forget} gate + cell state. 3d (time,batch,dim*4)
+      :param V_h: recurrent matrix. 2d (dim,dim*4)
+      :param c: initial cell state. 2d (batch,dim)
+      :param i: index. 2d (time,batch) -> 0 or 1
+    outputs:
+      :param Y: output. 3d (time,batch,dim)
+      :param H: gates and cell state. 3d (time,batch,dim*4)
+      :param d: final cell state. 2d (batch,dim)
     """
-    return V_h, c, i,  Y, H,  DY, Dd
+    in_info = (
+        {
+            "name": "Z",
+            "ndim": 3,
+            "shape": (None, None, None),
+            "need_contiguous": True,
+            "want_inplace": 1,
+            "bw_out_var": {"shape": ((2, 0), (2, 1), (0, 1))},
+        },  # see grad_input_map() for indices
+        {"name": "V_h", "ndim": 2, "shape": (None, None), "need_contiguous": True},
+        {"name": "c", "ndim": 2, "shape": (None, None), "need_contiguous": True},
+        {"name": "i", "ndim": 2, "shape": (None, None), "need_contiguous": True, "gradient": "disconnected"},
+    )
+    out_info = (
+        {
+            "name": "Y",
+            "ndim": 3,
+            "shape": ((0, 0), (0, 1), (1, 0)),
+            "need_contiguous": True,
+            "bw_grad_var": {"want_inplace": "dummy_out"},
+        },
+        {
+            "name": "H",
+            "ndim": 3,
+            "shape": ((0, 0), (0, 1), (0, 2)),
+            "need_contiguous": True,
+            "bw_in_var": {"want_inplace": 0},
+        },
+        {"name": "d", "ndim": 2, "shape": ((2, 0), (2, 1)), "need_contiguous": True},
+    )
 
-  c_extra_support_code = {
-    "lstm_kernel": """
+    # noinspection PyPep8Naming,PyUnusedLocal
+    @classmethod
+    def grad_input_map(cls, Z, V_h, c, i, Y, H, d, DY, DH, Dd):
+        """
+        Map grads.
+        """
+        return V_h, c, i, Y, H, DY, Dd
+
+    c_extra_support_code = {
+        "lstm_kernel": """
       DEF_KERNEL
       void lstm_kernel(float* data, const float* old_state, bool old_state_strided,
                        float* output, float* state_out, int n_cells, int n_batch, const float* i) {
@@ -344,7 +375,7 @@ class LstmGenericBase(NativeOpGenBase):
         }
       }
     """,
-    "lstm_bwd_kernel": """
+        "lstm_bwd_kernel": """
       DEF_KERNEL
       void lstm_bwd_kernel(
             float* delta, float* epsilon, const float* next_epsilon, const float* old_state,
@@ -397,10 +428,10 @@ class LstmGenericBase(NativeOpGenBase):
           idx += gridDim.x * blockDim.x;
         }
       }
-      """
-  }
+      """,
+    }
 
-  c_fw_code = """
+    c_fw_code = """
     // Z*, V_h, c, i = input_names (*: inplace)
     // Y, H, d = output_names
     assert(n_inputs == 4);
@@ -438,7 +469,7 @@ class LstmGenericBase(NativeOpGenBase):
     HANDLE_LAST_ERROR();
   """
 
-  c_bw_code = """
+    c_bw_code = """
     // V_h, c, i,   Y, H*,   DY*, Dd = input_names (*: inplace)
     // DZ, DV_h, Dc, tmpDc = output_names
     assert(n_inputs == 7);
@@ -488,64 +519,57 @@ class LstmGenericBase(NativeOpGenBase):
     HANDLE_LAST_ERROR();
   """
 
-  code_version = ()
+    code_version = ()
 
 
 class LstmLowMem(NativeOpGenBase):
-  # noinspection PyUnresolvedReferences
-  """
-  This is designed to require minimal memory during training.
-  It only stores the outputs and the cell states,
-  i.e. it requires time * cells * 2 floats for memory in total.
-
-  inputs:
-    :param X: (time,batch,in_dim)
-    :param W: forward+recurrent matrix. 2d (in_dim+dim,dim*4)
-    :param b: bias. 1d (dim*4,)
-    :param y0: initial output|hidden state. 2d (batch,dim)
-    :param c0: initial cell state. 2d (batch,dim)
-    :param i: index. 2d (time,batch) -> 0 or 1
-    :param start: where to start. must be >=0, default is usually 0. dtype int, scalar.
-    :param step: +1 for fwd, -1 for bwd direction. can also be |step|>1 for wider steps. dtype int, scalar.
-      for bwd (<0), will start at T-start-1.
-  outputs:
-    :param Y: output. 3d (time,batch,dim)
-    :param C: cell states. 3d (time,batch,dim). gradient ignored!
-    :param d: final cell state. 2d (batch,dim)
-  """
-  in_info = (
-    {"name": "X", "ndim": 3, "shape": (None, None, None), "need_contiguous": True},
-    {"name": "W", "ndim": 2, "shape": (None, None), "need_contiguous": True},
-    {"name": "b", "ndim": 1, "shape": (None,), "need_contiguous": True},
-    {"name": "y0", "ndim": 2, "shape": (None, None), "need_contiguous": True},
-    {"name": "c0", "ndim": 2, "shape": (None, None), "need_contiguous": True},
-    {"name": "i", "ndim": 2, "shape": (None, None), "need_contiguous": True, "gradient": "disconnected"},
-    {"name": "start", "ndim": 0, "shape": (), "gradient": "disconnected", "dtype": "int32", "host_memory": True},
-    {"name": "step", "ndim": 0, "shape": (), "gradient": "disconnected", "dtype": "int32", "host_memory": True},
-  )
-  out_info = (
-    {"name": "Y", "ndim": 3, "shape": ((0, 0), (0, 1), (4, 1)), "need_contiguous": True},
-    {"name": "C", "ndim": 3, "shape": ((0, 0), (0, 1), (4, 1)), "need_contiguous": True},
-    {"name": "d", "ndim": 2, "shape": ((0, 1), (4, 1)), "need_contiguous": True}
-  )
-
-  # noinspection PyPep8Naming,PyUnusedLocal
-  @classmethod
-  def grad_input_map(
-        cls,
-        X, W, b, y0, c0, i, start, step,
-        Y, C, d,
-        DY, DC, Dd):
+    # noinspection PyUnresolvedReferences
     """
-    Map args.
-    """
-    return (
-      X, W, b, y0, c0, i, start, step,
-      Y, C,
-      DY, Dd)
+    This is designed to require minimal memory during training.
+    It only stores the outputs and the cell states,
+    i.e. it requires time * cells * 2 floats for memory in total.
 
-  c_extra_support_code = {
-    "lstm_kernel": """
+    inputs:
+      :param X: (time,batch,in_dim)
+      :param W: forward+recurrent matrix. 2d (in_dim+dim,dim*4)
+      :param b: bias. 1d (dim*4,)
+      :param y0: initial output|hidden state. 2d (batch,dim)
+      :param c0: initial cell state. 2d (batch,dim)
+      :param i: index. 2d (time,batch) -> 0 or 1
+      :param start: where to start. must be >=0, default is usually 0. dtype int, scalar.
+      :param step: +1 for fwd, -1 for bwd direction. can also be |step|>1 for wider steps. dtype int, scalar.
+        for bwd (<0), will start at T-start-1.
+    outputs:
+      :param Y: output. 3d (time,batch,dim)
+      :param C: cell states. 3d (time,batch,dim). gradient ignored!
+      :param d: final cell state. 2d (batch,dim)
+    """
+    in_info = (
+        {"name": "X", "ndim": 3, "shape": (None, None, None), "need_contiguous": True},
+        {"name": "W", "ndim": 2, "shape": (None, None), "need_contiguous": True},
+        {"name": "b", "ndim": 1, "shape": (None,), "need_contiguous": True},
+        {"name": "y0", "ndim": 2, "shape": (None, None), "need_contiguous": True},
+        {"name": "c0", "ndim": 2, "shape": (None, None), "need_contiguous": True},
+        {"name": "i", "ndim": 2, "shape": (None, None), "need_contiguous": True, "gradient": "disconnected"},
+        {"name": "start", "ndim": 0, "shape": (), "gradient": "disconnected", "dtype": "int32", "host_memory": True},
+        {"name": "step", "ndim": 0, "shape": (), "gradient": "disconnected", "dtype": "int32", "host_memory": True},
+    )
+    out_info = (
+        {"name": "Y", "ndim": 3, "shape": ((0, 0), (0, 1), (4, 1)), "need_contiguous": True},
+        {"name": "C", "ndim": 3, "shape": ((0, 0), (0, 1), (4, 1)), "need_contiguous": True},
+        {"name": "d", "ndim": 2, "shape": ((0, 1), (4, 1)), "need_contiguous": True},
+    )
+
+    # noinspection PyPep8Naming,PyUnusedLocal
+    @classmethod
+    def grad_input_map(cls, X, W, b, y0, c0, i, start, step, Y, C, d, DY, DC, Dd):
+        """
+        Map args.
+        """
+        return (X, W, b, y0, c0, i, start, step, Y, C, DY, Dd)
+
+    c_extra_support_code = {
+        "lstm_kernel": """
       DEF_KERNEL
       void lstm_kernel(
         int n_batch, int n_cells, const float* mask,
@@ -577,7 +601,7 @@ class LstmLowMem(NativeOpGenBase):
         }
       }
       """,
-    "lstm_bwd_kernel": """
+        "lstm_bwd_kernel": """
       DEF_KERNEL
       void lstm_bwd_kernel(
         int n_batch, int n_in, int n_cells, const float* mask,
@@ -631,7 +655,7 @@ class LstmLowMem(NativeOpGenBase):
         }
       }
       """,
-    "add_bias_kernel": """
+        "add_bias_kernel": """
       DEF_KERNEL
       void add_bias_kernel(int n_batch, int n_dim, float* x, float* b) {
         int idx = threadIdx.x + blockDim.x * blockIdx.x;
@@ -642,7 +666,7 @@ class LstmLowMem(NativeOpGenBase):
         }
       }
     """,
-    "copy_x_h_kernel": """
+        "copy_x_h_kernel": """
       DEF_KERNEL
       void copy_x_h_kernel(
         int n_batch, int n_in, int n_cells,
@@ -665,7 +689,7 @@ class LstmLowMem(NativeOpGenBase):
         }
       }
       """,
-    "inv_copy_x_h_kernel": """
+        "inv_copy_x_h_kernel": """
     DEF_KERNEL
     void inv_copy_x_h_kernel(
       int n_batch, int n_in, int n_cells,
@@ -687,10 +711,10 @@ class LstmLowMem(NativeOpGenBase):
         idx += gridDim.x * blockDim.x;
       }
     }
-    """
-  }
+    """,
+    }
 
-  c_fw_code = """
+    c_fw_code = """
     // X, W, b, y0, c0, i, start, step = input_names
     // Y, C, d = output_names
     assert(n_inputs == 8);
@@ -785,8 +809,8 @@ class LstmLowMem(NativeOpGenBase):
     Ndarray_memcpy(Ndarray_DEV_DATA(d), data_ptr(C, t - step), n_batch * n_cells * sizeof(float));
   """
 
-  # language=C++
-  c_bw_code = """
+    # language=C++
+    c_bw_code = """
     // X, W, b, y0, c0, i, start, step,   Y, C,   DY, Dd = input_names
     // DX, DW, Db, Dh, Dc = output_names
     assert(n_inputs == 12);
@@ -949,53 +973,53 @@ class LstmLowMem(NativeOpGenBase):
 
 
 class NativeLstm2(NativeOpGenBase):
-  # noinspection PyUnresolvedReferences
-  """
-  Yet another LSTM kernel.
-  This kernel is about 27% than NativeLstm,
-  and also has some more options (like the direction).
-  But it requires time * batch * cells more memory,
-  thus time * batch * cells * 6 in total.
+    # noinspection PyUnresolvedReferences
+    """
+    Yet another LSTM kernel.
+    This kernel is about 27% than NativeLstm,
+    and also has some more options (like the direction).
+    But it requires time * batch * cells more memory,
+    thus time * batch * cells * 6 in total.
 
-  inputs:
-    :param X: (time,batch,dim*4)
-    :param W: recurrent matrix. 2d (dim,dim*4)
-    :param y0: initial output|hidden state. 2d (batch,dim)
-    :param c0: initial cell state. 2d (batch,dim)
-    :param i: index. 2d (time,batch) -> 0 or 1
-    :param start: where to start. must be >=0, default is usually 0. dtype int, scalar.
-    :param step: +1 for fwd, -1 for bwd direction. can also be |step|>1 for wider steps. dtype int, scalar.
-      for bwd (<0), will start at T-start-1.
-  outputs:
-    :param Y: output. 3d (time,batch,dim)
-    :param C: cell states. 3d (time,batch,dim). gradient ignored!
-    :param H: cell-in + gates. 3d (time,batch,dim*4). gradient ignored!
-    :param d: final cell state. 2d (batch,dim)
-  """
-  in_info = (
-    {"name": "X", "ndim": 3, "shape": (None, None, None), "need_contiguous": True},
-    {"name": "W", "ndim": 2, "shape": (None, None), "need_contiguous": True},
-    {"name": "y0", "ndim": 2, "shape": (None, None), "need_contiguous": True},
-    {"name": "c0", "ndim": 2, "shape": (None, None), "need_contiguous": True},
-    {"name": "i", "ndim": 2, "shape": (None, None), "need_contiguous": True, "gradient": "disconnected"},
-    {"name": "start", "ndim": 0, "shape": (), "gradient": "disconnected", "dtype": "int32", "host_memory": True},
-    {"name": "step", "ndim": 0, "shape": (), "gradient": "disconnected", "dtype": "int32", "host_memory": True},
-  )
-  out_info = (
-    {"name": "Y", "ndim": 3, "shape": ((0, 0), (0, 1), (1, 0)), "need_contiguous": True},
-    {"name": "C", "ndim": 3, "shape": ((0, 0), (0, 1), (1, 0)), "need_contiguous": True},
-    {"name": "H", "ndim": 3, "shape": ((0, 0), (0, 1), (1, 1)), "need_contiguous": True},
-    {"name": "d", "ndim": 2, "shape": ((0, 1), (1, 0)), "need_contiguous": True}
-  )
+    inputs:
+      :param X: (time,batch,dim*4)
+      :param W: recurrent matrix. 2d (dim,dim*4)
+      :param y0: initial output|hidden state. 2d (batch,dim)
+      :param c0: initial cell state. 2d (batch,dim)
+      :param i: index. 2d (time,batch) -> 0 or 1
+      :param start: where to start. must be >=0, default is usually 0. dtype int, scalar.
+      :param step: +1 for fwd, -1 for bwd direction. can also be |step|>1 for wider steps. dtype int, scalar.
+        for bwd (<0), will start at T-start-1.
+    outputs:
+      :param Y: output. 3d (time,batch,dim)
+      :param C: cell states. 3d (time,batch,dim). gradient ignored!
+      :param H: cell-in + gates. 3d (time,batch,dim*4). gradient ignored!
+      :param d: final cell state. 2d (batch,dim)
+    """
+    in_info = (
+        {"name": "X", "ndim": 3, "shape": (None, None, None), "need_contiguous": True},
+        {"name": "W", "ndim": 2, "shape": (None, None), "need_contiguous": True},
+        {"name": "y0", "ndim": 2, "shape": (None, None), "need_contiguous": True},
+        {"name": "c0", "ndim": 2, "shape": (None, None), "need_contiguous": True},
+        {"name": "i", "ndim": 2, "shape": (None, None), "need_contiguous": True, "gradient": "disconnected"},
+        {"name": "start", "ndim": 0, "shape": (), "gradient": "disconnected", "dtype": "int32", "host_memory": True},
+        {"name": "step", "ndim": 0, "shape": (), "gradient": "disconnected", "dtype": "int32", "host_memory": True},
+    )
+    out_info = (
+        {"name": "Y", "ndim": 3, "shape": ((0, 0), (0, 1), (1, 0)), "need_contiguous": True},
+        {"name": "C", "ndim": 3, "shape": ((0, 0), (0, 1), (1, 0)), "need_contiguous": True},
+        {"name": "H", "ndim": 3, "shape": ((0, 0), (0, 1), (1, 1)), "need_contiguous": True},
+        {"name": "d", "ndim": 2, "shape": ((0, 1), (1, 0)), "need_contiguous": True},
+    )
 
-  # noinspection PyMissingOrEmptyDocstring,PyUnusedLocal,PyPep8Naming
-  @classmethod
-  def grad_input_map(cls, X, W, y0, c0, i, start, step,   Y, C, H, d,   DY, DC, DH, Dd):
-    # noinspection PyRedundantParentheses
-    return (X, W, y0, c0, i, start, step,   Y, C, H,   DY, Dd)
+    # noinspection PyMissingOrEmptyDocstring,PyUnusedLocal,PyPep8Naming
+    @classmethod
+    def grad_input_map(cls, X, W, y0, c0, i, start, step, Y, C, H, d, DY, DC, DH, Dd):
+        # noinspection PyRedundantParentheses
+        return (X, W, y0, c0, i, start, step, Y, C, H, DY, Dd)
 
-  c_extra_support_code = {
-    "lstm_kernel": """
+    c_extra_support_code = {
+        "lstm_kernel": """
       DEF_KERNEL
       void lstm_kernel(
         int n_batch, int n_cells, const float* mask,
@@ -1036,7 +1060,7 @@ class NativeLstm2(NativeOpGenBase):
         }
       }
       """,
-    "lstm_bwd_kernel": """
+        "lstm_bwd_kernel": """
       DEF_KERNEL
       void lstm_bwd_kernel(
         int n_batch, int n_cells, const float* mask,
@@ -1093,10 +1117,10 @@ class NativeLstm2(NativeOpGenBase):
           idx += gridDim.x * blockDim.x;
         }
       }
-      """
-  }
+      """,
+    }
 
-  c_fw_code = """
+    c_fw_code = """
     // X, W, y0, c0, i, start, step = input_names
     // Y, C, H, d = output_names
     assert(n_inputs == 7);
@@ -1199,8 +1223,8 @@ class NativeLstm2(NativeOpGenBase):
     }
   """
 
-  # language=C++
-  c_bw_code = """
+    # language=C++
+    c_bw_code = """
     // X, W, y0, c0, i, start, step,   Y, C, H,   DY, Dd = input_names
     // DX, DW, Dy0, Dc0 = output_names
     assert(n_inputs == 12);
@@ -1380,68 +1404,146 @@ class NativeLstm2(NativeOpGenBase):
 
 
 class TwoDLSTM(NativeOpGenBase):
-  # noinspection PyUnresolvedReferences
-  """
-  inputs:
-    :param X: {input,output,forget,lambda} gate + cell state. 3d (timeT,timeS,batch,dim*5) // dim*5 or dim*1 ?
-    :param V_h: recurrent matrix. 2d (dim,dim*5)
-    :param V_v: recurrent matrix. 2d (dim,dim*5)
-    :param W: recurrent matrix. 2d (dim,dim*5)
-    :param b: bias. 2d (batch,dim)
-    :param ptr_storage: ptr_storage. 1d (1 * 5 * max_diag_size * sizeof(float*) / sizeof(float))
-    :param valid: used internally to store which cells are valid (have to be computed).
-      1d (1 * max_diag_size * n_minibatch)
-    :param workmem2: used internally. 3d (H[0], H[2], H[3])
-    :param sizes: height (target) x width (source) of the unpadded sentences. 2d (batch, 2)
-  outputs:
-    :param CompleteY: output. 4d (timeS,timeT,batch,dim)
-    :param H: gates and cell state. 4d (timeS,timeT,batch,dim*5) ?
-    :param d: final cell state. 3d (timeT,batch,dim)
-  """
-  in_info = (
-    {"name": "X", "ndim": 4, "shape": (None, None, None, None), "need_contiguous": True,
-     "bw_out_var": {"shape": ((0, 0), (0, 1), (0, 2), (0, 3))}},  # see grad_input_map() for indices
-    {"name": "V_h", "ndim": 2, "shape": (None, None), "need_contiguous": True},
-    {"name": "V_v", "ndim": 2, "shape": (None, None), "need_contiguous": True},
-    {"name": "W", "ndim": 2, "shape": (None, None), "need_contiguous": True},
-    {"name": "b", "ndim": 1, "shape": (None,), "need_contiguous": True},
-    {"name": "ptr_storage_fwd", "ndim": 1, "shape": (None,), "need_contiguous": True, "gradient": "disconnected"},
-    {"name": "ptr_storage_bwd", "ndim": 1, "shape": (None,), "need_contiguous": True, "gradient": "disconnected"},
-    {"name": "valid", "ndim": 1, "shape": (None,), "need_contiguous": True, "gradient": "disconnected"},
-    {"name": "workmem", "ndim": 5, "shape": (None, None, None, None, None), "need_contiguous": True,
-     "gradient": "disconnected"},
-    {"name": "workmem2", "ndim": 3, "shape": (None, None, None), "need_contiguous": True, "gradient": "disconnected"},
-    {"name": "sizes", "ndim": 2, "shape": (None, None), "need_contiguous": True, "gradient": "disconnected"},
-    {"name": "DYDummy", "ndim": 4, "shape": (None, None, None, None), "need_contiguous": True,
-     "gradient": "disconnected"},
-    {"name": "initialState", "ndim": 4, "shape": (None, None, None, None), "need_contiguous": True,
-     "gradient": "disconnected"},
-    {"name": "initialOutput", "ndim": 4, "shape": (None, None, None, None), "need_contiguous": True,
-     "gradient": "disconnected"},
-    {"name": "iteration", "ndim": 1, "shape": (None,), "need_contiguous": True, "gradient": "disconnected"},
-  )
-  out_info = (
-    {"name": "CompleteY", "ndim": 4, "shape": ((0, 0), (0, 1), (0, 2), (1, 0)), "need_contiguous": True,
-     },  # "bw_grad_var": {"want_inplace": "dummy_out"}},
-    {"name": "H", "ndim": 4, "shape": ((0, 0), (0, 1), (0, 2), (3, 1)), "need_contiguous": True,
-     # (timeT, timeS, batch, dim*5)
-     },  # "bw_in_var": {"want_inplace": "dummy_out"}},
-  )
+    # noinspection PyUnresolvedReferences
+    """
+    inputs:
+      :param X: {input,output,forget,lambda} gate + cell state. 3d (timeT,timeS,batch,dim*5) // dim*5 or dim*1 ?
+      :param V_h: recurrent matrix. 2d (dim,dim*5)
+      :param V_v: recurrent matrix. 2d (dim,dim*5)
+      :param W: recurrent matrix. 2d (dim,dim*5)
+      :param b: bias. 2d (batch,dim)
+      :param ptr_storage: ptr_storage. 1d (1 * 5 * max_diag_size * sizeof(float*) / sizeof(float))
+      :param valid: used internally to store which cells are valid (have to be computed).
+        1d (1 * max_diag_size * n_minibatch)
+      :param workmem2: used internally. 3d (H[0], H[2], H[3])
+      :param sizes: height (target) x width (source) of the unpadded sentences. 2d (batch, 2)
+    outputs:
+      :param CompleteY: output. 4d (timeS,timeT,batch,dim)
+      :param H: gates and cell state. 4d (timeS,timeT,batch,dim*5) ?
+      :param d: final cell state. 3d (timeT,batch,dim)
+    """
+    in_info = (
+        {
+            "name": "X",
+            "ndim": 4,
+            "shape": (None, None, None, None),
+            "need_contiguous": True,
+            "bw_out_var": {"shape": ((0, 0), (0, 1), (0, 2), (0, 3))},
+        },  # see grad_input_map() for indices
+        {"name": "V_h", "ndim": 2, "shape": (None, None), "need_contiguous": True},
+        {"name": "V_v", "ndim": 2, "shape": (None, None), "need_contiguous": True},
+        {"name": "W", "ndim": 2, "shape": (None, None), "need_contiguous": True},
+        {"name": "b", "ndim": 1, "shape": (None,), "need_contiguous": True},
+        {"name": "ptr_storage_fwd", "ndim": 1, "shape": (None,), "need_contiguous": True, "gradient": "disconnected"},
+        {"name": "ptr_storage_bwd", "ndim": 1, "shape": (None,), "need_contiguous": True, "gradient": "disconnected"},
+        {"name": "valid", "ndim": 1, "shape": (None,), "need_contiguous": True, "gradient": "disconnected"},
+        {
+            "name": "workmem",
+            "ndim": 5,
+            "shape": (None, None, None, None, None),
+            "need_contiguous": True,
+            "gradient": "disconnected",
+        },
+        {
+            "name": "workmem2",
+            "ndim": 3,
+            "shape": (None, None, None),
+            "need_contiguous": True,
+            "gradient": "disconnected",
+        },
+        {"name": "sizes", "ndim": 2, "shape": (None, None), "need_contiguous": True, "gradient": "disconnected"},
+        {
+            "name": "DYDummy",
+            "ndim": 4,
+            "shape": (None, None, None, None),
+            "need_contiguous": True,
+            "gradient": "disconnected",
+        },
+        {
+            "name": "initialState",
+            "ndim": 4,
+            "shape": (None, None, None, None),
+            "need_contiguous": True,
+            "gradient": "disconnected",
+        },
+        {
+            "name": "initialOutput",
+            "ndim": 4,
+            "shape": (None, None, None, None),
+            "need_contiguous": True,
+            "gradient": "disconnected",
+        },
+        {"name": "iteration", "ndim": 1, "shape": (None,), "need_contiguous": True, "gradient": "disconnected"},
+    )
+    out_info = (
+        {
+            "name": "CompleteY",
+            "ndim": 4,
+            "shape": ((0, 0), (0, 1), (0, 2), (1, 0)),
+            "need_contiguous": True,
+        },  # "bw_grad_var": {"want_inplace": "dummy_out"}},
+        {
+            "name": "H",
+            "ndim": 4,
+            "shape": ((0, 0), (0, 1), (0, 2), (3, 1)),
+            "need_contiguous": True,
+            # (timeT, timeS, batch, dim*5)
+        },  # "bw_in_var": {"want_inplace": "dummy_out"}},
+    )
 
-  # noinspection PyMissingOrEmptyDocstring,PyPep8Naming
-  @classmethod
-  def grad_input_map(cls, X, V_h, V_v, W, b, ptr_storage_fwd, ptr_storage_bwd, valid, workmem, workmem2, sizes, DYDummy,
-                     initialState, initialOutput, iteration, CompleteY, H, DCompleteY, DH):
-    return (X, V_h, V_v, W, b, ptr_storage_fwd, ptr_storage_bwd, valid, workmem, workmem2, sizes, DYDummy, initialState,
-            initialOutput, iteration, CompleteY, H, DCompleteY, DH)
+    # noinspection PyMissingOrEmptyDocstring,PyPep8Naming
+    @classmethod
+    def grad_input_map(
+        cls,
+        X,
+        V_h,
+        V_v,
+        W,
+        b,
+        ptr_storage_fwd,
+        ptr_storage_bwd,
+        valid,
+        workmem,
+        workmem2,
+        sizes,
+        DYDummy,
+        initialState,
+        initialOutput,
+        iteration,
+        CompleteY,
+        H,
+        DCompleteY,
+        DH,
+    ):
+        return (
+            X,
+            V_h,
+            V_v,
+            W,
+            b,
+            ptr_storage_fwd,
+            ptr_storage_bwd,
+            valid,
+            workmem,
+            workmem2,
+            sizes,
+            DYDummy,
+            initialState,
+            initialOutput,
+            iteration,
+            CompleteY,
+            H,
+            DCompleteY,
+            DH,
+        )
 
-  # noinspection PyMissingOrEmptyDocstring,PyPep8Naming
-  @classmethod
-  def map_layer_inputs_to_op(cls, Zs, Zt, V_h, V_v, W, b, ptr_storage):
-    assert False  # no support for Theano
+    # noinspection PyMissingOrEmptyDocstring,PyPep8Naming
+    @classmethod
+    def map_layer_inputs_to_op(cls, Zs, Zt, V_h, V_v, W, b, ptr_storage):
+        assert False  # no support for Theano
 
-  c_extra_support_code = {
-    "01_repvec": """
+    c_extra_support_code = {
+        "01_repvec": """
       DEF_KERNEL
       void repvec(const float * v, int vlen, int nCopies, float * dest)
       {
@@ -1453,7 +1555,7 @@ class TwoDLSTM(NativeOpGenBase):
         }
       }
     """,
-    "02_fillmat": """
+        "02_fillmat": """
       void fillmat(OpKernelContext* context, const Ndarray * b, Ndarray * dst)
       {
         const float * data_b = Ndarray_DEV_DATA(b);
@@ -1470,7 +1572,7 @@ class TwoDLSTM(NativeOpGenBase):
         ));
       }
     """,
-    "03_data_ptr": """
+        "03_data_ptr": """
       // if nd is 2 then assume a weight matrix and just return beginning of data
       // else nd should be 3 and we pick the x part
       float* data_ptr(const Ndarray* a, int y, int x, int outer_dim=0) {
@@ -1498,7 +1600,7 @@ class TwoDLSTM(NativeOpGenBase):
         return const_cast<float *>(data_ptr(ca, y, x, outer_dim));
       }
     """,
-    "04_affine_y_x_batched_onedir": """
+        "04_affine_y_x_batched_onedir": """
       // ys and xs: base indices, offset by y_A, x_A (-1,0,1)
       void affine_y_x_batched_onedir(OpKernelContext* context, int y_A, int x_A,
         const Ndarray * A1,
@@ -1559,7 +1661,7 @@ class TwoDLSTM(NativeOpGenBase):
           C_ptrs_data, B_dim[1], 1 * batch_size, batch_size == 1);
       }
     """,
-    "05_lstm_stable_cell_kernel_batched": """
+        "05_lstm_stable_cell_kernel_batched": """
       DEF_KERNEL
       void lstm_stable_cell_kernel_batched(float ** datas, const float ** old_state_ys, const float ** old_state_xs,
        float ** outputs, const float ** valids, int n_outer_batch, int n_cells, int n_minibatch)
@@ -1623,7 +1725,7 @@ class TwoDLSTM(NativeOpGenBase):
         }
       }
     """,
-    "06_do_lstm_batched_onedir": """
+        "06_do_lstm_batched_onedir": """
       // H, CompleteY, ys, xs, ptr_storage
       void do_lstm_batched_onedir(
        OpKernelContext* context, Ndarray* H, Ndarray* initialState, float iteration, Ndarray* completeOut,
@@ -1708,7 +1810,7 @@ class TwoDLSTM(NativeOpGenBase):
         ));
       }
     """,
-    "07_lstm_bwd_stable_cell_kernel_batched": """
+        "07_lstm_bwd_stable_cell_kernel_batched": """
       DEF_KERNEL
       void lstm_bwd_stable_cell_kernel_batched(float ** deltas, const float ** epsilons,
         const float ** next_epsilon_ys, const float ** next_epsilon_xs, float ** epsilon_ys, float ** epsilon_xs,
@@ -1820,7 +1922,7 @@ class TwoDLSTM(NativeOpGenBase):
         }
       }
     """,
-    "08_do_lstm_bwd_batched_onedir": """
+        "08_do_lstm_bwd_batched_onedir": """
       //epsilon are the derivates w.r.t. Z, delta stores the gate and cell activations
       //  and will store the derivatives later
       void do_lstm_bwd_batched_onedir(OpKernelContext* context, Ndarray * delta1, Ndarray * epsilon1,
@@ -1922,9 +2024,9 @@ class TwoDLSTM(NativeOpGenBase):
         ));
       }
     """,
-  }
+    }
 
-  c_fw_code = """
+    c_fw_code = """
     // X*, V_h, V_v, W, b, ptr_storage_fwd, ptr_storage_bwd, valid, workmem, sizes, DYDummy,
     //   initialState, initialOutput, iteration = input_names (*: inplace)
     // CompleteY, H = output_names
@@ -2021,7 +2123,7 @@ class TwoDLSTM(NativeOpGenBase):
     }
     """
 
-  c_bw_code = """
+    c_bw_code = """
     // X, V_h, V_v, W, b, ptr_storage_fwd, ptr_storage_bwd, valid, workmem, workmem2, sizes, DYDummy, initialState,
     //   initialOutput, iteration, CompleteY, H, DCompleteY, DH = inputs
     // DX, DV_h, DV_v, DW, Db = outputs
@@ -2144,42 +2246,54 @@ class TwoDLSTM(NativeOpGenBase):
     affine_global(CompleteY, delta1, DV_v, true, false, Y_dim[1], 0.0f);
   """
 
-  cpu_support = False
-  code_version = ()
+    cpu_support = False
+    code_version = ()
 
 
 class Chunking(NativeOpGenBase):
-  """
-  Given an input in 3d (n_time,n_batch,n_dim), we chunk up the time dimension
-  in chunks of size chunk_size, every chunk_step frames.
-  This results in an 3d output (chunk_size, n_batch * n_chunks, n_dim)
-  where n_chunks = floor( max(n_time - chunk_size + chunk_step - 1, 0) / chunk_step ) + 1.
-  Examples:
-    n_time=1,   chunk_size=50, chunk_step=10 -> n_chunks=1
-    n_time=49,  chunk_size=50, chunk_step=10 -> n_chunks=1
-    n_time=50,  chunk_size=50, chunk_step=10 -> n_chunks=1
-    n_time=51,  chunk_size=50, chunk_step=10 -> n_chunks=2
-    n_time=60,  chunk_size=50, chunk_step=10 -> n_chunks=2
-    n_time=61,  chunk_size=50, chunk_step=10 -> n_chunks=3
-    n_time=99,  chunk_size=50, chunk_step=10 -> n_chunks=6
-    n_time=100, chunk_size=50, chunk_step=10 -> n_chunks=6
-    n_time=101, chunk_size=50, chunk_step=10 -> n_chunks=7
-  """
-  in_info = (
-    {"name": "input", "ndim": 3, "shape": (None, None, None)},
-    {"name": "index", "ndim": 2, "shape": (None, None), "gradient": "disconnected"},
-    {"name": "output_buffer", "ndim": 3, "shape": (None, None, None), "want_inplace": 0, "gradient": "disconnected"},
-    {"name": "oindex_buffer", "ndim": 2, "shape": (None, None), "want_inplace": 1, "gradient": "disconnected"},
-    {"name": "chunk_params", "ndim": 1, "shape": (2,),
-     "need_contiguous": True, "gradient": "disconnected"},  # (chunk_size, chunk_step)
-  )
-  out_info = (
-    {"name": "output", "ndim": 3, "shape": ((2, 0), (2, 1), (2, 2))},
-    {"name": "oindex", "ndim": 2, "shape": ((3, 0), (3, 1))}
-  )
+    """
+    Given an input in 3d (n_time,n_batch,n_dim), we chunk up the time dimension
+    in chunks of size chunk_size, every chunk_step frames.
+    This results in an 3d output (chunk_size, n_batch * n_chunks, n_dim)
+    where n_chunks = floor( max(n_time - chunk_size + chunk_step - 1, 0) / chunk_step ) + 1.
+    Examples:
+      n_time=1,   chunk_size=50, chunk_step=10 -> n_chunks=1
+      n_time=49,  chunk_size=50, chunk_step=10 -> n_chunks=1
+      n_time=50,  chunk_size=50, chunk_step=10 -> n_chunks=1
+      n_time=51,  chunk_size=50, chunk_step=10 -> n_chunks=2
+      n_time=60,  chunk_size=50, chunk_step=10 -> n_chunks=2
+      n_time=61,  chunk_size=50, chunk_step=10 -> n_chunks=3
+      n_time=99,  chunk_size=50, chunk_step=10 -> n_chunks=6
+      n_time=100, chunk_size=50, chunk_step=10 -> n_chunks=6
+      n_time=101, chunk_size=50, chunk_step=10 -> n_chunks=7
+    """
 
-  c_extra_support_code = {
-    "copy_kernel": """
+    in_info = (
+        {"name": "input", "ndim": 3, "shape": (None, None, None)},
+        {"name": "index", "ndim": 2, "shape": (None, None), "gradient": "disconnected"},
+        {
+            "name": "output_buffer",
+            "ndim": 3,
+            "shape": (None, None, None),
+            "want_inplace": 0,
+            "gradient": "disconnected",
+        },
+        {"name": "oindex_buffer", "ndim": 2, "shape": (None, None), "want_inplace": 1, "gradient": "disconnected"},
+        {
+            "name": "chunk_params",
+            "ndim": 1,
+            "shape": (2,),
+            "need_contiguous": True,
+            "gradient": "disconnected",
+        },  # (chunk_size, chunk_step)
+    )
+    out_info = (
+        {"name": "output", "ndim": 3, "shape": ((2, 0), (2, 1), (2, 2))},
+        {"name": "oindex", "ndim": 2, "shape": ((3, 0), (3, 1))},
+    )
+
+    c_extra_support_code = {
+        "copy_kernel": """
     DEF_KERNEL
     void copy_kernel(
       float* chunk_params,
@@ -2228,9 +2342,9 @@ class Chunking(NativeOpGenBase):
       }
     }
     """
-  }
+    }
 
-  c_fw_code = """
+    c_fw_code = """
     assert_cmp(n_inputs, ==, 5);
     assert_cmp(n_outputs, ==, 2);
     Ndarray* input = inputs[0];
@@ -2276,49 +2390,61 @@ class Chunking(NativeOpGenBase):
     HANDLE_LAST_ERROR();
   """
 
-  code_version = ()
+    code_version = ()
 
-  @staticmethod
-  def naive_chunk_start_frames(n_time, chunk_size, chunk_step):
-    """
-    This is just for documentation / demonstration. Also used by testing code.
-    """
-    t = 0
-    chunk_start_frames = []
-    while True:
-      chunk_start_frames.append(t)
-      if t + chunk_size >= n_time:
-        break
-      t += chunk_step
-    return chunk_start_frames
+    @staticmethod
+    def naive_chunk_start_frames(n_time, chunk_size, chunk_step):
+        """
+        This is just for documentation / demonstration. Also used by testing code.
+        """
+        t = 0
+        chunk_start_frames = []
+        while True:
+            chunk_start_frames.append(t)
+            if t + chunk_size >= n_time:
+                break
+            t += chunk_step
+        return chunk_start_frames
 
 
 class UnChunking(NativeOpGenBase):
-  """
-  This reverses the output from `Chunking`, i.e. chunking the time dimension.
-  We get a 3d input (chunk_size, n_batch * n_chunks, n_dim)
-  and return an 3d output (n_time, n_batch, n_dim)
-  where the chunks are of size chunk_size, every chunk_step frames.
-  Because of overlaps, we have to combine the overlapping chunks somehow.
-  We will do that with a uniform distribution, i.e. take the mean of all overlaps per frame.
-  """
-  in_info = (
-    {"name": "input", "ndim": 3, "shape": (None, None, None)},
-    {"name": "index", "ndim": 2, "shape": (None, None), "gradient": "disconnected"},
-    {"name": "output_buffer", "ndim": 3, "shape": (None, None, None), "want_inplace": 0, "gradient": "disconnected"},
-    {"name": "oindex_buffer", "ndim": 2, "shape": (None, None), "want_inplace": 1, "gradient": "disconnected"},
-    {"name": "ofactors_buffer", "ndim": 2, "shape": (None, None), "want_inplace": 2, "gradient": "disconnected"},
-    {"name": "chunk_params", "ndim": 1, "shape": (2,),
-     "need_contiguous": True, "gradient": "disconnected"},  # (chunk_size, chunk_step)
-  )
-  out_info = (
-    {"name": "output", "ndim": 3, "shape": ((2, 0), (2, 1), (2, 2))},
-    {"name": "oindex", "ndim": 2, "shape": ((3, 0), (3, 1))},
-    {"name": "ofactors", "ndim": 2, "shape": ((4, 0), (4, 1))}
-  )
+    """
+    This reverses the output from `Chunking`, i.e. chunking the time dimension.
+    We get a 3d input (chunk_size, n_batch * n_chunks, n_dim)
+    and return an 3d output (n_time, n_batch, n_dim)
+    where the chunks are of size chunk_size, every chunk_step frames.
+    Because of overlaps, we have to combine the overlapping chunks somehow.
+    We will do that with a uniform distribution, i.e. take the mean of all overlaps per frame.
+    """
 
-  c_extra_support_code = {
-    "unchunk_kernel": """
+    in_info = (
+        {"name": "input", "ndim": 3, "shape": (None, None, None)},
+        {"name": "index", "ndim": 2, "shape": (None, None), "gradient": "disconnected"},
+        {
+            "name": "output_buffer",
+            "ndim": 3,
+            "shape": (None, None, None),
+            "want_inplace": 0,
+            "gradient": "disconnected",
+        },
+        {"name": "oindex_buffer", "ndim": 2, "shape": (None, None), "want_inplace": 1, "gradient": "disconnected"},
+        {"name": "ofactors_buffer", "ndim": 2, "shape": (None, None), "want_inplace": 2, "gradient": "disconnected"},
+        {
+            "name": "chunk_params",
+            "ndim": 1,
+            "shape": (2,),
+            "need_contiguous": True,
+            "gradient": "disconnected",
+        },  # (chunk_size, chunk_step)
+    )
+    out_info = (
+        {"name": "output", "ndim": 3, "shape": ((2, 0), (2, 1), (2, 2))},
+        {"name": "oindex", "ndim": 2, "shape": ((3, 0), (3, 1))},
+        {"name": "ofactors", "ndim": 2, "shape": ((4, 0), (4, 1))},
+    )
+
+    c_extra_support_code = {
+        "unchunk_kernel": """
     DEF_KERNEL
     void unchunk_kernel(
       float* chunk_params,
@@ -2400,9 +2526,9 @@ class UnChunking(NativeOpGenBase):
       }
     }
     """
-  }
+    }
 
-  c_fw_code = """
+    c_fw_code = """
     assert_cmp(n_inputs, ==, 6);
     assert_cmp(n_outputs, ==, 3);
     Ndarray* input = inputs[0];
@@ -2455,35 +2581,34 @@ class UnChunking(NativeOpGenBase):
     HANDLE_LAST_ERROR();
   """
 
-  code_version = ()
+    code_version = ()
 
 
 class SubtensorBatchedIndex(NativeOpGenBase):
-  """
-  Consider you have:
-    idx: 2d (n_time, n_batch) -> idx (in [0..n_dim-1])
-    x: 3d (n_time, n_batch, n_dim)
-  Then, this op will calculate:
-    x[..., idx[...]]: 2d (n_time, n_batch)
-  """
-  in_info = (
-    {"name": "x", "ndim": 3, "shape": (None, None, None), "bw_in_var": {"want_inplace": 0}},
-    {"name": "idx", "ndim": 2, "shape": (None, None), "gradient": "disconnected"}
-  )
-  out_info = (
-    {"name": "y", "ndim": 2, "shape": ((0, 0), (0, 1))},
-  )
-
-  # noinspection PyUnusedLocal,PyPep8Naming
-  @classmethod
-  def grad_input_map(cls, x, idx,  y,  DY):
     """
-    Map.
+    Consider you have:
+      idx: 2d (n_time, n_batch) -> idx (in [0..n_dim-1])
+      x: 3d (n_time, n_batch, n_dim)
+    Then, this op will calculate:
+      x[..., idx[...]]: 2d (n_time, n_batch)
     """
-    return x, idx, DY
 
-  c_extra_support_code = {
-    "select_kernel": """
+    in_info = (
+        {"name": "x", "ndim": 3, "shape": (None, None, None), "bw_in_var": {"want_inplace": 0}},
+        {"name": "idx", "ndim": 2, "shape": (None, None), "gradient": "disconnected"},
+    )
+    out_info = ({"name": "y", "ndim": 2, "shape": ((0, 0), (0, 1))},)
+
+    # noinspection PyUnusedLocal,PyPep8Naming
+    @classmethod
+    def grad_input_map(cls, x, idx, y, DY):
+        """
+        Map.
+        """
+        return x, idx, DY
+
+    c_extra_support_code = {
+        "select_kernel": """
     DEF_KERNEL
     void select_kernel(
       float* x, long x_dim0, long x_dim1, long x_dim2, long x_stride0, long x_stride1, long x_stride2,
@@ -2505,7 +2630,7 @@ class SubtensorBatchedIndex(NativeOpGenBase):
       }
     }
     """,
-    "select_bw_kernel": """
+        "select_bw_kernel": """
     DEF_KERNEL
     void select_bw_kernel(
       float* Dx, long Dx_dim0, long Dx_dim1, long Dx_dim2, long Dx_stride0, long Dx_stride1, long Dx_stride2,
@@ -2526,10 +2651,10 @@ class SubtensorBatchedIndex(NativeOpGenBase):
         Dx[d0 * Dx_stride0 + d1 * Dx_stride1 + d2 * Dx_stride2] = Dy[d0 * Dy_stride0 + d1 * Dy_stride1];
       }
     }
-    """
-  }
+    """,
+    }
 
-  c_fw_code = """
+    c_fw_code = """
     assert_cmp(n_inputs, ==, 2);
     assert_cmp(n_outputs, ==, 1);
     Ndarray* x = inputs[0];
@@ -2562,7 +2687,7 @@ class SubtensorBatchedIndex(NativeOpGenBase):
     HANDLE_LAST_ERROR();
   """
 
-  c_bw_code = """
+    c_bw_code = """
     assert_cmp(n_inputs, ==, 3);
     assert_cmp(n_outputs, ==, 1);
     Ndarray* x = inputs[0];
@@ -2603,24 +2728,23 @@ class SubtensorBatchedIndex(NativeOpGenBase):
 
 
 class SparseToDense(NativeOpGenBase):
-  """
-  Expects a sparse matrix in COOrdinate format,
-  where W[s0[i,b],b,s1[i]] = weight[i,b] for all i, and all batches b.
-  Will return W (time,batch,dim).
-  """
-  in_info = (
-    {"name": "_initial_W", "ndim": 3, "shape": (None, None, None), "need_contiguous": True, "want_inplace": 0},
-    {"name": "s0", "ndim": 2, "shape": (None, None), "need_contiguous": True},
-    {"name": "s1", "ndim": 2, "shape": (None, None), "need_contiguous": True},
-    {"name": "weight", "ndim": 2, "shape": (None, None), "need_contiguous": True},
-    {"name": "mask", "ndim": 2, "shape": (None, None), "need_contiguous": True}
-  )
-  out_info = (
-    {"name": "W", "ndim": 3, "shape": ((0, 0), (0, 1), (0, 2))},
-  )
+    """
+    Expects a sparse matrix in COOrdinate format,
+    where W[s0[i,b],b,s1[i]] = weight[i,b] for all i, and all batches b.
+    Will return W (time,batch,dim).
+    """
 
-  c_extra_support_code = {
-    "assign_kernel": """
+    in_info = (
+        {"name": "_initial_W", "ndim": 3, "shape": (None, None, None), "need_contiguous": True, "want_inplace": 0},
+        {"name": "s0", "ndim": 2, "shape": (None, None), "need_contiguous": True},
+        {"name": "s1", "ndim": 2, "shape": (None, None), "need_contiguous": True},
+        {"name": "weight", "ndim": 2, "shape": (None, None), "need_contiguous": True},
+        {"name": "mask", "ndim": 2, "shape": (None, None), "need_contiguous": True},
+    )
+    out_info = ({"name": "W", "ndim": 3, "shape": ((0, 0), (0, 1), (0, 2))},)
+
+    c_extra_support_code = {
+        "assign_kernel": """
     DEF_KERNEL
     void assign_kernel(
       float* out, float* s0, float* s1, float* w, float* mask,
@@ -2644,9 +2768,9 @@ class SparseToDense(NativeOpGenBase):
       }
     }
     """
-  }
+    }
 
-  c_fw_code = """
+    c_fw_code = """
     assert(n_inputs == 5);
     assert(n_outputs == 1);
     Ndarray* s0 = inputs[1];
@@ -2685,29 +2809,42 @@ class SparseToDense(NativeOpGenBase):
 
 
 class MaxAndArgmaxSparse(NativeOpGenBase):
-  """
-  Expects a sparse matrix in COOrdinate format,
-  where W[s0[i,b],s1[i],b] = weight[i,b] for all i, and all batches b.
-  It will return the max and argmax for all W[:,:,b]
-  over the second axis.
-  """
-  in_info = (
-    {"name": "s0", "ndim": 2, "shape": (None, None), "need_contiguous": True, "gradient": "disconnected"},
-    {"name": "s1", "ndim": 2, "shape": (None, None), "need_contiguous": True, "gradient": "disconnected"},
-    {"name": "weight", "ndim": 2, "shape": (None, None), "need_contiguous": True},
-    {"name": "mask", "ndim": 2, "shape": (None, None), "need_contiguous": True, "gradient": "disconnected"},
-    {"name": "_out_max", "ndim": 2, "shape": (None, None),
-     "need_contiguous": True, "want_inplace": 0, "gradient": "disconnected"},
-    {"name": "_out_arg", "ndim": 2, "shape": (None, None),
-     "need_contiguous": True, "want_inplace": 1, "gradient": "disconnected"},
-  )
-  out_info = (
-    {"name": "out_max", "ndim": 2, "shape": ((4, 0), (4, 1))},
-    {"name": "out_arg", "ndim": 2, "shape": ((5, 0), (5, 1))},
-  )
+    """
+    Expects a sparse matrix in COOrdinate format,
+    where W[s0[i,b],s1[i],b] = weight[i,b] for all i, and all batches b.
+    It will return the max and argmax for all W[:,:,b]
+    over the second axis.
+    """
 
-  c_extra_support_code = {
-    "doit_kernel": """
+    in_info = (
+        {"name": "s0", "ndim": 2, "shape": (None, None), "need_contiguous": True, "gradient": "disconnected"},
+        {"name": "s1", "ndim": 2, "shape": (None, None), "need_contiguous": True, "gradient": "disconnected"},
+        {"name": "weight", "ndim": 2, "shape": (None, None), "need_contiguous": True},
+        {"name": "mask", "ndim": 2, "shape": (None, None), "need_contiguous": True, "gradient": "disconnected"},
+        {
+            "name": "_out_max",
+            "ndim": 2,
+            "shape": (None, None),
+            "need_contiguous": True,
+            "want_inplace": 0,
+            "gradient": "disconnected",
+        },
+        {
+            "name": "_out_arg",
+            "ndim": 2,
+            "shape": (None, None),
+            "need_contiguous": True,
+            "want_inplace": 1,
+            "gradient": "disconnected",
+        },
+    )
+    out_info = (
+        {"name": "out_max", "ndim": 2, "shape": ((4, 0), (4, 1))},
+        {"name": "out_arg", "ndim": 2, "shape": ((5, 0), (5, 1))},
+    )
+
+    c_extra_support_code = {
+        "doit_kernel": """
     DEF_KERNEL
     void doit_kernel(
         long n_batch, long n_in_time, long n_out_time,
@@ -2732,9 +2869,9 @@ class MaxAndArgmaxSparse(NativeOpGenBase):
       }
     }
     """
-  }
+    }
 
-  c_fw_code = """
+    c_fw_code = """
     assert(n_inputs == 6);
     assert(n_outputs == 2);
     Ndarray* s0 = inputs[0];
@@ -2776,33 +2913,34 @@ class MaxAndArgmaxSparse(NativeOpGenBase):
     HANDLE_LAST_ERROR();
   """
 
-  code_version = ()
+    code_version = ()
 
 
 class CrossEntropySoftmaxAndGradientZSparse(NativeOpGenBase):
-  """
-  y_target is given in sparse COOrdinate format.
-  We will calculate CE[t,b] = \\sum_i y_target[t,b,i] * log(softmax(z[t,b])[i]),
-  for any timeframe t and batch b,
-  and grad(CE[t,b], z[t,b]) = softmax(z[t,b]) - y_target[t,b].
-  We also support an index-mask for z, i.e. for the possible [t,b].
-  """
-  in_info = (
-    {"name": "z", "ndim": 3, "shape": (None, None, None), "need_contiguous": True},
-    {"name": "z_mask", "ndim": 2, "shape": (None, None), "need_contiguous": True},
-    {"name": "y_target_t", "ndim": 2, "shape": (None, None), "need_contiguous": True},
-    {"name": "y_target_i", "ndim": 2, "shape": (None, None), "need_contiguous": True},
-    {"name": "y_target_w", "ndim": 2, "shape": (None, None), "need_contiguous": True},
-    {"name": "y_target_mask", "ndim": 2, "shape": (None, None), "need_contiguous": True}
-  )
-  out_info = (
-    {"name": "out_ce", "ndim": 2, "shape": ((0, 0), (0, 1))},
-    {"name": "out_grad_z", "ndim": 3, "shape": ((0, 0), (0, 1), (0, 2))},
-    {"name": "_out_max_z", "ndim": 2, "shape": ((0, 0), (0, 1))}
-  )
+    """
+    y_target is given in sparse COOrdinate format.
+    We will calculate CE[t,b] = \\sum_i y_target[t,b,i] * log(softmax(z[t,b])[i]),
+    for any timeframe t and batch b,
+    and grad(CE[t,b], z[t,b]) = softmax(z[t,b]) - y_target[t,b].
+    We also support an index-mask for z, i.e. for the possible [t,b].
+    """
 
-  c_extra_support_code = {
-    "max_kernel": """
+    in_info = (
+        {"name": "z", "ndim": 3, "shape": (None, None, None), "need_contiguous": True},
+        {"name": "z_mask", "ndim": 2, "shape": (None, None), "need_contiguous": True},
+        {"name": "y_target_t", "ndim": 2, "shape": (None, None), "need_contiguous": True},
+        {"name": "y_target_i", "ndim": 2, "shape": (None, None), "need_contiguous": True},
+        {"name": "y_target_w", "ndim": 2, "shape": (None, None), "need_contiguous": True},
+        {"name": "y_target_mask", "ndim": 2, "shape": (None, None), "need_contiguous": True},
+    )
+    out_info = (
+        {"name": "out_ce", "ndim": 2, "shape": ((0, 0), (0, 1))},
+        {"name": "out_grad_z", "ndim": 3, "shape": ((0, 0), (0, 1), (0, 2))},
+        {"name": "_out_max_z", "ndim": 2, "shape": ((0, 0), (0, 1))},
+    )
+
+    c_extra_support_code = {
+        "max_kernel": """
     DEF_KERNEL
     void max_kernel(float* out, float* v, float* mask, long stride, long max_idx) {
       for(
@@ -2825,7 +2963,7 @@ class CrossEntropySoftmaxAndGradientZSparse(NativeOpGenBase):
       }
     }
     """,
-    "softmax_kernel": """
+        "softmax_kernel": """
     DEF_KERNEL
     void softmax_kernel(
       float* out_softmax,
@@ -2850,7 +2988,7 @@ class CrossEntropySoftmaxAndGradientZSparse(NativeOpGenBase):
       }
     }
     """,
-    "ce_sm_grad_kernel": """
+        "ce_sm_grad_kernel": """
     DEF_KERNEL
     void ce_sm_grad_kernel(
       float* out_ce, float* out_grad_z,
@@ -2879,10 +3017,10 @@ class CrossEntropySoftmaxAndGradientZSparse(NativeOpGenBase):
         out_grad_z[out_y_idx] -= y_target;
       }
     }
-    """
-  }
+    """,
+    }
 
-  c_fw_code = """
+    c_fw_code = """
     assert(n_inputs == 6);
     assert(n_outputs == 3);
     Ndarray* z = inputs[0];
@@ -2948,14 +3086,14 @@ class CrossEntropySoftmaxAndGradientZSparse(NativeOpGenBase):
 
 
 common_fast_bw_kernels = {
-  "001_set_start_states": """
+    "001_set_start_states": """
     DEF_KERNEL
     void set_start_states(float* states, unsigned* start_states) {
       unsigned state_idx = start_states[blockIdx.x * blockDim.x + threadIdx.x];
       states[state_idx] = 0.0;
     }
   """,
-  "010_fill_array": """
+    "010_fill_array": """
     DEF_KERNEL
     void fill_array(float* array, float value, unsigned size) {
       unsigned idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -2964,7 +3102,7 @@ common_fast_bw_kernels = {
       }
     }
   """,
-  "011_remove_inf": """
+    "011_remove_inf": """
   DEF_KERNEL
   void remove_inf(float* array, unsigned size) {
     unsigned idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -2973,7 +3111,7 @@ common_fast_bw_kernels = {
     }
   }
   """,
-  "012_prob_add": """
+    "012_prob_add": """
     DEV_FUNC
     float prob_add(float a, float b) {
       float diff = a - b;
@@ -2985,7 +3123,7 @@ common_fast_bw_kernels = {
       }
     }
   """,
-  "013_atomic_prob_add": """
+    "013_atomic_prob_add": """
     DEV_FUNC
     void atomic_prob_add(float* a, float b) {
       int* addr = (int*)a;
@@ -2997,7 +3135,7 @@ common_fast_bw_kernels = {
       } while (old != assumed);
     }
   """,
-  "020_dump_to_file": """
+    "020_dump_to_file": """
     template<typename T>
     void dump_to_file_1d(T* d_mem, unsigned n_d1, std::string const& path) {
       std::vector<T> buffer(n_d1);
@@ -3050,37 +3188,52 @@ common_fast_bw_kernels = {
 
 
 class FastBaumWelchOp(NativeOpGenBase):
-  # noinspection PyUnresolvedReferences
-  """
-  inputs:
-    :param am_scores: scores in -log space. 3d (time,batch,dim)
-    :param edges: edges of the graph (from,to,emission_idx,sequence_idx)
-    :param weights: weights of the edges
-  outputs:
-    :param output: Baum-Welch alignment, scores in -log space. 3d (time,batch,dim), like am_scores
-  """
-  in_info = (
-    {"name": "am_scores",        "ndim": 3, "shape": (None,   None,    None),
-     "need_contiguous": True, "gradient": "disconnected"},
-    {"name": "edges",            "ndim": 2, "shape": (None,   None),          "dtype": "int32",
-     "need_contiguous": True, "gradient": "disconnected"},
-    {"name": "weights",          "ndim": 1, "shape": (None,),
-     "need_contiguous": True, "gradient": "disconnected"},
-    {"name": "start_end_states", "ndim": 2, "shape": (2,      None),          "dtype": "int32",
-     "need_contiguous": True, "gradient": "disconnected"},
-    {"name": "index",            "ndim": 2, "shape": ((0, 0), (0, 1)),
-     "need_contiguous": True, "gradient": "disconnected"},
-    {"name": "state_buffer",     "ndim": 2, "shape": (2,      None),
-     "need_contiguous": True, "gradient": "disconnected"}
-  )
-  out_info = (
-    {"name": "output", "ndim": 3, "shape": ((0, 0), (0, 1), (0, 2)), "need_contiguous": True},
-    {"name": "sums",   "ndim": 2, "shape": ((0, 0), (0, 1)),         "need_contiguous": True},
-  )
+    # noinspection PyUnresolvedReferences
+    """
+    inputs:
+      :param am_scores: scores in -log space. 3d (time,batch,dim)
+      :param edges: edges of the graph (from,to,emission_idx,sequence_idx)
+      :param weights: weights of the edges
+    outputs:
+      :param output: Baum-Welch alignment, scores in -log space. 3d (time,batch,dim), like am_scores
+    """
+    in_info = (
+        {
+            "name": "am_scores",
+            "ndim": 3,
+            "shape": (None, None, None),
+            "need_contiguous": True,
+            "gradient": "disconnected",
+        },
+        {
+            "name": "edges",
+            "ndim": 2,
+            "shape": (None, None),
+            "dtype": "int32",
+            "need_contiguous": True,
+            "gradient": "disconnected",
+        },
+        {"name": "weights", "ndim": 1, "shape": (None,), "need_contiguous": True, "gradient": "disconnected"},
+        {
+            "name": "start_end_states",
+            "ndim": 2,
+            "shape": (2, None),
+            "dtype": "int32",
+            "need_contiguous": True,
+            "gradient": "disconnected",
+        },
+        {"name": "index", "ndim": 2, "shape": ((0, 0), (0, 1)), "need_contiguous": True, "gradient": "disconnected"},
+        {"name": "state_buffer", "ndim": 2, "shape": (2, None), "need_contiguous": True, "gradient": "disconnected"},
+    )
+    out_info = (
+        {"name": "output", "ndim": 3, "shape": ((0, 0), (0, 1), (0, 2)), "need_contiguous": True},
+        {"name": "sums", "ndim": 2, "shape": ((0, 0), (0, 1)), "need_contiguous": True},
+    )
 
-  c_extra_support_code = copy.copy(common_fast_bw_kernels)
-  c_extra_support_code.update({
-    "100_init_bwd_state_buffer": """
+    c_extra_support_code = copy.copy(common_fast_bw_kernels)
+    c_extra_support_code.update(
+        {
+            "100_init_bwd_state_buffer": """
       DEF_KERNEL
       void init_bwd_state_buffer(
           float* states, unsigned* end_states, unsigned t, unsigned max_t, float* index, unsigned index_stride) {
@@ -3091,7 +3244,7 @@ class FastBaumWelchOp(NativeOpGenBase):
         }
       }
     """,
-    "101_next_frame": """
+            "101_next_frame": """
       DEF_KERNEL
       void next_frame(bool fwd, unsigned num_edges, unsigned  num_emissions,
                       unsigned* sequence_idxs, unsigned* from_buffer, unsigned* to_buffer, float* weight_buffer,
@@ -3125,7 +3278,7 @@ class FastBaumWelchOp(NativeOpGenBase):
         atomic_prob_add(next_frame + to, val);
       }
     """,
-    "102_normalize": """
+            "102_normalize": """
       DEF_KERNEL
       void normalize(float* buffer, unsigned* sequence_idxs, unsigned num_edges, unsigned num_seqs, float* sum_output) {
         DEF_SHARED(float, sum);
@@ -3157,7 +3310,7 @@ class FastBaumWelchOp(NativeOpGenBase):
         }
       }
     """,
-    "103_compute_result": """
+            "103_compute_result": """
       DEF_KERNEL
       void compute_result(float* edge_buffer, float* out, unsigned* emission_idxs, unsigned* sequence_idxs,
                           unsigned frame_stride, unsigned seq_stride,
@@ -3176,7 +3329,7 @@ class FastBaumWelchOp(NativeOpGenBase):
         atomic_prob_add(out + frame * frame_stride + seq_idx * seq_stride + emission_idx, score);
       }
     """,
-    "110_write_alignment_to_file": """
+            "110_write_alignment_to_file": """
       void write_alignment_to_file(float* d_state_buffer, float* d_index, unsigned index_stride,
                                    unsigned* d_start_states, unsigned* d_end_states,
                                    float pruning, unsigned n_frames, unsigned n_seqs, unsigned n_states,
@@ -3221,7 +3374,7 @@ class FastBaumWelchOp(NativeOpGenBase):
         }
       }
     """,
-    "111_write_output_to_file": """
+            "111_write_output_to_file": """
       void write_output_to_file(float* d_out, float* d_index, unsigned index_stride,
                                 float pruning, unsigned n_frames, unsigned n_seqs, unsigned n_emissions,
                                 unsigned batch_idx) {
@@ -3249,9 +3402,10 @@ class FastBaumWelchOp(NativeOpGenBase):
         }
       }
     """,
-  })
+        }
+    )
 
-  c_fw_code = """
+    c_fw_code = """
     // am_scores, edges, weights, start_end_states, index, state_buffer* = input_names (*: inplace)
     // output = output_names
     assert(n_inputs  == 6);
@@ -3452,45 +3606,71 @@ class FastBaumWelchOp(NativeOpGenBase):
     batch_idx++;
   """
 
-  c_bw_code = None
+    c_bw_code = None
 
 
 class MultiEndFastBaumWelchOp(NativeOpGenBase):
-  # noinspection PyUnresolvedReferences
-  """
-  inputs:
-    :param am_scores: scores in -log space. 3d (time,batch,dim)
-    :param edges: edges of the graph (from,to,emission_idx,sequence_idx)
-    :param weights: weights of the edges
-  outputs:
-    :param output: Baum-Welch alignment, scores in -log space. 3d (time,batch,dim), like am_scores
-  """
-  in_info = (
-    {"name": "am_scores",         "ndim": 3, "shape": (None,   None,    None),
-     "need_contiguous": True, "gradient": "disconnected"},
-    {"name": "edges",             "ndim": 2, "shape": (None,   None),
-     "need_contiguous": True, "gradient": "disconnected", "dtype": "int32"},
-    {"name": "weights",           "ndim": 1, "shape": (None,),
-     "need_contiguous": True, "gradient": "disconnected"},
-    {"name": "start_states",      "ndim": 1, "shape": (None,),
-     "need_contiguous": True, "gradient": "disconnected", "dtype": "int32"},
-    {"name": "end_states",        "ndim": 2, "shape": (None, 2),
-     "need_contiguous": True, "gradient": "disconnected", "dtype": "int32"},
-    {"name": "end_state_weights", "ndim": 1, "shape": ((4, 0),),
-     "need_contiguous": True, "gradient": "disconnected"},
-    {"name": "index",             "ndim": 2, "shape": ((0, 0), (0, 1)),
-     "need_contiguous": True, "gradient": "disconnected"},
-    {"name": "state_buffer",      "ndim": 2, "shape": (2,      None),
-     "need_contiguous": True, "gradient": "disconnected"}
-  )
-  out_info = (
-    {"name": "output", "ndim": 3, "shape": ((0, 0), (0, 1), (0, 2)), "need_contiguous": True},
-    {"name": "sums",   "ndim": 2, "shape": ((0, 0), (0, 1)),         "need_contiguous": True},
-  )
+    # noinspection PyUnresolvedReferences
+    """
+    inputs:
+      :param am_scores: scores in -log space. 3d (time,batch,dim)
+      :param edges: edges of the graph (from,to,emission_idx,sequence_idx)
+      :param weights: weights of the edges
+    outputs:
+      :param output: Baum-Welch alignment, scores in -log space. 3d (time,batch,dim), like am_scores
+    """
+    in_info = (
+        {
+            "name": "am_scores",
+            "ndim": 3,
+            "shape": (None, None, None),
+            "need_contiguous": True,
+            "gradient": "disconnected",
+        },
+        {
+            "name": "edges",
+            "ndim": 2,
+            "shape": (None, None),
+            "need_contiguous": True,
+            "gradient": "disconnected",
+            "dtype": "int32",
+        },
+        {"name": "weights", "ndim": 1, "shape": (None,), "need_contiguous": True, "gradient": "disconnected"},
+        {
+            "name": "start_states",
+            "ndim": 1,
+            "shape": (None,),
+            "need_contiguous": True,
+            "gradient": "disconnected",
+            "dtype": "int32",
+        },
+        {
+            "name": "end_states",
+            "ndim": 2,
+            "shape": (None, 2),
+            "need_contiguous": True,
+            "gradient": "disconnected",
+            "dtype": "int32",
+        },
+        {
+            "name": "end_state_weights",
+            "ndim": 1,
+            "shape": ((4, 0),),
+            "need_contiguous": True,
+            "gradient": "disconnected",
+        },
+        {"name": "index", "ndim": 2, "shape": ((0, 0), (0, 1)), "need_contiguous": True, "gradient": "disconnected"},
+        {"name": "state_buffer", "ndim": 2, "shape": (2, None), "need_contiguous": True, "gradient": "disconnected"},
+    )
+    out_info = (
+        {"name": "output", "ndim": 3, "shape": ((0, 0), (0, 1), (0, 2)), "need_contiguous": True},
+        {"name": "sums", "ndim": 2, "shape": ((0, 0), (0, 1)), "need_contiguous": True},
+    )
 
-  c_extra_support_code = copy.copy(FastBaumWelchOp.c_extra_support_code)
-  c_extra_support_code.update({
-    "100_init_bwd_state_buffer": """
+    c_extra_support_code = copy.copy(FastBaumWelchOp.c_extra_support_code)
+    c_extra_support_code.update(
+        {
+            "100_init_bwd_state_buffer": """
       __global__
       void init_bwd_state_buffer(unsigned t, unsigned max_t, unsigned num_endstates, unsigned index_stride,
                                  float* states, unsigned const* end_states, float const* end_state_weights,
@@ -3508,9 +3688,11 @@ class MultiEndFastBaumWelchOp(NativeOpGenBase):
           states[state_idx] = weight;
         }
       }
-    """})
+    """
+        }
+    )
 
-  c_fw_code = """
+    c_fw_code = """
     // am_scores, edges, weights, start_states, end_states, end_state_weights,
     //   index, state_buffer* = input_names (*: inplace)
     // output = output_names
@@ -3716,44 +3898,55 @@ class MultiEndFastBaumWelchOp(NativeOpGenBase):
     batch_idx++;
   """
 
-  c_bw_code = None
+    c_bw_code = None
 
-  cpu_support = False  # TODO: fix CPU support...
+    cpu_support = False  # TODO: fix CPU support...
 
 
 class SegmentFastBaumWelchOp(NativeOpGenBase):
-  """
-  Segmental Baum-Welch...
-  """
-  in_info = (
-    {"name": "am_scores",        "ndim": 3, "shape": (None,   None,    None),
-     "need_contiguous": True, "gradient": "disconnected"},
-    {"name": "batch_idxs",       "ndim": 2, "shape": (None,   None),
-     "need_contiguous": True, "gradient": "disconnected"},
-    {"name": "edges",            "ndim": 2, "shape": (None,   None),
-     "need_contiguous": True, "gradient": "disconnected"},
-    {"name": "weights",          "ndim": 1, "shape": ((2, 1),),
-     "need_contiguous": True, "gradient": "disconnected"},
-    {"name": "length_models",    "ndim": 2, "shape": (None,   (0, 0)),
-     "need_contiguous": True, "gradient": "disconnected"},
-    {"name": "start_end_states", "ndim": 2, "shape": (2,      None),
-     "need_contiguous": True, "gradient": "disconnected"},
-    {"name": "index",            "ndim": 2, "shape": ((0, 0), (0, 1)),
-     "need_contiguous": True, "gradient": "disconnected"},
-    {"name": "am_score_scales",  "ndim": 1, "shape": (None,),
-     "need_contiguous": True, "gradient": "disconnected"},
-    {"name": "epoch",            "ndim": 0, "shape": (),
-     "need_contiguous": True, "gradient": "disconnected"},
-  )
-  out_info = (
-    {"name": "output",                "ndim": 3, "shape": ((0, 0), (0, 1), (0, 2)), "need_contiguous": True},
-    {"name": "normalization_factors", "ndim": 2, "shape": ((0, 0), (0, 1)),         "need_contiguous": True},
-    {"name": "posterior_weigths",     "ndim": 2, "shape": ((0, 0), (0, 1)),         "need_contiguous": True},
-  )
+    """
+    Segmental Baum-Welch...
+    """
 
-  c_extra_support_code = copy.copy(common_fast_bw_kernels)
-  c_extra_support_code.update({
-    "100_get_batch_idx": """
+    in_info = (
+        {
+            "name": "am_scores",
+            "ndim": 3,
+            "shape": (None, None, None),
+            "need_contiguous": True,
+            "gradient": "disconnected",
+        },
+        {"name": "batch_idxs", "ndim": 2, "shape": (None, None), "need_contiguous": True, "gradient": "disconnected"},
+        {"name": "edges", "ndim": 2, "shape": (None, None), "need_contiguous": True, "gradient": "disconnected"},
+        {"name": "weights", "ndim": 1, "shape": ((2, 1),), "need_contiguous": True, "gradient": "disconnected"},
+        {
+            "name": "length_models",
+            "ndim": 2,
+            "shape": (None, (0, 0)),
+            "need_contiguous": True,
+            "gradient": "disconnected",
+        },
+        {
+            "name": "start_end_states",
+            "ndim": 2,
+            "shape": (2, None),
+            "need_contiguous": True,
+            "gradient": "disconnected",
+        },
+        {"name": "index", "ndim": 2, "shape": ((0, 0), (0, 1)), "need_contiguous": True, "gradient": "disconnected"},
+        {"name": "am_score_scales", "ndim": 1, "shape": (None,), "need_contiguous": True, "gradient": "disconnected"},
+        {"name": "epoch", "ndim": 0, "shape": (), "need_contiguous": True, "gradient": "disconnected"},
+    )
+    out_info = (
+        {"name": "output", "ndim": 3, "shape": ((0, 0), (0, 1), (0, 2)), "need_contiguous": True},
+        {"name": "normalization_factors", "ndim": 2, "shape": ((0, 0), (0, 1)), "need_contiguous": True},
+        {"name": "posterior_weigths", "ndim": 2, "shape": ((0, 0), (0, 1)), "need_contiguous": True},
+    )
+
+    c_extra_support_code = copy.copy(common_fast_bw_kernels)
+    c_extra_support_code.update(
+        {
+            "100_get_batch_idx": """
       __device__
       int get_batch_idx(int const* batch_idxs, unsigned num_seqs, unsigned t, unsigned seq_idx) {
         if (NEW_BATCH_IDX_FORMAT) {
@@ -3768,7 +3961,7 @@ class SegmentFastBaumWelchOp(NativeOpGenBase):
         }
       }
     """,
-    "101_init_bwd_state_buffer": """
+            "101_init_bwd_state_buffer": """
       __global__
       void init_bwd_state_buffer(unsigned t, unsigned num_batches, unsigned num_seqs,
                                  int* batch_idxs, float* index, float* states, unsigned* end_states) {
@@ -3785,7 +3978,7 @@ class SegmentFastBaumWelchOp(NativeOpGenBase):
         }
       }
     """,
-    "102_next_frame_fwd": """
+            "102_next_frame_fwd": """
       __global__
       void next_frame_fwd(unsigned time, unsigned num_states, unsigned num_edges, unsigned num_emissions,
                           unsigned num_seg_frames,
@@ -3840,7 +4033,7 @@ class SegmentFastBaumWelchOp(NativeOpGenBase):
         }
       }
     """,
-    "103_next_frame_bwd": """
+            "103_next_frame_bwd": """
       __global__
       void next_frame_bwd(unsigned time, unsigned num_states, unsigned num_edges, unsigned num_emissions,
                           unsigned num_seg_frames,
@@ -3898,7 +4091,7 @@ class SegmentFastBaumWelchOp(NativeOpGenBase):
         atomic_prob_add(state_buffer + next_frame_idx * num_states + to, acc_val);
       }
     """,
-    "104_compute_framewise_sum": """
+            "104_compute_framewise_sum": """
       __global__
       void compute_framewise_sum(unsigned num_tot_frames, unsigned num_seqs, unsigned num_seg_frames,
                                  unsigned num_batches, unsigned num_edges,
@@ -3940,7 +4133,7 @@ class SegmentFastBaumWelchOp(NativeOpGenBase):
         }
       }
     """,
-    "105_merge_framewise_sums": """
+            "105_merge_framewise_sums": """
       __global__
       void merge_framewise_sum(unsigned num_seg_frames, unsigned num_batches, float const* index, float* sum_buffer) {
         const unsigned idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -3965,7 +4158,7 @@ class SegmentFastBaumWelchOp(NativeOpGenBase):
         }
       }
     """,
-    "106_compute_targets": """
+            "106_compute_targets": """
       __global__
       void compute_targets(unsigned num_tot_frames, unsigned num_seg_frames, unsigned num_edges, unsigned num_batches,
                            unsigned num_seqs, unsigned num_emissions,
@@ -4000,7 +4193,7 @@ class SegmentFastBaumWelchOp(NativeOpGenBase):
           edge_buffer[idx] - normalization);
       }
     """,
-    "107_compute_posterior_weights": """
+            "107_compute_posterior_weights": """
     __global__
     void compute_posterior_weights(unsigned num_tot_frames, unsigned num_seg_frames, unsigned num_seqs,
                                    unsigned num_batches,
@@ -4028,10 +4221,11 @@ class SegmentFastBaumWelchOp(NativeOpGenBase):
           posterior_weigths[i] = exp(-(normalization_factors[i] - seq_sum));
         }
     }
-    """
-  })
+    """,
+        }
+    )
 
-  c_fw_code = """
+    c_fw_code = """
     // inputs:  am_scores, batch_idxs, edges, weights, length_models, start_end_states, index, am_score_scales, epoch
     // outputs: output, normalization_factors, posterior_weigths
     assert(n_inputs  == 9);
@@ -4253,76 +4447,111 @@ class SegmentFastBaumWelchOp(NativeOpGenBase):
     device_free(d_edge_buffer);
   """
 
-  cpu_support = False  # TODO: fix CPU support...
+    cpu_support = False  # TODO: fix CPU support...
 
-  def __init__(self, segmentwise_normalization=False, dump_targets_interval=None, new_batch_idxs_format=False):
-    # the new_buffer_idx_format flag can be used to change the format of buffer_idxs parameter, if set to false
-    # the code expects a two-dimensional array that stores the batch index (within the given am_scores) for any
-    # timeframe and sequence index. if the flag is true we expect a list of offsets (as given by a cumulative sum
-    # of the sequence lengths).
-    def _to_cpp_bool(v):
-      return 'true' if v else 'false'
-    extra_lines = [
-      'const bool segmentwise_normalization = %s;' % _to_cpp_bool(segmentwise_normalization),
-      'const bool dump_targets = %s;' % _to_cpp_bool(dump_targets_interval is not None),
-      'const unsigned dump_targets_interval = %d;' % (
-        0 if dump_targets_interval is None else dump_targets_interval)]
+    def __init__(self, segmentwise_normalization=False, dump_targets_interval=None, new_batch_idxs_format=False):
+        # the new_buffer_idx_format flag can be used to change the format of buffer_idxs parameter, if set to false
+        # the code expects a two-dimensional array that stores the batch index (within the given am_scores) for any
+        # timeframe and sequence index. if the flag is true we expect a list of offsets (as given by a cumulative sum
+        # of the sequence lengths).
+        def _to_cpp_bool(v):
+            return "true" if v else "false"
 
-    self.c_extra_support_code = dict(**self.c_extra_support_code)
-    self.c_extra_support_code['000_batch_format'] = (
-      '#define NEW_BATCH_IDX_FORMAT %s\n' % _to_cpp_bool(new_batch_idxs_format))
-    if new_batch_idxs_format:
-      in_info = list(self.in_info)  # copy class member to instance
-      in_info[1] = {
-        "name": "batch_idxs", "ndim": 1, "shape": (None,),
-        "need_contiguous": True, "gradient": "disconnected"}
-      self.in_info = tuple(in_info)
+        extra_lines = [
+            "const bool segmentwise_normalization = %s;" % _to_cpp_bool(segmentwise_normalization),
+            "const bool dump_targets = %s;" % _to_cpp_bool(dump_targets_interval is not None),
+            "const unsigned dump_targets_interval = %d;"
+            % (0 if dump_targets_interval is None else dump_targets_interval),
+        ]
 
-    self.c_fw_code = '\n'.join(extra_lines) + '\n' + self.c_fw_code
+        self.c_extra_support_code = dict(**self.c_extra_support_code)
+        self.c_extra_support_code["000_batch_format"] = "#define NEW_BATCH_IDX_FORMAT %s\n" % _to_cpp_bool(
+            new_batch_idxs_format
+        )
+        if new_batch_idxs_format:
+            in_info = list(self.in_info)  # copy class member to instance
+            in_info[1] = {
+                "name": "batch_idxs",
+                "ndim": 1,
+                "shape": (None,),
+                "need_contiguous": True,
+                "gradient": "disconnected",
+            }
+            self.in_info = tuple(in_info)
+
+        self.c_fw_code = "\n".join(extra_lines) + "\n" + self.c_fw_code
 
 
 class FastViterbiOp(NativeOpGenBase):
-  # noinspection PyUnresolvedReferences
-  """
-  inputs:
-    :param am_scores: scores in +log space. 3d (time,batch,dim)
-    :param am_seq_len: (batch,)
-    :param edges: edges of the graph (from,to,emission_idx,sequence_idx), i.e. (4, n_edges)
-    :param weights: weights of the edges (n_edges,)
-    :param start_end_states: (2, batch)
-    :param n_states: scalar, int32
-  outputs:
-    :param output: Viterbi (hard) alignment, scores in +log space. 2d (time,batch)
-    :param scores: (batch,)
-  """
-  in_info = (
-    {"name": "am_scores", "ndim": 3, "shape": (None,   None,    None),
-     "need_contiguous": True, "gradient": "disconnected"},
-    {"name": "am_seq_len", "ndim": 1, "shape": ((0, 0),), "dtype": "int32",
-     "need_contiguous": True, "gradient": "disconnected"},
-    {"name": "edges", "ndim": 2, "shape": (4, None), "dtype": "int32",
-     "need_contiguous": True, "gradient": "disconnected"},
-    {"name": "weights", "ndim": 1, "shape": ((3, 1),),
-     "need_contiguous": True, "gradient": "disconnected"},
-    {"name": "start_end_states", "ndim": 2, "shape": (2, (0, 0)), "dtype": "int32",
-     "need_contiguous": True, "gradient": "disconnected"},
-    {"name": "n_states", "ndim": 0, "shape": (), "dtype": "int32",
-     "need_contiguous": True, "gradient": "disconnected", "host_memory": True}
-  )
-  out_info = (
-    {"name": "output", "ndim": 2, "shape": ((0, 0), (0, 1)), "dtype": "int32", "need_contiguous": True},
-    {"name": "scores", "ndim": 1, "shape": ((0, 1),), "need_contiguous": True},
-  )
+    # noinspection PyUnresolvedReferences
+    """
+    inputs:
+      :param am_scores: scores in +log space. 3d (time,batch,dim)
+      :param am_seq_len: (batch,)
+      :param edges: edges of the graph (from,to,emission_idx,sequence_idx), i.e. (4, n_edges)
+      :param weights: weights of the edges (n_edges,)
+      :param start_end_states: (2, batch)
+      :param n_states: scalar, int32
+    outputs:
+      :param output: Viterbi (hard) alignment, scores in +log space. 2d (time,batch)
+      :param scores: (batch,)
+    """
+    in_info = (
+        {
+            "name": "am_scores",
+            "ndim": 3,
+            "shape": (None, None, None),
+            "need_contiguous": True,
+            "gradient": "disconnected",
+        },
+        {
+            "name": "am_seq_len",
+            "ndim": 1,
+            "shape": ((0, 0),),
+            "dtype": "int32",
+            "need_contiguous": True,
+            "gradient": "disconnected",
+        },
+        {
+            "name": "edges",
+            "ndim": 2,
+            "shape": (4, None),
+            "dtype": "int32",
+            "need_contiguous": True,
+            "gradient": "disconnected",
+        },
+        {"name": "weights", "ndim": 1, "shape": ((3, 1),), "need_contiguous": True, "gradient": "disconnected"},
+        {
+            "name": "start_end_states",
+            "ndim": 2,
+            "shape": (2, (0, 0)),
+            "dtype": "int32",
+            "need_contiguous": True,
+            "gradient": "disconnected",
+        },
+        {
+            "name": "n_states",
+            "ndim": 0,
+            "shape": (),
+            "dtype": "int32",
+            "need_contiguous": True,
+            "gradient": "disconnected",
+            "host_memory": True,
+        },
+    )
+    out_info = (
+        {"name": "output", "ndim": 2, "shape": ((0, 0), (0, 1)), "dtype": "int32", "need_contiguous": True},
+        {"name": "scores", "ndim": 1, "shape": ((0, 1),), "need_contiguous": True},
+    )
 
-  c_extra_support_code = {
-    "01_IdxAndVal": """
+    c_extra_support_code = {
+        "01_IdxAndVal": """
       struct __attribute__((__packed__)) IdxAndVal {
         int idx;
         float val;
       };
     """,
-    "04_select_max":
-    """
+        "04_select_max": """
       DEV_FUNC
       void select_max(IdxAndVal* a, IdxAndVal b) {
         // fast path
@@ -4353,8 +4582,7 @@ class FastViterbiOp(NativeOpGenBase):
         }
       }
     """,
-    "05_init_buffer":
-    """
+        "05_init_buffer": """
       DEF_KERNEL
       void init_buffer
       (
@@ -4371,8 +4599,7 @@ class FastViterbiOp(NativeOpGenBase):
         }
       }
     """,
-    "06_init_first_frame":
-    """
+        "06_init_first_frame": """
       DEF_KERNEL
       void init_first_frame
       (
@@ -4390,7 +4617,7 @@ class FastViterbiOp(NativeOpGenBase):
         }
       }
     """,
-    "08_next_frame": """
+        "08_next_frame": """
       DEF_KERNEL
       void next_frame
       (
@@ -4433,8 +4660,7 @@ class FastViterbiOp(NativeOpGenBase):
         }
       }
     """,
-    "11_select_scores":
-    """
+        "11_select_scores": """
       DEF_KERNEL
       void select_scores
       (
@@ -4457,8 +4683,7 @@ class FastViterbiOp(NativeOpGenBase):
         }
       }
     """,
-    "13_select_best_path":
-    """
+        "13_select_best_path": """
       DEF_KERNEL
       void select_best_path
       (
@@ -4497,9 +4722,9 @@ class FastViterbiOp(NativeOpGenBase):
         }
       }
     """,
-  }
+    }
 
-  c_fw_code = """
+    c_fw_code = """
     using namespace std;
     // am_scores, am_seq_len, edges, weights, start_end_states, n_states = input_names
     // output, scores = output_names
@@ -4615,49 +4840,81 @@ class FastViterbiOp(NativeOpGenBase):
     device_free(d_buffer);
   """
 
-  c_bw_code = None
+    c_bw_code = None
 
 
 class GetCtcFsaFastBwOp(NativeOpGenBase):
-  # noinspection PyUnresolvedReferences
-  """
-  This implements :func:`Fsa.get_ctc_fsa_fast_bw` as a native op.
-  This is for constructing a FSA with a CTC topology.
-  The output format is compatible to the FastBaumWelch native op.
+    # noinspection PyUnresolvedReferences
+    """
+    This implements :func:`Fsa.get_ctc_fsa_fast_bw` as a native op.
+    This is for constructing a FSA with a CTC topology.
+    The output format is compatible to the FastBaumWelch native op.
 
-  inputs:
-    :param targets: shape (batch,time), int32
-    :param seq_lens: shape (batch), int32
-    :param blank_idx: scalar, int32
-    :param weights: shape (num_edges,), float32 (not used, except for target shape)
-    :param label_loop: scalar, int32 (casted from bool). True -> normal CTC; False -> RNA-like
-  outputs:
-    :param edges: (4,num_edges), int32, edges of the graph (from,to,emission_idx,sequence_idx)
-    :param start_end_states: (2,batch), int32, (start,end) state idx in FSA
+    inputs:
+      :param targets: shape (batch,time), int32
+      :param seq_lens: shape (batch), int32
+      :param blank_idx: scalar, int32
+      :param weights: shape (num_edges,), float32 (not used, except for target shape)
+      :param label_loop: scalar, int32 (casted from bool). True -> normal CTC; False -> RNA-like
+    outputs:
+      :param edges: (4,num_edges), int32, edges of the graph (from,to,emission_idx,sequence_idx)
+      :param start_end_states: (2,batch), int32, (start,end) state idx in FSA
 
-  To construct `weights` (for FastBaumWelch), `weights` should be just `tf.zeros((num_edges,))`.
-  `num_edges` should be `n_batch * (5 * (n_time - 1) + 10)`
-    (see construction in kernel why that number).
-  """
-  in_info = (
-    {"name": "targets", "ndim": 2, "shape": (None, None), "dtype": "int32",
-     "need_contiguous": True, "gradient": "disconnected"},
-    {"name": "seq_lens", "ndim": 1, "shape": (None,), "dtype": "int32",
-     "need_contiguous": True, "gradient": "disconnected"},
-    {"name": "blank_idx", "ndim": 0, "shape": (), "dtype": "int32",
-     "need_contiguous": True, "gradient": "disconnected", "host_memory": True},
-    {"name": "weights", "ndim": 1, "shape": (None,), "dtype": "float32",
-     "need_contiguous": True, "gradient": "disconnected"},
-    {"name": "label_loop", "ndim": 0, "shape": (), "dtype": "int32",
-     "need_contiguous": True, "gradient": "disconnected", "host_memory": True},
-  )
-  out_info = (
-    {"name": "edges", "ndim": 2, "shape": (4, (3, 0)), "dtype": "int32", "need_contiguous": True},
-    {"name": "start_end_states", "ndim": 2, "shape": (2, (1, 0)), "dtype": "int32", "need_contiguous": True},
-  )
+    To construct `weights` (for FastBaumWelch), `weights` should be just `tf.zeros((num_edges,))`.
+    `num_edges` should be `n_batch * (5 * (n_time - 1) + 10)`
+      (see construction in kernel why that number).
+    """
+    in_info = (
+        {
+            "name": "targets",
+            "ndim": 2,
+            "shape": (None, None),
+            "dtype": "int32",
+            "need_contiguous": True,
+            "gradient": "disconnected",
+        },
+        {
+            "name": "seq_lens",
+            "ndim": 1,
+            "shape": (None,),
+            "dtype": "int32",
+            "need_contiguous": True,
+            "gradient": "disconnected",
+        },
+        {
+            "name": "blank_idx",
+            "ndim": 0,
+            "shape": (),
+            "dtype": "int32",
+            "need_contiguous": True,
+            "gradient": "disconnected",
+            "host_memory": True,
+        },
+        {
+            "name": "weights",
+            "ndim": 1,
+            "shape": (None,),
+            "dtype": "float32",
+            "need_contiguous": True,
+            "gradient": "disconnected",
+        },
+        {
+            "name": "label_loop",
+            "ndim": 0,
+            "shape": (),
+            "dtype": "int32",
+            "need_contiguous": True,
+            "gradient": "disconnected",
+            "host_memory": True,
+        },
+    )
+    out_info = (
+        {"name": "edges", "ndim": 2, "shape": (4, (3, 0)), "dtype": "int32", "need_contiguous": True},
+        {"name": "start_end_states", "ndim": 2, "shape": (2, (1, 0)), "dtype": "int32", "need_contiguous": True},
+    )
 
-  c_extra_support_code = {
-    "01_kernel": """
+    c_extra_support_code = {
+        "01_kernel": """
       template<bool label_loop>
       DEF_KERNEL
       void construct_kernel
@@ -4891,9 +5148,9 @@ class GetCtcFsaFastBwOp(NativeOpGenBase):
         }
       }
     """
-  }
+    }
 
-  c_fw_code = """
+    c_fw_code = """
     assert(n_inputs == 5);
     assert(n_outputs == 2);
     Ndarray* targets = inputs[0];
@@ -4945,48 +5202,70 @@ class GetCtcFsaFastBwOp(NativeOpGenBase):
 
 
 class EditDistanceOp(NativeOpGenBase):
-  # noinspection PyUnresolvedReferences
-  """
-  Similar to :func:`tf.edit_distance`.
-  Calculates the `edit distance / Levenshtein distance <https://en.wikipedia.org/wiki/Levenshtein_distance>`__.
+    # noinspection PyUnresolvedReferences
+    """
+    Similar to :func:`tf.edit_distance`.
+    Calculates the `edit distance / Levenshtein distance <https://en.wikipedia.org/wiki/Levenshtein_distance>`__.
 
-  The naive implementation either goes over ``a`` and then ``b``, thus results in O(|a|*|b|) time complexity.
-  To calculate a new entry in the table (over then length of ``a`` and ``b``),
-  it depends on the prev symbol in ``a`` (left) (deletion error),
-  the prev symbol in ``b`` (up) (insertion error),
-  and the left-up diagonal (substitution error, or no error).
+    The naive implementation either goes over ``a`` and then ``b``, thus results in O(|a|*|b|) time complexity.
+    To calculate a new entry in the table (over then length of ``a`` and ``b``),
+    it depends on the prev symbol in ``a`` (left) (deletion error),
+    the prev symbol in ``b`` (up) (insertion error),
+    and the left-up diagonal (substitution error, or no error).
 
-  To take advantage of the parallelism of the GPU, we follow a diagonal iteration scheme, such that
-  in every iteration, all entries on the diagonal can be computed in parallel, as they do not depend on each other.
-  After implementing this, we found that this algorithm is described here::
+    To take advantage of the parallelism of the GPU, we follow a diagonal iteration scheme, such that
+    in every iteration, all entries on the diagonal can be computed in parallel, as they do not depend on each other.
+    After implementing this, we found that this algorithm is described here::
 
-    Using GPUs to Speed-Up Levenshtein Edit Distance Computation, Balhaf et al, 2016,
-    https://ieeexplore.ieee.org/stamp/stamp.jsp?tp=&arnumber=7476090&tag=1
+      Using GPUs to Speed-Up Levenshtein Edit Distance Computation, Balhaf et al, 2016,
+      https://ieeexplore.ieee.org/stamp/stamp.jsp?tp=&arnumber=7476090&tag=1
 
-  inputs:
-    :param a: symbols. 2d (batch,time), int32
-    :param a_len: 1d (batch,), int32
-    :param b: symbols. 2d (batch,time), int32
-    :param b_len: 1d (batch,), int32
-  outputs:
-    :param output: 1d (batch,), int32, unnormalized edit distance
-  """
-  in_info = (
-    {"name": "a", "ndim": 2, "shape": (None, None), "dtype": "int32",
-     "need_contiguous": True, "gradient": "disconnected"},
-    {"name": "a_len", "ndim": 1, "shape": (None,), "dtype": "int32",
-     "need_contiguous": True, "gradient": "disconnected"},
-    {"name": "b", "ndim": 2, "shape": (None, None), "dtype": "int32",
-     "need_contiguous": True, "gradient": "disconnected"},
-    {"name": "b_len", "ndim": 1, "shape": (None,), "dtype": "int32",
-     "need_contiguous": True, "gradient": "disconnected"},
-  )
-  out_info = (
-    {"name": "output", "ndim": 1, "shape": ((0, 0),), "dtype": "int32", "need_contiguous": True},
-  )
+    inputs:
+      :param a: symbols. 2d (batch,time), int32
+      :param a_len: 1d (batch,), int32
+      :param b: symbols. 2d (batch,time), int32
+      :param b_len: 1d (batch,), int32
+    outputs:
+      :param output: 1d (batch,), int32, unnormalized edit distance
+    """
+    in_info = (
+        {
+            "name": "a",
+            "ndim": 2,
+            "shape": (None, None),
+            "dtype": "int32",
+            "need_contiguous": True,
+            "gradient": "disconnected",
+        },
+        {
+            "name": "a_len",
+            "ndim": 1,
+            "shape": (None,),
+            "dtype": "int32",
+            "need_contiguous": True,
+            "gradient": "disconnected",
+        },
+        {
+            "name": "b",
+            "ndim": 2,
+            "shape": (None, None),
+            "dtype": "int32",
+            "need_contiguous": True,
+            "gradient": "disconnected",
+        },
+        {
+            "name": "b_len",
+            "ndim": 1,
+            "shape": (None,),
+            "dtype": "int32",
+            "need_contiguous": True,
+            "gradient": "disconnected",
+        },
+    )
+    out_info = ({"name": "output", "ndim": 1, "shape": ((0, 0),), "dtype": "int32", "need_contiguous": True},)
 
-  c_extra_support_code = {
-    "001_next_step": """
+    c_extra_support_code = {
+        "001_next_step": """
       DEF_KERNEL
       void next_step_kernel(
             int n_batch, int n_a_max_len, int n_b_max_len,
@@ -5065,9 +5344,9 @@ class EditDistanceOp(NativeOpGenBase):
         }
       }
     """
-  }
+    }
 
-  c_fw_code = """
+    c_fw_code = """
     assert(n_inputs == 4);
     assert(n_outputs == 1);
     Ndarray* a = inputs[0];
@@ -5116,40 +5395,62 @@ class EditDistanceOp(NativeOpGenBase):
     device_free(buffer);
   """
 
-  c_bw_code = None
+    c_bw_code = None
 
 
 class OptimalCompletionEditDistanceOp(NativeOpGenBase):
-  # noinspection PyUnresolvedReferences
-  """
-  Given some prefix ``a``, what is the minimum possible edit distance to ``b`` with any possible suffix on ``a`` ?
-  This is described in `Optimal Completion Distillation (OCD) <https://arxiv.org/abs/1810.01398>`__.
-  The implementation is derived from :class:`EditDistanceOp`.
+    # noinspection PyUnresolvedReferences
+    """
+    Given some prefix ``a``, what is the minimum possible edit distance to ``b`` with any possible suffix on ``a`` ?
+    This is described in `Optimal Completion Distillation (OCD) <https://arxiv.org/abs/1810.01398>`__.
+    The implementation is derived from :class:`EditDistanceOp`.
 
-  inputs:
-    :param a: symbols. 2d (batch,time), int32. prefix.
-    :param a_len: 1d (batch,), int32
-    :param b: symbols. 2d (batch,time), int32
-    :param b_len: 1d (batch,), int32
-  outputs:
-    :param output: 1d (batch,), int32, unnormalized edit distance
-  """
-  in_info = (
-    {"name": "a", "ndim": 2, "shape": (None, None), "dtype": "int32",
-     "need_contiguous": True, "gradient": "disconnected"},
-    {"name": "a_len", "ndim": 1, "shape": (None,), "dtype": "int32",
-     "need_contiguous": True, "gradient": "disconnected"},
-    {"name": "b", "ndim": 2, "shape": (None, None), "dtype": "int32",
-     "need_contiguous": True, "gradient": "disconnected"},
-    {"name": "b_len", "ndim": 1, "shape": (None,), "dtype": "int32",
-     "need_contiguous": True, "gradient": "disconnected"},
-  )
-  out_info = (
-    {"name": "output", "ndim": 1, "shape": ((0, 0),), "dtype": "int32", "need_contiguous": True},
-  )
+    inputs:
+      :param a: symbols. 2d (batch,time), int32. prefix.
+      :param a_len: 1d (batch,), int32
+      :param b: symbols. 2d (batch,time), int32
+      :param b_len: 1d (batch,), int32
+    outputs:
+      :param output: 1d (batch,), int32, unnormalized edit distance
+    """
+    in_info = (
+        {
+            "name": "a",
+            "ndim": 2,
+            "shape": (None, None),
+            "dtype": "int32",
+            "need_contiguous": True,
+            "gradient": "disconnected",
+        },
+        {
+            "name": "a_len",
+            "ndim": 1,
+            "shape": (None,),
+            "dtype": "int32",
+            "need_contiguous": True,
+            "gradient": "disconnected",
+        },
+        {
+            "name": "b",
+            "ndim": 2,
+            "shape": (None, None),
+            "dtype": "int32",
+            "need_contiguous": True,
+            "gradient": "disconnected",
+        },
+        {
+            "name": "b_len",
+            "ndim": 1,
+            "shape": (None,),
+            "dtype": "int32",
+            "need_contiguous": True,
+            "gradient": "disconnected",
+        },
+    )
+    out_info = ({"name": "output", "ndim": 1, "shape": ((0, 0),), "dtype": "int32", "need_contiguous": True},)
 
-  c_extra_support_code = {
-    "001_init_result": """
+    c_extra_support_code = {
+        "001_init_result": """
       DEF_KERNEL
       void init_result_kernel(int n_batch, int32_t* result) {
         int idx = threadIdx.x + blockDim.x * blockIdx.x;
@@ -5159,7 +5460,7 @@ class OptimalCompletionEditDistanceOp(NativeOpGenBase):
         }
       }
     """,
-    "002_next_step": """
+        "002_next_step": """
       DEF_KERNEL
       void next_step_kernel(
             int n_batch, int n_a_max_len, int n_b_max_len,
@@ -5235,10 +5536,10 @@ class OptimalCompletionEditDistanceOp(NativeOpGenBase):
           idx += gridDim.x * blockDim.x;
         }
       }
-    """
-  }
+    """,
+    }
 
-  c_fw_code = """
+    c_fw_code = """
     assert(n_inputs == 4);
     assert(n_outputs == 1);
     Ndarray* a = inputs[0];
@@ -5287,45 +5588,73 @@ class OptimalCompletionEditDistanceOp(NativeOpGenBase):
     device_free(buffer);
   """
 
-  c_bw_code = None
+    c_bw_code = None
 
 
 class OptimalCompletionEditDistancePerSuccessorOp(NativeOpGenBase):
-  # noinspection PyUnresolvedReferences
-  """
-  Given some prefix ``a`` + successor,
-  what is the minimum possible edit distance to ``b`` with any possible suffix on ``a`` + successor,
-  for successor in ``successors``.
-  This is described in `Optimal Completion Distillation (OCD) <https://arxiv.org/abs/1810.01398>`__.
-  The implementation is derived from :class:`OptimalCompletionEditDistanceOp`.
+    # noinspection PyUnresolvedReferences
+    """
+    Given some prefix ``a`` + successor,
+    what is the minimum possible edit distance to ``b`` with any possible suffix on ``a`` + successor,
+    for successor in ``successors``.
+    This is described in `Optimal Completion Distillation (OCD) <https://arxiv.org/abs/1810.01398>`__.
+    The implementation is derived from :class:`OptimalCompletionEditDistanceOp`.
 
-  inputs:
-    :param a: symbols. 2d (batch,time), int32. prefix.
-    :param a_len: 1d (batch,), int32
-    :param b: symbols. 2d (batch,time), int32
-    :param b_len: 1d (batch,), int32
-    :param successors: 1d (num_labels,), int32
-  outputs:
-    :param output: 2d (batch,num_labels), int32, unnormalized edit distance
-  """
-  in_info = (
-    {"name": "a", "ndim": 2, "shape": (None, None), "dtype": "int32",
-     "need_contiguous": True, "gradient": "disconnected"},
-    {"name": "a_len", "ndim": 1, "shape": (None,), "dtype": "int32",
-     "need_contiguous": True, "gradient": "disconnected"},
-    {"name": "b", "ndim": 2, "shape": (None, None), "dtype": "int32",
-     "need_contiguous": True, "gradient": "disconnected"},
-    {"name": "b_len", "ndim": 1, "shape": (None,), "dtype": "int32",
-     "need_contiguous": True, "gradient": "disconnected"},
-    {"name": "successors", "ndim": 1, "shape": (None,), "dtype": "int32",
-     "need_contiguous": True, "gradient": "disconnected"},
-  )
-  out_info = (
-    {"name": "output", "ndim": 2, "shape": ((0, 0), (4, 0)), "dtype": "int32", "need_contiguous": True},
-  )
+    inputs:
+      :param a: symbols. 2d (batch,time), int32. prefix.
+      :param a_len: 1d (batch,), int32
+      :param b: symbols. 2d (batch,time), int32
+      :param b_len: 1d (batch,), int32
+      :param successors: 1d (num_labels,), int32
+    outputs:
+      :param output: 2d (batch,num_labels), int32, unnormalized edit distance
+    """
+    in_info = (
+        {
+            "name": "a",
+            "ndim": 2,
+            "shape": (None, None),
+            "dtype": "int32",
+            "need_contiguous": True,
+            "gradient": "disconnected",
+        },
+        {
+            "name": "a_len",
+            "ndim": 1,
+            "shape": (None,),
+            "dtype": "int32",
+            "need_contiguous": True,
+            "gradient": "disconnected",
+        },
+        {
+            "name": "b",
+            "ndim": 2,
+            "shape": (None, None),
+            "dtype": "int32",
+            "need_contiguous": True,
+            "gradient": "disconnected",
+        },
+        {
+            "name": "b_len",
+            "ndim": 1,
+            "shape": (None,),
+            "dtype": "int32",
+            "need_contiguous": True,
+            "gradient": "disconnected",
+        },
+        {
+            "name": "successors",
+            "ndim": 1,
+            "shape": (None,),
+            "dtype": "int32",
+            "need_contiguous": True,
+            "gradient": "disconnected",
+        },
+    )
+    out_info = ({"name": "output", "ndim": 2, "shape": ((0, 0), (4, 0)), "dtype": "int32", "need_contiguous": True},)
 
-  c_extra_support_code = {
-    "001_next_step": """
+    c_extra_support_code = {
+        "001_next_step": """
       DEF_KERNEL
       void next_step_kernel(
             int n_batch, int n_a_max_len, int n_b_max_len,
@@ -5401,7 +5730,7 @@ class OptimalCompletionEditDistancePerSuccessorOp(NativeOpGenBase):
         }
       }
     """,
-    "002_init_result": """
+        "002_init_result": """
       DEF_KERNEL
       void init_result_kernel(
             int n_batch, int n_b_max_len, int n_labels,
@@ -5425,7 +5754,7 @@ class OptimalCompletionEditDistancePerSuccessorOp(NativeOpGenBase):
         }
       }
     """,
-    "003_expand": """
+        "003_expand": """
       DEF_KERNEL
       void expand_kernel(
             int n_batch, int n_b_max_len, int n_labels,
@@ -5454,10 +5783,10 @@ class OptimalCompletionEditDistancePerSuccessorOp(NativeOpGenBase):
           idx += gridDim.x * blockDim.x;
         }
       }
-    """
-  }
+    """,
+    }
 
-  c_fw_code = """
+    c_fw_code = """
     assert(n_inputs == 5);
     assert(n_outputs == 1);
     Ndarray* a = inputs[0];
@@ -5530,46 +5859,80 @@ class OptimalCompletionEditDistancePerSuccessorOp(NativeOpGenBase):
     device_free(a_last_row);
   """
 
-  c_bw_code = None
+    c_bw_code = None
 
 
 class NextEditDistanceRowOp(NativeOpGenBase):
-  # noinspection PyUnresolvedReferences
-  """
-  This does a single step in calculating the edit distance table, going over the symbols in ``a``.
-  Note that when you have the full sequence ``a`` in advance, :class:`EditDistanceOp` should be faster.
-  However, this iterative op is useful when ``a`` is constructed step by step.
+    # noinspection PyUnresolvedReferences
+    """
+    This does a single step in calculating the edit distance table, going over the symbols in ``a``.
+    Note that when you have the full sequence ``a`` in advance, :class:`EditDistanceOp` should be faster.
+    However, this iterative op is useful when ``a`` is constructed step by step.
 
-  inputs:
-    :param last_row: 2d (batch,b_time + 1), int32. last edit distances
-    :param a: symbols. 1d (batch,), int32. current.
-    :param a_n: (batch,), int32. current position
-    :param a_ended: 1d (batch,), int32 (casted from bool, because int32 easier to handle)
-    :param b: symbols. 2d (batch,b_time), int32
-    :param b_len: 1d (batch,), int32
-  outputs:
-    :param output: 2d (batch,b_time + 1), int32, next (unnormalized) edit distance row
-  """
-  in_info = (
-    {"name": "last_row", "ndim": 2, "shape": (None, None), "dtype": "int32",
-     "need_contiguous": True, "gradient": "disconnected"},
-    {"name": "a", "ndim": 1, "shape": (None,), "dtype": "int32",
-     "need_contiguous": True, "gradient": "disconnected"},
-    {"name": "a_n", "ndim": 1, "shape": (None,), "dtype": "int32",
-     "need_contiguous": True, "gradient": "disconnected"},
-    {"name": "a_ended", "ndim": 1, "shape": (None,), "dtype": "int32",
-     "need_contiguous": True, "gradient": "disconnected"},
-    {"name": "b", "ndim": 2, "shape": (None, None), "dtype": "int32",
-     "need_contiguous": True, "gradient": "disconnected"},
-    {"name": "b_len", "ndim": 1, "shape": (None,), "dtype": "int32",
-     "need_contiguous": True, "gradient": "disconnected"},
-  )
-  out_info = (
-    {"name": "output", "ndim": 2, "shape": ((0, 0), (0, 1)), "dtype": "int32", "need_contiguous": True},
-  )
+    inputs:
+      :param last_row: 2d (batch,b_time + 1), int32. last edit distances
+      :param a: symbols. 1d (batch,), int32. current.
+      :param a_n: (batch,), int32. current position
+      :param a_ended: 1d (batch,), int32 (casted from bool, because int32 easier to handle)
+      :param b: symbols. 2d (batch,b_time), int32
+      :param b_len: 1d (batch,), int32
+    outputs:
+      :param output: 2d (batch,b_time + 1), int32, next (unnormalized) edit distance row
+    """
+    in_info = (
+        {
+            "name": "last_row",
+            "ndim": 2,
+            "shape": (None, None),
+            "dtype": "int32",
+            "need_contiguous": True,
+            "gradient": "disconnected",
+        },
+        {
+            "name": "a",
+            "ndim": 1,
+            "shape": (None,),
+            "dtype": "int32",
+            "need_contiguous": True,
+            "gradient": "disconnected",
+        },
+        {
+            "name": "a_n",
+            "ndim": 1,
+            "shape": (None,),
+            "dtype": "int32",
+            "need_contiguous": True,
+            "gradient": "disconnected",
+        },
+        {
+            "name": "a_ended",
+            "ndim": 1,
+            "shape": (None,),
+            "dtype": "int32",
+            "need_contiguous": True,
+            "gradient": "disconnected",
+        },
+        {
+            "name": "b",
+            "ndim": 2,
+            "shape": (None, None),
+            "dtype": "int32",
+            "need_contiguous": True,
+            "gradient": "disconnected",
+        },
+        {
+            "name": "b_len",
+            "ndim": 1,
+            "shape": (None,),
+            "dtype": "int32",
+            "need_contiguous": True,
+            "gradient": "disconnected",
+        },
+    )
+    out_info = ({"name": "output", "ndim": 2, "shape": ((0, 0), (0, 1)), "dtype": "int32", "need_contiguous": True},)
 
-  c_extra_support_code = {
-    "001_next_row": """
+    c_extra_support_code = {
+        "001_next_row": """
       DEF_KERNEL
       void next_row_kernel(
             int n_batch, int n_b_max_len,
@@ -5613,9 +5976,9 @@ class NextEditDistanceRowOp(NativeOpGenBase):
         }
       }
     """
-  }
+    }
 
-  c_fw_code = """
+    c_fw_code = """
     assert(n_inputs == 6);
     assert(n_outputs == 1);
     Ndarray* last_row = inputs[0];
@@ -5655,50 +6018,96 @@ class NextEditDistanceRowOp(NativeOpGenBase):
     HANDLE_LAST_ERROR();
   """
 
-  c_bw_code = None
+    c_bw_code = None
 
 
 class NextEditDistanceReduceOp(NativeOpGenBase):
-  # noinspection PyUnresolvedReferences
-  """
-  Code derived from :class:`NextEditDistanceRowOp`.
+    # noinspection PyUnresolvedReferences
+    """
+    Code derived from :class:`NextEditDistanceRowOp`.
 
-  inputs:
-    :param last_row: 2d (batch,b_time + 1), int32. last edit distances
-    :param a: symbols. 2d (batch|1,n_labels), int32. current.
-    :param a_n: 1d (batch,), int32. current position
-    :param a_ended: 1d (batch,), int32 (casted from bool, because int32 easier to handle)
-    :param b: symbols. 2d (batch,b_time), int32
-    :param b_len: 1d (batch,), int32
-    :param optimal_completion: scalar, int32 (casted from bool). True -> reduce_min over row; False -> last of row
-    :param a_blank_idx: scalar, int32. use -1 to not use
-  outputs:
-    :param output: 2d (batch,n_labels), int32, next (unnormalized) (maybe optional) edit distance
-  """
-  in_info = (
-    {"name": "last_row", "ndim": 2, "shape": (None, None), "dtype": "int32",
-     "need_contiguous": True, "gradient": "disconnected"},
-    {"name": "a", "ndim": 2, "shape": (None, None), "dtype": "int32",
-     "need_contiguous": True, "gradient": "disconnected"},
-    {"name": "a_n", "ndim": 1, "shape": (None,), "dtype": "int32",
-     "need_contiguous": True, "gradient": "disconnected"},
-    {"name": "a_ended", "ndim": 1, "shape": (None,), "dtype": "int32",
-     "need_contiguous": True, "gradient": "disconnected"},
-    {"name": "b", "ndim": 2, "shape": (None, None), "dtype": "int32",
-     "need_contiguous": True, "gradient": "disconnected"},
-    {"name": "b_len", "ndim": 1, "shape": (None,), "dtype": "int32",
-     "need_contiguous": True, "gradient": "disconnected"},
-    {"name": "optimal_completion", "ndim": 0, "shape": (), "dtype": "int32",
-     "gradient": "disconnected", "host_memory": True},
-    {"name": "a_blank_idx", "ndim": 0, "shape": (), "dtype": "int32",
-     "gradient": "disconnected", "host_memory": True},
-  )
-  out_info = (
-    {"name": "output", "ndim": 2, "shape": ((0, 0), (1, 1)), "dtype": "int32", "need_contiguous": True},
-  )
+    inputs:
+      :param last_row: 2d (batch,b_time + 1), int32. last edit distances
+      :param a: symbols. 2d (batch|1,n_labels), int32. current.
+      :param a_n: 1d (batch,), int32. current position
+      :param a_ended: 1d (batch,), int32 (casted from bool, because int32 easier to handle)
+      :param b: symbols. 2d (batch,b_time), int32
+      :param b_len: 1d (batch,), int32
+      :param optimal_completion: scalar, int32 (casted from bool). True -> reduce_min over row; False -> last of row
+      :param a_blank_idx: scalar, int32. use -1 to not use
+    outputs:
+      :param output: 2d (batch,n_labels), int32, next (unnormalized) (maybe optional) edit distance
+    """
+    in_info = (
+        {
+            "name": "last_row",
+            "ndim": 2,
+            "shape": (None, None),
+            "dtype": "int32",
+            "need_contiguous": True,
+            "gradient": "disconnected",
+        },
+        {
+            "name": "a",
+            "ndim": 2,
+            "shape": (None, None),
+            "dtype": "int32",
+            "need_contiguous": True,
+            "gradient": "disconnected",
+        },
+        {
+            "name": "a_n",
+            "ndim": 1,
+            "shape": (None,),
+            "dtype": "int32",
+            "need_contiguous": True,
+            "gradient": "disconnected",
+        },
+        {
+            "name": "a_ended",
+            "ndim": 1,
+            "shape": (None,),
+            "dtype": "int32",
+            "need_contiguous": True,
+            "gradient": "disconnected",
+        },
+        {
+            "name": "b",
+            "ndim": 2,
+            "shape": (None, None),
+            "dtype": "int32",
+            "need_contiguous": True,
+            "gradient": "disconnected",
+        },
+        {
+            "name": "b_len",
+            "ndim": 1,
+            "shape": (None,),
+            "dtype": "int32",
+            "need_contiguous": True,
+            "gradient": "disconnected",
+        },
+        {
+            "name": "optimal_completion",
+            "ndim": 0,
+            "shape": (),
+            "dtype": "int32",
+            "gradient": "disconnected",
+            "host_memory": True,
+        },
+        {
+            "name": "a_blank_idx",
+            "ndim": 0,
+            "shape": (),
+            "dtype": "int32",
+            "gradient": "disconnected",
+            "host_memory": True,
+        },
+    )
+    out_info = ({"name": "output", "ndim": 2, "shape": ((0, 0), (1, 1)), "dtype": "int32", "need_contiguous": True},)
 
-  c_extra_support_code = {
-    "001_calc_result": """
+    c_extra_support_code = {
+        "001_calc_result": """
       DEF_KERNEL
       void calc_result_kernel(
             int n_batch, int n_b_max_len, int n_labels,
@@ -5749,9 +6158,9 @@ class NextEditDistanceReduceOp(NativeOpGenBase):
         }
       }
     """
-  }
+    }
 
-  c_fw_code = """
+    c_fw_code = """
     assert(n_inputs == 8);
     assert(n_outputs == 1);
     Ndarray* last_row = inputs[0];
@@ -5799,12 +6208,12 @@ class NextEditDistanceReduceOp(NativeOpGenBase):
     HANDLE_LAST_ERROR();
   """
 
-  c_bw_code = None
+    c_bw_code = None
 
 
 def sparse_splice_offset_numpy(s0, idx):
-  """
-  Like sparse_slice_offset().
-  """
-  mask = s0 < idx
-  return numpy.sum(mask)
+    """
+    Like sparse_slice_offset().
+    """
+    mask = s0 < idx
+    return numpy.sum(mask)
