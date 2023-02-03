@@ -95,17 +95,9 @@ jobs:
           - TEST=TaskSystem_SharedMem
           - TEST=TranslationDataset
           - TEST=Util
-        include:
-          - action: TEST=SprintDataset
-            python-version: 2.7
 
     steps:
     - uses: actions/checkout@v3
-
-    - uses: actions/setup-python@v4
-      with:
-        python-version: 2.7
-      if: matrix.python-version != 2.7
 
     - uses: actions/setup-python@v4
       with:
@@ -126,26 +118,14 @@ jobs:
         echo "PATH=$PATH:~/.local/bin" >> $GITHUB_ENV
         echo "Python ${{matrix.python-version}}"
         echo "pip: $(type pip)"
-        echo "pip2: $(type pip2)"
-
-        pip2 install -qq --upgrade pip setuptools wheel six | cat  # Python2<->Python3
-        pip2 install --user -r requirements.txt | cat  # need for Python2<->Python3 communication tests
-        pip2 install --user typing | cat
 
         pip install --user --upgrade pip setuptools wheel
         pip install --user typing | cat  # needed for Python 2 in some cases
 
-        if [[ "${{matrix.python-version}}" == 2.* ]]; then
-          # pytest does not support Python <3.7, so we use nose instead.
-          pip install --user nose
-        fi
+        pip install --user pytest
 
-        if [[ "${{matrix.python-version}}" == 3.* ]]; then
-          pip install --user pytest
-
-          # Install nose anyway because we currently use some of its helper functions.
-          pip install --user nose
-        fi
+        # Install nose anyway because we currently use some of its helper functions.
+        pip install --user nose
 
         pip install --user -r requirements.txt | cat
 
@@ -154,22 +134,13 @@ jobs:
         echo "Python env: $(type python) $(python --version)"
         python -c "import numpy; print('NumPy:', numpy.version.full_version)"
 
-        if [[ "${{matrix.python-version}}" == 2.* ]]; then
-          echo "Nosetests env:"
-          python -m nose -V
-        else
-          echo "Pytest env:"
-          python -m pytest -V
-        fi
+        echo "Pytest env:"
+        python -m pytest -V
 
     - name: Run test
       run: |
         export ${{ matrix.action }}
-        if [[ "${{matrix.python-version}}" == 2.* ]]; then
-          python -m nose tests/test_$TEST.py
-        else
-          python -m pytest tests/test_$TEST.py
-        fi
+        python -m pytest tests/test_$TEST.py
 
   tf-tests:
     # As long as we want to test Python 2.7 here in the test, we can only use up to Ubuntu 20.
@@ -196,14 +167,8 @@ jobs:
           - TEST=tools
         include:
           - action: TEST=TFUtil
-            python-version: 2.7
-            tf-version: 1.14.0
-          - action: TEST=TFUtil
             python-version: 3.7
             tf-version: 1.15.3
-          - action: TEST=TFEngine
-            python-version: 2.7
-            tf-version: 1.15.0
           - action: TEST=TFEngine
             python-version: 3.7
             tf-version: 1.15.3
@@ -211,19 +176,13 @@ jobs:
             python-version: 3.7
             tf-version: 2.3.0
           - action: TEST=TFNativeOp
-            python-version: 2.7
-            tf-version: 1.4.0
-          - action: TEST=TFNativeOp
-            python-version: 3.6
-            tf-version: 1.8.0
-          - action: TEST=TFNativeOp
             python-version: 3.7
             tf-version: 1.14.0
           - action: TEST=TFNetworkSigProcLayer
             python-version: 3.7
             tf-version: 1.15.3
           - action: TEST=demos
-            python-version: 3.6
+            python-version: 3.7
             tf-version: 2.3.0
 
     steps:
@@ -248,47 +207,24 @@ jobs:
         echo "PATH=$PATH:~/.local/bin" >> $GITHUB_ENV
         echo "Python ${{matrix.python-version}}"
         echo "pip: $(type pip)"
-        echo "pip2: $(type pip2)"
-
-        pip2 install -qq --upgrade pip setuptools wheel six | cat  # Python2<->Python3
-        pip2 install --user -r requirements.txt | cat  # need for Python2<->Python3 communication tests
-        pip2 install --user typing | cat
 
         pip install --user --upgrade pip setuptools wheel
         pip install --user typing | cat  # needed for Python 2 in some cases
 
-        if [[ "${{matrix.python-version}}" == 2.* ]]; then
-          echo "Cleaning ub potential messed up tensorboard for Python 2.7."
-          echo "Current site-packages:"
-          ls ~/.local/lib/python2.7/site-packages
-          # https://github.com/tensorflow/tensorboard/issues/1862#issuecomment-521876133
-          rm -rf ~/.local/lib/python2.7/site-packages/tensorboard* || true
+        pip install --user pytest
 
-          # Newer protobuf (3.18.0) seems be broken for Python 2
-          # and TF just adds protobuf>=3.3 as dependency.
-          pip install --user protobuf==3.12
+        # Install nose anyway because we currently use some of its helper functions.
+        pip install --user nose
 
-          # pytest does not support Python <3.7, so we use nose instead.
-          pip install --user nose
+        if [[ "${{matrix.tf-version}}" == 2.[0123].* || "${{matrix.tf-version}}" == 1.* ]]; then
+          # Older TF needs older NumPy version.
+          # https://github.com/rwth-i6/returnn/pull/1160#issuecomment-1284537803
+          pip install --user numpy==1.19.5
+          # Older TF needs also older protobuf version.
+          # https://github.com/rwth-i6/returnn/issues/1209
+          pip install --user "protobuf<=3.20.1"
         fi
 
-        if [[ "${{matrix.python-version}}" == 3.* ]]; then
-          pip install --user pytest
-
-          # Install nose anyway because we currently use some of its helper functions.
-          pip install --user nose
-        fi
-
-        if [[ "${{matrix.python-version}}" == 3.* ]]; then
-          if [[ "${{matrix.tf-version}}" == 2.[0123].* || "${{matrix.tf-version}}" == 1.* ]]; then
-            # Older TF needs older NumPy version.
-            # https://github.com/rwth-i6/returnn/pull/1160#issuecomment-1284537803
-            pip install --user numpy==1.19.5
-            # Older TF needs also older protobuf version.
-            # https://github.com/rwth-i6/returnn/issues/1209
-            pip install --user "protobuf<=3.20.1"
-          fi
-        fi
         pip install --user -r requirements.txt | cat
         pip install --user scipy | cat  # for some tests
         pip install --user --upgrade tensorflow==${{ matrix.tf-version }} | cat
@@ -300,19 +236,10 @@ jobs:
         python -c "import tensorflow as tf; print('TensorFlow:', tf.__git_version__, tf.__version__, tf.__file__)"
         python -c "import tensorflow as tf; assert tf.__version__ == '${{ matrix.tf-version }}'"
 
-        if [[ "${{matrix.python-version}}" == 2.* ]]; then
-          echo "Nosetests env:"
-          python -m nose -V
-        else
-          echo "Pytest env:"
-          python -m pytest -V
-        fi
+        echo "Pytest env:"
+        python -m pytest -V
 
     - name: Run test
       run: |
         export ${{ matrix.action }}
-        if [[ "${{matrix.python-version}}" == 2.* ]]; then
-          python -m nose tests/test_$TEST.py
-        else
-          python -m pytest tests/test_$TEST.py
-        fi
+        python -m pytest tests/test_$TEST.py
