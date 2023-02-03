@@ -699,8 +699,10 @@ class SelectSearchSourcesLayer(InternalLayer):
                     assert base_src_choices.src_beams is not None, self.network.debug_search_choices(
                         self.search_choices_layer
                     ) or (
-                        "Cannot transform %r,\n" "search choices %r,\n" "to search choices %r.\n" "Missing beam idxs."
-                        % (src, src_search_choices, search_choices_seq)
+                        "Cannot transform %r,\n"
+                        "search choices %r,\n"
+                        "to search choices %r.\n"
+                        "Missing beam idxs." % (src, src_search_choices, search_choices_seq)
                     )
                     tag = Dim.get_tag_from_size_tensor(v)
                     if tag:

@@ -243,8 +243,8 @@ class BehaviorVersion:
             from returnn import __long_version__
 
             log.print_warning(
-                "behavior_version %i > latest known behavior_version %i. " "Your RETURNN version is too old (%s)."
-                % (version, cls._latest_behavior_version, __long_version__)
+                "behavior_version %i > latest known behavior_version %i. "
+                "Your RETURNN version is too old (%s)." % (version, cls._latest_behavior_version, __long_version__)
             )
         cls._behavior_version = version
 

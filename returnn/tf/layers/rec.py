@@ -1535,9 +1535,14 @@ class _SubnetworkRecCell(object):
                 while parent and parent.parent:
                     parent_names.insert(0, parent.parent_name or "?")
                     parent = parent.parent
-                return "<RecLayer construct template GetLayer>(" "allow_uninitialized_template %r, " "parents %r)" % (
-                    lself.allow_uninitialized_template,
-                    " <- ".join(parent_names) or None,
+                return (
+                    "<RecLayer construct template GetLayer>("
+                    "allow_uninitialized_template %r, "
+                    "parents %r)"
+                    % (
+                        lself.allow_uninitialized_template,
+                        " <- ".join(parent_names) or None,
+                    )
                 )
 
             def _add_uninitialized_count(self):
@@ -7312,7 +7317,8 @@ class GenericAttentionLayer(AttentionBaseLayer):
         from pprint import pformat
 
         raise Exception(
-            "no matching time axis found in weights %r with dim tags\n%s;\n" "base %r with time dim tag\n %r"
+            "no matching time axis found in weights %r with dim tags\n%s;\n"
+            "base %r with time dim tag\n %r"
             % (weights, pformat(weights.get_batch_shape_dim_tags()), base, base_time_tag)
         )
 

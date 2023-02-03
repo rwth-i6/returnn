@@ -4686,10 +4686,12 @@ class CustomCheckpointLoader:
             "lstm_cell/kernel": "rnn/lstm_cell/weights",
             "rnn/lstm_cell/bias": "lstm_cell/bias",
             "rnn/lstm_cell/kernel": "lstm_cell/kernel",
-            ("cudnn/params_canonical/rnn/multi_rnn_cell/cell_0/"
-             "cudnn_compatible_lstm_cell/bias"): "lstm_fused_cell/bias",
-            ("cudnn/params_canonical/rnn/multi_rnn_cell/cell_0/"
-             "cudnn_compatible_lstm_cell/kernel"): "lstm_fused_cell/kernel",
+            (
+                "cudnn/params_canonical/rnn/multi_rnn_cell/cell_0/" "cudnn_compatible_lstm_cell/bias"
+            ): "lstm_fused_cell/bias",
+            (
+                "cudnn/params_canonical/rnn/multi_rnn_cell/cell_0/" "cudnn_compatible_lstm_cell/kernel"
+            ): "lstm_fused_cell/kernel",
         }
 
         print("Variables to restore which are not in checkpoint:", missing_var_names, file=log.v2)
@@ -5004,7 +5006,8 @@ class CustomCheckpointLoader:
                             (
                                 "Warning, did not find match for var %r"
                                 " (%r, params_prefix %r, load_if_prefix %r)"
-                                " in checkpoint %r.")
+                                " in checkpoint %r."
+                            )
                             % (v, v_name, self.params_prefix, self.load_if_prefix, self.filepattern),
                             file=log.v3,
                         )
