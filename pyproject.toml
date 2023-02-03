@@ -1,3 +1,14 @@
 [tool.black]
 line-length = 120
 target-version = ["py37"]  # https://github.com/rwth-i6/returnn/issues/487
+extend-exclude = '''
+/(
+    # All Git submodules, see .gitmodules.
+    | returnn/extern/blocksparse
+    | returnn/extern/kenlm
+    | returnn/extern/openfst
+    | returnn/extern/ParseOggVorbis
+    | returnn/extern/HawkAaronWarpTransducer/warp-transducer
+    | returnn/extern/WarpRna/warp-rna
+)/
+'''
