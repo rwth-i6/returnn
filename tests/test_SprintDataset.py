@@ -34,12 +34,12 @@ def test_read_all():
     config = Config()
     config.update(dummyconfig_dict)
     print("Create ExternSprintDataset")
-    python2_exec = util.which("python2")
-    if python2_exec is None:
-        raise unittest.SkipTest("python2 not found")
+    python_exec = util.which("python")
+    if python_exec is None:
+        raise unittest.SkipTest("python not found")
     num_seqs = 4
     dataset = ExternSprintDataset(
-        [python2_exec, sprintExecPath],
+        [python_exec, sprintExecPath],
         "--*.feature-dimension=2 --*.trainer-output-dimension=3 "
         "--*.crnn-dataset=DummyDataset(2,3,num_seqs=%i,seq_len=10)" % num_seqs,
     )
@@ -121,31 +121,6 @@ def test_window():
     finally:
         dataset1._exit_handler()
         dataset2._exit_handler()
-
-
-def test_py2_client():
-    # like test_read_all
-    config = Config()
-    config.update(dummyconfig_dict)
-    print("Create ExternSprintDataset")
-    python2_exec = util.which("python2")
-    if python2_exec is None:
-        raise unittest.SkipTest("python2 not found")
-    num_seqs = 4
-    dataset = ExternSprintDataset(
-        [python2_exec, sprintExecPath],
-        "--*.feature-dimension=2 --*.trainer-output-dimension=3 "
-        "--*.crnn-dataset=DummyDataset(2,3,num_seqs=%i,seq_len=10)" % num_seqs,
-    )
-    dataset.init_seq_order(epoch=1)
-    seq_idx = 0
-    while dataset.is_less_than_num_seqs(seq_idx):
-        dataset.load_seqs(seq_idx, seq_idx + 1)
-        for key in dataset.get_data_keys():
-            value = dataset.get_data(seq_idx, key)
-            print("seq idx %i, data %r: %r" % (seq_idx, key, value))
-        seq_idx += 1
-    assert seq_idx == num_seqs
 
 
 if __name__ == "__main__":
