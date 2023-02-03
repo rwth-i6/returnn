@@ -2035,7 +2035,8 @@ class LinearLayer(_ConcatInputLayer):
         """
         :param str|None activation: e.g. "relu", or None
         :param bool with_bias:
-        :param float|None grad_filter: if grad norm is higher than this threshold (before activation), the grad is removed
+        :param float|None grad_filter: if grad norm is higher than this threshold (before activation),
+            the grad is removed
         :param str forward_weights_init: see :func:`returnn.tf.util.basic.get_initializer`
         :param str recurrent_weights_init: see :func:`returnn.tf.util.basic.get_initializer`
         :param str|float bias_init: see :func:`returnn.tf.util.basic.get_initializer`
@@ -2540,7 +2541,8 @@ class SeqLenMaskLayer(_ConcatInputLayer):
         :param Data|None start:
         :param Data|None window_start:
         :param Data|int|None window_size:
-        :return: mask which is broadcastable to energy_data, thus you can e.g. use :func:`returnn.tf.util.basic.where_bc`
+        :return: mask which is broadcastable to energy_data,
+            thus you can e.g. use :func:`returnn.tf.util.basic.where_bc`
         :rtype: tf.Tensor
         """
         from returnn.tf.util.basic import get_shape
