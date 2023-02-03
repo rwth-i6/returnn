@@ -201,7 +201,8 @@ class ExternData(object):
             else:
                 batch_info.dim = batch_dim_value
         self._batch_info = batch_info
-        # Set batch info on global batch dim tag. We should probably change this at some point to not modify the global tag.
+        # Set batch info on global batch dim tag.
+        # We should probably change this at some point to not modify the global tag.
         global_batch_dim_tag.batch = batch_info
         # Set batch info on extern data.
         # Overwrite all in case some dim tags have been used before and are still set to old global batch info.
@@ -403,7 +404,8 @@ class ExternData(object):
                 print("Warning: Using extern_data and will ignore num_inputs/num_outputs in config.", file=log.v2)
         else:
             log.print_deprecation_warning(
-                "Using num_inputs/num_ouputs instead of extern_data is deprecated and might be removed in future versions"
+                "Using num_inputs/num_ouputs instead of extern_data is deprecated"
+                " and might be removed in future versions"
             )
             num_inputs, num_outputs = cls._num_inputs_outputs_from_config(config)
             data_dims = num_outputs.copy()
@@ -1919,7 +1921,8 @@ class TFNetwork(object):
         :param bool with_summary:
         :param bool with_size:
         :param dict[str,(tf.Tensor,tf.Tensor)]|None horovod_collected_reduce_inputs: will write into. see below
-        :return: values and actions which should be calculated and executed in self.run() by the TF session for each step
+        :return: values and actions which should be calculated and executed in self.run()
+            by the TF session for each step
         :rtype: dict[str,tf.Tensor|tf.Operation]
         """
         # Note that it is important that we do not recreate graph nodes for every call to this function.
@@ -2669,7 +2672,8 @@ class TFNetwork(object):
         :param LayerBase|None src:
         :param LayerBase|None base_search_choice:
         :param list[LayerBase]|None sources:
-        :param dict[LayerBase]|None _layer_to_search_choices: keep track of visited layers in case there are circular deps
+        :param dict[LayerBase]|None _layer_to_search_choices:
+            keep track of visited layers in case there are circular deps
         :param typing.TextIO|None debug_stream: if given, will print additional debug info into it
         :return: (direct or indirect) source LayerBase which has search_choices, or None
         :rtype: LayerBase|None
@@ -2869,7 +2873,8 @@ class TFNetwork(object):
                     return layers
                 if any([layer.get_normalized_layer() == layer for layer in normalized_choices]):
                     # Filter any "prev:..." layers away. This should always be correct.
-                    # Also, this is important to have the correct choice resolution for the prev layer (base_search_choice).
+                    # Also, this is important to have the correct choice resolution
+                    # for the prev layer (base_search_choice).
                     normalized_choices = [
                         layer for layer in normalized_choices if layer.get_normalized_layer() == layer
                     ]
@@ -3289,7 +3294,8 @@ class TFNetwork(object):
     def get_search_choices_from_beam(self, beam):
         """
         Currently we have somewhat redundant information in
-        :class:`returnn.tf.util.data.SearchBeam` (which is totally independent from other things in RETURNN (which is good))
+        :class:`returnn.tf.util.data.SearchBeam`
+        (which is totally independent from other things in RETURNN (which is good))
         and
         :class:`returnn.tf.layers.base.SearchChoices` (which is more dependent on the RETURNN layers,
           and has some more info).
@@ -4293,7 +4299,8 @@ def help_on_tf_exception(
             # The exception occurred in the op, but that means that all the inputs to the op were correctly calculated.
             # It is probably helpful to calculate these again, and show their shape.
             try:
-                # Note: In principle, we would just do `input_values = session.run(list(op.inputs), feed_dict=feed_dict)`.
+                # Note: In principle, we would just do
+                # `input_values = session.run(list(op.inputs), feed_dict=feed_dict)`.
                 # However, this will not work if the op is inside a loop.
                 # Thus, we use this workaround to fetch them nonetheless.
                 # First find some value to fetch.
@@ -4679,8 +4686,10 @@ class CustomCheckpointLoader:
             "lstm_cell/kernel": "rnn/lstm_cell/weights",
             "rnn/lstm_cell/bias": "lstm_cell/bias",
             "rnn/lstm_cell/kernel": "lstm_cell/kernel",
-            "cudnn/params_canonical/rnn/multi_rnn_cell/cell_0/cudnn_compatible_lstm_cell/bias": "lstm_fused_cell/bias",
-            "cudnn/params_canonical/rnn/multi_rnn_cell/cell_0/cudnn_compatible_lstm_cell/kernel": "lstm_fused_cell/kernel",
+            ("cudnn/params_canonical/rnn/multi_rnn_cell/cell_0/"
+             "cudnn_compatible_lstm_cell/bias"): "lstm_fused_cell/bias",
+            ("cudnn/params_canonical/rnn/multi_rnn_cell/cell_0/"
+             "cudnn_compatible_lstm_cell/kernel"): "lstm_fused_cell/kernel",
         }
 
         print("Variables to restore which are not in checkpoint:", missing_var_names, file=log.v2)
@@ -4992,7 +5001,10 @@ class CustomCheckpointLoader:
                 else:
                     if self.ignore_missing and v_name not in var_name_map:
                         print(
-                            "Warning, did not find match for var %r (%r, params_prefix %r, load_if_prefix %r) in checkpoint %r."
+                            (
+                                "Warning, did not find match for var %r"
+                                " (%r, params_prefix %r, load_if_prefix %r)"
+                                " in checkpoint %r.")
                             % (v, v_name, self.params_prefix, self.load_if_prefix, self.filepattern),
                             file=log.v3,
                         )

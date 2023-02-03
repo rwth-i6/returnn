@@ -233,7 +233,8 @@ class ComplexToAlternatingRealLayer(_ConcatInputLayer):
 
 class MaskBasedGevBeamformingLayer(LayerBase):
     """
-    This layer applies GEV beamforming to a multichannel signal. The different channels are assumed to be concatenated to
+    This layer applies GEV beamforming to a multichannel signal.
+    The different channels are assumed to be concatenated to
     the input feature vector. The first source to the layer must contain the complex spectrograms of the single channels
     and the second source must contain the noise and speech masks
     """
@@ -313,8 +314,10 @@ class MaskBasedGevBeamformingLayer(LayerBase):
 
 class MaskBasedMvdrBeamformingWithDiagLoadingLayer(LayerBase):
     """
-    This layer applies GEV beamforming to a multichannel signal. The different channels are assumed to be concatenated to
-    the input feature vector. The first source to the layer must contain the complex spectrograms of the single channels
+    This layer applies GEV beamforming to a multichannel signal.
+    The different channels are assumed to be concatenated to
+    the input feature vector.
+    The first source to the layer must contain the complex spectrograms of the single channels
     and the second source must contain the noise and speech masks.
     """
 
@@ -540,9 +543,9 @@ class MultiChannelMultiResolutionStftLayer(_ConcatInputLayer):
         :param list[int] frame_sizes: frame size for stft in samples
         :param list[int] fft_sizes: fft size in samples
         :param str window: id of the windowing function used. Possible options are:
-          - hanning
-        :param bool use_rfft: if set to true a real input signal is expected and only the significant half of the FFT bins
-        are returned
+            - hanning
+        :param bool use_rfft: if set to true a real input signal is expected
+            and only the significant half of the FFT bins are returned
         :param int nr_of_channels: number of input channels
         :param bool pad_last_frame: padding of last frame with zeros or discarding of last frame
         """
@@ -991,9 +994,12 @@ class ParametricWienerFilterLayer(LayerBase):
         **kwargs,
     ):
         """
-        :param float|None l_overwrite: if given overwrites the l value of the parametric wiener filter with given constant
-        :param float|None p_overwrite: if given overwrites the p value of the parametric wiener filter with given constant
-        :param float|None q_overwrite: if given overwrites the q value of the parametric wiener filter with given constant
+        :param float|None l_overwrite:
+            if given overwrites the l value of the parametric wiener filter with given constant
+        :param float|None p_overwrite:
+            if given overwrites the p value of the parametric wiener filter with given constant
+        :param float|None q_overwrite:
+            if given overwrites the q value of the parametric wiener filter with given constant
         :param LayerBase|None filter_input: name of layer containing input for wiener filter
         :param LayerBase|None parameters: name of layer containing parameters for wiener filter
         :param LayerBase|None noise_estimation: name of layer containing noise estimate for wiener filter

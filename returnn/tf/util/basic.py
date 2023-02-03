@@ -1173,7 +1173,8 @@ def get_tf_list_local_devices(tf_session_opts=None, file=None):
         # CUDA will internally cache the devices, thus the first call to list_local_devices will init
         # all visible devices at that point, and TF/CUDA will get confused later
         # when another set of devices is visible.
-        # However, getting the list via tf.compat.v1.Session.list_devices() will not provide us with a full DeviceAttributes
+        # However, getting the list via tf.compat.v1.Session.list_devices()
+        # will not provide us with a full DeviceAttributes
         # with all needed information, as dev.physical_device_desc is missing,
         # and we need that for e.g. get_available_gpu_min_compute_capability.
         # See also: https://github.com/tensorflow/tensorflow/issues/9374
@@ -1670,8 +1671,10 @@ class GammatoneFilterbankInitializer(init_ops.Initializer):
         import numpy
 
         fbank = self.gammatone_filterbank.get_gammatone_filterbank()
-        # Check whether shape and specified parameters for gammatone filterbank match. Currently, this is just implemented
-        # for the case that the expected shape is (sample_rate * length, num_channels) with possibly additional 1-dim axes
+        # Check whether shape and specified parameters for gammatone filterbank match.
+        # Currently, this is just implemented
+        # for the case that the expected shape is (sample_rate * length, num_channels)
+        # with possibly additional 1-dim axes
         # in between.
         gammatone_shape = (
             int(self.gammatone_filterbank.sample_rate * self.gammatone_filterbank.length),
@@ -3092,7 +3095,7 @@ class OpCodeCompiler(NativeCodeCompiler):
             # TF >=2.10 uses C++17 by default.
             # https://github.com/tensorflow/tensorflow/blob/v2.10.0/.bazelrc#L334
             # This we need to use this as well to avoid any abseil errors such as:
-            #   undefined symbol: _ZN10tensorflow8str_util13StringReplaceB5cxx11EN4absl12lts_2022062311string_viewES3_S3_b
+            #   undefined symbol: _ZN10tensorflow8str_util13StringReplaceB5cxx11EN4absl12lts_2022062311string_viewES3_S3_b  # noqa
             return "-std=c++17"
         else:
             return "-std=c++14"
@@ -3168,7 +3171,7 @@ def make_var_tuple(v):
     :rtype: tuple[tf.Tensor]
     """
     if isinstance(v, (int, float, tf.Tensor, tf.Operation)):
-        return (v,)
+        return v,
     if isinstance(v, list):
         return tuple(v)
     assert isinstance(v, tuple)
@@ -3799,7 +3802,8 @@ def spatial_smoothing_energy(x, dim, use_circular_conv=True):
     :rtype: tf.Tensor
     :return: energy of shape (...)
 
-    Via: Achieving Human Parity in Conversational Speech Recognition, Microsoft, 2017 (https://arxiv.org/abs/1610.05256).
+    Via: Achieving Human Parity in Conversational Speech Recognition, Microsoft, 2017
+    (https://arxiv.org/abs/1610.05256).
     Interpret the last dimension as 2D (w, h) and apply some high-pass filter on it.
     """
     import math
@@ -3873,7 +3877,8 @@ def where_bc(condition, x, y, allow_broadcast_all_sources=NotSpecified, name="wh
             # where_v2 supports broadcasting. But we might still need to extend dims.
             # Note that the extend dims is on the opposite side as it would be common (in all other broadcasting ops).
             # However, this matches the old tf.compat.v1.where behavior.
-            # (Actually the doc of this where_bc says we do not allow this anyway...? We should check where this is used...)
+            # (Actually the doc of this where_bc says we do not allow this anyway...?
+            #  We should check where this is used...)
             condition = tf.convert_to_tensor(condition)
             x = tf.convert_to_tensor(x)
             y = tf.convert_to_tensor(y)
@@ -3918,7 +3923,8 @@ def nd_indices(indices, batch_axis=0, indices_batch_major=None):
     :param bool|None indices_batch_major: of the resulting 2-tuple,
       whether it represents (batch_idx, index) or (index, batch_idx). default is like batch_axis
     :return: extended indices with batch-idx which can be used for tf.gather_nd,
-      i.e. in the example of shape (batch, ..., 2) where the 2-tuple represents (batch_idx, index) or (index, batch_idx).
+      i.e. in the example of shape (batch, ..., 2)
+      where the 2-tuple represents (batch_idx, index) or (index, batch_idx).
       the shape[:-1] is exactly the same as the indices shape.
     :rtype: tf.Tensor
     """
@@ -6431,7 +6437,8 @@ class _DeviceAttrMod:
 def get_device_attr(dev):
     """
     :param str dev: eg. "/device:GPU:0", or any argument for :func:`tf.device`
-    :return: scalar string, eg. b'device: 2, name: GeForce GTX 1080 Ti, pci bus id: 0000:82:00.0, compute capability: 6.1'
+    :return: scalar string,
+        eg. b'device: 2, name: GeForce GTX 1080 Ti, pci bus id: 0000:82:00.0, compute capability: 6.1'
     :rtype: tf.Tensor
     """
     # `dev` should be one of the available devices, e.g. via session.list_devices(), and exactly that,
@@ -6715,7 +6722,8 @@ def get_variable_grad_from_update_ops(var, update_ops):
         m_scaled_g_values = scatter_add_ops[0].inputs[2]
         assert m_scaled_g_values.op.type == "Mul"
         grad = m_scaled_g_values.op.inputs[0]
-        # We should either have the gradient directly now, or an UnsortedSegmentSum, via _apply_sparse_duplicate_indices.
+        # We should either have the gradient directly now,
+        # or an UnsortedSegmentSum, via _apply_sparse_duplicate_indices.
         assert "gradients" in grad.name or grad.op.type == "UnsortedSegmentSum"
         return tf.IndexedSlices(values=grad, indices=indices, dense_shape=tf.convert_to_tensor(get_shape(var)))
     assert "var" in op_inputs
@@ -6728,7 +6736,8 @@ def get_variable_grad_from_update_ops(var, update_ops):
     else:
         raise Exception("Don't know how to get grad from op %r with inputs %r." % (op, op_inputs))
     if op.type.startswith("SparseApply"):  # e.g. SparseApplyMomentum
-        # We should either have the gradient directly now, or an UnsortedSegmentSum, via _apply_sparse_duplicate_indices.
+        # We should either have the gradient directly now,
+        # or an UnsortedSegmentSum, via _apply_sparse_duplicate_indices.
         assert "gradients" in grad.name or grad.op.type == "UnsortedSegmentSum"
         indices = op_inputs["indices"]
         return tf.IndexedSlices(values=grad, indices=indices, dense_shape=tf.convert_to_tensor(get_shape(var)))
