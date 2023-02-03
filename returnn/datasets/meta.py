@@ -71,7 +71,8 @@ class EpochWiseFilter:
             # Select subset of seq_order. Keep order as-is.
             seq_order = [seq_idx for seq_idx in seq_order if seq_idx in selected_seq_idxs]
             print(
-                "%sOld mean seq len is %f, new is %f, requested max is %f." " Old num seqs is %i, new num seqs is %i."
+                "%sOld mean seq len is %f, new is %f, requested max is %f."
+                " Old num seqs is %i, new num seqs is %i."
                 % (
                     debug_msg_prefix,
                     float(numpy.mean(lens_and_seqs[:, 0])),
@@ -313,8 +314,7 @@ class MetaDataset(CachedDataset2):
             except NotImplementedError:
                 raise NotImplementedError(
                     "Unsupported %s used as default in MetaDataset."
-                    " Only datasets with known and tagged sequences can be used."
-                    % type(default_dataset)
+                    " Only datasets with known and tagged sequences can be used." % type(default_dataset)
                 )
 
             # Catch index out of bounds errors.

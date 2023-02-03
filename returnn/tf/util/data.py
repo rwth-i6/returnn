@@ -710,7 +710,8 @@ class Dim(object):
                         [
                             (
                                 "%r (%r) already has size %r,"
-                                " and another incompatible size %r (batch %r) is being assigned.")
+                                " and another incompatible size %r (batch %r) is being assigned."
+                            )
                             % (self, self.description, self.dyn_size, x, batch),
                             "\nNew size computation graph:",
                             format_graph_output(x, max_depth=3),

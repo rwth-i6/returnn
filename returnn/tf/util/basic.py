@@ -3171,7 +3171,7 @@ def make_var_tuple(v):
     :rtype: tuple[tf.Tensor]
     """
     if isinstance(v, (int, float, tf.Tensor, tf.Operation)):
-        return v,
+        return (v,)
     if isinstance(v, list):
         return tuple(v)
     assert isinstance(v, tuple)
