@@ -126,7 +126,8 @@ class OpMaker(object):
     def _load_cuda_blas_gemm(cls):
         """
         https://github.com/tensorflow/tensorflow/issues/6602
-        As a workaround for TF issue 6602, we link to some functions which are implemented in contrib.rnn.kernels.blas_gemm.
+        As a workaround for TF issue 6602, we link to some functions
+        which are implemented in contrib.rnn.kernels.blas_gemm.
         See NativeOp.cpp.
         To make the symbols available in the namespace, load the library now.
         This issue if fixed with tensorflow 1.5
@@ -323,7 +324,8 @@ class OpMaker(object):
                 # mutable_input if it is a ref-type, i.e. a Variable.
                 # code_set_io += "Ndarray mutable_input_%i = context->mutable_input(%i, false);\n" % (in_idx, in_idx)
                 # code_set_io += "inputs[%i] = &mutable_input_%i;\n" % (in_idx, in_idx)
-                # Maybe we could use a TemporaryVariable or so but not sure if the gradient will flow through tf.assign().
+                # Maybe we could use a TemporaryVariable or so
+                # but not sure if the gradient will flow through tf.assign().
                 # https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/ops/state_ops.cc
                 # but a normal tensor is never mutable, thus create a copy of the input now.
                 code_set_io += "Ndarray* output_%i = NULL;\n" % (out_idx,)
@@ -920,7 +922,8 @@ class NativeLstm2(RecSeqCellOp):
     def __init__(self, rec_weight_dropout=0.0, rec_weight_dropout_shape=None, forget_bias=0.0, **kwargs):
         """
         :param float rec_weight_dropout: weight dropout in the recurrent matrix, https://openreview.net/pdf?id=SyyGPP0TZ
-        :param tuple[int|None]|None rec_weight_dropout_shape: e.g. (None,1) to use dropout on all rec inputs (save memory)
+        :param tuple[int|None]|None rec_weight_dropout_shape:
+            e.g. (None,1) to use dropout on all rec inputs (save memory)
         :param float forget_bias:
         """
         super(NativeLstm2, self).__init__(**kwargs)
@@ -1159,7 +1162,8 @@ class TwoDNativeLstmCell(RecSeqCellOp):
             # The output of the operation are two 2D grids
             # For the prediction of the next target word, only the last output of each row is relevant
             # To select them, we have to find the position of the last word of each sentence
-            # To this end, we shift the mask by one position and compare with the unshifted mask: The only position that's
+            # To this end, we shift the mask by one position and compare with the unshifted mask:
+            # The only position that's
             # different is the position of the last 1 (the last word).
             # 1) append one 0 to the src mask.
             # This ensures, that every mask ends in a 0, even if the sentence has maximal length
@@ -1357,7 +1361,8 @@ def fast_baum_welch(am_scores, edges, weights, start_end_states, float_idx, stat
     :param tf.Tensor am_scores: (time, batch, dim), in -log space
     :param tf.Tensor edges: (4,num_edges), edges of the graph (from,to,emission_idx,sequence_idx)
     :param tf.Tensor weights: (num_edges,), weights of the edges
-    :param tf.Tensor start_end_states: (2, batch), (start,end) state idx in automaton. there is only one single automaton.
+    :param tf.Tensor start_end_states: (2, batch), (start,end) state idx in automaton.
+        there is only one single automaton.
     :param tf.Tensor float_idx: (time, batch) -> 0 or 1 (index mask, via seq lens)
     :param tf.Tensor state_buffer: (2, num_states)
     :return: (fwdbwd, obs_scores), fwdbwd is (time, batch, dim), obs_scores is (time, batch), in -log space
@@ -1571,7 +1576,8 @@ def fast_viterbi(am_scores, am_seq_len, edges, weights, start_end_states):
     :param tf.Tensor am_seq_len: (batch,), int32
     :param tf.Tensor edges: (4,num_edges), edges of the graph (from,to,emission_idx,sequence_idx)
     :param tf.Tensor weights: (num_edges,), weights of the edges
-    :param tf.Tensor start_end_states: (2, batch), (start,end) state idx in automaton. there is only one single automaton.
+    :param tf.Tensor start_end_states: (2, batch), (start,end) state idx in automaton.
+        there is only one single automaton.
     :return: (alignment, scores), alignment is (time, batch), scores is (batch,), in +log space
     :rtype: (tf.Tensor, tf.Tensor)
     """
