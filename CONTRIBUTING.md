@@ -14,10 +14,11 @@ General rules when contributing to the code of RETURNN:
    It is even encouraged to commit often and early and not wait too long.)
 * Do not break existing setups (unless there is a very good reason to do so).
 * Keep consistent and clean code style.
-  Our code style follows mostly PEP8, except for 2 space indents, and 120 char line limits.
-  Our code style is extended by a lot of common Python conventions.
-  (If you are not an expert in Python, you will likely not know about PEP8 or standard Python conventions.
-   In that case, I very much recommend to use an IDE like PyCharm which will help you keeping these standards.)
+  Our code style follows mostly PEP8, except for 120 char line limit.
+  Our code style uses most common Python conventions.
+  If you are not an expert in Python, use PyCharm,
+  and follow [our PyCharm configuration guide](https://github.com/rwth-i6/returnn/wiki/PyCharm-Configuration).
+  Apply [black](https://black.readthedocs.io/).
 * Make sure all [tests](https://returnn.readthedocs.io/en/latest/advanced/test_suite.html) pass.
 * At the time being, we want to support earlier versions of TF 1
   (consider at least TF 1.8, but maybe even TF 1.4)
