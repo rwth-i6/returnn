@@ -98,7 +98,8 @@ class LearningRateControl(object):
         """
         :param float default_learning_rate: default learning rate. usually for epoch 1
         :param list[float] | dict[int,float] default_learning_rates: learning rates
-        :param str|list[str]|None error_measure_key: for get_epoch_error_value() the key for EpochData.error which is a dict
+        :param str|list[str]|None error_measure_key: for get_epoch_error_value() the key for EpochData.error
+            which is a dict
         :param int min_num_epochs_per_new_learning_rate: if the lr was recently updated, use it for at least N epochs
         :param bool relative_error_div_by_old: if True, compute relative error as (new - old) / old.
         :param float|(float)->float learning_rate_decay:

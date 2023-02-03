@@ -622,7 +622,8 @@ class AllophoneLabeling(object):
         :param str silence_phone: e.g. "si"
         :param str allophone_file: list of allophones
         :param str|None phoneme_file: list of phonemes
-        :param str|None state_tying_file: allophone state tying (e.g. via CART). maps each allophone state to a class label
+        :param str|None state_tying_file: allophone state tying (e.g. via CART).
+            maps each allophone state to a class label
         :param file verbose_out: stream to dump log messages
         """
         assert phoneme_file or state_tying_file

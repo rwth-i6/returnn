@@ -741,7 +741,8 @@ class PythonControl:
                         return  # no more segments
                     self.cond.wait(timeout=1)
 
-            # We got a new segment name from the parent RETURNN process (via self.handle_cmd_get_loss_and_error_signal()).
+            # We got a new segment name from the parent RETURNN process
+            # (via self.handle_cmd_get_loss_and_error_signal()).
             # We wait in this segment because we wait to get the error signal from Sprint
             # (via SprintNnPythonLayer.backpropagate()).
             # Sprint waits currently for us to get the new segment (in the PythonSegmentOrder code).

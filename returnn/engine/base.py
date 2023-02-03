@@ -100,7 +100,8 @@ class EngineBase(object):
                 assert util.model_epoch_from_filename(load_model_epoch_filename) == load_epoch
 
         # Only use this when we don't train.
-        # For training, we first consider existing models before we take the 'load' into account when in auto epoch mode.
+        # For training, we first consider existing models
+        # before we take the 'load' into account when in auto epoch mode.
         # In all other cases, we use the model specified by 'load'.
         if load_model_epoch_filename and (config.value("task", "train") != "train" or start_epoch is not None):
             if config.value("task", "train") == "train" and start_epoch is not None:

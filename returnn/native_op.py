@@ -566,7 +566,7 @@ class LstmLowMem(NativeOpGenBase):
         """
         Map args.
         """
-        return (X, W, b, y0, c0, i, start, step, Y, C, DY, Dd)
+        return X, W, b, y0, c0, i, start, step, Y, C, DY, Dd
 
     c_extra_support_code = {
         "lstm_kernel": """

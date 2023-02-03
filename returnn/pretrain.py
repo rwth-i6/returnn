@@ -84,12 +84,13 @@ class Pretrain:
         """
         :type original_network_json: dict[str]
         :param dict[str]|None network_init_args: additional args we use for LayerNetwork.from_json().
-          must have n_in, n_out. (for Theano only, thus optional now)
+            must have n_in, n_out. (for Theano only, thus optional now)
         :param str copy_param_mode:
         :param bool|str copy_output_layer: whether to copy the output layer params from last epoch or reinit
         :param bool greedy: if True, only train output+last layer, otherwise train all
-        :param None | int | list[int] | dict repetitions: how often to repeat certain pretrain steps. default is one epoch.
-          It can also be a dict, with keys like 'default' and 'final'. See code below.
+        :param None | int | list[int] | dict repetitions: how often to repeat certain pretrain steps.
+            default is one epoch.
+            It can also be a dict, with keys like 'default' and 'final'. See code below.
         :param str|callable construction_algo: e.g. "from_output"
         :param list[str]|tuple[str] output_layers: used for construction
         :param list[str]|tuple[str] input_layers: used for construction
