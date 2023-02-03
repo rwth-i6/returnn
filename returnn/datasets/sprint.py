@@ -63,14 +63,17 @@ class SprintDatasetBase(Dataset):
         **kwargs,
     ):
         """
-        :param dict[str,str|dict] target_maps: e.g. {"speaker_name": "speaker_map.txt"}, with "speaker_map.txt" containing
-          a line for each expected speaker. The indices will be given by the line index. Note that scalar
-          content (e.g. single index) will automatically get a time axis added with the length of the audio frames.
+        :param dict[str,str|dict] target_maps: e.g. {"speaker_name": "speaker_map.txt"},
+            with "speaker_map.txt" containing a line for each expected speaker.
+            The indices will be given by the line index.
+            Note that scalar content (e.g. single index) will automatically get a time axis added
+            with the length of the audio frames.
         :param bool str_add_final_zero: adds e.g. "orth0" with '\0'-ending
         :param float input_stddev: if != 1, will divide the input "data" by that
         :param str|list[str]|((str)->str)|None orth_post_process: :func:`get_post_processor_function`, applied on orth
         :param None|dict[str] bpe: if given, will be opts for :class:`BytePairEncoding`
-        :param None|dict[str] orth_vocab: if given, orth_vocab is applied to orth and orth_classes is an available target`
+        :param None|dict[str] orth_vocab: if given, orth_vocab is applied to orth
+            and orth_classes is an available target`
         :param bool suppress_load_seqs_print: less verbose
         :param int reduce_target_factor: downsample factor to allow less targets than features
         """
@@ -374,7 +377,8 @@ class SprintDatasetBase(Dataset):
             # 'classes' is always the alignment
             assert targets["classes"].shape == (
                 reduce_num_frames,
-            ), "Number of targets %s does not match number of features %s (reduce factor %d)" % (  # is in format (time,)
+            ), "Number of targets %s does not match number of features %s (reduce factor %d)" % (
+                # is in format (time,)
                 targets["classes"].shape,
                 (num_frames,),
                 self.reduce_target_factor,

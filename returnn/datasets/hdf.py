@@ -39,8 +39,10 @@ class HDFDataset(CachedDataset):
         self._use_cache_manager = use_cache_manager
         self.files = []  # type: typing.List[str]  # file names
         self.h5_files = []  # type: typing.List[h5py.File]
-        # We cache the h5py.Dataset objects that are created each time when accessing a h5py.File, e.g. via fin['inputs'],
-        # as this access seems to have a significant overhead. Speeds up going through a HDFDataset by up to factor 3
+        # We cache the h5py.Dataset objects that are created each time when accessing a h5py.File,
+        # e.g. via fin['inputs'],
+        # as this access seems to have a significant overhead.
+        # Speeds up going through a HDFDataset by up to factor 3
         # (tested with h5py 3.1.0).
         self.cached_h5_datasets = []  # type: typing.List[typing.Dict[str,h5py.Dataset]]
         self.file_start = [0]
@@ -762,7 +764,8 @@ class SiameseHDFDataset(CachedDataset2):
     Here we assume that each dataset from the input .hdf has a single label.
     In the config we can access streams by e.g. ["data:features_0"], ["data:features_1"], ["data:features_2"].
     Split names depend on stream names in the input data, e.g. "features", "data", "classes", etc.
-    SiameseHDFDataset method _collect_single_seq(self, seq_idx) returns a DatasetSeq with extended dictionary of targets.
+    SiameseHDFDataset method _collect_single_seq(self, seq_idx)
+    returns a DatasetSeq with extended dictionary of targets.
     "data:features_0" key stands for features of anchor sequences from the input data.
     In NexGenHDFDataset it would correspond to "data:features" or "data".
     "data:features_1" is a key, which denote a pair of "data:features_0".
@@ -1245,10 +1248,11 @@ class SimpleHDFWriter:
         :param numpy.ndarray inputs: shape=(n_batch,time,data) (or (n_batch,time), or (n_batch,time1,time2), ...)
         :param list[int]|dict[int,list[int]|numpy.ndarray] seq_len: sequence lengths (per axis, excluding batch axis)
         :param list[str|bytes] seq_tag: sequence tags of length n_batch
-        :param dict[str,numpy.ndarray]|None extra: one or multiple possible targets data. key can be "classes" or anything.
-          The dtype and dim is inferred automatically from the Numpy array.
-          If there are multiple items, the seq length must be the same currently.
-          Must be batch-major, and following the time, then the feature.
+        :param dict[str,numpy.ndarray]|None extra: one or multiple possible targets data.
+            key can be "classes" or anything.
+            The dtype and dim is inferred automatically from the Numpy array.
+            If there are multiple items, the seq length must be the same currently.
+            Must be batch-major, and following the time, then the feature.
         """
         n_batch = len(seq_tag)
         assert n_batch == inputs.shape[0]

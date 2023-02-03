@@ -166,7 +166,8 @@ class Dataset(object):
                 context_window = NumbersDict(numbers_dict=context_window)
             assert isinstance(context_window, NumbersDict)
             # ctx_total is how much frames we add additionally.
-            # One less because the original frame also counts, and context_window=1 means that we just have that single frame.
+            # One less because the original frame also counts,
+            # and context_window=1 means that we just have that single frame.
             ctx_total = NumbersDict.max([context_window, 1]) - 1
             # In case ctx_total is odd / context_window is even, we have to decide where to put one more frame.
             # To keep it consistent with e.g. 1D convolution with a kernel of even size, we add one more to the right.
@@ -298,10 +299,13 @@ class Dataset(object):
 
     def get_estimated_seq_length(self, seq_idx):
         """
-        In contrast to self.get_seq_length(), this method is designed to work for sequences that have not been loaded yet
+        In contrast to self.get_seq_length(),
+        this method is designed to work for sequences that have not been loaded yet
         via self.load_seqs().
-        Used by meta-datasets for sequence ordering. Currently we only provide one number, i.e. do not give different
-        estimates for the different data keys (as in get_seq_length()). It is up to the dataset what this number represents
+        Used by meta-datasets for sequence ordering.
+        Currently we only provide one number, i.e. do not give different
+        estimates for the different data keys (as in get_seq_length()).
+        It is up to the dataset what this number represents
         and how it is computed.
 
         :param int seq_idx: for current epoch, not the corpus seq idx

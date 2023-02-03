@@ -1348,7 +1348,8 @@ class TimitDataset(CachedDataset2):
         :param bool|int with_delta: whether to add delta features (doubles the features dim). if int, up to this degree
         :param str norm_mean: file with mean values which are used for mean-normalization of the final features
         :param str norm_std_dev: file with std dev valeus for variance-normalization of the final features
-        :param None|bool|dict[str] random_permute_audio: enables permutation on the audio. see _get_random_permuted_audio
+        :param None|bool|dict[str] random_permute_audio: enables permutation on the audio.
+            see _get_random_permuted_audio
         :param int num_phones: 39, 48 or 61. num labels of our classes
         :param bool demo_play_audio: plays the audio. only make sense with tools/dump-dataset.py
         :param None|int fixed_random_seed: if given, use this fixed random seed in every epoch
@@ -1874,11 +1875,13 @@ class LibriSpeechCorpus(CachedDataset2):
         :param bool use_zip: whether to use the ZIP files instead (better for NFS)
         :param bool use_ogg: add .ogg postfix to all files
         :param bool use_cache_manager: uses :func:`Util.cf`
-        :param int|None fixed_random_seed: for the shuffling, e.g. for seq_ordering='random'. otherwise epoch will be used
+        :param int|None fixed_random_seed: for the shuffling, e.g. for seq_ordering='random'.
+            otherwise epoch will be used
         :param float|int|None fixed_random_subset:
-          Value in [0,1] to specify the fraction, or integer >=1 which specifies number of seqs.
-          If given, will use this random subset. This will be applied initially at loading time,
-          i.e. not dependent on the epoch. It will use an internally hardcoded fixed random seed, i.e. it's deterministic.
+            Value in [0,1] to specify the fraction, or integer >=1 which specifies number of seqs.
+            If given, will use this random subset. This will be applied initially at loading time,
+            i.e. not dependent on the epoch. It will use an internally hardcoded fixed random seed,
+            i.e. it's deterministic.
         :param dict|None epoch_wise_filter: see init_seq_order
         """
         if not name:
@@ -2076,7 +2079,8 @@ class LibriSpeechCorpus(CachedDataset2):
                                     [(len(self.transs[self._reference_seq_order[idx]]), idx) for idx in self._seq_order]
                                 )
                             )
-                            # Note: This is somewhat incorrect. But keep the behavior, such that old setups are reproducible.
+                            # Note: This is somewhat incorrect. But keep the behavior,
+                            # such that old setups are reproducible.
                             # You can use the option `use_new_filter` to get a better behavior.
                             num = returnn.util.basic.binary_search_any(
                                 cmp=lambda num_: numpy.mean(seqs[:num_, 0]) > max_mean_len, low=1, high=len(seqs) + 1
@@ -2085,7 +2089,8 @@ class LibriSpeechCorpus(CachedDataset2):
                             self._seq_order = list(seqs[:num, 1])
                             print(
                                 (
-                                    "%s, epoch %i. Old mean seq len (transcription) is %f, new is %f, requested max is %f."
+                                    "%s, epoch %i."
+                                    " Old mean seq len (transcription) is %f, new is %f, requested max is %f."
                                     " Old num seqs is %i, new num seqs is %i."
                                 )
                                 % (

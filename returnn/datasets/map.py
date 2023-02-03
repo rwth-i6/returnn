@@ -9,7 +9,8 @@ from returnn.util.basic import OptionalNotImplementedError
 
 class MapDatasetBase(object):
     """
-    This dataset can be used as template to implement user-side Datasets, where the data can be access in arbitrary order.
+    This dataset can be used as template to implement user-side Datasets,
+    where the data can be access in arbitrary order.
     For global sorting, the length information needs to be known beforehand, see get_seq_len.
     """
 
