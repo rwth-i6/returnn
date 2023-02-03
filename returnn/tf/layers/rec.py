@@ -972,8 +972,8 @@ class RecLayer(_ConcatInputLayer):
                 )
             self._last_hidden_state = final_state
         elif rnn_contrib and isinstance(
-            cell, (rnn_contrib.FusedRNNCell, rnn_contrib.LSTMBlockWrapper)
-        ):  # noqa # e.g. LSTMBlockFusedCell
+            cell, (rnn_contrib.FusedRNNCell, rnn_contrib.LSTMBlockWrapper)  # noqa # e.g. LSTMBlockFusedCell
+        ):
             # Will get (time,batch,ydim).
             assert self._max_seq_len is None
             y, final_state = cell(
