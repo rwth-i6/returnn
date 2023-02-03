@@ -50,15 +50,15 @@ class HDFTranslationDatasetCreator(object):
         :param str source_file: filename of the source text file
         :param str target_file: filename of the target text file
         :param list[str] source_vocabularies: Filenames of the source vocabularies (in pickle format).
-          Usually there is just one. In case of source factors, provide one per factor.
+            Usually there is just one. In case of source factors, provide one per factor.
         :param list[str] target_vocabularies: Filenames of the target vocabularies (in pickle format).
-          Usually there is just one. In case of target factors, provide one per factor.
+            Usually there is just one. In case of target factors, provide one per factor.
         :param list[str] source_factors: Data keys for the source factors. First data key is always 'data'
-          and must not be contained in the list.
+            and must not be contained in the list.
         :param list[str] target_factors: Data keys for the target factors. First data key is always 'classes'
-          and must not be contained in the list.
-        :param str factor_separator: "String used to separate factors of the words. E.g. if "|", words are expected to be
-          of format "<lemma>|<factor>|...".
+            and must not be contained in the list.
+        :param str factor_separator: "String used to separate factors of the words.
+            E.g. if "|", words are expected to be of format "<lemma>|<factor>|...".
         :param int number_of_lines: line count in source_file and target_file
         :param str compression_method: Optional compression method as supported by h5py.File.create_dataset().
             Applied to the main data only ('inputs' and 'target/data/classes').

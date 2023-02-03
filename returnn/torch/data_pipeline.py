@@ -73,11 +73,15 @@ class Chunker(IterableDataset):
     def __init__(self, dataset, chunking):
         """
         :param torch.IterableDataset dataset: dataset to apply chunking to
-        :param None|int|(int,int)|dict|(dict,dict) chunking: tuple (chunk_size, chunk_step). If given as single value,
-          value will be used for both. Both chunk_size and chunk_step can be given as a dict data_key -> size/step.
-          This can be used to apply chunking to only a subset of all data keys, or to use different chunking for different
-          data keys. (The number of resulting chunks has to be match though for all given data keys, i.e. sequence lengths
-          have to be considered.)
+        :param None|int|(int,int)|dict|(dict,dict) chunking: tuple (chunk_size, chunk_step).
+            If given as single value,
+            value will be used for both.
+            Both chunk_size and chunk_step can be given as a dict data_key -> size/step.
+            This can be used to apply chunking to only a subset of all data keys,
+            or to use different chunking for different
+            data keys.
+            (The number of resulting chunks has to be match though for all given data keys, i.e. sequence lengths
+            have to be considered.)
         """
         self._dataset = dataset
         self._chunk_size, self._chunk_step = self._parse_chunking(chunking)
@@ -120,7 +124,8 @@ class Chunker(IterableDataset):
             for chunk_index in range(num_chunks):
                 chunk_data = {data_key: data_chunks[data_key][chunk_index] for data_key in data_chunks.keys()}
 
-                # If chunking is configured using a dict, i.e. with explicit data keys, there might be remaining data keys
+                # If chunking is configured using a dict,
+                # i.e. with explicit data keys, there might be remaining data keys
                 # for which we yield the full sequence in each chunk.
                 non_chunked_data = {
                     data_key: data for data_key, data in data_dict.items() if data_key not in chunk_data
@@ -160,7 +165,8 @@ class Chunker(IterableDataset):
 class Batching(IterableDataset):
     """
     Converts a dataset yielding sequences (dict data_key -> array per sequence) into a dataset yielding lists of
-    these sequences, i.e. batches. Sequences are grouped in-order according to the 'max_tokens' and 'max_seqs' batch size
+    these sequences, i.e. batches.
+    Sequences are grouped in-order according to the 'max_tokens' and 'max_seqs' batch size
     limits.
     Note, that batches are not yet merged into a single (padded) data array here, this happens in 'collate_batch()'.
     """
@@ -169,9 +175,11 @@ class Batching(IterableDataset):
         """
         :param torch.IterableDataset dataset: dataset to apply batching to
         :param int|dict[str,int]|None batch_size: Maximum number of time steps (e.g. audio frames / words) in one
-          batch (padding included). If given as a dict data_key -> value, sets different individual limits per data key.
-          If None, no limit.
-        :param int|None max_seqs: maximum number of sequences in a batch, None means unlimited (also -1 to match TF backend)
+            batch (padding included).
+            If given as a dict data_key -> value, sets different individual limits per data key.
+            If None, no limit.
+        :param int|None max_seqs: maximum number of sequences in a batch,
+            None means unlimited (also -1 to match TF backend)
         """
         self._dataset = dataset
         self._max_batch_size = NumbersDict(sys.maxsize if batch_size is None else batch_size)

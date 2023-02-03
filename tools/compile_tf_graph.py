@@ -396,7 +396,8 @@ class SubnetworkRecCellSingleStep(_SubnetworkRecCell):
 
             def get_reads_once(self):
                 """
-                :return: same structure as state vars with the actual reads, type tf.Tensor. makes sure they are created once
+                :return: same structure as state vars with the actual reads, type tf.Tensor.
+                    makes sure they are created once
                 """
                 if self._reads_once is not None:
                     return self._reads_once
@@ -1058,8 +1059,10 @@ class RecStepByStepLayer(RecLayer):
             del initial_value
             # Note: Don't use `initializer` of `tf.get_variable` directly, because
             # it uses _try_guard_against_uninitialized_dependencies internally,
-            # which replace references to variables in `initial_value` with references to the variable's initialized values.
-            # This is not what we want. Also, it has a cycle check which is extremely inefficient and basically just hangs.
+            # which replace references to variables in `initial_value`
+            # with references to the variable's initialized values.
+            # This is not what we want.
+            # Also, it has a cycle check which is extremely inefficient and basically just hangs.
             # Instead, some dummy initializer. The shape should not matter.
             zero_initializer = tf_util.zeros_dyn_shape(
                 shape=self.var_data_shape.batch_shape, dtype=self.var_data_shape.dtype
