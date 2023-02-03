@@ -243,7 +243,7 @@ class BehaviorVersion:
             from returnn import __long_version__
 
             log.print_warning(
-                ("behavior_version %i > latest known behavior_version %i. " "Your RETURNN version is too old (%s).")
+                "behavior_version %i > latest known behavior_version %i. " "Your RETURNN version is too old (%s)."
                 % (version, cls._latest_behavior_version, __long_version__)
             )
         cls._behavior_version = version
@@ -3513,12 +3513,14 @@ class NativeCodeCompiler(object):
         :param dict[str,str|int|None]|None c_macro_defines: e.g. {"TENSORFLOW": 1}
         :param list[str]|None ld_flags: e.g. ["-lblas"]
         :param list[str]|tuple[str] include_paths:
-        :param list[str]|None include_deps: if provided and an existing lib file, we will check if any dependency is newer
-          and we need to recompile. we could also do it automatically via -MD but that seems overkill and too slow.
+        :param list[str]|None include_deps: if provided and an existing lib file,
+            we will check if any dependency is newer
+            and we need to recompile. we could also do it automatically via -MD but that seems overkill and too slow.
         :param str|None static_version_name: normally, we use .../base_name/hash as the dir
-          but this would use .../base_name/static_version_name.
+            but this would use .../base_name/static_version_name.
         :param bool should_cleanup_old_all: whether we should look in the cache dir
-          and check all ops if we can delete some old ones which are older than some limit (self._cleanup_time_limit_days)
+            and check all ops if we can delete some old ones which are older than some limit
+            (self._cleanup_time_limit_days)
         :param bool should_cleanup_old_mydir: whether we should delete our op dir before we compile there.
         :param typing.TextIO|None log_stream: file stream for print statements
         :param bool verbose: be slightly more verbose
