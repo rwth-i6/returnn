@@ -29,22 +29,22 @@ import returnn.tf.compat as tf_compat  # noqa
 
 
 def main():
-  """
-  Main entry.
-  """
-  argparser = ArgumentParser()
-  argparser.add_argument("file", help="e.g. events.out.tfevents...")
-  argparser.add_argument("--tag", default="objective/loss", help="default is 'objective/loss'")
-  args = argparser.parse_args()
+    """
+    Main entry.
+    """
+    argparser = ArgumentParser()
+    argparser.add_argument("file", help="e.g. events.out.tfevents...")
+    argparser.add_argument("--tag", default="objective/loss", help="default is 'objective/loss'")
+    args = argparser.parse_args()
 
-  print("file: %s" % args.file)
-  print("tag: %s" % args.tag)
-  for e in tf_compat.v1.train.summary_iterator(args.file):
-    for v in e.summary.value:
-      if v.tag == args.tag:
-        print("step %i: %r" % (e.step, v.simple_value))
-  print("done")
+    print("file: %s" % args.file)
+    print("tag: %s" % args.tag)
+    for e in tf_compat.v1.train.summary_iterator(args.file):
+        for v in e.summary.value:
+            if v.tag == args.tag:
+                print("step %i: %r" % (e.step, v.simple_value))
+    print("done")
 
 
 if __name__ == "__main__":
-  main()
+    main()

@@ -1,4 +1,3 @@
-
 # -*- coding: utf-8 -*-
 # Copyright (c) 2011-2021, Albert Zeyer, www.az2000.de
 # All rights reserved.
@@ -57,6 +56,7 @@ import threading
 import keyword
 import inspect
 import contextlib
+
 try:
     import typing
 except ImportError:
@@ -65,8 +65,10 @@ except ImportError:
 try:
     from traceback import StackSummary, FrameSummary
 except ImportError:
+
     class _Dummy:
         pass
+
     StackSummary = FrameSummary = _Dummy
 
 # noinspection PySetFunctionToLiteral,SpellCheckingInspection
@@ -79,7 +81,7 @@ try:
     # noinspection PyUnresolvedReferences,PyUnboundLocalVariable
     unicode
 except NameError:  # Python3
-    unicode = str   # Python 3 compatibility
+    unicode = str  # Python 3 compatibility
 
 try:
     # noinspection PyUnresolvedReferences,PyUnboundLocalVariable
@@ -138,7 +140,7 @@ def parse_py_statement(line):
         elif state == 1:  # string via "
             if c == "\\":
                 state = 4
-            elif c == "\"":
+            elif c == '"':
                 yield "str", cur_token
                 cur_token = ""
                 state = 0
@@ -205,8 +207,8 @@ def grep_full_py_identifiers(tokens):
         i += 1
         if token_type != "id":
             continue
-        while i+1 < len(tokens) and tokens[i] == ("op", ".") and tokens[i+1][0] == "id":
-            token += "." + tokens[i+1][1]
+        while i + 1 < len(tokens) and tokens[i] == ("op", ".") and tokens[i + 1][0] == "id":
+            token += "." + tokens[i + 1][1]
             i += 2
         if token == "":
             continue
@@ -228,7 +230,8 @@ def set_linecache(filename, source):
     :return: nothing
     """
     import linecache
-    linecache.cache[filename] = None, None, [line+'\n' for line in source.splitlines()], filename
+
+    linecache.cache[filename] = None, None, [line + "\n" for line in source.splitlines()], filename
 
 
 # noinspection PyShadowingBuiltins
@@ -293,6 +296,7 @@ def debug_shell(user_ns, user_global_ns, traceback=None, execWrapper=None):
     try:
         # noinspection PyPackageRequirements
         import IPython
+
         have_ipython = True
     except ImportError:
         have_ipython = False
@@ -302,10 +306,13 @@ def debug_shell(user_ns, user_global_ns, traceback=None, execWrapper=None):
         try:
             # noinspection PyPackageRequirements,PyUnresolvedReferences
             from IPython.core.debugger import Pdb
+
             # noinspection PyPackageRequirements,PyUnresolvedReferences
             from IPython.terminal.debugger import TerminalPdb
+
             # noinspection PyPackageRequirements,PyUnresolvedReferences
             from IPython.terminal.ipapp import TerminalIPythonApp
+
             ipapp = TerminalIPythonApp.instance()
             ipapp.interact = False  # Avoid output (banner, prints)
             ipapp.initialize(argv=[])
@@ -328,19 +335,20 @@ def debug_shell(user_ns, user_global_ns, traceback=None, execWrapper=None):
         try:
             # noinspection PyPackageRequirements,PyUnresolvedReferences
             import IPython
+
             # noinspection PyPackageRequirements,PyUnresolvedReferences
             import IPython.terminal.embed
 
             class DummyMod(object):
                 """Dummy module"""
+
             module = DummyMod()
             module.__dict__ = user_global_ns
             module.__name__ = "_DummyMod"
             if "__name__" not in user_ns:
                 user_ns = user_ns.copy()
                 user_ns["__name__"] = "_DummyUserNsMod"
-            ipshell = IPython.terminal.embed.InteractiveShellEmbed.instance(
-                user_ns=user_ns, user_module=module)
+            ipshell = IPython.terminal.embed.InteractiveShellEmbed.instance(user_ns=user_ns, user_module=module)
         except Exception:
             print("IPython not available:")
             better_exchook(*sys.exc_info(), autodebugshell=False, file=sys.stdout)
@@ -354,6 +362,7 @@ def debug_shell(user_ns, user_global_ns, traceback=None, execWrapper=None):
         print("Use simple pdb debug shell:")
         if traceback:
             import pdb
+
             pdb.post_mortem(traceback)
         else:
             simple_debug_shell(user_global_ns, user_ns)
@@ -454,6 +463,7 @@ def get_source_code(filename, lineno, module_globals=None):
     :rtype: str
     """
     import linecache
+
     linecache.checkcache(filename)
     source_code = linecache.getline(filename, lineno, module_globals)
     # In case of a multi-line statement, lineno is usually the last line.
@@ -474,7 +484,7 @@ def get_source_code(filename, lineno, module_globals=None):
             end_line += 1
             if end_line > len(lines):  # 1-indexed
                 break
-        source_code = "".join(lines[start_line - 1:end_line])  # 1-indexed
+        source_code = "".join(lines[start_line - 1 : end_line])  # 1-indexed
     return source_code
 
 
@@ -485,6 +495,7 @@ def str_visible_len(s):
     :rtype: int
     """
     import re
+
     # via: https://github.com/chalk/ansi-regex/blob/master/index.js
     s = re.sub("[\x1b\x9b][\\[()#;?]*(?:[0-9]{1,4}(?:;[0-9]{0,4})*)?[0-9A-PRZcf-nqry=><]", "", s)
     return len(s)
@@ -510,7 +521,7 @@ def get_indent_prefix(s):
     :return: the indent spaces of s
     :rtype: str
     """
-    return s[:len(s) - len(s.lstrip())]
+    return s[: len(s) - len(s.lstrip())]
 
 
 def get_same_indent_prefix(lines):
@@ -540,7 +551,7 @@ def remove_indent_lines(s):
     prefix = get_same_indent_prefix(lines)
     if prefix is None:  # not in expected format. just lstrip all lines
         return "".join([line.lstrip() for line in lines])
-    return "".join([line[len(prefix):] for line in lines])
+    return "".join([line[len(prefix) :] for line in lines])
 
 
 def replace_tab_indent(s, replace="    "):
@@ -550,7 +561,7 @@ def replace_tab_indent(s, replace="    "):
     :rtype: str
     """
     prefix = get_indent_prefix(s)
-    return prefix.replace("\t", replace) + s[len(prefix):]
+    return prefix.replace("\t", replace) + s[len(prefix) :]
 
 
 def replace_tab_indents(s, replace="    "):
@@ -585,8 +596,9 @@ class Color:
     Helper functions provided to perform terminal coloring.
     """
 
-    ColorIdxTable = {k: i for (i, k) in enumerate([
-        "black", "red", "green", "yellow", "blue", "magenta", "cyan", "white"])}
+    ColorIdxTable = {
+        k: i for (i, k) in enumerate(["black", "red", "green", "yellow", "blue", "magenta", "cyan", "white"])
+    }
 
     @classmethod
     def get_global_color_enabled(cls):
@@ -718,7 +730,7 @@ class Color:
             elif state == 1:  # string via "
                 if c == "\\":
                     state = 4
-                elif c == "\"":
+                elif c == '"':
                     color_args[i] = {}
                     state = 0
             elif state == 2:  # string via '
@@ -768,6 +780,7 @@ class DomTerm:
         :rtype: bool
         """
         import os
+
         if cls._is_domterm is not None:
             return cls._is_domterm
         if not os.environ.get("DOMTERM"):
@@ -800,7 +813,7 @@ class DomTerm:
         """
         :param io.TextIOBase|io.StringIO file:
         """
-        file.write("\033]114;\"│\"\007")
+        file.write('\033]114;"│"\007')
 
     # noinspection PyMethodMayBeStatic
     def hide_button(self, file=sys.stdout):
@@ -826,6 +839,7 @@ class DomTerm:
             and collect the data during the context (in the `with` block).
         """
         import io
+
         if hidden_stream is None:
             hidden_stream = sys.stdout
         assert isinstance(hidden_stream, io.IOBase)
@@ -881,6 +895,7 @@ class DomTerm:
         :rtype: str
         """
         import io
+
         output_buf = io.StringIO()
         self.fold_text(prefix=prefix, hidden=hidden, file=output_buf, **kwargs)
         return output_buf.getvalue()
@@ -944,6 +959,7 @@ class _OutputLinesCollector:
         self.lines, new_lines = old_lines, self.lines  # recover self.lines
         hidden_text = "".join(new_lines)
         import io
+
         output_buf = io.StringIO()
         prefix = ""
         while line[:1] == " ":
@@ -1000,7 +1016,7 @@ class _OutputLinesCollector:
                 s = self.color.py_syntax_highlight(s)
                 s = self.dom_term.fold_text_string("", s)
             else:
-                s = s[:limit - 3]  # cut before syntax highlighting, to avoid missing color endings
+                s = s[: limit - 3]  # cut before syntax highlighting, to avoid missing color endings
                 s = self.color.py_syntax_highlight(s)
                 s += "..."
         else:
@@ -1035,9 +1051,10 @@ def format_tb(tb=None, limit=None, allLocals=None, allGlobals=None, withTitle=Fa
         """
         base = os.path.basename(s)
         return (
-            color('"' + s[:-len(base)], color.fg_colors[2]) +
-            color(base, color.fg_colors[2], bold=True) +
-            color('"', color.fg_colors[2]))
+            color('"' + s[: -len(base)], color.fg_colors[2])
+            + color(base, color.fg_colors[2], bold=True)
+            + color('"', color.fg_colors[2])
+        )
 
     format_py_obj = output.pretty_print
     if tb is None:
@@ -1059,9 +1076,9 @@ def format_tb(tb=None, limit=None, allLocals=None, allGlobals=None, withTitle=Fa
     isframe = inspect.isframe
     if withTitle:
         if isframe(tb) or is_stack_summary(tb):
-            output(color('Traceback (most recent call first):', color.fg_colors[0]))
+            output(color("Traceback (most recent call first):", color.fg_colors[0]))
         else:  # expect traceback-object (or compatible)
-            output(color('Traceback (most recent call last):', color.fg_colors[0]))
+            output(color("Traceback (most recent call last):", color.fg_colors[0]))
     if with_vars is None and is_at_exit():
         # Better to not show __repr__ of some vars, as this might lead to crashes
         # when native extensions are involved.
@@ -1084,7 +1101,7 @@ def format_tb(tb=None, limit=None, allLocals=None, allGlobals=None, withTitle=Fa
     # noinspection PyBroadException
     try:
         if limit is None:
-            if hasattr(sys, 'tracebacklimit'):
+            if hasattr(sys, "tracebacklimit"):
                 limit = sys.tracebacklimit
         n = 0
         _tb = tb
@@ -1151,11 +1168,19 @@ def format_tb(tb=None, limit=None, allLocals=None, allGlobals=None, withTitle=Fa
                 if alt_fn:
                     filename = alt_fn
             name = get_func_str_from_code_object(co)
-            file_descr = "".join([
-                '  ',
-                color("File ", color.fg_colors[0], bold=True), format_filename(filename), ", ",
-                color("line ", color.fg_colors[0]), color("%d" % lineno, color.fg_colors[4]), ", ",
-                color("in ", color.fg_colors[0]), name])
+            file_descr = "".join(
+                [
+                    "  ",
+                    color("File ", color.fg_colors[0], bold=True),
+                    format_filename(filename),
+                    ", ",
+                    color("line ", color.fg_colors[0]),
+                    color("%d" % lineno, color.fg_colors[4]),
+                    ", ",
+                    color("in ", color.fg_colors[0]),
+                    name,
+                ]
+            )
             with output.fold_text_ctx(file_descr):
                 source_code = get_source_code(filename, lineno, f.f_globals)
                 if source_code:
@@ -1166,7 +1191,7 @@ def format_tb(tb=None, limit=None, allLocals=None, allGlobals=None, withTitle=Fa
                     elif isinstance(f, DummyFrame) and not f.have_vars_available:
                         pass
                     else:
-                        with output.fold_text_ctx(color('    locals:', color.fg_colors[0])):
+                        with output.fold_text_ctx(color("    locals:", color.fg_colors[0])):
                             already_printed_locals = set()  # type: typing.Set[typing.Tuple[str,...]]
                             for token_str in grep_full_py_identifiers(parse_py_statement(source_code)):
                                 splitted_token = tuple(token_str.split("."))
@@ -1175,24 +1200,30 @@ def format_tb(tb=None, limit=None, allLocals=None, allGlobals=None, withTitle=Fa
                                         continue
                                     token_value = None
                                     token_value = _try_set(
-                                        token_value, color("<local> ", color.fg_colors[0]),
-                                        lambda: format_py_obj(_resolve_identifier(f.f_locals, token)))
+                                        token_value,
+                                        color("<local> ", color.fg_colors[0]),
+                                        lambda: format_py_obj(_resolve_identifier(f.f_locals, token)),
+                                    )
                                     token_value = _try_set(
-                                        token_value, color("<global> ", color.fg_colors[0]),
-                                        lambda: format_py_obj(_resolve_identifier(f.f_globals, token)))
+                                        token_value,
+                                        color("<global> ", color.fg_colors[0]),
+                                        lambda: format_py_obj(_resolve_identifier(f.f_globals, token)),
+                                    )
                                     token_value = _try_set(
-                                        token_value, color("<builtin> ", color.fg_colors[0]),
-                                        lambda: format_py_obj(_resolve_identifier(f.f_builtins, token)))
+                                        token_value,
+                                        color("<builtin> ", color.fg_colors[0]),
+                                        lambda: format_py_obj(_resolve_identifier(f.f_builtins, token)),
+                                    )
                                     token_value = token_value or color("<not found>", color.fg_colors[0])
-                                    prefix = (
-                                        '      %s ' % color(".", color.fg_colors[0], bold=True).join(token) +
-                                        color("= ", color.fg_colors[0], bold=True))
+                                    prefix = "      %s " % color(".", color.fg_colors[0], bold=True).join(
+                                        token
+                                    ) + color("= ", color.fg_colors[0], bold=True)
                                     output(prefix, token_value)
                                     already_printed_locals.add(token)
                             if len(already_printed_locals) == 0:
                                 output(color("       no locals", color.fg_colors[0]))
                 else:
-                    output(color('    -- code not available --', color.fg_colors[0]))
+                    output(color("    -- code not available --", color.fg_colors[0]))
             if isframe(_tb):
                 _tb = _tb.f_back
             elif is_stack_summary(_tb):
@@ -1206,6 +1237,7 @@ def format_tb(tb=None, limit=None, allLocals=None, allGlobals=None, withTitle=Fa
     except Exception:
         output(color("ERROR: cannot get more detailed exception info because:", color.fg_colors[1], bold=True))
         import traceback
+
         for line in traceback.format_exc().split("\n"):
             output("   " + line)
 
@@ -1225,9 +1257,9 @@ def print_tb(tb, file=None, **kwargs):
     file.flush()
 
 
-def better_exchook(etype, value, tb,
-                   debugshell=False, autodebugshell=True,
-                   file=None, with_color=None, with_preamble=True):
+def better_exchook(
+    etype, value, tb, debugshell=False, autodebugshell=True, file=None, with_color=None, with_preamble=True
+):
     """
     Replacement for sys.excepthook.
 
@@ -1266,17 +1298,18 @@ def better_exchook(etype, value, tb,
         """
         base = os.path.basename(s)
         return (
-            color('"' + s[:-len(base)], color.fg_colors[2]) +
-            color(base, color.fg_colors[2], bold=True) +
-            color('"', color.fg_colors[2]))
+            color('"' + s[: -len(base)], color.fg_colors[2])
+            + color(base, color.fg_colors[2], bold=True)
+            + color('"', color.fg_colors[2])
+        )
 
     if with_preamble:
         output(color("EXCEPTION", color.fg_colors[1], bold=True))
     all_locals, all_globals = {}, {}
     if tb is not None:
         output.lines.extend(
-            format_tb(
-                tb=tb, allLocals=all_locals, allGlobals=all_globals, withTitle=True, with_color=color.enable))
+            format_tb(tb=tb, allLocals=all_locals, allGlobals=all_globals, withTitle=True, with_color=color.enable)
+        )
     else:
         output(color("better_exchook: traceback unknown", color.fg_colors[1]))
 
@@ -1285,17 +1318,24 @@ def better_exchook(etype, value, tb,
         # so do it in a similar way here as well.
         filename = value.filename
         # Keep the output somewhat consistent with format_tb.
-        file_descr = "".join([
-            '  ',
-            color("File ", color.fg_colors[0], bold=True), format_filename(filename), ", ",
-            color("line ", color.fg_colors[0]), color("%d" % value.lineno, color.fg_colors[4])])
+        file_descr = "".join(
+            [
+                "  ",
+                color("File ", color.fg_colors[0], bold=True),
+                format_filename(filename),
+                ", ",
+                color("line ", color.fg_colors[0]),
+                color("%d" % value.lineno, color.fg_colors[4]),
+            ]
+        )
         with output.fold_text_ctx(file_descr):
             if not os.path.isfile(filename):
                 alt_fn = fallback_findfile(filename)
                 if alt_fn:
                     output(
-                        color("    -- couldn't find file, trying this instead: ", color.fg_colors[0]) +
-                        format_filename(alt_fn))
+                        color("    -- couldn't find file, trying this instead: ", color.fg_colors[0])
+                        + format_filename(alt_fn)
+                    )
                     filename = alt_fn
             source_code = get_source_code(filename, value.lineno)
             if source_code:
@@ -1306,7 +1346,7 @@ def better_exchook(etype, value, tb,
                 indent_prefix = get_same_indent_prefix(lines)
                 if indent_prefix is None:
                     indent_prefix = ""
-                source_code = "".join([line[len(indent_prefix):] for line in lines])
+                source_code = "".join([line[len(indent_prefix) :] for line in lines])
                 source_code = source_code.rstrip()
                 prefix = "    line: "
                 output(prefix, color.py_syntax_highlight(source_code), color=color.fg_colors[0])
@@ -1324,7 +1364,7 @@ def better_exchook(etype, value, tb,
         try:
             return str(value)
         except Exception:
-            return '<unprintable %s object>' % type(value).__name__
+            return "<unprintable %s object>" % type(value).__name__
 
     # noinspection PyShadowingNames
     def _format_final_exc_line(etype, value):
@@ -1336,9 +1376,12 @@ def better_exchook(etype, value, tb,
         return line
 
     # noinspection PyUnresolvedReferences
-    if (isinstance(etype, BaseException) or
-            (hasattr(types, "InstanceType") and isinstance(etype, types.InstanceType)) or
-            etype is None or type(etype) is str):
+    if (
+        isinstance(etype, BaseException)
+        or (hasattr(types, "InstanceType") and isinstance(etype, types.InstanceType))
+        or etype is None
+        or type(etype) is str
+    ):
         output(_format_final_exc_line(etype, value))
     else:
         output(_format_final_exc_line(etype.__name__, value))
@@ -1448,6 +1491,7 @@ def get_func_from_code_object(co, frame=None):
     """
     import gc
     import types
+
     assert isinstance(co, (types.CodeType, DummyFrame))
     _attr_name = "__code__" if PY3 else "func_code"
     if frame:
@@ -1488,9 +1532,9 @@ def _get_loaded_module_from_filename(filename):
     # Update the filename to module name cache and check yet again
     # Copy sys.modules in order to cope with changes while iterating
     for modname, module in sys.modules.copy().items():
-        f = getattr(module, '__file__', None)
+        f = getattr(module, "__file__", None)
         if f:
-            if f.endswith('.pyc') or f.endswith('.pyo'):
+            if f.endswith(".pyc") or f.endswith(".pyo"):
                 f = f[:-1]
             _loaded_module_from_filename_cache[f] = modname
     if filename in _loaded_module_from_filename_cache:
@@ -1560,6 +1604,7 @@ class ExtendedFrameSummary(FrameSummary):
     """
     Extends :class:`FrameSummary` by ``self.tb_frame``.
     """
+
     def __init__(self, frame, **kwargs):
         super(ExtendedFrameSummary, self).__init__(**kwargs)
         self.tb_frame = frame
@@ -1591,7 +1636,7 @@ class DummyFrame:
         self.f_locals = f_locals or {}
         self.f_globals = f_globals or {}
         self.f_builtins = f_builtins or {}
-        self.have_vars_available = (f_locals is not None or f_globals is not None or f_builtins is not None)
+        self.have_vars_available = f_locals is not None or f_globals is not None or f_builtins is not None
 
 
 # noinspection PyPep8Naming,PyUnusedLocal
@@ -1619,8 +1664,7 @@ def _StackSummary_extract(frame_gen, limit=None, lookup_lines=True, capture_loca
         co = f.f_code
         filename = co.co_filename
         name = co.co_name
-        result.append(ExtendedFrameSummary(
-            frame=f, filename=filename, lineno=lineno, name=name, lookup_line=False))
+        result.append(ExtendedFrameSummary(frame=f, filename=filename, lineno=lineno, name=name, lookup_line=False))
     return result
 
 
@@ -1643,6 +1687,7 @@ def replace_traceback_format_tb():
     and is not officially supported by Python.
     """
     import traceback
+
     traceback.format_tb = format_tb
     if hasattr(traceback, "StackSummary"):
         traceback.StackSummary.format = format_tb

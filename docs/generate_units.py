@@ -26,28 +26,27 @@ A performance comparison of the different LSTM Layers is available :ref:`here <t
 
 
 def generate():
-  RecLayer._create_rnn_cells_dict()
-  layer_names = sorted(list(RecLayer._rnn_cells_dict.keys()))
+    RecLayer._create_rnn_cells_dict()
+    layer_names = sorted(list(RecLayer._rnn_cells_dict.keys()))
 
-  rst_file = open("layer_reference/units.rst", "w")
-  rst_file.write(header_text)
+    rst_file = open("layer_reference/units.rst", "w")
+    rst_file.write(header_text)
 
-  for layer_name in layer_names:
-    unit_class = RecLayer.get_rnn_cell_class(layer_name)
+    for layer_name in layer_names:
+        unit_class = RecLayer.get_rnn_cell_class(layer_name)
 
-    if issubclass(unit_class, RNNCell) or issubclass(unit_class, RecSeqCellOp):
-      module = unit_class.__module__
-      name = unit_class.__name__
+        if issubclass(unit_class, RNNCell) or issubclass(unit_class, RecSeqCellOp):
+            module = unit_class.__module__
+            name = unit_class.__name__
 
-      if name.endswith("Cell") and not name.startswith("_"):
-        rst_file.write("\n")
-        rst_file.write("%s\n" % name)
-        rst_file.write("%s\n" % ("-" * len(name)))
-        rst_file.write("\n")
-        rst_file.write(".. autoclass:: %s.%s\n" % (module, name))
-        rst_file.write("    :members:\n")
-        rst_file.write("    :undoc-members:\n")
-        rst_file.write("\n")
+            if name.endswith("Cell") and not name.startswith("_"):
+                rst_file.write("\n")
+                rst_file.write("%s\n" % name)
+                rst_file.write("%s\n" % ("-" * len(name)))
+                rst_file.write("\n")
+                rst_file.write(".. autoclass:: %s.%s\n" % (module, name))
+                rst_file.write("    :members:\n")
+                rst_file.write("    :undoc-members:\n")
+                rst_file.write("\n")
 
-  rst_file.close()
-
+    rst_file.close()

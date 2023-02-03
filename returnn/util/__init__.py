@@ -1,4 +1,3 @@
-
 """
 Basic utilities for RETURNN, such as some Numpy utilities, or system utilities, or other helpers.
 Independent from other parts of RETURNN.

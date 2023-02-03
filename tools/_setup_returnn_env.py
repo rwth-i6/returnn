@@ -1,4 +1,3 @@
-
 """
 Import this module to have the side effect
 that the RETURNN root dir will be added to ``sys.path``,

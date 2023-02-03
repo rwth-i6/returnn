@@ -1,4 +1,3 @@
-
 """
 Common settings for linters, e.g. pycharm-inspect.py or pylint.py.
 
@@ -101,59 +100,57 @@ assert os.path.exists("%s/rnn.py" % _root_dir)
 # Proceed like this: Fix all warnings for some file, then remove it from this list.
 # I removed already all files which really should not have warnings (mostly the TF backend + shared files).
 ignore_count_for_files = {
-  'returnn/util/fsa.py',
-  'returnn/util/task_system.py',
-  'returnn/datasets/bundle_file.py',
-  'returnn/datasets/cached.py',
-  'returnn/datasets/normalization_data.py',
-  'returnn/datasets/raw_wav.py',
-  'returnn/datasets/stereo.py',
-  'returnn/tf/layers/segmental_model.py',
-
-  # Copied to RETURNN, still work-in-progress to clean up.
-  "returnn/extern/graph_editor/reroute.py",
-  "returnn/extern/graph_editor/subgraph.py",
-  "returnn/extern/graph_editor/transform.py",
-  "returnn/extern/graph_editor/util.py",
-  "returnn/extern/official_tf_resnet/resnet_model.py",
-
-  # Ignore some outdated or rarely used tools/demos.
-  'tools/collect-orth-symbols.py',
-  'tools/debug-plot-search-scores.py',
-  'tools/import-blocks-mt-model.py',
-  'tools/import-sprint-nn.py',
-  'tools/import-t2t-mt-model.py',
-  'demos/mdlstm/IAM/create_IAM_dataset.py',
-  'demos/mdlstm/IAM/decode.py',
-  'demos/mdlstm/artificial/create_test_h5.py',
-  'demos/mdlstm/artificial_rgb/create_test_h5.py',
+    "returnn/util/fsa.py",
+    "returnn/util/task_system.py",
+    "returnn/datasets/bundle_file.py",
+    "returnn/datasets/cached.py",
+    "returnn/datasets/normalization_data.py",
+    "returnn/datasets/raw_wav.py",
+    "returnn/datasets/stereo.py",
+    "returnn/tf/layers/segmental_model.py",
+    # Copied to RETURNN, still work-in-progress to clean up.
+    "returnn/extern/graph_editor/reroute.py",
+    "returnn/extern/graph_editor/subgraph.py",
+    "returnn/extern/graph_editor/transform.py",
+    "returnn/extern/graph_editor/util.py",
+    "returnn/extern/official_tf_resnet/resnet_model.py",
+    # Ignore some outdated or rarely used tools/demos.
+    "tools/collect-orth-symbols.py",
+    "tools/debug-plot-search-scores.py",
+    "tools/import-blocks-mt-model.py",
+    "tools/import-sprint-nn.py",
+    "tools/import-t2t-mt-model.py",
+    "demos/mdlstm/IAM/create_IAM_dataset.py",
+    "demos/mdlstm/IAM/decode.py",
+    "demos/mdlstm/artificial/create_test_h5.py",
+    "demos/mdlstm/artificial_rgb/create_test_h5.py",
 }
 
 
 def find_all_py_source_files():
-  """
-  :rtype: list[str]
-  """
-  # Earlier this was a `glob("%s/*.py" % _root_dir)`. But not anymore, since we have the new package structure.
-  src_files = []
-  for root, dirs, files in os.walk(_root_dir):
-    if root == _root_dir:
-      root = ""
-    else:
-      assert root.startswith(_root_dir + "/")
-      root = root[len(_root_dir) + 1:]  # relative to the root
-      root += "/"
-    # Ignore tests, or other irrelevant directories.
-    if root == "":
-      dirs[:] = ["returnn", "demos", "tools"]
-    else:
-      dirs[:] = sorted(dirs)
-      # Ignore extern git submodules.
-      dirs[:] = [d for d in dirs if not os.path.exists("%s/%s%s/.git" % (_root_dir, root, d))]
-    for file in sorted(files):
-      if not file.endswith(".py"):
-        continue
-      if file == "_setup_info_generated.py":
-        continue
-      src_files.append(root + file)
-  return src_files
+    """
+    :rtype: list[str]
+    """
+    # Earlier this was a `glob("%s/*.py" % _root_dir)`. But not anymore, since we have the new package structure.
+    src_files = []
+    for root, dirs, files in os.walk(_root_dir):
+        if root == _root_dir:
+            root = ""
+        else:
+            assert root.startswith(_root_dir + "/")
+            root = root[len(_root_dir) + 1 :]  # relative to the root
+            root += "/"
+        # Ignore tests, or other irrelevant directories.
+        if root == "":
+            dirs[:] = ["returnn", "demos", "tools"]
+        else:
+            dirs[:] = sorted(dirs)
+            # Ignore extern git submodules.
+            dirs[:] = [d for d in dirs if not os.path.exists("%s/%s%s/.git" % (_root_dir, root, d))]
+        for file in sorted(files):
+            if not file.endswith(".py"):
+                continue
+            if file == "_setup_info_generated.py":
+                continue
+            src_files.append(root + file)
+    return src_files

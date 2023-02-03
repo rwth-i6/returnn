@@ -15,21 +15,22 @@ from returnn.util.basic import better_repr
 
 
 def main():
-  """
-  Main entry.
-  """
-  arg_parser = ArgumentParser()
-  arg_parser.add_argument("file")
-  args = arg_parser.parse_args()
-  try:
-    o = pickle.load(open(args.file, "rb"))
-    print(better_repr(o))
-  except BrokenPipeError:
-    print("BrokenPipeError", file=sys.stderr)
-    sys.exit(1)
+    """
+    Main entry.
+    """
+    arg_parser = ArgumentParser()
+    arg_parser.add_argument("file")
+    args = arg_parser.parse_args()
+    try:
+        o = pickle.load(open(args.file, "rb"))
+        print(better_repr(o))
+    except BrokenPipeError:
+        print("BrokenPipeError", file=sys.stderr)
+        sys.exit(1)
 
 
 if __name__ == "__main__":
-  from returnn.util import better_exchook
-  better_exchook.install()
-  main()
+    from returnn.util import better_exchook
+
+    better_exchook.install()
+    main()

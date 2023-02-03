@@ -1,4 +1,3 @@
-
 """
 This package contains modules which all provide different :class:`Dataset` implementations.
 A :class:`Dataset` is totally independent from the backend engine used (TF or Theano),

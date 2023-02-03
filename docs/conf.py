@@ -13,18 +13,21 @@ import sys
 import os
 
 if not os.path.exists("returnn"):
-  os.symlink("../returnn", "returnn")
+    os.symlink("../returnn", "returnn")
 
 sys.path += [".", "returnn"]
 
 import faulthandler
+
 faulthandler.enable()
 
 from returnn.util import better_exchook
+
 better_exchook.install()
 
 import logging
-logging.getLogger('tensorflow').disabled = True
+
+logging.getLogger("tensorflow").disabled = True
 
 # Disable compilation with Theano.
 os.environ["THEANO_FLAGS"] = "mode=FAST_COMPILE,cxx="
@@ -38,12 +41,15 @@ os.environ["C_FLAGS"] = os.environ["CFLAGS"]
 os.environ["CXX_FLAGS"] = os.environ["CFLAGS"]
 
 import generateapi
+
 generateapi.generate()
 
 import generate_units
+
 generate_units.generate()
 
 import generate_optimizer
+
 generate_optimizer.generate()
 
 # If extensions (or modules to document with autodoc) are in another directory,
@@ -60,45 +66,44 @@ generate_optimizer.generate()
 # extensions coming with Sphinx (named 'sphinx.ext.*') or your custom
 # ones.
 extensions = [
-    'sphinx.ext.autodoc',
-    'sphinx.ext.autosummary',
-    'sphinx.ext.doctest',
-    'sphinx.ext.mathjax',
-#    'sphinx.ext.viewcode',  # create HTML file of source code and link to it
-    'sphinx.ext.linkcode',  # link to github, see linkcode_resolve() below
-#    'numpydoc',
-#    'sphinx.ext.napoleon',  # alternative to numpydoc -- looks a bit worse.
+    "sphinx.ext.autodoc",
+    "sphinx.ext.autosummary",
+    "sphinx.ext.doctest",
+    "sphinx.ext.mathjax",
+    #    'sphinx.ext.viewcode',  # create HTML file of source code and link to it
+    "sphinx.ext.linkcode",  # link to github, see linkcode_resolve() below
+    #    'numpydoc',
+    #    'sphinx.ext.napoleon',  # alternative to numpydoc -- looks a bit worse.
 ]
 
 # See https://github.com/rtfd/readthedocs.org/issues/283
-mathjax_path = ('https://cdn.mathjax.org/mathjax/latest/MathJax.js?'
-                'config=TeX-AMS-MML_HTMLorMML')
+mathjax_path = "https://cdn.mathjax.org/mathjax/latest/MathJax.js?" "config=TeX-AMS-MML_HTMLorMML"
 
 # see https://stackoverflow.com/q/12206334/562769
 numpydoc_show_class_members = False
 
 # Add any paths that contain templates here, relative to this directory.
-templates_path = ['_templates']
+templates_path = ["_templates"]
 
 # The suffix of source filenames.
-source_suffix = '.rst'
+source_suffix = ".rst"
 
 # The encoding of source files.
 # source_encoding = 'utf-8-sig'
 
 # The master toctree document.
-master_doc = 'index'
+master_doc = "index"
 
 # General information about the project.
-project = u'RETURNN'
-copyright = u'2014–2020, %s contributors' % project
+project = "RETURNN"
+copyright = "2014–2020, %s contributors" % project
 
 # The version info for the project you're documenting, acts as replacement for
 # |version| and |release|, also used in various other places throughout the
 # built documents.
 #
 # The short X.Y version.
-version = '1.0'
+version = "1.0"
 # The full version, including alpha/beta/rc tags.
 release = version + "-dev"
 
@@ -114,7 +119,7 @@ release = version + "-dev"
 
 # List of patterns, relative to source directory, that match files and
 # directories to ignore when looking for source files.
-exclude_patterns = ['_build', "returnn"]
+exclude_patterns = ["_build", "returnn"]
 
 # The reST default role (used for this markup: `text`) to use for all
 # documents.
@@ -132,13 +137,13 @@ exclude_patterns = ['_build', "returnn"]
 # show_authors = False
 
 # https://stackoverflow.com/questions/5599254/how-to-use-sphinxs-autodoc-to-document-a-classs-init-self-method
-autoclass_content = 'both'
+autoclass_content = "both"
 
 # https://stackoverflow.com/questions/4692865/autodoc-params
-autodoc_member_order = 'bysource'
+autodoc_member_order = "bysource"
 
 # The name of the Pygments (syntax highlighting) style to use.
-pygments_style = 'sphinx'
+pygments_style = "sphinx"
 
 # A list of ignored prefixes for module index sorting.
 # modindex_common_prefix = []
@@ -151,57 +156,60 @@ def linkcode_resolve(domain, info):
     def find_source():
         # try to find the file and line number, based on code from numpy:
         # https://github.com/numpy/numpy/blob/master/doc/source/conf.py#L286
-        obj = sys.modules[info['module']]
-        for part in info['fullname'].split('.'):
+        obj = sys.modules[info["module"]]
+        for part in info["fullname"].split("."):
             obj = getattr(obj, part)
         import inspect
         import os
+
         fn = inspect.getsourcefile(obj)
         fn = os.path.relpath(fn, start="returnn")
         source, lineno = inspect.getsourcelines(obj)
         return fn, lineno, lineno + len(source) - 1
 
-    if domain != 'py' or not info['module']:
+    if domain != "py" or not info["module"]:
         return None
     try:
-        filename = '%s#L%d-L%d' % find_source()
+        filename = "%s#L%d-L%d" % find_source()
     except Exception:
-        filename = info['module'].replace('.', '/') + '.py'
-    tag = 'master' if 'dev' in release else ('v' + release)
+        filename = info["module"].replace(".", "/") + ".py"
+    tag = "master" if "dev" in release else ("v" + release)
     return "https://github.com/rwth-i6/returnn/blob/%s/returnn/%s" % (tag, filename)
 
 
 # -- Options for HTML output ----------------------------------------------
 
 ## Classic Python style:
-#html_theme = 'classic'
-#html_theme_options = {
+# html_theme = 'classic'
+# html_theme_options = {
 #    'stickysidebar': True,
-#}
+# }
 
 ## Read the docs style:
-if os.environ.get('READTHEDOCS') != 'True':
+if os.environ.get("READTHEDOCS") != "True":
     try:
         import sphinx_rtd_theme
     except ImportError:
         pass  # assume we have sphinx >= 1.3
     else:
         html_theme_path = [sphinx_rtd_theme.get_html_theme_path()]
-    html_theme = 'sphinx_rtd_theme'
+    html_theme = "sphinx_rtd_theme"
+
 
 def setup(app):
     app.add_css_file("fix_rtd.css")
 
+
 ## Bootstrap style:
-#import sphinx_bootstrap_theme
-#html_theme = 'bootstrap'
-#html_theme_options = {
+# import sphinx_bootstrap_theme
+# html_theme = 'bootstrap'
+# html_theme_options = {
 #    'bootswatch_theme': 'cosmo',  # see https://bootswatch.com/ for more
 #    'bootstrap_version': '3',
 #    'navbar_title': project,
 #    'source_link_position': 'footer',
-#}
-#html_theme_path = sphinx_bootstrap_theme.get_html_theme_path()
+# }
+# html_theme_path = sphinx_bootstrap_theme.get_html_theme_path()
 
 # The name for this set of Sphinx documents.  If None, it defaults to
 # "<project> v<release> documentation".
@@ -222,7 +230,7 @@ def setup(app):
 # Add any paths that contain custom static files (such as style sheets) here,
 # relative to this directory. They are copied after the builtin static files,
 # so a file named "default.css" will overwrite the builtin "default.css".
-html_static_path = ['_static']
+html_static_path = ["_static"]
 
 # Add any extra paths that contain custom files (such as robots.txt or
 # .htaccess) here, relative to this directory. These files are copied
@@ -273,7 +281,7 @@ html_show_sourcelink = False
 # html_file_suffix = None
 
 # Output file base name for HTML help builder.
-htmlhelp_basename = '%sdoc' % project.lower()
+htmlhelp_basename = "%sdoc" % project.lower()
 
 
 # -- Options for LaTeX output ---------------------------------------------
@@ -281,10 +289,8 @@ htmlhelp_basename = '%sdoc' % project.lower()
 latex_elements = {
     # The paper size ('letterpaper' or 'a4paper').
     # 'papersize': 'letterpaper',
-
     # The font size ('10pt', '11pt' or '12pt').
     # 'pointsize': '10pt',
-
     # Additional stuff for the LaTeX preamble.
     # 'preamble': '',
 }
@@ -293,8 +299,7 @@ latex_elements = {
 # (source start file, target name, title,
 #  author, documentclass [howto, manual, or own class]).
 latex_documents = [
-    ('index', '%s.tex' % project.lower(), u'%s Documentation' % project,
-     u'%s contributors' % project, 'manual'),
+    ("index", "%s.tex" % project.lower(), "%s Documentation" % project, "%s contributors" % project, "manual"),
 ]
 
 # The name of an image file (relative to this directory) to place at the top of
@@ -322,10 +327,7 @@ latex_documents = [
 
 # One entry per manual page. List of tuples
 # (source start file, name, description, authors, manual section).
-man_pages = [
-    ('index', project.lower(), u'%s Documentation' % project,
-     [u'%s contributors' % project], 1)
-]
+man_pages = [("index", project.lower(), "%s Documentation" % project, ["%s contributors" % project], 1)]
 
 # If true, show URL addresses after external links.
 # man_show_urls = False
@@ -337,9 +339,15 @@ man_pages = [
 # (source start file, target name, title, author,
 #  dir menu entry, description, category)
 texinfo_documents = [
-    ('index', project.lower(), u'%s Documentation' % project,
-     u'%s contributors' % project, project,
-     'One line description of project.', 'Miscellaneous'),
+    (
+        "index",
+        project.lower(),
+        "%s Documentation" % project,
+        "%s contributors" % project,
+        project,
+        "One line description of project.",
+        "Miscellaneous",
+    ),
 ]
 
 # Documents to append as an appendix to all manuals.
@@ -353,4 +361,3 @@ texinfo_documents = [
 
 # If true, do not generate a @detailmenu in the "Top" node's menu.
 # texinfo_no_detailmenu = False
-
