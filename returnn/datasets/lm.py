@@ -54,8 +54,11 @@ class LmDataset(CachedDataset2):
         **kwargs,
     ):
         """
-        To use the LmDataset with words or characters, either ``orth_symbols_file`` or ``orth_symbols_map_file`` has to be
-        specified (both is not possible). If words should be used, set ``word_based`` to True.
+        To use the LmDataset with words or characters,
+        either ``orth_symbols_file`` or ``orth_symbols_map_file``
+        has to be
+        specified (both is not possible).
+        If words should be used, set ``word_based`` to True.
 
         The LmDatasets also support the conversion of words to phonemes with the help of the
         :class:`LmDataset.PhoneSeqGenerator` class. To enable this mode, the input parameters to
@@ -77,8 +80,8 @@ class LmDataset(CachedDataset2):
                                                        or a pickled dictionary
         :param str|()->str|None orth_replace_map_file: JSON file with replacement dict for orth symbols.
         :param bool word_based: whether to parse single words, or otherwise will be character based.
-        :param str|None word_end_symbol: If provided and if word_based is False (character based modeling), token to be used
-          to represent word ends.
+        :param str|None word_end_symbol: If provided and if word_based is False (character based modeling),
+            token to be used to represent word ends.
         :param str|None seq_end_symbol: what to add at the end, if given.
           will be set as postfix=[seq_end_symbol] or postfix=[] for parse_orth_opts.
         :param str|None unknown_symbol: token to represent unknown words.
@@ -1132,18 +1135,19 @@ class TranslationDataset(CachedDataset2):
     ):
         """
         :param str path: the directory containing the files
-        :param str file_postfix: e.g. "train" or "dev". it will then search for "source." + postfix and "target." + postfix.
+        :param str file_postfix: e.g. "train" or "dev".
+            it will then search for "source." + postfix and "target." + postfix.
         :param bool random_shuffle_epoch1: if True, will also randomly shuffle epoch 1. see self.init_seq_order().
         :param str source_postfix: will concat this at the end of the source.
         :param str target_postfix: will concat this at the end of the target.
-          You might want to add some sentence-end symbol.
+            You might want to add some sentence-end symbol.
         :param bool source_only: if targets are not available
         :param bool search_without_reference:
         :param str|dict[str,str]|None unknown_label: Label to replace out-of-vocabulary words with, e.g. "<UNK>".
-          If not given, will not replace unknowns but throw an error. Can also be a dict data_key -> unknown_label
-          to configure for each data key separately (default for each key is None).
+            If not given, will not replace unknowns but throw an error. Can also be a dict data_key -> unknown_label
+            to configure for each data key separately (default for each key is None).
         :param str seq_list_file: filename. line-separated list of line numbers defining fixed sequence order.
-          multiple occurrences supported, thus allows for repeating examples while loading only once.
+            multiple occurrences supported, thus allows for repeating examples while loading only once.
         :param bool use_cache_manager: uses :func:`Util.cf` for files
         """
 
@@ -1320,7 +1324,8 @@ class TranslationDataset(CachedDataset2):
         """
         Note that there might be multiple items in the vocabulary (e.g. "<S>" and "</S>")
         which map to the same label index.
-        We sort the list by lexical order and the last entry for a particular label index is used ("<S>" in that example).
+        We sort the list by lexical order
+        and the last entry for a particular label index is used ("<S>" in that example).
 
         :param str data_key: e.g. "data" or "classes"
         :rtype: dict[int,str]
@@ -1586,7 +1591,8 @@ class TranslationFactorsDataset(TranslationDataset):
 
     def _factored_words_to_numpy(self, data_keys, words, postfix):
         """
-        Creates list of words for each factor separately and converts to numpy by calling self._words_to_numpy() for each.
+        Creates list of words for each factor separately
+        and converts to numpy by calling self._words_to_numpy() for each.
 
         :param list[str] data_keys: data keys corresponding to the factors present for each word
         :param list[str] words: list of factored words of the form "<factor_0>|<factor_1>|..."
@@ -1621,21 +1627,28 @@ class TranslationFactorsDataset(TranslationDataset):
 
 class ConfusionNetworkDataset(TranslationDataset):
     """
-    This dataset allows for multiple (weighted) options for each word in the source sequence. In particular, it can be
-    used to represent confusion networks. Two matrices (of dimension source length x max_density) will be provided as
-    input to the network, one containing the word ids ("sparse_inputs") and one containing the weights ("sparse_weights").
+    This dataset allows for multiple (weighted) options for each word in the source sequence.
+    In particular, it can be
+    used to represent confusion networks.
+    Two matrices (of dimension source length x max_density) will be provided as
+    input to the network,
+    one containing the word ids ("sparse_inputs")
+    and one containing the weights ("sparse_weights").
     The matrices are read from the following input format (example):
 
     "__ALT__ we're|0.999659__were|0.000341148 a|0.977656__EPS|0.0223441 social|1.0 species|1.0"
 
-    Input positions are separated by a space, different word options at one positions are separated by two underscores.
-    Each word option has a weight appended to it, separated by "|". If "__ALT__" is missing, the line is interpreted
-    as a regular plain text sentence. For this, all weights are set to 1.0 and only one word option is used at each
-    position. Epsilon arcs of confusion networks can be represented by a special token (e.g. "EPS"), which has to be
+    Input positions are separated by a space,
+    different word options at one positions are separated by two underscores.
+    Each word option has a weight appended to it, separated by "|".
+    If "__ALT__" is missing, the line is interpreted
+    as a regular plain text sentence.
+    For this, all weights are set to 1.0 and only one word option is used at each position.
+    Epsilon arcs of confusion networks can be represented by a special token (e.g. "EPS"), which has to be
     added to the source vocabulary.
 
-    Via "seq_list_file" (see TranslationDataset) it is possible to give an explicit order of training examples. This
-    can e.g. be used to repeat the confusion net part of the training data without loading it several times.
+    Via "seq_list_file" (see TranslationDataset) it is possible to give an explicit order of training examples.
+    This can e.g. be used to repeat the confusion net part of the training data without loading it several times.
     """
 
     main_source_data_key = "sparse_inputs"
@@ -1643,11 +1656,12 @@ class ConfusionNetworkDataset(TranslationDataset):
     def __init__(self, max_density=20, **kwargs):
         """
         :param str path: the directory containing the files
-        :param str file_postfix: e.g. "train" or "dev". it will then search for "source." + postfix and "target." + postfix.
+        :param str file_postfix: e.g. "train" or "dev".
+            it will then search for "source." + postfix and "target." + postfix.
         :param bool random_shuffle_epoch1: if True, will also randomly shuffle epoch 1. see self.init_seq_order().
         :param None|str source_postfix: will concat this at the end of the source. e.g.
         :param None|str target_postfix: will concat this at the end of the target.
-          You might want to add some sentence-end symbol.
+            You might want to add some sentence-end symbol.
         :param bool source_only: if targets are not available
         :param str|None unknown_label: "UNK" or so. if not given, then will not replace unknowns but throw an error
         :param int max_density: the density of the confusion network: max number of arcs per slot

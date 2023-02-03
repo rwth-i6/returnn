@@ -71,7 +71,7 @@ class EpochWiseFilter:
             # Select subset of seq_order. Keep order as-is.
             seq_order = [seq_idx for seq_idx in seq_order if seq_idx in selected_seq_idxs]
             print(
-                ("%sOld mean seq len is %f, new is %f, requested max is %f." " Old num seqs is %i, new num seqs is %i.")
+                "%sOld mean seq len is %f, new is %f, requested max is %f." " Old num seqs is %i, new num seqs is %i."
                 % (
                     debug_msg_prefix,
                     float(numpy.mean(lens_and_seqs[:, 0])),
@@ -297,8 +297,10 @@ class MetaDataset(CachedDataset2):
         if seq_list_file:
             seq_list = Dataset._load_seq_list_file(seq_list_file, expect_list=False)
         else:
-            # We create a sequence list from all the sequences of the default dataset and hope that it also applies to the
-            # other datasets. This can only work if all datasets have the same tag format and the sequences in the other
+            # We create a sequence list from all the sequences of the default dataset
+            # and hope that it also applies to the
+            # other datasets.
+            # This can only work if all datasets have the same tag format and the sequences in the other
             # datasets are a subset of those in the default dataset.
             default_dataset = self.datasets[self.default_dataset_key]
             assert isinstance(default_dataset, Dataset)
@@ -310,11 +312,13 @@ class MetaDataset(CachedDataset2):
                 seq_list = default_dataset.get_all_tags()
             except NotImplementedError:
                 raise NotImplementedError(
-                    "Unsupported %s used as default in MetaDataset. Only datasets with known and tagged sequences can be used."
+                    "Unsupported %s used as default in MetaDataset."
+                    " Only datasets with known and tagged sequences can be used."
                     % type(default_dataset)
                 )
 
-            # Catch index out of bounds errors. Whether the tags are actually valid will be checked in _check_dataset_seq().
+            # Catch index out of bounds errors.
+            # Whether the tags are actually valid will be checked in _check_dataset_seq().
             for key in self.dataset_keys:
                 if key == self.default_dataset_key:
                     continue
@@ -841,15 +845,20 @@ class CombinedDataset(CachedDataset2):
     am-dataset:data -> am-data, am-dataset:classes -> am-classes, lm-dataset:data -> lm-data.
     For each sequence idx, it will select one of the given datasets, fill in the data-keys of this dataset
     and will return empty sequences for the remaining datasets.
-    The default sequence ordering is to first go through all sequences of dataset 1, then dataset 2 and so on. If
-    seq_ordering is set to 'random_dataset', we always pick one of the datasets at random (equally distributed over the
-    sum of num-seqs), but still go through the sequences of a particular dataset in the order defined for it in the config
-    (in order if not defined). For 'sorted' or 'laplace' the sequence length as provided by the datasets is used to sort
-    all sequences jointly. Note, that this overrides the sequence order of the sub-datasets (also the case for 'random').
+    The default sequence ordering is to first go through all sequences of dataset 1, then dataset 2 and so on.
+    If seq_ordering is set to 'random_dataset',
+    we always pick one of the datasets at random (equally distributed over the sum of num-seqs),
+    but still go through the sequences of a particular dataset in the order defined for it in the config
+    (in order if not defined).
+    For 'sorted' or 'laplace' the sequence length as provided by the datasets is used to sort
+    all sequences jointly.
+    Note, that this overrides the sequence order of the sub-datasets (also the case for 'random').
     'partition_epoch' of the CombinedDataset is applied to the joint sequence order for all sequences.
-    'partition_epoch' of the sub-datasets is still applied. This can be used to adjust the relative size of
-    the datasets. (However, do not combine 'partition_epoch' on both levels, as this leads to an unexpected selection
-    of sequences.) To upscale a dataset, rather than downscaling the others via 'partition_epoch', use the
+    'partition_epoch' of the sub-datasets is still applied.
+    This can be used to adjust the relative size of the datasets.
+    (However, do not combine 'partition_epoch' on both levels,
+    as this leads to an unexpected selection of sequences.)
+    To upscale a dataset, rather than downscaling the others via 'partition_epoch', use the
     'repeat_epoch' option.
 
     Also see :class:`MetaDataset`.
@@ -951,9 +960,10 @@ class CombinedDataset(CachedDataset2):
             self._num_seqs = num_seqs_saved
             return False
 
-        # First init sequence order for sub-datasets as usual to get a list of available sequences. This way, sorting and
-        # partition epoch of the individual sub-datasets is still supported. Later we will call init_seq_order again with a
-        # sequence list to e.g. apply joint sorting or partition epoch of all sequences.
+        # First init sequence order for sub-datasets as usual to get a list of available sequences.
+        # This way, sorting and partition epoch of the individual sub-datasets is still supported.
+        # Later we will call init_seq_order again with a sequence list
+        # to e.g. apply joint sorting or partition epoch of all sequences.
         for dataset in self.datasets.values():
             dataset.init_seq_order(epoch=epoch)
 
@@ -1047,7 +1057,8 @@ class CombinedDataset(CachedDataset2):
 
     def _get_random_dataset_seq_order(self, total_num_seqs):
         """
-        Choose datasets randomly but preserve order within each dataset. This sorting method is unique to CombinedDataset.
+        Choose datasets randomly but preserve order within each dataset.
+        This sorting method is unique to CombinedDataset.
 
         :param int total_num_seqs:
         :returns: sequence order
@@ -1060,7 +1071,8 @@ class CombinedDataset(CachedDataset2):
         rnd.shuffle(dataset_ids)
 
         # Create the actual seq_order list.
-        # We want to keep the order within the sub-datasets, thus we assign seq_ids by simply counting up for each dataset.
+        # We want to keep the order within the sub-datasets,
+        # thus we assign seq_ids by simply counting up for each dataset.
         # We however have to account for the different offsets needed when accessing self.dataset_seq_idx_list later.
         seq_order = []
         counters = [0] * len(self.datasets)

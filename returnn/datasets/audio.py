@@ -53,17 +53,21 @@ class OggZipDataset(CachedDataset2):
     ):
         """
         :param str|list[str] path: filename to zip
-        :param dict[str]|None audio: options for :class:`ExtractAudioFeatures`. use {} for default. None means to disable.
+        :param dict[str]|None audio: options for :class:`ExtractAudioFeatures`.
+            use {} for default. None means to disable.
         :param dict[str]|None targets: options for :func:`Vocabulary.create_vocab` (e.g. :class:`BytePairEncoding`)
-        :param str|list[str]|((str)->str)|None targets_post_process: :func:`get_post_processor_function`, applied on orth
+        :param str|list[str]|((str)->str)|None targets_post_process: :func:`get_post_processor_function`,
+            applied on orth
         :param bool use_cache_manager: uses :func:`Util.cf`
         :param str|None segment_file: .txt or .gz text file containing sequence tags that will be used as whitelist
         :param bool zip_audio_files_have_name_as_prefix:
-        :param int|None fixed_random_seed: for the shuffling, e.g. for seq_ordering='random'. otherwise epoch will be used
+        :param int|None fixed_random_seed: for the shuffling, e.g. for seq_ordering='random'.
+            otherwise epoch will be used
         :param float|int|None fixed_random_subset:
           Value in [0,1] to specify the fraction, or integer >=1 which specifies number of seqs.
           If given, will use this random subset. This will be applied initially at loading time,
-          i.e. not dependent on the epoch. It will use an internally hardcoded fixed random seed, i.e. it's deterministic.
+          i.e. not dependent on the epoch.
+          It will use an internally hardcoded fixed random seed, i.e. it's deterministic.
         :param dict|None epoch_wise_filter: see init_seq_order
         """
         import os
