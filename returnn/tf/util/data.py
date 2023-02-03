@@ -124,6 +124,8 @@ class Dim(object):
         self.match_priority = match_priority
         if src_data:
             assert isinstance(src_data, Data) and isinstance(src_axis, int)
+        if dyn_size_ext:
+            dyn_size_ext = dyn_size_ext.copy()
         if not batch and dyn_size_ext:
             batch = dyn_size_ext.batch
             if not control_flow_ctx:
