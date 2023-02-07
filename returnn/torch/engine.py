@@ -10,6 +10,7 @@ import os
 from torch.utils.data import DataLoader
 from random import random
 
+from returnn.torch.data.returnn_dataset_wrapper import DatasetWrapper
 from returnn.log import log
 from returnn.engine.base import EngineBase
 from returnn.learning_rate_control import load_learning_rate_control_from_config, LearningRateControl
@@ -182,7 +183,7 @@ class Engine(EngineBase):
         :return: PyTorch data loader created from given RETURNN dataset
         :rtype: DataLoader
         """
-        wrapped_dataset = data_pipeline.DatasetWrapper(dataset, epoch=self.epoch)
+        wrapped_dataset = DatasetWrapper(dataset, epoch=self.epoch)
 
         chunking = self.config.typed_value("chunking", None)
         if chunking:
