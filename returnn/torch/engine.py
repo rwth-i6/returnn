@@ -18,7 +18,7 @@ from returnn.torch.updater import Updater
 from returnn.util import basic as util
 from returnn.util import NumbersDict
 from .data import pipeline as data_pipeline
-from .data.returnn_dataset_wrapper import DatasetWrapper
+from .data.returnn_dataset_wrapper import IterableDatasetWrapper
 
 
 class Engine(EngineBase):
@@ -183,7 +183,7 @@ class Engine(EngineBase):
         :return: PyTorch data loader created from given RETURNN dataset
         :rtype: DataLoader
         """
-        wrapped_dataset = DatasetWrapper(dataset, epoch=self.epoch)
+        wrapped_dataset = IterableDatasetWrapper(dataset, epoch=self.epoch)
 
         chunking = self.config.typed_value("chunking", None)
         if chunking:
