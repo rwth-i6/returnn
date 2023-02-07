@@ -34,6 +34,18 @@ def collate_batch(batch):
 class Chunker(torch.utils.data.IterableDataset):
     """
     Splits each sequence in the given dataset into chunks according to the 'chunking' config option.
+    So it transforms one sequences into multiple sequences.
+
+    This is implemented as a dataset, as this seems to be the common way in PyTorch,
+    as it is also commonly done in Fairseq:
+        https://github.com/facebookresearch/fairseq/tree/main/fairseq/data
+        https://github.com/facebookresearch/fairseq/blob/main/fairseq/data/subsample_dataset.py
+
+    We potentially could also implement this as part of the data loader.
+
+    We also have :class:`ChunkShuffleDataset` on RETURNN dataset level.
+    However, having this separate pure PyTorch implementation is useful to allow to use
+    other PyTorch datasets more directly, including also HuggingFace datasets.
     """
 
     def __init__(self, dataset: torch.utils.data.IterableDataset, chunking):
