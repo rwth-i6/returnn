@@ -6,13 +6,13 @@ import sys
 from copy import deepcopy
 
 import torch
-from torch.utils.data import IterableDataset
+import torch.utils.data
 
 from returnn.util.basic import NumbersDict
 
 
 # noinspection PyAbstractClass
-class DatasetWrapper(IterableDataset):
+class DatasetWrapper(torch.utils.data.IterableDataset):
     """
     Converts a RETURNN dataset into a PyTorch IterableDataset.
     """
@@ -65,14 +65,14 @@ def collate_batch(batch):
 
 
 # noinspection PyAbstractClass
-class Chunker(IterableDataset):
+class Chunker(torch.utils.data.IterableDataset):
     """
     Splits each sequence in the given dataset into chunks according to the 'chunking' config option.
     """
 
-    def __init__(self, dataset, chunking):
+    def __init__(self, dataset: torch.utils.data.IterableDataset, chunking):
         """
-        :param torch.IterableDataset dataset: dataset to apply chunking to
+        :param dataset: dataset to apply chunking to
         :param None|int|(int,int)|dict|(dict,dict) chunking: tuple (chunk_size, chunk_step).
             If given as single value,
             value will be used for both.
@@ -162,7 +162,7 @@ class Chunker(IterableDataset):
 
 
 # noinspection PyAbstractClass
-class Batching(IterableDataset):
+class Batching(torch.utils.data.IterableDataset):
     """
     Converts a dataset yielding sequences (dict data_key -> array per sequence) into a dataset yielding lists of
     these sequences, i.e. batches.
@@ -171,9 +171,9 @@ class Batching(IterableDataset):
     Note, that batches are not yet merged into a single (padded) data array here, this happens in 'collate_batch()'.
     """
 
-    def __init__(self, dataset, batch_size=1, max_seqs=None):
+    def __init__(self, dataset: torch.utils.data.IterableDataset, batch_size=1, max_seqs=None):
         """
-        :param torch.IterableDataset dataset: dataset to apply batching to
+        :param dataset: dataset to apply batching to
         :param int|dict[str,int]|None batch_size: Maximum number of time steps (e.g. audio frames / words) in one
             batch (padding included).
             If given as a dict data_key -> value, sets different individual limits per data key.
