@@ -2,6 +2,7 @@
 Provides :class:`MapDatasetBase`
 """
 
+from typing import List
 from returnn.datasets.basic import DatasetSeq
 from returnn.datasets.cached2 import CachedDataset2
 from returnn.util.basic import OptionalNotImplementedError
@@ -158,7 +159,7 @@ class MapDatasetWrapper(CachedDataset2):
         seq_tag = self._dataset.get_seq_tag(self.get_corpus_seq_idx(sorted_seq_idx))
         return seq_tag
 
-    def get_all_tags(self) -> list[str]:
+    def get_all_tags(self) -> List[str]:
         """
         :return: list of all tags
         """
