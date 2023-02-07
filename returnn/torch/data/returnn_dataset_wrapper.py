@@ -49,6 +49,7 @@ class MapStyleDatasetPerEpochWrapper(torch.utils.data.Dataset):
         :param returnn.datasets.basic.Dataset returnn_dataset: dataset to be wrapped
         :param int epoch:
         """
+        assert returnn_dataset.have_corpus_seq_idx() and returnn_dataset.have_get_corpus_seq()
         self._dataset = returnn_dataset
         self._epoch = epoch
         self._dataset.init_seq_order(epoch=self._epoch)
@@ -80,6 +81,7 @@ class MapStyleDatasetFullWrapper(torch.utils.data.Dataset):
         """
         :param returnn.datasets.basic.Dataset returnn_dataset: dataset to be wrapped
         """
+        assert returnn_dataset.have_get_corpus_seq()
         self._dataset = returnn_dataset
 
     def __len__(self):
