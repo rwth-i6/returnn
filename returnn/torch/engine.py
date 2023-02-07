@@ -10,7 +10,6 @@ import os
 from torch.utils.data import DataLoader
 from random import random
 
-from returnn.torch.data.returnn_dataset_wrapper import DatasetWrapper
 from returnn.log import log
 from returnn.engine.base import EngineBase
 from returnn.learning_rate_control import load_learning_rate_control_from_config, LearningRateControl
@@ -18,7 +17,8 @@ from returnn.datasets.basic import init_dataset
 from returnn.torch.updater import Updater
 from returnn.util import basic as util
 from returnn.util import NumbersDict
-from . import data_pipeline
+from .data import pipeline as data_pipeline
+from .data.returnn_dataset_wrapper import DatasetWrapper
 
 
 class Engine(EngineBase):
