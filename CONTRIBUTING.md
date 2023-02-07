@@ -29,6 +29,7 @@ General rules when contributing to the code of RETURNN:
   and in general to use newer TF features (even maybe TF >=2),
   as long as your new feature (new layer or so) is just optional.
   For older TF support, `TFCompat.py` might be helpful. (See code for examples.)
+* We support Python >=3.7 ([discussion](https://github.com/rwth-i6/returnn/issues/487)).
 
 About new features:
 
