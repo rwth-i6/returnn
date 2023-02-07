@@ -401,6 +401,23 @@ class HDFDataset(CachedDataset):
         ids = self._seq_index[self._index_map[sorted_seq_idx]]
         return self._get_tag_by_real_idx(ids)
 
+    def have_get_corpus_seq(self) -> bool:
+        """
+        :return: whether this dataset supports :func:`get_corpus_seq`
+        """
+        return True
+
+    def get_corpus_seq(self, corpus_seq_idx: int) -> DatasetSeq:
+        """
+        :param int corpus_seq_idx: corpus seq idx
+        :return: the seq with the given corpus seq idx
+        :rtype: DatasetSeq
+        """
+        data = {}
+        for key in self.get_data_keys():
+            data[key] = self._get_data_by_real_seq_idx(corpus_seq_idx, key)
+        return DatasetSeq(seq_idx=corpus_seq_idx, features=data, seq_tag=self._get_tag_by_real_idx(corpus_seq_idx))
+
     def get_all_tags(self):
         """
         :rtype: list[str]

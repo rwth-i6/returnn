@@ -3,6 +3,7 @@ This defines the base dataset class :class:`Dataset`.
 """
 
 from __future__ import print_function
+from __future__ import annotations
 
 __author__ = "Patrick Doetsch"
 __copyright__ = "Copyright 2015"
@@ -738,6 +739,23 @@ class Dataset(object):
             return seq_idx
         assert self.have_corpus_seq_idx()
         raise NotImplemented
+
+    def have_get_corpus_seq(self) -> bool:
+        """
+        :return: whether you can call :func:`get_corpus_seq`
+        """
+        return False
+
+    def get_corpus_seq(self, corpus_seq_idx: int) -> DatasetSeq:
+        """
+        This function allows random access directly into the corpus.
+        Only implement this if such random access is possible in a reasonable efficient way.
+        This allows to write map-style wrapper datasets around such RETURNN datasets.
+
+        :param corpus_seq_idx: corresponds to output of :func:`get_corpus_seq_idx`
+        :return: data
+        """
+        raise OptionalNotImplementedError
 
     @classmethod
     def generic_complete_frac(cls, seq_idx, num_seqs):

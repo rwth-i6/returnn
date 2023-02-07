@@ -362,13 +362,13 @@ class OggZipDataset(CachedDataset2):
                 return [self.feature_extractor.num_channels, self.feature_extractor.get_feature_dimension()]
         return super(OggZipDataset, self).get_data_shape(key)
 
-    def _get_transcription(self, seq_idx):
+    def _get_transcription(self, corpus_seq_idx: int):
         """
-        :param int seq_idx:
+        :param corpus_seq_idx:
         :return: (targets (e.g. bpe), txt)
         :rtype: (list[int], str)
         """
-        seq = self._data[self._get_ref_seq_idx(seq_idx)]
+        seq = self._data[corpus_seq_idx]
         raw_targets_txt = seq["text"]
         targets_txt = raw_targets_txt
         if self.targets:
@@ -379,14 +379,14 @@ class OggZipDataset(CachedDataset2):
             targets_seq = []
         return targets_seq, raw_targets_txt
 
-    def _open_audio_file(self, seq_idx):
+    def _open_audio_file(self, corpus_seq_idx: int):
         """
-        :param int seq_idx:
+        :param corpus_seq_idx:
         :return: io.FileIO
         """
         import io
 
-        seq = self._data[self._get_ref_seq_idx(seq_idx)]
+        seq = self._data[corpus_seq_idx]
         if self.zip_audio_files_have_name_as_prefix:
             audio_fn = "%s/%s" % (self._names[seq["_zip_file_index"]], seq["file"])
         else:
@@ -399,13 +399,29 @@ class OggZipDataset(CachedDataset2):
         :param int seq_idx:
         :rtype: DatasetSeq
         """
-        seq_tag = self.get_tag(seq_idx)
+        corpus_seq_idx = self._get_ref_seq_idx(seq_idx)
+        seq = self.get_corpus_seq(corpus_seq_idx)
+        seq.seq_idx = seq_idx
+        return seq
+
+    def have_get_corpus_seq(self) -> bool:
+        """
+        :return: whether this dataset supports :func:`get_corpus_seq`
+        """
+        return True
+
+    def get_corpus_seq(self, corpus_seq_idx: int) -> DatasetSeq:
+        """
+        :param corpus_seq_idx:
+        :return: seq
+        """
+        seq_tag = self._get_tag_from_info_dict(self._data[corpus_seq_idx])
         if self.feature_extractor:
-            with self._open_audio_file(seq_idx) as audio_file:
+            with self._open_audio_file(corpus_seq_idx) as audio_file:
                 features = self.feature_extractor.get_audio_features_from_raw_bytes(audio_file, seq_name=seq_tag)
         else:
             features = numpy.zeros(())  # currently the API requires some dummy values...
-        targets, txt = self._get_transcription(seq_idx)
+        targets, txt = self._get_transcription(corpus_seq_idx)
         targets = numpy.array(targets, dtype="int32")
         raw_txt = numpy.array(txt, dtype="object")
         orth = txt.encode("utf8")
@@ -418,6 +434,6 @@ class OggZipDataset(CachedDataset2):
         return DatasetSeq(
             features=features,
             targets={"classes": targets, "raw": raw_txt, "orth": orth},
-            seq_idx=seq_idx,
+            seq_idx=corpus_seq_idx,
             seq_tag=seq_tag,
         )
