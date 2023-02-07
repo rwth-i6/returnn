@@ -98,6 +98,12 @@ class MapDatasetWrapper(CachedDataset2):
             raise NotImplementedError("'num_seqs' is only known after calling init_seq_order().")
         return len(self._seq_order)
 
+    def get_total_num_seqs(self) -> int:
+        """
+        :return: total number of seqs
+        """
+        return len(self._dataset)
+
     def init_seq_order(self, epoch=None, seq_list=None, seq_order=None):
         """
         :param int|None epoch:
@@ -151,6 +157,12 @@ class MapDatasetWrapper(CachedDataset2):
         """
         seq_tag = self._dataset.get_seq_tag(self.get_corpus_seq_idx(sorted_seq_idx))
         return seq_tag
+
+    def get_all_tags(self) -> list[str]:
+        """
+        :return: list of all tags
+        """
+        return [self._dataset.get_seq_tag(i) for i in range(len(self._dataset))]
 
     def get_corpus_seq_idx(self, sorted_seq_idx):
         """
