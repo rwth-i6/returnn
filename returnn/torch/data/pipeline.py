@@ -49,8 +49,12 @@ class Chunker(torch.utils.data.IterableDataset):
             (The number of resulting chunks has to be match though for all given data keys, i.e. sequence lengths
             have to be considered.)
         """
+        from returnn.datasets.basic import Dataset as ReturnnDataset
+
         self._dataset = dataset
-        self._chunk_size, self._chunk_step = self._parse_chunking(chunking)
+        # noinspection PyProtectedMember
+        self._chunk_size, self._chunk_step, custom_chunk_func = ReturnnDataset._parse_chunking(chunking)
+        assert not custom_chunk_func, f"Custom chunking function not supported, {chunking!r}"
 
     def __iter__(self):
         """
