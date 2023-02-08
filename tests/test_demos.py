@@ -31,17 +31,20 @@ def build_env(env_update=None):
     return env_update_
 
 
-def run(*args, env_update=None):
+def run(*args, env_update=None, print_stdout=False):
     args = list(args)
     print("run:", args)
     # RETURNN by default outputs on stderr, so just merge both together
     p = Popen(args, stdout=PIPE, stderr=STDOUT, env=build_env(env_update=env_update))
     out, _ = p.communicate()
+    out = out.decode("utf8")
     if p.returncode != 0:
         print("Return code is %i" % p.returncode)
-        print("std out/err:\n---\n%s\n---\n" % out.decode("utf8"))
+        print("std out/err:\n---\n%s\n---\n" % out)
         raise CalledProcessError(cmd=args, returncode=p.returncode, output=out)
-    return out.decode("utf8")
+    if print_stdout:
+        print("std out/err:\n---\n%s\n---\n" % out)
+    return out
 
 
 def run_and_parse_last_fer(*args, **kwargs):
@@ -61,9 +64,17 @@ def run_and_parse_last_fer(*args, **kwargs):
     return parsed_fer
 
 
-def run_config_get_fer(config_filename, env_update=None):
+def run_config_get_fer(config_filename, env_update=None, *, log_verbosity=5, print_stdout=False):
     cleanup_tmp_models(config_filename)
-    fer = run_and_parse_last_fer(py, "rnn.py", config_filename, "++log_verbosity", "5", env_update=env_update)
+    fer = run_and_parse_last_fer(
+        py,
+        "rnn.py",
+        config_filename,
+        "++log_verbosity",
+        str(log_verbosity),
+        env_update=env_update,
+        print_stdout=print_stdout,
+    )
     print("FER:", fer)
     cleanup_tmp_models(config_filename)
     return fer
@@ -84,7 +95,7 @@ def cleanup_tmp_models(config_filename):
 
 
 def test_demo_tf_task12ax():
-    fer = run_config_get_fer("demos/demo-tf-native-lstm.12ax.config")
+    fer = run_config_get_fer("demos/demo-tf-native-lstm.12ax.config", print_stdout=True)
     assert_less(fer, 0.01)
 
 
