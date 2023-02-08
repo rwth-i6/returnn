@@ -56,25 +56,6 @@ def get_optimizer_class(class_name):
     return class_name
 
 
-def _possibly_add_opt_param(opt_name, opt_value, opt_kwargs, cls_vars_list):
-    """
-    Adds an attribute to the dictionary of attributes to be passed to the optimizer,
-    provided that the optimizer accepts this attribute.
-
-    :param str opt_name: Name of the attribute to be added.
-    :param typing.Any opt_value: Value of the attribute to be added.
-    :param dict[str] opt_kwargs: Attributes that the optimizer accepts.
-    :param list[str] cls_vars_list: List of accepted attributes by the optimizer.
-    """
-    if opt_name in cls_vars_list:
-        opt_kwargs.setdefault(opt_name, opt_value)
-    else:
-        assert not opt_value, "%s not accepted by the chosen optimizer. Accepted values: %s" % (
-            opt_name,
-            ", ".join("%s" % optim_name for optim_name in cls_vars_list),
-        )
-
-
 def _get_class_init_kwargs(optim_class):
     """
     Obtains the keyword arguments of the class provided as parameter that the user can add to their optimizer.
@@ -196,9 +177,10 @@ class Updater(object):
             else:
                 opt_kwargs.setdefault("eps", OPTIMIZER_EPSILON_DEFAULT)
         else:
-            assert "eps" not in opt_kwargs, (
-                    "epsilon not accepted by the chosen optimizer. Accepted values: %s" %
-                    ", ".join("%s" % optim_name for optim_name in optim_class_init_kwargs)
+            assert (
+                "eps" not in opt_kwargs
+            ), "epsilon not accepted by the chosen optimizer. Accepted values: %s" % ", ".join(
+                "%s" % optim_name for optim_name in optim_class_init_kwargs
             )
         assert "learning_rate" not in optimizer_opts, "learning_rate should be set outside of the optimizer dict."
         lr = lr * optimizer_opts.get("learning_rate_multiplier", 1.0)
