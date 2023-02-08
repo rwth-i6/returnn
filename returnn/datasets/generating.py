@@ -61,8 +61,13 @@ class GeneratingDataset(Dataset):
             "predefined order doesn't make sense for %s" % self.__class__.__name__
         )
         self.random.seed(self._get_random_seed_for_epoch(epoch=epoch))
-        self._seq_order = self.get_seq_order_for_epoch(epoch=epoch, num_seqs=self.num_seqs, get_seq_len=None)
-        self._num_seqs = len(self._seq_order)
+        if self._total_num_seqs == float("inf"):
+            assert self.seq_ordering == "default"
+            self._seq_order = None
+            self._num_seqs = self._total_num_seqs
+        else:
+            self._seq_order = self.get_seq_order_for_epoch(epoch=epoch, num_seqs=self._total_num_seqs, get_seq_len=None)
+            self._num_seqs = len(self._seq_order)
         self._num_timesteps = 0
         self.reached_final_seq = False
         self.expected_load_seq_start = 0
@@ -126,7 +131,7 @@ class GeneratingDataset(Dataset):
             end = self.num_seqs
         if end >= self.num_seqs:
             self.reached_final_seq = True
-        seqs = [self.get_corpus_seq(self._seq_order[seq_idx]) for seq_idx in range(start, end)]
+        seqs = [self.get_corpus_seq(self.get_corpus_seq_idx(seq_idx)) for seq_idx in range(start, end)]
         if self.window > 1:
             for seq in seqs:
                 seq.features["data"] = self._sliding_window(seq.features["data"])
@@ -191,6 +196,8 @@ class GeneratingDataset(Dataset):
         :param seq_idx:
         :return: corpus seq idx
         """
+        if self._seq_order is None:
+            return seq_idx
         return self._seq_order[seq_idx]
 
     def get_seq_length(self, seq_idx):

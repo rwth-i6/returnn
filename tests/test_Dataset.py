@@ -7,12 +7,23 @@ import _setup_test_env  # noqa
 import unittest
 import numpy
 from nose.tools import assert_equal, assert_is_instance, assert_in, assert_not_in, assert_true, assert_false
-from returnn.datasets.generating import GeneratingDataset, DummyDataset, DummyDatasetMultipleSequenceLength
+from returnn.datasets.generating import Task12AXDataset, DummyDataset, DummyDatasetMultipleSequenceLength
 from returnn.engine.batch import Batch
 from returnn.datasets.basic import Dataset
 from returnn.util.basic import NumbersDict
 
 from returnn.util import better_exchook
+
+
+def test_Task12AXDataset_inf():
+    dataset = Task12AXDataset(num_seqs=float("inf"))
+    dataset.init_seq_order(1)
+    n = 10
+    for i in range(n):
+        dataset.load_seqs(i, i + 1)
+        targets = dataset.get_data(i, "classes")
+        print(targets)
+    assert dataset.is_less_than_num_seqs(n)
 
 
 def test_generate_batches():

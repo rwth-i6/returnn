@@ -413,6 +413,9 @@ class Dataset(object):
         partition_epoch = self.partition_epoch or 1
         repeat_epoch = self.repeat_epoch or 1
         assert num_seqs > 0
+        # Make sure it is a proper integer now.
+        assert num_seqs == int(num_seqs)
+        num_seqs = int(num_seqs)
         if self._seq_order_seq_lens_file:
             get_seq_len = self._get_seq_order_seq_lens_by_idx
 
