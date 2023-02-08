@@ -294,7 +294,8 @@ jobs:
         echo "Python env: $(type python) $(python --version)"
         python -c "import numpy; print('NumPy:', numpy.version.full_version)"
         python -c "import torch; print('PyTorch:', torch.__version__, torch.__file__)"
-        python -c "import torch; assert torch.__version__ == '${{ matrix.torch-version }}'"
+        # torch.__version__ is for example "1.13.1+cu117"
+        python -c "import torch; assert (torch.__version__ + '+').startswith('${{ matrix.torch-version }}+')"
 
         echo "Pytest env:"
         python -m pytest -V
