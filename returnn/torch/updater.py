@@ -176,13 +176,8 @@ class Updater(object):
                 opt_kwargs["eps"] = opt_kwargs.pop("epsilon")
             else:
                 opt_kwargs.setdefault("eps", OPTIMIZER_EPSILON_DEFAULT)
-        else:
-            assert (
-                "eps" not in opt_kwargs
-            ), "epsilon not accepted by the chosen optimizer. Accepted values: %s" % ", ".join(
-                "%s" % optim_name for optim_name in optim_class_init_kwargs
-            )
-        assert "learning_rate" not in optimizer_opts, "learning_rate should be set outside of the optimizer dict."
+        if "learning_rate" in optimizer_opts:
+            raise ValueError("'learning_rate' should be set outside of the 'optimizer' dict.")
         lr = lr * optimizer_opts.get("learning_rate_multiplier", 1.0)
         opt_kwargs["lr"] = lr
 
