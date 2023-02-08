@@ -9,7 +9,6 @@ import torch
 import typing
 
 from returnn.log import log
-from returnn.torch.constants import OPTIMIZER_EPSILON_DEFAULT
 
 _OptimizerClassesDictInitialized = False
 _OptimizerClassesDict = {}
