@@ -803,9 +803,9 @@ class Dataset(object):
         return self.generic_complete_frac(seq_idx, num_seqs)
 
     @property
-    def num_seqs(self):
+    def num_seqs(self) -> int:
         """
-        :rtype: int
+        :return: num seqs for current epoch
         """
         raise NotImplementedError
 

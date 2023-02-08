@@ -4,16 +4,19 @@ Some datasets for artificially generated data.
 
 from __future__ import print_function
 
+from typing import Optional, Sequence
+import numpy
+import sys
+import typing
+
+from returnn.util.basic import class_idx_seq_to_1_of_k, CollectionReadCheckCovered
+from returnn.log import log
+
 from .util.feature_extraction import ExtractAudioFeatures
 from .util.vocabulary import *
 from .audio import OggZipDataset  # noqa # for API compatibility
 from .basic import Dataset, DatasetSeq, convert_data_dims
 from .cached2 import CachedDataset2
-from returnn.util.basic import class_idx_seq_to_1_of_k, CollectionReadCheckCovered
-from returnn.log import log
-import numpy
-import sys
-import typing
 
 
 class GeneratingDataset(Dataset):
@@ -39,7 +42,9 @@ class GeneratingDataset(Dataset):
             output_dim["data"] = (input_dim * self.window, 2)  # not sparse
         self.num_outputs = output_dim
         self.expected_load_seq_start = 0
+        self._seq_order = None  # type: Optional[Sequence[int]]
         self._num_seqs = num_seqs
+        self._total_num_seqs = num_seqs
         self.random = numpy.random.RandomState(1)
         self.reached_final_seq = False
         self.added_data = []  # type: typing.List[DatasetSeq]
@@ -56,7 +61,8 @@ class GeneratingDataset(Dataset):
             "predefined order doesn't make sense for %s" % self.__class__.__name__
         )
         self.random.seed(self._get_random_seed_for_epoch(epoch=epoch))
-        self.get_seq_order_for_epoch(epoch=epoch, num_seqs=self.num_seqs, get_seq_len=None)
+        self._seq_order = self.get_seq_order_for_epoch(epoch=epoch, num_seqs=self.num_seqs, get_seq_len=None)
+        self._num_seqs = len(self._seq_order)
         self._num_timesteps = 0
         self.reached_final_seq = False
         self.expected_load_seq_start = 0
@@ -120,17 +126,34 @@ class GeneratingDataset(Dataset):
             end = self.num_seqs
         if end >= self.num_seqs:
             self.reached_final_seq = True
-        seqs = [self.generate_seq(seq_idx=seq_idx) for seq_idx in range(start, end)]
+        seqs = [self.get_corpus_seq(self._seq_order[seq_idx]) for seq_idx in range(start, end)]
         if self.window > 1:
             for seq in seqs:
                 seq.features["data"] = self._sliding_window(seq.features["data"])
         self._num_timesteps += sum([seq.num_frames for seq in seqs])
         self.added_data += seqs
 
-    def generate_seq(self, seq_idx):
+    def have_get_corpus_seq(self) -> bool:
         """
-        :type seq_idx: int
-        :rtype: DatasetSeq
+        :return: whether we have :func:`get_corpus_seq`
+        """
+        return True
+
+    def get_corpus_seq(self, corpus_seq_idx: int) -> DatasetSeq:
+        """
+        :param corpus_seq_idx:
+        :return: seq
+        """
+        # seed value based on epoch and corpus_seq_idx in order to get deterministic behavior
+        self.random.seed((self._get_random_seed_for_epoch(epoch=self.epoch), corpus_seq_idx))
+        return self.generate_seq(corpus_seq_idx)
+
+    def generate_seq(self, seq_idx: int) -> DatasetSeq:
+        """
+        This assumes that self.random is already initialized and seeded
+        to sth deterministic for the given seq_idx and epoch.
+
+        :param seq_idx: corpus seq idx
         """
         raise NotImplementedError
 
@@ -145,16 +168,35 @@ class GeneratingDataset(Dataset):
         return self._num_timesteps
 
     @property
-    def num_seqs(self):
+    def num_seqs(self) -> int:
         """
-        :rtype: int
+        :return: num seqs for current epoch
         """
         return self._num_seqs
+
+    def get_total_num_seqs(self) -> int:
+        """
+        :return: total num seqs
+        """
+        return self._total_num_seqs
+
+    def have_corpus_seq_idx(self):
+        """
+        :return: whether we have :func:`get_corpus_seq_idx`
+        """
+        return True
+
+    def get_corpus_seq_idx(self, seq_idx: int) -> int:
+        """
+        :param seq_idx:
+        :return: corpus seq idx
+        """
+        return self._seq_order[seq_idx]
 
     def get_seq_length(self, seq_idx):
         """
         :param int seq_idx:
-        :rtype: Util.NumbersDict
+        :rtype: returnn.util.NumbersDict
         """
         # get_seq_length() can be called before the seq is loaded via load_seqs().
         # Thus, we just call load_seqs() ourselves here.
@@ -197,13 +239,13 @@ class GeneratingDataset(Dataset):
         """
         :rtype: list[str]
         """
-        return ["seq-%i" % seq_idx for seq_idx in range(self.num_seqs)]
+        return ["seq-%i" % seq_idx for seq_idx in range(self.get_total_num_seqs())]
 
-    def get_current_seq_order(self):
+    def get_current_seq_order(self) -> Sequence[int]:
         """
-        :rtype: list[int]
+        :return: seq order
         """
-        return list(range(self.num_seqs))
+        return self._seq_order
 
 
 class Task12AXDataset(GeneratingDataset):
