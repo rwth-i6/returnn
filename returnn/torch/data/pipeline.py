@@ -30,8 +30,7 @@ def collate_batch(batch):
     return res
 
 
-# noinspection PyAbstractClass
-class Chunker(torch.utils.data.IterableDataset):
+class IterableChunker(torch.utils.data.IterableDataset):
     """
     Splits each sequence in the given dataset into chunks according to the 'chunking' config option.
     So it transforms one sequences into multiple sequences.
@@ -117,6 +116,9 @@ class Chunker(torch.utils.data.IterableDataset):
 
                 yield chunk_data
 
+    def __getitem__(self, index):
+        raise Exception(f"{self.__class__.__name__}.__getitem__ not supported")
+
     @staticmethod
     def _parse_chunking(chunking):
         """
@@ -144,7 +146,7 @@ class Chunker(torch.utils.data.IterableDataset):
 
 
 # noinspection PyAbstractClass
-class Batching(torch.utils.data.IterableDataset):
+class IterableBatching(torch.utils.data.IterableDataset):
     """
     Converts a dataset yielding sequences (dict data_key -> array per sequence) into a dataset yielding lists of
     these sequences, i.e. batches.

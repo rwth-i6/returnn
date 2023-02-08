@@ -187,11 +187,11 @@ class Engine(EngineBase):
 
         chunking = self.config.typed_value("chunking", None)
         if chunking:
-            wrapped_dataset = data_pipeline.Chunker(wrapped_dataset, chunking)
+            wrapped_dataset = data_pipeline.IterableChunker(wrapped_dataset, chunking)
 
         batch_size = self.config.typed_value("batch_size", 1)
         max_seqs = self.config.int("max_seqs", -1)
-        batches_dataset = data_pipeline.Batching(wrapped_dataset, batch_size=batch_size, max_seqs=max_seqs)
+        batches_dataset = data_pipeline.IterableBatching(wrapped_dataset, batch_size=batch_size, max_seqs=max_seqs)
 
         data_loader = DataLoader(
             batches_dataset,
