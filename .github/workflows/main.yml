@@ -143,9 +143,7 @@ jobs:
         python -m pytest tests/test_$TEST.py
 
   tf-tests:
-    # As long as we want to test Python 2.7 here in the test, we can only use up to Ubuntu 20.
-    # https://github.com/rwth-i6/returnn/issues/1226
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
