@@ -129,6 +129,13 @@ def test_demo_tf_task12ax_no_test_env():
     assert_less(fer, 0.015)
 
 
+@unittest.skipIf(not torch, "no PyTorch")
+def test_demo_torch_task12ax():
+    cleanup_tmp_models("demos/demo-torch.config")
+    run(py, "rnn.py", "demos/demo-torch.config", print_stdout=True)
+    # TODO also check FER. So far this is not properly reported. https://github.com/rwth-i6/returnn/issues/1120
+
+
 def test_demo_iter_dataset_task12ax():
     # there should be no actual TF dependency, we just iterate the dataset
     cleanup_tmp_models("demos/demo-tf-vanilla-lstm.12ax.config")
