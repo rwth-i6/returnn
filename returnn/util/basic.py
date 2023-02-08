@@ -3375,7 +3375,7 @@ def is_running_on_cluster():
     :return: i6 specific. Whether we run on some of the cluster nodes.
     :rtype: bool
     """
-    return get_hostname().startswith("cluster-cn-")
+    return get_hostname().startswith("cluster-cn-") or get_hostname().startswith("cn-")
 
 
 start_time = time.time()
