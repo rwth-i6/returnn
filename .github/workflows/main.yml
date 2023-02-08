@@ -289,7 +289,7 @@ jobs:
         pip install --user scipy | cat  # for some tests
         pip install --user --upgrade torch==${{ matrix.torch-version }} | cat
 
-    - name: Test Python/Numpy/TF versions.
+    - name: Test Python/Numpy/PyTorch versions.
       run: |
         echo "Python env: $(type python) $(python --version)"
         python -c "import numpy; print('NumPy:', numpy.version.full_version)"
