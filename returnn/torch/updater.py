@@ -9,6 +9,7 @@ import torch
 import typing
 
 from returnn.log import log
+from returnn.torch.constants import OPTIMIZER_EPSILON_DEFAULT
 
 _OptimizerClassesDictInitialized = False
 _OptimizerClassesDict = {}
@@ -127,10 +128,9 @@ class Updater(object):
         Creates an optimizer and stores it in self.optimizer.
         """
         optimizer_opts = self.config.typed_value("optimizer", None)
-        if not optimizer_opts:
-            self.optimizer = self._create_default_optimizer()
-        else:
-            self.optimizer = self._create_optimizer(optimizer_opts)
+        if optimizer_opts is None:
+            raise ValueError("config field 'optimizer' needs to be set explicitely for the Torch backend")
+        self.optimizer = self._create_optimizer(optimizer_opts)
 
     def load_optimizer(self, filename):
         """
@@ -169,19 +169,17 @@ class Updater(object):
         :rtype: torch.optim.Optimizer
         """
         lr = self.learning_rate
-        epsilon = self.config.float("optimizer_epsilon", 1e-16)
-        momentum = self.config.float("momentum", 0.0)
 
         # If the parameter is already a valid optimizer, return it without further processing
         if isinstance(optimizer_opts, torch.optim.Optimizer):
             return optimizer_opts
-
-        if isinstance(optimizer_opts, str) or callable(optimizer_opts):
+        elif callable(optimizer_opts):
             optimizer_opts = {"class": optimizer_opts}
-        assert isinstance(
-            optimizer_opts, dict
-        ), "optimizer_opts must be dict, str, callable or torch.optim.Optimizer instance."
-        assert "class" in optimizer_opts, "A custom optimizer requires a class (SGD, Adam...)"
+        else:
+            if not isinstance(optimizer_opts, dict):
+                raise ValueError("'optimizer' must of type dict, callable or torch.optim.Optimizer instance.")
+            if "class" not in optimizer_opts:
+                raise ValueError("'class' field of 'optimizer' dict was not set (use e.g. 'SGD', 'Adam', ...)")
 
         # Resolve the optimizer class
         optim_class_name = optimizer_opts.pop("class")
@@ -196,21 +194,19 @@ class Updater(object):
             if "epsilon" in opt_kwargs:
                 opt_kwargs["eps"] = opt_kwargs.pop("epsilon")
             else:
-                opt_kwargs.setdefault("eps", epsilon)
+                opt_kwargs.setdefault("eps", OPTIMIZER_EPSILON_DEFAULT)
         else:
-            assert (
-                "eps" not in opt_kwargs
-            ), "epsilon not accepted by the chosen optimizer. Accepted values: %s" % ", ".join(
-                "%s" % optim_name for optim_name in optim_class_init_kwargs
+            assert "eps" not in opt_kwargs, (
+                    "epsilon not accepted by the chosen optimizer. Accepted values: %s" %
+                    ", ".join("%s" % optim_name for optim_name in optim_class_init_kwargs)
             )
-        _possibly_add_opt_param("momentum", momentum, opt_kwargs, optim_class_init_kwargs)
         assert "learning_rate" not in optimizer_opts, "learning_rate should be set outside of the optimizer dict."
         lr = lr * optimizer_opts.get("learning_rate_multiplier", 1.0)
         opt_kwargs["lr"] = lr
 
         param_groups = self._get_optimizer_param_groups(optim_class, opt_kwargs)
         optimizer = optim_class(param_groups, **opt_kwargs)
-        print("Optimizer: %s" % optimizer)
+        print("Optimizer: %s" % optimizer, file=log.v1)
         assert isinstance(optimizer, torch.optim.Optimizer)
 
         return optimizer
