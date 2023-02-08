@@ -24,12 +24,11 @@ class GeneratingDataset(Dataset):
     _input_classes = None
     _output_classes = None
 
-    def __init__(self, input_dim, output_dim, num_seqs=float("inf"), fixed_random_seed=None, **kwargs):
+    def __init__(self, input_dim, output_dim, num_seqs=float("inf"), **kwargs):
         """
         :param int|None input_dim:
         :param int|dict[str,int|(int,int)|dict] output_dim: if dict, can specify all data-keys
         :param int|float num_seqs:
-        :param int|None fixed_random_seed:
         """
         super(GeneratingDataset, self).__init__(**kwargs)
         assert self.shuffle_frames_of_nseqs == 0
@@ -42,7 +41,6 @@ class GeneratingDataset(Dataset):
         self.expected_load_seq_start = 0
         self._num_seqs = num_seqs
         self.random = numpy.random.RandomState(1)
-        self.fixed_random_seed = fixed_random_seed  # useful when used as eval dataset
         self.reached_final_seq = False
         self.added_data = []  # type: typing.List[DatasetSeq]
 
@@ -57,7 +55,8 @@ class GeneratingDataset(Dataset):
         assert seq_list is None and seq_order is None, (
             "predefined order doesn't make sense for %s" % self.__class__.__name__
         )
-        self.random.seed(self.fixed_random_seed or self._get_random_seed_for_epoch(epoch=epoch))
+        self.random.seed(self._get_random_seed_for_epoch(epoch=epoch))
+        self.get_seq_order_for_epoch(epoch=epoch, num_seqs=self.num_seqs, get_seq_len=None)
         self._num_timesteps = 0
         self.reached_final_seq = False
         self.expected_load_seq_start = 0
@@ -915,13 +914,12 @@ class StaticDataset(CachedDataset2):
             input_dim=dataset.num_inputs,
         )
 
-    def __init__(self, data, target_list=None, input_dim=None, output_dim=None, fixed_random_seed=None, **kwargs):
+    def __init__(self, data, target_list=None, input_dim=None, output_dim=None, **kwargs):
         """
         :param list[dict[str,numpy.ndarray]] data: list of seqs, each provide the data for each data-key
         :param target_list:
         :param int|None input_dim:
         :param int|dict[str,(int,int)|list[int]] output_dim:
-        :param int|None fixed_random_seed:
         """
         super(StaticDataset, self).__init__(**kwargs)
 
@@ -965,7 +963,6 @@ class StaticDataset(CachedDataset2):
         if "data" not in output_dim and input_dim is not None:
             output_dim["data"] = (input_dim * self.window, 2)  # not sparse
         self.num_outputs = output_dim
-        self.fixed_random_seed = fixed_random_seed  # useful when used as eval dataset
 
         self._seq_order = None
         self.init_seq_order(epoch=1)
@@ -1336,7 +1333,6 @@ class TimitDataset(CachedDataset2):
         random_permute_audio=None,
         num_phones=61,
         demo_play_audio=False,
-        fixed_random_seed=None,
         **kwargs,
     ):
         """
@@ -1352,7 +1348,6 @@ class TimitDataset(CachedDataset2):
             see _get_random_permuted_audio
         :param int num_phones: 39, 48 or 61. num labels of our classes
         :param bool demo_play_audio: plays the audio. only make sense with tools/dump-dataset.py
-        :param None|int fixed_random_seed: if given, use this fixed random seed in every epoch
         """
         super(TimitDataset, self).__init__(**kwargs)
         from threading import Lock, Thread
@@ -1378,7 +1373,6 @@ class TimitDataset(CachedDataset2):
         self._is_train = train
         self._demo_play_audio = demo_play_audio
         self._random = numpy.random.RandomState(1)
-        self._fixed_random_seed = fixed_random_seed  # useful when used as eval dataset
         if random_permute_audio is None:
             random_permute_audio = train
         from returnn.util.basic import CollectionReadCheckCovered
@@ -1600,7 +1594,7 @@ class TimitDataset(CachedDataset2):
         self._seq_order = self.get_seq_order_for_epoch(
             epoch=epoch, num_seqs=self._num_seqs, get_seq_len=lambda i: len(self._seq_tags[i][1])
         )
-        self._random.seed(self._fixed_random_seed or epoch or 1)
+        self._random.seed(self._get_random_seed_for_epoch(epoch=epoch))
         return True
 
     def _collect_single_seq(self, seq_idx):
@@ -1858,7 +1852,6 @@ class LibriSpeechCorpus(CachedDataset2):
         use_zip=False,
         use_ogg=False,
         use_cache_manager=False,
-        fixed_random_seed=None,
         fixed_random_subset=None,
         epoch_wise_filter=None,
         name=None,
@@ -1875,8 +1868,6 @@ class LibriSpeechCorpus(CachedDataset2):
         :param bool use_zip: whether to use the ZIP files instead (better for NFS)
         :param bool use_ogg: add .ogg postfix to all files
         :param bool use_cache_manager: uses :func:`Util.cf`
-        :param int|None fixed_random_seed: for the shuffling, e.g. for seq_ordering='random'.
-            otherwise epoch will be used
         :param float|int|None fixed_random_subset:
             Value in [0,1] to specify the fraction, or integer >=1 which specifies number of seqs.
             If given, will use this random subset. This will be applied initially at loading time,
@@ -1929,7 +1920,6 @@ class LibriSpeechCorpus(CachedDataset2):
             raise Exception("invalid targets %r. provide bpe or chars" % targets)
         if self.targets:
             self.labels["classes"] = self.targets.labels
-        self._fixed_random_seed = fixed_random_seed
         self._audio_random = numpy.random.RandomState(1)
         self.feature_extractor = (
             ExtractAudioFeatures(random_state=self._audio_random, **audio) if audio is not None else None
@@ -2015,7 +2005,7 @@ class LibriSpeechCorpus(CachedDataset2):
         super(LibriSpeechCorpus, self).init_seq_order(epoch=epoch, seq_list=seq_list, seq_order=seq_order)
         if not epoch:
             epoch = 1
-        random_seed = self._fixed_random_seed or self._get_random_seed_for_epoch(epoch=epoch)
+        random_seed = self._get_random_seed_for_epoch(epoch=epoch)
         self._audio_random.seed(random_seed)
         if self.targets:
             self.targets.set_random_seed(random_seed)
@@ -2235,12 +2225,11 @@ class Enwik8Corpus(CachedDataset2):
     # Use a single HDF file, and cache it across all instances.
     _hdf_file = None
 
-    def __init__(self, path, subset, seq_len, fixed_random_seed=None, batch_num_seqs=None, subsubset=None, **kwargs):
+    def __init__(self, path, subset, seq_len, batch_num_seqs=None, subsubset=None, **kwargs):
         """
         :param str path:
         :param str subset: "training", "validation", "test"
         :param int seq_len:
-        :param int|None fixed_random_seed:
         :param int|None batch_num_seqs: if given, will not shuffle the data but have it in such order,
           that with a given batch num_seqs setting, you could reuse the hidden state in an RNN
         :param int|(int,int)|None subsubset: end, (start,end), or full
@@ -2265,7 +2254,6 @@ class Enwik8Corpus(CachedDataset2):
                 self._data = self._data[subsubset[0] : subsubset[1]]
         assert len(self._data) > 1
         self._seq_len = seq_len
-        self._fixed_random_seed = fixed_random_seed
         self._batch_num_seqs = batch_num_seqs
         self._random = numpy.random.RandomState(1)  # seed will be set in init_seq_order
         self._seq_starts = numpy.arange(0, len(self._data) - 1, seq_len)
@@ -2292,7 +2280,7 @@ class Enwik8Corpus(CachedDataset2):
         if self.partition_epoch:
             epoch_part = (epoch - 1) % self.partition_epoch
             epoch = ((epoch - 1) // self.partition_epoch) + 1
-        self._random.seed(self._fixed_random_seed or self._get_random_seed_for_epoch(epoch=epoch))
+        self._random.seed(self._get_random_seed_for_epoch(epoch=epoch))
         self._num_seqs = len(self._seq_starts)
         self._num_timesteps = len(self._data) - 1
         if self._batch_num_seqs is None:

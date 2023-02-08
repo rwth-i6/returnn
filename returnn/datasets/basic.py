@@ -91,6 +91,7 @@ class Dataset(object):
         context_window=None,
         chunking=None,
         seq_ordering="default",
+        fixed_random_seed=None,
         random_seed_offset=None,
         partition_epoch=None,
         repeat_epoch=None,
@@ -110,7 +111,11 @@ class Dataset(object):
         :param None|str|int|(int,int)|dict|(dict,dict)|function chunking: "chunk_size:chunk_step"
         :param str seq_ordering: "batching"-option in config. e.g. "default", "sorted" or "random".
           See self.get_seq_order_for_epoch() for more details.
-        :param int|None random_seed_offset:
+        :param int|None fixed_random_seed: for the shuffling, e.g. for seq_ordering='random'.
+            otherwise epoch will be used.
+            useful when used as eval dataset.
+        :param int|None random_seed_offset: for shuffling, e.g. for seq_ordering='random'.
+            ignored when fixed_random_seed is set.
         :param int|None partition_epoch:
         :param int|None repeat_epoch: Repeat the sequences in an epoch this many times. Useful to scale the dataset
           relative to other datasets, e.g. when used in CombinedDataset. Not allowed to be used in combination with
@@ -130,6 +135,7 @@ class Dataset(object):
         )  # type: typing.Optional[typing.Dict[str,typing.Tuple[int,int]]]  # tuple is num-classes, len(shape).  # nopep8
         self.window = window
         self.seq_ordering = seq_ordering  # "default", "sorted" or "random". See self.get_seq_order_for_epoch().
+        self.fixed_random_seed = fixed_random_seed
         if random_seed_offset is None:
             random_seed_offset = self._get_default_random_seed_offset()
         self.random_seed_offset = random_seed_offset
@@ -554,6 +560,8 @@ class Dataset(object):
         :param int num_epochs_fixed: keep random seed fixed for n subsequent epochs
         :rtype: int
         """
+        if self.fixed_random_seed is not None:
+            return self.fixed_random_seed
         partition_epoch = self.partition_epoch or 1
         seed = epoch or 1
         if partition_epoch > 1:
