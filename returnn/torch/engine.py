@@ -2,7 +2,7 @@
 Main engine for PyTorch
 """
 
-from typing import Optional, Callable
+from typing import Optional, Callable, Dict
 
 import torch
 import numpy
@@ -281,24 +281,26 @@ class TrainCtx:
     """
 
     def __init__(self):
-        self.losses = {}  # typing: dict[str, torch.Tensor]
-        self.loss_scales = {}  # typing: dict[str, float]
+        self.losses = {}  # type: Dict[str, torch.Tensor]
+        self.loss_scales = {}  # type: Dict[str, float]
 
-    def mark_as_loss(self, name, loss, scale=1.0):
+    def mark_as_loss(self, name: str, loss: torch.Tensor, scale: float = 1.0):
         """
         Can be called several times. Total loss will be weighted sum according to 'scale' parameters.
+        The total loss is used for backpropagation, so the scale is only relevant for backprop,
+        not for reporting.
 
-        :param str name:
-        :param torch.Tensor loss: e.g. the output of nn.CrossEntropyLoss
-        :param float scale: optional factor for this loss
+        :param name:
+        :param loss: e.g. the output of nn.CrossEntropyLoss
+        :param scale: optional factor for this loss. only relevant for backprop.
         """
         assert isinstance(name, str)
         self.losses[name] = loss
         self.loss_scales[name] = scale
 
-    def total_loss(self):
+    def total_loss(self) -> torch.Tensor:
         """
-        :rtype: torch.Tensor
+        :return: total loss, as it is used for backpropagation
         """
         assert self.losses, "call train_ctx.mark_as_loss"
         return sum([self.losses[name] * self.loss_scales[name] for name in self.losses])
