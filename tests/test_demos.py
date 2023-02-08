@@ -12,6 +12,22 @@ from returnn.util import better_exchook
 from returnn.util.basic import which_pip
 
 
+try:
+    import torch
+except ImportError:
+    torch = None
+else:
+    print("Torch:", torch.__version__)
+
+
+try:
+    import tensorflow as tf
+except ImportError:
+    tf = None
+else:
+    print("TensorFlow:", tf.__version__)
+
+
 py = sys.executable
 print("Python:", py)
 
@@ -94,6 +110,7 @@ def cleanup_tmp_models(config_filename):
         os.remove(f)
 
 
+@unittest.skipIf(not tf, "no TF")
 def test_demo_tf_task12ax():
     fer = run_config_get_fer("demos/demo-tf-native-lstm.12ax.config", print_stdout=True)
     # The FER limit here is somewhat arbitrary.
@@ -105,6 +122,7 @@ def test_demo_tf_task12ax():
     assert_less(fer, 0.015)
 
 
+@unittest.skipIf(not tf, "no TF")
 def test_demo_tf_task12ax_no_test_env():
     fer = run_config_get_fer("demos/demo-tf-native-lstm2.12ax.config", env_update={"RETURNN_TEST": ""})
     # see test_demo_tf_task12ax above
@@ -112,12 +130,14 @@ def test_demo_tf_task12ax_no_test_env():
 
 
 def test_demo_iter_dataset_task12ax():
+    # there should be no actual TF dependency, we just iterate the dataset
     cleanup_tmp_models("demos/demo-tf-vanilla-lstm.12ax.config")
     # pick any 12ax config for the dataset test
     out = run(py, "demos/demo-iter-dataset.py", "demos/demo-tf-vanilla-lstm.12ax.config")
     assert_in("Epoch 5.", out.splitlines())
 
 
+@unittest.skipIf(not tf, "no TF")
 def test_demo_returnn_as_framework():
     print("Prepare.")
     import subprocess
@@ -179,7 +199,15 @@ def test_returnn_as_framework_TaskSystem():
     subprocess.check_call(["echo", "travis_fold:end:test_returnn_as_framework_TaskSystem"])
 
 
+@unittest.skipIf(not tf, "no TF")
 def test_returnn_as_framework_old_style_crnn_TFUtil():
+    """
+    Check that old-style `import crnn.TFUtil` works.
+
+    It's not so much about TFUtil, it also could be some other module.
+    It's about the old-style module names.
+    This is the logic in __old_mod_loader__.
+    """
     import subprocess
 
     # echo via subprocess, because this stdout as well as the other will always be visible.
@@ -198,7 +226,12 @@ def test_returnn_as_framework_old_style_crnn_TFUtil():
     subprocess.check_call(["echo", "travis_fold:end:test_returnn_as_framework_old_style_crnn_TFUtil"])
 
 
+@unittest.skipIf(not tf, "no TF")
 def test_returnn_as_framework_old_style_TFUtil():
+    """
+    Check that old-style `import TFUtil` works.
+    See also :func:`test_returnn_as_framework_old_style_crnn_TFUtil`.
+    """
     import subprocess
 
     # echo via subprocess, because this stdout as well as the other will always be visible.
