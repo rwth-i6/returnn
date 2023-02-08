@@ -26,6 +26,17 @@ def test_Task12AXDataset_inf():
     assert dataset.is_less_than_num_seqs(n)
 
 
+def test_Task12AXDataset_random():
+    dataset = Task12AXDataset(num_seqs=10, seq_ordering="random")
+    dataset.init_seq_order(1)
+    n = dataset.num_seqs
+    for i in range(n):
+        dataset.load_seqs(i, i + 1)
+        targets = dataset.get_data(i, "classes")
+        print(targets)
+    assert not dataset.is_less_than_num_seqs(n)
+
+
 def test_generate_batches():
     dataset = DummyDataset(input_dim=2, output_dim=3, num_seqs=20)
     dataset.init_seq_order(1)

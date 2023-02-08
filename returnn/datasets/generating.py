@@ -48,6 +48,10 @@ class GeneratingDataset(Dataset):
         self.random = numpy.random.RandomState(1)
         self.reached_final_seq = False
         self.added_data = []  # type: typing.List[DatasetSeq]
+        if self.seq_ordering in ("sorted", "sorted_reverse"):
+            # For the dev/eval dataset, RETURNN automatically tries to sort them.
+            # As this is not supported, just ignore it and reset it to the default order.
+            self.seq_ordering = "default"
 
     def init_seq_order(self, epoch=None, seq_list=None, seq_order=None):
         """
@@ -131,12 +135,14 @@ class GeneratingDataset(Dataset):
             end = self.num_seqs
         if end >= self.num_seqs:
             self.reached_final_seq = True
-        seqs = [self.get_corpus_seq(self.get_corpus_seq_idx(seq_idx)) for seq_idx in range(start, end)]
-        if self.window > 1:
-            for seq in seqs:
-                seq.features["data"] = self._sliding_window(seq.features["data"])
+        seqs = [self._make_seq(seq_idx) for seq_idx in range(start, end)]
         self._num_timesteps += sum([seq.num_frames for seq in seqs])
         self.added_data += seqs
+
+    def _make_seq(self, seq_idx: int) -> DatasetSeq:
+        seq = self.get_corpus_seq(self.get_corpus_seq_idx(seq_idx))
+        seq.seq_idx = seq_idx
+        return seq
 
     def have_get_corpus_seq(self) -> bool:
         """
@@ -151,7 +157,10 @@ class GeneratingDataset(Dataset):
         """
         # seed value based on epoch and corpus_seq_idx in order to get deterministic behavior
         self.random.seed((self._get_random_seed_for_epoch(epoch=self.epoch), corpus_seq_idx))
-        return self.generate_seq(corpus_seq_idx)
+        seq = self.generate_seq(corpus_seq_idx)
+        if self.window > 1:
+            seq.features["data"] = self._sliding_window(seq.features["data"])
+        return seq
 
     def generate_seq(self, seq_idx: int) -> DatasetSeq:
         """

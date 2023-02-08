@@ -1223,8 +1223,8 @@ class DatasetSeq:
         :param dict[str,numpy.ndarray]|numpy.ndarray|None targets: name -> format 1d (time) (idx of output-feature)
         :param str seq_tag: sequence name / tag
         """
-        assert isinstance(seq_idx, int)
-        self.seq_idx = seq_idx
+        assert isinstance(seq_idx, (int, numpy.integer))
+        self.seq_idx = int(seq_idx)
         self.seq_tag = seq_tag or ("seq-%i" % seq_idx)
         if not isinstance(features, dict):
             assert isinstance(features, numpy.ndarray)
