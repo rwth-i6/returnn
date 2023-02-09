@@ -10,22 +10,39 @@ import torch.utils.data
 from returnn.datasets.basic import Dataset as ReturnnDataset
 
 
-ResetCallbackT = Callable[[ReturnnDataset], None]
+ResetCallbackT = Callable[[], None]
 
 
-class DatasetResetMpSharedEpochCallback:
+class ReturnnDatasetResetDefaultEpochCounterCallback:
+    """
+    Default for reset_callback.
+    Has an internal counter for the epoch, starting at epoch 1 (RETURNN convention).
+    """
+
+    def __init__(self, dataset: ReturnnDataset):
+        self.dataset = dataset
+        self.epoch = 0  # next __call__ will increment, thus we start at epoch 1
+
+    def __call__(self):
+        # dataset is likely a copy of the original dataset, either in the main process or in a worker process
+        self.epoch += 1
+        self.dataset.init_seq_order(epoch=self.epoch)
+
+
+class ReturnnDatasetResetMpSharedEpochCallback:
     """
     Can be used as reset_callback.
     """
 
-    def __init__(self, epoch_mp_shared: torch.multiprocessing.Value):
+    def __init__(self, dataset: ReturnnDataset, epoch_mp_shared: torch.multiprocessing.Value):
+        self.dataset = dataset
         self.epoch_mp_shared = epoch_mp_shared
 
-    def __call__(self, ds_worker: ReturnnDataset):
-        # ds_worker is likely a copy of the original dataset, either in the main process or in a worker process
-        # Use _epoch_mp_shared to get the current epoch correctly in worked processes
+    def __call__(self):
+        # dataset is likely a copy of the original dataset, either in the main process or in a worker process
+        # Use epoch_mp_shared to get the current epoch correctly in worked processes
         epoch = self.epoch_mp_shared.value
-        ds_worker.init_seq_order(epoch=epoch)
+        self.dataset.init_seq_order(epoch=epoch)
 
 
 class ReturnnDatasetIterDataPipe(torch.utils.data.IterDataPipe):
@@ -36,17 +53,19 @@ class ReturnnDatasetIterDataPipe(torch.utils.data.IterDataPipe):
     def __init__(self, returnn_dataset: ReturnnDataset, *, reset_callback: Optional[ResetCallbackT] = None):
         """
         :param returnn_dataset: dataset to be wrapped
-        :param reset_callback: callback function to be called when the dataset is reset, e.g. to init the epoch
+        :param reset_callback: callback function to be called when the dataset is reset, e.g. to init the epoch.
+            ReturnnDatasetResetDefaultEpochCounterCallback(returnn_dataset) is the default.
         """
         self._dataset = returnn_dataset
+        if not reset_callback:
+            reset_callback = ReturnnDatasetResetDefaultEpochCounterCallback(returnn_dataset)
         self._reset_callback = reset_callback
 
     def reset(self):
         """
         :return:
         """
-        if self._reset_callback:
-            self._reset_callback(self._dataset)
+        self._reset_callback()
 
     def __iter__(self):
         """
@@ -74,18 +93,20 @@ class ReturnnDatasetPerEpochMapDataPipe(torch.utils.data.MapDataPipe):
     def __int__(self, returnn_dataset: ReturnnDataset, *, reset_callback: Optional[ResetCallbackT] = None):
         """
         :param returnn_dataset: dataset to be wrapped
-        :param reset_callback: callback function to be called when the dataset is reset, e.g. to init the epoch
+        :param reset_callback: callback function to be called when the dataset is reset, e.g. to init the epoch.
+            ReturnnDatasetResetDefaultEpochCounterCallback(returnn_dataset) is the default.
         """
         assert returnn_dataset.have_corpus_seq_idx() and returnn_dataset.have_get_corpus_seq()
         self._dataset = returnn_dataset
+        if not reset_callback:
+            reset_callback = ReturnnDatasetResetDefaultEpochCounterCallback(returnn_dataset)
         self._reset_callback = reset_callback
 
     def reset(self):
         """
         :return:
         """
-        if self._reset_callback:
-            self._reset_callback(self._dataset)
+        self._reset_callback()
 
     def __len__(self):
         """
@@ -108,6 +129,9 @@ class ReturnnDatasetPerEpochMapDataPipe(torch.utils.data.MapDataPipe):
 class ReturnnDatasetFullMapDataPipe(torch.utils.data.MapDataPipe):
     """
     Converts a RETURNN dataset into a PyTorch map-style Dataset.
+    This is over the full dataset, using the default ordering.
+    RETURNN-dataset-side sorting/shuffling is not supported here.
+    Sorting/shuffling is intended to be done in the further PyTorch data pipeline.
     """
 
     def __int__(self, returnn_dataset: ReturnnDataset):

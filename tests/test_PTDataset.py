@@ -7,7 +7,6 @@ import torch
 import torch.utils.data.datapipes as dp
 from torchdata.dataloader2 import DataLoader2
 
-from returnn.datasets.basic import Dataset
 from returnn.datasets.generating import Task12AXDataset
 from returnn.torch.data import pipeline as data_pipeline
 from returnn.torch.data import returnn_dataset_wrapper
@@ -22,7 +21,9 @@ def test_pipeline_serialization():
     _mp_manager = torch.multiprocessing.Manager()
     epoch_mp_shared = _mp_manager.Value("i", 0)
     epoch_mp_shared.value = 1
-    reset_callback = returnn_dataset_wrapper.DatasetResetMpSharedEpochCallback(epoch_mp_shared=epoch_mp_shared)
+    reset_callback = returnn_dataset_wrapper.ReturnnDatasetResetMpSharedEpochCallback(
+        dataset=dataset, epoch_mp_shared=epoch_mp_shared
+    )
 
     wrapped_dataset = returnn_dataset_wrapper.ReturnnDatasetIterDataPipe(dataset, reset_callback=reset_callback)
 

@@ -200,7 +200,9 @@ class Engine(EngineBase):
         """
         # Make sure that _dataset_reset does not keep a ref to `self`,
         # otherwise it would trigger to pickle `self` and all its members.
-        dataset_reset = returnn_dataset_wrapper.DatasetResetMpSharedEpochCallback(epoch_mp_shared=self._epoch_mp_shared)
+        dataset_reset = returnn_dataset_wrapper.ReturnnDatasetResetMpSharedEpochCallback(
+            dataset=dataset, epoch_mp_shared=self._epoch_mp_shared
+        )
 
         wrapped_dataset = returnn_dataset_wrapper.ReturnnDatasetIterDataPipe(dataset, reset_callback=dataset_reset)
 
