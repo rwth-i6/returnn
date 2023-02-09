@@ -115,6 +115,7 @@ It depends on whether the full network is recurrent or not.
 
 from __future__ import print_function
 
+import contextlib
 import sys
 import typing
 
@@ -329,7 +330,7 @@ class FeedDictDataProvider(DataProviderBase):
         self.dataset.load_seqs(batch.start_seq, batch.end_seq)
         from returnn.util.basic import slice_pad_zeros
 
-        with self.dataset.lock:
+        with self.dataset.lock or contextlib.nullcontext():
             for seq in batch.seqs:
                 o = seq.batch_frame_offset
                 q = seq.batch_slice

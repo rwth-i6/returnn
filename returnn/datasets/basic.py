@@ -15,12 +15,12 @@ __email__ = "doetsch@i6.informatik.rwth-aachen.de"
 
 from threading import RLock
 from random import Random, random
-
 import sys
 import os
 import numpy
 import functools
 import typing
+from typing import Optional
 
 from returnn.log import log
 from returnn.engine.batch import Batch, BatchSetGenerator
@@ -127,7 +127,7 @@ class Dataset(object):
         :param None|int estimated_num_seqs: for progress reporting in case the real num_seqs is unknown
         """
         self.name = name or ("dataset_id%s" % id(self))
-        self.lock = RLock()  # Used when manipulating our data potentially from multiple threads.
+        self.lock = None  # type: Optional[RLock]  # Used when manipulating our data potentially from multiple threads.
         self.rnd_seq_drop = None  # type: typing.Optional[Random]
         self.num_inputs = 0  # usually not used, but num_outputs instead, which is more generic
         self.num_outputs = (

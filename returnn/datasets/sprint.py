@@ -14,7 +14,7 @@ try:
     import thread
 except ImportError:
     import _thread as thread
-from threading import Condition, currentThread, Thread
+from threading import Condition, RLock, currentThread, Thread
 import time
 import numpy
 import typing
@@ -118,6 +118,7 @@ class SprintDatasetBase(Dataset):
 
             self.orth_vocab = Vocabulary.create_vocab(**orth_vocab)
             self.labels["orth_classes"] = self.orth_vocab.labels
+        self.lock = RLock()
         self.cond = Condition(lock=self.lock)
         self.add_data_thread_id = thread.get_ident()  # This will be created in the Sprint thread.
         self.ready_for_data = False
