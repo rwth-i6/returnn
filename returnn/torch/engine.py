@@ -5,9 +5,9 @@ Main engine for PyTorch
 from typing import Optional, Callable, Dict
 
 import torch
+import torch.utils.data.datapipes as dp
 import numpy
 import os
-import torchdata
 from torchdata.dataloader2 import DataLoader2
 from random import random
 
@@ -217,7 +217,7 @@ class Engine(EngineBase):
         batch_size = self.config.typed_value("batch_size", 1)
         max_seqs = self.config.int("max_seqs", -1)
         batches_dataset = data_pipeline.BatchingIterDataPipe(wrapped_dataset, batch_size=batch_size, max_seqs=max_seqs)
-        batches_dataset = torchdata.datapipes.iter.Collator(batches_dataset, collate_fn=data_pipeline.collate_batch)
+        batches_dataset = dp.iter.Collator(batches_dataset, collate_fn=data_pipeline.collate_batch)
 
         return DataLoader2(batches_dataset)
 
