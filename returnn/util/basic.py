@@ -1820,7 +1820,7 @@ class NumbersDict:
 
         self.dict = numbers_dict
         self.value = broadcast_value
-        self.max = self.__max_error
+        self.max = self._max_error
 
     def copy(self):
         """
@@ -2147,7 +2147,7 @@ class NumbersDict:
         return cls.min([items[0], cls.min(items[1:])])
 
     @staticmethod
-    def __max_error():
+    def _max_error():
         # Will replace self.max for each instance. To be sure that we don't confuse it with self.max_value.
         raise Exception("Use max_value instead.")
 
