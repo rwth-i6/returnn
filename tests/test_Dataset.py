@@ -15,6 +15,20 @@ from returnn.util.basic import NumbersDict
 from returnn.util import better_exchook
 
 
+def test_Task12AXDataset_deepcopy():
+    from copy import deepcopy
+
+    dataset = Task12AXDataset(num_seqs=10)
+    dataset = deepcopy(dataset)
+    dataset.init_seq_order(1)
+    n = dataset.num_seqs
+    for i in range(n):
+        dataset.load_seqs(i, i + 1)
+        targets = dataset.get_data(i, "classes")
+        print(targets)
+    assert not dataset.is_less_than_num_seqs(n)
+
+
 def test_Task12AXDataset_inf():
     dataset = Task12AXDataset(num_seqs=float("inf"))
     dataset.init_seq_order(1)
