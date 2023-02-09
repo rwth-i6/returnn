@@ -13,7 +13,7 @@ from returnn.datasets.basic import Dataset as ReturnnDataset
 ResetCallbackT = Callable[[ReturnnDataset], None]
 
 
-class IterableDatasetWrapper(torch.utils.data.IterDataPipe):
+class ReturnnDatasetIterDataPipe(torch.utils.data.IterDataPipe):
     """
     Converts a RETURNN dataset into a PyTorch IterableDataset.
     """
@@ -51,7 +51,7 @@ class IterableDatasetWrapper(torch.utils.data.IterDataPipe):
         raise Exception(f"{self.__class__.__name__}.__getitem__ not supported")
 
 
-class MapStyleDatasetPerEpochWrapper(torch.utils.data.MapDataPipe):
+class ReturnnDatasetPerEpochMapDataPipe(torch.utils.data.MapDataPipe):
     """
     Converts a RETURNN dataset into a PyTorch map-style Dataset.
     """
@@ -90,26 +90,17 @@ class MapStyleDatasetPerEpochWrapper(torch.utils.data.MapDataPipe):
         return seq.features
 
 
-class MapStyleDatasetFullWrapper(torch.utils.data.MapDataPipe):
+class ReturnnDatasetFullMapDataPipe(torch.utils.data.MapDataPipe):
     """
     Converts a RETURNN dataset into a PyTorch map-style Dataset.
     """
 
-    def __int__(self, returnn_dataset: ReturnnDataset, *, reset_callback: Optional[ResetCallbackT] = None):
+    def __int__(self, returnn_dataset: ReturnnDataset):
         """
         :param returnn_dataset: dataset to be wrapped
-        :param reset_callback:
         """
         assert returnn_dataset.have_get_corpus_seq()
         self._dataset = returnn_dataset
-        self._reset_callback = reset_callback
-
-    def reset(self):
-        """
-        :return:
-        """
-        if self._reset_callback:
-            self._reset_callback(self._dataset)
 
     def __len__(self):
         """

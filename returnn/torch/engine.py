@@ -20,7 +20,7 @@ from returnn.torch.updater import Updater
 from returnn.util import basic as util
 from returnn.util import NumbersDict
 from .data import pipeline as data_pipeline
-from .data.returnn_dataset_wrapper import IterableDatasetWrapper
+from .data.returnn_dataset_wrapper import ReturnnDatasetIterDataPipe
 
 
 class Engine(EngineBase):
@@ -208,7 +208,7 @@ class Engine(EngineBase):
             epoch = epoch_mp_shared.value
             ds_worker.init_seq_order(epoch=epoch)
 
-        wrapped_dataset = IterableDatasetWrapper(dataset, reset_callback=_dataset_reset)
+        wrapped_dataset = ReturnnDatasetIterDataPipe(dataset, reset_callback=_dataset_reset)
 
         chunking = self.config.typed_value("chunking", None)
         if chunking:
