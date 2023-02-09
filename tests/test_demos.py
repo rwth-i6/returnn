@@ -20,12 +20,15 @@ else:
     print("Torch:", torch.__version__)
 
 
-try:
-    import tensorflow as tf
-except ImportError:
+if "RETURNN_DISABLE_TF" in os.environ and int(os.environ["RETURNN_DISABLE_TF"]) == 1:
     tf = None
 else:
-    print("TensorFlow:", tf.__version__)
+    try:
+        import tensorflow as tf
+    except ImportError:
+        tf = None
+    else:
+        print("TensorFlow:", tf.__version__)
 
 
 py = sys.executable

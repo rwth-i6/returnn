@@ -250,7 +250,7 @@ jobs:
         torch-version:
           - 1.13.1
         action:
-          - TEST=demos
+          - TEST=demos RETURNN_DISABLE_TF=1
           - TEST=PTDataset
 
     steps:
