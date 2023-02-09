@@ -53,7 +53,7 @@ jobs:
 
         pip install --user -r requirements.txt | cat
         pip install --user --upgrade tensorflow==${{ matrix.tf-version }} | cat
-        pip install --user torch==1.12 | cat
+        pip install --user torch torchdata | cat
 
     - name: Test Python/Numpy/TF versions.
       run: |
