@@ -1,5 +1,21 @@
 """
 Code to create PyTorch datasets that can be used with the PyTorch DataLoader.
+
+We make use of TorchData data pipelines.
+
+Most functionality is implemented as a dataset/datapipe, as this seems to be the common way in PyTorch,
+as it is also commonly done in Fairseq:
+    https://github.com/facebookresearch/fairseq/tree/main/fairseq/data
+    https://github.com/facebookresearch/fairseq/blob/main/fairseq/data/subsample_dataset.py
+
+This is also the intended way for TorchData.
+
+We potentially could also implement some functionality as part of the data loader (v1),
+but DataLoader2 suggests to decouple this, as we do here.
+
+We also have :class:`ChunkShuffleDataset` on RETURNN dataset level.
+However, having this separate pure PyTorch implementation is useful to allow to use
+other PyTorch datasets more directly, including also HuggingFace datasets.
 """
 
 import sys
@@ -30,21 +46,10 @@ def collate_batch(batch):
     return res
 
 
-class IterableChunker(torch.utils.data.IterableDataset):
+class ChunkingIterDataPipe(torch.utils.data.IterDataPipe):
     """
     Splits each sequence in the given dataset into chunks according to the 'chunking' config option.
     So it transforms one sequences into multiple sequences.
-
-    This is implemented as a dataset, as this seems to be the common way in PyTorch,
-    as it is also commonly done in Fairseq:
-        https://github.com/facebookresearch/fairseq/tree/main/fairseq/data
-        https://github.com/facebookresearch/fairseq/blob/main/fairseq/data/subsample_dataset.py
-
-    We potentially could also implement this as part of the data loader.
-
-    We also have :class:`ChunkShuffleDataset` on RETURNN dataset level.
-    However, having this separate pure PyTorch implementation is useful to allow to use
-    other PyTorch datasets more directly, including also HuggingFace datasets.
     """
 
     def __init__(self, dataset: torch.utils.data.IterableDataset, chunking):
@@ -60,6 +65,7 @@ class IterableChunker(torch.utils.data.IterableDataset):
             (The number of resulting chunks has to be match though for all given data keys, i.e. sequence lengths
             have to be considered.)
         """
+        super().__init__()
         from returnn.datasets.basic import Dataset as ReturnnDataset
 
         self._dataset = dataset
@@ -146,7 +152,7 @@ class IterableChunker(torch.utils.data.IterableDataset):
 
 
 # noinspection PyAbstractClass
-class IterableBatching(torch.utils.data.IterableDataset):
+class BatchingIterDataPipe(torch.utils.data.IterDataPipe):
     """
     Converts a dataset yielding sequences (dict data_key -> array per sequence) into a dataset yielding lists of
     these sequences, i.e. batches.
@@ -165,6 +171,7 @@ class IterableBatching(torch.utils.data.IterableDataset):
         :param int|None max_seqs: maximum number of sequences in a batch,
             None means unlimited (also -1 to match TF backend)
         """
+        super().__init__()
         self._dataset = dataset
         self._max_batch_size = NumbersDict(sys.maxsize if batch_size is None else batch_size)
         self._max_seqs = sys.maxsize if (max_seqs is None or max_seqs == -1) else max_seqs

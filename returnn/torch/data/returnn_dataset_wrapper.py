@@ -1,31 +1,43 @@
 """
-Wrapper for RETURNN datasets
+Wrapper for RETURNN datasets.
+
+We make use of TorchData data pipelines.
 """
 
 from __future__ import annotations
+from typing import Callable, Optional
 import torch.utils.data
+from returnn.datasets.basic import Dataset as ReturnnDataset
 
 
-class IterableDatasetWrapper(torch.utils.data.IterableDataset):
+ResetCallbackT = Callable[[ReturnnDataset], None]
+
+
+class IterableDatasetWrapper(torch.utils.data.IterDataPipe):
     """
     Converts a RETURNN dataset into a PyTorch IterableDataset.
     """
 
-    def __init__(self, returnn_dataset, epoch):
+    def __init__(self, returnn_dataset: ReturnnDataset, *, reset_callback: Optional[ResetCallbackT] = None):
         """
-        :param returnn.datasets.basic.Dataset returnn_dataset: dataset to be wrapped
-        :param int epoch:
+        :param returnn_dataset: dataset to be wrapped
+        :param reset_callback: callback function to be called when the dataset is reset, e.g. to init the epoch
         """
         self._dataset = returnn_dataset
-        self._epoch = epoch
+        self._reset_callback = reset_callback
+
+    def reset(self):
+        """
+        :return:
+        """
+        if self._reset_callback:
+            self._reset_callback(self._dataset)
 
     def __iter__(self):
         """
         :return: generator providing data samples in the form of a dict data_key -> data
         :rtype: Iterable[dict[str, numpy.ndarray]]
         """
-        self._dataset.init_seq_order(epoch=self._epoch)
-
         data_keys = self._dataset.get_data_keys()
 
         seq_index = 0
@@ -39,20 +51,26 @@ class IterableDatasetWrapper(torch.utils.data.IterableDataset):
         raise Exception(f"{self.__class__.__name__}.__getitem__ not supported")
 
 
-class MapStyleDatasetPerEpochWrapper(torch.utils.data.Dataset):
+class MapStyleDatasetPerEpochWrapper(torch.utils.data.MapDataPipe):
     """
     Converts a RETURNN dataset into a PyTorch map-style Dataset.
     """
 
-    def __int__(self, returnn_dataset, epoch):
+    def __int__(self, returnn_dataset: ReturnnDataset, *, reset_callback: Optional[ResetCallbackT] = None):
         """
-        :param returnn.datasets.basic.Dataset returnn_dataset: dataset to be wrapped
-        :param int epoch:
+        :param returnn_dataset: dataset to be wrapped
+        :param reset_callback: callback function to be called when the dataset is reset, e.g. to init the epoch
         """
         assert returnn_dataset.have_corpus_seq_idx() and returnn_dataset.have_get_corpus_seq()
         self._dataset = returnn_dataset
-        self._epoch = epoch
-        self._dataset.init_seq_order(epoch=self._epoch)
+        self._reset_callback = reset_callback
+
+    def reset(self):
+        """
+        :return:
+        """
+        if self._reset_callback:
+            self._reset_callback(self._dataset)
 
     def __len__(self):
         """
@@ -72,17 +90,26 @@ class MapStyleDatasetPerEpochWrapper(torch.utils.data.Dataset):
         return seq.features
 
 
-class MapStyleDatasetFullWrapper(torch.utils.data.Dataset):
+class MapStyleDatasetFullWrapper(torch.utils.data.MapDataPipe):
     """
     Converts a RETURNN dataset into a PyTorch map-style Dataset.
     """
 
-    def __int__(self, returnn_dataset, epoch):
+    def __int__(self, returnn_dataset: ReturnnDataset, *, reset_callback: Optional[ResetCallbackT] = None):
         """
-        :param returnn.datasets.basic.Dataset returnn_dataset: dataset to be wrapped
+        :param returnn_dataset: dataset to be wrapped
+        :param reset_callback:
         """
         assert returnn_dataset.have_get_corpus_seq()
         self._dataset = returnn_dataset
+        self._reset_callback = reset_callback
+
+    def reset(self):
+        """
+        :return:
+        """
+        if self._reset_callback:
+            self._reset_callback(self._dataset)
 
     def __len__(self):
         """

@@ -7,13 +7,15 @@ from typing import Optional, Callable, Dict
 import torch
 import numpy
 import os
-from torch.utils.data import DataLoader
+import torchdata
+from torchdata.dataloader2 import DataLoader2
 from random import random
 
+from returnn.config import Config
 from returnn.log import log
 from returnn.engine.base import EngineBase
 from returnn.learning_rate_control import load_learning_rate_control_from_config, LearningRateControl
-from returnn.datasets.basic import init_dataset
+from returnn.datasets.basic import init_dataset, Dataset
 from returnn.torch.updater import Updater
 from returnn.util import basic as util
 from returnn.util import NumbersDict
@@ -26,15 +28,19 @@ class Engine(EngineBase):
     PyTorch engine
     """
 
-    def __init__(self, config):
+    def __init__(self, config: Config):
         """
-        :param returnn.config.Config config:
+        :param config:
         """
         super(Engine, self).__init__()
         self.config = config
         self.model_filename = self.config.value("model", None)
-        self.train_dataset = None
+        self._mp_manager = torch.multiprocessing.Manager()
+        self._epoch_mp_shared = self._mp_manager.Value("i", 0)
+        self.train_dataset = None  # type: Optional[Dataset]
         self.eval_datasets = {}
+        self._train_dataloader = None  # type: Optional[DataLoader2]
+        self._eval_dataloaders = {}  # type: Dict[str, DataLoader2]
 
         self._start_epoch = None  # type: Optional[int]
         self._final_epoch = None  # type: Optional[int]
@@ -47,12 +53,18 @@ class Engine(EngineBase):
 
         self._device = "cuda" if torch.cuda.is_available() else "cpu"
 
-    def init_train_from_config(self, config=None, train_data=None, dev_data=None, eval_data=None):
+    def init_train_from_config(
+        self,
+        config: Optional[Config] = None,
+        train_data: Optional[Dataset] = None,
+        dev_data: Optional[Dataset] = None,
+        eval_data: Optional[Dataset] = None,
+    ):
         """
-        :param returnn.config.Config|None config:
-        :param returnn.datasets.basic.Dataset|None train_data:
-        :param returnn.datasets.basic.Dataset|None dev_data:
-        :param returnn.datasets.basic.Dataset|None eval_data:
+        :param config:
+        :param train_data:
+        :param dev_data:
+        :param eval_data:
         """
         assert config is self.config
         self.train_dataset = train_data
@@ -64,6 +76,10 @@ class Engine(EngineBase):
         if config.has("eval_datasets"):
             for dataset_name, dataset_opts in config.typed_value("eval_datasets", {}).items():
                 self.eval_datasets[dataset_name] = init_dataset(dataset_opts, default_kwargs={"name": dataset_name})
+
+        self._train_dataloader = self._create_data_loader(train_data) if train_data else None
+        for dataset_name, dataset in self.eval_datasets.items():
+            self._eval_dataloaders[dataset_name] = self._create_data_loader(dataset)
 
         self._start_epoch, _ = self.get_train_start_epoch_batch(self.config)
         self._final_epoch = self.config_get_final_epoch(self.config)
@@ -90,11 +106,13 @@ class Engine(EngineBase):
         assert self._model, "Model not initialized, call init_train_from_config()."
 
         self.epoch = self._start_epoch
+        self._epoch_mp_shared.value = self.epoch
         while self.epoch <= self._final_epoch:
             self.init_train_epoch()
             self.train_epoch()
 
             self.epoch += 1
+            self._epoch_mp_shared.value = self.epoch
 
         print("Finished training at epoch {}.".format(self.epoch), file=log.v3)
 
@@ -113,12 +131,10 @@ class Engine(EngineBase):
         """
         print("start", self.get_epoch_str(), "with learning rate", self._learning_rate, "...", file=log.v4)
 
-        data_loader = self._create_data_loader(self.train_dataset)
-
         self._model.train()
 
         step_idx = 0
-        for data in data_loader:
+        for data in self._train_dataloader:
             loss, _ = self._run_step(data)
 
             self._updater.get_optimizer().zero_grad()
@@ -144,9 +160,9 @@ class Engine(EngineBase):
         self._model.eval()
 
         for dataset_name, dataset in self.eval_datasets.items():
-            print("Evaluating dataset '{}'...".format(dataset_name), file=log.v3)
+            print(f"Evaluating dataset {dataset_name!r}'", file=log.v3)
 
-            data_loader = self._create_data_loader(dataset)
+            data_loader = self._eval_dataloaders[dataset_name]
 
             accumulated_loss = 0.0
             accumulated_losses_dict = NumbersDict()
@@ -177,29 +193,33 @@ class Engine(EngineBase):
 
         self._learning_rate_control.save()
 
-    def _create_data_loader(self, dataset):
+    def _create_data_loader(self, dataset: Dataset) -> DataLoader2:
         """
-        :param returnn.datasets.basic.Dataset dataset:
+        :param dataset: RETURNN dataset
         :return: PyTorch data loader created from given RETURNN dataset
-        :rtype: DataLoader
         """
-        wrapped_dataset = IterableDatasetWrapper(dataset, epoch=self.epoch)
+        # Make sure that _dataset_reset does not keep a ref to `self`,
+        # otherwise it would trigger to pickle `self` and all its members.
+        epoch_mp_shared = self._epoch_mp_shared
+
+        def _dataset_reset(ds_worker: Dataset):
+            # ds_worker is likely a copy of the original dataset, either in the main process or in a worker process
+            # Use _epoch_mp_shared to get the current epoch correctly in worked processes
+            epoch = epoch_mp_shared.value
+            ds_worker.init_seq_order(epoch=epoch)
+
+        wrapped_dataset = IterableDatasetWrapper(dataset, reset_callback=_dataset_reset)
 
         chunking = self.config.typed_value("chunking", None)
         if chunking:
-            wrapped_dataset = data_pipeline.IterableChunker(wrapped_dataset, chunking)
+            wrapped_dataset = data_pipeline.ChunkingIterDataPipe(wrapped_dataset, chunking)
 
         batch_size = self.config.typed_value("batch_size", 1)
         max_seqs = self.config.int("max_seqs", -1)
-        batches_dataset = data_pipeline.IterableBatching(wrapped_dataset, batch_size=batch_size, max_seqs=max_seqs)
+        batches_dataset = data_pipeline.BatchingIterDataPipe(wrapped_dataset, batch_size=batch_size, max_seqs=max_seqs)
+        batches_dataset = torchdata.datapipes.iter.Collator(batches_dataset, collate_fn=data_pipeline.collate_batch)
 
-        data_loader = DataLoader(
-            batches_dataset,
-            batch_size=None,
-            collate_fn=data_pipeline.collate_batch,
-        )
-
-        return data_loader
+        return DataLoader2(batches_dataset)
 
     def _run_step(self, data):
         """
@@ -303,4 +323,4 @@ class TrainCtx:
         :return: total loss, as it is used for backpropagation
         """
         assert self.losses, "call train_ctx.mark_as_loss"
-        return sum([self.losses[name] * self.loss_scales[name] for name in self.losses])
+        return sum([self.losses[name] * self.loss_scales[name] for name in self.losses], torch.zeros(()))
