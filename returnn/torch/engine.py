@@ -20,7 +20,7 @@ from returnn.torch.updater import Updater
 from returnn.util import basic as util
 from returnn.util import NumbersDict
 from .data import pipeline as data_pipeline
-from .data.returnn_dataset_wrapper import ReturnnDatasetIterDataPipe
+from .data import returnn_dataset_wrapper
 
 
 class Engine(EngineBase):
@@ -200,15 +200,9 @@ class Engine(EngineBase):
         """
         # Make sure that _dataset_reset does not keep a ref to `self`,
         # otherwise it would trigger to pickle `self` and all its members.
-        epoch_mp_shared = self._epoch_mp_shared
+        dataset_reset = returnn_dataset_wrapper.DatasetResetMpSharedEpochCallback(epoch_mp_shared=self._epoch_mp_shared)
 
-        def _dataset_reset(ds_worker: Dataset):
-            # ds_worker is likely a copy of the original dataset, either in the main process or in a worker process
-            # Use _epoch_mp_shared to get the current epoch correctly in worked processes
-            epoch = epoch_mp_shared.value
-            ds_worker.init_seq_order(epoch=epoch)
-
-        wrapped_dataset = ReturnnDatasetIterDataPipe(dataset, reset_callback=_dataset_reset)
+        wrapped_dataset = returnn_dataset_wrapper.ReturnnDatasetIterDataPipe(dataset, reset_callback=dataset_reset)
 
         chunking = self.config.typed_value("chunking", None)
         if chunking:

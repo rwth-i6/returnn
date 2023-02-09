@@ -13,6 +13,21 @@ from returnn.datasets.basic import Dataset as ReturnnDataset
 ResetCallbackT = Callable[[ReturnnDataset], None]
 
 
+class DatasetResetMpSharedEpochCallback:
+    """
+    Can be used as reset_callback.
+    """
+
+    def __init__(self, epoch_mp_shared: torch.multiprocessing.Value):
+        self.epoch_mp_shared = epoch_mp_shared
+
+    def __call__(self, ds_worker: ReturnnDataset):
+        # ds_worker is likely a copy of the original dataset, either in the main process or in a worker process
+        # Use _epoch_mp_shared to get the current epoch correctly in worked processes
+        epoch = self.epoch_mp_shared.value
+        ds_worker.init_seq_order(epoch=epoch)
+
+
 class ReturnnDatasetIterDataPipe(torch.utils.data.IterDataPipe):
     """
     Converts a RETURNN dataset into a PyTorch IterableDataset.

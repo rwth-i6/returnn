@@ -10,19 +10,8 @@ from torchdata.dataloader2 import DataLoader2
 from returnn.datasets.basic import Dataset
 from returnn.datasets.generating import Task12AXDataset
 from returnn.torch.data import pipeline as data_pipeline
-from returnn.torch.data.returnn_dataset_wrapper import ReturnnDatasetIterDataPipe
+from returnn.torch.data import returnn_dataset_wrapper
 from returnn.util import better_exchook
-
-
-class _DatasetResetCallback:
-    def __init__(self, epoch_mp_shared: torch.multiprocessing.Value):
-        self.epoch_mp_shared = epoch_mp_shared
-
-    def __call__(self, ds_worker: Dataset):
-        # ds_worker is likely a copy of the original dataset, either in the main process or in a worker process
-        # Use _epoch_mp_shared to get the current epoch correctly in worked processes
-        epoch = self.epoch_mp_shared.value
-        ds_worker.init_seq_order(epoch=epoch)
 
 
 def test_pipeline_serialization():
@@ -33,9 +22,9 @@ def test_pipeline_serialization():
     _mp_manager = torch.multiprocessing.Manager()
     epoch_mp_shared = _mp_manager.Value("i", 0)
     epoch_mp_shared.value = 1
-    reset_callback = _DatasetResetCallback(epoch_mp_shared=epoch_mp_shared)
+    reset_callback = returnn_dataset_wrapper.DatasetResetMpSharedEpochCallback(epoch_mp_shared=epoch_mp_shared)
 
-    wrapped_dataset = ReturnnDatasetIterDataPipe(dataset, reset_callback=reset_callback)
+    wrapped_dataset = returnn_dataset_wrapper.ReturnnDatasetIterDataPipe(dataset, reset_callback=reset_callback)
 
     batch_size = 5
     max_seqs = 2
