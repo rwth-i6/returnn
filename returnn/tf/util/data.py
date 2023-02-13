@@ -57,6 +57,7 @@ class Dim(object):
 
     def __init__(
         self,
+        *,
         kind=Types.Unspecified,
         description=None,
         dimension=None,
@@ -3016,6 +3017,7 @@ class Data(object):
 
     def __init__(
         self,
+        *,
         name,
         shape=None,
         dtype=None,
