@@ -711,8 +711,8 @@ def test_concat_new_dim_tag():
 
     with make_scope():
         n_out = 5
-        time_tag = Dim(Dim.Types.Spatial, "time")
-        new_time_tag = Dim(Dim.Types.Spatial, "new-time")
+        time_tag = Dim(kind=Dim.Types.Spatial, description="time")
+        new_time_tag = Dim(kind=Dim.Types.Spatial, description="new-time")
         config = Config(
             {
                 "debug_print_layer_output_template": True,
@@ -2025,7 +2025,7 @@ def test_CombineLayer_RangeFromLengthLayer():
 def test_CompareLayer_allow_broadcast_all_sources():
     from returnn.tf.util.data import batch_dim, Dim
 
-    time_tag = Dim(Dim.Types.Spatial, description="time")
+    time_tag = Dim(kind=Dim.Types.Spatial, description="time")
     with make_scope():
         n_out = 5
         config = Config(
@@ -2134,7 +2134,7 @@ def test_SwitchLayer_sanity_check():
 
     with make_scope():
         n_out = 5
-        time_tag = Dim(Dim.Types.Spatial, "time")
+        time_tag = Dim(kind=Dim.Types.Spatial, description="time")
         config = Config(
             {
                 "debug_print_layer_output_template": True,
