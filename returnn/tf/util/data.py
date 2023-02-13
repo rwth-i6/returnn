@@ -3017,8 +3017,8 @@ class Data(object):
 
     def __init__(
         self,
-        *,
         name,
+        *,
         shape=None,
         dtype=None,
         placeholder=None,
