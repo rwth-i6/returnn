@@ -1306,7 +1306,7 @@ class Dim(object):
                         self.dyn_size_ext = base.dyn_size_ext.copy_template(name="%s:size" % self_base.description)
                 elif base.is_batch_dim():
                     self.dyn_size_ext = Data(
-                        "%s:batch" % self_base.description, shape=(), dtype="int32", batch_dim_axis=None
+                        name="%s:batch" % self_base.description, shape=(), dtype="int32", batch_dim_axis=None
                     )
 
     @classmethod
@@ -6237,7 +6237,7 @@ def _create_size_placeholder(name, axis_wo_b, tag, batch_dim):
 
     with reuse_name_scope("extern_data/placeholders/%s" % name, absolute=True):
         dyn_size_ext = Data(
-            "%s_dim%i_size" % (name, axis_wo_b),
+            name="%s_dim%i_size" % (name, axis_wo_b),
             dtype=Data.size_dtype,
             dim_tags=[batch_dim] if batch_dim else [],
             batch=batch_dim.batch if batch_dim else None,
@@ -6324,7 +6324,7 @@ def _infer_dim_tags_tuple_from_shape(
                     auto_generated=True,
                 )
                 tag.dyn_size_ext = Data(
-                    "%s_dim%i_size" % (name, axis_wo_b), dtype=Data.size_dtype, shape=(), batch=batch
+                    name="%s_dim%i_size" % (name, axis_wo_b), dtype=Data.size_dtype, shape=(), batch=batch
                 )
                 dim_tags[axis] = tag
             dyn_size = tag.dyn_size
@@ -6368,7 +6368,9 @@ def _infer_dim_tags_tuple_from_shape(
                 auto_generated=True,
             )
         if dim is None and tag.dyn_size_ext is None:
-            tag.dyn_size_ext = Data("%s_dim%i_size" % (name, axis_wo_b), dtype=Data.size_dtype, shape=(), batch=batch)
+            tag.dyn_size_ext = Data(
+                name="%s_dim%i_size" % (name, axis_wo_b), dtype=Data.size_dtype, shape=(), batch=batch
+            )
             if dyn_size is not None:
                 tag.dyn_size_ext.placeholder = dyn_size
         dim_tags[axis] = tag

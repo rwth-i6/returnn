@@ -324,7 +324,7 @@ def copy_compatible_reduce(source, target, reduce_type):
         axis = source.get_axis_from_description(d)
         x = tf.reduce_max(source.placeholder, axis=axis)
         dim_tags = source.dim_tags[:axis] + source.dim_tags[axis + 1 :]
-        source = Data(source.name, dim_tags=dim_tags, dtype=source.dtype, placeholder=x)
+        source = Data(name=source.name, dim_tags=dim_tags, dtype=source.dtype, placeholder=x)
     # Now this should work.
     return source.copy_compatible_to(target, check_sparse=False, check_dtype=False)
 

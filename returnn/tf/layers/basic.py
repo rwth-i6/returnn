@@ -2311,9 +2311,9 @@ class LengthLayer(LayerBase):
                 dim=None if sparse else NotSpecified,
             )
         if dim.is_batch_dim():
-            return Data("%s_batch_dim" % name, dim_tags=(), dtype=dtype, sparse=sparse)
+            return Data(name="%s_batch_dim" % name, dim_tags=(), dtype=dtype, sparse=sparse)
         if dim.dimension is not None:  # static
-            return Data("%s_static_dim" % name, dim_tags=(), dtype=dtype, sparse=sparse)
+            return Data(name="%s_static_dim" % name, dim_tags=(), dtype=dtype, sparse=sparse)
         if not dim.dyn_size_ext:  # yet undefined
             return Data(
                 name="%s_length" % name,
@@ -4904,7 +4904,7 @@ class UnflattenNdLayer(_ConcatInputLayer):
                 SpatialDim(
                     "%s:unflatten-nd:%i" % (name, i),
                     auto_generated=True,
-                    dyn_size_ext=Data("%s:unflatten-nd:%i" % (name, i), shape=(), dtype=Data.size_dtype),
+                    dyn_size_ext=Data(name="%s:unflatten-nd:%i" % (name, i), shape=(), dtype=Data.size_dtype),
                 )
                 for i in range(num_axes)
             ]

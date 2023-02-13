@@ -2392,7 +2392,7 @@ class _SubnetworkRecCell(object):
                     out.placeholder,
                     indices=tf.maximum(
                         indices.copy_compatible_to(
-                            Data("dummy", dim_tags=out.dim_tags[:1], dtype="int32"), unbroadcast=True
+                            Data(name="dummy", dim_tags=out.dim_tags[:1], dtype="int32"), unbroadcast=True
                         ).placeholder,
                         0,
                     ),
@@ -4729,13 +4729,13 @@ class _SubnetworkRecWrappedLoss(Loss):
         self.layer = base_loss.layer  # avoid that init() gets executed again
         # Get either (time_flat,) or (time*batch,) for loss_value and error_value.
         loss_data = Data(
-            "loss", shape=(None,), time_dim_axis=0, batch_dim_axis=1, dtype="float32", placeholder=loss_value
+            name="loss", shape=(None,), time_dim_axis=0, batch_dim_axis=1, dtype="float32", placeholder=loss_value
         )
         loss_data.size_placeholder[0] = seq_lens
         self.loss_value = self._flatten_or_merge(loss_data)
         if error_value is not None:
             error_data = Data(
-                "error",
+                name="error",
                 shape=(None,),
                 time_dim_axis=0,
                 batch_dim_axis=1,
@@ -5567,7 +5567,7 @@ class GetLastHiddenStateLayer(LayerBase):
         if not out_dim:
             assert n_out
             out_dim = FeatureDim("%s:hidden-out" % name, n_out, auto_generated=True)
-        out = Data("%s_output" % name, dim_tags=[batch_dim, out_dim])
+        out = Data(name="%s_output" % name, dim_tags=[batch_dim, out_dim])
         out.beam = sources[0].output.beam
         out.batch = sources[0].output.batch
         return out
