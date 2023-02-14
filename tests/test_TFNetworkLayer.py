@@ -5725,8 +5725,8 @@ def test_CondLayer_dyn_dim_replace():
         # tensorflow.python.framework.errors_impl.InvalidArgumentError: Retval[0] does not have value
         # Adding the same_control_flow_ctx at the place where it is created fixes this.
         print("out_seq_len:", out_seq_len)
-        tf_util.print_graph_output(out_seq_len)
-        print(out_seq_len.op._traceback)
+        # tf_util.print_graph_output(out_seq_len) -- not really relevant
+        # print(out_seq_len.op._traceback) -- not always available?
         fetch = out.placeholder
         session.run(fetch, feed_dict=make_feed_dict(network.extern_data, n_time=1))
         session.run(fetch, feed_dict=make_feed_dict(network.extern_data, n_time=2))
