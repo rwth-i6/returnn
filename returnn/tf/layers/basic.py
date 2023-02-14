@@ -5456,6 +5456,7 @@ class ReinterpretDataLayer(_ConcatInputLayer):
                 )
                 if new_tag.is_batch_dim() or new_tag.dimension is not None:
                     continue
+                new_tag.complete_dyn_size()
                 if new_tag.dyn_size_ext and new_tag.dyn_size_ext.placeholder is not None:
                     continue
                 # still undefined
