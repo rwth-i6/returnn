@@ -609,9 +609,10 @@ class Runner(object):
         self._horovod_last_param_sync_time = time.time()
         return self._horovod_last_param_sync_time - start_time
 
-    def run(self, report_prefix):
+    def run(self, report_prefix: str, *, raise_exception: bool = False):
         """
-        :param str report_prefix: prefix for logging, e.g. "train"
+        :param report_prefix: prefix for logging, e.g. "train"
+        :param raise_exception: if True, directly raise any exception; otherwise, will store in
         """
         self.report_prefix = report_prefix
         sess = self.engine.tf_session
@@ -805,10 +806,12 @@ class Runner(object):
         except KeyboardInterrupt as exc:
             print("KeyboardInterrupt in step %r." % step)
             self.run_exception = exc
+            if raise_exception:
+                raise
 
         except Exception as exc:
             print("Exception %r in step %r. (pid %i)" % (exc, step, os.getpid()), file=log.v1)
-            if not isinstance(exc, CancelTrainingException):
+            if not isinstance(exc, CancelTrainingException) and not raise_exception:
                 help_on_tf_exception(
                     session=sess,
                     exception=exc,
@@ -821,6 +824,8 @@ class Runner(object):
                 sys.excepthook(*sys.exc_info())
             self.device_crash_batch = step
             self.run_exception = exc
+            if raise_exception:
+                raise
 
         finally:
             # Try and ignore certain exceptions as we anyway should try to clean up as much as possible.
