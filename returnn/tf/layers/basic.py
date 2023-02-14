@@ -5465,9 +5465,10 @@ class ReinterpretDataLayer(_ConcatInputLayer):
                     assert old_tag.dyn_size_ext
                     new_dyn_size_ext = old_tag.dyn_size_ext.copy(name="%s_size" % (new_tag.description or "<unnamed>"))
                 # Need to create new size tensor as long as we have get_tag_from_size_tensor.
-                new_dyn_size_ext.placeholder = tf.identity(
-                    new_dyn_size_ext.placeholder, name=get_valid_scope_name_from_str(new_dyn_size_ext.name)
-                )
+                with tf_util.same_control_flow_ctx(new_dyn_size_ext.placeholder):
+                    new_dyn_size_ext.placeholder = tf.identity(
+                        new_dyn_size_ext.placeholder, name=get_valid_scope_name_from_str(new_dyn_size_ext.name)
+                    )
                 if new_tag.dyn_size_ext:
                     assert new_dyn_size_ext.dim_tags == new_tag.dyn_size_ext.dim_tags
                 new_tag.dyn_size_ext = new_dyn_size_ext
