@@ -23,6 +23,7 @@ ipython-kernel-*.json
 /build
 /dist
 /_setup_info_generated.py
+/returnn.egg-info
 
 # via test cases run directly in this directory, or maybe in the tests dir
 dataset_id*
