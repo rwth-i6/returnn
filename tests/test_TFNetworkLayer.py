@@ -5645,6 +5645,82 @@ def test_CondLayer_mult_dyn_axes():
         numpy.testing.assert_array_equal(t3, _ceildiv(t1, 4))
 
 
+def test_CondLayer_dyn_dim_replace():
+    from returnn.tf.util.data import batch_dim, SpatialDim, FeatureDim
+
+    time_dim = SpatialDim("time")
+    in_dim = FeatureDim("in", 12)
+
+    config = Config(
+        dict(
+            extern_data={
+                "data": {"dim_tags": (batch_dim, time_dim, in_dim), "dtype": "float32", "available_for_inference": True}
+            }
+        )
+    )
+
+    _2_time_dim = 2 * time_dim
+    time_2_dim = time_dim * 2
+    random_state_dim = FeatureDim("random-state", 3)
+
+    net_dict = {
+        "length": {"class": "length", "from": ["data:data"], "axis": time_dim, "out_shape": {batch_dim}},
+        "dim_value": {"class": "reduce", "from": "length", "mode": "max", "axis": (batch_dim,), "out_shape": {}},
+        "mod": {"class": "eval", "from": "dim_value", "eval": "source(0) % 2", "out_shape": {}},
+        "compare": {"class": "compare", "from": "mod", "kind": "equal", "value": 0, "out_shape": {}},
+        "cond": {
+            "class": "cond",
+            "from": [],
+            "condition": "compare",
+            "true_layer": {
+                "class": "subnetwork",
+                "from": [],
+                "subnetwork": {
+                    "concat": {
+                        "class": "concat",
+                        "from": (("base:data:data", time_dim), ("base:data:data", time_dim)),
+                        "out_dim": _2_time_dim,
+                        "out_shape": {batch_dim, in_dim, _2_time_dim},
+                    },
+                    "new_dim": {
+                        "class": "reinterpret_data",
+                        "set_dim_tags": {_2_time_dim: time_2_dim},
+                        "from": "concat",
+                        "out_shape": {batch_dim, in_dim, time_2_dim},
+                    },
+                    "output": {"class": "copy", "from": "new_dim", "out_shape": {batch_dim, in_dim, time_2_dim}},
+                },
+            },
+            "false_layer": {
+                "class": "subnetwork",
+                "from": [],
+                "subnetwork": {
+                    "random": {
+                        "class": "random",
+                        "shape": (batch_dim, time_2_dim, in_dim),
+                        "distribution": "uniform",
+                        "minval": 0,
+                        "maxval": 1.0,
+                        "shape_deps": ["base:data:data"],
+                    },
+                    "output": {"class": "copy", "from": "random", "out_shape": {batch_dim, in_dim, time_2_dim}},
+                },
+            },
+            "out_shape": {batch_dim, in_dim, time_2_dim},
+            "name_scope": "",
+        },
+        "output": {"class": "copy", "from": "cond", "out_shape": {batch_dim, in_dim, time_2_dim}},
+    }
+
+    with make_scope() as session:
+        network = TFNetwork(config=config)
+        network.construct_from_dict(net_dict)
+        network.initialize_params(session)
+        fetch = network.get_default_output_layer().output.placeholder
+        session.run(fetch, feed_dict=make_feed_dict(network.extern_data, n_time=1))
+        session.run(fetch, feed_dict=make_feed_dict(network.extern_data, n_time=2))
+
+
 def test_CondLayer_variational_weight_noise():
     from returnn.tf.util.data import batch_dim, SpatialDim, FeatureDim
 
