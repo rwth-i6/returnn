@@ -5661,7 +5661,6 @@ def test_CondLayer_dyn_dim_replace():
 
     _2_time_dim = 2 * time_dim
     time_2_dim = time_dim * 2
-    random_state_dim = FeatureDim("random-state", 3)
 
     net_dict = {
         "length": {"class": "length", "from": ["data:data"], "axis": time_dim, "out_shape": {batch_dim}},
