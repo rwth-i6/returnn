@@ -5659,6 +5659,8 @@ def test_CondLayer_dyn_dim_replace():
         )
     )
 
+    # For the test, it is crucial to have two different dim tags here
+    # which can be replaced by each other though.
     _2_time_dim = 2 * time_dim
     time_2_dim = time_dim * 2
 
