@@ -806,7 +806,7 @@ class Runner(object):
             print("KeyboardInterrupt in step %r." % step)
             self.run_exception = exc
 
-        except BaseException as exc:
+        except Exception as exc:
             print("Exception %r in step %r. (pid %i)" % (exc, step, os.getpid()), file=log.v1)
             if not isinstance(exc, CancelTrainingException):
                 help_on_tf_exception(
