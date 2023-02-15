@@ -91,6 +91,7 @@ jobs:
           - TEST=SprintDataset
           - TEST=TaskSystem
           - TEST=TaskSystem_SharedMem
+          - TEST=tensor
           - TEST=TranslationDataset
           - TEST=Util
 
