@@ -80,6 +80,7 @@ class Dim(_DimMixin):
         self._extra = None
 
         if kwargs:
+            # TODO filter kwargs, avoid creation of _DimExtra if not needed
             self._extra = _DimExtra(dim=self, **kwargs)
 
     def __repr__(self):

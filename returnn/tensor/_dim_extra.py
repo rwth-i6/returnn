@@ -102,11 +102,6 @@ class _DimExtra:
         self.control_flow_ctx = control_flow_ctx
         self.src_data = src_data
         self.src_axis = src_axis
-        if dyn_size_ext and not dyn_size_ext.batch and batch:
-            dyn_size_ext.batch = batch
-        if dyn_size_ext:
-            assert batch == dyn_size_ext.batch
-        self.dyn_size_ext = dyn_size_ext  # type: Optional[_t.Tensor]
         self._dyn_size_same = set()  # set of TensorRef
         self._undefined = undefined
         self.special = special
@@ -117,7 +112,6 @@ class _DimExtra:
         # They each have same_as = self. The same_base should have the base (global) batch info.
         self._same_for_batch_ctx = {}  # type: Dict[Tuple[BatchInfo,Optional[ControlFlowContext]],_d.Dim]
         if dyn_size is not None:
-            assert not dyn_size_ext
             dim.dyn_size = dyn_size
         if self.derived_from_op and dim.is_dynamic():
             dim.complete_dyn_size()
@@ -177,15 +171,12 @@ class _DimMixin:
         if self.special:
             desc += "!"
         elif self.dimension is not None:
-            desc += "(%i%s)" % (self.dimension, "*" if self.generic else "")
+            desc += "(%i)" % (self.dimension)
         else:
             if self.dyn_size_ext:
-                desc += "[%s%s]" % (
-                    ",".join(self.dyn_size_ext.get_batch_axes_short_description(special_axes=False)),
-                    "*" if self.generic else "",
-                )
+                desc += "[%s]" % ",".join(self.dyn_size_ext.get_batch_axes_short_description(special_axes=False))
             else:
-                desc += "[*]" if self.generic else "[?]"
+                desc += "[?]"
             if self.control_flow_ctx:
                 desc += "{ctx=%s}" % self.control_flow_ctx.repr_inner()
         return desc
@@ -201,7 +192,7 @@ class _DimMixin:
     def __setstate__(self, state):
         self.__dict__.update(state)
         if self.kind is not None:
-            self.kind = {v.name: v for v in Dim.Types.Types}[self.kind]
+            self.kind = {v.name: v for v in DimTypes.Types}[self.kind]
         if self.is_batch_dim():
             self.same_as = batch_dim
 
@@ -242,7 +233,7 @@ class _DimMixin:
         assert self.can_be_used_as_dim()
         if not same_as_self:
             assert description is not None, "%s copy with not same_as_self should have a new description" % self
-        tag = Dim(
+        tag = _d.Dim(
             kind=kind or self.kind,
             description=description or self.description,
             match_priority=match_priority if match_priority is not None else self.match_priority,
@@ -351,7 +342,7 @@ class _DimMixin:
             # We ignore the ctx for the batch dim currently.
             if self.batch == batch:
                 return self
-            return Dim(kind=Dim.Types.Batch, description="batch:%s" % batch.short_repr(), batch=batch)
+            return _d.Dim(kind=DimTypes.Batch, description="batch:%s" % batch.short_repr(), batch=batch)
         if not self.is_dynamic():
             # If static dim, no effect.
             assert not self.batch
@@ -467,7 +458,7 @@ class _DimMixin:
                 dim_tag = candidate
                 break
         if not dim_tag:
-            dim_tag = Dim(
+            dim_tag = _d.Dim(
                 kind=self.kind,
                 description=self.description,
                 dimension=self.dimension,
@@ -478,7 +469,7 @@ class _DimMixin:
             )
             dim_tag.same_as = same_base
         if dyn_size_ext and dyn_size_ext.placeholder is not None:
-            if Dim.get_tag_from_size_tensor(dyn_size_ext.placeholder) is None:
+            if _d.Dim.get_tag_from_size_tensor(dyn_size_ext.placeholder) is None:
                 dim_tag.set_tag_on_size_tensor(dyn_size_ext.placeholder, batch=batch)
         same_base._same_for_batch_ctx[(batch, ctx)] = dim_tag
         dim_tag.complete_dyn_size(template_only=True)
@@ -555,7 +546,7 @@ class _DimMixin:
             return
         assert self.can_be_used_as_dim()
         assert isinstance(dyn_size, tf.Tensor) and dyn_size.shape.ndims == 1
-        other = Dim.get_tag_from_size_tensor(dyn_size)
+        other = _d.Dim.get_tag_from_size_tensor(dyn_size)
         if other:
             self.declare_same_as(other)
             if self.batch:
@@ -578,9 +569,9 @@ class _DimMixin:
                 assert self.dyn_size_ext.placeholder is dyn_size
         else:
             beam = getattr(dyn_size, "_RETURNN_dyn_size_beam", None)
-            self.dyn_size_ext = Data(
+            self.dyn_size_ext = _t.Tensor(
                 name=("%s:dyn_size" % self.description) if self.description else dyn_size.op.name,
-                dtype=Data.size_dtype,
+                dtype=_t.Tensor.size_dtype,
                 shape=(),
                 batch_dim_axis=0,
                 batch=self.batch,
@@ -821,7 +812,7 @@ class _DimMixin:
                     assert x.dimension is not None
                     if y is None:
                         with tf.control_dependencies(None):  # this will reset the context
-                            y = Data(
+                            y = _t.Tensor(
                                 name=y_name,
                                 dim_tags=[],
                                 dtype="int32",
@@ -840,7 +831,7 @@ class _DimMixin:
                     y = x.copy(name=y_name)
                     continue
                 if x.dim_tags != y.dim_tags:
-                    common = Data.get_common_data([x, y], allow_broadcast_all_sources=True)
+                    common = _t.Tensor.get_common_data([x, y], allow_broadcast_all_sources=True)
                     x_ = x.copy_compatible_to(common) if x.dim_tags else x
                     y_ = y.copy_compatible_to(common) if y.dim_tags else y
                     y = common
@@ -899,17 +890,6 @@ class _DimMixin:
             return True
         if self.special or other.special:
             return False  # only true if same instance, check above
-        if self.generic or other.generic:
-            # Note that this invalidates the transitive property of equivalence relations.
-            if self.generic and self.dimension:
-                if not other.generic or other.dimension:
-                    if self.dimension != other.dimension:
-                        return False
-            if other.generic and other.dimension:
-                if not self.generic or self.dimension:
-                    if self.dimension != other.dimension:
-                        return False
-            return self.kind == other.kind
         if allow_same_spatial_dim is None:
             allow_same_spatial_dim = allow_same_feature_dim
         self_base = self.get_same_derived_base() if derived_matches else self.get_same_base()
@@ -1448,7 +1428,7 @@ class _DimMixin:
         :return: self + other. note that this is not commutative, i.e. different from other + self.
         :rtype: Dim
         """
-        term = Dim._OpLinearTerm.from_dim(self)
+        term = _OpLinearTerm.from_dim(self)
         term.extend_add_sub_(other, kind="add", right=True)
         return term.as_dim()
 
@@ -1458,7 +1438,7 @@ class _DimMixin:
         :return: other + self
         :rtype: Dim
         """
-        term = Dim._OpLinearTerm.from_dim(self)
+        term = _OpLinearTerm.from_dim(self)
         term.extend_add_sub_(other, kind="add", right=False)
         return term.as_dim()
 
@@ -1475,7 +1455,7 @@ class _DimMixin:
         :return: self - other
         :rtype: Dim
         """
-        term = Dim._OpLinearTerm.from_dim(self)
+        term = _OpLinearTerm.from_dim(self)
         term.extend_add_sub_(other, kind="sub", right=True)
         return term.as_dim()
 
@@ -1485,7 +1465,7 @@ class _DimMixin:
         :return: (-other) + self
         :rtype: Dim
         """
-        term = Dim._OpLinearTerm.from_dim(self)
+        term = _OpLinearTerm.from_dim(self)
         term.extend_add_sub_(other, kind="sub", right=False)
         return term.as_dim()
 
@@ -1494,7 +1474,7 @@ class _DimMixin:
         :param Dim|int other:
         :rtype: Dim
         """
-        term = Dim._OpLinearTerm.from_dim(self)
+        term = _OpLinearTerm.from_dim(self)
         term.extend_mul_div_(other, kind="mul", right=True)
         return term.as_dim()
 
@@ -1503,7 +1483,7 @@ class _DimMixin:
         :param Dim|int other:
         :rtype: Dim
         """
-        term = Dim._OpLinearTerm.from_dim(self)
+        term = _OpLinearTerm.from_dim(self)
         term.extend_mul_div_(other, kind="mul", right=False)
         return term.as_dim()
 
@@ -1512,7 +1492,7 @@ class _DimMixin:
         :param Dim|int other:
         :rtype: Dim
         """
-        term = Dim._OpLinearTerm.from_dim(self)
+        term = _OpLinearTerm.from_dim(self)
         term.extend_mul_div_(other, kind="floordiv", right=True)
         return term.as_dim()
 
@@ -1528,7 +1508,7 @@ class _DimMixin:
         :param Dim|int other:
         :rtype: Dim
         """
-        term = Dim._OpLinearTerm.from_dim(self)
+        term = _OpLinearTerm.from_dim(self)
         term.extend_mul_div_(other, kind="truediv", right=False)
         return term.as_dim()
 
@@ -1537,7 +1517,7 @@ class _DimMixin:
         :param Dim|int other:
         :rtype: Dim
         """
-        term = Dim._OpLinearTerm.from_dim(self)
+        term = _OpLinearTerm.from_dim(self)
         term.extend_mul_div_(other, kind="truediv", right=True)
         return term.as_dim()
 
@@ -1546,7 +1526,7 @@ class _DimMixin:
         :param Dim|int other:
         :rtype: Dim
         """
-        term = Dim._OpLinearTerm.from_dim(self)
+        term = _OpLinearTerm.from_dim(self)
         term.extend_mul_div_(other, kind="ceildiv", right=False)
         return term.as_dim()
 
@@ -1555,7 +1535,7 @@ class _DimMixin:
         :param Dim|int other:
         :rtype: Dim
         """
-        term = Dim._OpLinearTerm.from_dim(self)
+        term = _OpLinearTerm.from_dim(self)
         term.extend_mul_div_(other, kind="ceildiv", right=True)
         return term.as_dim()
 
@@ -1933,11 +1913,11 @@ class _OpMultTerm:
         if len(self.terms) == 1:
             return self.terms[0]
         dim_kind = _get_merged_dim_kind(self.terms)
-        return Dim(
+        return _d.Dim(
             kind=dim_kind,
-            description="*".join(map(Dim._get_description, self.terms)),
+            description="*".join(map(_get_description, self.terms)),
             dimension=self.dimension,
-            derived_from_op=Dim.Op(kind="mul", inputs=list(self.terms)),
+            derived_from_op=Op(kind="mul", inputs=list(self.terms)),
             derived_from_tag=self.representative_tag(),
         )
 
@@ -1952,7 +1932,7 @@ class _OpMultTerm:
                 return term_
         # Now find non-unspecified.
         for term_ in self.terms:
-            if term_.kind != Dim.Types.Unspecified:
+            if term_.kind != DimTypes.Unspecified:
                 return term_
         # Now find any.
         for term_ in self.terms:
@@ -1980,7 +1960,7 @@ class _OpLinearTerm:
         """
         :rtype: Dim._OpLinearTerm
         """
-        return Dim._OpLinearTerm([])
+        return _OpLinearTerm([])
 
     def __init__(self, terms):
         """
@@ -1992,7 +1972,7 @@ class _OpLinearTerm:
         return hash(tuple(self.terms))
 
     def __eq__(self, other):
-        if isinstance(other, Dim._OpLinearTerm):
+        if isinstance(other, _OpLinearTerm):
             return self.terms == other.terms
         return False
 
@@ -2004,7 +1984,7 @@ class _OpLinearTerm:
         :rtype: Dim
         """
         if self.is_zero():
-            return Dim._make_constant_static_dim(0)
+            return _make_constant_static_dim(0)
         if len(self.terms) == 1:
             return self.terms[0].as_dim()
         add_parts = []
@@ -2013,18 +1993,18 @@ class _OpLinearTerm:
         for term in self.terms:
             s = term.as_dim()
             add_parts.append(s)
-            desc_parts.append(Dim._get_description(s))
+            desc_parts.append(_get_description(s))
             if dim is not None and s.dimension is not None:
                 dim += s.dimension
             else:
                 dim = None
         if len(add_parts) == 1:
             return add_parts[0]
-        return Dim(
+        return _d.Dim(
             kind=_get_merged_dim_kind(add_parts),
             description="+".join(desc_parts),
             dimension=dim,
-            derived_from_op=Dim.Op(kind="add", inputs=add_parts),
+            derived_from_op=Op(kind="add", inputs=add_parts),
             derived_from_tag=self.representative_tag(),
         )
 
@@ -2051,7 +2031,7 @@ class _OpLinearTerm:
             for other_ in other.derived_from_op.inputs if right else reversed(other.derived_from_op.inputs):
                 self.extend_add_sub_(other_, kind=kind, right=right)
             return
-        term = Dim._OpMultTerm.from_dim(other)
+        term = _OpMultTerm.from_dim(other)
         neg_term = term.negative()
         if kind == "sub":
             term, neg_term = neg_term, term
@@ -2061,15 +2041,15 @@ class _OpLinearTerm:
                 self.terms.pop(-1 if right else 0)
                 return
             if most_recent_term.is_constant_static_dim() and term.is_constant_static_dim():
-                self.terms[-1 if right else 0] = Dim._OpMultTerm.from_dim(
-                    Dim._make_constant_static_dim(most_recent_term.dimension + term.dimension, kind=other.kind)
+                self.terms[-1 if right else 0] = _OpMultTerm.from_dim(
+                    _make_constant_static_dim(most_recent_term.dimension + term.dimension, kind=other.kind)
                 )
                 return
             if most_recent_term.terms and term.terms and most_recent_term.terms[-1] == term.terms[-1]:
                 # Merge terms
-                a = Dim._OpMultTerm.from_dim_factors(most_recent_term.terms[:-1]).as_dim()
-                b = Dim._OpMultTerm.from_dim_factors(term.terms[:-1]).as_dim()
-                res = Dim._OpMultTerm.from_dim((a + b) if right else (b + a))
+                a = _OpMultTerm.from_dim_factors(most_recent_term.terms[:-1]).as_dim()
+                b = _OpMultTerm.from_dim_factors(term.terms[:-1]).as_dim()
+                res = _OpMultTerm.from_dim((a + b) if right else (b + a))
                 res.extend_mul_div_(term.terms[-1], kind="mul", right=True)
                 self.terms[-1 if right else 0] = res
                 return
@@ -2089,14 +2069,14 @@ class _OpLinearTerm:
         if kind == "mul" and right:
             if not all(term.can_simplify(other, kind=kind, right=right) for term in self.terms):
                 # Do it the other way around
-                self.terms, other = Dim._OpLinearTerm.from_dim(other).terms, self.as_dim()
+                self.terms, other = _OpLinearTerm.from_dim(other).terms, self.as_dim()
                 right = False
         if other._is_constant_static_dim() and other.dimension == 1:
             return
         if kind.endswith("div"):
             if any(not term.divisible(other, right=right) for term in self.terms):
                 self.terms = [
-                    Dim._OpMultTerm.from_dim(Dim._OpMultTerm.new_div_dim(self.as_dim(), other, kind=kind, right=right))
+                    _OpMultTerm.from_dim(_OpMultTerm.new_div_dim(self.as_dim(), other, kind=kind, right=right))
                 ]
                 return
         for term in self.terms:
@@ -2110,8 +2090,8 @@ class _OpLinearTerm:
         """
         if isinstance(other, int):
             base_tag = self.representative_tag()
-            return Dim._make_constant_static_dim(other, kind=base_tag.kind if base_tag else None)
-        elif isinstance(other, Dim):
+            return _make_constant_static_dim(other, kind=base_tag.kind if base_tag else None)
+        elif isinstance(other, _d.Dim):
             return other.get_same_base()
         else:
             raise TypeError("%s %s %s invalid for type %s" % (self, kind, other, type(other)))
@@ -2128,7 +2108,7 @@ class _OpLinearTerm:
         # Now find non-unspecified.
         for term in self.terms:
             for term_ in term.terms:
-                if term_.kind != Dim.Types.Unspecified:
+                if term_.kind != DimTypes.Unspecified:
                     return term_
         # Now find any.
         for term in self.terms:
@@ -2144,11 +2124,11 @@ def _get_merged_dim_kind(dim_tags):
     :rtype: Entity
     """
     if any(tag.is_batch_dim() for tag in dim_tags):
-        return Dim.Types.Batch
+        return DimTypes.Batch
     elif any(tag.is_feature_dim() for tag in dim_tags):
-        return Dim.Types.Feature
+        return DimTypes.Feature
     else:
-        return Dim.Types.Spatial
+        return DimTypes.Spatial
 
 
 def dim_cmp_value(obj):
