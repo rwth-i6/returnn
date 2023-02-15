@@ -83,7 +83,7 @@ class _TensorExtra:
                 if feature_dim_axis < 0:
                     feature_dim_axis += self.batch_ndim
                 assert 0 <= feature_dim_axis < self.batch_ndim
-        self._feature_dim_axis = feature_dim_axis
+        self.feature_dim_axis = feature_dim_axis
         if time_dim_axis is not None:
             assert 0 <= time_dim_axis < self.batch_ndim
         self.time_dim_axis = time_dim_axis  # type: typing.Optional[int]  # counted with batch-dim
@@ -119,13 +119,13 @@ class _TensorExtra:
             for _axis, _dim_tag in sorted(same_dim_tags_as.items()):
                 _axis = self.get_axis_from_description(_axis)
                 assert isinstance(_dim_tag, Dim)
-                base_tag = self._dim_tags[_axis]
+                base_tag = self._dims[_axis]
                 if base_tag != _dim_tag:
                     base_tag.declare_same_as(_dim_tag)
-                self._dim_tags = self._dim_tags[:_axis] + (_dim_tag,) + self._dim_tags[_axis + 1 :]
+                self._dims = self._dims[:_axis] + (_dim_tag,) + self._dims[_axis + 1 :]
         if auto_create_placeholders:
             # Do that after same_dim_tags_as handling.
-            _auto_create_size_placeholders_on_dim_tags(name=name, dim_tags=self._dim_tags)
+            _auto_create_size_placeholders_on_dim_tags(name=name, dim_tags=self._dims)
         tensor._adapt_batch_consistent_dim_tags()
         tensor.sanity_check(assume_complete=False)
 
@@ -137,9 +137,6 @@ class _TensorMixin:
     sparse_dim: Optional[Dim]
     _raw_tensor: object
     _extra: Optional[_TensorExtra]
-
-    def _extra_kwargs_handler():
-        pass
 
     @staticmethod
     def from_tensor(x):
@@ -206,6 +203,33 @@ class _TensorMixin:
         if with_batch_dim and batch_dim not in dim_tags:
             dim_tags.insert(0, batch_dim)
         return _t.Tensor(name=name, dim_tags=dim_tags, dtype=dtype, sparse_dim=sparse_dim)
+
+    @property
+    def control_flow_ctx(self) -> Optional[ControlFlowContext]:
+        """
+        :return: control flow ctx (graph-based)
+        """
+        if not self._extra:
+            return None
+        return self._extra.control_flow_ctx
+
+    @property
+    def available_for_inference(self) -> bool:
+        """
+        :return: available for inference
+        """
+        if not self._extra:
+            return True
+        return self._extra.available_for_inference
+
+    @property
+    def time_dim_axis(self) -> Optional[int]:
+        """
+        :return: time dim axis (deprecated)
+        """
+        if not self._extra:
+            return None
+        return self._extra.time_dim_axis
 
     def sanity_check(self, ignore_placeholder=False, assume_complete=True):
         """
@@ -436,8 +460,9 @@ class _TensorMixin:
         """
         keys = ["name", "dim_tags", "dtype"]
         if include_special_axes:
-            keys += ["time_dim_axis"]
-            if self._feature_dim_axis is not NotSpecified:
+            if self.time_dim_axis is not None:
+                keys += ["time_dim_axis"]
+            if self.feature_dim_axis_or_unspecified is not NotSpecified:
                 keys += ["feature_dim_axis"]
         if self.sparse_dim:
             # Sparse is False by default.
@@ -573,17 +598,14 @@ class _TensorMixin:
     def _adapt_batch_consistent_dim_tags(self):
         if not self.batch:  # uninitialized
             return
-        self._dim_tags = tuple(
-            tag.get_for_batch_ctx(batch=self.batch, ctx=self.control_flow_ctx) for tag in self._dim_tags
-        )
+        self._dims = tuple(tag.get_for_batch_ctx(batch=self.batch, ctx=self.control_flow_ctx) for tag in self._dims)
 
-    def copy(self, name=None):
+    def copy(self, name: Optional[str] = None) -> _t.Tensor:
         """
-        :param str name: if given, will overwrite this name
+        :param name: if given, will overwrite this name
         :return: copy of myself, using self.get_kwargs(), and with placeholder and size_placeholder
-        :rtype: Data
         """
-        data = Data(**self.get_kwargs())
+        data = _t.Tensor(**self.get_kwargs())
         data.placeholder = self.placeholder
         if name:
             data.name = name
@@ -1523,7 +1545,7 @@ class _TensorMixin:
         """
         :rtype: tuple[Dim]
         """
-        return self._dim_tags
+        return self._dims
 
     @property
     def shape(self):
@@ -1531,7 +1553,7 @@ class _TensorMixin:
         :return: shape without batch-dim. e.g. (time,feat) = (None,128)
         :rtype: tuple[int|None]
         """
-        return tuple(tag.dimension for tag in self._dim_tags if not tag.is_batch_dim())
+        return tuple(tag.dimension for tag in self._dims if not tag.is_batch_dim())
 
     @shape.setter
     def shape(self, shape):
@@ -1698,7 +1720,7 @@ class _TensorMixin:
         :rtype: int
         :return: ndim counted with batch-dim
         """
-        return len(self._dim_tags)
+        return len(self._dims)
 
     @property
     def batch_ndim_dense(self):
@@ -1740,7 +1762,7 @@ class _TensorMixin:
         :return: batch dim axis, counted with batch-dim
         :rtype: int|None
         """
-        return _batch_dim_axis_from_dim_tags_tuple(self._dim_tags)
+        return _batch_dim_axis_from_dim_tags_tuple(self._dims)
 
     @batch_dim_axis.setter
     def batch_dim_axis(self, axis):
@@ -1769,8 +1791,8 @@ class _TensorMixin:
         :return: feature dim axis, counted with batch-dim
         :rtype: int|None
         """
-        if self._feature_dim_axis is not NotSpecified:
-            return self._feature_dim_axis
+        if self.feature_dim_axis_or_unspecified is not NotSpecified:
+            return self.feature_dim_axis_or_unspecified
         return self._default_feature_dim_axis()
 
     @feature_dim_axis.setter
@@ -1779,9 +1801,14 @@ class _TensorMixin:
         :param int|None|NotSpecified value:
         """
         assert value is NotSpecified or value is None or isinstance(value, int)
+        if self.feature_dim_axis_or_unspecified == value:
+            return
         if isinstance(value, int):
             assert 0 <= value < self.batch_ndim
-        self._feature_dim_axis = value
+        if not self._extra:
+            assert isinstance(self, _t.Tensor)
+            self._extra = _TensorExtra(tensor=self)
+        self._extra.feature_dim_axis = value
 
     @property
     def feature_dim_axis_or_unspecified(self):
@@ -1789,7 +1816,9 @@ class _TensorMixin:
         :return: feature dim axis, counted with batch-dim. could also be unspecified
         :rtype: int|None|NotSpecified
         """
-        return self._feature_dim_axis
+        if not self._extra:
+            return NotSpecified
+        return self._extra.feature_dim_axis
 
     @property
     def time_dim_axis_excluding_batch(self):
@@ -1820,7 +1849,9 @@ class _TensorMixin:
         """
         :rtype: BatchInfo|None
         """
-        return self._batch
+        if not self._extra:
+            return None
+        return self._extra.batch
 
     @batch.setter
     def batch(self, batch):
@@ -1829,9 +1860,13 @@ class _TensorMixin:
         """
         if batch:
             assert batch.beam == self.beam
-        if self._batch == batch:  # fast path
+        if self.batch == batch:  # fast path
             return
-        self._batch = batch
+        if not self._extra:
+            assert batch
+            assert isinstance(self, _t.Tensor)
+            self._extra = _TensorExtra(tensor=self)
+        self._extra.batch = batch
         self._adapt_batch_consistent_dim_tags()
 
     @property
@@ -1839,10 +1874,12 @@ class _TensorMixin:
         """
         :rtype: SearchBeam|None
         """
-        if self._beam:
-            return self._beam
-        if self._batch:
-            return self._batch.beam
+        if not self._extra:
+            return None
+        if self._extra.beam:
+            return self._extra.beam
+        if self._extra.batch:
+            return self._extra.batch.beam
         return None
 
     @beam.setter
@@ -1850,10 +1887,16 @@ class _TensorMixin:
         """
         :param SearchBeam|None beam:
         """
+        if self.beam == beam:
+            return
+        if not self._extra:
+            assert beam
+            assert isinstance(self, _t.Tensor)
+            self._extra = _TensorExtra(tensor=self)
         # No check for batch.beam, as the batch is usually set only later.
-        self._beam = beam
-        if self._batch:
-            self._batch = self._batch.copy_set_beam(beam=beam)
+        self._extra.beam = beam
+        if self._extra.batch:
+            self._extra.batch = self.batch.copy_set_beam(beam=beam)
             self._adapt_batch_consistent_dim_tags()
 
     @property
@@ -2476,7 +2519,7 @@ class _TensorMixin:
         if tag.dyn_size is None:
             if sizes_tag:  # special rule for older code: overtake previous existing
                 assert sizes_tag.is_same_size_tensor(sizes)
-                self._dim_tags = self.dim_tags[:axis] + (sizes_tag,) + self.dim_tags[axis + 1 :]
+                self._dims = self._dims[:axis] + (sizes_tag,) + self._dims[axis + 1 :]
                 # Also assume the existing dim tag should be expected as equal.
                 # Likely there is anyway no reference so this does not matter.
                 tag.declare_same_as(sizes_tag)
@@ -2484,12 +2527,12 @@ class _TensorMixin:
                 # Assign now. This should also set the dim tag on sizes.
                 new_tag = tag.set_tag_on_size_tensor(sizes, batch=self.batch)
                 if new_tag is not tag:
-                    self._dim_tags = self.dim_tags[:axis] + (new_tag,) + self.dim_tags[axis + 1 :]
+                    self._dims = self._dims[:axis] + (new_tag,) + self._dims[axis + 1 :]
         else:
             # Reset to some new size.
             # Use new dim tag, or previous existing attached to size.
             assert sizes_tag, "%s: assign dyn sizes %s without defined dim tag" % (self, sizes)
-            self._dim_tags = self.dim_tags[:axis] + (sizes_tag,) + self.dim_tags[axis + 1 :]
+            self._dims = self._dims[:axis] + (sizes_tag,) + self._dims[axis + 1 :]
 
     def get_dynamic_axes(self):
         """
@@ -2750,7 +2793,7 @@ class _TensorMixin:
             d = {k: self.get_batch_axis_excluding_batch(v) if (v is not None) else None for (k, v) in d.items()}
         if only_available:
             d = {k: v for (k, v) in d.items() if v is not None}
-            if self._feature_dim_axis is NotSpecified:  # special rule
+            if self.feature_dim_axis_or_unspecified is NotSpecified:  # special rule
                 d.pop("feature_dim_axis", None)
         return d
 
@@ -2838,7 +2881,7 @@ class _TensorMixin:
         :param int axis: counted with batch-dim
         :rtype: Dim
         """
-        return self._dim_tags[axis]
+        return self._dims[axis]
 
     def get_time_dim_tag(self):
         """
@@ -2852,7 +2895,7 @@ class _TensorMixin:
         :return: all dim tags with dynamic size
         :rtype: list[Dim]
         """
-        return [dim_tag for dim_tag in self._dim_tags if dim_tag.is_dynamic()]
+        return [dim_tag for dim_tag in self._dims if dim_tag.is_dynamic()]
 
     def get_size_dim_tag(self, number):
         """

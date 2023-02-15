@@ -160,6 +160,15 @@ class _DimMixin:
             return None
         return self._extra.batch
 
+    @property
+    def same_as(self) -> Optional[_d.Dim]:
+        """
+        :return: same as other dim
+        """
+        if not self._extra:
+            return None
+        return self._extra.same_as
+
     def short_repr(self):
         """
         :return: some short repr
@@ -325,13 +334,13 @@ class _DimMixin:
                     if not same.dyn_size_ext or same.dyn_size_ext.placeholder is None:
                         same.dyn_size_ext = self.dyn_size_ext
 
-    def get_for_batch_ctx(self, batch, ctx, allow_none=False):
+    def get_for_batch_ctx(self, batch, ctx, allow_none=False) -> _d.Dim:
         """
         :param BatchInfo batch:
         :param ControlFlowContext|None ctx:
         :param bool allow_none:
-        :rtype: Dim|None
         """
+        assert isinstance(self, _d.Dim)
         assert self.can_be_used_as_dim()
         if self.batch == batch and self.control_flow_ctx == ctx and self.dyn_size_ext:
             self._validate_in_current_graph()
@@ -342,7 +351,7 @@ class _DimMixin:
             # We ignore the ctx for the batch dim currently.
             if self.batch == batch:
                 return self
-            return _d.Dim(kind=DimTypes.Batch, description="batch:%s" % batch.short_repr(), batch=batch)
+            return _d.Dim(kind=DimTypes.Batch, description="batch:%s" % batch.short_repr(), batch=batch, dimension=None)
         if not self.is_dynamic():
             # If static dim, no effect.
             assert not self.batch
@@ -650,7 +659,7 @@ class _DimMixin:
             return True
         return False
 
-    def set_tag_on_size_tensor(self, x, batch=None, same_as_before=False):
+    def set_tag_on_size_tensor(self, x, batch=None, same_as_before=False) -> _d.Dim:
         """
         This function is used
         to couple a tf.Tensor instance representing the dyn size
@@ -670,7 +679,6 @@ class _DimMixin:
         :param bool same_as_before: implies it was set before, and the new size is the same.
           e.g. it could be some identity with added checks, or other change.
         :return: self or new dim tag
-        :rtype: Dim
         """
         from .basic import TensorRef
 
@@ -737,10 +745,9 @@ class _DimMixin:
         return self
 
     @classmethod
-    def get_tag_from_size_tensor(cls, x):
+    def get_tag_from_size_tensor(cls, x) -> Optional[_d.Dim]:
         """
         :param tf.Tensor x: size tensor. has been set before via :func:`set_tag_on_size_tensor`
-        :rtype: Dim|None
         """
         return getattr(x, "_is_size_of_dim_tag", None)
 
@@ -1028,9 +1035,9 @@ class _DimMixin:
     def __le__(self, other):
         return not self > other
 
-    def get_same_base(self):
+    def get_same_base(self) -> _d.Dim:
         """
-        :rtype: Dim
+        :return: same base
         """
         base = self
         while base.same_as:
