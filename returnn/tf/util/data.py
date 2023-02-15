@@ -53,8 +53,6 @@ class Dim(object):
         Feature = Entity("feature")
         Types = (Batch, Spatial, Feature)
 
-    _creation_counter = 0
-
     def __init__(
         self,
         *,
@@ -159,8 +157,6 @@ class Dim(object):
         if dyn_size is not None:
             assert not dyn_size_ext
             self.dyn_size = dyn_size
-        self._creation_idx = Dim._creation_counter
-        Dim._creation_counter += 1
         if self.derived_from_op and self.is_dynamic():
             self.complete_dyn_size()
 
@@ -1155,13 +1151,6 @@ class Dim(object):
             )
             or (not self.undefined and other_.undefined)
         ):
-            if self_same_as._creation_idx > other_same_base._creation_idx:
-                # We want to keep other instead.
-                # https://github.com/rwth-i6/returnn_common/issues/200
-                self_same_as.description = other_same_base.description
-                # Set new description, because in case of auto_generated,
-                # they would evaluate to be the same dim otherwise.
-                other_same_base.description = other_same_base.description + "{to-be-replaced}"
             with util.guard_infinite_recursion(Dim.declare_same_as, other, self):
                 return other.declare_same_as(self)
         other_derived_bases = other.get_derived_bases_set()
@@ -6755,8 +6744,8 @@ def _dim_cmp_value(obj):
     # Make Dim and _MarkedDim comparable to each other.
     # Note that the order is really arbitrary and does not matter.
     if isinstance(obj, Dim):
-        # noinspection PyProtectedMember
-        return "", obj.get_same_base()._creation_idx
+        obj = obj.get_same_base()
+        return "", obj.description, obj.kind, obj.dimension, obj.dyn_size_ext
     if isinstance(obj, _MarkedDim):
         return obj.__class__.__name__, obj.tag
     return obj
