@@ -13,9 +13,7 @@ https://github.com/rwth-i6/returnn/issues/1165
 from __future__ import annotations
 from typing import TYPE_CHECKING, Optional, Sequence, Tuple
 
-if TYPE_CHECKING:
-    from .dim import Dim
-
+from .dim import Dim
 from ._tensor_extra import _TensorExtra, _TensorMixin
 
 

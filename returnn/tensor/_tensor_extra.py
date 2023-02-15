@@ -7,11 +7,11 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Optional, Tuple
 
 from .dim import Dim
-from .tensor import Tensor
+from . import tensor as _t
 
 
 class _TensorExtra:
-    def __init__(self, *, tensor: Tensor):
+    def __init__(self, *, tensor: _t.Tensor):
         self.tensor = tensor
 
 
