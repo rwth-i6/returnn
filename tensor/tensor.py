@@ -53,7 +53,7 @@ class Tensor(_TensorMixin):
         if kwargs:
             self._extra = _TensorExtra(tensor=self, **kwargs)
         if raw_tensor is not None:
-            self.raw_tensor = raw_tensor
+            self.raw_tensor = raw_tensor  # assignment via property, to have extra checks
 
 
 # dispatch table for frameworks for sanity_check

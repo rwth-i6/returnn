@@ -1,13 +1,13 @@
 """
-Backwards-compatible functions for the old ``Data`` class.
+Backwards-compatible functions and attribs for the old ``Data`` class,
+or just rarely used attribs, such that we can save memory for the common case.
 """
 
 from __future__ import annotations
 from typing import TYPE_CHECKING, Optional, Tuple
 
-if TYPE_CHECKING:
-    from .dim import Dim
-    from .tensor import Tensor
+from .dim import Dim
+from .tensor import Tensor
 
 
 class _TensorExtra:
