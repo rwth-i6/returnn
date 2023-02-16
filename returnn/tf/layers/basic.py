@@ -7885,7 +7885,7 @@ class DotLayer(LayerBase):
             message="DotLayer: add_var2_if_empty not allowed",
             version=3,
         )
-        if BehaviorVersion.get() < 3:
+        if BehaviorVersion.get() < 3 and var1 != "auto" and var2 != "auto":
             # Earlier defaults: red1=-1, red2=-2, var1=-2, var2=-1, add_var2_if_empty=True.
             red1 = -1 if red1 is NotSpecified else red1
             red2 = -2 if red2 is NotSpecified else red2
@@ -7915,8 +7915,12 @@ class DotLayer(LayerBase):
             assert len(a_reduce_axes) == len(
                 b_reduce_axes
             ), "%s: sources %r, red1 %r, red2 %r, reduce axes must match in count" % (self, self.sources, red1, red2)
-        if BehaviorVersion.get() >= 3 and (var1 is NotSpecified or var2 is NotSpecified):
-            assert var1 is NotSpecified and var2 is NotSpecified
+        if (
+            (BehaviorVersion.get() >= 3 and (var1 is NotSpecified or var2 is NotSpecified))
+            or var1 == "auto"
+            or var2 == "auto"
+        ):
+            assert var1 in (NotSpecified, "auto") and var2 in (NotSpecified, "auto")
             a_var_axes, b_var_axes = self._auto_var_axes(a_out, b_out, a_reduce_axes, b_reduce_axes)
         else:
             a_var_axes = a_out.get_axes_from_description(var1, allow_int=axis_desc_allow_int)
@@ -8183,7 +8187,7 @@ class DotLayer(LayerBase):
             # skip it.
             var1 = d.get("var1", NotSpecified)
             var2 = d.get("var2", NotSpecified)
-            if var1 is not NotSpecified and var2 is not NotSpecified:
+            if var1 not in (NotSpecified, "auto") and var2 not in (NotSpecified, "auto"):
                 var1_ = set([src1.output.dim_tags[i] for i in src1.output.get_axes_from_description(var1)])
                 var2_ = set([src2.output.dim_tags[i] for i in src2.output.get_axes_from_description(var2)])
                 dims1.difference_update(var1_)
@@ -8253,7 +8257,7 @@ class DotLayer(LayerBase):
             message="DotLayer: add_var2_if_empty not allowed",
             version=3,
         )
-        if BehaviorVersion.get() < 3:
+        if BehaviorVersion.get() < 3 and var1 != "auto" and var2 != "auto":
             # Earlier defaults: red1=-1, red2=-2, var1=-2, var2=-1, add_var2_if_empty=True.
             red1 = -1 if red1 is NotSpecified else red1
             red2 = -2 if red2 is NotSpecified else red2
@@ -8286,8 +8290,12 @@ class DotLayer(LayerBase):
             assert len(a_reduce_axes) == len(
                 b_reduce_axes
             ), "%s: sources %r, red1 %r, red2 %r, reduce axes must match in count" % (name, sources, red1, red2)
-        if BehaviorVersion.get() >= 3 and (var1 is NotSpecified or var2 is NotSpecified):
-            assert var1 is NotSpecified and var2 is NotSpecified
+        if (
+            (BehaviorVersion.get() >= 3 and (var1 is NotSpecified or var2 is NotSpecified))
+            or var1 == "auto"
+            or var2 == "auto"
+        ):
+            assert var1 in (NotSpecified, "auto") and var2 in (NotSpecified, "auto")
             a_var_axes, b_var_axes = cls._auto_var_axes(a_out, b_out, a_reduce_axes, b_reduce_axes)
         else:
             a_var_axes = a_out.get_axes_from_description(var1, allow_int=axis_desc_allow_int)
