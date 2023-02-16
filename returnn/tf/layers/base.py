@@ -492,7 +492,7 @@ class LayerBase(object):
             out_type.setdefault("dim", out_dim.dimension)  # e.g. needed when sparse
         output = Data(**out_type)
         if not out_dim and sources_data and sources_data.feature_dim_or_sparse_dim and sources_data.dim == output.dim:
-            if output.feature_dim_or_sparse_dim.auto_generated:
+            if output.feature_dim_or_sparse_dim and output.feature_dim_or_sparse_dim.auto_generated:
                 # Special case: Input feature or sparse dim looks the same, so overtake it.
                 out_dim = sources_data.feature_dim_or_sparse_dim
         if out_dim:
