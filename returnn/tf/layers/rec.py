@@ -7277,6 +7277,7 @@ class GenericAttentionLayer(AttentionBaseLayer):
         :return: axis
         :rtype: int
         """
+        assert weights.time_dim_axis is not None
         # Note: This is tricky. The old behavior was to just use time_dim_axis.
         # In some cases, it might make sense to use the last dynamic axis.
         # If we had SoftmaxOverSpatialLayer before, we should make sure to use that same axis.
@@ -7338,6 +7339,9 @@ class GenericAttentionLayer(AttentionBaseLayer):
         base_rem_axes = base.get_axes(exclude_batch=True, exclude_time=True)
         base_rem_axes.remove(base.feature_dim_axis)
         weights_rem_axes = weights.get_axes(exclude_batch=True)
+        assert (
+            weights.time_dim_axis is not None
+        ), f"{exception_prefix}: base {base}, weights {weights}, need time_dim_axis in weights"
         weights_axis_to_reduce = cls._weights_time_axis_to_reduce(weights=weights, base=base)
         assert weights.batch_shape[weights_axis_to_reduce] == base.batch_shape[base.time_dim_axis]
         weights_rem_axes.remove(weights_axis_to_reduce)
