@@ -7665,6 +7665,10 @@ class PostfixInTimeLayer(_ConcatInputLayer):
 class TimeChunkingLayer(_ConcatInputLayer):
     """
     Performs chunking in time. See :func:`returnn.tf.native_op.chunk`.
+    See also :class:`WindowLayer` and :class:`TimeUnChunkingLayer`.
+    It's very similar to :class:`WindowLayer`, but we have this case more optimized,
+    and also it modifies the batch dim.
+    The output is of shape (chunk_size, n_batch * n_chunks, ...).
     """
 
     layer_class = "time_chunking"
@@ -7672,8 +7676,8 @@ class TimeChunkingLayer(_ConcatInputLayer):
 
     def __init__(self, chunk_size, chunk_step, axis="T", out_dim=None, **kwargs):
         """
-        :param int chunk_size:
-        :param int chunk_step:
+        :param int chunk_size: chunk size or window size
+        :param int chunk_step: chunk step or striding
         :param Dim|str axis:
         :param Dim|None out_dim:
         """
@@ -7718,11 +7722,11 @@ class TimeChunkingLayer(_ConcatInputLayer):
         data = get_concat_sources_data_template(sources, name="%s_output" % name)
         axis = data.get_axis_from_description(axis, allow_int=False)
         in_dim = data.dim_tags[axis]
-        data = data.copy_move_axis(old_axis=axis, new_axis=0)
-        data = data.copy_with_batch_dim_axis(1)
+        data = data.copy_move_axis(old_axis=axis, new_axis=0)  # (T,...)
+        data = data.copy_with_batch_dim_axis(1)  # (T,B,...)
         if not out_dim:
             out_dim = Dim(kind=in_dim.kind, description="%s:chunking" % name, auto_generated=True)
-        data = data.copy_template_replace_dim_tag(axis=0, new_dim_tag=out_dim)
+        data = data.copy_template_replace_dim_tag(axis=0, new_dim_tag=out_dim)  # (T',B',...)
         data.time_dim_axis = 0
         return data
 
@@ -7730,6 +7734,7 @@ class TimeChunkingLayer(_ConcatInputLayer):
 class TimeUnChunkingLayer(_ConcatInputLayer):
     """
     Performs chunking in time. See :func:`TFNativeOp.chunk`.
+    See :class:`TimeChunkingLayer`.
     """
 
     layer_class = "time_unchunking"
