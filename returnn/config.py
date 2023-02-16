@@ -14,6 +14,7 @@ __email__ = "doetsch@i6.informatik.rwth-aachen.de"
 
 import sys
 import typing
+import os
 
 PY3 = sys.version_info[0] >= 3
 
@@ -54,27 +55,43 @@ class Config:
         :param string|io.TextIOBase|io.StringIO f:
         """
         if isinstance(f, str):
-            import os
-
             assert os.path.isfile(f), "config file not found: %r" % f
             self.files.append(f)
             filename = f
+            dirname = os.path.dirname(filename) or "."
             content = open(filename).read()
         else:
             # assume stream-like
             filename = "<config string>"
+            dirname = None
             content = f.read()
         content = content.strip()
         if content.startswith("#!") or filename.endswith(".py"):  # assume Python
-            from returnn.util.basic import custom_exec
+            if dirname and os.path.exists(f"{dirname}/__init__.py"):
+                # It looks like a Python module inside a Python package.
+                # Import it as a module.
+                import importlib
 
-            # Operate inplace on ourselves.
-            # Also, we want that it's available as the globals() dict, so that defined functions behave well
-            # (they would loose the local context otherwise).
-            user_ns = self.typed_dict
-            # Always overwrite:
-            user_ns.update({"config": self, "__file__": filename, "__name__": "__returnn_config__"})
-            custom_exec(content, filename, user_ns, user_ns)
+                basedir = os.path.abspath(dirname)
+                while os.path.exists(f"{basedir}/__init__.py"):
+                    basedir = os.path.dirname(basedir)
+                if basedir not in sys.path:
+                    sys.path.insert(0, basedir)
+                modname = os.path.relpath(dirname, basedir).replace("/", ".") + "." + os.path.basename(filename)[:-3]
+                mod = importlib.import_module(modname)
+                self.update(vars(mod))
+
+            else:
+                # Directly execute the Python code.
+                from returnn.util.basic import custom_exec
+
+                # Operate inplace on ourselves.
+                # Also, we want that it's available as the globals() dict, so that defined functions behave well
+                # (they would loose the local context otherwise).
+                user_ns = self.typed_dict
+                # Always overwrite:
+                user_ns.update({"config": self, "__file__": filename, "__name__": "__returnn_config__"})
+                custom_exec(content, filename, user_ns, user_ns)
             return
         if content.startswith("{"):  # assume JSON
             from returnn.util.basic import load_json
