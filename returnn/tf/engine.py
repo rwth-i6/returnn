@@ -652,7 +652,6 @@ class Runner(object):
 
         coord = self.data_provider.coord
 
-        threads = tf_compat.v1.train.start_queue_runners(sess=sess, coord=coord)
         self.data_provider.start_threads(session=sess)
         self.start_time = time.time()
         elapsed_time_tf = 0.0
@@ -837,7 +836,6 @@ class Runner(object):
                 try_and_ignore_exception(writer.close)
                 try_and_ignore_exception(lambda: stop_event_writer_thread(writer.event_writer))
             try_and_ignore_exception(coord.request_stop)
-            try_and_ignore_exception(lambda: coord.join(threads))
             try_and_ignore_exception(self.data_provider.stop_threads)
             if self.store_tf_profile:
                 try_and_ignore_exception(tf.profiler.experimental.stop)
