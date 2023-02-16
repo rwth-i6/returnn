@@ -972,8 +972,13 @@ class Engine(EngineBase):
             import returnn.tf.distributed
 
             session_opts["target"] = returnn.tf.distributed.get_session_target()
+        session = tf_compat.v1.Session(**session_opts)
         # For debugging, see tfdbg.LocalCLIDebugWrapperSession.
-        self.tf_session = tf_compat.v1.Session(**session_opts)
+        if self.config.typed_dict.get("wrap_tf_session", None):
+            wrap_tf_session = self.config.typed_dict["wrap_tf_session"]
+            assert callable(wrap_tf_session), "wrap_tf_session must be callable"
+            session = wrap_tf_session(session)
+        self.tf_session = session
 
     def _reset_graph(self, error_occurred=False):
         """

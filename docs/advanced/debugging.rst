@@ -35,6 +35,23 @@ RETURNN uses TensorFlow.
 So you can use all the native TensorFlow debugging tools.
 Please refer to the TF documentation or other resources.
 
+Some functionality:
+
+* `tf.debugging.experimental.enable_dump_debug_info <https://www.tensorflow.org/api_docs/python/tf/debugging/experimental/enable_dump_debug_info>`__
+* tfdbg
+* TF profiler
+* many more
+
+For example, to use tfdbg, try this is the config:
+
+.. code-block:: python
+
+    def wrap_tf_session(session):
+        """Wrap a TensorFlow session to add debugging capabilities."""
+        from tensorflow.python import debug as tf_debug
+
+        return tf_debug.LocalCLIDebugWrapperSession(session)
+
 
 .. _debug_interactive:
 
