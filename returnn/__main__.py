@@ -425,7 +425,9 @@ def execute_main_task():
     if config.is_true("dry_run"):
         print("Dry run, will not save anything.", file=log.v1)
     if task == "train":
-        assert train_data.have_seqs(), "no train files specified, check train option: %s" % config.value("train", None)
+        assert (
+            train_data and train_data.have_seqs()
+        ), "no train files specified, check 'train' option: %s" % config.value("train", None)
         engine.init_train_from_config(config, train_data, dev_data, eval_data)
         engine.train()
     elif task == "eval":
