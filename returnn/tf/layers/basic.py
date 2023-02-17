@@ -12092,7 +12092,9 @@ class EditDistanceLoss(Loss):
         if self._ctc_decode:
             labels = self._ctc_decode_dense_output()
         else:
-            labels = self._sparse_labels(self.output.get_placeholder_as_batch_major(), seq_lens=self.output_seq_lens)
+            labels = self._sparse_labels(
+                self.output.get_placeholder_as_batch_major(), seq_lens=self.output.get_sequence_lengths()
+            )
         labels = self._map_labels(labels)
         self._output_sparse_labels = labels
         return labels
@@ -12103,7 +12105,9 @@ class EditDistanceLoss(Loss):
         """
         if self._target_sparse_labels is not None:
             return self._target_sparse_labels
-        labels = self._sparse_labels(self.target.get_placeholder_as_batch_major(), seq_lens=self.target_seq_lens)
+        labels = self._sparse_labels(
+            self.target.get_placeholder_as_batch_major(), seq_lens=self.target.get_sequence_lengths()
+        )
         labels = self._map_labels(labels)
         self._target_sparse_labels = labels
         return labels
