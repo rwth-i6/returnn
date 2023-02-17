@@ -11671,6 +11671,7 @@ class BinaryCrossEntropyLoss(Loss):
     """
 
     class_name = "bin_ce"
+    _check_output_before_softmax = False
 
     def __init__(self, pos_weight=None, **kwargs):
         """
@@ -12464,6 +12465,7 @@ class L1Loss(Loss):
     """
 
     class_name = "l1"
+    _check_output_before_softmax = False
 
     def get_value(self):
         """
@@ -12480,6 +12482,7 @@ class MeanSquaredError(Loss):
     """
 
     class_name = "mse"
+    _check_output_before_softmax = False
 
     def get_value(self):
         """
@@ -12510,6 +12513,7 @@ class MeanL1Loss(Loss):
     """
 
     class_name = "mean_l1"
+    _check_output_before_softmax = False
 
     def get_value(self):
         """
@@ -12767,6 +12771,7 @@ class AsIsLoss(Loss):
 
     class_name = "as_is"
     need_target = False
+    _check_output_before_softmax = False
 
     def __init__(self, as_error=False, **kwargs):
         """
