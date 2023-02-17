@@ -3217,11 +3217,14 @@ class RangeInAxisLayer(LayerBase):
         :param bool sparse:
         """
         super(RangeInAxisLayer, self).__init__(**kwargs)
+        source = self.sources[0].output if self.sources else None
         if isinstance(axis, Dim):
             dim = LengthLayer.fixup_dim(axis, self.sources)
             dim_value = dim.get_dim_value()
+        elif axis == "sparse_dim":
+            assert source.sparse_dim, f"{self}: sparse_dim not defined in source {source}"
+            dim_value = source.sparse_dim.get_dim_value()
         else:
-            source = self.sources[0].output
             axis = source.get_axis_from_description(axis)
             dim_value = tf_util.get_shape_dim(source.placeholder, axis)
         out = tf.range(0, dim_value, dtype=dtype)
@@ -3245,8 +3248,12 @@ class RangeInAxisLayer(LayerBase):
         else:
             assert len(sources) == 1, "%s layer %r requires single source with axis %r" % (cls, name, axis)
             source = sources[0].output
-            axis = source.get_axis_from_description(axis)
-            dim = source.dim_tags[axis]
+            if axis == "sparse_dim":
+                assert source.sparse_dim, f"{name!r}: sparse_dim not defined in source {source}"
+                dim = source.sparse_dim
+            else:
+                axis = source.get_axis_from_description(axis)
+                dim = source.dim_tags[axis]
         data_opts = {"name": "%s_output" % name, "dim_tags": [dim], "dtype": dtype, "sparse": sparse}
         if sparse:
             data_opts["sparse_dim"] = dim
