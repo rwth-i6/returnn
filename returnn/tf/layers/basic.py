@@ -11531,6 +11531,7 @@ class CrossEntropyLoss(Loss):
 
     def __init__(
         self,
+        input_type="prob",
         focal_loss_factor=0.0,
         label_smoothing=0.0,
         label_smoothing_gaussian=False,
@@ -11541,6 +11542,7 @@ class CrossEntropyLoss(Loss):
         **kwargs,
     ):
         """
+        :param str input_type: "prob" (default) or "logits"
         :param float focal_loss_factor: see https://arxiv.org/abs/1708.02002. 0 means disabled
         :param float label_smoothing: 0.1 is a common default. see :func:`returnn.tf.util.basic.smoothing_cross_entropy`
         :param bool label_smoothing_gaussian: see :func:`returnn.tf.util.basic.smoothing_cross_entropy`
@@ -11550,7 +11552,8 @@ class CrossEntropyLoss(Loss):
         :param float|None fake_upper_bound: uses :func:`returnn.tf.util.basic.minimum_with_identity_grad`.
           I.e. you will see a finite loss, but we use the original gradient (which should be safe).
         """
-        super(CrossEntropyLoss, self).__init__(**kwargs)
+        super(CrossEntropyLoss, self).__init__(_check_output_before_softmax=input_type == "prob", **kwargs)
+        self.input_type = input_type
         self.focal_loss_factor = focal_loss_factor
         self.label_smoothing = label_smoothing
         self.label_smoothing_gaussian = label_smoothing_gaussian
@@ -11561,12 +11564,17 @@ class CrossEntropyLoss(Loss):
 
     def get_output_target_scores(self):
         """
-        :return: shape (time_flat,), type float32
+        :return: shape (time_flat,), type float32, std-prob space
         :rtype: tf.Tensor
         """
         output_flat = self.output_flat
-        if output_flat is None:
-            output_flat = tf.nn.softmax(self.output_before_softmax_flat)
+        if self.input_type == "logits":
+            output_flat = tf.nn.softmax(output_flat)
+        elif self.input_type == "prob":
+            if output_flat is None:
+                output_flat = tf.nn.softmax(self.output_before_softmax_flat)
+        else:
+            raise NotImplementedError(f"input_type {self.input_type!r}")
         assert output_flat is not None
         target_flat_exp = tf.stack(
             [tf.range(tf.shape(self.target_flat)[0], dtype=tf.int32), tf.cast(self.target_flat, tf.int32)], axis=1
@@ -11583,15 +11591,21 @@ class CrossEntropyLoss(Loss):
 
         with tf.name_scope("loss_ce"):
             assert self.target.ndim_dense == self.output.ndim_dense
+            if self.input_type == "prob":
+                output_before_softmax_flat = self.output_before_softmax_flat
+            elif self.input_type == "logits":
+                output_before_softmax_flat = self.output_flat
+            else:
+                raise NotImplementedError(f"input_type {self.input_type!r}")
             if self.target.sparse:
-                if self.use_fused and self.output_before_softmax_flat is not None:
+                if self.use_fused and output_before_softmax_flat is not None:
                     target_flat = self.target_flat
                     if self.debug_dump:
                         target_flat = py_print(target_flat, [target_flat], summarize=10000, message="target word IDs ")
                         target_flat = py_print(target_flat, [tf.shape(target_flat)], message="sequence length ")
                     if self.label_smoothing:
                         out = smoothing_cross_entropy(
-                            logits=self.output_before_softmax_flat,
+                            logits=output_before_softmax_flat,
                             labels=to_int32_64(target_flat),
                             vocab_size=self.target.dim,
                             label_smoothing=self.label_smoothing,
@@ -11600,7 +11614,7 @@ class CrossEntropyLoss(Loss):
                     else:
                         # This is really the standard case which we hope to get:
                         out = tf.nn.sparse_softmax_cross_entropy_with_logits(
-                            logits=self.output_before_softmax_flat, labels=to_int32_64(target_flat)
+                            logits=output_before_softmax_flat, labels=to_int32_64(target_flat)
                         )  # shape(labels)
                     if self.debug_dump:
                         out = py_print(out, [tf.exp(tf.negative(out))], summarize=10000, message="target prob ")
@@ -11611,6 +11625,8 @@ class CrossEntropyLoss(Loss):
                         file=log.v3,
                     )
                     if self.label_smoothing:
+                        if self.input_type != "prob":
+                            raise NotImplementedError(f"input_type {self.input_type!r}")
                         out = smoothing_cross_entropy(
                             logits=safe_log(self.output_flat),
                             logits_are_normalized=True,
@@ -11630,15 +11646,17 @@ class CrossEntropyLoss(Loss):
                 assert not self.focal_loss_factor, "not implemented"
                 assert not self.label_smoothing, "not implemented"
                 assert not self.debug_dump, "not implemented"
-                if self.use_fused and self.output_before_softmax_flat is not None:
+                if self.use_fused and output_before_softmax_flat is not None:
                     out = tf.nn.softmax_cross_entropy_with_logits(
-                        logits=self.output_before_softmax_flat, labels=self.target_flat
+                        logits=output_before_softmax_flat, labels=self.target_flat
                     )
                     if self.fake_upper_bound is not None:
                         out = minimum_with_identity_grad(out, self.fake_upper_bound)
                     return self.reduce_func(out)
                 else:
                     print("Warning: using numerical unstable dense Cross-Entropy loss calculation", file=log.v3)
+                    if self.input_type != "prob":
+                        raise NotImplementedError(f"input_type {self.input_type!r}")
                     out = self.target_flat * safe_log(self.output_flat, **self.safe_log_opts)
                     if self.fake_upper_bound is not None:
                         out = minimum_with_identity_grad(out, self.fake_upper_bound)

@@ -2770,6 +2770,7 @@ class Loss(object):
         custom_norm_factor=None,
         custom_inv_norm_factor=None,
         scale=1.0,
+        _check_output_before_softmax=True,
     ):
         """
         :param returnn.tf.network.TFNetwork base_network:
@@ -2790,6 +2791,7 @@ class Loss(object):
           So you could simply pass target_seq_len directly here.
           Basically, for all reporting, it uses sum(loss) * sum(custom_inv_norm_factor).
         :param float scale: additional scale factor for the loss
+        :param _check_output_before_softmax:
         """
         self.base_network = base_network
         self.use_flatten_frames = use_flatten_frames
@@ -2802,6 +2804,7 @@ class Loss(object):
         self.target_seq_lens = None  # type: typing.Optional[tf.Tensor]
         self.output_flat = None  # type: typing.Optional[tf.Tensor]
         self.output_before_softmax_flat = None  # type: typing.Optional[tf.Tensor]
+        self._check_output_before_softmax = _check_output_before_softmax
         self.target_flat = None  # type: typing.Optional[tf.Tensor]
         # Maybe make configurable. For now, same as in our Theano behavior.
         # The loss_norm_factor is used by Runner._normalize_loss both for normalization per epoch and per batch.
@@ -2947,6 +2950,8 @@ class Loss(object):
         :param Data target: reference target from dataset
         :param LayerBase|None layer:
         """
+        if not self._check_output_before_softmax:
+            output_with_activation = None
         with tf.name_scope("loss_init"):
             self.layer = layer
             if target:
