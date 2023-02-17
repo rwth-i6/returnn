@@ -8915,35 +8915,37 @@ class CombineLayer(LayerBase):
 
     def _op_kind_eval(self, sources, eval_str, eval_locals=None):
         """
-        :param list[LayerBase]|list[tf.Tensor] sources:
+        :param list[LayerBase] sources:
         :param str|callable eval_str:
         :param dict[str]|None eval_locals:
         :rtype: tf.Tensor
         """
         used_sources = set()  # type: typing.Set[int]
 
-        def source(i, auto_convert=True, enforce_batch_major=False, as_data=False):
+        def source(i, auto_convert=True, enforce_batch_major=False, as_data=False, as_layer=False):
             """
             :param int i: layer index
             :param bool auto_convert:
             :param bool enforce_batch_major: if True, return as batch-major
             :param bool as_data: if True, return the Data object
+            :param bool as_layer: if True, return the Layer object. ignores any conversion options
             :return: output placeholder from source i, compatible to source 0
-            :rtype: tf.Tensor|Data
+            :rtype: tf.Tensor|Data|LayerBase
             """
             assert 0 <= i < len(sources)
             used_sources.add(i)
-            if isinstance(sources[i], LayerBase):
-                output = sources[i].output
-                if auto_convert:
-                    output = output.copy_compatible_to(self.output, check_dtype=False, check_sparse=False)
-                if enforce_batch_major:
-                    output = output.copy_as_batch_major()
-                if as_data:
-                    return output
-                return output.placeholder
-            assert not as_data
-            return sources[i]
+            assert isinstance(sources[i], LayerBase)
+            if as_layer:
+                assert not as_data
+                return sources[i]
+            output = sources[i].output
+            if auto_convert:
+                output = output.copy_compatible_to(self.output, check_dtype=False, check_sparse=False)
+            if enforce_batch_major:
+                output = output.copy_as_batch_major()
+            if as_data:
+                return output
+            return output.placeholder
 
         vs = {}  # type: typing.Dict[str,object]
         if not callable(eval_str):
