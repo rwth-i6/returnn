@@ -2109,15 +2109,20 @@ class _SubnetworkRecCell(object):
                 layer_template = self.layer_data_templates[name]
                 layer_choices = layer.get_search_choices()
                 if not layer.search_choices and layer_choices:
-                    assert (
+                    if not (
                         layer.output.beam == layer_template.output.beam
                         and layer_choices.beam_size
                         == layer.output.beam.beam_size
                         == layer_template.output.beam.beam_size
-                    ), (
-                        "Layer %r has buggy search choices resolution." % layer,
-                        self.net.debug_search_choices(layer) or "see search choices debug output",
-                    )
+                    ):
+                        print(f"{layer} has buggy search choices resolution. Search choices debug output:")
+                        self.net.debug_search_choices(layer)
+                        raise Exception(
+                            f"{layer} has buggy search choices resolution.\n"
+                            f"layer beam {layer.output.beam} vs template beam {layer_template.output.beam}\n"
+                            f"beam sizes {layer_choices.beam_size} vs {layer.output.beam.beam_size}\n"
+                            f"See search choices debug output above for some debug info."
+                        )
                 if name == "end":
                     # Special logic for the end layer, to always logical_or to the prev:end layer.
                     assert layer.output.shape == (), "%s: 'end' layer %r unexpected shape" % (
