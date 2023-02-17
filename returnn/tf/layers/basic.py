@@ -2,11 +2,12 @@
 Many canonical basic layers.
 """
 
-from __future__ import print_function
+from __future__ import annotations
 
+from typing import Union
+import typing
 import tensorflow as tf
 import contextlib
-import typing
 import returnn.tf.compat as tf_compat
 import returnn.tf.util.basic as tf_util
 from returnn.util.basic import unicode, NotSpecified
@@ -1488,12 +1489,14 @@ class GatherLayer(_ConcatInputLayer):
 
     layer_class = "gather"
 
-    def __init__(self, position, axis, **kwargs):
+    def __init__(self, position: Union[LayerBase, int], axis: Union[Dim, str], clip_to_valid: bool = False, **kwargs):
         """
-        :param LayerBase|int position: Layer containing the indices used to select the slices of the input from.
-          If another layer, must be of type ``int32`` or ``int64``.
-          Can also specify a constant ``int``.
-        :param Dim|str axis: The axis into which we gather the indices into
+        :param position: indices used to select the slices of the input from.
+            If another layer, must be of type ``int32`` or ``int64``.
+            Can also specify a constant ``int``.
+        :param axis: The axis into which we gather the indices into
+        :param clip_to_valid: if True, the indices will be clipped to the valid range of the input
+            Also taking seq lengths into account.
         """
         super(GatherLayer, self).__init__(**kwargs)
         self.position = position
@@ -1504,6 +1507,16 @@ class GatherLayer(_ConcatInputLayer):
         else:
             position_data = position.output
         old_gather_axis = input_data.get_axis_from_description(axis, allow_int=False)  # might be moved later
+
+        if clip_to_valid:
+            dim = input_data.dim_tags[old_gather_axis]
+            dyn_size_ext = dim.dyn_size_ext
+            if not dyn_size_ext:
+                dyn_size_ext = Data.from_tensor(tf.shape(input_data.placeholder)[old_gather_axis])
+            common = Data.get_common_data([position_data, dyn_size_ext])
+            position_data = position_data.copy_compatible_to(common, check_sparse=False, check_dtype=False)
+            dyn_size_ext = dyn_size_ext.copy_compatible_to(common, check_sparse=False, check_dtype=False)
+            position_data.placeholder = tf.clip_by_value(position_data.placeholder, 0, dyn_size_ext.placeholder - 1)
 
         # determine all common axes of input_data and position_data
         common_axes_input, common_axes_position, input_axes, position_axes = self._get_common_input_position_axes(
