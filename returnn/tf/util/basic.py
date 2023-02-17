@@ -897,7 +897,7 @@ def check_dim_equal(x, x_axis, y, y_axis, extra_msg=()):
     :param int x_axis: which axis to check
     :param tf.Tensor y:
     :param int y_axis: which axis to check
-    :param list[str]|tuple[str] extra_msg: will be printed additionally if it fails
+    :param typing.Sequence[str|tf.Tensor] extra_msg: will be printed additionally if it fails
     :return: x with check added that shape(x)[x_axis] == shape(y)[y_axis]
     :rtype: tf.Tensor
     """
@@ -2340,7 +2340,19 @@ def sparse_labels_with_seq_lens(x, seq_lens, dtype=tf.int32, collapse_repeated=F
     with tf.name_scope("sparse_labels"):
         x = check_input_ndim(x, ndim=2)
         if seq_lens is not None:
-            x = check_dim_equal(x, 0, seq_lens, 0)
+            x = check_dim_equal(
+                x,
+                0,
+                seq_lens,
+                0,
+                extra_msg=[
+                    "x",
+                    str(x),
+                    "seq_lens",
+                    str(seq_lens),
+                    seq_lens,
+                ],
+            )
         if dtype:
             x = tf.cast(x, dtype)
         batch_size = tf.shape(x)[0]
