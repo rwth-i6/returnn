@@ -236,7 +236,9 @@ class SubnetworkRecCellSingleStep(_SubnetworkRecCell):
             name="base_value_%s" % layer_name, initial_value=output.placeholder, data_shape=output
         )
         self._maybe_delay_tiled(state_var, output)
-        layer = WrappedInternalLayer(name=layer_name, network=self.parent_net, output=output, base_layer=layer)
+        layer = WrappedInternalLayer(
+            name=layer_name, network=self.parent_net, output=output, base_layer=layer, debug_type_name="rec-single-step"
+        )
         self._parent_layers[layer_name] = layer
         return layer
 

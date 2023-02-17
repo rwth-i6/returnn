@@ -2,8 +2,9 @@
 This module contains the layer base class :class:`LayerBase`.
 """
 
-from __future__ import print_function
+from __future__ import annotations
 
+from typing import Optional
 import typing
 import contextlib
 import tensorflow as tf
@@ -2090,13 +2091,24 @@ class InternalLayer(LayerBase):
     It is used by some code to construct a wrapper layer or so.
     """
 
-    def __init__(self, output, **kwargs):
+    def __init__(self, output: Data, debug_type_name: Optional[str] = None, **kwargs):
         """
-        :param Data output:
+        :param output:
+        :param debug_type_name: just for repr
         """
         # Explicit call to fixup_out_data as this might be missing by some direct construction.
         output = self.fixup_out_data(output=output, **kwargs)
         super(InternalLayer, self).__init__(output=output, **kwargs)
+        self.debug_type_name = debug_type_name
+
+    def __repr__(self):
+        return "<%s%s %s%r out_type=%s>" % (
+            self.__class__.__name__,
+            f"({self.debug_type_name})" if self.debug_type_name else "",
+            self.network.get_absolute_name_prefix(),
+            self.name,
+            self.output.get_description(with_name=False) if self.output else None,
+        )
 
 
 class DataNotAvailableLayer(InternalLayer):
@@ -2155,6 +2167,16 @@ class WrappedInternalLayer(InternalLayer):
         super(WrappedInternalLayer, self).__init__(sources=sources, **kwargs)
         self.base_layer = base_layer
         self.params.update(base_layer.params)  # maybe ReuseParams wants to access it or so
+
+    def __repr__(self):
+        return "<%s%s%s %s%r out_type=%s>" % (
+            self.__class__.__name__,
+            f"({self.base_layer.__class__.__name__})",
+            f"({self.debug_type_name})" if self.debug_type_name else "",
+            self.network.get_absolute_name_prefix(),
+            self.name,
+            self.output.get_description(with_name=False) if self.output else None,
+        )
 
     def get_base_absolute_name_scope_prefix(self):
         """

@@ -2068,7 +2068,13 @@ class _SubnetworkRecCell(object):
                 else:
                     output.placeholder = inputs_moved_out_tas[layer_name].read(i)
                 output.sanity_check()
-            layer = self.net.add_layer(name=name, output=output, layer_class=WrappedInternalLayer, base_layer=layer)
+            layer = self.net.add_layer(
+                name=name,
+                output=output,
+                layer_class=WrappedInternalLayer,
+                base_layer=layer,
+                debug_type_name="input-moved-out",
+            )
             inputs_moved_out[name] = layer
             return layer
 
@@ -4217,7 +4223,12 @@ class _SubnetworkRecCell(object):
                 output.placeholder = tensor_array_stack(acc_ta, stop=max_len)  # e.g. (time,batch,dim)
                 assert isinstance(self.output_layers_net, TFNetwork)
                 layer_ = self.output_layers_net.add_layer(
-                    name=name, output=output, layer_class=WrappedInternalLayer, sources=[], base_layer=in_loop_layer
+                    name=name,
+                    output=output,
+                    layer_class=WrappedInternalLayer,
+                    sources=[],
+                    base_layer=in_loop_layer,
+                    debug_type_name="loop-acc-layer",
                 )
                 if latest_layer_choice_name:
                     loop_acc_layers_search_choices[name] = latest_layer_choice_name
@@ -4253,7 +4264,11 @@ class _SubnetworkRecCell(object):
                 # output.size_placeholder[0] = seq_len. just don't modify. assert seq_len is not None
                 assert isinstance(self.output_layers_net, TFNetwork)
                 layer = self.output_layers_net.add_layer(
-                    name="prev:%s" % name, output=output, layer_class=WrappedInternalLayer, base_layer=cur_layer
+                    name="prev:%s" % name,
+                    output=output,
+                    layer_class=WrappedInternalLayer,
+                    base_layer=cur_layer,
+                    debug_type_name="prev-layer",
                 )
                 prev_layers[name] = layer
                 return layer
@@ -8937,7 +8952,13 @@ class MaskedComputationLayer(LayerBase):
                 )
                 res_data.placeholder = res[:new_time]
                 res_data.beam = SearchBeam.get_combined_beam(res_data.beam, mask.output.beam)
-                layer_desc = dict(base_layer=source, network=source.network, name=source.name, output=res_data)
+                layer_desc = dict(
+                    base_layer=source,
+                    network=source.network,
+                    name=source.name,
+                    output=res_data,
+                    debug_type_name="masked-source",
+                )
                 layer = WrappedInternalLayer(**layer_desc)
                 layer.post_init(layer_desc)
                 layer.sources.extend([source, mask])  # add deps
@@ -8950,7 +8971,11 @@ class MaskedComputationLayer(LayerBase):
             )
             source_data.available_for_inference = True  # we would make sure that this works at inference
             layer_desc = dict(
-                base_layer=masked_from, network=masked_from.network, name=masked_from.name, output=source_data
+                base_layer=masked_from,
+                network=masked_from.network,
+                name=masked_from.name,
+                output=source_data,
+                debug_type_name="masked-from",
             )
             source = WrappedInternalLayer(**layer_desc)
             source.post_init(layer_desc)
@@ -9181,7 +9206,11 @@ class MaskedComputationLayer(LayerBase):
                     )
                 source_data.available_for_inference = True  # we would make sure that this works at inference
                 source = WrappedInternalLayer(
-                    base_layer=masked_from, network=masked_from.network, name=masked_from.name, output=source_data
+                    base_layer=masked_from,
+                    network=masked_from.network,
+                    name=masked_from.name,
+                    output=source_data,
+                    debug_type_name="masked-from-sub",
                 )
                 _layer_cache[sub_layer_name] = source
                 return source
@@ -9217,7 +9246,11 @@ class MaskedComputationLayer(LayerBase):
                             extra_net._over_rec_time_dim = _Locals.out_spatial_dim_
                 source_data = source_data.copy_template_replace_dim_tag(axis=0, new_dim_tag=_Locals.out_spatial_dim_)
                 layer = WrappedInternalLayer(
-                    base_layer=layer, network=layer.network, name=layer.name, output=source_data
+                    base_layer=layer,
+                    network=layer.network,
+                    name=layer.name,
+                    output=source_data,
+                    debug_type_name="masked-sub",
                 )
             _layer_cache[sub_layer_name] = layer
             return layer
@@ -9347,7 +9380,11 @@ class MaskedComputationLayer(LayerBase):
             opts["output"] = UnmaskLayer.get_out_data_from_opts(**opts)
             out_layer = UnmaskLayer(**opts)
             return WrappedInternalLayer(
-                base_layer=out_layer, name=full_layer_name, network=self.network, output=out_layer.output
+                base_layer=out_layer,
+                name=full_layer_name,
+                network=self.network,
+                output=out_layer.output,
+                debug_type_name="unmask",
             )
         elif self.mask and self.network.is_inside_rec_layer():
             assert self._rec_previous_layer
@@ -9370,10 +9407,15 @@ class MaskedComputationLayer(LayerBase):
                 output=out,
                 network=self.network,
                 name=(self.name + "/" + layer_name) if layer_name else self.name,
+                debug_type_name="mask-inside-rec",
             )
         else:
             return WrappedInternalLayer(
-                base_layer=layer, name=full_layer_name, network=self.network, output=layer.output
+                base_layer=layer,
+                name=full_layer_name,
+                network=self.network,
+                output=layer.output,
+                debug_type_name="mask-no-op",
             )
 
     @classmethod
