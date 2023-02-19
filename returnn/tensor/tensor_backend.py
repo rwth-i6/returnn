@@ -11,7 +11,7 @@ thus this is public.
 """
 
 from __future__ import annotations
-from typing import TypeVar, Generic, Type, Dict
+from typing import TypeVar, Generic, Type, Dict, Any
 from . import tensor as _t
 
 T = TypeVar("T")
@@ -42,3 +42,13 @@ class TensorBackend(Generic[T]):
         Rather, the logic to create placeholders should be done elsewhere.
         """
         raise Exception(f"{self}.create_placeholder not supported")
+
+    def runtime_sanity_checks(self, tensor: _t.Tensor) -> Any:
+        """
+        Checks whether the tensor.raw_tensor is consistent with the tensor metadata.
+
+        In graph-based frameworks (TF graph), we return some operation here.
+        In eager frameworks, we would not return anything but instead directly perform the checks.
+        """
+        # By default, we do not do any checks. This is optional for the backend.
+        pass

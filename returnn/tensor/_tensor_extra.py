@@ -4,7 +4,7 @@ or just rarely used attribs, such that we can save memory for the common case.
 """
 
 from __future__ import annotations
-from typing import TYPE_CHECKING, Optional, Sequence, Tuple, Dict
+from typing import TYPE_CHECKING, Optional, Sequence, Tuple
 
 if TYPE_CHECKING:
     # Those are only used for TensorFlow, or they are deprecated.
@@ -13,6 +13,9 @@ if TYPE_CHECKING:
 from returnn.util.basic import NotSpecified
 from .dim import Dim
 from . import tensor as _t
+
+if TYPE_CHECKING:
+    from .tensor_backend import TensorBackend
 
 
 class _TensorExtra:
@@ -216,6 +219,14 @@ class _TensorMixin:
         self.sanity_check(assume_complete=False)  # TODO still needed?
 
     @property
+    def _backend(self) -> Optional[TensorBackend]:
+        if self._raw_tensor is None:
+            return None
+        from .tensor_backend import get_backend
+
+        return get_backend(type(self._raw_tensor))
+
+    @property
     def control_flow_ctx(self) -> Optional[ControlFlowContext]:
         """
         :return: control flow ctx (graph-based)
@@ -316,60 +327,10 @@ class _TensorMixin:
     def get_runtime_sanity_check_op(self):
         """
         :return: op which does a couple of runtime sanity checks on the placeholder
-        :rtype: tf.Operation
+        :rtype: tensorflow.Operation|Any
         """
         assert self.placeholder is not None
-        checks = []
-        with tf.name_scope("runtime_sanity_check"):
-            shape = tf.shape(self.placeholder)
-            # noinspection PyShadowingNames
-            batch_dim = shape[self.batch_dim_axis] if self.have_batch_axis() else 1
-            rank = tf.rank(self.placeholder)
-            data = ["Data.get_runtime_sanity_check_op:", str(self), "shape", shape]
-            for i, tag in enumerate(self.dim_tags):
-                if tag.dyn_size is not None:
-                    data += ["dyn_size[%i] (%s)" % (i, tag), tag.dyn_size, ".shape", tf.shape(tag.dyn_size)]
-            checks += [tf.Assert(tf.equal(rank, self.batch_ndim), data + ["-> invalid rank"])]
-            if self.have_batch_axis():
-                batch_dim_via_info = self.get_batch_dim()
-                checks += [
-                    tf.Assert(
-                        tf.equal(batch_dim, batch_dim_via_info),
-                        data + ["-> invalid batch dim info", batch_dim_via_info],
-                    )
-                ]
-            for i in range(self.batch_ndim):
-                if self.batch_shape[i] is not None:
-                    checks += [tf.Assert(tf.equal(shape[i], self.batch_shape[i]), data + ["-> invalid shape[%i]" % i])]
-                dyn_size_ext = self.dim_tags[i].dyn_size_ext
-                if dyn_size_ext and dyn_size_ext.placeholder is not None:
-                    dyn_size = dyn_size_ext.placeholder
-                    if dyn_size_ext.have_batch_axis() and self.have_batch_axis():
-                        checks += [
-                            tf.Assert(
-                                tf.equal(tf.shape(dyn_size)[dyn_size_ext.batch_dim_axis], batch_dim),
-                                data + ["-> invalid axis %i tag dyn size batch dim" % i],
-                            )
-                        ]
-                    checks += [
-                        tf.Assert(
-                            # Note: in almost all cases, we have equality here.
-                            # However, not strictly in all cases, e.g. DecideLayer, maybe some others...
-                            # But that should not be more than 1 less.
-                            tf.logical_or(
-                                tf.logical_and(
-                                    tf.less_equal(tf.reduce_max(dyn_size), shape[i]),
-                                    tf.greater_equal(tf.reduce_max(dyn_size), shape[i] - 1),
-                                ),
-                                # In other rare cases, this might be a broadcast dim
-                                # (e.g. as initial values of att weights for a rec loop).
-                                tf.equal(1, shape[i]),
-                            ),
-                            data + ["-> invalid shape[%i] or max(dyn_size[%i])" % (i, i)],
-                        )
-                    ]
-                    checks += [dyn_size_ext.get_runtime_sanity_check_op()]
-        return tf.group(*checks)
+        return self._backend.runtime_sanity_checks(self)
 
     def verify_out_shape(self, out_shape, allow_missing_implicit_dims=False):
         """
