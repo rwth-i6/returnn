@@ -51,16 +51,27 @@ class _TensorExtra:
         self.control_flow_ctx = control_flow_ctx
         self.available_for_inference = available_for_inference
 
-        if feature_dim_axis is not NotSpecified:
-            if isinstance(feature_dim_axis, int):
-                assert not self.tensor.sparse, "cannot have feature_dim_axis when sparse"
-                if feature_dim_axis < 0:
-                    feature_dim_axis += self.tensor.batch_ndim
-                assert 0 <= feature_dim_axis < self.tensor.batch_ndim
+        if feature_dim_axis is NotSpecified:
+            pass
+        elif feature_dim_axis is None:
+            pass
+        elif isinstance(feature_dim_axis, int):
+            assert not self.tensor.sparse, "cannot have feature_dim_axis when sparse"
+            if feature_dim_axis < 0:
+                feature_dim_axis += self.tensor.batch_ndim
+            assert 0 <= feature_dim_axis < self.tensor.batch_ndim
+        else:
+            raise TypeError(f"unexpected feature_dim_axis type {type(feature_dim_axis)}")
         self.feature_dim_axis = feature_dim_axis
-        if time_dim_axis is not None:
+        if time_dim_axis is NotSpecified:
+            pass
+        elif time_dim_axis is None:
+            pass
+        elif isinstance(time_dim_axis, int):
             assert 0 <= time_dim_axis < self.tensor.batch_ndim
-        self.time_dim_axis = time_dim_axis  # type: Optional[int]  # counted with batch-dim
+        else:
+            raise TypeError(f"unexpected time_dim_axis type {type(time_dim_axis)}")
+        self.time_dim_axis = time_dim_axis
 
 
 class _TensorMixin:
@@ -140,6 +151,7 @@ class _TensorMixin:
     def _handle_extra_kwargs(
         self,
         *,
+        shape=None,
         sparse=None,
         dim=NotSpecified,
         batch_dim_axis=NotSpecified,
@@ -152,6 +164,7 @@ class _TensorMixin:
         **kwargs,
     ):
         """
+        :param shape:
         :param sparse:
         :param dim:
         :param batch_dim_axis:
@@ -170,7 +183,7 @@ class _TensorMixin:
         :param dict[int|str,Dim]|None same_dim_tags_as: will mark our dimension tags to be the same
         """
         assert isinstance(self, _t.Tensor)
-        sparse, dim, batch_dim_axis, dim_tags  # noqa  # unused here, handled in infer_dim_tags
+        shape, sparse, dim, batch_dim_axis, dim_tags  # noqa  # unused here, handled in infer_dim_tags
 
         if vocab is not None:
             from returnn.datasets.util.vocabulary import Vocabulary
@@ -243,15 +256,6 @@ class _TensorMixin:
         if not self._extra:
             return True
         return self._extra.available_for_inference
-
-    @property
-    def time_dim_axis(self) -> Optional[int]:
-        """
-        :return: time dim axis (deprecated)
-        """
-        if not self._extra:
-            return None
-        return self._extra.time_dim_axis
 
     def sanity_check(self, ignore_placeholder=False, assume_complete=True):
         """
@@ -1791,6 +1795,25 @@ class _TensorMixin:
         if not self._extra:
             return NotSpecified
         return self._extra.feature_dim_axis
+
+    @property
+    def time_dim_axis(self) -> Optional[int]:
+        """
+        :return: time dim axis (deprecated)
+        """
+        if self.time_dim_axis_or_unspecified is not NotSpecified:
+            return self.time_dim_axis_or_unspecified
+        return _default_time_dim_axis_dim_tags(self.dim_tags)
+
+    @property
+    def time_dim_axis_or_unspecified(self):
+        """
+        :return: time dim axis, counted with batch-dim. could also be unspecified
+        :rtype: int|None|NotSpecified
+        """
+        if not self._extra:
+            return NotSpecified
+        return self._extra.time_dim_axis
 
     @property
     def time_dim_axis_excluding_batch(self):
