@@ -1380,24 +1380,20 @@ class _DimMixin:
         """
         if self.dimension is not None:
             return self.dimension
-        if self.is_batch_dim():
-            if self._extra and self._extra.src_data:
-                return self._extra.src_data.get_batch_dim()
-            from returnn.tf.layers.base import LayerBase
-
-            return LayerBase.get_recent_layer().get_batch_dim()
+        if self.is_batch_dim() and self._extra and self._extra.src_data:
+            return self._extra.src_data.get_batch_dim()
         if (
             self._extra
             and self._extra.src_data is not None
             and self._extra.src_axis is not None
             and self._extra.src_data.placeholder is not None
         ):
-            from returnn.tf.util.basic import get_shape_dim
-
-            return get_shape_dim(self._extra.src_data.placeholder, self._extra.src_axis)
+            return self._extra.src_data.get_dim(self._extra.src_axis)
         self.complete_dyn_size()
-        if self.dyn_size is not None:
-            return tf.math.reduce_max(self.dyn_size)
+        if self.dyn_size_ext and self.dyn_size_ext.placeholder is not None:
+            if self.dyn_size_ext.batch_ndim > 0:
+                return tf.math.reduce_max(self.dyn_size_ext.placeholder)
+            return self.dyn_size_ext.placeholder
         raise Exception("%s: need placeholder, self.dimension or self.dyn_size for dim value" % self)
 
     def axis_split_info(self):
