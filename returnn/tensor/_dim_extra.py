@@ -46,8 +46,8 @@ class _DimExtra:
         derived_from_op=None,
         batch=None,
         control_flow_ctx=None,
-        src_data=None,
-        src_axis=None,
+        src_data: Optional[_t.Tensor] = None,
+        src_axis: Optional[int] = None,
     ):
         """
         :param dim:
@@ -55,7 +55,7 @@ class _DimExtra:
         :param returnn.datasets.util.vocabulary.Vocabulary|None vocab:
         :param tf.Tensor|None dyn_size: e.g. seq_len, (batch,)
         :param bool undefined: When this is specified as `None` by the user via `shape`.
-        :param bool special: this can not be a dim tag of :class:`Data`.
+        :param bool special: this can not be a dim tag of :class:`Tensor`.
             But this dim tag also does not match anything except itself.
             So it can be used to represent special placeholders with special meanings like ``single_step``.
         :param bool auto_generated:
@@ -76,8 +76,9 @@ class _DimExtra:
             the reduce dim tag should have a higher priority.
         :param BatchInfo|None batch: for batch-dim, or dynamic dims per batch
         :param ControlFlowContext|None control_flow_ctx:
-        :param Data|None src_data:
-        :param int|None src_axis:"""
+        :param src_data:
+        :param src_axis:
+        """
         self.dim = dim
         assert kind is None or (isinstance(kind, Entity) and kind in DimTypes.Types)
         self.kind = kind
@@ -102,8 +103,8 @@ class _DimExtra:
         self.control_flow_ctx = control_flow_ctx
         self.src_data = src_data
         self.src_axis = src_axis
-        self._dyn_size_same = set()  # set of TensorRef
-        self._undefined = undefined
+        self.dyn_size_same = set()  # set of TensorRef
+        self.undefined = undefined
         self.special = special
         if derived_from_tag:
             auto_generated = derived_from_tag.auto_generated
@@ -168,6 +169,15 @@ class _DimMixin:
         if not self._extra:
             return None
         return self._extra.same_as
+
+    @property
+    def special(self) -> bool:
+        """
+        :return: see _DimExtra
+        """
+        if not self._extra:
+            return False
+        return self._extra.special
 
     def short_repr(self):
         """
@@ -1191,10 +1201,10 @@ class _DimMixin:
                     )
         # If we have a defined source, and this is a dynamic spatial axis, and it was undefined before,
         # maybe we can overtake the size_placeholder now.
-        if other_same_base.dyn_size is not None and self.src_data:
-            assert isinstance(self.src_axis, int)
+        if other_same_base.dyn_size is not None and self._extra and self._extra.src_data:
+            assert isinstance(self._extra.src_axis, int)
             # Maybe it changed in the meanwhile, so check.
-            tag = self.src_data.get_dim_tag(self.src_axis)
+            tag = self._extra.src_data.get_dim_tag(self._extra.src_axis)
             if tag.description == self.description and (not tag.dyn_size_ext or not tag._validate_in_current_graph()):
                 tag.dyn_size_ext = self.get_dyn_size_ext_for_batch_ctx(
                     tag.batch, tag.control_flow_ctx, template_only=True
@@ -1371,15 +1381,20 @@ class _DimMixin:
         if self.dimension is not None:
             return self.dimension
         if self.is_batch_dim():
-            if self.src_data:
-                return self.src_data.get_batch_dim()
+            if self._extra and self._extra.src_data:
+                return self._extra.src_data.get_batch_dim()
             from returnn.tf.layers.base import LayerBase
 
             return LayerBase.get_recent_layer().get_batch_dim()
-        if self.src_data is not None and self.src_axis is not None and self.src_data.placeholder is not None:
+        if (
+            self._extra
+            and self._extra.src_data is not None
+            and self._extra.src_axis is not None
+            and self._extra.src_data.placeholder is not None
+        ):
             from returnn.tf.util.basic import get_shape_dim
 
-            return get_shape_dim(self.src_data.placeholder, self.src_axis)
+            return get_shape_dim(self._extra.src_data.placeholder, self._extra.src_axis)
         self.complete_dyn_size()
         if self.dyn_size is not None:
             return tf.math.reduce_max(self.dyn_size)

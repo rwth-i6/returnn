@@ -8442,6 +8442,7 @@ class ShiftAxisLayer(_ConcatInputLayer):
                 src_data=self.output,
                 src_axis=axis,
                 auto_generated=True,
+                dimension=None,
             )
             self.output.size_placeholder[axis_wob] = new_size
 
