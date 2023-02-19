@@ -4,7 +4,7 @@ or just rarely used attribs, such that we can save memory for the common case.
 """
 
 from __future__ import annotations
-from typing import TYPE_CHECKING, Optional, Sequence, Tuple
+from typing import TYPE_CHECKING, Optional, Sequence, Tuple, Dict
 
 if TYPE_CHECKING:
     # Those are only used for TensorFlow, or they are deprecated.
@@ -31,7 +31,7 @@ class _TensorExtra:
         :param tensor:
         :param int|None|NotSpecified time_dim_axis: where we have the time dim axis, after we added the batch-dim.
             this is often 1. however, can be None if there is no time-dim.
-        :param int|None|NotSpecified feature_dim_axis: feature dim axis. by default it's the last one
+        :param int|None|NotSpecified feature_dim_axis: feature dim axis. by default, it's the last one
         :param bool available_for_inference: e.g. the extern data "classes" is usually not available for inference
         :param BatchInfo|None batch:
         :param SearchBeam|None beam: the batch-dim could be extended by a beam-size,
@@ -140,6 +140,7 @@ class _TensorMixin:
         sparse=None,
         dim=NotSpecified,
         batch_dim_axis=NotSpecified,
+        dim_tags=None,
         placeholder=None,
         size_placeholder=None,
         auto_create_placeholders=False,
@@ -148,22 +149,26 @@ class _TensorMixin:
         **kwargs,
     ):
         """
+        :param sparse:
+        :param dim:
+        :param batch_dim_axis:
+        :param Sequence[Dim]|None dim_tags:
+            If tuple/list, this specifies the whole (batch) shape.
         :param tf.Tensor|None placeholder: with added batch-dim
-        :param dict[int,tf.Tensor]|None size_placeholder: for every None in shape, this will describe the size.
-          The size is always a tensor of shape (batch,), i.e. the size can be different for each sequence in a batch.
+        :param dict[int,tf.Tensor]|None size_placeholder: for every dynamic dim, this will describe the size.
+            The keys are the axes but counted without batch-dim, and the value is the size.
+            The size is always a tensor of shape (batch,), i.e. the size can be different for each sequence in a batch.
+            This is the old deprecated way. Now this is all part of :class:`Dim`.
         :param bool auto_create_placeholders: This will create a tf.placeholder.
-        :param str|dict[str]|returnn.datasets.util.vocabulary.Vocabulary|None vocab:
-        :param tuple[Dim]|list[Dim]|dict[int,Dim]|None dim_tags:
-          If tuple/list, this specifies the whole (batch) shape.
-          If dict, explicitly specified dimension tags per axis (axis counted with batch-dim)
+            This is deprecated. Rather, the placeholder should be created outside and passed in.
+        :param str|dict[str]|returnn.datasets.util.vocabulary.Vocabulary|None vocab: vocab of the feature dim
+            or sparse dim.
+            This is deprecated. Rather, the vocab is part of the :class:`Dim`.
         :param dict[int|str,Dim]|None same_dim_tags_as: will mark our dimension tags to be the same
         """
         assert isinstance(self, _t.Tensor)
-        sparse, dim, batch_dim_axis  # noqa  # unused here, handled in infer_dim_tags
+        sparse, dim, batch_dim_axis, dim_tags  # noqa  # unused here, handled in infer_dim_tags
 
-        if placeholder is None and auto_create_placeholders:
-            with tf.name_scope("extern_data/placeholders/%s/" % name):
-                placeholder = tf_compat.v1.placeholder(**self.get_placeholder_kwargs(with_batch=True))
         if vocab is not None:
             from returnn.datasets.util.vocabulary import Vocabulary
 
@@ -175,11 +180,29 @@ class _TensorMixin:
             assert self.sparse, "%s should represent indices of %s" % (self, vocab)
             assert self.dim == vocab.num_labels, "%s dims do not match with vocab %s" % (self, vocab)
             self.sparse_dim.vocab = vocab
+
+        if kwargs:
+            self._extra = _TensorExtra(tensor=self, **kwargs)
+
+        if placeholder is not None:
+            self.raw_tensor = placeholder
+        elif auto_create_placeholders:
+            # Need to import backend here directly, as we have not assigned the tensor yet,
+            # and thus cannot infer it from its type.
+            # This option auto_create_placeholders is anyway really only for TensorFlow
+            # and should not be used in other backends,
+            # even in graph-based backends.
+            # Rather, the logic to create placeholders should be done elsewhere.
+            from .tensor_backend_tf import tensor_backend_tf
+
+            self.raw_tensor = tensor_backend_tf.create_placeholder(self)
+            # Do that after same_dim_tags_as handling.
+            _auto_create_size_placeholders_on_dim_tags(name=self.name, dim_tags=self._dims)
+
         # The size_placeholder is for each variable length dimension in shape, i.e. excluding the batch-dim.
         if size_placeholder:
-            self.size_placeholder = (
-                size_placeholder
-            )  # type: typing.Dict[int,tf.Tensor]  # axis w.o. batch -> size (batch,)
+            self.size_placeholder = size_placeholder
+
         if same_dim_tags_as:
             for _axis, _dim_tag in sorted(same_dim_tags_as.items()):
                 _axis = self.get_axis_from_description(_axis)
@@ -188,17 +211,9 @@ class _TensorMixin:
                 if base_tag != _dim_tag:
                     base_tag.declare_same_as(_dim_tag)
                 self._dims = self._dims[:_axis] + (_dim_tag,) + self._dims[_axis + 1 :]
-        if auto_create_placeholders:
-            # Do that after same_dim_tags_as handling.
-            _auto_create_size_placeholders_on_dim_tags(name=self.name, dim_tags=self._dims)
 
-        self._adapt_batch_consistent_dim_tags()
-        self.sanity_check(assume_complete=False)
-
-        if placeholder is not None:
-            self.raw_tensor = placeholder
-        if kwargs:
-            self._extra = _TensorExtra(tensor=self, **kwargs)
+        self._adapt_batch_consistent_dim_tags()  # TODO where to move this? not needed in general...
+        self.sanity_check(assume_complete=False)  # TODO still needed?
 
     @property
     def control_flow_ctx(self) -> Optional[ControlFlowContext]:
@@ -1828,16 +1843,34 @@ class _TensorMixin:
     @property
     def placeholder(self):
         """
-        :rtype: tf.Tensor|None
+        (Old alias for raw_tensor.)
+
+        :rtype: T
         """
-        return self._placeholder
+        return self._raw_tensor
 
     @placeholder.setter
     def placeholder(self, value):
         """
-        :param tf.Tensor|None value:
+        (Old alias for raw_tensor.)
+
+        :param T|None value:
         """
-        self._placeholder = value
+        self.raw_tensor = value
+
+    @property
+    def raw_tensor(self):
+        """
+        :rtype: T
+        """
+        return self._raw_tensor
+
+    @raw_tensor.setter
+    def raw_tensor(self, value):
+        """
+        :param T|None value:
+        """
+        self._raw_tensor = value
         self.sanity_check(assume_complete=False)
 
     @property

@@ -11,9 +11,34 @@ thus this is public.
 """
 
 from __future__ import annotations
+from typing import TypeVar, Generic, Type, Dict
+from . import tensor as _t
+
+T = TypeVar("T")
 
 
-class TensorBackend:
+_dispatch_table = {}  # type: Dict[Type, TensorBackend]
+
+
+def get_backend(tensor_type: Type[T]) -> TensorBackend[T]:
+    """
+    :param tensor_type:
+    """
+    return _dispatch_table[tensor_type]
+
+
+class TensorBackend(Generic[T]):
     """
     Tensor backend API
     """
+
+    def create_placeholder(self, tensor: _t.Tensor) -> T:
+        """
+        :return: tf.placeholder in TF
+
+        This is really only for TensorFlow for the deprecated option auto_create_placeholders
+        and should not be used in other backends,
+        even in graph-based backends.
+        Rather, the logic to create placeholders should be done elsewhere.
+        """
+        raise Exception(f"{self}.create_placeholder not supported")

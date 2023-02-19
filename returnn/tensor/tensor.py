@@ -21,22 +21,16 @@ https://github.com/rwth-i6/returnn/issues/1165
 """
 
 from __future__ import annotations
-from typing import TYPE_CHECKING, Optional, Union, Sequence, Tuple
+from typing import Optional, Sequence, Tuple, Generic, TypeVar
 
-if TYPE_CHECKING:
-    import numpy
-    import tensorflow as tf
-    import torch
-
-    RawTensorType = Union[numpy.ndarray, tf.Tensor, torch.Tensor]
-
-from returnn.util.basic import NotSpecified
 from .dim import Dim
 from ._tensor_extra import _TensorExtra, _TensorMixin
 from . import _tensor_extra
 
+RawTensorType = TypeVar("RawTensorType")  # e.g. torch.Tensor, tf.Tensor, numpy.ndarray, ...
 
-class Tensor(_TensorMixin):
+
+class Tensor(_TensorMixin, Generic[RawTensorType]):
     """
     Represents a tensor, in a frame-agnostic way. See the module docstring.
     """
