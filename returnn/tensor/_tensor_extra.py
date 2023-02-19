@@ -587,45 +587,40 @@ class _TensorMixin:
             data.name = name
         return data
 
-    def copy_as_batch_major(self):
+    def copy_as_batch_major(self) -> _t.Tensor:
         """
         :return: copy of myself with batch_dim_axis == 0
-        :rtype: Data
         """
         return self.copy_with_batch_dim_axis(0)
 
-    def copy_as_time_major(self):
+    def copy_as_time_major(self) -> _t.Tensor:
         """
         :return: copy of myself with time_dim_axis == 0
-        :rtype: Data
         """
         assert self.time_dim_axis is not None
         return self.copy_with_time_dim_axis(0)
 
-    def copy_with_batch_dim_axis(self, batch_dim_axis):
+    def copy_with_batch_dim_axis(self, batch_dim_axis) -> _t.Tensor:
         """
         :param int batch_dim_axis:
         :return: copy of myself with specific batch_dim_axis
-        :rtype: Data
         """
         assert self.batch_dim_axis is not None
         return self.copy_move_axis(self.batch_dim_axis, batch_dim_axis)
 
-    def copy_with_time_dim_axis(self, time_dim_axis):
+    def copy_with_time_dim_axis(self, time_dim_axis) -> _t.Tensor:
         """
         :param int time_dim_axis:
         :return: copy of myself with specific time_dim_axis
-        :rtype: Data
         """
         assert self.time_dim_axis is not None
         return self.copy_move_axis(self.time_dim_axis, time_dim_axis)
 
-    def copy_transpose(self, perm):
+    def copy_transpose(self, perm) -> _t.Tensor:
         """
         :param list[int] perm: permutation of the axes, counted with batch-dim.
           Maps the new axes to the old axes
         :return: copy of myself with permuted axes
-        :rtype: Data
         """
         assert len(perm) == self.batch_ndim
         assert set(perm) == set(range(self.batch_ndim))
@@ -652,7 +647,7 @@ class _TensorMixin:
                 self.placeholder, perm, name="%s_transpose" % get_valid_scope_name_from_str(self.name)
             )
         data_opts["dim_tags"] = tuple(self.dim_tags[perm[i]] for i in range(self.batch_ndim))
-        data = Data(**data_opts)
+        data = _t.Tensor(**data_opts)
         data.sanity_check()
         if self.time_dim_axis is not None and translate_axis(self.time_dim_axis) != data.time_dim_axis:
             data.time_dim_axis = translate_axis(self.time_dim_axis)
@@ -1504,30 +1499,29 @@ class _TensorMixin:
     def _get_var_len_axes(self):
         return [i for (i, d) in enumerate(self._get_variable_dim_pattern()) if d]
 
-    def matches_var_dim_pattern(self, other):
+    def matches_var_dim_pattern(self, other: _t.Tensor) -> bool:
         """
-        :param Data other:
+        :param other:
         :return: whether the variable-dims pattern matches,
           i.e. same variable dims (get_variable_dim_pattern), same time dim, excluding batch-dim.
           i.e. the size_placeholder should be compatible.
-        :rtype: bool
         """
         if self.time_dim_axis_excluding_batch != other.time_dim_axis_excluding_batch:
             return False
         return self._get_var_len_axes() == other._get_var_len_axes()
 
     @property
-    def dim_tags(self):
+    def dim_tags(self) -> Tuple[Dim, ...]:
         """
-        :rtype: tuple[Dim]
+        :return: dim tags, i.e. the shape. (alias for :func:`dims`)
         """
         return self._dims
 
     @property
-    def shape(self):
+    def shape(self) -> Tuple[Optional[int], ...]:
         """
-        :return: shape without batch-dim. e.g. (time,feat) = (None,128)
-        :rtype: tuple[int|None]
+        :return: shape *without* batch-dim. e.g. (time,feat) = (None,128)
+            see also :func:`batch_shape` or `dims`
         """
         return tuple(tag.dimension for tag in self._dims if not tag.is_batch_dim())
 
@@ -1541,10 +1535,9 @@ class _TensorMixin:
         raise Exception("%s: setting the shape is not allowed (new shape %s)" % (self, shape))
 
     @property
-    def batch_shape(self):
+    def batch_shape(self) -> Tuple[Optional[int], ...]:
         """
         :return: shape with added batch-dim. e.g. (batch,time,feat) = (None,None,128)
-        :rtype: tuple[int|None]
         """
         return tuple(tag.dimension for tag in self.dim_tags)
 
@@ -1804,6 +1797,21 @@ class _TensorMixin:
         if self.time_dim_axis_or_unspecified is not NotSpecified:
             return self.time_dim_axis_or_unspecified
         return _default_time_dim_axis_dim_tags(self.dim_tags)
+
+    @time_dim_axis.setter
+    def time_dim_axis(self, value):
+        """
+        :param int|None|NotSpecified value:
+        """
+        assert value is NotSpecified or value is None or isinstance(value, int)
+        if self.time_dim_axis_or_unspecified == value:
+            return
+        if isinstance(value, int):
+            assert 0 <= value < self.batch_ndim
+        if not self._extra:
+            assert isinstance(self, _t.Tensor)
+            self._extra = _TensorExtra(tensor=self)
+        self._extra.time_dim_axis = value
 
     @property
     def time_dim_axis_or_unspecified(self):
