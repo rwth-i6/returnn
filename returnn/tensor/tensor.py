@@ -62,6 +62,16 @@ class Tensor(_TensorMixin):
         raw_tensor: Optional[RawTensorType] = None,
         **kwargs,
     ):
+        """
+        :param name:
+        :param dims: the shape, where each dimension is described by a :class:`Dim`.
+        :param dtype: e.g. "float32" or "int64"
+        :param sparse_dim: when the values are indices into some dimension, this is the dimension.
+            You can also interpret the whole tensor as a sparse representation of a dense one-hot tensor,
+            where this sparse_dim becomes the additional dense dimension.
+        :param raw_tensor: the raw tensor, e.g. numpy array, TF tensor, or PyTorch tensor
+        :param kwargs: see :func:`_handle_extra_kwargs`, :func:`infer_dim_tags`
+        """
         if dims is None:
             # old code
             dims, sparse_dim = _tensor_extra.infer_dim_tags(name=name, sparse_dim=sparse_dim, **kwargs)
@@ -77,7 +87,7 @@ class Tensor(_TensorMixin):
         self._extra = None  # type: Optional[_TensorExtra]
 
         if kwargs:
-            self._extra = _TensorExtra(tensor=self, **kwargs)
+            self._handle_extra_kwargs(**kwargs)
         if raw_tensor is not None:
             self.raw_tensor = raw_tensor  # assignment via property, to have extra checks
 

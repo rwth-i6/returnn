@@ -4,7 +4,7 @@ or just rarely used attribs, such that we can save memory for the common case.
 """
 
 from __future__ import annotations
-from typing import TYPE_CHECKING, Optional, Tuple
+from typing import TYPE_CHECKING, Optional, Sequence, Tuple
 
 if TYPE_CHECKING:
     # Those are only used for TensorFlow, or they are deprecated.
@@ -20,51 +20,22 @@ class _TensorExtra:
         self,
         *,
         tensor: _t.Tensor,
-        sparse=None,
-        sparse_dim=NotSpecified,
-        dim=NotSpecified,
-        size_placeholder=None,
-        batch_dim_axis=NotSpecified,
         time_dim_axis=NotSpecified,
         feature_dim_axis=NotSpecified,
         available_for_inference=True,
-        auto_create_placeholders=False,
-        vocab=None,
-        dim_tags=None,
-        same_dim_tags_as=None,
         batch=None,
         beam=None,
         control_flow_ctx=None,
     ):
         """
         :param tensor:
-        :param tuple[int|None]|list[int|None] shape: including time-dim (can be None). excluding batch-dim.
-          e.g. (time,feat)=(None,128)
-        :param str dtype: e.g. "float32" or "int64"
-        :param tf.Tensor|None placeholder: with added batch-dim
-        :param bool|None sparse: whether to treat the value as an index. do not confuse with tf.SparseTensor
-        :param Dim|int|None|NotSpecified sparse_dim:
-        :param int|None|NotSpecified dim: feature dimension, shape[-1] if not sparse, otherwise like num_classes
-        :param int|None|NotSpecified batch_dim_axis: where we add the batch-dim.
-          e.g. shape=(time,...), 0 -> (batch,time,...), 1 -> (time,batch,...).
-          Default is 0.
-          This is normally always set, and a lot of code expects this. However, you can set it to None
-          if this Data does not have a batch-dim.
         :param int|None|NotSpecified time_dim_axis: where we have the time dim axis, after we added the batch-dim.
-          this is often 1. however, can be None if there is no time-dim.
+            this is often 1. however, can be None if there is no time-dim.
         :param int|None|NotSpecified feature_dim_axis: feature dim axis. by default it's the last one
-        :param dict[int,tf.Tensor]|None size_placeholder: for every None in shape, this will describe the size.
-          The size is always a tensor of shape (batch,), i.e. the size can be different for each sequence in a batch.
         :param bool available_for_inference: e.g. the extern data "classes" is usually not available for inference
-        :param bool auto_create_placeholders: This will create a tf.placeholder.
-        :param str|dict[str]|returnn.datasets.util.vocabulary.Vocabulary|None vocab:
-        :param tuple[Dim]|list[Dim]|dict[int,Dim]|None dim_tags:
-          If tuple/list, this specifies the whole (batch) shape.
-          If dict, explicitly specified dimension tags per axis (axis counted with batch-dim)
-        :param dict[int|str,Dim]|None same_dim_tags_as: will mark our dimension tags to be the same
         :param BatchInfo|None batch:
         :param SearchBeam|None beam: the batch-dim could be extended by a beam-size,
-          such that it represents the merged dims [batch, beam_size].
+            such that it represents the merged dims [batch, beam_size].
         :param ControlFlowContext|None control_flow_ctx:
         """
         self.tensor = tensor
@@ -79,55 +50,14 @@ class _TensorExtra:
 
         if feature_dim_axis is not NotSpecified:
             if isinstance(feature_dim_axis, int):
-                assert not self.sparse, "cannot have feature_dim_axis when sparse"
+                assert not self.tensor.sparse, "cannot have feature_dim_axis when sparse"
                 if feature_dim_axis < 0:
-                    feature_dim_axis += self.batch_ndim
-                assert 0 <= feature_dim_axis < self.batch_ndim
+                    feature_dim_axis += self.tensor.batch_ndim
+                assert 0 <= feature_dim_axis < self.tensor.batch_ndim
         self.feature_dim_axis = feature_dim_axis
         if time_dim_axis is not None:
-            assert 0 <= time_dim_axis < self.batch_ndim
-        self.time_dim_axis = time_dim_axis  # type: typing.Optional[int]  # counted with batch-dim
-        if dim is not NotSpecified:
-            if sparse:
-                assert self.sparse_dim.dimension == dim
-            else:
-                if self.feature_dim_axis is None:
-                    assert dim is None
-                else:
-                    assert self.batch_shape[self.feature_dim_axis] == dim
-        if placeholder is None and auto_create_placeholders:
-            with tf.name_scope("extern_data/placeholders/%s/" % name):
-                placeholder = tf_compat.v1.placeholder(**self.get_placeholder_kwargs(with_batch=True))
-        self._placeholder = placeholder  # type: tf.Tensor  # this will hold the data value itself
-        if vocab is not None:
-            from returnn.datasets.util.vocabulary import Vocabulary
-
-            if isinstance(vocab, str):
-                vocab = Vocabulary(vocab)
-            elif isinstance(vocab, dict):
-                vocab = Vocabulary.create_vocab(**vocab)
-            assert isinstance(vocab, Vocabulary)
-            assert self.sparse, "%s should represent indices of %s" % (self, vocab)
-            assert self.dim == vocab.num_labels, "%s dims do not match with vocab %s" % (self, vocab)
-            self.sparse_dim.vocab = vocab
-        # The size_placeholder is for each variable length dimension in shape, i.e. excluding the batch-dim.
-        if size_placeholder:
-            self.size_placeholder = (
-                size_placeholder
-            )  # type: typing.Dict[int,tf.Tensor]  # axis w.o. batch -> size (batch,)
-        if same_dim_tags_as:
-            for _axis, _dim_tag in sorted(same_dim_tags_as.items()):
-                _axis = self.get_axis_from_description(_axis)
-                assert isinstance(_dim_tag, Dim)
-                base_tag = self._dims[_axis]
-                if base_tag != _dim_tag:
-                    base_tag.declare_same_as(_dim_tag)
-                self._dims = self._dims[:_axis] + (_dim_tag,) + self._dims[_axis + 1 :]
-        if auto_create_placeholders:
-            # Do that after same_dim_tags_as handling.
-            _auto_create_size_placeholders_on_dim_tags(name=name, dim_tags=self._dims)
-        tensor._adapt_batch_consistent_dim_tags()
-        tensor.sanity_check(assume_complete=False)
+            assert 0 <= time_dim_axis < self.tensor.batch_ndim
+        self.time_dim_axis = time_dim_axis  # type: Optional[int]  # counted with batch-dim
 
 
 class _TensorMixin:
@@ -203,6 +133,72 @@ class _TensorMixin:
         if with_batch_dim and batch_dim not in dim_tags:
             dim_tags.insert(0, batch_dim)
         return _t.Tensor(name=name, dim_tags=dim_tags, dtype=dtype, sparse_dim=sparse_dim)
+
+    def _handle_extra_kwargs(
+        self,
+        *,
+        sparse=None,
+        dim=NotSpecified,
+        batch_dim_axis=NotSpecified,
+        placeholder=None,
+        size_placeholder=None,
+        auto_create_placeholders=False,
+        vocab=None,
+        same_dim_tags_as=None,
+        **kwargs,
+    ):
+        """
+        :param tf.Tensor|None placeholder: with added batch-dim
+        :param dict[int,tf.Tensor]|None size_placeholder: for every None in shape, this will describe the size.
+          The size is always a tensor of shape (batch,), i.e. the size can be different for each sequence in a batch.
+        :param bool auto_create_placeholders: This will create a tf.placeholder.
+        :param str|dict[str]|returnn.datasets.util.vocabulary.Vocabulary|None vocab:
+        :param tuple[Dim]|list[Dim]|dict[int,Dim]|None dim_tags:
+          If tuple/list, this specifies the whole (batch) shape.
+          If dict, explicitly specified dimension tags per axis (axis counted with batch-dim)
+        :param dict[int|str,Dim]|None same_dim_tags_as: will mark our dimension tags to be the same
+        """
+        assert isinstance(self, _t.Tensor)
+        sparse, dim, batch_dim_axis  # noqa  # unused here, handled in infer_dim_tags
+
+        if placeholder is None and auto_create_placeholders:
+            with tf.name_scope("extern_data/placeholders/%s/" % name):
+                placeholder = tf_compat.v1.placeholder(**self.get_placeholder_kwargs(with_batch=True))
+        if vocab is not None:
+            from returnn.datasets.util.vocabulary import Vocabulary
+
+            if isinstance(vocab, str):
+                vocab = Vocabulary(vocab)
+            elif isinstance(vocab, dict):
+                vocab = Vocabulary.create_vocab(**vocab)
+            assert isinstance(vocab, Vocabulary)
+            assert self.sparse, "%s should represent indices of %s" % (self, vocab)
+            assert self.dim == vocab.num_labels, "%s dims do not match with vocab %s" % (self, vocab)
+            self.sparse_dim.vocab = vocab
+        # The size_placeholder is for each variable length dimension in shape, i.e. excluding the batch-dim.
+        if size_placeholder:
+            self.size_placeholder = (
+                size_placeholder
+            )  # type: typing.Dict[int,tf.Tensor]  # axis w.o. batch -> size (batch,)
+        if same_dim_tags_as:
+            for _axis, _dim_tag in sorted(same_dim_tags_as.items()):
+                _axis = self.get_axis_from_description(_axis)
+                assert isinstance(_dim_tag, Dim)
+                base_tag = self._dims[_axis]
+                if base_tag != _dim_tag:
+                    base_tag.declare_same_as(_dim_tag)
+                self._dims = self._dims[:_axis] + (_dim_tag,) + self._dims[_axis + 1 :]
+        if auto_create_placeholders:
+            # Do that after same_dim_tags_as handling.
+            _auto_create_size_placeholders_on_dim_tags(name=self.name, dim_tags=self._dims)
+
+        self._adapt_batch_consistent_dim_tags()
+        self.sanity_check(assume_complete=False)
+
+        if placeholder is not None:
+            self.raw_tensor = placeholder
+        if kwargs:
+            self._extra = _TensorExtra(tensor=self, **kwargs)
 
     @property
     def control_flow_ctx(self) -> Optional[ControlFlowContext]:
@@ -3061,7 +3057,7 @@ def infer_dim_tags(
     batch_dim_axis=NotSpecified,
     time_dim_axis=NotSpecified,
     feature_dim_axis=NotSpecified,
-    shape=None,
+    shape: Optional[Sequence[Optional[int]]] = None,
     sparse: Optional[bool] = None,
     sparse_dim,
     dim=NotSpecified,
@@ -3072,13 +3068,19 @@ def infer_dim_tags(
 ) -> Tuple[Tuple[Dim, ...], Dim]:
     """
     :param name:
-    :param batch_dim_axis:
-    :param time_dim_axis:
-    :param feature_dim_axis:
-    :param shape:
+    :param int|None|NotSpecified batch_dim_axis: where we add the batch-dim.
+      e.g. shape=(time,...), 0 -> (batch,time,...), 1 -> (time,batch,...).
+      Default is 0.
+      This is normally always set, and a lot of code expects this. However, you can set it to None
+      if this Data does not have a batch-dim.
+    :param int|None|NotSpecified time_dim_axis: where we have the time dim axis, after we added the batch-dim.
+      this is often 1. however, can be None if there is no time-dim.
+    :param int|None|NotSpecified feature_dim_axis: feature dim axis. by default it's the last one
+    :param shape: including time-dim (can be None). excluding batch-dim.
+        e.g. (time,feat)=(None,128)
     :param sparse:
     :param sparse_dim:
-    :param dim:
+    :param int|None|NotSpecified dim: feature dimension, shape[-1] if not sparse, otherwise like num_classes
     :param size_placeholder:
     :param auto_create_placeholders:
     :param batch:
@@ -3123,20 +3125,26 @@ def infer_dim_tags(
     else:
         if time_dim_axis is NotSpecified:
             time_dim_axis = _default_time_dim_axis(batch_dim_axis=batch_dim_axis, shape=shape)
-    return (
-        _infer_dim_tags_tuple_from_shape(
-            shape,
-            batch_dim_axis=batch_dim_axis,
-            time_dim_axis=time_dim_axis,
-            feature_dim_axis=feature_dim_axis,
-            size_placeholder=size_placeholder,
-            name=name,
-            extern_data=auto_create_placeholders,
-            sparse=sparse,
-            batch=batch,
-        ),
-        sparse_dim,
+    dims = _infer_dim_tags_tuple_from_shape(
+        shape,
+        batch_dim_axis=batch_dim_axis,
+        time_dim_axis=time_dim_axis,
+        feature_dim_axis=feature_dim_axis,
+        size_placeholder=size_placeholder,
+        name=name,
+        extern_data=auto_create_placeholders,
+        sparse=sparse,
+        batch=batch,
     )
+    if dim is not NotSpecified:
+        if sparse:
+            assert sparse_dim.dimension == dim
+        else:
+            if feature_dim_axis is None:
+                assert dim is None
+            else:
+                assert dims[feature_dim_axis].dimension == dim
+    return dims, sparse_dim
 
 
 class _SizePlaceholderProxy:
@@ -3248,7 +3256,7 @@ class _SizePlaceholderProxy:
 
 def _batch_dim_axis_from_dim_tags_tuple(dim_tags):
     """
-    :param tuple[Dim] dim_tags:
+    :param Sequence[Dim] dim_tags:
     :return: batch_dim_axis. int or None if not existing
     :rtype: int|None
     """
@@ -3260,7 +3268,7 @@ def _batch_dim_axis_from_dim_tags_tuple(dim_tags):
 
 def _batch_shape_from_shape(shape, batch_dim_axis):
     """
-    :param tuple[int|None]|list[int|None] shape: without batch-dim
+    :param Sequence[int|None] shape: without batch-dim
     :param int|None batch_dim_axis:
     :return: shape with batch dim if existing
     :rtype: tuple[int|None]
@@ -3534,7 +3542,7 @@ def _infer_default_shape_and_time(batch_dim_axis, time_dim_axis, feature_dim_axi
 def _default_time_dim_axis(batch_dim_axis, shape):
     """
     :param int|None batch_dim_axis:
-    :param tuple[int|None]|list[int|None] shape: without batch-dim
+    :param Sequence[int|None] shape: without batch-dim
     :return: time dim axis, counted with batch-dim
     :rtype: int|None
     """
