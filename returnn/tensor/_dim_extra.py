@@ -647,10 +647,10 @@ class _DimMixin:
 
     def can_be_used_as_dim(self):
         """
-        :return: whether this can be used as a dim in :class:`Data`, i.e. it is not generic or special
+        :return: whether this can be used as a dim in :class:`Data`, i.e. it is not special
         :rtype: bool
         """
-        return not self.generic and not self.special
+        return not self.special
 
     def is_same_size_tensor(self, x):
         """
@@ -989,16 +989,10 @@ class _DimMixin:
     def __hash__(self):
         """
         :rtype: int
-        :return: hash, matching to :func:`__eq__` (ignoring generic flag)
+        :return: hash, matching to :func:`__eq__`
         """
         # This must match the behavior in __eq__, which is is_equal with default options.
         # I.e. different hash implies not equal (but same hash not necessarily equal).
-        if self.generic:
-            raise ValueError(
-                "Hash for generic dim tag %s is not well defined. " % self
-                + "The generic flag invalidates the transitive property of equivalence relations. "
-                "Explicitly go through the set or dict of dim tags and check each for equality instead."
-            )
         if self.special:
             return hash(id(self))
         if self.is_batch_dim():
