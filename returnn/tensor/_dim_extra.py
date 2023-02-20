@@ -7,6 +7,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Optional, Tuple, Dict
 
 from returnn.util.basic import Entity
+from returnn.util import basic as util
 
 if TYPE_CHECKING:
     # Those are only used for TensorFlow, or they are deprecated.
@@ -111,7 +112,7 @@ class _DimExtra:
         self.auto_generated = auto_generated
         # We can have different tag variants per batch info (e.g. with beam), or per control flow ctx.
         # They each have same_as = self. The same_base should have the base (global) batch info.
-        self._same_for_batch_ctx = {}  # type: Dict[Tuple[BatchInfo,Optional[ControlFlowContext]],_d.Dim]
+        self.same_for_batch_ctx = {}  # type: Dict[Tuple[BatchInfo,Optional[ControlFlowContext]],_d.Dim]
         if dyn_size is not None:
             dim.dyn_size = dyn_size
         if self.derived_from_op and dim.is_dynamic():
@@ -378,15 +379,23 @@ class _DimMixin:
             return self
         if batch.is_broadcast():
             return self  # just leave as-is. should not matter.
-        same_base = self.get_same_base()
-        same_base._validate_in_current_graph()
-        for ctx_ in ControlFlowContext.abs_ctx_stack_with_root(ctx):
-            tag = same_base._same_for_batch_ctx.get((batch, ctx_), None)
-            if tag and tag._can_use_in_ctx(ctx) and tag._validate_in_current_graph():
-                assert tag.batch == batch  # some code updated batch directly (incorrectly) and could trigger this
-                return tag
-        if same_base.batch == batch and same_base._can_use_in_ctx(ctx) and same_base.dyn_size_ext:
-            return same_base
+        if self._extra:
+            same_base = self.get_same_base()
+            same_base._validate_in_current_graph()
+            # noinspection PyProtectedMember
+            if same_base._extra:
+                for ctx_ in ControlFlowContext.abs_ctx_stack_with_root(ctx):
+                    # noinspection PyProtectedMember
+                    tag = same_base._extra.same_for_batch_ctx.get((batch, ctx_), None)
+                    if tag and tag._can_use_in_ctx(ctx) and tag._validate_in_current_graph():
+                        assert (
+                            tag.batch == batch
+                        )  # some code updated batch directly (incorrectly) and could trigger this
+                        return tag
+            if same_base.batch == batch and same_base._can_use_in_ctx(ctx) and same_base.dyn_size_ext:
+                return same_base
+        else:
+            same_base = self
         # Ok, nothing matching found.
         if ctx:
             # Check if the ctx is really relevant, when this is derived from other tags.
@@ -1052,6 +1061,8 @@ class _DimMixin:
         """
         :return: same base
         """
+        if not self._extra:
+            return self
         base = self
         while base.same_as:
             base = base.same_as
@@ -1263,7 +1274,7 @@ class _DimMixin:
         for _, dim in list(self._same_for_batch_ctx.items()):
             assert isinstance(dim, _d.Dim)
             dim._validate_in_current_graph()
-        for key, dim in other._same_for_batch_ctx.items():
+        for key, dim in other.same_for_batch_ctx.items():
             if not dim._validate_in_current_graph():
                 continue
             self_dim = self._same_for_batch_ctx.get(key, None)
@@ -1272,7 +1283,7 @@ class _DimMixin:
             if not dim.dyn_size_ext:
                 continue  # undefined, do not overtake
             self._same_for_batch_ctx[key] = dim
-        other._same_for_batch_ctx.clear()  # we only want to have it once
+        other.same_for_batch_ctx.clear()  # we only want to have it once
 
     def derive_from(self, base, set_derived_from_flag=True):
         """
