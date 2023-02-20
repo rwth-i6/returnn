@@ -152,6 +152,15 @@ class _DimMixin:
         return self._extra.kind
 
     @property
+    def match_priority(self) -> int:
+        """
+        :return: match priority
+        """
+        if not self._extra:
+            return 0
+        return self._extra.match_priority
+
+    @property
     def batch(self) -> Optional[BatchInfo]:
         """
         :return: batch info (deprecated)
@@ -270,8 +279,8 @@ class _DimMixin:
             dimension=self.dimension,
             dyn_size_ext=self.dyn_size_ext,
             batch=self.batch,
-            src_data=self.src_data,
-            src_axis=self.src_axis,
+            src_data=self._extra.src_data if self._extra else None,
+            src_axis=self._extra.src_axis if self._extra else None,
         )
         if same_as_self:
             tag.same_as = self  # not declare_same_as, none of the extra checks needed
@@ -1050,7 +1059,7 @@ class _DimMixin:
     def __le__(self, other):
         return not self > other
 
-    def get_same_base(self) -> _d.Dim:
+    def get_same_base(self: _d.Dim) -> _d.Dim:
         """
         :return: same base
         """
@@ -1061,9 +1070,9 @@ class _DimMixin:
             base = base.same_as
         return base
 
-    def get_same_derived_base(self):
+    def get_same_derived_base(self: _d.Dim) -> _d.Dim:
         """
-        :rtype: Dim
+        :return: same base, but also consider derived_from_...
         """
         base = self
         visited = {}
@@ -1099,24 +1108,25 @@ class _DimMixin:
         return res
 
     @property
-    def undefined(self):
+    def undefined(self: _d.Dim) -> bool:
         """
         :return: whether the undefined flag is set, in self, bases, or any derived bases. also see :func:`is_dim_known`
-        :rtype: bool
         """
         base = self
         visited = {}
         while base.same_as or base.derived_from_tag:
             assert id(base) not in visited  # should not have cycles. normally this should never be triggered
             visited[id(base)] = base
-            if base._undefined:
+            # noinspection PyProtectedMember
+            if base._extra and base._extra.undefined:
                 return True
             if base.same_as:
                 base = base.same_as
                 continue
             base = base.derived_from_tag
             assert base
-        return base._undefined
+        # noinspection PyProtectedMember
+        return base._extra and base._extra.undefined
 
     def declare_same_as(self, other):
         """
