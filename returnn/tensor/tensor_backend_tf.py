@@ -3,25 +3,32 @@ TensorFlow backend for :class:`Tensor`.
 """
 
 from __future__ import annotations
+
 import tensorflow as tf
-from returnn.tf import compat as tf_compat
+
 from .tensor_backend import TensorBackend, _dispatch_table
 from . import tensor as _t
 
+from returnn.tf.util import basic as tf_util
+from returnn.tf import compat as tf_compat
 
-class TensorBackendTF(TensorBackend[tf.Tensor]):
+_T = tf.Tensor
+_TT = _t.Tensor[_T]
+
+
+class TensorBackendTF(TensorBackend[_T]):
     """
     TensorFlow backend for :class:`Tensor`.
     """
 
-    def create_placeholder(self, tensor: _t.Tensor) -> tf.Tensor:
+    def create_placeholder(self, tensor: _TT) -> tf.Tensor:
         """
         :return: tf.placeholder in TF
         """
         with tf.name_scope("extern_data/placeholders/%s/" % tensor.name):
             return tf_compat.v1.placeholder(**tensor.get_placeholder_kwargs(with_batch=True))
 
-    def runtime_sanity_checks(self, tensor: _t.Tensor) -> tf.Operation:
+    def runtime_sanity_checks(self, tensor: _TT) -> tf.Operation:
         """
         Runtime checks
         """
@@ -78,6 +85,17 @@ class TensorBackendTF(TensorBackend[tf.Tensor]):
                     ]
                     checks += [dyn_size_ext.get_runtime_sanity_check_op()]
         return tf.group(*checks)
+
+    def is_valid_in_current_graph(self, tensor: _TT) -> bool:
+        """
+        :return: whether the tensor is valid in the current graph
+        """
+        if tensor.raw_tensor is None:
+            return True
+        if tf_compat.executing_eagerly():
+            return True  # always true in eager mode
+        g = tf_util.get_root_graph()
+        return tf_util.get_root_graph(tensor.raw_tensor.graph) is g
 
 
 tensor_backend_tf = TensorBackendTF()

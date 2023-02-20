@@ -52,3 +52,10 @@ class TensorBackend(Generic[T]):
         """
         # By default, we do not do any checks. This is optional for the backend.
         pass
+
+    def is_valid_in_current_graph(self, tensor: _t.Tensor) -> bool:
+        """
+        :return: whether the raw tensor is valid in the current graph.
+            In eager-mode frameworks, this is always true -- there is no graph.
+        """
+        return True

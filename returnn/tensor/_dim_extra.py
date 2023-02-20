@@ -302,28 +302,20 @@ class _DimMixin:
         """
         :rtype: bool
         """
-        tensor = None
-        if self.batch:
-            batch_base = self.batch.get_global_base()
-            if batch_base.is_global_batch():
-                tensor = batch_base.get_global_batch_dim().size
-        if not isinstance(tensor, tf.Tensor):
-            if self.dyn_size_ext and self.dyn_size_ext.placeholder is not None:
-                tensor = self.dyn_size_ext.placeholder
-        if isinstance(tensor, tf.Tensor) and not tf_compat.executing_eagerly():
-            from returnn.tf.util import basic as tf_util
-
-            g = tf_util.get_root_graph()
-            if tf_util.get_root_graph(tensor.graph) is not g:  # maybe from an earlier run which reuses the dim tag
-                # Reset and cleanup.
-                if self.dyn_size_ext:
-                    self.dyn_size_ext = self.dyn_size_ext.copy_template()
-                    self.dyn_size_ext.batch = None
-                same_base = self.get_same_base()
-                same_base._same_for_batch_ctx.pop((self.batch, self.control_flow_ctx), None)
-                self.batch = None  # it is invalid in the new graph
-                self.control_flow_ctx = None  # also invalid
-                return False
+        if (
+            self.dyn_size_ext and not self.dyn_size_ext.is_valid_in_current_graph()
+        ):  # maybe from an earlier run which reuses the dim tag
+            # Reset and cleanup.
+            self.dyn_size_ext = self.dyn_size_ext.copy_template()
+            self.dyn_size_ext.batch = None
+            same_base = self.get_same_base()
+            # noinspection PyProtectedMember
+            if same_base._extra:
+                # noinspection PyProtectedMember
+                same_base._extra.same_for_batch_ctx.pop((self.batch, self.control_flow_ctx), None)
+            self.batch = None  # it is invalid in the new graph
+            self.control_flow_ctx = None  # also invalid
+            return False
         return True
 
     def _maybe_update(self):

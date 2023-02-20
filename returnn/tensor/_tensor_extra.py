@@ -232,7 +232,10 @@ class _TensorMixin:
         self.sanity_check(assume_complete=False)  # TODO still needed?
 
     @property
-    def _backend(self) -> Optional[TensorBackend]:
+    def backend(self) -> Optional[TensorBackend]:
+        """
+        :return: the backend for the raw tensor
+        """
         if self._raw_tensor is None:
             return None
         from .tensor_backend import get_backend
@@ -334,7 +337,7 @@ class _TensorMixin:
         :rtype: tensorflow.Operation|Any
         """
         assert self.placeholder is not None
-        return self._backend.runtime_sanity_checks(self)
+        return self.backend.runtime_sanity_checks(self)
 
     def verify_out_shape(self, out_shape, allow_missing_implicit_dims=False):
         """
@@ -3074,6 +3077,15 @@ class _TensorMixin:
             other_to_self_mapping[axis] = map_other_axis_to_self(axis, set(other_to_self_mapping.values()))
         assert len(other_to_self_mapping) == len(other_axes), "other_axes may not contain duplicates"
         return other_to_self_mapping
+
+    def is_valid_in_current_graph(self: _t.Tensor) -> bool:
+        """
+        :return: whether the raw tensor is valid in the current graph.
+            In eager mode, this is always True.
+        """
+        if self._raw_tensor is None:
+            return True
+        return self.backend.is_valid_in_current_graph(self)
 
 
 def infer_dim_tags(
