@@ -22,7 +22,7 @@ import re
 import time
 import contextlib
 
-from returnn import frontend as rf
+import returnn.frontend
 from returnn.tf.frontend import TFFrontend
 from returnn.torch.frontend import TorchFrontend
 
@@ -169,9 +169,9 @@ class BackendEngine:
             if engine is None:
                 engine = cls._get_default_engine()
         if engine == cls.TensorFlow:
-            rf.__class__ = TFFrontend
+            returnn.frontend.__class__ = TFFrontend
         elif engine == cls.Torch:
-            rf.__class__ = TorchFrontend
+            returnn.frontend.__class__ = TorchFrontend
         cls.selected_engine = engine
 
     @classmethod
