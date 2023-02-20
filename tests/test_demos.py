@@ -191,6 +191,7 @@ def test_demo_returnn_as_framework():
     subprocess.check_call(["echo", "travis_fold:end:test_demo_returnn_as_framework"])
 
 
+@unittest.skipIf(not tf, "no TF")
 def test_demo_sprint_interface():
     import subprocess
 
