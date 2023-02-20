@@ -676,14 +676,14 @@ class _DimMixin:
         :return: whether this dim tag for this specific batch (incl beam) is the same as the given size
         :rtype: bool
         """
-        if x is self.dyn_size:
+        if self.dyn_size_ext and x is self.dyn_size_ext.placeholder:
             return True
         tag = _DimMixin.get_tag_from_size_tensor(x)
         if tag and tag == self:
             return True
-        from .basic import TensorRef
-
-        if TensorRef(x) in self._dyn_size_same:
+        if not self._extra:
+            return False
+        if util.TensorRef(x) in self._extra.dyn_size_same:
             return True
         return False
 
@@ -708,8 +708,6 @@ class _DimMixin:
           e.g. it could be some identity with added checks, or other change.
         :return: self or new dim tag
         """
-        from .basic import TensorRef
-
         assert self.can_be_used_as_dim()
         # It's unusual if self.dimension is not None, but let's accept that.
         if hasattr(x, "_is_size_of_dim_tag"):
@@ -722,10 +720,13 @@ class _DimMixin:
             new_dim_tag.set_tag_on_size_tensor(x, batch=batch)
             return new_dim_tag
         if self.dyn_size is not None and self.dyn_size is not x:
-            if TensorRef(x) in self._dyn_size_same:
+            if self._extra and util.TensorRef(x) in self._extra.dyn_size_same:
                 pass  # ok, pass on
             elif same_as_before:
-                self._dyn_size_same.add(TensorRef(x))
+                if not self._extra:
+                    assert isinstance(self, _d.Dim)
+                    self._extra = _DimExtra(dim=self)
+                self._extra.dyn_size_same.add(util.TensorRef(x))
                 # And now pass on.
             else:
                 assert self.batch and batch
