@@ -161,6 +161,16 @@ class _DimMixin:
             return None
         return self._extra.batch
 
+    def control_flow_ctx(self) -> Optional[ControlFlowContext]:
+        """
+        :return: control flow context (deprecated)
+        """
+        if not self._extra:
+            if self.dyn_size_ext:
+                return self.dyn_size_ext.control_flow_ctx
+            return None
+        return self._extra.control_flow_ctx
+
     @property
     def same_as(self) -> Optional[_d.Dim]:
         """
@@ -190,7 +200,7 @@ class _DimMixin:
         if self.special:
             desc += "!"
         elif self.dimension is not None:
-            desc += "(%i)" % (self.dimension)
+            desc += f"({self.dimension})"
         else:
             if self.dyn_size_ext:
                 desc += "[%s]" % ",".join(self.dyn_size_ext.get_batch_axes_short_description(special_axes=False))
@@ -564,7 +574,6 @@ class _DimMixin:
         if self.dyn_size_ext and self.dyn_size_ext.placeholder is dyn_size:  # fast path check
             return
         assert self.can_be_used_as_dim()
-        assert isinstance(dyn_size, tf.Tensor) and dyn_size.shape.ndims == 1
         other = _d.Dim.get_tag_from_size_tensor(dyn_size)
         if other:
             self.declare_same_as(other)
@@ -660,7 +669,7 @@ class _DimMixin:
         """
         if x is self.dyn_size:
             return True
-        tag = Dim.get_tag_from_size_tensor(x)
+        tag = _DimMixin.get_tag_from_size_tensor(x)
         if tag and tag == self:
             return True
         from .basic import TensorRef
