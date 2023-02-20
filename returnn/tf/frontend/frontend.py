@@ -1,13 +1,11 @@
 """
-Frontend for exposing TensorFlow-specific functionality to returnn_common.
+Frontend for exposing TensorFlow-specific functionality.
 """
+
 from returnn.frontend_api import Frontend
 
 
 class TFFrontend(Frontend):
     """
-    TensorFlow frontend that implements all modules
-    in code compatible with TensorFlow.
+    TensorFlow frontend
     """
-
-    pass

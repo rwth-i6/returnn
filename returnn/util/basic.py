@@ -22,10 +22,6 @@ import re
 import time
 import contextlib
 
-import returnn.frontend
-from returnn.tf.frontend import TFFrontend
-from returnn.torch.frontend import TorchFrontend
-
 try:
     import thread
 except ImportError:
@@ -168,10 +164,17 @@ class BackendEngine:
                 }[backend]
             if engine is None:
                 engine = cls._get_default_engine()
+
+        from returnn import frontend
+
         if engine == cls.TensorFlow:
-            returnn.frontend.__class__ = TFFrontend
+            from returnn.tf.frontend import TFFrontend
+
+            frontend.__class__ = TFFrontend
         elif engine == cls.Torch:
-            returnn.frontend.__class__ = TorchFrontend
+            from returnn.torch.frontend import TorchFrontend
+
+            frontend.__class__ = TorchFrontend
         cls.selected_engine = engine
 
     @classmethod

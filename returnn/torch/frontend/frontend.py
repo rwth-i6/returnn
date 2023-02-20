@@ -1,13 +1,11 @@
 """
-Frontend for exposing PyTorch-specific functionality to returnn_common.
+Frontend for exposing PyTorch-specific functionality.
 """
+
 from returnn.frontend_api import Frontend
 
 
 class TorchFrontend(Frontend):
     """
-    PyTorch frontend that implements all modules
-    in code compatible with PyTorch.
+    PyTorch frontend
     """
-
-    pass

@@ -12,7 +12,7 @@ which used our old-style module names, like ``import TFUtil`` or ``import return
 import os as _os
 
 from .__setup__ import get_version_str as _get_version_str
-from .frontend_api import Frontend
+from . import frontend_api as _frontend_api
 
 __long_version__ = _get_version_str(
     fallback="1.0.0+unknown", long=True, verbose_error=True
@@ -26,4 +26,4 @@ _old_mod_loader_setup(modules=globals())
 
 __root_dir__ = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))  # can be used as __path__
 
-frontend = Frontend()
+frontend = _frontend_api.Frontend()
