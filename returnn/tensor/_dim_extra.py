@@ -355,13 +355,12 @@ class _DimMixin:
                     if not same.dyn_size_ext or same.dyn_size_ext.placeholder is None:
                         same.dyn_size_ext = self.dyn_size_ext
 
-    def get_for_batch_ctx(self, batch, ctx, allow_none=False) -> _d.Dim:
+    def get_for_batch_ctx(self: _d.Dim, batch, ctx, allow_none=False) -> _d.Dim:
         """
         :param BatchInfo batch:
         :param ControlFlowContext|None ctx:
         :param bool allow_none:
         """
-        assert isinstance(self, _d.Dim)
         assert self.can_be_used_as_dim()
         if self.batch == batch and self.control_flow_ctx == ctx and self.dyn_size_ext:
             self._validate_in_current_graph()
@@ -404,7 +403,7 @@ class _DimMixin:
             if derived_bases:
                 derived_ctxs = set()
                 for d in derived_bases:
-                    with util.guard_infinite_recursion(Dim.get_for_batch_ctx, d):
+                    with util.guard_infinite_recursion(_d.Dim.get_for_batch_ctx, d):
                         d = d.get_for_batch_ctx(batch=batch, ctx=ctx)
                     if d.control_flow_ctx:
                         derived_ctxs.add(d.control_flow_ctx)
@@ -418,12 +417,14 @@ class _DimMixin:
         # Maybe we have sth with the base batch without beam or padded batch which we can extend.
         if batch != batch.get_global_base():
             batch_base = batch.get_global_base()
-            base_can_use_in_ctx = None
+            base_can_use_in_ctx = None  # type: Optional[_d.Dim]
+            # noinspection PyProtectedMember
             if same_base.batch == batch_base and same_base._can_use_in_ctx(ctx) and same_base.dyn_size_ext:
                 base_can_use_in_ctx = same_base
-            else:
+            elif same_base._extra:
                 for ctx_ in ControlFlowContext.abs_ctx_stack_with_root(ctx):
-                    tag = same_base._same_for_batch_ctx.get((batch_base, ctx_), None)
+                    # noinspection PyProtectedMember
+                    tag = same_base._extra.same_for_batch_ctx.get((batch_base, ctx_), None)
                     if tag and tag._can_use_in_ctx(ctx) and tag._validate_in_current_graph() and tag.dyn_size_ext:
                         base_can_use_in_ctx = tag
                         break
@@ -687,7 +688,7 @@ class _DimMixin:
             return True
         return False
 
-    def set_tag_on_size_tensor(self, x, batch=None, same_as_before=False) -> _d.Dim:
+    def set_tag_on_size_tensor(self: _d.Dim, x, batch=None, same_as_before=False) -> _d.Dim:
         """
         This function is used
         to couple a tf.Tensor instance representing the dyn size
@@ -724,7 +725,6 @@ class _DimMixin:
                 pass  # ok, pass on
             elif same_as_before:
                 if not self._extra:
-                    assert isinstance(self, _d.Dim)
                     self._extra = _DimExtra(dim=self)
                 self._extra.dyn_size_same.add(util.TensorRef(x))
                 # And now pass on.
@@ -1267,24 +1267,32 @@ class _DimMixin:
                 self.control_flow_ctx = self_.control_flow_ctx  # might be different
                 self.dyn_size_ext = self_.dyn_size_ext  # might be unset
 
-    def _merge_same_for_batch_ctx_dict(self, other):
+    def _merge_same_for_batch_ctx_dict(self: _d.Dim, other: _d.Dim):
         """
-        :param Dim other:
+        :param other:
         """
+        # noinspection PyProtectedMember
+        if not self._extra and not other._extra:
+            return
         self._validate_in_current_graph()
-        for _, dim in list(self._same_for_batch_ctx.items()):
-            assert isinstance(dim, _d.Dim)
-            dim._validate_in_current_graph()
-        for key, dim in other.same_for_batch_ctx.items():
-            if not dim._validate_in_current_graph():
-                continue
-            self_dim = self._same_for_batch_ctx.get(key, None)
-            if self_dim and (self_dim.dyn_size_ext or not dim.dyn_size_ext):
-                continue  # keep ours
-            if not dim.dyn_size_ext:
-                continue  # undefined, do not overtake
-            self._same_for_batch_ctx[key] = dim
-        other.same_for_batch_ctx.clear()  # we only want to have it once
+        if self._extra:
+            for _, dim in list(self._extra.same_for_batch_ctx.items()):
+                assert isinstance(dim, _d.Dim)
+                dim._validate_in_current_graph()
+        # noinspection PyProtectedMember
+        if other._extra:
+            # noinspection PyProtectedMember
+            for key, dim in other._extra.same_for_batch_ctx.items():
+                if not dim._validate_in_current_graph():
+                    continue
+                self_dim = self._extra.same_for_batch_ctx.get(key, None)
+                if self_dim and (self_dim.dyn_size_ext or not dim.dyn_size_ext):
+                    continue  # keep ours
+                if not dim.dyn_size_ext:
+                    continue  # undefined, do not overtake
+                self._extra.same_for_batch_ctx[key] = dim
+            # noinspection PyProtectedMember
+            other._extra.same_for_batch_ctx.clear()  # we only want to have it once
 
     def derive_from(self, base, set_derived_from_flag=True):
         """
