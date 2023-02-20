@@ -7366,33 +7366,6 @@ def safe_deep_copy(obj):
     return deepcopy(obj, stop_types=stop_types)
 
 
-class TensorRef:
-    """
-    Reference to the original tensor, which is hashable.
-    We have this here for compatibility because tf.Tensor.ref() was not available in earlier TF versions.
-    """
-
-    def __init__(self, tensor):
-        """
-        :param tf.Tensor tensor:
-        """
-        self.tensor = tensor
-
-    def __repr__(self):
-        return "TensorRef{%r}" % self.tensor
-
-    def __eq__(self, other):
-        if other is None or not isinstance(other, TensorRef):
-            return False
-        return self.tensor is other.tensor
-
-    def __ne__(self, other):
-        return not self.__eq__(other)
-
-    def __hash__(self):
-        return id(self.tensor)
-
-
 class FetchHelper:
     """
     ``session.run(tensor)`` does not work if ``tensor`` is inside a loop (``tf.while_loop``) (or ``tf.cond``).

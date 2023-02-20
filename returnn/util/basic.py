@@ -4,8 +4,8 @@
 Various generic utilities, which are shared across different backend engines.
 """
 
-from __future__ import print_function
-from __future__ import division
+from __future__ import annotations
+from typing import Generic, TypeVar
 
 import subprocess
 from subprocess import CalledProcessError
@@ -60,6 +60,9 @@ else:
     except ImportError:
         # noinspection PyUnresolvedReferences,PyCompatibility
         from StringIO import StringIO as BytesIO
+
+
+T = TypeVar("T")
 
 returnn_root_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -2309,11 +2312,37 @@ def make_hashable(obj):
         return obj
     if "tensorflow" in sys.modules:
         import tensorflow as tf
-        from returnn.tf.util import basic as tf_util
 
         if isinstance(obj, tf.Tensor):
-            return tf_util.TensorRef(obj)
+            return TensorRef(obj)
     assert False, "don't know how to make hashable: %r (%r)" % (obj, type(obj))
+
+
+class TensorRef(Generic[T]):
+    """
+    Reference to the original tensor, which is hashable.
+    We have this here for compatibility because tf.Tensor.ref() was not available in earlier TF versions.
+    """
+
+    def __init__(self, tensor: T):
+        """
+        :param tensor: for example tf.Tensor
+        """
+        self.tensor = tensor
+
+    def __repr__(self):
+        return "TensorRef{%r}" % self.tensor
+
+    def __eq__(self, other):
+        if other is None or not isinstance(other, TensorRef):
+            return False
+        return self.tensor is other.tensor
+
+    def __ne__(self, other):
+        return not self.__eq__(other)
+
+    def __hash__(self):
+        return id(self.tensor)
 
 
 def make_dll_name(basename):
