@@ -188,9 +188,7 @@ class _DimMixin:
     def batch(self: _d.Dim, value: Optional[BatchInfo]):
         if self.batch is value:
             return
-        if not self._extra:
-            self._extra = _DimExtra(dim=self)
-        self._extra.batch = value
+        self._make_extra().batch = value
 
     @property
     def control_flow_ctx(self) -> Optional[ControlFlowContext]:
@@ -208,9 +206,7 @@ class _DimMixin:
         if self.control_flow_ctx is value:
             return
         assert rf.is_tensorflow, "control_flow_ctx is only supported in TensorFlow"
-        if not self._extra:
-            self._extra = _DimExtra(dim=self)
-        self._extra.control_flow_ctx = value
+        self._make_extra().control_flow_ctx = value
 
     @property
     def auto_generated(self) -> bool:
@@ -234,9 +230,7 @@ class _DimMixin:
     def same_as(self: _d.Dim, value: Optional[_d.Dim]):
         if self.same_as is value:
             return
-        if not self._extra:
-            self._extra = _DimExtra(dim=self)
-        self._extra.same_as = value
+        self._make_extra().same_as = value
 
     @property
     def special(self) -> bool:
@@ -452,11 +446,7 @@ class _DimMixin:
                 return same_base
         else:
             same_base = self
-        # noinspection PyProtectedMember
-        same_base_extra = same_base._extra
-        if not same_base_extra:
-            same_base_extra = _DimExtra(dim=self)
-            same_base._extra = same_base_extra
+        same_base_extra = same_base._make_extra()
         # Ok, nothing matching found.
         if ctx:
             # Check if the ctx is really relevant, when this is derived from other tags.
@@ -789,9 +779,7 @@ class _DimMixin:
             if self._extra and util.TensorRef(x) in self._extra.dyn_size_same:
                 pass  # ok, pass on
             elif same_as_before:
-                if not self._extra:
-                    self._extra = _DimExtra(dim=self)
-                self._extra.dyn_size_same.add(util.TensorRef(x))
+                self._make_extra().dyn_size_same.add(util.TensorRef(x))
                 # And now pass on.
             else:
                 assert self.batch and batch
@@ -1331,19 +1319,17 @@ class _DimMixin:
             other_same_base.vocab = self.vocab
         elif other_same_base.vocab and not self.vocab:
             self.vocab = other_same_base.vocab
-        if not self._extra:
-            self._extra = _DimExtra(dim=self)
-        # noinspection PyProtectedMember
-        if not self_same_as._extra:
-            self_same_as._extra = _DimExtra(dim=self_same_as)
+        self._make_extra()
+        self_same_as._make_extra()
         # noinspection PyProtectedMember
         self._extra.auto_generated = self_same_as._extra.auto_generated = other_same_base.auto_generated
         # Take over derived_from_op. However, only if this would not introduce cycles!
         if not self_derived_bases.issuperset(other_derived_bases):
             if self.derived_from_op and not other_same_base.derived_from_op:
-                other_same_base.derived_from_op = self.derived_from_op
+                # noinspection PyProtectedMember
+                other_same_base._make_extra().derived_from_op = self.derived_from_op
             elif other_same_base.derived_from_op and not self.derived_from_op:
-                self.derived_from_op = other_same_base.derived_from_op
+                self._make_extra().derived_from_op = other_same_base.derived_from_op
         if self.batch:
             self_ = self.get_for_batch_ctx(batch=self.batch, ctx=self.control_flow_ctx)
             if self_ is not self:
@@ -1384,10 +1370,7 @@ class _DimMixin:
         :param set_derived_from_flag:
         """
         self_base = self.get_same_base()
-        self_base_extra = self_base._extra
-        if not self_base_extra:
-            self_base_extra = _DimExtra(dim=self_base)
-            self_base._extra = self_base_extra
+        self_base_extra = self_base._make_extra()
         if set_derived_from_flag:
             if self_base_extra.derived_from_tag:
                 assert self_base_extra.derived_from_tag == base
@@ -1533,6 +1516,11 @@ class _DimMixin:
         base = self.get_same_base()
         # noinspection PyProtectedMember
         return base._extra
+
+    def _make_extra(self: _d.Dim) -> _DimExtra:
+        if not self._extra:
+            self._extra = _DimExtra(dim=self)
+        return self._extra
 
     @property
     def vocab(self):

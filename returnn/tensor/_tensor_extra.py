@@ -256,6 +256,11 @@ class _TensorMixin:
             return True
         return self._extra.available_for_inference
 
+    def _make_extra(self: _t.Tensor) -> _TensorExtra:
+        if not self._extra:
+            self._extra = _TensorExtra(tensor=self)
+        return self._extra
+
     def sanity_check(self, ignore_placeholder=False, assume_complete=True):
         """
         Performs some sanity checks on self, and raises exceptions if something is not sane.
@@ -1742,7 +1747,7 @@ class _TensorMixin:
         return self._default_feature_dim_axis()
 
     @feature_dim_axis.setter
-    def feature_dim_axis(self, value):
+    def feature_dim_axis(self: _t.Tensor, value):
         """
         :param int|None|NotSpecified value:
         """
@@ -1751,10 +1756,7 @@ class _TensorMixin:
             return
         if isinstance(value, int):
             assert 0 <= value < self.batch_ndim
-        if not self._extra:
-            assert isinstance(self, _t.Tensor)
-            self._extra = _TensorExtra(tensor=self)
-        self._extra.feature_dim_axis = value
+        self._make_extra().feature_dim_axis = value
 
     @property
     def feature_dim_axis_or_unspecified(self):
@@ -1776,7 +1778,7 @@ class _TensorMixin:
         return _default_time_dim_axis_dim_tags(self.dim_tags)
 
     @time_dim_axis.setter
-    def time_dim_axis(self, value):
+    def time_dim_axis(self: _t.Tensor, value):
         """
         :param int|None|NotSpecified value:
         """
@@ -1785,10 +1787,7 @@ class _TensorMixin:
             return
         if isinstance(value, int):
             assert 0 <= value < self.batch_ndim
-        if not self._extra:
-            assert isinstance(self, _t.Tensor)
-            self._extra = _TensorExtra(tensor=self)
-        self._extra.time_dim_axis = value
+        self._make_extra().time_dim_axis = value
 
     @property
     def time_dim_axis_or_unspecified(self):
@@ -1860,11 +1859,7 @@ class _TensorMixin:
             assert batch.beam == self.beam
         if self.batch == batch:  # fast path
             return
-        if not self._extra:
-            assert batch
-            assert isinstance(self, _t.Tensor)
-            self._extra = _TensorExtra(tensor=self)
-        self._extra.batch = batch
+        self._make_extra().batch = batch
         self._adapt_batch_consistent_dim_tags()
 
     @property
@@ -1887,12 +1882,8 @@ class _TensorMixin:
         """
         if self.beam == beam:
             return
-        if not self._extra:
-            assert beam
-            assert isinstance(self, _t.Tensor)
-            self._extra = _TensorExtra(tensor=self)
         # No check for batch.beam, as the batch is usually set only later.
-        self._extra.beam = beam
+        self._make_extra().beam = beam
         if self._extra.batch:
             self._extra.batch = self.batch.copy_set_beam(beam=beam)
             self._adapt_batch_consistent_dim_tags()
