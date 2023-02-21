@@ -5,6 +5,7 @@ or just rarely used attribs, such that we can save memory for the common case.
 
 from __future__ import annotations
 from typing import TYPE_CHECKING, Optional, Sequence, Tuple, Type
+import os
 
 if TYPE_CHECKING:
     # Those are only used for TensorFlow, or they are deprecated.
@@ -13,6 +14,7 @@ if TYPE_CHECKING:
 from returnn.util.basic import NotSpecified
 from .dim import Dim
 from . import tensor as _t
+from . import marked_dim as _m
 from returnn import frontend_api as _frontend_api
 
 
@@ -371,7 +373,7 @@ class _TensorMixin:
         for dim in out_shape:
             if isinstance(dim, Dim):
                 dim_tag = dim
-            elif isinstance(dim, _ImplicitDim):
+            elif isinstance(dim, _m.ImplicitDim):
                 dim_tag = dim.tag
                 if dim not in self_dim_tags_implicit_only:
                     raise VerifyOutShapeException(
@@ -383,7 +385,7 @@ class _TensorMixin:
                         )
                         % (self, actual_dims_str, expected_dims_str, dim)
                     )
-            elif isinstance(dim, OptionalDim):
+            elif isinstance(dim, _m.OptionalDim):
                 dim_tag = dim.tag
                 if dim_tag not in remaining:
                     continue
@@ -1610,12 +1612,12 @@ class _TensorMixin:
         self_dim_tags = set(self.dim_tags)
         dims = set()
         if self.sparse_dim and self.sparse_dim not in self_dim_tags:
-            dims.add(ImplicitSparseDim(self.sparse_dim))
+            dims.add(_m.ImplicitSparseDim(self.sparse_dim))
         for dim in self.dim_tags:
             if dim.dyn_size_ext:
                 for dim_ in dim.dyn_size_ext.dim_tags:
                     if dim_ not in self_dim_tags:
-                        dims.add(ImplicitDynSizeDim(dim_))
+                        dims.add(_m.ImplicitDynSizeDim(dim_))
         return dims
 
     @property
@@ -2167,7 +2169,7 @@ class _TensorMixin:
         if isinstance(axes, int):
             self._verify_axis_int_from_description(allow_int=allow_int)
             return [self._make_valid_int_axis(axes)]
-        assert isinstance(axes, (str, int, list, tuple, typing.Sequence))
+        assert isinstance(axes, (str, int, list, tuple, Sequence))
         if isinstance(axes, str):
             import re
 
@@ -2261,7 +2263,7 @@ class _TensorMixin:
             elif axes.startswith("tag:"):  # any tag
                 return [self.get_axis_by_tag_name(axes[len("tag:") :])]
             raise Exception("invalid axis mode %r" % axes)
-        assert isinstance(axes, (tuple, list, typing.Sequence)), "invalid axes %r" % axes
+        assert isinstance(axes, (tuple, list, Sequence)), "invalid axes %r" % axes
         flat_axes = []
         for i in axes:
             if isinstance(i, int):
@@ -3303,9 +3305,9 @@ def _create_size_placeholder(name, axis_wo_b, tag, batch_dim):
     from .basic import reuse_name_scope
 
     with reuse_name_scope("extern_data/placeholders/%s" % name, absolute=True):
-        dyn_size_ext = Data(
+        dyn_size_ext = _t.Tensor(
             name="%s_dim%i_size" % (name, axis_wo_b),
-            dtype=Data.size_dtype,
+            dtype=_t.Tensor.size_dtype,
             dim_tags=[batch_dim] if batch_dim else [],
             batch=batch_dim.batch if batch_dim else None,
         )

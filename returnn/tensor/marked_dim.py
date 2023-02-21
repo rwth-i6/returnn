@@ -56,20 +56,20 @@ class MarkedDim:
         return not self > other
 
 
-class _ImplicitDim(MarkedDim):
+class ImplicitDim(MarkedDim):
     """
     Represents an implicit dim (dim tag) in :class:`Data`.
     https://github.com/rwth-i6/returnn/issues/706
     """
 
 
-class ImplicitSparseDim(_ImplicitDim):
+class ImplicitSparseDim(ImplicitDim):
     """
     Represents an implicit dim via Data.sparse_dim.
     """
 
 
-class ImplicitDynSizeDim(_ImplicitDim):
+class ImplicitDynSizeDim(ImplicitDim):
     """
     Represents an implicit dim via dynamic dim sizes.
     https://github.com/rwth-i6/returnn/issues/706
