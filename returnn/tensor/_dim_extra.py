@@ -118,6 +118,18 @@ class _DimExtra:
         if self.derived_from_op and dim.is_dynamic():
             dim.complete_dyn_size()
 
+    def __getstate__(self):
+        d = vars(self).copy()
+        d["batch"] = None
+        d["same_for_batch_ctx"] = {}
+        d["kind"] = self.kind.name if self.kind else None
+        return d
+
+    def __setstate__(self, state):
+        self.__dict__.update(state)
+        if self.kind is not None:
+            self.kind = {v.name: v for v in DimTypes.Types}[self.kind]
+
 
 class _DimMixin:
     name: Optional[str]
@@ -219,21 +231,6 @@ class _DimMixin:
             if self.control_flow_ctx:
                 desc += "{ctx=%s}" % self.control_flow_ctx.repr_inner()
         return desc
-
-    def __getstate__(self):
-        d = vars(self).copy()
-        d["batch"] = None
-        d["_same_for_batch_ctx"] = {}
-        d["dyn_size_ext"] = None
-        d["kind"] = self.kind.name if self.kind else None
-        return d
-
-    def __setstate__(self, state):
-        self.__dict__.update(state)
-        if self.kind is not None:
-            self.kind = {v.name: v for v in DimTypes.Types}[self.kind]
-        if self.is_batch_dim():
-            self.same_as = batch_dim
 
     def __copy__(self):
         """
@@ -995,7 +992,7 @@ class _DimMixin:
         :rtype: bool
         :return: :func:`is_equal` with default options
         """
-        if not isinstance(other, Dim):
+        if not isinstance(other, _d.Dim):
             return False
         return self.is_equal(other)
 
@@ -1017,7 +1014,7 @@ class _DimMixin:
             return hash(id(self))
         if self.is_batch_dim():
             return hash(())
-        with util.guard_infinite_recursion(Dim.__hash__, self):
+        with util.guard_infinite_recursion(_d.Dim.__hash__, self):
             base = self.get_same_base()
             if base is not self:
                 return hash(base)
@@ -1038,7 +1035,7 @@ class _DimMixin:
         :param Dim other:
         :rtype: bool
         """
-        if not isinstance(other, (_d.Dim, _MarkedDim)):
+        if not isinstance(other, (_d.Dim, _m.MarkedDim)):
             raise TypeError("cannot compare %r with %r" % (self, other))
         if self == other:
             return False
@@ -1417,7 +1414,9 @@ class _DimMixin:
         self.complete_dyn_size()
         if self.dyn_size_ext and self.dyn_size_ext.placeholder is not None:
             if self.dyn_size_ext.batch_ndim > 0:
-                return tf.math.reduce_max(self.dyn_size_ext.placeholder)
+                return self.dyn_size_ext.raw_frontend.reduce(
+                    self.dyn_size_ext, axis=self.dyn_size_ext.dim_tags, mode="max"
+                ).raw_tensor
             return self.dyn_size_ext.placeholder
         raise Exception("%s: need placeholder, self.dimension or self.dyn_size for dim value" % self)
 
