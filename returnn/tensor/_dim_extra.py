@@ -1311,14 +1311,22 @@ class _DimMixin:
         if self.is_dim_known() and other.is_dim_known():
             assert self.dimension == other.dimension
         elif self.is_dim_known() and not other.is_dim_known():
-            other.dimension = self.dimension
+            other.capacity = self.capacity
+            other.size = self.size
         elif not self.is_dim_known() and other.is_dim_known():
-            self.dimension = other.dimension
+            self.capacity = other.capacity
+            self.size = other.size
         if self.vocab and not other_same_base.vocab:
             other_same_base.vocab = self.vocab
         elif other_same_base.vocab and not self.vocab:
             self.vocab = other_same_base.vocab
-        self.auto_generated = self_same_as.auto_generated = other_same_base.auto_generated
+        if not self._extra:
+            self._extra = _DimExtra(dim=self)
+        # noinspection PyProtectedMember
+        if not self_same_as._extra:
+            self_same_as._extra = _DimExtra(dim=self_same_as)
+        # noinspection PyProtectedMember
+        self._extra.auto_generated = self_same_as._extra.auto_generated = other_same_base.auto_generated
         # Take over derived_from_op. However, only if this would not introduce cycles!
         if not self_derived_bases.issuperset(other_derived_bases):
             if self.derived_from_op and not other_same_base.derived_from_op:
