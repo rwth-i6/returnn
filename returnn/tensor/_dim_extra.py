@@ -65,12 +65,12 @@ class _DimExtra:
             E.g. for ConvLayer and others.
             This implies certain behavior on equality, such as comparing the description,
             to allow for several independent creations of the dim tag during template construction.
-        :param Dim|None derived_from_tag:
+        :param _d.Dim|None derived_from_tag:
             Whether this new tag is reduced, down/up sampled, padded etc from this given other tag.
             In situations where dim tags are being matched (Data.get_common_data),
             the behavior is to consider them as equal,
             and assume that the chain of operations (e.g. padding + valid conv) results in the same dim.
-        :param Dim.Op|None derived_from_op:
+        :param Op|None derived_from_op:
         :param int match_priority: when there is ambiguity between multiple dim tags, this value defines the order
             in which the dimension are assigned to their matching counterparts.
             A dimension tag with a higher priority value is assigned first.
@@ -192,6 +192,7 @@ class _DimMixin:
             self._extra = _DimExtra(dim=self)
         self._extra.batch = value
 
+    @property
     def control_flow_ctx(self) -> Optional[ControlFlowContext]:
         """
         :return: control flow context (deprecated)
@@ -201,6 +202,24 @@ class _DimMixin:
                 return self.dyn_size_ext.control_flow_ctx
             return None
         return self._extra.control_flow_ctx
+
+    @control_flow_ctx.setter
+    def control_flow_ctx(self: _d.Dim, value: Optional[ControlFlowContext]):
+        if self.control_flow_ctx is value:
+            return
+        assert rf.is_tensorflow, "control_flow_ctx is only supported in TensorFlow"
+        if not self._extra:
+            self._extra = _DimExtra(dim=self)
+        self._extra.control_flow_ctx = value
+
+    @property
+    def auto_generated(self) -> bool:
+        """
+        :return: see _DimExtra
+        """
+        if not self._extra:
+            return False
+        return self._extra.auto_generated
 
     @property
     def same_as(self) -> Optional[_d.Dim]:
@@ -227,6 +246,24 @@ class _DimMixin:
         if not self._extra:
             return False
         return self._extra.special
+
+    @property
+    def derived_from_op(self) -> Optional[Op]:
+        """
+        :return: op
+        """
+        if not self._extra:
+            return None
+        return self._extra.derived_from_op
+
+    @property
+    def derived_from_tag(self) -> Optional[_d.Dim]:
+        """
+        :return: dim
+        """
+        if not self._extra:
+            return None
+        return self._extra.derived_from_tag
 
     def short_repr(self):
         """
@@ -1147,9 +1184,9 @@ class _DimMixin:
         # noinspection PyProtectedMember
         return base._extra and base._extra.undefined
 
-    def declare_same_as(self, other):
+    def declare_same_as(self: _d.Dim, other: _d.Dim):
         """
-        :param Dim other:
+        :param other:
         """
         assert self.can_be_used_as_dim() and other.can_be_used_as_dim()  # declare_same_as does not make sense otherwise
         # Note: Check `is`, not `==`. `==` can be true even though same_as are not the same instance,
@@ -1195,8 +1232,9 @@ class _DimMixin:
             # Avoid cycles on derived_from_tag. https://github.com/rwth-i6/returnn/issues/1054
             with util.guard_infinite_recursion(_d.Dim.declare_same_as, other, self):
                 return other.declare_same_as(self)
-        self.derived_from_op = None
-        self.derived_from_tag = None
+        if self._extra:
+            self._extra.derived_from_op = None
+            self._extra.derived_from_tag = None
         if self_same_as is not self:
             assert not self_same_as.same_as
             if self_same_as is other_same_base:
@@ -1208,15 +1246,20 @@ class _DimMixin:
                     self.batch, self.control_flow_ctx, template_only=True
                 )
         else:
-            for dim_ in self._same_for_batch_ctx.values():
-                dim_.derived_from_op = None
-                dim_.derived_from_tag = None
+            if self._extra:
+                for dim_ in self._extra.same_for_batch_ctx.values():
+                    # noinspection PyProtectedMember
+                    if dim_._extra:
+                        # noinspection PyProtectedMember
+                        dim_._extra.derived_from_op = None
+                        # noinspection PyProtectedMember
+                        dim_._extra.derived_from_tag = None
         # Now merge existing variants. But only if not derived via op, because in that case, we can (and should!)
         # automatically infer it. Note that we only got here when the other is not the same dim, so it means that
         # the other is really different, the sizes are potentially different, but we want to overtake the other.
         if other_same_base.derived_from_op:
             # Cleanup everything, esp potential already computed sizes, as these might be invalid.
-            for dim_ in [self_same_as, self] + list(self._same_for_batch_ctx.values()):
+            for dim_ in [self_same_as, self] + (list(self._extra.same_for_batch_ctx.values()) if self._extra else []):
                 if dim_.dyn_size_ext:
                     dim_.dyn_size_ext.placeholder = None
         other_same_base._merge_same_for_batch_ctx_dict(self)
@@ -1271,10 +1314,10 @@ class _DimMixin:
             other.dimension = self.dimension
         elif not self.is_dim_known() and other.is_dim_known():
             self.dimension = other.dimension
-        if self._vocab and not other_same_base._vocab:
-            other_same_base._vocab = self._vocab
-        elif other_same_base._vocab and not self._vocab:
-            self._vocab = other_same_base._vocab
+        if self.vocab and not other_same_base.vocab:
+            other_same_base.vocab = self.vocab
+        elif other_same_base.vocab and not self.vocab:
+            self.vocab = other_same_base.vocab
         self.auto_generated = self_same_as.auto_generated = other_same_base.auto_generated
         # Take over derived_from_op. However, only if this would not introduce cycles!
         if not self_derived_bases.issuperset(other_derived_bases):
@@ -1460,19 +1503,34 @@ class _DimMixin:
             return res
         return [self.dimension]
 
+    def _get_same_base_extra(self) -> Optional[_DimExtra]:
+        base = self.get_same_base()
+        # noinspection PyProtectedMember
+        return base._extra
+
     @property
     def vocab(self):
         """
         :rtype: returnn.datasets.util.vocabulary.Vocabulary|None
         """
-        return self.get_same_base()._vocab
+        extra = self._get_same_base_extra()
+        if extra:
+            return extra.vocab
+        return None
 
     @vocab.setter
     def vocab(self, vocab):
         """
         :param returnn.datasets.util.vocabulary.Vocabulary|None vocab:
         """
-        self.get_same_base()._vocab = vocab
+        if vocab is self.vocab:
+            return
+        if self.same_as:
+            self.get_same_base().vocab = vocab
+            return
+        extra = self._get_same_base_extra()
+        if extra:
+            extra.vocab = vocab
 
     # The kind of operations we have:
     # a + b: padding, concat
