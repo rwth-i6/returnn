@@ -632,18 +632,6 @@ class _TensorMixin:
         assert set(perm) == set(range(self.batch_ndim))
         if all(perm[axis] == axis for axis in range(self.batch_ndim)):
             return self.copy()
-        inv_perm_ = {j: i for (i, j) in enumerate(perm)}
-        inv_perm = [j for (i, j) in sorted(inv_perm_.items())]
-
-        def translate_axis(axis):
-            """
-            :param int|None axis: counted with batch-dim
-            :return: translated axis (if not None)
-            :rtype: int|None
-            """
-            if axis is None:
-                return None
-            return inv_perm[axis]
 
         data_opts = self.get_kwargs(include_special_axes=False)
         if self.placeholder is not None:
@@ -655,10 +643,21 @@ class _TensorMixin:
         data_opts["dim_tags"] = tuple(self.dim_tags[perm[i]] for i in range(self.batch_ndim))
         data = _t.Tensor(**data_opts)
         data.sanity_check()
-        if self.time_dim_axis is not None and translate_axis(self.time_dim_axis) != data.time_dim_axis:
-            data.time_dim_axis = translate_axis(self.time_dim_axis)
-        if self.feature_dim_axis is not None and translate_axis(self.feature_dim_axis) != data.feature_dim_axis:
-            data.feature_dim_axis = translate_axis(self.feature_dim_axis)
+        if self._extra:
+            inv_perm_ = {j: i for (i, j) in enumerate(perm)}
+            inv_perm = [j for (i, j) in sorted(inv_perm_.items())]
+            if (
+                self.time_dim_axis_or_unspecified is not NotSpecified
+                and self.time_dim_axis is not None
+                and inv_perm[self.time_dim_axis] != data.time_dim_axis
+            ):
+                data.time_dim_axis = inv_perm[self.time_dim_axis]
+            if (
+                self.feature_dim_axis_or_unspecified is not NotSpecified
+                and self.feature_dim_axis is not None
+                and inv_perm[self.feature_dim_axis] != data.feature_dim_axis
+            ):
+                data.feature_dim_axis = inv_perm[self.feature_dim_axis]
         return data
 
     def copy_move_axis(self, old_axis, new_axis) -> _t.Tensor:
