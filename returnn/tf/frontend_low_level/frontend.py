@@ -3,7 +3,7 @@ Frontend for exposing TensorFlow-specific functionality.
 """
 
 from __future__ import annotations
-from typing import Union, Sequence
+from typing import Optional, Union, Sequence
 import tensorflow as tf
 
 from returnn.util.basic import NotSpecified
@@ -103,12 +103,20 @@ class TFFrontend(Frontend[tf.Tensor]):
         return tf_util.get_root_graph(tensor.raw_tensor.graph) is g
 
     @staticmethod
+    def format_graph_output(tensor: tf.Tensor, *, max_depth: Optional[int] = None) -> str:
+        """
+        :param tensor:
+        :param max_depth:
+        """
+        return tf_util.format_graph_output(tensor, max_depth=max_depth)
+
+    @staticmethod
     def reduce(source: _TT, *, mode: str, axis: Union[Dim, Sequence[Dim]], use_time_mask: bool = NotSpecified) -> _TT:
         """Reduce"""
         x = source
         assert not x.sparse
         axes = x.get_axes_from_description(axis)
-        if use_time_mask is None:
+        if use_time_mask in (None, NotSpecified):
             use_time_mask = any(x.has_dynamic_size(a) for a in axes)
         out_data = x.copy_template()
         dim_tags = [dim_tag for i, dim_tag in enumerate(x.dim_tags) if i not in axes]

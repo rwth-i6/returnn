@@ -3,7 +3,7 @@ Frontend API
 """
 
 from __future__ import annotations
-from typing import TypeVar, Generic, Any, Dict, Type, Union, Sequence
+from typing import Optional, TypeVar, Generic, Any, Dict, Type, Union, Sequence
 
 from returnn.tensor import Tensor, Dim
 from returnn.util.basic import NotSpecified
@@ -52,6 +52,14 @@ class Frontend(Generic[T]):
             In eager-mode frameworks, this is always true -- there is no graph.
         """
         return True
+
+    @staticmethod
+    def format_graph_output(tensor: T, *, max_depth: Optional[int] = None) -> Optional[str]:
+        """
+        :return: the computation graph leading to this tensor formatted.
+            In eager-mode frameworks, this is not supported and returns None.
+        """
+        return None
 
     @staticmethod
     def reduce(

@@ -184,6 +184,14 @@ class _DimMixin:
             return None
         return self._extra.batch
 
+    @batch.setter
+    def batch(self: _d.Dim, value: Optional[BatchInfo]):
+        if self.batch is value:
+            return
+        if not self._extra:
+            self._extra = _DimExtra(dim=self)
+        self._extra.batch = value
+
     def control_flow_ctx(self) -> Optional[ControlFlowContext]:
         """
         :return: control flow context (deprecated)
@@ -202,6 +210,14 @@ class _DimMixin:
         if not self._extra:
             return None
         return self._extra.same_as
+
+    @same_as.setter
+    def same_as(self: _d.Dim, value: Optional[_d.Dim]):
+        if self.same_as is value:
+            return
+        if not self._extra:
+            self._extra = _DimExtra(dim=self)
+        self._extra.same_as = value
 
     @property
     def special(self) -> bool:
@@ -354,12 +370,13 @@ class _DimMixin:
                     if not same.dyn_size_ext or same.dyn_size_ext.placeholder is None:
                         same.dyn_size_ext = self.dyn_size_ext
 
-    def get_for_batch_ctx(self: _d.Dim, batch, ctx, allow_none=False) -> _d.Dim:
+    def get_for_batch_ctx(self: _d.Dim, batch, ctx, allow_none=False) -> Optional[_d.Dim]:
         """
         :param BatchInfo batch:
         :param ControlFlowContext|None ctx:
         :param bool allow_none:
         """
+        assert rf.is_tensorflow, "get_for_batch_ctx only supported for TensorFlow"
         assert self.can_be_used_as_dim()
         if self.batch == batch and self.control_flow_ctx == ctx and self.dyn_size_ext:
             self._validate_in_current_graph()
@@ -447,7 +464,8 @@ class _DimMixin:
                         # when there are different beams with same beam size!
                         # This breaks the current logic in get_tag_from_size_tensor.
                         # As a workaround, we make an explicit new tensor here.
-                        from .basic import get_valid_scope_name_from_str, same_control_flow_ctx
+                        import tensorflow as tf
+                        from returnn.tf.util.basic import get_valid_scope_name_from_str, same_control_flow_ctx
 
                         with same_control_flow_ctx(dyn_size_ext.placeholder):
                             dyn_size_ext.placeholder = tf.identity(
@@ -732,7 +750,7 @@ class _DimMixin:
                 # It's not clear what to do. We could create a new dim tag, but the sizes might be different.
                 # Usually we should not get here.
                 # So for now, just error.
-                from .basic import format_graph_output
+                from returnn.frontend_api import get_frontend_by_tensor_type
 
                 raise Exception(
                     "\n".join(
@@ -743,7 +761,7 @@ class _DimMixin:
                             )
                             % (self, self.description, self.dyn_size, x, batch),
                             "\nNew size computation graph:",
-                            format_graph_output(x, max_depth=3),
+                            get_frontend_by_tensor_type(type(x)).format_graph_output(x, max_depth=3) or "<None>",
                             "\nThis is maybe the result of an incorrect declare_same_as. ",
                             "same_as = %s" % self.same_as,
                         ]
@@ -1591,7 +1609,10 @@ class _DimMixin:
         """
         return -1 * self
 
-    def _is_constant_static_dim(self):
+    def is_constant_static_dim(self) -> bool:
+        """
+        :return: derived op of type constant
+        """
         return self.derived_from_op and self.derived_from_op.kind == "constant"
 
 
@@ -1675,7 +1696,7 @@ class _OpMultTerm:
         :return: op mult term
         """
         dim = dim.get_same_base()
-        if dim.dimension == 1 and dim._is_constant_static_dim():
+        if dim.dimension == 1 and dim.is_constant_static_dim():
             return cls.one()
         if dim.derived_from_op and dim.derived_from_op.kind == "mul":
             return cls(list(dim.derived_from_op.inputs))
@@ -1753,7 +1774,7 @@ class _OpMultTerm:
         """
         if not self.terms:
             return True
-        return all(term._is_constant_static_dim() for term in self.terms)
+        return all(term.is_constant_static_dim() for term in self.terms)
 
     def copy(self):
         """
@@ -1765,7 +1786,7 @@ class _OpMultTerm:
         """
         :rtype: Dim._OpMultTerm
         """
-        if self.terms and self.terms[0]._is_constant_static_dim() and self.terms[0].dimension == -1:
+        if self.terms and self.terms[0].is_constant_static_dim() and self.terms[0].dimension == -1:
             return _OpMultTerm(self.terms[1:])
         res = self.copy()
         res.extend_mul_div_(_make_constant_static_dim(-1), kind="mul", right=False)
@@ -1835,7 +1856,7 @@ class _OpMultTerm:
                 if other.derived_from_op.kind == "truediv_" + ("right" if not right else "left"):
                     if other.derived_from_op.inputs[-1] == term:
                         return i
-            if term._is_constant_static_dim() and other._is_constant_static_dim():
+            if term.is_constant_static_dim() and other.is_constant_static_dim():
                 if kind == "mul":
                     return i
                 if kind.endswith("div") and term.dimension % other.dimension == 0:
@@ -1849,7 +1870,7 @@ class _OpMultTerm:
         :param bool right:
         """
         assert kind in {"mul", "floordiv", "truediv", "ceildiv"}
-        if other._is_constant_static_dim() and other.dimension == 1:
+        if other.is_constant_static_dim() and other.dimension == 1:
             return
         if not self.terms:
             if kind == "mul":
@@ -1878,7 +1899,7 @@ class _OpMultTerm:
                     if other.derived_from_op.inputs[-1] == term:
                         self.terms[idx] = other.derived_from_op.inputs[0]
                         return
-            if term._is_constant_static_dim() and other._is_constant_static_dim():
+            if term.is_constant_static_dim() and other.is_constant_static_dim():
                 if kind == "mul":
                     if term.dimension * other.dimension == 1:
                         self.terms.pop(idx)
@@ -2071,7 +2092,7 @@ class _OpLinearTerm:
         """
         assert kind in {"add", "sub"}
         other = self._make_dim(other, kind=kind)
-        if other._is_constant_static_dim() and other.dimension == 0:
+        if other.is_constant_static_dim() and other.dimension == 0:
             return
         if other.derived_from_op and other.derived_from_op.kind == "add":
             for other_ in other.derived_from_op.inputs if right else reversed(other.derived_from_op.inputs):
@@ -2117,7 +2138,7 @@ class _OpLinearTerm:
                 # Do it the other way around
                 self.terms, other = _OpLinearTerm.from_dim(other).terms, self.as_dim()
                 right = False
-        if other._is_constant_static_dim() and other.dimension == 1:
+        if other.is_constant_static_dim() and other.dimension == 1:
             return
         if kind.endswith("div"):
             if any(not term.divisible(other, right=right) for term in self.terms):
