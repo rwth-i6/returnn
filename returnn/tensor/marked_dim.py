@@ -81,9 +81,3 @@ class OptionalDim(MarkedDim):
     """
     Represents a dim which might exist or not.
     """
-
-
-class VerifyOutShapeException(Exception):
-    """
-    Exception via :func:`Data.verify_out_shape`.
-    """

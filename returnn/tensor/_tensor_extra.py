@@ -3399,7 +3399,8 @@ def _infer_dim_tags_tuple_from_shape(
             # Just some sanity checks.
             assert isinstance(tag, Dim)
             assert tag.dimension == dim
-            assert tag.is_same_size_tensor(dyn_size)
+            if dyn_size is not None:
+                assert tag.is_same_size_tensor(dyn_size)
             continue
         if axis == feature_dim_axis and dyn_size is None and axis != time_dim_axis:
             tag = Dim(
@@ -3627,3 +3628,9 @@ def _default_feature_dim_axis(batch_dim_axis, time_dim_axis, batch_shape, sparse
     if static_axes:
         return static_axes[-1]
     return axes[-1]
+
+
+class VerifyOutShapeException(Exception):
+    """
+    Exception via :func:`Data.verify_out_shape`.
+    """
