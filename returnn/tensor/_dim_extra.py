@@ -378,23 +378,27 @@ class _DimMixin:
             return False
         return True
 
-    def _maybe_update(self):
+    def _maybe_update(self: _d.Dim):
         if self.is_batch_dim():
             return
-        if isinstance(self.dimension, int):
+        if isinstance(self.size, int):
+            return
+        if not self._extra:
             return
         if not self.batch:
             if self.dyn_size_ext and self.dyn_size_ext.batch:
                 self.batch = self.dyn_size_ext.batch
             else:
                 return
-        same_base = self.get_same_base()
+        extra = self._get_same_base_extra()
+        if not extra:
+            return
         key = (self.batch, self.control_flow_ctx)
-        if self.dyn_size_ext and key not in same_base._same_for_batch_ctx:
-            same_base._same_for_batch_ctx[key] = self
+        if self.dyn_size_ext and key not in extra.same_for_batch_ctx:
+            extra.same_for_batch_ctx[key] = self
         # Check if we can find more
-        if key in same_base._same_for_batch_ctx:
-            same = same_base._same_for_batch_ctx[key]
+        if key in extra.same_for_batch_ctx:
+            same = extra.same_for_batch_ctx[key]
             if same is not self:
                 if same.dyn_size_ext and not self.dyn_size_ext:
                     self.dyn_size_ext = same.dyn_size_ext
@@ -448,6 +452,11 @@ class _DimMixin:
                 return same_base
         else:
             same_base = self
+        # noinspection PyProtectedMember
+        same_base_extra = same_base._extra
+        if not same_base_extra:
+            same_base_extra = _DimExtra(dim=self)
+            same_base._extra = same_base_extra
         # Ok, nothing matching found.
         if ctx:
             # Check if the ctx is really relevant, when this is derived from other tags.
@@ -516,10 +525,10 @@ class _DimMixin:
                             dyn_size_ext.placeholder._RETURNN_beam_expanded_base_data = beam_expanded_base_data
         if not dyn_size_ext and allow_none and not same_base.derived_from_op:
             return None
-        if not dyn_size_ext and same_base._same_for_batch_ctx:
+        if not dyn_size_ext and same_base_extra.same_for_batch_ctx:
             # There are earlier entries in _same_for_batch_ctx
             # -- maybe we can infer dyn_size_ext, even with different batch.
-            for (batch_, ctx_), other in same_base._same_for_batch_ctx.items():
+            for (batch_, ctx_), other in same_base_extra.same_for_batch_ctx.items():
                 if ctx_ == ctx and other.dyn_size_ext:
                     dyn_size_ext = other.dyn_size_ext.copy_template()
                     dyn_size_ext.beam = batch.beam
@@ -564,15 +573,16 @@ class _DimMixin:
         if dyn_size_ext and dyn_size_ext.placeholder is not None:
             if _d.Dim.get_tag_from_size_tensor(dyn_size_ext.placeholder) is None:
                 dim_tag.set_tag_on_size_tensor(dyn_size_ext.placeholder, batch=batch)
-        same_base._same_for_batch_ctx[(batch, ctx)] = dim_tag
+        same_base_extra.same_for_batch_ctx[(batch, ctx)] = dim_tag
         dim_tag.complete_dyn_size(template_only=True)
         return dim_tag
 
-    def reset_batch_ctx(self):
+    def reset_batch_ctx(self: _d.Dim):
         """
         For the self instance, reset batch and context.
         """
-        self._same_for_batch_ctx.pop((self.batch, self.control_flow_ctx), None)
+        if self._extra:
+            self._extra.same_for_batch_ctx.pop((self.batch, self.control_flow_ctx), None)
         self.batch = None
         self.control_flow_ctx = None
         if self.dyn_size_ext and self.dyn_size_ext.batch:
@@ -705,10 +715,11 @@ class _DimMixin:
             return True
         if self.dyn_size_ext:
             return True
-        base = self.get_same_base()
-        for _, other in base._same_for_batch_ctx.items():
-            if other.dyn_size_ext:
-                return True
+        extra = self._get_same_base_extra()
+        if extra:
+            for _, other in extra.same_for_batch_ctx.items():
+                if other.dyn_size_ext:
+                    return True
         return False
 
     def is_dynamic(self):
@@ -1366,23 +1377,28 @@ class _DimMixin:
             # noinspection PyProtectedMember
             other._extra.same_for_batch_ctx.clear()  # we only want to have it once
 
-    def derive_from(self, base, set_derived_from_flag=True):
+    # noinspection PyProtectedMember
+    def derive_from(self: _d.Dim, base: _d.Dim, set_derived_from_flag: bool = True):
         """
-        :param Dim base:
-        :param bool set_derived_from_flag:
+        :param base: dim
+        :param set_derived_from_flag:
         """
         self_base = self.get_same_base()
+        self_base_extra = self_base._extra
+        if not self_base_extra:
+            self_base_extra = _DimExtra(dim=self_base)
+            self_base._extra = self_base_extra
         if set_derived_from_flag:
-            if self_base.derived_from_tag:
-                assert self_base.derived_from_tag == base
+            if self_base_extra.derived_from_tag:
+                assert self_base_extra.derived_from_tag == base
             else:
-                self_base.derived_from_tag = base
+                self_base_extra.derived_from_tag = base
         if not self.batch and base.batch:
             self.batch = base.batch
             self.control_flow_ctx = base.control_flow_ctx
             key = base.batch, base.control_flow_ctx
-            assert key not in self_base._same_for_batch_ctx
-            self_base._same_for_batch_ctx[key] = self
+            assert key not in self_base_extra.same_for_batch_ctx
+            self_base_extra.same_for_batch_ctx[key] = self
         if self.is_dynamic() or not self.is_dim_known():
             if not self.dyn_size_ext:
                 if base.dyn_size_ext:
@@ -1512,6 +1528,8 @@ class _DimMixin:
         return [self.dimension]
 
     def _get_same_base_extra(self) -> Optional[_DimExtra]:
+        if not self._extra:
+            return None
         base = self.get_same_base()
         # noinspection PyProtectedMember
         return base._extra
