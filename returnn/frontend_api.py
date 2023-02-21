@@ -3,10 +3,12 @@ Frontend API
 """
 
 from __future__ import annotations
-from typing import Optional, TypeVar, Generic, Any, Dict, Type, Union, Sequence
+from typing import TYPE_CHECKING, Optional, TypeVar, Generic, Any, Dict, Type, Union, Sequence
 
-from returnn.tensor import Tensor, Dim
 from returnn.util.basic import NotSpecified
+
+if TYPE_CHECKING:
+    from returnn.tensor import Tensor, Dim
 
 T = TypeVar("T")  # tf.Tensor, torch.Tensor or so
 
