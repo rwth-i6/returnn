@@ -1,5 +1,5 @@
 """
-Frontend for exposing TensorFlow-specific functionality.
+High-level frontend for RETURNN layers
 """
 
 from __future__ import annotations
@@ -10,9 +10,9 @@ from returnn.frontend_api import Frontend
 from returnn.tensor import Tensor, Dim
 
 
-class TFFrontend(Frontend):
+class ReturnnLayersFrontend(Frontend):
     """
-    TensorFlow frontend
+    RETURNN layers frontend (using TF), where raw_tensor represents a RETURNN layer
     """
 
     @staticmethod
@@ -20,4 +20,4 @@ class TFFrontend(Frontend):
         source: Tensor, *, mode: str, axis: Union[Dim, Sequence[Dim]], use_time_mask: bool = NotSpecified
     ) -> Tensor:
         """Reduce"""
-        pass  # TODO
+        raise NotImplementedError  # TODO
