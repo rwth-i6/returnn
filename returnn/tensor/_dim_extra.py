@@ -16,6 +16,7 @@ if TYPE_CHECKING:
 from . import dim as _d
 from . import tensor as _t
 from . import marked_dim as _m
+from returnn import frontend as rf
 
 
 class DimTypes:
@@ -784,6 +785,7 @@ class _DimMixin:
 
         :param bool template_only:
         """
+        assert rf.is_tensorflow, "complete_dyn_size only supported in TF"
         if not self.is_dynamic():
             return
         self._validate_in_current_graph()
@@ -791,98 +793,100 @@ class _DimMixin:
             return
         same_base = self.get_same_base()
         op = self.derived_from_op or same_base.derived_from_op
-        if op:
-            from returnn.tf.util import basic as tf_util
+        if not op:
+            return
 
-            kind = op.kind
-            if kind.endswith("_right"):
-                kind = kind[: -len("_right")]  # order does not matter here
-            if kind.endswith("_left"):
-                kind = kind[: -len("_left")]
+        import tensorflow as tf
+        from returnn.tf.util import basic as tf_util
+        import numpy
+        from tensorflow.python.framework import tensor_util
 
-            import numpy
-            from tensorflow.python.framework import tensor_util
+        kind = op.kind
+        if kind.endswith("_right"):
+            kind = kind[: -len("_right")]  # order does not matter here
+        if kind.endswith("_left"):
+            kind = kind[: -len("_left")]
 
-            def _is_negative(x__):
-                if isinstance(x__, numpy.ndarray):
-                    return (x__ < 0).any()
-                if isinstance(x__, (int, float, numpy.number)):
-                    return x__ < 0
-                assert isinstance(x__, tf.Tensor)
-                x__ = tensor_util.constant_value(x__)
-                if x__ is not None:
-                    return _is_negative(x__)
-                return False
+        def _is_negative(x__):
+            if isinstance(x__, numpy.ndarray):
+                return (x__ < 0).any()
+            if isinstance(x__, (int, float, numpy.number)):
+                return x__ < 0
+            assert isinstance(x__, tf.Tensor)
+            x__ = tensor_util.constant_value(x__)
+            if x__ is not None:
+                return _is_negative(x__)
+            return False
 
-            def _bin_op(a, b):
-                if template_only:
-                    return None
-                if a is None or b is None:
-                    return None
-                with tf_util.same_control_flow_ctx([a, b]):
-                    if kind == "add":
-                        use_relu = _is_negative(a) or _is_negative(b)  # for dynamic tensors, assume all positive
-                        if use_relu:
-                            return tf.convert_to_tensor(tf_util.simplify_non_negative_seq_length(a + b))
-                        return a + b
-                    elif kind == "sub":
-                        return tf.convert_to_tensor(tf_util.simplify_non_negative_seq_length(a - b))
-                    elif kind == "mul":
-                        return a * b
-                    elif kind in ("floordiv", "truediv"):  # truediv assumes there is no remainder
-                        return a // b
-                    elif kind == "ceildiv":
-                        return -(-a // b)
-                    else:
-                        raise ValueError("unknown op kind %r" % op.kind)
+        def _bin_op(a, b):
+            if template_only:
+                return None
+            if a is None or b is None:
+                return None
+            with tf_util.same_control_flow_ctx([a, b]):
+                if kind == "add":
+                    use_relu = _is_negative(a) or _is_negative(b)  # for dynamic tensors, assume all positive
+                    if use_relu:
+                        return tf.convert_to_tensor(tf_util.simplify_non_negative_seq_length(a + b))
+                    return a + b
+                elif kind == "sub":
+                    return tf.convert_to_tensor(tf_util.simplify_non_negative_seq_length(a - b))
+                elif kind == "mul":
+                    return a * b
+                elif kind in ("floordiv", "truediv"):  # truediv assumes there is no remainder
+                    return a // b
+                elif kind == "ceildiv":
+                    return -(-a // b)
+                else:
+                    raise ValueError("unknown op kind %r" % op.kind)
 
-            y_name = self.description + ":seq-length"
-            y = None
-            inputs = list(op.inputs)
-            assert inputs
-            while inputs:
-                x = inputs.pop(0)
-                if not x.is_dynamic():  # static
-                    assert x.dimension is not None
-                    if y is None:
-                        with tf.control_dependencies(None):  # this will reset the context
-                            y = _t.Tensor(
-                                name=y_name,
-                                dim_tags=[],
-                                dtype="int32",
-                                placeholder=None if template_only else tf.constant(x.dimension),
-                            )
-                        continue
-                    y.placeholder = _bin_op(y.placeholder, x.dimension)
-                    continue
-                if self.batch:
-                    x = x.get_for_batch_ctx(self.batch, self.control_flow_ctx)
-                x.complete_dyn_size(template_only=template_only)
-                if not x.dyn_size_ext:
-                    return
-                x = x.dyn_size_ext
+        y_name = self.description + ":seq-length"
+        y = None
+        inputs = list(op.inputs)
+        assert inputs
+        while inputs:
+            x = inputs.pop(0)
+            if not x.is_dynamic():  # static
+                assert x.dimension is not None
                 if y is None:
-                    y = x.copy(name=y_name)
+                    with tf.control_dependencies(None):  # this will reset the context
+                        y = _t.Tensor(
+                            name=y_name,
+                            dim_tags=[],
+                            dtype="int32",
+                            placeholder=None if template_only else tf.constant(x.dimension),
+                        )
                     continue
-                if x.dim_tags != y.dim_tags:
-                    common = _t.Tensor.get_common_data([x, y], allow_broadcast_all_sources=True)
-                    x_ = x.copy_compatible_to(common) if x.dim_tags else x
-                    y_ = y.copy_compatible_to(common) if y.dim_tags else y
-                    y = common
-                else:
-                    x_, y_ = x, y
-                y.placeholder = _bin_op(y_.placeholder, x_.placeholder)
-            assert y
-            if self.dyn_size_ext:
-                assert self.dyn_size_ext.dim_tags == y.dim_tags
-            if y.batch:
-                if self.batch:
-                    assert self.batch == y.batch
-                else:
-                    self.batch = y.batch
-            self.dyn_size_ext = y
-            if y.placeholder is not None:
-                self.set_tag_on_size_tensor(y.placeholder)
+                y.placeholder = _bin_op(y.placeholder, x.dimension)
+                continue
+            if self.batch:
+                x = x.get_for_batch_ctx(self.batch, self.control_flow_ctx)
+            x.complete_dyn_size(template_only=template_only)
+            if not x.dyn_size_ext:
+                return
+            x = x.dyn_size_ext
+            if y is None:
+                y = x.copy(name=y_name)
+                continue
+            if x.dim_tags != y.dim_tags:
+                common = _t.Tensor.get_common_data([x, y], allow_broadcast_all_sources=True)
+                x_ = x.copy_compatible_to(common) if x.dim_tags else x
+                y_ = y.copy_compatible_to(common) if y.dim_tags else y
+                y = common
+            else:
+                x_, y_ = x, y
+            y.placeholder = _bin_op(y_.placeholder, x_.placeholder)
+        assert y
+        if self.dyn_size_ext:
+            assert self.dyn_size_ext.dim_tags == y.dim_tags
+        if y.batch:
+            if self.batch:
+                assert self.batch == y.batch
+            else:
+                self.batch = y.batch
+        self.dyn_size_ext = y
+        if y.placeholder is not None:
+            self.set_tag_on_size_tensor(y.placeholder)
 
     def is_equal(
         self,

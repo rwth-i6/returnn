@@ -20,6 +20,7 @@ class Frontend(Generic[T]):
     """
 
     T: Type[T]
+    is_tensorflow: bool = False  # whether this framework uses TensorFlow
 
     @classmethod
     def create_placeholder(cls, tensor: Tensor) -> T:

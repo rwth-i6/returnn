@@ -21,6 +21,7 @@ class TFFrontend(Frontend[tf.Tensor]):
     """
 
     T = tf.Tensor
+    is_tensorflow = True
 
     @classmethod
     def create_placeholder(cls, tensor: _TT) -> tf.Tensor:

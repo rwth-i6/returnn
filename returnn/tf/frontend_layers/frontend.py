@@ -15,6 +15,8 @@ class ReturnnLayersFrontend(Frontend):
     RETURNN layers frontend (using TF), where raw_tensor represents a RETURNN layer
     """
 
+    is_tensorflow = True
+
     @staticmethod
     def reduce(
         source: Tensor, *, mode: str, axis: Union[Dim, Sequence[Dim]], use_time_mask: bool = NotSpecified
