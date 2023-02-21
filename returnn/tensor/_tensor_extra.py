@@ -821,7 +821,7 @@ class _TensorMixin:
         """
         if dim is None:
             assert not self.placeholder
-        dim_tag = SpatialDim("added_spatial", dimension=dim)
+        dim_tag = Dim(description="added_spatial", dimension=dim, kind=Dim.Types.Spatial)
         if spatial_dim_axis is None:
             spatial_dim_axis = self.get_default_new_axis_for_dim_tag(dim_tag)
         v = self.copy_add_dim_by_tag(dim_tag, unbroadcast=True, axis=spatial_dim_axis)
@@ -839,7 +839,7 @@ class _TensorMixin:
         if self.sparse:
             # By definition, we don't have a feature dim. We allow this though. We just make it a spatial axis.
             return self.copy_add_spatial_dim(spatial_dim_axis=axis)
-        dim_tag = FeatureDim("feature1", dimension=1)
+        dim_tag = Dim(description="feature1", dimension=1, kind=Dim.Types.Feature)
         if axis is None:
             axis = self.get_default_new_axis_for_dim_tag(dim_tag)
         v = self.copy_add_dim_by_tag(dim_tag, axis=axis)
@@ -2025,9 +2025,10 @@ class _TensorMixin:
     def get_placeholder_time_flattened(self):
         """
         :return: via :func:`flatten_with_seq_len_mask`
-        :rtype: tf.Tensor
+        :rtype: tensorflow.Tensor
         """
-        from .basic import flatten_with_seq_len_mask
+        assert self.raw_frontend.is_tensorflow, "get_placeholder_time_flattened only implemented for TF yet"
+        from returnn.tf.util.basic import flatten_with_seq_len_mask
 
         assert self.placeholder is not None
         assert self.have_time_axis()
@@ -2048,6 +2049,9 @@ class _TensorMixin:
           with keep_dims, (batch, time, height, dim) will become (batch'|time', 1, 1, dim).
         """
         assert self.placeholder is not None
+        assert self.raw_frontend.is_tensorflow, "get_placeholder_flattened only implemented for TF yet"
+        import tensorflow as tf
+
         x = self.placeholder
         orig_dyn_axes = self.get_spatial_batch_axes() + [self.batch_dim_axis]
         dyn_axes = list(orig_dyn_axes)
