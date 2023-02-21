@@ -4,20 +4,199 @@ Frontend for exposing TensorFlow-specific functionality.
 
 from __future__ import annotations
 from typing import Union, Sequence
+import tensorflow as tf
 
 from returnn.util.basic import NotSpecified
 from returnn.frontend_api import Frontend
 from returnn.tensor import Tensor, Dim
+from returnn.tf.util import basic as tf_util
+from returnn.tf import compat as tf_compat
+
+_TT = Tensor[tf.Tensor]
 
 
-class TFFrontend(Frontend):
+class TFFrontend(Frontend[tf.Tensor]):
     """
     TensorFlow low-level frontend, operating on tf.Tensor
     """
 
+    T = tf.Tensor
+
+    @classmethod
+    def create_placeholder(cls, tensor: _TT) -> tf.Tensor:
+        """
+        :return: tf.placeholder in TF
+        """
+        with tf.name_scope("extern_data/placeholders/%s/" % tensor.name):
+            return tf_compat.v1.placeholder(**tensor.get_placeholder_kwargs(with_batch=True))
+
     @staticmethod
-    def reduce(
-        source: Tensor, *, mode: str, axis: Union[Dim, Sequence[Dim]], use_time_mask: bool = NotSpecified
-    ) -> Tensor:
+    def runtime_sanity_checks(tensor: _TT) -> tf.Operation:
+        """
+        Runtime checks
+        """
+        checks = []
+        with tf.name_scope("runtime_sanity_check"):
+            shape = tf.shape(tensor.placeholder)
+            # noinspection PyShadowingNames
+            batch_dim = shape[tensor.batch_dim_axis] if tensor.have_batch_axis() else 1
+            rank = tf.rank(tensor.placeholder)
+            data = ["Data.get_runtime_sanity_check_op:", str(tensor), "shape", shape]
+            for i, tag in enumerate(tensor.dim_tags):
+                if tag.dyn_size is not None:
+                    data += ["dyn_size[%i] (%s)" % (i, tag), tag.dyn_size, ".shape", tf.shape(tag.dyn_size)]
+            checks += [tf.Assert(tf.equal(rank, tensor.batch_ndim), data + ["-> invalid rank"])]
+            if tensor.have_batch_axis():
+                batch_dim_via_info = tensor.get_batch_dim()
+                checks += [
+                    tf.Assert(
+                        tf.equal(batch_dim, batch_dim_via_info),
+                        data + ["-> invalid batch dim info", batch_dim_via_info],
+                    )
+                ]
+            for i in range(tensor.batch_ndim):
+                if tensor.batch_shape[i] is not None:
+                    checks += [
+                        tf.Assert(tf.equal(shape[i], tensor.batch_shape[i]), data + ["-> invalid shape[%i]" % i])
+                    ]
+                dyn_size_ext = tensor.dim_tags[i].dyn_size_ext
+                if dyn_size_ext and dyn_size_ext.placeholder is not None:
+                    dyn_size = dyn_size_ext.placeholder
+                    if dyn_size_ext.have_batch_axis() and tensor.have_batch_axis():
+                        checks += [
+                            tf.Assert(
+                                tf.equal(tf.shape(dyn_size)[dyn_size_ext.batch_dim_axis], batch_dim),
+                                data + ["-> invalid axis %i tag dyn size batch dim" % i],
+                            )
+                        ]
+                    checks += [
+                        tf.Assert(
+                            # Note: in almost all cases, we have equality here.
+                            # However, not strictly in all cases, e.g. DecideLayer, maybe some others...
+                            # But that should not be more than 1 less.
+                            tf.logical_or(
+                                tf.logical_and(
+                                    tf.less_equal(tf.reduce_max(dyn_size), shape[i]),
+                                    tf.greater_equal(tf.reduce_max(dyn_size), shape[i] - 1),
+                                ),
+                                # In other rare cases, this might be a broadcast dim
+                                # (e.g. as initial values of att weights for a rec loop).
+                                tf.equal(1, shape[i]),
+                            ),
+                            data + ["-> invalid shape[%i] or max(dyn_size[%i])" % (i, i)],
+                        )
+                    ]
+                    checks += [dyn_size_ext.get_runtime_sanity_check_op()]
+        return tf.group(*checks)
+
+    @staticmethod
+    def is_valid_in_current_graph(tensor: _TT) -> bool:
+        """
+        :return: whether the tensor is valid in the current graph
+        """
+        if tensor.raw_tensor is None:
+            return True
+        if tf_compat.executing_eagerly():
+            return True  # always true in eager mode
+        g = tf_util.get_root_graph()
+        return tf_util.get_root_graph(tensor.raw_tensor.graph) is g
+
+    @staticmethod
+    def reduce(source: _TT, *, mode: str, axis: Union[Dim, Sequence[Dim]], use_time_mask: bool = NotSpecified) -> _TT:
         """Reduce"""
-        raise NotImplementedError  # TODO
+        x = source
+        assert not x.sparse
+        axes = x.get_axes_from_description(axis)
+        if use_time_mask is None:
+            use_time_mask = any(x.has_dynamic_size(a) for a in axes)
+        out_data = x.copy_template()
+        dim_tags = [dim_tag for i, dim_tag in enumerate(x.dim_tags) if i not in axes]
+        out_data = out_data.copy_template_new_dim_tags(dim_tags)
+        sparse_out = mode.lower().startswith("arg")
+        if sparse_out:
+            assert len(axes) == 1
+            out_data.sparse_dim = x.dim_tags[axes[0]]
+            out_data.dtype = "int32"
+        assert isinstance(use_time_mask, bool)
+        mode = mode.lower()
+        if mode == "avg":  # alias
+            mode = "mean"
+        reduce_abs_funcs = {
+            name: getattr(tf, "reduce_%s" % name) for name in ["max", "min", "sum", "logsumexp", "any", "all"]
+        }
+        reduce_rel_func = {"mean": tf.reduce_mean}
+        arg_funcs = {name: getattr(tf, name) for name in ["argmax", "argmin"]}
+        funcs = dict(list(reduce_abs_funcs.items()) + list(reduce_rel_func.items()) + list(arg_funcs.items()))
+        assert mode in funcs, "invalid mode %r. choose from: %r" % (mode, funcs)
+        f = funcs[mode]
+        x_ = x.placeholder
+        # Check if we should ignore some frames, e.g. via masking.
+        correction_factor = None
+        if use_time_mask and any(x.has_dynamic_size(a) for a in axes):
+            if x.batch_dim_axis in axes and x.time_dim_axis in axes and len(axes) == 2:
+                assert mode not in arg_funcs, "unexpected arg reduce for multiple axes"
+                # Flattening.
+                axes = [a if (a < x.time_dim_axis) else (a - 1) for a in axes if a != x.time_dim_axis]
+                x = x.copy_time_flattened()
+                x_ = x.placeholder
+
+            else:
+                # Fhe fastest and simplest way is masking.
+                for axis in axes:
+                    if axis == x.batch_dim_axis:
+                        continue
+                    if not x.has_dynamic_size(axis):
+                        continue
+                    mask = x.get_sequence_mask_broadcast(axis=axis)
+
+                    zeros = tf.zeros((), dtype=x.placeholder.dtype)
+                    # Cannot call x.placeholder.dtype.{min,max} in case input is e.g. a bool
+                    if x.placeholder.dtype.is_floating or x.placeholder.dtype.is_integer:
+                        if f in (tf.reduce_mean, tf.reduce_sum):
+                            replacement_value = zeros
+                        elif f in (tf.reduce_max, tf.reduce_logsumexp, tf.argmax):
+                            replacement_value = zeros + x.placeholder.dtype.min
+                        elif f in (tf.reduce_min, tf.argmin):
+                            replacement_value = zeros + x.placeholder.dtype.max
+                        else:
+                            raise ValueError("unexpected reduce function %r" % f)
+                    elif x.placeholder.dtype.is_bool:
+                        if f in (tf.reduce_any,):
+                            replacement_value = zeros
+                        elif f in (tf.reduce_all,):
+                            replacement_value = tf.ones((), dtype=x.placeholder.dtype)
+                        else:
+                            raise ValueError("unexpected reduce function %r" % f)
+                    else:
+                        raise TypeError("reduce: unexpected input type %r from input %s" % (x.placeholder.dtype, x))
+
+                    x_ = tf_util.where_bc(mask, x_, replacement_value, name="x_masked_axis_%i" % axis)
+                    if f == tf.reduce_mean:
+                        tag = x.dim_tags[axis]
+                        assert tag.dyn_size_ext is not None  # checked above
+                        size_all = tf.shape(x.placeholder)[axis]
+                        size_actual = tag.dyn_size_ext
+                        while any(d not in out_data.dim_tags for d in size_actual.dim_tags):
+                            # We have some axis (e.g. B) which is not in the output.
+                            # We need to remove this.
+                            # https://github.com/rwth-i6/returnn/issues/1242
+                            i, d = [(i, d) for i, d in enumerate(size_actual.dim_tags) if d not in out_data.dim_tags][0]
+                            assert not d.is_dynamic()  # not implemented
+                            size_all *= d.get_dim_value()
+                            s = tf.reduce_sum(size_actual.placeholder, axis=i)
+                            size_actual = size_actual.copy_template_excluding_axis(i)
+                            size_actual.placeholder = s
+                        seq_len_bc = size_actual.copy_compatible_to(
+                            out_data, check_sparse=False, check_dtype=False
+                        ).placeholder
+                        seq_len_bc = tf.maximum(seq_len_bc, 1)  # avoid nan
+                        correction_factor_ = tf.cast(size_all, tf.float32) / tf.cast(seq_len_bc, tf.float32)
+                        correction_factor = tf_util.optional_mul(correction_factor, correction_factor_)
+        if mode in arg_funcs:
+            assert len(axes) == 1, "For argmax/argmin, only one reduction axis is supported"
+            y = f(x_, axis=axes[0], output_type=tf.int32)
+        else:
+            y = f(x_, axis=axes)
+            y = tf_util.optional_mul(y, correction_factor)
+        out_data.raw_tensor = y
+        return out_data

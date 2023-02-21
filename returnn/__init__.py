@@ -26,4 +26,4 @@ _old_mod_loader_setup(modules=globals())
 
 __root_dir__ = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))  # can be used as __path__
 
-frontend = _frontend_api.Frontend()
+frontend = _frontend_api.global_frontend

@@ -4,7 +4,7 @@ or just rarely used attribs, such that we can save memory for the common case.
 """
 
 from __future__ import annotations
-from typing import TYPE_CHECKING, Optional, Sequence, Tuple
+from typing import TYPE_CHECKING, Optional, Sequence, Tuple, Type
 
 if TYPE_CHECKING:
     # Those are only used for TensorFlow, or they are deprecated.
@@ -13,9 +13,7 @@ if TYPE_CHECKING:
 from returnn.util.basic import NotSpecified
 from .dim import Dim
 from . import tensor as _t
-
-if TYPE_CHECKING:
-    from .tensor_backend import TensorBackend
+from returnn import frontend_api as _frontend_api
 
 
 class _TensorExtra:
@@ -209,9 +207,9 @@ class _TensorMixin:
             # and should not be used in other backends,
             # even in graph-based backends.
             # Rather, the logic to create placeholders should be done elsewhere.
-            from .tensor_backend_tf import tensor_backend_tf
+            from returnn.tf.frontend_low_level import TFFrontend
 
-            self.raw_tensor = tensor_backend_tf.create_placeholder(self)
+            self.raw_tensor = TFFrontend.create_placeholder(self)
             # Do that after same_dim_tags_as handling.
             _auto_create_size_placeholders_on_dim_tags(name=self.name, dim_tags=self._dims)
 
@@ -232,15 +230,13 @@ class _TensorMixin:
         self.sanity_check(assume_complete=False)  # TODO still needed?
 
     @property
-    def backend(self) -> Optional[TensorBackend]:
+    def raw_frontend(self) -> Optional[Type[_frontend_api.Frontend]]:
         """
         :return: the backend for the raw tensor
         """
         if self._raw_tensor is None:
             return None
-        from .tensor_backend import get_backend
-
-        return get_backend(type(self._raw_tensor))
+        return _frontend_api.get_frontend_by_tensor_type(type(self._raw_tensor))
 
     @property
     def control_flow_ctx(self) -> Optional[ControlFlowContext]:
@@ -331,13 +327,13 @@ class _TensorMixin:
                             ), "%s sanity_check: dynamic dim %s value unknown" % (self, tag)
                 assert tag.is_dim_known()
 
-    def get_runtime_sanity_check_op(self):
+    def get_runtime_sanity_check_op(self: _t.Tensor):
         """
         :return: op which does a couple of runtime sanity checks on the placeholder
         :rtype: tensorflow.Operation|Any
         """
         assert self.placeholder is not None
-        return self.backend.runtime_sanity_checks(self)
+        return self.raw_frontend.runtime_sanity_checks(self)
 
     def verify_out_shape(self, out_shape, allow_missing_implicit_dims=False):
         """
@@ -658,12 +654,11 @@ class _TensorMixin:
             data.feature_dim_axis = translate_axis(self.feature_dim_axis)
         return data
 
-    def copy_move_axis(self, old_axis, new_axis):
+    def copy_move_axis(self, old_axis, new_axis) -> _t.Tensor:
         """
         :param int old_axis: counted with batch-dim
         :param int new_axis: counted with batch-dim
         :return: copy of myself with moved axis (see :func:`move_axis`)
-        :rtype: Data
         """
         if old_axis < 0:
             old_axis += self.batch_ndim
@@ -681,13 +676,12 @@ class _TensorMixin:
         perm.insert(new_axis, old)
         return self.copy_transpose(perm)
 
-    def copy_swap_axes(self, axis1, axis2):
+    def copy_swap_axes(self, axis1, axis2) -> _t.Tensor:
         """
         Like :func:`Data.copy_move_axis`, but keeps all other axes unchanged.
         :param int axis1: counted with batch-dim
         :param int axis2: counted with batch-dim
         :return: copy of myself with moved axis (see :func:`swapaxes`)
-        :rtype: Data
         """
         if axis1 < 0:
             axis1 += self.batch_ndim
@@ -702,9 +696,8 @@ class _TensorMixin:
         perm[axis1], perm[axis2] = perm[axis2], perm[axis1]
         return self.copy_transpose(perm)
 
-    def copy_as_bt_or_tb_major(self):
+    def copy_as_bt_or_tb_major(self) -> _t.Tensor:
         """
-        :rtype: Data
         :return: copy of myself in batch-time-major or time-batch-major
         """
         assert self.have_batch_axis() and self.have_time_axis()
@@ -716,19 +709,17 @@ class _TensorMixin:
             return self.copy_as_time_major().copy_as_bt_or_tb_major()
         return self.copy_as_batch_major().copy_as_bt_or_tb_major()
 
-    def copy_with_feature_dim_axis(self, feature_dim_axis):
+    def copy_with_feature_dim_axis(self, feature_dim_axis) -> _t.Tensor:
         """
         :param int feature_dim_axis: can also be negative
         :return: copy of myself with specific feature dim axis
-        :rtype: Data
         """
         assert self.feature_dim_axis is not None
         return self.copy_move_axis(self.feature_dim_axis, feature_dim_axis)
 
-    def copy_as_batch_feature_major(self):
+    def copy_as_batch_feature_major(self) -> _t.Tensor:
         """
         :return: copy of self with batch_dim_axis == 0 and feature_dim_axis == 1
-        :rtype: Data
         """
         assert self.batch_dim_axis is not None
         assert self.feature_dim_axis is not None
@@ -736,10 +727,9 @@ class _TensorMixin:
         data = data.copy_with_feature_dim_axis(1)
         return data
 
-    def copy_as_time_batch_major(self):
+    def copy_as_time_batch_major(self) -> _t.Tensor:
         """
         :return: copy of self with batch_dim_axis == 1 and time_dim_axis == 0
-        :rtype: Data
         """
         assert self.have_batch_axis() and self.have_time_axis()
         data = self.copy_as_bt_or_tb_major()
@@ -747,10 +737,9 @@ class _TensorMixin:
             data = data.copy_move_axis(0, 1)
         return data
 
-    def copy_as_batch_spatial_major(self):
+    def copy_as_batch_spatial_major(self) -> _t.Tensor:
         """
         :return: copy with batch_dim_axis == 0, then all dynamic axes, then any other spatial axes, last feature axis
-        :rtype: Data
         """
         data = self.copy_as_batch_major()
         if data.feature_dim_axis is not None:
@@ -766,21 +755,19 @@ class _TensorMixin:
                     data.feature_dim_axis = NotSpecified
         return data
 
-    def copy_with_feature_last(self):
+    def copy_with_feature_last(self) -> _t.Tensor:
         """
         :return: copy of self with feature_dim_axis being the very last axis
-        :rtype: Data
         """
         assert self.feature_dim_axis is not None
         return self.copy_with_feature_dim_axis(-1)
 
-    def copy_add_batch_dim(self, batch_dim_axis, batch=None, dim_tag=None):
+    def copy_add_batch_dim(self, batch_dim_axis, batch=None, dim_tag=None) -> _t.Tensor:
         """
         :param int batch_dim_axis:
         :param BatchInfo|None batch:
         :param Dim|None dim_tag:
         :return: copy of myself with added batch-dim
-        :rtype: Data
         """
         assert self.batch_dim_axis is None
         if not batch:
@@ -816,15 +803,14 @@ class _TensorMixin:
         other_special_axes = self.get_special_axes_dict(counted_with_batch_dim=True, only_available=True)
         for k, a in other_special_axes.items():
             data_opts[k] = a if (a < batch_dim_axis) else (a + 1)
-        return Data(placeholder=placeholder, **data_opts)
+        return _t.Tensor(placeholder=placeholder, **data_opts)
 
-    def copy_add_spatial_dim(self, spatial_dim_axis=None, dim=1, auto_time_dim_axis=True):
+    def copy_add_spatial_dim(self, spatial_dim_axis=None, dim=1, auto_time_dim_axis=True) -> _t.Tensor:
         """
         :param int|None spatial_dim_axis: counted with batch-dim. if there is no time-dim, this will be it.
         :param int|None dim:
         :param bool auto_time_dim_axis:
         :return: copy of myself with added spatial-dim
-        :rtype: Data
         """
         if dim is None:
             assert not self.placeholder
@@ -836,13 +822,12 @@ class _TensorMixin:
             v.time_dim_axis = spatial_dim_axis
         return v
 
-    def copy_add_feature_dim(self, axis=None):
+    def copy_add_feature_dim(self, axis=None) -> _t.Tensor:
         """
         :param int|None axis:
         :return: self with a new feature dim axis with dim 1.
           If there is an existing feature dim, the new feature dim will be added right after.
           If we are sparse, we don't add a feature dim, but it becomes a spatial dim instead.
-        :rtype: Data
         """
         if self.sparse:
             # By definition, we don't have a feature dim. We allow this though. We just make it a spatial axis.
@@ -884,13 +869,12 @@ class _TensorMixin:
         else:
             return self.batch_ndim  # add it at the end
 
-    def copy_add_dim_by_tag(self, dim_tag, unbroadcast=False, axis=None):
+    def copy_add_dim_by_tag(self, dim_tag, unbroadcast=False, axis=None) -> _t.Tensor:
         """
         :param Dim dim_tag:
         :param bool unbroadcast: If True unbroadcast the newly added axis.
           Will infer the unbroadcast shape via :func:`Dim.get_dim_value`
         :param int|None axis:
-        :rtype: Data
         """
         assert dim_tag.can_be_used_as_dim()
         from .basic import get_valid_scope_name_from_str
@@ -938,15 +922,14 @@ class _TensorMixin:
                     tiles = [1] * axis + [dim_tag.get_dim_value()] + [1] * (self.batch_ndim - axis)
                     placeholder = tf.tile(placeholder, tiles)
             data_opts["placeholder"] = placeholder
-        return Data(**data_opts)
+        return _t.Tensor(**data_opts)
 
-    def copy_split_feature_dim(self, new_feature_dim):
+    def copy_split_feature_dim(self, new_feature_dim) -> _t.Tensor:
         """
         Split it into (new_spatial_dim, new_feat_dim), in that order.
         This will increase the feature_dim_axis by one.
 
         :param int new_feature_dim: will be the new dim
-        :rtype: Data
         """
         from .basic import get_shape
 
@@ -988,9 +971,9 @@ class _TensorMixin:
                 + old_shape[self.feature_dim_axis + 1 :]
             )
             data_opts["placeholder"] = tf.reshape(self.placeholder, new_shape, name="copy_split_feature_dim")
-        return Data(**data_opts)
+        return _t.Tensor(**data_opts)
 
-    def copy_extend_batch(self, batch):
+    def copy_extend_batch(self, batch) -> _t.Tensor:
         """
         Similar as copy_compatible_to with unbroadcast=True,
         we would possibly extend/expand our batch dim.
@@ -1002,7 +985,6 @@ class _TensorMixin:
         (e.g. see :func:`copy_extend_with_beam`).
 
         :param BatchInfo batch:
-        :rtype: Data
         """
         assert self.have_batch_axis()
         assert self.batch, "%s: batch unset" % self
@@ -1057,7 +1039,7 @@ class _TensorMixin:
         except_axis=None,
         check_sparse=True,
         check_dtype=True,
-    ):
+    ) -> _t.Tensor:
         """
         :param Data data: other data which the returned tensor should be compatible to
           It would add any missing axes with a dim 1 axis for automatic broadcasting (with add_dims=True).
@@ -1069,7 +1051,6 @@ class _TensorMixin:
         :param bool check_sparse:
         :param bool check_dtype:
         :returns: Data, might add broadcast dimensions
-        :rtype: Data
         """
         assert not check_sparse or self.sparse == data.sparse
         assert not check_dtype or self.dtype == data.dtype
@@ -1143,11 +1124,10 @@ class _TensorMixin:
         v.sanity_check()
         return v
 
-    def copy_time_flattened(self):
+    def copy_time_flattened(self) -> _t.Tensor:
         """
         :return: copy of myself where the time-axis is flattened away into the batch-dim-axis.
           See :func:`get_placeholder_time_flattened` and :func:`flatten_with_seq_len_mask for more details.
-        :rtype: Data
         """
         assert self.batch_dim_axis is not None
         assert self.time_dim_axis is not None
@@ -1156,14 +1136,17 @@ class _TensorMixin:
             data_opts["placeholder"] = self.get_placeholder_time_flattened()
         dim_tag = self.dim_tags[self.time_dim_axis]
         dim_tag = Dim(
-            kind=Dim.Types.Spatial, description="%s_flattened" % (dim_tag.description or "unnamed"), auto_generated=True
+            kind=Dim.Types.Spatial,
+            description="%s_flattened" % (dim_tag.description or "unnamed"),
+            auto_generated=True,
+            dimension=None,
         )
         data_opts["dim_tags"] = (dim_tag,) + tuple(
             tag for (i, tag) in enumerate(self.dim_tags) if i not in (self.batch_dim_axis, self.time_dim_axis)
         )
         data_opts["time_dim_axis"] = None
         data_opts.pop("feature_dim_axis", None)
-        return Data(**data_opts)
+        return _t.Tensor(**data_opts)
 
     def copy_extend_with_beam(self, beam):
         """
@@ -1233,7 +1216,7 @@ class _TensorMixin:
             data.placeholder = tensor
         return data
 
-    def copy_squeeze_axes(self, axes):
+    def copy_squeeze_axes(self, axes) -> _t.Tensor:
         """
         :param list[int] axes: counted with batch dim
         :return: copy of myself, with squeezed axes
@@ -1267,21 +1250,20 @@ class _TensorMixin:
                     data_opts["feature_dim_axis"] = self.feature_dim_axis - len(
                         [axis for axis in axes if axis < self.feature_dim_axis]
                     )
-        return Data(**data_opts)
+        return _t.Tensor(**data_opts)
 
-    def copy_template(self, name=None, dtype=None):
+    def copy_template(self, name=None, dtype=None) -> _t.Tensor:
         """
         :param str|None name:
         :param str|None dtype:
         :return: copy of myself, using self.get_kwargs(), without placeholder
-        :rtype: Data
         """
         kwargs = self.get_kwargs()
         if name:
             kwargs["name"] = name
         if dtype:
             kwargs["dtype"] = dtype
-        return Data(**kwargs)
+        return _t.Tensor(**kwargs)
 
     def copy_template_dense(self, name=None, dtype=None):
         """
@@ -1302,12 +1284,11 @@ class _TensorMixin:
             out.dtype = dtype
         return out
 
-    def copy_template_excluding_axis(self, exclude_axis, name=None):
+    def copy_template_excluding_axis(self, exclude_axis, name=None) -> _t.Tensor:
         """
         :param int exclude_axis: axis to be removed.
         :param str|None name: if set, this will be the new name.
         :return: copy of myself excluding exclude_axis axis, without placeholder.
-        :rtype: Data
         """
         kwargs = self.get_kwargs(include_special_axes=False)
         if exclude_axis < 0:
@@ -1326,7 +1307,7 @@ class _TensorMixin:
         kwargs["dim_tags"] = new_dim_tags
         if name:
             kwargs["name"] = name
-        return Data(**kwargs)
+        return _t.Tensor(**kwargs)
 
     def copy_template_excluding_spatial_dim(self, spatial_axis_num, name=None):
         """
@@ -1343,16 +1324,15 @@ class _TensorMixin:
         axis_to_exclude = spatial_axes[spatial_axis_num]
         return self.copy_template_excluding_axis(exclude_axis=axis_to_exclude, name=name)
 
-    def copy_template_excluding_time_dim(self, name=None):
+    def copy_template_excluding_time_dim(self, name=None) -> _t.Tensor:
         """
         :param str|None name: if set, this will be the new name
         :return: copy of myself excluding the time-dimension without placeholder
-        :rtype: Data
         """
         assert self.time_dim_axis is not None
         return self.copy_template_excluding_axis(exclude_axis=self.time_dim_axis, name=name)
 
-    def copy_template_adding_time_dim(self, name=None, time_dim_axis=0):
+    def copy_template_adding_time_dim(self, name=None, time_dim_axis=0) -> _t.Tensor:
         """
         Adds a time-dim-axis.
         If a time-dim-axis already exists, it will anyway create this new one.
@@ -1360,7 +1340,6 @@ class _TensorMixin:
         :param str|None name: if set, this will be the new name
         :param int time_dim_axis: the new time-dim-axis index
         :return: copy of myself adding the time-dimension without placeholder
-        :rtype: Data
         """
         if time_dim_axis < 0:
             time_dim_axis += self.batch_ndim + 1
@@ -1377,14 +1356,13 @@ class _TensorMixin:
         kwargs["time_dim_axis"] = time_dim_axis
         if name:
             kwargs["name"] = name
-        return Data(**kwargs)
+        return _t.Tensor(**kwargs)
 
-    def copy_template_replace_dim_tag(self, axis, new_dim_tag, name=None):
+    def copy_template_replace_dim_tag(self, axis, new_dim_tag, name=None) -> _t.Tensor:
         """
         :param int axis:
         :param Dim new_dim_tag:
         :param str|None name: new name
-        :rtype: Data
         """
         assert new_dim_tag.can_be_used_as_dim()
         if axis < 0:
@@ -1410,14 +1388,13 @@ class _TensorMixin:
                 opts["feature_dim_axis"] = None
         if name:
             opts["name"] = name
-        return Data(**opts)
+        return _t.Tensor(**opts)
 
-    def copy_template_replace_dim(self, axis, new_dim, new_size=None):
+    def copy_template_replace_dim(self, axis, new_dim, new_size=None) -> _t.Tensor:
         """
         :param int axis:
         :param int|None new_dim:
         :param tf.Tensor|None new_size:
-        :rtype: Data
         """
         dim_tag = self.dim_tags[axis]
         if dim_tag.is_batch_dim():
@@ -1432,12 +1409,11 @@ class _TensorMixin:
         )
         return self.copy_template_replace_dim_tag(axis=axis, new_dim_tag=dim_tag)
 
-    def copy_template_new_dim_tags(self, new_dim_tags, name=None, keep_special_axes=False):
+    def copy_template_new_dim_tags(self, new_dim_tags, name=None, keep_special_axes=False) -> _t.Tensor:
         """
         :param list[Dim]|tuple[Dim] new_dim_tags:
         :param str|None name:
         :param bool keep_special_axes:
-        :rtype: Data
         """
         if keep_special_axes:
             assert len(new_dim_tags) == self.batch_ndim
@@ -1445,24 +1421,21 @@ class _TensorMixin:
         opts["dim_tags"] = new_dim_tags
         if name:
             opts["name"] = name
-        return Data(**opts)
+        return _t.Tensor(**opts)
 
-    def copy_template_set_ctx(self, ctx):
+    def copy_template_set_ctx(self, ctx) -> _t.Tensor:
         """
         :param ControlFlowContext ctx:
         :return: new Data instance
-        :rtype: Data
         """
         kwargs = self.get_kwargs()
         kwargs["control_flow_ctx"] = ctx
-        return Data(**kwargs)
+        return _t.Tensor(**kwargs)
 
-    def copy_template_unpack_batch(self):
+    def copy_template_unpack_batch(self) -> _t.Tensor:
         """
         If the batch dim contains a :class:`BatchInfo.PackedDim`,
         unpack it and restore the data from before the packing.
-
-        :rtype: Data
         """
         assert self.have_batch_axis()
         assert self.batch, "%s: batch unset" % self
@@ -1489,7 +1462,7 @@ class _TensorMixin:
                 dim_tags.append(dim_tag)
 
         kwargs["dim_tags"] = dim_tags
-        return Data(**kwargs)
+        return _t.Tensor(**kwargs)
 
     def _get_variable_dim_pattern(self):
         """
@@ -1508,6 +1481,7 @@ class _TensorMixin:
         :return: whether the variable-dims pattern matches,
           i.e. same variable dims (get_variable_dim_pattern), same time dim, excluding batch-dim.
           i.e. the size_placeholder should be compatible.
+          (deprecated)
         """
         if self.time_dim_axis_excluding_batch != other.time_dim_axis_excluding_batch:
             return False
@@ -3085,7 +3059,7 @@ class _TensorMixin:
         """
         if self._raw_tensor is None:
             return True
-        return self.backend.is_valid_in_current_graph(self)
+        return self.raw_frontend.is_valid_in_current_graph(self)
 
 
 def infer_dim_tags(

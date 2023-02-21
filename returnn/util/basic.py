@@ -168,20 +168,16 @@ class BackendEngine:
             if engine is None:
                 engine = cls._get_default_engine()
 
-        from returnn import frontend
+        from returnn import frontend_api
 
         if engine == cls.TensorFlow:
             # Note that we assume that the user wants the RETURNN layers frontend (TF-based)
             # and not the low-level TF frontend.
             # If we want to expose the low-level TF frontend to the user directly at some point,
             # we would need a new config option.
-            from returnn.tf.frontend_layers import ReturnnLayersFrontend
-
-            frontend.__class__ = ReturnnLayersFrontend
+            frontend_api.select_frontend_returnn_layers_tf()
         elif engine == cls.Torch:
-            from returnn.torch.frontend import TorchFrontend
-
-            frontend.__class__ = TorchFrontend
+            frontend_api.select_frontend_torch()
         cls.selected_engine = engine
 
     @classmethod
