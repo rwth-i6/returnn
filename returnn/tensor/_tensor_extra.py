@@ -79,7 +79,7 @@ class _TensorMixin:
     _dims: Tuple[Dim]
     dtype: str
     sparse_dim: Optional[Dim]
-    _raw_tensor: object
+    _raw_tensor: _t.RawTensorType
     _extra: Optional[_TensorExtra]
 
     @staticmethod
@@ -1958,14 +1958,12 @@ class _TensorMixin:
         :return: shape(placeholder)[time_dim_axis], int scalar
         :rtype: tf.Tensor
         """
-        from .basic import reuse_name_scope_of_tensor
-
         assert self.time_dim_axis is not None
         if self.batch_shape[self.time_dim_axis] is not None:
             return self.batch_shape[self.time_dim_axis]
-        with reuse_name_scope_of_tensor(self.placeholder):
-            with tf.name_scope("time_dim"):
-                return tf.shape(self.placeholder)[self.time_dim_axis]
+        assert self._raw_tensor is not None
+        rf = self.raw_frontend
+        return rf.get_shape_raw(self._raw_tensor)[self.time_dim_axis]
 
     def get_dim(self, axis):
         """
@@ -1975,7 +1973,9 @@ class _TensorMixin:
         """
         if self.batch_shape[axis] is not None:
             return self.batch_shape[axis]
-        return tf.shape(self.placeholder)[axis]
+        assert self._raw_tensor is not None
+        rf = self.raw_frontend
+        return rf.get_shape_raw(self._raw_tensor)[axis]
 
     def get_placeholder_as_time_major(self):
         """
@@ -1990,18 +1990,6 @@ class _TensorMixin:
         """
         assert self.placeholder is not None
         return self.copy_as_batch_major().placeholder
-
-    def get_placeholder_with_specific_batch_dim_axis(self, batch_dim_axis):
-        """
-        :param int batch_dim_axis:
-        :rtype: tf.Tensor
-        """
-        from .basic import swapaxes
-
-        assert self.placeholder is not None
-        if self.batch_dim_axis == batch_dim_axis:
-            return self.placeholder
-        return swapaxes(self.placeholder, batch_dim_axis, self.batch_dim_axis)
 
     def get_placeholder_with_runtime_sanity_checks(self):
         """
