@@ -85,3 +85,10 @@ class Dim(_DimMixin):
 
     def __repr__(self):
         return "Dim{%s}" % self.short_repr()
+
+
+# Global batch dim, which would usually be used the dataloader.
+batch_dim = Dim(kind=Dim.Types.Batch, description="global batch", dimension=None)
+
+# This indicates to perform a single step execution of some layer which can potentially have recurrent state.
+single_step_dim = Dim(description="single-step", kind=Dim.Types.Spatial, special=True, dimension=1)

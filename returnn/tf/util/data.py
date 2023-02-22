@@ -12,7 +12,10 @@ import tensorflow as tf
 
 import returnn.util.basic as util
 from returnn.util.basic import NotSpecified
-from returnn.tensor import Tensor, Dim
+
+# Import also batch_dim, single_step_dim, to support old code.
+# noinspection PyUnresolvedReferences
+from returnn.tensor import Tensor, Dim, batch_dim, single_step_dim
 from returnn.tensor.marked_dim import MarkedDim
 
 
@@ -22,8 +25,8 @@ Data = Tensor
 # Earlier the class was called DimensionTag. Provide this alias for older code.
 DimensionTag = Dim
 
-# Global dim tag placeholders.
-batch_dim = Dim(kind=Dim.Types.Batch, description="global batch", dimension=None)
+# Alias for older code.
+_MarkedDim = MarkedDim
 
 
 # Provide some simple wrappers. https://github.com/rwth-i6/returnn/issues/782
@@ -32,6 +35,8 @@ batch_dim = Dim(kind=Dim.Types.Batch, description="global batch", dimension=None
 # noinspection PyPep8Naming
 def FeatureDim(description, dimension, **kwargs):
     """
+    DEPRECATED. Use :class:`Dim` instead, and setting the `kind` is not needed anymore.
+
     :param str description:
     :param int|None dimension:
     :rtype: Dim
@@ -42,18 +47,13 @@ def FeatureDim(description, dimension, **kwargs):
 # noinspection PyPep8Naming
 def SpatialDim(description, dimension=None, **kwargs):
     """
+    DEPRECATED. Use :class:`Dim` instead, and setting the `kind` is not needed anymore.
+
     :param str description:
     :param int|None dimension:
     :rtype: Dim
     """
     return Dim(kind=Dim.Types.Spatial, description=description, dimension=dimension, **kwargs)
-
-
-# This indicates to perform a single step execution of some layer which can potentially have recurrent state.
-single_step_dim = Dim(description="single-step", kind=Dim.Types.Spatial, special=True, dimension=1)
-
-# Alias for older code.
-_MarkedDim = MarkedDim
 
 
 class BatchInfo:
