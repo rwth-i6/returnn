@@ -69,6 +69,15 @@ class Frontend(Generic[T]):
         assert shape == existing_shape
 
     @staticmethod
+    def transpose_raw(raw_tensor: T, perm: Sequence[int]) -> T:
+        """
+        :param raw_tensor: raw tensor
+        :param perm: permutation
+        :return: transposed raw tensor
+        """
+        raise NotImplementedError
+
+    @staticmethod
     def create_placeholder(tensor: Tensor) -> T:
         """
         :return: tf.placeholder in TF

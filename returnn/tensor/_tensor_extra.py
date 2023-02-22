@@ -635,15 +635,10 @@ class _TensorMixin:
             return self.copy()
 
         data_opts = self.get_kwargs(include_special_axes=False)
-        if self.placeholder is not None:
-            from returnn.tf.util.basic import get_valid_scope_name_from_str
-
-            data_opts["placeholder"] = tf.transpose(
-                self.placeholder, perm, name="%s_transpose" % get_valid_scope_name_from_str(self.name)
-            )
+        if self._raw_tensor is not None:
+            data_opts["raw_tensor"] = self.raw_frontend.transpose_raw(self._raw_tensor, perm)
         data_opts["dim_tags"] = tuple(self.dim_tags[perm[i]] for i in range(self.batch_ndim))
         data = _t.Tensor(**data_opts)
-        data.sanity_check()
         if self._extra:
             inv_perm_ = {j: i for (i, j) in enumerate(perm)}
             inv_perm = [j for (i, j) in sorted(inv_perm_.items())]

@@ -70,6 +70,15 @@ class TFFrontend(Frontend[tf.Tensor]):
         raw_tensor.set_shape(shape)
 
     @staticmethod
+    def transpose_raw(raw_tensor: tf.Tensor, perm: Sequence[int]) -> tf.Tensor:
+        """
+        :param raw_tensor:
+        :param perm: e.g. [0, 2, 1]
+        :return: permuted (transposed) raw tensor
+        """
+        return tf.transpose(raw_tensor, perm)
+
+    @staticmethod
     def create_placeholder(tensor: _TT) -> tf.Tensor:
         """
         :return: tf.placeholder in TF
