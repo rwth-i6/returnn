@@ -85,5 +85,27 @@ class Tensor(_TensorMixin, Generic[RawTensorType]):
         if raw_tensor is not None:
             self.raw_tensor = raw_tensor  # assignment via property, to have extra checks
 
+    @property
+    def dims(self) -> Tuple[Dim, ...]:
+        """
+        :return: dim tags
+        """
+        return self._dims
+
+    @property
+    def raw_tensor(self) -> Optional[RawTensorType]:
+        """
+        :return: raw tensor
+        """
+        return self._raw_tensor
+
+    @raw_tensor.setter
+    def raw_tensor(self, value: Optional[RawTensorType]):
+        """
+        :param value:
+        """
+        self._raw_tensor = value
+        self.sanity_check(assume_complete=False)
+
 
 # dispatch table for frameworks for sanity_check

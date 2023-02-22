@@ -1818,21 +1818,6 @@ class _TensorMixin:
         self.raw_tensor = value
 
     @property
-    def raw_tensor(self):
-        """
-        :rtype: T
-        """
-        return self._raw_tensor
-
-    @raw_tensor.setter
-    def raw_tensor(self, value):
-        """
-        :param T|None value:
-        """
-        self._raw_tensor = value
-        self.sanity_check(assume_complete=False)
-
-    @property
     def batch(self):
         """
         :rtype: BatchInfo|None
@@ -2555,21 +2540,31 @@ class _TensorMixin:
         tag_other = other.get_dim_tag(other.time_dim_axis)
         return tag_self == tag_other
 
-    def get_sequence_lengths(self):
+    def get_sequence_lengths(self) -> _t.RawTensorType:
         """
-        :return: seq lens tensor of shape (batch,) of dtype int32. also see :func:`get_dynamic_size`
+        Deprecated. Access the information directly from dim tags, whatever you need.
+
+        Warning: This assumes TensorFlow in the fallback case.
+
+        :return: seq lens tensor of shape [B] of dtype int32. also see :func:`get_dynamic_size`
         :rtype: tf.Tensor
         """
-        from .basic import same_control_flow_ctx, expand_dims_unbroadcast
-
         assert self.time_dim_axis is not None
-        if self.is_time_axis_dynamic():
-            return self.size_placeholder[self.time_dim_axis_excluding_batch]
-        assert self.shape[self.time_dim_axis_excluding_batch] is not None
-        with same_control_flow_ctx(self.placeholder), tf.name_scope("fixed_seq_len"):
-            return expand_dims_unbroadcast(
-                self.shape[self.time_dim_axis_excluding_batch], axis=0, dim=self.get_batch_dim()
-            )
+        dim = self._dims[self.time_dim_axis]
+        assert isinstance(dim, Dim)
+        if dim.dyn_size_ext:
+            assert dim.dyn_size_ext.raw_tensor is not None
+            return dim.dyn_size_ext.raw_tensor
+        assert self.batch_shape[self.time_dim_axis] is not None
+        assert self.batch_dim_axis is not None
+        batch_dim_ = self._dims[self.batch_dim_axis]
+        assert isinstance(batch_dim_, Dim)
+        if batch_dim_.dyn_size_ext and batch_dim_.dyn_size_ext.raw_tensor is not None:
+            rf = batch_dim_.dyn_size_ext.raw_frontend
+            return rf.fill_raw([batch_dim_.dyn_size_ext.raw_tensor], dim.size)
+        import tensorflow as tf
+
+        return tf.fill([self.get_batch_dim()], dim.size)
 
     def get_sequence_mask(self):
         """
@@ -2676,16 +2671,18 @@ class _TensorMixin:
         res.placeholder = mask_dyn_seq_len_nd(self, pad_value=mask_value, axes=dyn_axes)
         return res
 
-    def get_batch_dim(self):
+    def get_batch_dim(self) -> Union[_t.RawTensorType, int]:
         """
-        :rtype: tf.Tensor|int
+        Warning: This assumes TensorFlow and is also mostly TF specific.
+
+        :return: batch dim
         """
         assert self.batch_dim_axis is not None
         if self.batch:
             if self.beam:
                 assert self.batch.beam == self.beam
             dim = self.batch.dim
-            if isinstance(dim, tf.Tensor):
+            if not isinstance(dim, int):
                 batch_dim_ = self.dim_tags[self.batch_dim_axis]
                 batch_dim_.set_tag_on_size_tensor(dim, batch=self.batch)
             return dim

@@ -76,6 +76,16 @@ class TFFrontend(Frontend[tf.Tensor]):
         raw_tensor.set_shape(shape)
 
     @staticmethod
+    def fill_raw(shape: Union[Sequence[Union[int, tf.Tensor]], tf.Tensor], value: Union[Any, tf.Tensor]) -> tf.Tensor:
+        """
+        :param shape: shape
+        :param value: value to fill
+        :return: raw tensor filled with value everywhere
+        """
+        with tf_util.same_control_flow_ctx([shape, value]):
+            return tf.fill(shape, value)
+
+    @staticmethod
     def reshape_raw(raw_tensor: tf.Tensor, shape: Union[Sequence[Union[int, tf.Tensor]], tf.Tensor]) -> tf.Tensor:
         """
         :param raw_tensor: raw tensor

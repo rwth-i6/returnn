@@ -82,6 +82,15 @@ class Frontend(Generic[T]):
         assert shape == existing_shape
 
     @staticmethod
+    def fill_raw(shape: Union[Sequence[Union[int, T]], T], value: Union[Any, T]) -> T:
+        """
+        :param shape: shape
+        :param value: scalar value to fill
+        :return: raw tensor filled with value everywhere
+        """
+        raise NotImplementedError
+
+    @staticmethod
     def reshape_raw(raw_tensor: T, shape: Union[Sequence[Union[int, T]], T]) -> T:
         """
         :param raw_tensor: raw tensor
