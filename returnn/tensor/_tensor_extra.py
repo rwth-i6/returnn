@@ -876,7 +876,6 @@ class _TensorMixin:
         :param int|None axis:
         """
         assert dim_tag.can_be_used_as_dim()
-        from .basic import get_valid_scope_name_from_str
 
         if axis is None:
             axis = self.get_default_new_axis_for_dim_tag(dim_tag=dim_tag)
@@ -915,11 +914,10 @@ class _TensorMixin:
         if dim_tag.is_spatial_dim() and self.time_dim_axis is None:
             data_opts.pop("time_dim_axis", None)  # fall back to default
         if self.placeholder is not None:
-            with tf.name_scope("%s_copy_add_dim_by_tag" % get_valid_scope_name_from_str(self.name)):
-                placeholder = tf.expand_dims(self.placeholder, axis)
-                if dim_tag.dimension is None or dim_tag.dimension > 1:
-                    tiles = [1] * axis + [dim_tag.get_dim_value()] + [1] * (self.batch_ndim - axis)
-                    placeholder = tf.tile(placeholder, tiles)
+            rf = self.raw_frontend
+            placeholder = rf.expand_dims_raw(self.placeholder, axis)
+            if dim_tag.dimension is None or dim_tag.dimension > 1:
+                placeholder = rf.expand_raw(placeholder, axis, dim_tag.get_dim_value())
             data_opts["placeholder"] = placeholder
         return _t.Tensor(**data_opts)
 
