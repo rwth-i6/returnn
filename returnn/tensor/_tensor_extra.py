@@ -2581,17 +2581,20 @@ class _TensorMixin:
         :return: seq mask of shape (batch,time) if we are batch-major, else (time,batch) if we are time-major
         :rtype: tf.Tensor
         """
-        from .basic import sequence_mask_time_major, sequence_mask
+        from returnn.frontend_api import get_frontend_by_tensor_type
 
         assert self.time_dim_axis is not None
         assert self.batch_dim_axis is not None
+        dyn_seq_len = self.get_sequence_lengths()
+        rf = get_frontend_by_tensor_type(type(dyn_seq_len))
+
         if self.is_time_major:
             assert self.batch_dim_axis == 1
-            return sequence_mask_time_major(self.get_sequence_lengths())
+            return rf.sequence_mask_raw(dyn_seq_len, batch_major=False)
         else:
             assert self.batch_dim_axis == 0
             assert self.time_dim_axis == 1
-            return sequence_mask(self.get_sequence_lengths())
+            return rf.sequence_mask_raw(dyn_seq_len, batch_major=True)
 
     def get_sequence_mask_broadcast(self, axis=None):
         """

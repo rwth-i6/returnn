@@ -140,6 +140,21 @@ class TFFrontend(Frontend[tf.Tensor]):
             return tf.tile(raw_tensor, [1] * axis + [dim] + [1] * (raw_tensor.shape.ndims - axis - 1))
 
     @staticmethod
+    def sequence_mask_raw(lengths: tf.Tensor, *, batch_major: bool = True) -> tf.Tensor:
+        """
+        Wraps around tf.sequence_mask().
+        It will cache the value inside the passed object so that we don't recompute it multiple times.
+
+        :param lengths: shape (batch,)
+        :param batch_major:
+        :return: tensor mask of shape (batch,maxlen) if batch_major else (maxlen,batch) of type bool
+        """
+        if batch_major:
+            return tf_util.sequence_mask(lengths)
+        else:
+            return tf_util.sequence_mask_time_major(lengths)
+
+    @staticmethod
     @contextlib.contextmanager
     def control_dependencies_raw(dependencies: Sequence[Union[tf.Tensor, tf.Operation]]) -> Any:
         """

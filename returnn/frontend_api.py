@@ -143,6 +143,17 @@ class Frontend(Generic[T]):
         raise NotImplementedError
 
     @staticmethod
+    def sequence_mask_raw(lengths: T, *, batch_major: bool = True) -> T:
+        """
+        Like tf.sequence_mask().
+
+        :param lengths: shape (batch,)
+        :param batch_major:
+        :return: tensor mask of shape (batch,maxlen) if batch_major else (maxlen,batch) of type bool
+        """
+        raise NotImplementedError
+
+    @staticmethod
     @contextlib.contextmanager
     def control_dependencies_raw(dependencies: Sequence[Any]) -> Any:
         """
