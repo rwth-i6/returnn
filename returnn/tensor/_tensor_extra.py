@@ -2615,7 +2615,7 @@ class _TensorMixin:
                     seq_mask = sequence_mask(size)  # (B,T)
                 else:  # axis < batch_dim_axis
                     seq_mask = sequence_mask_time_major(size)  # (T,B)
-                shape = [1] * self.batch_ndim  # type: typing.List[typing.Union[int,tf.Tensor]]
+                shape = [1] * self.batch_ndim  # type: List[Union[int,tf.Tensor]]
                 shape[self.batch_dim_axis] = self.get_batch_dim()
                 shape[axis] = tag.get_dim_value()
                 seq_mask = tf.reshape(seq_mask, shape, name="seq_mask_reshape")
@@ -2936,7 +2936,7 @@ class _TensorMixin:
                 axis = common.get_default_new_axis_for_dim_tag(dim_tag)
                 common = common.copy_add_dim_by_tag(dim_tag, unbroadcast=True, axis=axis)
         if all(s.batch_ndim < common.batch_ndim for s in sources):
-            from .basic import validate_broadcast_all_sources
+            from returnn.util.basic import validate_broadcast_all_sources
 
             validate_broadcast_all_sources(
                 allow_broadcast_all_sources=allow_broadcast_all_sources, inputs=sources, common=common

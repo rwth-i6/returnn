@@ -12,6 +12,7 @@ import os
 import sys
 import threading
 import typing
+from returnn.util import basic as util
 from returnn.util.basic import NotSpecified, NativeCodeCompiler
 import returnn.tf.compat as tf_compat
 
@@ -2468,35 +2469,6 @@ def ctc_greedy_decode(logits, seq_lens, time_major):
     return y
 
 
-def validate_broadcast_all_sources(allow_broadcast_all_sources, inputs, common):
-    """
-    Call this when all inputs to some operation (layer) must be broadcasted.
-    It checks whether broadcasting to all sources should be allowed.
-    E.g. for input [B,T1,D1] + [B,T2,D2], when allowed, it would broadcast to [B,T1,T2,D1,D2].
-    When not allowed, there must be at least one source where no broadcasting will be done.
-    Whether it is allowed, this depends on the behavior version.
-      https://github.com/rwth-i6/returnn/issues/691
-
-    Common usages are for :func:`get_common_shape` or :func:`Data.get_common_data`.
-
-    :param bool|NotSpecified allow_broadcast_all_sources:
-    :param inputs: anything convertible to iterable of str, used for reporting
-    :param common: anything convertible to str, used for reporting
-    """
-    msg = (
-        "All inputs\n%s\nrequire broadcasting to \n  %s.\n" % ("\n".join(" - %s" % inp for inp in inputs), common)
-        + "This must be explicitly allowed, e.g. by specifying out_shape."
-    )
-    if allow_broadcast_all_sources is NotSpecified:
-        from returnn.util import BehaviorVersion
-
-        BehaviorVersion.require(version=4, condition=False, message=msg)
-        return
-    if allow_broadcast_all_sources:
-        return
-    raise Exception(msg)
-
-
 def get_common_shape(values, ignore_axes=(), allow_broadcast_all_sources=NotSpecified):
     """
     Related: :func:`tf.broadcast_dynamic_shape`.
@@ -2563,7 +2535,7 @@ def get_common_shape(values, ignore_axes=(), allow_broadcast_all_sources=NotSpec
                 if static_value_dim == 1 and static_common_dim != 1:
                     need_broadcast[id(value)] = True
         if all(need_broadcast.values()):
-            validate_broadcast_all_sources(
+            util.validate_broadcast_all_sources(
                 allow_broadcast_all_sources=allow_broadcast_all_sources,
                 inputs=values,
                 common="shape %s" % (common_shape,),
