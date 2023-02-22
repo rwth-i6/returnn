@@ -200,6 +200,19 @@ class _TensorMixin:
         if kwargs:
             self._extra = _TensorExtra(tensor=self, **kwargs)
 
+        # The size_placeholder is for each variable length dimension in shape, i.e. excluding the batch-dim.
+        if size_placeholder:
+            self.size_placeholder = size_placeholder
+
+        if same_dim_tags_as:
+            for _axis, _dim_tag in sorted(same_dim_tags_as.items()):
+                _axis = self.get_axis_from_description(_axis)
+                assert isinstance(_dim_tag, Dim)
+                base_tag = self._dims[_axis]
+                if base_tag != _dim_tag:
+                    base_tag.declare_same_as(_dim_tag)
+                self._dims = self._dims[:_axis] + (_dim_tag,) + self._dims[_axis + 1 :]
+
         if placeholder is not None:
             self.raw_tensor = placeholder
         elif auto_create_placeholders:
@@ -214,19 +227,6 @@ class _TensorMixin:
             self.raw_tensor = TFFrontend.create_placeholder(self)
             # Do that after same_dim_tags_as handling.
             _auto_create_size_placeholders_on_dim_tags(name=self.name, dim_tags=self._dims)
-
-        # The size_placeholder is for each variable length dimension in shape, i.e. excluding the batch-dim.
-        if size_placeholder:
-            self.size_placeholder = size_placeholder
-
-        if same_dim_tags_as:
-            for _axis, _dim_tag in sorted(same_dim_tags_as.items()):
-                _axis = self.get_axis_from_description(_axis)
-                assert isinstance(_dim_tag, Dim)
-                base_tag = self._dims[_axis]
-                if base_tag != _dim_tag:
-                    base_tag.declare_same_as(_dim_tag)
-                self._dims = self._dims[:_axis] + (_dim_tag,) + self._dims[_axis + 1 :]
 
         self._adapt_batch_consistent_dim_tags()  # TODO where to move this? not needed in general...
         self.sanity_check(assume_complete=False)  # TODO still needed?
