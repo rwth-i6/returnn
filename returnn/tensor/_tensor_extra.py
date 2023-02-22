@@ -259,6 +259,10 @@ class _TensorMixin:
             return True
         return self._extra.available_for_inference
 
+    @available_for_inference.setter
+    def available_for_inference(self, value: bool):
+        self._make_extra().available_for_inference = value
+
     def _make_extra(self: _t.Tensor) -> _TensorExtra:
         if not self._extra:
             self._extra = _TensorExtra(tensor=self)
