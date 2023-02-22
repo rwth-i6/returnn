@@ -16,7 +16,14 @@ from returnn.util.basic import NotSpecified
 # Import also batch_dim, single_step_dim, to support old code.
 # noinspection PyUnresolvedReferences
 from returnn.tensor import Tensor, Dim, batch_dim, single_step_dim
-from returnn.tensor.marked_dim import MarkedDim
+
+# Import also more to support old code.
+# noinspection PyUnresolvedReferences
+from returnn.tensor.marked_dim import MarkedDim, ImplicitSparseDim, ImplicitDynSizeDim
+
+# Import to support old code.
+# noinspection PyUnresolvedReferences
+from returnn.tensor.dim import VerifyOutShapeException
 
 
 # Alias for old code compatibility.

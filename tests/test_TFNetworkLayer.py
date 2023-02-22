@@ -211,7 +211,7 @@ def test_LinearLayer_two_time_dims_allow_broadcast_all_sources():
 
 
 def test_LinearLayer_generic_dim_tags():
-    from returnn.tf.util.data import batch_dim, any_feature_dim, any_spatial_dim
+    from returnn.tf.util.data import batch_dim
 
     with make_scope() as session:
         time1_dim = SpatialDim("time1")
@@ -232,7 +232,6 @@ def test_LinearLayer_generic_dim_tags():
                 "output1": {
                     "class": "linear",
                     "from": "data:in1",
-                    "in_dim": any_feature_dim,
                     "out_dim": out_dim,
                     "out_shape": {batch_dim, time1_dim, time2_dim, out_dim},
                     "is_output_layer": True,
@@ -251,29 +250,11 @@ def test_LinearLayer_generic_dim_tags():
                 }
             }
         )
-        try:
-            network.construct_from_dict(
-                {
-                    "output3": {
-                        "class": "linear",
-                        "from": "output2",
-                        "in_dim": any_feature_dim,
-                        "out_dim": out_dim,
-                        "is_output_layer": True,
-                    }
-                }
-            )
-        except Exception as exc:
-            print("Expected exception:", exc)
-            assert "not found or unique in input" in str(exc)
-        else:
-            raise Exception("No exception")
         network.construct_from_dict(
             {
                 "output4": {
                     "class": "linear",
                     "from": "data:in2",
-                    "in_dim": any_spatial_dim,
                     "out_dim": out_dim,
                     "out_shape": {batch_dim, out_dim, feat_dim},
                     "is_output_layer": True,

@@ -92,3 +92,9 @@ batch_dim = Dim(kind=Dim.Types.Batch, description="global batch", dimension=None
 
 # This indicates to perform a single step execution of some layer which can potentially have recurrent state.
 single_step_dim = Dim(description="single-step", kind=Dim.Types.Spatial, special=True, dimension=1)
+
+
+class VerifyOutShapeException(Exception):
+    """
+    Exception via :func:`Data.verify_out_shape`.
+    """

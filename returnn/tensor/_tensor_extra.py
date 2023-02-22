@@ -12,7 +12,7 @@ if TYPE_CHECKING:
     from returnn.tf.util.data import BatchInfo, SearchBeam, ControlFlowContext
 
 from returnn.util.basic import NotSpecified
-from .dim import Dim, batch_dim
+from .dim import Dim, batch_dim, VerifyOutShapeException
 from . import tensor as _t
 from . import marked_dim as _m
 from returnn import frontend_api as _frontend_api
@@ -3638,9 +3638,3 @@ def _default_feature_dim_axis(batch_dim_axis, time_dim_axis, batch_shape, sparse
     if static_axes:
         return static_axes[-1]
     return axes[-1]
-
-
-class VerifyOutShapeException(Exception):
-    """
-    Exception via :func:`Data.verify_out_shape`.
-    """
