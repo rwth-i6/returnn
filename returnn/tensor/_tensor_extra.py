@@ -4,7 +4,7 @@ or just rarely used attribs, such that we can save memory for the common case.
 """
 
 from __future__ import annotations
-from typing import TYPE_CHECKING, Optional, Sequence, Tuple, Type
+from typing import TYPE_CHECKING, Optional, Union, Type, Sequence, Tuple, List
 import os
 
 if TYPE_CHECKING:
@@ -993,9 +993,11 @@ class _TensorMixin:
         data.batch = batch
         self._adapt_batch_consistent_dim_tags()
         if self.placeholder is not None:
+            assert self.raw_frontend.is_tensorflow
             # This can only work if the batch is expanded.
             assert set(self.batch.virtual_dims).issubset(batch.virtual_dims)
-            from .basic import get_shape
+            import tensorflow as tf
+            from returnn.tf.util.basic import get_shape
             from returnn.util.basic import ensure_list_of_type
 
             with tf.name_scope("copy_extend_batch"):
@@ -1005,9 +1007,9 @@ class _TensorMixin:
                 # Only fixed dims supported/implemented (no packed dims).
                 old_dims = ensure_list_of_type(self.batch.virtual_dims, BatchInfo.FixedDim)
                 new_dims = ensure_list_of_type(batch.virtual_dims, BatchInfo.FixedDim)
-                batch_broadcast_shape = []  # type: typing.List[typing.Union[tf.Tensor,int]]  # fill below
+                batch_broadcast_shape = []  # type: List[Union[tf.Tensor,int]]  # fill below
                 ndim_batch_split = self.batch_ndim - 1 + len(new_dims)
-                tiles = [1] * ndim_batch_split  # type: typing.List[typing.Union[tf.Tensor,int]]  # overwrite below
+                tiles = [1] * ndim_batch_split  # type: List[Union[tf.Tensor,int]]  # overwrite below
                 old_idx = 0
                 for new_idx, new_dim in enumerate(new_dims):
                     old_dim = old_dims[old_idx] if old_idx < len(old_dims) else None
@@ -1150,8 +1152,6 @@ class _TensorMixin:
         :return: copy of myself where the batch-dim is extended/multiplied by beam_size, using tile_transposed
         :rtype: Data
         """
-        from .basic import get_valid_scope_name_from_str, same_control_flow_ctx, tile_transposed
-
         data = self.copy()
         if data.beam and data.beam == beam:
             return data
@@ -1161,8 +1161,12 @@ class _TensorMixin:
         data.beam = beam
         assert data.batch
         data.batch = data.batch.copy_set_beam(beam)
-        with tf.name_scope("%s_data_extend_with_beam" % get_valid_scope_name_from_str(self.name)):
-            if data.placeholder is not None:
+        if data.placeholder is not None:
+            assert data.raw_frontend.is_tensorflow
+            import tensorflow as tf
+            from returnn.tf.util.basic import get_valid_scope_name_from_str, same_control_flow_ctx, tile_transposed
+
+            with tf.name_scope("%s_data_extend_with_beam" % get_valid_scope_name_from_str(self.name)):
                 with same_control_flow_ctx(data.placeholder):
                     data.placeholder = tile_transposed(
                         data.placeholder, axis=data.batch_dim_axis, multiples=beam.beam_size
@@ -1205,7 +1209,9 @@ class _TensorMixin:
                 data = data.copy_template_excluding_axis(axis)
         data.batch = batch
         if tensor is not None:
-            from .basic import get_shape
+            assert self.raw_frontend.is_tensorflow
+            import tensorflow as tf
+            from returnn.tf.util.basic import get_shape
 
             shape = get_shape(tensor)
             tensor = tf.reshape(tensor, shape[:min_axis] + [-1] + shape[min_axis + len(axes) :])
