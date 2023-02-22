@@ -1664,7 +1664,7 @@ class GatherLayer(_ConcatInputLayer):
         )
         out_type = input_data.get_kwargs(include_special_axes=False)
         out_type["name"] = "%s_output" % name
-        out_type["dim_tags"] = dim_tags
+        out_type["dims"] = dim_tags
         out_type["beam"] = SearchBeam.get_combined_beam(input_data.beam, position_data.beam)
         out_type["available_for_inference"] = (
             input_data.available_for_inference and position_data.available_for_inference
@@ -1816,7 +1816,7 @@ class GatherNdLayer(_ConcatInputLayer):
         dim_tags = list(position_data.dim_tags) + list(input_data.dim_tags[2:])  # (B, ...) (w/o batch)
         out_type = position_data.get_kwargs(include_special_axes=False)
         out_type["name"] = "%s_output" % name
-        out_type["dim_tags"] = dim_tags
+        out_type["dims"] = dim_tags
         if position_data.time_dim_axis is None:
             if input_data.time_dim_axis is not None and input_data.time_dim_axis_excluding_batch >= 1:
                 out_type["time_dim_axis"] = len(dim_tags) + input_data.time_dim_axis_excluding_batch - 2
@@ -4082,7 +4082,7 @@ class MergeDimsLayer(_ConcatInputLayer):
         new_dim_tags.insert(merge_target_axis, out_dim_)
 
         data_opts = data.get_kwargs(include_special_axes=False)
-        data_opts["dim_tags"] = new_dim_tags
+        data_opts["dims"] = new_dim_tags
         data = Data(**data_opts)
 
         new_feature_dim_axis = cls._old_axis_to_new_axis(
@@ -5331,7 +5331,7 @@ class SwapAxesLayer(_ConcatInputLayer):
         dim_tags = list(out.dim_tags)
         dim_tags[axis1], dim_tags[axis2] = dim_tags[axis2], dim_tags[axis1]
         opts = out.get_kwargs(include_special_axes=False)
-        opts["dim_tags"] = dim_tags
+        opts["dims"] = dim_tags
         opts["time_dim_axis"] = cls._translate_axis(out.time_dim_axis, axis1, axis2)
         if out.feature_dim_axis_or_unspecified is not NotSpecified:
             opts["feature_dim_axis"] = cls._translate_axis(out.feature_dim_axis, axis1, axis2)
@@ -10742,7 +10742,7 @@ class ForcedAlignmentLayer(_ConcatInputLayer):
         """
         src = get_concat_sources_data_template(sources, name="%s_output" % name).copy_as_time_major()
         opts = src.get_kwargs(include_special_axes=False)
-        opts["dim_tags"] = (src.get_time_dim_tag(), src.dim_tags[src.batch_dim_axis])
+        opts["dims"] = (src.get_time_dim_tag(), src.dim_tags[src.batch_dim_axis])
         opts["dtype"] = "int32"
         opts["sparse_dim"] = src.dim_tags[src.feature_dim_axis]
         return Data(**opts)

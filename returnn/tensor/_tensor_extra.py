@@ -638,7 +638,7 @@ class _TensorMixin:
         data_opts = self.get_kwargs(include_special_axes=False)
         if self._raw_tensor is not None:
             data_opts["raw_tensor"] = self.raw_frontend.transpose_raw(self._raw_tensor, perm)
-        data_opts["dim_tags"] = tuple(self.dim_tags[perm[i]] for i in range(self.batch_ndim))
+        data_opts["dims"] = tuple(self.dim_tags[perm[i]] for i in range(self.batch_ndim))
         data = _t.Tensor(**data_opts)
         if self._extra:
             inv_perm_ = {j: i for (i, j) in enumerate(perm)}
@@ -796,7 +796,7 @@ class _TensorMixin:
         else:
             dim_tag = Dim(kind=Dim.Types.Batch, description="batch", dimension=batch.static_dim, batch=batch)
         dim_tags.insert(batch_dim_axis, dim_tag)
-        data_opts["dim_tags"] = dim_tags
+        data_opts["dims"] = dim_tags
         data_opts["batch"] = batch
         data_opts["beam"] = batch.beam
         other_special_axes = self.get_special_axes_dict(counted_with_batch_dim=True, only_available=True)
@@ -905,7 +905,7 @@ class _TensorMixin:
                 dimension=1,
                 auto_generated=True,
             )
-        data_opts["dim_tags"] = self.dim_tags[:axis] + (dim_tag,) + self.dim_tags[axis:]
+        data_opts["dims"] = self._dims[:axis] + (dim_tag,) + self._dims[axis:]
         other_special_axes = self.get_special_axes_dict(counted_with_batch_dim=True, only_available=True)
         for k, a in other_special_axes.items():
             data_opts[k] = a if (a < axis) else (a + 1)
@@ -952,7 +952,7 @@ class _TensorMixin:
             + (dim_tag_split_rem, dim_tag_new)
             + self.dim_tags[self.feature_dim_axis + 1 :]
         )
-        data_opts["dim_tags"] = dim_tags
+        data_opts["dims"] = dim_tags
         other_special_axes = self.get_special_axes_dict(counted_with_batch_dim=True, only_available=True)
         other_special_axes.pop("feature_dim_axis", None)
         for k, a in other_special_axes.items():
@@ -1139,7 +1139,7 @@ class _TensorMixin:
             auto_generated=True,
             dimension=None,
         )
-        data_opts["dim_tags"] = (dim_tag,) + tuple(
+        data_opts["dims"] = (dim_tag,) + tuple(
             tag for (i, tag) in enumerate(self.dim_tags) if i not in (self.batch_dim_axis, self.time_dim_axis)
         )
         data_opts["time_dim_axis"] = None
@@ -1300,7 +1300,7 @@ class _TensorMixin:
             kwargs[axis_name] = axis if (axis < exclude_axis) else (axis - 1)
         new_dim_tags = list(self.dim_tags)
         del new_dim_tags[exclude_axis]
-        kwargs["dim_tags"] = new_dim_tags
+        kwargs["dims"] = new_dim_tags
         if name:
             kwargs["name"] = name
         return _t.Tensor(**kwargs)
@@ -1344,7 +1344,7 @@ class _TensorMixin:
         kwargs = self.get_kwargs(include_special_axes=False)
         dim_tag = Dim(kind=Dim.Types.Time, description="unknown_time", dimension=None, auto_generated=True)
         dim_tags = self.dim_tags[:time_dim_axis] + (dim_tag,) + self.dim_tags[time_dim_axis:]
-        kwargs["dim_tags"] = dim_tags
+        kwargs["dims"] = dim_tags
         other_special_axes = self.get_special_axes_dict(counted_with_batch_dim=True, only_available=True)
         other_special_axes.pop("time_dim_axis", None)
         for axis_name, axis in other_special_axes.items():
@@ -1374,7 +1374,7 @@ class _TensorMixin:
             if self.feature_dim_axis == axis:
                 opts.pop("feature_dim_axis", None)
         dim_tags = self.dim_tags[:axis] + (new_dim_tag,) + self.dim_tags[axis + 1 :]
-        opts["dim_tags"] = dim_tags
+        opts["dims"] = dim_tags
         if self.feature_dim_axis_or_unspecified is not NotSpecified:
             if (
                 self.feature_dim_axis == axis
@@ -1414,7 +1414,7 @@ class _TensorMixin:
         if keep_special_axes:
             assert len(new_dim_tags) == self.batch_ndim
         opts = self.get_kwargs(include_special_axes=keep_special_axes)
-        opts["dim_tags"] = new_dim_tags
+        opts["dims"] = new_dim_tags
         if name:
             opts["name"] = name
         return _t.Tensor(**opts)
@@ -1457,7 +1457,7 @@ class _TensorMixin:
             else:
                 dim_tags.append(dim_tag)
 
-        kwargs["dim_tags"] = dim_tags
+        kwargs["dims"] = dim_tags
         return _t.Tensor(**kwargs)
 
     def _get_variable_dim_pattern(self):

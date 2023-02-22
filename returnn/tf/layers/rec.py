@@ -7944,7 +7944,7 @@ class SelfAttentionLayer(_ConcatInputLayer):
         else:
             dim_tags = (batch_dim_tag, feat_tag)
         data_opts = out.get_kwargs(include_special_axes=False)
-        data_opts["dim_tags"] = dim_tags
+        data_opts["dims"] = dim_tags
         data_opts["dtype"] = "float32"
         data_opts.pop("sparse", None)
         data_opts.pop("vocab", None)

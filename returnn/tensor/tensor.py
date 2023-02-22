@@ -69,6 +69,8 @@ class Tensor(_TensorMixin, Generic[RawTensorType]):
         if dims is None:
             # old code
             dims, sparse_dim = _tensor_extra.infer_dim_tags(name=name, sparse_dim=sparse_dim, **kwargs)
+        else:
+            assert "shape" not in kwargs and "dim_tags" not in kwargs  # probably old code got this wrong
         if dtype is None:
             # old defaults
             dtype = "int32" if sparse_dim else "float32"
