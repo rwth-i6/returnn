@@ -437,6 +437,8 @@ class _DimMixin:
             same_base._validate_in_current_graph()
             # noinspection PyProtectedMember
             if same_base._extra:
+                from returnn.tf.util.data import ControlFlowContext
+
                 for ctx_ in ControlFlowContext.abs_ctx_stack_with_root(ctx):
                     # noinspection PyProtectedMember
                     tag = same_base._extra.same_for_batch_ctx.get((batch, ctx_), None)
