@@ -767,6 +767,8 @@ class _TensorMixin:
 
     def copy_add_batch_dim(self, batch_dim_axis, batch=None, dim_tag=None) -> _t.Tensor:
         """
+        Warning: Assumes TensorFlow.
+
         :param int batch_dim_axis:
         :param BatchInfo|None batch:
         :param Dim|None dim_tag:
@@ -887,6 +889,8 @@ class _TensorMixin:
             if unbroadcast:
                 return self.copy_add_batch_dim(batch_dim_axis=axis, batch=dim_tag.batch, dim_tag=dim_tag)
             else:
+                from returnn.tf.util.data import BatchInfo
+
                 batch_info = BatchInfo.make_global_broadcast_batch_info()
                 return self.copy_add_batch_dim(
                     batch_dim_axis=axis,
