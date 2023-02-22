@@ -928,8 +928,6 @@ class _TensorMixin:
 
         :param int new_feature_dim: will be the new dim
         """
-        from .basic import get_shape
-
         assert not self.sparse
         assert self.feature_dim_axis is not None
         assert self.dim is not None
@@ -960,14 +958,15 @@ class _TensorMixin:
         for k, a in other_special_axes.items():
             data_opts[k] = a if (a < new_feature_dim_axis) else (a + 1)
         if self.placeholder is not None:
-            self.placeholder.set_shape(self.batch_shape)
-            old_shape = get_shape(self.placeholder)
+            rf = self.raw_frontend
+            rf.set_known_shape_raw(self.placeholder, self.batch_shape)
+            old_shape = rf.get_shape_tuple_raw(self.placeholder)
             new_shape = (
                 old_shape[: self.feature_dim_axis]
-                + [feature_dim_rem, new_feature_dim]
+                + (feature_dim_rem, new_feature_dim)
                 + old_shape[self.feature_dim_axis + 1 :]
             )
-            data_opts["placeholder"] = tf.reshape(self.placeholder, new_shape, name="copy_split_feature_dim")
+            data_opts["placeholder"] = rf.reshape_raw(self.placeholder, new_shape)
         return _t.Tensor(**data_opts)
 
     def copy_extend_batch(self, batch) -> _t.Tensor:

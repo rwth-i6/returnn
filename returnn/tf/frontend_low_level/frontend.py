@@ -20,7 +20,7 @@ class TFFrontend(Frontend[tf.Tensor]):
     TensorFlow low-level frontend, operating on tf.Tensor
     """
 
-    T = tf.Tensor
+    RawTensorType = tf.Tensor
     is_tensorflow = True
 
     @staticmethod
@@ -39,7 +39,14 @@ class TFFrontend(Frontend[tf.Tensor]):
         return raw_tensor.shape.ndims
 
     @staticmethod
-    def get_shape_raw(raw_tensor: tf.Tensor) -> Tuple[Union[int, tf.Tensor]]:
+    def get_shape_raw(raw_tensor: tf.Tensor) -> tf.Tensor:
+        """
+        :return: shape of raw tensor
+        """
+        return tf.shape(raw_tensor)
+
+    @staticmethod
+    def get_shape_tuple_raw(raw_tensor: tf.Tensor) -> Tuple[Union[int, tf.Tensor]]:
         """
         :return: shape of raw tensor. assumes that ndim is known
         """
@@ -66,6 +73,16 @@ class TFFrontend(Frontend[tf.Tensor]):
         wrap tf.Tensor.set_shape
         """
         raw_tensor.set_shape(shape)
+
+    @staticmethod
+    def reshape_raw(raw_tensor: tf.Tensor, shape: Union[Sequence[Union[int, tf.Tensor]], tf.Tensor]) -> tf.Tensor:
+        """
+        :param raw_tensor: raw tensor
+        :param shape: new shape
+        :return: reshaped raw tensor
+        """
+        with tf_util.same_control_flow_ctx([raw_tensor, shape]):
+            return tf.reshape(raw_tensor, shape)
 
     @staticmethod
     def transpose_raw(raw_tensor: tf.Tensor, perm: Sequence[int]) -> tf.Tensor:

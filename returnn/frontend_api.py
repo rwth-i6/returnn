@@ -1,5 +1,9 @@
 """
 Frontend API
+
+The convention for the user is to do::
+
+    from returnn import frontend as rf
 """
 
 from __future__ import annotations
@@ -21,7 +25,7 @@ class Frontend(Generic[T]):
     and all functions are staticmethod (or classmethod).
     """
 
-    T: Type[T]
+    RawTensorType: Type[T]
     is_tensorflow: bool = False  # whether this framework uses TensorFlow
 
     @staticmethod
@@ -39,7 +43,14 @@ class Frontend(Generic[T]):
         raise NotImplementedError
 
     @staticmethod
-    def get_shape_raw(raw_tensor: T) -> Tuple[Union[int, T]]:
+    def get_shape_raw(raw_tensor: T) -> T:
+        """
+        :return: shape of raw tensor
+        """
+        raise NotImplementedError
+
+    @staticmethod
+    def get_shape_tuple_raw(raw_tensor: T) -> Tuple[Union[int, T]]:
         """
         :return: shape of raw tensor. assumes that ndim is known.
             In eager frameworks, all dims are int.
@@ -64,9 +75,19 @@ class Frontend(Generic[T]):
         """
         # Default implementation for eager-based frameworks.
         assert all(dim is not None for dim in shape)
-        existing_shape = get_frontend_by_tensor_type(raw_tensor).get_known_shape_raw(raw_tensor)
+        rf = get_frontend_by_tensor_type(type(raw_tensor))
+        existing_shape = rf.get_known_shape_raw(raw_tensor)
         assert all(dim is not None for dim in existing_shape)
         assert shape == existing_shape
+
+    @staticmethod
+    def reshape_raw(raw_tensor: T, shape: Union[Sequence[Union[int, T]], T]) -> T:
+        """
+        :param raw_tensor: raw tensor
+        :param shape: new shape
+        :return: reshaped raw tensor
+        """
+        raise NotImplementedError
 
     @staticmethod
     def transpose_raw(raw_tensor: T, perm: Sequence[int]) -> T:

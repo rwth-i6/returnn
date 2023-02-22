@@ -14,4 +14,4 @@ class TorchFrontend(Frontend[torch.Tensor]):
     PyTorch frontend
     """
 
-    T = torch.Tensor
+    RawTensorType = torch.Tensor
