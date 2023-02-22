@@ -12,7 +12,7 @@ if TYPE_CHECKING:
     from returnn.tf.util.data import BatchInfo, SearchBeam, ControlFlowContext
 
 from returnn.util.basic import NotSpecified
-from .dim import Dim
+from .dim import Dim, batch_dim
 from . import tensor as _t
 from . import marked_dim as _m
 from returnn import frontend_api as _frontend_api
@@ -303,22 +303,23 @@ class _TensorMixin:
                 if tag.dyn_size_ext.have_batch_axis():
                     assert tag.batch == tag.dyn_size_ext.batch
                 tag.dyn_size_ext.sanity_check()
-        if not ignore_placeholder and self.placeholder is not None:
+        if not ignore_placeholder and self._raw_tensor is not None:
             # Note: We could just call self.placeholder.set_shape.
             # However, we are more explicit.
             # We assume that the placeholder has already a known shape, and error otherwise.
-            assert self.placeholder.shape.ndims == self.batch_ndim
+            rf = self.raw_frontend
+            assert rf.get_ndim_raw(self._raw_tensor) == self.batch_ndim
+            raw_shape = rf.get_known_shape_raw(self._raw_tensor)
             for i in range(self.batch_ndim):
                 if self.batch_shape[i] is None:
                     continue  # we allow anything in the placeholder
-                if self.placeholder.shape[i].value != self.batch_shape[i]:
-                    print("Mismatching shape: Tensor %r vs Data %r" % (self.placeholder, self))
-                    from .basic import print_graph_output
-
-                    print_graph_output(self.placeholder, max_depth=3)
-                assert self.placeholder.shape[i].value == self.batch_shape[i]
-            self.placeholder.set_shape(self.batch_shape)
-            assert self.placeholder.dtype.base_dtype.name == self.dtype
+                if raw_shape[i] != self.batch_shape[i]:
+                    raise Exception(
+                        f"Mismatching shape: Raw tensor {self._raw_tensor} vs Tensor {self};\n"
+                        + self.raw_frontend.format_graph_output(self._raw_tensor, max_depth=3)
+                    )
+            rf.set_known_shape_raw(self._raw_tensor, self.batch_shape)
+            assert rf.get_dtype_name_raw(self._raw_tensor) == self.dtype
         if assume_complete:
             for tag in self.dim_tags:
                 if tag.is_batch_dim():

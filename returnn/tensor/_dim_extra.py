@@ -758,7 +758,7 @@ class _DimMixin:
         See also :func:`get_tag_from_size_tensor`.
         Also see :func:`set_dyn_size_ext_for_batch_ctx`.
 
-        :param tf.Tensor x:
+        :param x: raw tensor, for example tf.Tensor
         :param BatchInfo|None batch:
         :param bool same_as_before: implies it was set before, and the new size is the same.
           e.g. it could be some identity with added checks, or other change.
@@ -797,7 +797,7 @@ class _DimMixin:
                             )
                             % (self, self.description, self.dyn_size, x, batch),
                             "\nNew size computation graph:",
-                            get_frontend_by_tensor_type(type(x)).format_graph_output(x, max_depth=3) or "<None>",
+                            get_frontend_by_tensor_type(type(x)).format_graph_output(x, max_depth=3),
                             "\nThis is maybe the result of an incorrect declare_same_as. ",
                             "same_as = %s" % self.same_as,
                         ]

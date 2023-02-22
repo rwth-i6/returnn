@@ -3,7 +3,7 @@ Frontend for exposing TensorFlow-specific functionality.
 """
 
 from __future__ import annotations
-from typing import Optional, Union, Sequence
+from typing import Optional, Union, Sequence, Tuple
 import tensorflow as tf
 
 from returnn.util.basic import NotSpecified
@@ -23,8 +23,54 @@ class TFFrontend(Frontend[tf.Tensor]):
     T = tf.Tensor
     is_tensorflow = True
 
-    @classmethod
-    def create_placeholder(cls, tensor: _TT) -> tf.Tensor:
+    @staticmethod
+    def get_dtype_name_raw(raw_tensor: tf.Tensor) -> str:
+        """
+        :return: dtype of raw tensor, as string
+        """
+        return raw_tensor.dtype.base_dtype.name
+
+    @staticmethod
+    def get_ndim_raw(raw_tensor: tf.Tensor) -> int:
+        """
+        :return: ndim of raw tensor. assumes it is known
+        """
+        assert raw_tensor.shape.ndims is not None
+        return raw_tensor.shape.ndims
+
+    @staticmethod
+    def get_shape_raw(raw_tensor: tf.Tensor) -> Tuple[Union[int, tf.Tensor]]:
+        """
+        :return: shape of raw tensor. assumes that ndim is known
+        """
+        shape = raw_tensor.shape.as_list()
+        if all([dim is not None for dim in shape]):
+            return tuple(shape)
+        with tf_util.same_control_flow_ctx(raw_tensor):
+            shape_dynamic = tf.shape(raw_tensor)
+            for axis, dim in enumerate(shape):
+                if dim is None:
+                    shape[axis] = shape_dynamic[axis]
+            return tuple(shape)
+
+    @staticmethod
+    def get_known_shape_raw(raw_tensor: tf.Tensor) -> Tuple[Optional[int]]:
+        """
+        :return: shape of raw tensor, int for static known, None otherwise. assumes that ndim is known.
+        """
+        return tuple(raw_tensor.shape.as_list())
+
+    @staticmethod
+    def set_known_shape_raw(raw_tensor: tf.Tensor, shape: Tuple[Optional[int]]) -> None:
+        """
+        Sets the known shape of the raw tensor.
+        This is only supported in graph-based frameworks,
+        and just performs a check in eager frameworks.
+        """
+        raw_tensor.set_shape(shape)
+
+    @staticmethod
+    def create_placeholder(tensor: _TT) -> tf.Tensor:
         """
         :return: tf.placeholder in TF
         """
@@ -103,12 +149,12 @@ class TFFrontend(Frontend[tf.Tensor]):
         return tf_util.get_root_graph(tensor.raw_tensor.graph) is g
 
     @staticmethod
-    def format_graph_output(tensor: tf.Tensor, *, max_depth: Optional[int] = None) -> str:
+    def format_graph_output(raw_tensor: tf.Tensor, *, max_depth: Optional[int] = None) -> str:
         """
-        :param tensor:
+        :param raw_tensor:
         :param max_depth:
         """
-        return tf_util.format_graph_output(tensor, max_depth=max_depth)
+        return tf_util.format_graph_output(raw_tensor, max_depth=max_depth)
 
     @staticmethod
     def reduce(source: _TT, *, mode: str, axis: Union[Dim, Sequence[Dim]], use_time_mask: bool = NotSpecified) -> _TT:

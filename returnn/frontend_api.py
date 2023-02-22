@@ -3,7 +3,7 @@ Frontend API
 """
 
 from __future__ import annotations
-from typing import TYPE_CHECKING, Optional, TypeVar, Generic, Any, Dict, Type, Union, Sequence
+from typing import TYPE_CHECKING, Optional, TypeVar, Generic, Any, Dict, Type, Union, Sequence, Tuple
 
 from returnn.util.basic import NotSpecified
 
@@ -24,8 +24,52 @@ class Frontend(Generic[T]):
     T: Type[T]
     is_tensorflow: bool = False  # whether this framework uses TensorFlow
 
-    @classmethod
-    def create_placeholder(cls, tensor: Tensor) -> T:
+    @staticmethod
+    def get_dtype_name_raw(raw_tensor: T) -> str:
+        """
+        :return: dtype of raw tensor, as string
+        """
+        raise NotImplementedError
+
+    @staticmethod
+    def get_ndim_raw(raw_tensor: T) -> int:
+        """
+        :return: ndim of raw tensor. assumes it is known
+        """
+        raise NotImplementedError
+
+    @staticmethod
+    def get_shape_raw(raw_tensor: T) -> Tuple[Union[int, T]]:
+        """
+        :return: shape of raw tensor. assumes that ndim is known.
+            In eager frameworks, all dims are int.
+        """
+        raise NotImplementedError
+
+    @staticmethod
+    def get_known_shape_raw(raw_tensor: T) -> Tuple[Optional[int]]:
+        """
+        :return: shape of raw tensor, int for static known, None otherwise. assumes that ndim is known.
+            This will not create any ops.
+            In eager frameworks, all dims are known.
+        """
+        raise NotImplementedError
+
+    @staticmethod
+    def set_known_shape_raw(raw_tensor: T, shape: Tuple[Optional[int]]) -> None:
+        """
+        Sets the known shape of the raw tensor.
+        This is only supported in graph-based frameworks,
+        and just performs a check in eager frameworks.
+        """
+        # Default implementation for eager-based frameworks.
+        assert all(dim is not None for dim in shape)
+        existing_shape = get_frontend_by_tensor_type(raw_tensor).get_known_shape_raw(raw_tensor)
+        assert all(dim is not None for dim in existing_shape)
+        assert shape == existing_shape
+
+    @staticmethod
+    def create_placeholder(tensor: Tensor) -> T:
         """
         :return: tf.placeholder in TF
 
@@ -34,7 +78,7 @@ class Frontend(Generic[T]):
         even in graph-based backends.
         Rather, the logic to create placeholders should be done elsewhere.
         """
-        raise Exception(f"{cls}.create_placeholder not supported")
+        raise Exception("create_placeholder not supported by backend")
 
     @staticmethod
     def runtime_sanity_checks(tensor: Tensor) -> Any:
@@ -56,12 +100,12 @@ class Frontend(Generic[T]):
         return True
 
     @staticmethod
-    def format_graph_output(tensor: T, *, max_depth: Optional[int] = None) -> Optional[str]:
+    def format_graph_output(raw_tensor: T, *, max_depth: Optional[int] = None) -> str:
         """
         :return: the computation graph leading to this tensor formatted.
             In eager-mode frameworks, this is not supported and returns None.
         """
-        return None
+        return "<no-graph>"
 
     @staticmethod
     def reduce(
