@@ -79,7 +79,8 @@ class _TensorMixin:
     _dims: Tuple[Dim]
     dtype: str
     sparse_dim: Optional[Dim]
-    _raw_tensor: _t.RawTensorType
+    _raw_tensor: Optional[_t.RawTensorType]
+    raw_tensor: Optional[_t.RawTensorType]
     _extra: Optional[_TensorExtra]
 
     @staticmethod
@@ -1818,11 +1819,11 @@ class _TensorMixin:
         return self._raw_tensor
 
     @placeholder.setter
-    def placeholder(self, value):
+    def placeholder(self: _t.Tensor, value: Optional[_t.RawTensorType]):
         """
         (Old alias for raw_tensor.)
 
-        :param T|None value:
+        :param value:
         """
         self.raw_tensor = value
 
