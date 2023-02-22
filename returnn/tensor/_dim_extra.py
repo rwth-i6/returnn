@@ -13,6 +13,9 @@ if TYPE_CHECKING:
     # Those are only used for TensorFlow, or they are deprecated.
     from returnn.tf.util.data import BatchInfo, ControlFlowContext
 
+    # just for type hints, otherwise use _d.Dim
+    from .dim import Dim
+
 from . import dim as _d
 from . import tensor as _t
 from . import marked_dim as _m
@@ -1056,7 +1059,7 @@ class _DimMixin:
             return False
         return self.is_equal(other)
 
-    def __ne__(self, other):
+    def __ne__(self: Dim, other: Dim):
         """
         :param Dim other:
         :rtype: bool
@@ -1084,7 +1087,7 @@ class _DimMixin:
                 return hash((base.kind, base.dimension, base.description))
             return hash(id(base))
 
-    def __lt__(self, other):
+    def __lt__(self: Dim, other: Dim):
         """
         Define some order. This is just such that `sorted` works, or some diff reporting, or so.
         It is on symbolic level, i.e. it does not consider the actual dimension value.
@@ -1560,7 +1563,7 @@ class _DimMixin:
     # This assumption is necessary for some simplifications.
     # https://github.com/rwth-i6/returnn/pull/853
 
-    def __add__(self, other):
+    def __add__(self: Dim, other):
         """
         :param Dim|int other:
         :return: self + other. note that this is not commutative, i.e. different from other + self.
@@ -1570,7 +1573,7 @@ class _DimMixin:
         term.extend_add_sub_(other, kind="add", right=True)
         return term.as_dim()
 
-    def __radd__(self, other):
+    def __radd__(self: Dim, other):
         """
         :param Dim|int other:
         :return: other + self
@@ -1587,7 +1590,7 @@ class _DimMixin:
         """
         return self.sub_right(other)
 
-    def sub_right(self, other):
+    def sub_right(self: Dim, other):
         """
         :param Dim|int other:
         :return: self - other
@@ -1597,7 +1600,7 @@ class _DimMixin:
         term.extend_add_sub_(other, kind="sub", right=True)
         return term.as_dim()
 
-    def sub_left(self, other):
+    def sub_left(self: Dim, other):
         """
         :param Dim|int other:
         :return: (-other) + self
@@ -1607,7 +1610,7 @@ class _DimMixin:
         term.extend_add_sub_(other, kind="sub", right=False)
         return term.as_dim()
 
-    def __mul__(self, other):
+    def __mul__(self: Dim, other):
         """
         :param Dim|int other:
         :rtype: Dim
@@ -1616,7 +1619,7 @@ class _DimMixin:
         term.extend_mul_div_(other, kind="mul", right=True)
         return term.as_dim()
 
-    def __rmul__(self, other):
+    def __rmul__(self: Dim, other):
         """
         :param Dim|int other:
         :rtype: Dim
@@ -1625,7 +1628,7 @@ class _DimMixin:
         term.extend_mul_div_(other, kind="mul", right=False)
         return term.as_dim()
 
-    def __floordiv__(self, other):
+    def __floordiv__(self: Dim, other):
         """
         :param Dim|int other:
         :rtype: Dim
@@ -1641,7 +1644,7 @@ class _DimMixin:
         """
         return self.div_right(other)
 
-    def div_left(self, other):
+    def div_left(self: Dim, other):
         """
         :param Dim|int other:
         :rtype: Dim
@@ -1650,7 +1653,7 @@ class _DimMixin:
         term.extend_mul_div_(other, kind="truediv", right=False)
         return term.as_dim()
 
-    def div_right(self, other):
+    def div_right(self: Dim, other):
         """
         :param Dim|int other:
         :rtype: Dim
@@ -1659,7 +1662,7 @@ class _DimMixin:
         term.extend_mul_div_(other, kind="truediv", right=True)
         return term.as_dim()
 
-    def ceildiv_left(self, other):
+    def ceildiv_left(self: Dim, other):
         """
         :param Dim|int other:
         :rtype: Dim
@@ -1668,7 +1671,7 @@ class _DimMixin:
         term.extend_mul_div_(other, kind="ceildiv", right=False)
         return term.as_dim()
 
-    def ceildiv_right(self, other):
+    def ceildiv_right(self: Dim, other):
         """
         :param Dim|int other:
         :rtype: Dim
