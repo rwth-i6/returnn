@@ -16,7 +16,6 @@ if TYPE_CHECKING:
 from . import dim as _d
 from . import tensor as _t
 from . import marked_dim as _m
-from returnn import frontend as rf
 
 
 class DimTypes:
@@ -205,7 +204,6 @@ class _DimMixin:
     def control_flow_ctx(self: _d.Dim, value: Optional[ControlFlowContext]):
         if self.control_flow_ctx is value:
             return
-        assert rf.is_tensorflow, "control_flow_ctx is only supported in TensorFlow"
         self._make_extra().control_flow_ctx = value
 
     @property
@@ -839,9 +837,10 @@ class _DimMixin:
         """
         In case we can calculate the dyn size, do that now.
 
+        Warning: This is TensorFlow only currently.
+
         :param bool template_only:
         """
-        assert rf.is_tensorflow, "complete_dyn_size only supported in TF"
         if not self.is_dynamic():
             return
         self._validate_in_current_graph()
@@ -879,6 +878,7 @@ class _DimMixin:
                 return None
             if a is None or b is None:
                 return None
+            assert isinstance(a, tf.Tensor) and isinstance(b, tf.Tensor)
             with tf_util.same_control_flow_ctx([a, b]):
                 if kind == "add":
                     use_relu = _is_negative(a) or _is_negative(b)  # for dynamic tensors, assume all positive
