@@ -11327,6 +11327,8 @@ class HDFDumpLayer(LayerBase):
                     if callable(filename_):
                         assert dump_per_run  # does not make sense otherwise
                         filename_ = filename_(**self.network.get_run_opts())
+                    elif dump_per_run:
+                        filename_ = filename_.format_map(self.network.get_run_opts())
                     assert isinstance(filename_, str)
                     self.hdf_writer = SimpleHDFWriter(
                         filename=filename_,
