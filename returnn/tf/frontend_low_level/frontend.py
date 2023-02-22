@@ -146,7 +146,7 @@ class TFFrontend(Frontend[tf.Tensor]):
         :param dependencies: list of tensors or operations
         :return: identity of tensor with control dependencies
         """
-        with tf.control_dependencies(dependencies):
+        with tf.control_dependencies(dependencies), tf_util.same_control_flow_ctx(raw_tensor):
             return tf.identity(raw_tensor)
 
     @staticmethod
