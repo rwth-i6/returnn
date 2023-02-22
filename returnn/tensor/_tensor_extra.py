@@ -580,9 +580,14 @@ class _TensorMixin:
         return d
 
     def _adapt_batch_consistent_dim_tags(self):
-        if not self.batch:  # uninitialized
+        if not self._extra:
             return
-        self._dims = tuple(tag.get_for_batch_ctx(batch=self.batch, ctx=self.control_flow_ctx) for tag in self._dims)
+        if not self.batch:  # uninitialized or not relevant for this framework
+            return
+        dims = tuple(tag.get_for_batch_ctx(batch=self.batch, ctx=self.control_flow_ctx) for tag in self._dims)
+        assert all(dims)
+        dims: Tuple[Dim, ...]
+        self._dims = dims
 
     def copy(self, name: Optional[str] = None) -> _t.Tensor:
         """
