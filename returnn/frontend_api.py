@@ -78,6 +78,27 @@ class Frontend(Generic[T]):
         raise NotImplementedError
 
     @staticmethod
+    def expand_dims_raw(raw_tensor: T, axis: int) -> T:
+        """
+        :param raw_tensor:
+        :param axis:
+        :return: raw tensor with new axis
+        """
+        raise NotImplementedError
+
+    @staticmethod
+    def expand_raw(raw_tensor: T, axis: int, dim: Union[int, T]) -> T:
+        """
+        :param raw_tensor:
+        :param axis: shape[axis] must be 1
+        :param dim: the new dim for shape[axis]
+        :return: shape[axis] expands to dim.
+            in PyTorch or other frameworks which support custom strides,
+            this is an efficient view and not a copy.
+        """
+        raise NotImplementedError
+
+    @staticmethod
     def create_placeholder(tensor: Tensor) -> T:
         """
         :return: tf.placeholder in TF

@@ -63,9 +63,7 @@ class TFFrontend(Frontend[tf.Tensor]):
     @staticmethod
     def set_known_shape_raw(raw_tensor: tf.Tensor, shape: Tuple[Optional[int]]) -> None:
         """
-        Sets the known shape of the raw tensor.
-        This is only supported in graph-based frameworks,
-        and just performs a check in eager frameworks.
+        wrap tf.Tensor.set_shape
         """
         raw_tensor.set_shape(shape)
 
@@ -74,9 +72,29 @@ class TFFrontend(Frontend[tf.Tensor]):
         """
         :param raw_tensor:
         :param perm: e.g. [0, 2, 1]
-        :return: permuted (transposed) raw tensor
+        :return: permuted (transposed) raw tensor; wraps tf.transpose
         """
         return tf.transpose(raw_tensor, perm)
+
+    @staticmethod
+    def expand_dims_raw(raw_tensor: tf.Tensor, axis: int) -> tf.Tensor:
+        """
+        :param raw_tensor:
+        :param axis: e.g. 1
+        :return: raw tensor with new axis; wraps tf.expand_dims
+        """
+        return tf.expand_dims(raw_tensor, axis=axis)
+
+    @staticmethod
+    def expand_raw(raw_tensor: tf.Tensor, axis: int, dim: Union[int, tf.Tensor]) -> tf.Tensor:
+        """
+        :param raw_tensor:
+        :param axis: shape[axis] must be 1
+        :param dim: the new dim for shape[axis]
+        :return: shape[axis] expands to dim
+        """
+        assert raw_tensor.shape.as_list()[axis] == 1
+        return tf.tile(raw_tensor, [1] * axis + [dim] + [1] * (raw_tensor.shape.ndims - axis - 1))
 
     @staticmethod
     def create_placeholder(tensor: _TT) -> tf.Tensor:
