@@ -3053,7 +3053,7 @@ def infer_dim_tags(
     auto_create_placeholders=False,
     batch=None,
     **_other_kwargs,
-) -> Tuple[Tuple[Dim, ...], Dim]:
+) -> Tuple[Tuple[Dim, ...], Optional[Dim]]:
     """
     :param name:
     :param int|None|NotSpecified batch_dim_axis: where we add the batch-dim.
@@ -3097,8 +3097,8 @@ def infer_dim_tags(
             assert sparse_dim.dimension == dim
     else:
         assert not sparse
-    if dim_tags:
-        return dim_tags, sparse_dim
+    if dim_tags is not None:
+        return tuple(dim_tags), sparse_dim
     if batch_dim_axis is NotSpecified:
         batch_dim_axis = 0
     if shape is None:
