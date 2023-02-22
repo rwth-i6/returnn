@@ -89,6 +89,19 @@ class Frontend(Generic[T]):
         """
         raise NotImplementedError
 
+    @classmethod
+    def squeeze_raw(cls, raw_tensor: T, axes: Sequence[int]) -> T:
+        """
+        :param raw_tensor: raw tensor
+        :param axes: axes to squeeze
+        :return: squeezed raw tensor
+        """
+        # Default implementation using reshape_raw.
+        known_shape = cls.get_known_shape_raw(raw_tensor)
+        assert all([known_shape[axis] == 1 for axis in axes])
+        new_shape = [dim for a, dim in enumerate(cls.get_shape_tuple_raw(raw_tensor)) if a not in axes]
+        return cls.reshape_raw(raw_tensor, new_shape)
+
     @staticmethod
     def transpose_raw(raw_tensor: T, perm: Sequence[int]) -> T:
         """

@@ -1224,34 +1224,28 @@ class _TensorMixin:
         :return: copy of myself, with squeezed axes
         :rtype: Data
         """
-        from .basic import get_valid_scope_name_from_str
-
         assert isinstance(axes, (list, tuple))
         assert all(self.batch_shape[axis] == 1 for axis in axes)
         assert all(0 <= axis < self.batch_ndim for axis in axes)
         if not axes:
             return self.copy()
         data_opts = self.get_kwargs(include_special_axes=False)
-        if self.placeholder is not None:
-            data_opts["placeholder"] = tf.squeeze(
-                self.placeholder, axes, name="%s_squeeze_axes" % get_valid_scope_name_from_str(self.name)
-            )
-        data_opts["dim_tags"] = [tag for (i, tag) in enumerate(self.dim_tags) if i not in axes]
-        if self.time_dim_axis is not None:
-            if self.time_dim_axis in axes:
-                data_opts.pop("time_dim_axis", None)
-            else:
-                data_opts["time_dim_axis"] = self.time_dim_axis - len(
-                    [axis for axis in axes if axis < self.time_dim_axis]
-                )
-        if not self.sparse:
-            if self.feature_dim_axis is not None and self.feature_dim_axis_or_unspecified is not NotSpecified:
-                if self.feature_dim_axis in axes:
-                    data_opts.pop("feature_dim_axis", None)
-                else:
-                    data_opts["feature_dim_axis"] = self.feature_dim_axis - len(
-                        [axis for axis in axes if axis < self.feature_dim_axis]
+        if self._raw_tensor is not None:
+            rf = self.raw_frontend
+            data_opts["raw_tensor"] = rf.squeeze_raw(self._raw_tensor, axes)
+        data_opts["dims"] = [tag for (i, tag) in enumerate(self._dims) if i not in axes]
+        if self._extra:
+            if self.time_dim_axis is not None and self.time_dim_axis_or_unspecified is not NotSpecified:
+                if self.time_dim_axis not in axes:
+                    data_opts["time_dim_axis"] = self.time_dim_axis - len(
+                        [axis for axis in axes if axis < self.time_dim_axis]
                     )
+            if not self.sparse:
+                if self.feature_dim_axis is not None and self.feature_dim_axis_or_unspecified is not NotSpecified:
+                    if self.feature_dim_axis not in axes:
+                        data_opts["feature_dim_axis"] = self.feature_dim_axis - len(
+                            [axis for axis in axes if axis < self.feature_dim_axis]
+                        )
         return _t.Tensor(**data_opts)
 
     def copy_template(self, name=None, dtype=None) -> _t.Tensor:

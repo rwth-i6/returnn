@@ -84,6 +84,18 @@ class TFFrontend(Frontend[tf.Tensor]):
         with tf_util.same_control_flow_ctx([raw_tensor, shape]):
             return tf.reshape(raw_tensor, shape)
 
+    @classmethod
+    def squeeze_raw(cls, raw_tensor: tf.Tensor, axes: Sequence[int]) -> tf.Tensor:
+        """
+        :param raw_tensor: raw tensor
+        :param axes: axes to squeeze
+        :return: squeezed raw tensor
+        """
+        known_shape = raw_tensor.shape.as_list()
+        assert all([known_shape[axis] == 1 for axis in axes])
+        with tf_util.same_control_flow_ctx(raw_tensor):
+            return tf.squeeze(raw_tensor, axis=axes)
+
     @staticmethod
     def transpose_raw(raw_tensor: tf.Tensor, perm: Sequence[int]) -> tf.Tensor:
         """
