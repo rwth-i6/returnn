@@ -3040,6 +3040,7 @@ def infer_dim_tags(
     batch_dim_axis=NotSpecified,
     time_dim_axis=NotSpecified,
     feature_dim_axis=NotSpecified,
+    dim_tags: Optional[Sequence[Dim]] = None,
     shape: Optional[Sequence[Optional[int]]] = None,
     sparse: Optional[bool] = None,
     sparse_dim,
@@ -3059,6 +3060,7 @@ def infer_dim_tags(
     :param int|None|NotSpecified time_dim_axis: where we have the time dim axis, after we added the batch-dim.
       this is often 1. however, can be None if there is no time-dim.
     :param int|None|NotSpecified feature_dim_axis: feature dim axis. by default it's the last one
+    :param dim_tags:
     :param shape: including time-dim (can be None). excluding batch-dim.
         e.g. (time,feat)=(None,128)
     :param sparse:
@@ -3091,6 +3093,8 @@ def infer_dim_tags(
             assert sparse_dim.dimension == dim
     else:
         assert not sparse
+    if dim_tags:
+        return dim_tags, sparse_dim
     if batch_dim_axis is NotSpecified:
         batch_dim_axis = 0
     if shape is None:
@@ -3283,7 +3287,8 @@ def _create_size_placeholder(name, axis_wo_b, tag, batch_dim):
     # but this does not correspond to the global batch info which we will get here.
     # Only trust batch_dim here, or if that batch info is unset, then leave it uninitialized,
     # or even explicitly set it to None, see below.
-    from .basic import reuse_name_scope
+    from returnn.tf import compat as tf_compat
+    from returnn.tf.util.basic import reuse_name_scope
 
     with reuse_name_scope("extern_data/placeholders/%s" % name, absolute=True):
         dyn_size_ext = _t.Tensor(
