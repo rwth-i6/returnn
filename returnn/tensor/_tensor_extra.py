@@ -3139,6 +3139,8 @@ def infer_dim_tags(
         else:
             if feature_dim_axis is None:
                 assert dim is None
+            elif feature_dim_axis is NotSpecified:
+                pass
             else:
                 assert dims[feature_dim_axis].dimension == dim
     return dims, sparse_dim
