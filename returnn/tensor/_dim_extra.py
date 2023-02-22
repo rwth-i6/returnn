@@ -38,7 +38,7 @@ class _DimExtra:
     def __init__(
         self,
         *,
-        dim: _d.Dim,
+        dim: Dim,
         kind=DimTypes.Unspecified,
         vocab=None,
         dyn_size=None,
@@ -67,7 +67,7 @@ class _DimExtra:
             E.g. for ConvLayer and others.
             This implies certain behavior on equality, such as comparing the description,
             to allow for several independent creations of the dim tag during template construction.
-        :param _d.Dim|None derived_from_tag:
+        :param Dim|None derived_from_tag:
             Whether this new tag is reduced, down/up sampled, padded etc from this given other tag.
             In situations where dim tags are being matched (Data.get_common_data),
             the behavior is to consider them as equal,
@@ -187,7 +187,7 @@ class _DimMixin:
         return self._extra.batch
 
     @batch.setter
-    def batch(self: _d.Dim, value: Optional[BatchInfo]):
+    def batch(self: Dim, value: Optional[BatchInfo]):
         if self.batch is value:
             return
         self._make_extra().batch = value
@@ -204,7 +204,7 @@ class _DimMixin:
         return self._extra.control_flow_ctx
 
     @control_flow_ctx.setter
-    def control_flow_ctx(self: _d.Dim, value: Optional[ControlFlowContext]):
+    def control_flow_ctx(self: Dim, value: Optional[ControlFlowContext]):
         if self.control_flow_ctx is value:
             return
         self._make_extra().control_flow_ctx = value
@@ -219,7 +219,7 @@ class _DimMixin:
         return self._extra.auto_generated
 
     @property
-    def same_as(self) -> Optional[_d.Dim]:
+    def same_as(self) -> Optional[Dim]:
         """
         :return: same as other dim
         """
@@ -228,7 +228,7 @@ class _DimMixin:
         return self._extra.same_as
 
     @same_as.setter
-    def same_as(self: _d.Dim, value: Optional[_d.Dim]):
+    def same_as(self: Dim, value: Optional[_d.Dim]):
         if self.same_as is value:
             return
         self._make_extra().same_as = value
@@ -252,7 +252,7 @@ class _DimMixin:
         return self._extra.derived_from_op
 
     @property
-    def derived_from_tag(self) -> Optional[_d.Dim]:
+    def derived_from_tag(self) -> Optional[Dim]:
         """
         :return: dim
         """
@@ -373,7 +373,7 @@ class _DimMixin:
             return False
         return True
 
-    def _maybe_update(self: _d.Dim):
+    def _maybe_update(self: Dim):
         if self.is_batch_dim():
             return
         if isinstance(self.size, int):
@@ -406,7 +406,7 @@ class _DimMixin:
                     if not same.dyn_size_ext or same.dyn_size_ext.placeholder is None:
                         same.dyn_size_ext = self.dyn_size_ext
 
-    def get_for_batch_ctx(self: _d.Dim, batch, ctx, allow_none=False) -> Optional[_d.Dim]:
+    def get_for_batch_ctx(self: Dim, batch, ctx, allow_none=False) -> Optional[Dim]:
         """
         Warning: This is only for TensorFlow, and also we might want to remove it.
         https://github.com/rwth-i6/returnn/issues/975
@@ -570,7 +570,7 @@ class _DimMixin:
         dim_tag.complete_dyn_size(template_only=True)
         return dim_tag
 
-    def reset_batch_ctx(self: _d.Dim):
+    def reset_batch_ctx(self: Dim):
         """
         For the self instance, reset batch and context.
         """
@@ -746,7 +746,7 @@ class _DimMixin:
             return True
         return False
 
-    def set_tag_on_size_tensor(self: _d.Dim, x, batch=None, same_as_before=False) -> _d.Dim:
+    def set_tag_on_size_tensor(self: Dim, x, batch=None, same_as_before=False) -> Dim:
         """
         This function is used
         to couple a tf.Tensor instance representing the dyn size
