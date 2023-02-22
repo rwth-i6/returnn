@@ -120,6 +120,24 @@ def get_frontend_by_tensor_type(tensor_type: Type[T]) -> Type[Frontend[T]]:
     """
     :param tensor_type:
     """
+    if tensor_type not in _dispatch_table:
+        # It would be registered if there was any select_engine or select_frontend_* call.
+        # However, some code might not have done that, so for the common cases,
+        # we do it here.
+        if tensor_type.__module__.split(".")[0] == "tensorflow":
+            import tensorflow as tf
+            from returnn.tf.frontend_low_level import TFFrontend
+
+            assert tensor_type is tf.Tensor
+            register_frontend_by_tensor_type(tf.Tensor, TFFrontend)
+        elif tensor_type.__module__.split(".")[0] == "torch":
+            import torch
+            from returnn.torch.frontend import TorchFrontend
+
+            assert tensor_type is torch.Tensor
+            register_frontend_by_tensor_type(torch.Tensor, TorchFrontend)
+        else:
+            raise Exception(f"unknown tensor type {tensor_type}")
     return _dispatch_table[tensor_type]
 
 
