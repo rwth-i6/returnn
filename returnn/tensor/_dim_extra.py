@@ -407,11 +407,13 @@ class _DimMixin:
 
     def get_for_batch_ctx(self: _d.Dim, batch, ctx, allow_none=False) -> Optional[_d.Dim]:
         """
+        Warning: This is only for TensorFlow, and also we might want to remove it.
+        https://github.com/rwth-i6/returnn/issues/975
+
         :param BatchInfo batch:
         :param ControlFlowContext|None ctx:
         :param bool allow_none:
         """
-        assert rf.is_tensorflow, "get_for_batch_ctx only supported for TensorFlow"
         assert self.can_be_used_as_dim()
         if self.batch == batch and self.control_flow_ctx == ctx and self.dyn_size_ext:
             self._validate_in_current_graph()
