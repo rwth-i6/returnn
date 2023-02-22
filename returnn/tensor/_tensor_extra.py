@@ -2605,8 +2605,6 @@ class _TensorMixin:
           We assert here that the axis is dynamic (:func:`is_axis_dynamic`), i.e. we have the size.
         :rtype: tf.Tensor
         """
-        from .basic import sequence_mask_time_major, sequence_mask
-
         if axis is None:
             assert self.time_dim_axis is not None
             axis = self.time_dim_axis
@@ -2615,23 +2613,21 @@ class _TensorMixin:
             axis += self.batch_ndim
         assert 0 <= axis < self.batch_ndim
         assert axis != self.batch_dim_axis
-        tag = self.dim_tags[axis]
-        assert tag.dyn_size_ext
+        tag: Dim = self.dim_tags[axis]
+        assert tag.dyn_size_ext and tag.dyn_size_ext.raw_tensor is not None
+        rf = tag.dyn_size_ext.raw_frontend
         assert set(tag.dyn_size_ext.dim_tags).issubset(self.dim_tags)  # https://github.com/rwth-i6/returnn/issues/721
-        with tf.name_scope("get_sequence_mask_broadcast"):
+        with rf.name_scope_raw("get_sequence_mask_broadcast"):
             if tag.dyn_size_ext.have_batch_axis() and tag.dyn_size_ext.batch_ndim == 1:  # just [B]
                 # This is the common case where the size is of shape [B].
                 # We make use of sequence_mask or sequence_mask_time_major in that case,
                 # which is optimized by caching.
                 size = tag.dyn_size
-                if axis >= self.batch_dim_axis:
-                    seq_mask = sequence_mask(size)  # (B,T)
-                else:  # axis < batch_dim_axis
-                    seq_mask = sequence_mask_time_major(size)  # (T,B)
-                shape = [1] * self.batch_ndim  # type: List[Union[int,tf.Tensor]]
+                seq_mask = rf.sequence_mask_raw(size, batch_major=axis >= self.batch_dim_axis)  # (B,T) or (T,B)
+                shape = [1] * self.batch_ndim  # type: List[Union[int,_t.RawTensorType]]
                 shape[self.batch_dim_axis] = self.get_batch_dim()
                 shape[axis] = tag.get_dim_value()
-                seq_mask = tf.reshape(seq_mask, shape, name="seq_mask_reshape")
+                seq_mask = rf.reshape_raw(seq_mask, shape)
                 assert seq_mask.get_shape().ndims == self.batch_ndim
             else:  # size is something unusual, not just [B], but e.g. [B,S] or so
                 max_idx = tf.reduce_max(tag.dyn_size)

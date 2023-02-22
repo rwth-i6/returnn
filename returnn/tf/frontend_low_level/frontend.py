@@ -156,6 +156,16 @@ class TFFrontend(Frontend[tf.Tensor]):
 
     @staticmethod
     @contextlib.contextmanager
+    def name_scope_raw(name: str) -> Any:
+        """
+        :param name: name of scope
+        :return: context manager
+        """
+        with tf.name_scope(name):
+            yield
+
+    @staticmethod
+    @contextlib.contextmanager
     def control_dependencies_raw(dependencies: Sequence[Union[tf.Tensor, tf.Operation]]) -> Any:
         """
         :param dependencies: list of tensors or operations

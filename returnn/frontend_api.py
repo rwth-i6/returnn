@@ -155,24 +155,41 @@ class Frontend(Generic[T]):
 
     @staticmethod
     @contextlib.contextmanager
+    def name_scope_raw(name: str) -> Any:
+        """
+        Default implementation for eager-based frameworks:
+        Do nothing, tensors do not have a name.
+
+        :param name:
+        :return: context manager
+        """
+        # Default implementation for eager-based frameworks
+        pass  # nothing to do
+
+    @staticmethod
+    @contextlib.contextmanager
     def control_dependencies_raw(dependencies: Sequence[Any]) -> Any:
         """
+        Default implementation for eager-based frameworks:
+        Do nothing, we expect that the dependencies are already executed.
+
         :param dependencies: raw tensors or ops
         :return: context manager
         """
-        # Default implementation for eager-based frameworks:
-        # Do nothing, we expect that the dependencies are already executed.
+        # Default implementation for eager-based frameworks
         yield
 
     @staticmethod
     def identity_with_control_dependencies_raw(raw_tensor: T, dependencies: Sequence[Any]) -> T:
         """
+        Default implementation for eager-based frameworks:
+        Do nothing, we expect that the dependencies are already executed.
+
         :param raw_tensor: raw tensor
         :param dependencies: raw tensors or ops
         :return: raw tensor
         """
-        # Default implementation for eager-based frameworks:
-        # Do nothing, we expect that the dependencies are already executed.
+        # Default implementation for eager-based frameworks
         return raw_tensor
 
     @staticmethod
