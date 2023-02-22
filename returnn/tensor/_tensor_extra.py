@@ -441,9 +441,9 @@ class _TensorMixin:
         :return: relevant attrib items for copying
         :rtype: dict[str]
         """
-        keys = ["name", "dim_tags", "dtype"]
+        keys = ["name", "dims", "dtype"]
         if include_special_axes:
-            if self.time_dim_axis is not None:
+            if self.time_dim_axis_or_unspecified is not NotSpecified:
                 keys += ["time_dim_axis"]
             if self.feature_dim_axis_or_unspecified is not NotSpecified:
                 keys += ["feature_dim_axis"]
@@ -451,14 +451,15 @@ class _TensorMixin:
             # Sparse is False by default.
             # And the dim is inferred from the feature dim, or otherwise does not make sense.
             keys += ["sparse_dim"]
-        if self.batch is not None:
-            keys += ["batch"]
-        if self.beam is not None:
-            keys += ["beam"]
-        if self.control_flow_ctx:
-            keys += ["control_flow_ctx"]
-        if not self.available_for_inference:
-            keys += ["available_for_inference"]
+        if self._extra:
+            if self.batch is not None:
+                keys += ["batch"]
+            if self.beam is not None:
+                keys += ["beam"]
+            if self.control_flow_ctx:
+                keys += ["control_flow_ctx"]
+            if not self.available_for_inference:
+                keys += ["available_for_inference"]
         return {key: getattr(self, key) for key in keys}
 
     def get_description(self, with_name=True, with_placeholder=False, catch_exceptions=False):
