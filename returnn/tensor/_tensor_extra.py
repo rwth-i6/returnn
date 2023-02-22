@@ -1459,7 +1459,7 @@ class _TensorMixin:
                         batch = batch.copy_remove_dim(virtual_dim)
                     elif isinstance(virtual_dim, BatchInfo.GlobalBatchDim):
                         assert not new_batch_dim_tag
-                        new_batch_dim_tag = Dim(kind=Dim.Types.Batch, description=dim_tag.description)
+                        new_batch_dim_tag = Dim(kind=Dim.Types.Batch, description=dim_tag.description, dimension=None)
                         dim_tags.append(new_batch_dim_tag)
                 assert new_batch_dim_tag, "%s: batch info %r invalid" % (self, batch)
                 new_batch_dim_tag.batch = batch
