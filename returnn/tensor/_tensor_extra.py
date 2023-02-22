@@ -340,7 +340,7 @@ class _TensorMixin:
         :return: op which does a couple of runtime sanity checks on the placeholder
         :rtype: tensorflow.Operation|Any
         """
-        assert self.placeholder is not None
+        assert self._raw_tensor is not None
         return self.raw_frontend.runtime_sanity_checks(self)
 
     def verify_out_shape(self, out_shape, allow_missing_implicit_dims=False):
@@ -1996,8 +1996,9 @@ class _TensorMixin:
         :return: identity(self.placeholder) with added checks
         :rtype: tf.Tensor
         """
-        with tf.control_dependencies([self.get_runtime_sanity_check_op()]):
-            return tf.identity(self.placeholder, name="identity_with_runtime_sanity_checks")
+        assert self._raw_tensor is not None
+        rf = self.raw_frontend
+        return rf.identity_with_control_dependencies_raw(self._raw_tensor, [self.get_runtime_sanity_check_op()])
 
     def get_placeholder_time_flattened(self):
         """

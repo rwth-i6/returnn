@@ -8,6 +8,7 @@ The convention for the user is to do::
 
 from __future__ import annotations
 from typing import TYPE_CHECKING, Optional, TypeVar, Generic, Any, Dict, Type, Union, Sequence, Tuple
+import contextlib
 
 from returnn.util.basic import NotSpecified
 
@@ -131,6 +132,28 @@ class Frontend(Generic[T]):
             this is an efficient view and not a copy.
         """
         raise NotImplementedError
+
+    @staticmethod
+    @contextlib.contextmanager
+    def control_dependencies_raw(dependencies: Sequence[Any]) -> Any:
+        """
+        :param dependencies: raw tensors or ops
+        :return: context manager
+        """
+        # Default implementation for eager-based frameworks:
+        # Do nothing, we expect that the dependencies are already executed.
+        yield
+
+    @staticmethod
+    def identity_with_control_dependencies_raw(raw_tensor: T, dependencies: Sequence[Any]) -> T:
+        """
+        :param raw_tensor: raw tensor
+        :param dependencies: raw tensors or ops
+        :return: raw tensor
+        """
+        # Default implementation for eager-based frameworks:
+        # Do nothing, we expect that the dependencies are already executed.
+        return raw_tensor
 
     @staticmethod
     def create_placeholder(tensor: Tensor) -> T:

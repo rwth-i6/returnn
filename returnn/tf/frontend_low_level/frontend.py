@@ -3,8 +3,9 @@ Frontend for exposing TensorFlow-specific functionality.
 """
 
 from __future__ import annotations
-from typing import Optional, Union, Sequence, Tuple
+from typing import Optional, Union, Any, Sequence, Tuple
 import tensorflow as tf
+import contextlib
 
 from returnn.util.basic import NotSpecified
 from returnn.frontend_api import Frontend
@@ -127,6 +128,26 @@ class TFFrontend(Frontend[tf.Tensor]):
         assert raw_tensor.shape.as_list()[axis] == 1
         with tf_util.same_control_flow_ctx(raw_tensor):
             return tf.tile(raw_tensor, [1] * axis + [dim] + [1] * (raw_tensor.shape.ndims - axis - 1))
+
+    @staticmethod
+    @contextlib.contextmanager
+    def control_dependencies_raw(dependencies: Sequence[Union[tf.Tensor, tf.Operation]]) -> Any:
+        """
+        :param dependencies: list of tensors or operations
+        :return: context manager
+        """
+        with tf.control_dependencies(dependencies):
+            yield
+
+    @staticmethod
+    def identity_with_control_dependencies_raw(raw_tensor: tf.Tensor, dependencies: Sequence[Any]) -> tf.Tensor:
+        """
+        :param raw_tensor:
+        :param dependencies: list of tensors or operations
+        :return: identity of tensor with control dependencies
+        """
+        with tf.control_dependencies(dependencies):
+            return tf.identity(raw_tensor)
 
     @staticmethod
     def create_placeholder(tensor: _TT) -> tf.Tensor:
