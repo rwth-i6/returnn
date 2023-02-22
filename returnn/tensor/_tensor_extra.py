@@ -2906,7 +2906,12 @@ class _TensorMixin:
         if len(sources) == 1:
             return sources[0].copy_template()
         max_ndim = max([s.batch_ndim for s in sources])
-        common_batch = BatchInfo.get_common_batch_info([src.batch for src in sources if src.batch])
+        if any(src.batch for src in sources):
+            from returnn.tf.util.data import BatchInfo
+
+            common_batch = BatchInfo.get_common_batch_info([src.batch for src in sources if src.batch])
+        else:
+            common_batch = None
         # Try with the (first) largest.
         common = [s for s in sources if s.batch_ndim == max_ndim][0]
         common = common.copy_template(name=name)
@@ -2914,6 +2919,8 @@ class _TensorMixin:
         if common_batch:
             common.batch = common_batch.copy_set_beam(None)  # the beam will be reset
         if any([s.beam for s in sources]):
+            from returnn.tf.util.data import SearchBeam
+
             # Note: we don't use copy_extend_with_beam
             # because we don't want to create any ops in the TF graph at this point.
             common.beam = SearchBeam.get_combined_beam(*[s.beam for s in sources])
