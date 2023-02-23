@@ -1138,10 +1138,11 @@ class _TensorMixin:
         assert v.batch_ndim == data.batch_ndim
         assert all(mapped_axes[ax] == ax for ax in range(v.batch_ndim))
 
-        # Ensure time_dim_axis and feature_dim_axis is same as in data
-        assert v.batch_dim_axis == data.batch_dim_axis  # there is only at most one batch_dim_axis
-        v.time_dim_axis = data.time_dim_axis_or_unspecified
-        v.feature_dim_axis = data.feature_dim_axis_or_unspecified
+        if self.version == 1:
+            # Ensure time_dim_axis and feature_dim_axis is same as in data
+            assert v.batch_dim_axis == data.batch_dim_axis  # there is only at most one batch_dim_axis
+            v.time_dim_axis = data.time_dim_axis_or_unspecified
+            v.feature_dim_axis = data.feature_dim_axis_or_unspecified
 
         # Reset sparse
         if self.sparse:
