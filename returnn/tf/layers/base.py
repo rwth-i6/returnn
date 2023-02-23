@@ -427,7 +427,7 @@ class LayerBase(object):
                 sources_data_list = [sources_data_list[0].copy()]
                 sources_data_list[0].feature_dim_axis = axis
         allow_broadcast_all_sources = NotSpecified
-        if "shape" in out_type or "dim_tags" in out_type or out_shape is not None:
+        if "shape" in out_type or "dim_tags" in out_type or "dims" in out_type or out_shape is not None:
             allow_broadcast_all_sources = True
         sources_data = (
             Data.get_common_data(
@@ -460,10 +460,10 @@ class LayerBase(object):
                             out_type.setdefault("feature_dim_axis", None)
             elif network.is_inside_rec_layer() and None not in out_type.get("shape", ()):
                 out_type.setdefault("time_dim_axis", None)
-        if "shape" not in out_type and "dim_tags" not in out_type:
+        if "shape" not in out_type and "dim_tags" not in out_type and "dims" not in out_type:
             if sources_data:
                 if out_type.get("sparse", False) or out_type.get("sparse_dim", None):
-                    out_type["dim_tags"] = sources_data.dim_tags_sparse
+                    out_type["dims"] = sources_data.dim_tags_sparse
                 else:  # not sparse
                     feature_dim_axis = out_type.get("feature_dim_axis", NotSpecified)
                     dim_tags = list(sources_data.dim_tags_sparse)
@@ -478,7 +478,7 @@ class LayerBase(object):
                         else:
                             feature_dim_axis = sources_data.feature_dim_axis
                     dim_tags.insert(feature_dim_axis, feature_dim_tag)
-                    out_type["dim_tags"] = dim_tags
+                    out_type["dims"] = dim_tags
             elif network.is_inside_rec_layer():
                 if out_type.get("sparse", False):
                     out_type.setdefault("shape", ())

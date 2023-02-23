@@ -4,12 +4,14 @@ or just rarely used attribs, such that we can save memory for the common case.
 """
 
 from __future__ import annotations
-from typing import TYPE_CHECKING, Optional, Union, Type, Sequence, Tuple, List
+from typing import TYPE_CHECKING, Optional, Union, Type, Sequence, Tuple, List, Dict
 import os
 
 if TYPE_CHECKING:
     # Those are only used for TensorFlow, or they are deprecated.
     from returnn.tf.util.data import BatchInfo, SearchBeam, ControlFlowContext
+
+    from .tensor import Tensor  # just for type hints; otherwise use _t.Tensor
 
 from returnn.util.basic import NotSpecified
 from .dim import Dim, batch_dim, VerifyOutShapeException
@@ -22,7 +24,7 @@ class _TensorExtra:
     def __init__(
         self,
         *,
-        tensor: _t.Tensor,
+        tensor: Tensor,
         time_dim_axis=NotSpecified,
         feature_dim_axis=NotSpecified,
         available_for_inference=True,
@@ -266,7 +268,7 @@ class _TensorMixin:
             return
         self._make_extra().available_for_inference = value
 
-    def _make_extra(self: _t.Tensor) -> _TensorExtra:
+    def _make_extra(self: Tensor) -> _TensorExtra:
         if not self._extra:
             self._extra = _TensorExtra(tensor=self)
         return self._extra
@@ -343,7 +345,7 @@ class _TensorMixin:
                             ), "%s sanity_check: dynamic dim %s value unknown" % (self, tag)
                 assert tag.is_dim_known()
 
-    def get_runtime_sanity_check_op(self: _t.Tensor):
+    def get_runtime_sanity_check_op(self: Tensor):
         """
         :return: op which does a couple of runtime sanity checks on the placeholder
         :rtype: tensorflow.Operation|Any
@@ -2904,9 +2906,11 @@ class _TensorMixin:
         return self.dim_tags
 
     @classmethod
-    def get_common_data(cls, sources, ignore_feature_dim=False, allow_broadcast_all_sources=NotSpecified, name=None):
+    def get_common_data(
+        cls, sources: List[Tensor], ignore_feature_dim=False, allow_broadcast_all_sources=NotSpecified, name=None
+    ) -> Optional[Tensor]:
         """
-        :param list[Data] sources:
+        :param sources:
         :param bool ignore_feature_dim: when set, the feature dim does not have to match in the sources
         :param bool|NotSpecified allow_broadcast_all_sources:
         :param str|None name:
@@ -2971,22 +2975,21 @@ class _TensorMixin:
             )
         return common
 
-    def find_matching_dims(self, dim_tag, is_equal_opts):
+    def find_matching_dims(self: Tensor, dim_tag: Dim, is_equal_opts) -> List[int]:
         """
         Finds the dimensions of this Data that match another Dim
 
-        :param Dim dim_tag:
+        :param dim_tag:
         :param dict[str,bool]|None is_equal_opts: passed to Dim.is_equal
-        :rtype: list[int]
         :return: a list of matching axes, counted with batch dim. Sorted in ascending order
         """
         return [axis for axis in range(self.batch_ndim) if self.get_dim_tag(axis).is_equal(dim_tag, **is_equal_opts)]
 
-    def find_matching_dim_map(self, other, other_axes, is_equal_opts=None):
+    def find_matching_dim_map(self: Tensor, other: Tensor, other_axes, is_equal_opts=None) -> Dict[int, int]:
         """
         Looks up all other_axes of another Data in this Data. Does not allow duplicates.
 
-        :param Data other:
+        :param other:
         :param list[int] other_axes: a list of axes of ``other``, counted with batch dim
         :return: a dict mapping other axes to own axes, all counted with batch dim
         :param dict[str,bool]|None is_equal_opts: passed to Dim.is_equal

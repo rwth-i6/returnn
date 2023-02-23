@@ -3330,6 +3330,7 @@ class RangeFromLengthLayer(LayerBase):
                 batch=source.batch,
                 control_flow_ctx=source.control_flow_ctx,
                 dyn_size_ext=source,
+                dimension=None,
             )
             if source.placeholder is not None:
                 dim_tag.set_tag_on_size_tensor(source.placeholder)
