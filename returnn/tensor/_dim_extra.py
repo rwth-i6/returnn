@@ -883,7 +883,7 @@ class _DimMixin:
                 return None
             if a is None or b is None:
                 return None
-            assert isinstance(a, tf.Tensor) and isinstance(b, tf.Tensor)
+            assert isinstance(a, (int, tf.Tensor)) and isinstance(b, (int, tf.Tensor))
             with tf_util.same_control_flow_ctx([a, b]):
                 if kind == "add":
                     use_relu = _is_negative(a) or _is_negative(b)  # for dynamic tensors, assume all positive
