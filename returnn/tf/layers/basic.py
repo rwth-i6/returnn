@@ -2919,7 +2919,10 @@ class RandomLayer(LayerBase):
             # https://github.com/rwth-i6/returnn/issues/1190
             # https://github.com/tensorflow/tensorflow/issues/51803
             # Make sure we recheck this for later TF versions, whether it is still needed.
-            assert tf_util.tf_version_tuple()[:2] <= (2, 10)
+            # Check via test_RandomLayer_zero_shape, but using CUDA and GPU,
+            # or check whether the TF issue is still open.
+            # When fixed in TF, we can just return f() here.
+            assert tf_util.tf_version_tuple()[:2] <= (2, 11)
             if all(isinstance(d, int) and d > 0 for d in shape_):
                 return f()
             if any(isinstance(d, int) and d == 0 for d in shape_):
