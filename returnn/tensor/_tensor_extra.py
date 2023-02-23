@@ -1141,8 +1141,14 @@ class _TensorMixin:
         if self.version == 1:
             # Ensure time_dim_axis and feature_dim_axis is same as in data
             assert v.batch_dim_axis == data.batch_dim_axis  # there is only at most one batch_dim_axis
-            v.time_dim_axis = data.time_dim_axis_or_unspecified
-            v.feature_dim_axis = data.feature_dim_axis_or_unspecified
+            if v.time_dim_axis != data.time_dim_axis:
+                v.time_dim_axis = NotSpecified
+                if v.time_dim_axis != data.time_dim_axis:
+                    v.time_dim_axis = data.time_dim_axis
+            if v.feature_dim_axis != data.feature_dim_axis:
+                v.feature_dim_axis = NotSpecified
+                if v.feature_dim_axis != data.feature_dim_axis:
+                    v.feature_dim_axis = data.feature_dim_axis
 
         # Reset sparse
         if self.sparse:
