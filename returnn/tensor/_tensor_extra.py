@@ -1058,17 +1058,17 @@ class _TensorMixin:
         return data
 
     def copy_compatible_to(
-        self,
-        data,
+        self: Tensor,
+        data: Tensor,
         add_dims=True,
         unbroadcast=False,
         except_feature=False,
         except_axis=None,
         check_sparse=True,
         check_dtype=True,
-    ) -> _t.Tensor:
+    ) -> Tensor:
         """
-        :param Data data: other data which the returned tensor should be compatible to
+        :param data: other data which the returned tensor should be compatible to
           It would add any missing axes with a dim 1 axis for automatic broadcasting (with add_dims=True).
           It currently does not check whether existing dims match.
         :param bool add_dims: whether to add (broadcast, or unbroadcasted) dims. throws error if missing dim
@@ -1140,7 +1140,7 @@ class _TensorMixin:
 
         # Ensure time_dim_axis and feature_dim_axis is same as in data
         assert v.batch_dim_axis == data.batch_dim_axis  # there is only at most one batch_dim_axis
-        v.time_dim_axis = data.time_dim_axis
+        v.time_dim_axis = data.time_dim_axis_or_unspecified
         v.feature_dim_axis = data.feature_dim_axis_or_unspecified
 
         # Reset sparse
@@ -1779,6 +1779,8 @@ class _TensorMixin:
         assert value is NotSpecified or value is None or isinstance(value, int)
         if self.feature_dim_axis_or_unspecified == value:
             return
+        if self.version >= 2 and value in (None, NotSpecified):
+            return
         assert self.version == 1, "feature_dim_axis is deprecated"
         if isinstance(value, int):
             assert 0 <= value < self.batch_ndim
@@ -1814,6 +1816,8 @@ class _TensorMixin:
         """
         assert value is NotSpecified or value is None or isinstance(value, int)
         if self.time_dim_axis_or_unspecified == value:
+            return
+        if self.version >= 2 and value in (None, NotSpecified):
             return
         assert self.version == 1, "time_dim_axis is deprecated"
         if isinstance(value, int):
