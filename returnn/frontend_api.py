@@ -265,12 +265,12 @@ def select_frontend_returnn_layers_tf():
     Selects the RETURNN layers frontend (based on TF).
     """
     import tensorflow as tf
-    from returnn.tf.frontend_low_level import TFFrontend
-    from returnn.tf.frontend_layers import ReturnnLayersFrontend
 
-    register_frontend_by_tensor_type(tf.Tensor, TFFrontend)
+    frontend = get_frontend_by_tensor_type(tf.Tensor)  # side-effect: register it
+    global_frontend.__class__ = frontend
+
     # TODO returnn layer type, register_frontend_by_tensor_type for that
-    global_frontend.__class__ = ReturnnLayersFrontend
+    #   global_frontend.__class__ = ReturnnLayersFrontend
 
 
 def select_frontend_torch():
@@ -278,10 +278,9 @@ def select_frontend_torch():
     Selects the PyTorch (low-level) frontend.
     """
     import torch
-    from returnn.torch.frontend import TorchFrontend
 
-    register_frontend_by_tensor_type(torch.Tensor, TorchFrontend)
-    global_frontend.__class__ = TorchFrontend
+    frontend = get_frontend_by_tensor_type(torch.Tensor)  # side-effect: register it
+    global_frontend.__class__ = frontend
 
 
 def get_frontend_by_tensor_type(tensor_type: Type[T]) -> Type[Frontend[T]]:
@@ -289,23 +288,33 @@ def get_frontend_by_tensor_type(tensor_type: Type[T]) -> Type[Frontend[T]]:
     :param tensor_type:
     """
     if tensor_type not in _dispatch_table:
+        # We don't register all possible subclasses in the dispatch table.
+        # Check through the MRO.
+        for type_ in tensor_type.__mro__:
+            if type_ in _dispatch_table:
+                # Also register it for faster future lookups.
+                _dispatch_table[tensor_type] = _dispatch_table[type_]
+                return _dispatch_table[type_]
+    if tensor_type not in _dispatch_table:
         # It would be registered if there was any select_engine or select_frontend_* call.
         # However, some code might not have done that, so for the common cases,
         # we do it here.
         if tensor_type.__module__.split(".")[0] == "tensorflow":
-            import tensorflow as tf
             from returnn.tf.frontend_low_level import TFFrontend
 
-            assert tensor_type is tf.Tensor
-            register_frontend_by_tensor_type(tf.Tensor, TFFrontend)
+            frontend_type = TFFrontend
+            tensor_types = _get_tensor_types_tf()
         elif tensor_type.__module__.split(".")[0] == "torch":
-            import torch
             from returnn.torch.frontend import TorchFrontend
 
-            assert tensor_type is torch.Tensor
-            register_frontend_by_tensor_type(torch.Tensor, TorchFrontend)
+            frontend_type = TorchFrontend
+            tensor_types = _get_tensor_types_torch()
         else:
             raise Exception(f"unknown tensor type {tensor_type}")
+        assert any(issubclass(tensor_type, type_) for type_ in tensor_types)
+        for type_ in tensor_types:
+            register_frontend_by_tensor_type(type_, frontend_type)
+        return frontend_type
     return _dispatch_table[tensor_type]
 
 
@@ -315,3 +324,25 @@ def register_frontend_by_tensor_type(tensor_type: Type[T], frontend: Type[Fronte
     :param frontend:
     """
     _dispatch_table[tensor_type] = frontend
+
+
+def _get_tensor_types_tf():
+    """
+    :return: tuple of relevant tensor types in TF.
+        Note that it is not so important to cover all, as we also check issubclass as a fallback.
+    """
+    import tensorflow as tf
+
+    ls = [tf.Tensor, tf.Variable]
+    return tuple(ls)
+
+
+def _get_tensor_types_torch():
+    """
+    :return: tuple of relevant tensor types in PyTorch.
+        Note that it is not so important to cover all, as we also check issubclass as a fallback.
+    """
+    import torch
+
+    ls = [torch.Tensor, torch.nn.Parameter]
+    return tuple(ls)
