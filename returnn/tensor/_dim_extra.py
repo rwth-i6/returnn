@@ -339,6 +339,8 @@ class _DimMixin:
         """
         if self.control_flow_ctx == ctx:
             return True
+        from returnn.tf.util.data import ControlFlowContext
+
         if not ControlFlowContext.is_parent_or_same(self.control_flow_ctx, ctx):
             return False
         assert ctx

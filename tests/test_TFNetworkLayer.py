@@ -714,8 +714,8 @@ def test_concat_new_dim_tag():
 
     with make_scope():
         n_out = 5
-        time_tag = Dim(kind=Dim.Types.Spatial, description="time")
-        new_time_tag = Dim(kind=Dim.Types.Spatial, description="new-time")
+        time_tag = Dim(kind=Dim.Types.Spatial, description="time", dimension=None)
+        new_time_tag = Dim(kind=Dim.Types.Spatial, description="new-time", dimension=None)
         config = Config(
             {
                 "debug_print_layer_output_template": True,
@@ -2031,7 +2031,7 @@ def test_CombineLayer_RangeFromLengthLayer():
 def test_CompareLayer_allow_broadcast_all_sources():
     from returnn.tf.util.data import batch_dim, Dim
 
-    time_tag = Dim(kind=Dim.Types.Spatial, description="time")
+    time_tag = Dim(kind=Dim.Types.Spatial, description="time", dimension=None)
     with make_scope():
         n_out = 5
         config = Config(
@@ -2140,7 +2140,7 @@ def test_SwitchLayer_sanity_check():
 
     with make_scope():
         n_out = 5
-        time_tag = Dim(kind=Dim.Types.Spatial, description="time")
+        time_tag = Dim(kind=Dim.Types.Spatial, description="time", dimension=None)
         config = Config(
             {
                 "debug_print_layer_output_template": True,
@@ -2756,7 +2756,7 @@ def test_SoftmaxOverSpatialLayer_window():
                 [0, 1, 1, 0, 0, 0, 0, 0, 0],
                 [0, 0, 0, 0, 1, 1, 1, 1, 1],
             ],
-            dtype=numpy.bool,
+            dtype=bool,
         )  # (B, T)
         print("mask", mask)
         mask = numpy.expand_dims(mask, axis=1)
@@ -3392,7 +3392,7 @@ def test_MergeDimsLayer_dim_tags():
             2: ("att-heads", [2, 2, 2]),
         }
         for axis_wo_batch, (description, dyn_size) in tag_names_with_dyn_size.items():
-            tag = Dim(description=description, kind=Dim.Types.Spatial)
+            tag = Dim(description=description, kind=Dim.Types.Spatial, dimension=None)
             dyn_size = tf.constant(dyn_size)
             tag.set_tag_on_size_tensor(dyn_size)
             src_data.size_placeholder[axis_wo_batch] = dyn_size
@@ -3824,7 +3824,7 @@ def test_SwitchLayer_masking():
 
 def test_SwitchLayer_template_const_from():
     net = TFNetwork(extern_data=ExternData())
-    batch_dim = Dim(kind=Dim.Types.Batch, description="batch")
+    batch_dim = Dim(kind=Dim.Types.Batch, description="batch", dimension=None)
     time_dim = SpatialDim("time")
     feat_dim = FeatureDim("feature", dimension=2)
     # [T]

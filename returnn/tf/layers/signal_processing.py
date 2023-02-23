@@ -568,6 +568,7 @@ class MultiChannelMultiResolutionStftLayer(_ConcatInputLayer):
                 src_data=self.output,
                 src_axis=self.output.get_batch_axis(0),
                 auto_generated=True,
+                dimension=None,
             )
             size_placeholder_dict[0] = new_size
             return size_placeholder_dict

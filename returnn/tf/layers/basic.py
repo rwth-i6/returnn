@@ -5184,7 +5184,13 @@ class RepeatLayer(_ConcatInputLayer):
         if isinstance(repetitions, int):
             out_dim_ = tag * repetitions
         else:
-            out_dim_ = Dim(description="repeated:%s" % name, kind=tag.kind, derived_from_tag=tag, auto_generated=True)
+            out_dim_ = Dim(
+                description="repeated:%s" % name,
+                kind=tag.kind,
+                derived_from_tag=tag,
+                auto_generated=True,
+                dimension=None,
+            )
         if out_dim:
             out_dim_.declare_same_as(out_dim)
         if data.batch:

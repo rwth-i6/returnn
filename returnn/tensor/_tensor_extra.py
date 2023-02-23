@@ -1013,6 +1013,7 @@ class _TensorMixin:
             import tensorflow as tf
             from returnn.tf.util.basic import get_shape
             from returnn.util.basic import ensure_list_of_type
+            from returnn.tf.util.data import BatchInfo
 
             with tf.name_scope("copy_extend_batch"):
                 axis = self.batch_dim_axis
@@ -1451,6 +1452,7 @@ class _TensorMixin:
         assert self.batch, "%s: batch unset" % self
         data = self.copy()
         kwargs = self.get_kwargs(include_special_axes=False)
+        from returnn.tf.util.data import BatchInfo
 
         dim_tags = []
         for dim_tag in data.dim_tags:
