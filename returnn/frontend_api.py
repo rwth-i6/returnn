@@ -260,6 +260,7 @@ class Frontend(Generic[T]):
         b: Union[Tensor, RawTensorTypes],
         *,
         allow_broadcast_all_sources: Optional[bool] = None,
+        dim_order: Optional[Sequence[Dim]] = None,
     ) -> Tensor:
         """
         :param a:
@@ -267,7 +268,8 @@ class Frontend(Generic[T]):
         :param b:
         :param allow_broadcast_all_sources: if True, it is allowed that neither a nor b has all dims of the result.
             Not needed when out_dims is specified explicitly.
-        :param out_dims: shape of the result. if None, it is automatically inferred from a and b
+        :param dim_order: defines the order of the resulting dims. if None, it is automatically inferred from a and b.
+            Not all the dims of a and b need to be specified here, and there could also be other dims in the dim_order.
         :return: element-wise comparison of a and b
         """
         a = cls.convert_to_tensor(a)
@@ -279,8 +281,14 @@ class Frontend(Generic[T]):
         if all(set(x.dims) != set(all_dims) for x in (a, b)):
             if allow_broadcast_all_sources is False:
                 raise ValueError(f"compare: sources {a!r} {b!r} not allowed with allow_broadcast_all_sources=False")
-            if allow_broadcast_all_sources is None:
+            elif allow_broadcast_all_sources is None:
                 raise ValueError(f"compare: sources {a!r} {b!r} require explicit allow_broadcast_all_sources=True")
+            elif allow_broadcast_all_sources is True:
+                pass
+            else:
+                raise TypeError(f"invalid type for allow_broadcast_all_sources: {type(allow_broadcast_all_sources)}")
+        if dim_order:
+            all_dims.sort(key=lambda d: dim_order.index(d) if d in dim_order else len(dim_order))
         out = _t.Tensor("compare", dims=all_dims, dtype="bool")
         a = a.copy_compatible_to(out, check_sparse=False, check_dtype=False)
         b = b.copy_compatible_to(out, check_sparse=False, check_dtype=False)

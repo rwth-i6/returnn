@@ -2682,7 +2682,7 @@ class _TensorMixin:
                 size_ext = tag.dyn_size_ext.copy_masked(max_idx)
                 idx_range = rf.range_over_dim(tag)
                 seq_mask = (
-                    rf.compare(idx_range, "<", size_ext, allow_broadcast_all_sources=True)
+                    rf.compare(idx_range, "<", size_ext, allow_broadcast_all_sources=True, dim_order=self.dims)
                     .copy_compatible_to(self, check_dtype=False, check_sparse=False)
                     .raw_tensor
                 )
