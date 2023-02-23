@@ -41,7 +41,6 @@ class _DimExtra:
         dim: Dim,
         kind=DimTypes.Unspecified,
         vocab=None,
-        dyn_size=None,
         undefined=False,
         special=False,
         auto_generated=False,
@@ -57,7 +56,6 @@ class _DimExtra:
         :param dim:
         :param Entity|None kind:
         :param returnn.datasets.util.vocabulary.Vocabulary|None vocab:
-        :param tf.Tensor|None dyn_size: e.g. seq_len, (batch,)
         :param bool undefined: When this is specified as `None` by the user via `shape`.
         :param bool special: this can not be a dim tag of :class:`Tensor`.
             But this dim tag also does not match anything except itself.
@@ -136,6 +134,14 @@ class _DimMixin:
     size: Optional[int]
     dyn_size_ext: Optional[_t.Tensor]
     _extra: Optional[_DimExtra]
+
+    def _handle_extra_kwargs(self: Dim, *, dyn_size: Optional[_t.RawTensorType] = None, **kwargs):
+        if kwargs:
+            self._extra = _DimExtra(dim=self, **kwargs)
+        if dyn_size is not None:
+            self.dyn_size = dyn_size
+        if self.derived_from_op and self.is_dynamic():
+            self.complete_dyn_size()
 
     @property
     def description(self) -> Optional[str]:
@@ -477,6 +483,8 @@ class _DimMixin:
             if same_base.batch == batch_base and same_base._can_use_in_ctx(ctx) and same_base.dyn_size_ext:
                 base_can_use_in_ctx = same_base
             elif same_base._extra:
+                from returnn.tf.util.data import ControlFlowContext
+
                 for ctx_ in ControlFlowContext.abs_ctx_stack_with_root(ctx):
                     # noinspection PyProtectedMember
                     tag = same_base._extra.same_for_batch_ctx.get((batch_base, ctx_), None)
