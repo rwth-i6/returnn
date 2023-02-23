@@ -58,6 +58,7 @@ class _TensorExtra:
         elif feature_dim_axis is None:
             pass
         elif isinstance(feature_dim_axis, int):
+            assert self.tensor.version == 1
             assert not self.tensor.sparse, "cannot have feature_dim_axis when sparse"
             if feature_dim_axis < 0:
                 feature_dim_axis += self.tensor.batch_ndim
@@ -70,6 +71,7 @@ class _TensorExtra:
         elif time_dim_axis is None:
             pass
         elif isinstance(time_dim_axis, int):
+            assert self.tensor.version == 1
             assert 0 <= time_dim_axis < self.tensor.batch_ndim
         else:
             raise TypeError(f"unexpected time_dim_axis type {type(time_dim_axis)}")
