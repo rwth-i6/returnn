@@ -8637,7 +8637,9 @@ class ResizeLayer(_ConcatInputLayer):
         assert axis != out.batch_dim_axis, "batch-dim resize not supported"
         tag = out.dim_tags[axis]
         if fill_dropout or not isinstance(factor, int):
-            out_dim_ = Dim(kind=tag.kind, description="%s_resize" % name, auto_generated=True)  # unknown dim
+            out_dim_ = Dim(
+                kind=tag.kind, description="%s_resize" % name, auto_generated=True, dimension=None
+            )  # unknown dim
             if tag.dyn_size_ext is not None:
                 out_dim_.dyn_size_ext = tag.dyn_size_ext.copy_template(name="%s:dyn_size_ext" % name)
         else:

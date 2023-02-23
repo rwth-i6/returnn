@@ -9352,7 +9352,7 @@ def test_DotLayer_linear_square_matrix():
 
 
 def test_DotLayer_mask_dyn_seq():
-    batch = Dim(kind=Dim.Types.Batch, description="batch")
+    batch = Dim(kind=Dim.Types.Batch, description="batch", dimension=None)
     time = SpatialDim("time")
     feat1 = FeatureDim("feature 1", dimension=3)
     feat2 = FeatureDim("feature 2", dimension=5)
@@ -9390,7 +9390,7 @@ def test_DotLayer_mask_dyn_seq():
 
 
 def test_DotLayer_mask_dyn_seq_after_softmax():
-    batch = Dim(kind=Dim.Types.Batch, description="batch")
+    batch = Dim(kind=Dim.Types.Batch, description="batch", dimension=None)
     time = SpatialDim("time")
     feat1 = FeatureDim("feature 1", dimension=3)
     feat2 = FeatureDim("feature 2", dimension=5)
@@ -9429,9 +9429,9 @@ def test_DotLayer_mask_dyn_seq_after_softmax():
 
 
 def test_DotLayer_self_att_dyn_size_ext():
-    batch_dim = Dim(kind=Dim.Types.Batch)
+    batch_dim = Dim(kind=Dim.Types.Batch, dimension=None)
     heads_dim = SpatialDim("heads", dimension=8)
-    classes_dim = Dim(kind=Dim.Types.Time, description="classes")
+    classes_dim = Dim(kind=Dim.Types.Time, description="classes", dimension=None)
     keys_dim = Dim(
         kind=Dim.Types.Spatial,
         description="keys",

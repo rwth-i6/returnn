@@ -2589,6 +2589,8 @@ class _TensorMixin:
         dim = self._dims[self.time_dim_axis]
         assert isinstance(dim, Dim)
         if dim.dyn_size_ext:
+            if dim.dyn_size_ext.raw_tensor is None:
+                dim.complete_dyn_size()
             assert dim.dyn_size_ext.raw_tensor is not None
             return dim.dyn_size_ext.raw_tensor
         assert self.batch_shape[self.time_dim_axis] is not None
