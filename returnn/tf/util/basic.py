@@ -5751,7 +5751,7 @@ def _get_control_flows(v, yield_none):
 
 def _get_control_flow_graphs(v):
     """
-    :param tf.Tensor|tf.Operation|int|float|None|list[tf.Tensor|tf.Operation|int|float] v:
+    :param tf.Tensor|tf.Variable|tf.Operation|int|float|None|list[tf.Tensor|tf.Variable|tf.Operation|int|float] v:
     :return: yields control flow contexts
     :rtype: typing.Iterator[tensorflow.python.ops.control_flow_v2_func_graphs.ControlFlowFuncGraph]
     """
@@ -5768,7 +5768,7 @@ def _get_control_flow_graphs(v):
         return
     if isinstance(v, (int, float, numpy.integer, type(None))):
         return
-    if isinstance(v, tf.Tensor):
+    if isinstance(v, (tf.Tensor, tf.Variable)):
         v = v.op
     assert isinstance(v, tf.Operation), "unexpected type %r" % type(v)
     # Control flow is via the graph of the op. This is since control flow V2.
