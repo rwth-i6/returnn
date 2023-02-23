@@ -1219,8 +1219,6 @@ def print_available_devices(tf_session_opts=None, file=None):
     :param dict[str]|None tf_session_opts: if given, will init a temp Session with these opts
     :param typing.TextIO|None file: file stream for print statements, defaults to sys.stdout
     """
-    from returnn.util import basic as util
-
     if file is None:
         file = sys.stdout
     cuda_visible_devs = None
@@ -1982,8 +1980,6 @@ class TensorCachedComputation:
         :param str|tuple[str|int|tf.Tensor] key:
         """
         self.x = x
-        from returnn.util import basic as util
-
         self.key = util.make_hashable(key)
 
     def _get_cache_dict(self):

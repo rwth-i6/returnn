@@ -404,7 +404,7 @@ class BatchInfo:
         assert isinstance(dim, BatchInfo.GlobalBatchDim)
         dim.size = value
         if dim.dim_tag:
-            dim.dim_tag.dimension = value if (isinstance(value, int) and value > 0) else None
+            dim.dim_tag.capacity = dim.dim_tag.size = value if (isinstance(value, int) and value > 0) else None
         self._dim = value
 
     @property

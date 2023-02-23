@@ -7756,7 +7756,7 @@ class TimeChunkingLayer(_ConcatInputLayer):
         data = data.copy_move_axis(old_axis=axis, new_axis=0)  # (T,...)
         data = data.copy_with_batch_dim_axis(1)  # (T,B,...)
         if not out_dim:
-            out_dim = Dim(kind=in_dim.kind, description="%s:chunking" % name, auto_generated=True)
+            out_dim = Dim(kind=in_dim.kind, description="%s:chunking" % name, auto_generated=True, dimension=None)
         data = data.copy_template_replace_dim_tag(axis=0, new_dim_tag=out_dim)  # (T',B',...)
         data.time_dim_axis = 0
         return data
@@ -9684,7 +9684,8 @@ class TopKLayer(LayerBase):
         in_data = sources[0].output
         assert isinstance(k_dim, Dim)  # via transform_config_dict
         if isinstance(k, int) and not k_dim.is_dim_known():
-            k_dim.dimension = k
+            k_dim.size = k
+            k_dim.capacity = k
         k_data = k.output if isinstance(k, LayerBase) else Data.template_from_constant(k, name="static-k")
         if k_data.batch:
             k_dim = k_dim.get_for_batch_ctx(k_data.batch, k_data.control_flow_ctx)
@@ -10351,7 +10352,9 @@ class VariableLayer(LayerBase):
                 0, Dim(kind=Dim.Types.Time, description="%s:dummy-time" % name, dimension=1, auto_generated=True)
             )
         if add_batch_axis:
-            dim_tags.insert(0, Dim(kind=Dim.Types.Batch, description="batch", batch=network.get_global_batch_info()))
+            dim_tags.insert(
+                0, Dim(kind=Dim.Types.Batch, description="batch", batch=network.get_global_batch_info(), dimension=None)
+            )
         return Data(
             name="%s_output" % name,
             dim_tags=dim_tags,
