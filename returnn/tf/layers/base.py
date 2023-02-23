@@ -444,7 +444,7 @@ class LayerBase(object):
         # You are supposed to set self.output.{batch_dim_axis,time_dim_axis} explicitly,
         # as well as check the inputs if they are as you would suggest.
         # However, a good default is often to use the same as the input.
-        if all([k not in out_type for k in Data.SpecialAxesNames + ("dim_tags", "shape")]):
+        if all([k not in out_type for k in Data.SpecialAxesNames + ("dim_tags", "dims", "shape")]):
             if sources_data:
                 out_type.setdefault("batch_dim_axis", sources_data.batch_dim_axis)
                 out_type.setdefault("time_dim_axis", sources_data.time_dim_axis)
@@ -462,6 +462,7 @@ class LayerBase(object):
                 out_type.setdefault("time_dim_axis", None)
         if "shape" not in out_type and "dim_tags" not in out_type and "dims" not in out_type:
             if sources_data:
+                out_type.setdefault("version", sources_data.version)
                 if out_type.get("sparse", False) or out_type.get("sparse_dim", None):
                     out_type["dims"] = sources_data.dim_tags_sparse
                 else:  # not sparse
