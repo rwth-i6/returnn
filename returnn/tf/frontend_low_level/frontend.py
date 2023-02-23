@@ -3,15 +3,18 @@ Frontend for exposing TensorFlow-specific functionality.
 """
 
 from __future__ import annotations
-from typing import Optional, Union, Any, Sequence, Tuple
+from typing import TYPE_CHECKING, Optional, Union, Any, Sequence, Tuple
 import tensorflow as tf
 import contextlib
 
 from returnn.util.basic import NotSpecified
-from returnn.frontend_api import Frontend, RawTensorTypes
+from returnn.frontend_api import Frontend
 from returnn.tensor import Tensor, Dim
 from returnn.tf.util import basic as tf_util
 from returnn.tf import compat as tf_compat
+
+if TYPE_CHECKING:
+    from returnn.frontend_api import RawTensorTypes
 
 _TT = Tensor[tf.Tensor]
 
