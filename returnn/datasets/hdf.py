@@ -1237,7 +1237,7 @@ class SimpleHDFWriter:
         assert self._file.attrs["numSeqs"] > 0 and self._seq_lengths.shape[0] > 0
         seq_idx = self._file.attrs["numSeqs"] - 1
 
-        if raw_data.dtype == numpy.object:
+        if raw_data.dtype == object:
             # Is this a string?
             assert isinstance(raw_data.flat[0], (str, bytes))
             dtype = "string"
