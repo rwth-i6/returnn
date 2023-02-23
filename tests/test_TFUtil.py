@@ -478,6 +478,14 @@ def test_Data_sparse_int32_with_dim_kwargs_init():
     assert data.sparse and data.have_time_axis() and data.shape == (None,) and data.dim == 10
 
 
+def test_Data_sparse_with_dims():
+    from returnn.tf.util.data import batch_dim, SpatialDim
+
+    time_dim = SpatialDim("time")
+    out = Data(name="out", sparse=True, dim=5, batch_dim_axis=0, time_dim_axis=1, version=1, dims=(batch_dim, time_dim))
+    assert out.sparse and out.dtype == "int32"
+
+
 def test_Data_int32_no_dim_kwargs_init():
     data = Data(name="classes_with_no_dim", shape=(None,), dtype="int32")
     assert data.have_time_axis() and data.shape == (None,)
