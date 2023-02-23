@@ -9,15 +9,15 @@ The convention for the user is to do::
 from __future__ import annotations
 from typing import TYPE_CHECKING, Optional, TypeVar, Generic, Any, Dict, Type, Union, Sequence, Tuple
 import contextlib
+import numpy
 
 from returnn.util.basic import NotSpecified
 from returnn import tensor as _t
 
 if TYPE_CHECKING:
-    import numpy
     from returnn.tensor import Tensor, Dim
 
-    RawTensorTypes = Union[int, float, complex, numpy.number, numpy.ndarray, bool, str]
+RawTensorTypes = Union[int, float, complex, numpy.number, numpy.ndarray, bool, str]
 
 T = TypeVar("T")  # tf.Tensor, torch.Tensor or so
 

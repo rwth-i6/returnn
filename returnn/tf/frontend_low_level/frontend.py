@@ -8,13 +8,10 @@ import tensorflow as tf
 import contextlib
 
 from returnn.util.basic import NotSpecified
-from returnn.frontend_api import Frontend
+from returnn.frontend_api import Frontend, RawTensorTypes
 from returnn.tensor import Tensor, Dim
 from returnn.tf.util import basic as tf_util
 from returnn.tf import compat as tf_compat
-
-if TYPE_CHECKING:
-    from returnn.frontend_api import RawTensorTypes
 
 _TT = Tensor[tf.Tensor]
 
