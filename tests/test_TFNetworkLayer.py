@@ -255,6 +255,7 @@ def test_LinearLayer_generic_dim_tags():
                 "output4": {
                     "class": "linear",
                     "from": "data:in2",
+                    "in_dim": time2_dim,
                     "out_dim": out_dim,
                     "out_shape": {batch_dim, out_dim, feat_dim},
                     "is_output_layer": True,
@@ -1566,7 +1567,10 @@ def test_CombineLayer_match_unknown_derived():
         assert dat1.dim_tags[1].undefined
         dat1_derived_dim_tags = list(dat1.dim_tags)
         dat1_derived_dim_tags[1] = Dim(
-            kind=Dim.Types.Spatial, description="undefined_derived_dim", derived_from_tag=dat1.dim_tags[1]
+            kind=Dim.Types.Spatial,
+            description="undefined_derived_dim",
+            derived_from_tag=dat1.dim_tags[1],
+            dimension=None,
         )
         dat1_derived = Data(name="undefined_derived", dim_tags=dat1_derived_dim_tags)
         assert dat1_derived.dim_tags[1].undefined
