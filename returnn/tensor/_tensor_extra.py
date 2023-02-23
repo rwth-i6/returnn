@@ -3093,42 +3093,20 @@ class _TensorMixin:
         return self.raw_frontend.is_valid_in_current_graph(self)
 
 
-def infer_dim_tags(
+def infer_sparse_dim(
     *,
-    name,
-    batch_dim_axis=NotSpecified,
-    time_dim_axis=NotSpecified,
-    feature_dim_axis=NotSpecified,
-    dim_tags: Optional[Sequence[Dim]] = None,
-    shape: Optional[Sequence[Optional[int]]] = None,
+    name: str,
     sparse: Optional[bool] = None,
     sparse_dim,
     dim=NotSpecified,
-    size_placeholder=None,
-    auto_create_placeholders=False,
-    batch=None,
     **_other_kwargs,
-) -> Tuple[Tuple[Dim, ...], Optional[Dim]]:
+) -> Optional[Dim]:
     """
     :param name:
-    :param int|None|NotSpecified batch_dim_axis: where we add the batch-dim.
-      e.g. shape=(time,...), 0 -> (batch,time,...), 1 -> (time,batch,...).
-      Default is 0.
-      This is normally always set, and a lot of code expects this. However, you can set it to None
-      if this Data does not have a batch-dim.
-    :param int|None|NotSpecified time_dim_axis: where we have the time dim axis, after we added the batch-dim.
-      this is often 1. however, can be None if there is no time-dim.
-    :param int|None|NotSpecified feature_dim_axis: feature dim axis. by default it's the last one
-    :param dim_tags:
-    :param shape: including time-dim (can be None). excluding batch-dim.
-        e.g. (time,feat)=(None,128)
     :param sparse:
     :param sparse_dim:
-    :param int|None|NotSpecified dim: feature dimension, shape[-1] if not sparse, otherwise like num_classes
-    :param size_placeholder:
-    :param auto_create_placeholders:
-    :param batch:
-    :return: dims, sparse_dim
+    :param dim:
+    :return: sparse dim
     """
     if sparse is None:
         sparse = sparse_dim not in (None, NotSpecified)
@@ -3152,8 +3130,46 @@ def infer_dim_tags(
             assert sparse_dim.dimension == dim
     else:
         assert not sparse
+    return sparse_dim
+
+
+def infer_dim_tags(
+    *,
+    name,
+    batch_dim_axis=NotSpecified,
+    time_dim_axis=NotSpecified,
+    feature_dim_axis=NotSpecified,
+    dim_tags: Optional[Sequence[Dim]] = None,
+    shape: Optional[Sequence[Optional[int]]] = None,
+    sparse_dim: Optional[Dim] = None,
+    dim=NotSpecified,
+    size_placeholder=None,
+    auto_create_placeholders=False,
+    batch=None,
+    **_other_kwargs,
+) -> Tuple[Dim, ...]:
+    """
+    :param name:
+    :param int|None|NotSpecified batch_dim_axis: where we add the batch-dim.
+      e.g. shape=(time,...), 0 -> (batch,time,...), 1 -> (time,batch,...).
+      Default is 0.
+      This is normally always set, and a lot of code expects this. However, you can set it to None
+      if this Data does not have a batch-dim.
+    :param int|None|NotSpecified time_dim_axis: where we have the time dim axis, after we added the batch-dim.
+      this is often 1. however, can be None if there is no time-dim.
+    :param int|None|NotSpecified feature_dim_axis: feature dim axis. by default it's the last one
+    :param dim_tags:
+    :param shape: including time-dim (can be None). excluding batch-dim.
+        e.g. (time,feat)=(None,128)
+    :param sparse_dim:
+    :param int|None|NotSpecified dim: feature dimension, shape[-1] if not sparse, otherwise like num_classes
+    :param size_placeholder:
+    :param auto_create_placeholders:
+    :param batch:
+    :return: dims
+    """
     if dim_tags is not None:
-        return tuple(dim_tags), sparse_dim
+        return tuple(dim_tags)
     if batch_dim_axis is NotSpecified:
         batch_dim_axis = 0
     if shape is None:
@@ -3165,7 +3181,7 @@ def infer_dim_tags(
             batch_dim_axis=batch_dim_axis,
             feature_dim_axis=feature_dim_axis,
             time_dim_axis=time_dim_axis,
-            sparse=sparse,
+            sparse=bool(sparse_dim),
             dim=dim,
         )
     else:
@@ -3179,11 +3195,11 @@ def infer_dim_tags(
         size_placeholder=size_placeholder,
         name=name,
         extern_data=auto_create_placeholders,
-        sparse=sparse,
+        sparse=bool(sparse_dim),
         batch=batch,
     )
     if dim is not NotSpecified:
-        if sparse:
+        if sparse_dim:
             assert sparse_dim.dimension == dim
         else:
             if feature_dim_axis is None:
@@ -3192,7 +3208,7 @@ def infer_dim_tags(
                 pass
             else:
                 assert dims[feature_dim_axis].dimension == dim
-    return dims, sparse_dim
+    return dims
 
 
 class _SizePlaceholderProxy:

@@ -73,13 +73,15 @@ class Tensor(_TensorMixin, Generic[RawTensorType]):
             - v2: time_dim_axis, feature_dim_axis are None by default.
         :param kwargs: see :func:`_handle_extra_kwargs`, :func:`infer_dim_tags`
         """
+        if "sparse" in kwargs and sparse_dim is None:
+            sparse_dim = _tensor_extra.infer_sparse_dim(name=name, sparse_dim=sparse_dim, **kwargs)
         if dims is not None:
             assert "shape" not in kwargs and "dim_tags" not in kwargs  # probably old code got this wrong
             if version is None:
                 version = 2
         else:
             # old code
-            dims, sparse_dim = _tensor_extra.infer_dim_tags(name=name, sparse_dim=sparse_dim, **kwargs)
+            dims = _tensor_extra.infer_dim_tags(name=name, sparse_dim=sparse_dim, **kwargs)
             if version is None:
                 version = 1
         if dtype is None:
