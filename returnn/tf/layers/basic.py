@@ -5615,7 +5615,8 @@ class ReinterpretDataLayer(_ConcatInputLayer):
                 axis_int = out.get_axis_from_description(axis)
                 old_tag = out.dim_tags[axis_int]
                 if old_tag.is_dim_known() and not new_tag.is_dim_known():
-                    new_tag.dimension = old_tag.dimension
+                    new_tag.size = old_tag.size
+                    new_tag.capacity = old_tag.capacity
                 # The new tag might not have the same control flow context or batch as our output
                 # but maybe a more simplified case (e.g. no control flow context).
                 # As this is a copy of the old tag, see what simplified variant we get for the old tag,

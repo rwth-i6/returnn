@@ -260,6 +260,12 @@ class _TensorMixin:
             return None
         return self._extra.control_flow_ctx
 
+    @control_flow_ctx.setter
+    def control_flow_ctx(self, value: Optional[ControlFlowContext]):
+        if value == self.control_flow_ctx:
+            return
+        self._make_extra().control_flow_ctx = value
+
     @property
     def available_for_inference(self) -> bool:
         """

@@ -6777,7 +6777,7 @@ def test_RandIntLayer():
         input_len = feed[size_placeholder]
         sz = (
             Dim(description="feature", kind=Dim.Types.Feature, dimension=5),
-            Dim(kind=Dim.Types.Batch),
+            Dim(kind=Dim.Types.Batch, dimension=None),
             net.extern_data.data["data"].get_size_dim_tag(0),
             3,
         )
@@ -8040,7 +8040,7 @@ def test_SliceNdLayer_ReinterpretDataLayer():
     """
     from returnn.tf.util.data import DimensionTag
 
-    new_slice_tag = DimensionTag(kind=DimensionTag.Types.Spatial, description="new-slice")
+    new_slice_tag = DimensionTag(kind=DimensionTag.Types.Spatial, description="new-slice", dimension=None)
     with make_scope():
         n_out = 5
         config = Config(
@@ -9436,6 +9436,7 @@ def test_DotLayer_self_att_dyn_size_ext():
         kind=Dim.Types.Spatial,
         description="keys",
         dyn_size_ext=Data(name="keys_dyn_size", dim_tags=[classes_dim], dtype="int32", auto_create_placeholders=True),
+        dimension=None,
     )
     feature_dim = FeatureDim("feature", dimension=64)
 
