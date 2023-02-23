@@ -19,7 +19,7 @@ from returnn.tensor import Tensor, Dim, batch_dim, single_step_dim
 
 # Import also more to support old code.
 # noinspection PyUnresolvedReferences
-from returnn.tensor.marked_dim import MarkedDim, ImplicitSparseDim, ImplicitDynSizeDim
+from returnn.tensor.marked_dim import MarkedDim, ImplicitSparseDim, ImplicitDynSizeDim, OptionalDim
 
 # Import to support old code.
 # noinspection PyUnresolvedReferences
