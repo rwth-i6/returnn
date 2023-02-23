@@ -320,7 +320,6 @@ class TFFrontend(Frontend[tf.Tensor]):
     def reduce(source: _TT, *, mode: str, axis: Union[Dim, Sequence[Dim]], use_time_mask: bool = NotSpecified) -> _TT:
         """Reduce"""
         x = source
-        assert not x.sparse
         axes = x.get_axes_from_description(axis)
         if use_time_mask in (None, NotSpecified):
             use_time_mask = any(x.has_dynamic_size(a) for a in axes)
