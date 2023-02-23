@@ -85,7 +85,7 @@ class _TensorExtra:
 
 class _TensorMixin:
     name: str
-    _dims: Tuple[Dim]
+    _dims: Tuple[Dim, ...]
     dtype: str
     sparse_dim: Optional[Dim]
     _raw_tensor: Optional[_t.RawTensorType]
@@ -1574,7 +1574,7 @@ class _TensorMixin:
         return any(tag.control_flow_ctx for tag in self.dim_tags)
 
     @property
-    def size_placeholder(self):
+    def size_placeholder(self: Tensor):
         """
         For compatibility, return a proxy object which behaves like the original dict.
 
@@ -2625,7 +2625,7 @@ class _TensorMixin:
             assert self.time_dim_axis == 1
             return rf.sequence_mask_raw(dyn_seq_len, batch_major=True)
 
-    def get_sequence_mask_broadcast(self: Tensor, axis=None):
+    def get_sequence_mask_broadcast(self: Tensor, axis=None) -> _t.RawTensorType:
         """
         :param int|None axis:
         :return: seq mask of shape ((batch,time) or (time,batch)) + (1,)s for remaining dims
@@ -2693,13 +2693,14 @@ class _TensorMixin:
         assert tag.dyn_size_ext
         return tag.dyn_size_ext.copy_compatible_to(self, check_dtype=False, check_sparse=False).placeholder
 
-    def copy_masked(self, mask_value):
+    def copy_masked(self: Tensor, mask_value):
         """
         :param float|int|tf.Tensor mask_value:
         :rtype: Data
         """
         assert self.placeholder is not None
-        from .basic import mask_dyn_seq_len_nd
+        assert self.raw_frontend.is_tensorflow  # not implemented otherwise for now
+        from returnn.tf.util.basic import mask_dyn_seq_len_nd
 
         dyn_axes = [axis for axis, dim in enumerate(self.dim_tags) if not dim.is_batch_dim() and dim.dimension is None]
         res = self.copy()

@@ -40,7 +40,7 @@ class Tensor(_TensorMixin, Generic[RawTensorType]):
     __slots__ = ("name", "_dims", "dtype", "sparse_dim", "_raw_tensor", "version", "_extra")
 
     name: str
-    _dims: Tuple[Dim]
+    _dims: Tuple[Dim, ...]
     dtype: str
     sparse_dim: Optional[Dim]
     _raw_tensor: Optional[RawTensorType]
