@@ -81,6 +81,7 @@ class _TensorMixin:
     sparse_dim: Optional[Dim]
     _raw_tensor: Optional[_t.RawTensorType]
     raw_tensor: Optional[_t.RawTensorType]
+    version: int
     _extra: Optional[_TensorExtra]
 
     @staticmethod
@@ -458,6 +459,8 @@ class _TensorMixin:
             # Sparse is False by default.
             # And the dim is inferred from the feature dim, or otherwise does not make sense.
             keys += ["sparse_dim"]
+        if self.version == 1:
+            keys += ["version"]
         if self._extra:
             if self.batch is not None:
                 keys += ["batch"]
@@ -652,21 +655,12 @@ class _TensorMixin:
             data_opts["raw_tensor"] = self.raw_frontend.transpose_raw(self._raw_tensor, perm)
         data_opts["dims"] = tuple(self.dim_tags[perm[i]] for i in range(self.batch_ndim))
         data = _t.Tensor(**data_opts)
-        if self._extra:
-            inv_perm_ = {j: i for (i, j) in enumerate(perm)}
-            inv_perm = [j for (i, j) in sorted(inv_perm_.items())]
-            if (
-                self.time_dim_axis_or_unspecified is not NotSpecified
-                and self.time_dim_axis is not None
-                and inv_perm[self.time_dim_axis] != data.time_dim_axis
-            ):
-                data.time_dim_axis = inv_perm[self.time_dim_axis]
-            if (
-                self.feature_dim_axis_or_unspecified is not NotSpecified
-                and self.feature_dim_axis is not None
-                and inv_perm[self.feature_dim_axis] != data.feature_dim_axis
-            ):
-                data.feature_dim_axis = inv_perm[self.feature_dim_axis]
+        if self.version == 1:
+            inv_perm = {j: i for (i, j) in enumerate(perm)}
+            if inv_perm.get(self.time_dim_axis, None) != data.time_dim_axis:
+                data.time_dim_axis = inv_perm.get(self.time_dim_axis, None)
+            if inv_perm.get(self.feature_dim_axis, None) != data.feature_dim_axis:
+                data.feature_dim_axis = inv_perm.get(self.feature_dim_axis, None)
         return data
 
     def copy_move_axis(self, old_axis, new_axis) -> _t.Tensor:
@@ -1736,6 +1730,8 @@ class _TensorMixin:
         :return: feature dim axis, counted with batch-dim
         :rtype: int|None
         """
+        if self.version >= 2:
+            return None
         return _default_feature_dim_axis(
             batch_dim_axis=self.batch_dim_axis,
             time_dim_axis=self.time_dim_axis,
@@ -1749,6 +1745,8 @@ class _TensorMixin:
         :return: feature dim axis, counted with batch-dim
         :rtype: int|None
         """
+        if self.version >= 2:
+            return None
         if self.feature_dim_axis_or_unspecified is not NotSpecified:
             return self.feature_dim_axis_or_unspecified
         return self._default_feature_dim_axis()
@@ -1761,6 +1759,7 @@ class _TensorMixin:
         assert value is NotSpecified or value is None or isinstance(value, int)
         if self.feature_dim_axis_or_unspecified == value:
             return
+        assert self.version == 1, "feature_dim_axis is deprecated"
         if isinstance(value, int):
             assert 0 <= value < self.batch_ndim
         self._make_extra().feature_dim_axis = value
@@ -1771,6 +1770,8 @@ class _TensorMixin:
         :return: feature dim axis, counted with batch-dim. could also be unspecified
         :rtype: int|None|NotSpecified
         """
+        if self.version >= 2:
+            return None
         if not self._extra:
             return NotSpecified
         return self._extra.feature_dim_axis
@@ -1780,6 +1781,8 @@ class _TensorMixin:
         """
         :return: time dim axis (deprecated)
         """
+        if self.version >= 2:
+            return None
         if self.time_dim_axis_or_unspecified is not NotSpecified:
             return self.time_dim_axis_or_unspecified
         return _default_time_dim_axis_dim_tags(self.dim_tags)
@@ -1792,6 +1795,7 @@ class _TensorMixin:
         assert value is NotSpecified or value is None or isinstance(value, int)
         if self.time_dim_axis_or_unspecified == value:
             return
+        assert self.version == 1, "time_dim_axis is deprecated"
         if isinstance(value, int):
             assert 0 <= value < self.batch_ndim
         self._make_extra().time_dim_axis = value
@@ -1802,6 +1806,8 @@ class _TensorMixin:
         :return: time dim axis, counted with batch-dim. could also be unspecified
         :rtype: int|None|NotSpecified
         """
+        if self.version >= 2:
+            return None
         if not self._extra:
             return NotSpecified
         return self._extra.time_dim_axis

@@ -37,13 +37,14 @@ class Tensor(_TensorMixin, Generic[RawTensorType]):
 
     size_dtype = "int32"
 
-    __slots__ = ("name", "_dims", "dtype", "sparse_dim", "_raw_tensor", "_extra")
+    __slots__ = ("name", "_dims", "dtype", "sparse_dim", "_raw_tensor", "version", "_extra")
 
     name: str
     _dims: Tuple[Dim]
     dtype: str
     sparse_dim: Optional[Dim]
     _raw_tensor: Optional[RawTensorType]
+    version: int
     _extra: Optional[_TensorExtra]
 
     def __init__(
@@ -54,6 +55,7 @@ class Tensor(_TensorMixin, Generic[RawTensorType]):
         *,
         sparse_dim: Optional[Dim] = None,
         raw_tensor: Optional[RawTensorType] = None,
+        version: Optional[int] = None,
         **kwargs,
     ):
         """
@@ -64,13 +66,22 @@ class Tensor(_TensorMixin, Generic[RawTensorType]):
             You can also interpret the whole tensor as a sparse representation of a dense one-hot tensor,
             where this sparse_dim becomes the additional dense dimension.
         :param raw_tensor: the raw tensor, e.g. numpy array, TF tensor, or PyTorch tensor
+        :param version: behavior version just for Tensor. If not specified, and `dims` is None (old code),
+            it uses version 1.
+            - v1: the old behavior of Data. Specifically, time_dim_axis and feature_dim_axis are used
+                and automatically inferred when not specified.
+            - v2: time_dim_axis, feature_dim_axis are None by default.
         :param kwargs: see :func:`_handle_extra_kwargs`, :func:`infer_dim_tags`
         """
-        if dims is None:
+        if dims is not None:
+            assert "shape" not in kwargs and "dim_tags" not in kwargs  # probably old code got this wrong
+            if version is None:
+                version = 2
+        else:
             # old code
             dims, sparse_dim = _tensor_extra.infer_dim_tags(name=name, sparse_dim=sparse_dim, **kwargs)
-        else:
-            assert "shape" not in kwargs and "dim_tags" not in kwargs  # probably old code got this wrong
+            if version is None:
+                version = 1
         if dtype is None:
             # old defaults
             dtype = "int32" if sparse_dim else "float32"
@@ -80,6 +91,7 @@ class Tensor(_TensorMixin, Generic[RawTensorType]):
         self.dtype = dtype
         self.sparse_dim = sparse_dim
         self._raw_tensor = None  # assignment below
+        self.version = version
         self._extra = None  # type: Optional[_TensorExtra]
 
         if kwargs:
