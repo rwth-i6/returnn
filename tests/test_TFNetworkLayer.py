@@ -335,6 +335,27 @@ def test_LinearLayer_reuse_params_layer_output():
         numpy.testing.assert_array_equal(out1_np, out2_np)
 
 
+def test_CopyLayer_target():
+    from returnn.tf.util.data import batch_dim, SpatialDim, FeatureDim
+
+    time_dim = SpatialDim("time")
+    feat_dim = FeatureDim("feature", dimension=5)
+    config = Config(
+        {
+            "extern_data": {
+                "data": {"dim_tags": [batch_dim, time_dim], "sparse_dim": feat_dim},
+            },
+        }
+    )
+    net_dict = {"output": {"class": "copy", "from": "data", "target": "data"}}
+    with make_scope() as session:
+        net = TFNetwork(config=config)
+        net.construct_from_dict(net_dict)
+        out = net.get_default_output_layer().output
+        assert out.sparse_dim == feat_dim
+        session.run(out.placeholder, feed_dict=make_feed_dict(net.extern_data))
+
+
 def test_PadLayer_time():
     n_batch, n_time, n_in = 7, 3, 20
     config = Config(
