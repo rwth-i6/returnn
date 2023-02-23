@@ -9,6 +9,8 @@ import torch
 from returnn.frontend_api import Frontend
 
 
+# Ignore this warning until we really expect that we implemented everything.
+# noinspection PyAbstractClass
 class TorchFrontend(Frontend[torch.Tensor]):
     """
     PyTorch frontend

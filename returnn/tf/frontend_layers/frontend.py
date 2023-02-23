@@ -10,6 +10,8 @@ from returnn.frontend_api import Frontend
 from returnn.tensor import Tensor, Dim
 
 
+# Ignore this warning until we really expect that we implemented everything.
+# noinspection PyAbstractClass
 class ReturnnLayersFrontend(Frontend):
     """
     RETURNN layers frontend (using TF), where raw_tensor represents a RETURNN layer
