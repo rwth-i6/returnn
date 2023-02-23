@@ -2663,7 +2663,7 @@ class _TensorMixin:
                 seq_mask = rf.reshape_raw(seq_mask, shape)
                 assert seq_mask.get_shape().ndims == self.batch_ndim
             else:  # size is something unusual, not just [B], but e.g. [B,S] or so
-                max_idx = rf.reduce(tag.dyn_size_ext, axis=tag.dyn_size_ext.dims, mode="max").raw_tensor  # TODO...
+                max_idx = rf.reduce(tag.dyn_size_ext, axis=tag.dyn_size_ext.dims, mode="max").raw_tensor
                 # We use the assumption that self.placeholder.shape[axis] == max_idx.
                 # size_ext might have invalid (zero) sizes
                 # when it itself has some padding, e.g. when its own shape is dynamic.
@@ -2672,9 +2672,13 @@ class _TensorMixin:
                 # and this likely produces nan in backprop or elsewhere.
                 # Thus, mask size_ext itself, and set the padded values to 1.
                 # This assumes that max_idx >= 1.
-                size_ext = tag.dyn_size_ext.copy_masked(max_idx)  # TODO...
+                size_ext = tag.dyn_size_ext.copy_masked(max_idx)
                 idx_range = rf.range_over_dim(tag)
-                seq_mask = rf.compare(idx_range, "<", size_ext, out_dims=self.dims).raw_tensor
+                seq_mask = (
+                    rf.compare(idx_range, "<", size_ext, allow_broadcast_all_sources=True)
+                    .copy_compatible_to(self, check_dtype=False, check_sparse=False)
+                    .raw_tensor
+                )
         return seq_mask
 
     def get_sequence_lengths_broadcast(self, axis=None):

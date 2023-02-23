@@ -260,7 +260,6 @@ class Frontend(Generic[T]):
         b: Union[Tensor, RawTensorTypes],
         *,
         allow_broadcast_all_sources: Optional[bool] = None,
-        out_dims: Optional[Sequence[Dim]] = None,
     ) -> Tensor:
         """
         :param a:
@@ -273,19 +272,16 @@ class Frontend(Generic[T]):
         """
         a = cls.convert_to_tensor(a)
         b = cls.convert_to_tensor(b)
-        if out_dims is not None:
-            out = _t.Tensor("compare", dims=out_dims, dtype="bool")
-        else:
-            all_dims = []
-            for dim in a.dims + b.dims:
-                if dim not in all_dims:
-                    all_dims.append(dim)
-            if all(set(x.dims) != set(all_dims) for x in (a, b)):
-                if allow_broadcast_all_sources is False:
-                    raise ValueError(f"compare: sources {a!r} {b!r} not allowed with allow_broadcast_all_sources=False")
-                if allow_broadcast_all_sources is None:
-                    raise ValueError(f"compare: sources {a!r} {b!r} require explicit allow_broadcast_all_sources=True")
-            out = _t.Tensor("compare", dims=all_dims, dtype="bool")
+        all_dims = []
+        for dim in a.dims + b.dims:
+            if dim not in all_dims:
+                all_dims.append(dim)
+        if all(set(x.dims) != set(all_dims) for x in (a, b)):
+            if allow_broadcast_all_sources is False:
+                raise ValueError(f"compare: sources {a!r} {b!r} not allowed with allow_broadcast_all_sources=False")
+            if allow_broadcast_all_sources is None:
+                raise ValueError(f"compare: sources {a!r} {b!r} require explicit allow_broadcast_all_sources=True")
+        out = _t.Tensor("compare", dims=all_dims, dtype="bool")
         a = a.copy_compatible_to(out, check_sparse=False, check_dtype=False)
         b = b.copy_compatible_to(out, check_sparse=False, check_dtype=False)
         out.raw_tensor = cls.compare_raw(a.raw_tensor, kind, b.raw_tensor)
