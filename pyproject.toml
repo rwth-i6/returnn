@@ -12,3 +12,6 @@ extend-exclude = '''
     | returnn/extern/WarpRna/warp-rna
 )/
 '''
+
+[build-system]
+requires = ["setuptools", "numpy", "h5py"]
