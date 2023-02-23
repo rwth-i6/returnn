@@ -7732,8 +7732,8 @@ def test_reclayer_att_weights_output_layer():
     )
 
     att_heads = Dim(kind=Dim.Types.Spatial, description="att_heads", dimension=1)
-    att_t = Dim(kind=Dim.Types.Spatial, description="att_t")
-    label_axis = Dim(kind=Dim.Types.Spatial, description="label-axis")
+    att_t = Dim(kind=Dim.Types.Spatial, description="att_t", dimension=None)
+    label_axis = Dim(kind=Dim.Types.Spatial, description="label-axis", dimension=None)
 
     net_dict = {
         "encoder": {"class": "copy", "from": "data"},
