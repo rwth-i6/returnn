@@ -1076,8 +1076,8 @@ def test_Data_feature_dim_axis_btd():
     assert d1.time_dim_axis == d2.time_dim_axis == d3.time_dim_axis == d4.time_dim_axis == 1
     assert d1.feature_dim_axis == d2.feature_dim_axis == d3.feature_dim_axis == d4.feature_dim_axis == 2
     assert d1.batch_shape == d2.batch_shape == d3.batch_shape == d4.batch_shape == (None, None, 11)
-    assert d1._feature_dim_axis == 2
-    assert d3._feature_dim_axis is NotSpecified
+    assert d1._extra.feature_dim_axis == 2
+    assert d3._extra.feature_dim_axis is NotSpecified
 
 
 def test_Data_feature_dim_axis_none():
@@ -1086,8 +1086,8 @@ def test_Data_feature_dim_axis_none():
     d3 = Data(name="d3", shape=(None,), sparse=True, dim=7)
     d4 = Data(name="d4", shape=(None,), sparse=True, dim=7, feature_dim_axis=None)
     assert d1.feature_dim_axis == d2.feature_dim_axis == d3.feature_dim_axis == d4.feature_dim_axis == None
-    assert d1._feature_dim_axis is NotSpecified
-    assert d2._feature_dim_axis is None
+    assert d1._extra.feature_dim_axis is NotSpecified
+    assert d2._extra.feature_dim_axis is None
 
 
 def test_Data_feature_dim_axis_bdt():
