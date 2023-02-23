@@ -1481,8 +1481,17 @@ class _DimMixin:
         """
         if self.dimension is not None:
             return self.dimension
-        if self.is_batch_dim() and self._extra and self._extra.src_data:
-            return self._extra.src_data.get_batch_dim()
+        if self.dyn_size_ext and self.dyn_size_ext.placeholder is not None:  # fast path
+            if self.dyn_size_ext.batch_ndim > 0:
+                return self.dyn_size_ext.raw_frontend.reduce(
+                    self.dyn_size_ext, axis=self.dyn_size_ext.dim_tags, mode="max"
+                ).raw_tensor
+            return self.dyn_size_ext.placeholder
+        if self.is_batch_dim():
+            if self._extra and self._extra.src_data:
+                return self._extra.src_data.get_batch_dim()
+            if self.batch:
+                return self.batch.dim
         if (
             self._extra
             and self._extra.src_data is not None
