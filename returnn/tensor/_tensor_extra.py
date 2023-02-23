@@ -3193,9 +3193,9 @@ class _SizePlaceholderProxy:
     which was a dict[int,tf.Tensor], axis_wo_batch -> sizes.
     """
 
-    def __init__(self, data):
+    def __init__(self, data: Tensor):
         """
-        :param Data data:
+        :param data:
         """
         self.data = data
 

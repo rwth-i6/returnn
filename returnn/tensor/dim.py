@@ -82,6 +82,10 @@ class Dim(_DimMixin):
         if kwargs:
             # TODO filter kwargs, avoid creation of _DimExtra if not needed
             self._extra = _DimExtra(dim=self, **kwargs)
+            if kwargs.get("dyn_size") is not None:
+                self.dyn_size = kwargs["dyn_size"]
+            if self.derived_from_op and self.is_dynamic():
+                self.complete_dyn_size()
 
     def __repr__(self):
         return "Dim{%s}" % self.short_repr()

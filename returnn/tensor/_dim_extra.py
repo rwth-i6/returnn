@@ -116,10 +116,6 @@ class _DimExtra:
         # We can have different tag variants per batch info (e.g. with beam), or per control flow ctx.
         # They each have same_as = self. The same_base should have the base (global) batch info.
         self.same_for_batch_ctx = {}  # type: Dict[Tuple[BatchInfo,Optional[ControlFlowContext]],_d.Dim]
-        if dyn_size is not None:
-            dim.dyn_size = dyn_size
-        if self.derived_from_op and dim.is_dynamic():
-            dim.complete_dyn_size()
 
     def __getstate__(self):
         d = vars(self).copy()
@@ -885,7 +881,7 @@ class _DimMixin:
                 return None
             if a is None or b is None:
                 return None
-            assert isinstance(a, (int, tf.Tensor)) and isinstance(b, (int, tf.Tensor))
+            assert isinstance(a, tf.Tensor) and isinstance(b, (int, tf.Tensor))
             with tf_util.same_control_flow_ctx([a, b]):
                 if kind == "add":
                     use_relu = _is_negative(a) or _is_negative(b)  # for dynamic tensors, assume all positive
@@ -904,7 +900,7 @@ class _DimMixin:
                     raise ValueError("unknown op kind %r" % op.kind)
 
         y_name = self.description + ":seq-length"
-        y = None
+        y: Optional[_t.Tensor] = None  # resulting dyn size
         inputs = list(op.inputs)
         assert inputs
         while inputs:
