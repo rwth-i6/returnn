@@ -77,6 +77,11 @@ class _TensorExtra:
             raise TypeError(f"unexpected time_dim_axis type {type(time_dim_axis)}")
         self.time_dim_axis = time_dim_axis
 
+    def __getstate__(self):
+        d = vars(self)
+        d["batch"] = None  # BatchInfo pickling not supported
+        return d
+
 
 class _TensorMixin:
     name: str
@@ -588,10 +593,13 @@ class _TensorMixin:
         return id(self)
 
     def __getstate__(self):
-        d = vars(self)
-        d["_batch"] = None  # BatchInfo pickling not supported
-        d["_placeholder"] = None  # do not store the TF tensors
+        d = {k: getattr(self, k) for k in self.__slots__}
+        d["_raw_tensor"] = None  # do not store the TF tensors
         return d
+
+    def __setstate__(self, state):
+        for k, v in state.items():
+            setattr(self, k, v)
 
     def _adapt_batch_consistent_dim_tags(self):
         if not self._extra:

@@ -12083,6 +12083,22 @@ def test_pickle_dim_tags():
     # It should just involve some dim tags.
     from returnn.tf.util.data import batch_dim, ImplicitDynSizeDim
 
+    # noinspection PyUnresolvedReferences,PyProtectedMember
+    from pickle import _dumps as pickle_dumps  # Use pickle._dumps for easier debugging.
+    import pickle
+
+    dim = FeatureDim("feat-demo-dim", dimension=5)
+    dim_ = pickle.loads(pickle_dumps(dim))
+    print(dim)
+    print(dim_)
+    assert dim.dimension == dim_.dimension and dim != dim_ and dim._extra is not dim_._extra
+
+    data = Data(name="data-demo", dim_tags=[dim])
+    data_ = pickle.loads(pickle_dumps(data))
+    print(data)
+    print(data_)
+    assert data.shape == data_.shape and data.dim_tags != data_.dim_tags
+
     n_batch, n_time, n_ts, n_in, n_out = 2, 3, 6, 7, 11
     time_dim = SpatialDim("time")
     feat_dim = FeatureDim("in-feature", dimension=n_in)
@@ -12137,13 +12153,7 @@ def test_pickle_dim_tags():
     nest.map_structure_with_tuple_paths(_debug_dump, config.typed_dict)
 
     # Now pickle, unpickle and test again.
-    # Use pickle._dumps for easier debugging.
-    # noinspection PyUnresolvedReferences
-    from pickle import _dumps as dumps
-
-    s = dumps(config.typed_dict)
-    import pickle
-
+    s = pickle_dumps(config.typed_dict)
     config_dict = pickle.loads(s)
     new_dim_tags = config_dict["extern_data"]["data"]["dim_tags"]
     new_batch, new_time, new_feat = new_dim_tags
