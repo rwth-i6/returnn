@@ -5714,7 +5714,7 @@ def has_current_control_flow_context():
 
 def _get_control_flows(v, yield_none):
     """
-    :param tf.Tensor|tf.Operation|int|float|None|list[tf.Tensor|tf.Operation|int|float] v:
+    :param tf.Tensor|tf.Variable|tf.Operation|int|float|None|list[tf.Tensor|tf.Variable|tf.Operation|int|float] v:
     :param bool yield_none: the default context is None. specifies whether we should return that
     :return: yields control flow contexts
     :rtype: typing.Iterator[tensorflow.python.ops.control_flow_ops.ControlFlowContext|None]
@@ -5733,7 +5733,7 @@ def _get_control_flows(v, yield_none):
         if yield_none:
             yield None
         return
-    if isinstance(v, tf.Tensor):
+    if isinstance(v, (tf.Tensor, tf.Variable)):
         v = v.op
     assert isinstance(v, tf.Operation), "unexpected type %r" % type(v)
     # Control flow context will be set to the context of the loop or so, if there is one, otherwise None.
