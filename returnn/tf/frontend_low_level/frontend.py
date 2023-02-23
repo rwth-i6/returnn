@@ -8,7 +8,7 @@ import tensorflow as tf
 import contextlib
 
 from returnn.util.basic import NotSpecified
-from returnn.frontend_api import Frontend
+from returnn.frontend_api import Frontend, RawTensorTypes
 from returnn.tensor import Tensor, Dim
 from returnn.tf.util import basic as tf_util
 from returnn.tf import compat as tf_compat
@@ -84,6 +84,27 @@ class TFFrontend(Frontend[tf.Tensor]):
         """
         with tf_util.same_control_flow_ctx([shape, value]):
             return tf.fill(shape, value)
+
+    @staticmethod
+    def compare_raw(a: tf.Tensor, kind: str, b: tf.Tensor) -> tf.Tensor:
+        """
+        :param a:
+        :param kind: "equal"|"==", "less"|"<", "less_equal"|"<=", "greater"|">", "greater_equal"|">=", "not_equal"|"!="
+        :param b:
+        :return: a `kind` b
+        """
+        assert a.shape.ndims == b.shape.ndims
+        kind = {
+            "==": "equal",
+            "<=": "less_equal",
+            "<": "less",
+            ">=": "greater_equal",
+            ">": "greater",
+            "!=": "not_equal",
+            "<>": "not_equal",
+        }.get(kind, kind)
+        op = getattr(tf, kind)  # e.g. tf.equal
+        return op(a, b)
 
     @staticmethod
     def reshape_raw(raw_tensor: tf.Tensor, shape: Union[Sequence[Union[int, tf.Tensor]], tf.Tensor]) -> tf.Tensor:
@@ -270,6 +291,30 @@ class TFFrontend(Frontend[tf.Tensor]):
         :param max_depth:
         """
         return tf_util.format_graph_output(raw_tensor, max_depth=max_depth)
+
+    @staticmethod
+    def convert_to_tensor(value: Union[_TT, tf.Tensor, RawTensorTypes]) -> _TT:
+        """
+        :param value:
+        :return: tensor
+        """
+        if isinstance(value, Tensor):
+            return value
+        value = tf.convert_to_tensor(value)
+        assert isinstance(value, tf.Tensor)
+        assert value.shape.as_list() == [], f"scalar expected, got {value}"
+        return Tensor("const", raw_tensor=value, dims=[], dtype=value.dtype.base_dtype.name)
+
+    @staticmethod
+    def range_over_dim(dim: Dim) -> _TT:
+        """
+        :param dim:
+        :return: range over dim
+        """
+        out = Tensor(name=dim.description or "range_over_dim", dims=[dim], sparse_dim=dim)
+        dim_value = dim.get_dim_value()
+        out.raw_tensor = tf.range(0, dim_value, dtype=out.dtype)
+        return out
 
     @staticmethod
     def reduce(source: _TT, *, mode: str, axis: Union[Dim, Sequence[Dim]], use_time_mask: bool = NotSpecified) -> _TT:

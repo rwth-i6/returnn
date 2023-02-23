@@ -1980,23 +1980,18 @@ class _TensorMixin:
         """
         raise Exception("%s: setting vocab not supported anymore. set sparse_dim instead" % self)
 
-    def time_dimension(self):
+    def time_dimension(self) -> Union[int, _t.RawTensorType]:
         """
         :return: shape(placeholder)[time_dim_axis], int scalar
         :rtype: tf.Tensor
         """
         assert self.time_dim_axis is not None
-        if self.batch_shape[self.time_dim_axis] is not None:
-            return self.batch_shape[self.time_dim_axis]
-        assert self._raw_tensor is not None
-        rf = self.raw_frontend
-        return rf.get_shape_raw(self._raw_tensor)[self.time_dim_axis]
+        return self.get_dim(self.time_dim_axis)
 
-    def get_dim(self, axis):
+    def get_dim(self, axis: int) -> Union[int, _t.RawTensorType]:
         """
-        :param int axis: counted with batch-dim
+        :param axis: counted with batch-dim
         :return: shape[axis]
-        :rtype: tf.Tensor|int
         """
         if self.batch_shape[axis] is not None:
             return self.batch_shape[axis]
@@ -2630,7 +2625,7 @@ class _TensorMixin:
             assert self.time_dim_axis == 1
             return rf.sequence_mask_raw(dyn_seq_len, batch_major=True)
 
-    def get_sequence_mask_broadcast(self, axis=None):
+    def get_sequence_mask_broadcast(self: Tensor, axis=None):
         """
         :param int|None axis:
         :return: seq mask of shape ((batch,time) or (time,batch)) + (1,)s for remaining dims
@@ -2664,10 +2659,8 @@ class _TensorMixin:
                 seq_mask = rf.reshape_raw(seq_mask, shape)
                 assert seq_mask.get_shape().ndims == self.batch_ndim
             else:  # size is something unusual, not just [B], but e.g. [B,S] or so
-                max_idx = tf.reduce_max(tag.dyn_size)
+                max_idx = rf.reduce(tag.dyn_size_ext, axis=tag.dyn_size_ext.dims, mode="max").raw_tensor  # TODO...
                 # We use the assumption that self.placeholder.shape[axis] == max_idx.
-                idx_range = tf.range(max_idx)
-                idx_range = tf.reshape(idx_range, [1] * axis + [max_idx] + [1] * (self.batch_ndim - axis - 1))
                 # size_ext might have invalid (zero) sizes
                 # when it itself has some padding, e.g. when its own shape is dynamic.
                 # A zero size can lead to problems in some cases, e.g. in SoftmaxOverSpatialLayer,
@@ -2675,10 +2668,9 @@ class _TensorMixin:
                 # and this likely produces nan in backprop or elsewhere.
                 # Thus, mask size_ext itself, and set the padded values to 1.
                 # This assumes that max_idx >= 1.
-                size_ext = tag.dyn_size_ext.copy_masked(max_idx)
-                size_ext = size_ext.copy_compatible_to(self, check_sparse=False, check_dtype=False)
-                seq_mask = tf.less(idx_range, size_ext.placeholder)
-                assert seq_mask.get_shape().ndims == self.batch_ndim
+                size_ext = tag.dyn_size_ext.copy_masked(max_idx)  # TODO...
+                idx_range = rf.range_over_dim(tag)
+                seq_mask = rf.compare(idx_range, "<", size_ext, out_dims=self.dims).raw_tensor
         return seq_mask
 
     def get_sequence_lengths_broadcast(self, axis=None):

@@ -4,7 +4,7 @@ or just rarely used attribs, such that we can save memory for the common case.
 """
 
 from __future__ import annotations
-from typing import TYPE_CHECKING, Optional, Tuple, Dict
+from typing import TYPE_CHECKING, Optional, Union, Tuple, Dict
 
 from returnn.util.basic import Entity
 from returnn.util import basic as util
@@ -1470,12 +1470,13 @@ class _DimMixin:
                 res.append(tag)
         return res
 
-    def get_dim_value(self):
+    def get_dim_value(self) -> Union[int, _t.RawTensorType]:
         """
         Infers the dim this axis should have if unbroadcasted.
         If `self.src_data` has a placeholder, will use the shape from there.
         Otherwise, uses `self.dimension` (if static) or `self.dyn_size` (if dynamic).
-        :rtype: int|tf.Tensor
+
+        :return: max(size or dyn_size)
         """
         if self.dimension is not None:
             return self.dimension

@@ -9,6 +9,7 @@ The convention for the user is to do::
 from __future__ import annotations
 from typing import TYPE_CHECKING, Optional, TypeVar, Generic, Any, Dict, Type, Union, Sequence, Tuple
 import contextlib
+import numpy
 
 from returnn.util.basic import NotSpecified
 
@@ -16,6 +17,7 @@ if TYPE_CHECKING:
     from returnn.tensor import Tensor, Dim
 
 T = TypeVar("T")  # tf.Tensor, torch.Tensor or so
+RawTensorTypes = Union[int, float, complex, numpy.number, numpy.ndarray, bool, str]
 
 
 class Frontend(Generic[T]):
@@ -87,6 +89,16 @@ class Frontend(Generic[T]):
         :param shape: shape
         :param value: scalar value to fill
         :return: raw tensor filled with value everywhere
+        """
+        raise NotImplementedError
+
+    @staticmethod
+    def compare_raw(a: T, kind: str, b: T) -> T:
+        """
+        :param a:
+        :param kind: "equal"|"==", "less"|"<", "less_equal"|"<=", "greater"|">", "greater_equal"|">=", "not_equal"|"!="
+        :param b:
+        :return: a `kind` b
         """
         raise NotImplementedError
 
@@ -230,6 +242,61 @@ class Frontend(Generic[T]):
             In eager-mode frameworks, this is not supported and returns None.
         """
         return "<no-graph>"
+
+    @staticmethod
+    def convert_to_tensor(value: Union[Tensor, T, RawTensorTypes]) -> Tensor[T]:
+        """
+        :param value: tensor, or scalar raw tensor or some other scalar value
+        :return: tensor
+        """
+        raise NotImplementedError
+
+    @classmethod
+    def compare(
+        cls,
+        a: Union[Tensor, RawTensorTypes],
+        kind: str,
+        b: Union[Tensor, RawTensorTypes],
+        *,
+        allow_broadcast_all_sources: Optional[bool] = None,
+        out_dims: Optional[Sequence[Dim]] = None,
+    ) -> Tensor:
+        """
+        :param a:
+        :param kind: "equal"|"==", "less"|"<", "less_equal"|"<=", "greater"|">", "greater_equal"|">=", "not_equal"|"!="
+        :param b:
+        :param allow_broadcast_all_sources: if True, it is allowed that neither a nor b has all dims of the result.
+            Not needed when out_dims is specified explicitly.
+        :param out_dims: shape of the result. if None, it is automatically inferred from a and b
+        :return: element-wise comparison of a and b
+        """
+        a = cls.convert_to_tensor(a)
+        b = cls.convert_to_tensor(b)
+        if out_dims is not None:
+            out = Tensor("compare", dims=out_dims, dtype="bool")
+        else:
+            all_dims = []
+            for dim in a.dims + b.dims:
+                if dim not in all_dims:
+                    all_dims.append(dim)
+            if all(set(x.dims) != set(all_dims) for x in (a, b)):
+                if allow_broadcast_all_sources is False:
+                    raise ValueError(f"compare: sources {a!r} {b!r} not allowed with allow_broadcast_all_sources=False")
+                if allow_broadcast_all_sources is None:
+                    raise ValueError(f"compare: sources {a!r} {b!r} require explicit allow_broadcast_all_sources=True")
+            out = Tensor("compare", dims=all_dims, dtype="bool")
+        a = a.copy_compatible_to(out, check_sparse=False, check_dtype=False)
+        b = b.copy_compatible_to(out, check_sparse=False, check_dtype=False)
+        out.raw_tensor = cls.compare_raw(a.raw_tensor, kind, b.raw_tensor)
+        return out
+
+    @staticmethod
+    def range_over_dim(dim: Dim) -> Tensor[T]:
+        """
+        :param dim:
+        :return: tensor with shape [dim]
+        """
+        raise NotImplementedError
 
     @staticmethod
     def reduce(
