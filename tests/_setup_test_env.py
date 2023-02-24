@@ -24,7 +24,7 @@ def setup():
     logging.basicConfig(level=logging.DEBUG, format="%(message)s")
 
     # Disable extensive TF debug verbosity. Must come before the first TF import.
-    logging.getLogger("tensorflow").disabled = True
+    # logging.getLogger("tensorflow").disabled = True
     # os.environ['TF_CPP_MIN_LOG_LEVEL'] = '0'
     # logging.getLogger("tensorflow").setLevel(logging.INFO)
 
