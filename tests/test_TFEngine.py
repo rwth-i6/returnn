@@ -1124,6 +1124,13 @@ def test_engine_forward_EvalLayer_tf_function():
         #   tensorflow.python.framework.errors_impl.OperatorNotAllowedInGraphError:
         #   Iterating over a symbolic `tf.Tensor` is not allowed:
         #   AutoGraph did convert this function. This might indicate you are trying to use an unsupported feature.
+        # And it displays the warning:
+        #   AutoGraph could not transform <function ....<locals>._f at 0x2966598b0> and will run it as-is.
+        #   Please report this to the TensorFlow team.
+        #   When filing the bug, set the verbosity to 10 (on Linux, `export AUTOGRAPH_VERBOSITY=10`)
+        #   and attach the full output.
+        # Cause: name 'Tuple' is not defined
+        # To silence this warning, decorate the function with @tf.autograph.experimental.do_not_convert
         # However, the TF exception is only raised when we use our Engine.
         # When we create a normal tf.Session directly, it works.
         # So, what's the problem with our Engine?
