@@ -3,7 +3,7 @@ Frontend for exposing TensorFlow-specific functionality.
 """
 
 from __future__ import annotations
-from typing import TYPE_CHECKING, Optional, Union, Any, Sequence, Tuple
+from typing import Optional, Union, Any, Sequence, Tuple
 import tensorflow as tf
 import contextlib
 
