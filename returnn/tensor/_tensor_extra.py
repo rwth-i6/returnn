@@ -2671,7 +2671,14 @@ class _TensorMixin:
                 seq_mask = rf.reshape_raw(seq_mask, shape)
                 assert seq_mask.get_shape().ndims == self.batch_ndim
             else:  # size is something unusual, not just [B], but e.g. [B,S] or so
-                max_idx = rf.reduce(tag.dyn_size_ext, axis=tag.dyn_size_ext.dims, mode="max").raw_tensor
+                max_idx = rf.reduce(
+                    tag.dyn_size_ext,
+                    axis=tag.dyn_size_ext.dims,
+                    mode="max",
+                    # Masking here is not always possible, e.g. if we have
+                    # tag = Dim{'self-att-keys'['time:var:extern_data:classes'[B]]}
+                    use_time_mask=False,
+                ).raw_tensor
                 # We use the assumption that self.placeholder.shape[axis] == max_idx.
                 # size_ext might have invalid (zero) sizes
                 # when it itself has some padding, e.g. when its own shape is dynamic.

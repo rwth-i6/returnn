@@ -1491,7 +1491,12 @@ class _DimMixin:
         if self.dyn_size_ext and self.dyn_size_ext.placeholder is not None:  # fast path
             if self.dyn_size_ext.batch_ndim > 0:
                 return self.dyn_size_ext.raw_frontend.reduce(
-                    self.dyn_size_ext, axis=self.dyn_size_ext.dim_tags, mode="max"
+                    self.dyn_size_ext,
+                    axis=self.dyn_size_ext.dim_tags,
+                    mode="max",
+                    # Masking is not always possible here, e.g.
+                    # self = Dim{'self-att-keys'['time:var:extern_data:classes'[B]]}.
+                    use_time_mask=False,
                 ).raw_tensor
             return self.dyn_size_ext.placeholder
         if self.is_batch_dim():
