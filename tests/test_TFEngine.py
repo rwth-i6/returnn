@@ -5,7 +5,7 @@ tests for returnn.tf.engine
 # start test like this:  nosetests-2.7  tests/test_TFEngine.py
 # or directly:  python3 test_TFEngine.py test_engine_rec_subnet_count
 
-from __future__ import print_function
+from __future__ import annotations
 
 import _setup_test_env  # noqa
 import tensorflow as tf
@@ -1110,6 +1110,95 @@ def test_engine_forward_shape_deps():
     engine = Engine(config=config)
     engine.init_network_from_config()
     engine.forward_single(dataset=init_dataset(config.typed_dict["eval"]), seq_idx=0)
+
+
+def test_engine_forward_EvalLayer_tf_function():
+    def _get_chunked_align(source, self, chunk_step=15, eoc_idx=0, **_kwargs):
+        import tensorflow as tf
+        from typing import Tuple
+
+        data = source(0, as_data=True, auto_convert=False).copy_as_batch_major()
+        blank_idx = data.dim - 1
+
+        # This creates the TF exception:
+        #   tensorflow.python.framework.errors_impl.OperatorNotAllowedInGraphError:
+        #   Iterating over a symbolic `tf.Tensor` is not allowed:
+        #   AutoGraph did convert this function. This might indicate you are trying to use an unsupported feature.
+        # However, the TF exception is only raised when we use our Engine.
+        # When we create a normal tf.Session directly, it works.
+        # So, what's the problem with our Engine?
+        # -> This is fixed (worked around?) when we import __future__.annotations.
+        @tf.function
+        def _f(in_: tf.Tensor, in_sizes: tf.Tensor) -> Tuple[tf.Tensor, tf.Tensor]:
+            batch_size = tf.shape(in_)[0]
+            batched_ta = tf.TensorArray(dtype=tf.int32, size=batch_size, element_shape=[None])
+            batched_ta_seq_lens = tf.TensorArray(dtype=tf.int32, size=batch_size, element_shape=[])
+            for b in tf.range(batch_size):
+                x = in_[b][: in_sizes[b]]
+                ta = tf.TensorArray(dtype=tf.int32, size=0, dynamic_size=True, element_shape=[])
+                i = 0
+                for t in tf.range(in_sizes[b]):
+                    if t % chunk_step == 0 and t > 0:
+                        ta = ta.write(i, eoc_idx)
+                        i += 1
+                    if x[t] == blank_idx:
+                        continue
+                    ta = ta.write(i, x[t])
+                    i += 1
+                ta = ta.write(i, eoc_idx)
+                batched_ta = batched_ta.write(b, ta.stack())  # [i]
+                batched_ta_seq_lens = batched_ta_seq_lens.write(b, i + 1)
+
+            seq_lens = batched_ta_seq_lens.stack()
+            # stack batched_ta using padding
+            max_len = tf.reduce_max(seq_lens)
+            batched_ta_ = tf.TensorArray(dtype=tf.int32, size=batch_size, element_shape=[None])
+            for b in tf.range(batch_size):
+                x = batched_ta.read(b)
+                batched_ta_ = batched_ta_.write(b, tf.pad(x, [[0, max_len - tf.shape(x)[0]]]))
+            return batched_ta_.stack(), seq_lens
+
+        y, seq_lens = _f(data.placeholder, data.get_sequence_lengths())
+        out = self.output
+        out.set_dynamic_size(1, seq_lens)
+        return y
+
+    def _get_chunked_align_out_type(sources, **_kwargs):
+        from returnn.tf.util.data import Data, batch_dim, SpatialDim, FeatureDim
+
+        dim = sources[0].output.sparse_dim
+        dim = FeatureDim("out", dim.dimension - 1)
+        out_time_dim = SpatialDim("out-time")
+        out_time_dim.dyn_size_ext = Data("out-time:size", dim_tags=[batch_dim], dtype="int32")
+        return Data("out", dim_tags=[batch_dim, out_time_dim], sparse_dim=dim)
+
+    config = Config(
+        {
+            "extern_data": {
+                "classes": {"dim": 5, "sparse": True},
+            },
+            "network": {
+                "output": {
+                    "class": "eval",
+                    "from": "data:classes",
+                    "eval": _get_chunked_align,
+                    "out_type": _get_chunked_align_out_type,
+                },
+            },
+        },
+    )
+
+    from returnn.datasets.generating import DummyDataset
+
+    dataset = DummyDataset(input_dim=5, output_dim=5, num_seqs=2, seq_len=10)
+    dataset.init_seq_order(epoch=1)
+
+    engine = Engine(config=config)
+    engine.init_train_from_config(config=config, train_data=dataset, dev_data=None, eval_data=None)
+
+    engine.forward_single(dataset=dataset, seq_idx=0)
+
+    engine.finalize()
 
 
 def test_engine_rec_subnet_count():
