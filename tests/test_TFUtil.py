@@ -482,7 +482,7 @@ def test_Data_sparse_with_dims():
     from returnn.tf.util.data import batch_dim, SpatialDim
 
     time_dim = SpatialDim("time")
-    out = Data(name="out", sparse=True, dim=5, batch_dim_axis=0, time_dim_axis=1, version=1, dims=(batch_dim, time_dim))
+    out = Data(name="out", sparse=True, dim=5, batch_dim_axis=0, time_dim_axis=1, dim_tags=(batch_dim, time_dim))
     assert out.sparse and out.dtype == "int32"
 
 
