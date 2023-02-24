@@ -7732,8 +7732,8 @@ def test_reclayer_att_weights_output_layer():
     )
 
     att_heads = Dim(kind=Dim.Types.Spatial, description="att_heads", dimension=1)
-    att_t = Dim(kind=Dim.Types.Spatial, description="att_t")
-    label_axis = Dim(kind=Dim.Types.Spatial, description="label-axis")
+    att_t = Dim(kind=Dim.Types.Spatial, description="att_t", dimension=None)
+    label_axis = Dim(kind=Dim.Types.Spatial, description="label-axis", dimension=None)
 
     net_dict = {
         "encoder": {"class": "copy", "from": "data"},
@@ -12542,7 +12542,7 @@ def _build_self_attention_layer(
     d[output + "_value"] = {"class": "copy", "from": [output + "_qkv_split/2"]}  # [B,T?,n,F|d_v]
 
     # Accumulate keys/values or rename the axis
-    key_dim_tag = Dim(kind=Dim.Types.Time, description="self-att-keys")
+    key_dim_tag = Dim(kind=Dim.Types.Time, description="self-att-keys", dimension=None)
     if inside_rec_layer:
         d[output + "_key_accum"] = {
             "class": "cum_concat",

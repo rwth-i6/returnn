@@ -211,7 +211,7 @@ def test_LinearLayer_two_time_dims_allow_broadcast_all_sources():
 
 
 def test_LinearLayer_generic_dim_tags():
-    from returnn.tf.util.data import batch_dim, any_feature_dim, any_spatial_dim
+    from returnn.tf.util.data import batch_dim
 
     with make_scope() as session:
         time1_dim = SpatialDim("time1")
@@ -232,7 +232,6 @@ def test_LinearLayer_generic_dim_tags():
                 "output1": {
                     "class": "linear",
                     "from": "data:in1",
-                    "in_dim": any_feature_dim,
                     "out_dim": out_dim,
                     "out_shape": {batch_dim, time1_dim, time2_dim, out_dim},
                     "is_output_layer": True,
@@ -251,29 +250,12 @@ def test_LinearLayer_generic_dim_tags():
                 }
             }
         )
-        try:
-            network.construct_from_dict(
-                {
-                    "output3": {
-                        "class": "linear",
-                        "from": "output2",
-                        "in_dim": any_feature_dim,
-                        "out_dim": out_dim,
-                        "is_output_layer": True,
-                    }
-                }
-            )
-        except Exception as exc:
-            print("Expected exception:", exc)
-            assert "not found or unique in input" in str(exc)
-        else:
-            raise Exception("No exception")
         network.construct_from_dict(
             {
                 "output4": {
                     "class": "linear",
                     "from": "data:in2",
-                    "in_dim": any_spatial_dim,
+                    "in_dim": time2_dim,
                     "out_dim": out_dim,
                     "out_shape": {batch_dim, out_dim, feat_dim},
                     "is_output_layer": True,
@@ -732,8 +714,8 @@ def test_concat_new_dim_tag():
 
     with make_scope():
         n_out = 5
-        time_tag = Dim(kind=Dim.Types.Spatial, description="time")
-        new_time_tag = Dim(kind=Dim.Types.Spatial, description="new-time")
+        time_tag = Dim(kind=Dim.Types.Spatial, description="time", dimension=None)
+        new_time_tag = Dim(kind=Dim.Types.Spatial, description="new-time", dimension=None)
         config = Config(
             {
                 "debug_print_layer_output_template": True,
@@ -1585,7 +1567,10 @@ def test_CombineLayer_match_unknown_derived():
         assert dat1.dim_tags[1].undefined
         dat1_derived_dim_tags = list(dat1.dim_tags)
         dat1_derived_dim_tags[1] = Dim(
-            kind=Dim.Types.Spatial, description="undefined_derived_dim", derived_from_tag=dat1.dim_tags[1]
+            kind=Dim.Types.Spatial,
+            description="undefined_derived_dim",
+            derived_from_tag=dat1.dim_tags[1],
+            dimension=None,
         )
         dat1_derived = Data(name="undefined_derived", dim_tags=dat1_derived_dim_tags)
         assert dat1_derived.dim_tags[1].undefined
@@ -2046,7 +2031,7 @@ def test_CombineLayer_RangeFromLengthLayer():
 def test_CompareLayer_allow_broadcast_all_sources():
     from returnn.tf.util.data import batch_dim, Dim
 
-    time_tag = Dim(kind=Dim.Types.Spatial, description="time")
+    time_tag = Dim(kind=Dim.Types.Spatial, description="time", dimension=None)
     with make_scope():
         n_out = 5
         config = Config(
@@ -2155,7 +2140,7 @@ def test_SwitchLayer_sanity_check():
 
     with make_scope():
         n_out = 5
-        time_tag = Dim(kind=Dim.Types.Spatial, description="time")
+        time_tag = Dim(kind=Dim.Types.Spatial, description="time", dimension=None)
         config = Config(
             {
                 "debug_print_layer_output_template": True,
@@ -2771,7 +2756,7 @@ def test_SoftmaxOverSpatialLayer_window():
                 [0, 1, 1, 0, 0, 0, 0, 0, 0],
                 [0, 0, 0, 0, 1, 1, 1, 1, 1],
             ],
-            dtype=numpy.bool,
+            dtype=bool,
         )  # (B, T)
         print("mask", mask)
         mask = numpy.expand_dims(mask, axis=1)
@@ -3407,7 +3392,7 @@ def test_MergeDimsLayer_dim_tags():
             2: ("att-heads", [2, 2, 2]),
         }
         for axis_wo_batch, (description, dyn_size) in tag_names_with_dyn_size.items():
-            tag = Dim(description=description, kind=Dim.Types.Spatial)
+            tag = Dim(description=description, kind=Dim.Types.Spatial, dimension=None)
             dyn_size = tf.constant(dyn_size)
             tag.set_tag_on_size_tensor(dyn_size)
             src_data.size_placeholder[axis_wo_batch] = dyn_size
@@ -3839,7 +3824,7 @@ def test_SwitchLayer_masking():
 
 def test_SwitchLayer_template_const_from():
     net = TFNetwork(extern_data=ExternData())
-    batch_dim = Dim(kind=Dim.Types.Batch, description="batch")
+    batch_dim = Dim(kind=Dim.Types.Batch, description="batch", dimension=None)
     time_dim = SpatialDim("time")
     feat_dim = FeatureDim("feature", dimension=2)
     # [T]
@@ -6792,7 +6777,7 @@ def test_RandIntLayer():
         input_len = feed[size_placeholder]
         sz = (
             Dim(description="feature", kind=Dim.Types.Feature, dimension=5),
-            Dim(kind=Dim.Types.Batch),
+            Dim(kind=Dim.Types.Batch, dimension=None),
             net.extern_data.data["data"].get_size_dim_tag(0),
             3,
         )
@@ -8055,7 +8040,7 @@ def test_SliceNdLayer_ReinterpretDataLayer():
     """
     from returnn.tf.util.data import DimensionTag
 
-    new_slice_tag = DimensionTag(kind=DimensionTag.Types.Spatial, description="new-slice")
+    new_slice_tag = DimensionTag(kind=DimensionTag.Types.Spatial, description="new-slice", dimension=None)
     with make_scope():
         n_out = 5
         config = Config(
@@ -9367,7 +9352,7 @@ def test_DotLayer_linear_square_matrix():
 
 
 def test_DotLayer_mask_dyn_seq():
-    batch = Dim(kind=Dim.Types.Batch, description="batch")
+    batch = Dim(kind=Dim.Types.Batch, description="batch", dimension=None)
     time = SpatialDim("time")
     feat1 = FeatureDim("feature 1", dimension=3)
     feat2 = FeatureDim("feature 2", dimension=5)
@@ -9405,7 +9390,7 @@ def test_DotLayer_mask_dyn_seq():
 
 
 def test_DotLayer_mask_dyn_seq_after_softmax():
-    batch = Dim(kind=Dim.Types.Batch, description="batch")
+    batch = Dim(kind=Dim.Types.Batch, description="batch", dimension=None)
     time = SpatialDim("time")
     feat1 = FeatureDim("feature 1", dimension=3)
     feat2 = FeatureDim("feature 2", dimension=5)
@@ -9444,13 +9429,14 @@ def test_DotLayer_mask_dyn_seq_after_softmax():
 
 
 def test_DotLayer_self_att_dyn_size_ext():
-    batch_dim = Dim(kind=Dim.Types.Batch)
+    batch_dim = Dim(kind=Dim.Types.Batch, dimension=None)
     heads_dim = SpatialDim("heads", dimension=8)
-    classes_dim = Dim(kind=Dim.Types.Time, description="classes")
+    classes_dim = Dim(kind=Dim.Types.Time, description="classes", dimension=None)
     keys_dim = Dim(
         kind=Dim.Types.Spatial,
         description="keys",
         dyn_size_ext=Data(name="keys_dyn_size", dim_tags=[classes_dim], dtype="int32", auto_create_placeholders=True),
+        dimension=None,
     )
     feature_dim = FeatureDim("feature", dimension=64)
 
@@ -12098,6 +12084,22 @@ def test_pickle_dim_tags():
     # It should just involve some dim tags.
     from returnn.tf.util.data import batch_dim, ImplicitDynSizeDim
 
+    # noinspection PyUnresolvedReferences,PyProtectedMember
+    from pickle import _dumps as pickle_dumps  # Use pickle._dumps for easier debugging.
+    import pickle
+
+    dim = FeatureDim("feat-demo-dim", dimension=5)
+    dim_ = pickle.loads(pickle_dumps(dim))
+    print(dim)
+    print(dim_)
+    assert dim.dimension == dim_.dimension and dim != dim_ and dim._extra is not dim_._extra
+
+    data = Data(name="data-demo", dim_tags=[dim])
+    data_ = pickle.loads(pickle_dumps(data))
+    print(data)
+    print(data_)
+    assert data.shape == data_.shape and data.dim_tags != data_.dim_tags
+
     n_batch, n_time, n_ts, n_in, n_out = 2, 3, 6, 7, 11
     time_dim = SpatialDim("time")
     feat_dim = FeatureDim("in-feature", dimension=n_in)
@@ -12152,13 +12154,7 @@ def test_pickle_dim_tags():
     nest.map_structure_with_tuple_paths(_debug_dump, config.typed_dict)
 
     # Now pickle, unpickle and test again.
-    # Use pickle._dumps for easier debugging.
-    # noinspection PyUnresolvedReferences
-    from pickle import _dumps as dumps
-
-    s = dumps(config.typed_dict)
-    import pickle
-
+    s = pickle_dumps(config.typed_dict)
     config_dict = pickle.loads(s)
     new_dim_tags = config_dict["extern_data"]["data"]["dim_tags"]
     new_batch, new_time, new_feat = new_dim_tags

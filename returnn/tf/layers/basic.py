@@ -1664,7 +1664,7 @@ class GatherLayer(_ConcatInputLayer):
         )
         out_type = input_data.get_kwargs(include_special_axes=False)
         out_type["name"] = "%s_output" % name
-        out_type["dim_tags"] = dim_tags
+        out_type["dims"] = dim_tags
         out_type["beam"] = SearchBeam.get_combined_beam(input_data.beam, position_data.beam)
         out_type["available_for_inference"] = (
             input_data.available_for_inference and position_data.available_for_inference
@@ -1816,7 +1816,7 @@ class GatherNdLayer(_ConcatInputLayer):
         dim_tags = list(position_data.dim_tags) + list(input_data.dim_tags[2:])  # (B, ...) (w/o batch)
         out_type = position_data.get_kwargs(include_special_axes=False)
         out_type["name"] = "%s_output" % name
-        out_type["dim_tags"] = dim_tags
+        out_type["dims"] = dim_tags
         if position_data.time_dim_axis is None:
             if input_data.time_dim_axis is not None and input_data.time_dim_axis_excluding_batch >= 1:
                 out_type["time_dim_axis"] = len(dim_tags) + input_data.time_dim_axis_excluding_batch - 2
@@ -3330,6 +3330,7 @@ class RangeFromLengthLayer(LayerBase):
                 batch=source.batch,
                 control_flow_ctx=source.control_flow_ctx,
                 dyn_size_ext=source,
+                dimension=None,
             )
             if source.placeholder is not None:
                 dim_tag.set_tag_on_size_tensor(source.placeholder)
@@ -4082,7 +4083,7 @@ class MergeDimsLayer(_ConcatInputLayer):
         new_dim_tags.insert(merge_target_axis, out_dim_)
 
         data_opts = data.get_kwargs(include_special_axes=False)
-        data_opts["dim_tags"] = new_dim_tags
+        data_opts["dims"] = new_dim_tags
         data = Data(**data_opts)
 
         new_feature_dim_axis = cls._old_axis_to_new_axis(
@@ -5183,7 +5184,13 @@ class RepeatLayer(_ConcatInputLayer):
         if isinstance(repetitions, int):
             out_dim_ = tag * repetitions
         else:
-            out_dim_ = Dim(description="repeated:%s" % name, kind=tag.kind, derived_from_tag=tag, auto_generated=True)
+            out_dim_ = Dim(
+                description="repeated:%s" % name,
+                kind=tag.kind,
+                derived_from_tag=tag,
+                auto_generated=True,
+                dimension=None,
+            )
         if out_dim:
             out_dim_.declare_same_as(out_dim)
         if data.batch:
@@ -5331,7 +5338,7 @@ class SwapAxesLayer(_ConcatInputLayer):
         dim_tags = list(out.dim_tags)
         dim_tags[axis1], dim_tags[axis2] = dim_tags[axis2], dim_tags[axis1]
         opts = out.get_kwargs(include_special_axes=False)
-        opts["dim_tags"] = dim_tags
+        opts["dims"] = dim_tags
         opts["time_dim_axis"] = cls._translate_axis(out.time_dim_axis, axis1, axis2)
         if out.feature_dim_axis_or_unspecified is not NotSpecified:
             opts["feature_dim_axis"] = cls._translate_axis(out.feature_dim_axis, axis1, axis2)
@@ -5608,7 +5615,8 @@ class ReinterpretDataLayer(_ConcatInputLayer):
                 axis_int = out.get_axis_from_description(axis)
                 old_tag = out.dim_tags[axis_int]
                 if old_tag.is_dim_known() and not new_tag.is_dim_known():
-                    new_tag.dimension = old_tag.dimension
+                    new_tag.size = old_tag.size
+                    new_tag.capacity = old_tag.capacity
                 # The new tag might not have the same control flow context or batch as our output
                 # but maybe a more simplified case (e.g. no control flow context).
                 # As this is a copy of the old tag, see what simplified variant we get for the old tag,
@@ -7748,7 +7756,7 @@ class TimeChunkingLayer(_ConcatInputLayer):
         data = data.copy_move_axis(old_axis=axis, new_axis=0)  # (T,...)
         data = data.copy_with_batch_dim_axis(1)  # (T,B,...)
         if not out_dim:
-            out_dim = Dim(kind=in_dim.kind, description="%s:chunking" % name, auto_generated=True)
+            out_dim = Dim(kind=in_dim.kind, description="%s:chunking" % name, auto_generated=True, dimension=None)
         data = data.copy_template_replace_dim_tag(axis=0, new_dim_tag=out_dim)  # (T',B',...)
         data.time_dim_axis = 0
         return data
@@ -8442,6 +8450,7 @@ class ShiftAxisLayer(_ConcatInputLayer):
                 src_data=self.output,
                 src_axis=axis,
                 auto_generated=True,
+                dimension=None,
             )
             self.output.size_placeholder[axis_wob] = new_size
 
@@ -8629,7 +8638,9 @@ class ResizeLayer(_ConcatInputLayer):
         assert axis != out.batch_dim_axis, "batch-dim resize not supported"
         tag = out.dim_tags[axis]
         if fill_dropout or not isinstance(factor, int):
-            out_dim_ = Dim(kind=tag.kind, description="%s_resize" % name, auto_generated=True)  # unknown dim
+            out_dim_ = Dim(
+                kind=tag.kind, description="%s_resize" % name, auto_generated=True, dimension=None
+            )  # unknown dim
             if tag.dyn_size_ext is not None:
                 out_dim_.dyn_size_ext = tag.dyn_size_ext.copy_template(name="%s:dyn_size_ext" % name)
         else:
@@ -8861,8 +8872,8 @@ class CombineLayer(LayerBase):
             out_type_["dim"] = n_out
         if out_type:
             if isinstance(out_type, dict):
-                if "shape" in out_type:
-                    out_type_.pop("dim_tags", None)
+                if "shape" in out_type or "dim_tags" in out_type:
+                    out_type_.pop("dims", None)
                     out_type_.pop("batch_dim_axis", None)
                     out_type_.pop("feature_dim_axis", None)
                     out_type_.pop("time_dim_axis", None)
@@ -9123,6 +9134,8 @@ class CompareLayer(LayerBase):
         out_type_["vocab"] = None
         if out_type:
             if isinstance(out_type, dict):
+                if "shape" in out_type or "dim_tags" in out_type:
+                    out_type_.pop("dims")
                 out_type_.update(out_type)
             elif callable(out_type):
                 out_type_ = out_type  # just overwrite
@@ -9671,7 +9684,8 @@ class TopKLayer(LayerBase):
         in_data = sources[0].output
         assert isinstance(k_dim, Dim)  # via transform_config_dict
         if isinstance(k, int) and not k_dim.is_dim_known():
-            k_dim.dimension = k
+            k_dim.size = k
+            k_dim.capacity = k
         k_data = k.output if isinstance(k, LayerBase) else Data.template_from_constant(k, name="static-k")
         if k_data.batch:
             k_dim = k_dim.get_for_batch_ctx(k_data.batch, k_data.control_flow_ctx)
@@ -10338,7 +10352,9 @@ class VariableLayer(LayerBase):
                 0, Dim(kind=Dim.Types.Time, description="%s:dummy-time" % name, dimension=1, auto_generated=True)
             )
         if add_batch_axis:
-            dim_tags.insert(0, Dim(kind=Dim.Types.Batch, description="batch", batch=network.get_global_batch_info()))
+            dim_tags.insert(
+                0, Dim(kind=Dim.Types.Batch, description="batch", batch=network.get_global_batch_info(), dimension=None)
+            )
         return Data(
             name="%s_output" % name,
             dim_tags=dim_tags,
@@ -10741,7 +10757,7 @@ class ForcedAlignmentLayer(_ConcatInputLayer):
         """
         src = get_concat_sources_data_template(sources, name="%s_output" % name).copy_as_time_major()
         opts = src.get_kwargs(include_special_axes=False)
-        opts["dim_tags"] = (src.get_time_dim_tag(), src.dim_tags[src.batch_dim_axis])
+        opts["dims"] = (src.get_time_dim_tag(), src.dim_tags[src.batch_dim_axis])
         opts["dtype"] = "int32"
         opts["sparse_dim"] = src.dim_tags[src.feature_dim_axis]
         return Data(**opts)

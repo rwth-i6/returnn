@@ -7944,7 +7944,7 @@ class SelfAttentionLayer(_ConcatInputLayer):
         else:
             dim_tags = (batch_dim_tag, feat_tag)
         data_opts = out.get_kwargs(include_special_axes=False)
-        data_opts["dim_tags"] = dim_tags
+        data_opts["dims"] = dim_tags
         data_opts["dtype"] = "float32"
         data_opts.pop("sparse", None)
         data_opts.pop("vocab", None)
@@ -9242,7 +9242,10 @@ class MaskedComputationLayer(LayerBase):
                 # Create own time dim tag, to make sure we have some own custom.
                 if not _Locals.out_spatial_dim_:
                     _Locals.out_spatial_dim_ = Dim(
-                        kind=Dim.Types.Spatial, description="%s:masked:time" % name, auto_generated=True
+                        kind=Dim.Types.Spatial,
+                        description="%s:masked:time" % name,
+                        auto_generated=True,
+                        dimension=None,
                     )
                     _Locals.out_spatial_dim_.derive_from(_Locals.in_spatial_dim_)
                     if _Locals.in_spatial_dim_ == over_rec_time_dim and over_rec_time_dim and not inside_rec_time_dim:

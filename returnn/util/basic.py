@@ -4,8 +4,8 @@
 Various generic utilities, which are shared across different backend engines.
 """
 
-from __future__ import print_function
-from __future__ import division
+from __future__ import annotations
+from typing import Generic, TypeVar
 
 import subprocess
 from subprocess import CalledProcessError
@@ -60,6 +60,9 @@ else:
     except ImportError:
         # noinspection PyUnresolvedReferences,PyCompatibility
         from StringIO import StringIO as BytesIO
+
+
+T = TypeVar("T")
 
 returnn_root_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -165,16 +168,16 @@ class BackendEngine:
             if engine is None:
                 engine = cls._get_default_engine()
 
-        from returnn import frontend
+        from returnn import frontend_api
 
         if engine == cls.TensorFlow:
-            from returnn.tf.frontend import TFFrontend
-
-            frontend.__class__ = TFFrontend
+            # Note that we assume that the user wants the RETURNN layers frontend (TF-based)
+            # and not the low-level TF frontend.
+            # If we want to expose the low-level TF frontend to the user directly at some point,
+            # we would need a new config option.
+            frontend_api.select_frontend_returnn_layers_tf()
         elif engine == cls.Torch:
-            from returnn.torch.frontend import TorchFrontend
-
-            frontend.__class__ = TorchFrontend
+            frontend_api.select_frontend_torch()
         cls.selected_engine = engine
 
     @classmethod
@@ -1492,6 +1495,35 @@ def try_run(func, args=(), catch_exc=Exception, default=None):
         return default
 
 
+def validate_broadcast_all_sources(allow_broadcast_all_sources, inputs, common):
+    """
+    Call this when all inputs to some operation (layer) must be broadcasted.
+    It checks whether broadcasting to all sources should be allowed.
+    E.g. for input [B,T1,D1] + [B,T2,D2], when allowed, it would broadcast to [B,T1,T2,D1,D2].
+    When not allowed, there must be at least one source where no broadcasting will be done.
+    Whether it is allowed, this depends on the behavior version.
+      https://github.com/rwth-i6/returnn/issues/691
+
+    Common usages are for :func:`get_common_shape` or :func:`Data.get_common_data`.
+
+    :param bool|NotSpecified allow_broadcast_all_sources:
+    :param inputs: anything convertible to iterable of str, used for reporting
+    :param common: anything convertible to str, used for reporting
+    """
+    msg = (
+        "All inputs\n%s\nrequire broadcasting to \n  %s.\n" % ("\n".join(" - %s" % inp for inp in inputs), common)
+        + "This must be explicitly allowed, e.g. by specifying out_shape."
+    )
+    if allow_broadcast_all_sources is NotSpecified:
+        from returnn.util import BehaviorVersion
+
+        BehaviorVersion.require(version=4, condition=False, message=msg)
+        return
+    if allow_broadcast_all_sources:
+        return
+    raise Exception(msg)
+
+
 def class_idx_seq_to_1_of_k(seq, num_classes):
     """
     Basically one_hot.
@@ -2309,11 +2341,37 @@ def make_hashable(obj):
         return obj
     if "tensorflow" in sys.modules:
         import tensorflow as tf
-        from returnn.tf.util import basic as tf_util
 
         if isinstance(obj, tf.Tensor):
-            return tf_util.TensorRef(obj)
+            return TensorRef(obj)
     assert False, "don't know how to make hashable: %r (%r)" % (obj, type(obj))
+
+
+class TensorRef(Generic[T]):
+    """
+    Reference to the original tensor, which is hashable.
+    We have this here for compatibility because tf.Tensor.ref() was not available in earlier TF versions.
+    """
+
+    def __init__(self, tensor: T):
+        """
+        :param tensor: for example tf.Tensor
+        """
+        self.tensor = tensor
+
+    def __repr__(self):
+        return "TensorRef{%r}" % self.tensor
+
+    def __eq__(self, other):
+        if other is None or not isinstance(other, TensorRef):
+            return False
+        return self.tensor is other.tensor
+
+    def __ne__(self, other):
+        return not self.__eq__(other)
+
+    def __hash__(self):
+        return id(self.tensor)
 
 
 def make_dll_name(basename):
