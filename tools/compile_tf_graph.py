@@ -6,7 +6,7 @@ There are various options/variations for what task and what conditions you can c
 e.g. for training, forwarding, search, or also step-by-step execution over a recurrent layer.
 """
 
-from __future__ import print_function
+from __future__ import annotations
 
 import typing
 import os

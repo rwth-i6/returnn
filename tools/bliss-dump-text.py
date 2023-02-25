@@ -4,7 +4,7 @@
 Goes through a Sprint Bliss XML, and dumps all the orthography on stdout.
 """
 
-from __future__ import print_function
+from __future__ import annotations
 
 from argparse import ArgumentParser
 

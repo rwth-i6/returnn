@@ -1,4 +1,4 @@
-from __future__ import print_function
+from __future__ import annotations
 import _setup_test_env  # noqa
 from nose.tools import assert_equal, assert_in, assert_not_in
 from returnn.pretrain import pretrain_from_config

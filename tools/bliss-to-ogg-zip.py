@@ -6,7 +6,7 @@ and creates a corresponding ZIP files.
 The created files are compatible with the :class:`OggZipDataset`.
 """
 
-from __future__ import print_function
+from __future__ import annotations
 
 import typing
 import os

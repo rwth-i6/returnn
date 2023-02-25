@@ -5,7 +5,7 @@ Goes through a dataset (similar as dump-dataset.py), but does the training batch
 and calculate statistics about how much seqs we have per batch, how much zero padding there is, etc.
 """
 
-from __future__ import print_function, division
+from __future__ import annotations
 
 import os
 import sys

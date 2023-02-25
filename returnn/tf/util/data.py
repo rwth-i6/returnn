@@ -4,7 +4,7 @@ Provides :class:`Data`, :class:`Dim`, :class:`SearchBeam`.
 See :ref:`data` for some higher-level description.
 """
 
-from __future__ import print_function, division
+from __future__ import annotations
 
 import os
 import typing

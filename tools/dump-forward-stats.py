@@ -5,7 +5,7 @@ Forward some layer through the network over the dataset,
 and collect statistics (mean,std_dev,min,max).
 """
 
-from __future__ import print_function
+from __future__ import annotations
 
 import sys
 import typing

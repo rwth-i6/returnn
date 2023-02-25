@@ -9,8 +9,7 @@ We want to support the same code.
 
 
 from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
+from __future__ import annotations
 import os
 import sys
 

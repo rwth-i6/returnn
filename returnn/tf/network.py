@@ -2,7 +2,7 @@
 Defines the :class:`TFNetwork` and :class:`ExternData`.
 """
 
-from __future__ import print_function
+from __future__ import annotations
 
 import tensorflow as tf
 import sys

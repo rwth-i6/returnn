@@ -4,7 +4,7 @@
 For debugging, go through some dataset, forward it through the net, and output the layer activations on stdout.
 """
 
-from __future__ import print_function
+from __future__ import annotations
 
 import sys
 

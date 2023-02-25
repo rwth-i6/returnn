@@ -4,7 +4,7 @@ See SprintInterface.py for another Sprint interface.
 This Sprint interface is to be used for ExternSprintDataset, which should automatically use it.
 """
 
-from __future__ import print_function
+from __future__ import annotations
 
 import sys
 import os

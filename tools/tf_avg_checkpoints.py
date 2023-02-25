@@ -24,8 +24,7 @@ https://github.com/tensorflow/tensor2tensor/blob/master/tensor2tensor/utils/avg_
 """
 
 from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
+from __future__ import annotations
 
 import os
 import numpy

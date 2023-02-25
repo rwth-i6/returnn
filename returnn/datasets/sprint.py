@@ -3,7 +3,7 @@ Implements the SprintDatasetBase and ExternSprintDataset classes, some Dataset s
 Note that from the main RETURNN process, you probably want ExternSprintDataset instead.
 """
 
-from __future__ import print_function
+from __future__ import annotations
 
 import atexit
 import os

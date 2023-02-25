@@ -2,7 +2,7 @@
 Vocabulary related classes for targets such as BPE, SentencePieces etc...
 """
 
-from __future__ import print_function
+from __future__ import annotations
 
 __all__ = [
     "Vocabulary",

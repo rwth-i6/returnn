@@ -2,7 +2,7 @@
 Lots of random utility functions for TensorFlow.
 """
 
-from __future__ import print_function, division
+from __future__ import annotations
 
 import tensorflow as tf
 from tensorflow.python.client import device_lib

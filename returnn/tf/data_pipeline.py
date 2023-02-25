@@ -113,7 +113,7 @@ It depends on whether the full network is recurrent or not.
 
 """
 
-from __future__ import print_function
+from __future__ import annotations
 
 import contextlib
 import sys

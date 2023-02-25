@@ -1,6 +1,6 @@
 # Also see test_SprintDataset.py.
 
-from __future__ import print_function
+from __future__ import annotations
 
 import sys
 import _setup_test_env  # noqa

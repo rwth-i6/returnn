@@ -3,7 +3,7 @@ This module covers the optimizer (SGD, Adam, etc) logic,
 and model param update logic in general.
 """
 
-from __future__ import print_function
+from __future__ import annotations
 
 import torch
 import typing

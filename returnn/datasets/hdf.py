@@ -2,7 +2,7 @@
 Provides :class:`HDFDataset`.
 """
 
-from __future__ import print_function
+from __future__ import annotations
 import typing
 import collections
 import gc

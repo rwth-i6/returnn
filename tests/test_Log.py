@@ -2,7 +2,7 @@
 test logging
 """
 
-from __future__ import print_function
+from __future__ import annotations
 
 import _setup_test_env  # noqa
 from subprocess import Popen, PIPE, STDOUT, CalledProcessError
@@ -145,7 +145,7 @@ def test_returnn_startup_verbose():
 
 def test_simple_log():
     code = """
-from __future__ import print_function
+from __future__ import annotations
 print("hello stdout 1")
 from returnn.log import log
 log.initialize(verbosity=[], logs=[], formatter=[])

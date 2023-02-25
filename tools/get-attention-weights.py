@@ -19,7 +19,7 @@ Or into HDF. In this case, this tool is very similar to `rnn.py --task=forward`.
 
 """
 
-from __future__ import print_function
+from __future__ import annotations
 
 import os
 import sys

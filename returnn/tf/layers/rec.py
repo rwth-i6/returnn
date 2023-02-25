@@ -2,7 +2,7 @@
 Defines multiple recurrent layers, most importantly :class:`RecLayer`.
 """
 
-from __future__ import print_function
+from __future__ import annotations
 
 import typing
 import tensorflow as tf

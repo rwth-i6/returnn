@@ -8,7 +8,7 @@ Most of the other Sprint interfaces will be used automatically,
 e.g. via ExternSprintDataset, when it spawns its Sprint subprocess.
 """
 
-from __future__ import print_function
+from __future__ import annotations
 
 import os
 import sys

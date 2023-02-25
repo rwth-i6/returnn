@@ -10,7 +10,7 @@ It can also be used as a PythonSegmentOrdering interface.
 It also supports SprintNnPythonLayer.
 """
 
-from __future__ import print_function
+from __future__ import annotations
 
 import os
 import numpy

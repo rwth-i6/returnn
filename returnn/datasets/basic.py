@@ -2,7 +2,6 @@
 This defines the base dataset class :class:`Dataset`.
 """
 
-from __future__ import print_function
 from __future__ import annotations
 
 __author__ = "Patrick Doetsch"

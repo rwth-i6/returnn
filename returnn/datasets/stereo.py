@@ -4,7 +4,7 @@ interface for using RETURNN for regression.
 Applications are for example speech enhancement or mask estimations
 """
 
-from __future__ import print_function
+from __future__ import annotations
 
 __author__ = "menne"
 

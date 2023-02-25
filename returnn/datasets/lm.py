@@ -5,7 +5,7 @@ Provides :class:`LmDataset`, :class:`TranslationDataset`,
 and some related helpers.
 """
 
-from __future__ import print_function
+from __future__ import annotations
 
 import os
 import sys

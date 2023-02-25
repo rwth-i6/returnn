@@ -6,7 +6,7 @@
 This module is about reading (maybe later also writing) the Sprint archive format.
 """
 
-from __future__ import print_function
+from __future__ import annotations
 
 import sys
 import os

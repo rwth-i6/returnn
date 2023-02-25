@@ -9,7 +9,7 @@ See :func:`setup` below for details.
 """
 
 
-from __future__ import print_function
+from __future__ import annotations
 
 
 def setup():

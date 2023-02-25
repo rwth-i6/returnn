@@ -9,7 +9,7 @@ See :func:`init_config` for some arguments, or just run ``./rnn.py --help``.
 See :ref:`tech_overview` for a technical overview.
 """
 
-from __future__ import print_function
+from __future__ import annotations
 
 __author__ = "Patrick Doetsch"
 __copyright__ = "Copyright 2014"

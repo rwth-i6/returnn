@@ -47,7 +47,7 @@ GeForce GTX 680:
     CPU:BasicLSTM: 0:03:58.1545
 """
 
-from __future__ import print_function
+from __future__ import annotations
 import sys
 import time
 from argparse import ArgumentParser

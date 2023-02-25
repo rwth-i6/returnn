@@ -2,7 +2,7 @@
 Used by setup.py.
 """
 
-from __future__ import print_function
+from __future__ import annotations
 from pprint import pprint
 import os
 import sys

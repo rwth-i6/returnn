@@ -4,7 +4,7 @@
 Given BPE codes/vocab, create a lexicon (mapping of words to all possible BPE seqs).
 """
 
-from __future__ import print_function
+from __future__ import annotations
 
 from argparse import ArgumentParser
 from xml.etree import ElementTree

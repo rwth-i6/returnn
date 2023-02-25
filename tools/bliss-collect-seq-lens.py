@@ -6,7 +6,7 @@ and writes out sequence lengths based on the start/end time,
 into a Python-formatted file.
 """
 
-from __future__ import print_function
+from __future__ import annotations
 
 import sys
 from argparse import ArgumentParser

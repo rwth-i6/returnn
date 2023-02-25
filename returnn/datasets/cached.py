@@ -1,4 +1,4 @@
-from __future__ import print_function
+from __future__ import annotations
 import gc
 import sys
 import time

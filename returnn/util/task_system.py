@@ -3,7 +3,7 @@ Here are all subprocess, threading etc related utilities,
 most of them quite low level.
 """
 
-from __future__ import print_function
+from __future__ import annotations
 from threading import Lock
 import sys
 

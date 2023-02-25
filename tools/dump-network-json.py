@@ -4,7 +4,7 @@
 Dumps the network topology as JSON on stdout.
 """
 
-from __future__ import print_function
+from __future__ import annotations
 
 import sys
 import argparse

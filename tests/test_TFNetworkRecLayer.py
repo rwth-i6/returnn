@@ -1,6 +1,6 @@
 # start: nosetests $this_file --nologcapture
 
-from __future__ import print_function
+from __future__ import annotations
 
 import _setup_test_env  # noqa
 import tensorflow as tf

@@ -4,7 +4,7 @@
 Collect statistics about words in a corpus.
 """
 
-from __future__ import print_function
+from __future__ import annotations
 
 import sys
 

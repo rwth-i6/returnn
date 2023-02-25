@@ -4,7 +4,7 @@
 Loads some pickle file and dumps the Python object on stdout.
 """
 
-from __future__ import print_function
+from __future__ import annotations
 
 import sys
 from argparse import ArgumentParser

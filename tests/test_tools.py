@@ -2,7 +2,7 @@
 Test cases for different tools
 """
 
-from __future__ import print_function
+from __future__ import annotations
 
 import tempfile
 import _setup_test_env  # noqa

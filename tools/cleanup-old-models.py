@@ -4,7 +4,7 @@
 This is a wrapper around :func:`returnn.tf.engine.Engine.cleanup_old_models`.
 """
 
-from __future__ import print_function
+from __future__ import annotations
 import sys
 import os
 import argparse

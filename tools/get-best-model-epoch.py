@@ -5,7 +5,7 @@ Based on the scores / errors in a learning rate file ("newbob" file),
 calculates the best epochs.
 """
 
-from __future__ import print_function
+from __future__ import annotations
 
 import sys
 import argparse

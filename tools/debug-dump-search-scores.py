@@ -8,7 +8,7 @@ e.g. for training, forwarding, search, or also step-by-step execution over a rec
 You can use ``debug-plot-search-scores.py`` to visualize some of this.
 """
 
-from __future__ import print_function
+from __future__ import annotations
 
 import typing
 import os

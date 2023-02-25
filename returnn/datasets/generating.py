@@ -2,7 +2,7 @@
 Some datasets for artificially generated data.
 """
 
-from __future__ import print_function
+from __future__ import annotations
 
 from typing import Optional, Sequence
 import numpy

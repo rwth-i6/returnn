@@ -2,7 +2,7 @@
 Provide :class:`RawWavDataset`.
 """
 
-from __future__ import print_function
+from __future__ import annotations
 
 import h5py
 from .cached2 import CachedDataset2

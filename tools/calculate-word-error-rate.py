@@ -4,7 +4,7 @@
 Calculates word error rate (WER).
 """
 
-from __future__ import print_function
+from __future__ import annotations
 
 import os
 import sys

@@ -4,7 +4,7 @@
 Iterate through a dataset, just like RETURNN would do in training.
 """
 
-from __future__ import print_function
+from __future__ import annotations
 
 import sys
 import typing

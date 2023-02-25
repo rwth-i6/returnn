@@ -27,7 +27,7 @@ They can both be mixed, or used independently.
 This is also related to the dataset pipeline :mod:`TFDataPipeline`.
 """
 
-from __future__ import print_function
+from __future__ import annotations
 import os
 import typing
 import contextlib

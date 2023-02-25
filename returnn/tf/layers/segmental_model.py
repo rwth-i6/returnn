@@ -1,4 +1,4 @@
-from __future__ import print_function
+from __future__ import annotations
 
 import tensorflow as tf
 import returnn.tf.compat as tf_compat

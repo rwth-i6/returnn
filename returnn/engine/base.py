@@ -2,7 +2,7 @@
 Provides :class:`EngineBase`.
 """
 
-from __future__ import print_function
+from __future__ import annotations
 
 import os
 import sys

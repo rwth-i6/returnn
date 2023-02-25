@@ -4,7 +4,7 @@
 Dump translation dataset to HDF.
 """
 
-from __future__ import print_function
+from __future__ import annotations
 
 import sys
 import argparse

@@ -25,8 +25,7 @@ We extended it a bit.
 """
 
 from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
+from __future__ import annotations
 
 import _setup_returnn_env  # noqa
 import sys

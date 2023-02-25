@@ -5,8 +5,7 @@
 Utility functions to generate FSAs (or FSTs).
 """
 
-from __future__ import print_function
-from __future__ import division
+from __future__ import annotations
 
 import numpy
 import pickle

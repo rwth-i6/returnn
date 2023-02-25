@@ -21,7 +21,7 @@ There are use cases in which we want to combine several datasets:
 The dataset classes MetaDataset and CombinedDataset which perform these tasks are implemented in MetaDataset.py.
 """
 
-from __future__ import print_function
+from __future__ import annotations
 
 from returnn.datasets.basic import Dataset, DatasetSeq, init_dataset, convert_data_dims
 from .cached2 import CachedDataset2

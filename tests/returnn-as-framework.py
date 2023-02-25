@@ -4,7 +4,7 @@
 This is being used by some tests.
 """
 
-from __future__ import print_function
+from __future__ import annotations
 import sys
 import os
 import tempfile

@@ -2,7 +2,7 @@
 Provides the main class for logging, :class:`Log`, and some helpers.
 """
 
-from __future__ import print_function
+from __future__ import annotations
 
 import logging
 import os

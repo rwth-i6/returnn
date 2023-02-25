@@ -5,7 +5,7 @@ Iterates through any dataset, and prints/dump some information.
 This can also be used to collect statistics over the data like mean/variance.
 """
 
-from __future__ import print_function
+from __future__ import annotations
 
 import os
 import sys

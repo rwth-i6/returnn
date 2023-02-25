@@ -1,4 +1,4 @@
-from __future__ import print_function
+from __future__ import annotations
 
 import _setup_test_env  # noqa
 from subprocess import Popen, PIPE, STDOUT, CalledProcessError

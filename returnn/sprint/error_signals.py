@@ -6,7 +6,7 @@ to transfer the posteriors and get back the loss and error signal.
 It uses the SprintControl Sprint interface for the communication.
 """
 
-from __future__ import print_function
+from __future__ import annotations
 
 import numpy
 import sys

@@ -5,7 +5,7 @@ This script imports a t2t model into Returnn and compares the activations.
 It currently assumes a specific Returnn network topology with specific layer names.
 """
 
-from __future__ import print_function
+from __future__ import annotations
 
 import os
 import sys

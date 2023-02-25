@@ -9,7 +9,7 @@ such that you increase the average sequence length.
 This can be used for :class:`ConcatSeqsDataset`.
 """
 
-from __future__ import print_function
+from __future__ import annotations
 
 import os
 import sys

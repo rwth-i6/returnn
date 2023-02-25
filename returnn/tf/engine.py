@@ -10,20 +10,12 @@ managing the data pipeline, etc.
 See :ref:`tech_overview` for an overview how it fits all together.
 """
 
-from __future__ import print_function
+from __future__ import annotations
 
 import os
 import sys
 import time
 import typing
-
-try:
-    # noinspection PyCompatibility
-    from Queue import Queue
-except ImportError:
-    # noinspection PyCompatibility
-    from queue import Queue
-
 import numpy
 import tensorflow as tf
 from tensorflow.python.client import timeline

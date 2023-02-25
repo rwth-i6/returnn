@@ -3,7 +3,7 @@ Provides the learning rate scheduling logic.
 The base class is :class:`LearningRateControl`.
 """
 
-from __future__ import print_function
+from __future__ import annotations
 
 import os
 import typing

@@ -1,6 +1,6 @@
 # start test like this:  nosetests-2.7  tests/test_TFUtil.py
 
-from __future__ import print_function
+from __future__ import annotations
 
 import _setup_test_env  # noqa
 import tensorflow as tf

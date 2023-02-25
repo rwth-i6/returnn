@@ -4,7 +4,7 @@
 This demonstrates how to use RETURNN as a framework.
 """
 
-from __future__ import print_function
+from __future__ import annotations
 
 import tensorflow as tf
 

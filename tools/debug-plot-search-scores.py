@@ -5,7 +5,7 @@ Use ``debug-dump-search-scores.py`` to dump all information to some HDF file.
 The you can use this script here just for visualization/plotting.
 """
 
-from __future__ import print_function, division
+from __future__ import annotations
 
 from math import ceil
 import typing

@@ -5,7 +5,7 @@ Creates a HDF file, which can be read by :class:`HDFDataset`.
 The input is any other dataset (:class:`Dataset`).
 """
 
-from __future__ import print_function
+from __future__ import annotations
 
 import sys
 import argparse

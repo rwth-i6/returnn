@@ -6,7 +6,7 @@ This is useful for tests.
 To generate data, we can use the GeneratingDataset code.
 """
 
-from __future__ import print_function
+from __future__ import annotations
 
 import sys
 from importlib import import_module

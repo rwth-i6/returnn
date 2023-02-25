@@ -5,7 +5,7 @@ Go through a dataset, and collects the targets (or other data) as raw strings,
 and writes it to a file in Python format.
 """
 
-from __future__ import print_function
+from __future__ import annotations
 
 import os
 import sys

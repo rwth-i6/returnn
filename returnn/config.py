@@ -2,7 +2,7 @@
 Provides :class:`Config` and some related helpers.
 """
 
-from __future__ import print_function
+from __future__ import annotations
 
 __author__ = "Patrick Doetsch"
 __copyright__ = "Copyright 2014"

@@ -20,7 +20,7 @@ We could even do some simple search in the beginning of each epoch when we keep 
 Also, we could store the population of hyper params on disk to allow resuming of a search.
 """
 
-from __future__ import print_function
+from __future__ import annotations
 
 import sys
 import time

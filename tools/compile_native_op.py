@@ -7,7 +7,7 @@ When you export the computation graph (e.g. via ``compile_tf_graph.py``),
 you explicitly must load these native ops.
 """
 
-from __future__ import print_function
+from __future__ import annotations
 
 import os
 import sys
