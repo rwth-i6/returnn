@@ -27,7 +27,6 @@ The key difference of the full preactivation 'v2' variant compared to the
 rather than after.
 """
 
-from __future__ import absolute_import
 from __future__ import annotations
 
 import tensorflow as tf

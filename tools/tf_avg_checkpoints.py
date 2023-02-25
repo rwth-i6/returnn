@@ -23,7 +23,6 @@ Original code:
 https://github.com/tensorflow/tensor2tensor/blob/master/tensor2tensor/utils/avg_checkpoints.py
 """
 
-from __future__ import absolute_import
 from __future__ import annotations
 
 import os

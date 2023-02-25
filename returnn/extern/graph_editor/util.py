@@ -15,7 +15,6 @@
 """Utility functions for the graph_editor.
 """
 
-from __future__ import absolute_import
 from __future__ import annotations
 
 import re

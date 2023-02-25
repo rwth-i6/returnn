@@ -24,7 +24,6 @@ A simple script for inspect checkpoint files.
 We extended it a bit.
 """
 
-from __future__ import absolute_import
 from __future__ import annotations
 
 import _setup_returnn_env  # noqa

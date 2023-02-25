@@ -15,7 +15,6 @@
 """SubGraphView: a subgraph view on an existing tf.Graph.
 """
 
-from __future__ import absolute_import
 from __future__ import annotations
 
 import copy

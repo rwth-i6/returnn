@@ -11,8 +11,6 @@ for usage in TensorFlow and Theano.
 See :ref:`native_ops` for more background.
 """
 
-from __future__ import absolute_import  # fix "import theano" in Python 2
-
 import copy
 import numpy
 import typing
