@@ -797,7 +797,7 @@ class _DimMixin:
                 # It's not clear what to do. We could create a new dim tag, but the sizes might be different.
                 # Usually we should not get here.
                 # So for now, just error.
-                from returnn.frontend_api import get_frontend_by_tensor_type
+                from returnn._internal_frontend_api import get_internal_frontend_by_tensor_type
 
                 raise Exception(
                     "\n".join(
@@ -808,7 +808,7 @@ class _DimMixin:
                             )
                             % (self, self.description, self.dyn_size, x, batch),
                             "\nNew size computation graph:",
-                            get_frontend_by_tensor_type(type(x)).format_graph_output(x, max_depth=3),
+                            get_internal_frontend_by_tensor_type(type(x)).format_graph_output(x, max_depth=3),
                             "\nThis is maybe the result of an incorrect declare_same_as. ",
                             "same_as = %s" % self.same_as,
                         ]
