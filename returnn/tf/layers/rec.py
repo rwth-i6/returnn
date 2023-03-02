@@ -10955,7 +10955,7 @@ class RelativePositionalEncodingLayer(_ConcatInputLayer):
                 time_dim_tag.dyn_size_ext.placeholder = length
         else:
             offset = 0
-            length = tf.shape(self.input_data.placeholder)[self.input_data.time_dim_axis]
+            length = tf_util.get_shape_dim(self.input_data.placeholder, self.input_data.time_dim_axis)
 
         if fixed:
             from returnn.tf.util.basic import get_positional_encoding
