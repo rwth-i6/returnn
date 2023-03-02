@@ -1107,6 +1107,37 @@ def test_batch_norm_unequal_seq_len():
         numpy.testing.assert_array_almost_equal(np_bn1, out_1, decimal=5)
 
 
+def test_BatchNormLayer_static_time():
+    from returnn.tf.util.data import batch_dim, SpatialDim, FeatureDim
+
+    time_dim = SpatialDim("time", 13)
+    in_dim = FeatureDim("in", 5)
+
+    config = Config(
+        dict(
+            extern_data={
+                "data": {
+                    "dim_tags": (batch_dim, time_dim, in_dim),
+                    "time_dim_axis": 1,
+                }
+            }
+        )
+    )
+
+    net_dict = {
+        "output": {"class": "batch_norm", "from": "data", "masked_time": True},
+    }
+
+    with make_scope() as session:
+        net = TFNetwork(config=config, train_flag=True)
+        net.construct_from_dict(net_dict)
+        net.initialize_params(session)
+        out = net.get_default_output_layer().output
+        fetches = net.get_fetches_dict()
+        fetches["out"] = out.placeholder
+        session.run(fetches, feed_dict=make_feed_dict(net.extern_data))
+
+
 def test_BatchNormLayer_CondLayer():
     from returnn.tf.util.data import batch_dim, SpatialDim, FeatureDim
 
