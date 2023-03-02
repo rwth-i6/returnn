@@ -7760,9 +7760,12 @@ class SelfAttentionLayer(_ConcatInputLayer):
         x_shape = [-1, -1, num_heads, mat_n_out // num_heads]  # without time
         if input_data.time_dim_axis is None:
             assert input_data.batch_dim_axis == 0
+            num_queries = 1
             x_shape[1] = 1
         else:
             assert input_data.time_dim_axis in (0, 1)
+            num_queries = tf_util.get_shape_dim(self.input_data.placeholder, input_data.time_dim_axis)
+            x_shape[input_data.time_dim_axis] = num_queries
         assert input_data.batch_dim_axis in (0, 1)
         x_shape[input_data.batch_dim_axis] = batch_dim
         x = tf.reshape(x, x_shape)  # (batch,time|1)|(time|1,batch) + (heads,qkv-dim//heads)
@@ -7782,10 +7785,9 @@ class SelfAttentionLayer(_ConcatInputLayer):
         k.set_shape((None, num_heads, None, total_key_dim // num_heads))
         v.set_shape((None, num_heads, None, total_value_dim // num_heads))
         q *= (total_key_dim // num_heads) ** -0.5
-        orig_k = k
-        orig_q = q
         have_prev_kv_left = prev_k_left is not None
         assert have_prev_kv_left == (prev_v_left is not None)
+        num_keys = num_queries
         if have_prev_kv_left:
             # Memory for kv.
             self.rec_vars_outputs["k_left"] = k  # usually will be overwritten by the new k below
@@ -7809,6 +7811,7 @@ class SelfAttentionLayer(_ConcatInputLayer):
             else:  # this is usually the case
                 self.rec_vars_outputs["k_left"] = k
                 self.rec_vars_outputs["v_left"] = v
+            num_keys = tf_util.get_shape_dim(k, 2)
         # Dot-attention.
         # Resulting last time dimension will be used to perform the softmax over, and will the be reduced.
         # (batch,heads,num_queries|1,num_keys) e.g. (batch,heads,time|1,time)
@@ -7822,20 +7825,20 @@ class SelfAttentionLayer(_ConcatInputLayer):
             # See also _relative_attention_inner here: https://github.com/tensorflow/tensor2tensor
             q_t = tf.transpose(q, [2, 0, 1, 3])  # [num_queries|1,batch,heads,key_dim]
             q_t_r = tf.reshape(
-                q_t, [tf.shape(q_t)[0], batch_dim * num_heads, total_key_dim // num_heads]
+                q_t, [num_queries, batch_dim * num_heads, total_key_dim // num_heads]
             )  # [num_queries|1,batch*heads,k-dim]
             with tf.control_dependencies(
                 [
                     tf_compat.v1.assert_equal(
                         message="check_shape_of_key_shift:",
                         x=tf.shape(k_),
-                        y=[tf.shape(q_t)[0], tf.shape(energy)[-1], total_key_dim // num_heads],
+                        y=[num_queries, num_keys, total_key_dim // num_heads],
                     )
                 ]
             ):
                 energy_ = tf.matmul(q_t_r, k_, transpose_b=True)  # [num_queries|1,batch*heads,num_keys]
             energy_ = tf.reshape(
-                energy_, [tf.shape(q_t)[0], batch_dim, num_heads, tf.shape(energy)[-1]]
+                energy_, [num_queries, batch_dim, num_heads, num_keys]
             )  # [num_queries|1,batch,heads,num_keys]
             energy_ = tf.transpose(energy_, [1, 2, 0, 3])  # [batch,heads,num_queries|1,num_keys]
             energy += energy_
@@ -7846,33 +7849,24 @@ class SelfAttentionLayer(_ConcatInputLayer):
                 # are anyway ignored.
                 from returnn.tf.util.basic import matrix_triangular
 
-                num_queries = tf.shape(orig_q)[2]
-                num_keys = tf.shape(orig_k)[2]
                 # (1,1,num_queries,num_keys)
                 energy_mask = matrix_triangular((1, 1, num_queries, num_keys), dtype=tf.bool, lower=True)
                 if have_prev_kv_left:
                     energy_mask_left = tf.ones((1, 1, num_queries, tf.shape(prev_k_left)[2]), dtype=tf.bool)
                     energy_mask = tf.concat([energy_mask_left, energy_mask], axis=-1)
             else:
-                energy_mask = tf.sequence_mask(
-                    input_data.get_sequence_lengths(), maxlen=tf.shape(energy)[-1]
-                )  # (batch,time)
-                energy_mask = tf.reshape(
-                    energy_mask, [tf.shape(energy)[0], 1, 1, tf.shape(energy)[-1]]
-                )  # (batch,1,1,time)
+                energy_mask = tf.sequence_mask(input_data.get_sequence_lengths(), maxlen=num_keys)  # (batch,time)
+                energy_mask = tf.reshape(energy_mask, [batch_dim, 1, 1, num_keys])  # (batch,1,1,time)
             if state_var_lengths is not None and have_prev_kv_left:
                 if callable(state_var_lengths):
                     state_var_lengths = state_var_lengths()
                 assert isinstance(state_var_lengths, tf.Tensor)
                 state_var_max_length = tf.shape(prev_k_left)[-2]
-                total_max_length = tf.shape(energy)[-1]
                 inverted_prefix_mask = tf.sequence_mask(
-                    state_var_max_length - state_var_lengths, maxlen=total_max_length, name="inverted_prefix_mask"
+                    state_var_max_length - state_var_lengths, maxlen=num_keys, name="inverted_prefix_mask"
                 )
                 # shape: (batch,1,1,time)
-                inverted_prefix_mask = tf.reshape(
-                    inverted_prefix_mask, [tf.shape(energy)[0], 1, 1, tf.shape(energy)[-1]]
-                )
+                inverted_prefix_mask = tf.reshape(inverted_prefix_mask, [batch_dim, 1, 1, num_keys])
                 energy_mask = tf.math.logical_xor(energy_mask, inverted_prefix_mask)
             energy = where_bc(energy_mask, energy, -inf_value * tf.ones_like(energy), name="energy_masked")
         elif prev_mask is not None:
@@ -7897,8 +7891,8 @@ class SelfAttentionLayer(_ConcatInputLayer):
             )
         v = tf.matmul(weights, v, name="reduce_att")  # (batch,heads,time,v-dim//heads)
         v.set_shape(tf.TensorShape([None, num_heads, None, total_value_dim // num_heads]))
-        v = tf.transpose(v, [0, 2, 1, 3])  # (batch,time,heads,v-dim//heads)
-        v = tf.reshape(v, get_shape(v)[:2] + [total_value_dim], name="merge_vdim")  # (batch,time,v-dim)
+        v = tf.transpose(v, [0, 2, 1, 3])  # (batch,time|1,heads,v-dim//heads)
+        v = tf.reshape(v, [batch_dim, num_queries, total_value_dim], name="merge_vdim")  # (batch,time,v-dim)
         v.set_shape(tf.TensorShape([None, None, total_value_dim]))
         if input_data.time_dim_axis is None:
             # Squeeze away the time-dim, which should be 1.
