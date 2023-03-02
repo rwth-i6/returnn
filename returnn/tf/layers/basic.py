@@ -6226,10 +6226,10 @@ class ConvLayer(_ConcatInputLayer):
         # Swap the dims if the input dim order doesn't fit the flag auto_use_channel_first.
         if auto_use_channel_first is NotSpecified:
             auto_use_channel_first = True if BehaviorVersion.get() >= 9 else False
+        use_channel_first = False
         if auto_use_channel_first or input_data.feature_dim_axis == num_batch_dims:  # batch-feature-major
             if tf_util.is_gpu_available_in_session():
-                if len([d for d in dim_tags if d.dimension]) > 1:
-                    feature_dim_axis = num_batch_dims
+                use_channel_first = True
                 dim_tags = dim_tags[:num_batch_dims] + dim_tags[-1:] + dim_tags[num_batch_dims:-1]
                 if time_dim_axis is not None and time_dim_axis >= num_batch_dims:
                     if time_dim_axis == len(dim_tags) - 1:
@@ -6256,6 +6256,11 @@ class ConvLayer(_ConcatInputLayer):
                 dilation_rate=dilation_rate,
                 padding=padding,
             )
+        # Do the check here after set_output_dim_tags
+        # because that might have defined some previous undefined dim,
+        # thus we only know here whether it is static or dynamic.
+        if use_channel_first and len([d for d in out.dim_tags if not d.is_dynamic()]) > 1:
+            out.feature_dim_axis = num_batch_dims
         return out
 
     def get_dep_layers(self):
