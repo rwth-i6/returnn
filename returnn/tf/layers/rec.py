@@ -7706,7 +7706,7 @@ class SelfAttentionLayer(_ConcatInputLayer):
         total_value_dim = self.output.dim
         assert total_key_dim % num_heads == 0, "must be divisible"
         assert total_value_dim % num_heads == 0, "must be divisible. total_value_dim = n_out"
-        from returnn.tf.util.basic import get_initializer, dot, get_shape, to_int32_64, where_bc
+        from returnn.tf.util.basic import get_initializer, dot, to_int32_64, where_bc
 
         batch_dim = input_data.get_batch_dim()
         with self.var_creation_scope():
