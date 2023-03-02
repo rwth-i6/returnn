@@ -11942,6 +11942,43 @@ def test_trafo_search_lm():
             assert all(out_seqs[i, : input_seq_lens[i]] == input_seqs[i, : input_seq_lens[i]])
 
 
+def test_SelfAttentionLayer_static_time():
+    from returnn.tf.util.data import batch_dim, SpatialDim, FeatureDim
+    from test_TFNetworkLayer import make_feed_dict
+
+    time_dim = SpatialDim("time", 13)
+    feat_dim = FeatureDim("feat", 5)
+    config = Config(
+        {
+            "extern_data": {"data": {"dim_tags": [batch_dim, time_dim, feat_dim], "time_dim_axis": 1}},
+        }
+    )
+
+    net_dict = {
+        "output": {
+            "class": "self_attention",
+            "from": "data",
+            "n_out": 8,
+            "num_heads": 2,
+            "total_key_dim": 8,
+        },
+    }
+
+    with make_scope() as session:
+        network = TFNetwork(config=config)
+        in_ = network.extern_data.get_default_input_data()
+        print("in:", in_)
+        network.construct_from_dict(net_dict)
+        out = network.get_default_output_layer().output
+        print("out:", out)
+        assert out.dim_tags[:2] == in_.dim_tags[:2]
+        assert out.batch_shape == (batch_dim.dimension, time_dim.dimension, 8)
+        assert out.feature_dim_axis == in_.feature_dim_axis
+        assert out.time_dim_axis == in_.time_dim_axis
+        network.initialize_params(session)
+        session.run(out.placeholder, feed_dict=make_feed_dict(network.extern_data))
+
+
 def test_self_att_rec_state():
     rnd = numpy.random.RandomState(42)
     beam_size = 5

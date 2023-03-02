@@ -7935,11 +7935,14 @@ class SelfAttentionLayer(_ConcatInputLayer):
         if out.have_time_axis():
             time_tag = out.get_time_dim_tag()
             dim_tags = (batch_dim_tag, time_tag, feat_tag)
+            time_dim_axis = 1
         else:
             dim_tags = (batch_dim_tag, feat_tag)
+            time_dim_axis = None
         data_opts = out.get_kwargs(include_special_axes=False)
         data_opts["dims"] = dim_tags
         data_opts["dtype"] = "float32"
+        data_opts["time_dim_axis"] = time_dim_axis
         data_opts.pop("sparse", None)
         data_opts.pop("vocab", None)
         data_opts.pop("dim", None)
