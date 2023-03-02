@@ -434,6 +434,8 @@ class _DimMixin:
             # If static dim, no effect.
             assert not self.batch
             return self
+        if not self.is_dim_known():
+            return self
         if batch.is_broadcast():
             return self  # just leave as-is. should not matter.
         if self._extra:
