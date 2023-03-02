@@ -1343,6 +1343,17 @@ class _DimMixin:
                 other_same_base._make_extra().derived_from_op = self.derived_from_op
             elif other_same_base.derived_from_op and not self.derived_from_op:
                 self._make_extra().derived_from_op = other_same_base.derived_from_op
+        if self._extra and not other_same_base.is_dynamic():
+            # Those might be set via get_batch_for_ctx for an undefined dim,
+            # which now becomes static due to `other`.
+            self._extra.batch = None
+            self._extra.control_flow_ctx = None
+            for key, dim_ in self._extra.same_for_batch_ctx.items():
+                # noinspection PyProtectedMember
+                dim_extra = dim_._extra
+                if dim_extra:
+                    dim_extra.batch = None
+                    dim_extra.control_flow_ctx = None
         if self.batch:
             self_ = self.get_for_batch_ctx(batch=self.batch, ctx=self.control_flow_ctx)
             if self_ is not self:
