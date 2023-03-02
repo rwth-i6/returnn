@@ -7764,7 +7764,7 @@ class SelfAttentionLayer(_ConcatInputLayer):
             x_shape[1] = 1
         else:
             assert input_data.time_dim_axis in (0, 1)
-            num_queries = tf_util.get_shape_dim(self.input_data.placeholder, input_data.time_dim_axis)
+            num_queries = tf_util.get_shape_dim(input_data.placeholder, input_data.time_dim_axis)
             x_shape[input_data.time_dim_axis] = num_queries
         assert input_data.batch_dim_axis in (0, 1)
         x_shape[input_data.batch_dim_axis] = batch_dim

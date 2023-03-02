@@ -6956,6 +6956,7 @@ def test_reclayer_optimize_out_transformer():
             return params
 
     net_params = get_params()
+    print()
 
     def get_out(optimize_out):
         """
@@ -6979,11 +6980,20 @@ def test_reclayer_optimize_out_transformer():
                 assert_equal(cell.layers_in_loop, [])  # all moved out
             out = net.get_layer("output/output_prob").output.copy_as_batch_major()
             assert out.batch_ndim == 3 and out.shape == (None, n_tgt_dim)
-            out_np = session.run(out.placeholder, feed_dict=get_feed_dict(extern_data=net.extern_data))
+            feed_dict = get_feed_dict(extern_data=net.extern_data)
+            try:
+                out_np = session.run(out.placeholder, feed_dict=feed_dict)
+            except tf.errors.OpError as exc:
+                help_on_tf_exception(
+                    session, exc, fetches=out.placeholder, feed_dict=feed_dict, extern_data=net.extern_data
+                )
+                raise
             return out_np
 
     out_opt_np = get_out(optimize_out=True)
+    print()
     out_nopt_np = get_out(optimize_out=False)
+    print()
     print("output:")
     print(out_opt_np)
     numpy.testing.assert_almost_equal(out_opt_np, out_nopt_np, decimal=5)
