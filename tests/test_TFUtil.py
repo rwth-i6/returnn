@@ -2338,6 +2338,19 @@ def test_windowed_nd_big():
     numpy.testing.assert_almost_equal(naive, real)
 
 
+def test_windowed_nd_big_stride():
+    n_time = 11
+    n_batch = 5
+    n_dim = 7
+    window = 3
+    stride = 2
+    numpy.random.seed(123)
+    source = numpy.random.random((n_time, n_batch, n_dim)).astype("float32")
+    naive = naive_windowed_batch(source, window=window)[::stride]
+    real = windowed_nd(source, window_size=window, time_axis=0, new_window_axis=1, stride=stride).eval()
+    numpy.testing.assert_almost_equal(naive, real)
+
+
 def naive_slice_nd(x, start, size):
     slices_shape = [x.shape[0], size] + list(x.shape)[2:]
     ys = numpy.zeros(shape=slices_shape)

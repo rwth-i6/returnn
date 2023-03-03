@@ -4133,29 +4133,53 @@ def windowed_nd(
             pad_left = tf.zeros(tf.concat([[window_left], source_shape[1:]], axis=0), dtype=source.dtype)
             pad_right = tf.zeros(tf.concat([[window_right], source_shape[1:]], axis=0), dtype=source.dtype)
             source = tf.concat([pad_left, source, pad_right], axis=0)  # shape[0] == n_time + window - 1
+            n_padded_time = n_time + window_size - 1
         elif padding == "valid":
             assert window_left is None and window_right is None
             n_out_time = n_time - window_size + 1
+            n_padded_time = n_time
         else:
             raise Exception("invalid padding %r" % padding)
-        tiled_dimshuffle = expand_dims_unbroadcast(source, axis=0, dim=window_size)  # (window,n_time+window-1,...)
-        # We want to shift every dim*time block by one to the left.
-        # To do this, we interpret that we have one more time frame (i.e. n_time+window).
-        # We have to do some dimshuffling so that we get the right layout, then we can flatten,
-        # add some padding, and then dimshuffle it back.
-        # Then we can take out the first n_time frames.
-        tiled_flat = tf.reshape(tiled_dimshuffle, [-1])
-        rem = window_size * tf.reduce_prod(source_shape[1:])
-        tiled_flat_pad_right = tf.concat([tiled_flat, tf.zeros((rem,), dtype=source.dtype)], axis=0)
-        tiled_reshape_shift = tf.reshape(
-            tiled_flat_pad_right, tf.concat([(window_size, n_out_time + window_size), source_shape[1:]], axis=0)
-        )  # add time frame, (window,n_time+window,...)
-        final = tiled_reshape_shift
-        if new_window_axis != 0:
-            final = move_axis(final, 0, new_window_axis)  # (n_time+window,...,window,...)
-            final = final[:n_out_time:stride]  # (n_out_time//stride,...,window,...)
+
+        if stride > 1:
+            # Use a straightforward implementation using tf.while_loop.
+            ta = tf.TensorArray(
+                dtype=source.dtype, size=0, dynamic_size=True, element_shape=[window_size] + source.shape.as_list()[1:]
+            )
+
+            def _body(t, i, ta_):
+                return t + stride, i + 1, ta_.write(i, source[t : t + window_size])
+
+            def _cond(t, *_args):
+                return tf.less_equal(t + window_size, n_padded_time)
+
+            _, _, ta = tf.while_loop(_cond, _body, [0, 0, ta])
+            final = ta.stack()  # (n_out_time//stride,window,...)
+            if new_window_axis != 1:
+                final = move_axis(final, 1, new_window_axis)
+
         else:
-            final = final[:, :n_out_time:stride]  # (window,n_out_time//stride,...)
+            assert stride == 1, f"stride {stride!r} not supported"
+            tiled_dimshuffle = expand_dims_unbroadcast(source, axis=0, dim=window_size)  # (window,n_time+window-1,...)
+            # We want to shift every dim*time block by one to the left.
+            # To do this, we interpret that we have one more time frame (i.e. n_time+window).
+            # We have to do some dimshuffling so that we get the right layout, then we can flatten,
+            # add some padding, and then dimshuffle it back.
+            # Then we can take out the first n_time frames.
+            tiled_flat = tf.reshape(tiled_dimshuffle, [-1])
+            rem = window_size * tf.reduce_prod(source_shape[1:])
+            tiled_flat_pad_right = tf.concat([tiled_flat, tf.zeros((rem,), dtype=source.dtype)], axis=0)
+            tiled_reshape_shift = tf.reshape(
+                tiled_flat_pad_right, tf.concat([(window_size, n_out_time + window_size), source_shape[1:]], axis=0)
+            )  # add time frame, (window,n_time+window,...)
+            final = tiled_reshape_shift
+            if new_window_axis != 0:
+                final = move_axis(final, 0, new_window_axis)  # (n_time+window,...,window,...)
+                final = final[:n_out_time]  # (n_out_time,...,window,...)
+            else:
+                final = final[:, :n_out_time]  # (window,n_out_time,...)
+
+        # Now new_window_axis is right, but we still want to move the time_axis to the original place.
         # Move time-axis back to its original place.
         if new_window_axis <= time_axis:
             time_axis += 1  # New window axis was inserted before.
