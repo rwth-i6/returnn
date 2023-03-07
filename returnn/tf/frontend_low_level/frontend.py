@@ -15,6 +15,8 @@ from ._internal_frontend import TFInternalFrontend
 _TT = Tensor[tf.Tensor]
 
 
+# Ignore this warning until we really expect that we implemented everything.
+# noinspection PyAbstractClass
 class TFFrontend(Frontend[tf.Tensor]):
     """
     TensorFlow low-level frontend, operating on tf.Tensor
