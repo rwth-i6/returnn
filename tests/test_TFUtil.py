@@ -469,8 +469,8 @@ def test_Dim_get_all_dimension_tags_one_derived_time():
     all_dim_tags, _ = DimensionTag.get_all_dimension_tags([b, a], is_equal_opts=is_equal_opts)
     print("all_dim_tags:", all_dim_tags)
     # The is_equal_opts with derived_matches should match time_dim with derived_time_dim.
-    # We explicitly want that the time_dim is returned here.
-    assert derived_time_dim not in all_dim_tags and all_dim_tags == [batch_dim, time_dim, feat_dim]
+    # We explicitly want that the derived_time_dim is returned here.
+    assert time_dim not in all_dim_tags and all_dim_tags == [batch_dim, derived_time_dim, feat_dim]
 
 
 def test_Data_sparse_int32_with_dim_kwargs_init():
