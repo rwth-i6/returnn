@@ -6010,6 +6010,17 @@ def test_reclayer_optimize_out_access_split():
     )
 
 
+def test_reclayer_optimize_out_lstm4d():
+    from returnn.tf.util.data import single_step_dim
+
+    feat_dim = FeatureDim("feat", 15)
+    check_reclayer_optimize_out(
+        feat_dim=feat_dim,
+        subnet_layer_dict={"class": "rec", "unit": "nativelstm2", "from": "split", "axis": single_step_dim, "n_out": 7},
+        other_subnet_layers={"split": {"class": "split_dims", "from": "data:source", "axis": "F", "dims": (5, 3)}},
+    )
+
+
 def test_SplitLayer_move_out_as_output_layer():
     with make_scope() as session:
         config = Config()
