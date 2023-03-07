@@ -95,5 +95,5 @@ single_step_dim = Dim(description="single-step", kind=Dim.Types.Spatial, special
 
 class VerifyOutShapeException(Exception):
     """
-    Exception via :func:`Data.verify_out_shape`.
+    Exception via :func:`Tensor.verify_out_shape`.
     """
