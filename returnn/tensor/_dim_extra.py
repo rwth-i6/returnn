@@ -1463,8 +1463,6 @@ class _DimMixin:
                     replace_existing = (
                         existing_tag.undefined and not tag.undefined and tag.dimension == existing_tag.dimension
                     )
-                    if tag != existing_tag and tag in existing_tag.get_derived_bases_set():
-                        replace_existing = True
                     if replace_existing:  # Replace the existing by the new tag.
                         tags[tags.index(existing_tag)] = tag
                         for _, dims_ in data_axes_dict.items():
