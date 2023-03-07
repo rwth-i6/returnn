@@ -1984,14 +1984,12 @@ class LayerBase(object):
             )
         if v is None:
             v = "zeros"
-        bc_shape = [(d if (d is not None) else 1) for d in data.batch_shape]
-        # Some other code might not support automatic broadcasting in the batch-axis. (Earlier example: concat_in_time)
-        # Thus we will automatically unbroadcast here (at least the batch axis).
-        # Note that there still might be other axes which we do not unbroadcast here.
-        # Thus, concat_in_time was fixed now, and maybe we actually do not need this anymore.
-        shape = list(bc_shape)
-        if data.have_batch_axis():
-            shape[data.batch_dim_axis] = batch_dim
+        shape = []
+        for dim in data.dims:
+            if dim.is_batch_dim():
+                shape.append(batch_dim)
+            else:
+                shape.append(dim.get_dim_value())
         if isinstance(v, (float, int)):
             with tf.name_scope("init_%s_const" % name):
                 from returnn.tf.util.basic import constant_with_shape
@@ -2009,12 +2007,12 @@ class LayerBase(object):
             return tf.ones(shape, dtype=data.dtype, name="init_%s_ones" % name)
         elif v == "var":
             assert not data.sparse
-            assert numpy.prod(bc_shape) == data.dim
+            assert all(data.shape) and numpy.prod(data.shape) == data.dim
             with rec_layer.var_creation_scope():
                 x = tf_compat.v1.get_variable(
                     "init_%s_var" % name, shape=(data.dim,), dtype=data.dtype, initializer=tf.zeros_initializer()
                 )
-            x = tf.reshape(x, bc_shape, name="init_%s_var_bc" % name)
+            x = tf.reshape(x, [d or 1 for d in data.batch_shape], name="init_%s_var_bc" % name)
             x = tf.tile(
                 x,
                 [batch_dim if (i == data.batch_dim_axis) else 1 for i in range(data.batch_ndim)],
