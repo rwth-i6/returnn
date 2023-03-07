@@ -222,6 +222,13 @@ jobs:
           pip install --user "protobuf<=3.20.1"
         fi
 
+        if [[ "${{matrix.tf-version}}" == 2.10 ]]; then
+          # TF 2.10 requires gast<=0.4.0,>=0.2.1. But for example, with gast 0.2.2, we get some AutoGraph error:
+          # Cause: module 'gast' has no attribute 'Constant'
+          # Similar like: https://github.com/tensorflow/tensorflow/issues/47802
+          pip install --user "gast<=0.4.0"
+        fi
+
         pip install --user -r requirements.txt | cat
         pip install --user scipy | cat  # for some tests
         pip install --user --upgrade tensorflow==${{ matrix.tf-version }} | cat
