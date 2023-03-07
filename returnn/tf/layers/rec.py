@@ -2095,10 +2095,8 @@ class _SubnetworkRecCell(object):
             if name in self.input_layers_moved_out:
                 return get_input_moved_out(name)
             if name in self.output_layers_moved_out:
-                # Will be constructed later.
-                # This should not be used recursively, because we checked that nothing depends on it,
-                # thus it should not be a problem to return None.
-                return None
+                # Will be constructed later. We should not get here
+                raise AssertionError(f"layer {name!r} is moved out")
             # noinspection PyBroadException
             try:
                 layer = self.net.construct_layer(self.net_dict, name=name, get_layer=get_layer)
