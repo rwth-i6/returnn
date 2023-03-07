@@ -2007,12 +2007,12 @@ class LayerBase(object):
             return tf.ones(shape, dtype=data.dtype, name="init_%s_ones" % name)
         elif v == "var":
             assert not data.sparse
-            assert all(data.batch_shape) and numpy.prod(data.batch_shape) == data.dim
+            assert all(data.shape) and numpy.prod(data.shape) == data.dim
             with rec_layer.var_creation_scope():
                 x = tf_compat.v1.get_variable(
                     "init_%s_var" % name, shape=(data.dim,), dtype=data.dtype, initializer=tf.zeros_initializer()
                 )
-            x = tf.reshape(x, data.batch_shape, name="init_%s_var_bc" % name)
+            x = tf.reshape(x, [d or 1 for d in data.batch_shape], name="init_%s_var_bc" % name)
             x = tf.tile(
                 x,
                 [batch_dim if (i == data.batch_dim_axis) else 1 for i in range(data.batch_ndim)],
