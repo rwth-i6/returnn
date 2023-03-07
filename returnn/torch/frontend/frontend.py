@@ -67,6 +67,8 @@ class TorchFrontend(Frontend[torch.Tensor]):
         b_common_axes_shape = tuple(b_shape[i] for i in b_common_axes)
         assert common_axes_shape == b_common_axes_shape, "Tensor shape for common Dims of a and b does not match."
 
+        common_axes_total_dimension = prod(common_axes_shape)
+
         a_unique_axes_shape = tuple(a_shape[i] for i in a_unique_axes)
         b_unique_axes_shape = tuple(b_shape[i] for i in b_unique_axes)
 
@@ -80,12 +82,24 @@ class TorchFrontend(Frontend[torch.Tensor]):
         reduce_axes_total_dimension = prod(reduce_axes_shape)
 
         a_raw = torch.permute(a_raw, a_common_axes + a_unique_axes + a_reduce_axes)
-        a_raw = torch.reshape(a_raw, common_axes_shape + (a_unique_axes_total_dimension, reduce_axes_total_dimension))
-
         b_raw = torch.permute(b_raw, b_common_axes + b_reduce_axes + b_unique_axes)
-        b_raw = torch.reshape(b_raw, common_axes_shape + (reduce_axes_total_dimension, b_unique_axes_total_dimension))
 
-        raw_result = torch.matmul(a_raw, b_raw)
+        if common_axes_total_dimension == 1:  # standard matrix multiplication
+            a_raw = torch.reshape(a_raw, (a_unique_axes_total_dimension, reduce_axes_total_dimension))
+            b_raw = torch.reshape(b_raw, (reduce_axes_total_dimension, b_unique_axes_total_dimension))
+
+            raw_result = torch.mm(a_raw, b_raw)
+
+        else:  # batched matrix multiplication
+            a_raw = torch.reshape(
+                a_raw, (common_axes_total_dimension, a_unique_axes_total_dimension, reduce_axes_total_dimension)
+            )
+            b_raw = torch.reshape(
+                b_raw, (common_axes_total_dimension, reduce_axes_total_dimension, b_unique_axes_total_dimension)
+            )
+
+            raw_result = torch.bmm(a_raw, b_raw)
+
         raw_result = torch.reshape(raw_result, common_axes_shape + a_unique_axes_shape + b_unique_axes_shape)
 
         a_unique_dims = [a_dims[i] for i in a_unique_axes]
