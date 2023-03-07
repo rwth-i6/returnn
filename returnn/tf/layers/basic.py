@@ -2243,8 +2243,11 @@ class LengthLayer(LayerBase):
         else:
             assert len(self.sources) == 1, "%s: expects one source" % self
             source = self.sources[0].output
-            axis = source.get_axis_from_description(axis, allow_int=False)
-            dim = source.dim_tags[axis]
+            if axis == "sparse_dim":
+                assert source.sparse_dim
+                dim = source.sparse_dim
+            else:
+                dim = source.get_dim_tag_from_description(axis)
         self.dim_tag = dim
         if add_time_axis:
             # You anyway should not use this, so it's ok to have only a single case supported here.
@@ -2309,8 +2312,11 @@ class LengthLayer(LayerBase):
         else:
             assert len(sources) == 1
             source = sources[0].output
-            axis = source.get_axis_from_description(axis, allow_int=False)
-            dim = source.dim_tags[axis]
+            if axis == "sparse_dim":
+                assert source.sparse_dim
+                dim = source.sparse_dim
+            else:
+                dim = source.get_dim_tag_from_description(axis)
         if add_time_axis:
             # You anyway should not use this, so it's ok to have only a single case supported here.
             assert dim.dyn_size_ext and dim.dyn_size_ext.have_batch_axis() and dim.dyn_size_ext.batch_ndim == 1  # [B]
