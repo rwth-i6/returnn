@@ -308,6 +308,13 @@ class _DimMixin:
         """
         return self
 
+    def __reduce_ex__(self: _d.Dim, protocol):
+        if self == _d.batch_dim:
+            return "batch_dim"
+        if self == _d.single_step_dim:
+            return "single_step_dim"
+        return super().__reduce_ex__(protocol)
+
     def copy(self, same_as_self=True, description=None, kind=None, match_priority=None):
         """
         :param bool same_as_self:

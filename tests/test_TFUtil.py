@@ -1398,6 +1398,19 @@ def test_Dim_copy():
     assert a == copy.deepcopy(a)
 
 
+def test_Dim_pickle():
+    from returnn.tf.util.data import batch_dim, single_step_dim
+    import pickle
+
+    a = SpatialDim("a")
+    a_copy = pickle.loads(pickle.dumps(a))
+    batch_dim_copy = pickle.loads(pickle.dumps(batch_dim))
+    single_step_dim_copy = pickle.loads(pickle.dumps(single_step_dim))
+    assert a != a_copy
+    assert batch_dim_copy == batch_dim
+    assert single_step_dim_copy == single_step_dim
+
+
 def test_Dim_sorted():
     from returnn.util.basic import obj_diff_str
 
