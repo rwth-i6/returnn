@@ -716,39 +716,45 @@ class RecLayer(_ConcatInputLayer):
             raise Exception("unknown cell %r. known cells: %r" % (name, sorted(cls._rnn_cells_dict.keys())))
         return cls._rnn_cells_dict[name.lower()]
 
-    def _get_input(self, strict=True):
+    def _get_input(self, *, strict=True, add_time_dim=True):
         """
         :param bool strict:
         :return: (in_data, x, seq_len, initial_state), where x is (time,batch,...,dim) and seq_len is (batch,)
-        :rtype: (Data, tf.Tensor, tf.Tensor, object)
+        :rtype: (Data, tf.Tensor, tf.Tensor|None, object)
         """
         from tensorflow.python.util import nest
 
+        have_time_dim = self.time_dim_tag or add_time_dim
+        expected_ndim = 3 if have_time_dim else 2
         assert self.input_data
         in_data = self.input_data
-        if not self.time_dim_tag:
+        if not self.time_dim_tag and add_time_dim:
             in_data = in_data.copy_add_spatial_dim(spatial_dim_axis=0)
             in_data.time_dim_axis = 0
-        assert in_data.have_time_axis(), "%s, input %s should have time dim now, time dim tag %s" % (
-            self,
-            in_data,
-            self.time_dim_tag,
-        )
+        if have_time_dim:
+            assert in_data.have_time_axis(), "%s, input %s should have time dim now, time dim tag %s" % (
+                self,
+                in_data,
+                self.time_dim_tag,
+            )
         if strict:
             # Merge all other axes except time and feature such that we get (time,batch',dim).
-            in_data = in_data.copy_as_time_major()
+            if have_time_dim:
+                in_data = in_data.copy_as_time_major()
             if not in_data.sparse:
                 in_data = in_data.copy_with_feature_last()
-        else:
+        elif have_time_dim:
             if in_data.have_batch_axis():
                 in_data = in_data.copy_as_time_batch_major()
             else:
                 in_data = in_data.copy_as_time_major()
+        elif in_data.have_batch_axis():
+            in_data = in_data.copy_as_batch_major()
         in_data_ = in_data
         initial_state = self._initial_state
-        if strict and in_data_.batch_ndim_dense != 3:
-            assert in_data_.batch_ndim_dense > 3
-            batch_axes = list(range(1, in_data_.batch_ndim_dense - 1))
+        if strict and in_data_.batch_ndim_dense != expected_ndim:
+            assert in_data_.batch_ndim_dense > expected_ndim
+            batch_axes = list(range(1 if have_time_dim else 0, in_data_.batch_ndim_dense - 1))
             assert len(batch_axes) >= 2
             in_data_ = in_data_.copy_merge_into_batch(batch_axes)
 
@@ -757,7 +763,7 @@ class RecLayer(_ConcatInputLayer):
                     return None
                 assert isinstance(state, tf.Tensor)
                 if state.shape.rank > 2:
-                    n = in_data_.batch_ndim_dense - 2
+                    n = in_data_.batch_ndim_dense - (2 if have_time_dim else 1)
                     shape = tf_util.get_shape(state)
                     for i in range(n):
                         shape[0] *= shape.pop(1)
@@ -766,21 +772,24 @@ class RecLayer(_ConcatInputLayer):
 
             initial_state = nest.map_structure(_map_state, initial_state)
 
-        return in_data, in_data_.placeholder, in_data_.get_sequence_lengths(), initial_state
+        return in_data, in_data_.placeholder, in_data_.get_sequence_lengths() if have_time_dim else None, initial_state
 
-    def _post_proc_output_cell_strict(self, y, in_data, final_state):
+    def _post_proc_output_cell_strict(self, y, in_data, final_state, *, added_time_dim=True):
         """
         see :func:`_get_input` for comparison
 
         :param tf.Tensor y: (time,batch,dim)
         :param Data in_data:
         :param object final_state:
+        :param bool added_time_dim: whether add_time_dim in _get_input was used
         :rtype: (tf.Tensor, object)
         :return: (time,batch,dim) or (time,batch,...,dim); and final_state
         """
         from tensorflow.python.util import nest
 
-        if in_data.batch_ndim_dense > 3:
+        have_time_dim = self.time_dim_tag or added_time_dim
+        expected_ndim = 3 if have_time_dim else 2
+        if in_data.batch_ndim_dense > expected_ndim:
             y_shape = tf_util.get_shape(in_data.placeholder)
             if not in_data.sparse:
                 y_shape = y_shape[:-1]
@@ -791,7 +800,7 @@ class RecLayer(_ConcatInputLayer):
             axis=out_data.feature_dim_axis, new_dim_tag=self.output.feature_dim_or_sparse_dim
         )
         out_data.placeholder = y
-        if not self.time_dim_tag:
+        if not self.time_dim_tag and added_time_dim:
             out_data = out_data.copy_squeeze_axes(axes=[0])
         # The output format should match now.
         # If this is not the case, we should fix get_out_data_from_opts accordingly
@@ -954,7 +963,7 @@ class RecLayer(_ConcatInputLayer):
             pass
         assert self.input_data
         assert not self.input_data.sparse
-        in_data, x, seq_len, initial_state = self._get_input()
+        in_data, x, seq_len, initial_state = self._get_input(add_time_dim=False)
         if self._direction == -1:
             x = tf_compat.v1.reverse_sequence(x, seq_lengths=seq_len, batch_dim=1, seq_dim=0)
         if isinstance(cell, BaseRNNCell):
@@ -963,14 +972,13 @@ class RecLayer(_ConcatInputLayer):
             ):
                 x = cell.get_input_transformed(x)
         if isinstance(cell, rnn_cell.RNNCell):  # e.g. BasicLSTMCell
-            if not self.input_data.have_time_axis() or not self.time_dim_tag:
+            if not self.time_dim_tag:
                 assert self._direction in [1, None]
                 assert self._rec_previous_layer, "%s: assume in loop with input %s, but no rec info" % (
                     self,
                     self.input_data,
                 )
-                y, final_state = cell(self.input_data.placeholder, initial_state)
-                in_data = None  # mark that we have not used this
+                y, final_state = cell(x, initial_state)
             elif self._unroll:
                 assert self._max_seq_len is not None, "specify max_seq_len for unroll"
                 # We must get x.shape[0] == self._max_seq_len, so pad it.
@@ -1026,8 +1034,9 @@ class RecLayer(_ConcatInputLayer):
             raise Exception("invalid type: %s" % type(cell))
         if self._direction == -1:
             y = tf_compat.v1.reverse_sequence(y, seq_lengths=seq_len, batch_dim=1, seq_dim=0)
-        if in_data:
-            y, final_state = self._post_proc_output_cell_strict(y, in_data=in_data, final_state=final_state)
+        y, final_state = self._post_proc_output_cell_strict(
+            y, in_data=in_data, final_state=final_state, added_time_dim=False
+        )
         self._last_hidden_state = final_state
         return y
 
