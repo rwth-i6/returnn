@@ -4908,7 +4908,12 @@ def test_RnnCellLayer_with_time():
         with tf_compat.v1.variable_scope("prev_l1"):
             prev_l = InternalLayer(name="prev:l1", network=net, output=Data(name="prev_l1", dim=10, time_dim_axis=None))
             prev_l.rec_vars_outputs["state"] = RnnCellLayer.get_rec_initial_state(
-                batch_dim=1, name="prev_l", n_out=10, unit="LSTMBlock"
+                batch_dim=1,
+                name="prev_l",
+                n_out=10,
+                unit="LSTMBlock",
+                sources=[input_no_time_l],
+                network=net,
             )
             print("Previous time layer:", prev_l)
         with tf_compat.v1.variable_scope("l1"):
@@ -6007,6 +6012,17 @@ def test_reclayer_optimize_out_access_split():
     check_reclayer_optimize_out(
         subnet_layer_dict={"class": "copy", "from": "split/0", "n_out": 5},
         other_subnet_layers={"split": {"class": "split", "from": ["data:source"], "size_splits": [5, 8]}},
+    )
+
+
+def test_reclayer_optimize_out_lstm4d():
+    from returnn.tf.util.data import single_step_dim
+
+    feat_dim = FeatureDim("feat", 15)
+    check_reclayer_optimize_out(
+        feat_dim=feat_dim,
+        subnet_layer_dict={"class": "rec", "unit": "nativelstm2", "from": "split", "axis": single_step_dim, "n_out": 7},
+        other_subnet_layers={"split": {"class": "split_dims", "from": "data:source", "axis": "F", "dims": (5, 3)}},
     )
 
 
