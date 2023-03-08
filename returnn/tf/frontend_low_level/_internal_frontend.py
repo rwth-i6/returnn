@@ -85,7 +85,8 @@ class TFInternalFrontend(InternalFrontend[tf.Tensor]):
     def compare_raw(a: tf.Tensor, kind: str, b: tf.Tensor) -> tf.Tensor:
         """
         :param a:
-        :param kind: "equal"|"==", "less"|"<", "less_equal"|"<=", "greater"|">", "greater_equal"|">=", "not_equal"|"!="
+        :param kind: "equal"|"==", "less"|"<", "less_equal"|"<=", "greater"|">", "greater_equal"|">=",
+            "not_equal"|"!="|"<>"
         :param b:
         :return: a `kind` b
         """
@@ -100,6 +101,36 @@ class TFInternalFrontend(InternalFrontend[tf.Tensor]):
             "<>": "not_equal",
         }.get(kind, kind)
         op = getattr(tf, kind)  # e.g. tf.equal
+        return op(a, b)
+
+    @staticmethod
+    def combine_raw(a: tf.Tensor, kind: str, b: tf.Tensor) -> tf.Tensor:
+        """
+        :param a:
+        :param kind: "add"|"+", "sub"|"-", "mul"|"*", "truediv"|"/", "floordiv"|"//", "mod"|"%", "pow"|"**",
+            "max"|"maximum", "min"|"minimum", "logical_and", "logical_or", "squared_difference"
+        :param b:
+        :return: a `kind` b
+        """
+        assert a.shape.ndims == b.shape.ndims
+        kind = {
+            "+": "add",
+            "-": "subtract",
+            "sub": "subtract",
+            "*": "multiply",
+            "mul": "multiply",
+            "/": "truediv",
+            "//": "floordiv",
+            "%": "mod",  # Python-like modulo, not C-like (tf.truncatemod)
+            "mod": "mod",
+            "**": "pow",
+            "max": "maximum",
+            "min": "minimum",
+        }.get(kind, kind)
+        op = getattr(tf, kind, None)  # e.g. tf.add
+        # In tf v2, some ops like floordiv or mod exist in the tf.math namespace instead
+        if op is None:
+            op = getattr(tf.math, kind)
         return op(a, b)
 
     @staticmethod
