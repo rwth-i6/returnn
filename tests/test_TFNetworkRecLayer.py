@@ -4908,7 +4908,12 @@ def test_RnnCellLayer_with_time():
         with tf_compat.v1.variable_scope("prev_l1"):
             prev_l = InternalLayer(name="prev:l1", network=net, output=Data(name="prev_l1", dim=10, time_dim_axis=None))
             prev_l.rec_vars_outputs["state"] = RnnCellLayer.get_rec_initial_state(
-                batch_dim=1, name="prev_l", n_out=10, unit="LSTMBlock"
+                batch_dim=1,
+                name="prev_l",
+                n_out=10,
+                unit="LSTMBlock",
+                sources=[input_no_time_l],
+                network=net,
             )
             print("Previous time layer:", prev_l)
         with tf_compat.v1.variable_scope("l1"):
