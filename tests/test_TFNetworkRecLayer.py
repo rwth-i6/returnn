@@ -6026,6 +6026,24 @@ def test_reclayer_optimize_out_lstm4d():
     )
 
 
+def test_reclayer_optimize_out_lstm4d_zoneout():
+    from returnn.tf.util.data import single_step_dim
+
+    feat_dim = FeatureDim("feat", 15)
+    check_reclayer_optimize_out(
+        feat_dim=feat_dim,
+        subnet_layer_dict={
+            "class": "rec",
+            "unit": "zoneoutlstm",
+            "unit_opts": {"zoneout_factor_cell": 0.15, "zoneout_factor_output": 0.05},
+            "from": "split",
+            "axis": single_step_dim,
+            "n_out": 7,
+        },
+        other_subnet_layers={"split": {"class": "split_dims", "from": "data:source", "axis": "F", "dims": (5, 3)}},
+    )
+
+
 def test_SplitLayer_move_out_as_output_layer():
     with make_scope() as session:
         config = Config()
