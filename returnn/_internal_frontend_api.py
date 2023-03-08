@@ -93,6 +93,17 @@ class InternalFrontend(Generic[T]):
         raise NotImplementedError
 
     @staticmethod
+    def combine_raw(a: T, kind: str, b: T) -> T:
+        """
+        :param a:
+        :param kind: "add"|"+", "sub"|"-", "mul"|"*", "truediv"|"/", "floordiv"|"//", "mod"|"%", "pow"|"**",
+            "max"|"maximum", "min"|"minimum", "logical_and", "logical_or", "squared_difference"
+        :param b:
+        :return: a `kind` b
+        """
+        raise NotImplementedError
+
+    @staticmethod
     def reshape_raw(raw_tensor: T, shape: Union[Sequence[Union[int, T]], T]) -> T:
         """
         :param raw_tensor: raw tensor
