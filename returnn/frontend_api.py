@@ -42,6 +42,21 @@ class Frontend(Generic[T]):
         """
         raise NotImplementedError
 
+    @staticmethod
+    def _tensor_op_sanity_check(t1: Tensor, t2: Tensor):
+        """
+        Performs basic checks common to all _TensorMixin binary operations,
+        like _TensorMixin.__eq__ or _TensorMixin.__add__.
+
+        :param t1:
+        :param t2:
+        """
+        assert isinstance(t1, _t.Tensor) and isinstance(
+            t2, _t.Tensor
+        ), "The two operands of a binary operation must be of class Tensor."
+        assert t1.raw_frontend == t2.raw_frontend, "Cannot combine tensors from two different frontends, e.g. TF and PT"
+        assert t1.dtype == t2.dtype, "For now only operations with Tensors of the same dtypes are supported."
+
     @classmethod
     def compare(
         cls,
@@ -64,6 +79,7 @@ class Frontend(Generic[T]):
         """
         a = cls.convert_to_tensor(a)
         b = cls.convert_to_tensor(b)
+        cls._tensor_op_sanity_check(a, b)
         all_dims = []
         for dim in a.dims + b.dims:
             if dim not in all_dims:
@@ -83,6 +99,61 @@ class Frontend(Generic[T]):
         a = a.copy_compatible_to(out, check_sparse=False, check_dtype=False)
         b = b.copy_compatible_to(out, check_sparse=False, check_dtype=False)
         out.raw_tensor = cls._internal_frontend.compare_raw(a.raw_tensor, kind, b.raw_tensor)
+        return out
+
+    @classmethod
+    def combine(
+        cls,
+        a: Union[Tensor, RawTensorTypes],
+        kind: str,
+        b: Union[Tensor, RawTensorTypes],
+        *,
+        allow_broadcast_all_sources: Optional[bool] = None,
+        dim_order: Optional[Sequence[Dim]] = None,
+    ) -> Tensor:
+        """
+        :param a:
+        :param kind: "add"|"+", "sub"|"-", "mul"|"*", "truediv"|"/", "floordiv"|"//", "mod"|"%", "pow"|"**",
+            "max"|"maximum", "min"|"minimum", "logical_and", "logical_or", "squared_difference"
+        :param b:
+        :param allow_broadcast_all_sources: if True, it is allowed that neither a nor b has all dims of the result.
+            Not needed when out_dims is specified explicitly.
+        :param dim_order: defines the order of the resulting dims. if None, it is automatically inferred from a and b.
+            Not all the dims of a and b need to be specified here, and there could also be other dims in the dim_order.
+        :return: element-wise combination of a and b
+        """
+        # Truediv checks for int/int division
+        if kind in {"truediv", "/"}:
+            if isinstance(b, (int, float, numpy.number)) and b == 1:
+                return a
+            elif isinstance(b, (int, float, numpy.number)):
+                assert not a.dtype.startswith(
+                    "int"
+                ), "Dividing a Tensor of type int by an integer is disallowed. Please convert the Tensor to float."
+        a = cls.convert_to_tensor(a)
+        b = cls.convert_to_tensor(b)
+        cls._tensor_op_sanity_check(a, b)
+        all_dims = []
+        for dim in a.dims + b.dims:
+            if dim not in all_dims:
+                all_dims.append(dim)
+        if all(set(x.dims) != set(all_dims) for x in (a, b)):
+            if allow_broadcast_all_sources is False:
+                raise ValueError(f"combine: sources {a!r} {b!r} not allowed with allow_broadcast_all_sources=False")
+            elif allow_broadcast_all_sources is None:
+                raise ValueError(f"combine: sources {a!r} {b!r} require explicit allow_broadcast_all_sources=True")
+            elif allow_broadcast_all_sources is True:
+                pass
+            else:
+                raise TypeError(f"invalid type for allow_broadcast_all_sources: {type(allow_broadcast_all_sources)}")
+        if dim_order:
+            all_dims.sort(key=lambda d: dim_order.index(d) if d in dim_order else len(dim_order))
+        assert a.dtype == b.dtype, "For now only operations with Tensors of the same dtypes are supported."
+        out = _t.Tensor("combine", dims=all_dims, dtype=a.dtype)
+        a = a.copy_compatible_to(out, check_sparse=False, check_dtype=False)
+        b = b.copy_compatible_to(out, check_sparse=False, check_dtype=False)
+        out.raw_tensor = cls._internal_frontend.combine_raw(a.raw_tensor, kind, b.raw_tensor)
+
         return out
 
     @staticmethod
