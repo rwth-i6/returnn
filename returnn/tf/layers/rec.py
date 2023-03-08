@@ -266,6 +266,7 @@ class RecLayer(_ConcatInputLayer):
                         batch_dim=self.network.get_data_batch_dim(),
                         name=self.name,
                         rec_layer=self,
+                        sources=self.sources,
                     )
                 self.cell = self._get_cell(unit, unit_opts=unit_opts)
                 base_types = (rnn_cell.RNNCell,)
@@ -5090,6 +5091,7 @@ class RnnCellLayer(_ConcatInputLayer):
                     batch_dim=self.input_data.get_batch_dim(),
                     name=self.name,
                     initial_state=initial_state,
+                    sources=self.sources,
                 )
                 self.output.placeholder, state = tf_compat.v1.nn.dynamic_rnn(
                     self.cell,
