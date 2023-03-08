@@ -7,7 +7,7 @@ from typing import Union, Sequence
 
 import torch
 
-from returnn.frontend_api import Frontend
+from returnn.frontend_api import Frontend, RawTensorTypes
 from ._internal_frontend import TorchInternalFrontend
 from returnn.tensor import Tensor, Dim
 
@@ -25,6 +25,19 @@ class TorchFrontend(Frontend[torch.Tensor]):
 
     RawTensorType = torch.Tensor
     _internal_frontend = TorchInternalFrontend
+
+    @staticmethod
+    def convert_to_tensor(value: Union[Tensor, torch.Tensor, RawTensorTypes]) -> Tensor[torch.Tensor]:
+        """
+        :param value:
+        :return: tensor
+        """
+        if isinstance(value, Tensor):
+            return value
+        value = torch.tensor(value)
+        assert isinstance(value, torch.Tensor)
+        assert value.shape.as_list() == [], f"scalar expected, got {value}"
+        return Tensor("const", raw_tensor=value, dims=[], dtype=value.dtype.base_dtype.name)
 
     @staticmethod
     def dot(a: _TT, b: _TT, *, reduce: Union[Dim, Sequence[Dim]]) -> _TT:
