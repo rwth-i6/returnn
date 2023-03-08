@@ -718,9 +718,11 @@ class RecLayer(_ConcatInputLayer):
     def _get_input(self, strict=True):
         """
         :param bool strict:
-        :return: (in_data, x, seq_len), where x is (time,batch,...,dim) and seq_len is (batch,)
-        :rtype: (Data, tf.Tensor, tf.Tensor)
+        :return: (in_data, x, seq_len, initial_state), where x is (time,batch,...,dim) and seq_len is (batch,)
+        :rtype: (Data, tf.Tensor, tf.Tensor, object)
         """
+        from tensorflow.python.util import nest
+
         assert self.input_data
         in_data = self.input_data
         if not self.time_dim_tag:
@@ -742,20 +744,41 @@ class RecLayer(_ConcatInputLayer):
             else:
                 in_data = in_data.copy_as_time_major()
         in_data_ = in_data
+        initial_state = self._initial_state
         if strict and in_data_.batch_ndim_dense != 3:
             assert in_data_.batch_ndim_dense > 3
             batch_axes = list(range(1, in_data_.batch_ndim_dense - 1))
             assert len(batch_axes) >= 2
             in_data_ = in_data_.copy_merge_into_batch(batch_axes)
-        return in_data, in_data_.placeholder, in_data_.get_sequence_lengths()
 
-    def _post_proc_output_cell_strict(self, y, in_data):
+            def _map_state(state):
+                if state is None:
+                    return None
+                assert isinstance(state, tf.Tensor)
+                if state.shape.rank > 2:
+                    n = in_data_.batch_ndim_dense - 2
+                    shape = tf_util.get_shape(state)
+                    for i in range(n):
+                        shape[0] *= shape.pop(1)
+                    state = tf.reshape(state, shape)
+                return state
+
+            initial_state = nest.map_structure(_map_state, initial_state)
+
+        return in_data, in_data_.placeholder, in_data_.get_sequence_lengths(), initial_state
+
+    def _post_proc_output_cell_strict(self, y, in_data, final_state):
         """
+        see :func:`_get_input` for comparison
+
         :param tf.Tensor y: (time,batch,dim)
         :param Data in_data:
-        :rtype: tf.Tensor
-        :return: (time,batch,dim) or (time,batch,...,dim)
+        :param object final_state:
+        :rtype: (tf.Tensor, object)
+        :return: (time,batch,dim) or (time,batch,...,dim); and final_state
         """
+        from tensorflow.python.util import nest
+
         if in_data.batch_ndim_dense > 3:
             y_shape = tf_util.get_shape(in_data.placeholder)
             if not in_data.sparse:
@@ -773,7 +796,23 @@ class RecLayer(_ConcatInputLayer):
         # If this is not the case, we should fix get_out_data_from_opts accordingly
         # and avoid unnecessary further transformations here, esp any transposes.
         assert out_data.dim_tags == self.output.dim_tags
-        return out_data.placeholder
+
+        def _map_state(new_state, old_state):
+            if old_state is None:
+                return new_state
+            assert isinstance(new_state, tf.Tensor)
+            assert isinstance(old_state, tf.Tensor)
+            if new_state.shape.rank < old_state.shape.rank:
+                new_shape = tf_util.get_shape(new_state)
+                old_shape = tf_util.get_shape(old_state)
+                new_shape_ = old_shape[: len(old_shape) - len(new_shape) + 1] + new_shape[1:]
+                assert len(new_shape_) == len(old_shape)
+                new_state = tf.reshape(new_state, new_shape_)
+            return new_state
+
+        if self._initial_state is not None:
+            final_state = nest.map_structure(_map_state, final_state, self._initial_state)
+        return out_data.placeholder, final_state
 
     @classmethod
     def get_losses(cls, name, network, output, loss=None, reduce_func=None, layer=None, **kwargs):
@@ -908,7 +947,7 @@ class RecLayer(_ConcatInputLayer):
             pass
         assert self.input_data
         assert not self.input_data.sparse
-        in_data, x, seq_len = self._get_input()
+        in_data, x, seq_len, initial_state = self._get_input()
         if self._direction == -1:
             x = tf_compat.v1.reverse_sequence(x, seq_lengths=seq_len, batch_dim=1, seq_dim=0)
         if isinstance(cell, BaseRNNCell):
@@ -923,7 +962,7 @@ class RecLayer(_ConcatInputLayer):
                     self,
                     self.input_data,
                 )
-                y, final_state = cell(self.input_data.placeholder, self._initial_state)
+                y, final_state = cell(self.input_data.placeholder, initial_state)
                 in_data = None  # mark that we have not used this
             elif self._unroll:
                 assert self._max_seq_len is not None, "specify max_seq_len for unroll"
@@ -951,7 +990,7 @@ class RecLayer(_ConcatInputLayer):
                     dtype=tf.float32,
                     inputs=x,
                     sequence_length=seq_len,
-                    initial_state=self._initial_state,
+                    initial_state=initial_state,
                     scope=tf_compat.v1.get_variable_scope(),
                 )
                 y = tf.stack(y, axis=0)
@@ -967,25 +1006,22 @@ class RecLayer(_ConcatInputLayer):
                     time_major=True,
                     sequence_length=seq_len,
                     dtype=tf.float32,
-                    initial_state=self._initial_state,
+                    initial_state=initial_state,
                     scope=tf_compat.v1.get_variable_scope(),
                 )
-            self._last_hidden_state = final_state
         elif rnn_contrib and isinstance(
             cell, (rnn_contrib.FusedRNNCell, rnn_contrib.LSTMBlockWrapper)  # noqa # e.g. LSTMBlockFusedCell
         ):
             # Will get (time,batch,ydim).
             assert self._max_seq_len is None
-            y, final_state = cell(
-                inputs=x, sequence_length=seq_len, dtype=tf.float32, initial_state=self._initial_state
-            )
-            self._last_hidden_state = final_state
+            y, final_state = cell(inputs=x, sequence_length=seq_len, dtype=tf.float32, initial_state=initial_state)
         else:
             raise Exception("invalid type: %s" % type(cell))
         if self._direction == -1:
             y = tf_compat.v1.reverse_sequence(y, seq_lengths=seq_len, batch_dim=1, seq_dim=0)
         if in_data:
-            y = self._post_proc_output_cell_strict(y, in_data=in_data)
+            y, final_state = self._post_proc_output_cell_strict(y, in_data=in_data, final_state=final_state)
+        self._last_hidden_state = final_state
         return y
 
     @staticmethod
@@ -1079,7 +1115,7 @@ class RecLayer(_ConcatInputLayer):
         assert self._max_seq_len is None
         assert self.input_data
         assert not self.input_data.sparse
-        in_data, x, seq_len = self._get_input()
+        in_data, x, seq_len, initial_state = self._get_input()
         n_batch = tf.shape(seq_len)[0]
         if self._direction == -1:
             x = tf_compat.v1.reverse_sequence(x, seq_lengths=seq_len, batch_dim=1, seq_dim=0)
@@ -1124,10 +1160,11 @@ class RecLayer(_ConcatInputLayer):
             # It's like a fused cell, i.e. operates on the full sequence.
             input_h = tf.zeros((num_layers, n_batch, self.output.dim), dtype=tf.float32)
             input_c = tf.zeros((num_layers, n_batch, self.output.dim), dtype=tf.float32)
+            assert initial_state is None
             y, _ = cell(x, initial_state=(input_h, input_c))
         if self._direction == -1:
             y = tf_compat.v1.reverse_sequence(y, seq_lengths=seq_len, batch_dim=1, seq_dim=0)
-        y = self._post_proc_output_cell_strict(y, in_data=in_data)  # noqa
+        y, _ = self._post_proc_output_cell_strict(y, in_data=in_data, final_state=None)  # noqa
         return y  # noqa
 
     def _get_output_native_rec_op(self, cell):
@@ -1157,7 +1194,7 @@ class RecLayer(_ConcatInputLayer):
 
         assert self._max_seq_len is None
         assert self.input_data
-        in_data, x, seq_len = self._get_input()
+        in_data, x, seq_len, initial_state = self._get_input()
         if self._input_projection:
             if cell.does_input_projection:
                 # The cell get's x as-is. It will internally does the matrix mult and add the bias.
@@ -1191,13 +1228,13 @@ class RecLayer(_ConcatInputLayer):
         y, final_state = cell(
             inputs=x,
             index=index,
-            initial_state=self._initial_state,
+            initial_state=initial_state,
             recurrent_weights_initializer=self._rec_weights_initializer,
         )
-        self._last_hidden_state = final_state
         if not cell.does_direction_handling:
             y = directed(y, self._direction)
-        y = self._post_proc_output_cell_strict(y, in_data=in_data)
+        y, final_state = self._post_proc_output_cell_strict(y, in_data=in_data, final_state=final_state)
+        self._last_hidden_state = final_state
         return y
 
     def _get_output_subnet_unit(self, cell):
@@ -2643,7 +2680,7 @@ class _SubnetworkRecCell(object):
             if rec_layer.input_data:
                 with tf.name_scope("source_tensor_array"):
                     # noinspection PyProtectedMember
-                    source_data, source, input_seq_len = rec_layer._get_input(strict=False)  # (time,batch,..,dim)
+                    source_data, source, input_seq_len, _ = rec_layer._get_input(strict=False)  # (time,batch,..,dim)
                     source_shape = tf.shape(source, name="source_shape")
                     source_ta = tf.TensorArray(
                         name="source_ta",
@@ -5243,11 +5280,13 @@ class RnnCellLayer(_ConcatInputLayer):
         batch_dim,
         name,
         unit,
+        sources,
         n_out=None,
         out_dim=None,
         initial_state=None,
         unit_opts=None,
         rec_layer=None,
+        axis=None,
         **kwargs,
     ):
         """
@@ -5266,14 +5305,32 @@ class RnnCellLayer(_ConcatInputLayer):
         :param int|None n_out: out dim
         :param Dim|None out_dim: out dim
         :param str unit: cell name
+        :param list[LayerBase] sources:
         :param dict[str]|None unit_opts:
         :param LayerBase|str|int|float|None|list|tuple|namedtuple initial_state: see code
         :param RecLayer|LayerBase|None rec_layer: for the scope
+        :param Dim|None axis:
         :rtype: tf.Tensor|tuple[tf.Tensor]|namedtuple
         """
+        from returnn.tf.util.data import batch_dim as _batch_dim_tag
+
         if n_out is None:
             assert out_dim is not None and out_dim.dimension is not None
             n_out = out_dim.dimension
+        batch_dims = (batch_dim,)
+        if sources:
+            src = sources[0].output
+            if axis is None and src.have_time_axis():
+                axis = src.get_time_dim_tag()
+            src_dims = list(src.dim_tags)
+            if _batch_dim_tag in src_dims:
+                src_dims.remove(_batch_dim_tag)
+            if axis is not None and axis in src_dims:
+                src_dims.remove(axis)
+            if src.have_feature_axis():
+                src_dims.remove(src.feature_dim_or_sparse_dim)
+            # Remaining dims are also treated as additional batch dims.
+            batch_dims += tuple(dim.get_dim_value() for dim in src_dims)
         with tf.name_scope("rec_initial_state"):
             init_value = initial_state
             dim = cls.get_hidden_state_size(n_out=n_out, unit=unit, unit_opts=unit_opts, **kwargs)
@@ -5290,7 +5347,7 @@ class RnnCellLayer(_ConcatInputLayer):
                     assert len(init_value) == len(dim)
                     return [
                         cls.get_rec_initial_state_inner(
-                            initial_shape=(batch_dim, d), initial_state=v_, key=k, name=name, rec_layer=rec_layer
+                            initial_shape=batch_dims + (d,), initial_state=v_, key=k, name=name, rec_layer=rec_layer
                         )
                         for (d, v_, k) in zip(dim, init_value, keys)
                     ]
@@ -5298,7 +5355,7 @@ class RnnCellLayer(_ConcatInputLayer):
                 assert isinstance(init_value, (int, float, str, type(None)))
                 return [
                     cls.get_rec_initial_state_inner(
-                        initial_shape=(batch_dim, d), initial_state=init_value, key=k, name=name, rec_layer=rec_layer
+                        initial_shape=batch_dims + (d,), initial_state=init_value, key=k, name=name, rec_layer=rec_layer
                     )
                     for d, k in zip(dim, keys)
                 ]
@@ -5331,7 +5388,7 @@ class RnnCellLayer(_ConcatInputLayer):
                     assert len(init_value) == len(dim)
                     s = {
                         k: cls.get_rec_initial_state_inner(
-                            initial_shape=(batch_dim, d),
+                            initial_shape=batch_dims + (d,),
                             initial_state=init_value[k],
                             key=k,
                             name=name,
@@ -5350,7 +5407,11 @@ class RnnCellLayer(_ConcatInputLayer):
                 return type(dim)(s)
             elif isinstance(dim, int):
                 return cls.get_rec_initial_state_inner(
-                    initial_shape=(batch_dim, dim), initial_state=init_value, key=None, name=name, rec_layer=rec_layer
+                    initial_shape=batch_dims + (dim,),
+                    initial_state=init_value,
+                    key=None,
+                    name=name,
+                    rec_layer=rec_layer,
                 )
             else:
                 raise Exception("Did not expect hidden_state_size %r." % dim)

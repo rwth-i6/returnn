@@ -768,7 +768,7 @@ class RecSeqCellOp(object):
         """
         :param tf.Tensor inputs: shape (time,batch,n_input_dim)
         :param tf.Tensor index: shape (time,batch)
-        :param tf.Tensor|None initial_state: optional initial state of shape (batch,n_hidden)
+        :param tf.Tensor|object|None initial_state: optional initial state of shape (batch,n_hidden)
         :param ()->tf.Tensor recurrent_weights_initializer:
         :returns: output fused tensor shape (time,batch,n_hidden), last hidden state (batch,n_hidden)
         :rtype: (tf.Tensor, tf.Tensor)
@@ -945,7 +945,7 @@ class NativeLstm2(RecSeqCellOp):
         """
         :param tf.Tensor inputs: shape (time,batch,n_hidden)
         :param tf.Tensor index: shape (time,batch)
-        :param tf.Tensor|None initial_state: shape (batch,n_hidden)
+        :param tf.Tensor|object|None initial_state: shape (batch,n_hidden)
         :param ()->tf.Tensor recurrent_weights_initializer:
         :returns: shape (time,batch,n_hidden), shape (batch,n_hidden)
         :rtype: (tf.Tensor, tf.Tensor)
