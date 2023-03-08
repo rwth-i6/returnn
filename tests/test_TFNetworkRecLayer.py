@@ -5093,7 +5093,13 @@ def test_rec_subnet_simple_rnn():
 
 
 def check_reclayer_optimize_out(
-    subnet_layer_dict, other_subnet_layers=None, shared_base_net=None, rtol=1e-4, feat_dim=None, time_dim=None
+    subnet_layer_dict,
+    other_subnet_layers=None,
+    shared_base_net=None,
+    rtol=1e-4,
+    feat_dim=None,
+    time_dim=None,
+    train_flag: bool = True,
 ):
     """
     :param dict[str] subnet_layer_dict: opts for the output layer inside the rec-layer subnet
@@ -5102,6 +5108,7 @@ def check_reclayer_optimize_out(
     :param float rtol: for the final comparison check
     :param Dim|None feat_dim:
     :param Dim|None time_dim:
+    :param train_flag:
     """
     from returnn.tf.util.data import batch_dim
 
@@ -5141,7 +5148,7 @@ def check_reclayer_optimize_out(
     with make_scope() as session:
         print("Create non-optimized rec layer (with subnet layer moved out)")
         rec_layer_dict["optimize_move_layers_out"] = False
-        net1 = TFNetwork(config=config, train_flag=True, name="<root_not_opt>")
+        net1 = TFNetwork(config=config, train_flag=train_flag, name="<root_not_opt>")
         if shared_base_net:
             net1.construct_from_dict(shared_base_net)
             for key in shared_base_net:
@@ -5149,7 +5156,7 @@ def check_reclayer_optimize_out(
         net1.construct_from_dict({"output_not_opt": rec_layer_dict})
         rec_layer_dict["optimize_move_layers_out"] = True
         print("Create optimized rec layer (with subnet layer inside loop)")
-        net2 = TFNetwork(config=config, extern_data=net1.extern_data, train_flag=True, name="<root_opt>")
+        net2 = TFNetwork(config=config, extern_data=net1.extern_data, train_flag=train_flag, name="<root_opt>")
         if shared_base_net:
             for key in shared_base_net:
                 net2.layers[key] = net1.layers[key]
@@ -6041,6 +6048,7 @@ def test_reclayer_optimize_out_lstm4d_zoneout():
             "n_out": 7,
         },
         other_subnet_layers={"split": {"class": "split_dims", "from": "data:source", "axis": "F", "dims": (5, 3)}},
+        train_flag=False,
     )
 
 
