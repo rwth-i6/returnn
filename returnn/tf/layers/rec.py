@@ -5319,7 +5319,7 @@ class RnnCellLayer(_ConcatInputLayer):
             n_out = out_dim.dimension
         batch_dims = (batch_dim,)
         if sources:
-            src = sources[0].output
+            src = get_concat_sources_data_template(sources)
             if axis is None and src.have_time_axis():
                 axis = src.get_time_dim_tag()
             src_dims = list(src.dim_tags)
