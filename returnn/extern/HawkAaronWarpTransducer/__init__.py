@@ -106,6 +106,7 @@ def rnnt_loss(acts, labels, input_lengths, label_lengths, blank_label=0):
     """
     init_warprnnt()
     loss, _ = _tf_mod.warp_rnnt(acts, labels, input_lengths, label_lengths, blank_label)
+    loss.set_shape(acts.shape.as_list()[:1])
     return loss
 
 
