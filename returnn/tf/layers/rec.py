@@ -812,7 +812,13 @@ class RecLayer(_ConcatInputLayer):
             return new_state
 
         if self._initial_state is not None:
-            final_state = nest.map_structure(_map_state, final_state, self._initial_state)
+            final_state = nest.map_structure(
+                _map_state,
+                final_state,
+                self._initial_state,
+                # Initial state might just be a dict, while final state might be a named tuple (e.g. LSTMStateTuple).
+                check_types=False,
+            )
         return out_data.placeholder, final_state
 
     @classmethod
