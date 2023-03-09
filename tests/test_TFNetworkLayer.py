@@ -6794,6 +6794,25 @@ def test_LengthLayer_generic_dim():
         assert list(out_v) == list(in_size_v + 2)
 
 
+def test_LengthLayer_static_dim_sparse():
+    from returnn.tf.util.data import batch_dim, FeatureDim
+
+    feat_dim = FeatureDim("feat", 3)
+    config = Config({"extern_data": {"data": {"dim_tags": [batch_dim], "sparse_dim": feat_dim}}})
+    net_dict = {
+        "output": {"class": "length", "from": "data", "axis": feat_dim, "sparse": True},
+    }
+    with make_scope() as session:
+        net = TFNetwork(config=config)
+        net.construct_from_dict(net_dict)
+        out = net.get_default_output_layer().output
+        print("out:", out)
+        assert out.sparse
+        out_v = session.run(out.placeholder, feed_dict=make_feed_dict(net.extern_data))
+        assert out_v.shape == ()
+        assert out_v == feat_dim.dimension
+
+
 def test_RandIntLayer():
     with make_scope() as session:
         from returnn.tf.util.data import Dim

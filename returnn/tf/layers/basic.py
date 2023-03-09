@@ -2330,9 +2330,21 @@ class LengthLayer(LayerBase):
                 dim=None if sparse else NotSpecified,
             )
         if dim.is_batch_dim():
-            return Data(name="%s_batch_dim" % name, dim_tags=(), dtype=dtype, sparse=sparse)
-        if dim.dimension is not None:  # static
-            return Data(name="%s_static_dim" % name, dim_tags=(), dtype=dtype, sparse=sparse)
+            return Data(
+                name="%s_batch_dim" % name,
+                dim_tags=(),
+                dtype=dtype,
+                sparse=sparse,
+                dim=None if sparse else NotSpecified,
+            )
+        if not dim.is_dynamic():  # static
+            return Data(
+                name="%s_static_dim" % name,
+                dim_tags=(),
+                dtype=dtype,
+                sparse=sparse,
+                dim=None if sparse else NotSpecified,
+            )
         if not dim.dyn_size_ext:  # yet undefined
             return Data(
                 name="%s_length" % name,
