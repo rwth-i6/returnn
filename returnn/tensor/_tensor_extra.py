@@ -609,6 +609,15 @@ class _TensorMixin:
     def __hash__(self):
         return id(self)
 
+    def _sis_hash(self):
+        if self.raw_tensor is not None and hasattr(self.raw_tensor, "_sis_hash"):
+            # noinspection PyProtectedMember
+            return self.raw_tensor._sis_hash()
+
+        from sisyphus.hash import sis_hash_helper  # noqa
+
+        return sis_hash_helper(self.get_kwargs())
+
     def __getstate__(self):
         d = {k: getattr(self, k) for k in self.__slots__}
         d["_raw_tensor"] = None  # do not store the TF tensors
