@@ -1695,6 +1695,21 @@ class _TensorMixin:
         dims.update(self.dim_tags_set_implicit_only)
         return dims
 
+    def remaining_dims(self: _t.Tensor, remove: Optional[Union[Dim, Sequence[Dim]]] = None) -> List[Dim]:
+        """
+        :param remove: dims to remove from self.dims
+        :return: ordered batch dims
+        """
+        batch_dims = list(self._dims)
+        if not remove:
+            pass
+        elif isinstance(remove, Dim):
+            batch_dims.remove(remove)
+        else:
+            for remove_ in remove:
+                batch_dims.remove(remove_)
+        return batch_dims
+
     @property
     def ndim(self):
         """
