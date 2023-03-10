@@ -61,10 +61,27 @@ class Dim(_DimMixin):
         **kwargs,
     ):
         self.name = name or description
-        # dimension is the most common way to specify whether it is static or dynamic,
-        # and if dynamic, we can directly pass the dynamic sizes.
-        # It also infers reasonable defaults for capacity, if this is not set explicitly.
-        # This logic here also covers the old __init__ option dyn_size_ext.
+        self.set_sizes(dimension, capacity, dyn_size_ext)
+        self._extra = None
+
+        if kwargs:
+            self._handle_extra_kwargs(**kwargs)
+
+    def __repr__(self):
+        return "Dim{%s}" % self.short_repr()
+
+    def set_sizes(
+        self,
+        dimension: Optional[Union[int, _t.Tensor]],
+        capacity: Optional[int] = None,
+        dyn_size_ext: Optional[_t.Tensor] = None,
+    ):
+        """
+        dimension is the most common way to specify whether it is static or dynamic,
+        and if dynamic, we can directly pass the dynamic sizes.
+        It also infers reasonable defaults for capacity, if this is not set explicitly.
+        This logic here also covers the old __init__ option dyn_size_ext.
+        """
         if dimension is None:
             self.capacity = capacity
             self.size = None
@@ -77,13 +94,6 @@ class Dim(_DimMixin):
             self.capacity = capacity
             self.size = None
             self.dyn_size_ext = dimension.copy()
-        self._extra = None
-
-        if kwargs:
-            self._handle_extra_kwargs(**kwargs)
-
-    def __repr__(self):
-        return "Dim{%s}" % self.short_repr()
 
 
 # Global batch dim, which would usually be used the dataloader.
