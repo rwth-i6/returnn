@@ -261,6 +261,7 @@ jobs:
           - TEST=demos RETURNN_DISABLE_TF=1
           - TEST=PTDataset
           - TEST=torch_frontend
+          - TEST=torch_internal_frontend
 
     steps:
     - uses: actions/checkout@v3
