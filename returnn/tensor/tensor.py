@@ -143,5 +143,19 @@ class Tensor(_TensorMixin, Generic[RawTensorType]):
         self._raw_tensor = value
         self.sanity_check(assume_complete=False)
 
+    @property
+    def feature_dim(self) -> Optional[Dim]:
+        """
+        :return: self.dims[self.feature_dim_axis] or None
+        """
+        # first fast paths
+        if self._feature_dim_axis is None:
+            return None
+        if isinstance(self._feature_dim_axis, int):
+            return self._dims[self._feature_dim_axis]
+        if self.feature_dim_axis is None:
+            return None
+        return self._dims[self.feature_dim_axis]
+
 
 # dispatch table for frameworks for sanity_check
