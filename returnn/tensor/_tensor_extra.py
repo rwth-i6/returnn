@@ -1157,6 +1157,9 @@ class _TensorMixin:
                 v.feature_dim_axis = NotSpecified
                 if v.feature_dim_axis != data.feature_dim_axis:
                     v.feature_dim_axis = data.feature_dim_axis
+        else:
+            if v.feature_dim_axis != data.feature_dim_axis:
+                v.feature_dim_axis = data.feature_dim_axis
 
         # Reset sparse
         if self.sparse:
@@ -1807,8 +1810,8 @@ class _TensorMixin:
         assert value is NotSpecified or value is None or isinstance(value, int)
         if self.feature_dim_axis_or_unspecified == value:
             return
-        if self.version >= 2:
-            assert value is None or isinstance(value, int)
+        if self.version >= 2 and value is NotSpecified:
+            value = None
         if isinstance(value, int):
             assert 0 <= value < self.batch_ndim
         self._feature_dim_axis = value
