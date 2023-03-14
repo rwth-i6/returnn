@@ -56,7 +56,7 @@ class Tensor(_TensorMixin, Generic[RawTensorType]):
         dtype: Optional[str] = None,
         *,
         sparse_dim: Optional[Dim] = None,
-        feature_dim_axis: Optional[Union[int, NotSpecified]] = None,
+        feature_dim_axis: Optional[Union[int, NotSpecified]] = NotSpecified,
         raw_tensor: Optional[RawTensorType] = None,
         version: Optional[int] = None,
         **kwargs,
