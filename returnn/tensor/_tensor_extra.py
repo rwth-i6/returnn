@@ -27,7 +27,6 @@ class _TensorExtra:
         *,
         tensor: Tensor,
         time_dim_axis=NotSpecified,
-        feature_dim_axis=NotSpecified,
         available_for_inference=True,
         batch=None,
         beam=None,
@@ -37,7 +36,6 @@ class _TensorExtra:
         :param tensor:
         :param int|None|NotSpecified time_dim_axis: where we have the time dim axis, after we added the batch-dim.
             this is often 1. however, can be None if there is no time-dim.
-        :param int|None|NotSpecified feature_dim_axis: feature dim axis. by default, it's the last one
         :param bool available_for_inference: e.g. the extern data "classes" is usually not available for inference
         :param BatchInfo|None batch:
         :param SearchBeam|None beam: the batch-dim could be extended by a beam-size,
@@ -54,21 +52,10 @@ class _TensorExtra:
         self.control_flow_ctx = control_flow_ctx
         self.available_for_inference = available_for_inference
 
-        if feature_dim_axis is NotSpecified:
-            pass
-        elif feature_dim_axis is None:
-            pass
-        elif isinstance(feature_dim_axis, int):
-            assert self.tensor.version == 1
-            assert not self.tensor.sparse, "cannot have feature_dim_axis when sparse"
-            if feature_dim_axis < 0:
-                feature_dim_axis += self.tensor.batch_ndim
-            assert 0 <= feature_dim_axis < self.tensor.batch_ndim
-        else:
-            raise TypeError(f"unexpected feature_dim_axis type {type(feature_dim_axis)}")
-        self.feature_dim_axis = feature_dim_axis
         if time_dim_axis is NotSpecified:
-            pass
+            # just like feature_dim_axis, time_dim_axis is just None with version>=2, without any default behavior.
+            if self.tensor.version >= 2:
+                time_dim_axis = None
         elif time_dim_axis is None:
             pass
         elif isinstance(time_dim_axis, int):
@@ -89,6 +76,7 @@ class _TensorMixin:
     _dims: Tuple[Dim, ...]
     dtype: str
     sparse_dim: Optional[Dim]
+    _feature_dim_axis: Optional[Union[int, NotSpecified]]
     _raw_tensor: Optional[_t.RawTensorType]
     raw_tensor: Optional[_t.RawTensorType]
     version: int
@@ -1169,6 +1157,9 @@ class _TensorMixin:
                 v.feature_dim_axis = NotSpecified
                 if v.feature_dim_axis != data.feature_dim_axis:
                     v.feature_dim_axis = data.feature_dim_axis
+        else:
+            if v.feature_dim_axis != data.feature_dim_axis:
+                v.feature_dim_axis = data.feature_dim_axis
 
         # Reset sparse
         if self.sparse:
@@ -1807,10 +1798,8 @@ class _TensorMixin:
         :return: feature dim axis, counted with batch-dim
         :rtype: int|None
         """
-        if self.version >= 2:
-            return None
-        if self.feature_dim_axis_or_unspecified is not NotSpecified:
-            return self.feature_dim_axis_or_unspecified
+        if self._feature_dim_axis is not NotSpecified:
+            return self._feature_dim_axis
         return self._default_feature_dim_axis()
 
     @feature_dim_axis.setter
@@ -1821,12 +1810,11 @@ class _TensorMixin:
         assert value is NotSpecified or value is None or isinstance(value, int)
         if self.feature_dim_axis_or_unspecified == value:
             return
-        if self.version >= 2 and value in (None, NotSpecified):
-            return
-        assert self.version == 1, "feature_dim_axis is deprecated"
+        if self.version >= 2 and value is NotSpecified:
+            value = None
         if isinstance(value, int):
             assert 0 <= value < self.batch_ndim
-        self._make_extra().feature_dim_axis = value
+        self._feature_dim_axis = value
 
     @property
     def feature_dim_axis_or_unspecified(self):
@@ -1834,11 +1822,7 @@ class _TensorMixin:
         :return: feature dim axis, counted with batch-dim. could also be unspecified
         :rtype: int|None|NotSpecified
         """
-        if self.version >= 2:
-            return None
-        if not self._extra:
-            return NotSpecified
-        return self._extra.feature_dim_axis
+        return self._feature_dim_axis
 
     @property
     def time_dim_axis(self) -> Optional[int]:

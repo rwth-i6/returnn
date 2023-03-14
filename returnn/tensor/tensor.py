@@ -21,8 +21,9 @@ https://github.com/rwth-i6/returnn/issues/1165
 """
 
 from __future__ import annotations
-from typing import Optional, Sequence, Tuple, Generic, TypeVar
+from typing import Optional, Union, Sequence, Tuple, Generic, TypeVar
 
+from returnn.util.basic import NotSpecified
 from .dim import Dim
 from ._tensor_extra import _TensorExtra, _TensorMixin
 from . import _tensor_extra
@@ -37,12 +38,13 @@ class Tensor(_TensorMixin, Generic[RawTensorType]):
 
     size_dtype = "int32"
 
-    __slots__ = ("name", "_dims", "dtype", "sparse_dim", "_raw_tensor", "version", "_extra")
+    __slots__ = ("name", "_dims", "dtype", "sparse_dim", "_feature_dim_axis", "_raw_tensor", "version", "_extra")
 
     name: str
     _dims: Tuple[Dim, ...]
     dtype: str
     sparse_dim: Optional[Dim]
+    _feature_dim_axis: Optional[Union[int, NotSpecified]]
     _raw_tensor: Optional[RawTensorType]
     version: int
     _extra: Optional[_TensorExtra]
@@ -54,6 +56,7 @@ class Tensor(_TensorMixin, Generic[RawTensorType]):
         dtype: Optional[str] = None,
         *,
         sparse_dim: Optional[Dim] = None,
+        feature_dim_axis: Optional[Union[int, NotSpecified]] = NotSpecified,
         raw_tensor: Optional[RawTensorType] = None,
         version: Optional[int] = None,
         **kwargs,
@@ -81,7 +84,9 @@ class Tensor(_TensorMixin, Generic[RawTensorType]):
                 version = 2
         else:
             # old code
-            dims = _tensor_extra.infer_dim_tags(name=name, sparse_dim=sparse_dim, **kwargs)
+            dims = _tensor_extra.infer_dim_tags(
+                name=name, sparse_dim=sparse_dim, feature_dim_axis=feature_dim_axis, **kwargs
+            )
             if version is None:
                 version = 1
         if dtype is None:
@@ -95,6 +100,23 @@ class Tensor(_TensorMixin, Generic[RawTensorType]):
         self._raw_tensor = None  # assignment below
         self.version = version
         self._extra = None  # type: Optional[_TensorExtra]
+
+        if feature_dim_axis is NotSpecified:
+            # version == 1 leaves it as NotSpecified,
+            #   which enables some dynamic default behavior, like taking the last axis.
+            # version >= 2 avoids any default behavior, and just sets it to None.
+            if version >= 2:
+                feature_dim_axis = None
+        elif feature_dim_axis is None:
+            pass
+        elif isinstance(feature_dim_axis, int):
+            assert not self.sparse_dim, "cannot have feature_dim_axis when sparse"
+            if feature_dim_axis < 0:
+                feature_dim_axis += self.batch_ndim
+            assert 0 <= feature_dim_axis < self.batch_ndim
+        else:
+            raise TypeError(f"unexpected feature_dim_axis type {type(feature_dim_axis)}")
+        self._feature_dim_axis = feature_dim_axis
 
         if kwargs:
             self._handle_extra_kwargs(**kwargs)
@@ -122,6 +144,20 @@ class Tensor(_TensorMixin, Generic[RawTensorType]):
         """
         self._raw_tensor = value
         self.sanity_check(assume_complete=False)
+
+    @property
+    def feature_dim(self) -> Optional[Dim]:
+        """
+        :return: self.dims[self.feature_dim_axis] or None
+        """
+        # first fast paths
+        if self._feature_dim_axis is None:
+            return None
+        if isinstance(self._feature_dim_axis, int):
+            return self._dims[self._feature_dim_axis]
+        if self.feature_dim_axis is None:
+            return None
+        return self._dims[self.feature_dim_axis]
 
 
 # dispatch table for frameworks for sanity_check
