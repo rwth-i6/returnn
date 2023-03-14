@@ -84,7 +84,9 @@ class Tensor(_TensorMixin, Generic[RawTensorType]):
                 version = 2
         else:
             # old code
-            dims = _tensor_extra.infer_dim_tags(name=name, sparse_dim=sparse_dim, **kwargs)
+            dims = _tensor_extra.infer_dim_tags(
+                name=name, sparse_dim=sparse_dim, feature_dim_axis=feature_dim_axis, **kwargs
+            )
             if version is None:
                 version = 1
         if dtype is None:
