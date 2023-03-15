@@ -8,8 +8,6 @@ import numpy
 
 from returnn import frontend as _global_rf
 from returnn.frontend_api import Frontend
-
-# noinspection PyProtectedMember
 from returnn._internal_frontend_api import InternalFrontend
 from returnn.tensor import Tensor, Dim
 
