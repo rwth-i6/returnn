@@ -30,23 +30,31 @@ class Frontend(Generic[T]):
     and all functions are staticmethod (or classmethod).
     """
 
+    # class attribs set by derived classes
     RawTensorType: Type[T]
     is_tensorflow: bool = False  # whether this framework uses TensorFlow
     _internal_frontend: Type[InternalFrontend[T]]
+
+    # class private attribs
+    _default_int_dtype: str = "int32"
+    _default_float_dtype: str = "float32"
+
+    def __init__(self):
+        raise Exception("do not instantiate this class")
 
     @classmethod
     def get_default_int_dtype(cls) -> str:
         """
         :return: default dtype for int
         """
-        return cls._internal_frontend.default_int_dtype
+        return cls._default_int_dtype
 
     @classmethod
     def get_default_float_dtype(cls) -> str:
         """
         :return: default dtype for float
         """
-        return cls._internal_frontend.default_float_dtype
+        return cls._default_float_dtype
 
     @staticmethod
     def convert_to_tensor(value: Union[Tensor, T, RawTensorTypes]) -> Tensor[T]:
@@ -231,7 +239,8 @@ class Frontend(Generic[T]):
 # such that any reference to this can be updated.
 # This is exposed to the user as `returnn.frontend`.
 # The __class__ assignment is done in `select_engine`.
-global_frontend = Frontend()
+# Use object.__new__ because we disallow creating instances of Frontend.
+global_frontend = object.__new__(Frontend)
 
 _dispatch_table = {}  # type: Dict[Type, Type[Frontend]]
 

@@ -19,8 +19,6 @@ class InternalFrontend(Generic[T]):
     """
 
     RawTensorType: Type[T]
-    default_int_dtype: str = "int32"
-    default_float_dtype: str = "float32"
 
     @staticmethod
     def get_dtype_name_raw(raw_tensor: T) -> str:
