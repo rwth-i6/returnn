@@ -270,7 +270,9 @@ def test_combine_truediv_int_tensors():
     # Until type promotion logic is implemented, we don't allow this.
     with pytest.raises(ValueError):
         a / b
+    with pytest.raises(ValueError):
         rf.combine(a, "/", b)
+    with pytest.raises(ValueError):
         rf.combine(a, "truediv", b)
 
 
