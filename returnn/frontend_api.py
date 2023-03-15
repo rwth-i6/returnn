@@ -56,6 +56,20 @@ class Frontend(Generic[T]):
         """
         raise NotImplementedError
 
+    # noinspection PyNestedDecorators
+    @typing.overload
+    @classmethod
+    def compare(
+        cls,
+        a: Tensor,
+        kind: str,
+        b: Tensor,
+        *,
+        allow_broadcast_all_sources: Optional[bool] = None,
+        dim_order: Optional[Sequence[Dim]] = None,
+    ) -> Tensor:
+        """compare with two tensors"""
+
     @classmethod
     def compare(
         cls,
