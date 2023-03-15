@@ -20,6 +20,8 @@ class TorchInternalFrontend(InternalFrontend[torch.Tensor]):
     Internal frontend for PyTorch frontend.
     """
 
+    RawTensorType = torch.Tensor
+
     @staticmethod
     def get_dtype_name_raw(raw_tensor: torch.Tensor) -> str:
         """

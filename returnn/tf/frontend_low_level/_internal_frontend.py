@@ -15,10 +15,13 @@ from returnn.tf import compat as tf_compat
 _TT = Tensor[tf.Tensor]
 
 
+# noinspection PyAbstractClass
 class TFInternalFrontend(InternalFrontend[tf.Tensor]):
     """
     Internal frontend for TF low-level frontend.
     """
+
+    RawTensorType = tf.Tensor
 
     @staticmethod
     def get_dtype_name_raw(raw_tensor: tf.Tensor) -> str:

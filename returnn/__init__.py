@@ -12,7 +12,11 @@ which used our old-style module names, like ``import TFUtil`` or ``import return
 import os as _os
 
 from .__setup__ import get_version_str as _get_version_str
-from . import frontend_api as _frontend_api
+
+# `returnn.frontend` is a reference to `returnn.frontend_api.global_frontend`.
+# The order of the imports is important here to properly handle partially initialized modules.
+import returnn._internal_frontend_api
+import returnn.frontend_api as _frontend_api
 
 __long_version__ = _get_version_str(
     fallback="1.0.0+unknown", long=True, verbose_error=True

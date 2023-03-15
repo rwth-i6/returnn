@@ -15,10 +15,10 @@ if TYPE_CHECKING:
 
 from returnn.util.basic import NotSpecified
 from .dim import Dim, batch_dim, VerifyOutShapeException
-from . import tensor as _t
-from . import marked_dim as _m
-from returnn import frontend_api as _frontend_api
-from returnn import _internal_frontend_api
+import returnn.tensor.tensor as _t
+import returnn.tensor.marked_dim as _m
+import returnn.frontend_api as _frontend_api
+import returnn._internal_frontend_api as _internal_frontend_api
 
 
 class _TensorExtra:

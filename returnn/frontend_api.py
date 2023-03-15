@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Optional, TypeVar, Generic, Dict, Type, Union,
 import numpy
 
 from returnn.util.basic import NotSpecified
-from returnn import tensor as _t
+import returnn.tensor as _t
 
 if TYPE_CHECKING:
     from returnn.tensor import Tensor, Dim
