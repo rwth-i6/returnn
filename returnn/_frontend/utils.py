@@ -108,4 +108,6 @@ def bin_op_out_template(
     if dim_order:
         all_dims.sort(key=lambda d: dim_order.index(d) if d in dim_order else len(dim_order))
     out = Tensor(name, dims=all_dims, dtype=dtype)
+    a = a.copy_compatible_to(out, check_dtype=False, check_sparse=False)
+    b = b.copy_compatible_to(out, check_dtype=False, check_sparse=False)
     return out, a, b
