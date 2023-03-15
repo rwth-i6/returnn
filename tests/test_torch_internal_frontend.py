@@ -268,7 +268,7 @@ def test_combine_truediv_int_tensors():
     b = Tensor(name="b", raw_tensor=b_raw, dims=[feature_dim], dtype="int64")
 
     # Until type promotion logic is implemented, we don't allow this.
-    with pytest.raises(AssertionError):
+    with pytest.raises(ValueError):
         a / b
         rf.combine(a, "/", b)
         rf.combine(a, "truediv", b)
