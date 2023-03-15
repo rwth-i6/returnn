@@ -29,32 +29,6 @@ class InternalFrontend(Generic[T]):
         """
         raise NotImplementedError
 
-    @classmethod
-    def get_dtype_name(cls, x: Union[T, Tensor[T], int, float]) -> str:
-        """
-        :param x: tensor
-        :return: dtype of tensor, as string
-        """
-        if isinstance(x, cls.RawTensorType):
-            return cls.get_dtype_name_raw(x)
-        elif isinstance(x, Tensor):
-            return x.dtype
-        elif isinstance(x, int):
-            return cls.default_int_dtype
-        elif isinstance(x, float):
-            return cls.default_float_dtype
-        else:
-            raise TypeError(f"unexpected type {type(x)}")
-
-    @classmethod
-    def is_int(cls, x: Union[T, Tensor[T], int, float]) -> bool:
-        """
-        :param x:
-        :return: whether the dtype is int
-        """
-        dtype = cls.get_dtype_name(x)
-        return dtype.startswith("int") or dtype.startswith("uint")
-
     @staticmethod
     def get_ndim_raw(raw_tensor: T) -> int:
         """

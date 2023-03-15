@@ -12,7 +12,6 @@ from typing import TYPE_CHECKING, Optional, TypeVar, Generic, Dict, Type, Union,
 import numpy
 
 from returnn.util.basic import NotSpecified
-import returnn.tensor as _t
 
 if TYPE_CHECKING:
     from returnn.tensor import Tensor, Dim
@@ -35,6 +34,20 @@ class Frontend(Generic[T]):
     is_tensorflow: bool = False  # whether this framework uses TensorFlow
     _internal_frontend: Type[InternalFrontend[T]]
 
+    @classmethod
+    def get_default_int_dtype(cls) -> str:
+        """
+        :return: default dtype for int
+        """
+        return cls._internal_frontend.default_int_dtype
+
+    @classmethod
+    def get_default_float_dtype(cls) -> str:
+        """
+        :return: default dtype for float
+        """
+        return cls._internal_frontend.default_float_dtype
+
     @staticmethod
     def convert_to_tensor(value: Union[Tensor, T, RawTensorTypes]) -> Tensor[T]:
         """
@@ -42,21 +55,6 @@ class Frontend(Generic[T]):
         :return: tensor
         """
         raise NotImplementedError
-
-    @staticmethod
-    def _tensor_op_sanity_check(t1: Tensor, t2: Tensor):
-        """
-        Performs basic checks common to all _TensorMixin binary operations,
-        like _TensorMixin.__eq__ or _TensorMixin.__add__.
-
-        :param t1:
-        :param t2:
-        """
-        assert isinstance(t1, _t.Tensor) and isinstance(
-            t2, _t.Tensor
-        ), "The two operands of a binary operation must be of class Tensor."
-        assert t1.raw_frontend == t2.raw_frontend, "Cannot combine tensors from two different frontends, e.g. TF and PT"
-        assert t1.dtype == t2.dtype, "For now only operations with Tensors of the same dtypes are supported."
 
     @classmethod
     def compare(
@@ -78,27 +76,17 @@ class Frontend(Generic[T]):
             Not all the dims of a and b need to be specified here, and there could also be other dims in the dim_order.
         :return: element-wise comparison of a and b
         """
-        a = cls.convert_to_tensor(a)
-        b = cls.convert_to_tensor(b)
-        cls._tensor_op_sanity_check(a, b)
-        all_dims = []
-        for dim in a.dims + b.dims:
-            if dim not in all_dims:
-                all_dims.append(dim)
-        if all(set(x.dims) != set(all_dims) for x in (a, b)):
-            if allow_broadcast_all_sources is False:
-                raise ValueError(f"compare: sources {a!r} {b!r} not allowed with allow_broadcast_all_sources=False")
-            elif allow_broadcast_all_sources is None:
-                raise ValueError(f"compare: sources {a!r} {b!r} require explicit allow_broadcast_all_sources=True")
-            elif allow_broadcast_all_sources is True:
-                pass
-            else:
-                raise TypeError(f"invalid type for allow_broadcast_all_sources: {type(allow_broadcast_all_sources)}")
-        if dim_order:
-            all_dims.sort(key=lambda d: dim_order.index(d) if d in dim_order else len(dim_order))
-        out = _t.Tensor("compare", dims=all_dims, dtype="bool")
-        a = a.copy_compatible_to(out, check_sparse=False, check_dtype=False)
-        b = b.copy_compatible_to(out, check_sparse=False, check_dtype=False)
+        from ._frontend import utils
+
+        out, a, b = utils.bin_op_out_template(
+            cls,
+            a,
+            b,
+            name="compare",
+            dtype="bool",
+            allow_broadcast_all_sources=allow_broadcast_all_sources,
+            dim_order=dim_order,
+        )
         out.raw_tensor = cls._internal_frontend.compare_raw(a.raw_tensor, kind, b.raw_tensor)
         return out
 
@@ -137,6 +125,8 @@ class Frontend(Generic[T]):
             Not all the dims of a and b need to be specified here, and there could also be other dims in the dim_order.
         :return: element-wise combination of a and b
         """
+        from ._frontend import utils
+
         if isinstance(b, (int, float, bool, numpy.number)):
             if b == 1 and kind in {"truediv", "/", "floordiv", "//", "pow", "**", "mul", "*"}:
                 return a
@@ -157,34 +147,20 @@ class Frontend(Generic[T]):
                 return b
         # Truediv checks for int/int division
         if kind in {"truediv", "/"}:
-            if cls._internal_frontend.is_int(a) and cls._internal_frontend.is_int(b):
+            if utils.is_int(cls, a) and utils.is_int(cls, b):
                 raise ValueError(
                     "Dividing a Tensor of type int by an integer is disallowed. Please convert the Tensor to float."
                 )
-        a = cls.convert_to_tensor(a)
-        b = cls.convert_to_tensor(b)
-        cls._tensor_op_sanity_check(a, b)
-        all_dims = []
-        for dim in a.dims + b.dims:
-            if dim not in all_dims:
-                all_dims.append(dim)
-        if all(set(x.dims) != set(all_dims) for x in (a, b)):
-            if allow_broadcast_all_sources is False:
-                raise ValueError(f"combine: sources {a!r} {b!r} not allowed with allow_broadcast_all_sources=False")
-            elif allow_broadcast_all_sources is None:
-                raise ValueError(f"combine: sources {a!r} {b!r} require explicit allow_broadcast_all_sources=True")
-            elif allow_broadcast_all_sources is True:
-                pass
-            else:
-                raise TypeError(f"invalid type for allow_broadcast_all_sources: {type(allow_broadcast_all_sources)}")
-        if dim_order:
-            all_dims.sort(key=lambda d: dim_order.index(d) if d in dim_order else len(dim_order))
-        assert a.dtype == b.dtype, "For now only operations with Tensors of the same dtypes are supported."
-        out = _t.Tensor("combine", dims=all_dims, dtype=a.dtype)
-        a = a.copy_compatible_to(out, check_sparse=False, check_dtype=False)
-        b = b.copy_compatible_to(out, check_sparse=False, check_dtype=False)
+        out, a, b = utils.bin_op_out_template(
+            cls,
+            a,
+            b,
+            name="combine",
+            dtype=a.dtype,
+            allow_broadcast_all_sources=allow_broadcast_all_sources,
+            dim_order=dim_order,
+        )
         out.raw_tensor = cls._internal_frontend.combine_raw(a.raw_tensor, kind, b.raw_tensor)
-
         return out
 
     @staticmethod
