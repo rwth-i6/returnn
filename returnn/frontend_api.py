@@ -7,6 +7,7 @@ The convention for the user is to do::
 """
 
 from __future__ import annotations
+import typing
 from typing import TYPE_CHECKING, Optional, TypeVar, Generic, Dict, Type, Union, Sequence
 import numpy
 
@@ -101,6 +102,20 @@ class Frontend(Generic[T]):
         out.raw_tensor = cls._internal_frontend.compare_raw(a.raw_tensor, kind, b.raw_tensor)
         return out
 
+    # noinspection PyNestedDecorators
+    @typing.overload
+    @classmethod
+    def combine(
+        cls,
+        a: Tensor,
+        kind: str,
+        b: Tensor,
+        *,
+        allow_broadcast_all_sources: Optional[bool] = None,
+        dim_order: Optional[Sequence[Dim]] = None,
+    ) -> Tensor:
+        """combine with two tensors"""
+
     @classmethod
     def combine(
         cls,
@@ -110,7 +125,7 @@ class Frontend(Generic[T]):
         *,
         allow_broadcast_all_sources: Optional[bool] = None,
         dim_order: Optional[Sequence[Dim]] = None,
-    ) -> Tensor:
+    ) -> Union[Tensor, RawTensorTypes]:
         """
         :param a:
         :param kind: "add"|"+", "sub"|"-", "mul"|"*", "truediv"|"/", "floordiv"|"//", "mod"|"%", "pow"|"**",
@@ -122,14 +137,30 @@ class Frontend(Generic[T]):
             Not all the dims of a and b need to be specified here, and there could also be other dims in the dim_order.
         :return: element-wise combination of a and b
         """
+        if isinstance(b, (int, float, bool, numpy.number)):
+            if b == 1 and kind in {"truediv", "/", "floordiv", "//", "pow", "**", "mul", "*"}:
+                return a
+            if b == -1 and kind in {"truediv", "/", "floordiv", "//", "pow", "**", "mul", "*"}:
+                return -a
+            if b == 0 and kind in {"add", "+", "sub", "-"}:
+                return a
+            if b and kind in {"logical_and", "logical_or"}:
+                return a
+        if isinstance(a, (int, float, bool, numpy.number)):
+            if a == 1 and kind in {"pow", "**"}:
+                return a
+            if a == 1 and kind in {"mul", "*"}:
+                return b
+            if a == 0 and kind in {"add", "+", "sub", "-"}:
+                return b
+            if a and kind in {"logical_and", "logical_or"}:
+                return b
         # Truediv checks for int/int division
         if kind in {"truediv", "/"}:
-            if isinstance(b, (int, float, numpy.number)) and b == 1:
-                return a
-            elif isinstance(b, (int, float, numpy.number)):
-                assert not a.dtype.startswith(
-                    "int"
-                ), "Dividing a Tensor of type int by an integer is disallowed. Please convert the Tensor to float."
+            if cls._internal_frontend.is_int(a) and cls._internal_frontend.is_int(b):
+                raise ValueError(
+                    "Dividing a Tensor of type int by an integer is disallowed. Please convert the Tensor to float."
+                )
         a = cls.convert_to_tensor(a)
         b = cls.convert_to_tensor(b)
         cls._tensor_op_sanity_check(a, b)
