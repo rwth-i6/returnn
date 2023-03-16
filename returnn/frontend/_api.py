@@ -20,6 +20,7 @@ if TYPE_CHECKING:
 RawTensorTypes = Union[int, float, complex, numpy.number, numpy.ndarray, bool, str]
 
 T = TypeVar("T")  # tf.Tensor, torch.Tensor or so
+T2 = TypeVar("T2")
 
 
 class Frontend(Generic[T]):
@@ -246,7 +247,7 @@ class Frontend(Generic[T]):
         """
         # Default implementation for eager-based frameworks.
         assert all(dim is not None for dim in shape)
-        rf = get_frontend_by_tensor_type(type(raw_tensor))
+        rf = get_frontend_by_raw_tensor_type(type(raw_tensor))
         existing_shape = rf.get_known_shape_raw(raw_tensor)
         assert all(dim is not None for dim in existing_shape)
         assert shape == existing_shape
@@ -565,7 +566,7 @@ def select_frontend_returnn_layers_tf():
     """
     import tensorflow as tf
 
-    frontend = get_frontend_by_tensor_type(tf.Tensor)  # side-effect: register it
+    frontend = get_frontend_by_raw_tensor_type(tf.Tensor)  # side-effect: register it
     global_frontend.__class__ = frontend
 
     # TODO returnn layer type, register_frontend_by_tensor_type for that
@@ -578,11 +579,22 @@ def select_frontend_torch():
     """
     import torch
 
-    frontend = get_frontend_by_tensor_type(torch.Tensor)  # side-effect: register it
+    frontend = get_frontend_by_raw_tensor_type(torch.Tensor)  # side-effect: register it
     global_frontend.__class__ = frontend
 
 
-def get_frontend_by_tensor_type(tensor_type: Type[T]) -> Type[Frontend[T]]:
+def get_frontend_by_tensor(tensor: Tensor, *, fallback: Optional[T2] = None) -> Union[Type[Frontend[T]], T2]:
+    """
+    :param tensor:
+    :param fallback:
+    """
+    if fallback and tensor.raw_tensor is None:
+        return fallback
+    assert tensor.raw_tensor is not None
+    return get_frontend_by_raw_tensor_type(type(tensor.raw_tensor))
+
+
+def get_frontend_by_raw_tensor_type(tensor_type: Type[T]) -> Union[Type[Frontend[T]]]:
     """
     :param tensor_type:
     """

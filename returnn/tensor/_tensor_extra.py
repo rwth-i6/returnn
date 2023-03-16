@@ -230,7 +230,7 @@ class _TensorMixin(_TensorMixinBase):
         """
         if self._raw_tensor is None:
             return None
-        return _frontend_api.get_frontend_by_tensor_type(type(self._raw_tensor))
+        return _frontend_api.get_frontend_by_raw_tensor_type(type(self._raw_tensor))
 
     @property
     def _raw_internal_frontend(self) -> Optional[Type[_internal_frontend_api.InternalFrontend]]:

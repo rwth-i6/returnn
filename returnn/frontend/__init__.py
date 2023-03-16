@@ -7,3 +7,9 @@ The convention for the user is to do::
 
     from returnn import frontend as rf
 """
+
+from .array_ import *
+from .dims import *
+from .dot import *
+from .outputs import *
+from .reduce import *
