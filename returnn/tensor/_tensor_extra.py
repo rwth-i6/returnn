@@ -3210,6 +3210,56 @@ class _TensorMixin:
             return True
         return self._raw_internal_frontend.is_valid_in_current_graph(self)
 
+    def mark_as_loss(
+        self: Tensor,
+        name: str,
+        *,
+        scale: Optional[float] = 1.0,
+        as_error: bool = False,
+        use_normalized_loss: bool = False,
+        use_flatten_frames: bool = True,
+        custom_inv_norm_factor: Optional[Tensor] = None,
+    ) -> None:
+        """
+        Mark this as a loss.
+        Please refer to :func:`Frontend.mark_as_loss` for more details.
+
+        :param name:
+        :param scale:
+        :param as_error:
+        :param use_normalized_loss:
+        :param use_flatten_frames:
+        :param custom_inv_norm_factor:
+        """
+        self.raw_frontend.mark_as_loss(
+            loss=self,
+            name=name,
+            scale=scale,
+            as_error=as_error,
+            use_normalized_loss=use_normalized_loss,
+            use_flatten_frames=use_flatten_frames,
+            custom_inv_norm_factor=custom_inv_norm_factor,
+        )
+
+    def mark_as_output(self: Tensor, name: str, *, shape: Optional[Sequence[Dim]] = None) -> None:
+        """
+        Mark this as an output.
+        See :func:`Frontend.mark_as_output` for more details.
+
+        :param name:
+        :param shape:
+        """
+        self.raw_frontend.mark_as_output(self, name=name, shape=shape)
+
+    def mark_as_default_output(self: Tensor, *, shape: Optional[Sequence[Dim]] = None) -> None:
+        """
+        Mark this as the default output.
+        See :func:`Frontend.mark_as_default_output` for more details.
+
+        :param shape:
+        """
+        self.raw_frontend.mark_as_default_output(self, shape=shape)
+
 
 def infer_sparse_dim(
     *,
