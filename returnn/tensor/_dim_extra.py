@@ -4,7 +4,7 @@ or just rarely used attribs, such that we can save memory for the common case.
 """
 
 from __future__ import annotations
-from typing import TYPE_CHECKING, Optional, Union, Tuple, Dict
+from typing import TYPE_CHECKING, Optional, Union, Tuple, Dict, List
 
 from returnn.util.basic import Entity
 from returnn.util import basic as util
@@ -757,7 +757,7 @@ class _DimMixin:
             return True
         if not self._extra:
             return False
-        if util.TensorRef(x) in self._extra.dyn_size_same:
+        if util.RefIdEq(x) in self._extra.dyn_size_same:
             return True
         return False
 
@@ -794,10 +794,10 @@ class _DimMixin:
             new_dim_tag.set_tag_on_size_tensor(x, batch=batch)
             return new_dim_tag
         if self.dyn_size is not None and self.dyn_size is not x:
-            if self._extra and util.TensorRef(x) in self._extra.dyn_size_same:
+            if self._extra and util.RefIdEq(x) in self._extra.dyn_size_same:
                 pass  # ok, pass on
             elif same_as_before:
-                self._make_extra().dyn_size_same.add(util.TensorRef(x))
+                self._make_extra().dyn_size_same.add(util.RefIdEq(x))
                 # And now pass on.
             else:
                 assert self.batch and batch
@@ -1448,14 +1448,14 @@ class _DimMixin:
     @classmethod
     def get_all_dimension_tags(cls, data_list, is_equal_opts=None, unique_separate_axes=True):
         """
-        :param list[Data] data_list:
+        :param list[_t.Tensor] data_list:
         :param dict[str]|None is_equal_opts: passed to Dim.is_equal
         :param bool unique_separate_axes: e.g. data_list=[Data with shape (B,5,5,10)] results in 4 dim tags, not 3.
         :return: list of dimension tags, dict for data -> list of dimension tags (for each axis)
-        :rtype: (list[Dim], dict[Data, list[Dim]])
+        :rtype: (list[Dim], util.DictRefKeys[_t.Tensor, list[Dim]])
         """
         tags = []
-        data_axes_dict = {}
+        data_axes_dict = util.DictRefKeys()  # type: util.DictRefKeys[_t.Tensor, List[Dim]]
         for data in data_list:
             data_axes_dict[data] = []
             existing_tag_collection_for_data = list(tags) if unique_separate_axes else tags
