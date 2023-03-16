@@ -12,8 +12,7 @@ from returnn.util.basic import NotSpecified
 
 if TYPE_CHECKING:
     from returnn.tensor import Tensor, Dim
-
-RawTensorTypes = Union[int, float, complex, numpy.number, numpy.ndarray, bool, str]
+    from .types import RawTensorTypes
 
 T = TypeVar("T")  # tf.Tensor, torch.Tensor or so
 T2 = TypeVar("T2")

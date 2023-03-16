@@ -13,13 +13,14 @@ if TYPE_CHECKING:
 
     from .tensor import Tensor  # just for type hints; otherwise use _t.Tensor
 
+    # noinspection PyProtectedMember
+    import returnn.frontend._backend as _backend_api
+
 from returnn.util.basic import NotSpecified
 from .dim import Dim, batch_dim, VerifyOutShapeException
 import returnn.tensor.tensor as _t
 import returnn.tensor.marked_dim as _m
 
-# noinspection PyProtectedMember
-import returnn.frontend._backend as _backend_api
 from ._tensor_mixin_base import _TensorMixinBase
 
 
@@ -229,6 +230,9 @@ class _TensorMixin(_TensorMixinBase):
         """
         :return: the backend for the raw tensor
         """
+        # noinspection PyProtectedMember
+        import returnn.frontend._backend as _backend_api
+
         if self._raw_tensor is None:
             return None
         return _backend_api.get_backend_by_raw_tensor_type(type(self._raw_tensor))
