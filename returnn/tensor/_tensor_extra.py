@@ -14,7 +14,7 @@ if TYPE_CHECKING:
     from .tensor import Tensor  # just for type hints; otherwise use _t.Tensor
 
     # noinspection PyProtectedMember
-    import returnn.frontend._backend as _backend_api
+    from returnn.frontend._backend import Backend
 
 from returnn.util.basic import NotSpecified
 from .dim import Dim, batch_dim, VerifyOutShapeException
@@ -226,11 +226,11 @@ class _TensorMixin(_TensorMixinBase):
         self.sanity_check(assume_complete=False)  # TODO still needed?
 
     @property
-    def _raw_backend(self) -> Optional[Type[_backend_api.Backend]]:
+    def _raw_backend(self) -> Optional[Type[Backend]]:
         """
         :return: the backend for the raw tensor
         """
-        # noinspection PyProtectedMember
+        # noinspection PyProtectedMember,PyShadowingNames
         import returnn.frontend._backend as _backend_api
 
         if self._raw_tensor is None:
