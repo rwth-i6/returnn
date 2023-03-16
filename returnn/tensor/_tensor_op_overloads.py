@@ -12,7 +12,7 @@ import returnn.frontend_api as _frontend_api
 from ._tensor_mixin_base import _TensorMixinBase
 
 
-class _TensorBinOpsMixin(_TensorMixinBase):
+class _TensorOpOverloadsMixin(_TensorMixinBase):
 
     # _TensorMixin.__eq__ is disabled as per the following error in some TF tests:
     # AssertionError: unhashable type: 'Tensor'.
