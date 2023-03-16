@@ -26,12 +26,13 @@ from typing import Optional, Union, Sequence, Tuple, Generic, TypeVar, Set
 from returnn.util.basic import NotSpecified
 from .dim import Dim
 from ._tensor_extra import _TensorExtra, _TensorMixin
+from ._tensor_bin_ops import _TensorBinOpsMixin
 import returnn.tensor._tensor_extra as _tensor_extra
 
 RawTensorType = TypeVar("RawTensorType")  # e.g. torch.Tensor, tf.Tensor, numpy.ndarray, ...
 
 
-class Tensor(_TensorMixin, Generic[RawTensorType]):
+class Tensor(_TensorMixin, _TensorBinOpsMixin, Generic[RawTensorType]):
     """
     Represents a tensor, in a frame-agnostic way. See the module docstring.
     """
