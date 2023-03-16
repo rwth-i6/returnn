@@ -10,7 +10,8 @@ from returnn.tensor import Tensor, Dim
 from returnn.util.basic import prod
 
 # noinspection PyProtectedMember
-from returnn.frontend._backend import Backend, RawTensorTypes
+from returnn.frontend._backend import Backend
+from returnn.frontend import RawTensorTypes
 
 
 _TT = Tensor[torch.Tensor]

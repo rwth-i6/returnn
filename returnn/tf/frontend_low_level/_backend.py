@@ -13,7 +13,8 @@ from returnn.tensor import Tensor, Dim
 from returnn.tf.util import basic as tf_util
 
 # noinspection PyProtectedMember
-from returnn.frontend._backend import Backend, RawTensorTypes
+from returnn.frontend._backend import Backend
+from returnn.frontend import RawTensorTypes
 
 _TT = Tensor[tf.Tensor]
 

@@ -12,7 +12,7 @@ from returnn.util.basic import NotSpecified
 
 if TYPE_CHECKING:
     from returnn.tensor import Tensor, Dim
-    from .types import RawTensorTypes
+    from .types import RawTensorTypes as _RawTensorTypes
 
 T = TypeVar("T")  # tf.Tensor, torch.Tensor or so
 T2 = TypeVar("T2")
@@ -79,9 +79,9 @@ class Backend(Generic[T]):
     @classmethod
     def compare(
         cls,
-        a: Union[Tensor, RawTensorTypes],
+        a: Union[Tensor, _RawTensorTypes],
         kind: str,
-        b: Union[Tensor, RawTensorTypes],
+        b: Union[Tensor, _RawTensorTypes],
         *,
         allow_broadcast_all_sources: Optional[bool] = None,
         dim_order: Optional[Sequence[Dim]] = None,
@@ -127,13 +127,13 @@ class Backend(Generic[T]):
     @classmethod
     def combine(
         cls,
-        a: Union[Tensor, RawTensorTypes],
+        a: Union[Tensor, _RawTensorTypes],
         kind: str,
-        b: Union[Tensor, RawTensorTypes],
+        b: Union[Tensor, _RawTensorTypes],
         *,
         allow_broadcast_all_sources: Optional[bool] = None,
         dim_order: Optional[Sequence[Dim]] = None,
-    ) -> Union[Tensor, RawTensorTypes]:
+    ) -> Union[Tensor, _RawTensorTypes]:
         """
         :param a:
         :param kind: "add"|"+", "sub"|"-", "mul"|"*", "truediv"|"/", "floordiv"|"//", "mod"|"%", "pow"|"**",
@@ -488,7 +488,7 @@ class Backend(Generic[T]):
         raise NotImplementedError
 
     @staticmethod
-    def convert_to_tensor(value: Union[Tensor, T, RawTensorTypes]) -> Tensor[T]:
+    def convert_to_tensor(value: Union[Tensor, T, _RawTensorTypes]) -> Tensor[T]:
         """
         :param value: tensor, or scalar raw tensor or some other scalar value
         :return: tensor
