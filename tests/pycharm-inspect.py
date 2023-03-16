@@ -29,7 +29,7 @@ sys.path.insert(0, root_dir)
 os.chdir(root_dir)
 
 from returnn.util import better_exchook  # noqa
-from returnn.util.basic import pip_install, which_pip, pip_check_is_installed, hms  # noqa
+from returnn.util.basic import pip_install, which, which_pip, pip_check_is_installed, hms  # noqa
 
 travis_env = os.environ.get("TRAVIS") == "true"
 github_env = os.environ.get("GITHUB_ACTIONS") == "true"
@@ -233,6 +233,19 @@ def setup_pycharm_python_interpreter(pycharm_dir):
 
     :param str pycharm_dir:
     """
+    fold_start("script.opt_install_further_py_deps")
+    if not pip_check_is_installed("tensorflow") and not pip_check_is_installed("tensorflow-gpu"):
+        pip_install("tensorflow")
+    # Note: Horovod will usually fail to install in this env.
+    for pkg in ["typing", "librosa==0.8.1", "PySoundFile", "nltk", "matplotlib", "mpi4py", "pycodestyle"]:
+        if not pip_check_is_installed(pkg):
+            try:
+                pip_install(pkg)
+            except subprocess.CalledProcessError as exc:
+                print("Pip install failed:", exc)
+                print("Ignore...")
+    fold_end()
+
     fold_start("script.setup_pycharm_python_interpreter")
     print("Setup PyCharm Python interpreter... (jdk.table.xml)")
     print("Current Python:", sys.executable, sys.version, sys.version_info)
@@ -271,19 +284,6 @@ def setup_pycharm_python_interpreter(pycharm_dir):
             )
             assert os.path.isdir(stub_dir)
     else:
-        fold_start("script.opt_install_further_py_deps")
-        if not pip_check_is_installed("tensorflow") and not pip_check_is_installed("tensorflow-gpu"):
-            pip_install("tensorflow")
-        # Note: Horovod will usually fail to install in this env.
-        for pkg in ["typing", "librosa==0.8.1", "PySoundFile", "nltk", "matplotlib", "mpi4py", "pycodestyle"]:
-            if not pip_check_is_installed(pkg):
-                try:
-                    pip_install(pkg)
-                except subprocess.CalledProcessError as exc:
-                    print("Pip install failed:", exc)
-                    print("Ignore...")
-        fold_end()
-
         stub_dir = "%s/python_stubs/python%s-generated" % (pycharm_system_dir, "%i.%i.%i" % sys.version_info[:3])
         if os.path.exists(stub_dir):
             print("Python stubs already exists, not recreating (%s)" % stub_dir)
@@ -467,7 +467,7 @@ def run_inspect(pycharm_dir, src_dir, skip_pycharm_inspect=False):
     if not skip_pycharm_inspect:
         # Note: Will not run if PyCharm is already running.
         # Maybe we can find some workaround for this?
-        # See here: https://stackoverflow.com/questions/55339010/run-pycharm-inspect-sh-even-if-pycharm-is-already-running
+        # See here: https://stackoverflow.com/questions/55339010/run-pycharm-inspect-sh-even-if-pycharm-is-already-runn
         # And here: https://github.com/albertz/pycharm-inspect
         # Also: https://stackoverflow.com/questions/55323910/pycharm-code-style-check-via-command-line
         cmd = [
@@ -501,8 +501,16 @@ def run_inspect(pycharm_dir, src_dir, skip_pycharm_inspect=False):
         ]
         print("$ %s" % " ".join(cmd))
         sys.stdout.flush()
-        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-        stdout, _ = proc.communicate()
+        try:
+            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+            stdout, _ = proc.communicate()
+        except FileNotFoundError as exc:
+            raise Exception(
+                f"pycodestyle not found? {exc}\n"
+                f"which pycodestyle: {which('pycodestyle')}\n"
+                f"PATH: {os.environ.get('PATH')}"
+            )
+        problem_count = 0
         # We do not check returncode, as this is always non-zero if there is any warning.
         for line in stdout.decode("utf8").splitlines():
             # Example line: demos/demo-record-and-push-to-webserver.py:48:1: E302 expected 2 blank lines, found 1
@@ -519,6 +527,9 @@ def run_inspect(pycharm_dir, src_dir, skip_pycharm_inspect=False):
             ElementTree.SubElement(prob, "offset").text = str(col_nr)
             ElementTree.SubElement(prob, "problem_class", severity="WEAK WARNING", id=warn_id).text = description
             ElementTree.SubElement(prob, "description").text = description
+            problem_count += 1
+        if proc.returncode != 0:
+            assert problem_count > 0, "pycodestyle returned error but did not list any problems"
     et = ElementTree.ElementTree(root)
     et.write("%s/Pep8CodeStyle.xml" % out_tmp_dir, encoding="UTF-8")
 
