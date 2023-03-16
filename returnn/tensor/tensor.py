@@ -21,7 +21,7 @@ https://github.com/rwth-i6/returnn/issues/1165
 """
 
 from __future__ import annotations
-from typing import Optional, Union, Sequence, Tuple, Generic, TypeVar
+from typing import Optional, Union, Sequence, Tuple, Generic, TypeVar, Set
 
 from returnn.util.basic import NotSpecified
 from .dim import Dim
@@ -129,6 +129,17 @@ class Tensor(_TensorMixin, Generic[RawTensorType]):
         :return: dim tags
         """
         return self._dims
+
+    @property
+    def dims_set(self) -> Set[Dim]:
+        """
+        :return: set of dim tags. in all high-level code, the order of dims is irrelevant.
+          The order must not play a role
+          (RETURNN principles: https://github.com/rwth-i6/returnn/wiki/RETURNN-principles).
+          Note that we do not include any implicit dims here.
+          Also see :func:`verify_out_shape` and https://github.com/rwth-i6/returnn/issues/1153.
+        """
+        return set(self._dims)
 
     @property
     def raw_tensor(self) -> Optional[RawTensorType]:
