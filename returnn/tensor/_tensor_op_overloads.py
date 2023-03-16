@@ -16,13 +16,8 @@ class _TensorOpOverloadsMixin(_TensorMixinBase):
 
     # --- comparisons
 
-    # _TensorMixin.__eq__ is disabled as per the following error in some TF tests:
-    # AssertionError: unhashable type: 'Tensor'.
-    # See CI https://github.com/rwth-i6/returnn/actions/runs/4406240591
-    """
     def __eq__(self: Tensor, other: Union[_frontend_api.RawTensorTypes, Tensor]) -> Tensor:
         return self.raw_frontend.compare(self, "==", other)
-    """
 
     def __ne__(self: Tensor, other: Union[_frontend_api.RawTensorTypes, Tensor]) -> Tensor:
         return self.raw_frontend.compare(self, "!=", other)
