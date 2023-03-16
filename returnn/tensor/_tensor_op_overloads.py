@@ -79,19 +79,24 @@ class _TensorOpOverloadsMixin(_TensorMixinBase):
         return self.raw_frontend.combine(other, "**", self)
 
     def __neg__(self):  # -x
-        raise NotImplementedError  # TODO
+        if True:  # avoid warning: abstract base class...
+            raise NotImplementedError  # TODO
 
     def __invert__(self):  # ~x
-        raise NotImplementedError  # TODO
+        if True:
+            raise NotImplementedError  # TODO
 
     def __abs__(self):
-        raise NotImplementedError  # TODO
+        if True:
+            raise NotImplementedError  # TODO
 
     def __ceil__(self):
-        raise NotImplementedError  # TODO
+        if True:
+            raise NotImplementedError  # TODO
 
     def __floor__(self):
-        raise NotImplementedError  # TODO
+        if True:
+            raise NotImplementedError  # TODO
 
     def __and__(self: Tensor, other: Union[_frontend_api.RawTensorTypes, Tensor]) -> Tensor:
         return self.raw_frontend.combine(self, "logical_and", other)
