@@ -5,7 +5,7 @@ Various generic utilities, which are shared across different backend engines.
 """
 
 from __future__ import annotations
-from typing import Generic, TypeVar
+from typing import Generic, TypeVar, Iterable, Tuple
 
 import subprocess
 from subprocess import CalledProcessError
@@ -63,6 +63,8 @@ else:
 
 
 T = TypeVar("T")
+K = TypeVar("K")
+V = TypeVar("V")
 
 returnn_root_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -2343,35 +2345,75 @@ def make_hashable(obj):
         import tensorflow as tf
 
         if isinstance(obj, tf.Tensor):
-            return TensorRef(obj)
+            return RefIdEq(obj)
     assert False, "don't know how to make hashable: %r (%r)" % (obj, type(obj))
 
 
-class TensorRef(Generic[T]):
+class RefIdEq(Generic[T]):
     """
-    Reference to the original tensor, which is hashable.
-    We have this here for compatibility because tf.Tensor.ref() was not available in earlier TF versions.
+    Reference to some object (e.g. t.fTensor), but this object is always hashable,
+    and uses the `id` of the function for the hash and equality.
+
+    (In case of tf.Tensor, this is for compatibility
+     because tf.Tensor.ref() was not available in earlier TF versions.
+     However, we also need this for :class:`DictRefKeys`.)
     """
 
-    def __init__(self, tensor: T):
+    def __init__(self, obj: T):
         """
-        :param tensor: for example tf.Tensor
+        :param obj: for example tf.Tensor
         """
-        self.tensor = tensor
+        self.obj = obj
 
     def __repr__(self):
-        return "TensorRef{%r}" % self.tensor
+        return "TensorRef{%r}" % self.obj
 
     def __eq__(self, other):
-        if other is None or not isinstance(other, TensorRef):
+        if other is None or not isinstance(other, RefIdEq):
             return False
-        return self.tensor is other.tensor
+        return self.obj is other.obj
 
     def __ne__(self, other):
         return not self.__eq__(other)
 
     def __hash__(self):
-        return id(self.tensor)
+        return id(self.obj)
+
+
+class DictRefKeys(Generic[K, V]):
+    """
+    Like `dict`, but hash and equality of the keys
+    """
+
+    def __init__(self):
+        self._d = {}  # type: dict[RefIdEq[K], V]
+
+    def __repr__(self):
+        return "DictRefKeys(%s)" % ", ".join(["%r: %r" % (k, v) for (k, v) in self.items()])
+
+    def items(self) -> Iterable[Tuple[K, V]]:
+        """items"""
+        for k, v in self._d.items():
+            yield k.obj, v
+
+    def keys(self) -> Iterable[K]:
+        """keys"""
+        for k in self._d.keys():
+            yield k.obj
+
+    def values(self) -> Iterable[V]:
+        """values"""
+        for v in self._d.values():
+            yield v
+
+    def __getitem__(self, item: K) -> V:
+        return self._d[RefIdEq(item)]
+
+    def __setitem__(self, key: K, value: V):
+        self._d[RefIdEq(key)] = value
+
+    def __contains__(self, item: K):
+        return RefIdEq(item) in self._d
 
 
 def make_dll_name(basename):
