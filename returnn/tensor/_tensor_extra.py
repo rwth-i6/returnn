@@ -19,7 +19,7 @@ import returnn.tensor.tensor as _t
 import returnn.tensor.marked_dim as _m
 
 # noinspection PyProtectedMember
-import returnn.frontend._backend as _frontend_api
+import returnn.frontend._backend as _backend_api
 from ._tensor_mixin_base import _TensorMixinBase
 
 
@@ -225,22 +225,13 @@ class _TensorMixin(_TensorMixinBase):
         self.sanity_check(assume_complete=False)  # TODO still needed?
 
     @property
-    def raw_frontend(self) -> Optional[Type[_frontend_api.Backend]]:
+    def _raw_backend(self) -> Optional[Type[_backend_api.Backend]]:
         """
         :return: the backend for the raw tensor
         """
         if self._raw_tensor is None:
             return None
-        return _frontend_api.get_backend_by_raw_tensor_type(type(self._raw_tensor))
-
-    @property
-    def _raw_internal_frontend(self) -> Optional[Type[_frontend_api.Backend]]:
-        """
-        :return: the internal backend for the raw tensor
-        """
-        if self._raw_tensor is None:
-            return None
-        return _frontend_api.get_backend_by_raw_tensor_type(type(self._raw_tensor))
+        return _backend_api.get_backend_by_raw_tensor_type(type(self._raw_tensor))
 
     @property
     def control_flow_ctx(self) -> Optional[ControlFlowContext]:
@@ -321,7 +312,7 @@ class _TensorMixin(_TensorMixinBase):
             # Note: We could just call self.placeholder.set_shape.
             # However, we are more explicit.
             # We assume that the placeholder has already a known shape, and error otherwise.
-            rf = self._raw_internal_frontend
+            rf = self._raw_backend
             assert rf.get_ndim_raw(self._raw_tensor) == self.batch_ndim
             raw_shape = rf.get_known_shape_raw(self._raw_tensor)
             for i in range(self.batch_ndim):
@@ -355,7 +346,7 @@ class _TensorMixin(_TensorMixinBase):
         :rtype: tensorflow.Operation|Any
         """
         assert self._raw_tensor is not None
-        return self._raw_internal_frontend.runtime_sanity_checks(self)
+        return self._raw_backend.runtime_sanity_checks(self)
 
     def verify_out_shape(self, out_shape, allow_missing_implicit_dims=False):
         """
@@ -670,7 +661,7 @@ class _TensorMixin(_TensorMixinBase):
 
         data_opts = self.get_kwargs(include_special_axes=False)
         if self._raw_tensor is not None:
-            data_opts["raw_tensor"] = self._raw_internal_frontend.transpose_raw(self._raw_tensor, perm)
+            data_opts["raw_tensor"] = self._raw_backend.transpose_raw(self._raw_tensor, perm)
         data_opts["dims"] = tuple(self.dim_tags[perm[i]] for i in range(self.batch_ndim))
         data = _t.Tensor(**data_opts)
         if self.version == 1:
@@ -810,7 +801,7 @@ class _TensorMixin(_TensorMixinBase):
         data_opts = self.get_kwargs(include_special_axes=False)
         placeholder = self.placeholder
         if placeholder is not None:
-            rf = self._raw_internal_frontend
+            rf = self._raw_backend
             placeholder = rf.expand_dims_raw(placeholder, batch_dim_axis)
             if not isinstance(batch.dim, int) or batch.dim != 1:
                 placeholder = rf.expand_raw(placeholder, batch_dim_axis, batch.dim)
@@ -942,7 +933,7 @@ class _TensorMixin(_TensorMixinBase):
         if dim_tag.is_spatial_dim() and self.time_dim_axis is None:
             data_opts.pop("time_dim_axis", None)  # fall back to default
         if self.placeholder is not None:
-            rf = self._raw_internal_frontend
+            rf = self._raw_backend
             placeholder = rf.expand_dims_raw(self.placeholder, axis)
             if dim_tag.dimension is None or dim_tag.dimension > 1:
                 placeholder = rf.expand_raw(placeholder, axis, dim_tag.get_dim_value())
@@ -986,7 +977,7 @@ class _TensorMixin(_TensorMixinBase):
         for k, a in other_special_axes.items():
             data_opts[k] = a if (a < new_feature_dim_axis) else (a + 1)
         if self.placeholder is not None:
-            rf = self._raw_internal_frontend
+            rf = self._raw_backend
             rf.set_known_shape_raw(self.placeholder, self.batch_shape)
             old_shape = rf.get_shape_tuple_raw(self.placeholder)
             new_shape = (
@@ -1021,7 +1012,7 @@ class _TensorMixin(_TensorMixinBase):
         data.batch = batch
         self._adapt_batch_consistent_dim_tags()
         if self.placeholder is not None:
-            assert self.raw_frontend.is_tensorflow
+            assert self._raw_backend.is_tensorflow
             # This can only work if the batch is expanded.
             assert set(self.batch.virtual_dims).issubset(batch.virtual_dims)
             import tensorflow as tf
@@ -1201,7 +1192,7 @@ class _TensorMixin(_TensorMixinBase):
         assert data.batch
         data.batch = data.batch.copy_set_beam(beam)
         if data.placeholder is not None:
-            assert data.raw_frontend.is_tensorflow
+            assert data._raw_backend.is_tensorflow
             import tensorflow as tf
             from returnn.tf.util.basic import get_valid_scope_name_from_str, same_control_flow_ctx, tile_transposed
 
@@ -1248,7 +1239,7 @@ class _TensorMixin(_TensorMixinBase):
                 data = data.copy_template_excluding_axis(axis)
         data.batch = batch
         if tensor is not None:
-            assert self.raw_frontend.is_tensorflow
+            assert self._raw_backend.is_tensorflow
             import tensorflow as tf
             from returnn.tf.util.basic import get_shape
 
@@ -1270,7 +1261,7 @@ class _TensorMixin(_TensorMixinBase):
             return self.copy()
         data_opts = self.get_kwargs(include_special_axes=False)
         if self._raw_tensor is not None:
-            rf = self._raw_internal_frontend
+            rf = self._raw_backend
             data_opts["raw_tensor"] = rf.squeeze_raw(self._raw_tensor, axes)
         data_opts["dims"] = [tag for (i, tag) in enumerate(self._dims) if i not in axes]
         if self._extra:
@@ -2018,7 +2009,7 @@ class _TensorMixin(_TensorMixinBase):
         if self.batch_shape[axis] is not None:
             return self.batch_shape[axis]
         assert self._raw_tensor is not None
-        rf = self._raw_internal_frontend
+        rf = self._raw_backend
         return rf.get_shape_raw(self._raw_tensor)[axis]
 
     def get_placeholder_as_time_major(self):
@@ -2041,7 +2032,7 @@ class _TensorMixin(_TensorMixinBase):
         :rtype: tf.Tensor
         """
         assert self._raw_tensor is not None
-        rf = self._raw_internal_frontend
+        rf = self._raw_backend
         return rf.identity_with_control_dependencies_raw(self._raw_tensor, [self.get_runtime_sanity_check_op()])
 
     def get_placeholder_time_flattened(self):
@@ -2049,7 +2040,7 @@ class _TensorMixin(_TensorMixinBase):
         :return: via :func:`flatten_with_seq_len_mask`
         :rtype: tensorflow.Tensor
         """
-        assert self.raw_frontend.is_tensorflow, "get_placeholder_time_flattened only implemented for TF yet"
+        assert self._raw_backend.is_tensorflow, "get_placeholder_time_flattened only implemented for TF yet"
         from returnn.tf.util.basic import flatten_with_seq_len_mask, get_shape
         import tensorflow as tf
 
@@ -2084,7 +2075,7 @@ class _TensorMixin(_TensorMixinBase):
           with keep_dims, (batch, time, height, dim) will become (batch'|time', 1, 1, dim).
         """
         assert self.placeholder is not None
-        assert self.raw_frontend.is_tensorflow, "get_placeholder_flattened only implemented for TF yet"
+        assert self._raw_backend.is_tensorflow, "get_placeholder_flattened only implemented for TF yet"
         import tensorflow as tf
 
         x = self.placeholder
@@ -2635,7 +2626,7 @@ class _TensorMixin(_TensorMixinBase):
         batch_dim_ = self._dims[self.batch_dim_axis]
         assert isinstance(batch_dim_, Dim)
         if batch_dim_.dyn_size_ext and batch_dim_.dyn_size_ext.raw_tensor is not None:
-            rf = batch_dim_.dyn_size_ext._raw_internal_frontend
+            rf = batch_dim_.dyn_size_ext._raw_backend
             return rf.fill_raw([batch_dim_.dyn_size_ext.raw_tensor], dim.size)
         import tensorflow as tf
 
@@ -2681,8 +2672,8 @@ class _TensorMixin(_TensorMixinBase):
         assert axis != self.batch_dim_axis
         tag: Dim = self.dim_tags[axis]
         assert tag.dyn_size_ext and tag.dyn_size_ext.raw_tensor is not None
-        rf = tag.dyn_size_ext.raw_frontend
-        rif = tag.dyn_size_ext._raw_internal_frontend
+        rf = tag.dyn_size_ext._raw_backend
+        rif = tag.dyn_size_ext._raw_backend
         assert set(tag.dyn_size_ext.dim_tags).issubset(self.dim_tags)  # https://github.com/rwth-i6/returnn/issues/721
         with rif.name_scope_raw("get_sequence_mask_broadcast"):
             if tag.dyn_size_ext.have_batch_axis() and tag.dyn_size_ext.batch_ndim == 1:  # just [B]
@@ -2748,7 +2739,7 @@ class _TensorMixin(_TensorMixinBase):
         :rtype: Data
         """
         assert self.placeholder is not None
-        assert self.raw_frontend.is_tensorflow  # not implemented otherwise for now
+        assert self._raw_backend.is_tensorflow  # not implemented otherwise for now
         from returnn.tf.util.basic import mask_dyn_seq_len_nd
 
         dyn_axes = [axis for axis, dim in enumerate(self.dim_tags) if not dim.is_batch_dim() and dim.dimension is None]
@@ -3124,7 +3115,7 @@ class _TensorMixin(_TensorMixinBase):
         """
         if self._raw_tensor is None:
             return True
-        return self._raw_internal_frontend.is_valid_in_current_graph(self)
+        return self._raw_backend.is_valid_in_current_graph(self)
 
     def mark_as_loss(
         self: Tensor,
@@ -3147,7 +3138,7 @@ class _TensorMixin(_TensorMixinBase):
         :param use_flatten_frames:
         :param custom_inv_norm_factor:
         """
-        self.raw_frontend.mark_as_loss(
+        self._raw_backend.mark_as_loss(
             loss=self,
             name=name,
             scale=scale,
@@ -3165,7 +3156,7 @@ class _TensorMixin(_TensorMixinBase):
         :param name:
         :param shape:
         """
-        self.raw_frontend.mark_as_output(self, name=name, shape=shape)
+        self._raw_backend.mark_as_output(self, name=name, shape=shape)
 
     def mark_as_default_output(self: Tensor, *, shape: Optional[Sequence[Dim]] = None) -> None:
         """
@@ -3174,7 +3165,7 @@ class _TensorMixin(_TensorMixinBase):
 
         :param shape:
         """
-        self.raw_frontend.mark_as_default_output(self, shape=shape)
+        self._raw_backend.mark_as_default_output(self, shape=shape)
 
 
 def infer_sparse_dim(

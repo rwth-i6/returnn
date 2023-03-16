@@ -19,6 +19,7 @@ if TYPE_CHECKING:
 from . import dim as _d
 from . import tensor as _t
 from . import marked_dim as _m
+import returnn.frontend as rf
 
 
 class DimTypes:
@@ -1507,7 +1508,7 @@ class _DimMixin:
             return self.dimension
         if self.dyn_size_ext and self.dyn_size_ext.placeholder is not None:  # fast path
             if self.dyn_size_ext.batch_ndim > 0:
-                return self.dyn_size_ext.raw_frontend.reduce(
+                return rf.reduce(
                     self.dyn_size_ext,
                     axis=self.dyn_size_ext.dim_tags,
                     mode="max",
@@ -1531,9 +1532,7 @@ class _DimMixin:
         self.complete_dyn_size()
         if self.dyn_size_ext and self.dyn_size_ext.placeholder is not None:
             if self.dyn_size_ext.batch_ndim > 0:
-                return self.dyn_size_ext.raw_frontend.reduce(
-                    self.dyn_size_ext, axis=self.dyn_size_ext.dim_tags, mode="max"
-                ).raw_tensor
+                return rf.reduce(self.dyn_size_ext, axis=self.dyn_size_ext.dim_tags, mode="max").raw_tensor
             return self.dyn_size_ext.placeholder
         raise Exception("%s: need placeholder, self.dimension or self.dyn_size for dim value" % self)
 

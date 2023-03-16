@@ -13,14 +13,15 @@ from returnn.tensor import Tensor, Dim
 T = TypeVar("T")
 
 
-def get_frontend_from_tensors(*args):
+def get_backend_from_tensors(*args):
     """
     :param args:
     :return: frontend, fallback to global frontend
     """
     for x in args:
         if isinstance(x, Tensor):
-            return x.raw_frontend
+            # noinspection PyProtectedMember
+            return x._raw_backend
     return _global_rf
 
 
@@ -79,7 +80,8 @@ def bin_op_out_template(
     a = rf.convert_to_tensor(a)
     b = rf.convert_to_tensor(b)
     # sanity checks
-    assert a.raw_frontend == b.raw_frontend, "Cannot combine tensors from two different frontends, e.g. TF and PT"
+    # noinspection PyProtectedMember
+    assert a._raw_backend == b._raw_backend, "Cannot combine tensors from two different frontends, e.g. TF and PT"
     assert a.dtype == a.dtype, "For now only operations with Tensors of the same dtypes are supported."
     all_dims = []
     for dim in a.dims + b.dims:
