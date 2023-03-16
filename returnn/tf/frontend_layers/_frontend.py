@@ -6,8 +6,10 @@ from __future__ import annotations
 from typing import Union, Sequence
 
 from returnn.util.basic import NotSpecified
-from returnn.frontend_api import Frontend
 from returnn.tensor import Tensor, Dim
+
+# noinspection PyProtectedMember
+from returnn.frontend._api import Frontend
 
 
 # Ignore this warning until we really expect that we implemented everything.

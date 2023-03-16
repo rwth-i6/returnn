@@ -1,5 +1,5 @@
 """
-Utils
+Internal utils
 """
 
 from __future__ import annotations
@@ -7,8 +7,7 @@ from typing import Union, Optional, Type, TypeVar, Sequence, Tuple
 import numpy
 
 from returnn import frontend as _global_rf
-from returnn.frontend_api import Frontend
-from returnn._internal_frontend_api import InternalFrontend
+from returnn.frontend._api import Frontend
 from returnn.tensor import Tensor, Dim
 
 T = TypeVar("T")
@@ -25,14 +24,6 @@ def get_frontend_from_tensors(*args):
     return _global_rf
 
 
-def rfi(rf: Type[Frontend]) -> Type[InternalFrontend]:
-    """
-    Internal frontend
-    """
-    # noinspection PyProtectedMember
-    return rf._internal_frontend
-
-
 def get_dtype_name(rf: Type[Frontend], x: Union[T, Tensor[T], int, float]) -> str:
     """
     :param rf:
@@ -40,7 +31,7 @@ def get_dtype_name(rf: Type[Frontend], x: Union[T, Tensor[T], int, float]) -> st
     :return: dtype of tensor, as string
     """
     if isinstance(x, rf.RawTensorType):
-        return rfi(rf).get_dtype_name_raw(x)
+        return rf.get_dtype_name_raw(x)
     elif isinstance(x, Tensor):
         return x.dtype
     elif isinstance(x, int):

@@ -2,4 +2,4 @@
 TensorFlow frontend.
 """
 
-from .frontend import TFFrontend
+from ._frontend import TFFrontend
