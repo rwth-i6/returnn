@@ -492,8 +492,11 @@ def run_inspect(pycharm_dir, src_dir, skip_pycharm_inspect=False):
             ",E203"  # https://black.readthedocs.io/en/stable/faq.html#why-are-flake8-s-e203-and-w503-violated
         )
         indent_size = 4
+        pycodestyle_path = which("pycodestyle")
+        if not pycodestyle_path:
+            raise FileNotFoundError(f"pycodestyle not found. PATH = {os.environ.get('PATH')!r}")
         cmd = [
-            "pycodestyle",
+            pycodestyle_path,
             py_src_file,
             "--ignore=%s" % ignore_codes,
             "--indent-size=%i" % indent_size,
@@ -501,15 +504,8 @@ def run_inspect(pycharm_dir, src_dir, skip_pycharm_inspect=False):
         ]
         print("$ %s" % " ".join(cmd))
         sys.stdout.flush()
-        try:
-            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-            stdout, _ = proc.communicate()
-        except FileNotFoundError as exc:
-            raise Exception(
-                f"pycodestyle not found? {exc}\n"
-                f"which pycodestyle: {which('pycodestyle')}\n"
-                f"PATH: {os.environ.get('PATH')}"
-            )
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        stdout, _ = proc.communicate()
         problem_count = 0
         # We do not check returncode, as this is always non-zero if there is any warning.
         for line in stdout.decode("utf8").splitlines():
