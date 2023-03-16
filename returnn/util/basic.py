@@ -5,7 +5,7 @@ Various generic utilities, which are shared across different backend engines.
 """
 
 from __future__ import annotations
-from typing import Generic, TypeVar, Iterable, Tuple
+from typing import Generic, TypeVar, Iterable, Tuple, Dict
 
 import subprocess
 from subprocess import CalledProcessError
@@ -2386,7 +2386,7 @@ class DictRefKeys(Generic[K, V]):
     """
 
     def __init__(self):
-        self._d = {}  # type: dict[RefIdEq[K], V]
+        self._d = {}  # type: Dict[RefIdEq[K], V]
 
     def __repr__(self):
         return "DictRefKeys(%s)" % ", ".join(["%r: %r" % (k, v) for (k, v) in self.items()])
