@@ -1,30 +1,26 @@
 """
-Frontend API
-
-The convention for the user is to do::
-
-    from returnn import frontend as rf
+Backends for the frontend API
 """
 
 from __future__ import annotations
 import typing
-from typing import TYPE_CHECKING, Optional, TypeVar, Generic, Dict, Type, Union, Sequence
+from typing import TYPE_CHECKING, Optional, Any, Union, TypeVar, Generic, Type, Sequence, Dict, Tuple
 import numpy
+import contextlib
 
 from returnn.util.basic import NotSpecified
 
 if TYPE_CHECKING:
     from returnn.tensor import Tensor, Dim
-    from returnn._internal_frontend_api import InternalFrontend
-
-RawTensorTypes = Union[int, float, complex, numpy.number, numpy.ndarray, bool, str]
+    from .types import RawTensorTypes as _RawTensorTypes
 
 T = TypeVar("T")  # tf.Tensor, torch.Tensor or so
+T2 = TypeVar("T2")
 
 
-class Frontend(Generic[T]):
+class Backend(Generic[T]):
     """
-    Abstract base class for the frontend, operating on tensor type T, i.e. :class:`Tensor[T]`.
+    Abstract base class for the backend, operating on tensor type T, i.e. :class:`Tensor[T]`.
 
     This class and instances do not have any state,
     and all functions are staticmethod (or classmethod).
@@ -33,7 +29,6 @@ class Frontend(Generic[T]):
     # class attribs set by derived classes
     RawTensorType: Type[T]
     is_tensorflow: bool = False  # whether this framework uses TensorFlow
-    _internal_frontend: Type[InternalFrontend[T]]
 
     # class private attribs
     _default_int_dtype: str = "int32"
@@ -84,9 +79,9 @@ class Frontend(Generic[T]):
     @classmethod
     def compare(
         cls,
-        a: Union[Tensor, RawTensorTypes],
+        a: Union[Tensor, _RawTensorTypes],
         kind: str,
-        b: Union[Tensor, RawTensorTypes],
+        b: Union[Tensor, _RawTensorTypes],
         *,
         allow_broadcast_all_sources: Optional[bool] = None,
         dim_order: Optional[Sequence[Dim]] = None,
@@ -101,7 +96,7 @@ class Frontend(Generic[T]):
             Not all the dims of a and b need to be specified here, and there could also be other dims in the dim_order.
         :return: element-wise comparison of a and b
         """
-        from ._frontend import utils
+        from . import _utils as utils
 
         out, a, b = utils.bin_op_out_template(
             cls,
@@ -112,7 +107,7 @@ class Frontend(Generic[T]):
             allow_broadcast_all_sources=allow_broadcast_all_sources,
             dim_order=dim_order,
         )
-        out.raw_tensor = cls._internal_frontend.compare_raw(a.raw_tensor, kind, b.raw_tensor)
+        out.raw_tensor = cls.compare_raw(a.raw_tensor, kind, b.raw_tensor)
         return out
 
     # noinspection PyNestedDecorators
@@ -132,13 +127,13 @@ class Frontend(Generic[T]):
     @classmethod
     def combine(
         cls,
-        a: Union[Tensor, RawTensorTypes],
+        a: Union[Tensor, _RawTensorTypes],
         kind: str,
-        b: Union[Tensor, RawTensorTypes],
+        b: Union[Tensor, _RawTensorTypes],
         *,
         allow_broadcast_all_sources: Optional[bool] = None,
         dim_order: Optional[Sequence[Dim]] = None,
-    ) -> Union[Tensor, RawTensorTypes]:
+    ) -> Union[Tensor, _RawTensorTypes]:
         """
         :param a:
         :param kind: "add"|"+", "sub"|"-", "mul"|"*", "truediv"|"/", "floordiv"|"//", "mod"|"%", "pow"|"**",
@@ -150,7 +145,7 @@ class Frontend(Generic[T]):
             Not all the dims of a and b need to be specified here, and there could also be other dims in the dim_order.
         :return: element-wise combination of a and b
         """
-        from ._frontend import utils
+        from . import _utils as utils
 
         if isinstance(b, (int, float, bool, numpy.number)):
             if b == 1 and kind in {"truediv", "/", "floordiv", "//", "pow", "**", "mul", "*"}:
@@ -185,7 +180,7 @@ class Frontend(Generic[T]):
             allow_broadcast_all_sources=allow_broadcast_all_sources,
             dim_order=dim_order,
         )
-        out.raw_tensor = cls._internal_frontend.combine_raw(a.raw_tensor, kind, b.raw_tensor)
+        out.raw_tensor = cls.combine_raw(a.raw_tensor, kind, b.raw_tensor)
         return out
 
     @classmethod
@@ -199,6 +194,229 @@ class Frontend(Generic[T]):
         cls.mark_as_output(tensor, "output", shape=shape)
 
     # --- functions to override
+
+    @staticmethod
+    def get_dtype_name_raw(raw_tensor: T) -> str:
+        """
+        :return: dtype of raw tensor, as string
+        """
+        raise NotImplementedError
+
+    @staticmethod
+    def get_ndim_raw(raw_tensor: T) -> int:
+        """
+        :return: ndim of raw tensor. assumes it is known
+        """
+        raise NotImplementedError
+
+    @staticmethod
+    def get_shape_raw(raw_tensor: T) -> T:
+        """
+        :return: shape of raw tensor
+        """
+        raise NotImplementedError
+
+    @staticmethod
+    def get_shape_tuple_raw(raw_tensor: T) -> Tuple[Union[int, T]]:
+        """
+        :return: shape of raw tensor. assumes that ndim is known.
+            In eager frameworks, all dims are int.
+        """
+        raise NotImplementedError
+
+    @staticmethod
+    def get_known_shape_raw(raw_tensor: T) -> Tuple[Optional[int]]:
+        """
+        :return: shape of raw tensor, int for static known, None otherwise. assumes that ndim is known.
+            This will not create any ops.
+            In eager frameworks, all dims are known.
+        """
+        raise NotImplementedError
+
+    @staticmethod
+    def set_known_shape_raw(raw_tensor: T, shape: Tuple[Optional[int]]) -> None:
+        """
+        Sets the known shape of the raw tensor.
+        This is only supported in graph-based frameworks,
+        and just performs a check in eager frameworks.
+        """
+        # Default implementation for eager-based frameworks.
+        assert all(dim is not None for dim in shape)
+        rf = get_backend_by_raw_tensor_type(type(raw_tensor))
+        existing_shape = rf.get_known_shape_raw(raw_tensor)
+        assert all(dim is not None for dim in existing_shape)
+        assert shape == existing_shape
+
+    @staticmethod
+    def fill_raw(shape: Union[Sequence[Union[int, T]], T], value: Union[Any, T]) -> T:
+        """
+        :param shape: shape
+        :param value: scalar value to fill
+        :return: raw tensor filled with value everywhere
+        """
+        raise NotImplementedError
+
+    @staticmethod
+    def compare_raw(a: T, kind: str, b: T) -> T:
+        """
+        :param a:
+        :param kind: "equal"|"==", "less"|"<", "less_equal"|"<=", "greater"|">", "greater_equal"|">=", "not_equal"|"!="
+        :param b:
+        :return: a `kind` b
+        """
+        raise NotImplementedError
+
+    @staticmethod
+    def combine_raw(a: T, kind: str, b: T) -> T:
+        """
+        :param a:
+        :param kind: "add"|"+", "sub"|"-", "mul"|"*", "truediv"|"/", "floordiv"|"//", "mod"|"%", "pow"|"**",
+            "max"|"maximum", "min"|"minimum", "logical_and", "logical_or", "squared_difference"
+        :param b:
+        :return: a `kind` b
+        """
+        raise NotImplementedError
+
+    @staticmethod
+    def reshape_raw(raw_tensor: T, shape: Union[Sequence[Union[int, T]], T]) -> T:
+        """
+        :param raw_tensor: raw tensor
+        :param shape: new shape
+        :return: reshaped raw tensor
+        """
+        raise NotImplementedError
+
+    @classmethod
+    def squeeze_raw(cls, raw_tensor: T, axes: Sequence[int]) -> T:
+        """
+        :param raw_tensor: raw tensor
+        :param axes: axes to squeeze
+        :return: squeezed raw tensor
+        """
+        # Default implementation using reshape_raw.
+        known_shape = cls.get_known_shape_raw(raw_tensor)
+        assert all([known_shape[axis] == 1 for axis in axes])
+        new_shape = [dim for a, dim in enumerate(cls.get_shape_tuple_raw(raw_tensor)) if a not in axes]
+        return cls.reshape_raw(raw_tensor, new_shape)
+
+    @staticmethod
+    def transpose_raw(raw_tensor: T, perm: Sequence[int]) -> T:
+        """
+        :param raw_tensor: raw tensor
+        :param perm: permutation
+        :return: transposed raw tensor
+        """
+        raise NotImplementedError
+
+    @staticmethod
+    def expand_dims_raw(raw_tensor: T, axis: int) -> T:
+        """
+        :param raw_tensor:
+        :param axis:
+        :return: raw tensor with new axis
+        """
+        raise NotImplementedError
+
+    @staticmethod
+    def expand_raw(raw_tensor: T, axis: int, dim: Union[int, T]) -> T:
+        """
+        :param raw_tensor:
+        :param axis: shape[axis] must be 1
+        :param dim: the new dim for shape[axis]
+        :return: shape[axis] expands to dim.
+            in PyTorch or other frameworks which support custom strides,
+            this is an efficient view and not a copy.
+        """
+        raise NotImplementedError
+
+    @staticmethod
+    def sequence_mask_raw(lengths: T, *, batch_major: bool = True) -> T:
+        """
+        Like tf.sequence_mask().
+
+        :param lengths: shape (batch,)
+        :param batch_major:
+        :return: tensor mask of shape (batch,maxlen) if batch_major else (maxlen,batch) of type bool
+        """
+        raise NotImplementedError
+
+    @staticmethod
+    @contextlib.contextmanager
+    def name_scope_raw(name: str) -> Any:
+        """
+        Default implementation for eager-based frameworks:
+        Do nothing, tensors do not have a name.
+
+        :param name:
+        :return: context manager
+        """
+        # Default implementation for eager-based frameworks
+        pass  # nothing to do
+
+    @staticmethod
+    @contextlib.contextmanager
+    def control_dependencies_raw(dependencies: Sequence[Any]) -> Any:
+        """
+        Default implementation for eager-based frameworks:
+        Do nothing, we expect that the dependencies are already executed.
+
+        :param dependencies: raw tensors or ops
+        :return: context manager
+        """
+        # Default implementation for eager-based frameworks
+        yield
+
+    @staticmethod
+    def identity_with_control_dependencies_raw(raw_tensor: T, dependencies: Sequence[Any]) -> T:
+        """
+        Default implementation for eager-based frameworks:
+        Do nothing, we expect that the dependencies are already executed.
+
+        :param raw_tensor: raw tensor
+        :param dependencies: raw tensors or ops
+        :return: raw tensor
+        """
+        # Default implementation for eager-based frameworks
+        return raw_tensor
+
+    @staticmethod
+    def create_placeholder(tensor: Tensor) -> T:
+        """
+        :return: tf.placeholder in TF
+
+        This is really only for TensorFlow for the deprecated option auto_create_placeholders
+        and should not be used in other backends,
+        even in graph-based backends.
+        Rather, the logic to create placeholders should be done elsewhere.
+        """
+        raise Exception("create_placeholder not supported by backend")
+
+    @staticmethod
+    def runtime_sanity_checks(tensor: Tensor) -> Any:
+        """
+        Checks whether the tensor.raw_tensor is consistent with the tensor metadata.
+
+        In graph-based frameworks (TF graph), we return some operation here.
+        In eager frameworks, we would not return anything but instead directly perform the checks.
+        """
+        # By default, we do not do any checks. This is optional for the backend.
+        pass
+
+    @staticmethod
+    def is_valid_in_current_graph(tensor: Tensor) -> bool:
+        """
+        :return: whether the raw tensor is valid in the current graph.
+            In eager-mode frameworks, this is always true -- there is no graph.
+        """
+        return True
+
+    @staticmethod
+    def format_graph_output(raw_tensor: T, *, max_depth: Optional[int] = None) -> str:
+        """
+        :return: the computation graph leading to this tensor formatted.
+            In eager-mode frameworks, this is not supported and returns None.
+        """
+        return "<no-graph>"
 
     @staticmethod
     def mark_as_loss(
@@ -270,7 +488,7 @@ class Frontend(Generic[T]):
         raise NotImplementedError
 
     @staticmethod
-    def convert_to_tensor(value: Union[Tensor, T, RawTensorTypes]) -> Tensor[T]:
+    def convert_to_tensor(value: Union[Tensor, T, _RawTensorTypes]) -> Tensor[T]:
         """
         :param value: tensor, or scalar raw tensor or some other scalar value
         :return: tensor
@@ -332,35 +550,46 @@ class Frontend(Generic[T]):
 # This is exposed to the user as `returnn.frontend`.
 # The __class__ assignment is done in `select_engine`.
 # Use object.__new__ because we disallow creating instances of Frontend.
-global_frontend = object.__new__(Frontend)
+global_backend = object.__new__(Backend)
 
-_dispatch_table = {}  # type: Dict[Type, Type[Frontend]]
+_dispatch_table = {}  # type: Dict[Type, Type[Backend]]
 
 
-def select_frontend_returnn_layers_tf():
+def select_backend_returnn_layers_tf():
     """
-    Selects the RETURNN layers frontend (based on TF).
+    Selects the RETURNN layers backend (based on TF).
     """
     import tensorflow as tf
 
-    frontend = get_frontend_by_tensor_type(tf.Tensor)  # side-effect: register it
-    global_frontend.__class__ = frontend
+    backend = get_backend_by_raw_tensor_type(tf.Tensor)  # side-effect: register it
+    global_backend.__class__ = backend
 
     # TODO returnn layer type, register_frontend_by_tensor_type for that
     #   global_frontend.__class__ = ReturnnLayersFrontend
 
 
-def select_frontend_torch():
+def select_backend_torch():
     """
-    Selects the PyTorch (low-level) frontend.
+    Selects the PyTorch (low-level) backend.
     """
     import torch
 
-    frontend = get_frontend_by_tensor_type(torch.Tensor)  # side-effect: register it
-    global_frontend.__class__ = frontend
+    backend = get_backend_by_raw_tensor_type(torch.Tensor)  # side-effect: register it
+    global_backend.__class__ = backend
 
 
-def get_frontend_by_tensor_type(tensor_type: Type[T]) -> Type[Frontend[T]]:
+def get_backend_by_tensor(tensor: Tensor, *, fallback: Optional[T2] = None) -> Union[Type[Backend[T]], T2]:
+    """
+    :param tensor:
+    :param fallback:
+    """
+    if fallback and tensor.raw_tensor is None:
+        return fallback
+    assert tensor.raw_tensor is not None
+    return get_backend_by_raw_tensor_type(type(tensor.raw_tensor))
+
+
+def get_backend_by_raw_tensor_type(tensor_type: Type[T]) -> Union[Type[Backend[T]]]:
     """
     :param tensor_type:
     """
@@ -373,34 +602,34 @@ def get_frontend_by_tensor_type(tensor_type: Type[T]) -> Type[Frontend[T]]:
                 _dispatch_table[tensor_type] = _dispatch_table[type_]
                 return _dispatch_table[type_]
     if tensor_type not in _dispatch_table:
-        # It would be registered if there was any select_engine or select_frontend_* call.
+        # It would be registered if there was any select_engine or select_backend_* call.
         # However, some code might not have done that, so for the common cases,
         # we do it here.
         if tensor_type.__module__.split(".")[0] == "tensorflow":
-            from returnn.tf.frontend_low_level import TFFrontend
+            from returnn.tf.frontend_low_level import TFBackend
 
-            frontend_type = TFFrontend
+            backend_type = TFBackend
             tensor_types = _get_tensor_types_tf()
         elif tensor_type.__module__.split(".")[0] == "torch":
-            from returnn.torch.frontend import TorchFrontend
+            from returnn.torch.frontend import TorchBackend
 
-            frontend_type = TorchFrontend
+            backend_type = TorchBackend
             tensor_types = _get_tensor_types_torch()
         else:
             raise Exception(f"unknown tensor type {tensor_type}")
         assert any(issubclass(tensor_type, type_) for type_ in tensor_types)
         for type_ in tensor_types:
-            register_frontend_by_tensor_type(type_, frontend_type)
-        return frontend_type
+            register_backend_by_tensor_type(type_, backend_type)
+        return backend_type
     return _dispatch_table[tensor_type]
 
 
-def register_frontend_by_tensor_type(tensor_type: Type[T], frontend: Type[Frontend[T]]):
+def register_backend_by_tensor_type(tensor_type: Type[T], backend: Type[Backend[T]]):
     """
     :param tensor_type:
-    :param frontend:
+    :param backend:
     """
-    _dispatch_table[tensor_type] = frontend
+    _dispatch_table[tensor_type] = backend
 
 
 def _get_tensor_types_tf():

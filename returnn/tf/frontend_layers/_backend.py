@@ -1,20 +1,22 @@
 """
-High-level frontend for RETURNN layers
+High-level backend for RETURNN layers
 """
 
 from __future__ import annotations
 from typing import Union, Sequence
 
 from returnn.util.basic import NotSpecified
-from returnn.frontend_api import Frontend
 from returnn.tensor import Tensor, Dim
+
+# noinspection PyProtectedMember
+from returnn.frontend._backend import Backend
 
 
 # Ignore this warning until we really expect that we implemented everything.
 # noinspection PyAbstractClass
-class ReturnnLayersFrontend(Frontend):
+class ReturnnLayersBackend(Backend):
     """
-    RETURNN layers frontend (using TF), where raw_tensor represents a RETURNN layer
+    RETURNN layers backend (using TF), where raw_tensor represents a RETURNN layer
     """
 
     is_tensorflow = True

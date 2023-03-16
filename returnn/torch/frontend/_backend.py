@@ -1,30 +1,109 @@
 """
-Frontend for exposing PyTorch-specific functionality.
+Backend for exposing PyTorch-specific functionality.
 """
 
 from __future__ import annotations
-from typing import Union, Sequence
+from typing import Optional, Union, Sequence, Tuple
 
 import torch
-
-from returnn.frontend_api import Frontend, RawTensorTypes
-from ._internal_frontend import TorchInternalFrontend
 from returnn.tensor import Tensor, Dim
-
 from returnn.util.basic import prod
+
+# noinspection PyProtectedMember
+from returnn.frontend._backend import Backend
+from returnn.frontend import RawTensorTypes
+
 
 _TT = Tensor[torch.Tensor]
 
 
 # Ignore this warning until we really expect that we implemented everything.
 # noinspection PyAbstractClass
-class TorchFrontend(Frontend[torch.Tensor]):
+class TorchBackend(Backend[torch.Tensor]):
     """
-    PyTorch frontend
+    PyTorch backend
     """
 
     RawTensorType = torch.Tensor
-    _internal_frontend = TorchInternalFrontend
+
+    @staticmethod
+    def get_dtype_name_raw(raw_tensor: torch.Tensor) -> str:
+        """
+        :return: dtype of raw tensor, as string
+        """
+        return str(raw_tensor.dtype).replace("torch.", "")
+
+    @staticmethod
+    def get_ndim_raw(raw_tensor: torch.Tensor) -> int:
+        """
+        :return: ndim of raw tensor
+        """
+        return raw_tensor.dim()
+
+    @staticmethod
+    def get_known_shape_raw(raw_tensor: torch.Tensor) -> Tuple[Optional[int]]:
+        """
+        :return: shape of raw tensor; here for PyTorch the full shape is always known
+        """
+        return tuple(raw_tensor.size())
+
+    @staticmethod
+    def expand_dims_raw(raw_tensor: torch.Tensor, axis: int) -> torch.Tensor:
+        """
+        :param raw_tensor:
+        :param axis: e.g. 1
+        :return: raw tensor with new axis
+        """
+        return raw_tensor.unsqueeze(axis)
+
+    @staticmethod
+    def compare_raw(a: torch.Tensor, kind: str, b: torch.Tensor) -> torch.Tensor:
+        """
+        :param a:
+        :param kind: "equal"|"==", "less"|"<", "less_equal"|"<=", "greater"|">", "greater_equal"|">=",
+            "not_equal"|"!="|"<>"
+        :param b:
+        :return: a `kind` b
+        """
+        assert a.dim() == b.dim()
+        kind = {
+            "==": "eq",
+            "<=": "less_equal",
+            "<": "less",
+            ">=": "greater_equal",
+            ">": "greater",
+            "!=": "not_equal",
+            "<>": "not_equal",
+        }.get(kind, kind)
+        op = getattr(torch, kind)  # e.g. torch.equal
+        return op(a, b)
+
+    @staticmethod
+    def combine_raw(a: torch.Tensor, kind: str, b: torch.Tensor) -> torch.Tensor:
+        """
+        :param a:
+        :param kind: "add"|"+", "sub"|"-", "mul"|"*", "truediv"|"/", "floordiv"|"//", "mod"|"%", "pow"|"**",
+            "max"|"maximum", "min"|"minimum", "logical_and", "logical_or", "squared_difference"
+        :param b:
+        :return: a `kind` b
+        """
+        assert a.dim() == b.dim()
+        kind = {
+            "+": "add",
+            "-": "sub",
+            "*": "mul",
+            "/": "true_divide",
+            "truediv": "true_divide",
+            "//": "floor_divide",
+            "floordiv": "floor_divide",
+            "%": "remainder",  # Python-like modulo, not C-like (torch.fmod)
+            "mod": "remainder",
+            "**": "pow",
+            "max": "maximum",
+            "min": "minimum",
+        }.get(kind, kind)
+        op = getattr(torch, kind)  # e.g. torch.add
+        return op(a, b)
 
     @staticmethod
     def convert_to_tensor(value: Union[Tensor, torch.Tensor, RawTensorTypes]) -> Tensor[torch.Tensor]:

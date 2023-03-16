@@ -19,6 +19,7 @@ if TYPE_CHECKING:
 from . import dim as _d
 from . import tensor as _t
 from . import marked_dim as _m
+import returnn.frontend as rf
 
 
 class DimTypes:
@@ -804,7 +805,8 @@ class _DimMixin:
                 # It's not clear what to do. We could create a new dim tag, but the sizes might be different.
                 # Usually we should not get here.
                 # So for now, just error.
-                from returnn._internal_frontend_api import get_internal_frontend_by_tensor_type
+                # noinspection PyProtectedMember
+                from returnn.frontend._backend import get_backend_by_raw_tensor_type
 
                 raise Exception(
                     "\n".join(
@@ -815,7 +817,7 @@ class _DimMixin:
                             )
                             % (self, self.description, self.dyn_size, x, batch),
                             "\nNew size computation graph:",
-                            get_internal_frontend_by_tensor_type(type(x)).format_graph_output(x, max_depth=3),
+                            get_backend_by_raw_tensor_type(type(x)).format_graph_output(x, max_depth=3),
                             "\nThis is maybe the result of an incorrect declare_same_as. ",
                             "same_as = %s" % self.same_as,
                         ]
@@ -1506,7 +1508,7 @@ class _DimMixin:
             return self.dimension
         if self.dyn_size_ext and self.dyn_size_ext.placeholder is not None:  # fast path
             if self.dyn_size_ext.batch_ndim > 0:
-                return self.dyn_size_ext.raw_frontend.reduce(
+                return rf.reduce(
                     self.dyn_size_ext,
                     axis=self.dyn_size_ext.dim_tags,
                     mode="max",
@@ -1530,9 +1532,7 @@ class _DimMixin:
         self.complete_dyn_size()
         if self.dyn_size_ext and self.dyn_size_ext.placeholder is not None:
             if self.dyn_size_ext.batch_ndim > 0:
-                return self.dyn_size_ext.raw_frontend.reduce(
-                    self.dyn_size_ext, axis=self.dyn_size_ext.dim_tags, mode="max"
-                ).raw_tensor
+                return rf.reduce(self.dyn_size_ext, axis=self.dyn_size_ext.dim_tags, mode="max").raw_tensor
             return self.dyn_size_ext.placeholder
         raise Exception("%s: need placeholder, self.dimension or self.dyn_size for dim value" % self)
 

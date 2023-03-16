@@ -170,16 +170,17 @@ class BackendEngine:
             if engine is None:
                 engine = cls._get_default_engine()
 
-        from returnn import frontend_api
+        # noinspection PyProtectedMember
+        from returnn.frontend import _backend
 
         if engine == cls.TensorFlow:
             # Note that we assume that the user wants the RETURNN layers frontend (TF-based)
             # and not the low-level TF frontend.
             # If we want to expose the low-level TF frontend to the user directly at some point,
             # we would need a new config option.
-            frontend_api.select_frontend_returnn_layers_tf()
+            _backend.select_backend_returnn_layers_tf()
         elif engine == cls.Torch:
-            frontend_api.select_frontend_torch()
+            _backend.select_backend_torch()
         cls.selected_engine = engine
 
     @classmethod

@@ -13,10 +13,9 @@ import os as _os
 
 from .__setup__ import get_version_str as _get_version_str
 
-# `returnn.frontend` is a reference to `returnn.frontend_api.global_frontend`.
-# The order of the imports is important here to properly handle partially initialized modules.
-import returnn._internal_frontend_api
-import returnn.frontend_api as _frontend_api
+# This early import is important such that circular imports of partially initialized modules work.
+# noinspection PyProtectedMember
+import returnn.frontend._backend
 
 __long_version__ = _get_version_str(
     fallback="1.0.0+unknown", long=True, verbose_error=True
@@ -29,5 +28,3 @@ from .__old_mod_loader__ import setup as _old_mod_loader_setup
 _old_mod_loader_setup(modules=globals())
 
 __root_dir__ = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))  # can be used as __path__
-
-frontend = _frontend_api.global_frontend

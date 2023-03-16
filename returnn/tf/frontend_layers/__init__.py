@@ -2,4 +2,4 @@
 TensorFlow frontend.
 """
 
-from .frontend import ReturnnLayersFrontend
+from ._backend import ReturnnLayersBackend

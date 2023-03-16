@@ -1,5 +1,5 @@
 """
-Utils
+Internal utils
 """
 
 from __future__ import annotations
@@ -7,40 +7,32 @@ from typing import Union, Optional, Type, TypeVar, Sequence, Tuple
 import numpy
 
 from returnn import frontend as _global_rf
-from returnn.frontend_api import Frontend
-from returnn._internal_frontend_api import InternalFrontend
+from returnn.frontend._backend import Backend
 from returnn.tensor import Tensor, Dim
 
 T = TypeVar("T")
 
 
-def get_frontend_from_tensors(*args):
+def get_backend_from_tensors(*args):
     """
     :param args:
     :return: frontend, fallback to global frontend
     """
     for x in args:
         if isinstance(x, Tensor):
-            return x.raw_frontend
+            # noinspection PyProtectedMember
+            return x._raw_backend
     return _global_rf
 
 
-def rfi(rf: Type[Frontend]) -> Type[InternalFrontend]:
-    """
-    Internal frontend
-    """
-    # noinspection PyProtectedMember
-    return rf._internal_frontend
-
-
-def get_dtype_name(rf: Type[Frontend], x: Union[T, Tensor[T], int, float]) -> str:
+def get_dtype_name(rf: Type[Backend], x: Union[T, Tensor[T], int, float]) -> str:
     """
     :param rf:
     :param x: tensor
     :return: dtype of tensor, as string
     """
     if isinstance(x, rf.RawTensorType):
-        return rfi(rf).get_dtype_name_raw(x)
+        return rf.get_dtype_name_raw(x)
     elif isinstance(x, Tensor):
         return x.dtype
     elif isinstance(x, int):
@@ -51,7 +43,7 @@ def get_dtype_name(rf: Type[Frontend], x: Union[T, Tensor[T], int, float]) -> st
         raise TypeError(f"unexpected type {type(x)}")
 
 
-def is_int(rf: Type[Frontend], x: Union[T, Tensor[T], int, float]) -> bool:
+def is_int(rf: Type[Backend], x: Union[T, Tensor[T], int, float]) -> bool:
     """
     :param rf:
     :param x:
@@ -62,7 +54,7 @@ def is_int(rf: Type[Frontend], x: Union[T, Tensor[T], int, float]) -> bool:
 
 
 def bin_op_out_template(
-    rf: Type[Frontend],
+    rf: Type[Backend],
     a: Union[Tensor[T], int, float, numpy.number],
     b: Union[Tensor[T], int, float, numpy.number],
     *,
@@ -88,7 +80,8 @@ def bin_op_out_template(
     a = rf.convert_to_tensor(a)
     b = rf.convert_to_tensor(b)
     # sanity checks
-    assert a.raw_frontend == b.raw_frontend, "Cannot combine tensors from two different frontends, e.g. TF and PT"
+    # noinspection PyProtectedMember
+    assert a._raw_backend == b._raw_backend, "Cannot combine tensors from two different frontends, e.g. TF and PT"
     assert a.dtype == a.dtype, "For now only operations with Tensors of the same dtypes are supported."
     all_dims = []
     for dim in a.dims + b.dims:
