@@ -14,6 +14,8 @@ from ._tensor_mixin_base import _TensorMixinBase
 
 class _TensorOpOverloadsMixin(_TensorMixinBase):
 
+    # --- comparisons
+
     # _TensorMixin.__eq__ is disabled as per the following error in some TF tests:
     # AssertionError: unhashable type: 'Tensor'.
     # See CI https://github.com/rwth-i6/returnn/actions/runs/4406240591
@@ -36,6 +38,8 @@ class _TensorOpOverloadsMixin(_TensorMixinBase):
 
     def __ge__(self: Tensor, other: Union[_frontend_api.RawTensorTypes, Tensor]) -> Tensor:
         return self.raw_frontend.compare(self, ">=", other)
+
+    # --- math binary and unary ops
 
     def __add__(self: Tensor, other: Union[_frontend_api.RawTensorTypes, Tensor]) -> Tensor:
         return self.raw_frontend.combine(self, "+", other)
@@ -78,6 +82,21 @@ class _TensorOpOverloadsMixin(_TensorMixinBase):
 
     def __rpow__(self: Tensor, other: Union[_frontend_api.RawTensorTypes, Tensor]) -> Tensor:
         return self.raw_frontend.combine(other, "**", self)
+
+    def __neg__(self):  # -x
+        raise NotImplementedError  # TODO
+
+    def __invert__(self):  # ~x
+        raise NotImplementedError  # TODO
+
+    def __abs__(self):
+        raise NotImplementedError  # TODO
+
+    def __ceil__(self):
+        raise NotImplementedError  # TODO
+
+    def __floor__(self):
+        raise NotImplementedError  # TODO
 
     def __and__(self: Tensor, other: Union[_frontend_api.RawTensorTypes, Tensor]) -> Tensor:
         return self.raw_frontend.combine(self, "logical_and", other)
