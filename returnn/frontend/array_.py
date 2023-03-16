@@ -5,7 +5,8 @@ Array (Tensor) functions
 from __future__ import annotations
 from typing import Union, TypeVar
 from returnn.tensor import Tensor
-from ._backend import RawTensorTypes, global_backend
+from ._backend import global_backend
+from .types import RawTensorTypes
 
 T = TypeVar("T")
 
