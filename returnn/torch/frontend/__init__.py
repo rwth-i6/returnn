@@ -2,4 +2,4 @@
 PyTorch frontend.
 """
 
-from ._frontend import TorchFrontend
+from ._backend import TorchBackend

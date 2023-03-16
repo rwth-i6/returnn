@@ -10,7 +10,7 @@ from returnn.tensor import Tensor, Dim
 from returnn.util.basic import prod
 
 # noinspection PyProtectedMember
-from returnn.frontend._api import Frontend, RawTensorTypes
+from returnn.frontend._backend import Backend, RawTensorTypes
 
 
 _TT = Tensor[torch.Tensor]
@@ -18,7 +18,7 @@ _TT = Tensor[torch.Tensor]
 
 # Ignore this warning until we really expect that we implemented everything.
 # noinspection PyAbstractClass
-class TorchFrontend(Frontend[torch.Tensor]):
+class TorchBackend(Backend[torch.Tensor]):
     """
     PyTorch frontend
     """

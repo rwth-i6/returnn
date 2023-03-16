@@ -7,7 +7,7 @@ from typing import Union, Optional, Type, TypeVar, Sequence, Tuple
 import numpy
 
 from returnn import frontend as _global_rf
-from returnn.frontend._api import Frontend
+from returnn.frontend._backend import Backend
 from returnn.tensor import Tensor, Dim
 
 T = TypeVar("T")
@@ -24,7 +24,7 @@ def get_frontend_from_tensors(*args):
     return _global_rf
 
 
-def get_dtype_name(rf: Type[Frontend], x: Union[T, Tensor[T], int, float]) -> str:
+def get_dtype_name(rf: Type[Backend], x: Union[T, Tensor[T], int, float]) -> str:
     """
     :param rf:
     :param x: tensor
@@ -42,7 +42,7 @@ def get_dtype_name(rf: Type[Frontend], x: Union[T, Tensor[T], int, float]) -> st
         raise TypeError(f"unexpected type {type(x)}")
 
 
-def is_int(rf: Type[Frontend], x: Union[T, Tensor[T], int, float]) -> bool:
+def is_int(rf: Type[Backend], x: Union[T, Tensor[T], int, float]) -> bool:
     """
     :param rf:
     :param x:
@@ -53,7 +53,7 @@ def is_int(rf: Type[Frontend], x: Union[T, Tensor[T], int, float]) -> bool:
 
 
 def bin_op_out_template(
-    rf: Type[Frontend],
+    rf: Type[Backend],
     a: Union[Tensor[T], int, float, numpy.number],
     b: Union[Tensor[T], int, float, numpy.number],
     *,

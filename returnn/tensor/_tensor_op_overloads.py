@@ -9,7 +9,7 @@ if TYPE_CHECKING:
     from .tensor import Tensor  # just for type hints; otherwise use _t.Tensor
 
 # noinspection PyProtectedMember
-import returnn.frontend._api as _frontend_api
+import returnn.frontend._backend as _frontend_api
 from ._tensor_mixin_base import _TensorMixinBase
 
 

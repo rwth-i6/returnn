@@ -6,7 +6,7 @@ Dot / matmul
 from __future__ import annotations
 from typing import Sequence, Union, TypeVar
 from returnn.tensor import Tensor, Dim
-from ._api import get_frontend_by_tensor
+from ._backend import get_backend_by_tensor
 
 T = TypeVar("T")
 
@@ -31,5 +31,5 @@ def dot(a: Tensor[T], b: Tensor[T], *, reduce: Union[Dim, Sequence[Dim]]) -> Ten
     :return: result of dot product, Dim order: common axes as sorted in a, unique axes of a (in order),
         unique axes of b (in order)
     """
-    rf = get_frontend_by_tensor(a)
+    rf = get_backend_by_tensor(a)
     return rf.dot(a=a, b=b, reduce=reduce)

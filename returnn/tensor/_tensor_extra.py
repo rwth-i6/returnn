@@ -19,7 +19,7 @@ import returnn.tensor.tensor as _t
 import returnn.tensor.marked_dim as _m
 
 # noinspection PyProtectedMember
-import returnn.frontend._api as _frontend_api
+import returnn.frontend._backend as _frontend_api
 from ._tensor_mixin_base import _TensorMixinBase
 
 
@@ -215,9 +215,9 @@ class _TensorMixin(_TensorMixinBase):
             # even in graph-based backends.
             # Rather, the logic to create placeholders should be done elsewhere.
             # noinspection PyProtectedMember
-            from returnn.tf.frontend_low_level._frontend import TFFrontend
+            from returnn.tf.frontend_low_level._backend import TFBackend
 
-            self.raw_tensor = TFFrontend.create_placeholder(self)
+            self.raw_tensor = TFBackend.create_placeholder(self)
             # Do that after same_dim_tags_as handling.
             _auto_create_size_placeholders_on_dim_tags(name=self.name, dim_tags=self._dims)
 
@@ -225,22 +225,22 @@ class _TensorMixin(_TensorMixinBase):
         self.sanity_check(assume_complete=False)  # TODO still needed?
 
     @property
-    def raw_frontend(self) -> Optional[Type[_frontend_api.Frontend]]:
+    def raw_frontend(self) -> Optional[Type[_frontend_api.Backend]]:
         """
         :return: the backend for the raw tensor
         """
         if self._raw_tensor is None:
             return None
-        return _frontend_api.get_frontend_by_raw_tensor_type(type(self._raw_tensor))
+        return _frontend_api.get_backend_by_raw_tensor_type(type(self._raw_tensor))
 
     @property
-    def _raw_internal_frontend(self) -> Optional[Type[_frontend_api.Frontend]]:
+    def _raw_internal_frontend(self) -> Optional[Type[_frontend_api.Backend]]:
         """
         :return: the internal backend for the raw tensor
         """
         if self._raw_tensor is None:
             return None
-        return _frontend_api.get_frontend_by_raw_tensor_type(type(self._raw_tensor))
+        return _frontend_api.get_backend_by_raw_tensor_type(type(self._raw_tensor))
 
     @property
     def control_flow_ctx(self) -> Optional[ControlFlowContext]:
@@ -2647,12 +2647,12 @@ class _TensorMixin(_TensorMixinBase):
         :rtype: tf.Tensor
         """
         # noinspection PyProtectedMember
-        from returnn.frontend._api import get_frontend_by_raw_tensor_type
+        from returnn.frontend._backend import get_backend_by_raw_tensor_type
 
         assert self.time_dim_axis is not None
         assert self.batch_dim_axis is not None
         dyn_seq_len = self.get_sequence_lengths()
-        rf = get_frontend_by_raw_tensor_type(type(dyn_seq_len))
+        rf = get_backend_by_raw_tensor_type(type(dyn_seq_len))
 
         if self.is_time_major:
             assert self.batch_dim_axis == 1

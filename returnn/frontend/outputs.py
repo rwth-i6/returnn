@@ -5,7 +5,7 @@ mark_as_output, mark_as_loss
 from __future__ import annotations
 from typing import Optional, Sequence, TypeVar
 from returnn.tensor import Tensor
-from ._api import get_frontend_by_tensor
+from ._backend import get_backend_by_tensor
 
 T = TypeVar("T")
 
@@ -57,7 +57,7 @@ def mark_as_loss(
       If you want to change this norm factor, you can set this.
       Basically, for all reporting, it uses sum(loss) * sum(custom_inv_norm_factor).
     """
-    rf = get_frontend_by_tensor(loss)
+    rf = get_backend_by_tensor(loss)
     rf.mark_as_loss(
         loss=loss,
         name=name,
@@ -85,5 +85,5 @@ def mark_as_output(tensor: Tensor, name: str, *, shape: Optional[Sequence[int]] 
         for some external application.
         If not specified, we try to infer BTF or BF as default, if that works, otherwise it will be an error.
     """
-    rf = get_frontend_by_tensor(tensor)
+    rf = get_backend_by_tensor(tensor)
     rf.mark_as_output(tensor=tensor, name=name, shape=shape)

@@ -5,7 +5,7 @@ Array (Tensor) functions
 from __future__ import annotations
 from typing import Union, TypeVar
 from returnn.tensor import Tensor
-from ._api import RawTensorTypes, global_frontend
+from ._backend import RawTensorTypes, global_backend
 
 T = TypeVar("T")
 
@@ -17,4 +17,4 @@ def convert_to_tensor(value: Union[Tensor, T, RawTensorTypes]) -> Tensor[T]:
     """
     if isinstance(value, Tensor):  # fast path
         return value
-    return global_frontend.convert_to_tensor(value=value)
+    return global_backend.convert_to_tensor(value=value)

@@ -6,7 +6,7 @@ from __future__ import annotations
 from typing import Union, TypeVar, Sequence
 from returnn.util.basic import NotSpecified
 from returnn.tensor import Tensor, Dim
-from ._api import get_frontend_by_tensor
+from ._backend import get_backend_by_tensor
 
 T = TypeVar("T")
 
@@ -27,5 +27,5 @@ def reduce(
     :param use_time_mask: if True (default), use the time mask (part of dim tag) to ignore padding frames
     :return: tensor with axis removed
     """
-    rf = get_frontend_by_tensor(source)
+    rf = get_backend_by_tensor(source)
     return rf.reduce(source=source, mode=mode, axis=axis, use_time_mask=use_time_mask)

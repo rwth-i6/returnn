@@ -13,14 +13,14 @@ from returnn.tensor import Tensor, Dim
 from returnn.tf.util import basic as tf_util
 
 # noinspection PyProtectedMember
-from returnn.frontend._api import Frontend, RawTensorTypes
+from returnn.frontend._backend import Backend, RawTensorTypes
 
 _TT = Tensor[tf.Tensor]
 
 
 # Ignore this warning until we really expect that we implemented everything.
 # noinspection PyAbstractClass
-class TFFrontend(Frontend[tf.Tensor]):
+class TFBackend(Backend[tf.Tensor]):
     """
     TensorFlow low-level frontend, operating on tf.Tensor
     """

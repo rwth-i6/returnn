@@ -1,9 +1,5 @@
 """
-Frontend API
-
-The convention for the user is to do::
-
-    from returnn import frontend as rf
+Backends for the frontend API
 """
 
 from __future__ import annotations
@@ -23,9 +19,9 @@ T = TypeVar("T")  # tf.Tensor, torch.Tensor or so
 T2 = TypeVar("T2")
 
 
-class Frontend(Generic[T]):
+class Backend(Generic[T]):
     """
-    Abstract base class for the frontend, operating on tensor type T, i.e. :class:`Tensor[T]`.
+    Abstract base class for the backend, operating on tensor type T, i.e. :class:`Tensor[T]`.
 
     This class and instances do not have any state,
     and all functions are staticmethod (or classmethod).
@@ -247,7 +243,7 @@ class Frontend(Generic[T]):
         """
         # Default implementation for eager-based frameworks.
         assert all(dim is not None for dim in shape)
-        rf = get_frontend_by_raw_tensor_type(type(raw_tensor))
+        rf = get_backend_by_raw_tensor_type(type(raw_tensor))
         existing_shape = rf.get_known_shape_raw(raw_tensor)
         assert all(dim is not None for dim in existing_shape)
         assert shape == existing_shape
@@ -555,35 +551,35 @@ class Frontend(Generic[T]):
 # This is exposed to the user as `returnn.frontend`.
 # The __class__ assignment is done in `select_engine`.
 # Use object.__new__ because we disallow creating instances of Frontend.
-global_frontend = object.__new__(Frontend)
+global_backend = object.__new__(Backend)
 
-_dispatch_table = {}  # type: Dict[Type, Type[Frontend]]
+_dispatch_table = {}  # type: Dict[Type, Type[Backend]]
 
 
-def select_frontend_returnn_layers_tf():
+def select_backend_returnn_layers_tf():
     """
-    Selects the RETURNN layers frontend (based on TF).
+    Selects the RETURNN layers backend (based on TF).
     """
     import tensorflow as tf
 
-    frontend = get_frontend_by_raw_tensor_type(tf.Tensor)  # side-effect: register it
-    global_frontend.__class__ = frontend
+    backend = get_backend_by_raw_tensor_type(tf.Tensor)  # side-effect: register it
+    global_backend.__class__ = backend
 
     # TODO returnn layer type, register_frontend_by_tensor_type for that
     #   global_frontend.__class__ = ReturnnLayersFrontend
 
 
-def select_frontend_torch():
+def select_backend_torch():
     """
-    Selects the PyTorch (low-level) frontend.
+    Selects the PyTorch (low-level) backend.
     """
     import torch
 
-    frontend = get_frontend_by_raw_tensor_type(torch.Tensor)  # side-effect: register it
-    global_frontend.__class__ = frontend
+    backend = get_backend_by_raw_tensor_type(torch.Tensor)  # side-effect: register it
+    global_backend.__class__ = backend
 
 
-def get_frontend_by_tensor(tensor: Tensor, *, fallback: Optional[T2] = None) -> Union[Type[Frontend[T]], T2]:
+def get_backend_by_tensor(tensor: Tensor, *, fallback: Optional[T2] = None) -> Union[Type[Backend[T]], T2]:
     """
     :param tensor:
     :param fallback:
@@ -591,10 +587,10 @@ def get_frontend_by_tensor(tensor: Tensor, *, fallback: Optional[T2] = None) -> 
     if fallback and tensor.raw_tensor is None:
         return fallback
     assert tensor.raw_tensor is not None
-    return get_frontend_by_raw_tensor_type(type(tensor.raw_tensor))
+    return get_backend_by_raw_tensor_type(type(tensor.raw_tensor))
 
 
-def get_frontend_by_raw_tensor_type(tensor_type: Type[T]) -> Union[Type[Frontend[T]]]:
+def get_backend_by_raw_tensor_type(tensor_type: Type[T]) -> Union[Type[Backend[T]]]:
     """
     :param tensor_type:
     """
@@ -607,34 +603,34 @@ def get_frontend_by_raw_tensor_type(tensor_type: Type[T]) -> Union[Type[Frontend
                 _dispatch_table[tensor_type] = _dispatch_table[type_]
                 return _dispatch_table[type_]
     if tensor_type not in _dispatch_table:
-        # It would be registered if there was any select_engine or select_frontend_* call.
+        # It would be registered if there was any select_engine or select_backend_* call.
         # However, some code might not have done that, so for the common cases,
         # we do it here.
         if tensor_type.__module__.split(".")[0] == "tensorflow":
-            from returnn.tf.frontend_low_level import TFFrontend
+            from returnn.tf.frontend_low_level import TFBackend
 
-            frontend_type = TFFrontend
+            backend_type = TFBackend
             tensor_types = _get_tensor_types_tf()
         elif tensor_type.__module__.split(".")[0] == "torch":
-            from returnn.torch.frontend import TorchFrontend
+            from returnn.torch.frontend import TorchBackend
 
-            frontend_type = TorchFrontend
+            backend_type = TorchBackend
             tensor_types = _get_tensor_types_torch()
         else:
             raise Exception(f"unknown tensor type {tensor_type}")
         assert any(issubclass(tensor_type, type_) for type_ in tensor_types)
         for type_ in tensor_types:
-            register_frontend_by_tensor_type(type_, frontend_type)
-        return frontend_type
+            register_backend_by_tensor_type(type_, backend_type)
+        return backend_type
     return _dispatch_table[tensor_type]
 
 
-def register_frontend_by_tensor_type(tensor_type: Type[T], frontend: Type[Frontend[T]]):
+def register_backend_by_tensor_type(tensor_type: Type[T], backend: Type[Backend[T]]):
     """
     :param tensor_type:
-    :param frontend:
+    :param backend:
     """
-    _dispatch_table[tensor_type] = frontend
+    _dispatch_table[tensor_type] = backend
 
 
 def _get_tensor_types_tf():

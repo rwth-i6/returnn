@@ -9,12 +9,12 @@ from returnn.util.basic import NotSpecified
 from returnn.tensor import Tensor, Dim
 
 # noinspection PyProtectedMember
-from returnn.frontend._api import Frontend
+from returnn.frontend._backend import Backend
 
 
 # Ignore this warning until we really expect that we implemented everything.
 # noinspection PyAbstractClass
-class ReturnnLayersFrontend(Frontend):
+class ReturnnLayersBackend(Backend):
     """
     RETURNN layers frontend (using TF), where raw_tensor represents a RETURNN layer
     """
