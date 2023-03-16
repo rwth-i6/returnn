@@ -1,5 +1,5 @@
 """
-Frontend for exposing PyTorch-specific functionality.
+Backend for exposing PyTorch-specific functionality.
 """
 
 from __future__ import annotations
@@ -20,7 +20,7 @@ _TT = Tensor[torch.Tensor]
 # noinspection PyAbstractClass
 class TorchBackend(Backend[torch.Tensor]):
     """
-    PyTorch frontend
+    PyTorch backend
     """
 
     RawTensorType = torch.Tensor

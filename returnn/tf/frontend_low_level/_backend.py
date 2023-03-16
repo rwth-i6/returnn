@@ -1,5 +1,5 @@
 """
-Frontend for exposing TensorFlow-specific functionality.
+Backend for exposing TensorFlow-specific functionality.
 """
 
 from __future__ import annotations
@@ -22,7 +22,7 @@ _TT = Tensor[tf.Tensor]
 # noinspection PyAbstractClass
 class TFBackend(Backend[tf.Tensor]):
     """
-    TensorFlow low-level frontend, operating on tf.Tensor
+    TensorFlow low-level backend, operating on tf.Tensor
     """
 
     RawTensorType = tf.Tensor

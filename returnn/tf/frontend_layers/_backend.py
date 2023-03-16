@@ -1,5 +1,5 @@
 """
-High-level frontend for RETURNN layers
+High-level backend for RETURNN layers
 """
 
 from __future__ import annotations
@@ -16,7 +16,7 @@ from returnn.frontend._backend import Backend
 # noinspection PyAbstractClass
 class ReturnnLayersBackend(Backend):
     """
-    RETURNN layers frontend (using TF), where raw_tensor represents a RETURNN layer
+    RETURNN layers backend (using TF), where raw_tensor represents a RETURNN layer
     """
 
     is_tensorflow = True
