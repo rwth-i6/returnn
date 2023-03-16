@@ -2670,6 +2670,7 @@ def _get_tf_gcc_path(bin_name):
     gcc_candidates = []
     tf_gcc_version = get_tf_gcc_version()
     if tf_gcc_version:
+        tf_gcc_version = tf_gcc_version.split(".")  # ["5", "4", "0"]
         for i in range(len(tf_gcc_version), 0, -1):
             gcc_candidates.append("%s-%s" % (bin_name, ".".join(tf_gcc_version[:i])))
 
