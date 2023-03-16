@@ -34,7 +34,6 @@ from returnn.util.basic import pip_install, which, which_pip, pip_check_is_insta
 
 travis_env = os.environ.get("TRAVIS") == "true"
 github_env = os.environ.get("GITHUB_ACTIONS") == "true"
-pycodestyle_path = "pycodestyle"
 
 gray_color = "black"  # black is usually gray
 if github_env:
@@ -246,16 +245,6 @@ def setup_pycharm_python_interpreter(pycharm_dir):
             except subprocess.CalledProcessError as exc:
                 print("Pip install failed:", exc)
                 print("Ignore...")
-
-    global pycodestyle_path
-    pycodestyle_path = which("pycodestyle")
-    if not pycodestyle_path:
-        raise FileNotFoundError(f"pycodestyle not found. PATH = {os.environ.get('PATH')!r}")
-    if not (os.stat(pycodestyle_path).st_mode & stat.S_IEXEC):
-        print(f"WARNING: pycodestyle not executable: {pycodestyle_path!r}")
-        subprocess.check_call(["ls", "-la", pycodestyle_path])
-        print("Make it executable...")
-        os.chmod(pycodestyle_path, os.stat(pycodestyle_path).st_mode | stat.S_IEXEC)
     fold_end()
 
     fold_start("script.setup_pycharm_python_interpreter")
@@ -505,7 +494,9 @@ def run_inspect(pycharm_dir, src_dir, skip_pycharm_inspect=False):
         )
         indent_size = 4
         cmd = [
-            pycodestyle_path,
+            sys.executable,
+            "-m",
+            "pycodestyle",
             py_src_file,
             "--ignore=%s" % ignore_codes,
             "--indent-size=%i" % indent_size,
@@ -513,13 +504,8 @@ def run_inspect(pycharm_dir, src_dir, skip_pycharm_inspect=False):
         ]
         print("$ %s" % " ".join(cmd))
         sys.stdout.flush()
-        try:
-            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-            stdout, _ = proc.communicate()
-        except FileNotFoundError:
-            print("pycodestyle content:")
-            print(open(pycodestyle_path).read())
-            raise
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        stdout, _ = proc.communicate()
         problem_count = 0
         # We do not check returncode, as this is always non-zero if there is any warning.
         for line in stdout.decode("utf8").splitlines():
