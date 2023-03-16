@@ -178,9 +178,9 @@ class BackendEngine:
             # and not the low-level TF frontend.
             # If we want to expose the low-level TF frontend to the user directly at some point,
             # we would need a new config option.
-            _api.select_backend_returnn_layers_tf()
+            _backend.select_backend_returnn_layers_tf()
         elif engine == cls.Torch:
-            _api.select_backend_torch()
+            _backend.select_backend_torch()
         cls.selected_engine = engine
 
     @classmethod
