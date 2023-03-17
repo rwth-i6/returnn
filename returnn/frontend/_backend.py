@@ -31,15 +31,6 @@ class Backend(Generic[T]):
     def __init__(self):
         raise Exception("do not instantiate this class")
 
-    # --- some generic helpers
-
-    @classmethod
-    def get_current_run_ctx(cls) -> RunCtx:
-        """
-        :return: current run context, see :class:`RunCtx`
-        """
-        pass  # TODO...
-
     # --- some functions which provide some reasonable default implementation
 
     @classmethod
@@ -511,16 +502,3 @@ def _get_tensor_types_torch():
 
     ls = [torch.Tensor, torch.nn.Parameter]
     return tuple(ls)
-
-
-class RunCtx:
-    """
-    We can either be in param-init stage,
-    or in the main training loop,
-    or forwarding loop.
-
-    In training, we expect that some loss is being defined via mark_as_loss().
-    In forwarding, we expect that some output is being defined via mark_as_output().
-    """
-
-    # TODO ...
