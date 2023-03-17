@@ -399,11 +399,13 @@ class MelFilterbankLayer(_ConcatInputLayer):
 
     layer_class = "mel_filterbank"
 
-    def __init__(self, sampling_rate=16000, fft_size=1024, nr_of_filters=80, **kwargs):
+    def __init__(self, sampling_rate=16000, fft_size=1024, nr_of_filters=80, f_min=None, f_max=None, **kwargs):
         """
         :param int sampling_rate: sampling rate of the signal which the input originates from
         :param int fft_size: fft_size with which the time signal was transformed into the intput
         :param int nr_of_filters: number of output filter bins
+        :param float f_min: minimum frequency for mel filters
+        :param float f_max: maximum frequency for mel filters
         """
 
         # noinspection PyShadowingNames
@@ -486,7 +488,9 @@ class MelFilterbankLayer(_ConcatInputLayer):
 
         input_placeholder = self.input_data.get_placeholder_as_batch_major()
 
-        mel_fbank_mat = tf_mel_filter_bank(0, sampling_rate / 2.0, sampling_rate, fft_size, nr_of_filters)
+        f_min = f_min or 0
+        f_max = f_max or sampling_rate / 2.0
+        mel_fbank_mat = tf_mel_filter_bank(f_min, f_max, sampling_rate, fft_size, nr_of_filters)
         self.output.placeholder = tf.einsum(
             "btf,bfc->btc",
             input_placeholder,
