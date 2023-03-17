@@ -2666,6 +2666,8 @@ class _TensorMixin(_TensorMixinBase):
           We assert here that the axis is dynamic (:func:`is_axis_dynamic`), i.e. we have the size.
         :rtype: tf.Tensor
         """
+        import returnn.frontend as rf
+
         if axis is None:
             assert self.time_dim_axis is not None
             axis = self.time_dim_axis
@@ -2676,20 +2678,19 @@ class _TensorMixin(_TensorMixinBase):
         assert axis != self.batch_dim_axis
         tag: Dim = self.dim_tags[axis]
         assert tag.dyn_size_ext and tag.dyn_size_ext.raw_tensor is not None
-        rf = tag.dyn_size_ext._raw_backend
-        rif = tag.dyn_size_ext._raw_backend
+        backend = tag.dyn_size_ext._raw_backend
         assert set(tag.dyn_size_ext.dim_tags).issubset(self.dim_tags)  # https://github.com/rwth-i6/returnn/issues/721
-        with rif.name_scope_raw("get_sequence_mask_broadcast"):
+        with backend.name_scope_raw("get_sequence_mask_broadcast"):
             if tag.dyn_size_ext.have_batch_axis() and tag.dyn_size_ext.batch_ndim == 1:  # just [B]
                 # This is the common case where the size is of shape [B].
                 # We make use of sequence_mask or sequence_mask_time_major in that case,
                 # which is optimized by caching.
                 size = tag.dyn_size
-                seq_mask = rif.sequence_mask_raw(size, batch_major=axis >= self.batch_dim_axis)  # (B,T) or (T,B)
+                seq_mask = backend.sequence_mask_raw(size, batch_major=axis >= self.batch_dim_axis)  # (B,T) or (T,B)
                 shape = [1] * self.batch_ndim  # type: List[Union[int,_t.RawTensorType]]
                 shape[self.batch_dim_axis] = self.get_batch_dim()
                 shape[axis] = tag.get_dim_value()
-                seq_mask = rif.reshape_raw(seq_mask, shape)
+                seq_mask = backend.reshape_raw(seq_mask, shape)
                 assert seq_mask.get_shape().ndims == self.batch_ndim
             else:  # size is something unusual, not just [B], but e.g. [B,S] or so
                 max_idx = rf.reduce(
@@ -2709,7 +2710,7 @@ class _TensorMixin(_TensorMixinBase):
                 # Thus, mask size_ext itself, and set the padded values to 1.
                 # This assumes that max_idx >= 1.
                 size_ext = tag.dyn_size_ext.copy_masked(max_idx)
-                idx_range = rf.range_over_dim(tag)
+                idx_range = backend.range_over_dim(tag)
                 seq_mask = (
                     rf.compare(idx_range, "<", size_ext, allow_broadcast_all_sources=True, dim_order=self.dims)
                     .copy_compatible_to(self, check_dtype=False, check_sparse=False)
