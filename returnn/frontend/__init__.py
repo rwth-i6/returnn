@@ -13,6 +13,7 @@ The convention for the user is to do::
 from .array_ import *
 from .dims import *
 from .dot import *
+from .dtype import *
 from .math_ops import *
 from .outputs import *
 from .reduce import *

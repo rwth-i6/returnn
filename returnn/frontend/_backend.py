@@ -28,28 +28,10 @@ class Backend(Generic[T]):
     RawTensorType: Type[T]
     is_tensorflow: bool = False  # whether this framework uses TensorFlow
 
-    # class private attribs
-    _default_int_dtype: str = "int32"
-    _default_float_dtype: str = "float32"
-
     def __init__(self):
         raise Exception("do not instantiate this class")
 
     # --- some generic helpers
-
-    @classmethod
-    def get_default_int_dtype(cls) -> str:
-        """
-        :return: default dtype for int
-        """
-        return cls._default_int_dtype
-
-    @classmethod
-    def get_default_float_dtype(cls) -> str:
-        """
-        :return: default dtype for float
-        """
-        return cls._default_float_dtype
 
     @classmethod
     def get_current_run_ctx(cls) -> RunCtx:

@@ -9,6 +9,7 @@ import numpy
 from returnn import frontend as _global_rf
 from returnn.frontend._backend import Backend
 from returnn.tensor import Tensor, Dim
+import returnn.frontend as rf
 
 T = TypeVar("T")
 
@@ -25,14 +26,14 @@ def get_backend_from_tensors(*args):
     return _global_rf
 
 
-def get_dtype_name(rf: Type[Backend], x: Union[T, Tensor[T], int, float]) -> str:
+def get_dtype_name(backend: Type[Backend], x: Union[T, Tensor[T], int, float]) -> str:
     """
-    :param rf:
+    :param backend:
     :param x: tensor
     :return: dtype of tensor, as string
     """
-    if isinstance(x, rf.RawTensorType):
-        return rf.get_dtype_name_raw(x)
+    if isinstance(x, backend.RawTensorType):
+        return backend.get_dtype_name_raw(x)
     elif isinstance(x, Tensor):
         return x.dtype
     elif isinstance(x, int):
@@ -43,18 +44,18 @@ def get_dtype_name(rf: Type[Backend], x: Union[T, Tensor[T], int, float]) -> str
         raise TypeError(f"unexpected type {type(x)}")
 
 
-def is_int(rf: Type[Backend], x: Union[T, Tensor[T], int, float]) -> bool:
+def is_int(backend: Type[Backend], x: Union[T, Tensor[T], int, float]) -> bool:
     """
-    :param rf:
+    :param backend:
     :param x:
     :return: whether the dtype is int
     """
-    dtype = get_dtype_name(rf, x)
+    dtype = get_dtype_name(backend, x)
     return dtype.startswith("int") or dtype.startswith("uint")
 
 
 def bin_op_out_template(
-    rf: Type[Backend],
+    backend: Type[Backend],
     a: Union[Tensor[T], int, float, numpy.number],
     b: Union[Tensor[T], int, float, numpy.number],
     *,
@@ -66,7 +67,7 @@ def bin_op_out_template(
     """
     make template for output tensor of binary op
 
-    :param rf:
+    :param backend:
     :param a:
     :param b:
     :param name: str
@@ -77,8 +78,8 @@ def bin_op_out_template(
         Not all the dims of a and b need to be specified here, and there could also be other dims in the dim_order.
     :return: out, a, b
     """
-    a = rf.convert_to_tensor(a)
-    b = rf.convert_to_tensor(b)
+    a = backend.convert_to_tensor(a)
+    b = backend.convert_to_tensor(b)
     # sanity checks
     # noinspection PyProtectedMember
     assert a._raw_backend == b._raw_backend, "Cannot combine tensors from two different frontends, e.g. TF and PT"
