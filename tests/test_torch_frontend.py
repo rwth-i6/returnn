@@ -8,7 +8,7 @@ import torch
 import pytest
 
 from returnn.tensor import Tensor, Dim
-from returnn.torch.frontend import TorchBackend as rf
+import returnn.frontend as rf
 
 
 def test_dot_scalar_multiplication():

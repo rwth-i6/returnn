@@ -8,12 +8,12 @@ import torch
 import pytest
 
 from returnn.tensor import Tensor, Dim
-from returnn.torch.frontend import TorchBackend as rf
+import returnn.frontend as rf
+
 
 # Tensor.__eq__ is disabled as per the following error in some TF tests:
 # AssertionError: unhashable type: 'Tensor'.
 # See CI https://github.com/rwth-i6/returnn/actions/runs/4406240591
-"""
 def test_compare_eq():
     a_raw = torch.tensor([2.0, 2.0, 2.0])
     b_raw = torch.tensor([1.0, 2.0, 3.0])
@@ -30,7 +30,6 @@ def test_compare_eq():
     assert result.raw_tensor.tolist() == [False, True, False]
     assert result_alt1.raw_tensor.tolist() == [False, True, False]
     assert result_alt2.raw_tensor.tolist() == [False, True, False]
-"""
 
 
 def test_compare_ne():
