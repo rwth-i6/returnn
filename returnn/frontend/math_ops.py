@@ -9,6 +9,8 @@ import numpy
 from returnn.tensor import Tensor, Dim
 from .types import RawTensorTypes as _RawTensorTypes
 
+__all__ = ["compare", "combine"]
+
 
 # noinspection PyNestedDecorators
 @typing.overload

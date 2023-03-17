@@ -10,6 +10,8 @@ from ._backend import get_backend_by_tensor, global_backend
 
 T = TypeVar("T")
 
+__all__ = ["range_over_dim"]
+
 
 def range_over_dim(dim: Dim) -> Tensor[T]:
     """

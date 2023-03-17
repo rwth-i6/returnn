@@ -10,6 +10,8 @@ from ._backend import get_backend_by_tensor
 
 T = TypeVar("T")
 
+__all__ = ["reduce"]
+
 
 def reduce(
     source: Tensor[T],

@@ -9,6 +9,8 @@ from ._backend import get_backend_by_tensor
 
 T = TypeVar("T")
 
+__all__ = ["mark_as_output", "mark_as_loss"]
+
 
 def mark_as_loss(
     loss: Tensor,

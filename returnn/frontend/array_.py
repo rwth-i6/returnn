@@ -10,6 +10,8 @@ from .types import RawTensorTypes
 
 T = TypeVar("T")
 
+__all__ = ["convert_to_tensor"]
+
 
 def convert_to_tensor(value: Union[Tensor, T, RawTensorTypes]) -> Tensor[T]:
     """
