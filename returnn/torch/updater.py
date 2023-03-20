@@ -170,7 +170,7 @@ class Updater(object):
         optim_class_init_kwargs = _get_class_init_kwargs(optim_class)
         # epsilon is named eps in torch.
         # If the user specified it as epsilon, parse it as eps for the optimizer
-        if "eps" in optim_class_init_kwargs and "epsilion" in opt_kwargs:
+        if "eps" in optim_class_init_kwargs and "epsilon" in opt_kwargs:
             opt_kwargs["eps"] = opt_kwargs.pop("epsilon")
         if "learning_rate" in optimizer_opts:
             raise ValueError("'learning_rate' should be set outside of the 'optimizer' dict.")
