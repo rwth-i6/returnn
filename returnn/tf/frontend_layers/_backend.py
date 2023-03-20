@@ -26,4 +26,5 @@ class ReturnnLayersBackend(Backend):
         source: Tensor, *, mode: str, axis: Union[Dim, Sequence[Dim]], use_time_mask: bool = NotSpecified
     ) -> Tensor:
         """Reduce"""
-        raise NotImplementedError  # TODO
+        assert mode in Backend._AllowedReduceModes
+        return source  # TODO

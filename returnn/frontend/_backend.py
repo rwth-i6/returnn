@@ -408,6 +408,8 @@ class Backend(Generic[T]):
         """
         raise NotImplementedError
 
+    _AllowedReduceModes = {"sum", "max", "min", "mean", "logsumexp", "any", "all", "argmin", "argmax"}
+
     @staticmethod
     def reduce(
         source: Tensor[T],

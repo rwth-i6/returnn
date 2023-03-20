@@ -373,6 +373,7 @@ class TFBackend(Backend[tf.Tensor]):
     @staticmethod
     def reduce(source: _TT, *, mode: str, axis: Union[Dim, Sequence[Dim]], use_time_mask: bool = NotSpecified) -> _TT:
         """Reduce"""
+        assert mode in Backend._AllowedReduceModes
         x = source
         axes = x.get_axes_from_description(axis)
         if use_time_mask in (None, NotSpecified):
@@ -387,8 +388,6 @@ class TFBackend(Backend[tf.Tensor]):
             out_data.dtype = "int32"
         assert isinstance(use_time_mask, bool)
         mode = mode.lower()
-        if mode == "avg":  # alias
-            mode = "mean"
         reduce_abs_funcs = {
             name: getattr(tf, "reduce_%s" % name) for name in ["max", "min", "sum", "logsumexp", "any", "all"]
         }
