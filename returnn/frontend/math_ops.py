@@ -31,13 +31,16 @@ __all__ = [
     "logical_not",
     "identity",
     "exp",
+    "expm1",
     "log",
     "log1p",
     "sqrt",
+    "rsqrt",
     "square",
     "abs",
     "tanh",
     "sigmoid",
+    "log_sigmoid",
     "sin",
     "cos",
     "ceil",
@@ -267,6 +270,12 @@ def exp(a: Tensor) -> Tensor:
     return a._raw_backend.activation_raw(a.raw_tensor, "exp")
 
 
+def expm1(a: Tensor) -> Tensor:
+    """expm1"""
+    # noinspection PyProtectedMember
+    return a._raw_backend.activation_raw(a.raw_tensor, "expm1")
+
+
 def log(a: Tensor) -> Tensor:
     """log"""
     # noinspection PyProtectedMember
@@ -283,6 +292,12 @@ def sqrt(a: Tensor) -> Tensor:
     """sqrt"""
     # noinspection PyProtectedMember
     return a._raw_backend.activation_raw(a.raw_tensor, "sqrt")
+
+
+def rsqrt(a: Tensor) -> Tensor:
+    """rsqrt"""
+    # noinspection PyProtectedMember
+    return a._raw_backend.activation_raw(a.raw_tensor, "rsqrt")
 
 
 def square(a: Tensor) -> Tensor:
@@ -308,6 +323,12 @@ def sigmoid(a: Tensor) -> Tensor:
     """sigmoid"""
     # noinspection PyProtectedMember
     return a._raw_backend.activation_raw(a.raw_tensor, "sigmoid")
+
+
+def log_sigmoid(a: Tensor) -> Tensor:
+    """log_sigmoid"""
+    # noinspection PyProtectedMember
+    return a._raw_backend.activation_raw(a.raw_tensor, "log_sigmoid")
 
 
 def sin(a: Tensor) -> Tensor:

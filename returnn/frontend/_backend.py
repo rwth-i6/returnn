@@ -184,13 +184,16 @@ class Backend(Generic[T]):
     # or unwanted incompatibilities.
     _AllowedActivationFuncs = {
         "exp",
+        "expm1",
         "log",
         "log1p",
         "sqrt",
+        "rsqrt",
         "square",
         "abs",
         "tanh",
         "sigmoid",
+        "log_sigmoid",
         "sin",
         "cos",
         "ceil",
