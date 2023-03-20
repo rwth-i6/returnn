@@ -26,6 +26,7 @@ __all__ = [
     "neg",
     "mod",
     "pow",
+    "squared_difference",
     "logical_and",
     "logical_or",
     "logical_not",
@@ -241,6 +242,11 @@ def mod(a: Tensor, b: Tensor) -> Tensor:
 def pow(a: Tensor, b: Tensor) -> Tensor:
     """pow"""
     return combine(a, "pow", b)
+
+
+def squared_difference(a: Tensor, b: Tensor) -> Tensor:
+    """squared_difference"""
+    return combine(a, "squared_difference", b)
 
 
 def logical_and(a: Tensor, b: Tensor) -> Tensor:
