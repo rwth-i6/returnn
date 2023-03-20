@@ -29,6 +29,7 @@ __all__ = [
     "logical_and",
     "logical_or",
     "logical_not",
+    "identity",
     "exp",
     "log",
     "log1p",
@@ -251,6 +252,13 @@ def logical_not(a: Tensor) -> Tensor:
     """logical_not"""
     # noinspection PyProtectedMember
     return a._raw_backend.activation_raw(a.raw_tensor, "logical_not")
+
+
+def identity(x: Tensor) -> Tensor:
+    """
+    Identity function. Just to have one canonical. Does nothing, returns the input.
+    """
+    return x
 
 
 def exp(a: Tensor) -> Tensor:
