@@ -57,6 +57,22 @@ class TorchBackend(Backend[torch.Tensor]):
         return raw_tensor.unsqueeze(axis)
 
     @staticmethod
+    def activation_raw(raw_tensor: torch.Tensor, func: str) -> torch.Tensor:
+        """
+        :param raw_tensor:
+        :param func: e.g. "tanh"
+        :return: raw tensor after activation
+        """
+        assert func in Backend._AllowedActivationFuncs
+        if hasattr(torch, func):
+            f = getattr(torch, func)
+        elif hasattr(torch.nn.functional, func):
+            f = getattr(torch.nn.functional, func)
+        else:
+            raise ValueError(f"unknown activation function {func!r}")
+        return f(raw_tensor)
+
+    @staticmethod
     def compare_raw(a: torch.Tensor, kind: str, b: torch.Tensor) -> torch.Tensor:
         """
         :param a:

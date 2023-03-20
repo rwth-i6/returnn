@@ -179,6 +179,39 @@ class Backend(Generic[T]):
         """
         raise NotImplementedError
 
+    # Restrict the possible activation function names,
+    # to not get unexpected behavior,
+    # or unwanted incompatibilities.
+    _AllowedActivationFuncs = {
+        "exp",
+        "log",
+        "log1p",
+        "sqrt",
+        "square",
+        "abs",
+        "tanh",
+        "sigmoid",
+        "sin",
+        "cos",
+        "ceil",
+        "floor",
+        "round",
+        "relu",
+        "elu",
+        "selu",
+        "logical_not",
+        "neg",
+    }
+
+    @staticmethod
+    def activation_raw(raw_tensor: T, func: str) -> T:
+        """
+        :param raw_tensor:
+        :param func: "tanh", "sigmoid", "relu", ...
+        :return: raw tensor with activation applied
+        """
+        raise NotImplementedError
+
     @staticmethod
     def sequence_mask_raw(lengths: T, *, batch_major: bool = True) -> T:
         """

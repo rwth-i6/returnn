@@ -197,6 +197,24 @@ class TFBackend(Backend[tf.Tensor]):
             return tf.tile(raw_tensor, [1] * axis + [dim] + [1] * (raw_tensor.shape.ndims - axis - 1))
 
     @staticmethod
+    def activation_raw(raw_tensor: tf.Tensor, func: str) -> tf.Tensor:
+        """
+        :param raw_tensor:
+        :param func: e.g. "tanh"
+        :return: raw tensor after activation
+        """
+        assert func in Backend._AllowedActivationFuncs
+        if hasattr(tf.math, func):
+            f = getattr(tf.math, func)
+        elif hasattr(tf.nn, func):
+            f = getattr(tf.nn, func)
+        elif hasattr(tf, func):
+            f = getattr(tf, func)
+        else:
+            raise ValueError(f"unknown activation function {func!r}")
+        return f(raw_tensor)
+
+    @staticmethod
     def sequence_mask_raw(lengths: tf.Tensor, *, batch_major: bool = True) -> tf.Tensor:
         """
         Wraps around tf.sequence_mask().

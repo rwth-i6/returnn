@@ -23,11 +23,28 @@ __all__ = [
     "mul",
     "true_divide",
     "floor_divide",
+    "neg",
     "mod",
     "pow",
     "logical_and",
     "logical_or",
     "logical_not",
+    "exp",
+    "log",
+    "log1p",
+    "sqrt",
+    "square",
+    "abs",
+    "tanh",
+    "sigmoid",
+    "sin",
+    "cos",
+    "ceil",
+    "floor",
+    "round",
+    "relu",
+    "elu",
+    "selu",
 ]
 
 
@@ -203,6 +220,12 @@ def floor_divide(a: Tensor, b: Tensor) -> Tensor:
     return combine(a, "floordiv", b)
 
 
+def neg(a: Tensor) -> Tensor:
+    """neg"""
+    # noinspection PyProtectedMember
+    return a._raw_backend.activation_raw(a.raw_tensor, "neg")
+
+
 def mod(a: Tensor, b: Tensor) -> Tensor:
     """mod"""
     return combine(a, "mod", b)
@@ -226,4 +249,103 @@ def logical_or(a: Tensor, b: Tensor) -> Tensor:
 
 def logical_not(a: Tensor) -> Tensor:
     """logical_not"""
-    return a  # TODO
+    # noinspection PyProtectedMember
+    return a._raw_backend.activation_raw(a.raw_tensor, "logical_not")
+
+
+def exp(a: Tensor) -> Tensor:
+    """exp"""
+    # noinspection PyProtectedMember
+    return a._raw_backend.activation_raw(a.raw_tensor, "exp")
+
+
+def log(a: Tensor) -> Tensor:
+    """log"""
+    # noinspection PyProtectedMember
+    return a._raw_backend.activation_raw(a.raw_tensor, "log")
+
+
+def log1p(a: Tensor) -> Tensor:
+    """log1p"""
+    # noinspection PyProtectedMember
+    return a._raw_backend.activation_raw(a.raw_tensor, "log1p")
+
+
+def sqrt(a: Tensor) -> Tensor:
+    """sqrt"""
+    # noinspection PyProtectedMember
+    return a._raw_backend.activation_raw(a.raw_tensor, "sqrt")
+
+
+def square(a: Tensor) -> Tensor:
+    """square"""
+    # noinspection PyProtectedMember
+    return a._raw_backend.activation_raw(a.raw_tensor, "square")
+
+
+# noinspection PyShadowingBuiltins
+def abs(a: Tensor) -> Tensor:
+    """abs"""
+    # noinspection PyProtectedMember
+    return a._raw_backend.activation_raw(a.raw_tensor, "abs")
+
+
+def tanh(a: Tensor) -> Tensor:
+    """tanh"""
+    # noinspection PyProtectedMember
+    return a._raw_backend.activation_raw(a.raw_tensor, "tanh")
+
+
+def sigmoid(a: Tensor) -> Tensor:
+    """sigmoid"""
+    # noinspection PyProtectedMember
+    return a._raw_backend.activation_raw(a.raw_tensor, "sigmoid")
+
+
+def sin(a: Tensor) -> Tensor:
+    """sin"""
+    # noinspection PyProtectedMember
+    return a._raw_backend.activation_raw(a.raw_tensor, "sin")
+
+
+def cos(a: Tensor) -> Tensor:
+    """cos"""
+    # noinspection PyProtectedMember
+    return a._raw_backend.activation_raw(a.raw_tensor, "cos")
+
+
+def ceil(a: Tensor) -> Tensor:
+    """ceil"""
+    # noinspection PyProtectedMember
+    return a._raw_backend.activation_raw(a.raw_tensor, "ceil")
+
+
+def floor(a: Tensor) -> Tensor:
+    """floor"""
+    # noinspection PyProtectedMember
+    return a._raw_backend.activation_raw(a.raw_tensor, "floor")
+
+
+# noinspection PyShadowingBuiltins
+def round(a: Tensor) -> Tensor:
+    """round"""
+    # noinspection PyProtectedMember
+    return a._raw_backend.activation_raw(a.raw_tensor, "round")
+
+
+def relu(a: Tensor) -> Tensor:
+    """relu"""
+    # noinspection PyProtectedMember
+    return a._raw_backend.activation_raw(a.raw_tensor, "relu")
+
+
+def elu(a: Tensor) -> Tensor:
+    """elu"""
+    # noinspection PyProtectedMember
+    return a._raw_backend.activation_raw(a.raw_tensor, "elu")
+
+
+def selu(a: Tensor) -> Tensor:
+    """selu"""
+    # noinspection PyProtectedMember
+    return a._raw_backend.activation_raw(a.raw_tensor, "selu")
