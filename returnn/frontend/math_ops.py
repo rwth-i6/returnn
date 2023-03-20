@@ -12,7 +12,6 @@ from .types import RawTensorTypes as _RawTensorTypes
 __all__ = ["compare", "combine"]
 
 
-# noinspection PyNestedDecorators
 @typing.overload
 def compare(
     a: Tensor,
@@ -59,7 +58,6 @@ def compare(
     return out
 
 
-# noinspection PyNestedDecorators
 @typing.overload
 def combine(
     a: Tensor,
