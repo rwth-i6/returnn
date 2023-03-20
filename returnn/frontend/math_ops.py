@@ -9,7 +9,26 @@ import numpy
 from returnn.tensor import Tensor, Dim
 from .types import RawTensorTypes as _RawTensorTypes
 
-__all__ = ["compare", "combine"]
+__all__ = [
+    "compare",
+    "combine",
+    "equal",
+    "not_equal",
+    "less",
+    "less_equal",
+    "greater",
+    "greater_equal",
+    "add",
+    "sub",
+    "mul",
+    "true_divide",
+    "floor_divide",
+    "mod",
+    "pow",
+    "logical_and",
+    "logical_or",
+    "logical_not",
+]
 
 
 @typing.overload
@@ -127,3 +146,84 @@ def combine(
     )
     out.raw_tensor = backend.combine_raw(a.raw_tensor, kind, b.raw_tensor)
     return out
+
+
+def equal(a: Tensor, b: Tensor) -> Tensor:
+    """equal"""
+    return compare(a, "equal", b)
+
+
+def less(a: Tensor, b: Tensor) -> Tensor:
+    """less"""
+    return compare(a, "less", b)
+
+
+def less_equal(a: Tensor, b: Tensor) -> Tensor:
+    """less_equal"""
+    return compare(a, "less_equal", b)
+
+
+def greater(a: Tensor, b: Tensor) -> Tensor:
+    """greater"""
+    return compare(a, "greater", b)
+
+
+def greater_equal(a: Tensor, b: Tensor) -> Tensor:
+    """greater_equal"""
+    return compare(a, "greater_equal", b)
+
+
+def not_equal(a: Tensor, b: Tensor) -> Tensor:
+    """not_equal"""
+    return compare(a, "not_equal", b)
+
+
+def add(a: Tensor, b: Tensor) -> Tensor:
+    """add"""
+    return combine(a, "add", b)
+
+
+def sub(a: Tensor, b: Tensor) -> Tensor:
+    """sub"""
+    return combine(a, "sub", b)
+
+
+def mul(a: Tensor, b: Tensor) -> Tensor:
+    """mul"""
+    return combine(a, "mul", b)
+
+
+def true_divide(a: Tensor, b: Tensor) -> Tensor:
+    """truediv"""
+    return combine(a, "truediv", b)
+
+
+def floor_divide(a: Tensor, b: Tensor) -> Tensor:
+    """floordiv"""
+    return combine(a, "floordiv", b)
+
+
+def mod(a: Tensor, b: Tensor) -> Tensor:
+    """mod"""
+    return combine(a, "mod", b)
+
+
+# noinspection PyShadowingBuiltins
+def pow(a: Tensor, b: Tensor) -> Tensor:
+    """pow"""
+    return combine(a, "pow", b)
+
+
+def logical_and(a: Tensor, b: Tensor) -> Tensor:
+    """logical_and"""
+    return combine(a, "logical_and", b)
+
+
+def logical_or(a: Tensor, b: Tensor) -> Tensor:
+    """logical_or"""
+    return combine(a, "logical_or", b)
+
+
+def logical_not(a: Tensor) -> Tensor:
+    """logical_not"""
+    return a  # TODO
