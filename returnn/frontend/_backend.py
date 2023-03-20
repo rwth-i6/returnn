@@ -216,6 +216,24 @@ class Backend(Generic[T]):
         raise NotImplementedError
 
     @staticmethod
+    def softmax(tensor: Tensor, *, axis: Dim) -> Tensor:
+        """
+        :param tensor:
+        :param axis:
+        :return: softmax over axis
+        """
+        raise NotImplementedError
+
+    @staticmethod
+    def log_softmax(tensor: Tensor, *, axis: Dim) -> Tensor:
+        """
+        :param tensor:
+        :param axis:
+        :return: log_softmax over axis
+        """
+        raise NotImplementedError
+
+    @staticmethod
     def sequence_mask_raw(lengths: T, *, batch_major: bool = True) -> T:
         """
         Like tf.sequence_mask().

@@ -73,6 +73,28 @@ class TorchBackend(Backend[torch.Tensor]):
         return f(raw_tensor)
 
     @staticmethod
+    def softmax(tensor: Tensor, *, axis: Dim) -> Tensor:
+        """
+        :param tensor:
+        :param axis:
+        :return: softmax over axis
+        """
+        out = tensor.copy_template("softmax")
+        out.raw_tensor = torch.softmax(tensor.raw_tensor, dim=tensor.dims.index(axis))
+        return out
+
+    @staticmethod
+    def log_softmax(tensor: Tensor, *, axis: Dim) -> Tensor:
+        """
+        :param tensor:
+        :param axis:
+        :return: log_softmax over axis
+        """
+        out = tensor.copy_template("log_softmax")
+        out.raw_tensor = torch.log_softmax(tensor.raw_tensor, dim=tensor.dims.index(axis))
+        return out
+
+    @staticmethod
     def compare_raw(a: torch.Tensor, kind: str, b: torch.Tensor) -> torch.Tensor:
         """
         :param a:
