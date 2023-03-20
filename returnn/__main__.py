@@ -465,11 +465,14 @@ def execute_main_task():
             config.set("load_epoch", config.int("epoch", 0))
         engine.init_network_from_config(config)
         output_file = config.value("output_file", "dump-fwd-epoch-%i.hdf" % engine.epoch)
+        forward_batch_size = config.int("forward_batch_size", 0)
+        if not forward_batch_size:
+            raise Exception("forward_batch_size not set")
         engine.forward_to_hdf(
             data=eval_data,
             output_file=output_file,
             combine_labels=combine_labels,
-            batch_size=config.int("forward_batch_size", 0),
+            batch_size=forward_batch_size,
         )
     elif task == "search":
         engine.use_search_flag = True
