@@ -4,10 +4,10 @@ Main engine for PyTorch
 
 from typing import Optional, Callable, Dict
 
+import os
 import torch
 import torch.utils.data.datapipes as dp
-import numpy
-import os
+from torch.utils.data import DataLoader
 from torchdata.dataloader2 import DataLoader2
 from random import random
 
@@ -215,7 +215,15 @@ class Engine(EngineBase):
         batches_dataset = data_pipeline.BatchingIterDataPipe(wrapped_dataset, batch_size=batch_size, max_seqs=max_seqs)
         batches_dataset = dp.iter.Collator(batches_dataset, collate_fn=data_pipeline.collate_batch)
 
-        return DataLoader2(batches_dataset)
+        try:
+            return DataLoader2(batches_dataset)
+        except TypeError as e:
+            print(e)
+            raise ModuleNotFoundError("Possible type error in DataLoader2 due to missing module 'dill'")
+        except Exception as e:
+            print(e)
+            print("Setting up DataLoader2 failed, fallback to DataLoader")
+            return DataLoader(batches_dataset, batch_size=None)
 
     def _run_step(self, data):
         """
