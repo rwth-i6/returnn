@@ -14,7 +14,7 @@ from .array_ import *
 from .dims import *
 from .dot import *
 from .dtype import *
-from .math_ops import *
+from .math_ import *
 from .outputs import *
 from .reduce import *
 from .run_ctx import *
