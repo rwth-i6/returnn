@@ -7,7 +7,6 @@ from typing import Optional, Callable, Dict
 import os
 import torch
 import torch.utils.data.datapipes as dp
-from torch.utils.data import DataLoader
 from torchdata.dataloader2 import DataLoader2
 from random import random
 
@@ -217,13 +216,12 @@ class Engine(EngineBase):
 
         try:
             return DataLoader2(batches_dataset)
-        except TypeError as e:
-            print(e)
-            raise ModuleNotFoundError("Possible type error in DataLoader2 due to missing module 'dill'")
-        except Exception as e:
-            print(e)
-            print("Setting up DataLoader2 failed, fallback to DataLoader")
-            return DataLoader(batches_dataset, batch_size=None)
+        except TypeError as exc:
+            try:
+                # noinspection PyPackageRequirements
+                import dill
+            except ImportError:
+                raise ModuleNotFoundError("Possible type error in DataLoader2 due to missing module 'dill'") from exc
 
     def _run_step(self, data):
         """
