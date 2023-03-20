@@ -21,10 +21,22 @@ other PyTorch datasets more directly, including also HuggingFace datasets.
 import sys
 from copy import deepcopy
 
+import numpy as np
 import torch
 import torch.utils.data
 
 from returnn.util.basic import NumbersDict
+
+
+def create_tensor(array: np.ndarray) -> torch.Tensor:
+    """
+    Adjust non-supported dtypes
+
+    :param array: numpy array to be converted
+    """
+    if array.dtype == np.uint32:
+        array = np.asarray(array, dtype=np.int64)
+    return torch.tensor(array)
 
 
 def collate_batch(batch):
@@ -38,7 +50,7 @@ def collate_batch(batch):
 
     res = {}
     for key in data_keys:
-        ls = [torch.tensor(sample[key]) for sample in batch]
+        ls = [create_tensor(sample[key]) for sample in batch]
         padded = torch.nn.utils.rnn.pad_sequence(ls, batch_first=True, padding_value=0)
         res[key] = padded
         res["%s:seq_len" % key] = torch.tensor([v.shape[0] for v in ls])
