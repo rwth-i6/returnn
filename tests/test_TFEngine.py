@@ -1353,7 +1353,7 @@ def test_engine_end_layer(extra_rec_kwargs=None):
     engine.init_network_from_config(config=config)
     hdf_fn = _get_tmp_file(suffix=".hdf")
     os.remove(hdf_fn)  # forward_to_hdf expects that the file does not exist
-    engine.forward_to_hdf(data=dataset, output_file=hdf_fn)
+    engine.forward_to_hdf(data=dataset, output_file=hdf_fn, batch_size=5000)
 
     engine.finalize()
 
@@ -5260,7 +5260,7 @@ def test_attention_forward_hdf_then_unflatten_2d():
     assert len(att_output_layer.output.size_placeholder) == 2  # encoder and decoder time
     hdf_fn = _get_tmp_file(suffix=".hdf")
     os.remove(hdf_fn)  # forward_to_hdf expects that the file does not exist
-    att_engine.forward_to_hdf(output_file=hdf_fn, data=task_dataset, output_layer=att_output_layer)
+    att_engine.forward_to_hdf(output_file=hdf_fn, data=task_dataset, output_layer=att_output_layer, batch_size=5000)
 
     hdf_dataset = HDFDataset(files=[hdf_fn])
     hdf_dataset.initialize()
