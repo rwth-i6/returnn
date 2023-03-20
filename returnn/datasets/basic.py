@@ -1092,7 +1092,7 @@ class Dataset(object):
         :param set(str)|None used_data_keys:
         """
         if not batch_size:
-            raise Exception("batch_size must be set or greater than 0")
+            raise Exception("batch_size must be set and be greater than 0")
         batch_size = NumbersDict(batch_size)
         assert not batch_size.any_compare(NumbersDict(0), (lambda a, b: a <= b))
         max_pad_size = NumbersDict(max_pad_size)
