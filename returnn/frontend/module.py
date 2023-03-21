@@ -64,11 +64,11 @@ class Module:
 
     def default_initial_state(self, *, batch_dims: Sequence[Dim]) -> Optional[rf.State]:
         """
-        :return: default initial state, to be used if the module (layer) has recurrent (hidden) state.
-          When a module has recurrent state,
-          the convention is to return a tuple with instance :class:`LayerState` as the last item,
-          and to accept the ``state`` argument with a :class:`LayerState` with the same nested structure.
-          This can be a nested structure and should match the structure of the ``state`` argument and returned value.
+        :return: default initial state, to be used if the module has recurrent (hidden) state.
+            When a module has recurrent state,
+            the convention is to return a tuple with instance :class:`State` as the last item,
+            and to accept the ``state`` argument with a :class:`State` with the same nested structure.
+            This can be a nested structure and should match the structure of the ``state`` argument and returned value.
         """
         state = rf.State()
         for key, mod in self.named_children():
