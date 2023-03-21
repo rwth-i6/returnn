@@ -34,6 +34,8 @@ def create_tensor(array: np.ndarray) -> torch.Tensor:
 
     :param array: numpy array to be converted
     """
+    # The only supported PyTorch dtypes are:
+    # float64, float32, float16, complex64, complex128, int64, int32, int16, int8, uint8, and bool.
     if array.dtype == np.uint32:
         array = np.asarray(array, dtype=np.int64)
     return torch.tensor(array)
