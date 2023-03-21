@@ -24,8 +24,8 @@ class Module:
 
           def __init__(self, dim: Dim, activation=tanh):
             super().__init__()
-            self.layer_norm = nn.LayerNorm(dim)
-            self.linear = nn.Linear(dim, dim)
+            self.layer_norm = rf.LayerNorm(dim)
+            self.linear = rf.Linear(dim, dim)
             self.activation = activation
 
           def __call__(self, x: Tensor) -> Tensor:
@@ -120,7 +120,7 @@ class Module:
                 raise AttributeError(f"{mod} has no attribute `{item}`")
             mod = getattr(mod, item)
             if not isinstance(mod, Module):
-                raise AttributeError(f"`{item}` is not an nn.Module")
+                raise AttributeError(f"`{item}` is not an rf.Module")
 
         return getattr(mod, atoms[-1])
 
@@ -135,7 +135,7 @@ class Module:
             prefix, target = target.rsplit(".", 2)
             mod = self.get_deep(prefix)
             if not isinstance(mod, Module):
-                raise AttributeError(f"{self}: `{prefix}` is not an nn.Module")
+                raise AttributeError(f"{self}: `{prefix}` is not an rf.Module")
         else:
             mod = self
 
@@ -199,7 +199,7 @@ class Module:
         With recurse=True (default), this iterates over all children modules
         and iterates through their parameters as well.
 
-        Note that some modules (e.g. :class:`nn.Linear`) can behave lazy,
+        Note that some modules (e.g. :class:`rf.Linear`) can behave lazy,
         i.e. they only create the parameters on the first call,
         e.g. when the input dimension is unknown and thus the parameter shape is not defined
         before the first call.
