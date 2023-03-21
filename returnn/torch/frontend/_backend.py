@@ -105,7 +105,7 @@ class TorchBackend(Backend[torch.Tensor]):
         """
         assert a.dim() == b.dim()
         kind = {
-            "==": "eq",
+            "==": "equal",
             "<=": "less_equal",
             "<": "less",
             ">=": "greater_equal",
