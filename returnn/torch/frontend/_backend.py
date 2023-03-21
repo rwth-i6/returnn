@@ -164,6 +164,9 @@ class TorchBackend(Backend[torch.Tensor]):
         if isinstance(reduce, Dim):
             reduce = [reduce]
 
+        if any(dim.dyn_size_ext for dim in reduce):
+            raise NotImplementedError("masking in matmul reduce not yet implemented")
+
         a_dims = a.dims
         b_dims = b.dims
 
