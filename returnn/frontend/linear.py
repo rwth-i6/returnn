@@ -2,8 +2,12 @@
 Provides the :class:`Linear` module.
 """
 
+from __future__ import annotations
 import returnn.frontend as rf
 from returnn.tensor import Tensor, Dim
+
+
+__all__ = ["Linear", "Embedding"]
 
 
 class Linear(rf.Module):
