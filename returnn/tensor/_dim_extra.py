@@ -19,7 +19,6 @@ if TYPE_CHECKING:
 from . import dim as _d
 from . import tensor as _t
 from . import marked_dim as _m
-import returnn.frontend as rf
 
 
 class DimTypes:
@@ -1504,6 +1503,8 @@ class _DimMixin:
 
         :return: max(size or dyn_size)
         """
+        import returnn.frontend as rf
+
         if self.dimension is not None:
             return self.dimension
         if self.dyn_size_ext and self.dyn_size_ext.placeholder is not None:  # fast path
