@@ -9,13 +9,14 @@ from returnn.tensor import Tensor, Dim
 
 T = TypeVar("T")
 
-__all__ = ["dot"]
+__all__ = ["matmul", "dot"]
 
 
 # noinspection PyShadowingNames
-def dot(a: Tensor[T], b: Tensor[T], *, reduce: Union[Dim, Sequence[Dim]]) -> Tensor[T]:
+def matmul(a: Tensor[T], b: Tensor[T], *, reduce: Union[Dim, Sequence[Dim]]) -> Tensor[T]:
     """
-    This performs a dot-product of two sources a and b.
+    This performs a batched matmul of two sources a and b
+    (non-batched matmul and dot product are special cases).
     The underlying operation is a batched matmul (shared..., I, J) * (shared..., J, K) -> (shared..., I, K).
     The inputs a and b are transformed internally into the required shapes in the following way:
     The axis J is specified via the Dim given as 'reduce'. If multiple reduce Dims are given the corresponding axes
@@ -33,4 +34,8 @@ def dot(a: Tensor[T], b: Tensor[T], *, reduce: Union[Dim, Sequence[Dim]]) -> Ten
         unique axes of b (in order)
     """
     # noinspection PyProtectedMember
-    return a._raw_backend.dot(a=a, b=b, reduce=reduce)
+    return a._raw_backend.matmul(a=a, b=b, reduce=reduce)
+
+
+# alias for some older code
+dot = matmul

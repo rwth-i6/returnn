@@ -400,9 +400,10 @@ class Backend(Generic[T]):
         raise NotImplementedError
 
     @staticmethod
-    def dot(a: Tensor[T], b: Tensor[T], *, reduce: Union[Dim, Sequence[Dim]]) -> Tensor[T]:
+    def matmul(a: Tensor[T], b: Tensor[T], *, reduce: Union[Dim, Sequence[Dim]]) -> Tensor[T]:
         """
-        This performs a dot-product of two sources a and b.
+        This performs a batched matmul of two sources a and b
+        (non-batched matmul and dot product are special cases).
         The underlying operation is a batched matmul (shared..., I, J) * (shared..., J, K) -> (shared..., I, K).
         The inputs a and b are transformed internally into the required shapes in the following way:
         The axis J is specified via the Dim given as 'reduce'. If multiple reduce Dims are given the corresponding axes

@@ -157,9 +157,9 @@ class TorchBackend(Backend[torch.Tensor]):
         return Tensor("const", raw_tensor=value, dims=[], dtype=value.dtype.base_dtype.name)
 
     @staticmethod
-    def dot(a: _TT, b: _TT, *, reduce: Union[Dim, Sequence[Dim]]) -> _TT:
+    def matmul(a: _TT, b: _TT, *, reduce: Union[Dim, Sequence[Dim]]) -> _TT:
         """
-        dot-product of a and b, see base class doc string
+        batched matmul of a and b, see base class doc string
         """
         if isinstance(reduce, Dim):
             reduce = [reduce]

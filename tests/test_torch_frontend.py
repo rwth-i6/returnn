@@ -18,7 +18,7 @@ def test_dot_scalar_multiplication():
     a = Tensor(name="a", dims=[], dtype="float32", raw_tensor=a_raw)
     b = Tensor(name="b", dims=[], dtype="float32", raw_tensor=b_raw)
 
-    result = rf.dot(a, b, reduce=[])
+    result = rf.matmul(a, b, reduce=[])
 
     assert pytest.approx(result.raw_tensor) == 6.0
 
@@ -32,7 +32,7 @@ def test_dot_scalar_product():
     a = Tensor(name="a", dims=[feature_dim], dtype="float32", raw_tensor=a_raw)
     b = Tensor(name="b", dims=[feature_dim], dtype="float32", raw_tensor=b_raw)
 
-    result = rf.dot(a, b, reduce=[feature_dim])
+    result = rf.matmul(a, b, reduce=[feature_dim])
 
     assert pytest.approx(result.raw_tensor) == 32.0
 
@@ -47,7 +47,7 @@ def test_dot_outer_product():
     a = Tensor(name="a", dims=[a_feature_dim], dtype="float32", raw_tensor=a_raw)
     b = Tensor(name="b", dims=[b_feature_dim], dtype="float32", raw_tensor=b_raw)
 
-    result = rf.dot(a, b, reduce=[])
+    result = rf.matmul(a, b, reduce=[])
 
     assert result.dims == (a_feature_dim, b_feature_dim)
     assert result.raw_tensor.shape == (3, 3)
@@ -63,7 +63,7 @@ def test_dot_matrix_vector_product():
     a = Tensor(name="a", dims=[reduce_dim, a_feature_dim], dtype="float32", raw_tensor=a_raw)
     b = Tensor(name="b", dims=[reduce_dim], dtype="float32", raw_tensor=b_raw)
 
-    result = rf.dot(a, b, reduce=[reduce_dim])
+    result = rf.matmul(a, b, reduce=[reduce_dim])
 
     assert result.dims == (a_feature_dim,)
     assert result.raw_tensor.tolist() == pytest.approx([-1.0, -2.0, -3.0])
@@ -80,7 +80,7 @@ def test_dot_matrix_matrix_product():
     a = Tensor(name="a", dims=[a_feature_dim, reduce_dim], dtype="float32", raw_tensor=a_raw)
     b = Tensor(name="b", dims=[reduce_dim, b_feature_dim], dtype="float32", raw_tensor=b_raw)
 
-    result = rf.dot(a, b, reduce=[reduce_dim])
+    result = rf.matmul(a, b, reduce=[reduce_dim])
 
     assert result.dims == (a_feature_dim, b_feature_dim)
     assert torch.allclose(result.raw_tensor, torch.tensor([[5.0, -10.0], [11.0, -22.0], [17.0, -34.0]]))
@@ -96,7 +96,7 @@ def test_dot_scale_matrix():
     a = Tensor(name="a", dims=[a_feature_dim1, a_feature_dim2], dtype="float32", raw_tensor=a_raw)
     b = Tensor(name="b", dims=[], dtype="float32", raw_tensor=b_raw)
 
-    result = rf.dot(a, b, reduce=[])
+    result = rf.matmul(a, b, reduce=[])
 
     assert result.dims == (a_feature_dim1, a_feature_dim2)
     assert torch.allclose(result.raw_tensor, torch.tensor([[2.0, 4.0, 6.0], [-2.0, -4.0, -6.0]]))
@@ -111,7 +111,7 @@ def test_dot_batched_scalar_multiplication():
     a = Tensor(name="a", dims=[batch_dim], dtype="float32", raw_tensor=a_raw)
     b = Tensor(name="b", dims=[batch_dim], dtype="float32", raw_tensor=b_raw)
 
-    result = rf.dot(a, b, reduce=[])
+    result = rf.matmul(a, b, reduce=[])
 
     assert result.dims == (batch_dim,)
     assert result.raw_tensor.tolist() == pytest.approx([4.0, 10.0, 18.0])
@@ -127,7 +127,7 @@ def test_dot_batched_scalar_product():
     a = Tensor(name="a", dims=[batch_dim, feature_dim], dtype="float32", raw_tensor=a_raw)
     b = Tensor(name="b", dims=[batch_dim, feature_dim], dtype="float32", raw_tensor=b_raw)
 
-    result = rf.dot(a, b, reduce=[feature_dim])
+    result = rf.matmul(a, b, reduce=[feature_dim])
 
     assert result.dims == (batch_dim,)
     assert result.raw_tensor.tolist() == pytest.approx([32.0, -32.0])
@@ -144,7 +144,7 @@ def test_dot_batched_outer_product():
     a = Tensor(name="a", dims=[batch_dim, a_feature_dim], dtype="float32", raw_tensor=a_raw)
     b = Tensor(name="b", dims=[batch_dim, b_feature_dim], dtype="float32", raw_tensor=b_raw)
 
-    result = rf.dot(a, b, reduce=[])
+    result = rf.matmul(a, b, reduce=[])
 
     assert result.dims == (batch_dim, a_feature_dim, b_feature_dim)
     assert result.raw_tensor.shape == (2, 3, 3)
@@ -162,7 +162,7 @@ def test_dot_batched_matrix_vector_product():
     a = Tensor(name="a", dims=[a_feature_dim, reduce_dim, batch_dim], dtype="float32", raw_tensor=a_raw)
     b = Tensor(name="b", dims=[batch_dim, reduce_dim], dtype="float32", raw_tensor=b_raw)
 
-    result = rf.dot(a, b, reduce=[reduce_dim])
+    result = rf.matmul(a, b, reduce=[reduce_dim])
 
     assert result.dims == (batch_dim, a_feature_dim)
     assert torch.allclose(result.raw_tensor, torch.tensor([[5.0, 11.0, 17.0], [-10.0, -22.0, -34.0]]))
@@ -181,7 +181,7 @@ def test_dot_batched_matrix_matrix_product():
     a = Tensor(name="a", dims=[a_feature_dim, reduce_dim, batch_dim], dtype="float32", raw_tensor=a_raw)
     b = Tensor(name="b", dims=[b_feature_dim, batch_dim, reduce_dim], dtype="float32", raw_tensor=b_raw)
 
-    result = rf.dot(a, b, reduce=[reduce_dim])
+    result = rf.matmul(a, b, reduce=[reduce_dim])
 
     assert result.dims == (batch_dim, a_feature_dim, b_feature_dim)
     assert torch.allclose(result.raw_tensor, torch.zeros(size=(2, 3, 3)))  # values chosen such that everything cancels
@@ -198,7 +198,7 @@ def test_dot_batched_scale_matrix():
     a = Tensor(name="a", dims=[batch_dim], dtype="float32", raw_tensor=a_raw)
     b = Tensor(name="b", dims=[batch_dim, b_feature_dim1, b_feature_dim2], dtype="float32", raw_tensor=b_raw)
 
-    result = rf.dot(a, b, reduce=[])
+    result = rf.matmul(a, b, reduce=[])
 
     assert result.dims == (batch_dim, b_feature_dim1, b_feature_dim2)
     assert torch.allclose(
@@ -256,7 +256,7 @@ def test_dot_multiple_dims():
         raw_tensor=b_raw,
     )
 
-    result = rf.dot(a, b, reduce=[reduce_dim_1, reduce_dim_2, reduce_dim_3])
+    result = rf.matmul(a, b, reduce=[reduce_dim_1, reduce_dim_2, reduce_dim_3])
 
     # assumes common dims as sorted in a, unique dims as sorted in a / b respectively
     assert result.dims == (

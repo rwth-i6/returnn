@@ -12,9 +12,9 @@ The convention for the user is to do::
 # (Take PyTorch `torch.nn` as a reference.)
 from .array_ import *
 from .dims import *
-from .dot import *
 from .dtype import *
 from .math_ import *
+from .matmul import *
 from .module import *
 from .outputs import *
 from .parameter import *
