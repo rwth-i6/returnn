@@ -10,13 +10,17 @@ The convention for the user is to do::
 
 # Not necessarily all here, but the most common ones.
 # (Take PyTorch `torch.nn` as a reference.)
+
+# Some most come first here when others directly use it,
+# e.g. `rf.Module` as a baseclass.
+from .module import *
+
 from .array_ import *
 from .dims import *
 from .dtype import *
 from .linear import *
 from .math_ import *
 from .matmul import *
-from .module import *
 from .outputs import *
 from .parameter import *
 from .rand import *
