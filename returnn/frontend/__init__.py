@@ -15,7 +15,13 @@ from .dims import *
 from .dot import *
 from .dtype import *
 from .math_ import *
+from .module import *
 from .outputs import *
+from .parameter import *
+from .rand import *
 from .reduce import *
 from .run_ctx import *
+from .state import *
 from .types import *
+
+from . import init
