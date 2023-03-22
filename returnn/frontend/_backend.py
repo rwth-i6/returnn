@@ -99,11 +99,11 @@ class Backend(Generic[T]):
         and just performs a check in eager frameworks.
         """
         # Default implementation for eager-based frameworks.
-        assert all(dim is not None for dim in shape)
-        rf = get_backend_by_raw_tensor_type(type(raw_tensor))
-        existing_shape = rf.get_known_shape_raw(raw_tensor)
+        backend = get_backend_by_raw_tensor_type(type(raw_tensor))
+        existing_shape = backend.get_known_shape_raw(raw_tensor)
         assert all(dim is not None for dim in existing_shape)
-        assert shape == existing_shape
+        assert len(shape) == len(existing_shape)
+        assert all(dim is None or dim == existing_shape[i] for i, dim in enumerate(shape))
 
     @staticmethod
     def fill_raw(shape: Union[Sequence[Union[int, T]], T], value: Union[Any, T]) -> T:
