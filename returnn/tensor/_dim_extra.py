@@ -1532,7 +1532,7 @@ class _DimMixin:
         self.complete_dyn_size()
         if self.dyn_size_ext and self.dyn_size_ext.placeholder is not None:
             if self.dyn_size_ext.batch_ndim > 0:
-                return rf.reduce(self.dyn_size_ext, axis=self.dyn_size_ext.dim_tags, mode="max").raw_tensor
+                return rf.reduce_max(self.dyn_size_ext, axis=self.dyn_size_ext.dim_tags).raw_tensor
             return self.dyn_size_ext.placeholder
         raise Exception("%s: need placeholder, self.dimension or self.dyn_size for dim value" % self)
 
