@@ -3,24 +3,47 @@ Array (Tensor) functions
 """
 
 from __future__ import annotations
-from typing import Union, TypeVar
+from typing import Optional, Union, TypeVar, Sequence
+import numpy
 from returnn.tensor import Tensor, Dim
-from ._backend import global_backend
+from ._backend import global_backend, get_backend_by_raw_tensor_type
 from .types import RawTensorTypes
 
 T = TypeVar("T")
 
-__all__ = ["convert_to_tensor", "gather"]
+__all__ = ["convert_to_tensor", "constant", "gather"]
 
 
-def convert_to_tensor(value: Union[Tensor, T, RawTensorTypes]) -> Tensor[T]:
+def convert_to_tensor(
+    value: Union[Tensor, T, RawTensorTypes],
+    *,
+    dims: Sequence[Dim] = None,
+    dtype: Optional[str] = None,
+    sparse_dim: Optional[Dim] = None,
+    shape: Sequence[Dim] = None,
+) -> Tensor[T]:
     """
     :param value: tensor, or scalar raw tensor or some other scalar value
+    :param dims:
+    :param dtype:
+    :param sparse_dim:
+    :param shape: alias for dims, for some older code
     :return: tensor
     """
     if isinstance(value, Tensor):  # fast path
         return value
-    return global_backend.convert_to_tensor(value=value)
+    if isinstance(value, (int, float, complex, bool, str, numpy.number, numpy.ndarray)):
+        backend = global_backend
+    else:
+        backend = get_backend_by_raw_tensor_type(value)
+    if dims is None and shape is not None:
+        dims = shape
+    if dims is None:
+        dims = ()
+    return backend.convert_to_tensor(value=value, dims=dims, dtype=dtype, sparse_dim=sparse_dim)
+
+
+constant = convert_to_tensor  # alias for some older code
 
 
 # noinspection PyUnusedLocal

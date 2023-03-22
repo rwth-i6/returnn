@@ -34,6 +34,16 @@ class TorchBackend(Backend[torch.Tensor]):
         return str(raw_tensor.dtype).replace("torch.", "")
 
     @staticmethod
+    def as_dtype_raw(dtype_name: str) -> torch.dtype:
+        """
+        :param dtype_name: e.g. "float32"
+        :return: dtype object
+        """
+        dtype = getattr(torch, dtype_name)
+        assert isinstance(dtype, torch.dtype)
+        return dtype
+
+    @staticmethod
     def get_ndim_raw(raw_tensor: torch.Tensor) -> int:
         """
         :return: ndim of raw tensor
@@ -144,17 +154,26 @@ class TorchBackend(Backend[torch.Tensor]):
         return op(a, b)
 
     @staticmethod
-    def convert_to_tensor(value: Union[Tensor, torch.Tensor, RawTensorTypes]) -> Tensor[torch.Tensor]:
+    def convert_to_tensor(
+        value: Union[Tensor, torch.Tensor, RawTensorTypes],
+        *,
+        dims: Sequence[Dim] = (),
+        dtype: Optional[str] = None,
+        sparse_dim: Optional[Dim] = None,
+    ) -> Tensor[torch.Tensor]:
         """
         :param value:
+        :param dims:
+        :param dtype:
+        :param sparse_dim:
         :return: tensor
         """
         if isinstance(value, Tensor):
             return value
-        value = torch.tensor(value)
+        value = torch.tensor(value, dtype=TorchBackend.as_dtype_raw(dtype) if dtype else None)
         assert isinstance(value, torch.Tensor)
-        assert value.shape.as_list() == [], f"scalar expected, got {value}"
-        return Tensor("const", raw_tensor=value, dims=[], dtype=value.dtype.base_dtype.name)
+        dtype = dtype or TorchBackend.get_dtype_name_raw(value)
+        return Tensor("const", raw_tensor=value, dims=dims, dtype=dtype, sparse_dim=sparse_dim)
 
     @staticmethod
     def matmul(a: _TT, b: _TT, *, reduce: Union[Dim, Sequence[Dim]]) -> _TT:

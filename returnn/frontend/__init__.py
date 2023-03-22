@@ -30,3 +30,5 @@ from .state import *
 from .types import *
 
 from . import init
+
+from ._backend import select_backend_torch, select_backend_returnn_layers_tf

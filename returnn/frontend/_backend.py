@@ -53,6 +53,14 @@ class Backend(Generic[T]):
         raise NotImplementedError
 
     @staticmethod
+    def as_dtype_raw(dtype_name: str) -> Any:
+        """
+        :param dtype_name: e.g. "float32"
+        :return: dtype object
+        """
+        raise NotImplementedError
+
+    @staticmethod
     def get_ndim_raw(raw_tensor: T) -> int:
         """
         :return: ndim of raw tensor. assumes it is known
@@ -393,9 +401,18 @@ class Backend(Generic[T]):
         raise NotImplementedError
 
     @staticmethod
-    def convert_to_tensor(value: Union[Tensor, T, _RawTensorTypes]) -> Tensor[T]:
+    def convert_to_tensor(
+        value: Union[Tensor, T, _RawTensorTypes],
+        *,
+        dims: Sequence[Dim] = (),
+        dtype: Optional[str] = None,
+        sparse_dim: Optional[Dim] = None,
+    ) -> Tensor[T]:
         """
         :param value: tensor, or scalar raw tensor or some other scalar value
+        :param dims:
+        :param dtype:
+        :param sparse_dim:
         :return: tensor
         """
         raise NotImplementedError

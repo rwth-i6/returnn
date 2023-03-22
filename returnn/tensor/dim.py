@@ -60,7 +60,6 @@ class Dim(_DimMixin):
         description: Optional[str] = None,
         **kwargs,
     ):
-        self.name = name or description
         # dimension is the most common way to specify whether it is static or dynamic,
         # and if dynamic, we can directly pass the dynamic sizes.
         # It also infers reasonable defaults for capacity, if this is not set explicitly.
@@ -77,6 +76,9 @@ class Dim(_DimMixin):
             self.capacity = capacity
             self.size = None
             self.dyn_size_ext = dimension.copy()
+        if not name and not description and self.dyn_size_ext:
+            name = self.dyn_size_ext.name
+        self.name = name or description
         self._extra = None
 
         if kwargs:

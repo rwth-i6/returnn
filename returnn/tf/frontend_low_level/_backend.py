@@ -37,6 +37,16 @@ class TFBackend(Backend[tf.Tensor]):
         return raw_tensor.dtype.base_dtype.name
 
     @staticmethod
+    def as_dtype_raw(dtype_name: str) -> tf.DType:
+        """
+        :param dtype_name: e.g. "float32"
+        :return: dtype object
+        """
+        dtype = getattr(tf, dtype_name)
+        assert isinstance(dtype, tf.DType)
+        return dtype
+
+    @staticmethod
     def get_ndim_raw(raw_tensor: tf.Tensor) -> int:
         """
         :return: ndim of raw tensor. assumes it is known
@@ -347,17 +357,26 @@ class TFBackend(Backend[tf.Tensor]):
         return tf_util.format_graph_output(raw_tensor, max_depth=max_depth)
 
     @staticmethod
-    def convert_to_tensor(value: Union[_TT, tf.Tensor, RawTensorTypes]) -> _TT:
+    def convert_to_tensor(
+        value: Union[_TT, tf.Tensor, RawTensorTypes],
+        *,
+        dims: Sequence[Dim] = (),
+        dtype: Optional[str] = None,
+        sparse_dim: Optional[Dim] = None,
+    ) -> _TT:
         """
         :param value:
+        :param dims:
+        :param dtype:
+        :param sparse_dim:
         :return: tensor
         """
         if isinstance(value, Tensor):
             return value
-        value = tf.convert_to_tensor(value)
+        value = tf.convert_to_tensor(value, dtype=dtype)
         assert isinstance(value, tf.Tensor)
-        assert value.shape.as_list() == [], f"scalar expected, got {value}"
-        return Tensor("const", raw_tensor=value, dims=[], dtype=value.dtype.base_dtype.name)
+        dtype = dtype or TFBackend.get_dtype_name_raw(value)
+        return Tensor("const", raw_tensor=value, dims=dims, dtype=dtype, sparse_dim=sparse_dim)
 
     @staticmethod
     def range_over_dim(dim: Dim) -> _TT:
