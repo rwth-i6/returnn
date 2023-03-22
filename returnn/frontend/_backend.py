@@ -10,7 +10,7 @@ from returnn.util.basic import NotSpecified
 
 if TYPE_CHECKING:
     from returnn.tensor import Tensor, Dim
-    from .types import RawTensorTypes as _RawTensorTypes
+    from .types import RawTensorTypes
 
 T = TypeVar("T")  # tf.Tensor, torch.Tensor or so
 T2 = TypeVar("T2")
@@ -402,7 +402,7 @@ class Backend(Generic[T]):
 
     @staticmethod
     def convert_to_tensor(
-        value: Union[Tensor, T, _RawTensorTypes],
+        value: Union[Tensor, T, RawTensorTypes],
         *,
         dims: Sequence[Dim] = (),
         dtype: Optional[str] = None,
@@ -419,7 +419,7 @@ class Backend(Generic[T]):
 
     @staticmethod
     def full(
-        dims: Sequence[Dim], fill_value: _RawTensorTypes, *, dtype: str, sparse_dim: Optional[Dim] = None
+        dims: Sequence[Dim], fill_value: RawTensorTypes, *, dtype: str, sparse_dim: Optional[Dim] = None
     ) -> Tensor:
         """
         https://data-apis.org/array-api/latest/API_specification/generated/array_api.full.html
