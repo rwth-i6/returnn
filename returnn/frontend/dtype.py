@@ -5,22 +5,35 @@ DType helpers
 from __future__ import annotations
 
 
-__all__ = ["get_default_int_dtype", "get_default_float_dtype"]
+__all__ = ["get_default_float_dtype", "get_default_int_dtype", "get_default_array_index_dtype"]
 
 
-_default_int_dtype: str = "int32"
 _default_float_dtype: str = "float32"
+_default_int_dtype: str = "int32"
+
+
+def get_default_float_dtype() -> str:
+    """
+    https://data-apis.org/array-api/latest/API_specification/data_types.html#default-data-types
+
+    :return: default dtype for float
+    """
+    return _default_float_dtype
 
 
 def get_default_int_dtype() -> str:
     """
+    https://data-apis.org/array-api/latest/API_specification/data_types.html#default-data-types
+
     :return: default dtype for int
     """
     return _default_int_dtype
 
 
-def get_default_float_dtype() -> str:
+def get_default_array_index_dtype() -> str:
     """
-    :return: default dtype for float
+    https://data-apis.org/array-api/latest/API_specification/data_types.html#default-data-types
+
+    :return: default dtype for array index - currently just the same as :func:`get_default_int_dtype`
     """
-    return _default_float_dtype
+    return get_default_int_dtype()

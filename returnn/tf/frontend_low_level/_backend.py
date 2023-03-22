@@ -389,7 +389,7 @@ class TFBackend(Backend[tf.Tensor]):
             name=dim.description or "range_over_dim",
             dims=[dim],
             sparse_dim=dim,
-            dtype=dim.dyn_size_ext.dtype if dim.dyn_size_ext else rf.get_default_int_dtype(),
+            dtype=dim.dyn_size_ext.dtype if dim.dyn_size_ext else rf.get_default_array_index_dtype(),
         )
         dim_value = dim.get_dim_value()
         out.raw_tensor = tf.range(0, dim_value, dtype=out.dtype)
