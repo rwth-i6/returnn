@@ -73,7 +73,7 @@ def _fill_random(x: Tensor, *, rnd: numpy.random.RandomState, raw_tensor_type: t
             values = rnd.uniform(-1, 1, shape).astype(x.dtype)
         else:
             raise NotImplementedError(f"not implemented for {x} dtype {x.dtype}")
-        x.raw_tensor = rf.convert_to_tensor(values, dims=shape, dtype=x.dtype, sparse_dim=x.sparse_dim).raw_tensor
+        x.raw_tensor = rf.convert_to_tensor(values, dims=x.dims, dtype=x.dtype, sparse_dim=x.sparse_dim).raw_tensor
         filled = True
 
     assert isinstance(x.raw_tensor, raw_tensor_type)
