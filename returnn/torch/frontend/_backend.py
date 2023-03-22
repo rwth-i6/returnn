@@ -176,6 +176,21 @@ class TorchBackend(Backend[torch.Tensor]):
         return Tensor("const", raw_tensor=value, dims=dims, dtype=dtype, sparse_dim=sparse_dim)
 
     @staticmethod
+    def full(
+        dims: Sequence[Dim], fill_value: RawTensorTypes, *, dtype: str, sparse_dim: Optional[Dim] = None
+    ) -> Tensor:
+        """
+        :param dims:
+        :param fill_value:
+        :param dtype:
+        :param sparse_dim:
+        :return: tensor
+        """
+        shape = [dim.get_dim_value() for dim in dims]
+        raw_tensor = torch.full(shape, fill_value, dtype=TorchBackend.as_dtype_raw(dtype))
+        return Tensor("full", dims=dims, sparse_dim=sparse_dim, dtype=dtype, raw_tensor=raw_tensor)
+
+    @staticmethod
     def matmul(a: _TT, b: _TT, *, reduce: Union[Dim, Sequence[Dim]]) -> _TT:
         """
         batched matmul of a and b, see base class doc string

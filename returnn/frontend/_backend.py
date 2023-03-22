@@ -418,6 +418,21 @@ class Backend(Generic[T]):
         raise NotImplementedError
 
     @staticmethod
+    def full(
+        dims: Sequence[Dim], fill_value: _RawTensorTypes, *, dtype: str, sparse_dim: Optional[Dim] = None
+    ) -> Tensor:
+        """
+        https://data-apis.org/array-api/latest/API_specification/generated/array_api.full.html
+
+        :param dims:
+        :param fill_value:
+        :param dtype:
+        :param sparse_dim:
+        :return: tensor
+        """
+        raise NotImplementedError
+
+    @staticmethod
     def matmul(a: Tensor[T], b: Tensor[T], *, reduce: Union[Dim, Sequence[Dim]]) -> Tensor[T]:
         """
         This performs a batched matmul of two sources a and b

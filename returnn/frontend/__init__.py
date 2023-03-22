@@ -16,6 +16,7 @@ The convention for the user is to do::
 from .module import *
 
 from .array_ import *
+from .const import *
 from .dims import *
 from .dtype import *
 from .linear import *
