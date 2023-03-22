@@ -5,7 +5,7 @@ Parameter / variable
 from __future__ import annotations
 from typing import Optional, Sequence
 from returnn.tensor import Tensor, Dim
-from .. import frontend as rf
+import returnn.frontend as rf
 
 
 __all__ = ["Parameter"]
