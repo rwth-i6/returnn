@@ -7,7 +7,7 @@ from typing import Optional, Union, Sequence, Tuple
 
 import torch
 from returnn.tensor import Tensor, Dim
-from returnn.util.basic import prod
+from returnn.util.basic import prod, NotSpecified
 
 # noinspection PyProtectedMember
 from returnn.frontend._backend import Backend
@@ -262,3 +262,39 @@ class TorchBackend(Backend[torch.Tensor]):
         result_tensor = Tensor(name="dot", dims=result_dims, raw_tensor=raw_result, dtype=a.dtype)
 
         return result_tensor
+
+    @staticmethod
+    def reduce(
+        source: Tensor[torch.Tensor],
+        *,
+        mode: str,
+        axis: Union[Dim, Sequence[Dim]],
+        use_time_mask: bool = NotSpecified,
+    ) -> Tensor[torch.Tensor]:
+        """reduce"""
+        assert mode in Backend._AllowedReduceModes
+        if isinstance(axis, Dim):
+            assert not axis.need_masking()  # not implemented
+        else:
+            assert all(not dim.need_masking() for dim in axis)  # not implemented
+        func = getattr(torch, mode)
+        raw_dims = [source.dims.index(axis)] if isinstance(axis, Dim) else [source.dims.index(dim) for dim in axis]
+        res_dims = [dim for i, dim in enumerate(source.dims) if i not in raw_dims]
+        if not res_dims:
+            raw_result = func(source.raw_tensor)
+        elif len(raw_dims) == 1:
+            raw_result = func(source.raw_tensor, dim=raw_dims[0])
+            if mode in ["max", "min"]:
+                # result is a tuple (values, indices). https://pytorch.org/docs/stable/generated/torch.max.html
+                raw_result, _ = raw_result
+        else:
+            assert mode == "sum"  # not implemented otherwise for multiple axes
+            raw_result = func(source.raw_tensor, dim=raw_dims)
+        res = Tensor(
+            name=f"reduce_{mode}",
+            raw_tensor=raw_result,
+            dims=res_dims,
+            dtype=source.dtype,
+            sparse_dim=source.sparse_dim,
+        )
+        return res
