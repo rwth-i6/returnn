@@ -730,12 +730,27 @@ class _DimMixin:
                     return True
         return False
 
-    def is_dynamic(self):
+    def is_dynamic(self) -> bool:
         """
         :return: whether the dim is not static. usually means that it has seq lengths
-        :rtype: bool
         """
         return self.dimension is None and not self.is_batch_dim()
+
+    def is_static(self) -> bool:
+        """
+        :return: static
+        """
+        return not self.is_dynamic()
+
+    def need_masking(self):
+        """
+        :return: whether dim is static or dynamic but with scalar dyn_size_ext
+        """
+        if self.is_static():
+            return False
+        if not self.dyn_size_ext:
+            return True  # unknown
+        return self.dyn_size_ext.batch_ndim > 0
 
     def can_be_used_as_dim(self):
         """
