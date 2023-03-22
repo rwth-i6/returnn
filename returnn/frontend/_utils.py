@@ -60,7 +60,7 @@ def bin_op_out_template(
     b: Union[Tensor[T], int, float, numpy.number],
     *,
     name: str,
-    dtype: str,
+    res_dtype: Optional[str],
     allow_broadcast_all_sources: Optional[bool] = None,
     dim_order: Optional[Sequence[Dim]] = None,
 ) -> Tuple[Tensor[T], Tensor[T], Tensor[T]]:
@@ -71,19 +71,25 @@ def bin_op_out_template(
     :param a:
     :param b:
     :param name: str
-    :param dtype:
+    :param res_dtype: if not given, infer from a and b
     :param allow_broadcast_all_sources: if True, it is allowed that neither a nor b has all dims of the result.
         Not needed when out_dims is specified explicitly.
     :param dim_order: defines the order of the resulting dims. if None, it is automatically inferred from a and b.
         Not all the dims of a and b need to be specified here, and there could also be other dims in the dim_order.
     :return: out, a, b
     """
-    a = backend.convert_to_tensor(a)
-    b = backend.convert_to_tensor(b)
+    src_dtype = None
+    if isinstance(a, Tensor):
+        src_dtype = a.dtype
+    elif isinstance(b, Tensor):
+        src_dtype = b.dtype
+    a = backend.convert_to_tensor(a, dtype=src_dtype)
+    src_dtype = src_dtype or a.dtype
+    b = backend.convert_to_tensor(b, dtype=src_dtype)
     # sanity checks
     # noinspection PyProtectedMember
     assert a._raw_backend == b._raw_backend, "Cannot combine tensors from two different frontends, e.g. TF and PT"
-    assert a.dtype == a.dtype, "For now only operations with Tensors of the same dtypes are supported."
+    assert a.dtype == b.dtype, f"For now only operations with Tensors of the same dtypes are supported, got {a} and {b}"
     all_dims = []
     for dim in a.dims + b.dims:
         if dim not in all_dims:
@@ -99,7 +105,9 @@ def bin_op_out_template(
             raise TypeError(f"invalid type for allow_broadcast_all_sources: {type(allow_broadcast_all_sources)}")
     if dim_order:
         all_dims.sort(key=lambda d: dim_order.index(d) if d in dim_order else len(dim_order))
-    out = Tensor(name, dims=all_dims, dtype=dtype)
+    if res_dtype is None:
+        res_dtype = src_dtype
+    out = Tensor(name, dims=all_dims, dtype=res_dtype)
     a = a.copy_compatible_to(out, check_dtype=False, check_sparse=False)
     b = b.copy_compatible_to(out, check_dtype=False, check_sparse=False)
     return out, a, b

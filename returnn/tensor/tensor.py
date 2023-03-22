@@ -83,6 +83,7 @@ class Tensor(_TensorMixin, _TensorOpOverloadsMixin, Generic[RawTensorType]):
             assert "shape" not in kwargs and "dim_tags" not in kwargs  # probably old code got this wrong
             if version is None:
                 version = 2
+            assert dtype is not None
         else:
             # old code
             dims = _tensor_extra.infer_dim_tags(

@@ -94,7 +94,7 @@ def compare(
         a,
         b,
         name="compare",
-        dtype="bool",
+        res_dtype="bool",
         allow_broadcast_all_sources=allow_broadcast_all_sources,
         dim_order=dim_order,
     )
@@ -165,7 +165,7 @@ def combine(
         a,
         b,
         name="combine",
-        dtype=a.dtype,
+        res_dtype=None,
         allow_broadcast_all_sources=allow_broadcast_all_sources,
         dim_order=dim_order,
     )
