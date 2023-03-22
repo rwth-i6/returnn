@@ -15,6 +15,7 @@ from returnn.tf.util import basic as tf_util
 # noinspection PyProtectedMember
 from returnn.frontend._backend import Backend
 from returnn.frontend import RawTensorTypes
+import returnn.frontend as rf
 
 _TT = Tensor[tf.Tensor]
 
@@ -384,7 +385,12 @@ class TFBackend(Backend[tf.Tensor]):
         :param dim:
         :return: range over dim
         """
-        out = Tensor(name=dim.description or "range_over_dim", dims=[dim], sparse_dim=dim)
+        out = Tensor(
+            name=dim.description or "range_over_dim",
+            dims=[dim],
+            sparse_dim=dim,
+            dtype=dim.dyn_size_ext.dtype if dim.dyn_size_ext else rf.get_default_int_dtype(),
+        )
         dim_value = dim.get_dim_value()
         out.raw_tensor = tf.range(0, dim_value, dtype=out.dtype)
         return out
