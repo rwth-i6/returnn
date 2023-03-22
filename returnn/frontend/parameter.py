@@ -48,7 +48,7 @@ class Parameter(Tensor):
             raise ValueError(f"shape {dims} must be static")
         if len(dims) != len(set((d, d.match_priority) for d in dims)):
             raise ValueError(f"shape {dims} dims must be unique")
-        super(Parameter, self).__init__("parameter", dims=dims, dtype=dtype)
+        super(Parameter, self).__init__("parameter", dims=dims, dtype=dtype or rf.get_default_float_dtype())
         if auxiliary and trainable is None:
             trainable = False
         self._trainable = trainable
