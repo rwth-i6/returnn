@@ -50,6 +50,7 @@ __all__ = [
     "relu",
     "elu",
     "selu",
+    "silu",
     "softmax",
     "log_softmax",
 ]
@@ -386,6 +387,12 @@ def selu(a: Tensor) -> Tensor:
     """selu"""
     # noinspection PyProtectedMember
     return a._raw_backend.activation_raw(a.raw_tensor, "selu")
+
+
+def silu(a: Tensor) -> Tensor:
+    """silu"""
+    # noinspection PyProtectedMember
+    return a._raw_backend.activation_raw(a.raw_tensor, "silu")
 
 
 def softmax(a: Tensor, *, axis: Dim) -> Tensor:

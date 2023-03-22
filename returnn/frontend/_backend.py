@@ -202,6 +202,7 @@ class Backend(Generic[T]):
         "relu",
         "elu",
         "selu",
+        "silu",
         "logical_not",
         "neg",
     }
