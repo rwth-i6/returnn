@@ -185,6 +185,7 @@ class TorchBackend(Backend[torch.Tensor]):
 
         if any(dim.dyn_size_ext for dim in reduce):
             raise NotImplementedError("masking in matmul reduce not yet implemented")
+        assert a.dtype == b.dtype, f"matmul: dtypes do not match: {a} vs {b}"
 
         a_dims = a.dims
         b_dims = b.dims
@@ -258,6 +259,6 @@ class TorchBackend(Backend[torch.Tensor]):
         b_unique_dims = [b_dims[i] for i in b_unique_axes]
         result_dims = common_dims + a_unique_dims + b_unique_dims
 
-        result_tensor = Tensor(name="dot", dims=result_dims, raw_tensor=raw_result)
+        result_tensor = Tensor(name="dot", dims=result_dims, raw_tensor=raw_result, dtype=a.dtype)
 
         return result_tensor
