@@ -105,6 +105,15 @@ class TorchBackend(Backend[torch.Tensor]):
         return out
 
     @staticmethod
+    def create_parameter(tensor: Tensor) -> torch.nn.Parameter:
+        """
+        :return: parameter
+        """
+        assert all(d.is_static() for d in tensor.dims)
+        data = torch.zeros(*(d.dimension for d in tensor.dims), dtype=TorchBackend.as_dtype_raw(tensor.dtype))
+        return torch.nn.Parameter(data)
+
+    @staticmethod
     def compare_raw(a: torch.Tensor, kind: str, b: torch.Tensor) -> torch.Tensor:
         """
         :param a:

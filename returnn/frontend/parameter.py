@@ -6,6 +6,7 @@ from __future__ import annotations
 from typing import Optional, Sequence
 from returnn.tensor import Tensor, Dim
 import returnn.frontend as rf
+from ._backend import global_backend as _global_backend
 
 
 __all__ = ["Parameter"]
@@ -23,6 +24,7 @@ class Parameter(Tensor):
         dims: Sequence[Dim],
         dtype: Optional[str] = None,
         *,
+        sparse_dim: Optional[Dim] = None,
         trainable: Optional[bool] = None,
         auxiliary: bool = False,
         non_critical_for_restore: bool = False,
@@ -32,6 +34,7 @@ class Parameter(Tensor):
         """
         :param dims:
         :param dtype:
+        :param sparse_dim:
         :param trainable: if True, and optimizer would do updates to this parameter in training mode
         :param auxiliary: if True, this indicates that this parameter should not be transformed by transformations
           such as weight normalization. One example are running statistics, as used for batch normalization.
@@ -48,7 +51,13 @@ class Parameter(Tensor):
             raise ValueError(f"shape {dims} must be static")
         if len(dims) != len(set((d, d.match_priority) for d in dims)):
             raise ValueError(f"shape {dims} dims must be unique")
-        super(Parameter, self).__init__("parameter", dims=dims, dtype=dtype or rf.get_default_float_dtype())
+        super(Parameter, self).__init__(
+            "parameter",
+            dims=dims,
+            dtype=dtype or (rf.get_default_float_dtype() if not sparse_dim else rf.get_default_array_index_dtype()),
+            sparse_dim=sparse_dim,
+        )
+        self.raw_tensor = _global_backend.create_parameter(self)
         if auxiliary and trainable is None:
             trainable = False
         self._trainable = trainable

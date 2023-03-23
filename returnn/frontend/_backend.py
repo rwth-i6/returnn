@@ -305,6 +305,13 @@ class Backend(Generic[T]):
         raise Exception("create_placeholder not supported by backend")
 
     @staticmethod
+    def create_parameter(tensor: Tensor) -> T:
+        """
+        :return: parameter
+        """
+        raise NotImplementedError
+
+    @staticmethod
     def runtime_sanity_checks(tensor: Tensor) -> Any:
         """
         Checks whether the tensor.raw_tensor is consistent with the tensor metadata.
