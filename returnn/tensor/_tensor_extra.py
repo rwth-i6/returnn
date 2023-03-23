@@ -218,7 +218,7 @@ class _TensorMixin(_TensorMixinBase):
             # noinspection PyProtectedMember
             from returnn.tf.frontend_low_level._backend import TFBackend
 
-            self.raw_tensor = TFBackend.create_placeholder(self)
+            self.raw_tensor = TFBackend.create_placeholder_raw(self)
             # Do that after same_dim_tags_as handling.
             _auto_create_size_placeholders_on_dim_tags(name=self.name, dim_tags=self._dims)
 

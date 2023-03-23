@@ -57,14 +57,15 @@ class Parameter(Tensor):
             dtype=dtype or (rf.get_default_float_dtype() if not sparse_dim else rf.get_default_array_index_dtype()),
             sparse_dim=sparse_dim,
         )
-        self.raw_tensor = _global_backend.create_parameter(self)
+        self.raw_tensor = _global_backend.create_parameter_raw(self)
         if auxiliary and trainable is None:
             trainable = False
         self._trainable = trainable
         self._auxiliary = auxiliary
         self._non_critical_for_restore = non_critical_for_restore
         self._weight_decay = weight_decay
-        self._initial = initial
+        self._initial = None  # type: Optional[rf.init.ParamInitType]
+        self.initial = initial
 
     def __copy__(self):
         # Should return new copy. https://github.com/rwth-i6/returnn_common/pull/215#issuecomment-1269651064
@@ -102,6 +103,10 @@ class Parameter(Tensor):
         # Keep the original ParamInit, so that copies of the Parameter would have a different initial random value.
         # https://github.com/rwth-i6/returnn_common/issues/216
         self._initial = value
+
+        if isinstance(value, rf.init.ParamInit):
+            value = value(shape=self.dims, dtype=self.dtype)
+        self._raw_backend.set_parameter_initial_value(self, value)
 
     @property
     def weight_decay(self) -> float:

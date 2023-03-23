@@ -31,6 +31,13 @@ class TFBackend(Backend[tf.Tensor]):
     is_tensorflow = True
 
     @staticmethod
+    def executing_eagerly() -> bool:
+        """
+        :return: whether we are in eager execution mode
+        """
+        return tf.executing_eagerly()
+
+    @staticmethod
     def get_dtype_name_raw(raw_tensor: tf.Tensor) -> str:
         """
         :return: dtype of raw tensor, as string
@@ -271,7 +278,7 @@ class TFBackend(Backend[tf.Tensor]):
             return tf.identity(raw_tensor)
 
     @staticmethod
-    def create_placeholder(tensor: _TT) -> tf.Tensor:
+    def create_placeholder_raw(tensor: _TT) -> tf.Tensor:
         """
         :return: tf.placeholder in TF
         """

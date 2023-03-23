@@ -12,6 +12,7 @@ from returnn.util.basic import prod, NotSpecified
 # noinspection PyProtectedMember
 from returnn.frontend._backend import Backend
 from returnn.frontend import RawTensorTypes
+import returnn.frontend as rf
 
 
 _TT = Tensor[torch.Tensor]
@@ -25,6 +26,13 @@ class TorchBackend(Backend[torch.Tensor]):
     """
 
     RawTensorType = torch.Tensor
+
+    @staticmethod
+    def executing_eagerly() -> bool:
+        """
+        :return: whether we are executing eagerly
+        """
+        return True
 
     @staticmethod
     def get_dtype_name_raw(raw_tensor: torch.Tensor) -> str:
@@ -105,13 +113,30 @@ class TorchBackend(Backend[torch.Tensor]):
         return out
 
     @staticmethod
-    def create_parameter(tensor: Tensor) -> torch.nn.Parameter:
+    def create_parameter_raw(tensor: Tensor) -> torch.nn.Parameter:
         """
         :return: parameter
         """
         assert all(d.is_static() for d in tensor.dims)
         data = torch.zeros(*(d.dimension for d in tensor.dims), dtype=TorchBackend.as_dtype_raw(tensor.dtype))
         return torch.nn.Parameter(data)
+
+    @staticmethod
+    def set_parameter_initial_value(param: rf.Parameter, value: Union[None, Tensor, rf.RawTensorTypes]) -> None:
+        """
+        :param param: parameter
+        :param value: initial value
+        """
+        if value is None:
+            value = 0
+        raw_param = param.raw_tensor
+        assert isinstance(raw_param, torch.nn.Parameter)
+        if isinstance(value, Tensor):
+            with torch.no_grad():
+                raw_param[:] = value.raw_tensor
+        else:
+            with torch.no_grad():
+                raw_param[:] = value
 
     @staticmethod
     def compare_raw(a: torch.Tensor, kind: str, b: torch.Tensor) -> torch.Tensor:

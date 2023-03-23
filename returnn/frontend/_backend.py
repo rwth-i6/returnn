@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Optional, Any, Union, TypeVar, Generic, Type, 
 import contextlib
 
 from returnn.util.basic import NotSpecified
+import returnn.frontend as rf
 
 if TYPE_CHECKING:
     from returnn.tensor import Tensor, Dim
@@ -30,6 +31,13 @@ class Backend(Generic[T]):
 
     def __init__(self):
         raise Exception("do not instantiate this class")
+
+    @staticmethod
+    def executing_eagerly() -> bool:
+        """
+        :return: whether we are in eager execution mode
+        """
+        raise NotImplementedError
 
     # --- some functions which provide some reasonable default implementation
 
@@ -293,7 +301,7 @@ class Backend(Generic[T]):
         return raw_tensor
 
     @staticmethod
-    def create_placeholder(tensor: Tensor) -> T:
+    def create_placeholder_raw(tensor: Tensor) -> T:
         """
         :return: tf.placeholder in TF
 
@@ -305,9 +313,17 @@ class Backend(Generic[T]):
         raise Exception("create_placeholder not supported by backend")
 
     @staticmethod
-    def create_parameter(tensor: Tensor) -> T:
+    def create_parameter_raw(tensor: Tensor) -> T:
         """
         :return: parameter
+        """
+        raise NotImplementedError
+
+    @staticmethod
+    def set_parameter_initial_value(param: rf.Parameter, value: Union[None, Tensor, rf.RawTensorTypes]) -> None:
+        """
+        :param param: parameter
+        :param value: initial value
         """
         raise NotImplementedError
 
