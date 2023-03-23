@@ -87,6 +87,15 @@ def compare(
     """
     from . import _utils as utils
 
+    if (not isinstance(a, (Tensor,) + tuple(_RawTensorTypes.__args__))) or (
+        not isinstance(b, (Tensor,) + tuple(_RawTensorTypes.__args__))
+    ):
+        if kind in ["equal", "=="]:
+            # for Tensor checks against other types than specified equality can never be given
+            return False
+        else:
+            raise TypeError("Unsupported compare type of %s and %s" % (str(a), str(b)))
+
     backend = utils.get_backend_from_tensors(a, b)
     out, a, b = utils.bin_op_out_template(
         backend,
