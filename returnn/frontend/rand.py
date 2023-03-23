@@ -6,25 +6,27 @@ from __future__ import annotations
 from typing import Optional, Union, Sequence
 import numpy
 from returnn.tensor import Tensor, Dim
-from returnn.util.basic import NotSpecified
+from ._backend import global_backend as _global_backend
+
+__all__ = ["random"]
 
 
-# noinspection PyUnusedLocal
 def random(
     *,
-    shape: Sequence[Dim],
+    dims: Sequence[Dim],
+    dtype: Optional[str] = None,
+    sparse_dim: Optional[Dim] = None,
     distribution: str,
-    mean: Optional[Union[int, float, Tensor]] = NotSpecified,
-    stddev: Optional[Union[int, float, Tensor]] = NotSpecified,
-    bound: Optional[Union[int, float, Tensor]] = NotSpecified,
-    minval: Optional[Union[int, float, Tensor]] = NotSpecified,
-    maxval: Optional[Union[int, float, Tensor]] = NotSpecified,
-    dtype: str = NotSpecified,
-    seed: Optional[Union[int, Sequence[int], numpy.ndarray]] = NotSpecified,
-    algorithm: Optional[str] = NotSpecified,
-    explicit_state: Optional[Tensor] = NotSpecified,
-    auto_update_state: Optional[bool] = NotSpecified,
-    static: Optional[bool] = NotSpecified,
+    mean: Optional[Union[int, float, Tensor]] = None,
+    stddev: Optional[Union[int, float, Tensor]] = None,
+    bound: Optional[Union[int, float, Tensor]] = None,
+    minval: Optional[Union[int, float, Tensor]] = None,
+    maxval: Optional[Union[int, float, Tensor]] = None,
+    seed: Optional[Union[int, Sequence[int], numpy.ndarray]] = None,
+    algorithm: Optional[str] = None,
+    explicit_state: Optional[Tensor] = None,
+    auto_update_state: Optional[bool] = None,
+    static: Optional[bool] = None,
 ) -> Tensor:
     """
     Generates random numbers from uniform or normal or truncated normal distribution.
@@ -43,14 +45,15 @@ def random(
       You can just pass ``static=False``.
       Alternatively you could also pass the output of a :class:`RandomStateInitLayer` as ``state``.
 
-    :param Sequence[Dim] shape:
+    :param Sequence[Dim] dims:
+    :param str dtype:
+    :param sparse_dim:
     :param str distribution: "uniform", "normal" or "truncated_normal"
     :param int|float|Tensor|None mean:
     :param int|float|Tensor|None stddev:
     :param int|float|Tensor|None bound: for uniform, defining the range [-bound, bound)
     :param int|float|Tensor|None minval: for uniform
     :param int|float|Tensor|None maxval: for uniform
-    :param str dtype:
     :param int|list[int]|numpy.ndarray|None seed: If not given, uses self.network.random.randint,
       i.e. then it is controlled by the global seed setting, and every layer would get its own seed.
       If you specify it explicitly, make sure every :class:`RandomLayer` uses a different seed,
@@ -67,4 +70,19 @@ def random(
     :param bool|None static: if no state at all should be used. it just relies on the seed then.
     :return: layer
     """
-    raise NotImplementedError  # TODO
+    return _global_backend.random(
+        dims=dims,
+        dtype=dtype,
+        sparse_dim=sparse_dim,
+        distribution=distribution,
+        mean=mean,
+        stddev=stddev,
+        bound=bound,
+        minval=minval,
+        maxval=maxval,
+        seed=seed,
+        algorithm=algorithm,
+        explicit_state=explicit_state,
+        auto_update_state=auto_update_state,
+        static=static,
+    )

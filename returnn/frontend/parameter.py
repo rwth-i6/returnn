@@ -105,7 +105,7 @@ class Parameter(Tensor):
         self._initial = value
 
         if isinstance(value, rf.init.ParamInit):
-            value = value(shape=self.dims, dtype=self.dtype)
+            value = value(dims=self.dims, dtype=self.dtype)
         self._raw_backend.set_parameter_initial_value(self, value)
 
     @property

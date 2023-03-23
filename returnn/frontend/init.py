@@ -14,7 +14,9 @@ from .. import frontend as rf
 class ParamInit:
     """API for param init"""
 
-    def __call__(self, shape: Sequence[Dim], dtype: str) -> Union[Tensor, rf.RawTensorTypes]:
+    def __call__(
+        self, dims: Sequence[Dim], dtype: str, sparse_dim: Optional[Dim] = None
+    ) -> Union[Tensor, rf.RawTensorTypes]:
         raise NotImplementedError
 
 
@@ -33,7 +35,7 @@ class VarianceScaling(ParamInit):
     scale = 1.0
     mode = "fan_in"  # fan_in, fan_out, fan_avg
     distribution = "truncated_normal"  # normal, untruncated_normal, truncated_normal, uniform
-    dtype = "float32"
+    dtype: str  # rf.get_default_float_dtype() by default
 
     def __init__(self, scale: float = None, mode: str = None, distribution: str = None, dtype: str = None):
         if scale is not None:
@@ -42,8 +44,9 @@ class VarianceScaling(ParamInit):
             self.mode = mode
         if distribution is not None:
             self.distribution = distribution
-        if dtype is not None:
-            self.dtype = dtype
+        if dtype is None:
+            dtype = rf.get_default_float_dtype()
+        self.dtype = dtype
 
         if self.scale <= 0.0:
             raise ValueError(f"Argument `scale` must be a positive float. Received: {self.scale}")
@@ -58,35 +61,53 @@ class VarianceScaling(ParamInit):
                 f"Received: {self.distribution}"
             )
 
-    def __call__(self, shape: Sequence[Dim], dtype: Optional[str] = None) -> Tensor:
+    def __call__(self, dims: Sequence[Dim], dtype: Optional[str] = None, sparse_dim: Optional[Dim] = None) -> Tensor:
         if dtype is None:
             dtype = self.dtype
         scale = self.scale
-        fan_in, fan_out = _compute_fans(shape)
+        fan_in, fan_out = _compute_fans(dims)
         if self.mode == "fan_in":
             scale /= max(1.0, fan_in)
         elif self.mode == "fan_out":
             scale /= max(1.0, fan_out)
         else:
             scale /= max(1.0, (fan_in + fan_out) / 2.0)
-        return self._random(shape=shape, dtype=dtype, scale=scale)
+        return self._random(dims=dims, dtype=dtype, scale=scale, sparse_dim=sparse_dim)
 
-    def _random(self, shape: Sequence[Dim], scale: float, dtype=None) -> Tensor:
+    def _random(self, dims: Sequence[Dim], scale: float, dtype=None, sparse_dim: Optional[Dim] = None) -> Tensor:
         if self.distribution in {"truncated_normal", "normal"}:
             # constant taken from scipy.stats.truncnorm.std(a=-2, b=2, loc=0., scale=1.)
             stddev = math.sqrt(scale) / 0.87962566103423978
             return rf.random(
-                distribution=self.distribution, static=True, shape=shape, mean=0.0, stddev=stddev, dtype=dtype
+                distribution=self.distribution,
+                static=True,
+                dims=dims,
+                mean=0.0,
+                stddev=stddev,
+                dtype=dtype,
+                sparse_dim=sparse_dim,
             )
         elif self.distribution == "untruncated_normal":
             stddev = math.sqrt(scale)
             return rf.random(
-                distribution=self.distribution, static=True, shape=shape, mean=0.0, stddev=stddev, dtype=dtype
+                distribution=self.distribution,
+                static=True,
+                dims=dims,
+                mean=0.0,
+                stddev=stddev,
+                dtype=dtype,
+                sparse_dim=sparse_dim,
             )
         elif self.distribution == "uniform":
             limit = math.sqrt(3.0 * scale)
             return rf.random(
-                distribution=self.distribution, static=True, shape=shape, minval=-limit, maxval=limit, dtype=dtype
+                distribution=self.distribution,
+                static=True,
+                dims=dims,
+                minval=-limit,
+                maxval=limit,
+                dtype=dtype,
+                sparse_dim=sparse_dim,
             )
         else:
             raise ValueError(f"invalid distribution {self.distribution!r}")
@@ -126,29 +147,29 @@ class HeUniform(He):
     distribution = "uniform"
 
 
-def _compute_fans(shape: Sequence[Dim]):
+def _compute_fans(dims: Sequence[Dim]):
     """Computes the number of input and output units for a weight shape.
 
     Args:
-      shape: Integer shape tuple or TF tensor shape.
+      dims: Integer shape tuple or TF tensor shape.
 
     Returns:
       A tuple of integer scalars (fan_in, fan_out).
     """
-    shape = [dim.dimension for dim in shape]
-    if len(shape) < 1:  # Just to avoid errors for constants.
+    dims = [dim.dimension for dim in dims]
+    if len(dims) < 1:  # Just to avoid errors for constants.
         fan_in = fan_out = 1
-    elif len(shape) == 1:
-        fan_in = fan_out = shape[0]
-    elif len(shape) == 2:
-        fan_in = shape[0]
-        fan_out = shape[1]
+    elif len(dims) == 1:
+        fan_in = fan_out = dims[0]
+    elif len(dims) == 2:
+        fan_in = dims[0]
+        fan_out = dims[1]
     else:
         # Assuming convolution kernels (2D, 3D, or more).
         # kernel shape: (..., input_depth, depth)
         receptive_field_size = 1
-        for dim in shape[:-2]:
+        for dim in dims[:-2]:
             receptive_field_size *= dim
-        fan_in = shape[-2] * receptive_field_size
-        fan_out = shape[-1] * receptive_field_size
+        fan_in = dims[-2] * receptive_field_size
+        fan_out = dims[-1] * receptive_field_size
     return fan_in, fan_out

@@ -4,8 +4,9 @@ Backend for exposing PyTorch-specific functionality.
 
 from __future__ import annotations
 from typing import Optional, Union, Sequence, Tuple
-
 import torch
+import numpy
+
 from returnn.tensor import Tensor, Dim
 from returnn.util.basic import prod, NotSpecified
 
@@ -347,3 +348,60 @@ class TorchBackend(Backend[torch.Tensor]):
             sparse_dim=source.sparse_dim,
         )
         return res
+
+    @staticmethod
+    def random(
+        *,
+        dims: Sequence[Dim],
+        dtype: str,
+        sparse_dim: Optional[Dim] = None,
+        distribution: str,
+        mean: Optional[Union[int, float, Tensor]] = None,
+        stddev: Optional[Union[int, float, Tensor]] = None,
+        bound: Optional[Union[int, float, Tensor]] = None,
+        minval: Optional[Union[int, float, Tensor]] = None,
+        maxval: Optional[Union[int, float, Tensor]] = None,
+        seed: Optional[Union[int, Sequence[int], numpy.ndarray]] = None,
+        algorithm: Optional[str] = None,
+        explicit_state: Optional[Tensor] = None,
+        auto_update_state: Optional[bool] = None,
+        static: Optional[bool] = None,
+    ) -> Tensor:
+        """
+        random. See `rf.random` for details.
+        """
+        shape = [d.get_dim_value() for d in dims]
+        dtype_ = TorchBackend.as_dtype_raw(dtype)
+        out = Tensor(name=f"random_{distribution}", dims=dims, dtype=dtype, sparse_dim=sparse_dim)
+        assert explicit_state is None  # not implemented otherwise
+        assert static and seed is None  # not implemented otherwise
+        assert auto_update_state is None  # not implemented otherwise
+        if distribution == "uniform":
+            assert mean is None and stddev is None  # not implemented otherwise
+            if dtype_.is_floating_point:
+                out.raw_tensor = torch.rand(*shape, dtype=dtype_)
+                if minval is None:
+                    minval = 0
+                if maxval is None:
+                    maxval = 1
+                if isinstance(minval, Tensor) or isinstance(maxval, Tensor) or minval != 0 or maxval != 1:
+                    out = out * (maxval - minval) + minval
+            else:
+                if minval is None:
+                    minval = 0
+                assert maxval is not None, "maxval must be specified for integer random uniform"
+                out.raw_tensor = torch.randint(minval, maxval, shape, dtype=dtype_)
+        elif distribution == "normal":
+            assert minval is None and maxval is None
+            out.raw_tensor = torch.randn(*shape, dtype=dtype_)
+            if mean is None:
+                mean = 0
+            if stddev is None:
+                stddev = 1
+            if isinstance(stddev, Tensor) or stddev != 1:
+                out = out * stddev
+            if isinstance(mean, Tensor) or mean != 0:
+                out = out + mean
+        else:
+            raise NotImplementedError(f"random distribution {distribution} not implemented")
+        return out

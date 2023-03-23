@@ -5,6 +5,7 @@ Backends for the frontend API
 from __future__ import annotations
 from typing import TYPE_CHECKING, Optional, Any, Union, TypeVar, Generic, Type, Sequence, Dict, Tuple
 import contextlib
+import numpy
 
 from returnn.util.basic import NotSpecified
 import returnn.frontend as rf
@@ -504,6 +505,29 @@ class Backend(Generic[T]):
         :param axis:
         :param use_time_mask: if True (default), use the time mask (part of dim tag) to ignore padding frames
         :return: tensor with axis removed
+        """
+        raise NotImplementedError
+
+    @staticmethod
+    def random(
+        *,
+        dims: Sequence[Dim],
+        dtype: str,
+        sparse_dim: Optional[Dim] = None,
+        distribution: str,
+        mean: Optional[Union[int, float, Tensor]] = None,
+        stddev: Optional[Union[int, float, Tensor]] = None,
+        bound: Optional[Union[int, float, Tensor]] = None,
+        minval: Optional[Union[int, float, Tensor]] = None,
+        maxval: Optional[Union[int, float, Tensor]] = None,
+        seed: Optional[Union[int, Sequence[int], numpy.ndarray]] = None,
+        algorithm: Optional[str] = None,
+        explicit_state: Optional[Tensor] = None,
+        auto_update_state: Optional[bool] = None,
+        static: Optional[bool] = None,
+    ) -> Tensor:
+        """
+        random. See `rf.random` for details.
         """
         raise NotImplementedError
 
