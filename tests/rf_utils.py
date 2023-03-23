@@ -31,6 +31,10 @@ def run_model_torch(get_model: Callable[[], rf.Module], extern_data: Tensor) -> 
 
 def run_model_net_dict_tf(get_model: Callable[[], rf.Module], extern_data: Tensor):
     """run"""
+    rnd = numpy.random.RandomState(42)
+    rf.select_backend_returnn_layers_tf()
+    _fill_random(extern_data, rnd=rnd, raw_tensor_type=torch.Tensor)  # TODO fix raw_tensor_type
+
     get_model, extern_data  # noqa  # TODO
     raise NotImplementedError  # TODO
 

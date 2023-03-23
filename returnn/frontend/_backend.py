@@ -551,8 +551,11 @@ def select_backend_returnn_layers_tf():
     backend = get_backend_by_raw_tensor_type(tf.Tensor)  # side-effect: register it
     global_backend.__class__ = backend
 
-    # TODO returnn layer type, register_frontend_by_tensor_type for that
-    #   global_frontend.__class__ = ReturnnLayersFrontend
+    # TODO move this to get_backend_by_raw_tensor_type
+    #   use returnn layer type, register_frontend_by_tensor_type for that
+    from returnn.tf.frontend_layers import ReturnnLayersBackend
+
+    global_backend.__class__ = ReturnnLayersBackend
 
 
 def select_backend_torch():
