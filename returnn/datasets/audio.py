@@ -2,6 +2,8 @@
 Datasets dealing with audio
 """
 
+from __future__ import annotations
+from typing import Optional
 import numpy
 import typing
 
@@ -73,6 +75,8 @@ class OggZipDataset(CachedDataset2):
         from .meta import EpochWiseFilter
 
         self._separate_txt_files = {}  # name -> filename
+        self._path = path
+        self._use_cache_manager = use_cache_manager
         if (
             isinstance(path, str)
             and os.path.splitext(path)[1] != ".zip"
@@ -104,12 +108,19 @@ class OggZipDataset(CachedDataset2):
                 self._names.append(name)
             self._zip_files = [zipfile.ZipFile(path) for path in self.paths]
         self.segments = None  # type: typing.Optional[typing.Set[str]]
+        self._segment_file = segment_file
         if segment_file:
             self._read_segment_list(segment_file)
         self.zip_audio_files_have_name_as_prefix = zip_audio_files_have_name_as_prefix
         kwargs.setdefault("name", self._names[0])
         super(OggZipDataset, self).__init__(**kwargs)
-        self.targets = Vocabulary.create_vocab(**targets) if targets is not None else None
+        if targets is None:
+            self.targets = None  # type: typing.Optional[Vocabulary]
+        elif isinstance(targets, dict):
+            self.targets = Vocabulary.create_vocab(**targets)
+        else:
+            assert isinstance(targets, Vocabulary)
+            self.targets = targets
         if self.targets:
             self.labels["classes"] = self.targets.labels
         self.targets_post_process = None  # type: typing.Optional[typing.Callable[[str],str]]
@@ -121,6 +132,7 @@ class OggZipDataset(CachedDataset2):
 
                 self.targets_post_process = get_post_processor_function(targets_post_process)
         self._audio_random = numpy.random.RandomState(1)
+        self._audio = audio
         self.feature_extractor = (
             ExtractAudioFeatures(random_state=self._audio_random, **audio) if audio is not None else None
         )
@@ -139,9 +151,16 @@ class OggZipDataset(CachedDataset2):
         else:
             self.num_outputs["data"] = [0, 2]
         self._data = self._collect_data()
+        self._fixed_random_subset = fixed_random_subset
         if fixed_random_subset:
             self._filter_fixed_random_subset(fixed_random_subset)
-        self.epoch_wise_filter = EpochWiseFilter(epoch_wise_filter) if epoch_wise_filter else None
+        if epoch_wise_filter is None:
+            self.epoch_wise_filter = None  # type: Optional[EpochWiseFilter]
+        elif isinstance(epoch_wise_filter, dict):
+            self.epoch_wise_filter = EpochWiseFilter(epoch_wise_filter)
+        else:
+            assert isinstance(epoch_wise_filter, EpochWiseFilter)
+            self.epoch_wise_filter = epoch_wise_filter
         self._seq_order = None  # type: typing.Optional[typing.Sequence[int]]
         self.init_seq_order()
 
