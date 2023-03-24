@@ -188,6 +188,8 @@ class MetaDataset(CachedDataset2):
 
     """
 
+    _getnewargs_exclude_attrs = CachedDataset2._getnewargs_exclude_attrs.union(("data_dtypes",))
+
     def __init__(
         self,
         datasets,
@@ -239,6 +241,7 @@ class MetaDataset(CachedDataset2):
             for key in self.dataset_keys
         }  # type: typing.Dict[str,Dataset]
 
+        self._seq_list_file = seq_list_file
         self.seq_list_original = self._load_seq_list(seq_list_file)
         self.num_total_seqs = len(self.seq_list_original[self.default_dataset_key])
         for key in self.dataset_keys:
@@ -248,6 +251,7 @@ class MetaDataset(CachedDataset2):
 
         self._seq_lens = None  # type: typing.Optional[typing.Dict[str,NumbersDict]]
         self._num_timesteps = None  # type: typing.Optional[NumbersDict]
+        self._seq_lens_file = seq_lens_file
         if seq_lens_file:
             seq_lens = load_json(filename=seq_lens_file)
             assert isinstance(seq_lens, dict)
