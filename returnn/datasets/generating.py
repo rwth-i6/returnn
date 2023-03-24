@@ -36,6 +36,8 @@ class GeneratingDataset(Dataset):
         super(GeneratingDataset, self).__init__(**kwargs)
         assert self.shuffle_frames_of_nseqs == 0
 
+        self._input_dim = input_dim
+        self._output_dim = output_dim
         self.num_inputs = input_dim
         output_dim = convert_data_dims(output_dim, leave_dict_as_is=False)
         if "data" not in output_dim and input_dim is not None:
@@ -273,6 +275,7 @@ class Task12AXDataset(GeneratingDataset):
 
     _input_classes = "123ABCXYZ"  # noqa
     _output_classes = "LR"
+    _getnewargs_exclude_attrs = Dataset._getnewargs_exclude_attrs.union(("input_dim", "output_dim"))
 
     def __init__(self, **kwargs):
         super(Task12AXDataset, self).__init__(
@@ -368,6 +371,7 @@ class TaskEpisodicCopyDataset(GeneratingDataset):
     # Blank, delimiter and some chars.
     _input_classes = " .01234567"
     _output_classes = _input_classes
+    _getnewargs_exclude_attrs = Dataset._getnewargs_exclude_attrs.union(("input_dim", "output_dim"))
 
     def __init__(self, **kwargs):
         super(TaskEpisodicCopyDataset, self).__init__(
@@ -440,6 +444,7 @@ class TaskXmlModelingDataset(GeneratingDataset):
     # Blank, XML-tags and some chars.
     _input_classes = " <>/abcdefgh"  # noqa
     _output_classes = _input_classes
+    _getnewargs_exclude_attrs = Dataset._getnewargs_exclude_attrs.union(("input_dim", "output_dim"))
 
     def __init__(self, limit_stack_depth=4, **kwargs):
         super(TaskXmlModelingDataset, self).__init__(
@@ -535,6 +540,7 @@ class TaskVariableAssignmentDataset(GeneratingDataset):
     # Blank/Delim/End, Store/Query, and some chars for key/value.
     _input_classes = " ,.SQ()abcdefgh"  # noqa
     _output_classes = _input_classes
+    _getnewargs_exclude_attrs = Dataset._getnewargs_exclude_attrs.union(("input_dim", "output_dim"))
 
     def __init__(self, **kwargs):
         super(TaskVariableAssignmentDataset, self).__init__(
@@ -661,6 +667,8 @@ class TaskNumberBaseConvertDataset(GeneratingDataset):
     Task: E.g: Get some number in octal and convert it to binary (e.g. "10101001").
     Or basically convert some number from some base into another base.
     """
+
+    _getnewargs_exclude_attrs = Dataset._getnewargs_exclude_attrs.union(("input_dim", "output_dim"))
 
     def __init__(self, input_base=8, output_base=2, min_input_seq_len=1, max_input_seq_len=8, **kwargs):
         """
@@ -845,6 +853,8 @@ class DummyDatasetMultipleDataKeys(DummyDataset):
     It also provides the function of :class:`DummyDatasetMultipleSequenceLength` to customize the
     sequence length for each data point.
     """
+
+    _getnewargs_exclude_attrs = Dataset._getnewargs_exclude_attrs.union(("input_dim",))
 
     def __init__(
         self,
@@ -1122,6 +1132,8 @@ class CopyTaskDataset(GeneratingDataset):
     Copy task.
     Input/output is exactly the same random sequence of sparse labels.
     """
+
+    _getnewargs_exclude_attrs = Dataset._getnewargs_exclude_attrs.union(("input_dim", "output_dim"))
 
     def __init__(self, nsymbols, minlen=0, maxlen=0, minlen_epoch_factor=0, maxlen_epoch_factor=0, **kwargs):
         """

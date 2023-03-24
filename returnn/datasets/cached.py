@@ -11,11 +11,17 @@ from returnn.util import NumbersDict
 
 
 class CachedDataset(Dataset):
+    """
+    Base class for datasets with caching. This is only used for the :class:`HDFDataset`.
+    Also see :class:`CachedDataset2`.
+    """
+
     def __init__(self, cache_byte_size=0, **kwargs):
         """
         :param int cache_byte_size:
         """
         super(CachedDataset, self).__init__(**kwargs)
+        self._cache_byte_size = cache_byte_size
         self.cache_byte_size_total_limit = cache_byte_size
         if cache_byte_size == -1:
             self.cache_byte_size_limit_at_start = 1024**4
