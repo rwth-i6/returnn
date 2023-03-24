@@ -476,9 +476,10 @@ def test_SimpleHDFWriter_swmr():
     writer.close()  # Should not matter.
 
 
-def dummy_iter_dataset(dataset):
+def dummy_iter_dataset(dataset: Dataset) -> int:
     """
     :param Dataset dataset:
+    :return: num seqs
     """
     dataset.init_seq_order(epoch=1)
     data_keys = dataset.get_data_keys()
@@ -490,6 +491,7 @@ def dummy_iter_dataset(dataset):
             dataset.get_tag(seq_idx)
         seq_idx += 1
     print("Iterated through %r, num seqs %i" % (dataset, seq_idx))
+    return seq_idx
 
 
 def test_hdf_simple_iter():
@@ -721,6 +723,36 @@ def test_HDFDataset_no_cache_efficiency():
     hdf_dataset.load_seqs(3, 7)
     hdf_dataset.load_seqs(4, 10)
     # TODO... check alloc intervals etc
+
+
+def test_HDFDataset_pickle():
+    hdf_fn = generate_hdf_from_other({"class": "Task12AXDataset", "num_seqs": 23})
+    ds = HDFDataset(files=[hdf_fn], cache_byte_size=0)
+    ds.initialize()
+    ds.init_seq_order(epoch=1)
+
+    import pickle
+
+    ds_copy = pickle.loads(pickle.dumps(ds))
+    assert ds_copy.epoch == 1
+    num_seqs = dummy_iter_dataset(ds)
+    num_seqs_copy = dummy_iter_dataset(ds_copy)
+    assert num_seqs == num_seqs_copy
+
+
+def test_HDFDataset_deepcopy():
+    hdf_fn = generate_hdf_from_other({"class": "Task12AXDataset", "num_seqs": 23})
+    ds = HDFDataset(files=[hdf_fn], cache_byte_size=0)
+    ds.initialize()
+    ds.init_seq_order(epoch=1)
+
+    import copy
+
+    ds_copy = copy.deepcopy(ds)
+    assert ds_copy.epoch == 1
+    num_seqs = dummy_iter_dataset(ds)
+    num_seqs_copy = dummy_iter_dataset(ds_copy)
+    assert num_seqs == num_seqs_copy
 
 
 def test_siamese_triplet_sampling():
