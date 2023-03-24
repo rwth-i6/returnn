@@ -140,6 +140,7 @@ class Dataset(object):
         self.random_seed_offset = random_seed_offset
         self.partition_epoch = partition_epoch or 1
         self.repeat_epoch = repeat_epoch or 1
+        self._seq_list_filter_file = seq_list_filter_file
         self.seq_tags_filter = set(self._load_seq_list_file(seq_list_filter_file)) if seq_list_filter_file else None
         self.unique_seq_tags = unique_seq_tags
         self._seq_order_seq_lens_file = seq_order_seq_lens_file
@@ -155,7 +156,9 @@ class Dataset(object):
         self._estimated_num_seqs = estimated_num_seqs
         self.min_chunk_size = NumbersDict(min_chunk_size)
         self.chunking_variance = chunking_variance
+        self._chunking = chunking
         self.chunk_size, self.chunk_step, self.custom_chunking_func = self._parse_chunking(chunking)
+        self._context_window = context_window
         if isinstance(context_window, (tuple, list)):
             assert len(context_window) == 2
             for elem in context_window:
@@ -184,6 +187,7 @@ class Dataset(object):
         assert isinstance(self.ctx_right, NumbersDict)
         self.shuffle_frames_of_nseqs = shuffle_frames_of_nseqs
         self.epoch = None
+        self.zpad = None
 
     def __repr__(self):
         return "<%s %r epoch=%s>" % (
@@ -191,6 +195,39 @@ class Dataset(object):
             getattr(self, "name", "<unknown>"),
             getattr(self, "epoch", "<unknown>"),
         )
+
+    _getnewargs_exclude_attrs = set()  # type: typing.Set[str]
+
+    @staticmethod
+    def _create_from_reduce(cls, kwargs, state) -> Dataset:
+        """
+        :param type cls:
+        :param dict[str] kwargs:
+        :param dict[str] state:
+        :rtype: Dataset
+        """
+        assert issubclass(cls, Dataset)
+        ds = cls(**kwargs)
+        for attr, value in state.items():
+            setattr(ds, attr, value)
+        return ds
+
+    def __reduce__(self):
+        import inspect
+
+        kwargs = {}
+        for cls in self.__class__.__mro__:
+            if isinstance(cls, type) and issubclass(cls, Dataset):
+                for arg in inspect.getargs(cls.__init__.__code__).args[1:]:
+                    if arg in self._getnewargs_exclude_attrs:
+                        continue
+                    if hasattr(self, "_" + arg):
+                        kwargs[arg] = getattr(self, "_" + arg)
+                    else:
+                        kwargs[arg] = getattr(self, arg)
+
+        state = {attr: getattr(self, attr) for attr in ["epoch", "zpad"]}
+        return Dataset._create_from_reduce, (self.__class__, kwargs, state)
 
     @staticmethod
     def _get_default_random_seed_offset():
