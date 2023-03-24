@@ -168,9 +168,9 @@ class HDFDataset(CachedDataset):
         if "inputs" in fin:
             assert "data" not in self.target_keys, "Cannot use 'data' key for both a target and 'inputs'."
             if len(fin["inputs"].shape) == 1:  # sparse
-                num_inputs = [fin.attrs[attr_inputPattSize], 1]
+                num_inputs = [int(fin.attrs[attr_inputPattSize]), 1]
             else:
-                num_inputs = [fin["inputs"].shape[1], len(fin["inputs"].shape)]  # fin.attrs[attr_inputPattSize]
+                num_inputs = [int(fin["inputs"].shape[1]), len(fin["inputs"].shape)]  # fin.attrs[attr_inputPattSize]
         else:
             num_inputs = [0, 0]
         if self.num_inputs == 0:
