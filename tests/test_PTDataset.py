@@ -7,19 +7,17 @@ import torch
 import torch.utils.data.datapipes as dp
 from torchdata.dataloader2 import DataLoader2
 
+from returnn.datasets.basic import Dataset
 from returnn.datasets.generating import Task12AXDataset
 from returnn.torch.data import pipeline as data_pipeline
 from returnn.torch.data import returnn_dataset_wrapper
 from returnn.util import better_exchook
 
 
-def test_pipeline_serialization():
-    dataset = Task12AXDataset(num_seqs=1000)
-
+def get_loader_from_returnn_dataset(dataset: Dataset, mp_manager: torch.multiprocessing.Manager) -> DataLoader2:
     # Follow mostly similar logic as in the PT engine.
 
-    _mp_manager = torch.multiprocessing.Manager()
-    epoch_mp_shared = _mp_manager.Value("i", 0)
+    epoch_mp_shared = mp_manager.Value("i", 0)
     epoch_mp_shared.value = 1
     reset_callback = returnn_dataset_wrapper.ReturnnDatasetResetMpSharedEpochCallback(
         dataset=dataset, epoch_mp_shared=epoch_mp_shared
@@ -46,9 +44,36 @@ def test_pipeline_serialization():
 
     pickle.loads(pickle.dumps(batches_dataset))
 
-    # Now test the actual usage of the dataset.
-
     loader = DataLoader2(batches_dataset)
+    return loader
+
+
+def test_pipeline_serialization():
+    dataset = Task12AXDataset(num_seqs=1000)
+
+    mp_manager = torch.multiprocessing.Manager()
+    loader = get_loader_from_returnn_dataset(dataset, mp_manager)
+
+    c = 0
+    n = 3
+    for batch in loader:
+        print(batch)
+        c += 1
+        if c >= n:
+            break
+
+    assert c == n
+
+
+def test_HDFDataset():
+    # https://github.com/rwth-i6/returnn/issues/1281
+    from test_HDFDataset import generate_hdf_from_other, HDFDataset
+
+    hdf_fn = generate_hdf_from_other({"class": "Task12AXDataset", "num_seqs": 23})
+    hdf_dataset = HDFDataset(files=[hdf_fn], cache_byte_size=0)
+
+    mp_manager = torch.multiprocessing.Manager()
+    loader = get_loader_from_returnn_dataset(hdf_dataset, mp_manager)
     c = 0
     n = 3
     for batch in loader:
