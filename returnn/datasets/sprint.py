@@ -108,15 +108,23 @@ class SprintDatasetBase(Dataset):
                 self.orth_post_process = get_post_processor_function(orth_post_process)
         self.bpe = None
         if bpe:
-            from returnn.datasets.util.vocabulary import BytePairEncoding
+            from returnn.datasets.util.vocabulary import Vocabulary, BytePairEncoding
 
-            self.bpe = BytePairEncoding(**bpe)
+            if isinstance(bpe, dict):
+                self.bpe = BytePairEncoding(**bpe)
+            else:
+                assert isinstance(bpe, Vocabulary)
+                self.bpe = bpe
             self.labels["bpe"] = self.bpe.labels
         self.orth_vocab = None
         if orth_vocab:
             from returnn.datasets.util.vocabulary import Vocabulary
 
-            self.orth_vocab = Vocabulary.create_vocab(**orth_vocab)
+            if isinstance(orth_vocab, dict):
+                self.orth_vocab = Vocabulary.create_vocab(**orth_vocab)
+            else:
+                assert isinstance(orth_vocab, Vocabulary)
+                self.orth_vocab = orth_vocab
             self.labels["orth_classes"] = self.orth_vocab.labels
         self.lock = RLock()
         self.cond = Condition(lock=self.lock)
@@ -679,6 +687,22 @@ class ExternSprintDataset(SprintDatasetBase):
         # We don't know about num_outputs yet, but we should.
         # Thus we call Sprint and immediately exit it.
         self._start_child(epoch=None, get_dim_only=True)
+
+    # The following methods are here for __reduce__.
+    # noinspection PyPep8Naming
+    @property
+    def _sprintTrainerExecPath(self):
+        return self.sprint_trainer_exec_path
+
+    # noinspection PyPep8Naming
+    @property
+    def _sprintConfigStr(self):
+        return self.sprint_config
+
+    # noinspection PyPep8Naming
+    @property
+    def _partitionEpoch(self):
+        return self.partition_epoch
 
     def finish_epoch(self):
         """
