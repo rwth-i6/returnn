@@ -59,7 +59,7 @@ def setup(old_style=False, target_package_name="returnn"):
 
 def test_TaskSystem_Pickler():
     from returnn.util.task_system import Pickler
-    from returnn.util.task_system import BytesIO
+    from io import BytesIO
 
     stream = BytesIO()
     pickler = Pickler(stream)
