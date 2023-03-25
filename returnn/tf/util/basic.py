@@ -6503,7 +6503,7 @@ def format_graph_output(fetches, max_depth=None):
     :param int|None max_depth:
     :rtype: str
     """
-    from returnn.util.basic import StringIO
+    from io import StringIO
 
     ss = StringIO()
     print_graph_output(fetches, max_depth=max_depth, file=ss)

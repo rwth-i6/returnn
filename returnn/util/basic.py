@@ -28,38 +28,17 @@ except ImportError:
     import _thread as thread
 import threading
 
-try:
-    # noinspection PyCompatibility
-    from StringIO import StringIO
-except ImportError:
-    from io import StringIO
+from io import BytesIO
 import typing
 from returnn.log import log
+import builtins
 
 PY3 = sys.version_info[0] >= 3
 
-if PY3:
-    import builtins
-
-    unicode = str
-    long = int
-    # noinspection PyShadowingBuiltins
-    input = builtins.input
-    from io import BytesIO
-else:
-    # noinspection PyUnresolvedReferences
-    import __builtin__ as builtins
-
-    unicode = builtins.unicode  # type: typing.Type[str]
-    long = builtins.long  # type: typing.Type[int]
-    # noinspection PyShadowingBuiltins
-    input = builtins.raw_input
-    try:
-        # noinspection PyUnresolvedReferences,PyCompatibility
-        from cStringIO import StringIO as BytesIO
-    except ImportError:
-        # noinspection PyUnresolvedReferences,PyCompatibility
-        from StringIO import StringIO as BytesIO
+unicode = str
+long = int
+# noinspection PyShadowingBuiltins
+input = builtins.input
 
 
 T = TypeVar("T")

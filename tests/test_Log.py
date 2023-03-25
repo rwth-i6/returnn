@@ -158,11 +158,9 @@ print("hello log 2", file=log.v3)
 
 
 def test_StreamIO():
-    try:
-        import StringIO
-    except ImportError:
-        import io as StringIO
-    buf = StringIO.StringIO()
+    import io
+
+    buf = io.StringIO()
     assert_equal(buf.getvalue(), "")
     print("buf: %r" % buf.getvalue())
 

@@ -23,12 +23,6 @@ except ImportError:
 
 PY3 = sys.version_info[0] >= 3
 
-if PY3:
-    from io import BytesIO
-else:
-    # noinspection PyUnresolvedReferences,PyCompatibility
-    from StringIO import StringIO as BytesIO
-
 
 _abs_mod_file = os.path.abspath(__file__)
 

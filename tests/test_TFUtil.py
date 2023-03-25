@@ -783,7 +783,6 @@ def test_Data_get_common_data_one_undefined_time():
     print("c:", c)
     c.sanity_check()
     assert_equal(b.get_time_dim_tag(), c.get_time_dim_tag())
-    from returnn.util.basic import StringIO
 
     out = Data.get_common_data([a, b, c])
     print("out:", out)

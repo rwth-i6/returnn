@@ -24,7 +24,7 @@ from typing import Optional, Union, Type, List
 from returnn.log import log
 from returnn.engine.batch import Batch, BatchSetGenerator
 from returnn.datasets.util.vocabulary import Vocabulary
-from returnn.util.basic import try_run, NumbersDict, unicode, OptionalNotImplementedError
+from returnn.util.basic import try_run, NumbersDict, OptionalNotImplementedError
 
 
 class Dataset(object):
@@ -1347,7 +1347,7 @@ def init_dataset(kwargs, extra_kwargs=None, default_kwargs=None):
         return data
     if callable(kwargs):
         return init_dataset(kwargs(), extra_kwargs=extra_kwargs, default_kwargs=default_kwargs)
-    if isinstance(kwargs, (str, unicode)):
+    if isinstance(kwargs, str):
         if kwargs.startswith("{"):
             kwargs = eval(kwargs)
         elif kwargs.startswith("config:"):

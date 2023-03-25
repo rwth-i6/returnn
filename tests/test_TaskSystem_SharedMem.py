@@ -4,6 +4,7 @@ import _setup_test_env  # noqa
 import sys
 import os
 import threading
+from io import BytesIO
 from returnn.util.task_system import *
 import unittest
 import gc
@@ -11,22 +12,16 @@ import gc
 SharedMemNumpyConfig["enabled"] = True
 SharedMemNumpyConfig["auto_pickling_min_size"] = 1
 
-try:
-    # noinspection PyCompatibility
-    from StringIO import StringIO
-except ImportError:  # Python 3
-    from io import BytesIO as StringIO
-
 
 def pickle_dumps(obj):
-    sio = StringIO()
+    sio = BytesIO()
     p = Pickler(sio)
     p.dump(obj)
     return sio.getvalue()
 
 
 def pickle_loads(s):
-    p = Unpickler(StringIO(s))
+    p = Unpickler(BytesIO(s))
     return p.load()
 
 

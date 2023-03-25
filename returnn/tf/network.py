@@ -3648,7 +3648,7 @@ class Subnetwork:
 
             etype, value, tb = sys.exc_info()
             from returnn.util import better_exchook
-            from returnn.util.basic import StringIO
+            from io import StringIO
 
             ss = StringIO()
             print(

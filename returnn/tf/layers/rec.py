@@ -1451,10 +1451,11 @@ class _SubnetworkRecCell(object):
         :param ((str) -> LayerBase) parent_get_layer:
         """
         import sys
+        from io import StringIO
         from returnn.util import better_exchook
         from pprint import pformat
         from collections import OrderedDict
-        from returnn.util.basic import StringIO, BehaviorVersion
+        from returnn.util.basic import BehaviorVersion
         from returnn.tf.network import NetworkConstructionDependencyLoopException, DataNotFound
 
         # The stack trace is not so interesting for these exceptions.

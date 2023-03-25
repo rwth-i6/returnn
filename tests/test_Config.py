@@ -8,11 +8,7 @@ from returnn.util.basic import PY3
 from returnn.util import better_exchook
 
 better_exchook.replace_traceback_format_tb()
-if PY3:
-    from io import StringIO
-else:
-    # noinspection PyUnresolvedReferences,PyCompatibility
-    from StringIO import StringIO
+from io import StringIO
 
 
 def test_old_format():

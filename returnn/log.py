@@ -7,12 +7,7 @@ from __future__ import annotations
 import logging
 import os
 import sys
-
-try:
-    import StringIO
-except ImportError:
-    # noinspection PyPep8Naming
-    import io as StringIO
+import io
 import threading
 from threading import RLock
 import contextlib
@@ -33,7 +28,7 @@ class Stream:
         :type log: logging.Logger
         :type lvl: int
         """
-        self.buf = StringIO.StringIO()
+        self.buf = io.StringIO()
         self.log = log
         self.lvl = lvl
         self.lock = RLock()
@@ -268,7 +263,7 @@ class StreamThreadLocal(threading.local):
     """
 
     def __init__(self):
-        self.buf = StringIO.StringIO()
+        self.buf = io.StringIO()
 
     def write(self, msg):
         """
