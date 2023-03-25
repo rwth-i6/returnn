@@ -19,7 +19,7 @@ import os
 import numpy
 import functools
 import typing
-from typing import Optional
+from typing import Optional, Union, Type, List
 
 from returnn.log import log
 from returnn.engine.batch import Batch, BatchSetGenerator
@@ -466,7 +466,7 @@ class Dataset(object):
             for i in range(1, num):
                 seq_index[i::num] += i * (num_seqs // num)
         elif self.seq_ordering == "reverse":
-            seq_index = range(num_seqs - 1, -1, -1)
+            seq_index = range(num_seqs - 1, -1, -1)  # type: Union[range, typing.Sequence[int]]
         elif self.seq_ordering in ["sorted", "sorted_reverse"]:
             assert get_seq_len
             reverse = -1 if self.seq_ordering == "sorted_reverse" else 1
@@ -490,7 +490,7 @@ class Dataset(object):
                 nth = int(tmp[1])
             rnd_seed = self._get_random_seed_for_epoch(epoch=epoch, num_epochs_fixed=nth)
             random_generator = numpy.random.RandomState(rnd_seed)
-            seq_index = random_generator.permutation(num_seqs).tolist()  # type: typing.List[int]
+            seq_index = random_generator.permutation(num_seqs).tolist()  # type: Union[List[int], numpy.ndarray]
             seq_index.sort(key=get_seq_len)  # Sort by length, starting with shortest.
             if len(tmp) == 0:
                 bins = 2
@@ -526,7 +526,7 @@ class Dataset(object):
                 nth = int(tmp[1])
             rnd_seed = self._get_random_seed_for_epoch(epoch=epoch, num_epochs_fixed=nth)
             random_generator = numpy.random.RandomState(rnd_seed)
-            seq_index = random_generator.permutation(num_seqs)  # type: numpy.ndarray
+            seq_index = random_generator.permutation(num_seqs)  # type: Union[numpy.ndarray, List[int]]
             out_index = []
             for i in range(bins):
                 if i == bins - 1:
@@ -1302,14 +1302,19 @@ class DatasetSeq:
         return "<DataCache seq_idx=%i>" % self.seq_idx
 
 
-def get_dataset_class(name):
+_dataset_classes = {}  # type: dict[str,type[Dataset]]
+
+
+def get_dataset_class(name: Union[str, Type[Dataset]]) -> Optional[Type[Dataset]]:
     """
     :param str|type name:
-    :rtype: type[Dataset]
     """
     if isinstance(name, type):
         assert issubclass(name, Dataset)
         return name
+
+    if _dataset_classes:
+        return _dataset_classes.get(name, None)
 
     from importlib import import_module
 
@@ -1318,11 +1323,14 @@ def get_dataset_class(name):
     mod_names = ["hdf", "sprint", "generating", "numpy_dump", "meta", "lm", "stereo", "raw_wav", "map"]
     for mod_name in mod_names:
         mod = import_module("returnn.datasets.%s" % mod_name)
-        if name in vars(mod):
-            clazz = getattr(mod, name)
-            assert issubclass(clazz, Dataset)
-            return clazz
-    return None
+        for name, clazz in vars(mod).items():
+            if name in _dataset_classes:  # prefer first
+                continue
+            if not isinstance(clazz, type) or not issubclass(clazz, Dataset):
+                continue
+            _dataset_classes[name] = clazz
+
+    return _dataset_classes.get(name, None)
 
 
 def init_dataset(kwargs, extra_kwargs=None, default_kwargs=None):
