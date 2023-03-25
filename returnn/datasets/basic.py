@@ -19,7 +19,7 @@ import os
 import numpy
 import functools
 import typing
-from typing import Optional, Union, Type, List
+from typing import Optional, Union, Type, Dict, List
 
 from returnn.log import log
 from returnn.engine.batch import Batch, BatchSetGenerator
@@ -1302,7 +1302,7 @@ class DatasetSeq:
         return "<DataCache seq_idx=%i>" % self.seq_idx
 
 
-_dataset_classes = {}  # type: dict[str,type[Dataset]]
+_dataset_classes = {}  # type: Dict[str,Type[Dataset]]
 
 
 def get_dataset_class(name: Union[str, Type[Dataset]]) -> Optional[Type[Dataset]]:
@@ -1323,12 +1323,12 @@ def get_dataset_class(name: Union[str, Type[Dataset]]) -> Optional[Type[Dataset]
     mod_names = ["hdf", "sprint", "generating", "numpy_dump", "meta", "lm", "stereo", "raw_wav", "map"]
     for mod_name in mod_names:
         mod = import_module("returnn.datasets.%s" % mod_name)
-        for name, clazz in vars(mod).items():
-            if name in _dataset_classes:  # prefer first
+        for name_, clazz in vars(mod).items():
+            if name_ in _dataset_classes:  # prefer first
                 continue
             if not isinstance(clazz, type) or not issubclass(clazz, Dataset):
                 continue
-            _dataset_classes[name] = clazz
+            _dataset_classes[name_] = clazz
 
     return _dataset_classes.get(name, None)
 
