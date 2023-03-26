@@ -332,10 +332,9 @@ class Dataset(object):
         assert start < end
         return False
 
-    def get_seq_length(self, seq_idx):
+    def get_seq_length(self, seq_idx: int) -> NumbersDict:
         """
-        :param int seq_idx:
-        :rtype: NumbersDict
+        :param seq_idx:
         :returns the len of the input features and the len of the target sequence.
         """
         raise NotImplementedError
@@ -409,9 +408,10 @@ class Dataset(object):
     def _load_seqs(self, start, end):
         """
         Load data sequences.
+        If end > num_seqs, will not load them.
+
         :param int start: inclusive seq idx start
         :param int end: exclusive seq idx end. can be more than num_seqs
-        If end > num_seqs, will not load them.
         """
         raise NotImplementedError
 
@@ -1320,7 +1320,7 @@ def get_dataset_class(name: Union[str, Type[Dataset]]) -> Optional[Type[Dataset]
 
     # Only those modules which make sense to be loaded by the user,
     # because this function is only used for such cases.
-    mod_names = ["hdf", "sprint", "generating", "numpy_dump", "meta", "lm", "stereo", "raw_wav", "map"]
+    mod_names = ["hdf", "sprint", "generating", "numpy_dump", "meta", "lm", "stereo", "raw_wav", "map", "multi_proc"]
     for mod_name in mod_names:
         mod = import_module("returnn.datasets.%s" % mod_name)
         for name_, clazz in vars(mod).items():

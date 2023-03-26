@@ -2,9 +2,11 @@
 Provides :class:`CachedDataset2`.
 """
 
-from .basic import Dataset, DatasetSeq
-from threading import Condition
+from __future__ import annotations
 import typing
+from typing import Optional
+from threading import Condition
+from .basic import Dataset, DatasetSeq
 
 try:
     # noinspection PyCompatibility
@@ -143,10 +145,9 @@ class CachedDataset2(Dataset):
             self.reached_final_seq = True
             return False
 
-    def _collect_single_seq(self, seq_idx):
+    def _collect_single_seq(self, seq_idx: int) -> Optional[DatasetSeq]:
         """
-        :type seq_idx: int
-        :rtype: DatasetSeq | None
+        :param seq_idx:
         :returns DatasetSeq or None if seq_idx >= num_seqs.
         """
         raise NotImplementedError
