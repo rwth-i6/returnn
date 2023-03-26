@@ -28,6 +28,11 @@ class MultiProcDataset(CachedDataset2):
         :param buffer_size: buffer size for each worker, amount of seqs to prefetch
         """
         super().__init__(**kwargs)
+        assert num_workers > 0 and buffer_size > 0
+        dataset = dataset.copy()
+        for k, v in kwargs.items():
+            if k not in dataset:
+                dataset[k] = v
         self.dataset = dataset
         self.num_workers = num_workers
         self.buffer_size = buffer_size
@@ -36,86 +41,110 @@ class MultiProcDataset(CachedDataset2):
 
         self._worker_parent_conns = None  # type: Optional[List[mpConnection]]
         self._seq_order_proc_parent_conn = None  # type: Optional[mpConnection]
+        self._seq_order_proc = None  # type: Optional[mp.Process]
+        self._worker_procs = None  # type: Optional[List[mp.Process]]
 
-        # Seq order proc directly sends the seq order to each worker.
-        seq_order_to_worker = []  # type: List[mpConnection]
-        worker_from_seq_order = []  # type: List[mpConnection]
-        for i in range(self.num_workers):
-            reader, writer = _mp.Pipe(duplex=False)
-            seq_order_to_worker.append(writer)
-            worker_from_seq_order.append(reader)
+    def initialize(self):
+        """init"""
+        if not self._worker_procs:
+            # Seq order proc directly sends the seq order to each worker.
+            seq_order_to_worker = []  # type: List[mpConnection]
+            worker_from_seq_order = []  # type: List[mpConnection]
+            for i in range(self.num_workers):
+                reader, writer = _mp.Pipe(duplex=False)
+                seq_order_to_worker.append(writer)
+                worker_from_seq_order.append(reader)
 
-        worker_parent_conns = []  # type: List[mpConnection]
-        worker_child_conns = []  # type: List[mpConnection]
-        for i in range(self.num_workers):
-            parent_conn, child_conn = _mp.Pipe()
-            worker_parent_conns.append(parent_conn)
-            worker_child_conns.append(child_conn)
+            worker_parent_conns = []  # type: List[mpConnection]
+            worker_child_conns = []  # type: List[mpConnection]
+            for i in range(self.num_workers):
+                parent_conn, child_conn = _mp.Pipe()
+                worker_parent_conns.append(parent_conn)
+                worker_child_conns.append(child_conn)
 
-        seq_order_proc_parent_conn, seq_order_proc_child_conn = _mp.Pipe()
-        seq_order_proc = _mp.Process(
-            target=self._seq_order_proc_loop, args=(seq_order_proc_child_conn, seq_order_to_worker)
-        )
-        seq_order_proc.start()
-
-        worker_procs = []
-        for i in range(self.num_workers):
-            worker_proc = _mp.Process(
-                target=self._worker_proc_loop, args=(worker_child_conns[i], worker_from_seq_order[i])
+            seq_order_proc_parent_conn, seq_order_proc_child_conn = _mp.Pipe()
+            seq_order_proc = _mp.Process(
+                name=f"{self.name} seq order proc",
+                target=self._seq_order_proc_loop,
+                args=(self.dataset, seq_order_proc_child_conn, seq_order_to_worker),
             )
-            worker_proc.start()
-            worker_procs.append(worker_proc)
+            seq_order_proc.start()
 
-        self._seq_order_proc_parent_conn = seq_order_proc_parent_conn  # type: mpConnection
-        self._seq_order_proc = seq_order_proc
-        self._worker_parent_conns = worker_parent_conns
-        self._worker_procs = worker_procs
+            worker_procs = []
+            for i in range(self.num_workers):
+                worker_proc = _mp.Process(
+                    name=f"{self.name} worker proc {i + 1}/{self.num_workers}",
+                    target=self._worker_proc_loop,
+                    args=(self.dataset, self.buffer_size, worker_child_conns[i], worker_from_seq_order[i]),
+                )
+                worker_proc.start()
+                worker_procs.append(worker_proc)
+
+            self._seq_order_proc_parent_conn = seq_order_proc_parent_conn  # type: mpConnection
+            self._seq_order_proc = seq_order_proc
+            self._worker_parent_conns = worker_parent_conns
+            self._worker_procs = worker_procs
+
+            self._seq_order_proc_parent_conn.send(("init", {}))
+            msg, self.num_inputs = self._seq_order_proc_parent_conn.recv()
+            assert msg == "num_inputs"
+            msg, self.num_outputs = self._seq_order_proc_parent_conn.recv()
+            assert msg == "num_outputs"
+
+        super().initialize()
 
     def __del__(self):
-        if self._seq_order_proc_parent_conn:
+        if self._seq_order_proc:
             self._seq_order_proc_parent_conn.send(("exit", {}))
-        if self._worker_parent_conns:
+            self._seq_order_proc.join()
+        if self._worker_procs:
             for worker_parent_conn in self._worker_parent_conns:
                 worker_parent_conn.send(("exit", {}))
+            for worker_proc in self._worker_procs:
+                worker_proc.join()
 
-    def _seq_order_proc_loop(self, parent: mpConnection, workers: List[mpConnection]):
-        assert len(workers) == self.num_workers
-        dataset = init_dataset(self.dataset)
-        dataset.initialize()
+    @staticmethod
+    def _seq_order_proc_loop(dataset_dict: Dict[str, Any], parent: mpConnection, workers: List[mpConnection]):
+        num_workers = len(workers)
+        dataset = init_dataset(dataset_dict)
         while True:
             msg, kwargs = parent.recv()
             if msg == "exit":
                 break
+            elif msg == "init":
+                parent.send(("num_inputs", dataset.num_inputs))
+                parent.send(("num_outputs", dataset.num_outputs))
             elif msg == "init_seq_order":
                 dataset.init_seq_order(**kwargs)
                 seq_order = dataset.get_current_seq_order()
                 for i, worker in enumerate(workers):
-                    worker.send(("seq_order_shard", seq_order[i :: self.num_workers]))
+                    worker.send(("seq_order_shard", seq_order[i::num_workers]))
                 parent.send(("num_seqs", len(seq_order)))
             else:
                 raise Exception(f"unknown msg {msg!r}")
 
-    def _worker_proc_loop(self, parent: mpConnection, seq_order: mpConnection):
-        dataset = init_dataset(self.dataset)
-        dataset.initialize()
+    @staticmethod
+    def _worker_proc_loop(
+        dataset_dict: Dict[str, Any], buffer_size: int, parent: mpConnection, seq_order: mpConnection
+    ):
+        dataset = init_dataset(dataset_dict)
 
         got_init_seq_order = False
         cache = []  # type: List[DatasetSeq]
+        next_seq_idx = 0
 
         # noinspection PyShadowingNames
         def _add_to_cache():
-            if len(cache) >= self.buffer_size:
+            nonlocal next_seq_idx
+            if len(cache) >= buffer_size:
                 return False
-            if cache:
-                seq_idx = cache[-1].seq_idx + 1
-            else:
-                seq_idx = 0
-            if dataset.is_less_than_num_seqs(seq_idx):
+            if not dataset.is_less_than_num_seqs(next_seq_idx):
                 return False
-            seq_tag = dataset.get_tag(seq_idx)
-            features = {data_key: dataset.get_data(seq_idx, data_key) for data_key in self.get_data_keys()}
-            res = DatasetSeq(seq_idx=seq_idx, seq_tag=seq_tag, features=features)
+            seq_tag = dataset.get_tag(next_seq_idx)
+            features = {data_key: dataset.get_data(next_seq_idx, data_key) for data_key in dataset.get_data_keys()}
+            res = DatasetSeq(seq_idx=next_seq_idx, seq_tag=seq_tag, features=features)
             cache.append(res)
+            next_seq_idx += 1
             return True
 
         # noinspection PyShadowingNames
@@ -141,10 +170,12 @@ class MultiProcDataset(CachedDataset2):
                 return res
             if not dataset.is_less_than_num_seqs(seq_idx):
                 return None
+            assert next_seq_idx <= seq_idx
             while True:
                 if not _add_to_cache():
                     raise Exception(
-                        f"buffer too small, requested seq idx {seq_idx}, cache starts at {cache[0].seq_idx}"
+                        f"buffer too small, requested seq idx {seq_idx},"
+                        f" cache starts at {cache[0].seq_idx if cache else None}"
                     )
                 assert cache[-1].seq_idx <= seq_idx
                 if cache[-1].seq_idx == seq_idx:
@@ -160,15 +191,16 @@ class MultiProcDataset(CachedDataset2):
                 break
             elif msg == "get_data_seq":
                 seq_idx = kwargs["seq_idx"]
+                while cache and cache[0].seq_idx < seq_idx:
+                    cache.pop(0)
                 res = _get(seq_idx)
                 parent.send(("data_seq", res))
-                while cache[0].seq_idx < seq_idx:
-                    cache.pop(0)
             elif msg == "init_seq_order":
                 msg_, seq_order_ = seq_order.recv()
                 assert msg_ == "seq_order_shard"
                 dataset.init_seq_order(seq_order=seq_order_, **kwargs)
                 got_init_seq_order = True
+                next_seq_idx = 0
                 cache[:] = []
             else:
                 raise Exception(f"unknown msg {msg!r}")
