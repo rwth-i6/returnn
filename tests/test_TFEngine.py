@@ -254,6 +254,55 @@ def test_engine_train(additional_config=None):
     engine.finalize()
 
 
+def test_engine_train_MultiProcDataset():
+    from test_HDFDataset import generate_hdf_from_other
+    from returnn.datasets.multi_proc import MultiProcDataset
+
+    seq_len = 5
+    n_data_dim = 2
+    n_classes_dim = 3
+    train_data = {
+        "class": "DummyDataset",
+        "input_dim": n_data_dim,
+        "output_dim": n_classes_dim,
+        "num_seqs": 23,
+        "seq_len": seq_len,
+    }
+    train_hdf = generate_hdf_from_other(train_data)
+    train_data = {"class": "HDFDataset", "files": [train_hdf], "seq_ordering": "random"}
+    train_data = MultiProcDataset(dataset=train_data, num_workers=3, buffer_size=5)
+    train_data.initialize()
+    cv_data = {
+        "class": "DummyDataset",
+        "input_dim": n_data_dim,
+        "output_dim": n_classes_dim,
+        "num_seqs": 5,
+        "seq_len": seq_len,
+    }
+    cv_hdf = generate_hdf_from_other(cv_data)
+    cv_data = {"class": "HDFDataset", "files": [cv_hdf], "seq_ordering": "sorted"}
+    cv_data = MultiProcDataset(dataset=cv_data, num_workers=3, buffer_size=5)
+    cv_data.initialize()
+
+    config = Config()
+    config.update(
+        {
+            "model": "%s/model" % _get_tmp_dir(),
+            "num_outputs": n_classes_dim,
+            "num_inputs": n_data_dim,
+            "network": {"output": {"class": "softmax", "loss": "ce", "from": "data:data"}},
+            "start_epoch": 1,
+            "num_epochs": 2,
+        }
+    )
+    _cleanup_old_models(config)
+    engine = Engine(config=config)
+    engine.init_train_from_config(config=config, train_data=train_data, dev_data=cv_data, eval_data=None)
+    engine.train()
+
+    engine.finalize()
+
+
 def test_engine_train_newbob():
     additional_config = {
         "num_epochs": 5,
