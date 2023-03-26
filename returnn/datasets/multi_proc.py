@@ -226,11 +226,11 @@ class MultiProcDataset(CachedDataset2):
             self._seq_order_proc_parent_conn.send(
                 ("init_seq_order", {"epoch": epoch, "seq_list": seq_list, "seq_order": seq_order})
             )
+            for i in range(self.num_workers):
+                self._worker_parent_conns[i].send(("init_seq_order", {"epoch": epoch}))
             msg, num_seqs = self._seq_order_proc_parent_conn.recv()
             assert msg == "num_seqs"
             self._num_seqs = num_seqs
-            for i in range(self.num_workers):
-                self._worker_parent_conns[i].send(("init_seq_order", {"epoch": epoch}))
         else:
             self._num_seqs = 0
 
