@@ -237,6 +237,8 @@ class MultiProcDataset(CachedDataset2):
         return True
 
     def _collect_single_seq(self, seq_idx: int) -> Optional[DatasetSeq]:
+        if seq_idx >= self._num_seqs:
+            return None
         worker_idx = seq_idx % self.num_workers
         worker = self._worker_parent_conns[worker_idx]
         worker.send(("get_data_seq", {"seq_idx": seq_idx // self.num_workers}))
