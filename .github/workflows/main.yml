@@ -87,6 +87,7 @@ jobs:
           - TEST=hdf_dump
           - TEST=HDFDataset
           - TEST=LearningRateControl
+          - TEST=MultiProcDataset
           - TEST=Pretrain
           - TEST=SprintDataset
           - TEST=TaskSystem
