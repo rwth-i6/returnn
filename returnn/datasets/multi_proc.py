@@ -107,21 +107,24 @@ class MultiProcDataset(CachedDataset2):
     def _seq_order_proc_loop(dataset_dict: Dict[str, Any], parent: mpConnection, workers: List[mpConnection]):
         num_workers = len(workers)
         dataset = init_dataset(dataset_dict)
-        while True:
-            msg, kwargs = parent.recv()
-            if msg == "exit":
-                break
-            elif msg == "init":
-                parent.send(("num_inputs", dataset.num_inputs))
-                parent.send(("num_outputs", dataset.num_outputs))
-            elif msg == "init_seq_order":
-                dataset.init_seq_order(**kwargs)
-                seq_order = dataset.get_current_seq_order()
-                for i, worker in enumerate(workers):
-                    worker.send(("seq_order_shard", seq_order[i::num_workers]))
-                parent.send(("num_seqs", len(seq_order)))
-            else:
-                raise Exception(f"unknown msg {msg!r}")
+        try:
+            while True:
+                msg, kwargs = parent.recv()
+                if msg == "exit":
+                    break
+                elif msg == "init":
+                    parent.send(("num_inputs", dataset.num_inputs))
+                    parent.send(("num_outputs", dataset.num_outputs))
+                elif msg == "init_seq_order":
+                    dataset.init_seq_order(**kwargs)
+                    seq_order = dataset.get_current_seq_order()
+                    for i, worker in enumerate(workers):
+                        worker.send(("seq_order_shard", seq_order[i::num_workers]))
+                    parent.send(("num_seqs", len(seq_order)))
+                else:
+                    raise Exception(f"unknown msg {msg!r}")
+        except KeyboardInterrupt:  # when parent dies
+            pass
 
     @staticmethod
     def _worker_proc_loop(
@@ -181,29 +184,32 @@ class MultiProcDataset(CachedDataset2):
                 if cache[-1].seq_idx == seq_idx:
                     return cache[-1]
 
-        while True:
-            if got_init_seq_order:
-                while not parent.poll():
-                    if not _add_to_cache():
-                        break
-            msg, kwargs = parent.recv()
-            if msg == "exit":
-                break
-            elif msg == "get_data_seq":
-                seq_idx = kwargs["seq_idx"]
-                while cache and cache[0].seq_idx < seq_idx:
-                    cache.pop(0)
-                res = _get(seq_idx)
-                parent.send(("data_seq", res))
-            elif msg == "init_seq_order":
-                msg_, seq_order_ = seq_order.recv()
-                assert msg_ == "seq_order_shard"
-                dataset.init_seq_order(seq_order=seq_order_, **kwargs)
-                got_init_seq_order = True
-                next_seq_idx = 0
-                cache[:] = []
-            else:
-                raise Exception(f"unknown msg {msg!r}")
+        try:
+            while True:
+                if got_init_seq_order:
+                    while not parent.poll():
+                        if not _add_to_cache():
+                            break
+                msg, kwargs = parent.recv()
+                if msg == "exit":
+                    break
+                elif msg == "get_data_seq":
+                    seq_idx = kwargs["seq_idx"]
+                    while cache and cache[0].seq_idx < seq_idx:
+                        cache.pop(0)
+                    res = _get(seq_idx)
+                    parent.send(("data_seq", res))
+                elif msg == "init_seq_order":
+                    msg_, seq_order_ = seq_order.recv()
+                    assert msg_ == "seq_order_shard"
+                    dataset.init_seq_order(seq_order=seq_order_, **kwargs)
+                    got_init_seq_order = True
+                    next_seq_idx = 0
+                    cache[:] = []
+                else:
+                    raise Exception(f"unknown msg {msg!r}")
+        except KeyboardInterrupt:  # when parent dies
+            pass
 
     def init_seq_order(self, epoch=None, seq_list=None, seq_order=None):
         """
@@ -216,14 +222,17 @@ class MultiProcDataset(CachedDataset2):
         """
         super().init_seq_order(epoch=epoch, seq_list=seq_list, seq_order=seq_order)
 
-        self._seq_order_proc_parent_conn.send(
-            ("init_seq_order", {"epoch": epoch, "seq_list": seq_list, "seq_order": seq_order})
-        )
-        msg, num_seqs = self._seq_order_proc_parent_conn.recv()
-        assert msg == "num_seqs"
-        self._num_seqs = num_seqs
-        for i in range(self.num_workers):
-            self._seq_order_proc_parent_conn.send(("init_seq_order", {"epoch": epoch}))
+        if epoch is not None or seq_list is not None or seq_order is not None:
+            self._seq_order_proc_parent_conn.send(
+                ("init_seq_order", {"epoch": epoch, "seq_list": seq_list, "seq_order": seq_order})
+            )
+            msg, num_seqs = self._seq_order_proc_parent_conn.recv()
+            assert msg == "num_seqs"
+            self._num_seqs = num_seqs
+            for i in range(self.num_workers):
+                self._worker_parent_conns[i].send(("init_seq_order", {"epoch": epoch}))
+        else:
+            self._num_seqs = 0
 
         return True
 

@@ -43,7 +43,7 @@ def compare_dataset_seqs(seqs1: List[DatasetSeq], seqs2: List[DatasetSeq]):
     assert len(seqs1) == len(seqs2)
     for i, (seq1, seq2) in enumerate(zip(seqs1, seqs2)):
         assert seq1.seq_idx == seq2.seq_idx == i
-        assert seq1.seq_tag == seq2.seq_tag, f"seq1 tag {seq1.seq_tag} != seq2 tag {seq2.seq_tag} for seq idx {i}"
+        assert seq1.seq_tag == seq2.seq_tag, f"seq1 tag {seq1.seq_tag!r} != seq2 tag {seq2.seq_tag!r} for seq idx {i}"
         assert set(seq1.features.keys()) == set(seq2.features.keys())
         for key in seq1.features.keys():
             assert seq1.features[key].shape == seq2.features[key].shape
