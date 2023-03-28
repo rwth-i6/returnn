@@ -322,26 +322,6 @@ class ExternData(object):
             ["%s: %s" % (name, self.data[name].get_description(with_name=False)) for name in self.data.keys()]
         )
 
-    def get_queue_args(self, with_batch_dim, fixed_batch_dim=None):
-        """
-        :param bool with_batch_dim:
-        :param int|None fixed_batch_dim:
-        :return: kwargs for tf.Queue.__init__
-        :rtype: dict[str,list]
-        """
-        names = list(sorted(self.data.keys()))
-        shapes = [self.data[name].shape for name in names]
-        if with_batch_dim:
-            shapes = [(fixed_batch_dim,) + shape for shape in shapes]
-        dtypes = [self.data[name].dtype for name in names]
-        # And add seq_lens for each.
-        for name in list(names):
-            for axis in self.data[name].get_axes_with_size():
-                names.append("%s/size%i" % (name, axis))
-                shapes.append((fixed_batch_dim,) if with_batch_dim else ())
-                dtypes.append(self.data[name].size_dtype)
-        return {"names": names, "shapes": shapes, "dtypes": dtypes}
-
     def get_sorted_data_items(self):
         """
         :rtype: list[(str,Data)]
@@ -404,7 +384,7 @@ class ExternData(object):
                 print("Warning: Using extern_data and will ignore num_inputs/num_outputs in config.", file=log.v2)
         else:
             log.print_deprecation_warning(
-                "Using num_inputs/num_ouputs instead of extern_data is deprecated"
+                "Using num_inputs/num_outputs instead of extern_data is deprecated"
                 " and might be removed in future versions"
             )
             num_inputs, num_outputs = cls._num_inputs_outputs_from_config(config)
