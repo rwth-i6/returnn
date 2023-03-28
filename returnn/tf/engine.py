@@ -23,7 +23,7 @@ from tensorflow.python.client import timeline
 from returnn.engine.base import EngineBase
 from returnn.datasets.basic import Dataset, Batch, BatchSetGenerator, init_dataset
 from returnn.datasets.util.vocabulary import Vocabulary
-from returnn.learning_rate_control import load_learning_rate_control_from_config, LearningRateControl
+from returnn.learning_rate_control import load_learning_rate_control_from_config
 from returnn.log import log
 from returnn.pretrain import pretrain_from_config
 import returnn.tf.compat as tf_compat
