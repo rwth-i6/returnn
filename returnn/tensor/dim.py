@@ -33,6 +33,9 @@ from ._dim_extra import _DimExtra, _DimMixin, DimTypes
 from . import tensor as _t
 
 
+__all__ = ["Dim", "batch_dim", "single_step_dim", "VerifyOutShapeException"]
+
+
 class Dim(_DimMixin):
     """
     Represents a dimension of a tensor.

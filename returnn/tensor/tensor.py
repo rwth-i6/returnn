@@ -29,6 +29,10 @@ from ._tensor_extra import _TensorExtra, _TensorMixin
 from ._tensor_op_overloads import _TensorOpOverloadsMixin
 import returnn.tensor._tensor_extra as _tensor_extra
 
+
+__all__ = ["Tensor"]
+
+
 RawTensorType = TypeVar("RawTensorType")  # e.g. torch.Tensor, tf.Tensor, numpy.ndarray, ...
 
 
@@ -171,6 +175,3 @@ class Tensor(_TensorMixin, _TensorOpOverloadsMixin, Generic[RawTensorType]):
         if self.feature_dim_axis is None:
             return None
         return self._dims[self.feature_dim_axis]
-
-
-# dispatch table for frameworks for sanity_check
