@@ -1512,9 +1512,10 @@ def set_config_extern_data_from_dataset(config, dataset):
     """
     # ExternData supports more fine-grained specification,
     # however the dataset does not store that in num_outputs.
-    from returnn.tf.network import ExternData
+    # noinspection PyProtectedMember
+    from returnn.tf.network import _data_kwargs_from_dataset_key
 
     config.set(
         "extern_data",
-        {key: ExternData.data_kwargs_from_dataset_key(dataset=dataset, key=key) for key in dataset.get_data_keys()},
+        {key: _data_kwargs_from_dataset_key(dataset=dataset, key=key) for key in dataset.get_data_keys()},
     )
