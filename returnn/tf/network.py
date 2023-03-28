@@ -596,7 +596,7 @@ class TFNetwork(object):
                     from returnn.config import get_global_config
 
                     config = get_global_config()
-                extern_data.init_from_config(config)
+                extern_data.init_from_config(config, auto_create_placeholders=True)
         self.extern_data = extern_data
         self._config = config
         self.used_data_keys = set()  # type: typing.Set[str]  # keys from extern_data
