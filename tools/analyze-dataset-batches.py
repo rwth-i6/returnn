@@ -167,7 +167,6 @@ def init(config_str, config_dataset, use_pretrain, epoch, verbosity):
     print("Returnn %s starting up." % __file__, file=log.v2)
     rnn.returnn_greeting()
     rnn.init_faulthandler()
-    rnn.init_config_json_network()
     util.BackendEngine.select_engine(config=config)
     if not dataset_opts:
         if config_dataset:

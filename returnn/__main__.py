@@ -131,18 +131,6 @@ def init_log():
     log.init_by_config(config)
 
 
-def init_config_json_network():
-    """
-    Handles 'initialize_from_json' from the global config.
-    """
-    # initialize post process config file
-    if config.has("initialize_from_json"):
-        json_file = config.value("initialize_from_json", "")
-        assert os.path.isfile(json_file), "json file not found: " + json_file
-        print("loading network topology from json:", json_file, file=log.v5)
-        config.network_topology_json = open(json_file).read()
-
-
 def get_cache_byte_sizes():
     """
     :rtype: (int,int,int)
@@ -375,7 +363,6 @@ def init(config_filename=None, command_line_options=(), config_updates=None, ext
     init_backend_engine()
     if config.bool("ipython", False):
         debug_util.init_ipython_kernel()
-    init_config_json_network()
     if need_data():
         init_data()
     print_task_properties()

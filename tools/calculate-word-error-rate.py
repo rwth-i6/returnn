@@ -175,7 +175,6 @@ def init(config_filename, log_verbosity):
     rnn.init_backend_engine()
     assert util.BackendEngine.is_tensorflow_selected(), "this is only for TensorFlow"
     rnn.init_faulthandler()
-    rnn.init_config_json_network()
     rnn.print_task_properties()
 
 

@@ -62,7 +62,6 @@ def init(config_filename, log_verbosity, remaining_args=()):
     assert util.BackendEngine.is_tensorflow_selected(), "this is only for TensorFlow"
     rnn.init_faulthandler()
     better_exchook.replace_traceback_format_tb()  # makes some debugging easier
-    rnn.init_config_json_network()
 
 
 def prepare_compile(rec_layer_name, net_dict, cheating, dump_att_weights, hdf_filename, possible_labels):
