@@ -289,11 +289,26 @@ class Engine(EngineBase):
         self._model = get_model_func(**sentinel_kw)
         assert isinstance(self._model, torch.nn.Module)
 
+        preload_from_files = self.config.typed_value("preload_from_files", {})
         if epoch > 1:
             filename = self.get_epoch_model_filename(epoch=epoch - 1) + util.get_model_filename_postfix()
             print("Load model %s" % (filename,), file=log.v4)
             model_state = torch.load(filename)
             self._model.load_state_dict(model_state)
+        elif preload_from_files:
+            for key, opts in preload_from_files.items():
+                assert isinstance(opts, dict) and "filename" in opts
+                print(f"Pre-load weights for key '{key}' from {opts['filename']}")
+                preload_model_state = torch.load(opts["filename"])
+                if opts.get("checkpoint_key", None) is not None:
+                  preload_model_state = preload_model_state[opts["checkpoint_key"]]
+                if opts.get("prefix", ""):
+                    preload_model_state = {
+                        opts["prefix"] + key: value for key, value in preload_model_state.items()}
+                strict = not opts.get("ignore_missing", False)
+                missing_keys, unexpected_keys = self._model.load_state_dict(preload_model_state, strict=strict)
+                print(f"Missing keys: {missing_keys}")
+                print(f"Unexpected keys: {unexpected_keys}")
 
         self._model.to(self._device)
 
