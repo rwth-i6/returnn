@@ -3,7 +3,7 @@ Defines the :class:`TFNetwork` and :class:`ExternData`.
 """
 
 from __future__ import annotations
-
+from typing import Optional, List
 import tensorflow as tf
 import sys
 import re
@@ -15,17 +15,18 @@ from returnn.tf.layers.basic import LayerBase, get_layer_class
 import returnn.tf.compat as tf_compat
 from returnn.tf.util.basic import reuse_name_scope
 import returnn.tf.util.basic as tf_util
-from returnn.tf.util.data import Data, Dim
+from returnn.tensor import Tensor, Dim
+from returnn.tf.util.data import Data
 from returnn.util import basic as util
 
 
 class DataNotFound(Exception):
     """
-    When accessing non-existing ExternData data key
+    When accessing non-existing data key in :class:`ExternData` (e.g. extern_data).
     """
 
 
-class ExternData(object):
+class ExternData:
     """
     This holds :class:`Data` instances for every data-key of external data from the dataset,
     i.e. the description such as shape and sparsity, etc.
@@ -39,7 +40,7 @@ class ExternData(object):
         """
         self._config = None  # type: typing.Optional["returnn.config.Config"]
         self._batch_info = None  # type: typing.Optional["returnn.tf.util.data.BatchInfo"]
-        self.data = {}  # type: typing.Dict[str,Data]
+        self.data = {}  # type: typing.Dict[str,Tensor]
         self.default_input = default_input
         self.default_target = default_target
         if data:
@@ -58,12 +59,12 @@ class ExternData(object):
         :param bool auto_create_placeholders:
         :param bool reset_batch:
         """
-        from returnn.tf.util.data import batch_dim
+        from returnn.tensor.dim import batch_dim
 
         if reset_batch:
             batch_dim.batch = None  # make sure it is reset
         self._config = config
-        data_dims = self.extern_data_types_from_config(config)
+        data_dims = _extern_data_types_from_config(config)
         for key, init_args in data_dims.items():
             # In Returnn with Theano, we usually have the shape (time,batch,feature).
             # In TensorFlow, the default is (batch,time,feature).
@@ -75,7 +76,7 @@ class ExternData(object):
                     for tag in init_args["dim_tags"]:
                         assert isinstance(tag, Dim)
                         tag.reset_batch_ctx()
-            self.data[key] = Data(name=key, auto_create_placeholders=auto_create_placeholders, **init_args)
+            self.data[key] = Tensor(name=key, auto_create_placeholders=auto_create_placeholders, **init_args)
         # The default input has an effect on the order of data keys,
         # and thus this will be preferred for some global information like batch info.
         self.default_input = config.value("default_input", "data")
@@ -87,33 +88,6 @@ class ExternData(object):
                 if key != self.default_target:
                     data.available_for_inference = True
         self.init_batch_info()
-
-    @classmethod
-    def data_kwargs_from_dataset_key(cls, dataset, key):
-        """
-        :param Dataset.Dataset dataset:
-        :param str key:
-        :rtype: dict[str]
-        """
-        if key in dataset.get_target_list():
-            available_for_inference = False
-        else:
-            available_for_inference = True
-        dim = dataset.get_data_dim(key)
-        shape = [None] + list(dataset.get_data_shape(key))
-        sparse = dataset.is_data_sparse(key)
-        dtype = dataset.get_data_dtype(key)
-        if not sparse and shape[-1] is None:
-            dim = None  # overwrite. some datasets just would return some dummy int value
-        return dict(
-            batch_dim_axis=0,
-            time_dim_axis=1,
-            shape=shape,
-            dim=dim,
-            sparse=sparse,
-            dtype=dtype,
-            available_for_inference=available_for_inference,
-        )
 
     def init_from_dataset(self, dataset, auto_create_placeholders=True):
         """
@@ -134,10 +108,10 @@ class ExternData(object):
             else:
                 self.default_input = input_keys[0]
         for key in data_keys:
-            self.data[key] = Data(
+            self.data[key] = Tensor(
                 name=key,
                 auto_create_placeholders=auto_create_placeholders,
-                **self.data_kwargs_from_dataset_key(dataset=dataset, key=key),
+                **_data_kwargs_from_dataset_key(dataset=dataset, key=key),
             )
         self.init_batch_info()
 
@@ -154,14 +128,14 @@ class ExternData(object):
         # Maybe we already set it, and then added new data items.
         if not batch_info:
             for key, data in self.get_sorted_data_items():
-                assert isinstance(data, Data)
+                assert isinstance(data, Tensor)
                 if data.available_for_inference and data.batch and data.batch.is_global_batch():
                     batch_info = data.batch
                     break
         if not batch_info or batch_info.static_dim == -1:
             batch_dim_value = None  # type: typing.Union[tf.Tensor,int,None]
             for key, data in self.get_sorted_data_items():
-                assert isinstance(data, Data)
+                assert isinstance(data, Tensor)
                 if not data.available_for_inference:
                     continue
                 if not data.have_batch_axis():
@@ -267,7 +241,7 @@ class ExternData(object):
         :param dict[str,dict[str]] data: init kwargs for Data
         """
         for key, value in data.items():
-            self.data[key] = Data(name=key, auto_create_placeholders=True, **value)
+            self.data[key] = Tensor(name=key, auto_create_placeholders=True, **value)
         self.init_batch_info()
 
     def register_data(self, data):
@@ -285,10 +259,9 @@ class ExternData(object):
         """
         return name in self.data
 
-    def get_data(self, name):
+    def get_data(self, name: str) -> Tensor:
         """
-        :param str name:
-        :rtype: Data
+        :param name: key
         """
         try:
             return self.data[name]
@@ -301,15 +274,15 @@ class ExternData(object):
                 % (name, list(self.data.keys()), config_extern_data)
             )
 
-    def get_default_input_data(self):
+    def get_default_input_data(self) -> Tensor:
         """
-        :rtype: Data
+        :return: default input data
         """
         return self.data[self.default_input]
 
-    def get_default_target_data(self):
+    def get_default_target_data(self) -> Tensor:
         """
-        :rtype: Data
+        :return: default target data
         """
         return self.data[self.default_target]
 
@@ -361,7 +334,7 @@ class ExternData(object):
         if self._batch_info:
             return self._batch_info
         for key, data in self.get_sorted_data_items():
-            assert isinstance(data, Data)
+            assert isinstance(data, Tensor)
             if data.available_for_inference and data.have_batch_axis():
                 assert data.batch
                 return data.batch.get_global_base()
@@ -369,117 +342,146 @@ class ExternData(object):
             return None
         raise Exception("We cannot tell the batch dim.")
 
-    @classmethod
-    def extern_data_types_from_config(cls, config):
-        """
-        :param returnn.config.Config config:
-        :return: dict data_key -> kwargs of Data
-        :rtype: dict[str,dict[str]]
-        """
-        input_data_key = config.value("default_input", "data")
-        if config.has("extern_data"):
-            data_dims = config.typed_dict["extern_data"]
-            assert isinstance(data_dims, dict), "extern_data in config must be a dict"
-            if config.has("num_inputs") or config.has("num_outputs"):
-                print("Warning: Using extern_data and will ignore num_inputs/num_outputs in config.", file=log.v2)
+
+def _extern_data_types_from_config(config):
+    """
+    :param returnn.config.Config config:
+    :return: dict data_key -> kwargs of Data
+    :rtype: dict[str,dict[str]]
+    """
+    input_data_key = config.value("default_input", "data")
+    if config.has("extern_data"):
+        data_dims = config.typed_dict["extern_data"]
+        assert isinstance(data_dims, dict), "extern_data in config must be a dict"
+        if config.has("num_inputs") or config.has("num_outputs"):
+            print("Warning: Using extern_data and will ignore num_inputs/num_outputs in config.", file=log.v2)
+    else:
+        log.print_deprecation_warning(
+            "Using num_inputs/num_outputs instead of extern_data is deprecated"
+            " and might be removed in future versions"
+        )
+        num_inputs, num_outputs = _num_inputs_outputs_from_config(config)
+        data_dims = num_outputs.copy()
+        sparse_input = config.bool("sparse_input", False)
+        data_dims.setdefault(input_data_key, (num_inputs, 1 if sparse_input else 2))
+    data = {}
+    for key, data_type in data_dims.items():
+        if isinstance(data_type, dict):
+            data[key] = data_type.copy()
+            continue
+        assert isinstance(data_type, (list, tuple))
+        dim, ndim = data_type
+        init_args = {"dim": dim}
+        if ndim == 1:
+            init_args["shape"] = (None,)
+            init_args["sparse"] = True
+        elif ndim == 2:
+            init_args["shape"] = (None, dim)
         else:
-            log.print_deprecation_warning(
-                "Using num_inputs/num_outputs instead of extern_data is deprecated"
-                " and might be removed in future versions"
-            )
-            num_inputs, num_outputs = cls._num_inputs_outputs_from_config(config)
-            data_dims = num_outputs.copy()
-            sparse_input = config.bool("sparse_input", False)
-            data_dims.setdefault(input_data_key, (num_inputs, 1 if sparse_input else 2))
-        data = {}
-        for key, data_type in data_dims.items():
-            if isinstance(data_type, dict):
-                data[key] = data_type.copy()
-                continue
-            assert isinstance(data_type, (list, tuple))
-            dim, ndim = data_type
-            init_args = {"dim": dim}
-            if ndim == 1:
-                init_args["shape"] = (None,)
-                init_args["sparse"] = True
-            elif ndim == 2:
-                init_args["shape"] = (None, dim)
-            else:
-                assert ndim >= 3
-                init_args["shape"] = (None,) * (ndim - 1) + (dim,)
-            # In TensorFlow, the default is (batch,time,feature).
-            # This is also what we use here, i.e.:
-            # batch_dim_axis=0, time_dim_axis=1. See TFEngine.DataProvider._get_next_batch().
-            data[key] = init_args
-        for key, v in data.items():
-            if key == input_data_key:
-                v.setdefault("available_for_inference", True)
-            else:
-                v.setdefault("available_for_inference", False)
-        return data
+            assert ndim >= 3
+            init_args["shape"] = (None,) * (ndim - 1) + (dim,)
+        # In TensorFlow, the default is (batch,time,feature).
+        # This is also what we use here, i.e.:
+        # batch_dim_axis=0, time_dim_axis=1. See TFEngine.DataProvider._get_next_batch().
+        data[key] = init_args
+    for key, v in data.items():
+        if key == input_data_key:
+            v.setdefault("available_for_inference", True)
+        else:
+            v.setdefault("available_for_inference", False)
+    return data
 
-    @classmethod
-    def _num_inputs_outputs_from_config(cls, config):
-        """
-        :type config: returnn.config.Config
-        :returns (num_inputs, num_outputs),
-           where num_inputs is like num_outputs["data"][0],
-           and num_outputs is a dict of data_key -> (dim, ndim),
-             where data_key is e.g. "classes" or "data",
-             dim is the feature dimension or the number of classes,
-             and ndim is the ndim counted without batch-dim,
-             i.e. ndim=1 means usually sparse data and ndim=2 means dense data.
-        :rtype: (int,dict[str,(int,int)])
-        """
-        num_inputs = config.int("num_inputs", 0)
-        target = config.value("target", "classes")
-        if config.is_typed("num_outputs"):
-            num_outputs = config.typed_value("num_outputs")
-            if not isinstance(num_outputs, dict):
-                num_outputs = {target: num_outputs}
-            num_outputs = num_outputs.copy()
-            from returnn.datasets.basic import convert_data_dims
 
-            num_outputs = convert_data_dims(num_outputs, leave_dict_as_is=True)
-            if "data" in num_outputs:
-                num_inputs = num_outputs["data"]
-                if isinstance(num_inputs, (list, tuple)):
-                    num_inputs = num_inputs[0]
-                elif isinstance(num_inputs, dict):
-                    if "dim" in num_inputs:
-                        num_inputs = num_inputs["dim"]
-                    else:
-                        num_inputs = num_inputs["shape"][-1]
+def _num_inputs_outputs_from_config(config):
+    """
+    :type config: returnn.config.Config
+    :returns (num_inputs, num_outputs),
+       where num_inputs is like num_outputs["data"][0],
+       and num_outputs is a dict of data_key -> (dim, ndim),
+         where data_key is e.g. "classes" or "data",
+         dim is the feature dimension or the number of classes,
+         and ndim is the ndim counted without batch-dim,
+         i.e. ndim=1 means usually sparse data and ndim=2 means dense data.
+    :rtype: (int,dict[str,(int,int)])
+    """
+    num_inputs = config.int("num_inputs", 0)
+    target = config.value("target", "classes")
+    if config.is_typed("num_outputs"):
+        num_outputs = config.typed_value("num_outputs")
+        if not isinstance(num_outputs, dict):
+            num_outputs = {target: num_outputs}
+        num_outputs = num_outputs.copy()
+        from returnn.datasets.basic import convert_data_dims
+
+        num_outputs = convert_data_dims(num_outputs, leave_dict_as_is=True)
+        if "data" in num_outputs:
+            num_inputs = num_outputs["data"]
+            if isinstance(num_inputs, (list, tuple)):
+                num_inputs = num_inputs[0]
+            elif isinstance(num_inputs, dict):
+                if "dim" in num_inputs:
+                    num_inputs = num_inputs["dim"]
                 else:
-                    raise TypeError("data key %r" % num_inputs)
-        elif config.has("num_outputs"):
-            num_outputs = {target: [config.int("num_outputs", 0), 1]}
-        else:
-            num_outputs = None
-        dataset = None
-        if config.list("train") and ":" not in config.value("train", ""):
-            dataset = config.list("train")[0]
-        if not config.is_typed("num_outputs") and dataset:
-            # noinspection PyBroadException
-            try:
-                _num_inputs = util.hdf5_dimension(dataset, "inputCodeSize") * config.int("window", 1)
-            except Exception:
-                _num_inputs = util.hdf5_dimension(dataset, "inputPattSize") * config.int("window", 1)
-            # noinspection PyBroadException
-            try:
-                _num_outputs = {target: [util.hdf5_dimension(dataset, "numLabels"), 1]}
-            except Exception:
-                _num_outputs = util.hdf5_group(dataset, "targets/size")
-                for k in _num_outputs:
-                    _num_outputs[k] = [_num_outputs[k], len(util.hdf5_shape(dataset, "targets/data/" + k))]
-            if num_inputs:
-                assert num_inputs == _num_inputs
-            if num_outputs:
-                assert num_outputs == _num_outputs
-            num_inputs = _num_inputs
-            num_outputs = _num_outputs
-        assert num_inputs and num_outputs, "provide num_inputs/num_outputs directly or via train"
-        return num_inputs, num_outputs
+                    num_inputs = num_inputs["shape"][-1]
+            else:
+                raise TypeError("data key %r" % num_inputs)
+    elif config.has("num_outputs"):
+        num_outputs = {target: [config.int("num_outputs", 0), 1]}
+    else:
+        num_outputs = None
+    dataset = None
+    if config.list("train") and ":" not in config.value("train", ""):
+        dataset = config.list("train")[0]
+    if not config.is_typed("num_outputs") and dataset and isinstance(dataset, str):
+        from returnn.util.basic import hdf5_dimension, hdf5_group, hdf5_shape
+
+        # noinspection PyBroadException
+        try:
+            _num_inputs = hdf5_dimension(dataset, "inputCodeSize") * config.int("window", 1)
+        except Exception:
+            _num_inputs = hdf5_dimension(dataset, "inputPattSize") * config.int("window", 1)
+        # noinspection PyBroadException
+        try:
+            _num_outputs = {target: [hdf5_dimension(dataset, "numLabels"), 1]}
+        except Exception:
+            _num_outputs = hdf5_group(dataset, "targets/size")
+            for k in _num_outputs:
+                _num_outputs[k] = [_num_outputs[k], len(hdf5_shape(dataset, "targets/data/" + k))]
+        if num_inputs:
+            assert num_inputs == _num_inputs
+        if num_outputs:
+            assert num_outputs == _num_outputs
+        num_inputs = _num_inputs
+        num_outputs = _num_outputs
+    assert num_inputs and num_outputs, "provide extern_data in the config"
+    return num_inputs, num_outputs
+
+
+def _data_kwargs_from_dataset_key(dataset, key):
+    """
+    :param returnn.datasets.basic.Dataset dataset:
+    :param str key:
+    :rtype: dict[str]
+    """
+    if key in dataset.get_target_list():
+        available_for_inference = False
+    else:
+        available_for_inference = True
+    dim = dataset.get_data_dim(key)
+    shape = [None] + list(dataset.get_data_shape(key))  # type: List[Optional[int]]
+    sparse = dataset.is_data_sparse(key)
+    dtype = dataset.get_data_dtype(key)
+    if not sparse and shape[-1] is None:
+        dim = None  # overwrite. some datasets just would return some dummy int value
+    return dict(
+        batch_dim_axis=0,
+        time_dim_axis=1,
+        shape=shape,
+        dim=dim,
+        sparse=sparse,
+        dtype=dtype,
+        available_for_inference=available_for_inference,
+    )
 
 
 class _NetworkConstructionStack:
