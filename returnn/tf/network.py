@@ -72,9 +72,9 @@ class ExternData:
             # batch_dim_axis=0, time_dim_axis=1. See TFEngine.DataProvider._get_next_batch().
             if reset_batch:
                 init_args = init_args.copy()
-                if init_args.get("dim_tags"):
-                    for tag in init_args["dim_tags"]:
-                        assert isinstance(tag, Dim)
+                if init_args.get("dim_tags") or init_args.get("dims"):
+                    for tag in init_args.get("dim_tags") or init_args.get("dims"):
+                        assert isinstance(tag, Dim), f"invalid Tensor opts {init_args!r} for extern_data key {key!r}"
                         tag.reset_batch_ctx()
             self.data[key] = Tensor(name=key, auto_create_placeholders=auto_create_placeholders, **init_args)
         # The default input has an effect on the order of data keys,
