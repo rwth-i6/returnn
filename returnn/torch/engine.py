@@ -13,7 +13,6 @@ from random import random
 from returnn.config import Config
 from returnn.log import log
 from returnn.engine.base import EngineBase
-from returnn.learning_rate_control import load_learning_rate_control_from_config, LearningRateControl
 from returnn.datasets.basic import init_dataset, Dataset
 from returnn.torch.updater import Updater
 from returnn.util import basic as util
@@ -45,8 +44,6 @@ class Engine(EngineBase):
         self._final_epoch = None  # type: Optional[int]
         self._model = None  # type: Optional[torch.nn.Module]
         self._train_step_func = None  # type: Optional[Callable]
-        self._learning_rate = 0.0
-        self._learning_rate_control = None  # type: Optional[LearningRateControl]
         self._save_model_epoch_interval = 1
         self._updater = None  # type: Optional[Updater]
 
@@ -66,6 +63,7 @@ class Engine(EngineBase):
         :param eval_data:
         """
         assert config is self.config
+        super().init_train_from_config(config=config)
         self.train_dataset = train_data
         self.eval_datasets.clear()
         if dev_data:
@@ -84,11 +82,9 @@ class Engine(EngineBase):
         self._final_epoch = self.config_get_final_epoch(self.config)
 
         self._load_model(epoch=self._start_epoch)
-        self._learning_rate_control = load_learning_rate_control_from_config(config)
-        self._learning_rate = self._learning_rate_control.get_learning_rate_for_epoch(self._start_epoch)
         self._save_model_epoch_interval = config.int("save_interval", 1)
 
-        self._updater = Updater(self.config, self._model, self._learning_rate)
+        self._updater = Updater(self.config, self._model, self.learning_rate)
         self._updater.create_optimizer()
         if self._start_epoch > 1:
             self._load_optimizer(self._start_epoch)
@@ -119,16 +115,16 @@ class Engine(EngineBase):
         """
         init train (sub)epoch. LR etc
         """
-        self._learning_rate = self._learning_rate_control.get_learning_rate_for_epoch(self.epoch)
+        self.learning_rate = self.learning_rate_control.get_learning_rate_for_epoch(self.epoch)
 
         # Update learning rate
-        self._updater.set_learning_rate(self._learning_rate)
+        self._updater.set_learning_rate(self.learning_rate)
 
     def train_epoch(self):
         """
         train one (sub)epoch
         """
-        print("start", self.get_epoch_str(), "with learning rate", self._learning_rate, "...", file=log.v4)
+        print("start", self.get_epoch_str(), "with learning rate", self.learning_rate, "...", file=log.v4)
 
         self._model.train()
 
@@ -186,11 +182,11 @@ class Engine(EngineBase):
             accumulated_loss = accumulated_loss / step_idx
             accumulated_losses_dict = accumulated_losses_dict / step_idx
 
-            self._learning_rate_control.set_epoch_error(self.epoch, dict(accumulated_losses_dict))
+            self.learning_rate_control.set_epoch_error(self.epoch, dict(accumulated_losses_dict))
 
             print("Total loss for '{}': {:.6}".format(dataset_name, accumulated_loss), file=log.v3)
 
-        self._learning_rate_control.save()
+        self.learning_rate_control.save()
 
     def _create_data_loader(self, dataset: Dataset) -> DataLoader2:
         """

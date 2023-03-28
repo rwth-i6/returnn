@@ -6,7 +6,10 @@ from __future__ import annotations
 
 import os
 import sys
-import typing
+from typing import Optional
+
+from returnn.config import Config
+from returnn.learning_rate_control import load_learning_rate_control_from_config, LearningRateControl
 from returnn.log import log
 from returnn.pretrain import Pretrain
 from returnn.util import basic as util
@@ -19,8 +22,19 @@ class EngineBase(object):
 
     def __init__(self):
         self.epoch = 0
-        self.pretrain = None  # type: typing.Optional[Pretrain]
-        self.model_filename = None  # type: typing.Optional[str]
+        self.pretrain = None  # type: Optional[Pretrain]
+        self.model_filename = None  # type: Optional[str]
+        self.learning_rate = 0.0  # set in init_train_epoch
+        self.learning_rate_control = None  # type: Optional[LearningRateControl]
+
+    def init_train_from_config(self, config: Optional[Config] = None):
+        """
+        Initialize all engine parts needed for training
+
+        :param config:
+        """
+        self.learning_rate_control = load_learning_rate_control_from_config(config)
+        self.learning_rate = self.learning_rate_control.default_learning_rate
 
     @classmethod
     def config_get_final_epoch(cls, config):

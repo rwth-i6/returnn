@@ -877,7 +877,6 @@ class Engine(EngineBase):
         self.tf_session = None  # type: typing.Optional[tf.compat.v1.Session]
         self.network = None  # type: typing.Optional[TFNetwork]
         self.updater = None  # type: typing.Optional[Updater]
-        self.learning_rate_control = None  # type: typing.Optional[LearningRateControl]
         self._checked_uninitialized_vars = False
         self._merge_all_summaries = None
         self.dataset_batches = {}  # type: typing.Dict[str,BatchSetGenerator]
@@ -890,7 +889,6 @@ class Engine(EngineBase):
         self.use_dynamic_train_flag = False
         self.use_search_flag = config.value("task", None) == "search"
         self.use_eval_flag = config.value("task", None) != "forward"
-        self.learning_rate = 0.0  # set in init_train_epoch
         self._const_cache = {}  # type: typing.Dict[str,tf.Tensor]
         self.preload_from_files = None  # type: typing.Optional[typing.Dict[str,typing.Dict[str]]]
         self.max_seqs = None  # type: typing.Optional[int]
@@ -1082,6 +1080,7 @@ class Engine(EngineBase):
         """
         if not config:
             config = self.config
+        super().init_train_from_config(config=config)
         if (
             not config.has("num_inputs")
             and not config.has("num_outputs")
@@ -1107,8 +1106,6 @@ class Engine(EngineBase):
         self.update_batch_size = config.int("update_batch_size", 0)
         self.save_model_epoch_interval = config.int("save_interval", 1)
         self.save_epoch1_initial_model = config.bool("save_epoch1_initial_model", False)
-        self.learning_rate_control = load_learning_rate_control_from_config(config)
-        self.learning_rate = self.learning_rate_control.default_learning_rate
         self.initial_learning_rate = self.learning_rate
         self.pretrain_learning_rate = config.float("pretrain_learning_rate", self.learning_rate)
         self.final_epoch = self.config_get_final_epoch(config)  # Inclusive.
