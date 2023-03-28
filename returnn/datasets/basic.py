@@ -914,10 +914,9 @@ class Dataset(object):
             return False
         return True
 
-    def get_data_shape(self, key):
+    def get_data_shape(self, key: str) -> List[int]:
         """
         :returns get_data(*, key).shape[1:], i.e. num-frames excluded
-        :rtype: list[int]
         """
         if key in self.num_outputs:
             if self.num_outputs[key][1] <= 1:
