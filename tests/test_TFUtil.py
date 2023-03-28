@@ -533,6 +533,7 @@ def test_Data_copy_time_flattened():
 def test_ExternData_via_config():
     # Like ExternData.init_from_config.
     from returnn.config import Config
+    from returnn.tf.network import _extern_data_types_from_config
 
     config = Config(
         {
@@ -544,7 +545,7 @@ def test_ExternData_via_config():
             }
         }
     )
-    data_dims = ExternData.extern_data_types_from_config(config)
+    data_dims = _extern_data_types_from_config(config)
     data = {}
     for key, init_args in data_dims.items():
         data[key] = Data(name=key, auto_create_placeholders=True, **init_args)
