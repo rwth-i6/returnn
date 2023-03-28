@@ -70,7 +70,6 @@ def init(config_filename, command_line_options):
     rnn.init_log()
     print("RETURNN demo-dataset starting up", file=log.v3)
     rnn.init_faulthandler()
-    rnn.init_config_json_network()
     rnn.init_data()
     rnn.print_task_properties()
 

@@ -250,7 +250,6 @@ def init(config_str, config_dataset, verbosity):
     print("Returnn dump-dataset starting up.", file=log.v2)
     rnn.returnn_greeting()
     rnn.init_faulthandler()
-    rnn.init_config_json_network()
     print("Dataset:", file=log.v2)
     print("  input:", dataset.num_inputs, "x", dataset.window, file=log.v2)
     print("  output:", dataset.num_outputs, file=log.v2)

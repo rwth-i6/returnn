@@ -149,7 +149,6 @@ def init(config_filename=None):
     print("Returnn collect-words starting up.", file=log.v3)
     rnn.init_faulthandler()
     if config_filename:
-        rnn.init_config_json_network()
         rnn.init_data()
         rnn.print_task_properties()
 

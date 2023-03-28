@@ -724,7 +724,6 @@ def _init_base(configfile=None, target_mode=None, epoch=None, sprint_opts=None):
         rnn.returnn_greeting(config_filename=configfile)
         rnn.init_backend_engine()
         rnn.init_faulthandler(sigusr1_chain=True)
-        rnn.init_config_json_network()
 
         if BackendEngine.is_tensorflow_selected():
             # Use TFEngine.Engine class instead of Engine.Engine.

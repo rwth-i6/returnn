@@ -33,7 +33,6 @@ def init(config_filename, command_line_options):
     config.set("log", [])
     rnn.init_log()
     print("RETURNN dump-dataset starting up.", file=log.v3)
-    rnn.init_config_json_network()
 
 
 def main(argv):
