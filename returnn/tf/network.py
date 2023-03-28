@@ -50,7 +50,7 @@ class ExternData:
     def __repr__(self):
         return "<ExternData data=%r>" % self.data
 
-    def init_from_config(self, config, auto_create_placeholders=True, reset_batch=True):
+    def init_from_config(self, config, auto_create_placeholders=False, reset_batch=True):
         """
         It reads ``extern_data`` from the config,
         which defines the :class:`Data` instance options to be created.
