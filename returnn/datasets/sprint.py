@@ -658,6 +658,8 @@ class ExternSprintDataset(SprintDatasetBase):
     The Sprint subprocess will use SprintExternInterface to communicate with us.
     """
 
+    _getnewargs_exclude_attrs = CachedDataset2._getnewargs_exclude_attrs.union(("partitionEpoch",))
+
     # Do not change the argument names here, to not break existing configs.
     # noinspection PyPep8Naming
     def __init__(self, sprintTrainerExecPath, sprintConfigStr, partitionEpoch=None, **kwargs):
