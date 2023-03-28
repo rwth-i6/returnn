@@ -15,7 +15,7 @@ from returnn.tf.layers.basic import LayerBase, get_layer_class
 import returnn.tf.compat as tf_compat
 from returnn.tf.util.basic import reuse_name_scope
 import returnn.tf.util.basic as tf_util
-from returnn.tensor import Tensor, Dim
+from returnn.tensor import Tensor, Dim, TensorDict
 from returnn.tf.util.data import Data
 from returnn.util import basic as util
 
@@ -26,7 +26,7 @@ class DataNotFound(Exception):
     """
 
 
-class ExternData:
+class ExternData(TensorDict):
     """
     This holds :class:`Data` instances for every data-key of external data from the dataset,
     i.e. the description such as shape and sparsity, etc.
@@ -38,14 +38,17 @@ class ExternData:
         """
         :param None|dict[str,dict[str]] data: optional init kwargs for Data
         """
+        super().__init__()
         self._config = None  # type: typing.Optional["returnn.config.Config"]
         self._batch_info = None  # type: typing.Optional["returnn.tf.util.data.BatchInfo"]
-        self.data = {}  # type: typing.Dict[str,Tensor]
         self.default_input = default_input
         self.default_target = default_target
-        if data:
-            self.register_data_from_dict(data)
         self.extra_added_keys = set()  # set[str]
+
+        if data:
+            for key, value in data.items():
+                self.data[key] = Tensor(name=key, auto_create_placeholders=True, **value)
+            self.init_batch_info()
 
     def __repr__(self):
         return "<ExternData data=%r>" % self.data
@@ -235,14 +238,6 @@ class ExternData:
             assert data.dim == data_dim or data.dim is None, "key %r dim mismatch. %s" % (key, base_err_msg)
             data_shape = tuple(dataset.get_data_shape(key))
             assert data.shape[1:] == data_shape, "key %r shape mismatch. %s" % (key, base_err_msg)
-
-    def register_data_from_dict(self, data):
-        """
-        :param dict[str,dict[str]] data: init kwargs for Data
-        """
-        for key, value in data.items():
-            self.data[key] = Tensor(name=key, auto_create_placeholders=True, **value)
-        self.init_batch_info()
 
     def register_data(self, data):
         """
