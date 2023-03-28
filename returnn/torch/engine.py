@@ -301,10 +301,9 @@ class Engine(EngineBase):
                 print(f"Pre-load weights for key '{key}' from {opts['filename']}")
                 preload_model_state = torch.load(opts["filename"])
                 if opts.get("checkpoint_key", None) is not None:
-                  preload_model_state = preload_model_state[opts["checkpoint_key"]]
+                    preload_model_state = preload_model_state[opts["checkpoint_key"]]
                 if opts.get("prefix", ""):
-                    preload_model_state = {
-                        opts["prefix"] + key: value for key, value in preload_model_state.items()}
+                    preload_model_state = {opts["prefix"] + key: value for key, value in preload_model_state.items()}
                 strict = not opts.get("ignore_missing", False)
                 missing_keys, unexpected_keys = self._model.load_state_dict(preload_model_state, strict=strict)
                 print(f"Missing keys: {missing_keys}")
