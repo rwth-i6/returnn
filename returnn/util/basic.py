@@ -222,6 +222,7 @@ class BehaviorVersion:
 
     _latest_behavior_version = 16
     _behavior_version = None  # type: typing.Optional[int]
+    _min_behavior_version = 0  # type: int
 
     @classmethod
     def set(cls, version):
@@ -234,7 +235,7 @@ class BehaviorVersion:
             cls._behavior_version,
             version,
         )
-        assert version >= 0
+        assert version >= cls._min_behavior_version
         if version > cls._latest_behavior_version:
             from returnn import __long_version__
 
@@ -261,7 +262,21 @@ class BehaviorVersion:
         """
         if os.environ.get("RETURNN_TEST") and to_bool(os.environ.get("RETURNN_TEST")):
             return cls._latest_behavior_version
-        return 0
+        return cls._min_behavior_version
+
+    @classmethod
+    def set_min_behavior_version(cls, min_behavior_version: int):
+        """
+        There are some RETURNN features which trigger a higher min behavior version.
+        The min behavior version is used when no behavior version is explicitly set.
+        But it is also an error if a behavior version is set, but it is lower than the min behavior version.
+
+        :param min_behavior_version:
+        """
+        assert cls._min_behavior_version <= min_behavior_version <= cls._latest_behavior_version
+        if cls._behavior_version is not None:
+            assert cls._behavior_version >= min_behavior_version
+        cls._min_behavior_version = min_behavior_version
 
     @classmethod
     def is_set(cls):
