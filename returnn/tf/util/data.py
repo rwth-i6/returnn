@@ -10,7 +10,6 @@ import os
 import typing
 import tensorflow as tf
 
-import returnn.util.basic as util
 from returnn.util.basic import NotSpecified
 
 # Import also batch_dim, single_step_dim, to support old code.
