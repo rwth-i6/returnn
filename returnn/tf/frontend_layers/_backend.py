@@ -11,6 +11,8 @@ from returnn.tensor import Tensor, Dim
 # noinspection PyProtectedMember
 from returnn.frontend._backend import Backend
 
+from .layer import Layer
+
 
 # Ignore this warning until we really expect that we implemented everything.
 # noinspection PyAbstractClass
@@ -19,6 +21,7 @@ class ReturnnLayersBackend(Backend):
     RETURNN layers backend (using TF), where raw_tensor represents a RETURNN layer
     """
 
+    RawTensorType = Layer
     is_tensorflow = True
 
     @staticmethod
