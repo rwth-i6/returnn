@@ -481,6 +481,9 @@ class LearningRateControl(object):
         """
         if not self.filename:
             return
+        directory = os.path.dirname(self.filename)
+        if not os.path.exists(directory):
+            os.makedirs(directory, exist_ok=True)
         # First write to a temp-file, to be sure that the write happens without errors.
         # Otherwise, it could happen that we delete the old existing file, then
         # some error happens (e.g. disk quota), and we loose the newbob data.
