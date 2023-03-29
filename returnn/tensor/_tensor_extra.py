@@ -9,7 +9,8 @@ import os
 
 if TYPE_CHECKING:
     # Those are only used for TensorFlow, or they are deprecated.
-    from returnn.tf.util.data import BatchInfo, SearchBeam, ControlFlowContext
+    from returnn.tf.util.data import BatchInfo, SearchBeam
+    from .control_flow_ctx import ControlFlowContext
 
     from .tensor import Tensor  # just for type hints; otherwise use _t.Tensor
 
