@@ -12,6 +12,7 @@ __version__ = "0.9"
 __maintainer__ = "Patrick Doetsch"
 __email__ = "doetsch@i6.informatik.rwth-aachen.de"
 
+import contextlib
 import sys
 import typing
 import os
@@ -574,6 +575,21 @@ class Config:
 
 
 _global_config = None  # type: typing.Optional[Config]
+
+
+@contextlib.contextmanager
+def global_config_ctx(config: Config):
+    """
+    sets the config as global config in this context,
+    and recovers the original global config afterwards
+    """
+    global _global_config
+    prev_global_config = _global_config
+    try:
+        set_global_config(config)
+        yield
+    finally:
+        _global_config = prev_global_config
 
 
 def set_global_config(config):

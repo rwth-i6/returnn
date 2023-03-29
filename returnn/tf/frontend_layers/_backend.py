@@ -138,7 +138,13 @@ class ReturnnLayersBackend(Backend[Layer]):
             if dtype:
                 assert value.dtype == dtype
             return value
-        raise NotImplementedError
+        kwargs = {}
+        dim_deps = _dims.get_dim_deps(dims)
+        if dim_deps:
+            kwargs["shape_deps"] = dim_deps
+        return rfl.make_layer(
+            {"class": "constant", "value": value, "shape": dims, "dtype": dtype, **kwargs}, name="constant"
+        )
 
     @staticmethod
     def matmul(a: Tensor, b: Tensor, *, reduce: Union[Dim, Sequence[Dim]]) -> Tensor:

@@ -3,6 +3,7 @@ RETURNN frontend (returnn.frontend) tests
 """
 
 from __future__ import annotations
+import _setup_test_env  # noqa
 import returnn.frontend as rf
 from returnn.tensor import Tensor, Dim
 from rf_utils import run_model

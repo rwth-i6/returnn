@@ -65,10 +65,8 @@ def make_layer(
 
         if existing_tensor is not None:
             layer = existing_tensor
-            layer.raw_tensor = name_ctx
         elif predefined_out_data is not None:
             layer = predefined_out_data.copy_template()
-            layer.raw_tensor = name_ctx
         else:
             layer = _tensor_from_layer_dict(layer_dict, layer=name_ctx)
 
@@ -95,6 +93,7 @@ def make_layer(
 
         name_ctx.layer_dict = layer_dict
         name_ctx.tensor = layer
+        layer.raw_tensor = name_ctx
 
     except Exception as exc:
         # Just forward the exception.
@@ -205,9 +204,7 @@ def _tensor_from_layer_dict(layer_dict: rfl.LayerDictRaw, *, layer: rfl.Layer) -
     if rfl.is_debug_eager_mode_enabled():
         layer.debug_layer = net_layer
 
-    out = net_layer.output.copy_template()
-    out.raw_tensor = layer
-    return out
+    return net_layer.output.copy_template()
 
 
 class ReturnnConstructTemplateException(Exception):
