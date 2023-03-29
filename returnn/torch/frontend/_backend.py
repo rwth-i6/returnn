@@ -114,7 +114,7 @@ class TorchBackend(Backend[torch.Tensor]):
         return out
 
     @staticmethod
-    def create_parameter_raw(tensor: Tensor) -> torch.nn.Parameter:
+    def create_parameter_raw(tensor: rf.Parameter) -> torch.nn.Parameter:
         """
         :return: parameter
         """

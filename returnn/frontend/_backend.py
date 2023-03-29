@@ -314,7 +314,7 @@ class Backend(Generic[T]):
         raise Exception("create_placeholder not supported by backend")
 
     @staticmethod
-    def create_parameter_raw(tensor: Tensor) -> T:
+    def create_parameter_raw(tensor: rf.Parameter) -> T:
         """
         :return: parameter
         """

@@ -16,9 +16,10 @@ def make_layer(
     layer_dict: rfl.LayerDictRaw,
     *,
     name: Optional[Union[str, rfl.Layer]] = None,
+    existing_tensor: Optional[Tensor] = None,
     predefined_out_data: Optional[Tensor] = None,
     name_ctx_ignore_top_stack_frames: int = 0,
-) -> Tensor:
+) -> Tensor[rfl.Layer]:
     """
     Creates the layer. This also registers the layer instance in the top name ctx.
     When no name is given, this assumes that the top name ctx corresponds to this module.
@@ -35,6 +36,7 @@ def make_layer(
     :param name:
       if str: (suggested) layer name. if given, will create a new :class:`NameCtx`
       if NameCtx, will use this.
+    :param existing_tensor:
     :param predefined_out_data: normally we can derive the out data automatically.
       If this should be skipped, you can pass this explicitly.
     :param name_ctx_ignore_top_stack_frames: for :func:`Layer.current_ctx`.
@@ -47,6 +49,8 @@ def make_layer(
     """
     if isinstance(name, str) or not name:
         parent_ctx = rfl.Layer.current_ctx(ignore_top_stack_frames=name_ctx_ignore_top_stack_frames + 1)
+        if not name:
+            name = layer_dict["class"]
         name_ctx = rfl.Layer(suggested_name=name, parent=parent_ctx)
         created_name_ctx = True
     elif isinstance(name, rfl.Layer):
@@ -59,15 +63,14 @@ def make_layer(
 
     try:
 
-        if predefined_out_data:
+        if existing_tensor is not None:
+            layer = existing_tensor
+            layer.raw_tensor = name_ctx
+        elif predefined_out_data is not None:
             layer = predefined_out_data.copy_template()
+            layer.raw_tensor = name_ctx
         else:
             layer = _tensor_from_layer_dict(layer_dict, layer=name_ctx)
-
-        # layer = Tensor(layer_dict=layer_dict, name_ctx=name_ctx, data=predefined_out_data)
-
-        # It will be returnn.tensor.Tensor.raw_tensor, thus named raw_tensor here now.
-        layer.raw_tensor = name_ctx
 
         # Do not assign name_ctx.tensor yet because we potentially could raise exceptions later.
         assert name_ctx.tensor is None
@@ -109,7 +112,7 @@ def make_layer(
     return layer
 
 
-def _tensor_from_layer_dict(layer_dict: rfl.LayerDictRaw, *, layer: rfl.Layer) -> Tensor:
+def _tensor_from_layer_dict(layer_dict: rfl.LayerDictRaw, *, layer: rfl.Layer) -> Tensor[rfl.Layer]:
     """
     Use RETURNN layer_class.get_out_data_from_opts to get the :class:`Data`.
     For this function, we need to set up some dummy network and dummy source layers.
@@ -197,12 +200,14 @@ def _tensor_from_layer_dict(layer_dict: rfl.LayerDictRaw, *, layer: rfl.Layer) -
             return layer_
 
     # Use construct_layer to automatically handle more complex logic such as subnetworks.
-    layer = net.construct_layer(net_dict=net_dict, name=out_name, add_layer=_add_layer)
+    net_layer = net.construct_layer(net_dict=net_dict, name=out_name, add_layer=_add_layer)
 
     if rfl.is_debug_eager_mode_enabled():
-        layer.debug_layer = layer
+        layer.debug_layer = net_layer
 
-    return layer.output
+    out = net_layer.output.copy_template()
+    out.raw_tensor = layer
+    return out
 
 
 class ReturnnConstructTemplateException(Exception):
