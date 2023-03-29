@@ -296,18 +296,38 @@ class Engine(EngineBase):
             model_state = torch.load(filename)
             self._model.load_state_dict(model_state)
         elif preload_from_files:
+            # see `preload_from_files` in tf engine and `returnn.tf.network.CustomCheckpointLoader`
+            is_training = self.config.value("task", "train") == "train"
+            is_first_train_epoch = epoch == 1 and (is_training or self.config.value("task", "train") == "initialize_model")
             for key, opts in preload_from_files.items():
                 assert isinstance(opts, dict) and "filename" in opts
-                print(f"Pre-load weights for key '{key}' from {opts['filename']}")
+                if opts.get("init_for_train", False):
+                    if not is_first_train_epoch:
+                        continue
+                else:  # default: init for recog
+                    if is_training:
+                        continue
+                print(f"Pre-load weights for key '{key}' from {opts['filename']}", file=log.v3)
                 preload_model_state = torch.load(opts["filename"])
                 if opts.get("checkpoint_key", None) is not None:
                     preload_model_state = preload_model_state[opts["checkpoint_key"]]
                 if opts.get("prefix", ""):
                     preload_model_state = {opts["prefix"] + key: value for key, value in preload_model_state.items()}
-                strict = not opts.get("ignore_missing", False)
-                missing_keys, unexpected_keys = self._model.load_state_dict(preload_model_state, strict=strict)
-                print(f"Missing keys: {missing_keys}")
-                print(f"Unexpected keys: {unexpected_keys}")
+                ignore_params = opts.get("ignore_params", [])
+                ignore_params_prefixes = opts.get("ignore_params_prefixes", [])
+                for key in list(preload_model_state.keys()):
+                    if key in ignore_params or any([key.startswith(ignore_key) for ignore_key in ignore_params_prefixes]):
+                        print(f"Ignoring variable {key}", file=log.v3)
+                        preload_model_state.pop(key)
+                for new_name, name_in_checkpoint in opts.get("var_name_mapping", {}).items():
+                    preload_model_state[new_name] = preload_model_state.pop(name_in_checkpoint)
+                missing_keys, unexpected_keys = self._model.load_state_dict(preload_model_state, strict=False)
+                if not opts.get("ignore_missing", False):
+                    prefix_keys = [key for key in self._model.state_dict() if key.startswith(opts.get("prefix", ""))]
+                    missing_prefix_keys = set(prefix_keys).intersection(set(missing_keys))
+                    assert not missing_prefix_keys, f"Missing keys and ignore_missing=False: {missing_prefix_keys}"
+                print(f"Missing keys: {missing_keys}", file=log.v4)
+                print(f"Unexpected keys: {unexpected_keys}", file=log.v4)
 
         self._model.to(self._device)
 
