@@ -298,7 +298,9 @@ class Engine(EngineBase):
         elif preload_from_files:
             # see `preload_from_files` in tf engine and `returnn.tf.network.CustomCheckpointLoader`
             is_training = self.config.value("task", "train") == "train"
-            is_first_train_epoch = epoch == 1 and (is_training or self.config.value("task", "train") == "initialize_model")
+            is_first_train_epoch = epoch == 1 and (
+                is_training or self.config.value("task", "train") == "initialize_model"
+            )
             for key, opts in preload_from_files.items():
                 assert isinstance(opts, dict) and "filename" in opts
                 if opts.get("init_for_train", False):
@@ -316,7 +318,9 @@ class Engine(EngineBase):
                 ignore_params = opts.get("ignore_params", [])
                 ignore_params_prefixes = opts.get("ignore_params_prefixes", [])
                 for key in list(preload_model_state.keys()):
-                    if key in ignore_params or any([key.startswith(ignore_key) for ignore_key in ignore_params_prefixes]):
+                    if key in ignore_params or any(
+                        [key.startswith(ignore_key) for ignore_key in ignore_params_prefixes]
+                    ):
                         print(f"Ignoring variable {key}", file=log.v3)
                         preload_model_state.pop(key)
                 for new_name, name_in_checkpoint in opts.get("var_name_mapping", {}).items():
