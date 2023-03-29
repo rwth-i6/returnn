@@ -38,6 +38,7 @@ class MultiProcDataset(CachedDataset2):
         self.buffer_size = buffer_size
         self._data_keys = None
         self._num_seqs = None
+        self._total_num_seqs = None
 
         self._worker_parent_conns = None  # type: Optional[List[mpConnection]]
         self._seq_order_proc_parent_conn = None  # type: Optional[mpConnection]
@@ -90,6 +91,8 @@ class MultiProcDataset(CachedDataset2):
             assert msg == "num_inputs"
             msg, self.num_outputs = self._seq_order_proc_parent_conn.recv()
             assert msg == "num_outputs"
+            msg, self._total_num_seqs = self._seq_order_proc_parent_conn.recv()
+            assert msg == "total_num_seqs"
 
         super().initialize()
 
@@ -115,6 +118,11 @@ class MultiProcDataset(CachedDataset2):
                 elif msg == "init":
                     parent.send(("num_inputs", dataset.num_inputs))
                     parent.send(("num_outputs", dataset.num_outputs))
+                    try:
+                        total_num_seqs = dataset.get_total_num_seqs()
+                    except NotImplementedError:
+                        total_num_seqs = None
+                    parent.send(("total_num_seqs", total_num_seqs))
                 elif msg == "init_seq_order":
                     dataset.init_seq_order(**kwargs)
                     seq_order = dataset.get_current_seq_order()
@@ -254,3 +262,9 @@ class MultiProcDataset(CachedDataset2):
     def num_seqs(self) -> int:
         """num seqs"""
         return self._num_seqs
+
+    def get_total_num_seqs(self) -> int:
+        """total num seqs"""
+        if self._total_num_seqs is not None:
+            return self._total_num_seqs
+        raise NotImplementedError
