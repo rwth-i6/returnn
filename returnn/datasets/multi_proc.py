@@ -93,6 +93,8 @@ class MultiProcDataset(CachedDataset2):
             assert msg == "num_outputs"
             msg, self._total_num_seqs = self._seq_order_proc_parent_conn.recv()
             assert msg == "total_num_seqs"
+            msg, self.labels = self._seq_order_proc_parent_conn.recv()
+            assert msg == "labels"
 
         super().initialize()
 
@@ -123,6 +125,7 @@ class MultiProcDataset(CachedDataset2):
                     except NotImplementedError:
                         total_num_seqs = None
                     parent.send(("total_num_seqs", total_num_seqs))
+                    parent.send(("labels", dataset.labels))
                 elif msg == "init_seq_order":
                     dataset.init_seq_order(**kwargs)
                     seq_order = dataset.get_current_seq_order()
