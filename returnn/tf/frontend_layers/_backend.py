@@ -16,7 +16,7 @@ from .layer import Layer
 
 # Ignore this warning until we really expect that we implemented everything.
 # noinspection PyAbstractClass
-class ReturnnLayersBackend(Backend):
+class ReturnnLayersBackend(Backend[Layer]):
     """
     RETURNN layers backend (using TF), where raw_tensor represents a RETURNN layer
     """

@@ -546,16 +546,10 @@ def select_backend_returnn_layers_tf():
     """
     Selects the RETURNN layers backend (based on TF).
     """
-    import tensorflow as tf
+    from returnn.tf.frontend_layers import Layer
 
-    backend = get_backend_by_raw_tensor_type(tf.Tensor)  # side-effect: register it
+    backend = get_backend_by_raw_tensor_type(Layer)  # side-effect: register it
     global_backend.__class__ = backend
-
-    # TODO move this to get_backend_by_raw_tensor_type
-    #   use returnn layer type, register_frontend_by_tensor_type for that
-    from returnn.tf.frontend_layers import ReturnnLayersBackend
-
-    global_backend.__class__ = ReturnnLayersBackend
 
 
 def select_backend_torch():
@@ -607,6 +601,11 @@ def get_backend_by_raw_tensor_type(tensor_type: Type[T]) -> Union[Type[Backend[T
 
         backend_type = TorchBackend
         tensor_types = _get_tensor_types_torch()
+    elif tensor_type.__module__.startswith("returnn.tf.frontend_layers."):
+        from returnn.tf.frontend_layers import ReturnnLayersBackend, Layer
+
+        backend_type = ReturnnLayersBackend
+        tensor_types = (Layer,)
     else:
         raise Exception(f"unknown tensor type {tensor_type}")
     assert any(issubclass(tensor_type, type_) for type_ in tensor_types)
