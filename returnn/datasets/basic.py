@@ -756,12 +756,11 @@ class Dataset(object):
         finally:
             self.partition_epoch = old_partition_epoch
 
-    def get_total_num_seqs(self):
+    def get_total_num_seqs(self) -> int:
         """
         :return: total number of seqs, without partition epoch.
           Should be the same as len(self.get_all_tags()).
           Note that this is not possible with all datasets.
-        :rtype: int
         """
         if self.partition_epoch == 1:
             # Note: self.num_seqs might not always be set, or even be correct...
@@ -929,11 +928,15 @@ class Dataset(object):
             return []
         return [self.get_data_dim(key)]
 
-    def have_seqs(self):
+    def have_seqs(self) -> bool:
         """
         :return: whether num_seqs > 0
-        :rtype: bool
         """
+        try:
+            total_num_seqs = self.get_total_num_seqs()
+            return total_num_seqs > 0
+        except NotImplementedError:
+            pass
         return self.is_less_than_num_seqs(0)
 
     def len_info(self):
