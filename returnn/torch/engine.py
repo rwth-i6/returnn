@@ -128,19 +128,28 @@ class Engine(EngineBase):
 
         self._model.train()
 
+        accumulated_losses_dict = NumbersDict()
         step_idx = 0
         for data in self._train_dataloader:
-            loss, _ = self._run_step(data)
+            total_loss, losses_dict = self._run_step(data)
 
             self._updater.get_optimizer().zero_grad()
-            loss.backward()
+            total_loss.backward()
             self._updater.get_optimizer().step()
 
-            print("step %i, loss: %f" % (step_idx, loss.detach().cpu().numpy()), file=log.v4)
+            losses_dict = {
+                "train_loss_" + name: float(loss.detach().cpu().numpy()) for name, loss in losses_dict.items()
+            }
+            accumulated_losses_dict += NumbersDict(losses_dict)
+            print("step %i, loss: %f" % (step_idx, total_loss.detach().cpu().numpy()), file=log.v4)
 
             step_idx += 1
 
         print("Trained %i steps" % step_idx)
+
+        accumulated_losses_dict = accumulated_losses_dict / step_idx
+        self.learning_rate_control.set_epoch_error(self.epoch, dict(accumulated_losses_dict))
+        self.learning_rate_control.save()
 
         if self.epoch % self._save_model_epoch_interval == 0 or self.epoch == self._final_epoch:
             self._save_model()
@@ -169,7 +178,7 @@ class Engine(EngineBase):
                     total_loss, losses_dict = self._run_step(data)
                     total_loss = total_loss.detach().cpu().numpy()
                     losses_dict = {
-                        dataset_name + "_score_" + name: float(loss.detach().cpu().numpy())
+                        dataset_name + "_loss_" + name: float(loss.detach().cpu().numpy())
                         for name, loss in losses_dict.items()
                     }
                     print("step %i, loss: %f" % (step_idx, total_loss), file=log.v4)
