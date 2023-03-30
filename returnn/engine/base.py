@@ -20,8 +20,12 @@ class EngineBase(object):
     Base class for a backend engine, such as :class:`TFEngine.Engine`.
     """
 
-    def __init__(self):
+    def __init__(self, config: Optional[Config] = None):
+        """
+        :param config:
+        """
         self.epoch = 0
+        self.config = config
         self.pretrain = None  # type: Optional[Pretrain]
         self.model_filename = None  # type: Optional[str]
         self.learning_rate = 0.0  # set in init_train_epoch

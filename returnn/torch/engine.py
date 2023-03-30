@@ -30,8 +30,7 @@ class Engine(EngineBase):
         """
         :param config:
         """
-        super(Engine, self).__init__()
-        self.config = config
+        super(Engine, self).__init__(config=config)
         self.model_filename = self.config.value("model", None)
         self._mp_manager = torch.multiprocessing.Manager()
         self._epoch_mp_shared = self._mp_manager.Value("i", 0)
