@@ -2109,6 +2109,16 @@ class InternalLayer(LayerBase):
             self.output.get_description(with_name=False) if self.output else None,
         )
 
+    @classmethod
+    def transform_config_dict(cls, d, network, get_layer):
+        """
+        :param dict[str] d:
+        :param returnn.tf.network.TFNetwork network:
+        :param get_layer:
+        """
+        d.setdefault("from", [])
+        super(InternalLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
+
 
 class DataNotAvailableLayer(InternalLayer):
     """
