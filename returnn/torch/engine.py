@@ -301,6 +301,10 @@ class Engine(EngineBase):
             is_first_train_epoch = epoch == 1 and (
                 is_training or self.config.value("task", "train") == "initialize_model"
             )
+            # we use the reversed sorted order here to achieve consistent behavior with the tf engine. There, the keys
+            # are used in sorted order but if a variable is loaded, it will not be considered anymore afterwards. So
+            # the first occurrence is used. Here, we overwrite variables even if they have been loaded before. In order
+            # to get consistent behavior, we use the reversed order.
             for preload_key, opts in reversed(sorted(preload_from_files.items())):
                 assert isinstance(opts, dict) and "filename" in opts
                 if opts.get("init_for_train", False):
