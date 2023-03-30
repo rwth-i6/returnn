@@ -55,6 +55,30 @@ class Backend(Generic[T]):
     # --- functions to override
 
     @staticmethod
+    def set_random_seed(seed: int):
+        """
+        :param seed:
+        """
+        raise NotImplementedError
+
+    @staticmethod
+    def get_random_state() -> Dict[str, bytes]:
+        """
+        :return: random state
+        """
+        raise NotImplementedError
+
+    @staticmethod
+    def set_random_state(state: Dict[str, bytes]):
+        """
+        :param state: as returned by :func:`get_random_state`.
+            This might not always be successful (e.g. different hardware, different backend version),
+            so the calling code should always have called set_random_seed before to have the random generators
+            in a reasonable fallback state.
+        """
+        raise NotImplementedError
+
+    @staticmethod
     def get_dtype_name_raw(raw_tensor: T) -> str:
         """
         :return: dtype of raw tensor, as string

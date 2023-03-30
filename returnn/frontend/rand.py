@@ -1,14 +1,127 @@
 """
-Random number generator utilities
+Random number generator utilities.
+
+Note on the global seed:
+
+In the TF engine, we have this in ``_init_network``:
+
+.. code-block:: python
+
+    tf_random_seed = 42
+    net_random_seed = epoch
+    if self.config.opt_typed_value("random_seed", None):
+        seed = self.config.int("random_seed", None)
+        net_random_seed = (epoch * 3 + seed * 5 + 7) % (2**31)
+        tf_random_seed = (net_random_seed * 2 + 3) % (2**31)
+    tf_compat.v1.set_random_seed(tf_random_seed)
+
+``_init_network`` is only called in the beginning
+and then only when needed (e.g. different model due to pretrain).
+
+The ``net_random_seed`` is used inside the :class:`TFNetwork` for:
+
+.. code-block:: python
+
+    self.random = numpy.random.RandomState(rnd_seed)
+
+This in turns is used for param init in the TF layers, like:
+
+.. code-block:: python
+
+    fwd_weights_initializer = get_initializer(
+        forward_weights_init, seed=self.network.random.randint(2**31), eval_local_ns={"layer": self}
+    )
+
+It is also used by the :class:`RandomLayer` when ``static=True``:
+
+.. code-block:: python
+
+    # static is True
+    if seed is None:
+        seed = self.network.random.randint(2**31, size=[32], dtype="uint32")
+
+So, it means, with ``static=True``, the random numbers are always the same in each execution step.
+To reflect that in an eager-based backend,
+we need to reset the static-random-state in the beginning of each step.
+
 """
 
 from __future__ import annotations
-from typing import Optional, Union, Sequence
+from typing import Optional, Union, Sequence, Dict
 import numpy
 from returnn.tensor import Tensor, Dim
 from ._backend import global_backend as _global_backend
 
-__all__ = ["random"]
+
+__all__ = [
+    "set_random_seed",
+    "get_random_state",
+    "set_random_state",
+    "reset_step_random_state",
+    "get_static_step_based_seed",
+    "random",
+]
+
+
+def set_random_seed(seed: int):
+    """
+    Call this at the beginning of the program.
+    This initializes the random state of the backend and also the step-based random state.
+
+    This is *not* expected to be called after each epoch or step.
+
+    :param seed: should *not* depend on epoch or step
+    """
+    _global_backend.set_random_seed(seed)
+    global _step_rnd_seed
+    _step_rnd_seed = (seed * 5393 + 1187) % (2**31)
+    reset_step_random_state()
+
+
+def get_random_state() -> Dict[str, bytes]:
+    """
+    :return: current random state, for serialization, to be able to restore it later
+    """
+    return _global_backend.get_random_state()
+
+
+def set_random_state(state: Dict[str, bytes], *, fallback_seed: int):
+    """
+    Recovers the random state.
+    We still assume that :func:`set_initial_random_seed` was called before,
+
+
+    :param state: as returned by :func:`get_random_state`
+    :param fallback_seed: in case we cannot recover the state (e.g. different backend version, different hardware, ...),
+        we will use this seed to initialize the random state.
+        In this case, a run without interruption is not the same as a run with interruption.
+        However, this fallback_seed is still better than using the fixed initial random seed.
+        The fallback_seed should depend on the epoch and step, and not be the same as the initial random seed.
+    """
+    # Always call this first.
+    _global_backend.set_random_seed(fallback_seed)
+    _global_backend.set_random_state(state)
+
+
+_step_rnd_seed = 42
+_step_rnd = numpy.random.RandomState(_step_rnd_seed)
+
+
+def reset_step_random_state():
+    """
+    When ``static=True`` is used in :func:`random`,
+    the random state is reset to the beginning of the step.
+    So this should be called in the beginning of each step.
+    Also see the module docstring.
+    """
+    _step_rnd.seed(_step_rnd_seed)
+
+
+def get_static_step_based_seed(*, size=None) -> Union[int, numpy.ndarray]:
+    """
+    :return: from the static step-based random state, get a seed
+    """
+    return _step_rnd.randint(2**31, size=size)
 
 
 def random(
@@ -70,6 +183,13 @@ def random(
     :param bool|None static: if no state at all should be used. it just relies on the seed then.
     :return: layer
     """
+    if explicit_state is None:
+        if static is None:
+            static = False
+        assert isinstance(static, bool)
+        if static:
+            if seed is None:
+                seed = get_static_step_based_seed()
     return _global_backend.random(
         dims=dims,
         dtype=dtype,

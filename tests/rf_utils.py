@@ -5,15 +5,12 @@ RETURNN frontend (returnn.frontend) utils
 from __future__ import annotations
 from typing import Callable
 import contextlib
-import numpy
-import torch
 
 from returnn.config import Config, global_config_ctx
 import returnn.frontend as rf
 from returnn.tensor import Tensor, TensorDict
 import returnn.tf.compat as tf_compat
 from returnn.tf.network import TFNetwork, ExternData
-import returnn.tf.frontend_layers as rfl
 
 
 @contextlib.contextmanager
@@ -32,9 +29,9 @@ def run_model(get_model: Callable[[], rf.Module], extern_data: Tensor):
 
 def run_model_torch(get_model: Callable[[], rf.Module], extern_data: Tensor) -> Tensor:
     """run"""
-    rnd = numpy.random.RandomState(42)
     rf.select_backend_torch()
-    _fill_random(extern_data, rnd=rnd, raw_tensor_type=torch.Tensor)
+    rf.set_random_seed(42)
+    _fill_random(extern_data)
     model = get_model()
     out = model(extern_data)
     assert isinstance(out, Tensor)
@@ -43,8 +40,8 @@ def run_model_torch(get_model: Callable[[], rf.Module], extern_data: Tensor) -> 
 
 def run_model_net_dict_tf(get_model: Callable[[], rf.Module], extern_data: Tensor):
     """run"""
-    rnd = numpy.random.RandomState(42)
     rf.select_backend_returnn_layers_tf()
+    rf.set_random_seed(42)
 
     # noinspection PyUnusedLocal
     def _get_model(*, epoch: int, step: int) -> rf.Module:
@@ -62,7 +59,7 @@ def run_model_net_dict_tf(get_model: Callable[[], rf.Module], extern_data: Tenso
     from returnn.tf.frontend_layers.config_entry_points import get_net_dict
 
     with tf_scope() as session, global_config_ctx(config):
-        _fill_random(extern_data, rnd=rnd, raw_tensor_type=rfl.Layer)
+        _fill_random(extern_data)
 
         net_dict = get_net_dict(
             epoch=1, step=0, get_model_func=_get_model, extern_data=extern_data_, step_func=_forward_step
@@ -79,8 +76,9 @@ def run_model_net_dict_tf(get_model: Callable[[], rf.Module], extern_data: Tenso
         return out
 
 
-def _fill_random(x: Tensor, *, rnd: numpy.random.RandomState, raw_tensor_type: type) -> bool:
+def _fill_random(x: Tensor) -> bool:
     """fill. return whether sth was filled"""
+    raw_tensor_type = rf.get_raw_tensor_type()
     filled = False
     while True:
         have_unfilled = False
@@ -89,10 +87,12 @@ def _fill_random(x: Tensor, *, rnd: numpy.random.RandomState, raw_tensor_type: t
         for dim in x.dims:
             if not dim.dyn_size_ext:
                 continue
-            if _fill_random(dim.dyn_size_ext, rnd=rnd, raw_tensor_type=raw_tensor_type):
+            if _fill_random(dim.dyn_size_ext):
                 filled = True
                 filled_this_round = True
             if dim.dyn_size_ext.raw_tensor is None:
+                have_unfilled = True
+            elif not isinstance(dim.dyn_size_ext.raw_tensor, raw_tensor_type):
                 have_unfilled = True
 
         if have_unfilled:
@@ -106,18 +106,25 @@ def _fill_random(x: Tensor, *, rnd: numpy.random.RandomState, raw_tensor_type: t
             x.raw_tensor = None
 
     if x.raw_tensor is None:
-        shape = [dim.get_dim_value() for dim in x.dims]
         if x.dtype.startswith("int"):
             min_val = 0
             max_val = 10
             if x.sparse_dim and x.sparse_dim.dimension is not None:
                 max_val = x.sparse_dim.dimension
-            values = rnd.randint(min_val, max_val, shape).astype(x.dtype)
+            x.raw_tensor = rf.random(
+                dims=x.dims,
+                dtype=x.dtype,
+                sparse_dim=x.sparse_dim,
+                minval=min_val,
+                maxval=max_val,
+                distribution="uniform",
+            ).raw_tensor
         elif x.dtype.startswith("float"):
-            values = rnd.uniform(-1, 1, shape).astype(x.dtype)
+            x.raw_tensor = rf.random(
+                dims=x.dims, dtype=x.dtype, sparse_dim=x.sparse_dim, distribution="normal", mean=0.0, stddev=1.0
+            ).raw_tensor
         else:
             raise NotImplementedError(f"not implemented for {x} dtype {x.dtype}")
-        x.raw_tensor = rf.convert_to_tensor(values, dims=x.dims, dtype=x.dtype, sparse_dim=x.sparse_dim).raw_tensor
         filled = True
 
     assert isinstance(x.raw_tensor, raw_tensor_type)

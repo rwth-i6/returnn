@@ -3,7 +3,7 @@ Backend for exposing PyTorch-specific functionality.
 """
 
 from __future__ import annotations
-from typing import Optional, Union, Sequence, Tuple
+from typing import Optional, Union, Sequence, Tuple, Dict
 import torch
 import numpy
 
@@ -34,6 +34,46 @@ class TorchBackend(Backend[torch.Tensor]):
         :return: whether we are executing eagerly
         """
         return True
+
+    @staticmethod
+    def set_random_seed(seed: int):
+        """
+        :param seed:
+        """
+        torch.random.manual_seed(seed)
+
+    @staticmethod
+    def get_random_state() -> Dict[str, bytes]:
+        """
+        :return: random state
+        """
+        res = {
+            "cpu": torch.random.get_rng_state().detach().cpu().numpy().tobytes(),
+        }
+        cuda_states = [state.detach().cpu().numpy().tobytes() for state in torch.cuda.get_rng_state_all()]
+        if len(cuda_states) == 1:
+            res["cuda"] = cuda_states[0]
+        elif len(cuda_states) > 1:
+            for i, state in enumerate(cuda_states):
+                res[f"cuda{i}"] = state
+        return res
+
+    @staticmethod
+    def set_random_state(state: Dict[str, bytes]):
+        """
+        :param state: as returned by :func:`get_random_state`.
+            This might not always be successful (e.g. different hardware, different backend version),
+            so the calling code should always have called set_random_seed before to have the random generators
+            in a reasonable fallback state.
+        """
+        if "cpu" in state:
+            torch.random.set_rng_state(torch.from_numpy(numpy.frombuffer(state["cpu"], dtype="uint8")))
+        if "cuda" in state:
+            torch.cuda.set_rng_state_all(torch.from_numpy(numpy.frombuffer(state["cuda"], dtype="uint8")))
+        for k, v in state.items():
+            if k.startswith("cuda"):
+                i = int(k[4:])
+                torch.cuda.set_rng_state(torch.from_numpy(numpy.frombuffer(v, dtype="uint8")), i)
 
     @staticmethod
     def get_dtype_name_raw(raw_tensor: torch.Tensor) -> str:
@@ -374,12 +414,19 @@ class TorchBackend(Backend[torch.Tensor]):
         dtype_ = TorchBackend.as_dtype_raw(dtype)
         out = Tensor(name=f"random_{distribution}", dims=dims, dtype=dtype, sparse_dim=sparse_dim)
         assert explicit_state is None  # not implemented otherwise
-        assert static and seed is None  # not implemented otherwise
+        generator = None  # using the global default from PT
+        assert isinstance(static, bool)
+        if static:
+            assert seed is not None
+            generator = torch.Generator()
+            generator.manual_seed(seed)
+        else:
+            assert seed is None
         assert auto_update_state is None  # not implemented otherwise
         if distribution == "uniform":
             assert mean is None and stddev is None  # not implemented otherwise
             if dtype_.is_floating_point:
-                out.raw_tensor = torch.rand(*shape, dtype=dtype_)
+                out.raw_tensor = torch.rand(*shape, dtype=dtype_, generator=generator)
                 if minval is None:
                     minval = 0
                 if maxval is None:
@@ -393,7 +440,7 @@ class TorchBackend(Backend[torch.Tensor]):
                 out.raw_tensor = torch.randint(minval, maxval, shape, dtype=dtype_)
         elif distribution == "normal":
             assert minval is None and maxval is None
-            out.raw_tensor = torch.randn(*shape, dtype=dtype_)
+            out.raw_tensor = torch.randn(*shape, dtype=dtype_, generator=generator)
             if mean is None:
                 mean = 0
             if stddev is None:

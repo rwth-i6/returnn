@@ -3,7 +3,10 @@ High-level backend for RETURNN layers
 """
 
 from __future__ import annotations
-from typing import Union, Sequence, Optional, Any, Tuple
+from typing import Union, Sequence, Optional, Any, Tuple, Dict
+import numpy
+
+import returnn.tf.compat as tf_compat
 
 from returnn.util.basic import NotSpecified
 from returnn.tensor import Tensor, Dim
@@ -34,6 +37,31 @@ class ReturnnLayersBackend(Backend[Layer]):
         return False
 
     @staticmethod
+    def set_random_seed(seed: int):
+        """
+        :param seed:
+        """
+        tf_compat.v1.set_random_seed(seed)
+
+    @staticmethod
+    def get_random_state() -> Dict[str, bytes]:
+        """
+        :return: random state
+        """
+        # Not sure... we could cover all state vars used by RandomLayer...
+        return {}
+
+    @staticmethod
+    def set_random_state(state: Dict[str, bytes]):
+        """
+        :param state: as returned by :func:`get_random_state`.
+            This might not always be successful (e.g. different hardware, different backend version),
+            so the calling code should always have called set_random_seed before to have the random generators
+            in a reasonable fallback state.
+        """
+        assert not state  # not implemented... unexpected currently
+
+    @staticmethod
     def get_dtype_name_raw(raw_tensor: Layer) -> str:
         """dtype"""
         return raw_tensor.tensor.dtype
@@ -62,6 +90,11 @@ class ReturnnLayersBackend(Backend[Layer]):
     def get_known_shape_raw(raw_tensor: Layer) -> Tuple[Optional[int]]:
         """known shape"""
         return raw_tensor.tensor.batch_shape
+
+    @staticmethod
+    def set_known_shape_raw(raw_tensor: Layer, shape: Tuple[Optional[int]]) -> None:
+        """set known shape"""
+        pass  # ignore
 
     @staticmethod
     def fill_raw(shape: Union[Sequence[Union[int, Layer]], Layer], value: Union[Any, Layer]) -> Layer:
@@ -169,4 +202,48 @@ class ReturnnLayersBackend(Backend[Layer]):
             kwargs["use_time_mask"] = use_time_mask
         return rfl.make_layer(
             {"class": "reduce", "from": source, "mode": mode, "axis": axis, **kwargs}, name=f"reduce_{mode}"
+        )
+
+    @staticmethod
+    def random(
+        *,
+        dims: Sequence[Dim],
+        dtype: str,
+        sparse_dim: Optional[Dim] = None,
+        distribution: str,
+        mean: Optional[Union[int, float, Tensor]] = None,
+        stddev: Optional[Union[int, float, Tensor]] = None,
+        bound: Optional[Union[int, float, Tensor]] = None,
+        minval: Optional[Union[int, float, Tensor]] = None,
+        maxval: Optional[Union[int, float, Tensor]] = None,
+        seed: Optional[Union[int, Sequence[int], numpy.ndarray]] = None,
+        algorithm: Optional[str] = None,
+        explicit_state: Optional[Tensor] = None,
+        auto_update_state: Optional[bool] = None,
+        static: Optional[bool] = None,
+    ) -> Tensor:
+        """random"""
+        kwargs = {
+            "mean": mean,
+            "stddev": stddev,
+            "bound": bound,
+            "minval": minval,
+            "maxval": maxval,
+            "seed": seed,
+            "algorithm": algorithm,
+            "explicit_state": explicit_state,
+            "auto_update_state": auto_update_state,
+            "static": static,
+        }
+        kwargs = {k: v for k, v in kwargs.items() if v is not None}
+        return rfl.make_layer(
+            {
+                "class": "random",
+                "shape": dims,
+                "dtype": dtype,
+                "sparse_dim": sparse_dim,
+                "distribution": distribution,
+                **kwargs,
+            },
+            name="random",
         )
