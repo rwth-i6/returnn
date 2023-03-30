@@ -5,7 +5,7 @@ High-level backend for RETURNN layers
 from __future__ import annotations
 from typing import Union, Sequence, Optional, Any, Tuple, Dict
 import numpy
-
+import tensorflow as tf
 import returnn.tf.compat as tf_compat
 
 from returnn.util.basic import NotSpecified
@@ -153,9 +153,42 @@ class ReturnnLayersBackend(Backend[Layer]):
         ).raw_tensor
 
     @staticmethod
-    def set_parameter_initial_value(param: rf.Parameter, value: Union[None, Tensor, rf.RawTensorTypes]) -> None:
+    def set_parameter_initial_value(param: rf.Parameter[Layer], value: Union[None, Tensor, rf.RawTensorTypes]) -> None:
         """set parameter initial value"""
-        raise NotImplementedError  # TODO
+        if value is None:
+            param.raw_tensor.layer_dict.pop("init", None)
+            param.raw_tensor.layer_dict.pop("init_by_layer", None)
+        elif isinstance(value, Tensor):
+            param.raw_tensor.layer_dict.pop("init", None)
+            if not value.raw_tensor.parent.can_access_children_from_root:
+                accessible_parent = value.raw_tensor.parent
+                while not accessible_parent.can_access_children_from_root:
+                    accessible_parent = accessible_parent.parent
+                value.raw_tensor.assign_parent(accessible_parent)
+                # We could also maybe move out all the dependencies.
+                # However, it's not clear whether this is always safe.
+                for dep in value.raw_tensor.get_tensor_dependencies():
+                    assert (
+                        dep.parent.can_access_children_from_root
+                    ), f"dep {dep} of moved value {value} is not accessible"
+            param.raw_tensor.layer_dict["init_by_layer"] = value
+        else:
+            param.raw_tensor.layer_dict.pop("init_by_layer", None)
+            param.raw_tensor.layer_dict["init"] = value
+        if rfl.is_debug_eager_mode_enabled():
+            shape = [d.get_dim_value() for d in param.dims]
+            if isinstance(value, Tensor):
+                assert value.placeholder is not None
+                value_tf = value.placeholder
+            else:
+                value_tf = tf.broadcast_to(tf.convert_to_tensor(value), shape)
+            if param.raw_tensor.debug_layer.output.placeholder is None:
+                var = tf.Variable(value_tf, shape=[d.get_dim_value() for d in param.dims], dtype=param.dtype)
+                param.raw_tensor.debug_layer.output.placeholder = var
+            else:
+                var = param.raw_tensor.debug_layer.output.placeholder
+                assert isinstance(var, tf.Variable)
+                var.assign(value_tf)
 
     @staticmethod
     def convert_to_tensor(
