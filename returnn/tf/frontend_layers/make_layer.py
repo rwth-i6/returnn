@@ -242,7 +242,7 @@ def _get_raw_layer_by_name(name: str, *, scope: Optional[rfl.Layer] = None, data
     scope.get_child_with_tensor(name, data=data)
 
 
-def register_extern_data(data: Tensor):
+def register_extern_data(data: Tensor[rfl.Layer]):
     """
     Get extern data from root ctx.
     As a side effect, it registers the given data as extern data,
@@ -267,10 +267,14 @@ def register_extern_data(data: Tensor):
             )
         # noinspection PyProtectedMember
         _dims._register_dim_deps_when_novel(tag, [data])
-    if rfl.is_debug_eager_mode_enabled():
-        # TODO this is broken, we cannot overwrite placeholder (raw_tensor)
-        # data.placeholder = _make_random_tf_tensor_for_returnn_data(data)
-        raise NotImplementedError
+    if rfl.is_debug_eager_mode_enabled() and not data.raw_tensor.debug_layer:
+        from returnn.tf.layers.basic import InternalLayer
+
+        data_tf = data.copy_template()
+        data_tf.raw_tensor = _make_random_tf_tensor_for_returnn_data(data)
+        data.raw_tensor.debug_layer = rfl.make_layer(
+            {"class": InternalLayer, "output": data_tf, "debug_type_name": f"data:{data.name}"}
+        )
 
 
 def _make_random_tf_tensor_for_returnn_data(data: Tensor) -> tf.Tensor:

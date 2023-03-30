@@ -12,6 +12,7 @@ from returnn.util.basic import NotSpecified, RefIdEq
 from returnn.tensor import Tensor, Dim, ControlFlowContext, batch_dim, single_step_dim
 from returnn.tensor.marked_dim import MarkedDim as _MarkedDim
 from returnn.tf.util.data import BatchInfo
+from returnn.tf.layers.base import LayerBase
 from .. import frontend_layers as rfl
 from . import _utils
 import returnn.frontend as rf
@@ -128,6 +129,7 @@ class Layer:
         self.tensor_remove_unused_cleanup_hooks = []  # type: List[Callable[[Tensor], None]]
         self.layer_dict = None  # type: Optional[LayerDictRaw]
         self.layer_extra_dependencies = []  # type: List[Layer]
+        self.debug_layer = None  # type: Optional[LayerBase]
         self._enter_stack_frames = None  # type: Optional[Set[types.FrameType]]
         self.is_subnet = False  # it says whether it can have children
         self._subnet_main_output = None  # type: Optional[Tensor]  # when this is via SubnetworkLayer
