@@ -252,9 +252,10 @@ def register_extern_data(data: Tensor):
     assert isinstance(data, Tensor)  # the usage was different before. make sure we get this correct
     scope = rfl.Layer.top()  # must exist
     assert not scope.parent  # get_extern_data only allowed (only makes sense) in root name ctx
-    data.batch = _init_global_batch()
-    root_layer_name = f"data:{data.name}"
-    _get_raw_layer_by_name(root_layer_name, scope=scope, data=data)
+    if data.raw_tensor is None:
+        data.batch = _init_global_batch()
+        root_layer_name = f"data:{data.name}"
+        _get_raw_layer_by_name(root_layer_name, scope=scope, data=data)
     for tag in data.dim_tags:
         if not tag.is_batch_dim() and tag.is_dynamic() and not tag.dyn_size_ext:
             # Undefined dynamic dim tag. Set default data template.
@@ -267,7 +268,9 @@ def register_extern_data(data: Tensor):
         # noinspection PyProtectedMember
         _dims._register_dim_deps_when_novel(tag, [data])
     if rfl.is_debug_eager_mode_enabled():
-        data.placeholder = _make_random_tf_tensor_for_returnn_data(data)
+        # TODO this is broken, we cannot overwrite placeholder (raw_tensor)
+        # data.placeholder = _make_random_tf_tensor_for_returnn_data(data)
+        raise NotImplementedError
 
 
 def _make_random_tf_tensor_for_returnn_data(data: Tensor) -> tf.Tensor:
