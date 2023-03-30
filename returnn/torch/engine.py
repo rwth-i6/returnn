@@ -230,7 +230,7 @@ class Engine(EngineBase):
 
     def _run_step(self, data):
         """
-        :param dict[str, numpy.ndarray] data: model inputs for the step
+        :param dict[str, torch.Tensor] data: model inputs for the step
         :return: total loss (weighted sum) calculated for the step, and individual losses as a name -> value mapping
         :rtype: tuple[torch.Tensor, dict[str, torch.Tensor]]
         """
