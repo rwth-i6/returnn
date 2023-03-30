@@ -42,6 +42,7 @@ def run_model_net_dict_tf(get_model: Callable[[], rf.Module], extern_data: Tenso
     """run"""
     rf.select_backend_returnn_layers_tf()
     rf.set_random_seed(42)
+    extern_data_name = extern_data.name
 
     # noinspection PyUnusedLocal
     def _get_model(*, epoch: int, step: int) -> rf.Module:
@@ -49,7 +50,7 @@ def run_model_net_dict_tf(get_model: Callable[[], rf.Module], extern_data: Tenso
 
     # noinspection PyShadowingNames
     def _forward_step(*, model: rf.Module, extern_data: TensorDict):
-        out = model(extern_data)
+        out = model(extern_data.data[extern_data_name])
         out.mark_as_default_output(shape=out.dims)
 
     extern_data_ = ExternData()
