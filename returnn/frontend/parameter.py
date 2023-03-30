@@ -3,7 +3,7 @@ Parameter / variable
 """
 
 from __future__ import annotations
-from typing import Optional, Sequence
+from typing import Optional, TypeVar, Sequence
 from returnn.tensor import Tensor, Dim
 import returnn.frontend as rf
 from ._backend import global_backend as _global_backend
@@ -12,7 +12,10 @@ from ._backend import global_backend as _global_backend
 __all__ = ["Parameter"]
 
 
-class Parameter(Tensor):
+T = TypeVar("T")
+
+
+class Parameter(Tensor[T]):
     """
     This represents a (potential trainable) parameter,
     aka ``tf.Variable`` in TensorFlow,
