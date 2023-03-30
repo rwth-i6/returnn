@@ -296,7 +296,7 @@ class Engine(EngineBase):
         """
         filename = self.get_epoch_model_filename() + ".opt" + util.get_model_filename_postfix()
         directory = os.path.dirname(filename)
-        if not os.path.exists(directory):
+        if directory and not os.path.exists(directory):
             os.makedirs(directory, exist_ok=True)
 
         self._updater.save_optimizer(filename)
