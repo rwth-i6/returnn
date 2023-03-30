@@ -4,9 +4,10 @@ This module contains the layer base class :class:`LayerBase`.
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Optional, Dict
 import typing
 import contextlib
+import numpy
 import tensorflow as tf
 from returnn.util.basic import NotSpecified, CollectionReadCheckCovered, BehaviorVersion
 import returnn.tf.compat as tf_compat
@@ -1415,11 +1416,10 @@ class LayerBase(object):
                     continue
             self.network.get_var_assigner(param).assign(values, session=session)
 
-    def get_param_values_dict(self, session):
+    def get_param_values_dict(self, session) -> Dict[str, numpy.ndarray]:
         """
         :param tf.compat.v1.Session session:
         :return: dict name -> values
-        :rtype: dict[str,numpy.ndarray]
         """
         d = {}
         for param_name, param in self.get_saveable_params_dict().items():

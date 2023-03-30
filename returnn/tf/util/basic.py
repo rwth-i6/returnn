@@ -4,14 +4,16 @@ Lots of random utility functions for TensorFlow.
 
 from __future__ import annotations
 
-import tensorflow as tf
-from tensorflow.python.client import device_lib
-from tensorflow.python.ops import init_ops
+from typing import Optional
+import typing
 import contextlib
 import os
 import sys
 import threading
-import typing
+import numpy
+import tensorflow as tf
+from tensorflow.python.client import device_lib
+from tensorflow.python.ops import init_ops
 from returnn.util import basic as util
 from returnn.util.basic import NotSpecified, NativeCodeCompiler
 import returnn.tf.compat as tf_compat
@@ -189,7 +191,9 @@ def transform_param_axes_split_info_to_new_shape(axes_split_info, new_shape, deb
     return new_axes_split_info
 
 
-def copy_with_new_split_axes(old_axis_splits, new_axis_splits, old_values, new_values=None):
+def copy_with_new_split_axes(
+    old_axis_splits, new_axis_splits, old_values: numpy.ndarray, new_values: Optional[numpy.ndarray] = None
+):
     """
     On Numpy arrays only, however, fits better to the functions above.
 
