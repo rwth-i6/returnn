@@ -289,19 +289,19 @@ class Engine(EngineBase):
         self._model = get_model_func(**sentinel_kw)
         assert isinstance(self._model, torch.nn.Module)
 
-        preload_from_files = self.config.typed_value("preload_from_files", {})
         if epoch > 1:
             filename = self.get_epoch_model_filename(epoch=epoch - 1) + util.get_model_filename_postfix()
             print("Load model %s" % (filename,), file=log.v4)
             model_state = torch.load(filename)
             self._model.load_state_dict(model_state)
-        elif preload_from_files:
+        preload_from_files = self.config.typed_value("preload_from_files", {})
+        if preload_from_files:
             # see `preload_from_files` in tf engine and `returnn.tf.network.CustomCheckpointLoader`
             is_training = self.config.value("task", "train") == "train"
             is_first_train_epoch = epoch == 1 and (
                 is_training or self.config.value("task", "train") == "initialize_model"
             )
-            for key, opts in preload_from_files.items():
+            for preload_key, opts in reversed(sorted(preload_from_files.items())):
                 assert isinstance(opts, dict) and "filename" in opts
                 if opts.get("init_for_train", False):
                     if not is_first_train_epoch:
@@ -309,7 +309,7 @@ class Engine(EngineBase):
                 else:  # default: init for recog
                     if is_training:
                         continue
-                print(f"Pre-load weights for key '{key}' from {opts['filename']}", file=log.v3)
+                print(f"Pre-load weights for key '{preload_key}' from {opts['filename']}", file=log.v3)
                 preload_model_state = torch.load(opts["filename"])
                 if opts.get("checkpoint_key", None) is not None:
                     preload_model_state = preload_model_state[opts["checkpoint_key"]]
