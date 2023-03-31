@@ -245,10 +245,14 @@ class TorchBackend(Backend[torch.Tensor]):
         """
         if isinstance(value, Tensor):
             return value
-        value = torch.tensor(value, dtype=TorchBackend.as_dtype_raw(dtype) if dtype else None)
+        if isinstance(value, torch.Tensor):
+            name = "raw_tensor"
+        else:
+            name = "const"
+            value = torch.tensor(value, dtype=TorchBackend.as_dtype_raw(dtype) if dtype else None)
         assert isinstance(value, torch.Tensor)
         dtype = dtype or TorchBackend.get_dtype_name_raw(value)
-        return Tensor("const", raw_tensor=value, dims=dims, dtype=dtype, sparse_dim=sparse_dim)
+        return Tensor(name, dims=dims, dtype=dtype, sparse_dim=sparse_dim, raw_tensor=value)
 
     @staticmethod
     def full(
