@@ -310,7 +310,7 @@ class _TensorMixin(_TensorMixinBase):
                 assert tag.dyn_size_ext.dtype in {"int32", "int64"}
                 if tag.dyn_size_ext.have_batch_axis():
                     assert tag.batch == tag.dyn_size_ext.batch
-                tag.dyn_size_ext.sanity_check()
+                tag.dyn_size_ext.sanity_check(assume_complete=assume_complete)
         if not ignore_placeholder and self._raw_tensor is not None:
             # Note: We could just call self.placeholder.set_shape.
             # However, we are more explicit.
