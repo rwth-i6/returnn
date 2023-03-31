@@ -6,7 +6,7 @@ https://github.com/rwth-i6/returnn/issues/1120
 """
 
 from __future__ import annotations
-from typing import Any, Optional, Union, Dict
+from typing import Any, Optional, Union, Callable, Dict
 from returnn.util.basic import BehaviorVersion
 from returnn.tensor import TensorDict
 from returnn.config import get_global_config
@@ -42,8 +42,8 @@ def get_net_dict(
     step: int,
     random_seed: Optional[int] = None,
     get_model_func: Optional[GetModelFunc] = None,
-    extern_data: Optional[TensorDict],
-    step_func: Union[str, StepFunc],
+    extern_data: Optional[Union[TensorDict, Callable[[], TensorDict]]] = None,
+    step_func: Optional[Union[str, StepFunc]] = None,
 ) -> Dict[str, Any]:
     """called from the RETURNN config"""
     BehaviorVersion.set_min_behavior_version(rfl.min_returnn_behavior_version)
@@ -61,6 +61,9 @@ def get_net_dict(
         extern_data = TensorDict()
         extern_data_dict = get_global_config().typed_value("extern_data")
         extern_data.update(extern_data_dict, auto_convert=True)
+    elif callable(extern_data):
+        extern_data = extern_data()
+    assert isinstance(extern_data, TensorDict)
     for data in extern_data.data.values():
         rfl.register_extern_data(data)
 
@@ -68,6 +71,15 @@ def get_net_dict(
         get_model_func = get_global_config().typed_value("get_model")
     model = get_model_func(epoch=epoch, step=step)
 
+    if step_func is None:
+        task = get_global_config().typed_value("task")
+        if task in {"train", "eval"}:
+            step_func = "train"
+        elif task in {"forward", "search"}:
+            step_func = "forward"
+        else:
+            raise ValueError(f"invalid task {task!r}")
+    step_func: Union[str, StepFunc]
     if callable(step_func):
         step_func(model=model, extern_data=extern_data)
     elif step_func == "train":
