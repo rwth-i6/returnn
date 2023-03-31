@@ -12,6 +12,7 @@ from returnn.tensor import TensorDict
 from returnn.config import get_global_config
 import returnn.frontend as rf
 from .. import frontend_layers as rfl
+from . import _utils
 
 try:
     from typing import Protocol
@@ -98,5 +99,33 @@ def get_net_dict(
     else:
         raise ValueError(f"invalid step_func {step_func!r}")
 
-    net_dict = rfl.Layer.top().root.get_returnn_config().get_net_dict_raw_dict(root_module=model)
+    root_scope = rfl.Layer.top().root
+
+    for loss in rf.get_run_ctx().losses.values():
+        loss_t = _utils.copy(loss.loss, name=root_scope.get_new_child(suggested_name=loss.name))
+        loss_t.raw_tensor.layer_dict["loss"] = "as_is"
+        loss_opts = {}
+        if loss.scale != 1:
+            assert "loss_scale" not in loss_t.raw_tensor.layer_dict
+            loss_opts["scale"] = loss.scale
+        if loss.as_error:
+            loss_opts["as_error"] = True
+        if loss.use_normalized_loss:
+            loss_opts["use_normalized_loss"] = True
+        if not loss.use_flatten_frames:
+            loss_opts["use_flatten_frames"] = False
+        if loss.custom_inv_norm_factor is not None:
+            loss_opts["custom_inv_norm_factor"] = loss.custom_inv_norm_factor
+        if loss_opts:
+            loss_t.raw_tensor.layer_dict["loss_opts"] = loss_opts
+        # Add it to the root name scope marked_losses list.
+        # Note that this logic might change.
+        root_scope.marked_losses.append(loss_t)
+
+    for out in rf.get_run_ctx().outputs.values():
+        out_t = _utils.copy(out.tensor, name=root_scope.get_new_child(suggested_name=out.name))
+        out_t.raw_tensor.layer_dict["is_output_layer"] = True
+        root_scope.marked_outputs.append(out_t)
+
+    net_dict = root_scope.get_returnn_config().get_net_dict_raw_dict(root_module=model)
     return net_dict

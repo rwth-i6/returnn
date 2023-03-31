@@ -3,7 +3,7 @@ Some utilities for internal use
 """
 
 from __future__ import annotations
-from typing import Iterable, List
+from typing import Union, Iterable, List
 from returnn.tensor import Tensor
 from returnn.util.basic import RefIdEq
 from .. import frontend_layers as rfl
@@ -24,6 +24,6 @@ def unique_tensor_list(tensors: Iterable[Tensor]) -> List[Tensor]:
     return out
 
 
-def copy(tensor: Tensor, *, name: rfl.Layer) -> Tensor:
+def copy(tensor: Tensor[rfl.Layer], *, name: Union[rfl.Layer, str]) -> Tensor[rfl.Layer]:
     """copy"""
     return rfl.make_layer({"class": "copy", "from": tensor}, name=name)
