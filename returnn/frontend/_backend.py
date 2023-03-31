@@ -89,7 +89,7 @@ class Backend(Generic[T]):
         raise NotImplementedError
 
     @staticmethod
-    def get_shape_raw(raw_tensor: T) -> T:
+    def get_shape_raw(raw_tensor: T) -> Union[T, Tuple[Union[int, T]]]:
         """
         :return: shape of raw tensor
         """
@@ -573,6 +573,10 @@ def get_backend_by_raw_tensor_type(tensor_type: Type[T]) -> Union[Type[Backend[T
     if tensor_type in _dispatch_table:  # fast path
         return _dispatch_table[tensor_type]
 
+    if not isinstance(tensor_type, type):
+        raise TypeError(f"Expected type, got {tensor_type!r} of type {type(tensor_type)}")
+    tensor_type: Type[T]
+
     # We don't register all possible subclasses in the dispatch table.
     # Check through the MRO.
     for type_ in tensor_type.__mro__:
@@ -599,6 +603,11 @@ def get_backend_by_raw_tensor_type(tensor_type: Type[T]) -> Union[Type[Backend[T
 
         backend_type = ReturnnLayersBackend
         tensor_types = (Layer,)
+    elif issubclass(tensor_type, numpy.ndarray):
+        from ._numpy_backend import NumpyBackend
+
+        backend_type = NumpyBackend
+        tensor_types = (numpy.ndarray,)
     else:
         raise TypeError(f"unknown tensor type {tensor_type}")
     assert any(issubclass(tensor_type, type_) for type_ in tensor_types)
