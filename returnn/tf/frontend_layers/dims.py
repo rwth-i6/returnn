@@ -50,24 +50,23 @@ def _register_dim_deps_when_novel(dim: Dim, deps: List[Tensor]):
     if dim.derived_from_op:
         return  # not needed
     dim = dim.get_same_base()
-    # noinspection PyProtectedMember
-    if _register_dim_via_dyn_layer(dim):
-        return
     if dim in _dim_deps:
         # We could just always keep the first dep list.
         # But there are cases where the new dep list might be better:
         old_deps = _dim_deps[dim]
         if not _deps_valid_in_cur_name_ctx(old_deps):
-            pass  # replace, use new deps list
+            _dim_deps.pop(dim)  # replace, use new deps list
         elif (
             # For extern_data, when the first dep list for not fully available for inference,
             # but the new dep list is, we take over the new one.
             any(not dep.available_for_inference for dep in old_deps)
             and all(dep.available_for_inference for dep in deps)
         ):
-            pass  # go on, replace, use the new list
+            _dim_deps.pop(dim)  # go on, replace, use the new list
         else:
             return  # discard new list, keep old
+    if _register_dim_via_dyn_layer(dim):
+        return
     _dim_deps[dim] = deps
 
 
@@ -82,6 +81,8 @@ def _register_dim_via_dyn_layer(dim: Dim) -> bool:
     """
     if dim.is_static():
         return False
+    if dim in _dim_deps:
+        return False
     assert dim.dyn_size_ext
     if dim.dyn_size_ext.raw_tensor is None:
         return False
@@ -89,7 +90,8 @@ def _register_dim_via_dyn_layer(dim: Dim) -> bool:
     # It means the user probably has created some dynamic dim directly.
     # This is valid.
     # But for the net dict backend, we must handle it differently.
-    # This is the logic as in returnn-common make_dim_from_length.
+    _dim_deps[dim] = []  # Will be reassigned below. This is just to avoid recursion.
+    # Follow the logic as in returnn-common make_dim_from_length.
     # The actual range tensor is never used, but this has the side effect to set up the dim tag.
     layer_with_dim = rfl.make_layer(
         {
@@ -100,6 +102,6 @@ def _register_dim_via_dyn_layer(dim: Dim) -> bool:
         },
         name=dim.dyn_size_ext.name,
     )
-    _register_dim_deps_when_novel(dim, [layer_with_dim])
+    _dim_deps[dim] = [layer_with_dim]
     dim.dyn_size_ext.raw_tensor = None
     return True
