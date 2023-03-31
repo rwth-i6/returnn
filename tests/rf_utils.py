@@ -7,6 +7,7 @@ from typing import Callable
 import contextlib
 
 from returnn.config import Config, global_config_ctx
+from returnn.util.pprint import pprint
 import returnn.frontend as rf
 from returnn.tensor import Tensor, TensorDict
 import returnn.tf.compat as tf_compat
@@ -68,6 +69,8 @@ def run_model_net_dict_tf(get_model: Callable[[], rf.Module], extern_data: Tenso
         net_dict = get_net_dict(
             epoch=1, step=0, get_model_func=_get_model, extern_data=_get_extern_data, step_func=_forward_step
         )
+        print("*** TF net dict:")
+        pprint(net_dict)
 
         tf_extern_data = ExternData()
         tf_extern_data.set_batch_info(rfl.Layer.top().root.global_batch)
