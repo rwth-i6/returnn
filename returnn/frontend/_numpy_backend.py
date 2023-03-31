@@ -10,6 +10,8 @@ import numpy
 from ._backend import Backend
 
 
+# We do not expect that we will ever implement all the methods of the Backend interface.
+# noinspection PyAbstractClass
 class NumpyBackend(Backend[numpy.ndarray]):
     """Numpy backend"""
 
