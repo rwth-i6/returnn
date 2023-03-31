@@ -200,9 +200,6 @@ class ReturnnLayersBackend(Backend[Layer]):
     ) -> Tensor[Layer]:
         """convert to tensor"""
         if isinstance(value, Tensor):
-            assert value.dims == tuple(dims)
-            if dtype:
-                assert value.dtype == dtype
             return value
         kwargs = {}
         dim_deps = _dims.get_dim_deps(dims)
