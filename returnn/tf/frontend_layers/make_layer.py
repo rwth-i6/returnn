@@ -244,18 +244,19 @@ def _get_raw_layer_by_name(name: str, *, scope: Optional[rfl.Layer] = None, data
 
 def register_extern_data(data: Tensor[rfl.Layer]):
     """
-    Get extern data from root ctx.
+    Register extern data from root ctx.
     As a side effect, it registers the given data as extern data,
     and this will be included when creating the RETURNN config,
     via :func:`NameCtx.get_returnn_config`.
     """
     assert isinstance(data, Tensor)  # the usage was different before. make sure we get this correct
-    scope = rfl.Layer.top()  # must exist
-    assert not scope.parent  # get_extern_data only allowed (only makes sense) in root name ctx
+    if data.raw_tensor is not None:
+        assert isinstance(data.raw_tensor, rfl.Layer)
     if data.raw_tensor is None:
         data.batch = _init_global_batch()
-        root_layer_name = f"data:{data.name}"
-        _get_raw_layer_by_name(root_layer_name, scope=scope, data=data)
+        root_scope = rfl.Layer.top()  # must exist
+        assert not root_scope.parent  # get_extern_data only allowed (only makes sense) in root name ctx
+        _get_raw_layer_by_name(f"data:{data.name}", scope=root_scope, data=data)
     for tag in data.dim_tags:
         if not tag.is_batch_dim() and tag.is_dynamic() and not tag.dyn_size_ext:
             # Undefined dynamic dim tag. Set default data template.
