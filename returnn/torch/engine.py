@@ -318,6 +318,11 @@ class Engine(EngineBase):
                 print(f"Pre-load weights for key '{preload_key}' from {opts['filename']}", file=log.v3)
                 preload_model_state = torch.load(opts["filename"])
                 if opts.get("checkpoint_key", None) is not None:
+                    # This can be used if an external checkpoint saves a checkpoint a different structure that just the
+                    # model state dict. E.g., if a checkpoint is created using
+                    # `torch.save({"model": model.state_dict(), "optimizer": optimizer.state)_dict(), ...})`
+                    # we can set checkpoint_key = "model" to load the model.
+                    # Currently, this only supports single level dicts, but it could be extended if needed.
                     preload_model_state = preload_model_state[opts["checkpoint_key"]]
                 if opts.get("prefix", ""):
                     preload_model_state = {opts["prefix"] + key: value for key, value in preload_model_state.items()}
