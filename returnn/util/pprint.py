@@ -84,10 +84,12 @@ import sys
 import numpy
 
 
-def pprint(obj: Any, *, file=sys.stdout, prefix="", postfix="", line_prefix="", line_postfix="\n") -> None:
+def pprint(obj: Any, *, file=None, prefix="", postfix="", line_prefix="", line_postfix="\n") -> None:
     """
     Pretty-print a Python object.
     """
+    if file is None:
+        file = sys.stdout
     if "\n" in line_postfix and _type_simplicity_score(obj) <= _type_simplicity_limit:
         prefix = f"{line_prefix}{prefix}"
         line_prefix = ""
