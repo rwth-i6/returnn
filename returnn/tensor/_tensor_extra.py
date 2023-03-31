@@ -3125,7 +3125,7 @@ class _TensorMixin(_TensorMixinBase):
     ) -> None:
         """
         Mark this as a loss.
-        Please refer to :func:`returnn.frontend.mark_as_loss` for more details.
+        Please refer to :func:`RunCtx.frontend.mark_as_loss` for more details.
 
         :param name:
         :param scale:
@@ -3134,7 +3134,9 @@ class _TensorMixin(_TensorMixinBase):
         :param use_flatten_frames:
         :param custom_inv_norm_factor:
         """
-        self._raw_backend.mark_as_loss(
+        import returnn.frontend as rf
+
+        rf.get_run_ctx().mark_as_loss(
             loss=self,
             name=name,
             scale=scale,
@@ -3147,21 +3149,25 @@ class _TensorMixin(_TensorMixinBase):
     def mark_as_output(self: Tensor, name: str, *, shape: Optional[Sequence[Dim]] = None) -> None:
         """
         Mark this as an output.
-        See :func:`Frontend.mark_as_output` for more details.
+        See :func:`RunCtx.mark_as_output` for more details.
 
         :param name:
         :param shape:
         """
-        self._raw_backend.mark_as_output(self, name=name, shape=shape)
+        import returnn.frontend as rf
+
+        rf.get_run_ctx().mark_as_output(self, name=name, shape=shape)
 
     def mark_as_default_output(self: Tensor, *, shape: Optional[Sequence[Dim]] = None) -> None:
         """
         Mark this as the default output.
-        See :func:`Frontend.mark_as_default_output` for more details.
+        See :func:`RunCtx.mark_as_default_output` for more details.
 
         :param shape:
         """
-        self._raw_backend.mark_as_default_output(self, shape=shape)
+        import returnn.frontend as rf
+
+        rf.get_run_ctx().mark_as_default_output(self, shape=shape)
 
 
 def infer_sparse_dim(

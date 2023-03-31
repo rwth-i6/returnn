@@ -22,7 +22,6 @@ from .dtype import *
 from .linear import *
 from .math_ import *
 from .matmul import *
-from .outputs import *
 from .parameter import *
 from .rand import *
 from .reduce import *
