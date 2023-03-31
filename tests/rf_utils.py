@@ -5,6 +5,8 @@ RETURNN frontend (returnn.frontend) utils
 from __future__ import annotations
 from typing import Callable
 import contextlib
+import numpy
+import torch
 
 from returnn.config import Config, global_config_ctx
 from returnn.util.pprint import pprint
@@ -26,7 +28,8 @@ def run_model(get_model: Callable[[], rf.Module], extern_data: Tensor):
     """run"""
     out_pt = run_model_torch(get_model, extern_data)
     out_tf = run_model_net_dict_tf(get_model, extern_data)
-    out_pt, out_tf  # noqa  # TODO ...
+    print(out_pt.raw_tensor.shape, out_tf.raw_tensor.shape)
+    # TODO ...
 
 
 def run_model_torch(get_model: Callable[[], rf.Module], extern_data: Tensor) -> Tensor:
@@ -36,8 +39,10 @@ def run_model_torch(get_model: Callable[[], rf.Module], extern_data: Tensor) -> 
     _fill_random(extern_data)
     model = get_model()
     out = model(extern_data)
-    assert isinstance(out, Tensor)
-    return out
+    assert isinstance(out, Tensor) and isinstance(out.raw_tensor, torch.Tensor)
+    out_np = out.copy_template()
+    out_np.raw_tensor = out.raw_tensor.detach().cpu().numpy()
+    return out_np
 
 
 def run_model_net_dict_tf(get_model: Callable[[], rf.Module], extern_data: Tensor):
@@ -80,6 +85,7 @@ def run_model_net_dict_tf(get_model: Callable[[], rf.Module], extern_data: Tenso
 
         session.run(tf_compat.v1.global_variables_initializer())
         out_v = session.run(out.placeholder)
+        assert isinstance(out_v, numpy.ndarray)
         out = out.copy_template()
         out.raw_tensor = out_v
         return out
