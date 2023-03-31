@@ -40,6 +40,7 @@ def get_net_dict(
     *,
     epoch: int,
     step: int,
+    random_seed: Optional[int] = None,
     get_model_func: Optional[GetModelFunc] = None,
     extern_data: Optional[TensorDict],
     step_func: Union[str, StepFunc],
@@ -47,6 +48,13 @@ def get_net_dict(
     """called from the RETURNN config"""
     BehaviorVersion.set_min_behavior_version(rfl.min_returnn_behavior_version)
     rf.select_backend_returnn_layers_tf()
+
+    # See :mod:`rf.rand` docstring for an explanation of this logic.
+    if random_seed is None:
+        random_seed = get_global_config().int("random_seed", 42)
+    random_seed = (epoch * 193939 + step * 19937 + random_seed * 27644437 + 479001599) % (2**31)
+    rf.set_random_seed(random_seed)
+
     rfl.Layer.reset_default_root()
 
     if extern_data is None:
