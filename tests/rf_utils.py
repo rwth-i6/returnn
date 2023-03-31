@@ -10,6 +10,7 @@ from returnn.config import Config, global_config_ctx
 import returnn.frontend as rf
 from returnn.tensor import Tensor, TensorDict
 import returnn.tf.compat as tf_compat
+import returnn.tf.frontend_layers as rfl
 from returnn.tf.network import TFNetwork, ExternData
 
 
@@ -44,6 +45,11 @@ def run_model_net_dict_tf(get_model: Callable[[], rf.Module], extern_data: Tenso
     rf.set_random_seed(42)
     extern_data_name = extern_data.name
 
+    def _get_extern_data() -> TensorDict:
+        _fill_random(extern_data)
+        rfl.register_extern_data(extern_data)
+        return TensorDict([extern_data])
+
     # noinspection PyUnusedLocal
     def _get_model(*, epoch: int, step: int) -> rf.Module:
         return get_model()
@@ -53,20 +59,18 @@ def run_model_net_dict_tf(get_model: Callable[[], rf.Module], extern_data: Tenso
         out = model(extern_data.data[extern_data_name])
         out.mark_as_default_output(shape=out.dims)
 
-    extern_data_ = ExternData()
-    extern_data_.register_data(extern_data)
-    config = Config()
-
     from returnn.tf.frontend_layers.config_entry_points import get_net_dict
 
-    with tf_scope() as session, global_config_ctx(config):
-        _fill_random(extern_data)
+    config = Config()
 
+    with tf_scope() as session, global_config_ctx(config):
         net_dict = get_net_dict(
-            epoch=1, step=0, get_model_func=_get_model, extern_data=extern_data_, step_func=_forward_step
+            epoch=1, step=0, get_model_func=_get_model, extern_data=_get_extern_data, step_func=_forward_step
         )
 
-        net = TFNetwork(config=config, extern_data=extern_data_, train_flag=False)
+        tf_extern_data = ExternData()
+        tf_extern_data.set_batch_info(rfl.Layer.top().root.global_batch)
+        net = TFNetwork(config=config, extern_data=tf_extern_data, train_flag=False)
         net.construct_from_dict(net_dict)
         out = net.get_default_output_layer().output
 
