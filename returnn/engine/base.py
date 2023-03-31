@@ -8,7 +8,7 @@ import os
 import sys
 from typing import Optional
 
-from returnn.config import Config
+from returnn.config import Config, get_global_config
 from returnn.learning_rate_control import load_learning_rate_control_from_config, LearningRateControl
 from returnn.log import log
 from returnn.pretrain import Pretrain
@@ -24,8 +24,10 @@ class EngineBase(object):
         """
         :param config:
         """
-        self.epoch = 0
+        if config is None:
+            config = get_global_config(auto_create=True)
         self.config = config
+        self.epoch = 0
         self.pretrain = None  # type: Optional[Pretrain]
         self.model_filename = None  # type: Optional[str]
         self.learning_rate = 0.0  # set in init_train_epoch

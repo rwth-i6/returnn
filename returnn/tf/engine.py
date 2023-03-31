@@ -858,10 +858,6 @@ class Engine(EngineBase):
         """
         :param returnn.config.Config|None config:
         """
-        if config is None:
-            from returnn.config import get_global_config
-
-            config = get_global_config(auto_create=True)
         super(Engine, self).__init__(config=config)
         if not log.initialized:
             log.init_by_config(config)
