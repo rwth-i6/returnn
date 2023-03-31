@@ -306,6 +306,7 @@ class ReturnnLayersBackend(Backend[Layer]):
             {
                 "class": "random",
                 "shape": dims,
+                "shape_deps": _dims.get_dim_deps(dims),
                 "dtype": dtype,
                 "sparse_dim": sparse_dim,
                 "distribution": distribution,
