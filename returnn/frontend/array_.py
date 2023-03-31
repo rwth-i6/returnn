@@ -35,7 +35,7 @@ def convert_to_tensor(
     if isinstance(value, (int, float, complex, bool, str, numpy.number, numpy.ndarray)):
         backend = global_backend
     else:
-        backend = get_backend_by_raw_tensor_type(value)
+        backend = get_backend_by_raw_tensor_type(type(value))
     if dims is None and shape is not None:
         dims = shape
     if dims is None:
