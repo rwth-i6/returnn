@@ -3047,7 +3047,7 @@ class RandomLayer(LayerBase):
             d if isinstance(d, Dim) else SpatialDim("%s:dim%i" % (name, i), d, auto_generated=True)
             for i, d in enumerate(shape)
         ]
-        out = Data(name="%s_output" % name, dims=dim_tags, dtype=dtype, sparse_dim=sparse_dim)
+        out = Data(name="%s_output" % name, dim_tags=dim_tags, dtype=dtype, sparse_dim=sparse_dim)
         out.beam = SearchBeam.get_combined_beam(out.beam, *[dep.output.beam for dep in shape_deps if dep])
         return out
 
