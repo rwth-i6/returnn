@@ -65,12 +65,15 @@ __all__ = [
 
 def set_random_seed(seed: int):
     """
-    Call this at the beginning of the program.
+    Call this at the beginning of the program
+    (after the RF backend was selected),
+    or when the model and computation graph is supposed to be reinitialized.
+
     This initializes the random state of the backend and also the step-based random state.
 
     This is *not* expected to be called after each epoch or step.
 
-    :param seed: should *not* depend on epoch or step
+    :param seed: should depend on epoch or step
     """
     _global_backend.set_random_seed(seed)
     global _step_rnd_seed
@@ -85,21 +88,19 @@ def get_random_state() -> Dict[str, bytes]:
     return _global_backend.get_random_state()
 
 
-def set_random_state(state: Dict[str, bytes], *, fallback_seed: int):
+def set_random_state(state: Dict[str, bytes]):
     """
     Recovers the random state.
-    We still assume that :func:`set_initial_random_seed` was called before,
 
+    There are many potential cases where we cannot recover the state
+    (e.g. different backend version, different hardware, ...),
+    In this case, a run without interruption is not the same as a run with interruption.
+
+    We still assume that :func:`set_random_seed` was called before in any case.
 
     :param state: as returned by :func:`get_random_state`
-    :param fallback_seed: in case we cannot recover the state (e.g. different backend version, different hardware, ...),
-        we will use this seed to initialize the random state.
-        In this case, a run without interruption is not the same as a run with interruption.
-        However, this fallback_seed is still better than using the fixed initial random seed.
-        The fallback_seed should depend on the epoch and step, and not be the same as the initial random seed.
     """
     # Always call this first.
-    _global_backend.set_random_seed(fallback_seed)
     _global_backend.set_random_state(state)
 
 
