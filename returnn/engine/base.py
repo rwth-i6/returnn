@@ -8,7 +8,7 @@ import os
 import sys
 from typing import Optional
 
-from returnn.config import Config
+from returnn.config import Config, get_global_config
 from returnn.learning_rate_control import load_learning_rate_control_from_config, LearningRateControl
 from returnn.log import log
 from returnn.pretrain import Pretrain
@@ -20,7 +20,13 @@ class EngineBase(object):
     Base class for a backend engine, such as :class:`TFEngine.Engine`.
     """
 
-    def __init__(self):
+    def __init__(self, config: Optional[Config] = None):
+        """
+        :param config:
+        """
+        if config is None:
+            config = get_global_config(auto_create=True)
+        self.config = config
         self.epoch = 0
         self.pretrain = None  # type: Optional[Pretrain]
         self.model_filename = None  # type: Optional[str]

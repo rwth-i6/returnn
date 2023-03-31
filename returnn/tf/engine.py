@@ -858,11 +858,7 @@ class Engine(EngineBase):
         """
         :param returnn.config.Config|None config:
         """
-        super(Engine, self).__init__()
-        if config is None:
-            from returnn.config import get_global_config
-
-            config = get_global_config(auto_create=True)
+        super(Engine, self).__init__(config=config)
         if not log.initialized:
             log.init_by_config(config)
         if not BehaviorVersion.is_set():
@@ -870,7 +866,6 @@ class Engine(EngineBase):
         if BackendEngine.selected_engine is None:
             BackendEngine.select_engine(engine=BackendEngine.TensorFlow)
         assert BackendEngine.is_tensorflow_selected()
-        self.config = config
         self.orig_config = {}  # see _maybe_update_config
         self.custom_get_net_dict = None  # type: typing.Optional[typing.Callable]
         self._check_devices()
