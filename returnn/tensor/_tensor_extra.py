@@ -315,19 +315,19 @@ class _TensorMixin(_TensorMixinBase):
             # Note: We could just call self.placeholder.set_shape.
             # However, we are more explicit.
             # We assume that the placeholder has already a known shape, and error otherwise.
-            rf = self._raw_backend
-            assert rf.get_ndim_raw(self._raw_tensor) == self.batch_ndim
-            raw_shape = rf.get_known_shape_raw(self._raw_tensor)
+            backend = self._raw_backend
+            assert backend.get_ndim_raw(self._raw_tensor) == self.batch_ndim
+            raw_shape = backend.get_known_shape_raw(self._raw_tensor)
             for i in range(self.batch_ndim):
                 if self.batch_shape[i] is None:
                     continue  # we allow anything in the placeholder
                 if raw_shape[i] != self.batch_shape[i]:
                     raise Exception(
                         f"Mismatching shape: Raw tensor {self._raw_tensor} vs Tensor {self};\n"
-                        + rf.format_graph_output(self._raw_tensor, max_depth=3)
+                        + backend.format_graph_output(self._raw_tensor, max_depth=3)
                     )
-            rf.set_known_shape_raw(self._raw_tensor, self.batch_shape)
-            assert rf.get_dtype_name_raw(self._raw_tensor) == self.dtype
+            backend.set_known_shape_raw(self._raw_tensor, self.batch_shape)
+            assert backend.get_dtype_name_raw(self._raw_tensor) == self.dtype
         if assume_complete:
             for tag in self.dim_tags:
                 if tag.is_batch_dim():
@@ -804,10 +804,10 @@ class _TensorMixin(_TensorMixinBase):
         data_opts = self.get_kwargs(include_special_axes=False)
         placeholder = self.placeholder
         if placeholder is not None:
-            rf = self._raw_backend
-            placeholder = rf.expand_dims_raw(placeholder, batch_dim_axis)
+            backend = self._raw_backend
+            placeholder = backend.expand_dims_raw(placeholder, batch_dim_axis)
             if not isinstance(batch.dim, int) or batch.dim != 1:
-                placeholder = rf.expand_raw(placeholder, batch_dim_axis, batch.dim)
+                placeholder = backend.expand_raw(placeholder, batch_dim_axis, batch.dim)
         dim_tags = list(self.dim_tags)
         if dim_tag:
             assert dim_tag.is_batch_dim()
@@ -936,10 +936,10 @@ class _TensorMixin(_TensorMixinBase):
         if dim_tag.is_spatial_dim() and self.time_dim_axis is None:
             data_opts.pop("time_dim_axis", None)  # fall back to default
         if self.placeholder is not None:
-            rf = self._raw_backend
-            placeholder = rf.expand_dims_raw(self.placeholder, axis)
+            backend = self._raw_backend
+            placeholder = backend.expand_dims_raw(self.placeholder, axis)
             if dim_tag.dimension is None or dim_tag.dimension > 1:
-                placeholder = rf.expand_raw(placeholder, axis, dim_tag.get_dim_value())
+                placeholder = backend.expand_raw(placeholder, axis, dim_tag.get_dim_value())
             data_opts["placeholder"] = placeholder
         return _t.Tensor(**data_opts)
 
@@ -980,15 +980,15 @@ class _TensorMixin(_TensorMixinBase):
         for k, a in other_special_axes.items():
             data_opts[k] = a if (a < new_feature_dim_axis) else (a + 1)
         if self.placeholder is not None:
-            rf = self._raw_backend
-            rf.set_known_shape_raw(self.placeholder, self.batch_shape)
-            old_shape = rf.get_shape_tuple_raw(self.placeholder)
+            backend = self._raw_backend
+            backend.set_known_shape_raw(self.placeholder, self.batch_shape)
+            old_shape = backend.get_shape_tuple_raw(self.placeholder)
             new_shape = (
                 old_shape[: self.feature_dim_axis]
                 + (feature_dim_rem, new_feature_dim)
                 + old_shape[self.feature_dim_axis + 1 :]
             )
-            data_opts["placeholder"] = rf.reshape_raw(self.placeholder, new_shape)
+            data_opts["placeholder"] = backend.reshape_raw(self.placeholder, new_shape)
         return _t.Tensor(**data_opts)
 
     def copy_extend_batch(self, batch) -> _t.Tensor:
@@ -1261,8 +1261,8 @@ class _TensorMixin(_TensorMixinBase):
             return self.copy()
         data_opts = self.get_kwargs(include_special_axes=False)
         if self._raw_tensor is not None:
-            rf = self._raw_backend
-            data_opts["raw_tensor"] = rf.squeeze_raw(self._raw_tensor, axes)
+            backend = self._raw_backend
+            data_opts["raw_tensor"] = backend.squeeze_raw(self._raw_tensor, axes)
         data_opts["dims"] = [tag for (i, tag) in enumerate(self._dims) if i not in axes]
         if self._extra:
             if self.time_dim_axis is not None and self.time_dim_axis_or_unspecified is not NotSpecified:
@@ -2007,8 +2007,8 @@ class _TensorMixin(_TensorMixinBase):
         if self.batch_shape[axis] is not None:
             return self.batch_shape[axis]
         assert self._raw_tensor is not None
-        rf = self._raw_backend
-        return rf.get_shape_raw(self._raw_tensor)[axis]
+        backend = self._raw_backend
+        return backend.get_shape_raw(self._raw_tensor)[axis]
 
     def get_placeholder_as_time_major(self):
         """
@@ -2030,8 +2030,8 @@ class _TensorMixin(_TensorMixinBase):
         :rtype: tf.Tensor
         """
         assert self._raw_tensor is not None
-        rf = self._raw_backend
-        return rf.identity_with_control_dependencies_raw(self._raw_tensor, [self.get_runtime_sanity_check_op()])
+        backend = self._raw_backend
+        return backend.identity_with_control_dependencies_raw(self._raw_tensor, [self.get_runtime_sanity_check_op()])
 
     def get_placeholder_time_flattened(self):
         """
@@ -2623,8 +2623,8 @@ class _TensorMixin(_TensorMixinBase):
         batch_dim_ = self._dims[self.batch_dim_axis]
         assert isinstance(batch_dim_, Dim)
         if batch_dim_.dyn_size_ext and batch_dim_.dyn_size_ext.raw_tensor is not None:
-            rf = batch_dim_.dyn_size_ext._raw_backend
-            return rf.fill_raw([batch_dim_.dyn_size_ext.raw_tensor], dim.size)
+            backend = batch_dim_.dyn_size_ext._raw_backend
+            return backend.fill_raw([batch_dim_.dyn_size_ext.raw_tensor], dim.size)
         import tensorflow as tf
 
         return tf.fill([self.get_batch_dim()], dim.size)
@@ -2640,15 +2640,15 @@ class _TensorMixin(_TensorMixinBase):
         assert self.time_dim_axis is not None
         assert self.batch_dim_axis is not None
         dyn_seq_len = self.get_sequence_lengths()
-        rf = get_backend_by_raw_tensor_type(type(dyn_seq_len))
+        backend = get_backend_by_raw_tensor_type(type(dyn_seq_len))
 
         if self.is_time_major:
             assert self.batch_dim_axis == 1
-            return rf.sequence_mask_raw(dyn_seq_len, batch_major=False)
+            return backend.sequence_mask_raw(dyn_seq_len, batch_major=False)
         else:
             assert self.batch_dim_axis == 0
             assert self.time_dim_axis == 1
-            return rf.sequence_mask_raw(dyn_seq_len, batch_major=True)
+            return backend.sequence_mask_raw(dyn_seq_len, batch_major=True)
 
     def get_sequence_mask_broadcast(self: Tensor, axis=None) -> _t.RawTensorType:
         """
