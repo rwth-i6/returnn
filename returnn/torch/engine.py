@@ -17,9 +17,9 @@ from returnn.engine.base import EngineBase
 import returnn.frontend as rf
 from returnn.tensor import TensorDict
 from returnn.datasets.basic import init_dataset, Dataset
-from returnn.torch.updater import Updater
 from returnn.util import basic as util
 from returnn.util import NumbersDict
+from .updater import Updater
 from .data import pipeline as data_pipeline
 from .data import returnn_dataset_wrapper
 
