@@ -480,6 +480,56 @@ class Backend(Generic[T]):
         """
         raise NotImplementedError
 
+    @classmethod
+    def compare(
+        cls,
+        a: Union[Tensor, RawTensorTypes],
+        kind: str,
+        b: Union[Tensor, RawTensorTypes],
+        *,
+        allow_broadcast_all_sources: Optional[bool] = None,
+        dim_order: Optional[Sequence[Dim]] = None,
+    ) -> Tensor:
+        """compare, default implementation using compare_raw"""
+        from . import _utils
+
+        out, a, b = _utils.bin_op_out_template(
+            cls,
+            a,
+            b,
+            name="compare",
+            res_dtype="bool",
+            allow_broadcast_all_sources=allow_broadcast_all_sources,
+            dim_order=dim_order,
+        )
+        out.raw_tensor = cls.compare_raw(a.raw_tensor, kind, b.raw_tensor)
+        return out
+
+    @classmethod
+    def combine(
+        cls,
+        a: Union[Tensor, RawTensorTypes],
+        kind: str,
+        b: Union[Tensor, RawTensorTypes],
+        *,
+        allow_broadcast_all_sources: Optional[bool] = None,
+        dim_order: Optional[Sequence[Dim]] = None,
+    ) -> Tensor:
+        """combine, default implementation using combine_raw"""
+        from . import _utils
+
+        out, a, b = _utils.bin_op_out_template(
+            cls,
+            a,
+            b,
+            name="combine",
+            res_dtype=None,
+            allow_broadcast_all_sources=allow_broadcast_all_sources,
+            dim_order=dim_order,
+        )
+        out.raw_tensor = cls.combine_raw(a.raw_tensor, kind, b.raw_tensor)
+        return out
+
     @staticmethod
     def matmul(a: Tensor[T], b: Tensor[T], *, reduce: Union[Dim, Sequence[Dim]]) -> Tensor[T]:
         """
@@ -631,7 +681,7 @@ def get_backend_by_raw_tensor_type(tensor_type: Type[T]) -> Union[Type[Backend[T
         backend_type = ReturnnLayersBackend
         tensor_types = (Layer,)
     else:
-        raise Exception(f"unknown tensor type {tensor_type}")
+        raise TypeError(f"unknown tensor type {tensor_type}")
     assert any(issubclass(tensor_type, type_) for type_ in tensor_types)
     for type_ in tensor_types:
         register_backend_by_tensor_type(type_, backend_type)

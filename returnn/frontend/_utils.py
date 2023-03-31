@@ -7,7 +7,7 @@ from typing import Union, Optional, Type, TypeVar, Sequence, Tuple
 import numpy
 
 from returnn import frontend as _global_rf
-from returnn.frontend._backend import Backend
+from returnn.frontend._backend import Backend, get_backend_by_raw_tensor_type
 from returnn.tensor import Tensor, Dim
 import returnn.frontend as rf
 
@@ -26,31 +26,28 @@ def get_backend_from_tensors(*args):
     return _global_rf
 
 
-def get_dtype_name(backend: Type[Backend], x: Union[T, Tensor[T], int, float]) -> str:
+def get_dtype_name(x: Union[T, Tensor[T], int, float]) -> str:
     """
-    :param backend:
     :param x: tensor
     :return: dtype of tensor, as string
     """
-    if isinstance(x, backend.RawTensorType):
-        return backend.get_dtype_name_raw(x)
-    elif isinstance(x, Tensor):
+    if isinstance(x, Tensor):
         return x.dtype
     elif isinstance(x, int):
         return rf.get_default_int_dtype()
     elif isinstance(x, float):
         return rf.get_default_float_dtype()
     else:
-        raise TypeError(f"unexpected type {type(x)}")
+        backend = get_backend_by_raw_tensor_type(type(x))
+        return backend.get_dtype_name_raw(x)
 
 
-def is_int(backend: Type[Backend], x: Union[T, Tensor[T], int, float]) -> bool:
+def is_int(x: Union[T, Tensor[T], int, float]) -> bool:
     """
-    :param backend:
     :param x:
     :return: whether the dtype is int
     """
-    dtype = get_dtype_name(backend, x)
+    dtype = get_dtype_name(x)
     return dtype.startswith("int") or dtype.startswith("uint")
 
 

@@ -209,6 +209,42 @@ class ReturnnLayersBackend(Backend[Layer]):
             {"class": "constant", "value": value, "shape": dims, "dtype": dtype, **kwargs}, name="constant"
         )
 
+    @classmethod
+    def compare(
+        cls,
+        a: Union[Tensor, RawTensorTypes],
+        kind: str,
+        b: Union[Tensor, RawTensorTypes],
+        *,
+        allow_broadcast_all_sources: Optional[bool] = None,
+        dim_order: Optional[Sequence[Dim]] = None,
+    ) -> Tensor:
+        """compare"""
+        kwargs = {}
+        if allow_broadcast_all_sources is not None:
+            kwargs["allow_broadcast_all_sources"] = allow_broadcast_all_sources
+        a = cls.convert_to_tensor(a)
+        b = cls.convert_to_tensor(b)
+        return rfl.make_layer({"class": "compare", "from": [a, b], "kind": kind, **kwargs}, name=kind)
+
+    @classmethod
+    def combine(
+        cls,
+        a: Union[Tensor, RawTensorTypes],
+        kind: str,
+        b: Union[Tensor, RawTensorTypes],
+        *,
+        allow_broadcast_all_sources: Optional[bool] = None,
+        dim_order: Optional[Sequence[Dim]] = None,
+    ) -> Tensor:
+        """combine"""
+        kwargs = {}
+        if allow_broadcast_all_sources is not None:
+            kwargs["allow_broadcast_all_sources"] = allow_broadcast_all_sources
+        a = cls.convert_to_tensor(a)
+        b = cls.convert_to_tensor(b)
+        return rfl.make_layer({"class": "combine", "from": [a, b], "kind": kind, **kwargs}, name=kind)
+
     @staticmethod
     def matmul(a: Tensor, b: Tensor, *, reduce: Union[Dim, Sequence[Dim]]) -> Tensor:
         """matmul"""

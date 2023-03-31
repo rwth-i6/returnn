@@ -89,17 +89,7 @@ def compare(
     from . import _utils as utils
 
     backend = utils.get_backend_from_tensors(a, b)
-    out, a, b = utils.bin_op_out_template(
-        backend,
-        a,
-        b,
-        name="compare",
-        res_dtype="bool",
-        allow_broadcast_all_sources=allow_broadcast_all_sources,
-        dim_order=dim_order,
-    )
-    out.raw_tensor = backend.compare_raw(a.raw_tensor, kind, b.raw_tensor)
-    return out
+    return backend.compare(a, kind, b, allow_broadcast_all_sources=allow_broadcast_all_sources, dim_order=dim_order)
 
 
 @typing.overload
@@ -133,9 +123,8 @@ def combine(
         Not all the dims of a and b need to be specified here, and there could also be other dims in the dim_order.
     :return: element-wise combination of a and b
     """
-    from . import _utils as utils
+    from . import _utils
 
-    backend = utils.get_backend_from_tensors(a, b)
     if isinstance(b, (int, float, bool, numpy.number)):
         if b == 1 and kind in {"truediv", "/", "floordiv", "//", "pow", "**", "mul", "*"}:
             return a
@@ -156,21 +145,12 @@ def combine(
             return b
     # Truediv checks for int/int division
     if kind in {"truediv", "/"}:
-        if utils.is_int(backend, a) and utils.is_int(backend, b):
+        if _utils.is_int(a) and _utils.is_int(b):
             raise ValueError(
                 "Dividing a Tensor of type int by an integer is disallowed. Please convert the Tensor to float."
             )
-    out, a, b = utils.bin_op_out_template(
-        backend,
-        a,
-        b,
-        name="combine",
-        res_dtype=None,
-        allow_broadcast_all_sources=allow_broadcast_all_sources,
-        dim_order=dim_order,
-    )
-    out.raw_tensor = backend.combine_raw(a.raw_tensor, kind, b.raw_tensor)
-    return out
+    backend = _utils.get_backend_from_tensors(a, b)
+    return backend.combine(a, kind, b, allow_broadcast_all_sources=allow_broadcast_all_sources, dim_order=dim_order)
 
 
 def equal(a: Tensor, b: Tensor) -> Tensor:
