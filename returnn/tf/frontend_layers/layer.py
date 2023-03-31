@@ -1374,7 +1374,7 @@ class ReturnnDimTagsProxy:
 class _NamePathCache:
     def __init__(self):
         self.module_to_name_path = {}  # type: Dict[RefIdEq[rf.Module], List[str]]  # module -> full name path
-        self.tensor_to_name_path = {}  # type: Dict[RefIdEq[Tensor], List[str]]  # tensor -> full name path
+        self.tensor_to_name_path = {}  # type: Dict[rfl.Layer, List[str]]  # tensor (layer) -> full name path
         # (Tensor is not hashable, thus use its Layer)
 
     def register_module(self, module: rf.Module, name_path: List[str]):
@@ -1394,8 +1394,9 @@ class _NamePathCache:
                     self.module_to_name_path[RefIdEq(child)] = self.module_to_name_path[RefIdEq(parent)] + [name]
                     queue.append(child)
             for name, param in parent.named_parameters(recurse=False):
-                if RefIdEq(param) not in self.tensor_to_name_path:
-                    self.tensor_to_name_path[RefIdEq(param)] = self.module_to_name_path[RefIdEq(parent)] + [name]
+                assert isinstance(param.raw_tensor, rfl.Layer)
+                if param.raw_tensor not in self.tensor_to_name_path:
+                    self.tensor_to_name_path[param.raw_tensor] = self.module_to_name_path[RefIdEq(parent)] + [name]
 
     def get_name_path(
         self: _NamePathCache,
@@ -1411,9 +1412,9 @@ class _NamePathCache:
         assert self.module_to_name_path  # call register_module first
         if isinstance(child, Tensor):
             if raise_exc:
-                return self.tensor_to_name_path[RefIdEq(child.raw_tensor)]
+                return self.tensor_to_name_path[child.raw_tensor]
             else:
-                return self.tensor_to_name_path.get(RefIdEq(child.raw_tensor))
+                return self.tensor_to_name_path.get(child.raw_tensor)
         elif isinstance(child, rf.Module):
             if raise_exc:
                 return self.module_to_name_path[RefIdEq(child)]
