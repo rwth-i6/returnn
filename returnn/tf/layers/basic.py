@@ -2930,6 +2930,7 @@ class RandomLayer(LayerBase):
         self._distribution_attribs = (mean, stddev, bound, minval, maxval)
         mean, stddev, bound, minval, maxval = [_attrib_value(attrib) for attrib in self._distribution_attribs]
         shape_ = [d.get_dim_value() for d in self.output.dim_tags]
+        assert all(isinstance(d, (int, tf.Tensor)) for d in shape_)
 
         def _safe_call(f):
             """
