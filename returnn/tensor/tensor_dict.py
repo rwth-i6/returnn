@@ -26,6 +26,9 @@ class TensorDict:
         if data:
             self.update(data)
 
+    def __repr__(self):
+        return f"{self.__class__.__name__}({self.data})"
+
     def update(self, data: _DataAutoConvertT, *, auto_convert: bool = False):
         """update"""
         if isinstance(data, dict):
@@ -44,6 +47,9 @@ class TensorDict:
                 self.data[value.name] = value
         else:
             raise TypeError(f"invalid `data` type: {type(data)}")
+
+    def __getitem__(self, item: str) -> Tensor:
+        return self.data[item]
 
 
 def _convert_to_tensor(opts: _TensorT, *, name: Optional[str] = None) -> Tensor:
