@@ -56,6 +56,7 @@ def run_model_net_dict_tf(get_model: Callable[[], rf.Module], extern_data: Tenso
 
     # noinspection PyShadowingNames
     def _forward_step(*, model: rf.Module, extern_data: TensorDict):
+        rf.init_forward_step_run_ctx()
         out = model(extern_data.data[extern_data_name])
         out.mark_as_default_output(shape=out.dims)
 
