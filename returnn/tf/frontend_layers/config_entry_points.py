@@ -7,8 +7,9 @@ https://github.com/rwth-i6/returnn/issues/1120
 
 from __future__ import annotations
 from typing import Any, Optional, Union, Callable, Dict
+from tensorflow.python.util import nest
 from returnn.util.basic import BehaviorVersion
-from returnn.tensor import TensorDict
+from returnn.tensor import TensorDict, Tensor, Dim
 from returnn.config import get_global_config
 import returnn.frontend as rf
 from .. import frontend_layers as rfl
@@ -128,4 +129,16 @@ def get_net_dict(
         root_scope.marked_outputs.append(out_t)
 
     net_dict = root_scope.get_returnn_config().get_net_dict_raw_dict(root_module=model)
+
+    def _cleanup_net_dict_value(elem):
+        assert not isinstance(elem, Tensor), f"not expected to see Tensor {elem} in net dict"
+        if isinstance(elem, Dim):
+            # Dim dyn_size_ext might be Tensor[rfl.Layer],
+            # but now the TF engine actually wants to have Tensor[tf.Tensor].
+            # Reset it now. The TF engine should redefine it again.
+            if elem.dyn_size_ext:
+                elem.dyn_size_ext.raw_tensor = None
+        return elem
+
+    net_dict = nest.map_structure(_cleanup_net_dict_value, net_dict)
     return net_dict
