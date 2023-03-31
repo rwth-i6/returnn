@@ -2803,6 +2803,7 @@ class RandomLayer(LayerBase):
         minval=None,
         maxval=None,
         dtype="float32",
+        sparse_dim=None,
         seed=None,
         algorithm=None,
         explicit_state=None,
@@ -2820,6 +2821,7 @@ class RandomLayer(LayerBase):
         :param int|float|LayerBase|None minval: for uniform
         :param int|float|LayerBase|None maxval: for uniform
         :param str dtype:
+        :param Dim|None sparse_dim:
         :param int|list[int]|numpy.ndarray|None seed: If not given, uses self.network.random.randint,
           i.e. then it is controlled by the global seed setting, and every layer would get its own seed.
           If you specify it explicitly, make sure every :class:`RandomLayer` uses a different seed,
@@ -2847,7 +2849,7 @@ class RandomLayer(LayerBase):
                 return x.output.placeholder
             return x
 
-        shape  # noqa  # handled in get_out_data_from_opts
+        shape, sparse_dim  # noqa  # handled in get_out_data_from_opts
         super(RandomLayer, self).__init__(**kwargs)
         self.shape_deps = shape_deps
         algorithm_int = RandomStateInitLayer.select_algorithm(algorithm)
@@ -3032,11 +3034,12 @@ class RandomLayer(LayerBase):
             d["shape_deps"] = [get_layer(src_name) for src_name in extra_deps]
 
     @classmethod
-    def get_out_data_from_opts(cls, name, shape, dtype="float32", shape_deps=(), **kwargs):
+    def get_out_data_from_opts(cls, name, shape, dtype="float32", sparse_dim=None, shape_deps=(), **kwargs):
         """
         :param str name:
         :param typing.Sequence[Dim|int] shape:
         :param str dtype:
+        :param Dim|None sparse_dim:
         :param list[LayerBase] shape_deps: for dyn dim tags in shape
         :rtype: Data
         """
@@ -3044,7 +3047,7 @@ class RandomLayer(LayerBase):
             d if isinstance(d, Dim) else SpatialDim("%s:dim%i" % (name, i), d, auto_generated=True)
             for i, d in enumerate(shape)
         ]
-        out = Data(name="%s_output" % name, dim_tags=dim_tags, dtype=dtype)
+        out = Data(name="%s_output" % name, dims=dim_tags, dtype=dtype, sparse_dim=sparse_dim)
         out.beam = SearchBeam.get_combined_beam(out.beam, *[dep.output.beam for dep in shape_deps if dep])
         return out
 
