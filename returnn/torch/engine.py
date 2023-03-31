@@ -2,6 +2,7 @@
 Main engine for PyTorch
 """
 
+from __future__ import annotations
 from typing import Optional, Callable, Dict
 
 import os
@@ -13,6 +14,8 @@ from random import random
 from returnn.config import Config
 from returnn.log import log
 from returnn.engine.base import EngineBase
+import returnn.frontend as rf
+from returnn.tensor import TensorDict
 from returnn.datasets.basic import init_dataset, Dataset
 from returnn.torch.updater import Updater
 from returnn.util import basic as util
@@ -31,11 +34,13 @@ class Engine(EngineBase):
         :param config:
         """
         super(Engine, self).__init__(config=config)
+        rf.select_backend_torch()
         self.model_filename = self.config.value("model", None)
         self._mp_manager = torch.multiprocessing.Manager()
         self._epoch_mp_shared = self._mp_manager.Value("i", 0)
         self.train_dataset = None  # type: Optional[Dataset]
         self.eval_datasets = {}
+        self.extern_data = None  # type: Optional[TensorDict]
         self._train_dataloader = None  # type: Optional[DataLoader2]
         self._eval_dataloaders = {}  # type: Dict[str, DataLoader2]
 
@@ -73,14 +78,19 @@ class Engine(EngineBase):
             for dataset_name, dataset_opts in config.typed_value("eval_datasets", {}).items():
                 self.eval_datasets[dataset_name] = init_dataset(dataset_opts, default_kwargs={"name": dataset_name})
 
+        extern_data = TensorDict()
+        extern_data_dict = self.config.typed_value("extern_data")
+        extern_data.update(extern_data_dict, auto_convert=True)
+        self.extern_data = extern_data
+
         self._train_dataloader = self._create_data_loader(train_data) if train_data else None
         for dataset_name, dataset in self.eval_datasets.items():
             self._eval_dataloaders[dataset_name] = self._create_data_loader(dataset)
 
-        self._start_epoch, _ = self.get_train_start_epoch_batch(self.config)
+        self._start_epoch, step = self.get_train_start_epoch_batch(self.config)
         self._final_epoch = self.config_get_final_epoch(self.config)
 
-        self._load_model(epoch=self._start_epoch)
+        self._load_model(epoch=self._start_epoch, step=step)
         self._save_model_epoch_interval = config.int("save_interval", 1)
 
         self._updater = Updater(self.config, self._model, self.learning_rate)
@@ -130,17 +140,22 @@ class Engine(EngineBase):
         accumulated_losses_dict = NumbersDict()
         step_idx = 0
         for data in self._train_dataloader:
-            total_loss, losses_dict = self._run_step(data)
+            self._run_step(data)
+
+            train_ctx = rf.get_run_ctx()
+            losses_dict = train_ctx.losses
+            total_loss = train_ctx.total_loss()
 
             self._updater.get_optimizer().zero_grad()
-            total_loss.backward()
+            total_loss.raw_tensor.backward()
             self._updater.get_optimizer().step()
 
             losses_dict = {
-                "train_loss_" + name: float(loss.detach().cpu().numpy()) for name, loss in losses_dict.items()
+                "train_loss_" + name: float(loss.loss.raw_tensor.detach().cpu().numpy())
+                for name, loss in losses_dict.items()
             }
             accumulated_losses_dict += NumbersDict(losses_dict)
-            print("step %i, loss: %f" % (step_idx, total_loss.detach().cpu().numpy()), file=log.v4)
+            print("step %i, loss: %f" % (step_idx, total_loss.raw_tensor.detach().cpu().numpy()), file=log.v4)
 
             step_idx += 1
 
@@ -174,10 +189,14 @@ class Engine(EngineBase):
             with torch.no_grad():
                 for data in data_loader:
 
-                    total_loss, losses_dict = self._run_step(data)
-                    total_loss = total_loss.detach().cpu().numpy()
+                    self._run_step(data)
+                    train_ctx = rf.get_run_ctx()
+                    losses_dict = train_ctx.losses
+                    total_loss = train_ctx.total_loss()
+
+                    total_loss = total_loss.raw_tensor.detach().cpu().numpy()
                     losses_dict = {
-                        dataset_name + "_loss_" + name: float(loss.detach().cpu().numpy())
+                        dataset_name + "_loss_" + name: float(loss.loss.raw_tensor.detach().cpu().numpy())
                         for name, loss in losses_dict.items()
                     }
                     print("step %i, loss: %f" % (step_idx, total_loss), file=log.v4)
@@ -227,31 +246,43 @@ class Engine(EngineBase):
             except ImportError:
                 raise ModuleNotFoundError("Possible type error in DataLoader2 due to missing module 'dill'") from exc
 
-    def _run_step(self, data):
+    def _run_step(self, extern_data_raw: Dict[str, torch.Tensor]):
         """
-        :param dict[str, torch.Tensor] data: model inputs for the step
-        :return: total loss (weighted sum) calculated for the step, and individual losses as a name -> value mapping
-        :rtype: tuple[torch.Tensor, dict[str, torch.Tensor]]
+        :param dict[str, torch.Tensor] extern_data_raw: model inputs for the step
         """
-        assert isinstance(data, dict) and data
-        data = {
-            k: v.cpu() if k.endswith(":seq_len") else v.to(self._device) for (k, v) in data.items()
-        }  # Sequence lengths have to be on CPU for the later call to rnn.pack_padded_sequence
+        assert isinstance(extern_data_raw, dict) and extern_data_raw
+        extern_data = TensorDict()
+        for k, data in self.extern_data.data.items():
+            data = data.copy_template()
+            raw_tensor = extern_data_raw[k].to(self._device)
+            data.dtype = str(raw_tensor.dtype).split(".")[-1]  # just overwrite for now...
+            data.raw_tensor = raw_tensor
 
-        train_ctx = TrainCtx()
+            if k + ":seq_len" in extern_data_raw:
+                # Sequence lengths have to be on CPU for the later call to rnn.pack_padded_sequence
+                size = extern_data_raw[k + ":seq_len"].cpu()
+                data.dims[1].dyn_size_ext.dtype = str(size.dtype).split(".")[-1]  # just overwrite for now...
+                data.dims[1].dyn_size_ext.raw_tensor = size
+
+            extern_data.data[k] = data
+
+        rf.init_train_step_run_ctx()
+
         sentinel_kw = {"__fwd_compatible_random_arg_%i" % int(random() * 100): None}
-        self._train_step_func(model=self._model, data=data, train_ctx=train_ctx, **sentinel_kw)
-        losses_dict = train_ctx.losses
-        total_loss = train_ctx.total_loss()
+        self._train_step_func(model=self._model, extern_data=extern_data, **sentinel_kw)
 
-        return total_loss, losses_dict
-
-    def _load_model(self, epoch):
+    def _load_model(self, *, epoch: int, step: int):
         """
         Sets self._model to a torch.nn.Module.
 
-        :param int epoch:
+        :param epoch:
+        :param step:
         """
+        # See :mod:`rf.rand` docstring for an explanation of this logic.
+        random_seed = self.config.int("random_seed", 42)
+        random_seed = (epoch * 193939 + step * 19937 + random_seed * 27644437 + 479001599) % (2**31)
+        rf.set_random_seed(random_seed)
+
         get_model_func = self.config.typed_value("get_model")
         assert get_model_func, "get_model not defined"
         sentinel_kw = {"__fwd_compatible_random_arg_%i" % int(random() * 100): None}
@@ -299,34 +330,3 @@ class Engine(EngineBase):
             os.makedirs(directory, exist_ok=True)
 
         self._updater.save_optimizer(filename)
-
-
-class TrainCtx:
-    """
-    train ctx
-    """
-
-    def __init__(self):
-        self.losses = {}  # type: Dict[str, torch.Tensor]
-        self.loss_scales = {}  # type: Dict[str, float]
-
-    def mark_as_loss(self, name: str, loss: torch.Tensor, scale: float = 1.0):
-        """
-        Can be called several times. Total loss will be weighted sum according to 'scale' parameters.
-        The total loss is used for backpropagation, so the scale is only relevant for backprop,
-        not for reporting.
-
-        :param name:
-        :param loss: e.g. the output of nn.CrossEntropyLoss
-        :param scale: optional factor for this loss. only relevant for backprop.
-        """
-        assert isinstance(name, str)
-        self.losses[name] = loss
-        self.loss_scales[name] = scale
-
-    def total_loss(self) -> torch.Tensor:
-        """
-        :return: total loss, as it is used for backpropagation
-        """
-        assert self.losses, "call train_ctx.mark_as_loss"
-        return sum([self.losses[name] * self.loss_scales[name] for name in self.losses], torch.zeros(()))
