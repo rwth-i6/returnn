@@ -5,7 +5,6 @@ Layer (NameCtx earlier)
 from __future__ import annotations
 from typing import TypeVar, Optional, Union, Any, Dict, Collection, Sequence, List, Tuple, Set, Callable
 import types
-import weakref
 import numpy
 from tensorflow.python.util import nest
 from returnn.util.basic import NotSpecified, RefIdEq
@@ -1442,7 +1441,6 @@ class _NamePathCache:
             raise TypeError(f"invalid type {type(child)}")
 
 
-_FuncToFunctional = weakref.WeakKeyDictionary()  # type: weakref.WeakKeyDictionary[types.FunctionType, rf.Functional]
 _AutoSetupNameCtxPrevTopFrame = None  # type: Optional[types.FrameType]
 _AutoSetupNameCtxCodeBlacklist = set()  # type: Set[types.CodeType]
 
@@ -1462,7 +1460,7 @@ def _auto_setup_parent_name_ctx(*, ignore_top_stack_frames: int = 1) -> Layer:
     :return: name ctx for the layer
     """
     global _AutoSetupNameCtxPrevTopFrame
-    from returnn.util.better_exchook import get_current_frame, get_func_from_code_object
+    from returnn.util.better_exchook import get_current_frame
 
     frame = get_current_frame()
     assert frame
@@ -1518,20 +1516,6 @@ def _auto_setup_parent_name_ctx(*, ignore_top_stack_frames: int = 1) -> Layer:
         # is usually `self` in a method. If this is a module, we use it.
         if frame.f_code.co_varnames and isinstance(frame.f_locals.get(frame.f_code.co_varnames[0]), rf.Module):
             mod = frame.f_locals[frame.f_code.co_varnames[0]]
-        elif any(isinstance(v, Tensor) for v in frame.f_locals.values()) or frame is top_frame:
-            func = get_func_from_code_object(frame.f_code, frame=frame)
-            if isinstance(func, types.FunctionType):
-                if func.__module__ in {"copy"}:  # ignore those
-                    frame = frame.f_back
-                    continue
-                if func.__name__.startswith("<") or func.__name__.startswith("__"):  # e.g. <dictcomp> or __copy__ or so
-                    frame = frame.f_back  # also ignore
-                    continue
-                if func in _FuncToFunctional:
-                    mod = _FuncToFunctional[func]
-                else:
-                    mod = rf.Functional(func)
-                    _FuncToFunctional[func] = mod
         if mod is not None and id(mod) not in module_ids:
             calls = [
                 layer
@@ -1549,10 +1533,6 @@ def _auto_setup_parent_name_ctx(*, ignore_top_stack_frames: int = 1) -> Layer:
 
     if ctx is None:
         ctx = cur_ctx if cur_control_flow_ctx else cur_root_ctx
-
-    # Remove all function calls up to the first real module.
-    while module_frames and isinstance(module_frames[-1], rf.Functional):
-        module_frames = module_frames[:-1]
 
     for module in reversed(module_frames):
         # Note: instead of just storing the module, we could also cleverly infer a good suggested name
