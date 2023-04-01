@@ -124,8 +124,13 @@ def get_net_dict(
         root_scope.marked_losses.append(loss_t)
 
     for out in rf.get_run_ctx().outputs.values():
-        out_t = _utils.copy(out.tensor, name=root_scope.get_new_child(suggested_name=out.name))
-        out_t.raw_tensor.layer_dict["is_output_layer"] = True
+        if out.name == "output" and out.name not in root_scope.children:
+            layer = root_scope.get_child(out.name)
+        else:
+            layer = root_scope.get_new_child(suggested_name=out.name)
+        out_t = _utils.copy(out.tensor, name=layer)
+        if layer.name != "output":
+            out_t.raw_tensor.layer_dict["is_output_layer"] = True
         root_scope.marked_outputs.append(out_t)
 
     net_dict = root_scope.get_returnn_config().get_net_dict_raw_dict(root_module=model)
