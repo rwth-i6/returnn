@@ -40,6 +40,7 @@ class Layer:
     """
 
     _stack = []  # type: List[Layer]
+    _recent = None  # type: Optional[Layer]
     _ReservedNames = {"data", "output"}
 
     @classmethod
@@ -48,6 +49,7 @@ class Layer:
         Resets the default root name ctx.
         """
         cls._stack[0:1] = [cls.new_root()]
+        cls._recent = None
 
     @classmethod
     def _maybe_init_default_root(cls):
@@ -66,6 +68,21 @@ class Layer:
         cls._maybe_init_default_root()
         assert cls._stack
         return cls._stack[-1]
+
+    @classmethod
+    def recent_subnet(cls) -> Layer:
+        """
+        Return the most recent subnet.
+        """
+        top = cls.top()
+        recent = cls._recent
+        if recent and recent.root is top.root:
+            while not recent.is_subnet:
+                assert recent.parent
+                recent = recent.parent
+            assert recent.is_subnet
+            return recent
+        return top
 
     @classmethod
     def current_ctx(cls, *, ignore_top_stack_frames: int = 0) -> Layer:
@@ -154,6 +171,7 @@ class Layer:
         if self.parent:
             self.parent._add_child(self)
         self.custom_layer_name_scope = None  # type: Optional[str]  # layer_dict name_scope will be set to this
+        self.__class__._recent = self
 
     def __repr__(self):
         parts = [self.get_abs_name_repr()]
@@ -1471,7 +1489,7 @@ def _auto_setup_parent_name_ctx(*, ignore_top_stack_frames: int = 1) -> Layer:
         prev_frames.add(frame)
         frame = frame.f_back
 
-    cur_ctx = Layer.top()
+    cur_ctx = Layer.recent_subnet()
     if not cur_ctx.is_subnet:
         assert cur_ctx.parent and cur_ctx.parent.is_subnet
         cur_ctx = cur_ctx.parent
