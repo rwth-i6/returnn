@@ -233,12 +233,10 @@ def _init_global_batch() -> BatchInfo:
     return root_name_ctx.global_batch
 
 
-def _get_raw_layer_by_name(name: str, *, scope: Optional[rfl.Layer] = None, data: Tensor):
+def _get_raw_layer_by_name(name: str, *, scope: rfl.Layer, data: Tensor):
     """
     Special layer can be "data:..." or whatever.
     """
-    if not scope:
-        scope = rfl.Layer.current_ctx()  # must exist
     scope.get_child_with_tensor(name, data=data)
 
 
@@ -254,8 +252,7 @@ def register_extern_data(data: Tensor[rfl.Layer]):
         assert isinstance(data.raw_tensor, rfl.Layer)
     if data.raw_tensor is None:
         data.batch = _init_global_batch()
-        root_scope = rfl.Layer.top()  # must exist
-        assert not root_scope.parent  # get_extern_data only allowed (only makes sense) in root name ctx
+        root_scope = rfl.Layer.top().root  # must exist
         _get_raw_layer_by_name(f"data:{data.name}", scope=root_scope, data=data)
     for tag in data.dim_tags:
         if not tag.is_batch_dim() and tag.is_dynamic() and not tag.dyn_size_ext:
