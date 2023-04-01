@@ -1549,11 +1549,10 @@ def _auto_setup_parent_name_ctx(*, ignore_top_stack_frames: int = 1) -> Layer:
 
     if ctx is None:
         ctx = cur_ctx if cur_control_flow_ctx else cur_root_ctx
-        if module_frames and isinstance(module_frames[-1], rf.Functional):
-            # The topmost function usually sets up the model and everything.
-            # It's like the main() function
-            # We don't want to have that here on the name stack.
-            module_frames = module_frames[:-1]
+
+    # Remove all function calls up to the first real module.
+    while module_frames and isinstance(module_frames[-1], rf.Functional):
+        module_frames = module_frames[:-1]
 
     for module in reversed(module_frames):
         # Note: instead of just storing the module, we could also cleverly infer a good suggested name
