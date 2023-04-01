@@ -28,6 +28,7 @@ def run_model(get_model: Callable[[], rf.Module], extern_data: Tensor):
     """run"""
     out_pt = run_model_torch(get_model, extern_data)
     out_tf = run_model_net_dict_tf(get_model, extern_data)
+    # out_tf = out_tf.copy_compatible_to(out_pt, add_dims=False)  # TODO does not work yet, dim tags are not complete
     print(out_pt.raw_tensor.shape, out_tf.raw_tensor.shape)
     # TODO ...
 
