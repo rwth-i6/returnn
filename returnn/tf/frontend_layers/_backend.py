@@ -122,6 +122,11 @@ class ReturnnLayersBackend(Backend[Layer]):
         return raw_tensor
 
     @staticmethod
+    def activation(tensor: Tensor, func: str) -> Tensor:
+        """activation"""
+        return rfl.make_layer({"class": "activation", "activation": func, "from": tensor}, name=func)
+
+    @staticmethod
     def activation_raw(raw_tensor: Layer, func: str) -> Layer:
         """activation"""
         return rfl.make_layer(

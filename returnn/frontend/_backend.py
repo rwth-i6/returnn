@@ -237,11 +237,23 @@ class Backend(Generic[T]):
     }
 
     @staticmethod
+    def activation(tensor: Tensor, func: str) -> Tensor:
+        """
+        :param tensor:
+        :param func: "tanh", "sigmoid", "relu", ...
+        :return: tensor with elementwise activation applied
+        """
+        out = tensor.copy_template()
+        # noinspection PyProtectedMember
+        out.raw_tensor = tensor._raw_backend.activation_raw(tensor.raw_tensor, func)
+        return out
+
+    @staticmethod
     def activation_raw(raw_tensor: T, func: str) -> T:
         """
         :param raw_tensor:
         :param func: "tanh", "sigmoid", "relu", ...
-        :return: raw tensor with activation applied
+        :return: raw tensor with elementwise activation applied
         """
         raise NotImplementedError
 
