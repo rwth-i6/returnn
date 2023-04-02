@@ -133,7 +133,7 @@ def get_net_dict(
             out_t.raw_tensor.layer_dict["is_output_layer"] = True
         root_scope.marked_outputs.append(out_t)
 
-    net_dict = root_scope.get_returnn_config().get_net_dict_raw_dict(root_module=model)
+    net_dict = root_scope.get_returnn_config(root_module=model).get_net_dict_raw_dict()
 
     def _cleanup_net_dict_value(elem):
         assert not isinstance(elem, Tensor), f"not expected to see Tensor {elem} in net dict"

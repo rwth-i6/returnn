@@ -372,7 +372,7 @@ class Layer:
                     assert child.parent is name_ctx and child.name == name
                     queue.append(child)
 
-    def prepare_for_config_serialization(self, root_module: rf.Module):
+    def _prepare_for_config_serialization(self, *, root_module: rf.Module, name_path_cache: _NamePathCache):
         """
         Prepare the name ctx for RETURNN config serialization.
         This makes the root module maybe nicer and also removes unused entries.
@@ -410,24 +410,81 @@ class Layer:
                     root_mod_call.tensor = sub_real_out
 
                 # Do not use self.move_tensor_here(root_mod_call.tensor) because we don't want the extra logic.
-                for name, child in root_mod_call.children.items():
-                    child.parent = self
-                    if name not in self.children:
-                        self.children[name] = child
+                for name, child in list(root_mod_call.children.items()):
+                    child.assign_parent(parent=self, suggested_name=name)
+
+        # Check if we can rename some layers.
+        queue = [self.root]  # type: List[Layer]
+        mod_in_layer = {}  # type: Dict[Tuple[Layer, RefIdEq[rf.Module]], Layer]
+        while queue:
+            ctx = queue.pop(0)
+
+            assert not ctx.parent or ctx.parent.children[ctx.name] is ctx
+            for child in ctx.children.values():
+                queue.append(child)
+
+            if not ctx.parent:
+                continue
+
+            if ctx.module is not None and not ctx.layer_dict:
+                mod_path = name_path_cache.get_name_path(ctx.module, raise_exc=False)
+                if mod_path is not None and len(mod_path) > 0 and mod_path[-1] != ctx.name:
+                    existing = None  # type: Optional[Layer]
+                    if (ctx.parent, RefIdEq(ctx.module)) in mod_in_layer:
+                        existing = mod_in_layer[(ctx.parent, RefIdEq(ctx.module))]
+                    elif mod_path[-1] in ctx.parent.children and ctx.parent.children[mod_path[-1]].module is ctx.module:
+                        existing = ctx.parent.children[mod_path[-1]]
                     else:
-                        name = child._get_unique_name(name)  # make sure name is unique
-                        child.name = name
-                        self.children[name] = child
+                        for other in ctx.parent.children.values():
+                            if other.module is ctx.module and other.name.startswith(mod_path[-1]):
+                                existing = other
+                                break
+                    if existing:
+                        assert existing.is_subnet and not existing.tensor and not existing.layer_dict
+                        if ctx is existing:
+                            pass  # we are already there
+                        else:
+                            if (ctx.parent, RefIdEq(ctx.module)) not in mod_in_layer:
+                                mod_in_layer[(ctx.parent, RefIdEq(ctx.module))] = existing
+                            # Move all ctx.children to existing.
+                            for child in list(ctx.children.values()):
+                                child.assign_parent(existing)
+                            ctx.parent.children.pop(ctx.name)  # should not be needed anymore
+                    else:
+                        if mod_path[-1] not in ctx.parent.children:
+                            # Rename ctx.name to mod_path[-1].
+                            ctx.assign_parent(parent=ctx.parent, suggested_name=mod_path[-1])
+                        elif ctx.name.startswith(mod_path[-1]):
+                            pass  # just leave it
+                        else:
+                            # Rename ctx.name to suggested name based on mod_path[-1].
+                            ctx.assign_parent(parent=ctx.parent, suggested_name=mod_path[-1])
+                        mod_in_layer[(ctx.parent, RefIdEq(ctx.module))] = ctx
+
+            elif ctx.tensor is not None:
+                tensor_path = name_path_cache.get_name_path(ctx.tensor, raise_exc=False)
+                if tensor_path is not None and len(tensor_path) > 0 and tensor_path[-1] != ctx.name:
+                    if tensor_path[-1] not in ctx.parent.children:
+                        # Rename ctx.name to tensor_path[-1].
+                        ctx.assign_parent(parent=ctx.parent, suggested_name=tensor_path[-1])
+                    elif ctx.name.startswith(tensor_path[-1]):
+                        pass  # just leave it
+                    else:
+                        # Rename ctx.name to suggested name based on mod_path[-1].
+                        ctx.assign_parent(parent=ctx.parent, suggested_name=tensor_path[-1])
 
         self._assign_param_names(root_module=root_module)
         self._remove_unused_and_handle_subnets()
         assert not self.parent, f"{self} get_returnn_config only makes sense in the root name ctx"
 
-    def get_returnn_config(self) -> ReturnnConfigSerializer:
+    def get_returnn_config(self, *, root_module: rf.Module) -> _ReturnnConfigSerializer:
         """
+        :param root_module: there must be one root module such that all params have a well-defined name
         :return: config serializer
         """
-        return ReturnnConfigSerializer(name_ctx=self)
+        serializer = _ReturnnConfigSerializer(name_ctx=self, root_module=root_module)
+        self._prepare_for_config_serialization(root_module=root_module, name_path_cache=serializer.name_path_cache)
+        return serializer
 
     def make_net(self) -> Net:
         """
@@ -732,7 +789,7 @@ class Layer:
         self._subnet_main_output = sub_output
 
 
-class ReturnnConfigSerializer:
+class _ReturnnConfigSerializer:
     """
     Serializes a RETURNN config to a string.
 
@@ -745,19 +802,27 @@ class ReturnnConfigSerializer:
     and separately serialize the net dict and remaining needed dim tags.
     """
 
-    def __init__(self, name_ctx: Layer):
+    def __init__(self, *, name_ctx: Layer, root_module: rf.Module):
+        """
+        :param name_ctx:
+        :param root_module: there must be one root module such that all params have a well-defined name
+        """
         self.name_ctx = name_ctx
+        self.root_module = root_module
+        self.name_path_cache = _NamePathCache()
+        self.name_path_cache.register_module(root_module, [])
         self._behavior_version = rfl.min_returnn_behavior_version
         self._dim_tags_proxy = ReturnnDimTagsProxy()
         self._base_extern_data_dim_refs = None  # type: Optional[List[ReturnnDimTagsProxy.DimRefProxy]]
+        self._net_dict_builder = _NetDictBuilderCtx(root_module=self.root_module, name_path_cache=self.name_path_cache)
 
-    def get_complete_py_code_str(self, root_module: rf.Module):
+    def get_complete_py_code_str(self):
         """
         :return: complete combined config as Python code str.
           basically :func:`get_base_extern_data_py_code_str` + :func:`get_ext_net_dict_py_code_str`
         """
         return self.get_base_extern_data_py_code_str() + self.get_ext_net_dict_py_code_str(
-            root_module=root_module, with_imports=False, ref_extern_data_dims_via_global_config=False
+            with_imports=False, ref_extern_data_dims_via_global_config=False
         )
 
     ImportPyCodeStr = (
@@ -804,10 +869,9 @@ class ReturnnConfigSerializer:
         return "".join(code_lines)
 
     def get_ext_net_dict_py_code_str(
-        self, root_module: rf.Module, *, with_imports: bool = True, ref_extern_data_dims_via_global_config: bool = True
+        self, *, with_imports: bool = True, ref_extern_data_dims_via_global_config: bool = True
     ) -> str:
         """
-        :param root_module: there must be one root module such that all params have a well-defined name
         :param with_imports: whether to include imports
         :param ref_extern_data_dims_via_global_config: Add references to the definitions for the dimension tags
             written in `get_base_extern_data_py_code_str` via `returnn.config.get_global_config`.
@@ -816,7 +880,7 @@ class ReturnnConfigSerializer:
         from returnn.util.pprint import pformat
 
         dim_tags_proxy = self._dim_tags_proxy.copy()
-        net_dict = self.get_net_dict_raw_dict(root_module=root_module)
+        net_dict = self.get_net_dict_raw_dict()
         net_dict = dim_tags_proxy.collect_dim_tags_and_transform_config(net_dict)
         imports = {}
         net_dict = self._post_process_transform(net_dict, imports=imports)
@@ -838,13 +902,11 @@ class ReturnnConfigSerializer:
         ]
         return "".join(code_lines)
 
-    def get_net_dict_raw_dict(self, root_module: rf.Module) -> Dict[str, Any]:
+    def get_net_dict_raw_dict(self) -> Dict[str, Any]:
         """
-        :param root_module: there must be one root module such that all params have a well-defined name
         :return: raw dict
         """
-        self.name_ctx.prepare_for_config_serialization(root_module=root_module)
-        return NetDictBuilderCtx(root_module=root_module).make_net_dict_raw(self.name_ctx.make_net())
+        return self._net_dict_builder.make_net_dict_raw(self.name_ctx.make_net())
 
     def get_extern_data_raw_dict(self) -> Dict[str, Any]:
         """
@@ -859,14 +921,14 @@ class ReturnnConfigSerializer:
             for (data_key, data) in self.name_ctx.extern_data.items()
         }
 
-    def get_config_raw_dict(self, root_module: rf.Module) -> Dict[str, Any]:
+    def get_config_raw_dict(self) -> Dict[str, Any]:
         """
         :return: raw dict
         """
         return {
             "behavior_version": self._behavior_version,
             "extern_data": self.get_extern_data_raw_dict(),
-            "network": self.get_net_dict_raw_dict(root_module=root_module),
+            "network": self.get_net_dict_raw_dict(),
         }
 
     @classmethod
@@ -917,21 +979,20 @@ class ReturnnConfigSerializer:
             return self.code
 
 
-class NetDictBuilderCtx:
+class _NetDictBuilderCtx:
     """
     Context for building the net.
     """
 
-    def __init__(self, *, root_module: rf.Module):
+    def __init__(self, *, root_module: rf.Module, name_path_cache: _NamePathCache):
         self.root_module = root_module
-        self.cache = _NamePathCache()
-        self.cache.register_module(root_module, [])
+        self.cache = name_path_cache
 
     class _StackInfo:
         def __init__(
             self,
             *,
-            parent: Optional[NetDictBuilderCtx._StackInfo] = None,
+            parent: Optional[_NetDictBuilderCtx._StackInfo] = None,
             net: Net,
             layer_abs_name_scope_effective: str,
         ):
@@ -939,11 +1000,11 @@ class NetDictBuilderCtx:
             self.net = net
             self.layer_abs_name_scope_effective = layer_abs_name_scope_effective
 
-        def add(self, *, net: Net, layer_abs_name_scope_effective: str) -> NetDictBuilderCtx._StackInfo:
+        def add(self, *, net: Net, layer_abs_name_scope_effective: str) -> _NetDictBuilderCtx._StackInfo:
             """
             :return: new stack info
             """
-            return NetDictBuilderCtx._StackInfo(
+            return _NetDictBuilderCtx._StackInfo(
                 parent=self, net=net, layer_abs_name_scope_effective=layer_abs_name_scope_effective
             )
 
@@ -1390,37 +1451,40 @@ class ReturnnDimTagsProxy:
 
 class _NamePathCache:
     def __init__(self):
-        self.module_to_name_path = {}  # type: Dict[RefIdEq[rf.Module], List[str]]  # module -> full name path
-        self.tensor_to_name_path = {}  # type: Dict[rfl.Layer, List[str]]  # tensor (layer) -> full name path
+        self.module_to_name_path = {}  # type: Dict[RefIdEq[rf.Module], Tuple[str, ...]]  # module -> full name path
+        self.tensor_to_name_path = {}  # type: Dict[rfl.Layer, Tuple[str, ...]]  # tensor (layer) -> full name path
         # (Tensor is not hashable, thus use its Layer)
+        self.name_path_to_module = {}  # type: Dict[Tuple[str, ...], rf.Module]  # full name path -> module
 
-    def register_module(self, module: rf.Module, name_path: List[str]):
+    def register_module(self, module: rf.Module, name_path: Sequence[str]):
         """
         Register some module (e.g. root module).
         """
         assert isinstance(module, rf.Module)
-        assert isinstance(name_path, list)
+        assert isinstance(name_path, (tuple, list))
         assert RefIdEq(module) not in self.module_to_name_path
-        self.module_to_name_path[RefIdEq(module)] = name_path
+        self.module_to_name_path[RefIdEq(module)] = tuple(name_path)
+        self.name_path_to_module[tuple(name_path)] = module
 
         queue = [module]
         while queue:
             parent = queue.pop(0)
             for name, child in parent.named_children():
                 if RefIdEq(child) not in self.module_to_name_path:
-                    self.module_to_name_path[RefIdEq(child)] = self.module_to_name_path[RefIdEq(parent)] + [name]
+                    self.module_to_name_path[RefIdEq(child)] = self.module_to_name_path[RefIdEq(parent)] + (name,)
+                    self.name_path_to_module[self.module_to_name_path[RefIdEq(child)]] = child
                     queue.append(child)
             for name, param in parent.named_parameters(recurse=False):
                 assert isinstance(param.raw_tensor, rfl.Layer)
                 if param.raw_tensor not in self.tensor_to_name_path:
-                    self.tensor_to_name_path[param.raw_tensor] = self.module_to_name_path[RefIdEq(parent)] + [name]
+                    self.tensor_to_name_path[param.raw_tensor] = self.module_to_name_path[RefIdEq(parent)] + (name,)
 
     def get_name_path(
         self: _NamePathCache,
         child: Union[rf.Module, Tensor],
         *,
         raise_exc: bool = True,
-    ) -> Optional[List[str]]:
+    ) -> Optional[Tuple[str, ...]]:
         """
         :return: unique absolute layer name for the module hierarchy.
           https://github.com/rwth-i6/returnn_common/issues/25
