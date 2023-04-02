@@ -69,7 +69,11 @@ def run_model_net_dict_tf(get_model: Callable[[], rf.Module], extern_data: Tenso
 
     from returnn.tf.frontend_layers.config_entry_points import get_net_dict
 
-    config = Config()
+    config = Config(
+        {
+            "debug_runtime_sanity_checks": True,
+        }
+    )
 
     with tf_scope() as session, global_config_ctx(config):
         net_dict = get_net_dict(
