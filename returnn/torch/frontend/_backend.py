@@ -291,18 +291,22 @@ class TorchBackend(Backend[torch.Tensor]):
             dim in b_dims for dim in reduce
         ), f"'b' does not have the specified reduce dim(s) {reduce} (b dims: {b_dims})"
 
-        reduce_dims_sorted_by_a = [dim for dim in a_dims if dim in reduce]
+        if len(reduce) > 1:
+            reduce = list(reduce)
+            reduce.sort(key=lambda dim: a_dims.index(dim))
 
-        a_reduce_axes = [a_dims.index(reduce_dim) for reduce_dim in reduce_dims_sorted_by_a]
-        b_reduce_axes = [b_dims.index(reduce_dim) for reduce_dim in reduce_dims_sorted_by_a]
+        # matmul might get square matrices as arguments, where a dim could occur multiple times.
+        # This complicates the logic here, and we properly have to handle match_priority.
+        a_reduce_axes = [a.get_axis_from_description(reduce_dim) for reduce_dim in reduce]
+        b_reduce_axes = [b.get_axis_from_description(reduce_dim) for reduce_dim in reduce]
 
-        a_unique_axes = [i for (i, dim) in enumerate(a_dims) if dim not in b_dims]
-        b_unique_axes = [i for (i, dim) in enumerate(b_dims) if dim not in a_dims]
-
-        common_dims = [dim for dim in a_dims if dim in b_dims and dim not in reduce]
-
+        # We assume that dim tags in remaining dims are unique.
+        common_dims = [dim for i, dim in enumerate(a_dims) if dim in b_dims and i not in a_reduce_axes]
         a_common_axes = [a_dims.index(common_dim) for common_dim in common_dims]
         b_common_axes = [b_dims.index(common_dim) for common_dim in common_dims]
+
+        a_unique_axes = [i for i in range(len(a_dims)) if i not in a_reduce_axes and i not in a_common_axes]
+        b_unique_axes = [i for i in range(len(b_dims)) if i not in b_reduce_axes and i not in b_common_axes]
 
         a_raw = a.raw_tensor
         b_raw = b.raw_tensor
