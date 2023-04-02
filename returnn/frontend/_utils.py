@@ -89,7 +89,11 @@ def bin_op_out_template(
     assert a.dtype == b.dtype, f"For now only operations with Tensors of the same dtypes are supported, got {a} and {b}"
     all_dims = []
     for dim in a.dims + b.dims:
-        if dim not in all_dims:
+        # Not simply `if dim not in all_dims:`,
+        # because a dim might occur multiple times in a.dims or b.dims
+        # (with different match_priority),
+        # e.g. in the case of square matrices.
+        if all_dims.count(dim) < max(a.dims.count(dim), b.dims.count(dim)):
             all_dims.append(dim)
     if all(set(x.dims) != set(all_dims) for x in (a, b)):
         if allow_broadcast_all_sources is False:
