@@ -92,7 +92,7 @@ def run_model_net_dict_tf(get_model: Callable[[], rf.Module], extern_data: Tenso
         return out
 
 
-def _fill_random(x: Tensor) -> bool:
+def _fill_random(x: Tensor, *, min_val: int = 0) -> bool:
     """fill. return whether sth was filled"""
     raw_tensor_type = rf.get_raw_tensor_type()
     filled = False
@@ -103,7 +103,7 @@ def _fill_random(x: Tensor) -> bool:
         for dim in x.dims:
             if not dim.dyn_size_ext:
                 continue
-            if _fill_random(dim.dyn_size_ext):
+            if _fill_random(dim.dyn_size_ext, min_val=2):
                 filled = True
                 filled_this_round = True
             if dim.dyn_size_ext.raw_tensor is None:
@@ -123,7 +123,6 @@ def _fill_random(x: Tensor) -> bool:
 
     if x.raw_tensor is None:
         if x.dtype.startswith("int"):
-            min_val = 0
             max_val = 10
             if x.sparse_dim and x.sparse_dim.dimension is not None:
                 max_val = x.sparse_dim.dimension
