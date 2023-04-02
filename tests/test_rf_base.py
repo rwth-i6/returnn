@@ -18,12 +18,15 @@ def test_simple_net_linear():
     class _Net(rf.Module):
         def __init__(self):
             super().__init__()
-            self.linear = rf.Linear(in_dim, out_dim)
+            self.layer1 = rf.Linear(in_dim, out_dim)
+            self.layer2 = rf.Linear(out_dim, out_dim)
 
         def __call__(self, x: Tensor) -> Tensor:
             """
             Forward
             """
-            return self.linear(x)
+            x = rf.relu(self.layer1(x))
+            x = self.layer2(x)
+            return x
 
     run_model(_Net, extern_data)
