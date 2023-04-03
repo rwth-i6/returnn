@@ -43,12 +43,12 @@ class State(dict):
     def __setattr__(self, key, value):
         self[key] = value
 
-    def deep_tensors(self) -> List[Tensor]:
+    def flatten_tensors(self) -> List[Tensor]:
         """See :func:`cls_deep_tensors`."""
-        return self.cls_deep_tensors(self)
+        return self.cls_flatten_tensors(self)
 
     @classmethod
-    def cls_deep_tensors(cls, obj: Union[State, dict, Any]) -> List[Tensor]:
+    def cls_flatten_tensors(cls, obj: Union[State, dict, Any]) -> List[Tensor]:
         """
         Iterates through obj and all its sub-objects, yielding all tensors.
         """
