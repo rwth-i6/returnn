@@ -292,6 +292,7 @@ class ReturnnLayersBackend(Backend[Layer]):
         explicit_state: Optional[Tensor] = None,
         auto_update_state: Optional[bool] = None,
         static: Optional[bool] = None,
+        out: Optional[Tensor] = None,
     ) -> Tensor:
         """random"""
         kwargs = {
@@ -315,6 +316,7 @@ class ReturnnLayersBackend(Backend[Layer]):
                 "dtype": dtype,
                 "sparse_dim": sparse_dim,
                 "distribution": distribution,
+                "stop_grad": True,
                 **kwargs,
             },
             name="random",

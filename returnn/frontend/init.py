@@ -15,7 +15,7 @@ class ParamInit:
     """API for param init"""
 
     def __call__(
-        self, dims: Sequence[Dim], dtype: str, sparse_dim: Optional[Dim] = None
+        self, dims: Sequence[Dim], dtype: str, sparse_dim: Optional[Dim] = None, out: Optional[Tensor] = None
     ) -> Union[Tensor, rf.RawTensorTypes]:
         raise NotImplementedError
 
@@ -61,7 +61,13 @@ class VarianceScaling(ParamInit):
                 f"Received: {self.distribution}"
             )
 
-    def __call__(self, dims: Sequence[Dim], dtype: Optional[str] = None, sparse_dim: Optional[Dim] = None) -> Tensor:
+    def __call__(
+        self,
+        dims: Sequence[Dim],
+        dtype: Optional[str] = None,
+        sparse_dim: Optional[Dim] = None,
+        out: Optional[Tensor] = None,
+    ) -> Tensor:
         if dtype is None:
             dtype = self.dtype
         scale = self.scale
@@ -72,9 +78,16 @@ class VarianceScaling(ParamInit):
             scale /= max(1.0, fan_out)
         else:
             scale /= max(1.0, (fan_in + fan_out) / 2.0)
-        return self._random(dims=dims, dtype=dtype, scale=scale, sparse_dim=sparse_dim)
+        return self._random(dims=dims, dtype=dtype, scale=scale, sparse_dim=sparse_dim, out=out)
 
-    def _random(self, dims: Sequence[Dim], scale: float, dtype=None, sparse_dim: Optional[Dim] = None) -> Tensor:
+    def _random(
+        self,
+        dims: Sequence[Dim],
+        scale: float,
+        dtype=None,
+        sparse_dim: Optional[Dim] = None,
+        out: Optional[Tensor] = None,
+    ) -> Tensor:
         if self.distribution in {"truncated_normal", "normal"}:
             # constant taken from scipy.stats.truncnorm.std(a=-2, b=2, loc=0., scale=1.)
             stddev = math.sqrt(scale) / 0.87962566103423978
@@ -86,6 +99,7 @@ class VarianceScaling(ParamInit):
                 stddev=stddev,
                 dtype=dtype,
                 sparse_dim=sparse_dim,
+                out=out,
             )
         elif self.distribution == "untruncated_normal":
             stddev = math.sqrt(scale)
@@ -97,6 +111,7 @@ class VarianceScaling(ParamInit):
                 stddev=stddev,
                 dtype=dtype,
                 sparse_dim=sparse_dim,
+                out=out,
             )
         elif self.distribution == "uniform":
             limit = math.sqrt(3.0 * scale)
@@ -108,6 +123,7 @@ class VarianceScaling(ParamInit):
                 maxval=limit,
                 dtype=dtype,
                 sparse_dim=sparse_dim,
+                out=out,
             )
         else:
             raise ValueError(f"invalid distribution {self.distribution!r}")

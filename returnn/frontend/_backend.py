@@ -530,6 +530,7 @@ class Backend(Generic[T]):
         explicit_state: Optional[Tensor] = None,
         auto_update_state: Optional[bool] = None,
         static: Optional[bool] = None,
+        out: Optional[Tensor] = None,
     ) -> Tensor:
         """
         random. See `rf.random` for details.

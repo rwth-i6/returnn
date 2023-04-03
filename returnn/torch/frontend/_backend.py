@@ -414,13 +414,16 @@ class TorchBackend(Backend[torch.Tensor]):
         explicit_state: Optional[Tensor] = None,
         auto_update_state: Optional[bool] = None,
         static: Optional[bool] = None,
+        out: Optional[Tensor[torch.Tensor]] = None,
     ) -> Tensor:
         """
         random. See `rf.random` for details.
         """
         shape = [d.get_dim_value() for d in dims]
         dtype_ = TorchBackend.as_dtype_raw(dtype)
-        out = Tensor(name=f"random_{distribution}", dims=dims, dtype=dtype, sparse_dim=sparse_dim)
+        if out is None:
+            out = Tensor(name=f"random_{distribution}", dims=dims, dtype=dtype, sparse_dim=sparse_dim)
+            out.raw_tensor = torch.empty(shape, dtype=dtype_)
         assert explicit_state is None  # not implemented otherwise
         generator = None  # using the global default from PT
         assert isinstance(static, bool)
@@ -434,29 +437,57 @@ class TorchBackend(Backend[torch.Tensor]):
         if distribution == "uniform":
             assert mean is None and stddev is None  # not implemented otherwise
             if dtype_.is_floating_point:
-                out.raw_tensor = torch.rand(*shape, dtype=dtype_, generator=generator)
                 if minval is None:
                     minval = 0
                 if maxval is None:
                     maxval = 1
-                if isinstance(minval, Tensor) or isinstance(maxval, Tensor) or minval != 0 or maxval != 1:
-                    out = out * (maxval - minval) + minval
+                if isinstance(minval, Tensor):
+                    assert minval.dims == (), f"only scalar minval supported, got {minval}"
+                    minval = minval.raw_tensor
+                if isinstance(maxval, Tensor):
+                    assert maxval.dims == (), f"only scalar maxval supported, got {maxval}"
+                    maxval = maxval.raw_tensor
+                with torch.no_grad():
+                    out.raw_tensor.uniform_(minval, maxval, generator=generator)
             else:
                 if minval is None:
                     minval = 0
                 assert maxval is not None, "maxval must be specified for integer random uniform"
-                out.raw_tensor = torch.randint(minval, maxval, shape, dtype=dtype_)
+                if isinstance(minval, Tensor):
+                    assert minval.dims == (), f"only scalar minval supported, got {minval}"
+                    minval = minval.raw_tensor
+                if isinstance(maxval, Tensor):
+                    assert maxval.dims == (), f"only scalar maxval supported, got {maxval}"
+                    maxval = maxval.raw_tensor
+                with torch.no_grad():
+                    out.raw_tensor.random_(minval, maxval, generator=generator)
         elif distribution == "normal":
             assert minval is None and maxval is None
-            out.raw_tensor = torch.randn(*shape, dtype=dtype_, generator=generator)
             if mean is None:
                 mean = 0
             if stddev is None:
                 stddev = 1
-            if isinstance(stddev, Tensor) or stddev != 1:
-                out = out * stddev
-            if isinstance(mean, Tensor) or mean != 0:
-                out = out + mean
+            if isinstance(mean, Tensor):
+                assert mean.dims == (), f"only scalar mean supported, got {mean}"
+                mean = mean.raw_tensor
+            if isinstance(stddev, Tensor):
+                assert stddev.dims == (), f"only scalar stddev supported, got {stddev}"
+                stddev = stddev.raw_tensor
+            with torch.no_grad():
+                out.raw_tensor.normal_(mean, stddev, generator=generator)
+        elif distribution == "truncated_normal":
+            if mean is None:
+                mean = 0
+            if stddev is None:
+                stddev = 1
+            if minval is None:
+                minval = mean - 2 * stddev
+            if maxval is None:
+                maxval = mean + 2 * stddev
+
+            from . import _rand
+
+            _rand.no_grad_trunc_normal_(out.raw_tensor, mean=mean, std=stddev, a=minval, b=maxval, generator=generator)
         else:
             raise NotImplementedError(f"random distribution {distribution} not implemented")
         return out

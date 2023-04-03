@@ -141,10 +141,14 @@ def random(
     explicit_state: Optional[Tensor] = None,
     auto_update_state: Optional[bool] = None,
     static: Optional[bool] = None,
+    out: Optional[Tensor] = None,
 ) -> Tensor:
     """
     Generates random numbers from uniform or normal or truncated normal distribution.
 
+    There will be no gradients to mean, stddev, bound, minval, maxval!
+
+    In case of TensorFlow:
     This uses the TensorFlow stateless random ops internally, i.e. all the state handling is explicit.
     The state var can be explicitly provided and initialized via :class:`RandomStateInitLayer`,
     or when not provided it will be automatically created.
@@ -182,7 +186,8 @@ def random(
       Otherwise (default), it will not be updated automatically.
     :param bool|None auto_update_state: only used when you pass an explicit state
     :param bool|None static: if no state at all should be used. it just relies on the seed then.
-    :return: layer
+    :param out: if given, will directly write into it, if possible by backend
+    :return: random values
     """
     if explicit_state is None:
         if static is None:
@@ -206,4 +211,5 @@ def random(
         explicit_state=explicit_state,
         auto_update_state=auto_update_state,
         static=static,
+        out=out,
     )
