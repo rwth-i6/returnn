@@ -651,14 +651,16 @@ class _TensorMixin(_TensorMixinBase):
         assert self.time_dim_axis is not None
         return self.copy_move_axis(self.time_dim_axis, time_dim_axis)
 
-    def copy_transpose(self, perm) -> _t.Tensor:
+    def copy_transpose(self, perm: Sequence[Union[int, Dim]], *, allow_int: bool = True) -> _t.Tensor:
         """
-        :param list[int] perm: permutation of the axes, counted with batch-dim.
-          Maps the new axes to the old axes
+        :param perm: permutation of the axes. Maps the new axes to the old axes
+        :param allow_int: allow int as axis, otherwise only :class:`Dim`
         :return: copy of myself with permuted axes
         """
-        assert len(perm) == self.batch_ndim
-        assert set(perm) == set(range(self.batch_ndim))
+        assert len(perm) == self.batch_ndim, f"{self}: invalid perm {perm!r} length"
+        perm_ = perm
+        perm = [self.get_axis_from_description(a, allow_int=allow_int) for a in perm]
+        assert set(perm) == set(range(self.batch_ndim)), f"{self}: invalid perm {perm_!r} (axes: {perm!r})"
         if all(perm[axis] == axis for axis in range(self.batch_ndim)):
             return self.copy()
 
@@ -3156,7 +3158,7 @@ class _TensorMixin(_TensorMixinBase):
         """
         import returnn.frontend as rf
 
-        rf.get_run_ctx().mark_as_output(self, name=name, shape=shape)
+        rf.get_run_ctx().mark_as_output(self, name=name, dims=shape)
 
     def mark_as_default_output(self: Tensor, *, shape: Optional[Sequence[Dim]] = None) -> None:
         """

@@ -9,11 +9,11 @@ or forwarding loop.
 from __future__ import annotations
 from typing import Optional, Union, Any, Sequence, Dict
 from dataclasses import dataclass
-from returnn.tensor import Tensor, Dim
+from returnn.tensor import Tensor, Dim, TensorDict
 import returnn.frontend as rf
 
 
-__all__ = ["RunCtx", "Loss", "Output", "get_run_ctx", "init_train_step_run_ctx", "init_forward_step_run_ctx"]
+__all__ = ["RunCtx", "Loss", "get_run_ctx", "init_train_step_run_ctx", "init_forward_step_run_ctx"]
 
 
 _run_ctx = None  # type: Optional[RunCtx]
@@ -75,7 +75,7 @@ class RunCtx:
         """
         self.stage = stage
         self.losses = {}  # type: Dict[str, Loss]
-        self.outputs = {}  # type: Dict[str, Output]
+        self.outputs = TensorDict()
 
     def mark_as_loss(
         self,
@@ -141,7 +141,7 @@ class RunCtx:
             custom_inv_norm_factor=custom_inv_norm_factor,
         )
 
-    def mark_as_output(self, tensor: Union[Tensor, Any], name: str, *, shape: Optional[Sequence[int]] = None) -> None:
+    def mark_as_output(self, tensor: Union[Tensor, Any], name: str, *, dims: Optional[Sequence[int]] = None) -> None:
         """
         Mark this as an output.
         This has the effect that RETURNN will in any case construct the corresponding layer.
@@ -153,7 +153,7 @@ class RunCtx:
 
         :param tensor:
         :param name:
-        :param shape: this specifies the order of the dims of the output, such that it is well-defined
+        :param dims: this specifies the order of the dims of the output, such that it is well-defined
             for some external application.
             If not specified, we try to infer BTF or BF as default, if that works, otherwise it will be an error.
         """
@@ -161,7 +161,32 @@ class RunCtx:
         if not isinstance(tensor, Tensor):
             tensor = rf.convert_to_tensor(tensor)
         assert name not in self.outputs
-        self.outputs[name] = Output(tensor=tensor, name=name, shape=shape)
+        if dims is None:
+            rem_dims = list(tensor.dims)
+            dims = []
+            if tensor.have_batch_axis():
+                rem_dims.remove(tensor.get_batch_dim_tag())
+                dims.append(tensor.get_batch_dim_tag())
+            if tensor.have_time_axis():
+                rem_dims.remove(tensor.get_time_dim_tag())
+                dims.append(tensor.get_time_dim_tag())
+            static_dims = [d for d in dims if d.is_static()]
+            if len(static_dims) > 1:
+                raise Exception(
+                    f"Cannot infer order of dims automatically for output {name!r}. Please specify a shape explicitly."
+                )
+            elif len(static_dims) == 1:
+                rem_dims.remove(static_dims[0])
+                dims.insert(0, static_dims[0])
+            if len(rem_dims) > 1:
+                raise Exception(
+                    f"Cannot infer order of dims automatically for output {name!r}. Please specify a shape explicitly."
+                )
+            elif len(rem_dims) == 1:
+                dims.append(rem_dims[0])
+        tensor = tensor.copy_transpose(dims, allow_int=False)
+        tensor = tensor.copy(name=name)
+        self.outputs.data[name] = tensor
 
     def mark_as_default_output(self, tensor: Union[Tensor, Any], *, shape: Optional[Sequence[Dim]] = None) -> None:
         """
@@ -173,7 +198,7 @@ class RunCtx:
         :param tensor:
         :param shape:
         """
-        self.mark_as_output(tensor, "output", shape=shape)
+        self.mark_as_output(tensor, "output", dims=shape)
 
     def total_loss(self) -> Union[Tensor, float]:
         """
@@ -233,16 +258,3 @@ class Loss:
         else:
             loss = self.get_summed_loss()
         return loss * self.scale
-
-
-@dataclass
-class Output:
-    """
-    Output via :func:`RunCtx.mark_as_output`.
-
-    We collect all relevant information here.
-    """
-
-    tensor: Tensor
-    name: str
-    shape: Optional[Sequence[Dim]] = None
