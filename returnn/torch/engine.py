@@ -325,9 +325,11 @@ class Engine(EngineBase):
                     # Currently, this only supports single level dicts, but it could be extended if needed.
                     preload_model_state = preload_model_state[opts["checkpoint_key"]]
                 if opts.get("prefix", ""):
-                    # Only params with this prefix should be loaded. They are expected to be in the checkpoint without
-                    # this prefix. By adding the prefix to all params, we make sure that only params matching this
-                    # condition are loaded. This is in line with the behavior of the tf engine.
+                    # Only params with this prefix should be loaded.
+                    # They are expected to be in the checkpoint without this prefix.
+                    # By adding the prefix to all params,
+                    # we make sure that only params matching this condition are loaded.
+                    # This is in line with the behavior of the TF engine.
                     preload_model_state = {opts["prefix"] + key: value for key, value in preload_model_state.items()}
                 ignore_params = opts.get("ignore_params", [])
                 ignore_params_prefixes = opts.get("ignore_params_prefixes", [])
