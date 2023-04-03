@@ -10,7 +10,8 @@ import warnings
 
 def no_grad_trunc_normal_(tensor: torch.Tensor, mean, std, a, b, *, generator=None):
     """
-    Code copied and adopted from torch.nn.init._no_grad_trunc_normal_.
+    Code copied and adopted from torch.nn.init._no_grad_trunc_normal_,
+    to support the extra `generator` argument (https://github.com/pytorch/pytorch/issues/98200).
 
     Method based on https://people.sc.fsu.edu/~jburkardt/presentations/truncated_normal.pdf
 
