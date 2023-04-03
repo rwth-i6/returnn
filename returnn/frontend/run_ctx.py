@@ -163,28 +163,7 @@ class RunCtx:
         assert name not in self.outputs.data
         if dims is None:
             # We try some reasonable defaults, specifically: BTF or BF.
-            rem_dims = list(tensor.dims)
-            dims = []
-            if tensor.have_batch_axis():
-                rem_dims.remove(tensor.get_batch_dim_tag())
-                dims.append(tensor.get_batch_dim_tag())
-            if tensor.have_time_axis():
-                rem_dims.remove(tensor.get_time_dim_tag())
-                dims.append(tensor.get_time_dim_tag())
-            dyn_dims = [d for d in dims if d.is_dynamic()]
-            if len(dyn_dims) > 1:
-                raise Exception(
-                    f"Cannot infer order of dims automatically for output {name!r}. Please specify a shape explicitly."
-                )
-            elif len(dyn_dims) == 1:
-                rem_dims.remove(dyn_dims[0])
-                dims.append(dyn_dims[0])
-            if len(rem_dims) > 1:
-                raise Exception(
-                    f"Cannot infer order of dims automatically for output {name!r}. Please specify a shape explicitly."
-                )
-            elif len(rem_dims) == 1:
-                dims.append(rem_dims[0])
+            dims = _default_dim_order(tensor)
         tensor = tensor.copy_transpose(dims, allow_int=False)
         tensor = tensor.copy(name=name)
         self.outputs.data[name] = tensor
@@ -259,3 +238,35 @@ class Loss:
         else:
             loss = self.get_summed_loss()
         return loss * self.scale
+
+
+def _default_dim_order(tensor: Tensor) -> Sequence[Dim]:
+    """
+    See if some reasonable default dim order like BTF or BF is possible.
+
+    :param tensor:
+    :return:
+    """
+    rem_dims = list(tensor.dims)
+    dims = []
+    if tensor.have_batch_axis():
+        rem_dims.remove(tensor.get_batch_dim_tag())
+        dims.append(tensor.get_batch_dim_tag())
+    if tensor.have_time_axis():
+        rem_dims.remove(tensor.get_time_dim_tag())
+        dims.append(tensor.get_time_dim_tag())
+    dyn_dims = [d for d in rem_dims if d.is_dynamic()]
+    if len(dyn_dims) > 1:
+        raise Exception(
+            f"Cannot infer order of dims automatically for output {tensor}. Please specify `dims` explicitly."
+        )
+    elif len(dyn_dims) == 1:
+        rem_dims.remove(dyn_dims[0])
+        dims.append(dyn_dims[0])
+    if len(rem_dims) > 1:
+        raise Exception(
+            f"Cannot infer order of dims automatically for output {tensor}. Please specify `dims` explicitly."
+        )
+    elif len(rem_dims) == 1:
+        dims.append(rem_dims[0])
+    return dims
