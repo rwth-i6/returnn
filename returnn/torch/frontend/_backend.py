@@ -401,6 +401,9 @@ class TorchBackend(Backend[torch.Tensor]):
         )
         return res
 
+    _random_journal_record_enabled = False
+    _random_journal = []
+
     @staticmethod
     def random(
         *,
@@ -494,4 +497,23 @@ class TorchBackend(Backend[torch.Tensor]):
             _rand.no_grad_trunc_normal_(out.raw_tensor, mean=mean, std=stddev, a=minval, b=maxval, generator=generator)
         else:
             raise NotImplementedError(f"random distribution {distribution} not implemented")
+        if TorchBackend._random_journal_record_enabled:
+            out_ = out.copy()
+            out_.raw_tensor = out_.raw_tensor.detach().cpu().numpy()
+            TorchBackend._random_journal.append(
+                {
+                    "dims": tuple(dims),
+                    "dtype": dtype,
+                    "sparse_dim": sparse_dim,
+                    "distribution": distribution,
+                    "mean": mean,
+                    "stddev": stddev,
+                    "bound": bound,
+                    "minval": minval,
+                    "maxval": maxval,
+                    "seed": seed,
+                    "static": static,
+                    "out": out_,
+                }
+            )
         return out
