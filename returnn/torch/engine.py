@@ -325,6 +325,9 @@ class Engine(EngineBase):
                     # Currently, this only supports single level dicts, but it could be extended if needed.
                     preload_model_state = preload_model_state[opts["checkpoint_key"]]
                 if opts.get("prefix", ""):
+                    # Only params with this prefix should be loaded. They are expected to be in the checkpoint without
+                    # this prefix. By adding the prefix to all params, we make sure that only params matching this
+                    # condition are loaded. This is in line with the behavior of the tf engine.
                     preload_model_state = {opts["prefix"] + key: value for key, value in preload_model_state.items()}
                 ignore_params = opts.get("ignore_params", [])
                 ignore_params_prefixes = opts.get("ignore_params_prefixes", [])
@@ -336,13 +339,12 @@ class Engine(EngineBase):
                         preload_model_state.pop(key)
                 for new_name, name_in_checkpoint in opts.get("var_name_mapping", {}).items():
                     preload_model_state[new_name] = preload_model_state.pop(name_in_checkpoint)
-                missing_keys, unexpected_keys = self._model.load_state_dict(preload_model_state, strict=False)
+                missing_keys, _ = self._model.load_state_dict(preload_model_state, strict=False)
                 if not opts.get("ignore_missing", False):
                     prefix_keys = [key for key in self._model.state_dict() if key.startswith(opts.get("prefix", ""))]
                     missing_prefix_keys = set(prefix_keys).intersection(set(missing_keys))
                     assert not missing_prefix_keys, f"Missing keys and ignore_missing=False: {missing_prefix_keys}"
                 print(f"Missing keys: {missing_keys}", file=log.v4)
-                print(f"Unexpected keys: {unexpected_keys}", file=log.v4)
 
         self._model.to(self._device)
 
