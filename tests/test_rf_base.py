@@ -26,9 +26,6 @@ def test_simple_net_linear():
             self.layer2 = rf.Linear(out_dim, out_dim)
 
         def __call__(self, x: Tensor) -> Tensor:
-            """
-            Forward
-            """
             x = rf.relu(self.layer1(x))
             x = self.layer2(x)
             return x
