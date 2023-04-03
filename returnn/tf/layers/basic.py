@@ -2810,6 +2810,7 @@ class RandomLayer(LayerBase):
         auto_update_state=None,
         static=None,
         shape_deps=(),
+        stop_grad: bool = False,
         **kwargs,
     ):
         """
@@ -2837,16 +2838,24 @@ class RandomLayer(LayerBase):
         :param bool|None auto_update_state: only used when you pass an explicit state
         :param bool|None static: if no state at all should be used. it just relies on the seed then.
         :param list[LayerBase] shape_deps: for dyn dim tags in shape
+        :param bool stop_grad: if True, will stop the gradient to mean,stddev,bound,minval,maxval
         """
 
         def _attrib_value(x):
             """
-            :param LayerBase|T x:
+            :param LayerBase|T x: mean, stddev, bound, minval, maxval
+            :return: x or x.output.placeholder, with optional stop_gradient
             :rtype: tf.Tensor|T
             """
+            if x is None:
+                return x
+            if isinstance(x, (int, float)):
+                return x
             if isinstance(x, LayerBase):
                 assert x.output.batch_shape == ()  # expect scalars
-                return x.output.placeholder
+                x = x.output.placeholder
+            if stop_grad:
+                x = tf.stop_gradient(x)
             return x
 
         shape, sparse_dim  # noqa  # handled in get_out_data_from_opts
@@ -2973,14 +2982,21 @@ class RandomLayer(LayerBase):
                 raise ValueError("%s: uniform distribution needs either mean, stddev, bound or minval, maxval" % self)
             out = _safe_call(lambda: gen.uniform(shape=shape_, minval=minval, maxval=maxval, dtype=dtype))
         elif distribution in {"normal", "truncated_normal"}:
-            assert minval is None and maxval is None and bound is None
+            assert bound is None
             if mean is None:
                 mean = 0
             if stddev is None:
                 stddev = 1
             if distribution == "normal":
+                assert minval is None and maxval is None
                 out = _safe_call(lambda: gen.normal(shape=shape_, mean=mean, stddev=stddev, dtype=dtype))
             elif distribution == "truncated_normal":
+                if minval is not None:
+                    assert all(isinstance(x, (int, float)) for x in (minval, mean, stddev))
+                    assert minval == mean - 2 * stddev, "underlying truncated_normal does not support other minval"
+                if maxval is not None:
+                    assert all(isinstance(x, (int, float)) for x in (maxval, mean, stddev))
+                    assert maxval == mean + 2 * stddev, "underlying truncated_normal does not support other maxval"
                 out = _safe_call(lambda: gen.truncated_normal(shape=shape_, mean=mean, stddev=stddev, dtype=dtype))
             else:
                 assert False, distribution  # should not get here
