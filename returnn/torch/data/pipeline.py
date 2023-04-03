@@ -18,17 +18,19 @@ However, having this separate pure PyTorch implementation is useful to allow to 
 other PyTorch datasets more directly, including also HuggingFace datasets.
 """
 
+from __future__ import annotations
+from typing import List, Dict
 import sys
 from copy import deepcopy
 
-import numpy as np
+import numpy
 import torch
 import torch.utils.data
 
 from returnn.util.basic import NumbersDict
 
 
-def create_tensor(array: np.ndarray) -> torch.Tensor:
+def create_tensor(array: numpy.ndarray) -> torch.Tensor:
     """
     Adjust non-supported dtypes
 
@@ -36,14 +38,14 @@ def create_tensor(array: np.ndarray) -> torch.Tensor:
     """
     # The only supported PyTorch dtypes are:
     # float64, float32, float16, complex64, complex128, int64, int32, int16, int8, uint8, and bool.
-    if array.dtype == np.uint32:
-        array = np.asarray(array, dtype=np.int64)
+    if array.dtype == numpy.uint32:
+        array = numpy.asarray(array, dtype=numpy.int64)
     return torch.tensor(array)
 
 
-def collate_batch(batch):
+def collate_batch(batch: List[Dict[str, numpy.ndarray]]) -> Dict[str, torch.Tensor]:
     """
-    :param list[dict[str, numpy.ndarray]] batch:
+    :param batch:
     """
     assert isinstance(batch, list)
     assert batch, "batch is empty?"
