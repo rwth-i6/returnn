@@ -2338,7 +2338,13 @@ def dim_cmp_value(obj):
     # Note that the order is really arbitrary and does not matter.
     if isinstance(obj, _d.Dim):
         obj = obj.get_same_base()
-        return "", obj.description, obj.kind, obj.dimension, obj.dyn_size_ext
+        return (
+            "",
+            obj.description,
+            obj.kind,
+            obj.dimension,
+            obj.dyn_size_ext.dims if obj.dyn_size_ext is not None else None,
+        )
     if isinstance(obj, _m.MarkedDim):
         return obj.__class__.__name__, obj.tag
     return obj
