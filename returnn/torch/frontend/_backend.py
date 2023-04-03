@@ -448,7 +448,7 @@ class TorchBackend(Backend[torch.Tensor]):
                     assert maxval.dims == (), f"only scalar maxval supported, got {maxval}"
                     maxval = maxval.raw_tensor
                 with torch.no_grad():
-                    out.raw_tensor.uniform_(minval, maxval, generator=generator)
+                    out.raw_tensor.uniform_(minval, maxval, generator=generator)  # noqa
             else:
                 if minval is None:
                     minval = 0
