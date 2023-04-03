@@ -29,9 +29,12 @@ class TensorDict:
     def __repr__(self):
         return f"{self.__class__.__name__}({self.data})"
 
-    def update(self, data: _DataAutoConvertT, *, auto_convert: bool = False):
+    def update(self, data: Union[_DataAutoConvertT, TensorDict], *, auto_convert: bool = False):
         """update"""
-        if isinstance(data, dict):
+        if isinstance(data, TensorDict):
+            for key, value in data.data.items():
+                self.data[key] = value
+        elif isinstance(data, dict):
             for key, value in data.items():
                 if auto_convert:
                     value = _convert_to_tensor(value, name=key)
