@@ -160,7 +160,7 @@ class RunCtx:
         assert self.stage == "forward_step"
         if not isinstance(tensor, Tensor):
             tensor = rf.convert_to_tensor(tensor)
-        assert name not in self.outputs
+        assert name not in self.outputs.data
         if dims is None:
             # We try some reasonable defaults, specifically: BTF or BF.
             rem_dims = list(tensor.dims)
