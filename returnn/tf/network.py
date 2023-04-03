@@ -347,6 +347,13 @@ def _extern_data_types_from_config(config):
     input_data_key = config.value("default_input", "data")
     if config.has("extern_data"):
         data_dims = config.typed_dict["extern_data"]
+        if isinstance(data_dims, TensorDict):
+            res = {}
+            for k, v in data_dims.data.items():
+                kwargs = v.get_kwargs()
+                kwargs.pop("name")
+                res[k] = kwargs
+            return res
         assert isinstance(data_dims, dict), "extern_data in config must be a dict"
         if config.has("num_inputs") or config.has("num_outputs"):
             print("Warning: Using extern_data and will ignore num_inputs/num_outputs in config.", file=log.v2)
