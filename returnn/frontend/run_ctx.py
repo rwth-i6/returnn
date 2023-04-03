@@ -162,6 +162,7 @@ class RunCtx:
             tensor = rf.convert_to_tensor(tensor)
         assert name not in self.outputs
         if dims is None:
+            # We try some reasonable defaults, specifically: BTF or BF.
             rem_dims = list(tensor.dims)
             dims = []
             if tensor.have_batch_axis():
@@ -170,14 +171,14 @@ class RunCtx:
             if tensor.have_time_axis():
                 rem_dims.remove(tensor.get_time_dim_tag())
                 dims.append(tensor.get_time_dim_tag())
-            static_dims = [d for d in dims if d.is_static()]
-            if len(static_dims) > 1:
+            dyn_dims = [d for d in dims if d.is_dynamic()]
+            if len(dyn_dims) > 1:
                 raise Exception(
                     f"Cannot infer order of dims automatically for output {name!r}. Please specify a shape explicitly."
                 )
-            elif len(static_dims) == 1:
-                rem_dims.remove(static_dims[0])
-                dims.insert(0, static_dims[0])
+            elif len(dyn_dims) == 1:
+                rem_dims.remove(dyn_dims[0])
+                dims.append(dyn_dims[0])
             if len(rem_dims) > 1:
                 raise Exception(
                     f"Cannot infer order of dims automatically for output {name!r}. Please specify a shape explicitly."
