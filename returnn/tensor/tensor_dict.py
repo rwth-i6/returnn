@@ -54,6 +54,40 @@ class TensorDict:
     def __getitem__(self, item: str) -> Tensor:
         return self.data[item]
 
+    def copy_template(self) -> TensorDict:
+        """copy template"""
+        return TensorDict({k: v.copy_template() for k, v in self.data.items()})
+
+    def as_raw_tensor_dict(self) -> Dict[str, Any]:
+        """
+        :return: dict of raw tensors, including any sequence lengths / dynamic sizes
+        """
+        out = {}
+        for key, value in self.data.items():
+            assert key not in out
+            out[key] = value.raw_tensor
+            for i, dim in enumerate(value.dims):
+                key_ = f"{key}:size{i}"
+                assert key_ not in out
+                if dim.is_batch_dim() and not dim.dyn_size_ext:
+                    out[key_] = dim.get_dim_value()
+                elif dim.dyn_size_ext:
+                    out[key_] = dim.dyn_size_ext.raw_tensor
+        return out
+
+    def assign_from_raw_tensor_dict_(self, raw_tensor_dict: Dict[str, Any]):
+        """
+        :param raw_tensor_dict: dict of raw tensors, including any sequence lengths / dynamic sizes
+        """
+        for key, value in self.data.items():
+            assert key in raw_tensor_dict
+            value.raw_tensor = raw_tensor_dict[key]
+            for i, dim in enumerate(value.dims):
+                if dim.dyn_size_ext:
+                    key_ = f"{key}:size{i}"
+                    assert key_ in raw_tensor_dict
+                    dim.dyn_size_ext.raw_tensor = raw_tensor_dict[key_]
+
 
 def _convert_to_tensor(opts: _TensorT, *, name: Optional[str] = None) -> Tensor:
     """
