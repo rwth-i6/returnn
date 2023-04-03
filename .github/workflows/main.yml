@@ -315,3 +315,80 @@ jobs:
       run: |
         export ${{ matrix.action }}
         python -m pytest tests/test_$TEST.py
+
+  rf-tests:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version:
+          - 3.7
+        torch-version:
+          - 1.13.1
+        tf-version:
+          - 2.10.0
+        action:
+          - TEST=rf_base
+
+    steps:
+    - uses: actions/checkout@v3
+
+    - uses: actions/setup-python@v4
+      with:
+        python-version: ${{ matrix.python-version }}
+
+    - name: Cache dependencies
+      uses: actions/cache@v2
+      with:
+        path: |
+          ~/.cache
+          ~/.local
+        key: cache-${{ runner.os }}-py${{ matrix.python-version }}-torch${{ matrix.torch-version }}-tf${{ matrix.tf-version }}
+        restore-keys: |
+          cache-${{ runner.os }}-py${{ matrix.python-version }}-
+
+    - name: Setup dependencies
+      run: |
+        echo "PATH=$PATH:~/.local/bin" >> $GITHUB_ENV
+        echo "Python ${{matrix.python-version}}"
+        echo "pip: $(type pip)"
+
+        pip install --user --upgrade pip setuptools wheel
+        pip install --user typing | cat  # needed for Python 2 in some cases
+
+        pip install --user pytest
+
+        # Install nose anyway because we currently use some of its helper functions.
+        pip install --user nose
+
+        pip install --user -r requirements.txt | cat
+        pip install --user scipy | cat  # for some tests
+        pip install --user --upgrade torch==${{ matrix.torch-version }} | cat
+        pip install --user torchdata | cat
+
+        if [[ "${{matrix.tf-version}}" == 2.10.* ]]; then
+          # TF 2.10 requires gast<=0.4.0,>=0.2.1. But for example, with gast 0.2.2, we get some AutoGraph error:
+          # Cause: module 'gast' has no attribute 'Constant'
+          # Similar like: https://github.com/tensorflow/tensorflow/issues/47802
+          pip install --user --upgrade "gast<=0.4.0"
+        fi
+
+        pip install --user --upgrade tensorflow==${{ matrix.tf-version }} | cat
+
+    - name: Test Python/Numpy/PyTorch versions.
+      run: |
+        echo "Python env: $(type python) $(python --version)"
+        python -c "import numpy; print('NumPy:', numpy.version.full_version)"
+        python -c "import torch; print('PyTorch:', torch.__version__, torch.__file__)"
+        # torch.__version__ is for example "1.13.1+cu117"
+        python -c "import torch; assert (torch.__version__ + '+').startswith('${{ matrix.torch-version }}+')"
+        python -c "import tensorflow as tf; print('TensorFlow:', tf.__git_version__, tf.__version__, tf.__file__)"
+        python -c "import tensorflow as tf; assert tf.__version__ == '${{ matrix.tf-version }}'"
+
+        echo "Pytest env:"
+        python -m pytest -V
+
+    - name: Run test
+      run: |
+        export ${{ matrix.action }}
+        python -m pytest tests/test_$TEST.py
