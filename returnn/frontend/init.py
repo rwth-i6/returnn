@@ -34,7 +34,7 @@ class VarianceScaling(ParamInit):
 
     scale = 1.0
     mode = "fan_in"  # fan_in, fan_out, fan_avg
-    distribution = "truncated_normal"  # normal, untruncated_normal, truncated_normal, uniform
+    distribution = "truncated_normal"  # normal (=truncated_normal), untruncated_normal, truncated_normal, uniform
     dtype: str  # rf.get_default_float_dtype() by default
 
     def __init__(self, scale: float = None, mode: str = None, distribution: str = None, dtype: str = None):
@@ -79,7 +79,7 @@ class VarianceScaling(ParamInit):
             # constant taken from scipy.stats.truncnorm.std(a=-2, b=2, loc=0., scale=1.)
             stddev = math.sqrt(scale) / 0.87962566103423978
             return rf.random(
-                distribution=self.distribution,
+                distribution="truncated_normal",
                 static=True,
                 dims=dims,
                 mean=0.0,
@@ -90,7 +90,7 @@ class VarianceScaling(ParamInit):
         elif self.distribution == "untruncated_normal":
             stddev = math.sqrt(scale)
             return rf.random(
-                distribution=self.distribution,
+                distribution="normal",
                 static=True,
                 dims=dims,
                 mean=0.0,
@@ -101,7 +101,7 @@ class VarianceScaling(ParamInit):
         elif self.distribution == "uniform":
             limit = math.sqrt(3.0 * scale)
             return rf.random(
-                distribution=self.distribution,
+                distribution="uniform",
                 static=True,
                 dims=dims,
                 minval=-limit,
