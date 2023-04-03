@@ -6,6 +6,7 @@ import _setup_test_env  # noqa
 
 import torch
 import pytest
+import math
 
 from returnn.tensor import Tensor, Dim
 import returnn.frontend as rf
@@ -269,3 +270,67 @@ def test_dot_multiple_dims():
         b_unique_dim_2,
     )
     assert result.raw_tensor.shape == (2, 5, 8, 4, 9, 7, 4)
+
+
+def test_cross_entropy_no_batch_dim():
+    logits_raw = torch.tensor([0.0, 0.0, math.log(10.0), 0.0, 0.0, 0.0])
+    target_raw = torch.tensor(2, dtype=torch.int64)
+
+    classes_dim = Dim(dimension=6)
+
+    logits = Tensor(name="logits", dims=[classes_dim], dtype="float32", raw_tensor=logits_raw)
+    target = Tensor(name="target", dims=[], sparse_dim=classes_dim, dtype="int64", raw_tensor=target_raw)
+
+    cross_entropy = rf.cross_entropy(estimated=logits, target=target, axis=classes_dim, estimated_type="logits")
+
+    assert not cross_entropy.dims
+    assert cross_entropy.raw_tensor.tolist() == pytest.approx(-math.log(10 / 15))
+
+
+def test_cross_entropy_no_batch_dim_dense_target():
+    logits_raw = torch.tensor([0.0, 0.0, math.log(10.0), 0.0, 0.0, 0.0])
+    target_raw = torch.tensor([0.0, 0.0, 0.5, 0.0, 0.0, 0.5])
+
+    classes_dim = Dim(dimension=6)
+
+    logits = Tensor(name="logits", dims=[classes_dim], dtype="float32", raw_tensor=logits_raw)
+    target = Tensor(name="target", dims=[classes_dim], dtype="float32", raw_tensor=target_raw)
+
+    cross_entropy = rf.cross_entropy(estimated=logits, target=target, axis=classes_dim, estimated_type="logits")
+
+    assert not cross_entropy.dims
+    assert cross_entropy.raw_tensor.tolist() == pytest.approx(-0.5 * math.log(10 / 15) - 0.5 * math.log(1 / 15))
+
+
+def test_cross_entropy():
+    logits_raw = torch.tensor([[0.0, 0.0, math.log(3.0)], [math.log(5.0), 0.0, 0.0], [0.0, math.log(2.0), 0.0]])
+    target_raw = torch.tensor([2, 0, 1], dtype=torch.int64)
+
+    batch_dim = Dim(dimension=3)
+    classes_dim = Dim(dimension=3)
+
+    logits = Tensor(name="logits", dims=[batch_dim, classes_dim], dtype="float32", raw_tensor=logits_raw)
+    target = Tensor(name="target", dims=[batch_dim], sparse_dim=classes_dim, dtype="int64", raw_tensor=target_raw)
+
+    cross_entropy = rf.cross_entropy(estimated=logits, target=target, axis=classes_dim, estimated_type="logits")
+
+    assert cross_entropy.dims == (batch_dim,)
+    assert cross_entropy.raw_tensor.tolist() == pytest.approx([-math.log(3 / 5), -math.log(5 / 7), -math.log(2 / 4)])
+
+
+def test_cross_entropy_dense_target():
+    logits_raw = torch.tensor([[0.0, math.log(5.0)], [0.0, 0.0], [math.log(3.0), 0.0]])
+    target_raw = torch.tensor([[0.0, 0.4, 0.6], [0.3, 0.7, 0.0]])
+
+    batch_dim = Dim(dimension=2)
+    classes_dim = Dim(dimension=3)
+
+    logits = Tensor(name="logits", dims=[classes_dim, batch_dim], dtype="float32", raw_tensor=logits_raw)
+    target = Tensor(name="target", dims=[batch_dim, classes_dim], dtype="float32", raw_tensor=target_raw)
+
+    cross_entropy = rf.cross_entropy(estimated=logits, target=target, axis=classes_dim, estimated_type="logits")
+
+    assert cross_entropy.dims == (batch_dim,)
+    cross_entropy_list = cross_entropy.raw_tensor.tolist()
+    assert cross_entropy_list[0] == pytest.approx(-0.6 * math.log(3 / 5) - 0.4 * math.log(1 / 5))
+    assert cross_entropy_list[1] == pytest.approx(-0.3 * math.log(5 / 7) - 0.7 * math.log(1 / 7))

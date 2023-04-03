@@ -154,6 +154,59 @@ class TorchBackend(Backend[torch.Tensor]):
         return out
 
     @staticmethod
+    def softmax_cross_entropy_with_logits(logits: Tensor, targets: Tensor, axis: Dim):
+        """
+        Efficient cross entropy. For PyTorch this is actually the default cross entropy function.
+        (torch.nn.functional.cross_entropy)
+
+        :param logits: target estimates given as inputs to softmax (i.e. unnormalized)
+        :param targets: probabilities, i.e. normalized, can also be sparse
+        :param axis: class labels dim over which softmax is computed
+        :return: cross entropy (same Dims as 'logits' but without 'axis')
+        """
+        assert axis in logits.dims, "Specified axis not present in logits."
+
+        if axis == targets.sparse_dim:
+            assert (
+                logits.dims_set - {axis} == targets.dims_set
+            ), "logits Dims and target Dims have to match (except for implicit sparse_dim)."
+
+            logits_dim_order = list(targets.dims)
+            if len(logits_dim_order) > 0:
+                # PyTorch's cross_entropy expects class probabilities over second axis.
+                logits_dim_order.insert(1, axis)
+            else:
+                logits_dim_order = [axis]
+
+        else:
+            assert (
+                not targets.sparse_dim
+            ), "We expect that cross entropy would always be calculated along the sparse dim, if there is one."
+            assert logits.dims_set == targets.dims_set, "logits Dims and target Dims have to match."
+            assert axis in targets.dims, "Specified axis not present in targets."
+
+            if len(targets.dims) > 1:
+                # PyTorch's cross_entropy expects class probabilities over second axis.
+                targets = targets.copy_move_axis(targets.dims.index(axis), 1)
+
+            logits_dim_order = targets.dims
+
+        # We need same order of axes as in target.
+        logits_axes_permutation = [logits_dim_order.index(dim) for dim in logits.dims]
+        logits = logits.copy_transpose(logits_axes_permutation)
+
+        raw_cross_entropy = torch.nn.functional.cross_entropy(
+            input=logits.raw_tensor, target=targets.raw_tensor, reduction="none"
+        )
+
+        out_dims = list(logits.dims)
+        out_dims.remove(axis)
+
+        cross_entropy = Tensor(name="cross_entropy", dims=out_dims, raw_tensor=raw_cross_entropy, dtype=logits.dtype)
+
+        return cross_entropy
+
+    @staticmethod
     def create_parameter_raw(tensor: rf.Parameter) -> torch.nn.Parameter:
         """
         :return: parameter
@@ -227,6 +280,15 @@ class TorchBackend(Backend[torch.Tensor]):
         }.get(kind, kind)
         op = getattr(torch, kind)  # e.g. torch.add
         return op(a, b)
+
+    @staticmethod
+    def transpose_raw(raw_tensor: torch.Tensor, perm: Sequence[int]) -> torch.Tensor:
+        """
+        :param raw_tensor:
+        :param perm: e.g. [0, 2, 1]
+        :return: permuted (transposed) raw tensor; wraps torch.permute
+        """
+        return torch.permute(raw_tensor, perm)
 
     @staticmethod
     def convert_to_tensor(
