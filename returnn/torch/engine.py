@@ -294,6 +294,59 @@ class Engine(EngineBase):
             print("Load model %s" % (filename,), file=log.v4)
             model_state = torch.load(filename)
             self._model.load_state_dict(model_state)
+        preload_from_files = self.config.typed_value("preload_from_files", {})
+        if preload_from_files:
+            # see `preload_from_files` in tf engine and `returnn.tf.network.CustomCheckpointLoader`
+            is_training = self.config.value("task", "train") == "train"
+            is_first_train_epoch = epoch == 1 and (
+                is_training or self.config.value("task", "train") == "initialize_model"
+            )
+            # We use the reversed sorted order here to achieve consistent behavior with the TF engine.
+            # There, the keys are used in sorted order but if a variable is loaded,
+            # it will not be considered anymore afterwards.
+            # So the first occurrence is used.
+            # Here, we overwrite variables even if they have been loaded before.
+            # In order to get consistent behavior, we use the reversed order.
+            for preload_key, opts in reversed(sorted(preload_from_files.items())):
+                assert isinstance(opts, dict) and "filename" in opts
+                if opts.get("init_for_train", False):
+                    if not is_first_train_epoch:
+                        continue
+                else:  # default: init for recog
+                    if is_training:
+                        continue
+                print(f"Pre-load weights for key '{preload_key}' from {opts['filename']}", file=log.v3)
+                preload_model_state = torch.load(opts["filename"])
+                if opts.get("checkpoint_key", None) is not None:
+                    # This can be used if an external checkpoint saves a checkpoint a different structure that just the
+                    # model state dict. E.g., if a checkpoint is created using
+                    # `torch.save({"model": model.state_dict(), "optimizer": optimizer.state)_dict(), ...})`
+                    # we can set checkpoint_key = "model" to load the model.
+                    # Currently, this only supports single level dicts, but it could be extended if needed.
+                    preload_model_state = preload_model_state[opts["checkpoint_key"]]
+                if opts.get("prefix", ""):
+                    # Only params with this prefix should be loaded.
+                    # They are expected to be in the checkpoint without this prefix.
+                    # By adding the prefix to all params,
+                    # we make sure that only params matching this condition are loaded.
+                    # This is in line with the behavior of the TF engine.
+                    preload_model_state = {opts["prefix"] + key: value for key, value in preload_model_state.items()}
+                ignore_params = opts.get("ignore_params", [])
+                ignore_params_prefixes = opts.get("ignore_params_prefixes", [])
+                for key in list(preload_model_state.keys()):
+                    if key in ignore_params or any(
+                        [key.startswith(ignore_key) for ignore_key in ignore_params_prefixes]
+                    ):
+                        print(f"Ignoring variable {key}", file=log.v3)
+                        preload_model_state.pop(key)
+                for new_name, name_in_checkpoint in opts.get("var_name_mapping", {}).items():
+                    preload_model_state[new_name] = preload_model_state.pop(name_in_checkpoint)
+                missing_keys, _ = self._model.load_state_dict(preload_model_state, strict=False)
+                if not opts.get("ignore_missing", False):
+                    prefix_keys = [key for key in self._model.state_dict() if key.startswith(opts.get("prefix", ""))]
+                    missing_prefix_keys = set(prefix_keys).intersection(set(missing_keys))
+                    assert not missing_prefix_keys, f"Missing keys and ignore_missing=False: {missing_prefix_keys}"
+                print(f"Missing keys: {missing_keys}", file=log.v4)
 
         self._model.to(self._device)
 
