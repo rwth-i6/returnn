@@ -32,10 +32,19 @@ def run_model(extern_data: TensorDict, get_model: rf.GetModelFunc, forward_step:
         _fill_random(v, rnd=rnd)
 
     out_pt = run_model_torch(extern_data, get_model, forward_step)
+    out_pt_raw = out_pt.as_raw_tensor_dict()  # get them now because dims might get overwritten
     out_tf = run_model_net_dict_tf(extern_data, get_model, forward_step)
-    # out_tf = out_tf.copy_compatible_to(out_pt, add_dims=False)  # TODO does not work yet, dim tags are not complete
+    out_tf_raw = out_tf.as_raw_tensor_dict()
     print(out_pt, out_tf)
-    # TODO ...
+
+    assert set(out_pt.data.keys()) == set(out_tf.data.keys())
+    for k, v_pt in out_pt.data.items():
+        v_tf = out_tf[k]
+        assert v_pt.dims == v_tf.dims
+    assert set(out_pt_raw.keys()) == set(out_tf_raw.keys())
+    for k, v_pt in out_pt_raw.items():
+        v_tf = out_tf_raw[k]
+        assert numpy.allclose(v_pt, v_tf, atol=1e-5, rtol=1e-5)
     return out_pt
 
 
