@@ -275,6 +275,9 @@ class ReturnnLayersBackend(Backend[Layer]):
             {"class": "reduce", "from": source, "mode": mode, "axis": axis, **kwargs}, name=f"reduce_{mode}"
         )
 
+    _random_journal_replay_enabled = False
+    _random_journal = []
+
     @staticmethod
     def random(
         *,
@@ -295,6 +298,18 @@ class ReturnnLayersBackend(Backend[Layer]):
         out: Optional[Tensor] = None,
     ) -> Tensor:
         """random"""
+        if ReturnnLayersBackend._random_journal_replay_enabled:
+            elem = ReturnnLayersBackend._random_journal.pop(0)
+            assert isinstance(elem, dict)
+            assert elem["dims"] == dims
+            assert elem["dtype"] == dtype
+            assert elem["sparse_dim"] == sparse_dim
+            assert elem["distribution"] == distribution
+            assert rfl.Layer.inner_control_flow() is None  # not implemented yet
+            out = elem["out"]
+            assert isinstance(out, Tensor)
+            assert isinstance(out.raw_tensor, numpy.ndarray)
+            return ReturnnLayersBackend.convert_to_tensor(out.raw_tensor, dims=dims, dtype=dtype, sparse_dim=sparse_dim)
         kwargs = {
             "mean": mean,
             "stddev": stddev,
