@@ -376,7 +376,11 @@ class TorchBackend(Backend[torch.Tensor]):
         else:
             assert all(not dim.need_masking() for dim in axis)  # not implemented
         func = getattr(torch, mode)
-        raw_dims = [source.dims.index(axis)] if isinstance(axis, Dim) else [source.dims.index(dim) for dim in axis]
+        raw_dims = (
+            [source.get_axis_from_description(axis)]
+            if isinstance(axis, Dim)
+            else [source.get_axis_from_description(dim) for dim in axis]
+        )
         res_dims = [dim for i, dim in enumerate(source.dims) if i not in raw_dims]
         if not res_dims:
             raw_result = func(source.raw_tensor)
