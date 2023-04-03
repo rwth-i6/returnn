@@ -5,8 +5,10 @@ It just has the bare minimum such that the user can assign Numpy arrays to Tenso
 """
 
 from __future__ import annotations
-from typing import Tuple
+from typing import Union, Sequence, Tuple
 import numpy
+from returnn.util.basic import NotSpecified
+from returnn.tensor import Tensor, Dim
 from ._backend import Backend
 
 
@@ -67,3 +69,38 @@ class NumpyBackend(Backend[numpy.ndarray]):
             In eager frameworks, all dims are known.
         """
         return raw_tensor.shape
+
+    @staticmethod
+    def reduce(
+        source: Tensor[numpy.ndarray],
+        *,
+        mode: str,
+        axis: Union[Dim, Sequence[Dim]],
+        use_time_mask: bool = NotSpecified,
+    ) -> Tensor[numpy.ndarray]:
+        """reduce"""
+        assert mode in Backend._AllowedReduceModes
+        if isinstance(axis, Dim):
+            assert not axis.need_masking()  # not implemented
+        else:
+            assert all(not dim.need_masking() for dim in axis)  # not implemented
+        func = getattr(numpy, mode)
+        raw_dims = (
+            [source.get_axis_from_description(axis)]
+            if isinstance(axis, Dim)
+            else [source.get_axis_from_description(dim) for dim in axis]
+        )
+        res_dims = [dim for i, dim in enumerate(source.dims) if i not in raw_dims]
+        if not res_dims:
+            # All are reduced. Need numpy.array() to get a tensor again.
+            raw_result = numpy.array(func(source.raw_tensor))
+        else:
+            raw_result = func(source.raw_tensor, axis=raw_dims)
+        res = Tensor(
+            name=f"reduce_{mode}",
+            raw_tensor=raw_result,
+            dims=res_dims,
+            dtype=source.dtype,
+            sparse_dim=source.sparse_dim,
+        )
+        return res
