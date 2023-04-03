@@ -83,8 +83,10 @@ class TensorDict:
             assert key in raw_tensor_dict
             value.raw_tensor = raw_tensor_dict[key]
             for i, dim in enumerate(value.dims):
+                key_ = f"{key}:size{i}"
+                if dim.is_batch_dim() and not dim.dyn_size_ext:
+                    dim.dyn_size_ext = Tensor("batch", [], dtype="int32")
                 if dim.dyn_size_ext:
-                    key_ = f"{key}:size{i}"
                     assert key_ in raw_tensor_dict
                     dim.dyn_size_ext.raw_tensor = raw_tensor_dict[key_]
 
