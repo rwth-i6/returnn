@@ -33,21 +33,21 @@ class TensorDict:
         """update"""
         if isinstance(data, TensorDict):
             for key, value in data.data.items():
-                self.data[key] = value
+                self.data[key] = value.copy()
         elif isinstance(data, dict):
             for key, value in data.items():
                 if auto_convert:
                     value = _convert_to_tensor(value, name=key)
                 else:
                     assert isinstance(value, Tensor)
-                self.data[key] = value
+                self.data[key] = value.copy()
         elif isinstance(data, (list, tuple)):
             for value in data:
                 if auto_convert:
                     value = _convert_to_tensor(value)
                 else:
                     assert isinstance(value, Tensor)
-                self.data[value.name] = value
+                self.data[value.name] = value.copy()
         else:
             raise TypeError(f"invalid `data` type: {type(data)}")
 
