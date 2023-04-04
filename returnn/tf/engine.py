@@ -864,7 +864,17 @@ class Engine(EngineBase):
         if not BehaviorVersion.is_set():
             BehaviorVersion.set(self.config.int("behavior_version", None))
         if BackendEngine.selected_engine is None:
-            BackendEngine.select_engine(default_fallback_engine=BackendEngine.TensorFlow, config=self.config)
+            # This is only the case if the Engine is initialized directly in a custom script.
+            # Otherwise, the RETURNN main entry point would already have selected the engine.
+            # So, here we assume some more modern usage, i.e. direct TF instead of net-dict-based TF.
+            # By specifying `backend` in the config, you can make this explicit.
+            if config.has("get_model"):
+                default_fallback_engine = BackendEngine.TensorFlow
+            elif config.has("network") or config.has("get_network"):
+                default_fallback_engine = BackendEngine.TensorFlowNetDict
+            else:
+                default_fallback_engine = BackendEngine.TensorFlow
+            BackendEngine.select_engine(default_fallback_engine=default_fallback_engine, config=self.config)
         assert BackendEngine.is_tensorflow_selected()
         self.orig_config = {}  # see _maybe_update_config
         self.custom_get_net_dict = None  # type: typing.Optional[typing.Callable]
