@@ -370,9 +370,21 @@ def selu(a: Tensor) -> Tensor:
 
 
 def silu(a: Tensor) -> Tensor:
-    """silu"""
+    """silu / swish.
+
+    The SiLU activation function was introduced in "Gaussian Error Linear Units
+    (GELUs)" [Hendrycks et al. 2016](https://arxiv.org/abs/1606.08415) and
+    "Sigmoid-Weighted Linear Units for Neural Network Function Approximation in
+    Reinforcement Learning"
+    [Elfwing et al. 2017](https://arxiv.org/abs/1702.03118) and was independently
+    discovered (and called swish) in "Searching for Activation Functions"
+    [Ramachandran et al. 2017](https://arxiv.org/abs/1710.05941)
+    """
     # noinspection PyProtectedMember
     return a._raw_backend.activation(a, "silu")
+
+
+swish = silu  # alias
 
 
 def softmax(a: Tensor, *, axis: Dim) -> Tensor:
