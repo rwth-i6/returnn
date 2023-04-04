@@ -860,11 +860,11 @@ class Engine(EngineBase):
         """
         super(Engine, self).__init__(config=config)
         if not log.initialized:
-            log.init_by_config(config)
+            log.init_by_config(self.config)
         if not BehaviorVersion.is_set():
-            BehaviorVersion.set(config.int("behavior_version", None))
+            BehaviorVersion.set(self.config.int("behavior_version", None))
         if BackendEngine.selected_engine is None:
-            BackendEngine.select_engine(engine=BackendEngine.TensorFlowNetDict)
+            BackendEngine.select_engine(default_fallback_engine=BackendEngine.TensorFlow, config=self.config)
         assert BackendEngine.is_tensorflow_selected()
         self.orig_config = {}  # see _maybe_update_config
         self.custom_get_net_dict = None  # type: typing.Optional[typing.Callable]
@@ -882,8 +882,8 @@ class Engine(EngineBase):
         self._num_trained_epochs = 0  # type: int  # just a counter
         self._num_net_reinit = 0  # type: int
         self.use_dynamic_train_flag = False
-        self.use_search_flag = config.value("task", None) == "search"
-        self.use_eval_flag = config.value("task", None) != "forward"
+        self.use_search_flag = self.config.value("task", None) == "search"
+        self.use_eval_flag = self.config.value("task", None) != "forward"
         self._const_cache = {}  # type: typing.Dict[str,tf.Tensor]
         self.preload_from_files = None  # type: typing.Optional[typing.Dict[str,typing.Dict[str]]]
         self.max_seqs = None  # type: typing.Optional[int]

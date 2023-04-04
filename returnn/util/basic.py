@@ -127,9 +127,10 @@ class BackendEngine:
         """
 
     @classmethod
-    def select_engine(cls, engine=None, config=None):
+    def select_engine(cls, *, engine=None, default_fallback_engine=None, config=None):
         """
         :param int engine: see the global class attribs for possible values
+        :param int|None default_fallback_engine: if engine is None and not defined in config, use this
         :param returnn.config.Config config:
         """
         assert cls.selected_engine is None, "already set"
@@ -149,7 +150,10 @@ class BackendEngine:
                     "torch": cls.Torch,
                 }[backend]
             if engine is None:
-                engine = cls._get_default_engine()
+                if default_fallback_engine is not None:
+                    engine = default_fallback_engine
+                else:
+                    engine = cls._get_default_engine()
 
         # noinspection PyProtectedMember
         from returnn.frontend import _backend
