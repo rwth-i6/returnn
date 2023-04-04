@@ -278,6 +278,22 @@ class ReturnnLayersBackend(Backend[Layer]):
         return rfl.make_layer({"class": "combine", "from": [a, b], "kind": kind, **kwargs}, name=kind)
 
     @staticmethod
+    def gather(
+        source: Tensor,
+        *,
+        indices: Union[Tensor, int],
+        axis: Dim,
+        clip_to_valid: bool = False,
+    ) -> Tensor:
+        """gather"""
+        args = {}
+        if clip_to_valid:
+            args["clip_to_valid"] = clip_to_valid
+        return rfl.make_layer(
+            {"class": "gather", "from": source, "position": indices, "axis": axis, **args}, name="gather"
+        )
+
+    @staticmethod
     def matmul(a: Tensor, b: Tensor, *, reduce: Union[Dim, Sequence[Dim]]) -> Tensor:
         """matmul"""
         return rfl.make_layer({"class": "dot", "from": [a, b], "reduce": reduce}, name="matmul")

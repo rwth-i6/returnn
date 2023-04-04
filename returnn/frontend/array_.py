@@ -65,15 +65,16 @@ def gather(
     In general, all shared axes of the input and the positions will be considered as batch-axes.
 
     The ``indices`` argument can also be an ``int``.
-    In this case, this simply gives ``source[indices]`` one the specified ``axis``.
+    In this case, this simply gives ``source[indices]`` on the specified ``axis``.
 
     :param source:
     :param indices: indices used to select the slices of the source from.
-        If another layer, must be of type ``int32`` or ``int64``.
+        If another tensor, must be of type ``int32`` or ``int64``.
         Can also specify a constant ``int``.
     :param axis: The axis into which we gather the indices into
     :param clip_to_valid: if True, the indices will be clipped to the valid range of the input
         Also taking seq lengths into account.
-    :return: layer
+    :return: gathered values
     """
-    raise NotImplementedError
+    # noinspection PyProtectedMember
+    return source._raw_backend.gather(source, indices=indices, axis=axis, clip_to_valid=clip_to_valid)

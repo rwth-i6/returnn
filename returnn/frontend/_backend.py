@@ -474,6 +474,38 @@ class Backend(Generic[T]):
         return out
 
     @staticmethod
+    def gather(
+        source: Tensor,
+        *,
+        indices: Union[Tensor, int],
+        axis: Dim,
+        clip_to_valid: bool = False,
+    ) -> Tensor:
+        """
+        Gathers slices on a specified axis from the source using indices.
+        If the source is of the shape ``[B,D,F1]``, and indices of shape ``[B,F2]``,
+        this will yield output of the shape ``[B,F2,F1]`` where
+
+        ``output[b,f2,f1] = source[b,indices[b,f2],f1]``
+
+        (if ``D`` is the axis to gather from).
+        In general, all shared axes of the input and the positions will be considered as batch-axes.
+
+        The ``indices`` argument can also be an ``int``.
+        In this case, this simply gives ``source[indices]`` on the specified ``axis``.
+
+        :param source:
+        :param indices: indices used to select the slices of the source from.
+            If another tensor, must be of type ``int32`` or ``int64``.
+            Can also specify a constant ``int``.
+        :param axis: The axis into which we gather the indices into
+        :param clip_to_valid: if True, the indices will be clipped to the valid range of the input
+            Also taking seq lengths into account.
+        :return: gathered values
+        """
+        raise NotImplementedError
+
+    @staticmethod
     def matmul(a: Tensor[T], b: Tensor[T], *, reduce: Union[Dim, Sequence[Dim]]) -> Tensor[T]:
         """
         This performs a batched matmul of two sources a and b
