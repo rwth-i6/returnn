@@ -62,6 +62,7 @@ def test_forward():
     config = "\n".join(
         [
             "#!rnn.py",
+            "use_tensorflow = True",
             "model = '%s/model'" % tmpdir,
             "num_outputs = %i" % n_classes_dim,
             "num_inputs = %i" % n_data_dim,
