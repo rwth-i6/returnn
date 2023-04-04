@@ -69,7 +69,7 @@ class TensorDict:
             for i, dim in enumerate(value.dims):
                 key_ = f"{key}:size{i}"
                 assert key_ not in out
-                if dim.is_batch_dim() and not dim.dyn_size_ext:
+                if dim.is_batch_dim() and (not dim.dyn_size_ext or dim.dyn_size_ext.raw_tensor is None):
                     out[key_] = dim.get_dim_value()
                 elif dim.dyn_size_ext:
                     out[key_] = dim.dyn_size_ext.raw_tensor
