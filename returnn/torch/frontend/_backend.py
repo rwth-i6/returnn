@@ -3,7 +3,8 @@ Backend for exposing PyTorch-specific functionality.
 """
 
 from __future__ import annotations
-from typing import Optional, Union, Sequence, Tuple, Dict
+from typing import Optional, Union, Any, Sequence, Tuple, List, Dict
+import contextlib
 import torch
 import numpy
 
@@ -401,8 +402,22 @@ class TorchBackend(Backend[torch.Tensor]):
         )
         return res
 
+    @staticmethod
+    @contextlib.contextmanager
+    def random_journal_record() -> List[Dict[str, Any]]:
+        """
+        :return: the journal
+        """
+        try:
+            TorchBackend._random_journal_record_enabled = True
+            TorchBackend._random_journal = []
+            yield TorchBackend._random_journal
+        finally:
+            TorchBackend._random_journal_record_enabled = False
+            TorchBackend._random_journal = None
+
     _random_journal_record_enabled = False
-    _random_journal = []
+    _random_journal = None  # type: Optional[List[Dict[str, Any]]]
 
     @staticmethod
     def random(

@@ -4,6 +4,7 @@ High-level backend for RETURNN layers
 
 from __future__ import annotations
 from typing import Union, Sequence, Optional, Any, Tuple, Dict
+import contextlib
 import numpy
 import tensorflow as tf
 import returnn.tf.compat as tf_compat
@@ -275,9 +276,27 @@ class ReturnnLayersBackend(Backend[Layer]):
             {"class": "reduce", "from": source, "mode": mode, "axis": axis, **kwargs}, name=f"reduce_{mode}"
         )
 
+    @staticmethod
+    @contextlib.contextmanager
+    def random_journal_replay(journal: Sequence[Dict[str, Any]]):
+        """
+        Replays the journal.
+        At exit, the journal is cleared, and we check that we replayed everything.
+        """
+        try:
+            ReturnnLayersBackend._random_journal_replay_enabled = True
+            ReturnnLayersBackend._random_journal_replay_idx = 0
+            ReturnnLayersBackend._random_journal = journal
+            yield
+        finally:
+            assert ReturnnLayersBackend._random_journal_replay_idx == len(journal)
+            ReturnnLayersBackend._random_journal_replay_enabled = False
+            ReturnnLayersBackend._random_journal_replay_idx = 0
+            ReturnnLayersBackend._random_journal = None
+
     _random_journal_replay_enabled = False
     _random_journal_replay_idx = 0
-    _random_journal = []
+    _random_journal = None  # type: Optional[Sequence[Dict[str, Any]]]
 
     @staticmethod
     def random(

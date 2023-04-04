@@ -32,26 +32,13 @@ def run_model(extern_data: TensorDict, get_model: rf.GetModelFunc, forward_step:
     for v in extern_data.data.values():
         _fill_random(v, rnd=rnd)
 
-    rft.TorchBackend._random_journal_record_enabled = True
-    rft.TorchBackend._random_journal = []
-    out_pt = run_model_torch(extern_data, get_model, forward_step)
-    out_pt_raw = out_pt.as_raw_tensor_dict()  # get them now because dims might get overwritten
-    rft.TorchBackend._random_journal_record_enabled = False
-    # noinspection PyProtectedMember
-    random_journal = rft.TorchBackend._random_journal
-    rft.TorchBackend._random_journal = []
+    with rft.TorchBackend.random_journal_record() as random_journal:
+        out_pt = run_model_torch(extern_data, get_model, forward_step)
+        out_pt_raw = out_pt.as_raw_tensor_dict()  # get them now because dims might get overwritten
 
-    rfl.ReturnnLayersBackend._random_journal_replay_enabled = True
-    rfl.ReturnnLayersBackend._random_journal_replay_idx = 0
-    rfl.ReturnnLayersBackend._random_journal = random_journal
-    out_tf = run_model_net_dict_tf(extern_data, get_model, forward_step)
-    out_tf_raw = out_tf.as_raw_tensor_dict()
-    # all replayed?
-    # noinspection PyProtectedMember
-    assert len(rfl.ReturnnLayersBackend._random_journal) == rfl.ReturnnLayersBackend._random_journal_replay_idx
-    rfl.ReturnnLayersBackend._random_journal_replay_enabled = False
-    rfl.ReturnnLayersBackend._random_journal_replay_idx = 0
-    rfl.ReturnnLayersBackend._random_journal = []
+    with rfl.ReturnnLayersBackend.random_journal_replay(random_journal):
+        out_tf = run_model_net_dict_tf(extern_data, get_model, forward_step)
+        out_tf_raw = out_tf.as_raw_tensor_dict()
 
     print(out_pt, out_tf)
     assert set(out_pt.data.keys()) == set(out_tf.data.keys())
