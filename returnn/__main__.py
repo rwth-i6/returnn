@@ -29,6 +29,7 @@ from returnn.log import log
 from returnn.config import Config
 from returnn.datasets import Dataset, init_dataset, init_dataset_via_str
 from returnn.datasets.hdf import HDFDataset
+from returnn.engine.base import EngineBase
 from returnn.util import debug as debug_util
 from returnn.util import basic as util
 from returnn.util.basic import BackendEngine, BehaviorVersion
@@ -235,7 +236,12 @@ def init_engine():
     Initializes global ``engine``, for example :class:`returnn.tf.engine.Engine`.
     """
     global engine
-    if BackendEngine.is_tensorflow_selected():
+    if config.is_typed("CustomEngine") and config.is_of_type("CustomEngine", typing.Callable):
+        CustomEngine = config.typed_value("CustomEngine")
+        print("Using custom engine from config", file=log.v5)
+        engine = CustomEngine(config=config)
+        assert isinstance(CustomEngine, EngineBase)
+    elif BackendEngine.is_tensorflow_selected():
         from returnn.tf.engine import Engine
 
         engine = Engine(config=config)
