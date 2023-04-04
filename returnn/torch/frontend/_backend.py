@@ -294,7 +294,7 @@ class TorchBackend(Backend[torch.Tensor]):
         :param perm: e.g. [0, 2, 1]
         :return: permuted (transposed) raw tensor; wraps torch.permute
         """
-        return torch.permute(raw_tensor, perm)
+        return torch.permute(raw_tensor, tuple(perm))
 
     @staticmethod
     def convert_to_tensor(
