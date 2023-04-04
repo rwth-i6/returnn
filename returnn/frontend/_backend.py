@@ -276,7 +276,7 @@ class Backend(Generic[T]):
         raise NotImplementedError
 
     @staticmethod
-    def softmax_cross_entropy_with_logits(logits: Tensor, targets: Tensor, axis: Dim):
+    def softmax_cross_entropy_with_logits(*, logits: Tensor, targets: Tensor, axis: Dim):
         """
         Efficient cross entropy.
 

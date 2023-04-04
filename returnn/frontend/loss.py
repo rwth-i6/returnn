@@ -2,6 +2,7 @@
 Loss functions
 """
 
+from __future__ import annotations
 from returnn.tensor import Tensor, Dim
 import returnn.frontend as rf
 
@@ -37,6 +38,7 @@ def cross_entropy(
 
     if estimated_type == "logits":
         # This is a common case and most backends provide optimized functions for it.
+        # noinspection PyProtectedMember
         return estimated._raw_backend.softmax_cross_entropy_with_logits(logits=estimated, targets=target, axis=axis)
     if estimated_type == "probs":
         log_prob = rf.log(estimated)  # TODO: make numerically stable
