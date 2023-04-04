@@ -121,11 +121,6 @@ class BackendEngine:
     Torch = 3  # PyTorch
     selected_engine = None  # type: typing.Optional[int]  # One of the possible engines.
 
-    class CannotSelectEngine(Exception):
-        """
-        Cannot select backend engine
-        """
-
     @classmethod
     def select_engine(cls, *, engine=None, default_fallback_engine=None, config=None):
         """
@@ -139,7 +134,6 @@ class BackendEngine:
                 from returnn.config import get_global_config
 
                 config = get_global_config()
-            engine = None
             if config.bool("use_tensorflow", False):
                 engine = cls.TensorFlowNetDict
             if config.value("backend", None):
@@ -153,7 +147,7 @@ class BackendEngine:
                 if default_fallback_engine is not None:
                     engine = default_fallback_engine
                 else:
-                    engine = cls._get_default_engine()
+                    raise Exception("No backend defined. Please set the config option 'backend'.")
 
         # noinspection PyProtectedMember
         from returnn.frontend import _backend
@@ -171,39 +165,14 @@ class BackendEngine:
         cls.selected_engine = engine
 
     @classmethod
-    def _get_default_engine(cls) -> int:
+    def get_selected_engine(cls) -> int:
         """
-        Select the backend engine. If both are installed Tensorflow is the default.
+        :return: one of the constants TensorFlowNetDict, TensorFlow, Torch
         """
-        if "tensorflow" in sys.modules:
-            return cls.TensorFlowNetDict
-        if "torch" in sys.modules:
-            return cls.Torch
-        try:
-            import tensorflow
-
-            return cls.TensorFlowNetDict
-        except ImportError:
-            pass
-        try:
-            # noinspection PyPackageRequirements
-            import torch
-
-            return cls.Torch
-        except ImportError:
-            pass
-        raise cls.CannotSelectEngine("Neither TensorFlow or PyTorch available.")
-
-    @classmethod
-    def get_selected_engine(cls):
-        """
-        :rtype: int
-        """
-        if cls.selected_engine is not None:
-            return cls.selected_engine
-        else:
+        if cls.selected_engine is None:
             print("WARNING: BackendEngine.get_selected_engine() called before select_engine().", file=log.v3)
-            return cls._get_default_engine()
+            cls.select_engine()
+        return cls.selected_engine
 
     @classmethod
     def is_tensorflow_selected(cls):
