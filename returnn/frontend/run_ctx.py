@@ -11,6 +11,7 @@ from typing import Optional, Union, Any, Sequence, Dict
 from dataclasses import dataclass
 from returnn.tensor import Tensor, Dim, TensorDict
 import returnn.frontend as rf
+from . import _backend
 
 
 __all__ = ["RunCtx", "Loss", "get_run_ctx", "init_train_step_run_ctx", "init_forward_step_run_ctx"]
@@ -129,6 +130,13 @@ class RunCtx:
         """
         assert self.stage == "train_step"
         if not isinstance(loss, Tensor):
+            assert isinstance(loss, _backend.global_backend.RawTensorType)
+            assert _backend.global_backend.get_ndim_raw(loss) == 0, (
+                f"mark_as_loss(<loss with shape {_backend.global_backend.get_known_shape_raw(loss)}>, {name!r}):"
+                " Only scalar raw losses are supported,"
+                " because we cannot know whether there are any dynamic dims which might require padding."
+                " Explicitly convert to a Tensor first and specify dim tags."
+            )
             loss = rf.convert_to_tensor(loss)
         assert name not in self.losses
         self.losses[name] = Loss(
@@ -159,7 +167,12 @@ class RunCtx:
         """
         assert self.stage == "forward_step"
         if not isinstance(tensor, Tensor):
-            tensor = rf.convert_to_tensor(tensor)
+            assert isinstance(tensor, _backend.global_backend.RawTensorType)
+            if dims is None:
+                # We trust the user that the raw tensor has a well-defined dim order.
+                # So just create some dummy dims.
+                dims = [Dim(None, name=f"{name}-raw-axis-{i}") for i in _backend.global_backend.get_ndim_raw(tensor)]
+            tensor = rf.convert_to_tensor(tensor, dims=dims)
         assert name not in self.outputs.data
         if dims is None:
             # We try some reasonable defaults, specifically: BTF or BF.
