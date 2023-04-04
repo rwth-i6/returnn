@@ -22,6 +22,7 @@ from returnn.util import NumbersDict
 from .updater import Updater
 from .data import pipeline as data_pipeline
 from .data import returnn_dataset_wrapper
+from .data.tensor_utils import fill_tensor_from_raw_tensor
 
 
 class Engine(EngineBase):
@@ -255,14 +256,9 @@ class Engine(EngineBase):
         for k, data in self.extern_data.data.items():
             data = data.copy_template()
             raw_tensor = extern_data_raw[k].to(self._device)
-            data.dtype = str(raw_tensor.dtype).split(".")[-1]  # just overwrite for now...
-            data.raw_tensor = raw_tensor
+            size = extern_data_raw[k + ":seq_len"].cpu() if k + ":seq_len" in extern_data_raw else None
 
-            if k + ":seq_len" in extern_data_raw:
-                # Sequence lengths have to be on CPU for the later call to rnn.pack_padded_sequence
-                size = extern_data_raw[k + ":seq_len"].cpu()
-                data.dims[1].dyn_size_ext.dtype = str(size.dtype).split(".")[-1]  # just overwrite for now...
-                data.dims[1].dyn_size_ext.raw_tensor = size
+            data = fill_tensor_from_raw_tensor(data, raw_tensor, size)
 
             extern_data.data[k] = data
 
