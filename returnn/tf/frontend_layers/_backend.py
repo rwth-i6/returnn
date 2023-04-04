@@ -147,6 +147,32 @@ class ReturnnLayersBackend(Backend[Layer]):
         )
 
     @staticmethod
+    def softmax_cross_entropy_with_logits(*, logits: Tensor, targets: Tensor, axis: Dim):
+        """
+        Efficient cross entropy.
+
+        :param logits: target estimates given as inputs to softmax (i.e. unnormalized)
+        :param targets: probabilities, i.e. normalized, can also be sparse
+        :param axis: class labels dim over which softmax is computed
+        :return: cross entropy (same Dims as 'logits' but without 'axis')
+        """
+        if targets.sparse_dim:
+            assert axis == targets.sparse_dim and axis in logits.dims
+            return rfl.make_layer(
+                {
+                    "class": "sparse_softmax_cross_entropy_with_logits",
+                    "logits": logits,
+                    "targets": targets,
+                    "axis": axis,
+                },
+                name="sparse_softmax_cross_entropy_with_logits",
+            )
+        else:  # dense targets
+            assert axis in targets.dims and axis in logits.dims
+            log_probs = rf.log_softmax(logits, axis=axis)
+            return -rf.matmul(targets, log_probs, reduce=axis)
+
+    @staticmethod
     def sequence_mask_raw(lengths: Layer, *, batch_major: bool = True) -> Layer:
         """sequence mask"""
         raise NotImplementedError  # TODO
