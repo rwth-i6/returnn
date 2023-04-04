@@ -197,7 +197,7 @@ class TorchBackend(Backend[torch.Tensor]):
         logits = logits.copy_transpose(logits_axes_permutation)
 
         raw_cross_entropy = torch.nn.functional.cross_entropy(
-            input=logits.raw_tensor, target=targets.raw_tensor, reduction="none"
+            input=logits.raw_tensor, target=targets.raw_tensor.long(), reduction="none"
         )
 
         out_dims = list(logits.dims)
