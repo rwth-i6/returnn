@@ -42,12 +42,16 @@ def run_model(extern_data: TensorDict, get_model: rf.GetModelFunc, forward_step:
     rft.TorchBackend._random_journal = []
 
     rfl.ReturnnLayersBackend._random_journal_replay_enabled = True
+    rfl.ReturnnLayersBackend._random_journal_replay_idx = 0
     rfl.ReturnnLayersBackend._random_journal = random_journal
     out_tf = run_model_net_dict_tf(extern_data, get_model, forward_step)
     out_tf_raw = out_tf.as_raw_tensor_dict()
-    rfl.ReturnnLayersBackend._random_journal_replay_enabled = False
+    # all replayed?
     # noinspection PyProtectedMember
-    assert len(rfl.ReturnnLayersBackend._random_journal) == 0  # all replayed?
+    assert len(rfl.ReturnnLayersBackend._random_journal) == rfl.ReturnnLayersBackend._random_journal_replay_idx
+    rfl.ReturnnLayersBackend._random_journal_replay_enabled = False
+    rfl.ReturnnLayersBackend._random_journal_replay_idx = 0
+    rfl.ReturnnLayersBackend._random_journal = []
 
     print(out_pt, out_tf)
     assert set(out_pt.data.keys()) == set(out_tf.data.keys())

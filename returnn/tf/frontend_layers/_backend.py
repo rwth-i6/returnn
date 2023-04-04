@@ -276,6 +276,7 @@ class ReturnnLayersBackend(Backend[Layer]):
         )
 
     _random_journal_replay_enabled = False
+    _random_journal_replay_idx = 0
     _random_journal = []
 
     @staticmethod
@@ -299,17 +300,25 @@ class ReturnnLayersBackend(Backend[Layer]):
     ) -> Tensor:
         """random"""
         if ReturnnLayersBackend._random_journal_replay_enabled:
-            elem = ReturnnLayersBackend._random_journal.pop(0)
+            idx = ReturnnLayersBackend._random_journal_replay_idx
+            ReturnnLayersBackend._random_journal_replay_idx += 1
+            elem = ReturnnLayersBackend._random_journal[idx]
             assert isinstance(elem, dict)
             assert elem["dims"] == dims
             assert elem["dtype"] == dtype
             assert elem["sparse_dim"] == sparse_dim
             assert elem["distribution"] == distribution
             assert rfl.Layer.inner_control_flow() is None  # not implemented yet
-            out = elem["out"]
-            assert isinstance(out, Tensor)
-            assert isinstance(out.raw_tensor, numpy.ndarray)
-            return ReturnnLayersBackend.convert_to_tensor(out.raw_tensor, dims=dims, dtype=dtype, sparse_dim=sparse_dim)
+            return rfl.make_layer(
+                {
+                    "class": "eval",
+                    "from": (),
+                    "eval": _random_replay_eval,
+                    "eval_locals": {"idx": idx},
+                    "out_type": {"dims": dims, "dtype": dtype, "sparse_dim": sparse_dim},
+                },
+                name="random_replay",
+            )
         kwargs = {
             "mean": mean,
             "stddev": stddev,
@@ -336,3 +345,13 @@ class ReturnnLayersBackend(Backend[Layer]):
             },
             name="random",
         )
+
+
+def _random_replay_eval(idx, **_kwargs):
+    # noinspection PyProtectedMember
+    elem = ReturnnLayersBackend._random_journal[idx]
+    assert isinstance(elem, dict)
+    out = elem["out"]
+    assert isinstance(out, Tensor)
+    assert isinstance(out.raw_tensor, numpy.ndarray)
+    return tf.constant(out.raw_tensor, dtype=out.dtype)
