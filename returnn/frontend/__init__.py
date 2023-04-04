@@ -20,6 +20,7 @@ from .const import *
 from .dims import *
 from .dtype import *
 from .linear import *
+from .loss import *
 from .math_ import *
 from .matmul import *
 from .parameter import *
