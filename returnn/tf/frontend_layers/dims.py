@@ -71,7 +71,13 @@ def _register_dim_deps_when_novel(dim: Dim, deps: List[Tensor]):
 
 
 def _deps_valid_in_cur_name_ctx(deps: List[Tensor]) -> bool:
-    return all(dep.raw_tensor.root == rfl.Layer.top().root for dep in deps)
+    cur_root = rfl.Layer.top().root
+    for dep in deps:
+        assert isinstance(dep, Tensor)
+        assert isinstance(dep.raw_tensor, rfl.Layer)
+        if dep.raw_tensor.root != cur_root:
+            return False
+    return True
 
 
 def _register_dim_via_dyn_layer(dim: Dim) -> bool:
