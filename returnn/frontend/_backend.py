@@ -592,6 +592,16 @@ global_backend = object.__new__(Backend)
 _dispatch_table = {}  # type: Dict[Type, Type[Backend]]
 
 
+def select_backend_tf():
+    """
+    Selects the RETURNN layers backend (based on TF).
+    """
+    import tensorflow as tf
+
+    backend = get_backend_by_raw_tensor_type(tf.Tensor)  # side-effect: register it
+    global_backend.__class__ = backend
+
+
 def select_backend_returnn_layers_tf():
     """
     Selects the RETURNN layers backend (based on TF).

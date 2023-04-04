@@ -864,7 +864,7 @@ class Engine(EngineBase):
         if not BehaviorVersion.is_set():
             BehaviorVersion.set(config.int("behavior_version", None))
         if BackendEngine.selected_engine is None:
-            BackendEngine.select_engine(engine=BackendEngine.TensorFlow)
+            BackendEngine.select_engine(engine=BackendEngine.TensorFlowNetDict)
         assert BackendEngine.is_tensorflow_selected()
         self.orig_config = {}  # see _maybe_update_config
         self.custom_get_net_dict = None  # type: typing.Optional[typing.Callable]

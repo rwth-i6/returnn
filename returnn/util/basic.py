@@ -116,8 +116,9 @@ class BackendEngine:
     E.g. TensorFlow or PyTorch.
     """
 
-    TensorFlow = 1
-    Torch = 2  # PyTorch
+    TensorFlowNetDict = 1
+    TensorFlow = 2
+    Torch = 3  # PyTorch
     selected_engine = None  # type: typing.Optional[int]  # One of the possible engines.
 
     class CannotSelectEngine(Exception):
@@ -139,10 +140,11 @@ class BackendEngine:
                 config = get_global_config()
             engine = None
             if config.bool("use_tensorflow", False):
-                engine = cls.TensorFlow
+                engine = cls.TensorFlowNetDict
             if config.value("backend", None):
                 backend = config.value("backend", None)
                 engine = {
+                    "tensorflow-net-dict": cls.TensorFlowNetDict,
                     "tensorflow": cls.TensorFlow,
                     "torch": cls.Torch,
                 }[backend]
@@ -153,6 +155,8 @@ class BackendEngine:
         from returnn.frontend import _backend
 
         if engine == cls.TensorFlow:
+            _backend.select_backend_tf()
+        elif engine == cls.TensorFlowNetDict:
             # Note that we assume that the user wants the RETURNN layers frontend (TF-based)
             # and not the low-level TF frontend.
             # If we want to expose the low-level TF frontend to the user directly at some point,
@@ -163,19 +167,18 @@ class BackendEngine:
         cls.selected_engine = engine
 
     @classmethod
-    def _get_default_engine(cls):
+    def _get_default_engine(cls) -> int:
         """
         Select the backend engine. If both are installed Tensorflow is the default.
-        :rtype: int
         """
         if "tensorflow" in sys.modules:
-            return cls.TensorFlow
+            return cls.TensorFlowNetDict
         if "torch" in sys.modules:
             return cls.Torch
         try:
             import tensorflow
 
-            return cls.TensorFlow
+            return cls.TensorFlowNetDict
         except ImportError:
             pass
         try:
@@ -203,7 +206,7 @@ class BackendEngine:
         """
         :rtype: bool
         """
-        return cls.get_selected_engine() == cls.TensorFlow
+        return cls.get_selected_engine() in {cls.TensorFlowNetDict, cls.TensorFlow}
 
     @classmethod
     def is_torch_selected(cls):
