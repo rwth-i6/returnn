@@ -47,6 +47,7 @@ class Engine(EngineBase):
         self._start_epoch = None  # type: Optional[int]
         self._final_epoch = None  # type: Optional[int]
         self._model = None  # type: Optional[torch.nn.Module]
+        self._train_step = 0
         self._train_step_func = None  # type: Optional[Callable]
         self._save_model_epoch_interval = 1
         self._updater = None  # type: Optional[Updater]
@@ -87,10 +88,10 @@ class Engine(EngineBase):
         for dataset_name, dataset in self.eval_datasets.items():
             self._eval_dataloaders[dataset_name] = self._create_data_loader(dataset)
 
-        self._start_epoch, step = self.get_train_start_epoch_batch(self.config)
+        self._start_epoch, _ = self.get_train_start_epoch_batch(self.config)
         self._final_epoch = self.config_get_final_epoch(self.config)
 
-        self._load_model(epoch=self._start_epoch, step=step)
+        self._load_model(epoch=self._start_epoch)
         self._save_model_epoch_interval = config.int("save_interval", 1)
 
         self._updater = Updater(self.config, self._model, self.learning_rate)
@@ -107,7 +108,7 @@ class Engine(EngineBase):
         """
 
         print("Starting training at epoch {}.".format(self._start_epoch), file=log.v3)
-        assert self._model, "Model not initialized, call init_train_from_config()."
+        assert self._model is not None, "Model not initialized, call init_train_from_config()."
 
         self.epoch = self._start_epoch
         self._epoch_mp_shared.value = self.epoch
@@ -158,6 +159,7 @@ class Engine(EngineBase):
             print("step %i, loss: %f" % (step_idx, total_loss.raw_tensor.detach().cpu().numpy()), file=log.v4)
 
             step_idx += 1
+            self._train_step += 1
 
         print("Trained %i steps" % step_idx)
 
@@ -271,13 +273,23 @@ class Engine(EngineBase):
         sentinel_kw = {"__fwd_compatible_random_arg_%i" % int(random() * 100): None}
         self._train_step_func(model=self._model, extern_data=extern_data, **sentinel_kw)
 
-    def _load_model(self, *, epoch: int, step: int):
+    def _load_model(self, *, epoch: int):
         """
         Sets self._model to a torch.nn.Module.
 
         :param epoch:
-        :param step:
         """
+        checkpoint_state = None
+        if epoch > 1:
+            filename = self.get_epoch_model_filename(epoch=epoch - 1) + util.get_model_filename_postfix()
+            print("Load model %s" % (filename,), file=log.v4)
+            checkpoint_state = torch.load(filename)
+            assert checkpoint_state["epoch"] == epoch - 1
+            step = checkpoint_state["step"]
+        else:
+            step = 0
+        self._train_step = step
+
         # See :mod:`rf.rand` docstring for an explanation of this logic.
         random_seed = self.config.int("random_seed", 42)
         random_seed = (epoch * 193939 + step * 19937 + random_seed * 27644437 + 479001599) % (2**31)
@@ -289,11 +301,8 @@ class Engine(EngineBase):
         self._model = get_model_func(epoch=epoch, step=step, **sentinel_kw)
         assert isinstance(self._model, torch.nn.Module)
 
-        if epoch > 1:
-            filename = self.get_epoch_model_filename(epoch=epoch - 1) + util.get_model_filename_postfix()
-            print("Load model %s" % (filename,), file=log.v4)
-            model_state = torch.load(filename)
-            self._model.load_state_dict(model_state)
+        if checkpoint_state is not None:
+            self._model.load_state_dict(checkpoint_state["model"])
         preload_from_files = self.config.typed_value("preload_from_files", {})
         if preload_from_files:
             # see `preload_from_files` in tf engine and `returnn.tf.network.CustomCheckpointLoader`
@@ -317,13 +326,13 @@ class Engine(EngineBase):
                         continue
                 print(f"Pre-load weights for key '{preload_key}' from {opts['filename']}", file=log.v3)
                 preload_model_state = torch.load(opts["filename"])
-                if opts.get("checkpoint_key", None) is not None:
+                if opts.get("checkpoint_key", "model") is not None:
                     # This can be used if an external checkpoint saves a checkpoint a different structure that just the
                     # model state dict. E.g., if a checkpoint is created using
                     # `torch.save({"model": model.state_dict(), "optimizer": optimizer.state)_dict(), ...})`
                     # we can set checkpoint_key = "model" to load the model.
                     # Currently, this only supports single level dicts, but it could be extended if needed.
-                    preload_model_state = preload_model_state[opts["checkpoint_key"]]
+                    preload_model_state = preload_model_state[opts.get("checkpoint_key", "model")]
                 if opts.get("prefix", ""):
                     # Only params with this prefix should be loaded.
                     # They are expected to be in the checkpoint without this prefix.
@@ -360,7 +369,7 @@ class Engine(EngineBase):
             os.makedirs(directory, exist_ok=True)
 
         print("Save model under %s" % (filename,), file=log.v4)
-        torch.save(self._model.state_dict(), filename)
+        torch.save({"model": self._model.state_dict(), "epoch": self.epoch, "step": self._train_step}, filename)
 
     def _load_optimizer(self, epoch):
         """
