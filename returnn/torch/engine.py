@@ -303,7 +303,7 @@ class Engine(EngineBase):
             )
             # We use the reversed sorted order here to achieve consistent behavior with the TF engine.
             # There, the keys are used in sorted order but if a variable is loaded,
-            # it will not be considered anymore afterwards.
+            # it will not be considered anymore afterward.
             # So the first occurrence is used.
             # Here, we overwrite variables even if they have been loaded before.
             # In order to get consistent behavior, we use the reversed order.
