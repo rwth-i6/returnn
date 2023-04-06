@@ -9786,6 +9786,40 @@ def test_MaskedComputationLayer_sub_layers_RecLayer_construct():
         print("seq lens:", out_seq_lens_v)
 
 
+def test_MaskedComputationLayer_sub_rec_net_opt_out():
+    from returnn.tf.util.data import single_step_dim
+
+    check_reclayer_optimize_out(
+        {
+            "class": "masked_computation",
+            "mask": "mask",
+            "unit": {
+                "class": "rec",
+                "from": [],
+                "axis": single_step_dim,
+                "unit": {
+                    "in": {"class": "copy", "from": "base:in"},
+                    "layer1": {"class": "linear", "from": "in", "n_out": 5},
+                    "layer2": {"class": "rec", "from": "layer1", "unit": "lstm", "n_out": 5, "axis": single_step_dim},
+                    "layer3": {"class": "combine", "from": ["layer2", "prev:layer3"], "kind": "add"},
+                    "output": {"class": "linear", "from": "layer3", "n_out": 3},
+                },
+            },
+            "n_out": 3,
+        },
+        {
+            "const1": {"class": "constant", "value": 1, "with_batch_dim": True},  # just to broadcast mask
+            "mask": {
+                "class": "eval",
+                "from": [":i", "const1"],
+                "out_type": {"dtype": "bool"},
+                "eval": "tf.equal(source(0) % 2, source(1))",
+            },
+            "in": {"class": "copy", "from": "data:source"},
+        },
+    )
+
+
 def test_att_train_search_loss_prev_beam():
     beam_size = 1
     num_ner_labels = 13
