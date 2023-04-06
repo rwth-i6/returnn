@@ -105,12 +105,12 @@ class ReturnnLayersBackend(Backend[Layer]):
     @staticmethod
     def compare_raw(a: Layer, kind: str, b: Layer) -> Layer:
         """compare"""
-        raise NotImplementedError  # TODO
+        raise Exception("compare_raw should not get called")
 
     @staticmethod
     def combine_raw(a: Layer, kind: str, b: Layer) -> Layer:
         """combine"""
-        raise NotImplementedError  # TODO
+        raise Exception("combine_raw should not get called")
 
     @staticmethod
     def reshape_raw(raw_tensor: Layer, shape: Union[Sequence[Union[int, Layer]], Layer]) -> Layer:

@@ -139,7 +139,7 @@ class Backend(Generic[T]):
     def compare_raw(a: T, kind: str, b: T) -> T:
         """
         :param a:
-        :param kind: "equal"|"==", "less"|"<", "less_equal"|"<=", "greater"|">", "greater_equal"|">=", "not_equal"|"!="
+        :param kind: "equal", "less", "less_equal", "greater", "greater_equal", "not_equal"
         :param b:
         :return: a `kind` b
         """
@@ -149,8 +149,8 @@ class Backend(Generic[T]):
     def combine_raw(a: T, kind: str, b: T) -> T:
         """
         :param a:
-        :param kind: "add"|"+", "sub"|"-", "mul"|"*", "truediv"|"/", "floordiv"|"//", "mod"|"%", "pow"|"**",
-            "max"|"maximum", "min"|"minimum", "logical_and", "logical_or", "squared_difference"
+        :param kind: "add", "sub", "mul", "truediv", "floordiv", "mod", "pow",
+            "maximum", "minimum", "logical_and", "logical_or", "squared_difference"
         :param b:
         :return: a `kind` b
         """

@@ -68,6 +68,18 @@ def compare(
     """compare with two tensors"""
 
 
+_CompareMap = {
+    "==": "equal",
+    "eq": "equal",
+    "<=": "less_equal",
+    "<": "less",
+    ">=": "greater_equal",
+    ">": "greater",
+    "!=": "not_equal",
+    "<>": "not_equal",
+}
+
+
 def compare(
     a: Union[Tensor, _RawTensorTypes],
     kind: str,
@@ -88,6 +100,8 @@ def compare(
     """
     from . import _utils as utils
 
+    kind = _CompareMap.get(kind, kind)
+
     backend = utils.get_backend_from_tensors(a, b)
     return backend.compare(a, kind, b, allow_broadcast_all_sources=allow_broadcast_all_sources, dim_order=dim_order)
 
@@ -102,6 +116,19 @@ def combine(
     dim_order: Optional[Sequence[Dim]] = None,
 ) -> Tensor:
     """combine with two tensors"""
+
+
+_CombineMap = {
+    "+": "add",
+    "-": "sub",
+    "*": "mul",
+    "/": "truediv",
+    "//": "floordiv",
+    "%": "mod",
+    "**": "pow",
+    "max": "maximum",
+    "min": "minimum",
+}
 
 
 def combine(
@@ -125,21 +152,23 @@ def combine(
     """
     from . import _utils
 
+    kind = _CombineMap.get(kind, kind)
+
     if isinstance(b, (int, float, bool, numpy.number)):
-        if b == 1 and kind in {"truediv", "/", "floordiv", "//", "pow", "**", "mul", "*"}:
+        if b == 1 and kind in {"truediv", "floordiv", "pow", "mul"}:
             return a
-        if b == -1 and kind in {"truediv", "/", "floordiv", "//", "pow", "**", "mul", "*"}:
+        if b == -1 and kind in {"truediv", "floordiv", "pow", "mul"}:
             return -a
-        if b == 0 and kind in {"add", "+", "sub", "-"}:
+        if b == 0 and kind in {"add", "sub"}:
             return a
         if b and kind in {"logical_and", "logical_or"}:
             return a
     if isinstance(a, (int, float, bool, numpy.number)):
-        if a == 1 and kind in {"pow", "**"}:
+        if a == 1 and kind == "pow":
             return a
-        if a == 1 and kind in {"mul", "*"}:
+        if a == 1 and kind == "mul":
             return b
-        if a == 0 and kind in {"add", "+", "sub", "-"}:
+        if a == 0 and kind in {"add", "sub"}:
             return b
         if a and kind in {"logical_and", "logical_or"}:
             return b

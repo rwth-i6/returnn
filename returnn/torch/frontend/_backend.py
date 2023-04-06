@@ -242,21 +242,13 @@ class TorchBackend(Backend[torch.Tensor]):
     def compare_raw(a: torch.Tensor, kind: str, b: torch.Tensor) -> torch.Tensor:
         """
         :param a:
-        :param kind: "equal"|"==", "less"|"<", "less_equal"|"<=", "greater"|">", "greater_equal"|">=",
-            "not_equal"|"!="|"<>"
+        :param kind: "equal", "less", "less_equal", "greater", "greater_equal", "not_equal"
         :param b:
         :return: a `kind` b
         """
         assert a.dim() == b.dim()
-        kind = {
-            "==": "eq",  # eq is different to equal; eq returns a torch Tensor
-            "<=": "less_equal",
-            "<": "less",
-            ">=": "greater_equal",
-            ">": "greater",
-            "!=": "not_equal",
-            "<>": "not_equal",
-        }.get(kind, kind)
+        if kind == "equal":
+            kind = "eq"  # eq is different to equal; eq returns a torch Tensor
         op = getattr(torch, kind)  # e.g. torch.equal
         return op(a, b)
 
@@ -264,25 +256,16 @@ class TorchBackend(Backend[torch.Tensor]):
     def combine_raw(a: torch.Tensor, kind: str, b: torch.Tensor) -> torch.Tensor:
         """
         :param a:
-        :param kind: "add"|"+", "sub"|"-", "mul"|"*", "truediv"|"/", "floordiv"|"//", "mod"|"%", "pow"|"**",
-            "max"|"maximum", "min"|"minimum", "logical_and", "logical_or", "squared_difference"
+        :param kind: "add", "sub", "mul", "truediv", "floordiv", "mod", "pow",
+            "maximum", "minimum", "logical_and", "logical_or", "squared_difference"
         :param b:
         :return: a `kind` b
         """
         assert a.dim() == b.dim()
         kind = {
-            "+": "add",
-            "-": "sub",
-            "*": "mul",
-            "/": "true_divide",
             "truediv": "true_divide",
-            "//": "floor_divide",
             "floordiv": "floor_divide",
-            "%": "remainder",  # Python-like modulo, not C-like (torch.fmod)
             "mod": "remainder",
-            "**": "pow",
-            "max": "maximum",
-            "min": "minimum",
         }.get(kind, kind)
         op = getattr(torch, kind)  # e.g. torch.add
         return op(a, b)
