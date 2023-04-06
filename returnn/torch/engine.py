@@ -286,7 +286,7 @@ class Engine(EngineBase):
         get_model_func = self.config.typed_value("get_model")
         assert get_model_func, "get_model not defined"
         sentinel_kw = {"__fwd_compatible_random_arg_%i" % int(random() * 100): None}
-        self._model = get_model_func(**sentinel_kw)
+        self._model = get_model_func(epoch=epoch, step=step, **sentinel_kw)
         assert isinstance(self._model, torch.nn.Module)
 
         if epoch > 1:
