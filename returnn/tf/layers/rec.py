@@ -585,8 +585,9 @@ class RecLayer(_ConcatInputLayer):
         return self.get_base_absolute_name_scope_prefix() + "rec/"  # all under "rec" sub-name-scope
 
     @classmethod
-    def get_rec_initial_extra_outputs(cls, **kwargs):
+    def get_rec_initial_extra_outputs(cls, unit, **kwargs):
         """
+        :param str|type unit: cell name, minus the "Cell" at the end
         :rtype: dict[str,tf.Tensor|tuple[tf.Tensor]]
         """
         # axis is handled in transform_config_dict
@@ -597,7 +598,17 @@ class RecLayer(_ConcatInputLayer):
         if axis != single_step_dim:
             return {}
         # We expect to be inside another RecLayer, and should do a single step (like RnnCellLayer).
-        return {"state": RnnCellLayer.get_rec_initial_state(**kwargs)}
+        if isinstance(unit, _SubnetworkRecCell):
+            # noinspection PyProtectedMember
+            initial_outputs = {k: unit._get_init_output(k) for k in sorted(unit.prev_layers_needed)}
+            # noinspection PyProtectedMember
+            initial_extra_outputs = {
+                k: unit._get_init_extra_outputs(k) for k in sorted(unit.layer_data_templates.keys())
+            }
+            initial_extra_outputs = {k: v for (k, v) in initial_extra_outputs.items() if v}
+            return {"outputs": initial_outputs, "extra_outputs": initial_extra_outputs}
+        assert isinstance(unit, str)
+        return {"state": RnnCellLayer.get_rec_initial_state(unit=unit, **kwargs)}
 
     @classmethod
     def get_rec_initial_output(cls, **kwargs):
