@@ -342,7 +342,7 @@ class Engine(EngineBase):
                 for new_name, name_in_checkpoint in opts.get("var_name_mapping", {}).items():
                     preload_model_state[new_name] = preload_model_state.pop(name_in_checkpoint)
                 missing_keys, _ = self._model.load_state_dict(preload_model_state, strict=False)
-                if not opts.get("ignore_missing", False):
+                if missing_keys and not opts.get("ignore_missing", False):
                     prefix_keys = [key for key in self._model.state_dict() if key.startswith(opts.get("prefix", ""))]
                     missing_prefix_keys = set(prefix_keys).intersection(set(missing_keys))
                     assert not missing_prefix_keys, f"Missing keys and ignore_missing=False: {missing_prefix_keys}"
