@@ -220,9 +220,12 @@ class Loss:
 
     scale: float = 1.0
     as_error: bool = False
-    use_normalized_loss: bool = False
+    use_normalized_loss: bool = False  # for the gradient / total loss
     use_flatten_frames: bool = True
     custom_inv_norm_factor: Optional[Tensor] = None
+
+    _summed_loss_cached: Optional[Tensor] = None
+    _mean_loss_cached: Optional[Tensor] = None
 
     def get_summed_loss(self) -> Tensor:
         """
@@ -230,23 +233,39 @@ class Loss:
         """
         if not self.loss.dims:
             return self.loss
-        return rf.reduce_sum(self.loss, axis=self.loss.dims)
+        if self._summed_loss_cached is not None:
+            return self._summed_loss_cached
+        if self._mean_loss_cached is not None:
+            return self._mean_loss_cached / self.get_inv_norm_factor()
+        self._summed_loss_cached = rf.reduce_sum(self.loss, axis=self.loss.dims)
+        return self._summed_loss_cached
 
     def get_mean_loss(self) -> Tensor:
         """
         :return: sum of loss (scalar)
         """
+        if self._mean_loss_cached is not None:
+            return self._mean_loss_cached
         if self.custom_inv_norm_factor:
             loss = self.get_summed_loss()
             loss /= rf.cast(self.custom_inv_norm_factor, dtype=loss.dtype)
             return loss
         if not self.loss.dims:
             return self.loss
-        return rf.reduce_mean(self.loss, axis=self.loss.dims)
+        self._mean_loss_cached = rf.reduce_mean(self.loss, axis=self.loss.dims)
+        return self._mean_loss_cached
+
+    def get_inv_norm_factor(self) -> Union[int, Tensor]:
+        """
+        :return: inverse norm factor (scalar)
+        """
+        if self.custom_inv_norm_factor:
+            return self.custom_inv_norm_factor
+        return self.loss.num_elements()
 
     def get_scaled_reduced_loss(self) -> Tensor:
         """
-        :return: scaled reduced loss (scalar), as it is supposed to be used for calculating the
+        :return: scaled reduced loss (scalar), as it is supposed to be used for calculating the train gradient
         """
         if self.use_normalized_loss:
             loss = self.get_mean_loss()
