@@ -96,8 +96,10 @@ class Tensor(_TensorMixin, _TensorOpOverloadsMixin, Generic[RawTensorType]):
                 version = 1
         if dtype is None:
             # old defaults
-            assert version == 1
-            dtype = "int32" if sparse_dim else "float32"
+            if version == 1:
+                dtype = "int32" if sparse_dim else "float32"
+            else:
+                raise ValueError("Tensor dtype needs to be specified")
 
         self.name = name
         self._dims = tuple(dims)
