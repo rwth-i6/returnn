@@ -3,7 +3,7 @@ Main engine for PyTorch
 """
 
 from __future__ import annotations
-from typing import Optional, Callable, Dict
+from typing import Optional, Union, Callable, Dict
 
 import os
 import torch
@@ -15,13 +15,14 @@ from returnn.config import Config
 from returnn.log import log
 from returnn.engine.base import EngineBase
 import returnn.frontend as rf
-from returnn.tensor import TensorDict
+from returnn.tensor import TensorDict, Tensor, batch_dim
 from returnn.datasets.basic import init_dataset, Dataset
 from returnn.util import basic as util
 from returnn.util import NumbersDict
 from .updater import Updater
 from .data import pipeline as data_pipeline
 from .data import returnn_dataset_wrapper
+from .frontend.bridge import rf_module_to_pt_module
 
 
 class Engine(EngineBase):
@@ -46,7 +47,8 @@ class Engine(EngineBase):
 
         self._start_epoch = None  # type: Optional[int]
         self._final_epoch = None  # type: Optional[int]
-        self._model = None  # type: Optional[torch.nn.Module]
+        self._orig_model = None  # type: Optional[Union[rf.Module, torch.nn.Module]]
+        self._pt_model = None  # type: Optional[torch.nn.Module]
         self._train_step = 0
         self._train_step_func = None  # type: Optional[Callable]
         self._save_model_epoch_interval = 1
@@ -94,7 +96,7 @@ class Engine(EngineBase):
         self._load_model(epoch=self._start_epoch)
         self._save_model_epoch_interval = config.int("save_interval", 1)
 
-        self._updater = Updater(self.config, self._model, self.learning_rate)
+        self._updater = Updater(self.config, self._pt_model, self.learning_rate)
         self._updater.create_optimizer()
         if self._start_epoch > 1:
             self._load_optimizer(self._start_epoch)
@@ -108,7 +110,7 @@ class Engine(EngineBase):
         """
 
         print("Starting training at epoch {}.".format(self._start_epoch), file=log.v3)
-        assert self._model is not None, "Model not initialized, call init_train_from_config()."
+        assert self._pt_model is not None, "Model not initialized, call init_train_from_config()."
 
         self.epoch = self._start_epoch
         self._epoch_mp_shared.value = self.epoch
@@ -136,7 +138,7 @@ class Engine(EngineBase):
         """
         print("start", self.get_epoch_str(), "with learning rate", self.learning_rate, "...", file=log.v4)
 
-        self._model.train()
+        self._pt_model.train()
 
         accumulated_losses_dict = NumbersDict()
         step_idx = 0
@@ -177,7 +179,7 @@ class Engine(EngineBase):
         """
         Runs model on all eval datasets and calculates the loss.
         """
-        self._model.eval()
+        self._pt_model.eval()
 
         for dataset_name, dataset in self.eval_datasets.items():
             print(f"Evaluating dataset {dataset_name!r}'", file=log.v3)
@@ -263,7 +265,10 @@ class Engine(EngineBase):
             if k + ":seq_len" in extern_data_raw:
                 # Sequence lengths have to be on CPU for the later call to rnn.pack_padded_sequence
                 size = extern_data_raw[k + ":seq_len"].cpu()
-                data.dims[1].dyn_size_ext.dtype = str(size.dtype).split(".")[-1]  # just overwrite for now...
+                size_dtype = str(size.dtype).split(".")[-1]
+                if data.dims[1].dyn_size_ext is None:
+                    data.dims[1].dyn_size_ext = Tensor(data.dims[1].name or "time", dims=[batch_dim], dtype=size_dtype)
+                data.dims[1].dyn_size_ext.dtype = size_dtype
                 data.dims[1].dyn_size_ext.raw_tensor = size
 
             extern_data.data[k] = data
@@ -271,7 +276,7 @@ class Engine(EngineBase):
         rf.init_train_step_run_ctx()
 
         sentinel_kw = {"__fwd_compatible_random_arg_%i" % int(random() * 100): None}
-        self._train_step_func(model=self._model, extern_data=extern_data, **sentinel_kw)
+        self._train_step_func(model=self._orig_model, extern_data=extern_data, **sentinel_kw)
 
     def _load_model(self, *, epoch: int):
         """
@@ -298,11 +303,18 @@ class Engine(EngineBase):
         get_model_func = self.config.typed_value("get_model")
         assert get_model_func, "get_model not defined"
         sentinel_kw = {"__fwd_compatible_random_arg_%i" % int(random() * 100): None}
-        self._model = get_model_func(epoch=epoch, step=step, **sentinel_kw)
-        assert isinstance(self._model, torch.nn.Module)
+        model = get_model_func(epoch=epoch, step=step, **sentinel_kw)
+        self._orig_model = model
+        if isinstance(model, rf.Module):
+            self._pt_model = rf_module_to_pt_module(model)
+        elif isinstance(model, torch.nn.Module):
+            self._pt_model = model
+        else:
+            raise TypeError(f"get_model returned {model} of type {type(model)}, expected rf.Module or torch.nn.Module")
+        assert isinstance(self._pt_model, torch.nn.Module)
 
         if checkpoint_state is not None:
-            self._model.load_state_dict(checkpoint_state["model"])
+            self._pt_model.load_state_dict(checkpoint_state["model"])
         preload_from_files = self.config.typed_value("preload_from_files", {})
         if preload_from_files:
             # see `preload_from_files` in tf engine and `returnn.tf.network.CustomCheckpointLoader`
@@ -350,14 +362,14 @@ class Engine(EngineBase):
                         preload_model_state.pop(key)
                 for new_name, name_in_checkpoint in opts.get("var_name_mapping", {}).items():
                     preload_model_state[new_name] = preload_model_state.pop(name_in_checkpoint)
-                missing_keys, _ = self._model.load_state_dict(preload_model_state, strict=False)
+                missing_keys, _ = self._pt_model.load_state_dict(preload_model_state, strict=False)
                 if missing_keys and not opts.get("ignore_missing", False):
-                    prefix_keys = [key for key in self._model.state_dict() if key.startswith(opts.get("prefix", ""))]
+                    prefix_keys = [key for key in self._pt_model.state_dict() if key.startswith(opts.get("prefix", ""))]
                     missing_prefix_keys = set(prefix_keys).intersection(set(missing_keys))
                     assert not missing_prefix_keys, f"Missing keys and ignore_missing=False: {missing_prefix_keys}"
                 print(f"Missing keys: {missing_keys}", file=log.v4)
 
-        self._model.to(self._device)
+        self._pt_model.to(self._device)
 
     def _save_model(self):
         """
@@ -369,7 +381,7 @@ class Engine(EngineBase):
             os.makedirs(directory, exist_ok=True)
 
         print("Save model under %s" % (filename,), file=log.v4)
-        torch.save({"model": self._model.state_dict(), "epoch": self.epoch, "step": self._train_step}, filename)
+        torch.save({"model": self._pt_model.state_dict(), "epoch": self.epoch, "step": self._train_step}, filename)
 
     def _load_optimizer(self, epoch):
         """

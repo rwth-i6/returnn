@@ -16,6 +16,7 @@ def pt_module_to_rf_module(pt_module: torch.nn.Module) -> rf.Module:
     :param pt_module: torch module
     :return: RF module
     """
+    assert isinstance(pt_module, torch.nn.Module)
     if isinstance(pt_module, _RFModuleAsPTModule):
         return pt_module.rf_module
     return _PTModuleAsRFModule(pt_module=pt_module)
@@ -26,6 +27,7 @@ def rf_module_to_pt_module(rf_module: rf.Module) -> torch.nn.Module:
     :param rf_module: RF module
     :return: torch module
     """
+    assert isinstance(rf_module, rf.Module)
     if isinstance(rf_module, _PTModuleAsRFModule):
         return rf_module.pt_module
     return _RFModuleAsPTModule(rf_module=rf_module)
