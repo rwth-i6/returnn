@@ -237,7 +237,9 @@ class Loss:
         :return: sum of loss (scalar)
         """
         if self.custom_inv_norm_factor:
-            return self.get_summed_loss() * self.custom_inv_norm_factor
+            loss = self.get_summed_loss()
+            loss /= rf.cast(self.custom_inv_norm_factor, dtype=loss.dtype)
+            return loss
         if not self.loss.dims:
             return self.loss
         return rf.reduce_mean(self.loss, axis=self.loss.dims)
