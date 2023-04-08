@@ -437,15 +437,25 @@ class TorchBackend(Backend[torch.Tensor]):
         """reduce"""
         assert mode in Backend._AllowedReduceModes
         if isinstance(axis, Dim):
-            assert not axis.need_masking()  # not implemented
-        else:
-            assert all(not dim.need_masking() for dim in axis)  # not implemented
+            axis = [axis]
+        assert all(isinstance(dim, Dim) for dim in axis)
+        if use_time_mask is not False and any(dim.need_masking() for dim in axis):
+            source = source.copy()
+            dtype = source.raw_tensor.dtype
+            if mode == "max":
+                mask_value = torch.finfo(dtype).min if dtype.is_floating_point else torch.iinfo(dtype).min
+            elif mode == "min":
+                mask_value = torch.finfo(dtype).max if dtype.is_floating_point else torch.iinfo(dtype).max
+            elif mode == "sum":
+                mask_value = 0
+            else:
+                raise NotImplementedError(f"reduce_{mode} not implemented with masking on tensor {source!r}.")
+            for i, dim in enumerate(axis):
+                if dim.need_masking():
+                    mask = source.get_sequence_mask_broadcast(axis=i)
+                    source.raw_tensor = torch.where(mask, source.raw_tensor, mask_value)
         func = getattr(torch, mode)
-        raw_dims = (
-            [source.get_axis_from_description(axis)]
-            if isinstance(axis, Dim)
-            else [source.get_axis_from_description(dim) for dim in axis]
-        )
+        raw_dims = [source.get_axis_from_description(dim) for dim in axis]
         res_dims = [dim for i, dim in enumerate(source.dims) if i not in raw_dims]
         if not res_dims:
             raw_result = func(source.raw_tensor)
