@@ -1518,6 +1518,21 @@ class _DimMixin:
 
         :return: max(size or dyn_size)
         """
+        res = self.get_dim_value_tensor()
+        if isinstance(res, _t.Tensor):
+            assert res.dims == ()
+            return res.raw_tensor
+        assert isinstance(res, int)
+        return res
+
+    def get_dim_value_tensor(self) -> Union[int, _t.Tensor]:
+        """
+        Infers the dim this axis should have if unbroadcasted.
+        If `self.src_data` has a placeholder, will use the shape from there.
+        Otherwise, uses `self.dimension` (if static) or `self.dyn_size` (if dynamic).
+
+        :return: max(size or dyn_size)
+        """
         import returnn.frontend as rf
 
         if self.dimension is not None:
@@ -1530,25 +1545,33 @@ class _DimMixin:
                     # Masking is not always possible here, e.g.
                     # self = Dim{'self-att-keys'['time:var:extern_data:classes'[B]]}.
                     use_time_mask=False,
-                ).raw_tensor
-            return self.dyn_size_ext.placeholder
+                )
+            return self.dyn_size_ext
         if self.is_batch_dim():
+            res = None
             if self._extra and self._extra.src_data:
-                return self._extra.src_data.get_batch_dim()
-            if self.batch:
-                return self.batch.dim
+                res = self._extra.src_data.get_batch_dim()
+            elif self.batch:
+                res = self.batch.dim
+            if isinstance(res, int):
+                return res
+            if res is not None:
+                return _t.Tensor("batch", dims=(), dtype=rf.get_default_array_index_dtype(), raw_tensor=res)
         if (
             self._extra
             and self._extra.src_data is not None
             and self._extra.src_axis is not None
             and self._extra.src_data.placeholder is not None
         ):
-            return self._extra.src_data.get_dim(self._extra.src_axis)
+            res = self._extra.src_data.get_dim(self._extra.src_axis)
+            if isinstance(res, int):
+                return res
+            return _t.Tensor("batch", dims=(), dtype=rf.get_default_array_index_dtype(), raw_tensor=res)
         self.complete_dyn_size()
         if self.dyn_size_ext and self.dyn_size_ext.placeholder is not None:
             if self.dyn_size_ext.batch_ndim > 0:
-                return rf.reduce_max(self.dyn_size_ext, axis=self.dyn_size_ext.dim_tags).raw_tensor
-            return self.dyn_size_ext.placeholder
+                return rf.reduce_max(self.dyn_size_ext, axis=self.dyn_size_ext.dim_tags)
+            return self.dyn_size_ext
         raise Exception("%s: need placeholder, self.dimension or self.dyn_size for dim value" % self)
 
     def axis_split_info(self):
