@@ -747,7 +747,11 @@ class _DimMixin:
         :return: whether dim is static or dynamic but with scalar dyn_size_ext
         """
         if self.is_static():
+            if self.capacity is not None:
+                return self.size < self.capacity
             return False
+        if self.capacity is not None:
+            return True
         if not self.dyn_size_ext:
             return True  # unknown
         return self.dyn_size_ext.batch_ndim > 0
