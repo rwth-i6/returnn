@@ -119,14 +119,14 @@ class RunCtx:
           E.g. if the overall normalization is sum(loss)/sum(num_frames), this is also what the optimizer will use,
           otherwise the optimizer will just use sum(loss).
         :param custom_inv_norm_factor:
-          The standard norm factor is 1/sum(target_seq_len) if the target has a time-axis,
-          or 1/sum(output_seq_len) if there is no target and the output has a time-axis,
+          The standard inv norm factor is sum(target_seq_len) if the target has a time-axis,
+          or sum(output_seq_len) if there is no target and the output has a time-axis,
           or 1 otherwise. (See :func:`Loss.init` for details.)
           This is used for proper normalization of accumulated loss/error per epoch
           and also proper normalization per batch for reporting,
           no matter if use_normalized_loss is True or False.
           If you want to change this norm factor, you can set this.
-          Basically, for all reporting, it uses sum(loss) * sum(custom_inv_norm_factor).
+          Basically, for all reporting, it uses sum(loss) / sum(custom_inv_norm_factor).
         """
         assert self.stage == "train_step"
         if not isinstance(loss, Tensor):
