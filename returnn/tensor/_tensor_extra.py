@@ -2742,6 +2742,8 @@ class _TensorMixin(_TensorMixinBase):
         :param float|int|tf.Tensor mask_value:
         """
         assert self.placeholder is not None
+        if not any(dim.need_masking() for dim in self.dims):
+            return self.copy()
         assert self._raw_backend.is_tensorflow  # not implemented otherwise for now
         from returnn.tf.util.basic import mask_dyn_seq_len_nd
 
