@@ -257,8 +257,8 @@ class ReturnnLayersBackend(Backend[Layer]):
         kwargs = {}
         if allow_broadcast_all_sources is not None:
             kwargs["allow_broadcast_all_sources"] = allow_broadcast_all_sources
-        a = rf.convert_to_tensor(a)
-        b = rf.convert_to_tensor(b)
+        a = rf.convert_to_tensor(a, _backend=cls)
+        b = rf.convert_to_tensor(b, _backend=cls)
         return rfl.make_layer({"class": "compare", "from": [a, b], "kind": kind, **kwargs}, name=kind)
 
     @classmethod
@@ -275,8 +275,8 @@ class ReturnnLayersBackend(Backend[Layer]):
         kwargs = {}
         if allow_broadcast_all_sources is not None:
             kwargs["allow_broadcast_all_sources"] = allow_broadcast_all_sources
-        a = rf.convert_to_tensor(a)
-        b = rf.convert_to_tensor(b)
+        a = rf.convert_to_tensor(a, _backend=cls)
+        b = rf.convert_to_tensor(b, _backend=cls)
         return rfl.make_layer({"class": "combine", "from": [a, b], "kind": kind, **kwargs}, name=kind)
 
     @staticmethod

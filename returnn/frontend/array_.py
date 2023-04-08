@@ -3,11 +3,11 @@ Array (Tensor) functions
 """
 
 from __future__ import annotations
-from typing import Optional, Union, TypeVar, Sequence
+from typing import Optional, Union, Type, TypeVar, Sequence
 import numpy
 from returnn.tensor import Tensor, Dim
 import returnn.frontend as rf
-from ._backend import global_backend, get_backend_by_raw_tensor_type
+from ._backend import Backend, global_backend, get_backend_by_raw_tensor_type
 from .types import RawTensorTypes
 
 T = TypeVar("T")
@@ -22,6 +22,7 @@ def convert_to_tensor(
     dtype: Optional[str] = None,
     sparse_dim: Optional[Dim] = None,
     shape: Sequence[Dim] = None,
+    _backend: Optional[Type[Backend]] = None,
 ) -> Tensor[T]:
     """
     :param value: tensor, or scalar raw tensor or some other scalar value
@@ -29,6 +30,7 @@ def convert_to_tensor(
     :param dtype:
     :param sparse_dim:
     :param shape: alias for dims, for some older code
+    :param _backend:
     :return: tensor
     """
     if isinstance(value, Tensor):  # fast path
@@ -36,7 +38,8 @@ def convert_to_tensor(
     if dims is None and shape is not None:
         dims = shape  # old code
     if isinstance(value, (int, float, complex, bool, str, numpy.number)):
-        backend = global_backend
+        if _backend is None:
+            _backend = global_backend
         if dims is None:
             dims = ()
         if dtype is None:
@@ -53,19 +56,22 @@ def convert_to_tensor(
             else:
                 raise ValueError(f"number {value} type {type(value)} needs explicit `dtype` specification")
     elif isinstance(value, numpy.ndarray):
-        # Small exception: Do not use the NumpyBackend but the global backend in this case.
-        backend = global_backend
+        if _backend is None:
+            # Small exception: Do not use the NumpyBackend but the global backend in this case.
+            _backend = global_backend
         if dims is None:
             dims = [Dim(d) for d in value.shape]
         if dtype is None:
             dtype = value.dtype.name
     else:
-        backend = get_backend_by_raw_tensor_type(type(value))
+        value_backend = get_backend_by_raw_tensor_type(type(value))
+        if _backend is None:
+            _backend = value_backend
         if dims is None:
-            dims = [Dim(d) for d in backend.get_known_shape_raw(value)]
+            dims = [Dim(d) for d in value_backend.get_known_shape_raw(value)]
         if dtype is None:
-            dtype = backend.get_dtype_name_raw(value)
-    return backend.convert_to_tensor(value=value, dims=dims, dtype=dtype, sparse_dim=sparse_dim)
+            dtype = value_backend.get_dtype_name_raw(value)
+    return _backend.convert_to_tensor(value=value, dims=dims, dtype=dtype, sparse_dim=sparse_dim)
 
 
 constant = convert_to_tensor  # alias for some older code
