@@ -173,11 +173,6 @@ class ReturnnLayersBackend(Backend[Layer]):
             return -rf.matmul(targets, log_probs, reduce=axis)
 
     @staticmethod
-    def sequence_mask_raw(lengths: Layer, *, batch_major: bool = True) -> Layer:
-        """sequence mask"""
-        raise NotImplementedError  # TODO
-
-    @staticmethod
     def create_parameter_raw(tensor: rf.Parameter) -> Layer:
         """create parameter"""
         return rfl.make_layer(
