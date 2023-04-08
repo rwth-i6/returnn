@@ -209,13 +209,13 @@ class Engine(EngineBase):
                     accumulated_losses_dict += NumbersDict(losses_dict)
                     step_idx += 1
 
-            assert step_idx > 0, "No data in dataset '{}'.".format(dataset_name)
+            assert step_idx > 0, f"No data in dataset {dataset_name!r}."
             accumulated_loss = accumulated_loss / step_idx
             accumulated_losses_dict = accumulated_losses_dict / step_idx
 
             self.learning_rate_control.set_epoch_error(self.epoch, dict(accumulated_losses_dict))
 
-            print("Total loss for '{}': {:.6}".format(dataset_name, accumulated_loss), file=log.v3)
+            print(f"Total loss for {dataset_name!r}: {accumulated_loss:.6}", file=log.v3)
 
         self.learning_rate_control.save()
 
