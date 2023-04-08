@@ -2676,7 +2676,11 @@ class _TensorMixin(_TensorMixinBase):
         backend = tag.dyn_size_ext._raw_backend
         assert set(tag.dyn_size_ext.dim_tags).issubset(self.dim_tags)  # https://github.com/rwth-i6/returnn/issues/721
         with backend.name_scope_raw("get_sequence_mask_broadcast"):
-            if tag.dyn_size_ext.have_batch_axis() and tag.dyn_size_ext.batch_ndim == 1:  # just [B]
+            if (
+                backend.have_sequence_mask_raw()
+                and tag.dyn_size_ext.have_batch_axis()
+                and tag.dyn_size_ext.batch_ndim == 1
+            ):  # just [B]
                 # This is the common case where the size is of shape [B].
                 # We make use of sequence_mask or sequence_mask_time_major in that case,
                 # which is optimized by caching.
