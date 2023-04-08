@@ -309,7 +309,7 @@ class Backend(Generic[T]):
         :return: context manager
         """
         # Default implementation for eager-based frameworks
-        pass  # nothing to do
+        yield  # nothing to do
 
     @staticmethod
     @contextlib.contextmanager
