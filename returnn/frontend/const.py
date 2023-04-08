@@ -14,7 +14,7 @@ __all__ = ["full", "constant", "fill", "zeros", "ones"]
 
 
 def full(
-    dims: Sequence[Dim], fill_value: RawTensorTypes, *, dtype: Optional[str] = None, sparse_dim: Optional[Dim] = None
+    *, dims: Sequence[Dim], fill_value: RawTensorTypes, dtype: Optional[str] = None, sparse_dim: Optional[Dim] = None
 ) -> Tensor:
     """
     full
@@ -46,11 +46,11 @@ def zeros(dims: Sequence[Dim], *, dtype: Optional[str] = None, sparse_dim: Optio
     """
     zeros. float by default.
     """
-    return full(dims, 0, dtype=dtype or rf.get_default_float_dtype(), sparse_dim=sparse_dim)
+    return full(dims=dims, fill_value=0, dtype=dtype or rf.get_default_float_dtype(), sparse_dim=sparse_dim)
 
 
 def ones(dims: Sequence[Dim], *, dtype: Optional[str] = None, sparse_dim: Optional[Dim] = None) -> Tensor:
     """
     ones. float by default.
     """
-    return full(dims, 1, dtype=dtype or rf.get_default_float_dtype(), sparse_dim=sparse_dim)
+    return full(dims=dims, fill_value=1, dtype=dtype or rf.get_default_float_dtype(), sparse_dim=sparse_dim)
