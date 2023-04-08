@@ -288,6 +288,13 @@ class Backend(Generic[T]):
         raise NotImplementedError
 
     @staticmethod
+    def have_sequence_mask_raw() -> bool:
+        """
+        :return: whether we have a sequence_mask_raw implementation
+        """
+        return False
+
+    @staticmethod
     def sequence_mask_raw(lengths: T, *, batch_major: bool = True) -> T:
         """
         Like tf.sequence_mask().

@@ -213,6 +213,13 @@ class TFBackend(Backend[tf.Tensor]):
         return f(raw_tensor)
 
     @staticmethod
+    def have_sequence_mask_raw() -> bool:
+        """
+        :return: whether we have sequence_mask
+        """
+        return True
+
+    @staticmethod
     def sequence_mask_raw(lengths: tf.Tensor, *, batch_major: bool = True) -> tf.Tensor:
         """
         Wraps around tf.sequence_mask().
