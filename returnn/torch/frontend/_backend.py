@@ -412,6 +412,21 @@ class TorchBackend(Backend[torch.Tensor]):
         return result_tensor
 
     @staticmethod
+    def range_over_dim(dim: Dim) -> Tensor[torch.Tensor]:
+        """
+        :param dim:
+        :return: tensor with shape [dim]
+        """
+        out = Tensor(
+            "range",
+            dims=[dim],
+            sparse_dim=dim,
+            dtype=dim.dyn_size_ext.dtype if dim.dyn_size_ext else rf.get_default_array_index_dtype(),
+        )
+        out.raw_tensor = torch.arange(dim.get_dim_value())
+        return out
+
+    @staticmethod
     def reduce(
         source: Tensor[torch.Tensor],
         *,
