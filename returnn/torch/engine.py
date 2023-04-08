@@ -141,33 +141,46 @@ class Engine(EngineBase):
         self._pt_model.train()
 
         accumulated_losses_dict = NumbersDict()
+        accumulated_inv_norm_factors_dict = NumbersDict()
         step_idx = 0
         for data in self._train_dataloader:
             self._run_step(data)
 
             train_ctx = rf.get_run_ctx()
-            losses_dict = train_ctx.losses
             total_loss = train_ctx.total_loss()
+            losses_dict = NumbersDict(
+                {
+                    name: float(loss.get_summed_loss().raw_tensor.detach().cpu().numpy())
+                    for name, loss in train_ctx.losses.items()
+                }
+            )
+            inv_norm_factors_dict = NumbersDict(
+                {
+                    name: float(loss.get_inv_norm_factor().raw_tensor.detach().cpu().numpy())
+                    for name, loss in train_ctx.losses.items()
+                }
+            )
 
             self._updater.get_optimizer().zero_grad()
             total_loss.raw_tensor.backward()
             self._updater.get_optimizer().step()
 
-            losses_dict = {
-                "train_loss_" + name: float(loss.loss.raw_tensor.detach().cpu().numpy())
-                for name, loss in losses_dict.items()
-            }
-            accumulated_losses_dict += NumbersDict(losses_dict)
-            print("step %i, loss: %f" % (step_idx, total_loss.raw_tensor.detach().cpu().numpy()), file=log.v4)
+            accumulated_losses_dict += losses_dict
+            accumulated_inv_norm_factors_dict += inv_norm_factors_dict
+            print(f"step {step_idx}, loss: {dict(losses_dict / inv_norm_factors_dict)}", file=log.v4)
 
             step_idx += 1
             self._train_step += 1
 
         print("Trained %i steps" % step_idx)
 
-        accumulated_losses_dict = accumulated_losses_dict / step_idx
-        self.learning_rate_control.set_epoch_error(self.epoch, dict(accumulated_losses_dict))
+        accumulated_losses_dict = accumulated_losses_dict / accumulated_inv_norm_factors_dict
+        self.learning_rate_control.set_epoch_error(
+            self.epoch, {f"train_loss_{k}": v for k, v in accumulated_losses_dict.items()}
+        )
         self.learning_rate_control.save()
+
+        print(f"Total train loss: {dict(accumulated_losses_dict)}", file=log.v3)
 
         if self.epoch % self._save_model_epoch_interval == 0 or self.epoch == self._final_epoch:
             self._save_model()
@@ -186,8 +199,8 @@ class Engine(EngineBase):
 
             data_loader = self._eval_dataloaders[dataset_name]
 
-            accumulated_loss = 0.0
             accumulated_losses_dict = NumbersDict()
+            accumulated_inv_norm_factors_dict = NumbersDict()
             step_idx = 0
 
             with torch.no_grad():
@@ -195,29 +208,34 @@ class Engine(EngineBase):
 
                     self._run_step(data)
                     train_ctx = rf.get_run_ctx()
-                    losses_dict = train_ctx.losses
-                    total_loss = train_ctx.total_loss()
 
-                    total_loss = total_loss.raw_tensor.detach().cpu().numpy()
-                    losses_dict = {
-                        dataset_name + "_loss_" + name: float(loss.loss.raw_tensor.detach().cpu().numpy())
-                        for name, loss in losses_dict.items()
-                    }
-                    print("step %i, loss: %f" % (step_idx, total_loss), file=log.v4)
+                    losses_dict = NumbersDict(
+                        {
+                            name: float(loss.get_summed_loss().raw_tensor.detach().cpu().numpy())
+                            for name, loss in train_ctx.losses.items()
+                        }
+                    )
+                    inv_norm_factors_dict = NumbersDict(
+                        {
+                            name: float(loss.get_inv_norm_factor().raw_tensor.detach().cpu().numpy())
+                            for name, loss in train_ctx.losses.items()
+                        }
+                    )
 
-                    accumulated_loss += total_loss
-                    accumulated_losses_dict += NumbersDict(losses_dict)
+                    accumulated_losses_dict += losses_dict
+                    accumulated_inv_norm_factors_dict += inv_norm_factors_dict
+                    print(f"step {step_idx}, loss: {dict(losses_dict / inv_norm_factors_dict)}", file=log.v4)
                     step_idx += 1
 
             assert step_idx > 0, f"No data in dataset {dataset_name!r}."
-            accumulated_loss = accumulated_loss / step_idx
-            accumulated_losses_dict = accumulated_losses_dict / step_idx
+            accumulated_losses_dict = accumulated_losses_dict / accumulated_inv_norm_factors_dict
 
-            self.learning_rate_control.set_epoch_error(self.epoch, dict(accumulated_losses_dict))
+            self.learning_rate_control.set_epoch_error(
+                self.epoch, {f"{dataset_name}_loss_{k}": v for k, v in accumulated_losses_dict.items()}
+            )
+            self.learning_rate_control.save()
 
-            print(f"Total loss for {dataset_name!r}: {accumulated_loss:.6}", file=log.v3)
-
-        self.learning_rate_control.save()
+            print(f"Total loss for {dataset_name!r}: {dict(accumulated_losses_dict)}", file=log.v3)
 
     def _create_data_loader(self, dataset: Dataset) -> DataLoader2:
         """
