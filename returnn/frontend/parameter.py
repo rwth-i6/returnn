@@ -33,6 +33,7 @@ class Parameter(Tensor[T]):
         non_critical_for_restore: bool = False,
         weight_decay: Optional[float] = 0.0,
         initial: Optional[rf.init.ParamInitType] = None,
+        raw_tensor: Optional[T] = None,
     ):
         """
         :param dims:
@@ -60,7 +61,10 @@ class Parameter(Tensor[T]):
             dtype=dtype or (rf.get_default_float_dtype() if not sparse_dim else rf.get_default_array_index_dtype()),
             sparse_dim=sparse_dim,
         )
-        self.raw_tensor = _global_backend.create_parameter_raw(self)
+        if raw_tensor is not None:
+            self.raw_tensor = raw_tensor
+        else:
+            self.raw_tensor = _global_backend.create_parameter_raw(self)
         if auxiliary and trainable is None:
             trainable = False
         self._trainable = trainable
