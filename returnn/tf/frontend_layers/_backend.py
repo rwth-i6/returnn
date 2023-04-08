@@ -123,6 +123,11 @@ class ReturnnLayersBackend(Backend[Layer]):
         return raw_tensor
 
     @staticmethod
+    def cast(tensor: Tensor, dtype: str) -> Tensor:
+        """cast"""
+        return rfl.make_layer({"class": "cast", "from": tensor, "dtype": dtype}, name="cast")
+
+    @staticmethod
     def activation(tensor: Tensor, func: str) -> Tensor:
         """activation"""
         return rfl.make_layer({"class": "activation", "activation": func, "from": tensor}, name=func)

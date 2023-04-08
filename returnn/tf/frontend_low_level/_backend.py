@@ -195,6 +195,11 @@ class TFBackend(Backend[tf.Tensor]):
             return tf.tile(raw_tensor, [1] * axis + [dim] + [1] * (raw_tensor.shape.ndims - axis - 1))
 
     @staticmethod
+    def cast_raw(raw_tensor: tf.Tensor, dtype: str) -> tf.Tensor:
+        """cast"""
+        return tf.cast(raw_tensor, dtype)
+
+    @staticmethod
     def activation_raw(raw_tensor: tf.Tensor, func: str) -> tf.Tensor:
         """
         :param raw_tensor:

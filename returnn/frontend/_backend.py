@@ -208,6 +208,29 @@ class Backend(Generic[T]):
         """
         raise NotImplementedError
 
+    @staticmethod
+    def cast_raw(raw_tensor: T, dtype: str) -> T:
+        """
+        :param raw_tensor:
+        :param dtype: e.g. "float32"
+        :return: raw tensor with dtype casted
+        """
+        raise NotImplementedError
+
+    @staticmethod
+    def cast(tensor: Tensor, dtype: str) -> Tensor:
+        """
+        :param tensor:
+        :param dtype: e.g. "float32"
+        :return: tensor with dtype casted
+        """
+        # Default implementation using cast_raw.
+        res = tensor.copy_template()
+        res.dtype = dtype
+        # noinspection PyProtectedMember
+        res.raw_tensor = tensor._raw_backend.cast_raw(tensor.raw_tensor, dtype)
+        return res
+
     # Restrict the possible activation function names,
     # to not get unexpected behavior,
     # or unwanted incompatibilities.

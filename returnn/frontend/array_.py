@@ -12,7 +12,7 @@ from .types import RawTensorTypes
 
 T = TypeVar("T")
 
-__all__ = ["convert_to_tensor", "constant", "gather"]
+__all__ = ["convert_to_tensor", "constant", "cast", "gather"]
 
 
 def convert_to_tensor(
@@ -75,6 +75,16 @@ def convert_to_tensor(
 
 
 constant = convert_to_tensor  # alias for some older code
+
+
+def cast(tensor: Tensor, dtype: str) -> Tensor:
+    """
+    :param tensor:
+    :param dtype:
+    :return: tensor with the same data, but with a different dtype
+    """
+    # noinspection PyProtectedMember
+    return tensor._raw_backend.cast(tensor, dtype=dtype)
 
 
 # noinspection PyUnusedLocal

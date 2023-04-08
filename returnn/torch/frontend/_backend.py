@@ -117,6 +117,11 @@ class TorchBackend(Backend[torch.Tensor]):
         return raw_tensor.unsqueeze(axis)
 
     @staticmethod
+    def cast_raw(raw_tensor: torch.Tensor, dtype: str) -> torch.Tensor:
+        """cast"""
+        return raw_tensor.to(dtype=TorchBackend.as_dtype_raw(dtype))
+
+    @staticmethod
     def activation_raw(raw_tensor: torch.Tensor, func: str) -> torch.Tensor:
         """
         :param raw_tensor:
