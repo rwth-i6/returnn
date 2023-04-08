@@ -283,8 +283,8 @@ class TorchBackend(Backend[torch.Tensor]):
     def convert_to_tensor(
         value: Union[Tensor, torch.Tensor, RawTensorTypes],
         *,
-        dims: Sequence[Dim] = (),
-        dtype: Optional[str] = None,
+        dims: Sequence[Dim],
+        dtype: str,
         sparse_dim: Optional[Dim] = None,
     ) -> Tensor[torch.Tensor]:
         """
@@ -300,9 +300,8 @@ class TorchBackend(Backend[torch.Tensor]):
             name = "raw_tensor"
         else:
             name = "const"
-            value = torch.tensor(value, dtype=TorchBackend.as_dtype_raw(dtype) if dtype else None)
+            value = torch.tensor(value, dtype=TorchBackend.as_dtype_raw(dtype))
         assert isinstance(value, torch.Tensor)
-        dtype = dtype or TorchBackend.get_dtype_name_raw(value)
         return Tensor(name, dims=dims, dtype=dtype, sparse_dim=sparse_dim, raw_tensor=value)
 
     @staticmethod

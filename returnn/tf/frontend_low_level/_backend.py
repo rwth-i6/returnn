@@ -348,8 +348,8 @@ class TFBackend(Backend[tf.Tensor]):
     def convert_to_tensor(
         value: Union[_TT, tf.Tensor, RawTensorTypes],
         *,
-        dims: Sequence[Dim] = (),
-        dtype: Optional[str] = None,
+        dims: Sequence[Dim],
+        dtype: str,
         sparse_dim: Optional[Dim] = None,
     ) -> _TT:
         """
@@ -363,7 +363,6 @@ class TFBackend(Backend[tf.Tensor]):
             return value
         value = tf.convert_to_tensor(value, dtype=dtype)
         assert isinstance(value, tf.Tensor)
-        dtype = dtype or TFBackend.get_dtype_name_raw(value)
         return Tensor("const", raw_tensor=value, dims=dims, dtype=dtype, sparse_dim=sparse_dim)
 
     @staticmethod

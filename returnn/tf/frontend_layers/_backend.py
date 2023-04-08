@@ -226,14 +226,16 @@ class ReturnnLayersBackend(Backend[Layer]):
     def convert_to_tensor(
         value: Union[Tensor, Layer, RawTensorTypes],
         *,
-        dims: Sequence[Dim] = (),
-        dtype: Optional[str] = None,
+        dims: Sequence[Dim],
+        dtype: str,
         sparse_dim: Optional[Dim] = None,
     ) -> Tensor[Layer]:
         """convert to tensor"""
         if isinstance(value, Tensor):
             return value
         kwargs = {}
+        if sparse_dim:
+            kwargs["sparse_dim"] = sparse_dim
         dim_deps = _dims.get_dim_deps(dims)
         if dim_deps:
             kwargs["shape_deps"] = dim_deps
@@ -255,8 +257,8 @@ class ReturnnLayersBackend(Backend[Layer]):
         kwargs = {}
         if allow_broadcast_all_sources is not None:
             kwargs["allow_broadcast_all_sources"] = allow_broadcast_all_sources
-        a = cls.convert_to_tensor(a)
-        b = cls.convert_to_tensor(b)
+        a = rf.convert_to_tensor(a)
+        b = rf.convert_to_tensor(b)
         return rfl.make_layer({"class": "compare", "from": [a, b], "kind": kind, **kwargs}, name=kind)
 
     @classmethod
@@ -273,8 +275,8 @@ class ReturnnLayersBackend(Backend[Layer]):
         kwargs = {}
         if allow_broadcast_all_sources is not None:
             kwargs["allow_broadcast_all_sources"] = allow_broadcast_all_sources
-        a = cls.convert_to_tensor(a)
-        b = cls.convert_to_tensor(b)
+        a = rf.convert_to_tensor(a)
+        b = rf.convert_to_tensor(b)
         return rfl.make_layer({"class": "combine", "from": [a, b], "kind": kind, **kwargs}, name=kind)
 
     @staticmethod

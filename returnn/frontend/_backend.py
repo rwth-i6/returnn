@@ -395,8 +395,8 @@ class Backend(Generic[T]):
     def convert_to_tensor(
         value: Union[Tensor, T, RawTensorTypes],
         *,
-        dims: Sequence[Dim] = (),
-        dtype: Optional[str] = None,
+        dims: Sequence[Dim],
+        dtype: str,
         sparse_dim: Optional[Dim] = None,
     ) -> Tensor[T]:
         """

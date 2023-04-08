@@ -6,6 +6,7 @@ from __future__ import annotations
 from typing import Optional, Union, TypeVar, Sequence
 import numpy
 from returnn.tensor import Tensor, Dim
+import returnn.frontend as rf
 from ._backend import global_backend, get_backend_by_raw_tensor_type
 from .types import RawTensorTypes
 
@@ -32,14 +33,38 @@ def convert_to_tensor(
     """
     if isinstance(value, Tensor):  # fast path
         return value
-    if isinstance(value, (int, float, complex, bool, str, numpy.number, numpy.ndarray)):
+    if dims is None and shape is not None:
+        dims = shape  # old code
+    if isinstance(value, (int, float, complex, bool, str, numpy.number)):
         backend = global_backend
+        if dims is None:
+            dims = ()
+        if dtype is None:
+            if isinstance(value, int):
+                dtype = rf.get_default_int_dtype()
+            elif isinstance(value, float):
+                dtype = rf.get_default_float_dtype()
+            elif isinstance(value, bool):
+                dtype = "bool"
+            elif isinstance(value, str):
+                dtype = "string"
+            elif isinstance(value, numpy.number):
+                dtype = value.dtype.name
+            else:
+                raise ValueError(f"number {value} type {type(value)} needs explicit `dtype` specification")
+    elif isinstance(value, numpy.ndarray):
+        # Small exception: Do not use the NumpyBackend but the global backend in this case.
+        backend = global_backend
+        if dims is None:
+            dims = [Dim(d) for d in value.shape]
+        if dtype is None:
+            dtype = value.dtype.name
     else:
         backend = get_backend_by_raw_tensor_type(type(value))
-    if dims is None and shape is not None:
-        dims = shape
-    if dims is None:
-        dims = ()
+        if dims is None:
+            dims = [Dim(d) for d in backend.get_known_shape_raw(value)]
+        if dtype is None:
+            dtype = backend.get_dtype_name_raw(value)
     return backend.convert_to_tensor(value=value, dims=dims, dtype=dtype, sparse_dim=sparse_dim)
 
 
