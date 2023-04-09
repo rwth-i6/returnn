@@ -4,7 +4,7 @@ or just rarely used attribs, such that we can save memory for the common case.
 """
 
 from __future__ import annotations
-from typing import TYPE_CHECKING, Optional, Union, Tuple, Dict, List
+from typing import TYPE_CHECKING, Optional, Union, Tuple, Sequence, Dict, List
 
 from returnn.util.basic import Entity
 from returnn.util import basic as util
@@ -689,6 +689,41 @@ class _DimMixin:
                 control_flow_ctx=self.control_flow_ctx,
             )
         self.dyn_size_ext.placeholder = dyn_size
+
+    def get_mask(self: Dim, *, dim_order: Optional[Sequence[Dim]] = None) -> _t.Tensor:
+        """
+        :param dim_order: if given, the dims of the mask will be in this order.
+            This can be useful if the mask is broadcasted against some other tensor.
+        :return: if need_masking(), the corresponding mask.
+            If this is e.g. the time-dim T of shape [B], then the mask will be of shape [B,T].
+            The mask could be used with :func:`masked_select` (``boolean_mask``) or ``where``.
+        """
+        import returnn.frontend as rf
+
+        assert self.dyn_size_ext and self.dyn_size_ext.raw_tensor is not None
+        # noinspection PyProtectedMember
+        backend = self.dyn_size_ext._raw_backend
+
+        max_idx = rf.reduce(
+            self.dyn_size_ext,
+            axis=self.dyn_size_ext.dims,
+            mode="max",
+            # Masking here is not always possible, e.g. if we have
+            # tag = Dim{'self-att-keys'['time:var:extern_data:classes'[B]]}
+            use_time_mask=False,
+        )
+        # We use the assumption that self.placeholder.shape[axis] == max_idx.
+        # size_ext might have invalid (zero) sizes
+        # when it itself has some padding, e.g. when its own shape is dynamic.
+        # A zero size can lead to problems in some cases, e.g. in SoftmaxOverSpatialLayer,
+        # when everything is masked to -inf, it results in nan,
+        # and this likely produces nan in backprop or elsewhere.
+        # Thus, mask size_ext itself, and set the padded values to 1.
+        # This assumes that max_idx >= 1.
+        size_ext = self.dyn_size_ext.copy_masked(max_idx)
+        idx_range = backend.range_over_dim(self)
+        seq_mask = rf.compare(idx_range, "<", size_ext, allow_broadcast_all_sources=True, dim_order=dim_order)
+        return seq_mask
 
     def is_batch_dim(self):
         """

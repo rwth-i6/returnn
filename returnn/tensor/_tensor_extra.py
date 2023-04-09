@@ -2661,8 +2661,6 @@ class _TensorMixin(_TensorMixinBase):
           We assert here that the axis is dynamic (:func:`is_axis_dynamic`), i.e. we have the size.
         :rtype: tf.Tensor
         """
-        import returnn.frontend as rf
-
         if axis is None:
             assert self.time_dim_axis is not None
             axis = self.time_dim_axis
@@ -2692,30 +2690,25 @@ class _TensorMixin(_TensorMixinBase):
                 seq_mask = backend.reshape_raw(seq_mask, shape)
                 assert seq_mask.get_shape().ndims == self.batch_ndim
             else:  # size is something unusual, not just [B], but e.g. [B,S] or so
-                max_idx = rf.reduce(
-                    tag.dyn_size_ext,
-                    axis=tag.dyn_size_ext.dims,
-                    mode="max",
-                    # Masking here is not always possible, e.g. if we have
-                    # tag = Dim{'self-att-keys'['time:var:extern_data:classes'[B]]}
-                    use_time_mask=False,
-                ).raw_tensor
-                # We use the assumption that self.placeholder.shape[axis] == max_idx.
-                # size_ext might have invalid (zero) sizes
-                # when it itself has some padding, e.g. when its own shape is dynamic.
-                # A zero size can lead to problems in some cases, e.g. in SoftmaxOverSpatialLayer,
-                # when everything is masked to -inf, it results in nan,
-                # and this likely produces nan in backprop or elsewhere.
-                # Thus, mask size_ext itself, and set the padded values to 1.
-                # This assumes that max_idx >= 1.
-                size_ext = tag.dyn_size_ext.copy_masked(max_idx)
-                idx_range = backend.range_over_dim(tag)
                 seq_mask = (
-                    rf.compare(idx_range, "<", size_ext, allow_broadcast_all_sources=True, dim_order=self.dims)
+                    self.get_sequence_mask_tensor(axis)
                     .copy_compatible_to(self, check_dtype=False, check_sparse=False)
                     .raw_tensor
                 )
         return seq_mask
+
+    def get_sequence_mask_tensor(self: Tensor, axis: int) -> Tensor:
+        """
+        :param axis:
+        :return: mask
+        """
+        if axis < 0:
+            assert axis + self.batch_ndim > 0
+            axis += self.batch_ndim
+        assert 0 <= axis < self.batch_ndim
+        assert axis != self.batch_dim_axis
+        tag: Dim = self.dim_tags[axis]
+        return tag.get_mask(dim_order=self.dims)
 
     def get_sequence_lengths_broadcast(self, axis=None):
         """
@@ -2771,7 +2764,7 @@ class _TensorMixin(_TensorMixinBase):
 
     def copy_masked(self: Tensor, mask_value) -> Tensor:
         """
-        :param float|int|tf.Tensor mask_value:
+        :param float|int|tf.Tensor|Tensor mask_value:
         """
         assert self.placeholder is not None
         if not any(dim.need_masking() for dim in self.dims):

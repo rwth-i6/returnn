@@ -16,6 +16,7 @@ from tensorflow.python.client import device_lib
 from tensorflow.python.ops import init_ops
 from returnn.util import basic as util
 from returnn.util.basic import NotSpecified, NativeCodeCompiler
+from returnn.tensor import Tensor
 import returnn.tf.compat as tf_compat
 
 # noinspection PyUnresolvedReferences
@@ -260,12 +261,15 @@ def set_padding_info(x, dim, pad_value):
 
 def mask_dyn_seq_len_nd(x, pad_value, axes):
     """
-    :param Data x:
-    :param float|int|tf.Tensor pad_value:
+    :param Tensor x:
+    :param float|int|tf.Tensor|Tensor pad_value:
     :param list[int]|tuple[int] axes:
     :return: masked x
     :rtype: tf.Tensor
     """
+    if isinstance(pad_value, Tensor):
+        assert pad_value.dims == ()
+        pad_value = pad_value.placeholder
     # Filter out some axes which should not be used for masking.
     axes_ = []
     for axis in axes:
