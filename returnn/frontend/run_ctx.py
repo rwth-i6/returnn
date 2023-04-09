@@ -131,12 +131,6 @@ class RunCtx:
         assert self.stage == "train_step"
         if not isinstance(loss, Tensor):
             assert isinstance(loss, _backend.global_backend.RawTensorType)
-            assert _backend.global_backend.get_ndim_raw(loss) == 0, (
-                f"mark_as_loss(<loss with shape {_backend.global_backend.get_known_shape_raw(loss)}>, {name!r}):"
-                " Only scalar raw losses are supported,"
-                " because we cannot know whether there are any dynamic dims which might require padding."
-                " Explicitly convert to a Tensor first and specify dim tags."
-            )
             loss = rf.convert_to_tensor(loss)
         assert name not in self.losses
         self.losses[name] = Loss(
