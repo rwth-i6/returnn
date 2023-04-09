@@ -108,6 +108,15 @@ class TorchBackend(Backend[torch.Tensor]):
         return tuple(raw_tensor.size())
 
     @staticmethod
+    def get_new_dim_raw(raw_tensor: torch.Tensor, axis: int) -> Dim:
+        """
+        :param raw_tensor:
+        :param axis:
+        :return: new Dim object
+        """
+        return Dim(raw_tensor.size(axis))
+
+    @staticmethod
     def expand_dims_raw(raw_tensor: torch.Tensor, axis: int) -> torch.Tensor:
         """
         :param raw_tensor:
@@ -611,3 +620,40 @@ class TorchBackend(Backend[torch.Tensor]):
                 }
             )
         return out
+
+    @staticmethod
+    def masked_select(
+        tensor: Tensor, *, mask: Tensor, dims: Sequence[Dim], out_dim: Optional[Dim] = None
+    ) -> Tuple[Tensor, Dim]:
+        """
+        :param tensor:
+        :param mask:
+        :param dims: the order of the dims defines the format. those dims should be exactly the dims of the mask.
+        :param out_dim:
+        :return: tensor where all dims in mask/dims are removed and replaced by a new dim.
+            the new dim is also returned.
+            if mask==True for all elements, the returned tensor would be simply the flattened input tensor.
+        """
+        assert mask.dtype == "bool"
+        assert set(mask.dims) == set(dims)
+        assert set(mask.dims).issubset(set(tensor.dims))
+        remaining_dims = [d for d in tensor.dims if d not in mask.dims]
+        tensor_templ = tensor.copy_template_new_dim_tags(tuple(dims) + tuple(remaining_dims))
+        tensor = tensor.copy_compatible_to(tensor_templ, add_dims=False)
+        mask = mask.copy_compatible_to(tensor_templ, check_dtype=False, check_sparse=False)
+        out_raw = torch.masked_select(tensor.raw_tensor, mask.raw_tensor)
+        remaining_shape = [d.get_dim_value() for d in remaining_dims]
+        remaining_num_elements = numpy.prod(remaining_shape) if remaining_shape else 1
+        assert out_raw.numel() % remaining_num_elements == 0
+        flattened_num_elements = out_raw.numel() // remaining_num_elements
+        out_raw = out_raw.resize(flattened_num_elements, *remaining_shape)
+        if not out_dim:
+            out_dim = TorchBackend.get_new_dim_raw(out_raw, 0)
+        out = Tensor(
+            "masked_select",
+            dims=(out_dim,) + tuple(remaining_dims),
+            dtype=tensor.dtype,
+            sparse_dim=tensor.sparse_dim,
+            raw_tensor=out_raw,
+        )
+        return out, out_dim

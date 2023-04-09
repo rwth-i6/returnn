@@ -3,7 +3,7 @@ Array (Tensor) functions
 """
 
 from __future__ import annotations
-from typing import Optional, Union, Type, TypeVar, Sequence
+from typing import Optional, Union, Type, TypeVar, Sequence, Tuple
 import numpy
 from returnn.tensor import Tensor, Dim
 import returnn.frontend as rf
@@ -12,7 +12,7 @@ from .types import RawTensorTypes
 
 T = TypeVar("T")
 
-__all__ = ["convert_to_tensor", "constant", "cast", "gather"]
+__all__ = ["convert_to_tensor", "constant", "cast", "masked_select", "pack", "gather"]
 
 
 def convert_to_tensor(
@@ -68,7 +68,7 @@ def convert_to_tensor(
         if _backend is None:
             _backend = value_backend
         if dims is None:
-            dims = [Dim(d) for d in value_backend.get_known_shape_raw(value)]
+            dims = [value_backend.get_new_dim_raw(value, d) for d in range(value_backend.get_ndim_raw(value))]
         if dtype is None:
             dtype = value_backend.get_dtype_name_raw(value)
     return _backend.convert_to_tensor(value=value, dims=dims, dtype=dtype, sparse_dim=sparse_dim)
@@ -85,6 +85,45 @@ def cast(tensor: Tensor, dtype: str) -> Tensor:
     """
     # noinspection PyProtectedMember
     return tensor._raw_backend.cast(tensor, dtype=dtype)
+
+
+def masked_select(
+    tensor: Tensor, *, mask: Tensor, dims: Sequence[Dim], out_dim: Optional[Dim] = None
+) -> Tuple[Tensor, Dim]:
+    """
+    :param tensor:
+    :param mask:
+    :param dims: the order of the dims defines the format. those dims should be exactly the dims of the mask.
+    :param out_dim:
+    :return: tensor where all dims in mask/dims are removed and replaced by a new dim.
+        the new dim is also returned.
+        if mask==True for all elements, the returned tensor would be simply the flattened input tensor.
+    """
+    # noinspection PyProtectedMember
+    return tensor._raw_backend.masked_select(tensor, mask=mask, dims=dims, out_dim=out_dim)
+
+
+def pack(
+    source: Tensor, *, dims: Sequence[Dim], enforce_sorted: bool = True, out_dim: Optional[Dim] = None
+) -> Tuple[Tensor, Dim]:
+    """
+    Like pack_padded_sequence. Usually the sequences are padded when they have different lengths.
+    Packing means to only store the non-padded frames.
+    This uses :func:`masked_select` internally based on the mask of non-masked frames.
+
+    :param source:
+    :param dims: dims in source to pack. the order defines the format. first dim is major, etc.
+        if there are no padded frames, e.g. dims=[B,T] would just result in the [B*T,...] reshaped tensor.
+    :param enforce_sorted: seqs in the dims are reordered (stable sort) such that longest seqs come first.
+    :param out_dim:
+    :return: packed tensor, new packed dim
+    """
+    assert not enforce_sorted  # not implemented yet...
+    assert len(dims) > 0
+    dyn_dims = [d for d in dims if d.is_dynamic()]
+    assert len(dyn_dims) == 1  # not implemented otherwise yet...
+    mask = source.get_sequence_mask_tensor(source.get_axis_from_description(dyn_dims[0]))
+    return rf.masked_select(source, mask=mask, dims=dims, out_dim=out_dim)
 
 
 # noinspection PyUnusedLocal

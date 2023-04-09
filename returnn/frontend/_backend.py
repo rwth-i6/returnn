@@ -127,6 +127,15 @@ class Backend(Generic[T]):
         assert all(dim is None or dim == existing_shape[i] for i, dim in enumerate(shape))
 
     @staticmethod
+    def get_new_dim_raw(raw_tensor: T, axis: int) -> Dim:
+        """
+        :param raw_tensor:
+        :param axis:
+        :return: dim tag of axis
+        """
+        raise NotImplementedError
+
+    @staticmethod
     def fill_raw(shape: Union[Sequence[Union[int, T]], T], value: Union[Any, T]) -> T:
         """
         :param shape: shape
@@ -608,6 +617,21 @@ class Backend(Generic[T]):
     ) -> Tensor:
         """
         random. See `rf.random` for details.
+        """
+        raise NotImplementedError
+
+    @staticmethod
+    def masked_select(
+        tensor: Tensor, *, mask: Tensor, dims: Sequence[Dim], out_dim: Optional[Dim] = None
+    ) -> Tuple[Tensor, Dim]:
+        """
+        :param tensor:
+        :param mask:
+        :param dims: the order of the dims defines the format. those dims should be exactly the dims of the mask.
+        :param out_dim:
+        :return: tensor where all dims in mask/dims are removed and replaced by a new dim.
+            the new dim is also returned.
+            if mask==True for all elements, the returned tensor would be simply the flattened input tensor.
         """
         raise NotImplementedError
 
