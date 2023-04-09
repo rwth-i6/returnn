@@ -240,6 +240,25 @@ class Backend(Generic[T]):
         res.raw_tensor = tensor._raw_backend.cast_raw(tensor.raw_tensor, dtype)
         return res
 
+    @staticmethod
+    def merge_dims(
+        source: Tensor,
+        *,
+        dims: Sequence[Dim],
+        out_dim: Optional[Dim] = None,
+    ) -> Tuple[Tensor, Dim]:
+        """
+        Merges a list of axes into a single one. (Flatten the dims.)
+        E.g. input is (batch, width, height, dim) and dims=(width,height), then we get (batch, width*height, dim).
+        Or input is (batch, time, height, dim) and axes=(height,dim), then we get (batch, time, height*dim).
+
+        :param nn.Tensor source:
+        :param dims:
+        :param out_dim:
+        :return: tensor, out_dim
+        """
+        raise NotImplementedError
+
     # Restrict the possible activation function names,
     # to not get unexpected behavior,
     # or unwanted incompatibilities.

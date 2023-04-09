@@ -12,7 +12,7 @@ from .types import RawTensorTypes
 
 T = TypeVar("T")
 
-__all__ = ["convert_to_tensor", "constant", "cast", "masked_select", "pack", "gather"]
+__all__ = ["convert_to_tensor", "constant", "cast", "merge_dims", "masked_select", "pack", "gather"]
 
 
 def convert_to_tensor(
@@ -85,6 +85,26 @@ def cast(tensor: Tensor, dtype: str) -> Tensor:
     """
     # noinspection PyProtectedMember
     return tensor._raw_backend.cast(tensor, dtype=dtype)
+
+
+def merge_dims(
+    source: Tensor,
+    *,
+    dims: Sequence[Dim],
+    out_dim: Optional[Dim] = None,
+) -> Tuple[Tensor, Dim]:
+    """
+    Merges a list of axes into a single one. (Flatten the dims.)
+    E.g. input is (batch, width, height, dim) and dims=(width,height), then we get (batch, width*height, dim).
+    Or input is (batch, time, height, dim) and axes=(height,dim), then we get (batch, time, height*dim).
+
+    :param nn.Tensor source:
+    :param dims:
+    :param out_dim:
+    :return: tensor, out_dim
+    """
+    # noinspection PyProtectedMember
+    return source._raw_backend.merge_dims(source, dims=dims, out_dim=out_dim)
 
 
 def masked_select(

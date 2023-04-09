@@ -128,6 +128,34 @@ class ReturnnLayersBackend(Backend[Layer]):
         return rfl.make_layer({"class": "cast", "from": tensor, "dtype": dtype}, name="cast")
 
     @staticmethod
+    def merge_dims(
+        source: Tensor,
+        *,
+        dims: Sequence[Dim],
+        out_dim: Optional[Dim] = None,
+    ) -> Tuple[Tensor, Dim]:
+        """
+        Merges a list of axes into a single one. (Flatten the dims.)
+        E.g. input is (batch, width, height, dim) and dims=(width,height), then we get (batch, width*height, dim).
+        Or input is (batch, time, height, dim) and axes=(height,dim), then we get (batch, time, height*dim).
+
+        :param nn.Tensor source:
+        :param dims:
+        :param out_dim:
+        :return: tensor, out_dim
+        """
+        if not isinstance(source, Tensor):
+            raise TypeError(f"merge_dims: unexpected type for source {source!r}, need tensor")
+        if out_dim is None:
+            out_dim = dims[0]
+            for d in dims[1:]:
+                out_dim = out_dim * d
+        layer = rfl.make_layer(
+            {"class": "merge_dims", "from": source, "axes": dims, "out_dim": out_dim}, name="merge_dims"
+        )
+        return layer, out_dim
+
+    @staticmethod
     def activation(tensor: Tensor, func: str) -> Tensor:
         """activation"""
         return rfl.make_layer({"class": "activation", "activation": func, "from": tensor}, name=func)
@@ -408,6 +436,21 @@ class ReturnnLayersBackend(Backend[Layer]):
             },
             name="random",
         )
+
+    @staticmethod
+    def masked_select(
+        tensor: Tensor, *, mask: Tensor, dims: Sequence[Dim], out_dim: Optional[Dim] = None
+    ) -> Tuple[Tensor, Dim]:
+        """
+        :param tensor:
+        :param mask:
+        :param dims: the order of the dims defines the format. those dims should be exactly the dims of the mask.
+        :param out_dim:
+        :return: tensor where all dims in mask/dims are removed and replaced by a new dim.
+            the new dim is also returned.
+            if mask==True for all elements, the returned tensor would be simply the flattened input tensor.
+        """
+        raise NotImplementedError
 
 
 def _random_replay_eval(idx, **_kwargs):

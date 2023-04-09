@@ -131,6 +131,44 @@ class TorchBackend(Backend[torch.Tensor]):
         return raw_tensor.to(dtype=TorchBackend.as_dtype_raw(dtype))
 
     @staticmethod
+    def merge_dims(
+        source: Tensor,
+        *,
+        dims: Sequence[Dim],
+        out_dim: Optional[Dim] = None,
+    ) -> Tuple[Tensor, Dim]:
+        """
+        Merges a list of axes into a single one. (Flatten the dims.)
+        E.g. input is (batch, width, height, dim) and dims=(width,height), then we get (batch, width*height, dim).
+        Or input is (batch, time, height, dim) and axes=(height,dim), then we get (batch, time, height*dim).
+
+        :param nn.Tensor source:
+        :param dims:
+        :param out_dim:
+        :return: tensor, out_dim
+        """
+        assert dims
+        if len(dims) == 1:
+            return source, dims[0]
+        first_axis = min(source.dims.index(d) for d in dims)
+        pre_dims = source.dims[:first_axis]
+        post_dims = [d for d in source.dims if d not in dims]
+        if out_dim is None:
+            out_dim = dims[0]
+            for d in dims[1:]:
+                out_dim = out_dim * d
+        source = source.copy_transpose(tuple(pre_dims) + tuple(dims) + tuple(post_dims), allow_int=False)
+        out = Tensor(
+            "merge_dims",
+            dims=pre_dims + (out_dim,) + tuple(post_dims),
+            dtype=source.dtype,
+            sparse_dim=source.sparse_dim,
+        )
+        out_shape = [d.get_dim_value() for d in out.dims]
+        out.raw_tensor = torch.reshape(source.raw_tensor, out_shape)
+        return out, out_dim
+
+    @staticmethod
     def activation_raw(raw_tensor: torch.Tensor, func: str) -> torch.Tensor:
         """
         :param raw_tensor:
