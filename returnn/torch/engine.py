@@ -155,10 +155,7 @@ class Engine(EngineBase):
                 }
             )
             inv_norm_factors_dict = NumbersDict(
-                {
-                    name: float(loss.get_inv_norm_factor().raw_tensor.detach().cpu().numpy())
-                    for name, loss in train_ctx.losses.items()
-                }
+                {name: float(_to_raw(loss.get_inv_norm_factor())) for name, loss in train_ctx.losses.items()}
             )
 
             self._updater.get_optimizer().zero_grad()
@@ -216,10 +213,7 @@ class Engine(EngineBase):
                         }
                     )
                     inv_norm_factors_dict = NumbersDict(
-                        {
-                            name: float(loss.get_inv_norm_factor().raw_tensor.detach().cpu().numpy())
-                            for name, loss in train_ctx.losses.items()
-                        }
+                        {name: float(_to_raw(loss.get_inv_norm_factor())) for name, loss in train_ctx.losses.items()}
                     )
 
                     accumulated_losses_dict += losses_dict
@@ -422,3 +416,11 @@ class Engine(EngineBase):
             os.makedirs(directory, exist_ok=True)
 
         self._updater.save_optimizer(filename)
+
+
+def _to_raw(n: Union[int, float, Tensor]):
+    if isinstance(n, (int, float)):
+        return n
+    if isinstance(n, Tensor):
+        return n.raw_tensor.detach().cpu().numpy()
+    raise TypeError(f"Unexpected {n} of type {type(n)}")
