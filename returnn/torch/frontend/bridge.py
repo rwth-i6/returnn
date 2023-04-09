@@ -76,6 +76,9 @@ class _RFModuleAsPTModule(torch.nn.Module):
             pt_mod = rf_module_to_pt_module(rf_mod)
             self.add_module(name, pt_mod)
 
+    def _get_name(self):
+        return self._rf_module.__class__.__name__ + "[RF→PT]"
+
     @property
     def rf_module(self) -> rf.Module:
         """RF module"""
