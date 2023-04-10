@@ -67,6 +67,23 @@ def _register_dim_deps_when_novel(dim: Dim, deps: List[Tensor]):
             return  # discard new list, keep old
     if _register_dim_via_dyn_layer(dim):
         return
+    if dim.dyn_size_ext and not isinstance(dim.dyn_size_ext.raw_tensor, rfl.Layer):
+        # In the TF net dict backend, the dims dyn_size_ext are usually just templates.
+        # The raw_tensor would not be set.
+        # Once the net dict is created, and then only when the actual TFNetwork is created,
+        # those dim dyn_size_ext.raw_tensor would be set to the TF tensors.
+        # However, we want that the user can directly use the dyn_size_ext in the RF.
+        # In other RF backends (esp eager mode backends), this is usually not a problem.
+        # So we now create a `length` layer getting the tensor from the dim tag,
+        # and then set the dyn_size_ext.raw_tensor to that layer.
+        # Then using dyn_size_ext directly is possible also in the TF net dict backend.
+        assert dim.dyn_size_ext.raw_tensor is None
+        rfl.make_layer(
+            {"class": "length", "from": deps, "axis": dim, "dtype": dim.dyn_size_ext.dtype},
+            name=dim.dyn_size_ext.name,
+            out=dim.dyn_size_ext,
+        )
+        assert isinstance(dim.dyn_size_ext.raw_tensor, rfl.Layer)
     _dim_deps[dim] = deps
 
 
@@ -82,6 +99,10 @@ def _deps_valid_in_cur_name_ctx(deps: List[Tensor]) -> bool:
 
 def _register_dim_via_dyn_layer(dim: Dim) -> bool:
     """
+    Given is any custom length tensor (dyn layer),
+    and we make a dim from that.
+    We do that via the range_from_length layer.
+
     :param dim:
     :return: whether we registered the dim
     """
