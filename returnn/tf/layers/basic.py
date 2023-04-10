@@ -4,7 +4,7 @@ Many canonical basic layers.
 
 from __future__ import annotations
 
-from typing import Union
+from typing import Optional, Union, Sequence, List
 import typing
 import tensorflow as tf
 import contextlib
@@ -2669,6 +2669,68 @@ class SeqLenMaskLayer(_ConcatInputLayer):
         if isinstance(window_size, LayerBase):
             out.beam = SearchBeam.get_combined_beam(out.beam, window_size.output.beam)
         return out
+
+
+class BooleanMaskLayer(LayerBase):
+    """
+    Wrapper around tf.boolean_mask.
+    """
+
+    layer_class = "boolean_mask"
+
+    def __init__(self, *, mask: LayerBase, dims: Sequence[Dim], out_dim: Optional[Dim] = None, **kwargs):
+        """
+        :param mask:
+        :param dims:
+        :param out_dim:
+        """
+        out_dim  # noqa  # via get_out_data_from_opts
+        super().__init__(**kwargs)
+        assert set(mask.output.dims) == set(dims)
+        self.mask = mask
+        tensor = self.sources[0].output
+        remaining_dims = [d for d in tensor.dims if d not in dims]
+        tensor_templ = tensor.copy_template_new_dim_tags(tuple(dims) + tuple(remaining_dims))
+        tensor = tensor.copy_compatible_to(tensor_templ, add_dims=False)
+        mask_templ = mask.output.copy_template_new_dim_tags(new_dim_tags=tuple(dims))
+        mask_ = mask.output.copy_compatible_to(mask_templ, add_dims=False)
+        self.output.raw_tensor = tf.boolean_mask(tensor.raw_tensor, mask=mask_.raw_tensor)
+        if self.output.dims[0].dyn_size_ext.raw_tensor is None:
+            self.output.dims[0].dyn_size_ext.raw_tensor = tf.shape(self.output.raw_tensor)[0]
+
+    def get_dep_layers(self) -> List[LayerBase]:
+        """dep layers"""
+        return super().get_dep_layers() + [self.mask]
+
+    @classmethod
+    def transform_config_dict(cls, d, network, get_layer):
+        """
+        :param dict[str] d:
+        :param returnn.tf.network.TFNetwork network:
+        :param get_layer:
+        """
+        super().transform_config_dict(d, network=network, get_layer=get_layer)
+        d["mask"] = get_layer(d["mask"])
+
+    @classmethod
+    def get_out_data_from_opts(
+        cls, *, name: str, sources: Sequence[LayerBase], mask: LayerBase, out_dim: Optional[Dim] = None, **kwargs
+    ) -> Data:
+        """
+        :param name:
+        :param sources:
+        :param mask:
+        :param out_dim:
+        """
+        assert len(sources) == 1
+        assert mask.output.dims
+        _out_dim = Dim(Data(name=f"{name}:mask", dims=(), dtype=Data.size_dtype))
+        if out_dim:
+            _out_dim.declare_same_as(out_dim)
+        else:
+            out_dim = _out_dim
+        dims = [out_dim] + [d for d in sources[0].output.dims if d not in mask.output.dims]
+        return sources[0].output.copy_template_new_dim_tags(name=f"{name}_output", new_dim_tags=dims)
 
 
 class RandomStateInitLayer(LayerBase):
