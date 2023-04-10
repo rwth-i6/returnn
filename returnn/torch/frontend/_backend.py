@@ -475,7 +475,7 @@ class TorchBackend(Backend[torch.Tensor]):
             sparse_dim=dim,
             dtype=dim.dyn_size_ext.dtype if dim.dyn_size_ext else rf.get_default_array_index_dtype(),
         )
-        out.raw_tensor = torch.arange(dim.get_dim_value())
+        out.raw_tensor = torch.arange(dim.get_dim_value(), dtype=TorchBackend.as_dtype_raw(out.dtype))
         return out
 
     @staticmethod
