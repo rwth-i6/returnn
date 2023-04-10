@@ -450,7 +450,18 @@ class ReturnnLayersBackend(Backend[Layer]):
             the new dim is also returned.
             if mask==True for all elements, the returned tensor would be simply the flattened input tensor.
         """
-        raise NotImplementedError
+        assert mask.dtype == "bool"
+        assert set(mask.dims) == set(dims)
+        assert set(mask.dims).issubset(set(tensor.dims))
+        if not out_dim:
+            out_dim = Dim(None, name="mask")
+        return (
+            rfl.make_layer(
+                {"class": "boolean_mask", "from": tensor, "mask": mask, "dims": dims, "out_dim": out_dim},
+                name="boolean_mask",
+            ),
+            out_dim,
+        )
 
 
 def _random_replay_eval(idx, **_kwargs):
