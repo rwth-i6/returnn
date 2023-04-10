@@ -31,7 +31,7 @@ def convert_to_tensor(
     :param dtype:
     :param sparse_dim:
     :param shape: alias for dims, for some older code
-    :para name:
+    :param name:
     :param _backend:
     :return: tensor
     """
