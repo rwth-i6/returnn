@@ -16,7 +16,7 @@ def make_layer(
     layer_dict: rfl.LayerDictRaw,
     *,
     name: Optional[Union[str, rfl.Layer]] = None,
-    existing_tensor: Optional[Tensor] = None,
+    out: Optional[Tensor] = None,
     predefined_out_data: Optional[Tensor] = None,
     name_ctx_ignore_top_stack_frames: int = 0,
 ) -> Tensor[rfl.Layer]:
@@ -36,7 +36,7 @@ def make_layer(
     :param name:
       if str: (suggested) layer name. if given, will create a new :class:`NameCtx`
       if NameCtx, will use this.
-    :param existing_tensor:
+    :param out:
     :param predefined_out_data: normally we can derive the out data automatically.
       If this should be skipped, you can pass this explicitly.
     :param name_ctx_ignore_top_stack_frames: for :func:`Layer.current_ctx`.
@@ -63,8 +63,8 @@ def make_layer(
 
     try:
 
-        if existing_tensor is not None:
-            layer = existing_tensor
+        if out is not None:
+            layer = out
         elif predefined_out_data is not None:
             layer = predefined_out_data.copy_template()
         else:
