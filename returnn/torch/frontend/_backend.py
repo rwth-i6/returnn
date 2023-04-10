@@ -108,13 +108,14 @@ class TorchBackend(Backend[torch.Tensor]):
         return tuple(raw_tensor.size())
 
     @staticmethod
-    def get_new_dim_raw(raw_tensor: torch.Tensor, axis: int) -> Dim:
+    def get_new_dim_raw(raw_tensor: torch.Tensor, axis: int, *, name: str) -> Dim:
         """
         :param raw_tensor:
         :param axis:
+        :param name:
         :return: new Dim object
         """
-        return Dim(raw_tensor.size(axis))
+        return Dim(raw_tensor.size(axis), name=name)
 
     @staticmethod
     def expand_dims_raw(raw_tensor: torch.Tensor, axis: int) -> torch.Tensor:
@@ -338,20 +339,22 @@ class TorchBackend(Backend[torch.Tensor]):
         dims: Sequence[Dim],
         dtype: str,
         sparse_dim: Optional[Dim] = None,
+        name: Optional[str] = None,
     ) -> Tensor[torch.Tensor]:
         """
         :param value:
         :param dims:
         :param dtype:
         :param sparse_dim:
+        :param name:
         :return: tensor
         """
         if isinstance(value, Tensor):
             return value
         if isinstance(value, torch.Tensor):
-            name = "raw_tensor"
+            name = name or "raw_tensor"
         else:
-            name = "const"
+            name = name or "const"
             value = torch.tensor(value, dtype=TorchBackend.as_dtype_raw(dtype))
         assert isinstance(value, torch.Tensor)
         return Tensor(name, dims=dims, dtype=dtype, sparse_dim=sparse_dim, raw_tensor=value)
@@ -686,7 +689,7 @@ class TorchBackend(Backend[torch.Tensor]):
         flattened_num_elements = out_raw.numel() // remaining_num_elements
         out_raw = out_raw.resize(flattened_num_elements, *remaining_shape)
         if not out_dim:
-            out_dim = TorchBackend.get_new_dim_raw(out_raw, 0)
+            out_dim = TorchBackend.get_new_dim_raw(out_raw, 0, name="masked_select")
         out = Tensor(
             "masked_select",
             dims=(out_dim,) + tuple(remaining_dims),

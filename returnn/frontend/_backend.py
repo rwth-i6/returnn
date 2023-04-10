@@ -127,10 +127,11 @@ class Backend(Generic[T]):
         assert all(dim is None or dim == existing_shape[i] for i, dim in enumerate(shape))
 
     @staticmethod
-    def get_new_dim_raw(raw_tensor: T, axis: int) -> Dim:
+    def get_new_dim_raw(raw_tensor: T, axis: int, *, name: str) -> Dim:
         """
         :param raw_tensor:
         :param axis:
+        :param name:
         :return: dim tag of axis
         """
         raise NotImplementedError
@@ -456,12 +457,14 @@ class Backend(Generic[T]):
         dims: Sequence[Dim],
         dtype: str,
         sparse_dim: Optional[Dim] = None,
+        name: Optional[str] = None,
     ) -> Tensor[T]:
         """
         :param value: tensor, or scalar raw tensor or some other scalar value
         :param dims:
         :param dtype:
         :param sparse_dim:
+        :param name:
         :return: tensor
         """
         raise NotImplementedError

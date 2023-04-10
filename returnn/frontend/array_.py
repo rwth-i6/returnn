@@ -22,6 +22,7 @@ def convert_to_tensor(
     dtype: Optional[str] = None,
     sparse_dim: Optional[Dim] = None,
     shape: Sequence[Dim] = None,
+    name: Optional[str] = None,
     _backend: Optional[Type[Backend]] = None,
 ) -> Tensor[T]:
     """
@@ -30,6 +31,7 @@ def convert_to_tensor(
     :param dtype:
     :param sparse_dim:
     :param shape: alias for dims, for some older code
+    :para name:
     :param _backend:
     :return: tensor
     """
@@ -68,10 +70,13 @@ def convert_to_tensor(
         if _backend is None:
             _backend = value_backend
         if dims is None:
-            dims = [value_backend.get_new_dim_raw(value, d) for d in range(value_backend.get_ndim_raw(value))]
+            dims = [
+                value_backend.get_new_dim_raw(value, d, name=(name or "const") + f"_dim{d}")
+                for d in range(value_backend.get_ndim_raw(value))
+            ]
         if dtype is None:
             dtype = value_backend.get_dtype_name_raw(value)
-    return _backend.convert_to_tensor(value=value, dims=dims, dtype=dtype, sparse_dim=sparse_dim)
+    return _backend.convert_to_tensor(value=value, dims=dims, dtype=dtype, sparse_dim=sparse_dim, name=name)
 
 
 constant = convert_to_tensor  # alias for some older code

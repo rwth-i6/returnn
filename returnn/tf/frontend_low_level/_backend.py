@@ -363,19 +363,21 @@ class TFBackend(Backend[tf.Tensor]):
         dims: Sequence[Dim],
         dtype: str,
         sparse_dim: Optional[Dim] = None,
+        name: Optional[str] = None,
     ) -> _TT:
         """
         :param value:
         :param dims:
         :param dtype:
         :param sparse_dim:
+        :param name:
         :return: tensor
         """
         if isinstance(value, Tensor):
             return value
         value = tf.convert_to_tensor(value, dtype=dtype)
         assert isinstance(value, tf.Tensor)
-        return Tensor("const", raw_tensor=value, dims=dims, dtype=dtype, sparse_dim=sparse_dim)
+        return Tensor(name or "const", raw_tensor=value, dims=dims, dtype=dtype, sparse_dim=sparse_dim)
 
     @staticmethod
     def range_over_dim(dim: Dim) -> _TT:

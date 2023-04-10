@@ -257,6 +257,7 @@ class ReturnnLayersBackend(Backend[Layer]):
         dims: Sequence[Dim],
         dtype: str,
         sparse_dim: Optional[Dim] = None,
+        name: Optional[str] = None,
     ) -> Tensor[Layer]:
         """convert to tensor"""
         if isinstance(value, Tensor):
@@ -268,7 +269,7 @@ class ReturnnLayersBackend(Backend[Layer]):
         if dim_deps:
             kwargs["shape_deps"] = dim_deps
         return rfl.make_layer(
-            {"class": "constant", "value": value, "shape": dims, "dtype": dtype, **kwargs}, name="constant"
+            {"class": "constant", "value": value, "shape": dims, "dtype": dtype, **kwargs}, name=name or "constant"
         )
 
     @classmethod
