@@ -10,7 +10,7 @@ from tensorflow.python.util import nest
 from returnn.config import Config, global_config_ctx
 from returnn.util.pprint import pprint
 import returnn.frontend as rf
-from returnn.tensor import Tensor, TensorDict
+from returnn.tensor import Tensor, Dim, TensorDict
 import returnn.tf.compat as tf_compat
 import returnn.torch.frontend as rft
 import returnn.tf.frontend_layers as rfl
@@ -35,17 +35,35 @@ def run_model(extern_data: TensorDict, get_model: rf.GetModelFunc, forward_step:
 
     with rft.TorchBackend.random_journal_record() as random_journal:
         out_pt = run_model_torch(extern_data, get_model, forward_step)
-        out_pt_raw = out_pt.as_raw_tensor_dict()  # get them now because dims might get overwritten
+        # get the values now because dims might get overwritten
+        out_pt_raw = out_pt.as_raw_tensor_dict(include_const_sizes=True)
 
     with rfl.ReturnnLayersBackend.random_journal_replay(random_journal):
         out_tf = run_model_net_dict_tf(extern_data, get_model, forward_step)
-        out_tf_raw = out_tf.as_raw_tensor_dict()
+        out_tf_raw = out_tf.as_raw_tensor_dict(include_const_sizes=True)
 
     print(out_pt, out_tf)
     assert set(out_pt.data.keys()) == set(out_tf.data.keys())
     for k, v_pt in out_pt.data.items():
         v_tf = out_tf[k]
-        assert v_pt.dims == v_tf.dims
+        # We cannot really check the dims directly for equality,
+        # because the model code often creates new dims, which are different in each call.
+        # However, via mark_as_output, the order of dims is well-defined.
+        # So we can check the values.
+        assert len(v_pt.dims) == len(v_tf.dims)
+        for d_pt, d_tf in zip(v_pt.dims, v_tf.dims):
+            assert isinstance(d_pt, Dim) and isinstance(d_tf, Dim)
+            assert _dim_is_scalar_size(d_pt) == _dim_is_scalar_size(d_tf)
+            if _dim_is_scalar_size(d_pt):
+                assert _dim_scalar_size(d_pt) == _dim_scalar_size(d_tf)
+            else:
+                assert d_pt.dyn_size_ext and d_tf.dyn_size_ext
+                # There might be cases where the dims are maybe not equal
+                # (same reasoning as above, or also different order),
+                # although this would be quite exotic.
+                # Let's just assume for now that this does not happen.
+                assert d_pt.dyn_size_ext.dims == d_tf.dyn_size_ext.dims
+                assert (d_pt.dyn_size_ext.raw_tensor == d_tf.dyn_size_ext.raw_tensor).all()
     assert set(out_pt_raw.keys()) == set(out_tf_raw.keys())
     for k, v_pt in out_pt_raw.items():
         v_tf = out_tf_raw[k]
@@ -196,3 +214,22 @@ def _fill_random(x: Tensor, *, min_val: int = 0, rnd: numpy.random.RandomState) 
     assert isinstance(x.raw_tensor, numpy.ndarray)
 
     return filled
+
+
+def _dim_is_scalar_size(dim: Dim) -> bool:
+    """dim is scalar size"""
+    if dim.size is not None:
+        return True
+    if dim.dyn_size_ext:
+        return dim.dyn_size_ext.dims == ()
+    return False
+
+
+def _dim_scalar_size(dim: Dim) -> int:
+    """dim scalar size"""
+    if dim.size is not None:
+        return dim.size
+    if dim.dyn_size_ext:
+        assert dim.dyn_size_ext.dims == ()
+        return dim.dyn_size_ext.raw_tensor
+    raise Exception(f"dim {dim} has no known size")

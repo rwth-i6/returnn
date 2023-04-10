@@ -58,7 +58,7 @@ class TensorDict:
         """copy template"""
         return TensorDict({k: v.copy_template() for k, v in self.data.items()})
 
-    def as_raw_tensor_dict(self) -> Dict[str, Any]:
+    def as_raw_tensor_dict(self, *, include_const_sizes: bool = False) -> Dict[str, Any]:
         """
         :return: dict of raw tensors, including any sequence lengths / dynamic sizes
         """
@@ -73,6 +73,11 @@ class TensorDict:
                     out[key_] = dim.get_dim_value()
                 elif dim.dyn_size_ext:
                     out[key_] = dim.dyn_size_ext.raw_tensor
+                elif dim.size is not None:
+                    if include_const_sizes:
+                        out[key_] = dim.size
+                else:
+                    raise Exception(f"cannot handle dim: {dim}")
         return out
 
     def assign_from_raw_tensor_dict_(self, raw_tensor_dict: Dict[str, Any]):
@@ -89,6 +94,9 @@ class TensorDict:
                 if dim.dyn_size_ext:
                     assert key_ in raw_tensor_dict
                     dim.dyn_size_ext.raw_tensor = raw_tensor_dict[key_]
+                else:
+                    if key_ in raw_tensor_dict:
+                        assert dim.size == raw_tensor_dict[key_]
 
 
 def _convert_to_tensor(opts: _TensorT, *, name: Optional[str] = None) -> Tensor:
