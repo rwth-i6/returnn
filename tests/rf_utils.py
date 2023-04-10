@@ -5,6 +5,7 @@ RETURNN frontend (returnn.frontend) utils
 from __future__ import annotations
 import contextlib
 import numpy
+from tensorflow.python.util import nest
 
 from returnn.config import Config, global_config_ctx
 from returnn.util.pprint import pprint
@@ -122,6 +123,16 @@ def run_model_net_dict_tf(extern_data: TensorDict, get_model: rf.GetModelFunc, f
         feed_dict = {extern_data_tf_placeholders[k]: v for k, v in extern_data_raw.items()}
 
         outputs_numpy_raw = session.run(fetches, feed_dict=feed_dict)
+
+        # Scalars are not Numpy arrays, but our code below assumes that we only have Numpy arrays.
+        # So we convert them here.
+        def _make_numpy_array(x):
+            if isinstance(x, numpy.ndarray):
+                return x
+            return numpy.array(x)
+
+        outputs_numpy_raw = nest.map_structure(_make_numpy_array, outputs_numpy_raw)
+
         outputs_numpy = outputs_tf.copy_template()
         for v in outputs_numpy.data.values():
             _reset_tensor(v)
