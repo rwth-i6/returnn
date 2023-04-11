@@ -787,18 +787,12 @@ class _TensorMixin(_TensorMixinBase):
 
     def copy_add_batch_dim(self, batch_dim_axis, batch=None, dim_tag=None) -> _t.Tensor:
         """
-        Warning: Assumes TensorFlow.
-
         :param int batch_dim_axis:
         :param BatchInfo|None batch:
         :param Dim|None dim_tag:
         :return: copy of myself with added batch-dim
         """
         assert self.batch_dim_axis is None
-        if not batch:
-            from returnn.tf.layers.base import LayerBase
-
-            batch = LayerBase.get_recent_layer().get_batch_info()
         if batch_dim_axis < 0:
             assert batch_dim_axis + self.batch_ndim + 1 >= 0
             batch_dim_axis += self.batch_ndim + 1
@@ -808,19 +802,36 @@ class _TensorMixin(_TensorMixinBase):
         if placeholder is not None:
             backend = self._raw_backend
             placeholder = backend.expand_dims_raw(placeholder, batch_dim_axis)
-            if not isinstance(batch.dim, int) or batch.dim != 1:
-                placeholder = backend.expand_raw(placeholder, batch_dim_axis, batch.dim)
+            if batch:
+                batch_dim_ = batch.dim
+            elif dim_tag:
+                if dim_tag.dyn_size_ext:
+                    assert dim_tag.dyn_size_ext.dims == ()
+                    assert dim_tag.dyn_size_ext.raw_tensor is not None
+                    batch_dim_ = dim_tag.dyn_size_ext.raw_tensor
+                elif dim_tag.dimension:
+                    batch_dim_ = dim_tag.dimension
+                else:
+                    raise Exception(f"{self} copy_add_batch_dim: unknown batch dim for {dim_tag!r}")
+            else:
+                raise Exception(f"{self} copy_add_batch_dim: unknown batch dim ")
+            if not isinstance(batch_dim_, int) or batch_dim_ != 1:
+                placeholder = backend.expand_raw(placeholder, batch_dim_axis, batch_dim_)
         dim_tags = list(self.dim_tags)
         if dim_tag:
             assert dim_tag.is_batch_dim()
-            assert dim_tag.dimension == batch.static_dim or dim_tag.dimension is None
             assert dim_tag.batch == batch
+            if batch:
+                assert dim_tag.dimension == batch.static_dim or dim_tag.dimension is None
         else:
-            dim_tag = Dim(kind=Dim.Types.Batch, description="batch", dimension=batch.static_dim, batch=batch)
+            dim_tag = Dim(
+                kind=Dim.Types.Batch, description="batch", dimension=batch.static_dim if batch else None, batch=batch
+            )
         dim_tags.insert(batch_dim_axis, dim_tag)
         data_opts["dims"] = dim_tags
-        data_opts["batch"] = batch
-        data_opts["beam"] = batch.beam
+        if batch:
+            data_opts["batch"] = batch
+            data_opts["beam"] = batch.beam
         other_special_axes = self.get_special_axes_dict(counted_with_batch_dim=True, only_available=True)
         for k, a in other_special_axes.items():
             data_opts[k] = a if (a < batch_dim_axis) else (a + 1)
@@ -909,14 +920,17 @@ class _TensorMixin(_TensorMixinBase):
             if unbroadcast:
                 return self.copy_add_batch_dim(batch_dim_axis=axis, batch=dim_tag.batch, dim_tag=dim_tag)
             else:
-                from returnn.tf.util.data import BatchInfo
+                if dim_tag.batch or self.batch:
+                    from returnn.tf.util.data import BatchInfo
 
-                batch_info = BatchInfo.make_global_broadcast_batch_info()
-                return self.copy_add_batch_dim(
-                    batch_dim_axis=axis,
-                    batch=batch_info,
-                    dim_tag=dim_tag if (dim_tag.dimension == 1 and dim_tag.batch == batch_info) else None,
-                )
+                    batch_info = BatchInfo.make_global_broadcast_batch_info()
+                else:
+                    batch_info = None
+                if dim_tag and dim_tag.dimension == 1 and dim_tag.batch == batch_info:
+                    pass  # keep it
+                else:
+                    dim_tag = Dim(kind=Dim.Types.Batch, description="batch-broadcast", dimension=1, batch=batch_info)
+                return self.copy_add_batch_dim(batch_dim_axis=axis, batch=batch_info, dim_tag=dim_tag)
 
         data_opts = self.get_kwargs()
         # Note: if dim_tag is feature, but we are sparse, we just make it spatial
