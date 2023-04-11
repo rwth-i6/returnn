@@ -49,7 +49,6 @@ class Engine(EngineBase):
         self._final_epoch = None  # type: Optional[int]
         self._orig_model = None  # type: Optional[Union[rf.Module, torch.nn.Module]]
         self._pt_model = None  # type: Optional[torch.nn.Module]
-        self._train_step = 0
         self._train_step_func = None  # type: Optional[Callable]
         self._save_model_epoch_interval = 1
         self._updater = None  # type: Optional[Updater]
@@ -167,7 +166,7 @@ class Engine(EngineBase):
             print(f"step {step_idx}, loss: {dict(losses_dict / inv_norm_factors_dict)}", file=log.v4)
 
             step_idx += 1
-            self._train_step += 1
+            self.global_train_step += 1
 
         print("Trained %i steps" % step_idx)
 
@@ -305,7 +304,7 @@ class Engine(EngineBase):
             step = checkpoint_state["step"]
         else:
             step = 0
-        self._train_step = step
+        self.global_train_step = step
 
         # See :mod:`rf.rand` docstring for an explanation of this logic.
         random_seed = self.config.int("random_seed", 42)
@@ -394,7 +393,9 @@ class Engine(EngineBase):
             os.makedirs(directory, exist_ok=True)
 
         print("Save model under %s" % (filename,), file=log.v4)
-        torch.save({"model": self._pt_model.state_dict(), "epoch": self.epoch, "step": self._train_step}, filename)
+        torch.save(
+            {"model": self._pt_model.state_dict(), "epoch": self.epoch, "step": self.global_train_step}, filename
+        )
 
     def _load_optimizer(self, epoch):
         """

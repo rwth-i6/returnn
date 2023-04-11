@@ -12,10 +12,11 @@ See :ref:`tech_overview` for an overview how it fits all together.
 
 from __future__ import annotations
 
+from typing import Optional
+import typing
 import os
 import sys
 import time
-import typing
 import numpy
 import tensorflow as tf
 from tensorflow.python.client import timeline
@@ -26,6 +27,7 @@ from returnn.datasets.util.vocabulary import Vocabulary
 from returnn.learning_rate_control import load_learning_rate_control_from_config
 from returnn.log import log
 from returnn.pretrain import pretrain_from_config
+import returnn.tf.frontend_layers as rfl
 import returnn.tf.compat as tf_compat
 from returnn.tf.network import TFNetwork, ExternData, help_on_tf_exception
 from returnn.tf.util.data import Data
@@ -33,6 +35,7 @@ from returnn.tf.layers.base import LayerBase
 from returnn.tf.updater import Updater
 from returnn.tf.data_pipeline import FeedDictDataProvider, DatasetDataProvider
 import returnn.tf.horovod as tf_horovod
+import returnn.util.basic as util
 from returnn.util.basic import hms, NumbersDict, BackendEngine, BehaviorVersion
 from pprint import pprint
 
@@ -878,6 +881,7 @@ class Engine(EngineBase):
         assert BackendEngine.is_tensorflow_selected()
         self.orig_config = {}  # see _maybe_update_config
         self.custom_get_net_dict = None  # type: typing.Optional[typing.Callable]
+        self._have_rf_get_model_func = False
         self._check_devices()
         self.tf_session = None  # type: typing.Optional[tf.compat.v1.Session]
         self.network = None  # type: typing.Optional[TFNetwork]
@@ -1138,15 +1142,21 @@ class Engine(EngineBase):
         # And also initialize the network. That depends on some vars here such as pretrain.
         self.init_network_from_config(config)
 
-    def get_net_dict_for_epoch(self, epoch, config=None):
+    def get_net_dict_for_epoch(self, *, epoch: int, step: Optional[int] = None, config=None):
         """
-        :param int epoch:
+        :param epoch:
+        :param step:
         :param returnn.config.Config|None config:
         :rtype: dict[str]
         """
         if not config:
             config = self.config
-        if self.is_pretrain_epoch(epoch=epoch):
+        if self._have_rf_get_model_func:
+            assert BackendEngine.get_selected_engine() == BackendEngine.TensorFlowNetDict  # not implemented otherwise
+            assert not self.pretrain  # the RF API uses a different pretrain mechanism
+            assert epoch is not None and step is not None
+            net_dict = rfl.get_net_dict(epoch=epoch, step=step)
+        elif self.is_pretrain_epoch(epoch=epoch):
             # This would be obsolete if we don't want to load an existing model.
             # In self.init_train_epoch(), we initialize a new model.
             net_dict = self.pretrain.get_network_json_for_epoch(epoch)
@@ -1176,6 +1186,7 @@ class Engine(EngineBase):
         self.preload_from_files = config.typed_value("preload_from_files", {})
         self.pretrain = pretrain_from_config(config)
         self.custom_get_net_dict = config.typed_value("get_network")
+        self._have_rf_get_model_func = bool(config.typed_value("get_model"))
         self.max_seqs = config.int("max_seqs", -1)
 
         epoch, model_epoch_filename = self.get_epoch_model(config)
@@ -1195,12 +1206,20 @@ class Engine(EngineBase):
         is_training = config.value("task", "train") == "train"
         is_first_train_epoch = not epoch and (is_training or config.value("task", "train") == "initialize_model")
         self.epoch = epoch
+        self.global_train_step = None
         if is_first_train_epoch:
             assert self.start_epoch >= 1
             self.epoch = self.start_epoch
+            self.global_train_step = 0
+        elif model_epoch_filename:
+            # read "global_step" from the model file
+            filepattern = util.get_checkpoint_filepattern(model_epoch_filename)
+            reader = tf_compat.v1.train.NewCheckpointReader(filepattern)
+            if reader.has_tensor("global_step"):
+                self.global_train_step = int(reader.get_tensor("global_step"))
         assert self.epoch, "task %r" % config.value("task", "train")
 
-        net_dict = self.get_net_dict_for_epoch(epoch=self.epoch, config=config)
+        net_dict = self.get_net_dict_for_epoch(epoch=self.epoch, step=self.global_train_step, config=config)
         if net_dict_post_proc:
             net_dict = net_dict_post_proc(net_dict)
 
@@ -1742,6 +1761,8 @@ class Engine(EngineBase):
             trainer.exit_due_to_error()
 
         self._num_trained_epochs += 1
+        if self.global_train_step is not None:
+            self.global_train_step += trainer.num_steps
 
         if any(numpy.isinf(list(trainer.score.values()))) or any(numpy.isnan(list(trainer.score.values()))):
             print("Model seems broken, got inf or nan final score: %s" % trainer.score, file=log.v1)

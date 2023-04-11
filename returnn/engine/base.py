@@ -28,6 +28,7 @@ class EngineBase(object):
             config = get_global_config(auto_create=True)
         self.config = config
         self.epoch = 0
+        self.global_train_step = None  # type: Optional[int]
         self.pretrain = None  # type: Optional[Pretrain]
         self.model_filename = None  # type: Optional[str]
         self.learning_rate = 0.0  # set in init_train_epoch
