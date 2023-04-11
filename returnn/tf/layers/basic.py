@@ -2957,9 +2957,21 @@ class RandomLayer(LayerBase):
                 # In that case, we can still do some fallback here for the case with a static seed.
                 if tf_util.tf_version_tuple() < (2, 6, 0):
                     assert algorithm is None, "%s: custom algorithm not supported on older TF version" % self
+                    if isinstance(seed, int):
+                        # Similar as in TF stateful_random_ops _make_1d_state:
+                        # Chop the Python integer (infinite precision) into chunks.
+                        ls = []
+                        for _ in range(2):  # need 2 chunks, see below
+                            ls.append(seed & (2**31 - 1))
+                            seed >>= 31
+                        seed = ls
                     for func_name in ["normal", "truncated_normal", "uniform"]:
                         func = getattr(tf.random, "stateless_" + func_name)
-                        setattr(self, func_name, lambda _func=func, **kwargs_: _func(seed=seed[:2], **kwargs_))
+                        setattr(
+                            self,
+                            func_name,
+                            lambda _func=func, **kwargs_: _func(seed=seed[:2], **kwargs_),
+                        )
 
         self.explicit_state = explicit_state
         if explicit_state is None:
