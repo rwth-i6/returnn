@@ -325,7 +325,7 @@ class FeedDictDataProvider(DataProviderBase):
         seq_lens = {
             k: numpy.zeros(shape=(shapes[k][0],), dtype=self.extern_data.data[k].size_dtype)
             for k in self.data_keys
-            if self.extern_data.data[k].have_time_axis()
+            if self.extern_data.data[k].get_dynamic_axes()
         }
         self.dataset.load_seqs(batch.start_seq, batch.end_seq)
         from returnn.util.basic import slice_pad_zeros
@@ -343,11 +343,15 @@ class FeedDictDataProvider(DataProviderBase):
                         continue  # handled below. will always be added
                     if k in self.extern_data.extra_added_keys:
                         continue
-                    if self.extern_data.data[k].have_time_axis():
+                    data_ = self.extern_data.data[k]
+                    # Do not rely on time_dim_axis but check for any dynamic axes.
+                    dyn_axes = data_.get_dynamic_axes()
+                    assert len(dyn_axes) <= 1, f"unexpected dynamic axes in data {k!r} {data_}"
+                    if dyn_axes:
                         if length.get(k) in [0, None]:
                             continue
                     v = self.dataset.get_data(seq.seq_idx, k)
-                    if self.extern_data.data[k].have_time_axis():
+                    if dyn_axes:
                         v = slice_pad_zeros(v, begin=seq.seq_start_frame[k], end=seq.seq_end_frame[k])
                         ls = v.shape[0]
                         if ls != length[k]:
