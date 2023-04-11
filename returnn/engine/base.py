@@ -4,7 +4,7 @@ Provides :class:`EngineBase`.
 
 from __future__ import annotations
 
-from typing import Optional, Tuple
+from typing import Optional
 import os
 import sys
 
@@ -164,7 +164,7 @@ class EngineBase(object):
         return epoch_model
 
     @classmethod
-    def get_train_start_epoch_batch(cls, config: Config) -> Tuple[int, int]:
+    def get_train_start_epoch(cls, config: Config) -> int:
         """
         We will always automatically determine the best start (epoch,batch) tuple
         based on existing model files.
@@ -173,26 +173,18 @@ class EngineBase(object):
         Note that epochs start at idx 1 and batches at idx 0.
 
         :param config:
-        :returns (epoch,batch). the batch is within the epoch, not absolute.
+        :return: epoch
         """
         start_batch_mode = config.value("start_batch", "auto")
-        if start_batch_mode == "auto":
-            start_batch_config = None
-        else:
-            start_batch_config = int(start_batch_mode)
+        if start_batch_mode != "auto":
+            raise Exception(f"custom start_batch {start_batch_mode!r} not supported")
         last_epoch, _ = cls.get_epoch_model(config)
         if last_epoch is None:
             start_epoch = 1
-            start_batch = start_batch_config or 0
-        elif start_batch_config is not None:
-            # We specified a start batch. Stay in the same epoch, use that start batch.
-            start_epoch = last_epoch
-            start_batch = start_batch_config
         else:
             # Start with next epoch.
             start_epoch = last_epoch + 1
-            start_batch = 0
-        return start_epoch, start_batch
+        return start_epoch
 
     @classmethod
     def epoch_model_filename(cls, model_filename, epoch, is_pretrain):

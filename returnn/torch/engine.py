@@ -90,7 +90,7 @@ class Engine(EngineBase):
         for dataset_name, dataset in self.eval_datasets.items():
             self._eval_dataloaders[dataset_name] = self._create_data_loader(dataset)
 
-        self._start_epoch, _ = self.get_train_start_epoch_batch(self.config)
+        self._start_epoch = self.get_train_start_epoch(self.config)
         self._final_epoch = self.config_get_final_epoch(self.config)
 
         self._load_model(epoch=self._start_epoch)

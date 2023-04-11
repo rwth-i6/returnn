@@ -355,8 +355,8 @@ def getSegmentList(corpusName, segmentList, **kwargs):
     sprintDataset.use_multiple_epochs()
 
     finalEpoch = get_final_epoch()
-    startEpoch, startSegmentIdx = Engine.get_train_start_epoch_batch(config)
-    print("Sprint: Starting with epoch %i, segment-idx %s." % (startEpoch, startSegmentIdx))
+    startEpoch = Engine.get_train_start_epoch(config)
+    print("Sprint: Starting with epoch %i." % (startEpoch,))
     print("Final epoch is: %i" % finalEpoch)
 
     # Loop over multiple epochs. Epochs start at 1.

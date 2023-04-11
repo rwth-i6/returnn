@@ -36,10 +36,10 @@ def iterate_epochs():
     """
     Iterate through epochs.
     """
-    start_epoch, start_batch = EngineBase.get_train_start_epoch_batch(config)
+    start_epoch = EngineBase.get_train_start_epoch(config)
     final_epoch = EngineBase.config_get_final_epoch(config)
 
-    print("Starting with epoch %i, batch %i." % (start_epoch, start_batch), file=log.v3)
+    print("Starting with epoch %i." % (start_epoch,), file=log.v3)
     print("Final epoch is: %i" % final_epoch, file=log.v3)
 
     recurrent_net = "lstm" in config.value("hidden_type", "")  # good enough...

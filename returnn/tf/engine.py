@@ -1105,7 +1105,7 @@ class Engine(EngineBase):
         if config.has("eval_datasets"):
             for dataset_name, dataset_opts in config.typed_value("eval_datasets", {}).items():
                 self.eval_datasets[dataset_name] = init_dataset(dataset_opts, default_kwargs={"name": dataset_name})
-        self.start_epoch, self.start_batch = self.get_train_start_epoch_batch(config)
+        self.start_epoch = self.get_train_start_epoch(config)
         self.batch_size = config.typed_value("batch_size", 1)
         self.shuffle_batches = config.bool("shuffle_batches", False)
         self.update_batch_size = config.int("update_batch_size", 0)
@@ -1577,7 +1577,7 @@ class Engine(EngineBase):
         """
         Does the whole training, i.e. the loop over all the epochs.
         """
-        print("start training at epoch %i and step %i" % (self.start_epoch, self.start_batch), file=log.v3)
+        print("start training at epoch %i" % (self.start_epoch,), file=log.v3)
         print("using batch size: %r, max seqs: %i" % (self.batch_size, self.max_seqs), file=log.v4)
         print("learning rate control:", self.learning_rate_control, file=log.v4)
         print("pretrain:", self.pretrain, file=log.v4)
