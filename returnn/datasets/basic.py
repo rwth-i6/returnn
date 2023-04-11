@@ -672,12 +672,11 @@ class Dataset(object):
         """
         raise OptionalNotImplementedError
 
-    def get_data(self, seq_idx, key):
+    def get_data(self, seq_idx, key) -> numpy.ndarray:
         """
         :param int seq_idx: sorted seq idx
         :param str key: data-key, e.g. "data" or "classes"
-        :rtype: numpy.ndarray
-        :returns features or targets: format 2d (time,feature) (float)
+        :return: features or targets: format 2d (time,feature) (float)
         """
         # Fallback implementation for old-style subclasses.
         if key == "data":
