@@ -1493,11 +1493,15 @@ def shapes_for_batches(batches, *, data_keys, dataset=None, extern_data, enforce
 
     d = {}
     for k in all_data_keys:
-        data_shape = list(extern_data.data[k].batch_shape)
-        data_shape[extern_data.data[k].batch_dim_axis] = shape[1]
-        if extern_data.data[k].have_time_axis():
-            data_shape[extern_data.data[k].time_dim_axis] = shape[0][k]
-        assert all([n is not None for n in data_shape]), "data %r" % extern_data.data[k]
+        data = extern_data.data[k]
+        data_shape = list(data.batch_shape)
+        assert data.have_batch_axis()
+        data_shape[data.batch_dim_axis] = shape[1]
+        dyn_axes = data.get_dynamic_axes()
+        if dyn_axes:
+            assert len(dyn_axes) == 1, f"data {data} has multiple dynamic axes, not supported currently"
+            data_shape[dyn_axes[0]] = shape[0][k]
+        assert all([n is not None for n in data_shape]), f"data {data} leaves shape {data_shape} partially undefined"
         d[k] = data_shape
     return d
 
