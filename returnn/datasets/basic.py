@@ -1464,12 +1464,12 @@ def convert_data_dims(data_dims, leave_dict_as_is=False):
     return data_dims
 
 
-def shapes_for_batches(batches, data_keys, dataset=None, extern_data=None, enforce_min_len1=False):
+def shapes_for_batches(batches, *, data_keys, dataset=None, extern_data, enforce_min_len1=False):
     """
     :param list[EngineBatch.Batch] batches:
     :param list[str] data_keys:
     :param Dataset dataset:
-    :param TFNetwork.ExternData extern_data: detailed data description. only used for TensorFlow
+    :param returnn.tf.network.ExternData extern_data: detailed data description
     :param bool enforce_min_len1:
     :rtype: dict[str,list[int]] | None
     """
@@ -1491,19 +1491,14 @@ def shapes_for_batches(batches, data_keys, dataset=None, extern_data=None, enfor
         for k in all_data_keys:
             shape[0][k] = max(shape[0][k], 1)
 
-    if extern_data:
-        d = {}
-        for k in all_data_keys:
-            data_shape = list(extern_data.data[k].batch_shape)
-            data_shape[extern_data.data[k].batch_dim_axis] = shape[1]
-            if extern_data.data[k].have_time_axis():
-                data_shape[extern_data.data[k].time_dim_axis] = shape[0][k]
-            assert all([n is not None for n in data_shape]), "data %r" % extern_data.data[k]
-            d[k] = data_shape
-    else:  # shape via dataset
-        d = {k: [shape[0][k], shape[1]] for k in all_data_keys}
-        for k in all_data_keys:
-            d[k] += dataset.get_data_shape(k)
+    d = {}
+    for k in all_data_keys:
+        data_shape = list(extern_data.data[k].batch_shape)
+        data_shape[extern_data.data[k].batch_dim_axis] = shape[1]
+        if extern_data.data[k].have_time_axis():
+            data_shape[extern_data.data[k].time_dim_axis] = shape[0][k]
+        assert all([n is not None for n in data_shape]), "data %r" % extern_data.data[k]
+        d[k] = data_shape
     return d
 
 
