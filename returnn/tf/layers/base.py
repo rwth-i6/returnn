@@ -2990,7 +2990,7 @@ class Loss(object):
             self.output_seq_lens = None
             self.target_seq_lens = None
             self.loss_norm_factor = 1.0
-            if self.output.have_time_axis():
+            if self.output.have_time_axis() and self.output.have_batch_axis():
                 self.output_seq_lens = output.get_sequence_lengths()
                 time_and_batch_dims = (self.output.time_dim_axis, self.output.batch_dim_axis)
                 assert time_and_batch_dims in [(0, 1), (1, 0)], "output time-batch-dim unexpected: %r (target %r)" % (
