@@ -17,6 +17,7 @@ import os
 import sys
 import shlex
 import math
+import numpy
 import numpy as np
 import re
 import time
@@ -1546,15 +1547,14 @@ def uniq_generic(seq):
     return out
 
 
-def slice_pad_zeros(x, begin, end, axis=0):
+def slice_pad_zeros(x: numpy.ndarray, begin: int, end: int, axis: int = 0) -> numpy.ndarray:
     """
-    :param numpy.ndarray x: of shape (..., time, ...)
-    :param int begin:
-    :param int end:
-    :param int axis:
+    :param x: of shape (..., time, ...)
+    :param begin:
+    :param end:
+    :param axis:
     :return: basically x[begin:end] (with axis==0) but if begin < 0 or end > x.shape[0],
      it will not discard these frames but pad zeros, such that the resulting shape[0] == end - begin.
-    :rtype: numpy.ndarray
     """
     assert axis == 0, "not yet fully implemented otherwise"
     pad_left, pad_right = 0, 0
