@@ -5,6 +5,7 @@ TensorFlow frontend.
 from ._backend import ReturnnLayersBackend
 
 # Sorted by name.
+from .config_entry_points import *
 from .debug_eager_mode import *
 from .dims import *
 from .layer import *

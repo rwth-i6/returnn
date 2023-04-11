@@ -16,6 +16,9 @@ from .. import frontend_layers as rfl
 from . import _utils
 
 
+__all__ = ["get_net_dict"]
+
+
 def get_net_dict(
     *,
     epoch: int,
