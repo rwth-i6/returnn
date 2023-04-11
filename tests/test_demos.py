@@ -146,6 +146,13 @@ def test_demo_rf_torch_task12ax():
     # TODO also check FER. So far this is not properly reported. https://github.com/rwth-i6/returnn/issues/1120
 
 
+@unittest.skipIf(not tf, "no TF")
+def test_demo_rf_tf_task12ax():
+    cleanup_tmp_models("demos/demo-rf.config")
+    run(py, "rnn.py", "demos/demo-rf.config", "++backend", "tensorflow-net-dict", print_stdout=True)
+    # TODO also check FER. So far this is not properly reported. https://github.com/rwth-i6/returnn/issues/1120
+
+
 def test_demo_iter_dataset_task12ax():
     # there should be no actual TF dependency, we just iterate the dataset
     cleanup_tmp_models("demos/demo-tf-vanilla-lstm.12ax.config")
