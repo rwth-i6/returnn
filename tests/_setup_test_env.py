@@ -64,13 +64,16 @@ def setup():
     log.initialize(verbosity=[5], propagate=False)
 
     # TF is optional.
-    # Note that importing TF still has a small side effect:
-    # BackendEngine._get_default_engine() will return TF by default, if TF is already loaded.
-    # For most tests, this does not matter.
-    try:
-        import tensorflow as tf
-    except ImportError:
+    if "RETURNN_DISABLE_TF" in os.environ and int(os.environ["RETURNN_DISABLE_TF"]) == 1:
         tf = None
+    else:
+        # Note that importing TF still has a small side effect:
+        # BackendEngine._get_default_engine() will return TF by default, if TF is already loaded.
+        # For most tests, this does not matter.
+        try:
+            import tensorflow as tf
+        except ImportError:
+            tf = None
 
     if tf:
         import returnn.tf.util.basic as tf_util
