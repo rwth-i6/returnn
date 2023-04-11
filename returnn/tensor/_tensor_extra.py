@@ -2826,9 +2826,11 @@ class _TensorMixin(_TensorMixinBase):
         :rtype: int|None
         """
         # Do not fallback to get_batch_dim or get_recent_layer or so. This should be safe.
-        if not self.batch:
-            return None
-        return self.batch.static_dim
+        if self.batch:
+            return self.batch.static_dim
+        if self.have_batch_axis():
+            return self.get_batch_dim_tag().dimension
+        return None
 
     def get_spatial_batch_axes(self):
         """
