@@ -85,7 +85,7 @@ class EngineBase(object):
     def get_epoch_model(cls, config):
         """
         :type config: returnn.config.Config
-        :returns (epoch, modelFilename)
+        :return: (epoch, model_filename). epoch is the epoch of the model filename.
         :rtype: (int|None, str|None)
         """
         start_epoch_mode = config.value("start_epoch", "auto")
