@@ -4,9 +4,9 @@ Provides :class:`EngineBase`.
 
 from __future__ import annotations
 
+from typing import Optional, Tuple
 import os
 import sys
-from typing import Optional
 
 from returnn.config import Config, get_global_config
 from returnn.learning_rate_control import load_learning_rate_control_from_config, LearningRateControl
@@ -164,16 +164,16 @@ class EngineBase(object):
         return epoch_model
 
     @classmethod
-    def get_train_start_epoch_batch(cls, config):
+    def get_train_start_epoch_batch(cls, config: Config) -> Tuple[int, int]:
         """
         We will always automatically determine the best start (epoch,batch) tuple
         based on existing model files.
         This ensures that the files are present and enforces that there are
         no old outdated files which should be ignored.
         Note that epochs start at idx 1 and batches at idx 0.
-        :type config: returnn.config.Config
-        :returns (epoch,batch)
-        :rtype (int,int)
+
+        :param config:
+        :returns (epoch,batch). the batch is within the epoch, not absolute.
         """
         start_batch_mode = config.value("start_batch", "auto")
         if start_batch_mode == "auto":
