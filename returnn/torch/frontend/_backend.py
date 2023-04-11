@@ -193,6 +193,7 @@ class TorchBackend(Backend[torch.Tensor]):
         :return: softmax over axis
         """
         out = tensor.copy_template("softmax")
+        assert not axis.need_masking(), "not implemented"
         out.raw_tensor = torch.softmax(tensor.raw_tensor, dim=tensor.dims.index(axis))
         return out
 
@@ -204,6 +205,7 @@ class TorchBackend(Backend[torch.Tensor]):
         :return: log_softmax over axis
         """
         out = tensor.copy_template("log_softmax")
+        assert not axis.need_masking(), "not implemented"
         out.raw_tensor = torch.log_softmax(tensor.raw_tensor, dim=tensor.dims.index(axis))
         return out
 
