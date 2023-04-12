@@ -86,7 +86,10 @@ def bin_op_out_template(
     # sanity checks
     # noinspection PyProtectedMember
     assert a._raw_backend == b._raw_backend, "Cannot combine tensors from two different frontends, e.g. TF and PT"
-    assert a.dtype == b.dtype, f"For now only operations with Tensors of the same dtypes are supported, got {a} and {b}"
+    if res_dtype is None:
+        assert (
+            a.dtype == b.dtype
+        ), f"For now only operations with Tensors of the same dtypes are supported, got {a} and {b}"
     all_dims = []
     for dim in a.dims + b.dims:
         if dim in all_dims:
