@@ -163,7 +163,11 @@ class Engine(EngineBase):
 
             accumulated_losses_dict += losses_dict
             accumulated_inv_norm_factors_dict += inv_norm_factors_dict
-            print(f"step {step_idx}, loss: {dict(losses_dict / inv_norm_factors_dict)}", file=log.v4)
+            _print_process(
+                f"ep {self.epoch} train",
+                step=step_idx,
+                eval_info=dict(losses_dict / inv_norm_factors_dict),
+            )
 
             step_idx += 1
             self.global_train_step += 1
@@ -176,7 +180,7 @@ class Engine(EngineBase):
         )
         self.learning_rate_control.save()
 
-        print(f"Total train loss: {dict(accumulated_losses_dict)}", file=log.v3)
+        print(f"Total train loss:", _format_score(dict(accumulated_losses_dict)), file=log.v3)
 
         if self.epoch % self._save_model_epoch_interval == 0 or self.epoch == self._final_epoch:
             self._save_model()
@@ -190,8 +194,12 @@ class Engine(EngineBase):
         """
         self._pt_model.eval()
 
+        eval_dump_str = []
+        score_keys = None
+        error_keys = None
+
         for dataset_name, dataset in self.eval_datasets.items():
-            print(f"Evaluating dataset {dataset_name!r}'", file=log.v3)
+            print(f"Evaluating dataset {dataset_name!r}", file=log.v3)
 
             data_loader = self._eval_dataloaders[dataset_name]
 
@@ -205,6 +213,10 @@ class Engine(EngineBase):
                     self._run_step(data)
                     train_ctx = rf.get_run_ctx()
 
+                    if score_keys is None:
+                        score_keys = [name for name, loss in train_ctx.losses.items() if not loss.as_error]
+                        error_keys = [name for name, loss in train_ctx.losses.items() if loss.as_error]
+
                     losses_dict = NumbersDict(
                         {
                             name: float(loss.get_summed_loss().raw_tensor.detach().cpu().numpy())
@@ -217,7 +229,11 @@ class Engine(EngineBase):
 
                     accumulated_losses_dict += losses_dict
                     accumulated_inv_norm_factors_dict += inv_norm_factors_dict
-                    print(f"step {step_idx}, loss: {dict(losses_dict / inv_norm_factors_dict)}", file=log.v4)
+                    _print_process(
+                        f"ep {self.epoch} {dataset_name} eval",
+                        step=step_idx,
+                        eval_info=dict(losses_dict / inv_norm_factors_dict),
+                    )
                     step_idx += 1
 
             assert step_idx > 0, f"No data in dataset {dataset_name!r}."
@@ -228,7 +244,17 @@ class Engine(EngineBase):
             )
             self.learning_rate_control.save()
 
-            print(f"Total loss for {dataset_name!r}: {dict(accumulated_losses_dict)}", file=log.v3)
+            # Same format as the TF engine.
+            eval_dump_str += [
+                "%s: score %s error %s"
+                % (
+                    dataset_name,
+                    _format_score({name: accumulated_losses_dict[name] for name in score_keys}),
+                    _format_score({name: accumulated_losses_dict[name] for name in error_keys}),
+                )
+            ]
+
+        print(" ".join(eval_dump_str), file=log.v1)
 
     def _create_data_loader(self, dataset: Dataset) -> DataLoader2:
         """
@@ -426,3 +452,33 @@ def _to_raw(n: Union[int, float, Tensor]):
     if isinstance(n, Tensor):
         return n.raw_tensor.detach().cpu().numpy()
     raise TypeError(f"Unexpected {n} of type {type(n)}")
+
+
+def _print_process(report_prefix, step, eval_info):
+    """
+    Similar but simplified from TF engine _print_process.
+
+    :param str report_prefix:
+    :param int step:
+    :param dict[str] eval_info: via :func:`_collect_eval_info`
+    :return: nothing, will be printed to log
+    """
+    if log.verbose[5]:
+        info = [report_prefix, "step %i" % step]
+        if eval_info:  # Such as score.
+            info += ["%s %s" % item for item in sorted(eval_info.items())]
+        print(", ".join(filter(None, info)), file=log.v5)
+
+
+def _format_score(score: Dict[str, float]) -> str:
+    """
+    Like the TF engine format_score.
+
+    :param score:
+    :return: score(s) as str
+    """
+    if not score:
+        return "None"
+    if len(score) == 1:
+        return str(list(score.values())[0])
+    return " ".join(["%s %s" % (key.split(":", 2)[-1], str(score[key])) for key in sorted(score.keys())])
