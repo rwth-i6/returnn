@@ -19,6 +19,7 @@ from .array_ import *
 from .cond import *
 from .const import *
 from .dims import *
+from .dropout import *
 from .dtype import *
 from .linear import *
 from .loss import *
