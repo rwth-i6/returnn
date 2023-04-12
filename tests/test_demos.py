@@ -150,8 +150,11 @@ def test_demo_torch_task12ax():
 @unittest.skipIf(not torch, "no PyTorch")
 def test_demo_rf_torch_task12ax():
     cleanup_tmp_models("demos/demo-rf.config")
-    run(py, "rnn.py", "demos/demo-rf.config", print_stdout=True)
-    # TODO also check FER. So far this is not properly reported. https://github.com/rwth-i6/returnn/issues/1120
+    out = run(py, "rnn.py", "demos/demo-rf.config", print_stdout=True)
+    # Currently this just uses linear layers, so it's not very good.
+    # Also see test_demo_tf_task12ax above.
+    fer = parse_last_fer(out)
+    assert_less(fer, 0.15)
 
 
 @unittest.skipIf(not tf, "no TF")
