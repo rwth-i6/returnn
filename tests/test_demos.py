@@ -66,8 +66,11 @@ def run(*args, env_update=None, print_stdout=False):
     return out
 
 
-def run_and_parse_last_fer(*args, **kwargs):
-    out = run(*args, **kwargs)
+def parse_last_fer(out: str) -> float:
+    """
+    :param out:
+    :return: FER
+    """
     parsed_fer = None
     for line in out.splitlines():
         # example: epoch 5 score: 0.0231807245472 elapsed: 0:00:04 dev: score 0.0137521058997 error 0.00268961807423
@@ -81,6 +84,11 @@ def run_and_parse_last_fer(*args, **kwargs):
     err_msg = "ERROR: No epoch dev errors found in output"
     assert parsed_fer is not None, "%s.\nOutput:\n\n%s\n\n%s." % (err_msg, out, err_msg)
     return parsed_fer
+
+
+def run_and_parse_last_fer(*args, **kwargs):
+    out = run(*args, **kwargs)
+    return parse_last_fer(out)
 
 
 def run_config_get_fer(config_filename, env_update=None, *, log_verbosity=5, print_stdout=False):
@@ -149,8 +157,11 @@ def test_demo_rf_torch_task12ax():
 @unittest.skipIf(not tf, "no TF")
 def test_demo_rf_tf_task12ax():
     cleanup_tmp_models("demos/demo-rf.config")
-    run(py, "rnn.py", "demos/demo-rf.config", "++backend", "tensorflow-net-dict", print_stdout=True)
-    # TODO also check FER. So far this is not properly reported. https://github.com/rwth-i6/returnn/issues/1120
+    out = run(py, "rnn.py", "demos/demo-rf.config", "++backend", "tensorflow-net-dict", print_stdout=True)
+    # Currently this just uses linear layers, so it's not very good.
+    # Also see test_demo_tf_task12ax above.
+    fer = parse_last_fer(out)
+    assert_less(fer, 0.15)
 
 
 def test_demo_iter_dataset_task12ax():
