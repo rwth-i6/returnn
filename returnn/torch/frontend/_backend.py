@@ -689,7 +689,7 @@ class TorchBackend(Backend[torch.Tensor]):
         remaining_num_elements = numpy.prod(remaining_shape) if remaining_shape else 1
         assert out_raw.numel() % remaining_num_elements == 0
         flattened_num_elements = out_raw.numel() // remaining_num_elements
-        out_raw = out_raw.resize(flattened_num_elements, *remaining_shape)
+        out_raw = torch.reshape(out_raw, [flattened_num_elements] + remaining_shape)
         if not out_dim:
             out_dim = TorchBackend.get_new_dim_raw(out_raw, 0, name="masked_select")
         out = Tensor(
