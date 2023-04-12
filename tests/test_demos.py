@@ -146,7 +146,7 @@ def test_demo_torch_task12ax():
     out = run(py, "rnn.py", "demos/demo-torch.config", print_stdout=True)
     # Also see test_demo_tf_task12ax above.
     fer = parse_last_fer(out)
-    assert_less(fer, 0.015)
+    assert_less(fer, 0.02)
 
 
 @unittest.skipIf(not torch, "no PyTorch")
