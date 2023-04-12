@@ -60,6 +60,7 @@ __all__ = [
     "reset_step_random_state",
     "get_static_step_based_seed",
     "random",
+    "random_uniform",
 ]
 
 
@@ -204,6 +205,39 @@ def random(
         mean=mean,
         stddev=stddev,
         bound=bound,
+        minval=minval,
+        maxval=maxval,
+        seed=seed,
+        algorithm=algorithm,
+        explicit_state=explicit_state,
+        auto_update_state=auto_update_state,
+        static=static,
+        out=out,
+    )
+
+
+def random_uniform(
+    *,
+    dims: Sequence[Dim],
+    dtype: Optional[str] = None,
+    sparse_dim: Optional[Dim] = None,
+    minval: Union[int, float, Tensor],
+    maxval: Union[int, float, Tensor],
+    seed: Optional[Union[int, Sequence[int], numpy.ndarray]] = None,
+    algorithm: Optional[str] = None,
+    explicit_state: Optional[Tensor] = None,
+    auto_update_state: Optional[bool] = None,
+    static: Optional[bool] = None,
+    out: Optional[Tensor] = None,
+):
+    """
+    See :func:`random`. :func:`random` with ``distribution="uniform"``.
+    """
+    return random(
+        dims=dims,
+        dtype=dtype,
+        sparse_dim=sparse_dim,
+        distribution="uniform",
         minval=minval,
         maxval=maxval,
         seed=seed,
