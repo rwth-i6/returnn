@@ -2749,32 +2749,9 @@ class _TensorMixin(_TensorMixinBase):
         :return: number of elements in this tensor, i.e. prod(self.shape)
         :rtype: tf.Tensor
         """
-        if all(dim.is_static() for dim in self.dims):
-            n = 1
-            for dim in self.dims:
-                n *= dim.dimension
-            return n
-
         import returnn.frontend as rf
 
-        n = 1
-        dims = list(self.dims)
-        dims.sort(key=lambda dim: -dim.dyn_size_ext.batch_ndim if dim.dyn_size_ext else 0)
-        while dims:
-            dim = dims.pop(0)
-            if dim.is_static():
-                n *= dim.dimension
-                continue
-            # E.g. dyn_size_ext is shape [B], and self has shape [B,T].
-            # Due to the sorting of dims above, dims will be [T,B], and we will first process T.
-            # We want to sum over dyn_size_ext, but then we need to remove the other dims it covers.
-            for dim_ in dim.dyn_size_ext.dims:
-                assert dim_ in dims  # num elements not really well-defined then
-                assert not dim_.need_masking()  # not implemented
-                dims.remove(dim_)
-            n_ = rf.reduce_sum(dim.dyn_size_ext, axis=dim.dyn_size_ext.dims)
-            n *= n_
-        return n
+        return rf.num_elements_of_shape(self.dims)
 
     def copy_masked(self: Tensor, mask_value) -> Tensor:
         """
