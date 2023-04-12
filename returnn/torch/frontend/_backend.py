@@ -528,7 +528,7 @@ class TorchBackend(Backend[torch.Tensor]):
             name=f"reduce_{mode}",
             raw_tensor=raw_result,
             dims=res_dims,
-            dtype=source.dtype,
+            dtype=TorchBackend.get_dtype_name_raw(raw_result),
             sparse_dim=source.sparse_dim,
         )
         return res
