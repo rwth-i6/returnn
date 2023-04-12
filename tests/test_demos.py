@@ -143,8 +143,10 @@ def test_demo_tf_task12ax_no_test_env():
 @unittest.skipIf(not torch, "no PyTorch")
 def test_demo_torch_task12ax():
     cleanup_tmp_models("demos/demo-torch.config")
-    run(py, "rnn.py", "demos/demo-torch.config", print_stdout=True)
-    # TODO also check FER. So far this is not properly reported. https://github.com/rwth-i6/returnn/issues/1120
+    out = run(py, "rnn.py", "demos/demo-torch.config", print_stdout=True)
+    # Also see test_demo_tf_task12ax above.
+    fer = parse_last_fer(out)
+    assert_less(fer, 0.015)
 
 
 @unittest.skipIf(not torch, "no PyTorch")
