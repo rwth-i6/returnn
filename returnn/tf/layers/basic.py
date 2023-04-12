@@ -7993,6 +7993,7 @@ class DotLayer(LayerBase):
         var1=NotSpecified,
         var2=NotSpecified,
         add_var2_if_empty=NotSpecified,
+        disable_masking: bool = False,
         debug=False,
         **kwargs,
     ):
@@ -8003,6 +8004,9 @@ class DotLayer(LayerBase):
         :param str|Dim|tuple[str|Dim]|list[str|Dim]|None var1: var axes of first source
         :param str|Dim|tuple[str|Dim]|list[str|Dim]|None var2: var axes of second source
         :param bool add_var2_if_empty: if var2=None, add dim=1 at the end
+        :param disable_masking: If the reduction is over dynamic axes, to get the correct sum reduction,
+            we need to apply masking to one of the inputs. This is done automatically.
+            By enabling this flag, this would be disabled.
         :param bool debug: will print debug shapes, etc.
 
         Earlier defaults:
@@ -8139,7 +8143,9 @@ class DotLayer(LayerBase):
         a_reduce_dyn_axes = [i for i in a_reduce_axes if a_out.batch_shape[i] is None]
         b_reduce_dyn_axes = [i for i in b_reduce_axes if b_out.batch_shape[i] is None]
         assert len(a_reduce_dyn_axes) == len(b_reduce_dyn_axes) or not a_reduce_axes or not b_reduce_axes
-        if a_reduce_dyn_axes and b_reduce_dyn_axes:
+        if disable_masking:
+            self._info_reduce_mask = "disabled"
+        elif a_reduce_dyn_axes and b_reduce_dyn_axes:
             a_pad, b_pad = get_padding_info_dict_ref(a), get_padding_info_dict_ref(b)
             a_pad_values = [a_pad.get(a_out.dim_tags[i], None) for i in a_reduce_dyn_axes]
             b_pad_values = [b_pad.get(b_out.dim_tags[i], None) for i in b_reduce_dyn_axes]
