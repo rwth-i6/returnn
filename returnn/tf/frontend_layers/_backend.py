@@ -325,9 +325,12 @@ class ReturnnLayersBackend(Backend[Layer]):
         )
 
     @staticmethod
-    def matmul(a: Tensor, b: Tensor, *, reduce: Union[Dim, Sequence[Dim]]) -> Tensor:
+    def matmul(a: Tensor, b: Tensor, *, reduce: Union[Dim, Sequence[Dim]], disable_masking: bool = False) -> Tensor:
         """matmul"""
-        return rfl.make_layer({"class": "dot", "from": [a, b], "reduce": reduce}, name="matmul")
+        args = {}
+        if disable_masking:
+            args["disable_masking"] = True
+        return rfl.make_layer({"class": "dot", "from": [a, b], "reduce": reduce, **args}, name="matmul")
 
     @staticmethod
     def range_over_dim(dim: Dim) -> Tensor:

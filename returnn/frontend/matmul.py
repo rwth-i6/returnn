@@ -13,7 +13,9 @@ __all__ = ["matmul", "dot"]
 
 
 # noinspection PyShadowingNames
-def matmul(a: Tensor[T], b: Tensor[T], *, reduce: Union[Dim, Sequence[Dim]]) -> Tensor[T]:
+def matmul(
+    a: Tensor[T], b: Tensor[T], *, reduce: Union[Dim, Sequence[Dim]], disable_masking: bool = False
+) -> Tensor[T]:
     """
     This performs a batched matmul of two sources a and b
     (non-batched matmul and dot product are special cases).
@@ -30,11 +32,14 @@ def matmul(a: Tensor[T], b: Tensor[T], *, reduce: Union[Dim, Sequence[Dim]]) -> 
     :param a:
     :param b:
     :param reduce: Dims over which to perform the product, have to be present in both a and b
+    :param disable_masking: If the reduction is over dynamic axes, to get the correct sum reduction,
+        we need to apply masking to one of the inputs. This is done automatically.
+        By enabling this flag, this would be disabled.
     :return: result of dot product, Dim order: common axes as sorted in a, unique axes of a (in order),
         unique axes of b (in order)
     """
     # noinspection PyProtectedMember
-    return a._raw_backend.matmul(a=a, b=b, reduce=reduce)
+    return a._raw_backend.matmul(a=a, b=b, reduce=reduce, disable_masking=disable_masking)
 
 
 # alias for some older code
