@@ -139,7 +139,7 @@ class ReturnnLayersBackend(Backend[Layer]):
         E.g. input is (batch, width, height, dim) and dims=(width,height), then we get (batch, width*height, dim).
         Or input is (batch, time, height, dim) and axes=(height,dim), then we get (batch, time, height*dim).
 
-        :param nn.Tensor source:
+        :param source:
         :param dims:
         :param out_dim:
         :return: tensor, out_dim
