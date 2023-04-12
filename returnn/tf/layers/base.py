@@ -10,6 +10,7 @@ import contextlib
 import numpy
 import tensorflow as tf
 from returnn.util.basic import NotSpecified, CollectionReadCheckCovered, BehaviorVersion
+import returnn.frontend as rf
 import returnn.tf.compat as tf_compat
 import returnn.tf.util.basic as tf_util
 from returnn.tf.util.data import Data, FeatureDim, Dim
@@ -2990,6 +2991,7 @@ class Loss(object):
             self.output_seq_lens = None
             self.target_seq_lens = None
             self.loss_norm_factor = 1.0
+            out_dyn_axes = [axis for (axis, dim) in enumerate(self.output.batch_shape) if dim is None]
             if self.output.have_time_axis() and self.output.have_batch_axis():
                 self.output_seq_lens = output.get_sequence_lengths()
                 time_and_batch_dims = (self.output.time_dim_axis, self.output.batch_dim_axis)
@@ -3011,6 +3013,14 @@ class Loss(object):
                     self.loss_norm_factor = 1.0 / tf.cast(tf.reduce_sum(self.target_seq_lens), tf.float32)
                 else:
                     self.loss_norm_factor = 1.0 / tf.cast(tf.reduce_sum(self.output_seq_lens), tf.float32)
+            elif set(out_dyn_axes).difference([self.output.batch_dim_axis]):
+                # We have some dynamic axes (excl batch), but not the regular (batch,time)|(time,batch) dims.
+                assert len(out_dyn_axes) == 1, f"Loss flattening not implemented for {self.output}"
+                self.output_flat = output.placeholder
+                num_el = rf.num_elements_of_shape([self.output.dims[a] for a in out_dyn_axes])
+                if isinstance(num_el, Data):
+                    num_el = num_el.raw_tensor
+                self.loss_norm_factor = 1.0 / tf.cast(num_el, tf.float32)
             else:  # no time axis
                 if output_with_activation and output_with_activation.act_func is tf.nn.softmax:
                     self.output_before_softmax_flat = output_with_activation.x
