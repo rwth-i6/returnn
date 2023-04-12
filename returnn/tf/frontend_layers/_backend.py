@@ -156,6 +156,25 @@ class ReturnnLayersBackend(Backend[Layer]):
         return layer, out_dim
 
     @staticmethod
+    def split_dims(
+        source: Tensor,
+        *,
+        axis: Dim,
+        dims: Sequence[Dim],
+        pad_to_multiples: Optional[bool] = None,
+        pad_value: Union[None, int, float] = None,
+    ) -> Tensor:
+        """split dims"""
+        args = {}
+        if pad_to_multiples is not None or pad_value is not None:
+            args["pad_to_multiples"] = pad_to_multiples
+            args["pad_value"] = pad_value
+        args = {key: value for (key, value) in args.items() if value is not NotSpecified}
+        return rfl.make_layer(
+            {"class": "split_dims", "from": source, "axis": axis, "dims": dims, **args}, name="split_dims"
+        )
+
+    @staticmethod
     def activation(tensor: Tensor, func: str) -> Tensor:
         """activation"""
         return rfl.make_layer({"class": "activation", "activation": func, "from": tensor}, name=func)

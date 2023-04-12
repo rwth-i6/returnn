@@ -12,7 +12,7 @@ from .types import RawTensorTypes
 
 T = TypeVar("T")
 
-__all__ = ["convert_to_tensor", "constant", "cast", "merge_dims", "masked_select", "pack", "gather"]
+__all__ = ["convert_to_tensor", "constant", "cast", "merge_dims", "split_dims", "masked_select", "pack", "gather"]
 
 
 def convert_to_tensor(
@@ -110,6 +110,48 @@ def merge_dims(
     """
     # noinspection PyProtectedMember
     return source._raw_backend.merge_dims(source, dims=dims, out_dim=out_dim)
+
+
+def split_dims(
+    source: Tensor,
+    *,
+    axis: Dim,
+    dims: Sequence[Dim],
+    pad_to_multiples: Optional[bool] = None,
+    pad_value: Union[None, int, float] = None,
+) -> Tensor:
+    """
+    Splits one axis into multiple axes.
+    E.g. if you know that your feature-dim is composed by a window,
+    i.e. the input is (batch, time, window * feature),
+    you can set axis="F", dims=(window, -1),
+    and you will get the output (batch, time, window, feature).
+
+    If the split axis has a dynamic length,
+    exactly one of the axes that we split into need to also have a dynamic length.
+    You can e.g. use this to split the input dimension into smaller "chunks" of a fixed window size.
+    E.g. you could have input (batch, time, feature) and set axis="T", dims=(-1, window),
+    to get output (batch, split_time, window, feature).
+    In this case, the exact sequence lengths are lost and everything is padded to multiples of the window size using
+    the given padding value.
+    Use :class:`ReinterpretDataLayer` to receive back the original sequence lengths after merging.
+
+    Also see :class:`SplitBatchTimeLayer`.
+    Also see :class:`MergeDimsLayer` which can undo this operation.
+
+    :param source:
+    :param axis: e.g. "F"
+    :param dims: what the axis should be split into. e.g. (window, -1)
+    :param pad_to_multiples: If true, input will be padded to the next multiple of the product of the
+        static dims, such that splitting is actually possible.
+        By default this is done iff the axis has a dynamic size
+    :param pad_value: What pad value to use for pad_to_multiples
+    :return: source with axis replaced by dims
+    """
+    # noinspection PyProtectedMember
+    return source._raw_backend.split_dims(
+        source, axis=axis, dims=dims, pad_to_multiples=pad_to_multiples, pad_value=pad_value
+    )
 
 
 def masked_select(

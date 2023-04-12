@@ -260,6 +260,25 @@ class Backend(Generic[T]):
         """
         raise NotImplementedError
 
+    @staticmethod
+    def split_dims(
+        source: Tensor,
+        *,
+        axis: Dim,
+        dims: Sequence[Dim],
+        pad_to_multiples: Optional[bool] = None,
+        pad_value: Union[None, int, float] = None,
+    ) -> Tensor:
+        """
+        :param source:
+        :param axis:
+        :param dims:
+        :param pad_to_multiples:
+        :param pad_value:
+        :return: source with axis replaced by dims
+        """
+        raise NotImplementedError
+
     # Restrict the possible activation function names,
     # to not get unexpected behavior,
     # or unwanted incompatibilities.

@@ -170,6 +170,30 @@ class TorchBackend(Backend[torch.Tensor]):
         return out, out_dim
 
     @staticmethod
+    def split_dims(
+        source: Tensor,
+        *,
+        axis: Dim,
+        dims: Sequence[Dim],
+        pad_to_multiples: Optional[bool] = None,
+        pad_value: Union[None, int, float] = None,
+    ) -> Tensor:
+        """split dims"""
+        assert not axis.need_masking()  # not implemented
+        assert pad_to_multiples in (None, False)  # not implemented
+        axis_ = source.get_axis_from_description(axis)
+        out_dims = source.dims[:axis_] + tuple(dims) + source.dims[axis_ + 1 :]
+        out_shape = [d.get_dim_value() for d in out_dims]
+        out_raw = torch.reshape(source.raw_tensor, out_shape)
+        return Tensor(
+            "split_dims",
+            dims=out_dims,
+            dtype=source.dtype,
+            sparse_dim=source.sparse_dim,
+            raw_tensor=out_raw,
+        )
+
+    @staticmethod
     def activation_raw(raw_tensor: torch.Tensor, func: str) -> torch.Tensor:
         """
         :param raw_tensor:
