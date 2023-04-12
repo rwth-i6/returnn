@@ -29,12 +29,12 @@ def reset_run_ctx():
     _run_ctx = None
 
 
-def init_train_step_run_ctx():
+def init_train_step_run_ctx(*, train_flag: Union[bool, Tensor]):
     """
     Call this at the beginning of a new train step.
     """
     global _run_ctx
-    _run_ctx = RunCtx(stage="train_step")
+    _run_ctx = RunCtx(stage="train_step", train_flag=train_flag)
 
 
 def init_forward_step_run_ctx():
@@ -67,16 +67,33 @@ class RunCtx:
     In forwarding, we expect that some output is being defined via mark_as_output().
     """
 
-    def __init__(self, *, stage: str):
+    def __init__(self, *, stage: str, train_flag: Union[bool, Tensor] = False):
         """
         :param stage:
             - "init"
             - "train_step", also for eval, for mark_as_loss and get_total_loss
             - "forward_step", for mark_as_output
         """
-        self.stage = stage
+        self._stage = stage
+        self._train_flag = train_flag
         self.losses = {}  # type: Dict[str, Loss]
         self.outputs = TensorDict()
+
+    @property
+    def stage(self) -> str:
+        """
+        :return: "init", "train_step", "forward_step"
+        """
+        return self._stage
+
+    @property
+    def train_flag(self) -> Union[bool, Tensor]:
+        """
+        :return: whether we are in training mode, i.e. the model is updated,
+            and we are supposed to use dropout and similar mechanisms.
+            In a graph-based backend, this can be dynamic.
+        """
+        return self._train_flag
 
     def mark_as_loss(
         self,

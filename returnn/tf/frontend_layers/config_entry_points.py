@@ -48,7 +48,7 @@ def get_net_dict(
 
     task = config.value("task", None)
     if task in {"train", "eval"}:
-        rf.init_train_step_run_ctx()
+        rf.init_train_step_run_ctx(train_flag=rfl.make_layer({"class": "train_flag"}, name="train_flag"))
         train_step_func = get_global_config().typed_value("train_step")
         train_step_func(
             model=model,

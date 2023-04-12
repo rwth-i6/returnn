@@ -143,7 +143,7 @@ class Engine(EngineBase):
         accumulated_inv_norm_factors_dict = NumbersDict()
         step_idx = 0
         for data in self._train_dataloader:
-            self._run_step(data)
+            self._run_step(data, train_flag=True)
 
             train_ctx = rf.get_run_ctx()
             total_loss = train_ctx.total_loss()
@@ -287,7 +287,7 @@ class Engine(EngineBase):
             except ImportError:
                 raise ModuleNotFoundError("Possible type error in DataLoader2 due to missing module 'dill'") from exc
 
-    def _run_step(self, extern_data_raw: Dict[str, torch.Tensor]):
+    def _run_step(self, extern_data_raw: Dict[str, torch.Tensor], *, train_flag: bool = False):
         """
         :param dict[str, torch.Tensor] extern_data_raw: model inputs for the step
         """
@@ -310,7 +310,7 @@ class Engine(EngineBase):
 
             extern_data.data[k] = data
 
-        rf.init_train_step_run_ctx()
+        rf.init_train_step_run_ctx(train_flag=train_flag)
 
         sentinel_kw = {"__fwd_compatible_random_arg_%i" % int(random() * 100): None}
         self._train_step_func(model=self._orig_model, extern_data=extern_data, **sentinel_kw)
