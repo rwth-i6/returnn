@@ -179,3 +179,13 @@ class Tensor(_TensorMixin, _TensorOpOverloadsMixin, Generic[RawTensorType]):
         if self.feature_dim_axis is None:
             return None
         return self._dims[self.feature_dim_axis]
+
+    @feature_dim.setter
+    def feature_dim(self, value: Optional[Dim]):
+        """
+        :param value:
+        """
+        if value is None:
+            self._feature_dim_axis = None
+            return
+        self._feature_dim_axis = self.get_axis_from_description(value, allow_int=False)

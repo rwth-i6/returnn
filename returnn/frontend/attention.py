@@ -61,6 +61,8 @@ def dot_attention(
     # Masking not needed because softmax should already have masked,
     # so we have 0.0 att weights for padded frames.
     att = rf.matmul(att_weights, values, reduce=axis, disable_masking=True)
+    if values.feature_dim in att.dims:
+        att.feature_dim = values.feature_dim
     return att
 
 

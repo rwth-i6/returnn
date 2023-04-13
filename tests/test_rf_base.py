@@ -194,7 +194,7 @@ def test_dot_attention():
         {
             "q": Tensor("q", [batch_dim, time_dim, key_dim], dtype="float32"),
             "k": Tensor("k", [batch_dim, time_dim, key_dim], dtype="float32"),
-            "v": Tensor("v", [batch_dim, time_dim, value_dim], dtype="float32"),
+            "v": Tensor("v", [batch_dim, time_dim, value_dim], dtype="float32", feature_dim_axis=2),
         }
     )
 

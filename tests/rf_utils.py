@@ -51,6 +51,7 @@ def run_model(extern_data: TensorDict, get_model: rf.GetModelFunc, forward_step:
         # However, via mark_as_output, the order of dims is well-defined.
         # So we can check the values.
         assert len(v_pt.dims) == len(v_tf.dims)
+        assert v_pt.feature_dim_axis == v_tf.feature_dim_axis
         for d_pt, d_tf in zip(v_pt.dims, v_tf.dims):
             assert isinstance(d_pt, Dim) and isinstance(d_tf, Dim)
             assert _dim_is_scalar_size(d_pt) == _dim_is_scalar_size(d_tf)

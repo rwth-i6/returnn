@@ -34,6 +34,7 @@ class Linear(rf.Module):
         if self.in_dim not in source.dims_set:
             raise ValueError(f"{self}: input {source} does not have in_dim {self.in_dim}")
         out = rf.matmul(source, self.weight, reduce=self.in_dim)
+        out.feature_dim = self.out_dim
         if self.with_bias:
             out += self.bias
         return out

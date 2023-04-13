@@ -121,6 +121,22 @@ def bin_op_out_template(
     if res_dtype is None:
         res_dtype = src_dtype
     out = Tensor(name, dims=all_dims, dtype=res_dtype)
+    out.feature_dim = res_feature_dim(a, b)
     a = a.copy_compatible_to(out, check_dtype=False, check_sparse=False)
     b = b.copy_compatible_to(out, check_dtype=False, check_sparse=False)
     return out, a, b
+
+
+def res_feature_dim(a: Tensor, b: Tensor) -> Optional[Dim]:
+    """
+    :param a:
+    :param b:
+    :return: feature dim if consistent or None
+    """
+    if a.feature_dim and not b.feature_dim:
+        return a.feature_dim
+    if b.feature_dim and not a.feature_dim:
+        return b.feature_dim
+    if a.feature_dim and b.feature_dim and a.feature_dim == b.feature_dim:
+        return a.feature_dim
+    return None
