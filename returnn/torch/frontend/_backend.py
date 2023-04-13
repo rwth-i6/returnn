@@ -255,7 +255,6 @@ class TorchBackend(Backend[torch.Tensor]):
             mask = tensor.get_sequence_mask_broadcast(axis=axis)
             inf_value = get_global_inf_value()
             tensor.raw_tensor = torch.where(mask, tensor.raw_tensor, -inf_value)
-        assert not axis.need_masking(), "not implemented"
         out.raw_tensor = torch.softmax(tensor.raw_tensor, dim=tensor.dims.index(axis))
         return out
 
