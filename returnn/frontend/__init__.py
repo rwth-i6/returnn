@@ -30,6 +30,7 @@ from .linear import *
 from .loss import *
 from .math_ import *
 from .matmul import *
+from .normalization import *
 from .parameter import *
 from .rand import *
 from .reduce import *
