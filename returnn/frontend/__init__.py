@@ -25,6 +25,7 @@ from .container import *
 from .dims import *
 from .dropout import *
 from .dtype import *
+from .gradient import *
 from .linear import *
 from .loss import *
 from .math_ import *

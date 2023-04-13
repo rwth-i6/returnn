@@ -128,6 +128,11 @@ class ReturnnLayersBackend(Backend[Layer]):
         return rfl.make_layer({"class": "cast", "from": tensor, "dtype": dtype}, name="cast")
 
     @staticmethod
+    def stop_gradient(tensor: Tensor) -> Tensor:
+        """stop grad"""
+        return rfl.make_layer({"class": "scaled_grad", "from": tensor, "scale": 0}, name="stop_gradient")
+
+    @staticmethod
     def merge_dims(
         source: Tensor,
         *,

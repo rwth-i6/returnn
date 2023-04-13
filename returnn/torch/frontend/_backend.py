@@ -132,6 +132,13 @@ class TorchBackend(Backend[torch.Tensor]):
         return raw_tensor.to(dtype=TorchBackend.as_dtype_raw(dtype))
 
     @staticmethod
+    def stop_gradient(tensor: Tensor) -> Tensor:
+        """stop grad"""
+        out = tensor.copy()
+        out.raw_tensor = out.raw_tensor.detach()
+        return out
+
+    @staticmethod
     def merge_dims(
         source: Tensor,
         *,

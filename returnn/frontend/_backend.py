@@ -242,6 +242,14 @@ class Backend(Generic[T]):
         return res
 
     @staticmethod
+    def stop_gradient(tensor: Tensor) -> Tensor:
+        """
+        :param tensor:
+        :return: tensor with stopped gradient
+        """
+        raise NotImplementedError
+
+    @staticmethod
     def merge_dims(
         source: Tensor,
         *,
