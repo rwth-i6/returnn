@@ -213,6 +213,20 @@ class TorchBackend(Backend[torch.Tensor]):
         return out_tuple
 
     @staticmethod
+    def cum_concat_step(source: Tensor, *, prev_accum: Tensor, axis: Dim, out_spatial_dim: Dim) -> Tensor:
+        """cum concat step"""
+        out = prev_accum.copy_template_replace_dim_tag(
+            axis=prev_accum.get_axis_from_description(axis),
+            new_dim_tag=out_spatial_dim,
+            name=f"{source.name}/cum_concat_step",
+        )
+        source_ = source.copy_compatible_to(prev_accum)
+        out.raw_tensor = torch.cat(
+            (prev_accum.raw_tensor, source_.raw_tensor), dim=prev_accum.get_axis_from_description(axis)
+        )
+        return out
+
+    @staticmethod
     def activation_raw(raw_tensor: torch.Tensor, func: str) -> torch.Tensor:
         """
         :param raw_tensor:

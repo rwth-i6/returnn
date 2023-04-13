@@ -19,6 +19,7 @@ __all__ = [
     "merge_dims",
     "split_dims",
     "split",
+    "cum_concat_step",
     "masked_select",
     "pack",
     "gather",
@@ -177,6 +178,29 @@ def split(source: Tensor, *, axis: Dim, out_dims: Sequence[Dim]) -> Tuple[Tensor
     """
     # noinspection PyProtectedMember
     return source._raw_backend.split(source, axis=axis, out_dims=out_dims)
+
+
+def cum_concat_step(
+    source: Tensor, *, prev_accum: Tensor, axis: Dim, out_spatial_dim: Optional[Dim] = None
+) -> Tuple[Tensor, Dim]:
+    """
+    Concatenates all previous frames over a time-axis.
+    See RETURNN :class:`CumConcatLayer` for details.
+
+    :param source: same dims as prev_accum except for the accum axis
+    :param prev_accum: previous accumulated tensor, shape {..., axis}
+    :param axis: the axis to accumulate over
+    :param out_spatial_dim: if given, the spatial dim of the output will be this dim. axis+1.
+    :return: (accumulated, out_spatial_dim). accumulated shape {..., out_spatial_dim},
+        same shape as prev_accum with axis replaced by out_spatial_dim.
+    """
+    if not out_spatial_dim:
+        out_spatial_dim = axis + 1
+    # noinspection PyProtectedMember
+    return (
+        source._raw_backend.cum_concat_step(source, prev_accum=prev_accum, axis=axis, out_spatial_dim=out_spatial_dim),
+        out_spatial_dim,
+    )
 
 
 def masked_select(

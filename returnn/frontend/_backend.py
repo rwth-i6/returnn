@@ -293,6 +293,21 @@ class Backend(Generic[T]):
         """
         raise NotImplementedError
 
+    @staticmethod
+    def cum_concat_step(source: Tensor, *, prev_accum: Tensor, axis: Dim, out_spatial_dim: Dim) -> Tensor:
+        """
+        Concatenates all previous frames over a time-axis.
+        See RETURNN :class:`CumConcatLayer` for details.
+
+        :param source: same dims as prev_accum except for the accum axis
+        :param prev_accum: previous accumulated tensor, shape {..., axis}
+        :param axis: the axis to accumulate over
+        :param out_spatial_dim: the spatial dim of the output will be this dim. like axis+1.
+        :return: accumulated. accumulated shape {..., out_spatial_dim},
+            same shape as prev_accum with axis replaced by out_spatial_dim.
+        """
+        raise NotImplementedError
+
     # Restrict the possible activation function names,
     # to not get unexpected behavior,
     # or unwanted incompatibilities.
