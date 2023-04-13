@@ -428,10 +428,11 @@ class ReturnnLayersBackend(Backend[Layer]):
             ReturnnLayersBackend._random_journal = journal
             yield
         finally:
-            assert ReturnnLayersBackend._random_journal_replay_idx == len(journal)
+            final_replay_idx = ReturnnLayersBackend._random_journal_replay_idx
             ReturnnLayersBackend._random_journal_replay_enabled = False
             ReturnnLayersBackend._random_journal_replay_idx = 0
             ReturnnLayersBackend._random_journal = None
+        assert final_replay_idx == len(journal)
 
     _random_journal_replay_enabled = False
     _random_journal_replay_idx = 0
