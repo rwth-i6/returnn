@@ -143,28 +143,6 @@ def test_linear_cross_entropy():
     run_model(extern_data, lambda *, epoch, step: _Net(), _forward_step)
 
 
-def test_pack():
-    time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
-    in_dim = Dim(7, name="in")
-    extern_data = TensorDict(
-        {
-            "data": Tensor("data", [batch_dim, time_dim, in_dim], dtype="float32"),
-        }
-    )
-
-    class _Net(rf.Module):
-        def __call__(self, x: Tensor) -> Tuple[Tensor, Dim]:
-            pack, pack_dim = rf.pack(x, dims=[batch_dim, time_dim], enforce_sorted=False)
-            return pack, pack_dim
-
-    # noinspection PyShadowingNames
-    def _forward_step(*, model: _Net, extern_data: TensorDict):
-        out, pack_dim = model(extern_data["data"])
-        out.mark_as_default_output(shape=(pack_dim, in_dim))
-
-    run_model(extern_data, lambda *, epoch, step: _Net(), _forward_step)
-
-
 def test_dropout():
     time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
     in_dim = Dim(7, name="in")
@@ -182,32 +160,5 @@ def test_dropout():
     def _forward_step(*, model: _Net, extern_data: TensorDict):
         out = model(extern_data["data"])
         out.mark_as_default_output(shape=(batch_dim, time_dim, in_dim))
-
-    run_model(extern_data, lambda *, epoch, step: _Net(), _forward_step)
-
-
-def test_dot_attention():
-    time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
-    key_dim = Dim(7, name="key")
-    value_dim = Dim(13, name="value")
-    extern_data = TensorDict(
-        {
-            "q": Tensor("q", [batch_dim, time_dim, key_dim], dtype="float32"),
-            "k": Tensor("k", [batch_dim, time_dim, key_dim], dtype="float32"),
-            "v": Tensor("v", [batch_dim, time_dim, value_dim], dtype="float32", feature_dim_axis=2),
-        }
-    )
-
-    class _Net(rf.Module):
-        def __call__(self, q: Tensor, k: Tensor, v: Tensor) -> Tensor:
-            kv_axis = Dim(None, name=f"kv-axis")
-            k, _ = rf.replace_dim(k, in_dim=time_dim, out_dim=kv_axis)
-            v, _ = rf.replace_dim(v, in_dim=time_dim, out_dim=kv_axis)
-            return rf.dot_attention(q, k, v, axis=kv_axis, key_dim=key_dim)
-
-    # noinspection PyShadowingNames
-    def _forward_step(*, model: _Net, extern_data: TensorDict):
-        out = model(q=extern_data["q"], k=extern_data["k"], v=extern_data["v"])
-        out.mark_as_default_output(shape=(batch_dim, time_dim, value_dim))
 
     run_model(extern_data, lambda *, epoch, step: _Net(), _forward_step)
