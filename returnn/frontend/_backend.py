@@ -660,6 +660,8 @@ class Backend(Generic[T]):
         """
         # This default implementation works fine as long as the backend
         # does not have special treatments of Tensor and dim tags itself (like TF net dict backend).
+        if not out_dim.is_dim_known():
+            out_dim.copy_from(in_dim)
         out = source.copy_template_replace_dim_tag(axis=source.get_axis_from_description(in_dim), new_dim_tag=out_dim)
         out.raw_tensor = source.raw_tensor
         return out

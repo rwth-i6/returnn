@@ -1478,6 +1478,13 @@ class _DimMixin:
                         name="%s:batch" % self_base.description, shape=(), dtype="int32", batch_dim_axis=None
                     )
 
+    def copy_from(self: Dim, other: Dim):
+        """define"""
+        self.size = other.size
+        self.capacity = other.capacity
+        self.dyn_size_ext = other.dyn_size_ext
+        self.derive_from(other)
+
     @classmethod
     def get_existing_tag_from_collection(cls, other, tags, is_equal_opts=None):
         """
