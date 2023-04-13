@@ -463,7 +463,13 @@ class ReturnnLayersBackend(Backend[Layer]):
             ReturnnLayersBackend._random_journal_replay_idx += 1
             elem = ReturnnLayersBackend._random_journal[idx]
             assert isinstance(elem, dict)
-            assert elem["dims"] == dims
+            # Different calls might create their own dims, so we cannot directly compare dim tags for equality.
+            assert len(elem["dims"]) == len(dims)
+            # We still check static dimension equality.
+            for dim_journal, dim_tf in zip(elem["dims"], dims):
+                assert (
+                    dim_journal.dimension == dim_tf.dimension
+                ), f"random with dims {dims} does not match random journal replay\n{elem!r}"
             assert elem["dtype"] == dtype
             assert elem["sparse_dim"] == sparse_dim
             assert elem["distribution"] == distribution
