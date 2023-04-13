@@ -12,7 +12,17 @@ from .types import RawTensorTypes
 
 T = TypeVar("T")
 
-__all__ = ["convert_to_tensor", "constant", "cast", "merge_dims", "split_dims", "masked_select", "pack", "gather"]
+__all__ = [
+    "convert_to_tensor",
+    "constant",
+    "cast",
+    "merge_dims",
+    "split_dims",
+    "split",
+    "masked_select",
+    "pack",
+    "gather",
+]
 
 
 def convert_to_tensor(
