@@ -2668,13 +2668,15 @@ class _TensorMixin(_TensorMixinBase):
 
     def get_sequence_mask_broadcast(self: Tensor, axis=None) -> _t.RawTensorType:
         """
-        :param int|None axis:
+        :param Dim|int|None axis:
         :return: seq mask of shape ((batch,time) or (time,batch)) + (1,)s for remaining dims
           if BT or TB major, and axis is T or None.
           In general compatible to placeholder, i.e. same ndim, with broadcast dims.
           We assert here that the axis is dynamic (:func:`is_axis_dynamic`), i.e. we have the size.
         :rtype: tf.Tensor
         """
+        if isinstance(axis, Dim):
+            axis = self.get_axis_from_description(axis)
         if axis is None:
             assert self.time_dim_axis is not None
             axis = self.time_dim_axis

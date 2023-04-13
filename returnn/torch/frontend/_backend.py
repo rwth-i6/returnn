@@ -9,7 +9,7 @@ import torch
 import numpy
 
 from returnn.tensor import Tensor, Dim
-from returnn.util.basic import prod, NotSpecified
+from returnn.util.basic import prod, NotSpecified, get_global_inf_value
 
 # noinspection PyProtectedMember
 from returnn.frontend._backend import Backend
@@ -250,6 +250,11 @@ class TorchBackend(Backend[torch.Tensor]):
         :return: softmax over axis
         """
         out = tensor.copy_template("softmax")
+        if axis.need_masking():
+            tensor = tensor.copy()
+            mask = tensor.get_sequence_mask_broadcast(axis=axis)
+            inf_value = get_global_inf_value()
+            tensor.raw_tensor = torch.where(mask, tensor.raw_tensor, -inf_value)
         assert not axis.need_masking(), "not implemented"
         out.raw_tensor = torch.softmax(tensor.raw_tensor, dim=tensor.dims.index(axis))
         return out
@@ -262,7 +267,11 @@ class TorchBackend(Backend[torch.Tensor]):
         :return: log_softmax over axis
         """
         out = tensor.copy_template("log_softmax")
-        assert not axis.need_masking(), "not implemented"
+        if axis.need_masking():
+            tensor = tensor.copy()
+            mask = tensor.get_sequence_mask_broadcast(axis=axis)
+            inf_value = get_global_inf_value()
+            tensor.raw_tensor = torch.where(mask, tensor.raw_tensor, -inf_value)
         out.raw_tensor = torch.log_softmax(tensor.raw_tensor, dim=tensor.dims.index(axis))
         return out
 

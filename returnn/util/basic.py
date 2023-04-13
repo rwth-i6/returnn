@@ -3562,6 +3562,21 @@ def should_write_to_disk(config):
     return True
 
 
+_default_global_inf_value = float("inf")
+
+
+def get_global_inf_value() -> float:
+    """
+    :return: float("inf") by default, but tries to read `inf_value` from the global config
+    """
+    from returnn.config import get_global_config
+
+    config = get_global_config(raise_exception=False)
+    if not config:
+        return _default_global_inf_value
+    return config.float("inf_value", _default_global_inf_value)
+
+
 class NativeCodeCompiler(object):
     """
     Helper class to compile native C/C++ code on-the-fly.
