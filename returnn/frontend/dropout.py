@@ -25,7 +25,7 @@ def dropout(
 
     When dropout is applied, the output will be scaled by 1/dropout.
 
-    :param nn.Tensor source:
+    :param source:
     :param drop_prob: 0.0 means to apply no dropout. 100% would mask everything.
         For every value in the tensor, the probability of it being dropped
         is drawn independently given this probability.
