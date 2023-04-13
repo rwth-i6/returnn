@@ -331,6 +331,7 @@ jobs:
           - TEST=rf_array
           - TEST=rf_attention
           - TEST=rf_base
+          - TEST=rf_container
 
     steps:
     - uses: actions/checkout@v3
