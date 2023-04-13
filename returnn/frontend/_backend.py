@@ -621,6 +621,20 @@ class Backend(Generic[T]):
         """
         raise NotImplementedError
 
+    @staticmethod
+    def replace_dim(source: Tensor, *, in_dim: Dim, out_dim: Dim) -> Tensor:
+        """
+        :param source:
+        :param in_dim:
+        :param out_dim:
+        :return: source with in_dim replaced by out_dim.
+        """
+        # This default implementation works fine as long as the backend
+        # does not have special treatments of Tensor and dim tags itself (like TF net dict backend).
+        out = source.copy_template_replace_dim_tag(axis=source.get_axis_from_description(in_dim), new_dim_tag=out_dim)
+        out.raw_tensor = source.raw_tensor
+        return out
+
     _AllowedReduceModes = {"sum", "max", "min", "mean", "logsumexp", "any", "all", "argmin", "argmax"}
 
     @staticmethod

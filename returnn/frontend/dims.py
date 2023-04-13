@@ -4,14 +4,14 @@ Utilities for dimension tags, dimensions, axes.
 
 
 from __future__ import annotations
-from typing import Union, TypeVar, Sequence
+from typing import Optional, Union, TypeVar, Sequence, Tuple
 from returnn.tensor import Tensor, Dim
 import returnn.frontend as rf
 from ._backend import get_backend_by_tensor, global_backend
 
 T = TypeVar("T")
 
-__all__ = ["range_over_dim", "dim_match_priority_when_needed", "num_elements_of_shape"]
+__all__ = ["range_over_dim", "replace_dim", "dim_match_priority_when_needed", "num_elements_of_shape"]
 
 
 def range_over_dim(dim: Dim) -> Tensor[T]:
@@ -24,6 +24,20 @@ def range_over_dim(dim: Dim) -> Tensor[T]:
     else:
         backend = global_backend
     return backend.range_over_dim(dim)
+
+
+def replace_dim(source: Tensor, *, in_dim: Dim, out_dim: Optional[Dim] = None) -> Tuple[Tensor, Dim]:
+    """
+    :param source:
+    :param in_dim:
+    :param out_dim:
+    :return: source with in_dim replaced by out_dim, and new out_dim.
+        this does not work for the sparse_dim. see :func:`set_sparse_dim` for that case.
+    """
+    if not out_dim:
+        out_dim = in_dim.copy(same_as_self=False, description="new-dim")
+    # noinspection PyProtectedMember
+    return source._raw_backend.replace_dim(source, in_dim=in_dim, out_dim=out_dim), out_dim
 
 
 def dim_match_priority_when_needed(dim: Dim, *other_dims: Dim) -> Dim:

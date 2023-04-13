@@ -359,6 +359,18 @@ class ReturnnLayersBackend(Backend[Layer]):
         )
 
     @staticmethod
+    def replace_dim(source: Tensor, *, in_dim: Dim, out_dim: Dim) -> Tensor:
+        """
+        :param source:
+        :param in_dim:
+        :param out_dim:
+        :return: source with in_dim replaced by out_dim.
+        """
+        return rfl.make_layer(
+            {"class": "reinterpret_data", "set_dim_tags": {in_dim: out_dim}, "from": source}, name="new_dim"
+        )
+
+    @staticmethod
     def reduce(
         source: Tensor, *, mode: str, axis: Union[Dim, Sequence[Dim]], use_time_mask: bool = NotSpecified
     ) -> Tensor:
