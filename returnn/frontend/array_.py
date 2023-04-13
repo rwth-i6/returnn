@@ -154,6 +154,21 @@ def split_dims(
     )
 
 
+def split(source: Tensor, *, axis: Dim, out_dims: Sequence[Dim]) -> Tuple[Tensor, ...]:
+    """
+    Split the input on the specified axis (by default feature).
+    Basically a wrapper around tf.split.
+
+    :param source: {..., axis}
+    :param axis: some static axis
+    :param out_dims: list of dims where sum(out_dims) == axis
+    :return: tuple of tensors, same amount as out_dims,
+        with the same shape as source, but with the specified axis replaced by the out_dims
+    """
+    # noinspection PyProtectedMember
+    return source._raw_backend.split(source, axis=axis, out_dims=out_dims)
+
+
 def masked_select(
     tensor: Tensor, *, mask: Tensor, dims: Sequence[Dim], out_dim: Optional[Dim] = None
 ) -> Tuple[Tensor, Dim]:

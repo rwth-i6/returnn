@@ -12,6 +12,9 @@ from .. import frontend_layers as rfl
 from . import dims as _dims
 
 
+__all__ = ["make_layer", "_get_sub_layer", "register_extern_data"]
+
+
 def make_layer(
     layer_dict: rfl.LayerDictRaw,
     *,
@@ -109,6 +112,24 @@ def make_layer(
     # Debug out. Similar as RETURNN template log. Maybe put this behind a flag? Anyway, useful for now.
     print(layer)
     return layer
+
+
+def _get_sub_layer(layer: Tensor[rfl.Layer], name: str, *, data: Tensor) -> Tensor:
+    """
+    Like the "{layer}/{name}" syntax in RETURNN.
+    Normally this should only be needed for internal usage.
+    """
+    out = layer.raw_tensor.get_child_tensor(name, data=data)
+    if rfl.is_debug_eager_mode_enabled():
+        assert layer.raw_tensor.debug_layer
+        import returnn.tf.layers.base
+
+        assert isinstance(layer.raw_tensor.debug_layer, returnn.tf.layers.base.LayerBase)
+        sub_layer = layer.raw_tensor.debug_layer.get_sub_layer(name)
+        assert sub_layer and sub_layer.output.dim_tags == out.data.dim_tags
+        out.raw_tensor.debug_layer = sub_layer
+        out.data = sub_layer.output
+    return out
 
 
 def _tensor_from_layer_dict(layer_dict: rfl.LayerDictRaw, *, layer: rfl.Layer) -> Tensor[rfl.Layer]:

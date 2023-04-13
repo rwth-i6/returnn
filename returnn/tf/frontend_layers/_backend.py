@@ -175,6 +175,24 @@ class ReturnnLayersBackend(Backend[Layer]):
         )
 
     @staticmethod
+    def split(source: Tensor, *, axis: Dim, out_dims: Sequence[Dim]) -> Tuple[Tensor, ...]:
+        """split"""
+        res = rfl.make_layer({"class": "split", "from": source, "axis": axis, "out_dims": out_dims}, name="split")
+
+        src_axis_int = source.get_axis_from_description(axis)
+        # noinspection PyProtectedMember
+        return tuple(
+            rfl._get_sub_layer(
+                layer=res,
+                name=str(i),
+                data=source.copy_template_replace_dim_tag(
+                    axis=src_axis_int, new_dim_tag=dim, name=f"{source.name}/split:{i}:{dim.description}"
+                ),
+            )
+            for i, dim in enumerate(out_dims)
+        )
+
+    @staticmethod
     def activation(tensor: Tensor, func: str) -> Tensor:
         """activation"""
         return rfl.make_layer({"class": "activation", "activation": func, "from": tensor}, name=func)

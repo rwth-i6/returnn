@@ -279,6 +279,20 @@ class Backend(Generic[T]):
         """
         raise NotImplementedError
 
+    @staticmethod
+    def split(source: Tensor, *, axis: Dim, out_dims: Sequence[Dim]) -> Tuple[Tensor, ...]:
+        """
+        Split the input on the specified axis (by default feature).
+        Basically a wrapper around tf.split.
+
+        :param source: {..., axis}
+        :param axis: some static axis
+        :param out_dims: list of dims where sum(out_dims) == axis
+        :return: tuple of tensors, same amount as out_dims,
+            with the same shape as source, but with the specified axis replaced by the out_dims
+        """
+        raise NotImplementedError
+
     # Restrict the possible activation function names,
     # to not get unexpected behavior,
     # or unwanted incompatibilities.

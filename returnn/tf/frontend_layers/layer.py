@@ -621,6 +621,12 @@ class Layer:
         assert data.raw_tensor is child
         return child
 
+    def get_child_tensor(self, name: str, *, data: Tensor) -> Tensor[Layer]:
+        """
+        Get child layer ref. Makes sure it exists.
+        """
+        return self.get_child_with_tensor(name, data=data).tensor
+
     def __enter__(self):
         self._maybe_init_default_root()
         self._stack.append(self)

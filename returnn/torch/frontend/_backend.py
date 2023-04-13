@@ -194,6 +194,25 @@ class TorchBackend(Backend[torch.Tensor]):
         )
 
     @staticmethod
+    def split(source: Tensor, *, axis: Dim, out_dims: Sequence[Dim]) -> Tuple[Tensor, ...]:
+        """split"""
+        src_axis_int = source.get_axis_from_description(axis)
+        out_raw_list = torch.split(
+            source.raw_tensor,
+            split_size_or_sections=[d.get_dim_value() for d in out_dims],
+            dim=src_axis_int,
+        )
+        out_tuple = tuple(
+            source.copy_template_replace_dim_tag(
+                axis=src_axis_int, new_dim_tag=dim, name=f"{source.name}/split:{i}:{dim.description}"
+            )
+            for i, dim in enumerate(out_dims)
+        )
+        for i, out in enumerate(out_tuple):
+            out.raw_tensor = out_raw_list[i]
+        return out_tuple
+
+    @staticmethod
     def activation_raw(raw_tensor: torch.Tensor, func: str) -> torch.Tensor:
         """
         :param raw_tensor:
