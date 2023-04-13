@@ -42,8 +42,17 @@ def dropout(
         noise_dims = axis
     if not set(noise_dims).issubset(source.dims):
         raise ValueError(f"dropout axis {axis} not in source {source}")
+
+    if isinstance(keep_prob, (float, int)) and not 0 < keep_prob <= 1:
+        raise ValueError("keep_prob must be a scalar tensor or a float in the " "range (0, 1], got %g" % keep_prob)
+
+    # Do nothing if we know keep_prob == 1
+    if isinstance(keep_prob, (float, int)) and keep_prob == 1:
+        return source
+
     if on_forward:
         return _dropout(source, keep_prob, noise_dims=noise_dims)
+
     return rf.cond(
         pred=rf.get_run_ctx().train_flag,
         true_fn=lambda: _dropout(source, keep_prob, noise_dims=noise_dims),
@@ -71,13 +80,6 @@ def _dropout(
     :param seed: passed on to :func:`random` for the mask
     :param bool apply_correction_factor:
     """
-    assert isinstance(x, Tensor)
-    if isinstance(keep_prob, (float, int)) and not 0 < keep_prob <= 1:
-        raise ValueError("keep_prob must be a scalar tensor or a float in the " "range (0, 1], got %g" % keep_prob)
-    # Do nothing if we know keep_prob == 1
-    if isinstance(keep_prob, (float, int)) and keep_prob == 1:
-        return x
-
     # uniform [keep_prob, 1.0 + keep_prob)
     random_tensor = keep_prob + rf.random_uniform(dims=noise_dims, seed=seed, dtype=x.dtype, minval=0.0, maxval=1.0)
     # 0. if [keep_prob, 1.0) and 1. if [1.0, 1.0 + keep_prob)
