@@ -43,14 +43,15 @@ class Tensor(_TensorMixin, _TensorOpOverloadsMixin, Generic[RawTensorType]):
 
     size_dtype = "int32"
 
-    __slots__ = ("name", "_dims", "dtype", "sparse_dim", "_feature_dim_axis", "_raw_tensor", "version", "_extra")
+    __slots__ = ("name", "_dims", "dtype", "sparse_dim", "_raw_tensor", "_feature_dim_axis", "version", "_extra")
 
     name: str
     _dims: Tuple[Dim, ...]
     dtype: str
     sparse_dim: Optional[Dim]
-    _feature_dim_axis: Optional[Union[int, NotSpecified]]
     _raw_tensor: Optional[RawTensorType]
+
+    _feature_dim_axis: Optional[Union[int, NotSpecified]]  # https://github.com/rwth-i6/returnn/issues/1273
     version: int
     _extra: Optional[_TensorExtra]
 
@@ -167,7 +168,8 @@ class Tensor(_TensorMixin, _TensorOpOverloadsMixin, Generic[RawTensorType]):
     @property
     def feature_dim(self) -> Optional[Dim]:
         """
-        :return: self.dims[self.feature_dim_axis] or None
+        :return: self.dims[self.feature_dim_axis] or None.
+            See https://github.com/rwth-i6/returnn/issues/1273 for some discussion.
         """
         # first fast paths
         if self._feature_dim_axis is None:
