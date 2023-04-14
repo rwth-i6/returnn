@@ -23,6 +23,7 @@ __all__ = [
     "mul",
     "true_divide",
     "floor_divide",
+    "ceil_divide",
     "neg",
     "mod",
     "pow",
@@ -235,6 +236,11 @@ def true_divide(a: Tensor, b: Tensor) -> Tensor:
 def floor_divide(a: Tensor, b: Tensor) -> Tensor:
     """floordiv"""
     return combine(a, "floordiv", b)
+
+
+def ceil_divide(a: Tensor, b: Tensor) -> Tensor:
+    """ceildiv"""
+    return -(-a // b)
 
 
 def neg(a: Tensor) -> Tensor:
