@@ -910,8 +910,6 @@ class _DimMixin:
         """
         In case we can calculate the dyn size, do that now.
 
-        Warning: This is TensorFlow only currently.
-
         :param bool template_only:
         """
         if not self.is_dynamic():
@@ -924,10 +922,33 @@ class _DimMixin:
         if not op:
             return
 
-        import tensorflow as tf
-        from returnn.tf.util import basic as tf_util
+        for x in op.inputs:
+            if self.batch:
+                x = x.get_for_batch_ctx(self.batch, self.control_flow_ctx)
+            x.complete_dyn_size(template_only=template_only)
+
+        backend = None
+        for x in op.inputs:
+            if self.batch:
+                x = x.get_for_batch_ctx(self.batch, self.control_flow_ctx)
+            if x.dyn_size_ext and x.dyn_size_ext.raw_tensor is not None:
+                # noinspection PyProtectedMember
+                backend = x.dyn_size_ext._raw_backend
+                break
+
         import numpy
-        from tensorflow.python.framework import tensor_util
+        import returnn.frontend as rf
+        from returnn.tensor import Tensor
+
+        tf = tf_util = tensor_util = None
+        if backend and backend.is_tensorflow:
+            import tensorflow as tf
+
+            if backend.RawTensorType == tf.Tensor:
+                from returnn.tf.util import basic as tf_util
+                from tensorflow.python.framework import tensor_util
+            else:
+                tf = None
 
         kind = op.kind
         if kind.endswith("_right"):
@@ -940,6 +961,8 @@ class _DimMixin:
                 return (x__ < 0).any()
             if isinstance(x__, (int, float, numpy.number)):
                 return x__ < 0
+            if not tf:
+                return False
             assert isinstance(x__, tf.Tensor)
             x__ = tensor_util.constant_value(x__)
             if x__ is not None:
@@ -951,23 +974,38 @@ class _DimMixin:
                 return None
             if a is None or b is None:
                 return None
-            assert isinstance(a, tf.Tensor) and isinstance(b, (int, tf.Tensor))
-            with tf_util.same_control_flow_ctx([a, b]):
-                if kind == "add":
-                    use_relu = _is_negative(a) or _is_negative(b)  # for dynamic tensors, assume all positive
-                    if use_relu:
-                        return tf.convert_to_tensor(tf_util.simplify_non_negative_seq_length(a + b))
-                    return a + b
-                elif kind == "sub":
-                    return tf.convert_to_tensor(tf_util.simplify_non_negative_seq_length(a - b))
-                elif kind == "mul":
-                    return a * b
-                elif kind in ("floordiv", "truediv"):  # truediv assumes there is no remainder
-                    return a // b
-                elif kind == "ceildiv":
-                    return -(-a // b)
-                else:
-                    raise ValueError("unknown op kind %r" % op.kind)
+            if tf:
+                assert isinstance(a, tf.Tensor) and isinstance(b, (int, tf.Tensor))
+                with tf_util.same_control_flow_ctx([a, b]):
+                    if kind == "add":
+                        use_relu = _is_negative(a) or _is_negative(b)  # for dynamic tensors, assume all positive
+                        if use_relu:
+                            return tf.convert_to_tensor(tf_util.simplify_non_negative_seq_length(a + b))
+                        return a + b
+                    elif kind == "sub":
+                        return tf.convert_to_tensor(tf_util.simplify_non_negative_seq_length(a - b))
+                    elif kind == "mul":
+                        return a * b
+                    elif kind in ("floordiv", "truediv"):  # truediv assumes there is no remainder
+                        return a // b
+                    elif kind == "ceildiv":
+                        return -(-a // b)
+                    else:
+                        raise ValueError("unknown op kind %r" % op.kind)
+            if kind == "add":
+                return a + b
+            elif kind == "sub":
+                return a - b
+            elif kind == "mul":
+                return a * b
+            elif kind in ("floordiv", "truediv"):  # truediv assumes there is no remainder
+                return a // b
+            elif kind == "ceildiv":
+                if isinstance(a, Tensor):
+                    return rf.ceil_divide(a, b)
+                return -(-a // b)
+            else:
+                raise ValueError("unknown op kind %r" % op.kind)
 
         y_name = self.description + ":seq-length"
         y: Optional[_t.Tensor] = None  # resulting dyn size
@@ -978,15 +1016,22 @@ class _DimMixin:
             if not x.is_dynamic():  # static
                 assert x.dimension is not None
                 if y is None:
-                    with tf.control_dependencies(None):  # this will reset the context
+                    if not template_only and backend and not tf:
+                        y = backend.convert_to_tensor(x.dimension, dims=[], dtype=_t.Tensor.size_dtype, name=y_name)
+                    else:
                         y = _t.Tensor(
                             name=y_name,
                             dim_tags=[],
-                            dtype="int32",
-                            placeholder=None if template_only else tf.constant(x.dimension),
+                            dtype=_t.Tensor.size_dtype,
                         )
+                        if not template_only and tf:
+                            with tf.control_dependencies(None):  # this will reset the context
+                                y.raw_tensor = tf.constant(x.dimension)
                     continue
-                y.placeholder = _bin_op(y.placeholder, x.dimension)
+                if tf:
+                    y.placeholder = _bin_op(y.placeholder, x.dimension)
+                else:
+                    y = _bin_op(y, x.dimension)
                 continue
             if self.batch:
                 x = x.get_for_batch_ctx(self.batch, self.control_flow_ctx)
@@ -1004,7 +1049,10 @@ class _DimMixin:
                 y = common
             else:
                 x_, y_ = x, y
-            y.placeholder = _bin_op(y_.placeholder, x_.placeholder)
+            if tf:
+                y.placeholder = _bin_op(y_.placeholder, x_.placeholder)
+            else:
+                y = _bin_op(y_, x_)
         assert y
         if self.dyn_size_ext:
             assert self.dyn_size_ext.dim_tags == y.dim_tags
@@ -1014,7 +1062,7 @@ class _DimMixin:
             else:
                 self.batch = y.batch
         self.dyn_size_ext = y
-        if y.placeholder is not None:
+        if tf and y.placeholder is not None:
             self.set_tag_on_size_tensor(y.placeholder)
 
     def is_equal(
