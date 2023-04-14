@@ -22,6 +22,7 @@ from .attention import *
 from .cond import *
 from .const import *
 from .container import *
+from .conv import *
 from .dims import *
 from .dropout import *
 from .dtype import *

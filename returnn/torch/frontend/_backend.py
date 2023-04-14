@@ -834,3 +834,143 @@ class TorchBackend(Backend[torch.Tensor]):
         out.raw_tensor = torch.reshape(out_raw, source.raw_tensor.shape)
         out.feature_dim = in_dim
         return out
+
+    # noinspection PyShadowingBuiltins
+    @staticmethod
+    def conv(
+        source: Tensor,
+        *,
+        in_dim: Dim,
+        out_dim: Dim,
+        in_spatial_dims: Sequence[Dim],
+        out_spatial_dims: Optional[Sequence[Dim]] = None,
+        filter: Tensor,
+        filter_size: Sequence[Dim],  # to have the order well-defined
+        padding: str,
+        strides: Optional[Union[int, Sequence[int]]] = None,
+        dilation_rate: Optional[Union[int, Sequence[int]]] = None,
+        groups: Optional[int] = None,
+        bias: Optional[Tensor] = None,
+    ) -> Tuple[Tensor, Sequence[Dim]]:
+        if not out_spatial_dims:
+            out_spatial_dims = rf.make_conv_out_spatial_dims(
+                description_prefix="conv",
+                in_spatial_dims=in_spatial_dims,
+                filter_size=[d.dimension for d in filter_size],
+                strides=strides or 1,
+                dilation_rate=dilation_rate or 1,
+                padding=padding,
+            )
+        filter_in_dim = in_dim if not groups or groups == 1 else in_dim // groups
+        filter_dims = (out_dim, filter_in_dim) + tuple(filter_size)
+        filter = filter.copy_transpose(filter_dims)
+        batch_dims = [d for d in source.dims if d not in (in_dim,) + tuple(in_spatial_dims)]
+        # Torch conv expects (N,C,<spatial dims>) as shape.
+        source = source.copy_transpose(batch_dims + [in_dim] + list(in_spatial_dims))
+        src_raw = torch.reshape(
+            source.raw_tensor,
+            # potentially merge batch dims all together
+            [-1, in_dim.get_dim_value()] + [d.get_dim_value() for d in in_spatial_dims],
+        )
+        if len(filter_size) == 1:
+            # There is also conv_tbc, but it's a bit limited (no dilation)
+            # and also unclear when exactly it is faster.
+            out_raw = torch.nn.functional.conv1d(
+                src_raw,
+                weight=filter.raw_tensor,
+                bias=bias.raw_tensor if bias is not None else None,
+                stride=strides or 1,
+                padding=padding,
+                dilation=dilation_rate or 1,
+                groups=groups or 1,
+            )
+        elif len(filter_size) == 2:
+            out_raw = torch.nn.functional.conv2d(
+                src_raw,
+                weight=filter.raw_tensor,
+                bias=bias.raw_tensor if bias is not None else None,
+                stride=strides or 1,
+                padding=padding,
+                dilation=dilation_rate or 1,
+                groups=groups or 1,
+            )
+        elif len(filter_size) == 3:
+            out_raw = torch.nn.functional.conv3d(
+                src_raw,
+                weight=filter.raw_tensor,
+                bias=bias.raw_tensor if bias is not None else None,
+                stride=strides or 1,
+                padding=padding,
+                dilation=dilation_rate or 1,
+                groups=groups or 1,
+            )
+        else:
+            raise ValueError(f"invalid number of filter dims {filter_size}, expected 1, 2, or 3")
+        out = Tensor("conv", dims=batch_dims + [out_dim] + list(out_spatial_dims), dtype=source.dtype)
+        out.raw_tensor = torch.reshape(out_raw, [d.get_dim_value() for d in out.dims])
+        out.feature_dim = out_dim
+        return out, out_spatial_dims
+
+    @staticmethod
+    def pool(
+        source: Tensor,
+        *,
+        mode: str,
+        pool_size: Sequence[int],
+        padding: str = "valid",
+        dilation_rate: Union[Sequence[int], int] = 1,
+        strides: Sequence[int],
+        in_spatial_dims: Sequence[Dim],
+        out_spatial_dims: Optional[Sequence[Dim]] = None,
+    ) -> Tuple[Tensor, Sequence[Dim]]:
+        if out_spatial_dims is None:
+            out_spatial_dims = rf.make_conv_out_spatial_dims(
+                description_prefix="pool",
+                in_spatial_dims=in_spatial_dims,
+                filter_size=pool_size,
+                strides=strides,
+                dilation_rate=dilation_rate,
+                padding=padding,
+            )
+        assert padding == "valid"  # not implemented otherwise
+        batch_dims = [d for d in source.dims if d not in tuple(in_spatial_dims)]
+        # Torch conv expects (N,C,<spatial dims>) as shape.
+        # batch_dims would actually cover the channel-dim (C) as well,
+        # as it does not really matter to differentiate it from other batch dims.
+        source = source.copy_transpose(batch_dims + list(in_spatial_dims))
+        src_raw = torch.reshape(
+            source.raw_tensor,
+            # Potentially merge batch dims all together.
+            # Keep the last as the channel-dim, but not sure if this is really relevant.
+            [-1, batch_dims[-1] if batch_dims else 1] + [d.get_dim_value() for d in in_spatial_dims],
+        )
+        if len(in_spatial_dims) == 1:
+            # There is also conv_tbc, but it's a bit limited (no dilation)
+            # and also unclear when exactly it is faster.
+            out_raw = torch.nn.functional.max_pool1d(
+                src_raw,
+                kernel_size=pool_size,
+                stride=strides,
+                dilation=dilation_rate or 1,
+            )
+        elif len(in_spatial_dims) == 2:
+            out_raw = torch.nn.functional.max_pool2d(
+                src_raw,
+                kernel_size=pool_size,
+                stride=strides,
+                dilation=dilation_rate or 1,
+            )
+        elif len(in_spatial_dims) == 3:
+            out_raw = torch.nn.functional.max_pool3d(
+                src_raw,
+                kernel_size=pool_size,
+                stride=strides,
+                dilation=dilation_rate or 1,
+            )
+        else:
+            raise ValueError(f"invalid number of filter dims {in_spatial_dims}, expected 1, 2, or 3")
+        out = Tensor("conv", dims=batch_dims + list(out_spatial_dims), dtype=source.dtype)
+        out.raw_tensor = torch.reshape(out_raw, [d.get_dim_value() for d in out.dims])
+        if source.feature_dim and source.feature_dim in out.dims:
+            out.feature_dim = source.feature_dim
+        return out, out_spatial_dims

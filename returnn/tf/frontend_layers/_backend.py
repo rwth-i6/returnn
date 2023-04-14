@@ -591,6 +591,135 @@ class ReturnnLayersBackend(Backend[Layer]):
             name="batch_norm",
         )
 
+    # noinspection PyShadowingBuiltins
+    @staticmethod
+    def conv(
+        source: Tensor,
+        *,
+        in_dim: Dim,
+        out_dim: Dim,
+        in_spatial_dims: Sequence[Dim],
+        out_spatial_dims: Optional[Sequence[Dim]] = None,
+        filter: Tensor,
+        filter_size: Sequence[Dim],  # to have the order well-defined
+        padding: str,
+        strides: Optional[Union[int, Sequence[int]]] = None,
+        dilation_rate: Optional[Union[int, Sequence[int]]] = None,
+        groups: Optional[int] = None,
+        bias: Optional[Tensor] = None,
+    ) -> Tuple[Tensor, Sequence[Dim]]:
+        """conv"""
+        if not out_spatial_dims:
+            out_spatial_dims = rf.make_conv_out_spatial_dims(
+                description_prefix="conv",
+                in_spatial_dims=in_spatial_dims,
+                filter_size=[d.dimension for d in filter_size],
+                strides=strides or 1,
+                dilation_rate=dilation_rate or 1,
+                padding=padding,
+            )
+        layer_dict = {
+            "class": "conv",
+            "from": source,
+            "in_dim": in_dim,
+            "in_spatial_dims": in_spatial_dims,
+            "out_dim": out_dim,
+            "out_spatial_dims": out_spatial_dims,
+            "filter_size": filter_size,
+            "padding": padding,
+        }
+        if strides:
+            layer_dict["strides"] = strides
+        if dilation_rate:
+            layer_dict["dilation_rate"] = dilation_rate
+        if groups:
+            layer_dict["groups"] = groups
+        layer_dict.update({"filter": filter, "with_bias": bias is not None})
+        if bias is not None:
+            layer_dict["bias"] = bias
+        out = rfl.make_layer(layer_dict, name="conv")
+        return out, out_spatial_dims
+
+    # noinspection PyShadowingBuiltins
+    @staticmethod
+    def transposed_conv(
+        source: Tensor,
+        *,
+        in_dim: Dim,
+        out_dim: Dim,
+        in_spatial_dims: Sequence[Dim],
+        out_spatial_dims: Optional[Sequence[Dim]] = None,
+        filter: Tensor,
+        filter_size: Sequence[Dim],
+        padding: str,
+        remove_padding: Union[Sequence[int], int] = 0,
+        output_padding: Optional[Union[Sequence[Optional[int]], int]] = None,
+        strides: Optional[Sequence[int]] = None,
+        bias: Optional[Tensor] = None,
+    ) -> Tuple[Tensor, Sequence[Dim]]:
+        """transposed conv"""
+        if not out_spatial_dims:
+            out_spatial_dims = [Dim(None, name=f"out-spatial-dim{i}") for i, s in enumerate(filter_size)]
+            for i in range(len(filter_size)):
+                s = filter_size[i].dimension if not strides else strides[i]
+                if filter_size[i].dimension == s == 1 or (s == 1 and padding.lower() == "same"):
+                    out_spatial_dims[i] = in_spatial_dims[i]
+        layer_dict = {
+            "class": "transposed_conv",
+            "from": source,
+            "in_dim": in_dim,
+            "in_spatial_dims": in_spatial_dims,
+            "out_dim": out_dim,
+            "out_spatial_dims": out_spatial_dims,
+            "filter_size": filter_size,
+            "padding": padding,
+        }
+        if remove_padding:
+            layer_dict["remove_padding"] = remove_padding
+        if output_padding:
+            layer_dict["output_padding"] = output_padding
+        if strides:
+            layer_dict["strides"] = strides
+        layer_dict.update({"filter": filter, "with_bias": bias is not None})
+        if bias is not None:
+            layer_dict["bias"] = bias
+        out = rfl.make_layer(layer_dict, name="transposed_conv")
+        return out, out_spatial_dims
+
+    @staticmethod
+    def pool(
+        source: Tensor,
+        *,
+        mode: str,
+        pool_size: Sequence[int],
+        padding: str = "valid",
+        dilation_rate: Union[Sequence[int], int] = 1,
+        strides: Sequence[int],
+        in_spatial_dims: Sequence[Dim],
+        out_spatial_dims: Optional[Sequence[Dim]] = None,
+    ) -> Tuple[Tensor, Sequence[Dim]]:
+        """pool"""
+        if out_spatial_dims is None:
+            out_spatial_dims = rf.make_conv_out_spatial_dims(
+                description_prefix="pool",
+                in_spatial_dims=in_spatial_dims,
+                filter_size=pool_size,
+                strides=strides,
+                dilation_rate=dilation_rate,
+                padding=padding,
+            )
+        args = {
+            "mode": mode,
+            "pool_size": pool_size,
+            "padding": padding,
+            "dilation_rate": dilation_rate,
+            "strides": strides,
+            "in_spatial_dims": in_spatial_dims,
+            "out_spatial_dims": out_spatial_dims,
+        }
+        layer = rfl.make_layer({"class": "pool", "from": source, **args}, name="pool")
+        return layer, out_spatial_dims
+
 
 def _random_replay_eval(idx, **_kwargs):
     # noinspection PyProtectedMember

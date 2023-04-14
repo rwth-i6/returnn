@@ -786,6 +786,61 @@ class Backend(Generic[T]):
         """
         raise NotImplementedError
 
+    # noinspection PyShadowingBuiltins
+    @staticmethod
+    def conv(
+        source: Tensor,
+        *,
+        in_dim: Dim,
+        out_dim: Dim,
+        in_spatial_dims: Sequence[Dim],
+        out_spatial_dims: Optional[Sequence[Dim]] = None,
+        filter: Tensor,
+        filter_size: Sequence[Dim],  # to have the order well-defined
+        padding: str,
+        strides: Optional[Union[int, Sequence[int]]] = None,
+        dilation_rate: Optional[Union[int, Sequence[int]]] = None,
+        groups: Optional[int] = None,
+        bias: Optional[Tensor] = None,
+    ) -> Tuple[Tensor, Sequence[Dim]]:
+        """convolution"""
+        raise NotImplementedError
+
+    # noinspection PyShadowingBuiltins
+    @staticmethod
+    def transposed_conv(
+        source: Tensor,
+        *,
+        in_dim: Dim,
+        out_dim: Dim,
+        in_spatial_dims: Sequence[Dim],
+        out_spatial_dims: Optional[Sequence[Dim]] = None,
+        filter: Tensor,
+        filter_size: Sequence[Dim],
+        padding: str,
+        remove_padding: Union[Sequence[int], int] = 0,
+        output_padding: Optional[Union[Sequence[Optional[int]], int]] = None,
+        strides: Optional[Sequence[int]] = None,
+        bias: Optional[Tensor] = None,
+    ) -> Tuple[Tensor, Sequence[Dim]]:
+        """transposed convolution"""
+        raise NotImplementedError
+
+    @staticmethod
+    def pool(
+        source: Tensor,
+        *,
+        mode: str,
+        pool_size: Sequence[int],
+        padding: str = "valid",
+        dilation_rate: Union[Sequence[int], int] = 1,
+        strides: Sequence[int],
+        in_spatial_dims: Sequence[Dim],
+        out_spatial_dims: Optional[Sequence[Dim]] = None,
+    ) -> Tuple[Tensor, Sequence[Dim]]:
+        """pooling"""
+        raise NotImplementedError
+
 
 # We use a global instance, and we modify __class__ inplace,
 # such that any reference to this can be updated.

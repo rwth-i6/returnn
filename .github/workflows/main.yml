@@ -332,6 +332,7 @@ jobs:
           - TEST=rf_attention
           - TEST=rf_base
           - TEST=rf_container
+          - TEST=rf_conv
           - TEST=rf_normalization
 
     steps:
