@@ -794,6 +794,7 @@ class TorchBackend(Backend[torch.Tensor]):
         affine: bool,
         use_mask: bool,
     ) -> Tensor:
+        """batch norm"""
         if use_mask:
             raise NotImplementedError("batch_norm with masking not implemented")
         if (running_mean is None) != (running_variance is None):
