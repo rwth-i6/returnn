@@ -551,6 +551,45 @@ class ReturnnLayersBackend(Backend[Layer]):
             out_dim,
         )
 
+    @staticmethod
+    def batch_norm(
+        source: Tensor,
+        *,
+        in_dim: Union[Dim, Sequence[Dim]],
+        running_mean: Tensor,
+        running_variance: Tensor,
+        gamma: Optional[Tensor],
+        beta: Optional[Tensor],
+        epsilon: float,
+        momentum: float,
+        affine: bool,
+        use_mask: bool,
+    ) -> Tensor:
+        """batch norm"""
+        reuse_params = {
+            "batch_norm/v2_mean": running_mean,
+            "batch_norm/v2_variance": running_variance,
+        }
+        if affine:
+            reuse_params["batch_norm/v2_gamma"] = gamma
+            reuse_params["batch_norm/v2_beta"] = beta
+        reuse_params = {"map": {k: {"layer_output": v} for k, v in reuse_params.items()}}
+        return rfl.make_layer(
+            {
+                "class": "batch_norm",
+                "from": source,
+                "in_dim": in_dim,
+                "use_std": affine,
+                "use_shift": affine,
+                "param_version": 2,
+                "reuse_params": reuse_params,
+                "momentum": momentum,
+                "epsilon": epsilon,
+                "masked_time": use_mask,
+            },
+            name="batch_norm",
+        )
+
 
 def _random_replay_eval(idx, **_kwargs):
     # noinspection PyProtectedMember

@@ -779,3 +779,57 @@ class TorchBackend(Backend[torch.Tensor]):
             raw_tensor=out_raw,
         )
         return out, out_dim
+
+    @staticmethod
+    def batch_norm(
+        source: Tensor[torch.Tensor],
+        *,
+        in_dim: Union[Dim, Sequence[Dim]],
+        running_mean: Optional[Tensor],
+        running_variance: Optional[Tensor],
+        gamma: Optional[Tensor],
+        beta: Optional[Tensor],
+        epsilon: float,
+        momentum: float,
+        affine: bool,
+        use_mask: bool,
+    ) -> Tensor:
+        if use_mask:
+            raise NotImplementedError("batch_norm with masking not implemented")
+        if (running_mean is None) != (running_variance is None):
+            raise ValueError("running_mean and running_variance must be both None or both not None")
+        if affine:
+            if gamma is None or beta is None:
+                raise ValueError("gamma and beta must be given if affine=True")
+            if not gamma.dims == beta.dims == (in_dim,):
+                raise ValueError(f"gamma and beta must have shape [{in_dim}], got gamma {gamma} and beta {beta}")
+        if running_mean is not None:
+            if not running_mean.dims == running_variance.dims == (in_dim,):
+                raise ValueError(
+                    f"running_mean and running_variance must have shape [{in_dim}], got "
+                    f"running_mean {running_mean} and running_variance {running_variance}"
+                )
+        feat_axis = source.get_axis_from_description(in_dim)
+        if feat_axis == 0:
+            pre_dims = 1
+        else:
+            pre_dims = numpy.prod(source.raw_tensor.shape[:feat_axis])
+        # Torch batch_norm expects (N,C,+) as shape.
+        src_raw = torch.reshape(source.raw_tensor, [pre_dims, in_dim.get_dim_value(), -1])
+        # https://github.com/pytorch/pytorch/blob/59605811488eb07b3b8bf70a5f0b4b56b34b4a61/aten/src/ATen/native/Normalization.cpp#L546
+        out_raw = torch.nn.functional.batch_norm(
+            src_raw,
+            running_mean=running_mean.raw_tensor if running_mean is not None else None,
+            running_var=running_variance.raw_tensor if running_variance is not None else None,
+            weight=gamma.raw_tensor if affine else None,
+            bias=beta.raw_tensor if affine else None,
+            # training: means whether we should use the current batch statistics
+            #   + update the running statistics (if given)
+            training=rf.get_run_ctx().train_flag or (running_mean is None),
+            momentum=momentum,
+            eps=epsilon,
+        )
+        out = source.copy_template()
+        out.raw_tensor = torch.reshape(out_raw, source.raw_tensor.shape)
+        out.feature_dim = in_dim
+        return out

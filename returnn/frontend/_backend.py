@@ -742,6 +742,35 @@ class Backend(Generic[T]):
         """
         raise NotImplementedError
 
+    @staticmethod
+    def batch_norm(
+        source: Tensor,
+        *,
+        in_dim: Union[Dim, Sequence[Dim]],
+        running_mean: Tensor,
+        running_variance: Tensor,
+        gamma: Optional[Tensor],
+        beta: Optional[Tensor],
+        epsilon: float,
+        momentum: float,
+        affine: bool,
+        use_mask: bool,
+    ) -> Tensor:
+        """
+        :param source:
+        :param in_dim:
+        :param running_mean:
+        :param running_variance:
+        :param gamma:
+        :param beta:
+        :param epsilon:
+        :param momentum:
+        :param affine:
+        :param use_mask:
+        :return:
+        """
+        raise NotImplementedError
+
 
 # We use a global instance, and we modify __class__ inplace,
 # such that any reference to this can be updated.
