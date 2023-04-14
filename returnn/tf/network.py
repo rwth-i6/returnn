@@ -1706,6 +1706,7 @@ class TFNetwork(object):
                 return False
             layer_kwargs = layer_.kwargs.copy()
             layer_kwargs.pop("out_shape", None)
+            layer_kwargs.pop("output", None)
             layer_kwargs_flat_values = nest.flatten(layer_kwargs)
             if any(dim in layer_kwargs_flat_values for dim in dims):  # e.g. to operate on the axis
                 return False
