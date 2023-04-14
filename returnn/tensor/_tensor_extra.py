@@ -323,7 +323,7 @@ class _TensorMixin(_TensorMixinBase):
                     continue  # we allow anything in the placeholder
                 if raw_shape[i] != self.batch_shape[i]:
                     raise Exception(
-                        f"Mismatching shape: Raw tensor {self._raw_tensor.shape} vs Tensor {self};\n"
+                        f"Mismatching shape: Raw tensor {raw_shape} vs Tensor {self};\n"
                         + backend.format_graph_output(self._raw_tensor, max_depth=3)
                     )
             backend.set_known_shape_raw(self._raw_tensor, self.batch_shape)
