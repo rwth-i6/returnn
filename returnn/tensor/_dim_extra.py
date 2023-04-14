@@ -969,29 +969,37 @@ class _DimMixin:
                 return _is_negative(x__)
             return False
 
-        def _bin_op(a, b):
+        def _bin_op_tf(a, b):
             if template_only:
                 return None
             if a is None or b is None:
                 return None
-            if tf:
-                assert isinstance(a, tf.Tensor) and isinstance(b, (int, tf.Tensor))
-                with tf_util.same_control_flow_ctx([a, b]):
-                    if kind == "add":
-                        use_relu = _is_negative(a) or _is_negative(b)  # for dynamic tensors, assume all positive
-                        if use_relu:
-                            return tf.convert_to_tensor(tf_util.simplify_non_negative_seq_length(a + b))
-                        return a + b
-                    elif kind == "sub":
-                        return tf.convert_to_tensor(tf_util.simplify_non_negative_seq_length(a - b))
-                    elif kind == "mul":
-                        return a * b
-                    elif kind in ("floordiv", "truediv"):  # truediv assumes there is no remainder
-                        return a // b
-                    elif kind == "ceildiv":
-                        return -(-a // b)
-                    else:
-                        raise ValueError("unknown op kind %r" % op.kind)
+            assert isinstance(a, tf.Tensor) and isinstance(b, (int, tf.Tensor))
+            with tf_util.same_control_flow_ctx([a, b]):
+                if kind == "add":
+                    use_relu = _is_negative(a) or _is_negative(b)  # for dynamic tensors, assume all positive
+                    if use_relu:
+                        return tf.convert_to_tensor(tf_util.simplify_non_negative_seq_length(a + b))
+                    return a + b
+                elif kind == "sub":
+                    return tf.convert_to_tensor(tf_util.simplify_non_negative_seq_length(a - b))
+                elif kind == "mul":
+                    return a * b
+                elif kind in ("floordiv", "truediv"):  # truediv assumes there is no remainder
+                    return a // b
+                elif kind == "ceildiv":
+                    return -(-a // b)
+                else:
+                    raise ValueError("unknown op kind %r" % op.kind)
+
+        def _bin_op(a, b):
+            if template_only or not backend:
+                if isinstance(a, _t.Tensor) and isinstance(b, _t.Tensor):
+                    return _t.Tensor.get_common_data([a, b], allow_broadcast_all_sources=True)
+                if isinstance(a, _t.Tensor):
+                    return a
+                if isinstance(b, _t.Tensor):
+                    return b
             if kind == "add":
                 return a + b
             elif kind == "sub":
@@ -1029,7 +1037,7 @@ class _DimMixin:
                                 y.raw_tensor = tf.constant(x.dimension)
                     continue
                 if tf:
-                    y.placeholder = _bin_op(y.placeholder, x.dimension)
+                    y.placeholder = _bin_op_tf(y.placeholder, x.dimension)
                 else:
                     y = _bin_op(y, x.dimension)
                 continue
@@ -1050,10 +1058,10 @@ class _DimMixin:
             else:
                 x_, y_ = x, y
             if tf:
-                y.placeholder = _bin_op(y_.placeholder, x_.placeholder)
+                y.placeholder = _bin_op_tf(y_.placeholder, x_.placeholder)
             else:
                 y = _bin_op(y_, x_)
-        assert y
+        assert y, f"op {op}?"
         if self.dyn_size_ext:
             assert self.dyn_size_ext.dim_tags == y.dim_tags
         if y.batch:
