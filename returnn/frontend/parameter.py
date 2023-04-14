@@ -65,14 +65,14 @@ class Parameter(Tensor[T]):
             self.raw_tensor = raw_tensor
         else:
             self.raw_tensor = _global_backend.create_parameter_raw(self)
-        if auxiliary and trainable is None:
-            trainable = False
-        self._trainable = trainable
+        self._trainable = None  # type: Optional[bool]
         self._auxiliary = auxiliary
         self._non_critical_for_restore = non_critical_for_restore
         self._weight_decay = weight_decay
         self._initial = None  # type: Optional[rf.init.ParamInitType]
-        self.initial = initial
+
+        self.trainable = trainable  # use setter
+        self.initial = initial  # use setter
 
     def __copy__(self):
         # Should return new copy. https://github.com/rwth-i6/returnn_common/pull/215#issuecomment-1269651064
@@ -135,8 +135,11 @@ class Parameter(Tensor[T]):
         return self._trainable
 
     @trainable.setter
-    def trainable(self, value: Optional[bool]):
-        self._trainable = value
+    def trainable(self, trainable: Optional[bool]):
+        self._trainable = trainable
+        if trainable is None:
+            trainable = not self.auxiliary
+        self._raw_backend.set_parameter_trainable(self, trainable)
 
     @property
     def auxiliary(self) -> bool:

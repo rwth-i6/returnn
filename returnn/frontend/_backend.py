@@ -467,7 +467,7 @@ class Backend(Generic[T]):
     @staticmethod
     def create_parameter_raw(tensor: rf.Parameter) -> T:
         """
-        :return: parameter
+        :return: parameter (by default trainable)
         """
         raise NotImplementedError
 
@@ -476,6 +476,14 @@ class Backend(Generic[T]):
         """
         :param param: parameter
         :param value: initial value
+        """
+        raise NotImplementedError
+
+    @staticmethod
+    def set_parameter_trainable(param: rf.Parameter, trainable: bool) -> None:
+        """
+        :param param: parameter
+        :param trainable: whether the parameter should be trainable
         """
         raise NotImplementedError
 

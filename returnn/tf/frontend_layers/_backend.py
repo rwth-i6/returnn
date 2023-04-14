@@ -307,6 +307,15 @@ class ReturnnLayersBackend(Backend[Layer]):
                 var.assign(value_tf)
 
     @staticmethod
+    def set_parameter_trainable(param: rf.Parameter, trainable: bool) -> None:
+        """set parameter trainable"""
+        if trainable:
+            # pop it, as it's the default
+            param.raw_tensor.layer_dict.pop("trainable", None)
+        else:
+            param.raw_tensor.layer_dict["trainable"] = False
+
+    @staticmethod
     def convert_to_tensor(
         value: Union[Tensor, Layer, RawTensorTypes],
         *,

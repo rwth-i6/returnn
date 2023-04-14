@@ -366,6 +366,13 @@ class TorchBackend(Backend[torch.Tensor]):
                 raw_param[:] = value
 
     @staticmethod
+    def set_parameter_trainable(param: rf.Parameter, trainable: bool) -> None:
+        """set trainable"""
+        raw_param = param.raw_tensor
+        assert isinstance(raw_param, torch.nn.Parameter)
+        raw_param.requires_grad = trainable
+
+    @staticmethod
     def compare_raw(a: torch.Tensor, kind: str, b: torch.Tensor) -> torch.Tensor:
         """
         :param a:
