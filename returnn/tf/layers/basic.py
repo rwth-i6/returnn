@@ -5866,7 +5866,7 @@ class ConvLayer(_ConcatInputLayer):
         assert padding in ["SAME", "VALID"], "no other padding supported at the moment"
         assert "out_type" not in kwargs, "don't set out_type explicitly for this layer"
         assert len(filter_size) in (1, 2, 3), "only 1D conv, 2D conv or 3D conv supported"
-        super(ConvLayer, self).__init__(**kwargs)
+        super(ConvLayer, self).__init__(in_dim=in_dim, out_dim=out_dim, **kwargs)
         if isinstance(strides, int):
             strides = [strides] * len(filter_size)
         else:
