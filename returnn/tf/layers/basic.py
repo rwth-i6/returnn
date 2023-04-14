@@ -153,7 +153,7 @@ def get_concat_sources_data_template(src_layers, out_dim=None, allow_broadcast_a
     if len(src_layers) == 1:
         data = src_layers[0].output.copy_template(name=name)
         if out_dim:
-            assert out_dim == data.feature_dim_or_sparse_dim
+            data.feature_dim = out_dim
         return data
     if not name:
         name = "concat_" + "_".join([layer.name for layer in src_layers])
@@ -316,8 +316,8 @@ class CopyLayer(_ConcatInputLayer):
 
     def __init__(self, in_dim=None, out_dim=None, extra_deps=(), **kwargs):
         """
-        :param Dim|None in_dim:
-        :param Dim|None out_dim:
+        :param Dim|None in_dim: just for checking. but also, if this is provided, it will set the feature_dim to this.
+        :param Dim|None out_dim: alternative to in_dim. see in_dim doc.
         :param list[LayerBase] extra_deps: Just add as an additional dependency, without really using it.
           This can have an effect though on the search beam, via :class:`SelectSearchSourcesLayer`.
           We only have this here for the :class:`CopyLayer` because the :func:`get_out_data_from_opts`
@@ -347,13 +347,23 @@ class CopyLayer(_ConcatInputLayer):
 
     @classmethod
     def get_out_data_from_opts(
-        cls, name, sources=(), extra_deps=(), out_type=None, out_dim=None, n_out=NotSpecified, out_shape=None, **kwargs
+        cls,
+        name,
+        sources=(),
+        extra_deps=(),
+        out_type=None,
+        in_dim=None,
+        out_dim=None,
+        n_out=NotSpecified,
+        out_shape=None,
+        **kwargs,
     ):
         """
         :param str name:
         :param list[LayerBase] sources:
         :param list[LayerBase] extra_deps:
         :param dict[str]|None out_type:
+        :param Dim|None in_dim:
         :param Dim|None out_dim:
         :param int|None|NotSpecified n_out:
         :param set[Dim|returnn.tf.util.data._MarkedDim]|tuple|list|None out_shape:
@@ -362,7 +372,7 @@ class CopyLayer(_ConcatInputLayer):
         # If all sources are defined, use them to get the exact out_type.
         out = get_concat_sources_data_template(
             sources,
-            out_dim=out_dim,
+            out_dim=in_dim or out_dim,
             name="%s_output" % name,
             allow_broadcast_all_sources=True if out_shape else NotSpecified,
         )
@@ -382,7 +392,7 @@ class CopyLayer(_ConcatInputLayer):
                 name=name,
                 out_type=out_type,
                 n_out=n_out,
-                out_dim=out_dim,
+                out_dim=in_dim or out_dim,
                 out_shape=out_shape,
                 sources=sources,
                 **kwargs,
