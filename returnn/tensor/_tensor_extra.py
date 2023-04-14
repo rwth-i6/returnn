@@ -651,7 +651,17 @@ class _TensorMixin(_TensorMixinBase):
         assert self.time_dim_axis is not None
         return self.copy_move_axis(self.time_dim_axis, time_dim_axis)
 
-    def copy_transpose(self, perm: Sequence[Union[int, Dim]], *, allow_int: bool = True) -> _t.Tensor:
+    def copy_transpose(self: Tensor, perm: Sequence[Union[int, Dim]], *, allow_int: bool = True) -> _t.Tensor:
+        """
+        :param perm: permutation of the axes. Maps the new axes to the old axes
+        :param allow_int: allow int as axis, otherwise only :class:`Dim`
+        :return: copy of myself with permuted axes
+        """
+        if self.raw_tensor is not None:
+            return self._raw_backend.transpose(self, perm, allow_int=allow_int)
+        return self.copy_template_transpose(perm, allow_int=allow_int)
+
+    def copy_template_transpose(self: Tensor, perm: Sequence[Union[int, Dim]], *, allow_int: bool = True) -> _t.Tensor:
         """
         :param perm: permutation of the axes. Maps the new axes to the old axes
         :param allow_int: allow int as axis, otherwise only :class:`Dim`
@@ -669,12 +679,12 @@ class _TensorMixin(_TensorMixinBase):
             data_opts["raw_tensor"] = self._raw_backend.transpose_raw(self._raw_tensor, perm)
         data_opts["dims"] = tuple(self.dim_tags[perm[i]] for i in range(self.batch_ndim))
         data = _t.Tensor(**data_opts)
+        inv_perm = {j: i for (i, j) in enumerate(perm)}
         if self.version == 1:
-            inv_perm = {j: i for (i, j) in enumerate(perm)}
             if inv_perm.get(self.time_dim_axis, None) != data.time_dim_axis:
                 data.time_dim_axis = inv_perm.get(self.time_dim_axis, None)
-            if inv_perm.get(self.feature_dim_axis, None) != data.feature_dim_axis:
-                data.feature_dim_axis = inv_perm.get(self.feature_dim_axis, None)
+        if inv_perm.get(self.feature_dim_axis, None) != data.feature_dim_axis:
+            data.feature_dim_axis = inv_perm.get(self.feature_dim_axis, None)
         return data
 
     def copy_move_axis(self, old_axis, new_axis) -> _t.Tensor:

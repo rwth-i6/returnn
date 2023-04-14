@@ -198,6 +198,21 @@ class Backend(Generic[T]):
         raise NotImplementedError
 
     @staticmethod
+    def transpose(tensor: Tensor, perm: Sequence[Union[Dim, int]], *, allow_int: bool = False) -> Tensor:
+        """
+        :param tensor: tensor
+        :param perm: permutation
+        :param allow_int: allow int as axis in perm
+        :return: transposed tensor
+        """
+        # Default implementation using transpose_raw.
+        out = tensor.copy_template_transpose(perm, allow_int=allow_int)
+        backend = get_backend_by_tensor(tensor)
+        perm_ = [tensor.get_axis_from_description(a, allow_int=allow_int) for a in perm]
+        out.raw_tensor = backend.transpose_raw(tensor.raw_tensor, perm_)
+        return out
+
+    @staticmethod
     def expand_dims_raw(raw_tensor: T, axis: int) -> T:
         """
         :param raw_tensor:

@@ -118,9 +118,10 @@ class ReturnnLayersBackend(Backend[Layer]):
         raise Exception("reshape_raw not supported in layers backend because dim tags would be unknown")
 
     @staticmethod
-    def transpose_raw(raw_tensor: Layer, perm: Sequence[int]) -> Layer:
-        """transpose_raw is a no-op in this backend"""
-        return raw_tensor
+    def transpose(tensor: Tensor, perm: Sequence[Union[Dim, int]], *, allow_int: bool = False) -> Tensor:
+        """transpose"""
+        assert not allow_int  # not supported
+        return rfl.make_layer({"class": "transpose", "from": tensor, "perm": perm}, name="transpose")
 
     @staticmethod
     def cast(tensor: Tensor, dtype: str) -> Tensor:
