@@ -142,7 +142,7 @@ def get_concat_sources_data_template(src_layers, out_dim=None, allow_broadcast_a
     :func:`concat_sources` (and related) are the equivalent functions
     which would create a :class:`Data` together with the tensor.
 
-    :param list[LayerBase]|tuple[LayerBase] src_layers:
+    :param Sequence[LayerBase] src_layers:
     :param Dim|None out_dim:
     :param bool|NotSpecified allow_broadcast_all_sources:
     :param str|None name: name of the Data
@@ -5833,28 +5833,29 @@ class ConvLayer(_ConcatInputLayer):
         **kwargs,
     ):
         """
-        :param tuple[int] filter_size: (width,), (height,width) or (depth,height,width) for 1D/2D/3D conv.
-          the input data ndim must match, or you can add dimensions via input_expand_dims or input_add_feature_dim.
-          it will automatically swap the batch-dim to the first axis of the input data.
+        :param Sequence[Dim]|Sequence[int] filter_size: (width,), (height,width) or (depth,height,width)
+            for 1D/2D/3D conv.
+            The input data ndim must match, or you can add dimensions via input_expand_dims or input_add_feature_dim.
+            It will automatically swap the batch-dim to the first axis of the input data.
         :param str padding: "same" or "valid"
-        :param int|tuple[int] strides: strides for the spatial dims,
-          i.e. length of this tuple should be the same as filter_size, or a single int.
-        :param int|tuple[int] dilation_rate: dilation for the spatial dims
+        :param int|Sequence[int] strides: strides for the spatial dims,
+            i.e. length of this tuple should be the same as filter_size, or a single int.
+        :param int|Sequence[int] dilation_rate: dilation for the spatial dims
         :param int groups: grouped convolution
         :param Dim|None in_dim:
-        :param list[Dim|str]|None in_spatial_dims:
+        :param Sequence[Dim|str]|None in_spatial_dims:
         :param int|None n_out: number of outgoing features
         :param Dim|None out_dim:
-        :param list[Dim]|None out_spatial_dims:
+        :param Sequence[Dim]|None out_spatial_dims:
         :param int input_expand_dims: number of spatial dims to add to the input
         :param bool input_add_feature_dim: will add a dim at the end and use input-feature-dim == 1,
-          and use the original input feature-dim as a spatial dim.
+            and use the original input feature-dim as a spatial dim.
         :param None|int input_split_feature_dim: if set, like input_add_feature_dim it will add a new feature dim
-          which is of value input_split_feature_dim, and the original input feature dim
-          will be divided by input_split_feature_dim, thus it must be a multiple of that value.
+            which is of value input_split_feature_dim, and the original input feature dim
+            will be divided by input_split_feature_dim, thus it must be a multiple of that value.
         :param bool|NotSpecified auto_use_channel_first: convert the input to NCHW or not
         :param bool|NotSpecified with_bias: if True, will add a bias to the output features.
-          True by default since behavior version 10.
+            True by default since behavior version 10.
         :param None|str activation: if set, will apply this function at the end
         :param LayerBase|None filter: if given, will not create an own parameter, but use this as the filter
         :param dict[str,str]|None filter_perm: transposes the filter (input filter as layer)
@@ -5912,18 +5913,46 @@ class ConvLayer(_ConcatInputLayer):
             % (len(filter_size), input_data.batch_ndim - num_batch_dims - 1, self.input_data)
             + "consider using input_expand_dims or input_add_feature_dim."
         )
+        if in_dim:
+            assert input_data.feature_dim == in_dim
+        else:
+            in_dim = input_data.feature_dim
         n_in = input_data.dim
         if out_dim:
-            assert out_dim == self.output.feature_dim_or_sparse_dim
+            assert out_dim == self.output.feature_dim
         else:
-            out_dim = self.output.feature_dim_or_sparse_dim
+            out_dim = self.output.feature_dim
         if n_out:
             assert n_out == out_dim.dimension
         else:
             n_out = out_dim.dimension
         if groups != 1:
             assert groups >= 1 and n_in % groups == 0 and n_out % groups == 0
-        filter_shape = list(filter_size) + [n_in // groups, n_out]
+            filter_in_dim = in_dim // groups
+        else:
+            filter_in_dim = in_dim
+        if isinstance(filter_size[0], int):
+            if not all(isinstance(s, int) for s in filter_size):
+                raise TypeError(f"filter_size {filter_size} types {[type(s) for s in filter_size]} inconsistent")
+            if filter:
+                assert filter.output.batch_ndim == len(filter_size) + 2
+                filter_dims = list(filter.output.dims)
+                filter_dims.remove(filter_in_dim)
+                filter_dims.remove(out_dim)
+                assert all(d.dimension == s for d, s in zip(filter_dims, filter_size))
+                filter_size = filter_dims
+            else:
+                filter_size = [Dim(s, name=f"{self.name}:filter{i}") for i, s in enumerate(filter_size)]
+        elif isinstance(filter_size[0], Dim):
+            if not all(isinstance(s, Dim) for s in filter_size):
+                raise TypeError(f"filter_size {filter_size} types {[type(s) for s in filter_size]} inconsistent")
+            if filter:
+                assert all(d in filter.output.dims for d in filter_size)
+        else:
+            raise TypeError(
+                f"filter_size elems must be int or Dim, got {filter_size} with types {[type(s) for s in filter_size]}"
+            )
+        filter_shape = list(filter_size) + [filter_in_dim, out_dim]
         from returnn.tf.util.basic import get_initializer
 
         self.filter_layer = None
@@ -5932,7 +5961,7 @@ class ConvLayer(_ConcatInputLayer):
             filter_data = filter.output
             if filter_perm:
                 filter_data = TransposeLayer.transpose(filter_data, perm=filter_perm, name="filter_transposed")
-            assert filter_data.batch_shape == tuple(filter_shape)
+            filter_data = filter_data.copy_transpose(filter_shape, allow_int=False)
             filters = filter_data.placeholder
         else:
             assert not filter_perm
@@ -5941,7 +5970,9 @@ class ConvLayer(_ConcatInputLayer):
                     forward_weights_init, seed=self.network.random.randint(2**31), eval_local_ns={"layer": self}
                 )
                 filters = self.add_param(
-                    tf_compat.v1.get_variable(name="W", shape=filter_shape, initializer=fwd_weights_initializer)
+                    tf_compat.v1.get_variable(
+                        name="W", shape=[d.dimension for d in filter_shape], initializer=fwd_weights_initializer
+                    )
                 )
         data_format = None
         if out_batch_feature_major:
@@ -5954,12 +5985,16 @@ class ConvLayer(_ConcatInputLayer):
             x = tf.reshape(x, tf.concat([[-1], x_shape[num_batch_dims:]], axis=0))  # merge all batch dims
         if groups > 1 and groups == n_in and len(filter_size) <= 2:  # depthwise conv
             if len(filter_size) == 1:
-                filters = tf.reshape(filters, [filter_size[0], 1, n_in, n_out // n_in])  # [1,K,n_in,n_out//n_in]
+                filters = tf.reshape(
+                    filters, [filter_size[0].dimension, 1, n_in, n_out // n_in]
+                )  # [1,K,n_in,n_out//n_in]
                 x = tf.expand_dims(x, axis=-1 if out_batch_feature_major else -2)  # [B,T,1,n_in]
                 strides = strides * 2
                 dilation_rate = dilation_rate + [1]
             else:
-                filters = tf.reshape(filters, list(filter_size) + [n_in, n_out // n_in])  # K+[n_in,n_out//n_in]
+                filters = tf.reshape(
+                    filters, [d.dimension for d in filter_size] + [n_in, n_out // n_in]
+                )  # K+[n_in,n_out//n_in]
             y = tf.nn.depthwise_conv2d(
                 x,
                 data_format="NCHW" if out_batch_feature_major else "NHWC",
@@ -6050,11 +6085,11 @@ class ConvLayer(_ConcatInputLayer):
         """
         :param Data output:
         :param int num_batch_dims:
-        :param list[Dim]|tuple[Dim] in_spatial_dims:
-        :param list[Dim]|None out_spatial_dims:
-        :param list[int]|tuple[int] filter_size:
-        :param list[int]|tuple[int] strides:
-        :param list[int]|tuple[int] dilation_rate:
+        :param Sequence[Dim] in_spatial_dims:
+        :param Sequence[Dim]|None out_spatial_dims:
+        :param Sequence[int|Dim] filter_size:
+        :param Sequence[int] strides:
+        :param Sequence[int] dilation_rate:
         :param str padding:
         """
         if output.feature_dim_axis == num_batch_dims:
@@ -6204,7 +6239,7 @@ class ConvLayer(_ConcatInputLayer):
     def calc_out_dim(cls, in_dim, filter_size, stride, padding, dilation_rate=1):
         """
         :param T|int|tf.Tensor|Dim in_dim: dimension in some axis
-        :param int filter_size: e.g. 2, for the corresponding axis
+        :param int|Dim filter_size: e.g. 2, for the corresponding axis
         :param int stride: e.g. 1, for the corresponding axis
         :param int dilation_rate: e.g. 1
         :param str padding: "valid" or "same"
@@ -6234,6 +6269,9 @@ class ConvLayer(_ConcatInputLayer):
                 filter_right_dilated = (filter_size - 1) * dilation_rate - filter_left_dilated
                 valid_part = in_dim.sub_left(filter_left_dilated).sub_right(filter_right_dilated)
                 return valid_part.ceildiv_right(stride)
+            if isinstance(filter_size, Dim):
+                assert filter_size.dimension is not None
+                filter_size = filter_size.dimension
             return tf_util.simplify_non_negative_seq_length(
                 ceildiv((tf_util.simplify_sub(in_dim, (filter_size - 1) * dilation_rate)), stride)
             )
@@ -6263,20 +6301,20 @@ class ConvLayer(_ConcatInputLayer):
     ):
         """
         :param str name:
-        :param list[LayerBase]|tuple[LayerBase] sources:
+        :param Sequence[LayerBase] sources:
         :param returnn.tf.network.TFNetwork network:
-        :param tuple[int] filter_size:
+        :param Sequence[int|Dim] filter_size:
         :param str padding:
-        :param int|tuple[int]|list[int] strides:
-        :param int|tuple[int]|list[int] dilation_rate:
+        :param int|Sequence[int] strides:
+        :param int|Sequence[int] dilation_rate:
         :param int input_expand_dims: number of dynamic dims to add to the input
         :param bool input_add_feature_dim:
         :param None|int input_split_feature_dim:
         :param Dim|None in_dim:
-        :param list[Dim|str]|None in_spatial_dims:
+        :param Sequence[Dim|str]|None in_spatial_dims:
         :param int|None n_out: number of outgoing features
         :param Dim|None out_dim:
-        :param list[Dim]|None out_spatial_dims:
+        :param Sequence[Dim]|None out_spatial_dims:
         :param int input_expand_dims: number of spatial dims to add to the input
         :param bool|NotSpecified auto_use_channel_first:
         """
@@ -6326,7 +6364,8 @@ class ConvLayer(_ConcatInputLayer):
         else:
             for i in range(len(filter_size)):
                 old_tag = old_spatial_dim_tags[i] if i < len(old_spatial_dim_tags) else None
-                if old_tag and (filter_size[i] == strides[i] == 1 or (strides[i] == 1 and padding == "SAME")):
+                filter_size_ = filter_size[i].dimension if isinstance(filter_size[i], Dim) else filter_size[i]
+                if old_tag and (filter_size_ == strides[i] == 1 or (strides[i] == 1 and padding == "SAME")):
                     dim_tags.append(old_tag)  # identity in this axis
                     continue
                 new_dim = None
