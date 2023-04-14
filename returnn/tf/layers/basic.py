@@ -4,7 +4,7 @@ Many canonical basic layers.
 
 from __future__ import annotations
 
-from typing import Optional, Union, Sequence, List
+from typing import Optional, Union, Sequence, List, Dict
 import typing
 import tensorflow as tf
 import contextlib
@@ -5470,7 +5470,9 @@ class SwapAxesLayer(_ConcatInputLayer):
 class TransposeLayer(_ConcatInputLayer):
     """
     Basically a wrapper around :func:`tf.transpose`.
-    Note that usually, this should not be needed, and it is recommended not to be used,
+
+    Note that usually, this should not be needed,
+    and it is recommended not to be used,
     as this will be unnecessarily inefficient.
     Normally, all RETURNN layers will automatically transpose the input data into whatever format they need.
 
@@ -5481,50 +5483,57 @@ class TransposeLayer(_ConcatInputLayer):
 
     See also :class:`ReinterpretDataLayer`, which does not transpose axes,
     but allows to reinterpret their meaning / dim tags.
+
+    One valid use case is to use this for the final output layer,
+    to make sure the output is in the correct format.
     """
 
     layer_class = "transpose"
 
-    def __init__(self, perm, **kwargs):
+    def __init__(self, perm: Union[Dict[Union[Dim, str, int], Union[Dim, str]], Sequence[Dim]], **kwargs):
         """
-        :param dict[str,str] perm: target axis -> source axis
+        :param perm: target axis -> source axis
         """
         super(TransposeLayer, self).__init__(**kwargs)
         self.perm = perm
         perm_ = self.get_perm_int(input_data=self.input_data, perm=perm)
-        self.output.placeholder = tf.transpose(
-            self.input_data.placeholder, [perm_[i] for i in range(self.input_data.batch_ndim)]
-        )
+        self.output.placeholder = tf.transpose(self.input_data.placeholder, perm_)
 
     @classmethod
-    def transpose(cls, input_data, perm, name=None):
+    def transpose(
+        cls,
+        input_data: Data,
+        perm: Union[Dict[Union[Dim, str, int], Union[Dim, str]], Sequence[Dim]],
+        name: Optional[str] = None,
+    ) -> Data:
         """
-        :param Data input_data:
-        :param dict[str,str] perm:
-        :param str|str name:
+        :param input_data:
+        :param perm:
+        :param name:
         :return: transposed data
-        :rtype: Data
         """
         perm_ = cls.get_perm_int(input_data=input_data, perm=perm)
-        perm__ = [perm_[i] for i in range(input_data.batch_ndim)]
-        return input_data.copy_transpose(perm__).copy(name=name)
+        return input_data.copy_transpose(perm_).copy(name=name)
 
     @classmethod
-    def get_perm_int(cls, input_data, perm):
+    def get_perm_int(
+        cls, input_data: Data, perm: Union[Dict[Union[Dim, str, int], Union[Dim, str]], Sequence[Dim]]
+    ) -> List[int]:
         """
-        :param Data input_data:
-        :param dict[str,str] perm:
-        :rtype: dict[int,int]
+        :param input_data:
+        :param perm:
         """
 
-        def _axis(a):
-            """
-            :param str a:
-            :rtype: int
-            """
-            return input_data.get_axis_from_description(a, allow_int=False)
+        def _axis(a: Union[Dim, str, int], *, allow_int: bool = False) -> int:
+            return input_data.get_axis_from_description(a, allow_int=allow_int)
 
-        perm_ = {_axis(i): _axis(j) for (i, j) in perm.items()}
+        if isinstance(perm, (list, tuple)):
+            assert len(perm) == input_data.batch_ndim
+            perm_ = {_axis(i, allow_int=True): _axis(j) for (i, j) in enumerate(perm)}
+        elif isinstance(perm, dict):
+            perm_ = {_axis(i, allow_int=True): _axis(j) for (i, j) in perm.items()}
+        else:
+            raise TypeError(f"unexpected perm {perm!r} of type {type(perm)}")
         assert len(perm) == len(perm_) == len(set(perm_.values())), "data %s, perm %r invalid" % (input_data, perm)
         target_axes = set(perm_)
         source_axes = set(perm_.values())
@@ -5532,8 +5541,9 @@ class TransposeLayer(_ConcatInputLayer):
         rem_source_axes = [i for i in range(input_data.batch_ndim) if i not in source_axes]
         assert len(rem_target_axes) == len(rem_source_axes)
         perm_.update({i: j for (i, j) in zip(rem_target_axes, rem_source_axes)})
-        assert len(perm_) == len(set(perm_.values())) == input_data.batch_ndim
-        return perm_
+        assert set(perm_.keys()) == set(perm_.values()) == set(range(input_data.batch_ndim))
+        perm__ = [perm_[i] for i in range(input_data.batch_ndim)]
+        return perm__
 
     @classmethod
     def get_out_data_from_opts(cls, name, sources, perm, **kwargs):
