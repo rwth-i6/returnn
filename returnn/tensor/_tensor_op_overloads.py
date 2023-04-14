@@ -16,8 +16,21 @@ class _TensorOpOverloadsMixin(_TensorMixinBase):
 
     # --- comparisons
 
-    def __eq__(self: Tensor, other: Union[_rf_types.RawTensorTypes, Tensor]) -> Tensor:
-        return _rf().compare(self, "==", other)
+    def __eq__(self: Tensor, other: Union[_rf_types.RawTensorTypes, Tensor]) -> Union[Tensor, bool]:
+        # When comparing to some other invalid type, return False, not a Tensor.
+        # This is to allow easy equality checks with other random objects.
+        # See for example here: https://github.com/rwth-i6/returnn/pull/1284
+        if self.raw_tensor is None:
+            # The other op overloads would actually raise some exception in this case.
+            # However, here just return False.
+            return False
+
+        import returnn.frontend as rf
+
+        valid_types = (rf.Tensor, self._raw_backend.RawTensorType) + tuple(rf.RawTensorTypes.__args__)
+        if isinstance(other, valid_types):
+            return _rf().compare(self, "==", other)
+        return False
 
     def __ne__(self: Tensor, other: Union[_rf_types.RawTensorTypes, Tensor]) -> Tensor:
         return _rf().compare(self, "!=", other)
