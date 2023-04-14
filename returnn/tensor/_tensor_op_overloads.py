@@ -78,25 +78,21 @@ class _TensorOpOverloadsMixin(_TensorMixinBase):
     def __rpow__(self: Tensor, other: Union[_rf_types.RawTensorTypes, Tensor]) -> Tensor:
         return _rf().combine(other, "**", self)
 
-    def __neg__(self):  # -x
+    def __neg__(self: Tensor):  # -x
+        return _rf().neg(self)
+
+    def __invert__(self):  # ~x
         if True:  # avoid warning: abstract base class...
             raise NotImplementedError  # TODO
 
-    def __invert__(self):  # ~x
-        if True:
-            raise NotImplementedError  # TODO
+    def __abs__(self: Tensor):
+        return _rf().abs(self)
 
-    def __abs__(self):
-        if True:
-            raise NotImplementedError  # TODO
+    def __ceil__(self: Tensor):
+        return _rf().ceil(self)
 
-    def __ceil__(self):
-        if True:
-            raise NotImplementedError  # TODO
-
-    def __floor__(self):
-        if True:
-            raise NotImplementedError  # TODO
+    def __floor__(self: Tensor):
+        return _rf().floor(self)
 
     def __and__(self: Tensor, other: Union[_rf_types.RawTensorTypes, Tensor]) -> Tensor:
         return _rf().combine(self, "logical_and", other)
