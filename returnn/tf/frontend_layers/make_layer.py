@@ -156,6 +156,8 @@ def _tensor_from_layer_dict(layer_dict: rfl.LayerDictRaw, *, layer: rfl.Layer) -
     ref_to_layer_name = {}  # type: Dict[rfl.Layer, str]
 
     def _get_unique_name(name) -> str:
+        name = name.replace("/", "_")
+        name = LayerBase.cls_get_tf_scope_name(name)
         reserved_names = set(net.layers.keys()) | {"data"}
         if name not in reserved_names:
             return name
