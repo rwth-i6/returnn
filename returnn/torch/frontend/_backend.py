@@ -852,6 +852,7 @@ class TorchBackend(Backend[torch.Tensor]):
         groups: Optional[int] = None,
         bias: Optional[Tensor] = None,
     ) -> Tuple[Tensor, Sequence[Dim]]:
+        """conv"""
         if not out_spatial_dims:
             out_spatial_dims = rf.make_conv_out_spatial_dims(
                 description_prefix="conv",
@@ -923,6 +924,7 @@ class TorchBackend(Backend[torch.Tensor]):
         in_spatial_dims: Sequence[Dim],
         out_spatial_dims: Optional[Sequence[Dim]] = None,
     ) -> Tuple[Tensor, Sequence[Dim]]:
+        """pool"""
         if out_spatial_dims is None:
             out_spatial_dims = rf.make_conv_out_spatial_dims(
                 description_prefix="pool",
