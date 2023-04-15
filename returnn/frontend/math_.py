@@ -12,6 +12,7 @@ from .types import RawTensorTypes as _RawTensorTypes
 __all__ = [
     "compare",
     "combine",
+    "combine_bc",
     "equal",
     "not_equal",
     "less",
@@ -181,6 +182,17 @@ def combine(
             )
     backend = _utils.get_backend_from_tensors(a, b)
     return backend.combine(a, kind, b, allow_broadcast_all_sources=allow_broadcast_all_sources, dim_order=dim_order)
+
+
+def combine_bc(
+    a: Tensor,
+    kind: str,
+    b: Tensor,
+    *,
+    dim_order: Optional[Sequence[Dim]] = None,
+) -> Tensor:
+    """:func:`combine` with allow_broadcast_all_sources=True"""
+    return combine(a, kind, b, allow_broadcast_all_sources=True, dim_order=dim_order)
 
 
 def equal(a: Tensor, b: Tensor) -> Tensor:
