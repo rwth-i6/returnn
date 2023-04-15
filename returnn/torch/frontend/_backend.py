@@ -548,16 +548,21 @@ class TorchBackend(Backend[torch.Tensor]):
         return result_tensor
 
     @staticmethod
-    def range_over_dim(dim: Dim) -> Tensor[torch.Tensor]:
+    def range_over_dim(dim: Dim, *, dtype: Optional[str] = None) -> Tensor[torch.Tensor]:
         """
         :param dim:
+        :param dtype:
         :return: tensor with shape [dim]
         """
+        if not dtype and dim.dyn_size_ext:
+            dtype = dim.dyn_size_ext.dtype
+        if not dtype:
+            dtype = rf.get_default_array_index_dtype()
         out = Tensor(
             "range",
             dims=[dim],
             sparse_dim=dim,
-            dtype=dim.dyn_size_ext.dtype if dim.dyn_size_ext else rf.get_default_array_index_dtype(),
+            dtype=dtype,
         )
         out.raw_tensor = torch.arange(dim.get_dim_value(), dtype=TorchBackend.as_dtype_raw(out.dtype))
         return out

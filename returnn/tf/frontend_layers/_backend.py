@@ -399,10 +399,15 @@ class ReturnnLayersBackend(Backend[Layer]):
         return rfl.make_layer({"class": "dot", "from": [a, b], "reduce": reduce, **args}, name="matmul")
 
     @staticmethod
-    def range_over_dim(dim: Dim) -> Tensor:
+    def range_over_dim(dim: Dim, *, dtype: Optional[str] = None) -> Tensor:
         """range over dim"""
+        if not dtype and dim.dyn_size_ext:
+            dtype = dim.dyn_size_ext.dtype
+        if not dtype:
+            dtype = rf.get_default_array_index_dtype()
         return rfl.make_layer(
-            {"class": "range_in_axis", "from": _dims.get_dim_deps(dim), "axis": dim}, name="range_over_dim"
+            {"class": "range_in_axis", "from": _dims.get_dim_deps(dim), "axis": dim, "dtype": dtype},
+            name="range_over_dim",
         )
 
     @staticmethod

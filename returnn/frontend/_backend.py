@@ -674,9 +674,10 @@ class Backend(Generic[T]):
         raise NotImplementedError
 
     @staticmethod
-    def range_over_dim(dim: Dim) -> Tensor[T]:
+    def range_over_dim(dim: Dim, *, dtype: Optional[str] = None) -> Tensor[T]:
         """
         :param dim:
+        :param dtype:
         :return: tensor with shape [dim]
         """
         raise NotImplementedError
