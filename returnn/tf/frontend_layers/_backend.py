@@ -181,6 +181,20 @@ class ReturnnLayersBackend(Backend[Layer]):
         )
 
     @staticmethod
+    def reshape(source: Tensor, in_dims: Sequence[Dim], out_dims: Sequence[Dim]) -> Tensor:
+        """reshape"""
+        return rfl.make_layer(
+            {
+                "class": "reshape",
+                "from": source,
+                "in_dims": in_dims,
+                "out_dims": out_dims,
+                "extra_deps": rfl.get_dim_deps(out_dims),
+            },
+            name="reshape",
+        )
+
+    @staticmethod
     def split(source: Tensor, *, axis: Dim, out_dims: Sequence[Dim]) -> Tuple[Tensor, ...]:
         """split"""
         res = rfl.make_layer({"class": "split", "from": source, "axis": axis, "out_dims": out_dims}, name="split")

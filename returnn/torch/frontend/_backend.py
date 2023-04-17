@@ -201,6 +201,26 @@ class TorchBackend(Backend[torch.Tensor]):
         )
 
     @staticmethod
+    def reshape(source: Tensor, in_dims: Sequence[Dim], out_dims: Sequence[Dim]) -> Tensor:
+        """reshape"""
+        in_dims_axes = [source.get_axis_from_description(d, allow_int=False) for d in in_dims]
+        assert sorted(set(in_dims_axes)) == sorted(in_dims_axes), f"reshape {source}: invalid in_dims {in_dims}"
+        insert_axis = min(in_dims_axes)
+        dims = list(source.dim_tags)
+        permute = list(range(source.batch_ndim))
+        for axis in sorted(set(in_dims_axes), reverse=True):
+            dims.pop(axis)
+            permute.pop(axis)
+        permute = permute[:insert_axis] + in_dims_axes + permute[insert_axis:]
+        source = source.copy_transpose(permute)
+        dims = dims[:insert_axis] + list(out_dims) + dims[insert_axis:]
+        out = Tensor("reshape", dims=dims, dtype=source.dtype, sparse_dim=source.sparse_dim)
+        if source.feature_dim and source.feature_dim not in in_dims:
+            out.feature_dim = source.feature_dim
+        out.raw_tensor = torch.reshape(source.placeholder, [d.get_dim_value() for d in dims])
+        return out
+
+    @staticmethod
     def split(source: Tensor, *, axis: Dim, out_dims: Sequence[Dim]) -> Tuple[Tensor, ...]:
         """split"""
         src_axis_int = source.get_axis_from_description(axis)

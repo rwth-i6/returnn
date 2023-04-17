@@ -18,6 +18,7 @@ __all__ = [
     "cast",
     "merge_dims",
     "split_dims",
+    "reshape",
     "split",
     "expand_dim",
     "concat",
@@ -166,6 +167,27 @@ def split_dims(
     return source._raw_backend.split_dims(
         source, axis=axis, dims=dims, pad_to_multiples=pad_to_multiples, pad_value=pad_value
     )
+
+
+def reshape(source: Tensor, in_dims: Sequence[Dim], out_dims: Sequence[Dim]) -> Tensor:
+    """
+    Wraps tf.reshape.
+
+    You should use :func:`split_dims` or :func:`merge_dims`
+    when you want to split or merge dimensions.
+    This here is for doing any other kind of reshape.
+    This can be used for clever indexing, slicing, padding tricks.
+
+    :param source: e.g. (..., old_dims, ...)
+    :param in_dims: the old dims which should be reshaped into new_dims.
+      This should only cover those dims which should be reshaped,
+      not all the dims of the source.
+    :param out_dims: the new dims which should be reshaped from old_dims.
+      This is excluding any of the other dims in the source.
+    :return: e.g. (..., new_dims, ...)
+    """
+    # noinspection PyProtectedMember
+    return source._raw_backend.reshape(source, in_dims=in_dims, out_dims=out_dims)
 
 
 def split(source: Tensor, *, axis: Dim, out_dims: Sequence[Dim]) -> Tuple[Tensor, ...]:

@@ -303,6 +303,19 @@ class Backend(Generic[T]):
         raise NotImplementedError
 
     @staticmethod
+    def reshape(source: Tensor, in_dims: Sequence[Dim], out_dims: Sequence[Dim]) -> Tensor:
+        """
+        :param source: e.g. (..., old_dims, ...)
+        :param in_dims: the old dims which should be reshaped into new_dims.
+            This should only cover those dims which should be reshaped,
+            not all the dims of the source.
+        :param out_dims: the new dims which should be reshaped from old_dims.
+            This is excluding any of the other dims in the source.
+        :return: e.g. (..., new_dims, ...)
+        """
+        raise NotImplementedError
+
+    @staticmethod
     def split(source: Tensor, *, axis: Dim, out_dims: Sequence[Dim]) -> Tuple[Tensor, ...]:
         """
         Split the input on the specified axis (by default feature).
