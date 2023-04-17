@@ -5107,8 +5107,9 @@ class ExpandDimsLayer(_ConcatInputLayer):
         axis = axis.lower()
         if axis in ["f", "feature"]:
             assert not data.sparse
-            assert data.feature_dim_axis_or_unspecified is NotSpecified
-            return data.batch_ndim
+            if data.feature_dim_axis is None:
+                return data.batch_ndim
+            return data.feature_dim_axis + 1
         elif axis in ["spatial", "time", "t"]:
             if data.sparse:
                 return data.batch_ndim
