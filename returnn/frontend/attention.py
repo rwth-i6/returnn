@@ -18,6 +18,9 @@ __all__ = [
     "SelfAttention",
     "CausalSelfAttention",
     "CausalSelfAttentionState",
+    "RelPosSelfAttention",
+    "LearnedRelativePositionalEncoding",
+    "relative_positional_encoding",
 ]
 
 
