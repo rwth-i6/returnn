@@ -1316,11 +1316,14 @@ class SliceNdLayer(_ConcatInputLayer):
         assert isinstance(size, (int, tf.Tensor))
 
         if not slice_tag:
-            # for each start index in start_data, we want to gather a slice
-            # therefore, the output's first axes are the same as the ones from start_data
-            # and the next axis will therefore be the slice axis
-            slice_tag = self.output.dim_tags[start_data.batch_ndim]
-            assert slice_tag.description.startswith("sliced-time:")
+            # See GatherLayer for axes logic.
+            # (BatchAxes.., InputAxesBeforeGatherAxis, PositionAxes.., InputAxesAfterGatherAxis..)
+            if start_data is not None:
+                assert all(d in x.dims for d in start_data.dims)  # all shared (BatchAxes)
+            if size_data is not None:
+                assert all(d in x.dims for d in size_data.dims)  # all shared (BatchAxes)
+            # Thus, in_axis should be the same in the output for the slice axis.
+            slice_tag = self.output.dim_tags[in_axis]
             if size_data and (not slice_tag.dyn_size_ext or slice_tag.dyn_size_ext.placeholder is None):
                 # in this case, size is not known before runtime and becomes dynamic and we need to set dyn_size
                 assert slice_tag.is_dynamic()
