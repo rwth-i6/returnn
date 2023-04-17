@@ -229,6 +229,7 @@ class TorchBackend(Backend[torch.Tensor]):
         mode: str = "constant",
         value: Optional[Union[rf.RawTensorTypes, Tensor]] = None,
     ) -> Tensor:
+        """pad"""
         assert len(out_dims) == len(axes) == len(padding)
         out = source.copy_template_new_dim_tags(
             [out_dims[axes.index(dim)] if dim in axes else dim for dim in source.dim_tags]
