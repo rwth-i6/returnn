@@ -27,6 +27,7 @@ __all__ = [
     "masked_select",
     "pack",
     "gather",
+    "slice",
 ]
 
 
@@ -366,3 +367,85 @@ def gather(
     """
     # noinspection PyProtectedMember
     return source._raw_backend.gather(source, indices=indices, axis=axis, clip_to_valid=clip_to_valid)
+
+
+# noinspection PyShadowingBuiltins
+def slice(
+    source: Tensor,
+    *,
+    axis: Dim,
+    start: Optional[Union[int, Tensor]] = None,
+    end: Optional[Union[int, Tensor]] = None,
+    step: Optional[Union[int, Tensor]] = None,
+    size: Optional[Union[int, Tensor, Dim]] = None,
+    out_dim: Optional[Dim] = None,
+) -> Tuple[Tensor, Dim]:
+    """
+    Slicing on the input, i.e. ``x[start:end:step]`` in some axis.
+
+    If size is given, it takes out a slice-range like ``x[start:start + size]``.
+
+    This function allows a non-scalar start points.
+
+    :param source:
+    :param axis:
+    :param start:
+    :param end:
+    :param step:
+    :param size:
+    :param out_dim:
+    :return: tensor, out_dim
+    """
+    if not out_dim:
+        # Note: We cover not really all possible cases here but just those we really support.
+        # (Actually, it might still be a superset of cases we really support,
+        # but this might depend on the backend.)
+        if size is not None:
+            if isinstance(size, Dim):
+                out_dim = size
+            elif isinstance(size, (int, Tensor)):
+                out_dim = Dim(size, name="slice")
+            else:
+                raise TypeError(f"invalid type {type(size)} for size {size}")
+            assert step is None or (isinstance(step, int) and step == 1)
+
+        else:  # size is None
+            if start is None:
+                start = 0
+            if isinstance(start, int) and start >= 0:
+                if end is None:
+                    out_dim = axis.sub_left(start)
+                elif isinstance(end, int):
+                    if end < 0:
+                        out_dim = axis.sub_left(start).sub_right(-end)
+                    else:
+                        out_dim = Dim(end - start, name="slice")
+                elif isinstance(end, Tensor):
+                    out_dim = Dim(end - start, name="slice")
+                else:
+                    raise TypeError(f"invalid type {type(end)} for end {end}")
+            elif isinstance(start, int) and start < 0:
+                if end is None:
+                    out_dim = Dim(-start, name="slice")
+                elif isinstance(end, int):
+                    assert end < 0
+                    out_dim = Dim(-start + end, name="slice")
+                else:
+                    raise TypeError(f"invalid type {type(end)} for end {end}")
+            else:
+                raise TypeError(f"invalid type {type(start)} for start {start}")
+
+            if step is None or (isinstance(step, int) and step == 1):
+                pass
+            elif isinstance(step, int):
+                out_dim = out_dim.ceildiv_right(step)
+            elif isinstance(step, Tensor):
+                step_dim = Dim(step, name="step")
+                out_dim = out_dim.ceildiv_right(step_dim)
+            else:
+                raise TypeError(f"invalid type {type(step)} for step {step}")
+    # noinspection PyProtectedMember
+    return (
+        source._raw_backend.slice(source, axis=axis, start=start, end=end, step=step, size=size, out_dim=out_dim),
+        out_dim,
+    )

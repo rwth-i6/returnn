@@ -575,6 +575,39 @@ class TorchBackend(Backend[torch.Tensor]):
         return Tensor("full", dims=dims, sparse_dim=sparse_dim, dtype=dtype, raw_tensor=raw_tensor)
 
     @staticmethod
+    def slice(
+        source: Tensor,
+        *,
+        axis: Dim,
+        start: Optional[Union[int, Tensor]] = None,
+        end: Optional[Union[int, Tensor]] = None,
+        step: Optional[Union[int, Tensor]] = None,
+        size: Optional[Union[int, Tensor, Dim]] = None,
+        out_dim: Dim,
+    ) -> Tensor:
+        """slice"""
+        axis_int = source.get_axis_from_description(axis, allow_int=False)
+        out = source.copy_template_replace_dim_tag(axis=axis_int, new_dim_tag=out_dim)
+        if isinstance(start, Tensor):
+            assert start.dims == ()
+            start = start.raw_tensor
+        if start is None:
+            start = 0
+        if isinstance(size, Dim):
+            size = size.get_dim_value()
+        if size is not None:
+            assert end is None
+            out.raw_tensor = torch.narrow(source.raw_tensor, dim=axis_int, start=start, length=size)
+        else:
+            if isinstance(end, Tensor):
+                assert end.dims == ()
+                end = end.raw_tensor
+            if end is None:
+                end = axis.get_dim_value()
+            out.raw_tensor = torch.narrow(source.raw_tensor, dim=axis_int, start=start, length=end - start)
+        return out
+
+    @staticmethod
     def matmul(a: _TT, b: _TT, *, reduce: Union[Dim, Sequence[Dim]], disable_masking: bool = False) -> _TT:
         """
         batched matmul of a and b, see base class doc string

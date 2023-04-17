@@ -458,6 +458,48 @@ class ReturnnLayersBackend(Backend[Layer]):
         )
 
     @staticmethod
+    def slice(
+        source: Tensor,
+        *,
+        axis: Dim,
+        start: Optional[Union[int, Tensor]] = None,
+        end: Optional[Union[int, Tensor]] = None,
+        step: Optional[Union[int, Tensor]] = None,
+        size: Optional[Union[int, Tensor, Dim]] = None,
+        out_dim: Dim,
+    ) -> Tensor:
+        """slice"""
+        if size is not None:
+            assert end is None  # not implemented
+            assert step is None  # not implemented
+            assert size is not None  # not implemented
+            return rfl.make_layer(
+                {
+                    "class": "slice_nd",
+                    "from": source,
+                    "axis": axis,
+                    "start": start,
+                    "size": size,
+                    "out_spatial_dim": out_dim,
+                },
+                name="slice_nd",
+            )
+        assert size is None  # not implemented
+        assert isinstance(start, (int, type(None)))  # not implemented
+        assert isinstance(end, (int, type(None)))  # not implemented
+        assert isinstance(step, (int, type(None)))  # not implemented
+        args = {}
+        if start is not None:
+            args["slice_start"] = start
+        if end is not None:
+            args["slice_end"] = end
+        if step is not None:
+            args["slice_step"] = step
+        return rfl.make_layer(
+            {"class": "slice", "from": source, "axis": axis, "out_dim": out_dim, **args}, name="slice"
+        )
+
+    @staticmethod
     def matmul(a: Tensor, b: Tensor, *, reduce: Union[Dim, Sequence[Dim]], disable_masking: bool = False) -> Tensor:
         """matmul"""
         args = {}

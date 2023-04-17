@@ -698,6 +698,20 @@ class Backend(Generic[T]):
         raise NotImplementedError
 
     @staticmethod
+    def slice(
+        source: Tensor,
+        *,
+        axis: Dim,
+        start: Optional[Union[int, Tensor]] = None,
+        end: Optional[Union[int, Tensor]] = None,
+        step: Optional[Union[int, Tensor]] = None,
+        size: Optional[Union[int, Tensor, Dim]] = None,
+        out_dim: Dim,
+    ) -> Tensor:
+        """slice"""
+        raise NotImplementedError
+
+    @staticmethod
     def matmul(
         a: Tensor[T], b: Tensor[T], *, reduce: Union[Dim, Sequence[Dim]], disable_masking: bool = False
     ) -> Tensor[T]:
