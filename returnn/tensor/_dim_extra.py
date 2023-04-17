@@ -1496,7 +1496,7 @@ class _DimMixin:
             for key, dim in other._extra.same_for_batch_ctx.items():
                 if not dim._validate_in_current_graph():
                     continue
-                self_dim = self._extra.same_for_batch_ctx.get(key, None)
+                self_dim = self._make_extra().same_for_batch_ctx.get(key, None)
                 if self_dim and (self_dim.dyn_size_ext or not dim.dyn_size_ext):
                     continue  # keep ours
                 if not dim.dyn_size_ext:
