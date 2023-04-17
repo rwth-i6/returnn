@@ -774,7 +774,7 @@ class Runner(object):
             self._print_finish_process()
 
             if not hvd_stop and not self.data_provider.have_reached_end():
-                raise Exception("Did not successfully reached the end of the dataset.")
+                raise Exception("Did not successfully reach the end of the dataset.")
 
             if self._should_train:
                 final_global_train_step = self.engine.network.get_global_train_step(session=sess)
