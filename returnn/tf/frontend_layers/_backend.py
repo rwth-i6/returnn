@@ -199,6 +199,18 @@ class ReturnnLayersBackend(Backend[Layer]):
         )
 
     @staticmethod
+    def expand_dim(source: Tensor, dim: Dim) -> Tensor:
+        """expand dim"""
+        # Some heuristic on the kind, which just determines where RETURNN puts the new axis.
+        if source.have_feature_axis():
+            axis = "spatial"
+        elif dim.is_static():
+            axis = "feature"
+        else:
+            axis = "spatial"
+        return rfl.make_layer({"class": "expand_dims", "from": source, "axis": axis, "dim": dim}, name="expand_dims")
+
+    @staticmethod
     def pad(
         source: Tensor,
         *,

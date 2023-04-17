@@ -317,6 +317,15 @@ class Backend(Generic[T]):
         raise NotImplementedError
 
     @staticmethod
+    def expand_dim(source: Tensor, dim: Dim) -> Tensor:
+        """
+        :param source:
+        :param dim:
+        :return: source with dim added
+        """
+        raise NotImplementedError
+
+    @staticmethod
     def pad(
         source: Tensor,
         *,

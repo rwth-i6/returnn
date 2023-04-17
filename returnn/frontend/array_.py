@@ -19,6 +19,7 @@ __all__ = [
     "merge_dims",
     "split_dims",
     "split",
+    "expand_dim",
     "pad",
     "cum_concat_step",
     "masked_select",
@@ -179,6 +180,19 @@ def split(source: Tensor, *, axis: Dim, out_dims: Sequence[Dim]) -> Tuple[Tensor
     """
     # noinspection PyProtectedMember
     return source._raw_backend.split(source, axis=axis, out_dims=out_dims)
+
+
+def expand_dim(source: Tensor, dim: Dim) -> Tensor:
+    """
+    Expand the source by the given dimension.
+
+    Note that this is *never* needed for broadcasting.
+    All broadcasting should always happen automatically.
+
+    This might be needed for convolution or concatenation.
+    """
+    # noinspection PyProtectedMember
+    return source._raw_backend.expand_dim(source, dim=dim)
 
 
 def pad(

@@ -220,6 +220,32 @@ class TorchBackend(Backend[torch.Tensor]):
         return out_tuple
 
     @staticmethod
+    def expand_dim(source: Tensor, dim: Dim) -> Tensor:
+        """expand dim"""
+        assert dim not in source.dims
+        # Some heuristic where to put the new dim.
+        axis = len(source.dims)  # default: at the end
+        if dim.is_static():
+            if source.have_feature_axis():
+                axis = source.feature_dim_axis
+        if dim.is_dynamic():
+            for i, d in reversed(enumerate(source.dims)):
+                assert isinstance(d, Dim)
+                if d.is_dynamic():
+                    axis = i + 1
+                    break
+        new_dim_tags = list(source.dims)
+        new_dim_tags.insert(axis, dim)
+        out = source.copy_template_new_dim_tags(new_dim_tags)
+        if source.feature_dim:
+            out.feature_dim = source.feature_dim
+        out_raw = torch.unsqueeze(source.raw_tensor, axis)
+        if dim.is_dynamic() or dim.dimension != 1:
+            out_raw = torch.tile(out_raw, [dim.get_dim_value() if d == dim else 1 for d in out.dims])
+        out.raw_tensor = out_raw
+        return out
+
+    @staticmethod
     def pad(
         source: Tensor,
         *,
