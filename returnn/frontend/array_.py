@@ -20,6 +20,7 @@ __all__ = [
     "split_dims",
     "split",
     "expand_dim",
+    "concat",
     "pad",
     "cum_concat_step",
     "masked_select",
@@ -193,6 +194,25 @@ def expand_dim(source: Tensor, dim: Dim) -> Tensor:
     """
     # noinspection PyProtectedMember
     return source._raw_backend.expand_dim(source, dim=dim)
+
+
+def concat(
+    *sources: Tuple[Tensor, Dim],
+    allow_broadcast: bool = False,
+    out_dim: Optional[Dim] = None,
+) -> Tuple[Tensor, Dim]:
+    """
+    Concatenates multiple sources in the specified dimension.
+    """
+    assert sources
+    if not allow_broadcast:
+        dims = sources[0][0].dims_set - {sources[0][1]}
+        for src, dim in sources:
+            assert src.dims_set - {dim} == dims, f"concat {sources}, need allow_broadcast=True"
+    if not out_dim:
+        out_dim = sum(d for _, d in sources)
+    # noinspection PyProtectedMember
+    return sources[0][0]._raw_backend.concat(*sources, allow_broadcast=allow_broadcast, out_dim=out_dim), out_dim
 
 
 def pad(

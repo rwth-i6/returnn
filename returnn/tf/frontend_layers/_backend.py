@@ -211,6 +211,22 @@ class ReturnnLayersBackend(Backend[Layer]):
         return rfl.make_layer({"class": "expand_dims", "from": source, "axis": axis, "dim": dim}, name="expand_dims")
 
     @staticmethod
+    def concat(
+        *sources: Tuple[Tensor, Dim],
+        allow_broadcast: bool = False,
+        out_dim: Dim,
+    ) -> Tensor:
+        """concat"""
+        opts = {}
+        if allow_broadcast:
+            opts["allow_broadcast"] = True
+        out_dim = sum(d for _, d in sources)
+        return rfl.make_layer(
+            {"class": "concat", "from": sources, "out_dim": out_dim, **opts},
+            name="concat",
+        )
+
+    @staticmethod
     def pad(
         source: Tensor,
         *,

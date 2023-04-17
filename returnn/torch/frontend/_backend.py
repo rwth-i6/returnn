@@ -246,6 +246,45 @@ class TorchBackend(Backend[torch.Tensor]):
         return out
 
     @staticmethod
+    def concat(
+        *sources: Tuple[Tensor, Dim],
+        allow_broadcast: bool = False,
+        out_dim: Dim,
+    ) -> Tensor:
+        """concat"""
+        axis = sources[0][0].get_axis_from_description(sources[0][1])
+        dims = list(sources[0][0].dims)
+        dims.remove(sources[0][1])
+        if allow_broadcast:
+            for source, dim in sources[1:]:
+                assert dim in source.dims
+                for dim_ in source.dims:
+                    if dim_ == dim:
+                        continue
+                    if dim_ not in dims:
+                        dims.append(dim_)
+        sources_ = []
+        for source, dim in sources:
+            # Maybe extend dims, and also transpose in the right dim order.
+            templ = Tensor(
+                source.name, dims=dims[:axis] + [dim] + dims[axis:], dtype=source.dtype, sparse_dim=source.sparse_dim
+            )
+            if not allow_broadcast:
+                assert set(templ.dims) == set(source.dims)
+            source_ = source.copy_compatible_to(templ, add_dims=allow_broadcast, unbroadcast=True)
+            sources_.append(source_)
+        out = Tensor(
+            "concat",
+            dims=dims[:axis] + [out_dim] + dims[axis:],
+            dtype=sources[0][0].dtype,
+            sparse_dim=sources[0][0].sparse_dim,
+        )
+        if sources[0][0].feature_dim and sources[0][0].feature_dim != sources[0][1]:
+            out.feature_dim = sources[0][0].feature_dim
+        out.raw_tensor = torch.cat([s.raw_tensor for s in sources_], dim=axis)
+        return out
+
+    @staticmethod
     def pad(
         source: Tensor,
         *,

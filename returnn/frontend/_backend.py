@@ -326,6 +326,15 @@ class Backend(Generic[T]):
         raise NotImplementedError
 
     @staticmethod
+    def concat(
+        *sources: Tuple[Tensor, Dim],
+        allow_broadcast: bool = False,
+        out_dim: Dim,
+    ) -> Tensor:
+        """concat"""
+        raise NotImplementedError
+
+    @staticmethod
     def pad(
         source: Tensor,
         *,
