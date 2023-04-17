@@ -1321,15 +1321,12 @@ class SliceNdLayer(_ConcatInputLayer):
             if (start_data is None or start_data.batch_ndim == 0) and (size_data is None or size_data.batch_ndim == 0):
                 slice_tag = self.output.dim_tags[in_axis]
             else:
-                common_dims = set()
+                prefix_dims = set(x.dims[:in_axis])
                 if start_data is not None:
-                    assert all(d in x.dims for d in start_data.dims)  # all shared (BatchAxes)
-                    common_dims.update(start_data.dims)
+                    prefix_dims.update(start_data.dims)
                 if size_data is not None:
-                    assert all(d in x.dims for d in size_data.dims)  # all shared (BatchAxes)
-                    common_dims.update(size_data.dims)
-                in_axes_before_gather_axis = [d for d in x.dims[:in_axis] if d not in common_dims]
-                slice_tag = self.output.dim_tags[len(common_dims) + len(in_axes_before_gather_axis)]
+                    prefix_dims.update(size_data.dims)
+                slice_tag = self.output.dim_tags[len(prefix_dims)]
             if size_data and (not slice_tag.dyn_size_ext or slice_tag.dyn_size_ext.placeholder is None):
                 # in this case, size is not known before runtime and becomes dynamic and we need to set dyn_size
                 assert slice_tag.is_dynamic()
