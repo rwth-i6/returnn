@@ -220,6 +220,39 @@ class TorchBackend(Backend[torch.Tensor]):
         return out_tuple
 
     @staticmethod
+    def pad(
+        source: Tensor,
+        *,
+        axes: Sequence[Dim],
+        padding: Sequence[Tuple[Union[Dim, int], Union[Dim, int]]],
+        out_dims: Sequence[Dim],
+        mode: str = "constant",
+        value: Optional[Union[rf.RawTensorTypes, Tensor]] = None,
+    ) -> Tensor:
+        assert len(out_dims) == len(axes) == len(padding)
+        out = source.copy_template_new_dim_tags(
+            [out_dims[axes.index(dim)] if dim in axes else dim for dim in source.dim_tags]
+        )
+        remaining_dims = set(axes)
+        raw_pad = []
+        for dim in reversed(source.dims):
+            if dim not in remaining_dims:
+                continue
+            remaining_dims.remove(dim)
+            pad_ = padding[axes.index(dim)]
+            raw_pad.extend(
+                (
+                    pad_[0].get_dim_value() if isinstance(pad_[0], Dim) else pad_[0],
+                    pad_[1].get_dim_value() if isinstance(pad_[1], Dim) else pad_[1],
+                )
+            )
+        if isinstance(value, Tensor):
+            assert value.dims == (), f"value {value} must be a scalar"
+            value = value.raw_tensor
+        out.raw_tensor = torch.nn.functional.pad(source.raw_tensor, pad=raw_pad, mode=mode, value=value)
+        return out
+
+    @staticmethod
     def cum_concat_step(source: Tensor, *, prev_accum: Tensor, axis: Dim, out_spatial_dim: Dim) -> Tensor:
         """cum concat step"""
         out = prev_accum.copy_template_replace_dim_tag(

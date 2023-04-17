@@ -199,6 +199,31 @@ class ReturnnLayersBackend(Backend[Layer]):
         )
 
     @staticmethod
+    def pad(
+        source: Tensor,
+        *,
+        axes: Sequence[Dim],
+        padding: Sequence[Tuple[Union[Dim, int], Union[Dim, int]]],
+        out_dims: Sequence[Dim],
+        mode: str = "constant",
+        value: Union[rf.RawTensorTypes, Tensor] = None,
+    ) -> Tensor:
+        """pad"""
+        assert isinstance(value, (int, float, type(None)))  # not implemented otherwise
+        return rfl.make_layer(
+            {
+                "class": "pad",
+                "from": source,
+                "axes": axes,
+                "padding": padding,
+                "out_dims": out_dims,
+                "mode": mode,
+                "value": value,
+            },
+            name="pad",
+        )
+
+    @staticmethod
     def cum_concat_step(source: Tensor, *, prev_accum: Tensor, axis: Dim, out_spatial_dim: Dim) -> Tensor:
         """cum_concat_step"""
         return rfl.make_layer(

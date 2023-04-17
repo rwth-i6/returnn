@@ -19,6 +19,7 @@ __all__ = [
     "merge_dims",
     "split_dims",
     "split",
+    "pad",
     "cum_concat_step",
     "masked_select",
     "pack",
@@ -178,6 +179,41 @@ def split(source: Tensor, *, axis: Dim, out_dims: Sequence[Dim]) -> Tuple[Tensor
     """
     # noinspection PyProtectedMember
     return source._raw_backend.split(source, axis=axis, out_dims=out_dims)
+
+
+def pad(
+    source: Tensor,
+    *,
+    axes: Sequence[Dim],
+    padding: Sequence[Tuple[Union[Dim, int], Union[Dim, int]]],
+    out_dims: Optional[Sequence[Dim]] = None,
+    mode: str = "constant",
+    value: Optional[Union[rf.RawTensorTypes, Tensor]] = None,
+) -> Tuple[Tensor, Sequence[Dim]]:
+    """
+    Pad values left/right in the specified axes.
+
+    :param source:
+    :param axes: which axes to add padding to
+    :param padding: list of (left, right) padding for each axis
+    :param out_dims: (optional) predefined out dim tags, otherwise will automatically create
+    :param mode: 'constant', 'reflect', 'replicate' or 'circular'
+    :param value: (optional) value to pad with in "constant" mode
+    """
+    assert len(axes) == len(padding)
+    if not out_dims:
+        for left, right in padding:
+            if isinstance(left, Dim):
+                assert not left.need_masking(), f"padding {padding} does not support dynamic left padding"
+            if isinstance(right, Dim):
+                assert not right.need_masking(), f"padding {padding} does not support dynamic right padding"
+            # Note that even dynamic middle dims is not exactly correct...
+        out_dims = [left + middle + right for middle, (left, right) in zip(axes, padding)]
+    # noinspection PyProtectedMember
+    return (
+        source._raw_backend.pad(source, axes=axes, padding=padding, out_dims=out_dims, mode=mode, value=value),
+        out_dims,
+    )
 
 
 def cum_concat_step(

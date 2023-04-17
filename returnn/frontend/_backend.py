@@ -317,6 +317,27 @@ class Backend(Generic[T]):
         raise NotImplementedError
 
     @staticmethod
+    def pad(
+        source: Tensor,
+        *,
+        axes: Sequence[Dim],
+        padding: Sequence[Tuple[Union[Dim, int], Union[Dim, int]]],
+        out_dims: Sequence[Dim],
+        mode: str = "constant",
+        value: Optional[Union[rf.RawTensorTypes, Tensor]] = None,
+    ) -> Tensor:
+        """
+        :param source:
+        :param axes:
+        :param padding:
+        :param out_dims:
+        :param mode:
+        :param value:
+        :return: padded tensor
+        """
+        raise NotImplementedError
+
+    @staticmethod
     def cum_concat_step(source: Tensor, *, prev_accum: Tensor, axis: Dim, out_spatial_dim: Dim) -> Tensor:
         """
         Concatenates all previous frames over a time-axis.
