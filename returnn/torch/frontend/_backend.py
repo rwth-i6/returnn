@@ -367,14 +367,15 @@ class TorchBackend(Backend[torch.Tensor]):
         return f(raw_tensor)
 
     @staticmethod
-    def softmax(tensor: Tensor, *, axis: Dim) -> Tensor:
+    def softmax(tensor: Tensor, *, axis: Dim, use_mask: bool = True) -> Tensor:
         """
         :param tensor:
         :param axis:
+        :param use_mask:
         :return: softmax over axis
         """
         out = tensor.copy_template("softmax")
-        if axis.need_masking():
+        if use_mask and axis.need_masking():
             tensor = tensor.copy()
             mask = tensor.get_sequence_mask_broadcast(axis=axis)
             inf_value = get_global_inf_value()
@@ -383,14 +384,15 @@ class TorchBackend(Backend[torch.Tensor]):
         return out
 
     @staticmethod
-    def log_softmax(tensor: Tensor, *, axis: Dim) -> Tensor:
+    def log_softmax(tensor: Tensor, *, axis: Dim, use_mask: bool = True) -> Tensor:
         """
         :param tensor:
         :param axis:
+        :param use_mask:
         :return: log_softmax over axis
         """
         out = tensor.copy_template("log_softmax")
-        if axis.need_masking():
+        if use_mask and axis.need_masking():
             tensor = tensor.copy()
             mask = tensor.get_sequence_mask_broadcast(axis=axis)
             inf_value = get_global_inf_value()

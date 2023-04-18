@@ -432,19 +432,21 @@ class Backend(Generic[T]):
         raise NotImplementedError
 
     @staticmethod
-    def softmax(tensor: Tensor, *, axis: Dim) -> Tensor:
+    def softmax(tensor: Tensor, *, axis: Dim, use_mask: bool = True) -> Tensor:
         """
         :param tensor:
         :param axis:
+        :param use_mask:
         :return: softmax over axis
         """
         raise NotImplementedError
 
     @staticmethod
-    def log_softmax(tensor: Tensor, *, axis: Dim) -> Tensor:
+    def log_softmax(tensor: Tensor, *, axis: Dim, use_mask: bool = True) -> Tensor:
         """
         :param tensor:
         :param axis:
+        :param use_mask:
         :return: log_softmax over axis
         """
         raise NotImplementedError

@@ -434,13 +434,13 @@ def silu(a: Tensor) -> Tensor:
 swish = silu  # alias
 
 
-def softmax(a: Tensor, *, axis: Dim) -> Tensor:
+def softmax(a: Tensor, *, axis: Dim, use_mask: bool = True) -> Tensor:
     """softmax"""
     # noinspection PyProtectedMember
-    return a._raw_backend.softmax(a, axis=axis)
+    return a._raw_backend.softmax(a, axis=axis, use_mask=use_mask)
 
 
-def log_softmax(a: Tensor, *, axis: Dim) -> Tensor:
+def log_softmax(a: Tensor, *, axis: Dim, use_mask: bool = True) -> Tensor:
     """log_softmax"""
     # noinspection PyProtectedMember
-    return a._raw_backend.log_softmax(a, axis=axis)
+    return a._raw_backend.log_softmax(a, axis=axis, use_mask=use_mask)

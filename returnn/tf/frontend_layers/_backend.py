@@ -292,15 +292,22 @@ class ReturnnLayersBackend(Backend[Layer]):
         ).raw_tensor
 
     @staticmethod
-    def softmax(tensor: Tensor, *, axis: Dim) -> Tensor:
+    def softmax(tensor: Tensor, *, axis: Dim, use_mask: bool = True) -> Tensor:
         """softmax"""
-        return rfl.make_layer({"class": "softmax_over_spatial", "axis": axis, "from": tensor}, name="softmax")
+        args = {}
+        if not use_mask:
+            args["use_time_mask"] = False
+        return rfl.make_layer({"class": "softmax_over_spatial", "axis": axis, "from": tensor, **args}, name="softmax")
 
     @staticmethod
-    def log_softmax(tensor: Tensor, *, axis: Dim) -> Tensor:
+    def log_softmax(tensor: Tensor, *, axis: Dim, use_mask: bool = True) -> Tensor:
         """log softmax"""
+        args = {}
+        if not use_mask:
+            args["use_time_mask"] = False
         return rfl.make_layer(
-            {"class": "softmax_over_spatial", "axis": axis, "from": tensor, "log_space": True}, name="log_softmax"
+            {"class": "softmax_over_spatial", "axis": axis, "from": tensor, "log_space": True, **args},
+            name="log_softmax",
         )
 
     @staticmethod
