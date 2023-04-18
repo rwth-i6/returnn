@@ -3,6 +3,7 @@ RETURNN frontend (returnn.frontend) utils
 """
 
 from __future__ import annotations
+from typing import Union
 import contextlib
 import numpy
 import numpy.testing
@@ -36,11 +37,13 @@ def run_model(extern_data: TensorDict, get_model: rf.GetModelFunc, forward_step:
 
     with rft.TorchBackend.random_journal_record() as random_journal:
         out_pt = run_model_torch(extern_data, get_model, forward_step)
+        _pad_mask_zeros(out_pt)
         # get the values now because dims might get overwritten
         out_pt_raw = out_pt.as_raw_tensor_dict(include_const_sizes=True)
 
     with rfl.ReturnnLayersBackend.random_journal_replay(random_journal):
         out_tf = run_model_net_dict_tf(extern_data, get_model, forward_step)
+        _pad_mask_zeros(out_tf)
         out_tf_raw = out_tf.as_raw_tensor_dict(include_const_sizes=True)
 
     print(out_pt, out_tf)
@@ -235,3 +238,22 @@ def _dim_scalar_size(dim: Dim) -> int:
         assert dim.dyn_size_ext.dims == ()
         return dim.dyn_size_ext.raw_tensor
     raise Exception(f"dim {dim} has no known size")
+
+
+def _pad_mask_zeros(x: Union[TensorDict, Tensor, Dim]):
+    if isinstance(x, TensorDict):
+        for v in x.data.values():
+            _pad_mask_zeros(v)
+        return
+
+    if isinstance(x, Dim):
+        if x.dyn_size_ext:
+            _pad_mask_zeros(x.dyn_size_ext)
+        return
+
+    assert isinstance(x, Tensor)
+    for i, d in enumerate(x.dims):
+        _pad_mask_zeros(d)
+        if d.need_masking():
+            mask = x.get_sequence_mask_tensor(i).copy_compatible_to(x, check_sparse=False, check_dtype=False)
+            x.raw_tensor = numpy.where(mask.raw_tensor, x.raw_tensor, 0.0)
