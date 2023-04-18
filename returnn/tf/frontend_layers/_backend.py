@@ -120,7 +120,7 @@ class ReturnnLayersBackend(Backend[Layer]):
     @staticmethod
     def transpose(tensor: Tensor, perm: Sequence[Union[Dim, int]], *, allow_int: bool = False) -> Tensor:
         """transpose"""
-        assert not allow_int  # not supported
+        assert all(isinstance(d, Dim) for d in perm)  # axis as int not supported
         return rfl.make_layer({"class": "transpose", "from": tensor, "perm": perm}, name="transpose")
 
     @staticmethod
