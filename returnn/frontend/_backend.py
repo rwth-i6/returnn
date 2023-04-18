@@ -910,8 +910,8 @@ class Backend(Generic[T]):
     def lstm(
         source: Tensor,
         *,
-        state_c: Tensor,
         state_h: Tensor,
+        state_c: Tensor,
         ff_weight: Tensor,
         rec_weight: Tensor,
         bias: Tensor,

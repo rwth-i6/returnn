@@ -852,6 +852,77 @@ class ReturnnLayersBackend(Backend[Layer]):
             )
         return layer, out_spatial_dims
 
+    @staticmethod
+    def lstm(
+        source: Tensor,
+        *,
+        state_h: Tensor,
+        state_c: Tensor,
+        ff_weight: Tensor,
+        rec_weight: Tensor,
+        bias: Tensor,
+        spatial_dim: Dim,
+        in_dim: Dim,
+        out_dim: Dim,
+    ) -> Tuple[Tensor, Tuple[Tensor, Tensor]]:
+        """
+        :return: output, (h, c)
+        """
+        from ._utils import get_last_hidden_state
+
+        # PyTorch (cuDNN) weights are in ifco order (?),
+        # which we defined as the standard for the RF.
+        # Also, they are (in_dim|out_dim, 4*out_dim).
+        # RETURNN NativeLstm2 weight order: cell-in + input, forget and output gates (cifo).
+        # And they are (4*out_dim, in_dim|out_dim).
+        # So we need to reorder the params (ifco->cifo) and transpose them.
+        # See also CustomCheckpointLoader and convert_cudnn_canonical_to_lstm_block.
+        # TODO: ideally, we would create a new NativeLstm variant which just uses the same order.
+        rec_weight = rec_weight.copy_transpose((out_dim, 4 * out_dim))
+        ff_weight = ff_weight.copy_transpose((in_dim, 4 * out_dim))
+        out_dim_ = out_dim.copy(same_as_self=False, description="(out-dim)")
+        rec_weight_ = rf.split(rec_weight, axis=4 * out_dim, out_dims=[out_dim_] * 4)
+        ff_weight_ = rf.split(ff_weight, axis=4 * out_dim, out_dims=[out_dim_] * 4)
+        bias_ = rf.split(bias, axis=4 * out_dim, out_dims=[out_dim_] * 4)
+        rec_weight, _ = rf.concat(
+            (rec_weight_[2], out_dim_),
+            (rec_weight_[0], out_dim_),
+            (rec_weight_[1], out_dim_),
+            (rec_weight_[3], out_dim_),
+        )
+        ff_weight, _ = rf.concat(
+            (ff_weight_[2], out_dim_), (ff_weight_[0], out_dim_), (ff_weight_[1], out_dim_), (ff_weight_[3], out_dim_)
+        )
+        bias, _ = rf.concat((bias_[2], out_dim_), (bias_[0], out_dim_), (bias_[1], out_dim_), (bias_[3], out_dim_))
+        rec_weight = Tensor(
+            "rec_weight", [out_dim, 4 * out_dim], dtype=rec_weight.dtype, raw_tensor=rec_weight.raw_tensor
+        )
+        ff_weight = Tensor("ff_weight", [in_dim, 4 * out_dim], dtype=ff_weight.dtype, raw_tensor=ff_weight.raw_tensor)
+        bias = Tensor("bias", [4 * out_dim], dtype=bias.dtype, raw_tensor=bias.raw_tensor)
+
+        output = rfl.make_layer(
+            {
+                "class": "rec",
+                "from": source,
+                "in_dim": in_dim,
+                "axis": spatial_dim,
+                "out_dim": out_dim,
+                "unit": "lstm",
+                "reuse_params": {
+                    "map": {
+                        "W_re": {"layer_output": rec_weight, "shape": (out_dim, 4 * out_dim)},
+                        "W": {"layer_output": ff_weight, "shape": (in_dim, 4 * out_dim)},
+                        "b": {"layer_output": bias, "shape": (4 * out_dim,)},
+                    }
+                },
+                "initial_state": {"h": state_h, "c": state_c},
+            },
+            name="lstm",
+        )
+        h = get_last_hidden_state(output, out_dim=out_dim, key="h")
+        c = get_last_hidden_state(output, out_dim=out_dim, key="c")
+        return output, (h, c)
+
 
 def _random_replay_eval(idx, **_kwargs):
     # noinspection PyProtectedMember
