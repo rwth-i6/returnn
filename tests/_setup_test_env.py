@@ -200,7 +200,8 @@ def _try_hook_into_tests():
             def pytest_unconfigure(self, config):
                 """hook for pytest_unconfigure."""
                 print("test env hook pytest_unconfigure")
-                # This will get called (potentially) multiple times via config._ensure_unconfigure in the `finally` block
+                # This will get called (potentially) multiple times
+                # via config._ensure_unconfigure in the `finally` block
                 # in certain stages of the pytest call stack.
                 frame_ = get_current_frame()
                 while frame_:
@@ -209,9 +210,11 @@ def _try_hook_into_tests():
                     if get_func_str_from_code_object(frame_.f_code) == "pytest_cmdline_main":
                         # We assume there is yet another lower `finally` block in the call stack
                         # which calls to config._ensure_unconfigure.
-                        # However, it would not call pytest_unconfigure again when the configured flag is already set to False.
+                        # However, it would not call pytest_unconfigure again
+                        # when the configured flag is already set to False.
                         # So we again call config._do_configure to set the flag to True again.
-                        # We don't want to run any of the other plugin hooks anymore, so unregister them all (except us).
+                        # We don't want to run any of the other plugin hooks anymore,
+                        # so unregister them all (except us).
                         for plugin in test_session.config.pluginmanager.get_plugins():
                             if plugin != self:
                                 test_session.config.pluginmanager.unregister(plugin)
