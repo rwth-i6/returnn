@@ -255,5 +255,9 @@ def _pad_mask_zeros(x: Union[TensorDict, Tensor, Dim]):
     for i, d in enumerate(x.dims):
         _pad_mask_zeros(d)
         if d.need_masking():
-            mask = x.get_sequence_mask_tensor(i).copy_compatible_to(x, check_sparse=False, check_dtype=False)
+            mask = x.get_sequence_mask_tensor(i)
+            if not set(mask.dims).issubset(set(x.dims)):
+                print(f"Warning: cannot apply mask {mask} for dim {d} on tensor {x}.")
+                continue
+            mask = mask.copy_compatible_to(x, check_sparse=False, check_dtype=False)
             x.raw_tensor = numpy.where(mask.raw_tensor, x.raw_tensor, 0.0)
