@@ -1461,11 +1461,15 @@ def _get_act_func_with_op(s):
     assert False
 
 
+_ActFuncMap = {"neg": "negative"}
+
+
 def get_activation_function(s):
     """
     :param str|None s:
     :rtype: (tf.Tensor) -> tf.Tensor
     """
+    s = _ActFuncMap.get(s, s)
     if not s or s in ["none", "identity"]:
         return identity
     if "(" in s:
