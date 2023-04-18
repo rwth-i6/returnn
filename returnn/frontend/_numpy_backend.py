@@ -5,9 +5,10 @@ It just has the bare minimum such that the user can assign Numpy arrays to Tenso
 """
 
 from __future__ import annotations
-from typing import Union, Sequence, Tuple
+from typing import Optional, Union, Sequence, Tuple
 import numpy
 from returnn.tensor import Tensor, Dim
+import returnn.frontend as rf
 from ._backend import Backend
 
 
@@ -68,6 +69,60 @@ class NumpyBackend(Backend[numpy.ndarray]):
             In eager frameworks, all dims are known.
         """
         return raw_tensor.shape
+
+    @staticmethod
+    def expand_dims_raw(raw_tensor: numpy.ndarray, axis: int) -> numpy.ndarray:
+        """
+        :param raw_tensor:
+        :param axis: e.g. 1
+        :return: raw tensor with new axis
+        """
+        return numpy.expand_dims(raw_tensor, axis)
+
+    @staticmethod
+    def compare_raw(a: numpy.ndarray, kind: str, b: numpy.ndarray) -> numpy.ndarray:
+        """
+        :param a:
+        :param kind: "equal", "less", "less_equal", "greater", "greater_equal", "not_equal"
+        :param b:
+        :return: a `kind` b
+        """
+        assert a.ndim == b.ndim
+        op = getattr(numpy, kind)  # e.g. numpy.equal
+        return op(a, b)
+
+    @staticmethod
+    def combine_raw(a: numpy.ndarray, kind: str, b: numpy.ndarray) -> numpy.ndarray:
+        """
+        :param a:
+        :param kind: "add", "sub", "mul", "truediv", "floordiv", "mod", "pow",
+            "maximum", "minimum", "logical_and", "logical_or", "squared_difference"
+        :param b:
+        :return: a `kind` b
+        """
+        assert a.ndim == b.ndim
+        op = getattr(numpy, kind)  # e.g. numpy.add
+        return op(a, b)
+
+    @staticmethod
+    def range_over_dim(dim: Dim, *, dtype: Optional[str] = None) -> Tensor[numpy.ndarray]:
+        """
+        :param dim:
+        :param dtype:
+        :return: tensor with shape [dim]
+        """
+        if not dtype and dim.dyn_size_ext:
+            dtype = dim.dyn_size_ext.dtype
+        if not dtype:
+            dtype = rf.get_default_array_index_dtype()
+        out = Tensor(
+            "range",
+            dims=[dim],
+            sparse_dim=dim,
+            dtype=dtype,
+        )
+        out.raw_tensor = numpy.arange(dim.get_dim_value(), dtype=NumpyBackend.as_dtype_raw(out.dtype))
+        return out
 
     @staticmethod
     def reduce(
