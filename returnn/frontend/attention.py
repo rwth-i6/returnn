@@ -475,6 +475,7 @@ def relative_positional_encoding(spatial_dim: Dim, feat_dim: Dim, *, dtype: str 
         arg, feat_dim_ = rf.concat((arg_sin, feat2_dim), (arg_cos, feat2_dim))
         arg, feat_dim_ = rf.replace_dim(arg, in_dim=feat_dim_, out_dim=feat_dim)
         emb = rf.sin(arg)
-        emb.verify_out_shape({out_spatial_dim, feat_dim})
+        emb.verify_out_shape({out_spatial_dim, feat_dim}, allow_missing_implicit_dims=True)
+        emb.feature_dim = feat_dim
         cache[(spatial_dim, feat_dim)] = emb, out_spatial_dim
         return emb, out_spatial_dim

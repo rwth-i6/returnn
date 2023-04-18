@@ -3,6 +3,7 @@ RETURNN frontend (returnn.frontend) tests
 """
 
 from __future__ import annotations
+from typing import Tuple
 import _setup_test_env  # noqa
 import returnn.frontend as rf
 from returnn.tensor import Tensor, Dim, TensorDict, batch_dim
@@ -65,5 +66,27 @@ def test_self_attention():
     def _forward_step(*, model: _Net, extern_data: TensorDict):
         out = model(extern_data["data"], axis=time_dim)
         out.mark_as_default_output(shape=(batch_dim, time_dim, model.out_dim))
+
+    run_model(extern_data, lambda *, epoch, step: _Net(), _forward_step)
+
+
+def test_relative_positional_encoding():
+    time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
+    in_dim = Dim(8, name="in")
+    extern_data = TensorDict(
+        {
+            "data": Tensor("data", [batch_dim, time_dim, in_dim], dtype="float32"),
+        }
+    )
+
+    class _Net(rf.Module):
+        def __call__(self, x: Tensor, *, axis: Dim) -> Tuple[Tensor, Dim]:
+            x, dim = rf.relative_positional_encoding(axis, in_dim)
+            return x, dim
+
+    # noinspection PyShadowingNames
+    def _forward_step(*, model: _Net, extern_data: TensorDict):
+        out, dim = model(extern_data["data"], axis=time_dim)
+        out.mark_as_default_output(shape=(dim, in_dim))
 
     run_model(extern_data, lambda *, epoch, step: _Net(), _forward_step)
