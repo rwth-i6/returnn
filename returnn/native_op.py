@@ -1017,6 +1017,7 @@ class NativeLstm2(NativeOpGenBase):
         return (X, W, y0, c0, i, start, step, Y, C, H, DY, Dd)
 
     c_extra_support_code = {
+        # language=C++
         "lstm_kernel": """
       DEF_KERNEL
       void lstm_kernel(
@@ -1058,6 +1059,7 @@ class NativeLstm2(NativeOpGenBase):
         }
       }
       """,
+        # language=C++
         "lstm_bwd_kernel": """
       DEF_KERNEL
       void lstm_bwd_kernel(
@@ -1118,6 +1120,7 @@ class NativeLstm2(NativeOpGenBase):
       """,
     }
 
+    # language=C++
     c_fw_code = """
     // X, W, y0, c0, i, start, step = input_names
     // Y, C, H, d = output_names
