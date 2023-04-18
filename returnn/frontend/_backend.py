@@ -8,6 +8,7 @@ import contextlib
 import numpy
 
 import returnn.frontend as rf
+from . import State
 
 if TYPE_CHECKING:
     from returnn.tensor import Tensor, Dim
@@ -905,6 +906,31 @@ class Backend(Generic[T]):
         out_spatial_dims: Optional[Sequence[Dim]] = None,
     ) -> Tuple[Tensor, Sequence[Dim]]:
         """pooling"""
+        raise NotImplementedError
+
+    @staticmethod
+    def lstm(
+        source: Tensor,
+        state: State,
+        ff_weights: Tensor,
+        ff_biases: Tensor,
+        rec_weights: Tensor,
+        rec_biases: Tensor,
+        spatial_dim: Dim,
+        out_dim: Dim,
+    ) -> Tuple[Tensor, State]:
+        """
+        Functional LSTM.
+
+        :param source: Tensor of shape [*, in_dim].
+        :param state: State of the LSTM.
+        :param ff_weights: Parameters for the weights of the feed-forward part.
+        :param ff_biases: Parameters for the biases of the feed-forward part.
+        :param rec_weights: Parameters for the weights of the recurrent part.
+        :param rec_biases: Parameters for the biases of the recurrent part.
+        :param spatial_dim: Dimension in which the LSTM operates.
+        :param out_dim:
+        """
         raise NotImplementedError
 
 

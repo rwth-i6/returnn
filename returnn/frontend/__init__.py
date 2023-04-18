@@ -31,6 +31,7 @@ from .gradient import *
 from .linear import *
 from .loop import *
 from .loss import *
+from .lstm import *
 from .math_ import *
 from .matmul import *
 from .normalization import *
