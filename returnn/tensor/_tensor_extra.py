@@ -888,10 +888,9 @@ class _TensorMixin(_TensorMixinBase):
             v.feature_dim_axis = axis
         return v
 
-    def get_default_new_axis_for_dim_tag(self, dim_tag):
+    def get_default_new_axis_for_dim_tag(self, dim_tag: Dim) -> int:
         """
-        :param Dim dim_tag:
-        :rtype: int
+        :param dim_tag:
         """
         if dim_tag.is_batch_dim():
             return 0
@@ -901,12 +900,11 @@ class _TensorMixin(_TensorMixinBase):
                 return self.feature_dim_axis + 1  # after existing feature-dim
             else:
                 return self.batch_ndim  # at the end
-        assert dim_tag.is_spatial_dim() or (dim_tag.is_feature_dim() and self.sparse)
-        if dim_tag.dimension is None and self.get_dynamic_axes():
+        if dim_tag.is_dynamic() and self.get_dynamic_axes():
             return self.get_dynamic_axes()[-1] + 1  # after existing dynamic axis
-        if self.get_spatial_batch_axes():
+        if dim_tag.is_spatial_dim() and self.get_spatial_batch_axes():
             return self.get_spatial_batch_axes()[-1] + 1  # after the existing spatial dim
-        elif self.feature_dim_axis is not None:
+        elif dim_tag.is_spatial_dim() and self.feature_dim_axis is not None:
             return self.feature_dim_axis  # add it before the feature dim
         else:
             return self.batch_ndim  # add it at the end
