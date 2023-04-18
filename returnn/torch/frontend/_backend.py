@@ -13,7 +13,7 @@ from returnn.util.basic import prod, get_global_inf_value
 
 # noinspection PyProtectedMember
 from returnn.frontend._backend import Backend
-from returnn.frontend import RawTensorTypes
+from returnn.frontend import RawTensorTypes, State
 import returnn.frontend as rf
 
 
@@ -1138,3 +1138,71 @@ class TorchBackend(Backend[torch.Tensor]):
         if source.feature_dim and source.feature_dim in out.dims:
             out.feature_dim = source.feature_dim
         return out, out_spatial_dims
+
+    @staticmethod
+    def lstm(
+        source: _TT,
+        state: State,
+        ff_weights: _TT,
+        ff_biases: Optional[_TT],
+        rec_weights: _TT,
+        rec_biases: Optional[_TT],
+        spatial_dim: Dim,
+        out_dim: Dim,
+    ) -> Tuple[_TT, State]:
+        """
+        Wraps the functional LSTM from PyTorch.
+
+        :param source: Tensor of shape ``[*, in_dim]``.
+        :param state: State of the LSTM.
+        :param ff_weights: Parameters for the weights of the feed-forward part.
+        :param ff_biases: Parameters for the biases of the feed-forward part.
+        :param rec_weights: Parameters for the weights of the recurrent part.
+        :param rec_biases: Parameters for the biases of the recurrent part.
+        :param spatial_dim: Dimension in which the LSTM operates.
+        :param out_dim:
+
+        :return: Tuple consisting of two elements: the result as a :class:`Tensor`
+            and the new state as a :class:`State` (different from the previous one).
+        """
+        if ff_biases is None and rec_biases is None:
+            lstm_params = (ff_weights.raw_tensor, rec_weights.raw_tensor)
+            has_biases = False
+        else:
+            assert (
+                ff_biases is not None and rec_biases is not None
+            ), "A bias in the LSTM (feed-forward or recurrent) is set while the other is unset."
+            # Feed-forward has priority over recurrent, and weights have priority over biases. See the torch docstring
+            # or torch LSTMCell: https://github.com/pytorch/pytorch/blob/4bead64/aten/src/ATen/native/RNN.cpp#L1458
+            lstm_params = (ff_weights.raw_tensor, rec_weights.raw_tensor, ff_biases.raw_tensor, rec_biases.raw_tensor)
+            has_biases = True
+        batch_first = source.dims[0].is_batch_dim()
+
+        raw_result, raw_new_hidden_state, raw_new_cell_state = torch.lstm(
+            source.raw_tensor,
+            (state.h.raw_tensor, state.c.raw_tensor),
+            lstm_params,
+            has_biases=has_biases,
+            num_layers=1,
+            dropout=0.0,
+            train=rf.get_run_ctx().train_flag,
+            bidirectional=False,
+            batch_first=batch_first,
+        )
+
+        result_dims = list(source.dims)
+        index_in_dim = [i for i, dim in enumerate(result_dims) if dim == spatial_dim]
+        assert len(index_in_dim) == 1, "There are multiple spatial dimensions for the input tensor."
+        result_dims[index_in_dim[0]] = out_dim
+        result = Tensor(name="lstm", dims=result_dims, raw_tensor=raw_result, dtype="float32")
+        result.feature_dim = out_dim
+
+        new_state = State()
+        new_hidden_state = state.h.copy_template()
+        new_hidden_state.raw_tensor = raw_new_hidden_state
+        new_state.h = new_hidden_state
+        new_cell_state = state.c.copy_template()
+        new_cell_state.raw_tensor = raw_new_cell_state
+        new_state.c = new_cell_state
+
+        return result, new_state
