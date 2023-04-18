@@ -5536,7 +5536,10 @@ class TransposeLayer(_ConcatInputLayer):
             return input_data.get_axis_from_description(a, allow_int=allow_int)
 
         if isinstance(perm, (list, tuple)):
-            assert len(perm) == input_data.batch_ndim
+            assert len(perm) == input_data.batch_ndim, (
+                f"TransposeLayer: source {input_data},"
+                f" perm {perm} len {len(perm)} is not equal to batch ndim {input_data.batch_ndim}"
+            )
             perm_ = {_axis(i, allow_int=True): _axis(j) for (i, j) in enumerate(perm)}
         elif isinstance(perm, dict):
             perm_ = {_axis(i, allow_int=True): _axis(j) for (i, j) in perm.items()}
