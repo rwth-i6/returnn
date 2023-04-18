@@ -54,64 +54,65 @@ def make_layer(
         parent_ctx = rfl.Layer.current_ctx(ignore_top_stack_frames=name_ctx_ignore_top_stack_frames + 1)
         if not name:
             name = layer_dict["class"]
-        name_ctx = rfl.Layer(suggested_name=name, parent=parent_ctx)
+        layer = rfl.Layer(suggested_name=name, parent=parent_ctx)
         created_name_ctx = True
     elif isinstance(name, rfl.Layer):
-        name_ctx = name
+        layer = name
         created_name_ctx = False
     else:
         raise TypeError(f"name must be str or Layer, not {type(name)}; or you should pass a module")
-    assert not name_ctx.tensor and not name_ctx.layer_dict  # not yet assigned
+    assert not layer.tensor and not layer.layer_dict  # not yet assigned
     layer_dict = layer_dict.copy()
 
     try:
 
         if out is not None:
-            layer = out
+            assert isinstance(out, Tensor)
         elif predefined_out_data is not None:
-            layer = predefined_out_data.copy_template()
+            assert isinstance(predefined_out_data, Tensor)
+            out = predefined_out_data.copy_template()
         else:
-            layer = _tensor_from_layer_dict(layer_dict, layer=name_ctx)
+            out = _tensor_from_layer_dict(layer_dict, layer=layer)
 
         # Do not assign name_ctx.tensor yet because we potentially could raise exceptions later.
-        assert name_ctx.tensor is None
-        assert name_ctx.layer_dict is None
+        assert layer.tensor is None
+        assert layer.layer_dict is None
 
         assert layer_dict is not None
 
-        layer.control_flow_ctx = rfl.Layer.inner_control_flow()
-        if layer.have_batch_axis() and not layer.batch:
+        out.control_flow_ctx = rfl.Layer.inner_control_flow()
+        if out.have_batch_axis() and not out.batch:
             # You could say this is a bug of RETURNN. Or at least RETURNN is just incomplete here.
             # RETURNN usually would fix that later when the layer is actually created,
             # but we don't do that here.
             # We can still try to look at dependencies and use those batch info.
             batches = []
-            for dep in name_ctx.get_tensor_dependencies(_extra_layer_dict=layer_dict):
+            for dep in layer.get_tensor_dependencies(_extra_layer_dict=layer_dict):
                 if dep.tensor is not None and dep.tensor.batch and dep.tensor.batch not in batches:
                     batches.append(dep.tensor.batch)
             if batches:
-                layer.batch = BatchInfo.get_common_batch_info(batches)
-            elif name_ctx.root.global_batch:
-                layer.batch = name_ctx.root.global_batch
+                out.batch = BatchInfo.get_common_batch_info(batches)
+            elif layer.root.global_batch:
+                out.batch = layer.root.global_batch
 
-        name_ctx.layer_dict = layer_dict
-        name_ctx.tensor = layer
-        layer.raw_tensor = name_ctx
+        layer.layer_dict = layer_dict
+        layer.tensor = out
+        out.raw_tensor = layer
 
     except Exception as exc:
         # Just forward the exception.
         # However, if we already created a new name_ctx for it, we can clean this up now.
         if created_name_ctx:
-            assert name_ctx.parent
-            name_ctx.parent.children.pop(name_ctx.name)
+            assert layer.parent
+            layer.parent.children.pop(layer.name)
         raise exc
 
-    for tag in layer.dim_tags:
+    for tag in out.dim_tags:
         # noinspection PyProtectedMember
-        _dims._register_dim_deps_when_novel(tag, [layer])
+        _dims._register_dim_deps_when_novel(tag, [out])
     # Debug out. Similar as RETURNN template log. Maybe put this behind a flag? Anyway, useful for now.
-    print(layer)
-    return layer
+    print(out)
+    return out
 
 
 def _get_sub_layer(layer: Tensor[rfl.Layer], name: str, *, data: Tensor) -> Tensor:
