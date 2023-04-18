@@ -31,8 +31,8 @@ def test_lstm():
     # noinspection PyShadowingNames
     def _forward_step(*, model: _Net, extern_data: TensorDict):
         state = rf.LstmState(
-            h=rf.random(distribution="normal", dims=[batch_dim, out_dim], dtype="float32"),
-            c=rf.random(distribution="normal", dims=[batch_dim, out_dim], dtype="float32"),
+            h=rf.random_normal(dims=[batch_dim, out_dim], dtype="float32"),
+            c=rf.random_normal(dims=[batch_dim, out_dim], dtype="float32"),
         )
         out, new_state = model(extern_data["data"], state=state, spatial_dim=time_dim)
         out.mark_as_output("out", shape=(batch_dim, time_dim, out_dim))

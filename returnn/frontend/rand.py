@@ -61,6 +61,8 @@ __all__ = [
     "get_static_step_based_seed",
     "random",
     "random_uniform",
+    "random_normal",
+    "random_truncated_normal",
 ]
 
 
@@ -221,8 +223,8 @@ def random_uniform(
     dims: Sequence[Dim],
     dtype: Optional[str] = None,
     sparse_dim: Optional[Dim] = None,
-    minval: Union[int, float, Tensor],
-    maxval: Union[int, float, Tensor],
+    minval: Union[int, float, Tensor] = 0.,
+    maxval: Union[int, float, Tensor] = 1.,
     seed: Optional[Union[int, Sequence[int], numpy.ndarray]] = None,
     algorithm: Optional[str] = None,
     explicit_state: Optional[Tensor] = None,
@@ -238,6 +240,76 @@ def random_uniform(
         dtype=dtype,
         sparse_dim=sparse_dim,
         distribution="uniform",
+        minval=minval,
+        maxval=maxval,
+        seed=seed,
+        algorithm=algorithm,
+        explicit_state=explicit_state,
+        auto_update_state=auto_update_state,
+        static=static,
+        out=out,
+    )
+
+
+def random_normal(
+    *,
+    dims: Sequence[Dim],
+    dtype: Optional[str] = None,
+    sparse_dim: Optional[Dim] = None,
+    mean: Optional[Union[int, float, Tensor]] = 0.,
+    stddev: Optional[Union[int, float, Tensor]] = 1.,
+    seed: Optional[Union[int, Sequence[int], numpy.ndarray]] = None,
+    algorithm: Optional[str] = None,
+    explicit_state: Optional[Tensor] = None,
+    auto_update_state: Optional[bool] = None,
+    static: Optional[bool] = None,
+    out: Optional[Tensor] = None,
+):
+    """
+    See :func:`random`. :func:`random` with ``distribution="normal"``.
+    """
+    return random(
+        dims=dims,
+        dtype=dtype,
+        sparse_dim=sparse_dim,
+        distribution="normal",
+        mean=mean,
+        stddev=stddev,
+        seed=seed,
+        algorithm=algorithm,
+        explicit_state=explicit_state,
+        auto_update_state=auto_update_state,
+        static=static,
+        out=out,
+    )
+
+
+def random_truncated_normal(
+    *,
+    dims: Sequence[Dim],
+    dtype: Optional[str] = None,
+    sparse_dim: Optional[Dim] = None,
+    mean: Optional[Union[int, float, Tensor]] = 0.,
+    stddev: Optional[Union[int, float, Tensor]] = 1.,
+    minval: Union[int, float, Tensor] = None,
+    maxval: Union[int, float, Tensor] = None,
+    seed: Optional[Union[int, Sequence[int], numpy.ndarray]] = None,
+    algorithm: Optional[str] = None,
+    explicit_state: Optional[Tensor] = None,
+    auto_update_state: Optional[bool] = None,
+    static: Optional[bool] = None,
+    out: Optional[Tensor] = None,
+):
+    """
+    See :func:`random`. :func:`random` with ``distribution="truncated_normal"``.
+    """
+    return random(
+        dims=dims,
+        dtype=dtype,
+        sparse_dim=sparse_dim,
+        distribution="truncated_normal",
+        mean=mean,
+        stddev=stddev,
         minval=minval,
         maxval=maxval,
         seed=seed,
