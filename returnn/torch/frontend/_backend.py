@@ -13,7 +13,7 @@ from returnn.util.basic import prod, get_global_inf_value
 
 # noinspection PyProtectedMember
 from returnn.frontend._backend import Backend
-from returnn.frontend import RawTensorTypes, State
+from returnn.frontend import RawTensorTypes
 import returnn.frontend as rf
 
 
@@ -1142,25 +1142,19 @@ class TorchBackend(Backend[torch.Tensor]):
     @staticmethod
     def lstm(
         source: _TT,
-        state: State,
+        *,
+        state_h: _TT,
+        state_c: _TT,
         ff_weights: _TT,
         ff_biases: Optional[_TT],
         rec_weights: _TT,
         rec_biases: Optional[_TT],
         spatial_dim: Dim,
+        in_dim: Dim,
         out_dim: Dim,
-    ) -> Tuple[_TT, State]:
+    ) -> Tuple[_TT, Tuple[_TT, _TT]]:
         """
         Wraps the functional LSTM from PyTorch.
-
-        :param source: Tensor of shape ``[*, in_dim]``.
-        :param state: State of the LSTM.
-        :param ff_weights: Parameters for the weights of the feed-forward part.
-        :param ff_biases: Parameters for the biases of the feed-forward part.
-        :param rec_weights: Parameters for the weights of the recurrent part.
-        :param rec_biases: Parameters for the biases of the recurrent part.
-        :param spatial_dim: Dimension in which the LSTM operates.
-        :param out_dim:
 
         :return: Tuple consisting of two elements: the result as a :class:`Tensor`
             and the new state as a :class:`State` (different from the previous one).
@@ -1176,33 +1170,55 @@ class TorchBackend(Backend[torch.Tensor]):
             # or torch LSTMCell: https://github.com/pytorch/pytorch/blob/4bead64/aten/src/ATen/native/RNN.cpp#L1458
             lstm_params = (ff_weights.raw_tensor, rec_weights.raw_tensor, ff_biases.raw_tensor, rec_biases.raw_tensor)
             has_biases = True
-        batch_first = source.dims[0].is_batch_dim()
 
-        raw_result, raw_new_hidden_state, raw_new_cell_state = torch.lstm(
-            source.raw_tensor,
-            (state.h.raw_tensor, state.c.raw_tensor),
+        batch_dims = [d for d in source.dims if d != spatial_dim and d != in_dim]
+        source = source.copy_transpose([spatial_dim] + batch_dims + [in_dim])
+        state_h = state_h.copy_transpose(batch_dims + [out_dim])
+        state_c = state_c.copy_transpose(batch_dims + [out_dim])
+
+        source_raw = source.raw_tensor
+        state_h_raw = state_h.raw_tensor
+        state_c_raw = state_c.raw_tensor
+        batch_dim = torch.prod(torch.tensor([d.get_dim_value() for d in batch_dims])) if batch_dims else 1
+        if len(batch_dims) != 1:
+            # Torch LSTM expects (seq_len, batch, input_size) as shape.
+            # We need to merge all batch dims together.
+            source_raw = torch.reshape(
+                source_raw, [spatial_dim.get_dim_value()] + [batch_dim] + [in_dim.get_dim_value()]
+            )
+        # Torch LSTM expects (num_layers * num_directions, batch, hidden_size) as shape.
+        state_h_raw = torch.reshape(state_h_raw, [1, batch_dim, out_dim.get_dim_value()])
+        state_c_raw = torch.reshape(state_c_raw, [1, batch_dim, out_dim.get_dim_value()])
+
+        out_raw, new_state_h_raw, new_state_c_raw = torch.lstm(
+            source_raw,
+            (state_h_raw, state_c_raw),
             lstm_params,
             has_biases=has_biases,
             num_layers=1,
             dropout=0.0,
             train=rf.get_run_ctx().train_flag,
             bidirectional=False,
-            batch_first=batch_first,
+            batch_first=False,
         )
 
-        result_dims = list(source.dims)
-        index_in_dim = [i for i, dim in enumerate(result_dims) if dim == spatial_dim]
-        assert len(index_in_dim) == 1, "There are multiple spatial dimensions for the input tensor."
-        result_dims[index_in_dim[0]] = out_dim
-        result = Tensor(name="lstm", dims=result_dims, raw_tensor=raw_result, dtype="float32")
-        result.feature_dim = out_dim
+        if len(batch_dims) != 1:
+            out_raw = torch.reshape(
+                out_raw,
+                [spatial_dim.get_dim_value()] + [d.get_dim_value() for d in batch_dims] + [out_dim.get_dim_value()],
+            )
+        new_state_h_raw = torch.reshape(new_state_h_raw, [d.get_dim_value() for d in state_h.dims])
+        new_state_c_raw = torch.reshape(new_state_c_raw, [d.get_dim_value() for d in state_c.dims])
 
-        new_state = State()
-        new_hidden_state = state.h.copy_template()
-        new_hidden_state.raw_tensor = raw_new_hidden_state
-        new_state.h = new_hidden_state
-        new_cell_state = state.c.copy_template()
-        new_cell_state.raw_tensor = raw_new_cell_state
-        new_state.c = new_cell_state
+        out = source.copy_template_replace_dim_tag(axis=-1, new_dim_tag=out_dim, name="lstm")
+        out.feature_dim = out_dim
+        out.raw_tensor = out_raw
 
-        return result, new_state
+        new_state_h = state_h.copy_template()
+        new_state_h.raw_tensor = new_state_h_raw
+        new_state_h.feature_dim = out_dim
+        new_state_c = state_c.copy_template()
+        new_state_c.raw_tensor = new_state_c_raw
+        new_state_c.feature_dim = out_dim
+
+        return out, (new_state_h, new_state_c)

@@ -6,9 +6,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Optional, Any, Union, TypeVar, Generic, Type, Sequence, Dict, Tuple
 import contextlib
 import numpy
-
 import returnn.frontend as rf
-from . import State
 
 if TYPE_CHECKING:
     from returnn.tensor import Tensor, Dim
@@ -911,25 +909,31 @@ class Backend(Generic[T]):
     @staticmethod
     def lstm(
         source: Tensor,
-        state: State,
+        *,
+        state_c: Tensor,
+        state_h: Tensor,
         ff_weights: Tensor,
         ff_biases: Tensor,
         rec_weights: Tensor,
         rec_biases: Tensor,
         spatial_dim: Dim,
+        in_dim: Dim,
         out_dim: Dim,
-    ) -> Tuple[Tensor, State]:
+    ) -> Tuple[Tensor, Tuple[Tensor, Tensor]]:
         """
         Functional LSTM.
 
         :param source: Tensor of shape [*, in_dim].
-        :param state: State of the LSTM.
+        :param state_c:
+        :param state_h:
         :param ff_weights: Parameters for the weights of the feed-forward part.
         :param ff_biases: Parameters for the biases of the feed-forward part.
         :param rec_weights: Parameters for the weights of the recurrent part.
         :param rec_biases: Parameters for the biases of the recurrent part.
         :param spatial_dim: Dimension in which the LSTM operates.
+        :param in_dim:
         :param out_dim:
+        :return: output, (state_h, state_c)
         """
         raise NotImplementedError
 

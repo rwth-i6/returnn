@@ -7,13 +7,12 @@ from __future__ import annotations
 from typing import Tuple, TypeVar
 
 import returnn.frontend as rf
-from returnn.frontend import State
 from returnn.tensor import Tensor, Dim
 
 
 T = TypeVar("T")
 
-__all__ = ["LSTM"]
+__all__ = ["LSTM", "LstmState"]
 
 
 class LSTM(rf.Module):
@@ -36,27 +35,27 @@ class LSTM(rf.Module):
         self.in_dim = in_dim
         self.out_dim = out_dim
 
-        self.ff_weights = rf.Parameter((self.out_dim * 4, self.in_dim))  # type: Tensor[T]
+        self.ff_weights = rf.Parameter((4 * self.out_dim, self.in_dim))  # type: Tensor[T]
         self.ff_weights.initial = rf.init.Glorot()
-        self.recurrent_weights = rf.Parameter((self.out_dim * 4, self.out_dim))  # type: Tensor[T]
+        self.recurrent_weights = rf.Parameter((4 * self.out_dim, self.out_dim))  # type: Tensor[T]
         self.recurrent_weights.initial = rf.init.Glorot()
 
         self.ff_biases = None
         self.recurrent_biases = None
         if with_bias:
-            self.ff_biases = rf.Parameter((self.out_dim * 4,))  # type: Tensor[T]
+            self.ff_biases = rf.Parameter((4 * self.out_dim,))  # type: Tensor[T]
             self.ff_biases.initial = 0.0
-            self.recurrent_biases = rf.Parameter((self.out_dim * 4,))  # type: Tensor[T]
+            self.recurrent_biases = rf.Parameter((4 * self.out_dim,))  # type: Tensor[T]
             self.recurrent_biases.initial = 0.0
 
-    def __call__(self, source: Tensor[T], state: State) -> Tuple[Tensor, State]:
+    def __call__(self, source: Tensor[T], *, state: LstmState, spatial_dim: Dim) -> Tuple[Tensor, LstmState]:
         """
         Forward call of the LSTM.
 
-        :param source: Tensor of size ``[*, in_dim]``.
-        :param state: State of the LSTM. Contains two :class:`Tensor`: ``state.h`` as the hidden state,
-            and ``state.c`` as the cell state. Both are of shape ``[out_dim]``.
-        :return: Output of forward as a :class:`Tensor` of size ``[*, out_dim]``, and next LSTM state.
+        :param source: Tensor of size {...,in_dim} if spatial_dim is single_step_dim else {...,spatial_dim,in_dim}.
+        :param state: State of the LSTM. Both h and c are of shape {...,out_dim}.
+        :return: output of shape {...,out_dim} if spatial_dim is single_step_dim else {...,spatial_dim,out_dim},
+            and new state of the LSTM.
         """
         if not state.h or not state.c:
             raise ValueError(f"{self}: state {state} needs attributes ``h`` (hidden) and ``c`` (cell).")
@@ -66,13 +65,25 @@ class LSTM(rf.Module):
         # noinspection PyProtectedMember
         result, new_state = source._raw_backend.lstm(
             source=source,
-            state=state,
+            state_c=state.c,
+            state_h=state.h,
             ff_weights=self.ff_weights,
             ff_biases=self.ff_biases,
             rec_weights=self.recurrent_weights,
             rec_biases=self.recurrent_biases,
-            spatial_dim=self.in_dim,
+            spatial_dim=spatial_dim,
+            in_dim=self.in_dim,
             out_dim=self.out_dim,
         )
+        new_state = LstmState(*new_state)
 
         return result, new_state
+
+
+class LstmState(rf.State):
+    """LSTM state"""
+
+    def __init__(self, h: Tensor, c: Tensor):
+        super().__init__()
+        self.h = h
+        self.c = c
