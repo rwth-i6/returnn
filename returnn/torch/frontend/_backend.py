@@ -515,6 +515,8 @@ class TorchBackend(Backend[torch.Tensor]):
         :return: a `kind` b
         """
         assert a.dim() == b.dim()
+        if kind == "squared_difference":
+            return (a - b) ** 2
         kind = {
             "truediv": "true_divide",
             "floordiv": "floor_divide",
