@@ -6516,7 +6516,7 @@ class PoolLayer(_ConcatInputLayer):
         elif isinstance(strides, int):
             strides = [strides] * len(pool_size)
         assert len(strides) == len(pool_size)
-        super(PoolLayer, self).__init__(**kwargs)
+        super(PoolLayer, self).__init__(in_dim=in_dim, out_dim=out_dim, **kwargs)
         assert not self.input_data.sparse
         assert self.input_data.have_batch_axis()
         assert (
