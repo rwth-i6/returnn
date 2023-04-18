@@ -324,21 +324,22 @@ class Layer:
         queue = [
             (tensor, [])  # (tensor, path), where the path is how we get to the tensor through the graph, for debugging
             for tensor in self.marked_outputs + self.marked_losses
-        ]  # type: List[Tuple[Tensor[Layer],List[Tensor[Layer]]]]
+        ]  # type: List[Tuple[Tensor[Layer],List[Layer]]]
         while queue:
             tensor, src = queue.pop(0)
-            if tensor.raw_tensor in used_names:
-                continue
-            used_names.add(tensor.raw_tensor)
-            src_ = src + [tensor]
-            for dep in tensor.raw_tensor.get_tensor_dependencies():
-                if dep.tensor is not None and dep not in used_names:
-                    queue.append((dep.tensor, src_))
-
+            if tensor.raw_tensor is None:
+                raise Exception(f"tensor {tensor} has no layer defined, via {src}")
             # Parameters usually have no parent assigned at creation time.
             # However, we should have assigned them in _assign_param_names.
             if not tensor.raw_tensor.parent and tensor.raw_tensor != root:
                 raise Exception(f"tensor {tensor} has no parent assigned, via {src}")
+            if tensor.raw_tensor in used_names:
+                continue
+            used_names.add(tensor.raw_tensor)
+            src_ = src + [tensor.raw_tensor]
+            for dep in tensor.raw_tensor.get_tensor_dependencies():
+                if dep.tensor is not None and dep not in used_names:
+                    queue.append((dep.tensor, src_))
 
             # Handle subnetworks: Flatten away if just a single entry. Create layer if not created yet.
             ctx = tensor.raw_tensor  # type: Layer
