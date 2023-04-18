@@ -5591,7 +5591,7 @@ class ReinterpretDataLayer(_ConcatInputLayer):
         :param str|list[str] switch_axes: e.g. "bt" to switch batch and time axes
         :param LayerBase|None size_base: copy the size_placeholder from the given layer
         :param LayerBase|None batch_dim_base: copy the batch dim from this layer
-        :param dict[str,Dim|str] set_axes:
+        :param dict[str,Dim|str|None] set_axes:
           This can be used to overwrite the special axes like time_dim_axis or feature_dim_axis.
           For that, use keys "B","T" or "F", and a value via :func:`Data.get_axis_from_description`.
         :param dict[str|Dim,Dim]|None set_dim_tags: axis -> new dim tag. assigns new dim tags.
@@ -5698,7 +5698,7 @@ class ReinterpretDataLayer(_ConcatInputLayer):
         :param str|list[str] switch_axes: e.g. "bt" to switch batch and time axes
         :param LayerBase|None size_base: similar as size_target
         :param LayerBase|None batch_dim_base:
-        :param dict[str,Dim|str] set_axes:
+        :param dict[str,Dim|str|None] set_axes:
         :param dict[str|Dim,Dim]|None set_dim_tags:
         :param bool enforce_batch_major:
         :param bool enforce_time_major:
@@ -5738,10 +5738,9 @@ class ReinterpretDataLayer(_ConcatInputLayer):
                 s = map_axis_name(s)
                 if isinstance(i, int):
                     assert enforce_batch_major or enforce_time_major, "%r: explicit set_axes %r" % (name, set_axes)
-                i = out.get_axis_from_description(i)
+                if i is not None:
+                    i = out.get_axis_from_description(i)
                 setattr(out, s, i)
-                if s == "feature_dim_axis":
-                    out.dim = out.batch_shape[out.feature_dim_axis]
         if out.size_placeholder and size_base:  # size_placeholder might be None, e.g. via DataNotAvailableLayer
             assert size_base.output.size_placeholder
             assert len(out.size_placeholder) == len(size_base.output.size_placeholder)
