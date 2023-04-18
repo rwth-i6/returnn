@@ -99,13 +99,13 @@ def make_layer(
         layer.tensor = out
         out.raw_tensor = layer
 
-    except Exception as exc:
+    except Exception:
         # Just forward the exception.
         # However, if we already created a new name_ctx for it, we can clean this up now.
         if created_name_ctx:
             assert layer.parent
             layer.parent.children.pop(layer.name)
-        raise exc
+        raise
 
     for tag in out.dim_tags:
         # noinspection PyProtectedMember
