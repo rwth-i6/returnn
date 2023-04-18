@@ -29,6 +29,7 @@ from .dropout import *
 from .dtype import *
 from .gradient import *
 from .linear import *
+from .loop import *
 from .loss import *
 from .math_ import *
 from .matmul import *

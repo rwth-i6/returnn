@@ -1,5 +1,10 @@
 """
-Conditional execution
+Conditional execution.
+
+Why did we choose this API?
+To allow for both eager-based and graph-based frameworks,
+and also to avoid any magic happening here.
+https://github.com/rwth-i6/returnn/issues/1282
 """
 
 from __future__ import annotations
