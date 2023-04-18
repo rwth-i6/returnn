@@ -230,9 +230,7 @@ class TorchBackend(Backend[torch.Tensor]):
             dim=src_axis_int,
         )
         out_tuple = tuple(
-            source.copy_template_replace_dim_tag(
-                axis=src_axis_int, new_dim_tag=dim, name=f"{source.name}/split:{i}:{dim.description}"
-            )
+            source.copy_template_replace_dim_tag(axis=src_axis_int, new_dim_tag=dim, name=f"split{i}")
             for i, dim in enumerate(out_dims)
         )
         for i, out in enumerate(out_tuple):
