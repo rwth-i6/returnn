@@ -5,6 +5,7 @@ RETURNN frontend (returnn.frontend) utils
 from __future__ import annotations
 import contextlib
 import numpy
+import numpy.testing
 from tensorflow.python.util import nest
 
 from returnn.config import Config, global_config_ctx
@@ -68,7 +69,7 @@ def run_model(extern_data: TensorDict, get_model: rf.GetModelFunc, forward_step:
     assert set(out_pt_raw.keys()) == set(out_tf_raw.keys())
     for k, v_pt in out_pt_raw.items():
         v_tf = out_tf_raw[k]
-        assert numpy.allclose(v_pt, v_tf, atol=1e-5, rtol=1e-5)
+        numpy.testing.assert_allclose(v_pt, v_tf, atol=1e-5, rtol=1e-5, err_msg=f"output {k!r} differs")
     return out_pt
 
 
