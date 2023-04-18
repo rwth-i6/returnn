@@ -1191,8 +1191,22 @@ class TorchBackend(Backend[torch.Tensor]):
         state_h_raw = torch.reshape(state_h_raw, [1, batch_dim, out_dim.get_dim_value()])
         state_c_raw = torch.reshape(state_c_raw, [1, batch_dim, out_dim.get_dim_value()])
 
+        sizes = spatial_dim.get_size_tensor()
+        sizes = sizes.copy_compatible_to(
+            Tensor("batch_dims", batch_dims, dtype=sizes.dtype), unbroadcast=True, check_sparse=False
+        )
+        sizes_raw = torch.reshape(sizes.raw_tensor, [batch_dim])
+
+        # See the code of torch.nn.LSTM for sorting the batch dims.
+        # We need pack_padded_sequence because otherwise the LSTM would ignore the padding,
+        # and we would get incorrect final states.
+        source_packed = torch.nn.utils.rnn.pack_padded_sequence(source_raw, sizes_raw, enforce_sorted=False)
+        state_h_raw = state_h_raw.index_select(dim=1, index=source_packed.sorted_indices)
+        state_c_raw = state_c_raw.index_select(dim=1, index=source_packed.sorted_indices)
+
         out_raw, new_state_h_raw, new_state_c_raw = torch.lstm(
-            source_raw,
+            source_packed.data,
+            source_packed.batch_sizes,
             (state_h_raw, state_c_raw),
             lstm_params,
             has_biases=has_biases,
@@ -1200,8 +1214,19 @@ class TorchBackend(Backend[torch.Tensor]):
             dropout=0.0,
             train=rf.get_run_ctx().train_flag,
             bidirectional=False,
-            batch_first=False,
         )
+
+        # Unsort the batch dims.
+        new_state_h_raw = new_state_h_raw.index_select(dim=1, index=source_packed.unsorted_indices)
+        new_state_c_raw = new_state_c_raw.index_select(dim=1, index=source_packed.unsorted_indices)
+        # Unpack the sequence.
+        output_packed = torch.nn.utils.rnn.PackedSequence(
+            out_raw,
+            batch_sizes=source_packed.batch_sizes,
+            sorted_indices=source_packed.sorted_indices,
+            unsorted_indices=source_packed.unsorted_indices,
+        )
+        out_raw = torch.nn.utils.rnn.pad_packed_sequence(output_packed)[0]
 
         if len(batch_dims) != 1:
             out_raw = torch.reshape(

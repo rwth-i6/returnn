@@ -1612,6 +1612,19 @@ class _DimMixin:
                 res.append(tag)
         return res
 
+    def get_size_tensor(self) -> _t.Tensor:
+        """
+        :return: size tensor, or dyn_size_ext if defined
+        :rtype: _t.Tensor
+        """
+        if self.dyn_size_ext:
+            return self.dyn_size_ext
+
+        import returnn.frontend as rf
+
+        assert self.size is not None
+        return rf.convert_to_tensor(self.size, name="%s:size" % self.description)
+
     def get_dim_value(self) -> Union[int, _t.RawTensorType]:
         """
         Infers the dim this axis should have if unbroadcasted.
