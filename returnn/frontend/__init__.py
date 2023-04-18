@@ -31,12 +31,12 @@ from .gradient import *
 from .linear import *
 from .loop import *
 from .loss import *
-from .lstm import *
 from .math_ import *
 from .matmul import *
 from .normalization import *
 from .parameter import *
 from .rand import *
+from .rec import *
 from .reduce import *
 from .run_ctx import *
 from .types import *
