@@ -53,6 +53,7 @@ __all__ = [
     "elu",
     "selu",
     "silu",
+    "swish",
     "softmax",
     "log_softmax",
 ]
