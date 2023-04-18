@@ -114,6 +114,11 @@ def _register_dim_via_dyn_layer(dim: Dim) -> bool:
     if dim.dyn_size_ext.raw_tensor is None:
         return False
     assert isinstance(dim.dyn_size_ext.raw_tensor, rfl.Layer)
+    dyn_size_ext: Tensor[rfl.Layer] = dim.dyn_size_ext
+    # Check if this was already registered before.
+    if dyn_size_ext.raw_tensor.layer_dict["class"] == "range_from_length":
+        assert dyn_size_ext.raw_tensor.layer_dict["out_spatial_dim"] == dim
+        raise Exception("why not in _dim_deps already?")
     # It means the user probably has created some dynamic dim directly.
     # This is valid.
     # But for the net dict backend, we must handle it differently.
@@ -123,12 +128,11 @@ def _register_dim_via_dyn_layer(dim: Dim) -> bool:
     layer_with_dim = rfl.make_layer(
         {
             "class": "range_from_length",
-            "from": dim.dyn_size_ext.copy(),
-            "dtype": dim.dyn_size_ext.dtype,
+            "from": dyn_size_ext.copy(),
+            "dtype": dyn_size_ext.dtype,
             "out_spatial_dim": dim,
         },
-        name=dim.dyn_size_ext.name,
+        name=dim.name or dyn_size_ext.name or "unnamed_dyn_dim",
     )
     _dim_deps[dim] = [layer_with_dim]
-    dim.dyn_size_ext.raw_tensor = None
     return True
