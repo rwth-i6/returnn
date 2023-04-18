@@ -1091,7 +1091,6 @@ class TorchBackend(Backend[torch.Tensor]):
                 dilation_rate=dilation_rate,
                 padding=padding,
             )
-        assert padding == "valid"  # not implemented otherwise
         batch_dims = [d for d in source.dims if d not in tuple(in_spatial_dims)]
         # Torch conv expects (N,C,<spatial dims>) as shape.
         # batch_dims would actually cover the channel-dim (C) as well,
@@ -1103,6 +1102,7 @@ class TorchBackend(Backend[torch.Tensor]):
             # Keep the last as the channel-dim, but not sure if this is really relevant.
             [-1, batch_dims[-1].get_dim_value() if batch_dims else 1] + [d.get_dim_value() for d in in_spatial_dims],
         )
+        ceil_mode = padding.lower() == "same"
         if len(in_spatial_dims) == 1:
             # There is also conv_tbc, but it's a bit limited (no dilation)
             # and also unclear when exactly it is faster.
@@ -1111,6 +1111,7 @@ class TorchBackend(Backend[torch.Tensor]):
                 kernel_size=pool_size,
                 stride=strides,
                 dilation=dilation_rate or 1,
+                ceil_mode=ceil_mode,
             )
         elif len(in_spatial_dims) == 2:
             out_raw = torch.nn.functional.max_pool2d(
@@ -1118,6 +1119,7 @@ class TorchBackend(Backend[torch.Tensor]):
                 kernel_size=pool_size,
                 stride=strides,
                 dilation=dilation_rate or 1,
+                ceil_mode=ceil_mode,
             )
         elif len(in_spatial_dims) == 3:
             out_raw = torch.nn.functional.max_pool3d(
@@ -1125,6 +1127,7 @@ class TorchBackend(Backend[torch.Tensor]):
                 kernel_size=pool_size,
                 stride=strides,
                 dilation=dilation_rate or 1,
+                ceil_mode=ceil_mode,
             )
         else:
             raise ValueError(f"invalid number of filter dims {in_spatial_dims}, expected 1, 2, or 3")
