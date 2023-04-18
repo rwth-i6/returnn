@@ -338,7 +338,9 @@ class RelPosSelfAttention(SelfAttentionBase):
         scores *= self.key_dim_per_head.dimension**-0.5
         att_weights = rf.softmax(scores, axis=hist_dim)
         att_weights = rf.dropout(att_weights, self.att_dropout, axis=hist_dim)
-        att = rf.matmul(att_weights, v, reduce=hist_dim)
+        # Masking not needed because softmax should already have masked,
+        # so we have 0.0 att weights for padded frames.
+        att = rf.matmul(att_weights, v, reduce=hist_dim, disable_masking=True)
         output, _ = rf.merge_dims(att, dims=(self.num_heads, self.value_dim_per_head), out_dim=self.value_dim_total)
         if self.proj:
             output = self.proj(output)

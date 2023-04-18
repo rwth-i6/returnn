@@ -90,3 +90,36 @@ def test_relative_positional_encoding():
         out.mark_as_default_output(shape=(dim, in_dim))
 
     run_model(extern_data, lambda *, epoch, step: _Net(), _forward_step)
+
+
+def test_rel_pos_self_attention():
+    time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
+    in_dim = Dim(8, name="in")
+    extern_data = TensorDict(
+        {
+            "data": Tensor("data", [batch_dim, time_dim, in_dim], dtype="float32"),
+        }
+    )
+
+    class _Net(rf.Module):
+        def __init__(self):
+            super().__init__()
+            self.self_att = rf.RelPosSelfAttention(
+                in_dim=in_dim,
+                proj_dim=Dim(5, name="out"),
+                key_dim_total=Dim(21, name="key-dim-total"),
+                value_dim_total=Dim(33, name="value-dim-total"),
+                num_heads=3,
+            )
+            self.out_dim = self.self_att.out_dim
+
+        def __call__(self, x: Tensor, *, axis: Dim) -> Tensor:
+            """forward"""
+            return self.self_att(x, axis=axis)
+
+    # noinspection PyShadowingNames
+    def _forward_step(*, model: _Net, extern_data: TensorDict):
+        out = model(extern_data["data"], axis=time_dim)
+        out.mark_as_default_output(shape=(batch_dim, time_dim, model.out_dim))
+
+    run_model(extern_data, lambda *, epoch, step: _Net(), _forward_step)
