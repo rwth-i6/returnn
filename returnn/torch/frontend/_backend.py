@@ -1101,7 +1101,7 @@ class TorchBackend(Backend[torch.Tensor]):
             source.raw_tensor,
             # Potentially merge batch dims all together.
             # Keep the last as the channel-dim, but not sure if this is really relevant.
-            [-1, batch_dims[-1] if batch_dims else 1] + [d.get_dim_value() for d in in_spatial_dims],
+            [-1, batch_dims[-1].get_dim_value() if batch_dims else 1] + [d.get_dim_value() for d in in_spatial_dims],
         )
         if len(in_spatial_dims) == 1:
             # There is also conv_tbc, but it's a bit limited (no dilation)
