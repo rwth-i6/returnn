@@ -160,7 +160,7 @@ class TorchBackend(Backend[torch.Tensor]):
             return source, dims[0]
         first_axis = min(source.dims.index(d) for d in dims)
         pre_dims = source.dims[:first_axis]
-        post_dims = [d for d in source.dims if d not in dims]
+        post_dims = [d for d in source.dims if d not in dims and d not in pre_dims]
         if out_dim is None:
             out_dim = dims[0]
             for d in dims[1:]:
