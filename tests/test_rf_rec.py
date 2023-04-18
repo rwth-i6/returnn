@@ -24,6 +24,8 @@ def test_lstm():
         def __init__(self):
             super().__init__()
             self.lstm = rf.LSTM(in_dim, out_dim)
+            # better for the test to also have some random values in the bias, not zeros
+            self.lstm.bias.initial = rf.init.Glorot()
 
         def __call__(self, x: Tensor, *, spatial_dim: Dim, state: rf.LstmState) -> Tuple[Tensor, rf.LstmState]:
             return self.lstm(x, state=state, spatial_dim=spatial_dim)
