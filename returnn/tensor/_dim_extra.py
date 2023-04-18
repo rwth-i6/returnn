@@ -710,7 +710,7 @@ class _DimMixin:
             mode="max",
             # Masking here is not always possible, e.g. if we have
             # tag = Dim{'self-att-keys'['time:var:extern_data:classes'[B]]}
-            use_time_mask=False,
+            use_mask=False,
         )
         # We use the assumption that self.placeholder.shape[axis] == max_idx.
         # size_ext might have invalid (zero) sizes
@@ -1646,7 +1646,7 @@ class _DimMixin:
                     axis=self.dyn_size_ext.dim_tags,
                     # Masking is not always possible here, e.g.
                     # self = Dim{'self-att-keys'['time:var:extern_data:classes'[B]]}.
-                    use_time_mask=False,
+                    use_mask=False,
                 )
             return self.dyn_size_ext
         if self.is_batch_dim():

@@ -532,14 +532,12 @@ class ReturnnLayersBackend(Backend[Layer]):
         )
 
     @staticmethod
-    def reduce(
-        source: Tensor, *, mode: str, axis: Union[Dim, Sequence[Dim]], use_time_mask: bool = NotSpecified
-    ) -> Tensor:
+    def reduce(source: Tensor, *, mode: str, axis: Union[Dim, Sequence[Dim]], use_mask: bool = True) -> Tensor:
         """Reduce"""
         assert mode in Backend._AllowedReduceModes
         kwargs = {}
-        if use_time_mask is not NotSpecified:
-            kwargs["use_time_mask"] = use_time_mask
+        if not use_mask:
+            kwargs["use_time_mask"] = False
         return rfl.make_layer(
             {"class": "reduce", "from": source, "mode": mode, "axis": axis, **kwargs}, name=f"reduce_{mode}"
         )

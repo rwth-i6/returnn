@@ -7,7 +7,6 @@ It just has the bare minimum such that the user can assign Numpy arrays to Tenso
 from __future__ import annotations
 from typing import Union, Sequence, Tuple
 import numpy
-from returnn.util.basic import NotSpecified
 from returnn.tensor import Tensor, Dim
 from ._backend import Backend
 
@@ -76,14 +75,15 @@ class NumpyBackend(Backend[numpy.ndarray]):
         *,
         mode: str,
         axis: Union[Dim, Sequence[Dim]],
-        use_time_mask: bool = NotSpecified,
+        use_mask: bool = True,
     ) -> Tensor[numpy.ndarray]:
         """reduce"""
         assert mode in Backend._AllowedReduceModes
-        if isinstance(axis, Dim):
-            assert not axis.need_masking()  # not implemented
-        else:
-            assert all(not dim.need_masking() for dim in axis)  # not implemented
+        if use_mask:
+            if isinstance(axis, Dim):
+                assert not axis.need_masking()  # not implemented
+            else:
+                assert all(not dim.need_masking() for dim in axis)  # not implemented
         func = getattr(numpy, mode)
         raw_dims = (
             [source.get_axis_from_description(axis)]

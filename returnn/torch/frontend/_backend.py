@@ -9,7 +9,7 @@ import torch
 import numpy
 
 from returnn.tensor import Tensor, Dim
-from returnn.util.basic import prod, NotSpecified, get_global_inf_value
+from returnn.util.basic import prod, get_global_inf_value
 
 # noinspection PyProtectedMember
 from returnn.frontend._backend import Backend
@@ -723,14 +723,14 @@ class TorchBackend(Backend[torch.Tensor]):
         *,
         mode: str,
         axis: Union[Dim, Sequence[Dim]],
-        use_time_mask: bool = NotSpecified,
+        use_mask: bool = True,
     ) -> Tensor[torch.Tensor]:
         """reduce"""
         assert mode in Backend._AllowedReduceModes
         if isinstance(axis, Dim):
             axis = [axis]
         assert all(isinstance(dim, Dim) for dim in axis)
-        if use_time_mask is not False and any(dim.need_masking() for dim in axis):
+        if use_mask and any(dim.need_masking() for dim in axis):
             source = source.copy()
             dtype = source.raw_tensor.dtype
             if mode == "max":

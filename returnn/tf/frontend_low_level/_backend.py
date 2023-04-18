@@ -401,13 +401,13 @@ class TFBackend(Backend[tf.Tensor]):
         return out
 
     @staticmethod
-    def reduce(source: _TT, *, mode: str, axis: Union[Dim, Sequence[Dim]], use_time_mask: bool = NotSpecified) -> _TT:
+    def reduce(source: _TT, *, mode: str, axis: Union[Dim, Sequence[Dim]], use_mask: bool = True) -> _TT:
         """Reduce"""
         assert mode in Backend._AllowedReduceModes
         x = source
         axes = x.get_axes_from_description(axis)
-        if use_time_mask in (None, NotSpecified):
-            use_time_mask = any(x.has_dynamic_size(a) for a in axes)
+        if use_mask in (None, NotSpecified):
+            use_mask = any(x.has_dynamic_size(a) for a in axes)
         out_data = x.copy_template()
         dim_tags = [dim_tag for i, dim_tag in enumerate(x.dim_tags) if i not in axes]
         out_data = out_data.copy_template_new_dim_tags(dim_tags)
@@ -416,7 +416,7 @@ class TFBackend(Backend[tf.Tensor]):
             assert len(axes) == 1
             out_data.sparse_dim = x.dim_tags[axes[0]]
             out_data.dtype = "int32"
-        assert isinstance(use_time_mask, bool)
+        assert isinstance(use_mask, bool)
         mode = mode.lower()
         reduce_abs_funcs = {
             name: getattr(tf, "reduce_%s" % name) for name in ["max", "min", "sum", "logsumexp", "any", "all"]
@@ -429,7 +429,7 @@ class TFBackend(Backend[tf.Tensor]):
         x_ = x.placeholder
         # Check if we should ignore some frames, e.g. via masking.
         correction_factor = None
-        if use_time_mask and any(x.has_dynamic_size(a) for a in axes):
+        if use_mask and any(x.has_dynamic_size(a) for a in axes):
             if x.batch_dim_axis in axes and x.time_dim_axis in axes and len(axes) == 2:
                 assert mode not in arg_funcs, "unexpected arg reduce for multiple axes"
                 # Flattening.

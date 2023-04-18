@@ -7,7 +7,6 @@ from typing import TYPE_CHECKING, Optional, Any, Union, TypeVar, Generic, Type, 
 import contextlib
 import numpy
 
-from returnn.util.basic import NotSpecified
 import returnn.frontend as rf
 
 if TYPE_CHECKING:
@@ -770,7 +769,7 @@ class Backend(Generic[T]):
         *,
         mode: str,
         axis: Union[Dim, Sequence[Dim]],
-        use_time_mask: bool = NotSpecified,
+        use_mask: bool = True,
     ) -> Tensor[T]:
         """
         Reduce the tensor along the given axis
@@ -778,7 +777,7 @@ class Backend(Generic[T]):
         :param source:
         :param mode: "sum", "max", "min", "mean", "logsumexp", "any", "all", "argmin", "argmax"
         :param axis:
-        :param use_time_mask: if True (default), use the time mask (part of dim tag) to ignore padding frames
+        :param use_mask: if True (default), use the time mask (part of dim tag) to ignore padding frames
         :return: tensor with axis removed
         """
         raise NotImplementedError
