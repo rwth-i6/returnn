@@ -107,6 +107,8 @@ class RecLayer(_ConcatInputLayer):
         include_eos=False,
         debug=None,
         axis=None,
+        in_dim=None,
+        out_dim=None,
         **kwargs,
     ):
         """
@@ -132,8 +134,10 @@ class RecLayer(_ConcatInputLayer):
         :param bool|None debug:
         :param Dim|str axis: specify the axis to iterate over.
           It can also be the special marker ``single_step_dim``, or an outer recurrent time dim.
+        :param Dim|None in_dim:
+        :param Dim|None out_dim:
         """
-        super(RecLayer, self).__init__(**kwargs)
+        super(RecLayer, self).__init__(in_dim=in_dim, out_dim=out_dim, **kwargs)
         import re
         from returnn.tf.util.basic import is_gpu_available_in_session
 
@@ -179,6 +183,7 @@ class RecLayer(_ConcatInputLayer):
             axis = None  # this indicates in the following that we do a single-step operation
         if axis and self.input_data and self.input_data.have_dim_tag(axis):
             axis_int = self.input_data.get_axis_from_description(axis)
+            self.input_data.version = 1
             self.input_data.time_dim_axis = axis_int  # makes some of the following code easier
             if self.input_data.time_dim_axis == self.input_data.feature_dim_axis:
                 self.input_data.feature_dim_axis = NotSpecified
@@ -267,6 +272,9 @@ class RecLayer(_ConcatInputLayer):
                         name=self.name,
                         rec_layer=self,
                         sources=self.sources,
+                        axis=axis,
+                        in_dim=in_dim,
+                        out_dim=out_dim,
                     )
                 self.cell = self._get_cell(unit, unit_opts=unit_opts)
                 base_types = (rnn_cell.RNNCell,)
@@ -405,6 +413,7 @@ class RecLayer(_ConcatInputLayer):
                 axis = over_rec_time_dim
         if source_data and source_data.have_dim_tag(axis):
             # Make sure it is marked as time dim. This will make it easier in the following.
+            source_data.version = 1
             source_data.time_dim_axis = source_data.get_axis_from_description(axis)
             if source_data.time_dim_axis == source_data.feature_dim_axis:
                 source_data.feature_dim_axis = NotSpecified
@@ -491,7 +500,7 @@ class RecLayer(_ConcatInputLayer):
 
     @classmethod
     def get_out_data_from_opts(
-        cls, name, network, sources, unit, axis=None, out_dim=None, initial_state=None, **kwargs
+        cls, name, network, sources, unit, axis=None, in_dim=None, out_dim=None, initial_state=None, **kwargs
     ):
         """
         :param str name:
@@ -499,19 +508,21 @@ class RecLayer(_ConcatInputLayer):
         :param list[LayerBase] sources:
         :param str|dict[str] unit:
         :param Dim axis:
+        :param Dim|None in_dim:
         :param Dim|None out_dim:
         :param str|LayerBase|list[str|LayerBase] initial_state:
         :rtype: Data
         """
         from tensorflow.python.util import nest
 
-        source_data = get_concat_sources_data_template(sources) if sources else None
+        source_data = get_concat_sources_data_template(sources, out_dim=in_dim) if sources else None
         # Note: We preprocessed axis in transform_config_dict, so it can only be a Dim instance here.
         from returnn.tf.util.data import single_step_dim
 
         assert isinstance(axis, Dim)
         if source_data and source_data.have_dim_tag(axis):
             # This will make it easier in the following.
+            source_data.version = 1
             source_data.time_dim_axis = source_data.get_axis_from_description(axis)
             if source_data.time_dim_axis == source_data.feature_dim_axis:
                 source_data.feature_dim_axis = NotSpecified
@@ -5300,6 +5311,7 @@ class RnnCellLayer(_ConcatInputLayer):
         unit,
         sources,
         n_out=None,
+        in_dim=None,
         out_dim=None,
         initial_state=None,
         unit_opts=None,
@@ -5321,6 +5333,7 @@ class RnnCellLayer(_ConcatInputLayer):
         :param tf.Tensor batch_dim: including beam size in beam search
         :param str name: layer name
         :param int|None n_out: out dim
+        :param Dim|None in_dim:
         :param Dim|None out_dim: out dim
         :param str unit: cell name
         :param list[LayerBase] sources:
@@ -5337,7 +5350,7 @@ class RnnCellLayer(_ConcatInputLayer):
             n_out = out_dim.dimension
         batch_dims = (batch_dim,)
         if sources:
-            src = get_concat_sources_data_template(sources)
+            src = get_concat_sources_data_template(sources, out_dim=in_dim)
             if axis is None and src.have_time_axis():
                 axis = src.get_time_dim_tag()
             src_dims = list(src.dim_tags)
