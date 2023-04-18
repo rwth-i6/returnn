@@ -500,11 +500,11 @@ class ReturnnLayersBackend(Backend[Layer]):
         )
 
     @staticmethod
-    def matmul(a: Tensor, b: Tensor, *, reduce: Union[Dim, Sequence[Dim]], disable_masking: bool = False) -> Tensor:
+    def matmul(a: Tensor, b: Tensor, *, reduce: Union[Dim, Sequence[Dim]], use_mask: bool = True) -> Tensor:
         """matmul"""
         args = {}
-        if disable_masking:
-            args["disable_masking"] = True
+        if not use_mask:
+            args["use_mask"] = False
         return rfl.make_layer({"class": "dot", "from": [a, b], "reduce": reduce, **args}, name="matmul")
 
     @staticmethod

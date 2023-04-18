@@ -606,14 +606,14 @@ class TorchBackend(Backend[torch.Tensor]):
         return out
 
     @staticmethod
-    def matmul(a: _TT, b: _TT, *, reduce: Union[Dim, Sequence[Dim]], disable_masking: bool = False) -> _TT:
+    def matmul(a: _TT, b: _TT, *, reduce: Union[Dim, Sequence[Dim]], use_mask: bool = True) -> _TT:
         """
         batched matmul of a and b, see base class doc string
         """
         if isinstance(reduce, Dim):
             reduce = [reduce]
 
-        if not disable_masking and any(dim.dyn_size_ext for dim in reduce):
+        if use_mask and any(dim.dyn_size_ext for dim in reduce):
             raise NotImplementedError("masking in matmul reduce not yet implemented")
         assert a.dtype == b.dtype, f"matmul: dtypes do not match: {a} vs {b}"
 

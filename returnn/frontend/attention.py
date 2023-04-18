@@ -64,7 +64,7 @@ def dot_attention(
     att_weights = rf.dropout(att_weights, att_dropout, axis=axis)
     # Masking not needed because softmax should already have masked,
     # so we have 0.0 att weights for padded frames.
-    att = rf.matmul(att_weights, values, reduce=axis, disable_masking=True)
+    att = rf.matmul(att_weights, values, reduce=axis, use_mask=False)
     if values.feature_dim in att.dims:
         att.feature_dim = values.feature_dim
     return att
@@ -340,7 +340,7 @@ class RelPosSelfAttention(SelfAttentionBase):
         att_weights = rf.dropout(att_weights, self.att_dropout, axis=hist_dim)
         # Masking not needed because softmax should already have masked,
         # so we have 0.0 att weights for padded frames.
-        att = rf.matmul(att_weights, v, reduce=hist_dim, disable_masking=True)
+        att = rf.matmul(att_weights, v, reduce=hist_dim, use_mask=False)
         output, _ = rf.merge_dims(att, dims=(self.num_heads, self.value_dim_per_head), out_dim=self.value_dim_total)
         if self.proj:
             output = self.proj(output)
