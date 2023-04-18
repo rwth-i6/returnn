@@ -4,13 +4,11 @@ Provides the :class:`LSTM` module.
 
 from __future__ import annotations
 
-from typing import Tuple, TypeVar
+from typing import Tuple
 
 import returnn.frontend as rf
 from returnn.tensor import Tensor, Dim
 
-
-T = TypeVar("T")
 
 __all__ = ["LSTM", "LstmState"]
 
@@ -35,17 +33,17 @@ class LSTM(rf.Module):
         self.in_dim = in_dim
         self.out_dim = out_dim
 
-        self.ff_weight = rf.Parameter((4 * self.out_dim, self.in_dim))  # type: Tensor[T]
+        self.ff_weight = rf.Parameter((4 * self.out_dim, self.in_dim))
         self.ff_weight.initial = rf.init.Glorot()
-        self.rec_weight = rf.Parameter((4 * self.out_dim, self.out_dim))  # type: Tensor[T]
+        self.rec_weight = rf.Parameter((4 * self.out_dim, self.out_dim))
         self.rec_weight.initial = rf.init.Glorot()
 
         self.bias = None
         if with_bias:
-            self.bias = rf.Parameter((4 * self.out_dim,))  # type: Tensor[T]
+            self.bias = rf.Parameter((4 * self.out_dim,))
             self.bias.initial = 0.0
 
-    def __call__(self, source: Tensor[T], *, state: LstmState, spatial_dim: Dim) -> Tuple[Tensor, LstmState]:
+    def __call__(self, source: Tensor, *, state: LstmState, spatial_dim: Dim) -> Tuple[Tensor, LstmState]:
         """
         Forward call of the LSTM.
 
