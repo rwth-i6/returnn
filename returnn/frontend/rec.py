@@ -35,18 +35,15 @@ class LSTM(rf.Module):
         self.in_dim = in_dim
         self.out_dim = out_dim
 
-        self.ff_weights = rf.Parameter((4 * self.out_dim, self.in_dim))  # type: Tensor[T]
-        self.ff_weights.initial = rf.init.Glorot()
-        self.recurrent_weights = rf.Parameter((4 * self.out_dim, self.out_dim))  # type: Tensor[T]
-        self.recurrent_weights.initial = rf.init.Glorot()
+        self.ff_weight = rf.Parameter((4 * self.out_dim, self.in_dim))  # type: Tensor[T]
+        self.ff_weight.initial = rf.init.Glorot()
+        self.rec_weight = rf.Parameter((4 * self.out_dim, self.out_dim))  # type: Tensor[T]
+        self.rec_weight.initial = rf.init.Glorot()
 
-        self.ff_biases = None
-        self.recurrent_biases = None
+        self.bias = None
         if with_bias:
-            self.ff_biases = rf.Parameter((4 * self.out_dim,))  # type: Tensor[T]
-            self.ff_biases.initial = 0.0
-            self.recurrent_biases = rf.Parameter((4 * self.out_dim,))  # type: Tensor[T]
-            self.recurrent_biases.initial = 0.0
+            self.bias = rf.Parameter((4 * self.out_dim,))  # type: Tensor[T]
+            self.bias.initial = 0.0
 
     def __call__(self, source: Tensor[T], *, state: LstmState, spatial_dim: Dim) -> Tuple[Tensor, LstmState]:
         """
@@ -67,10 +64,9 @@ class LSTM(rf.Module):
             source=source,
             state_c=state.c,
             state_h=state.h,
-            ff_weights=self.ff_weights,
-            ff_biases=self.ff_biases,
-            rec_weights=self.recurrent_weights,
-            rec_biases=self.recurrent_biases,
+            ff_weight=self.ff_weight,
+            rec_weight=self.rec_weight,
+            bias=self.bias,
             spatial_dim=spatial_dim,
             in_dim=self.in_dim,
             out_dim=self.out_dim,

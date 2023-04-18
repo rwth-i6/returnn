@@ -912,10 +912,9 @@ class Backend(Generic[T]):
         *,
         state_c: Tensor,
         state_h: Tensor,
-        ff_weights: Tensor,
-        ff_biases: Tensor,
-        rec_weights: Tensor,
-        rec_biases: Tensor,
+        ff_weight: Tensor,
+        rec_weight: Tensor,
+        bias: Tensor,
         spatial_dim: Dim,
         in_dim: Dim,
         out_dim: Dim,
@@ -926,10 +925,9 @@ class Backend(Generic[T]):
         :param source: Tensor of shape [*, in_dim].
         :param state_c:
         :param state_h:
-        :param ff_weights: Parameters for the weights of the feed-forward part.
-        :param ff_biases: Parameters for the biases of the feed-forward part.
-        :param rec_weights: Parameters for the weights of the recurrent part.
-        :param rec_biases: Parameters for the biases of the recurrent part.
+        :param ff_weight: Parameters for the weights of the feed-forward part.
+        :param rec_weight: Parameters for the weights of the recurrent part.
+        :param bias: Parameters for the bias.
         :param spatial_dim: Dimension in which the LSTM operates.
         :param in_dim:
         :param out_dim:

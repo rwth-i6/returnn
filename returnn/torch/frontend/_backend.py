@@ -1145,10 +1145,9 @@ class TorchBackend(Backend[torch.Tensor]):
         *,
         state_h: _TT,
         state_c: _TT,
-        ff_weights: _TT,
-        ff_biases: Optional[_TT],
-        rec_weights: _TT,
-        rec_biases: Optional[_TT],
+        ff_weight: _TT,
+        rec_weight: _TT,
+        bias: Optional[_TT],
         spatial_dim: Dim,
         in_dim: Dim,
         out_dim: Dim,
@@ -1159,16 +1158,18 @@ class TorchBackend(Backend[torch.Tensor]):
         :return: Tuple consisting of two elements: the result as a :class:`Tensor`
             and the new state as a :class:`State` (different from the previous one).
         """
-        if ff_biases is None and rec_biases is None:
-            lstm_params = (ff_weights.raw_tensor, rec_weights.raw_tensor)
+        if bias is None:
+            lstm_params = (ff_weight.raw_tensor, rec_weight.raw_tensor)
             has_biases = False
         else:
-            assert (
-                ff_biases is not None and rec_biases is not None
-            ), "A bias in the LSTM (feed-forward or recurrent) is set while the other is unset."
             # Feed-forward has priority over recurrent, and weights have priority over biases. See the torch docstring
             # or torch LSTMCell: https://github.com/pytorch/pytorch/blob/4bead64/aten/src/ATen/native/RNN.cpp#L1458
-            lstm_params = (ff_weights.raw_tensor, rec_weights.raw_tensor, ff_biases.raw_tensor, rec_biases.raw_tensor)
+            lstm_params = (
+                ff_weight.raw_tensor,
+                rec_weight.raw_tensor,
+                bias.raw_tensor * 0.5,
+                bias.raw_tensor * 0.5,
+            )
             has_biases = True
 
         batch_dims = [d for d in source.dims if d != spatial_dim and d != in_dim]
