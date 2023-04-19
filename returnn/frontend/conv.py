@@ -57,7 +57,7 @@ class _ConvOrTransposedConv(rf.Module):
         """
         super().__init__()
         assert isinstance(in_dim, Dim) and isinstance(out_dim, Dim)
-        self.in_dim = in_dim
+        self.in_dim = rf.dim_match_priority_when_needed(in_dim, out_dim)
         self.out_dim = out_dim
         if isinstance(filter_size, (int, Dim)):
             if self.nd in (None, 1):

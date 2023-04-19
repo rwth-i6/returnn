@@ -659,20 +659,51 @@ class _TensorMixin(_TensorMixinBase):
         """
         if self.raw_tensor is not None:
             return self._raw_backend.transpose(self, perm, allow_int=allow_int)
-        return self.copy_template_transpose(perm, allow_int=allow_int)
+        out, _ = self.copy_template_transpose(perm, allow_int=allow_int)
+        return out
 
-    def copy_template_transpose(self: Tensor, perm: Sequence[Union[int, Dim]], *, allow_int: bool = True) -> _t.Tensor:
+    def copy_template_transpose(
+        self: Tensor, perm: Sequence[Union[int, Dim]], *, allow_int: bool = True
+    ) -> Tuple[_t.Tensor, List[int]]:
         """
         :param perm: permutation of the axes. Maps the new axes to the old axes
         :param allow_int: allow int as axis, otherwise only :class:`Dim`
-        :return: copy of myself with permuted axes
+        :return: copy of myself with permuted axes, raw permutation (list of original axes)
         """
         assert len(perm) == self.batch_ndim, f"{self}: invalid perm {perm!r} length"
         perm_ = perm
-        perm = [self.get_axis_from_description(a, allow_int=allow_int) for a in perm]
+        if len(set(self.dims)) == len(self.dims) or all(isinstance(a, int) for a in perm):  # all dims are unique?
+            perm = [self.get_axis_from_description(a, allow_int=allow_int) for a in perm]
+        else:
+            # We can have cases where dim tags are not unique.
+            # Using the normal get_axis_from_description logic with match_priority
+            # does not really work for this case.
+            perm = []
+            for a in perm_:
+                if isinstance(a, int):
+                    if not allow_int:
+                        raise ValueError(f"{self} transpose {perm}, axis {a} not allowed with allow_int=False")
+                    if a < 0:
+                        a += self.batch_ndim
+                    assert 0 <= a < self.batch_ndim, f"{self} transpose {perm}, axis {a} out of range"
+                elif isinstance(a, Dim):
+                    matching_dims = [(i, d) for i, d in enumerate(self.dims) if d == a]
+                    if len(matching_dims) == 0:
+                        raise ValueError(f"{self} transpose {perm}, axis {a} not found")
+                    elif len(matching_dims) == 1:
+                        ((a, d),) = matching_dims
+                    else:  # multiple matches
+                        matching_dims_ = [(i, d) for i, d in matching_dims if d.match_priority == a.match_priority]
+                        if len(matching_dims_) == 1:
+                            ((a, d),) = matching_dims_
+                        else:
+                            raise ValueError(f"{self} transpose {perm}, axis {a} multiple matches")
+                else:
+                    raise TypeError(f"{self} transpose {perm}, axis {a} invalid type {type(a)}")
+                perm.append(a)
         assert set(perm) == set(range(self.batch_ndim)), f"{self}: invalid perm {perm_!r} (axes: {perm!r})"
         if all(perm[axis] == axis for axis in range(self.batch_ndim)):
-            return self.copy()
+            return self.copy(), perm
 
         data_opts = self.get_kwargs(include_special_axes=False)
         if self._raw_tensor is not None:
@@ -685,7 +716,7 @@ class _TensorMixin(_TensorMixinBase):
                 data.time_dim_axis = inv_perm.get(self.time_dim_axis, None)
         if inv_perm.get(self.feature_dim_axis, None) != data.feature_dim_axis:
             data.feature_dim_axis = inv_perm.get(self.feature_dim_axis, None)
-        return data
+        return data, perm
 
     def copy_move_axis(self, old_axis, new_axis) -> _t.Tensor:
         """

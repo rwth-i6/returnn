@@ -204,9 +204,8 @@ class Backend(Generic[T]):
         :return: transposed tensor
         """
         # Default implementation using transpose_raw.
-        out = tensor.copy_template_transpose(perm, allow_int=allow_int)
+        out, perm_ = tensor.copy_template_transpose(perm, allow_int=allow_int)
         backend = get_backend_by_tensor(tensor)
-        perm_ = [tensor.get_axis_from_description(a, allow_int=allow_int) for a in perm]
         out.raw_tensor = backend.transpose_raw(tensor.raw_tensor, perm_)
         return out
 
