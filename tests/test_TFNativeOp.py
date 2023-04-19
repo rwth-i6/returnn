@@ -533,8 +533,8 @@ def pure_tf_unrolled_lstm(
     :param int start:
     :param int step:
     :param str name:
-    :return: h, c, c_T
-    :rtype: (tf.Tensor, tf.Tensor, tf.Tensor)
+    :return: h, c, c_T, h_T
+    :rtype: (tf.Tensor, tf.Tensor, tf.Tensor, tf.Tensor)
     """
     assert n_time > 0
     assert 0 <= start < n_time
@@ -598,7 +598,7 @@ def pure_tf_unrolled_lstm(
     # TF 1.3.0 bug: https://github.com/tensorflow/tensorflow/issues/13355
     h = h[::1]
     c = c[::1]
-    return h, c, c_t
+    return h, c, c_t, h_t
 
 
 def test_strided_slice_grad_grad():
@@ -703,7 +703,7 @@ def wrap_lstm_slice_start_step(
     print(name, "start", start, "start_", start_, "step", step, "num_steps", num_steps)
     x_.set_shape(tf.TensorShape((num_steps, n_batch, n_in_dim)))
     mask_.set_shape(tf.TensorShape((num_steps, n_batch)))
-    h, c, d = op(
+    h, c, d, e = op(
         x=x_,
         h_0=h_0,
         c_0=c_0,
@@ -722,6 +722,7 @@ def wrap_lstm_slice_start_step(
     h.set_shape(tf.TensorShape((num_steps, n_batch, n_cells)))
     c.set_shape(tf.TensorShape((num_steps, n_batch, n_cells)))
     d.set_shape(tf.TensorShape((n_batch, n_cells)))
+    e.set_shape(tf.TensorShape((n_batch, n_cells)))
 
     def reverse_strided_slice(shape, out):
         # if start == 0 and step == 1:
@@ -742,7 +743,7 @@ def wrap_lstm_slice_start_step(
 
     h = reverse_strided_slice(shape=(n_time, n_batch, n_cells), out=h)
     c = reverse_strided_slice(shape=(n_time, n_batch, n_cells), out=c)
-    return h, c, d
+    return h, c, d, e
 
 
 def lstm_slice(name, **kwargs):
@@ -767,8 +768,8 @@ def native_lstm2(
     :param int start:
     :param int step:
     :param str name:
-    :return: h, c
-    :rtype: (tf.Tensor, tf.Tensor)
+    :return: h, c, c_T, h_T
+    :rtype: (tf.Tensor, tf.Tensor, tf.Tensor, tf.Tensor)
     """
     assert n_time > 0
     assert 0 <= start < n_time
@@ -798,7 +799,12 @@ def native_lstm2(
     y.set_shape(tf.TensorShape((n_time, n_batch, n_cells)))
     c.set_shape(tf.TensorShape((n_time, n_batch, n_cells)))
     d.set_shape(tf.TensorShape((n_batch, n_cells)))
-    return y, c, d
+
+    # noinspection PyProtectedMember
+    from returnn.tf.native_op import _lstm_last_output
+
+    final_output = _lstm_last_output(y, h_0, mask, start, step)
+    return y, c, d, final_output
 
 
 def native_lstm2_slice(name, **kwargs):
@@ -814,9 +820,9 @@ def check_lstm_ops(op1, op2, name1, name2, rtol=1e-6, **kwargs):
             start_ = start
         else:
             start_ = kwargs["n_time"] - start - 1
-        h1, c1, d1 = op1(start=start, step=step, name="%s_%i_%i" % (name1, start, step), **kwargs)
-        h2, c2, d2 = op2(start=start, step=step, name="%s_%i_%i" % (name2, start, step), **kwargs)
-        vh1, vh2, vc1, vc2, vd1, vd2, vmask = session.run((h1, h2, c1, c2, d1, d2, mask_bc))
+        h1, c1, d1, e1 = op1(start=start, step=step, name="%s_%i_%i" % (name1, start, step), **kwargs)
+        h2, c2, d2, e2 = op2(start=start, step=step, name="%s_%i_%i" % (name2, start, step), **kwargs)
+        vh1, vh2, vc1, vc2, vd1, vd2, ve1, ve2, vmask = session.run((h1, h2, c1, c2, d1, d2, e1, e2, mask_bc))
         print("vh1:")
         print(vh1)
         print("vh2:")
@@ -829,9 +835,16 @@ def check_lstm_ops(op1, op2, name1, name2, rtol=1e-6, **kwargs):
         print(vd1)
         print("vd2:")
         print(vd2)
+        print("ve1:")
+        print(ve1)
+        print("ve2:")
+        print(ve2)
+        print("vmask:")
+        print(vmask)
         assert_allclose(vh1[start_::step] * vmask[start_::step], vh2[start_::step] * vmask[start_::step], rtol=rtol)
         assert_allclose(vc1[start_::step] * vmask[start_::step], vc2[start_::step] * vmask[start_::step], rtol=rtol)
         assert_allclose(vd1, vd2, rtol=rtol)
+        assert_allclose(ve1, ve2, rtol=rtol)
 
 
 def check_lstm_op_start_step(op, name, **kwargs):
@@ -865,7 +878,7 @@ def lstm_kwargs():
     kwargs["c_0"] = gen((kwargs["n_batch"], kwargs["n_cells"]), offset=0.3)
     kwargs["W_f"] = numpy.ones((kwargs["n_in_dim"], kwargs["n_cells"] * 4), dtype="float32")
     kwargs["W_r"] = numpy.ones((kwargs["n_cells"], kwargs["n_cells"] * 4), dtype="float32")
-    kwargs["b"] = numpy.zeros((kwargs["n_cells"] * 4,), dtype="float32")
+    kwargs["b"] = -numpy.ones((kwargs["n_cells"] * 4,), dtype="float32")
     return kwargs
 
 

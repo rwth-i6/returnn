@@ -1003,16 +1003,14 @@ def _lstm_last_output(out, y0, mask, start: int, step: Optional[int]):
     if step < 0:
         start = n_time - start - 1
     mask = tf.cast(mask, tf.int32)  # [T,B]
-    seq_lens = tf.reduce_sum(mask, axis=0)  # [B]
     mask_indices = tf.range(n_time)[:, None]  # [T,1]
     mask_indices = tf_util.where_bc(tf.cast(mask, tf.bool), mask_indices, -1 if step > 0 else n_time)  # [T,B]
     mask_indices = mask_indices[start::step]  # [T',B]
-    mask_indices = tf.compat.v1.Print(mask_indices, [mask_indices], "mask_indices", summarize=1000)
     last_indices = (tf.reduce_max if step > 0 else tf.reduce_min)(mask_indices, axis=0)  # [B]
     last_indices_ = tf.clip_by_value(last_indices, clip_value_min=0, clip_value_max=n_time - 1)  # [B]
     idx_ext = tf_util.nd_indices(last_indices_, indices_batch_major=False)  # [B,2] -> (time,batch) indices
     final_output = tf.gather_nd(out, indices=idx_ext)  # [B,n_hidden]
-    valid = tf.logical_and(tf.greater_equal(last_indices, 0), tf.less(last_indices, seq_lens))  # [B]
+    valid = tf.logical_and(tf.greater_equal(last_indices, 0), tf.less(last_indices, n_time))  # [B]
     final_output = tf_util.where_bc(valid[:, None], final_output, y0)
     return final_output
 
