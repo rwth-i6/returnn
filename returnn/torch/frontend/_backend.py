@@ -1158,12 +1158,15 @@ class TorchBackend(Backend[torch.Tensor]):
         :return: Tuple consisting of two elements: the result as a :class:`Tensor`
             and the new state as a :class:`State` (different from the previous one).
         """
+        # The order in the parameters for lstm_params is specified as follows:
+        # Feed-forward has priority over recurrent, and weights have priority over biases: (w_ih, w_hh, b_ih, b_hh).
+        # See https://github.com/pytorch/pytorch/blob/c263bd43/torch/nn/modules/rnn.py#L107.
+        # Alternatively see the implementation of LSTMCell:
+        # https://github.com/pytorch/pytorch/blob/4bead64/aten/src/ATen/native/RNN.cpp#L1458.
         if bias is None:
             lstm_params = (ff_weight.raw_tensor, rec_weight.raw_tensor)
             has_biases = False
         else:
-            # Feed-forward has priority over recurrent, and weights have priority over biases. See the torch docstring
-            # or torch LSTMCell: https://github.com/pytorch/pytorch/blob/4bead64/aten/src/ATen/native/RNN.cpp#L1458
             # Note that the mathematical definition of the model does not require two bias terms.
             # PyTorch just follows what CuDNN does here.
             # I don't really understand why CuDNN have two bias terms:
