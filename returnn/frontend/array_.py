@@ -25,7 +25,7 @@ __all__ = [
     "pad",
     "cum_concat_step",
     "masked_select",
-    "pack",
+    "pack_padded",
     "gather",
     "slice",
 ]
@@ -312,7 +312,7 @@ def masked_select(
     return tensor._raw_backend.masked_select(tensor, mask=mask, dims=dims, out_dim=out_dim)
 
 
-def pack(
+def pack_padded(
     source: Tensor, *, dims: Sequence[Dim], enforce_sorted: bool = True, out_dim: Optional[Dim] = None
 ) -> Tuple[Tensor, Dim]:
     """

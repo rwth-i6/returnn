@@ -10,7 +10,7 @@ from returnn.tensor import Tensor, Dim, TensorDict, batch_dim
 from rf_utils import run_model
 
 
-def test_pack():
+def test_pack_padded():
     time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
     in_dim = Dim(7, name="in")
     extern_data = TensorDict(
@@ -21,7 +21,7 @@ def test_pack():
 
     class _Net(rf.Module):
         def __call__(self, x: Tensor) -> Tuple[Tensor, Dim]:
-            pack, pack_dim = rf.pack(x, dims=[batch_dim, time_dim], enforce_sorted=False)
+            pack, pack_dim = rf.pack_padded(x, dims=[batch_dim, time_dim], enforce_sorted=False)
             return pack, pack_dim
 
     # noinspection PyShadowingNames
