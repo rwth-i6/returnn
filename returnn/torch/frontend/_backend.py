@@ -1164,11 +1164,20 @@ class TorchBackend(Backend[torch.Tensor]):
         else:
             # Feed-forward has priority over recurrent, and weights have priority over biases. See the torch docstring
             # or torch LSTMCell: https://github.com/pytorch/pytorch/blob/4bead64/aten/src/ATen/native/RNN.cpp#L1458
+            # Note that the mathematical definition of the model does not require two bias terms.
+            # PyTorch just follows what CuDNN does here.
+            # I don't really understand why CuDNN have two bias terms:
+            # https://stackoverflow.com/questions/76051800/why-does-the-cudnn-lstm-requires-two-biases-b-ih-and-b-hh
+            # It looks like an oversight by the CuDNN devs.
+            # I'm not sure if the two bias terms get the same gradient or not.
+            # If they do not, that would be mathematical incorrect, but maybe that's how CuDNN works.
+            # To really get both gradients, we don't just set one bias to zero, but we use 0.5 * bias for both.
+            bias_raw = bias.raw_tensor * 0.5
             lstm_params = (
                 ff_weight.raw_tensor,
                 rec_weight.raw_tensor,
-                bias.raw_tensor * 0.5,
-                bias.raw_tensor * 0.5,
+                bias_raw,
+                bias_raw,
             )
             has_biases = True
 
