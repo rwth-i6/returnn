@@ -5,6 +5,7 @@ Wrappers for most relevant NativeOp ops.
 
 from __future__ import annotations
 
+from typing import Optional
 import os
 import sys
 import tensorflow as tf
@@ -969,7 +970,7 @@ class NativeLstm2(RecSeqCellOp):
         index.set_shape(tf.TensorShape([None, None]))
         from returnn.tf.util.basic import to_float32
 
-        index = to_float32(index)
+        index_f32 = to_float32(index)
         n_batch = tf.shape(inputs)[1]
         if initial_state is None:
             c0 = tf.zeros((n_batch, self.n_hidden), dtype=tf.float32, name="initial_c")
@@ -987,12 +988,33 @@ class NativeLstm2(RecSeqCellOp):
             y0 = tf.zeros((n_batch, self.n_hidden), dtype=tf.float32, name="initial_h")
         start = tf.constant(0, name="start")
         step = tf.constant(self.step or 1, name="step")
-        out, _, _, final_cell_state = self.op(inputs, weights, y0, c0, index, start, step)  # noqa
+        out, _, _, final_cell_state = self.op(inputs, weights, y0, c0, index_f32, start, step)  # noqa
         if out.get_shape().as_list()[0] is None or out.get_shape().as_list()[0] > 0:
-            final_output = out[-1 if self.step is None or self.step > 0 else 0]
+            final_output = _lstm_last_output(out, y0, index, 0, self.step)
         else:
             final_output = y0
         return out, rnn_cell.LSTMStateTuple(h=final_output, c=final_cell_state)
+
+
+def _lstm_last_output(out, y0, mask, start: int, step: Optional[int]):
+    if step is None:
+        step = 1
+    n_time = tf.shape(out)[0]
+    if step < 0:
+        start = n_time - start - 1
+    mask = tf.cast(mask, tf.int32)  # [T,B]
+    seq_lens = tf.reduce_sum(mask, axis=0)  # [B]
+    mask_indices = tf.range(n_time)[:, None]  # [T,1]
+    mask_indices = tf_util.where_bc(tf.cast(mask, tf.bool), mask_indices, -1 if step > 0 else n_time)  # [T,B]
+    mask_indices = mask_indices[start::step]  # [T',B]
+    mask_indices = tf.compat.v1.Print(mask_indices, [mask_indices], "mask_indices", summarize=1000)
+    last_indices = (tf.reduce_max if step > 0 else tf.reduce_min)(mask_indices, axis=0)  # [B]
+    last_indices_ = tf.clip_by_value(last_indices, clip_value_min=0, clip_value_max=n_time - 1)  # [B]
+    idx_ext = tf_util.nd_indices(last_indices_, indices_batch_major=False)  # [B,2] -> (time,batch) indices
+    final_output = tf.gather_nd(out, indices=idx_ext)  # [B,n_hidden]
+    valid = tf.logical_and(tf.greater_equal(last_indices, 0), tf.less(last_indices, seq_lens))  # [B]
+    final_output = tf_util.where_bc(valid[:, None], final_output, y0)
+    return final_output
 
 
 class TwoDNativeLstmCell(RecSeqCellOp):
