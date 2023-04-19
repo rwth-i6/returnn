@@ -336,6 +336,7 @@ jobs:
           - TEST=rf_encoder_conformer
           - TEST=rf_math
           - TEST=rf_normalization
+          - TEST=rf_rec
 
     steps:
     - uses: actions/checkout@v3
