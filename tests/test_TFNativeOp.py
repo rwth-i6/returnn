@@ -946,7 +946,7 @@ def wrap_lstm_grad(op, x, h_0, c_0, dy, dd, mask, W_f, W_r, b, n_time, n_batch, 
     W_f.set_shape(tf.TensorShape((n_in_dim, n_cells * 4)))
     W_r.set_shape(tf.TensorShape((n_cells, n_cells * 4)))
     b.set_shape(tf.TensorShape((n_cells * 4,)))
-    y, _, d = op(
+    y, _, d, _ = op(
         x=x,
         h_0=h_0,
         c_0=c_0,
