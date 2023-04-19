@@ -22,6 +22,28 @@ and not listing legacy/deprecated parameters.
 Version History
 ---------------
 
+Behavior version 17 (2023-04-19)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+``ZoneoutLSTMCell`` used the wrong output,
+which was different from ``h``
+(it was actually the original output without zoneout),
+so it was not as specified in the Zoneout paper,
+and likely suboptimal.
+
+A new flag ``use_zoneout_output`` was introduced
+to switch between both behaviors.
+Setting it to ``True`` enables the correct behavior
+and makes it consistent with the paper.
+Setting it to ``False`` enables the old incorrect behavior.
+
+With behaviour version 17,
+the default changed to ``use_zoneout_output=True``.
+If you want to get the old behavior with a new behavior version,
+just set ``use_zoneout_output=False``.
+
+See issue `#1313 <https://github.com/rwth-i6/returnn/issues/1313>`__.
+
 Behavior version 16 (2022-11-11)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 

@@ -10914,14 +10914,30 @@ class ZoneoutLSTMCell(BaseRNNCell):
       https://arxiv.org/pdf/1606.01305.pdf
     """
 
-    def __init__(self, num_units, zoneout_factor_cell=0.0, zoneout_factor_output=0.0):
+    def __init__(
+        self,
+        num_units: int,
+        zoneout_factor_cell: float = 0.0,
+        zoneout_factor_output: float = 0.0,
+        use_zoneout_output: bool = NotSpecified,
+    ):
         """
         Initializer with possibility to set different zoneout values for cell/hidden states.
 
-        :param int num_units: number of hidden units
-        :param float zoneout_factor_cell: cell zoneout factor
-        :param float zoneout_factor_output: output zoneout factor
+        :param num_units: number of hidden units
+        :param zoneout_factor_cell: cell zoneout factor
+        :param zoneout_factor_output: output zoneout factor
+        :param use_zoneout_output: If False, return the direct output of the underlying LSTM,
+            without applying zoneout. So the output is different from h.
+            This is different from the original Zoneout LSTM paper.
+            If True, h is the same as output, and it is the same as the original Zoneout LSTM paper.
+            This was False in our earlier implementation,
+            and up to behavior version 16.
+            Since behavior version 17, the default is True.
         """
+        from returnn.tf.network import TFNetwork
+        from returnn.util.basic import BehaviorVersion
+
         super(ZoneoutLSTMCell, self).__init__()
 
         zm = min(zoneout_factor_output, zoneout_factor_cell)
@@ -10932,7 +10948,11 @@ class ZoneoutLSTMCell(BaseRNNCell):
         self._cell = rnn_cell.LSTMCell(num_units, state_is_tuple=True)
         self._zoneout_cell = zoneout_factor_cell
         self._zoneout_outputs = zoneout_factor_output
-        from returnn.tf.network import TFNetwork
+
+        if use_zoneout_output is NotSpecified:
+            use_zoneout_output = BehaviorVersion.get() >= 17
+        assert isinstance(use_zoneout_output, bool)
+        self._use_zoneout_output = use_zoneout_output
 
         self.is_training = TFNetwork.get_current_network().train_flag
 
@@ -10985,6 +11005,9 @@ class ZoneoutLSTMCell(BaseRNNCell):
         )
 
         new_state = rnn_cell.LSTMStateTuple(c, h)
+
+        if self._use_zoneout_output:
+            output = h
 
         return output, new_state
 
