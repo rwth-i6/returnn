@@ -156,7 +156,7 @@ def test_demo_rf_torch_task12ax():
     # Currently this just uses linear layers, so it's not very good.
     # Also see test_demo_tf_task12ax above.
     fer = parse_last_fer(out)
-    assert_less(fer, 0.15)
+    assert_less(fer, 0.02)
 
 
 @unittest.skipIf(not tf, "no TF")
@@ -166,7 +166,7 @@ def test_demo_rf_tf_task12ax():
     # Currently this just uses linear layers, so it's not very good.
     # Also see test_demo_tf_task12ax above.
     fer = parse_last_fer(out)
-    assert_less(fer, 0.15)
+    assert_less(fer, 0.02)
 
 
 def test_demo_iter_dataset_task12ax():
