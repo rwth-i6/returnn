@@ -53,7 +53,8 @@ class Engine(EngineBase):
         self._save_model_epoch_interval = 1
         self._updater = None  # type: Optional[Updater]
 
-        self._device = "cuda" if torch.cuda.is_available() else "cpu"
+        self._device = _get_device_from_config(config)
+        print("Using device:", self._device, file=log.v2)
 
     def init_train_from_config(
         self,
@@ -489,3 +490,25 @@ def _format_score(score: Dict[str, float]) -> str:
     if len(score) == 1:
         return str(list(score.values())[0])
     return " ".join(["%s %s" % (key.split(":", 2)[-1], str(score[key])) for key in sorted(score.keys())])
+
+
+def _get_gpu_device() -> Optional[str]:
+    if torch.cuda.is_available():
+        return "cuda"
+    if hasattr(torch.backends, "mps") and torch.backends.mps.is_available() and torch.backends.mps.is_built():
+        return "mps"
+    return None
+
+
+def _get_device_from_config(config: Config) -> str:
+    device = config.value("device", None)
+    if not device:
+        device = _get_gpu_device()
+        if device:
+            return device
+        return "cpu"
+    if device == "gpu":
+        device = _get_gpu_device()
+        if not device:
+            raise Exception("No GPU device found, but config requested 'gpu' device.")
+    return device
