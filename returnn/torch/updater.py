@@ -160,6 +160,7 @@ class Updater(object):
                 raise ValueError("'optimizer' must of type dict, callable or torch.optim.Optimizer instance.")
             if "class" not in optimizer_opts:
                 raise ValueError("'class' field of 'optimizer' dict was not set (use e.g. 'SGD', 'Adam', ...)")
+            optimizer_opts = optimizer_opts.copy()
 
         # Resolve the optimizer class
         optim_class_name = optimizer_opts.pop("class")
