@@ -15,7 +15,7 @@ from returnn.config import Config
 from returnn.log import log
 from returnn.engine.base import EngineBase
 import returnn.frontend as rf
-from returnn.tensor import TensorDict, Tensor, batch_dim
+from returnn.tensor import TensorDict, Tensor
 from returnn.datasets.basic import init_dataset, Dataset
 from returnn.util import basic as util
 from returnn.util import NumbersDict
@@ -293,12 +293,18 @@ class Engine(EngineBase):
         :param dict[str, torch.Tensor] extern_data_raw: model inputs for the step
         """
         assert isinstance(extern_data_raw, dict) and extern_data_raw
+        batch_dim = next(iter(self.extern_data.data.values())).dims[0]
+        batch_dim.dyn_size_ext = None  # if it is dynamic, reset now, and set it below
         extern_data = TensorDict()
         for k, data in self.extern_data.data.items():
             data = data.copy_template()
             raw_tensor = extern_data_raw[k].to(self._device)
             data.dtype = str(raw_tensor.dtype).split(".")[-1]  # just overwrite for now...
             data.raw_tensor = raw_tensor
+
+            if batch_dim.size is None and batch_dim.dyn_size_ext is None:
+                batch_dim.dyn_size_ext = Tensor(batch_dim.name or "batch", dims=[], dtype="int32")
+                batch_dim.dyn_size_ext.raw_tensor = torch.tensor(extern_data_raw[k].shape[0], dtype=torch.int32)
 
             if k + ":seq_len" in extern_data_raw:
                 # Sequence lengths have to be on CPU for the later call to rnn.pack_padded_sequence
