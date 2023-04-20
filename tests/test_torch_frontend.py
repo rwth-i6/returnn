@@ -4,6 +4,7 @@ tests for returnn.torch.frontend
 
 import _setup_test_env  # noqa
 
+import numpy.testing
 import torch
 import pytest
 import math
@@ -334,3 +335,91 @@ def test_cross_entropy_dense_target():
     cross_entropy_list = cross_entropy.raw_tensor.tolist()
     assert cross_entropy_list[0] == pytest.approx(-0.6 * math.log(3 / 5) - 0.4 * math.log(1 / 5))
     assert cross_entropy_list[1] == pytest.approx(-0.3 * math.log(5 / 7) - 0.7 * math.log(1 / 7))
+
+
+def test_pack_padded():
+    # https://github.com/pytorch/pytorch/issues/99638
+
+    # noinspection PyShadowingNames
+    def _loss_rf_packed(logits: Tensor, targets: Tensor) -> torch.Tensor:
+        logits_packed, pack_dim = rf.pack_padded(logits, dims=(batch_dim, time_dim), enforce_sorted=False)
+        targets_packed, _ = rf.pack_padded(targets, dims=(batch_dim, time_dim), enforce_sorted=False, out_dim=pack_dim)
+        loss_rf_packed = rf.cross_entropy(
+            estimated=logits_packed, estimated_type="logits", target=targets_packed, axis=classes_dim
+        )
+        loss_rf_packed_sum = rf.reduce_sum(loss_rf_packed, axis=loss_rf_packed.dims)
+        return loss_rf_packed_sum.raw_tensor
+
+    # noinspection PyShadowingNames
+    def _loss_pt_packed(logits: Tensor, targets: Tensor) -> torch.Tensor:
+        logits_pt_packed_raw = torch.nn.utils.rnn.pack_padded_sequence(
+            logits.raw_tensor, time_dim.dyn_size, batch_first=True, enforce_sorted=False
+        )
+        targets_pt_packed_raw = torch.nn.utils.rnn.pack_padded_sequence(
+            targets.raw_tensor, time_dim.dyn_size, batch_first=True, enforce_sorted=False
+        )
+        loss_pt_packed_raw = torch.nn.CrossEntropyLoss(reduction="none")(
+            logits_pt_packed_raw.data, targets_pt_packed_raw.data.long()
+        )
+        loss_pt_packed_sum_raw = torch.sum(loss_pt_packed_raw)
+        return loss_pt_packed_sum_raw
+
+    # noinspection PyShadowingNames
+    def _loss_rf_padded(logits: Tensor, targets: Tensor) -> torch.Tensor:
+        loss_rf_padded = rf.cross_entropy(estimated=logits, estimated_type="logits", target=targets, axis=classes_dim)
+        loss_rf_padded_sum = rf.reduce_sum(loss_rf_padded, axis=loss_rf_padded.dims)
+        return loss_rf_padded_sum.raw_tensor
+
+    prev_loss_value = None
+    prev_bias_grad = None
+
+    for loss_fn in [_loss_pt_packed, _loss_rf_padded, _loss_rf_packed]:
+
+        torch.manual_seed(42)
+
+        batch_dim = Dim(dimension=3, name="batch")
+        in_dim = Dim(dimension=5, name="in")
+        classes_dim = Dim(dimension=5, name="classes")
+
+        net = torch.nn.Conv1d(in_dim.dimension, classes_dim.dimension, 5, padding="same")
+
+        time_dim = Dim(
+            Tensor(name="time", dims=[batch_dim], dtype="int32", raw_tensor=torch.tensor([4, 3, 2], dtype=torch.int32))
+        )
+        inputs = Tensor(
+            name="inputs",
+            dims=[batch_dim, time_dim, classes_dim],
+            dtype="float32",
+            raw_tensor=torch.randn(3, 4, 5, requires_grad=True),
+        )
+        targets = Tensor(
+            name="target",
+            dims=[batch_dim, time_dim],
+            sparse_dim=classes_dim,
+            dtype="int64",
+            raw_tensor=torch.randint(0, 5, (3, 4)),
+        )
+
+        logits_raw_ = net(inputs.raw_tensor.transpose(1, 2))
+        logits_raw = logits_raw_.transpose(1, 2)
+        logits = Tensor(
+            name="logits",
+            dims=[batch_dim, time_dim, classes_dim],
+            dtype="float32",
+            raw_tensor=logits_raw,
+        )
+
+        loss_raw = loss_fn(logits, targets)
+        loss_value = loss_raw.detach().cpu().numpy()
+        print("loss:", loss_raw)
+
+        (bias_grad,) = torch.autograd.grad(loss_raw, net.bias, create_graph=True)
+        print("bias grad:", bias_grad)
+        bias_grad = bias_grad.detach().cpu().numpy()
+
+        if prev_loss_value is not None:
+            numpy.testing.assert_almost_equal(loss_value, prev_loss_value, decimal=5, err_msg="loss")
+            numpy.testing.assert_almost_equal(bias_grad, prev_bias_grad, decimal=5, err_msg="bias grad")
+
+        prev_loss_value = loss_value
+        prev_bias_grad = bias_grad

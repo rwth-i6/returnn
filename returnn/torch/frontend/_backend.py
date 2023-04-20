@@ -922,7 +922,14 @@ class TorchBackend(Backend[torch.Tensor]):
         tensor_templ = tensor.copy_template_new_dim_tags(tuple(dims) + tuple(remaining_dims))
         tensor = tensor.copy_compatible_to(tensor_templ, add_dims=False)
         mask = mask.copy_compatible_to(tensor_templ, check_dtype=False, check_sparse=False)
-        out_raw = torch.masked_select(tensor.raw_tensor, mask.raw_tensor)
+        in_raw = tensor.raw_tensor
+        # We have a very strange problem with the gradient of masked_select,
+        # when used together with some specific other operations before that,
+        # like convolution.
+        # This clone() with contiguous_format seems to fix the problem.
+        # https://github.com/pytorch/pytorch/issues/99638
+        in_raw = in_raw.clone(memory_format=torch.contiguous_format)
+        out_raw = torch.masked_select(in_raw, mask.raw_tensor)
         remaining_shape = [d.get_dim_value() for d in remaining_dims]
         remaining_num_elements = numpy.prod(remaining_shape) if remaining_shape else 1
         assert out_raw.numel() % remaining_num_elements == 0
