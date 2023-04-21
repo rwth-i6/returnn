@@ -44,6 +44,25 @@ def replace_dim(source: Tensor, *, in_dim: Dim, out_dim: Optional[Dim] = None) -
 def dim_match_priority_when_needed(dim: Dim, *other_dims: Dim) -> Dim:
     """
     :return: maybe copy of dim with higher match_priority if needed to distinguish from other_dims
+
+    Why or when is this needed?
+
+    For activation values, this should never be needed,
+    and all dims should be unique.
+
+    In case of self-attention, the standard way is to create a separate distinct dim
+    to perform the attention reduction over.
+    See :class:`SelfAttention`.
+
+    However, in case of weight matrices, it is not unusual to have the same dim for both the input and output,
+    so a square weight matrix.
+    When reduction is performed in :func:`matmul`, we want to match the input feature dim
+    to the dim in the weight matrix with higher match priority.
+
+    So :func:`dim_match_priority_when_needed` would be applied on the input feature dim.
+
+    https://github.com/rwth-i6/returnn/pull/871
+    https://github.com/rwth-i6/returnn_common/issues/17#issuecomment-997463222
     """
     if dim in other_dims:
         return dim.copy(match_priority=1)
