@@ -453,6 +453,13 @@ class Engine(EngineBase):
 
         self._updater.save_optimizer(filename)
 
+        # keep only the last two optimizer states (two in case one file gets corrupted)
+        clean_epoch = self.epoch - 2
+        if clean_epoch > 0:
+            filename = self.get_epoch_model_filename(epoch=clean_epoch) + ".opt" + util.get_model_filename_postfix()
+            if os.path.isfile(filename):
+                os.unlink(filename)
+
 
 def _to_raw(n: Union[int, float, Tensor]):
     if isinstance(n, (int, float)):
