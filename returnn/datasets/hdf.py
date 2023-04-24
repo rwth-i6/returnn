@@ -519,7 +519,7 @@ class FeatureSequenceStreamParser(StreamParser):
                 self.dtype = str(seq_data.dtype)
 
             assert seq_data.shape[1] == self.num_features
-            assert seq_data.dtype == self.dtype
+            assert str(seq_data.dtype) == self.dtype
 
         self.feature_type = 2
 
