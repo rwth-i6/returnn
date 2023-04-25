@@ -460,6 +460,21 @@ class Engine(EngineBase):
             if os.path.isfile(filename):
                 os.unlink(filename)
 
+    @staticmethod
+    def delete_model(filename):
+        """
+        :param str filename:
+        :return: accumulated file-size in bytes of deleted files
+        :rtype: int
+        """
+        count_bytes = 0
+        fn = filename + util.get_model_filename_postfix()
+        assert os.path.exists(filename + fn)
+        count_bytes += os.stat(fn).st_size
+        os.remove(fn)
+        assert count_bytes > 0
+        return count_bytes
+
 
 def _to_raw(n: Union[int, float, Tensor]):
     if isinstance(n, (int, float)):
