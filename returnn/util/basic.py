@@ -135,8 +135,6 @@ class BackendEngine:
                 from returnn.config import get_global_config
 
                 config = get_global_config()
-            if config.bool("use_tensorflow", False):
-                engine = cls.TensorFlowNetDict
             if config.value("backend", None):
                 backend = config.value("backend", None)
                 engine = {
@@ -144,6 +142,8 @@ class BackendEngine:
                     "tensorflow": cls.TensorFlow,
                     "torch": cls.Torch,
                 }[backend]
+            elif config.bool("use_tensorflow", False):
+                engine = cls.TensorFlowNetDict
             if engine is None:
                 if default_fallback_engine is not None:
                     engine = default_fallback_engine
