@@ -2113,23 +2113,30 @@ class _OpMultTerm:
         """
         if not self.terms:
             return None
-        for i, term in reversed(list(enumerate(self.terms))) if right else enumerate(self.terms):
-            assert isinstance(term, _d.Dim)
-            if kind.endswith("div") and other == term:
-                return i
-            if kind == "mul" and term.derived_from_op:
-                if term.derived_from_op.kind == "truediv_" + ("right" if right else "left"):
-                    if term.derived_from_op.inputs[-1] == other:
-                        return i
-            if kind == "mul" and other.derived_from_op:
-                if other.derived_from_op.kind == "truediv_" + ("right" if not right else "left"):
-                    if other.derived_from_op.inputs[-1] == term:
-                        return i
-            if term.is_constant_static_dim() and other.is_constant_static_dim():
-                if kind == "mul":
+        if kind == "mul":
+            # We want (b * a) // b != a.
+            # However, we want h * (2 * a // h) == 2 * a.
+            # So, for `mul`, and only for `mul`, check all terms, whether we can simplify some division-term.
+            for i, term in reversed(list(enumerate(self.terms))) if right else enumerate(self.terms):
+                assert isinstance(term, _d.Dim)
+                if term.derived_from_op:
+                    if term.derived_from_op.kind == "truediv_" + ("right" if right else "left"):
+                        if term.derived_from_op.inputs[-1] == other:
+                            return i
+                if other.derived_from_op:
+                    if other.derived_from_op.kind == "truediv_" + ("right" if not right else "left"):
+                        if other.derived_from_op.inputs[-1] == term:
+                            return i
+                if term.is_constant_static_dim() and other.is_constant_static_dim():
                     return i
-                if kind.endswith("div") and term.dimension % other.dimension == 0:
-                    return i
+        # For the last/first term, extra checks.
+        i = len(self.terms) - 1 if right else 0
+        term = self.terms[i]
+        if kind.endswith("div") and other == term:
+            return i
+        op_kind = kind + "_" + ("right" if right else "left")
+        if term.derived_from_op and term.derived_from_op.kind == op_kind:
+            return i
         return None
 
     def extend_mul_div_(self, other, kind, right):
@@ -2179,6 +2186,12 @@ class _OpMultTerm:
                     self.terms[idx] = _make_constant_static_dim(term.dimension // other.dimension, kind=term.kind)
                     return
                 # Fallback with generic handling.
+            op_kind = kind + "_" + ("right" if right else "left")
+            if kind.endswith("div") and term.derived_from_op and term.derived_from_op.kind == op_kind:
+                numerator = term.derived_from_op.inputs[0]
+                denominator = term.derived_from_op.inputs[1]
+                self.terms[idx] = _OpMultTerm.new_div_dim(numerator, denominator * other, kind=kind, right=right)
+                return
         if kind.endswith("div"):
             self.terms = [_OpMultTerm.new_div_dim(self.as_dim(), other, kind=kind, right=right)]
             return
@@ -2409,7 +2422,7 @@ class _OpLinearTerm:
                 right = False
         if other.is_constant_static_dim() and other.dimension == 1:
             return
-        if kind.endswith("div"):
+        if kind.endswith("div") and len(self.terms) >= 2:
             if any(not term.divisible(other, right=right) for term in self.terms):
                 self.terms = [
                     _OpMultTerm.from_dim(_OpMultTerm.new_div_dim(self.as_dim(), other, kind=kind, right=right))
