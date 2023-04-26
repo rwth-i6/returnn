@@ -1,5 +1,4 @@
 import os
-import six
 import h5py
 import numpy as np
 
