@@ -787,9 +787,10 @@ class StftLayer(_ConcatInputLayer):
             self.input_data, network=self.network, in_dim=in_dim, in_spatial_dims=in_spatial_dims
         )
         x = input_data.placeholder
-        # squeeze feature axis
-        assert input_data.batch_shape[input_data.feature_dim_axis] == 1, "only implemented for single channel"
-        x = tf.squeeze(x, axis=input_data.feature_dim_axis)
+        if input_data.have_feature_axis():
+            # squeeze feature axis
+            assert input_data.batch_shape[input_data.feature_dim_axis] == 1, "only implemented for single channel"
+            x = tf.squeeze(x, axis=input_data.feature_dim_axis)
         extended_batch_shape = None
         if num_batch_dims > 1:
             x_shape = tf.shape(x)
