@@ -36,7 +36,7 @@ def iterate_epochs():
     """
     Iterate through epochs.
     """
-    start_epoch = EngineBase.get_train_start_epoch(config)
+    start_epoch = 1
     final_epoch = EngineBase.config_get_final_epoch(config)
 
     print("Starting with epoch %i." % (start_epoch,), file=log.v3)
