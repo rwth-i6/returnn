@@ -2234,6 +2234,8 @@ class _OpMultTerm:
                 raise ValueError("invalid kind %r" % (kind,))
         if kind == "floordiv" and right:
             description = "%s//%s" % (_get_description(numerator), _get_description(denominator))
+        elif kind == "ceildiv" and right:
+            description = "⌈%s/%s⌉" % (_get_description(numerator), _get_description(denominator))
         else:
             description = "%s_%s(%s, %s)" % (
                 kind,
