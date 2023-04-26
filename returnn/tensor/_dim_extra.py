@@ -2130,6 +2130,9 @@ class _OpMultTerm:
                     return i
                 if kind.endswith("div") and term.dimension % other.dimension == 0:
                     return i
+        op_kind = kind + "_" + ("right" if right else "left")
+        if len(self.terms) == 1 and self.terms[0].derived_from_op and self.terms[0].derived_from_op.kind == op_kind:
+            return 0
         return None
 
     def extend_mul_div_(self, other, kind, right):
@@ -2179,6 +2182,12 @@ class _OpMultTerm:
                     self.terms[idx] = _make_constant_static_dim(term.dimension // other.dimension, kind=term.kind)
                     return
                 # Fallback with generic handling.
+            op_kind = kind + "_" + ("right" if right else "left")
+            if kind.endswith("div") and term.derived_from_op and term.derived_from_op.kind == op_kind:
+                numerator = term.derived_from_op.inputs[0]
+                denominator = term.derived_from_op.inputs[1]
+                self.terms[idx] = _OpMultTerm.new_div_dim(numerator, denominator * other, kind=kind, right=right)
+                return
         if kind.endswith("div"):
             self.terms = [_OpMultTerm.new_div_dim(self.as_dim(), other, kind=kind, right=right)]
             return
@@ -2409,7 +2418,7 @@ class _OpLinearTerm:
                 right = False
         if other.is_constant_static_dim() and other.dimension == 1:
             return
-        if kind.endswith("div"):
+        if kind.endswith("div") and len(self.terms) >= 2:
             if any(not term.divisible(other, right=right) for term in self.terms):
                 self.terms = [
                     _OpMultTerm.from_dim(_OpMultTerm.new_div_dim(self.as_dim(), other, kind=kind, right=right))
