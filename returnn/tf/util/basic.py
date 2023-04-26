@@ -457,6 +457,9 @@ def get_valid_scope_name_from_str(s):
     # because this name is used e.g. for layers, and you might introduce incompatibility by changes here.
     import re
 
+    # remove all unicode chars
+    s = "".join([c for c in s if ord(c) < 128])
+
     s = re.sub("[:(){}&+\\-*'\" ,]", "__", s)
     if s[:1] in "_-\\/":  # invalid first chars
         s = (".%i." % ord(s[0])) + s[1:]
