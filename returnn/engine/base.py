@@ -7,6 +7,7 @@ from __future__ import annotations
 from typing import Optional
 import os
 import sys
+import typing
 
 from returnn.config import Config, get_global_config
 from returnn.learning_rate_control import load_learning_rate_control_from_config, LearningRateControl
