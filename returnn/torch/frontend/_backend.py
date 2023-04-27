@@ -477,12 +477,13 @@ class TorchBackend(Backend[torch.Tensor]):
             value = 0
         raw_param = param.raw_tensor
         assert isinstance(raw_param, torch.nn.Parameter)
-        if isinstance(value, Tensor):
-            with torch.no_grad():
-                raw_param[:] = value.raw_tensor
-        else:
-            with torch.no_grad():
-                raw_param[:] = value
+        with torch.no_grad():
+            if isinstance(value, Tensor):
+                raw_param.copy_(value.raw_tensor)
+            elif isinstance(value, numpy.ndarray):
+                raw_param.copy_(torch.from_numpy(value))
+            else:
+                raw_param.copy_(value)
 
     @staticmethod
     def set_parameter_trainable(param: rf.Parameter, trainable: bool) -> None:
