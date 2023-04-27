@@ -469,7 +469,7 @@ class Engine(EngineBase):
         """
         count_bytes = 0
         fn = filename + util.get_model_filename_postfix()
-        assert os.path.exists(filename + fn)
+        assert os.path.exists(fn)
         count_bytes += os.stat(fn).st_size
         os.remove(fn)
         assert count_bytes > 0
