@@ -266,7 +266,7 @@ class TorchBackend(Backend[torch.Tensor]):
             if source.have_feature_axis():
                 axis = source.feature_dim_axis
         if dim.is_dynamic():
-            for i, d in reversed(enumerate(source.dims)):
+            for i, d in reversed(list(enumerate(source.dims))):
                 assert isinstance(d, Dim)
                 if d.is_dynamic():
                     axis = i + 1
