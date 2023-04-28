@@ -1059,6 +1059,44 @@ class TorchBackend(Backend[torch.Tensor]):
             # potentially merge batch dims all together
             [-1, in_dim.get_dim_value()] + [d.get_dim_value() for d in in_spatial_dims],
         )
+        use_striding = strides and (strides > 1 if isinstance(strides, int) else any(s > 1 for s in strides))
+        if padding == "same" and use_striding:
+            # padding='same' is not supported for strided convolutions
+            padding = "valid"
+            pads = []
+            for i, s in reversed(list(enumerate(filter_size))):
+                if use_striding:
+                    stride_ = strides[i] if isinstance(strides, (list, tuple)) else strides
+                else:
+                    stride_ = 1
+                # What is the logic here? You might be aware, in case without striding,
+                # we simply have pad_left = (s.dimension - 1) // 2,
+                # or the total amount of padding is s.dimension - 1.
+                # So we add the same amount of padding on both sides (or one less on the left side if odd).
+                # The output seq length in case of "valid" padding is ⌈(in_len - s.dimension + 1) / stride⌉.
+                # The output seq length in case of "same" padding with no striding (stride = 1)
+                # is simply the same as the input length.
+                # What is the output seq length in case of "same" padding with striding?
+                # It should be ⌈in_len / stride⌉.
+                # So, then we need to add a total amount of padding of s.dimension - 1.
+                # However, doing it the same way as without striding is incorrect.
+                # Why? Because then the first window might have more padding than the final window.
+                # But we want to have an even amount of padding on the first and last window,
+                # or maybe one less on the first window if odd.
+                # How many frames do the windows cover?
+                # in_len_covered = out_len * stride + (s.dimension - stride)
+                # We can rewrite out_len as:
+                # out_len = ⌊(in_len + stride - 1) / stride⌋ = (in_len + stride - 1 - (in_len - 1) % stride) / stride
+                # So we have:
+                # in_len_covered = (in_len + stride - 1 - (in_len - 1) % stride) + (s.dimension - stride)
+                #                = in_len + s.dimension - 1 - (in_len - 1) % stride
+                # Now, the amount of padding which actually matters is:
+                # pad = in_len_covered - in_len = s.dimension - 1 - (in_len - 1) % stride.
+                pad = s.dimension - 1 - (src_raw.shape[2 + i] - 1) % stride_
+                pad_left = pad // 2
+                pad_right = pad - pad_left
+                pads.extend([pad_left, pad_right])
+            src_raw = torch.nn.functional.pad(src_raw, pads)
         if len(filter_size) == 1:
             # There is also conv_tbc, but it's a bit limited (no dilation)
             # and also unclear when exactly it is faster.
