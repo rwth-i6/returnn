@@ -100,7 +100,7 @@ def mel_filterbank(
     *,
     in_dim: Dim,
     out_dim: Dim,
-    sampling_rate: Union[int, float] = 16000,
+    sampling_rate: Union[int, float],
     fft_length: Optional[int] = None,
     f_min: Optional[Union[int, float]] = None,
     f_max: Optional[Union[int, float]] = None,
