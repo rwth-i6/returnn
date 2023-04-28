@@ -436,7 +436,7 @@ class Backend(Generic[T]):
         """
         out = tensor.copy_template()
         if func == "abs" and out.dtype.startswith("complex"):
-            num_bits = int(out.dtype[len("complex"):])
+            num_bits = int(out.dtype[len("complex") :])
             out.dtype = f"float{num_bits // 2}"
         # noinspection PyProtectedMember
         out.raw_tensor = tensor._raw_backend.activation_raw(tensor.raw_tensor, func)
@@ -450,6 +450,16 @@ class Backend(Generic[T]):
         :return: raw tensor with elementwise activation applied
         """
         raise NotImplementedError
+
+    @staticmethod
+    def safe_log(tensor: Tensor, *, eps: float) -> Tensor:
+        """
+        :param tensor:
+        :param eps:
+        :return: log(tensor + eps) in the default case. but some backends might do more things,
+            like if tensor = softmax(logits), then this would be log_softmax(logits) instead.
+        """
+        return rf.log(rf.maximum(tensor, eps))
 
     @staticmethod
     def softmax(tensor: Tensor, *, axis: Dim, use_mask: bool = True) -> Tensor:

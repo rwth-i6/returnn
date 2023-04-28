@@ -292,6 +292,13 @@ class ReturnnLayersBackend(Backend[Layer]):
         ).raw_tensor
 
     @staticmethod
+    def safe_log(tensor: Tensor, *, eps: float) -> Tensor:
+        """safe log"""
+        return rfl.make_layer(
+            {"class": "activation", "activation": "safe_log", "eps": eps, "from": tensor}, name="safe_log"
+        )
+
+    @staticmethod
     def softmax(tensor: Tensor, *, axis: Dim, use_mask: bool = True) -> Tensor:
         """softmax"""
         args = {}

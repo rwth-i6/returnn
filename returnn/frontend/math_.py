@@ -33,10 +33,13 @@ __all__ = [
     "logical_and",
     "logical_or",
     "logical_not",
+    "maximum",
+    "minimum",
     "identity",
     "exp",
     "expm1",
     "log",
+    "safe_log",
     "log1p",
     "sqrt",
     "rsqrt",
@@ -296,6 +299,26 @@ def logical_not(a: Tensor) -> Tensor:
     return a._raw_backend.activation(a, "logical_not")
 
 
+def maximum(a: Tensor, b: Union[Tensor, _RawTensorTypes], *other_tensors) -> Tensor:
+    """maximum"""
+    if not other_tensors:
+        return combine(a, "maximum", b)
+    res = combine(a, "maximum", b)
+    for t in other_tensors:
+        res = combine(res, "maximum", t)
+    return res
+
+
+def minimum(a: Tensor, b: Union[Tensor, _RawTensorTypes], *other_tensors) -> Tensor:
+    """minimum"""
+    if not other_tensors:
+        return combine(a, "minimum", b)
+    res = combine(a, "minimum", b)
+    for t in other_tensors:
+        res = combine(res, "minimum", t)
+    return res
+
+
 def identity(x: Tensor) -> Tensor:
     """
     Identity function. Just to have one canonical. Does nothing, returns the input.
@@ -319,6 +342,12 @@ def log(a: Tensor) -> Tensor:
     """log"""
     # noinspection PyProtectedMember
     return a._raw_backend.activation(a, "log")
+
+
+def safe_log(a: Tensor, *, eps: float = 1e-7) -> Tensor:
+    """safe_log"""
+    # noinspection PyProtectedMember
+    return a._raw_backend.safe_log(a, eps=eps)
 
 
 def log1p(a: Tensor) -> Tensor:
