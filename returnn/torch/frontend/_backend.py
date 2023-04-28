@@ -1169,16 +1169,23 @@ class TorchBackend(Backend[torch.Tensor]):
             # Keep the last as the channel-dim, but not sure if this is really relevant.
             [-1, batch_dims[-1].get_dim_value() if batch_dims else 1] + [d.get_dim_value() for d in in_spatial_dims],
         )
-        ceil_mode = padding.lower() == "same"
+        assert isinstance(strides, (list, tuple)) and len(strides) == len(in_spatial_dims) == len(pool_size)
+        if padding.lower() == "same":
+            # padding='same' is not quite the same as ceil_mode=True, so we explicitly pad here.
+            pads = []
+            for i, s in reversed(list(enumerate(pool_size))):
+                # See comment in conv.
+                pad = s - 1 - (src_raw.shape[2 + i] - 1) % strides[i]
+                pad_left = pad // 2
+                pad_right = pad - pad_left
+                pads.extend([pad_left, pad_right])
+            src_raw = torch.nn.functional.pad(src_raw, pads)
         if len(in_spatial_dims) == 1:
-            # There is also conv_tbc, but it's a bit limited (no dilation)
-            # and also unclear when exactly it is faster.
             out_raw = torch.nn.functional.max_pool1d(
                 src_raw,
                 kernel_size=pool_size,
                 stride=strides,
                 dilation=dilation_rate or 1,
-                ceil_mode=ceil_mode,
             )
         elif len(in_spatial_dims) == 2:
             out_raw = torch.nn.functional.max_pool2d(
@@ -1186,7 +1193,6 @@ class TorchBackend(Backend[torch.Tensor]):
                 kernel_size=pool_size,
                 stride=strides,
                 dilation=dilation_rate or 1,
-                ceil_mode=ceil_mode,
             )
         elif len(in_spatial_dims) == 3:
             out_raw = torch.nn.functional.max_pool3d(
@@ -1194,7 +1200,6 @@ class TorchBackend(Backend[torch.Tensor]):
                 kernel_size=pool_size,
                 stride=strides,
                 dilation=dilation_rate or 1,
-                ceil_mode=ceil_mode,
             )
         else:
             raise ValueError(f"invalid number of filter dims {in_spatial_dims}, expected 1, 2, or 3")
