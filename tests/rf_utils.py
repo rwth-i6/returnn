@@ -193,6 +193,8 @@ def _fill_random(
     dyn_dim_max_sizes: Optional[Dict[Dim, int]] = None,
 ) -> bool:
     """fill. return whether sth was filled"""
+    if dyn_dim_max_sizes is None:
+        dyn_dim_max_sizes = {}
     filled = False
     while True:
         have_unfilled = False
