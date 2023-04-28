@@ -416,7 +416,23 @@ class ReturnnLayersBackend(Backend[Layer]):
         if dim_deps:
             kwargs["shape_deps"] = dim_deps
         return rfl.make_layer(
-            {"class": "constant", "value": value, "shape": dims, "dtype": dtype, **kwargs}, name=name or "constant"
+            {"class": "constant", "value": value, "shape": dims, "dtype": dtype, **kwargs},
+            name=name or "convert_to_tensor",
+        )
+
+    @staticmethod
+    def full(
+        dims: Sequence[Dim], fill_value: RawTensorTypes, *, dtype: str, sparse_dim: Optional[Dim] = None
+    ) -> Tensor:
+        """full"""
+        kwargs = {}
+        if sparse_dim:
+            kwargs["sparse_dim"] = sparse_dim
+        dim_deps = _dims.get_dim_deps(dims)
+        if dim_deps:
+            kwargs["shape_deps"] = dim_deps
+        return rfl.make_layer(
+            {"class": "constant", "value": fill_value, "shape": dims, "dtype": dtype, **kwargs}, name="full"
         )
 
     @classmethod
