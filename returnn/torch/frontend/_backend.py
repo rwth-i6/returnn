@@ -1225,10 +1225,9 @@ class TorchBackend(Backend[torch.Tensor]):
             center=False,
             return_complex=True,
         )
-
         y = Tensor("stft", dims=batch_dims + [out_dim, out_spatial_dim], dtype=TorchBackend.get_dtype_name_raw(y_raw))
         y.feature_dim = out_dim
-        y.raw_tensor = y_raw
+        y.raw_tensor = torch.reshape(y_raw, [d.get_dim_value() for d in y.dims])
         return y
 
     @staticmethod
