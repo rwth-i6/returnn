@@ -212,6 +212,10 @@ def _fill_random(x: Tensor, *, min_val: int = 0, rnd: numpy.random.RandomState) 
             x.raw_tensor = rnd.randint(min_val, max_val, size=shape, dtype=x.dtype)
         elif x.dtype.startswith("float"):
             x.raw_tensor = rnd.normal(0.0, 1.0, size=shape).astype(x.dtype)
+        elif x.dtype.startswith("complex"):
+            real = rnd.normal(0.0, 1.0, size=shape)
+            imag = rnd.normal(0.0, 1.0, size=shape)
+            x.raw_tensor = (real + 1j * imag).astype(x.dtype)
         else:
             raise NotImplementedError(f"not implemented for {x} dtype {x.dtype}")
         filled = True
