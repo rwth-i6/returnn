@@ -120,15 +120,18 @@ def mel_filterbank(
     """
     if not fft_length:
         fft_length = (in_dim.dimension - 1) * 2
+    f_min = f_min or 0
+    f_max = f_max or sampling_rate / 2.0
     # noinspection PyProtectedMember
     backend = x._raw_backend
-    cache_key = (f_min, f_max, sampling_rate, fft_length, out_dim.dimension, backend, x.device)
+    cache_key = (f_min, f_max, sampling_rate, fft_length, out_dim.dimension, backend, x.dtype, x.device)
     if cache_key in _mel_filter_bank_matrix_cache:
         filter_bank_matrix = _mel_filter_bank_matrix_cache[cache_key]
     else:
         filter_bank_matrix_np = _mel_filter_bank_matrix_np(
             f_min=f_min, f_max=f_max, sampling_rate=sampling_rate, fft_size=fft_length, nr_of_filters=out_dim.dimension
         )
+        filter_bank_matrix_np = filter_bank_matrix_np.astype(x.dtype)
         filter_bank_matrix = rf.convert_to_tensor(filter_bank_matrix_np, dims=(in_dim, out_dim), _backend=backend)
         filter_bank_matrix = rf.copy_to_device(filter_bank_matrix, x.device)
         if backend.executing_eagerly():
