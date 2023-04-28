@@ -936,6 +936,16 @@ class _DimMixin:
                 backend = x.dyn_size_ext._raw_backend
                 break
 
+        size_dtype = None
+        for x in op.inputs:
+            if self.batch:
+                x = x.get_for_batch_ctx(self.batch, self.control_flow_ctx)
+            if x.dyn_size_ext:
+                size_dtype = x.dyn_size_ext.dtype
+                break
+        if not size_dtype:
+            size_dtype = _t.Tensor.size_dtype
+
         import numpy
         import returnn.frontend as rf
         from returnn.tensor import Tensor
@@ -1025,12 +1035,12 @@ class _DimMixin:
                 assert x.dimension is not None
                 if y is None:
                     if not template_only and backend and not tf:
-                        y = backend.convert_to_tensor(x.dimension, dims=[], dtype=_t.Tensor.size_dtype, name=y_name)
+                        y = backend.convert_to_tensor(x.dimension, dims=[], dtype=size_dtype, name=y_name)
                     else:
                         y = _t.Tensor(
                             name=y_name,
                             dim_tags=[],
-                            dtype=_t.Tensor.size_dtype,
+                            dtype=size_dtype,
                         )
                         if not template_only and tf:
                             with tf.control_dependencies(None):  # this will reset the context
