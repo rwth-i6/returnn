@@ -906,6 +906,23 @@ class Backend(Generic[T]):
         raise NotImplementedError
 
     @staticmethod
+    def stft(
+        x: Tensor,
+        *,
+        in_spatial_dim: Dim,
+        frame_step: int,
+        frame_length: int,
+        fft_length: int,
+        window_use_frame_length: bool = True,
+        align_window_left: bool = True,
+        window_enforce_even: bool = True,
+        out_spatial_dim: Dim,
+        out_dim: Dim,
+    ) -> Tensor:
+        """stft. see :func:`stft` for details."""
+        raise NotImplementedError
+
+    @staticmethod
     def lstm(
         source: Tensor,
         *,

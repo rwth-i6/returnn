@@ -780,6 +780,12 @@ class StftLayer(_ConcatInputLayer):
         assert "out_type" not in kwargs
         super(StftLayer, self).__init__(**kwargs)
         assert not self.input_data.sparse
+        if in_spatial_dims:
+            assert len(in_spatial_dims) == 1
+            axis = self.input_data.get_axis_from_description(in_spatial_dims[0])
+            assert axis is not None
+            self.input_data.version = 1
+            self.input_data.time_dim_axis = axis
         assert self.input_data.have_batch_axis()
         assert self.input_data.have_time_axis()
         in_dim = self.input_data.feature_dim_or_sparse_dim

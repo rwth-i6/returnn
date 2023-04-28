@@ -1148,6 +1148,71 @@ class TorchBackend(Backend[torch.Tensor]):
         return out, out_spatial_dims
 
     @staticmethod
+    def stft(
+        x: Tensor,
+        *,
+        in_spatial_dim: Dim,
+        frame_step: int,
+        frame_length: int,
+        fft_length: int,
+        window_use_frame_length: bool = True,
+        align_window_left: bool = True,
+        window_enforce_even: bool = True,
+        out_spatial_dim: Dim,
+        out_dim: Dim,
+    ) -> Tensor:
+        """stft"""
+        batch_dims = [d for d in x.dims if d != in_spatial_dim]
+        x = x.copy_transpose(batch_dims + [in_spatial_dim])
+        x_raw = torch.reshape(x.raw_tensor, [-1, in_spatial_dim.get_dim_value()])
+
+        # TF code: y = tf.signal.stft(x, frame_length=frame_size, frame_step=frame_shift, fft_length=fft_size)
+        # This is similar to what SciPy will also return.
+        # It is somewhat nontrivial to get the same result in PyTorch, esp for the case frame_length < fft_length,
+        # and even more when frame_length % 2 != 0.
+        # PyTorch behaves like librosa.
+        # https://github.com/pytorch/pytorch/issues/100177
+        # https://github.com/albertz/playground/blob/master/tf_pt_stft.py
+
+        if frame_length < fft_length and window_use_frame_length:
+            # PyTorch uses windows always of the fft_length,
+            # so the output seq len is ⌈(T - fft_length + 1) / frame_step⌉.
+            # TF/SciPy use windows of frame_length,
+            # so the output seq len is ⌈(T - frame_length + 1) / frame_step⌉.
+            # By padding the difference (fft_length - frame_length) to the right,
+            # we get the same output seq length in both cases.
+            x_raw = torch.nn.functional.pad(x_raw, (0, (fft_length - frame_length)))
+
+        if window_enforce_even:
+            frame_length -= frame_length % 2
+
+        window_pt = torch.hann_window(frame_length)
+        if frame_length < fft_length:
+            if align_window_left:  # this is how TF/SciPy do it
+                window_pt = torch.nn.functional.pad(window_pt, (0, (fft_length - frame_length)))
+            else:  # this is how PyTorch/librosa do it
+                pad_left = (fft_length - frame_length) // 2
+                pad_right = fft_length - frame_length - pad_left
+                window_pt = torch.nn.functional.pad(window_pt, (pad_left, pad_right))
+
+        y_raw = torch.stft(
+            x_raw,
+            n_fft=fft_length,
+            hop_length=frame_step,
+            # PyTorch anyway uses a window with size = n_fft internally.
+            # So we just explicitly handle the window logic.
+            win_length=fft_length,
+            window=window_pt,
+            center=False,
+            return_complex=True,
+        )
+
+        y = Tensor("stft", dims=batch_dims + [out_dim, out_spatial_dim], dtype=TorchBackend.get_dtype_name_raw(y_raw))
+        y.feature_dim = out_dim
+        y.raw_tensor = y_raw
+        return y
+
+    @staticmethod
     def lstm(
         source: _TT,
         *,

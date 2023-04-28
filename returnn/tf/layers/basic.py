@@ -6207,9 +6207,13 @@ class ConvLayer(_ConcatInputLayer):
                     input_data = input_data.copy_move_axis(old_axis=a, new_axis=first + i)
                 axes = [input_data.get_axis_from_description(d) for d in in_spatial_dims]
                 assert sorted(axes) == axes
-            assert input_data.feature_dim_axis not in axes, "invalid in_spatial_dims %s" % (in_spatial_dims,)
-            expected_dims = {batch_dim, input_data.feature_dim_or_sparse_dim} | set(in_spatial_dims)
-            assert len(expected_dims) == 2 + len(in_spatial_dims)
+            expected_dims = {batch_dim} | set(in_spatial_dims)
+            if input_data.have_feature_axis():
+                assert input_data.feature_dim_axis not in axes, "invalid in_spatial_dims %s" % (in_spatial_dims,)
+                expected_dims.add(input_data.feature_dim_or_sparse_dim)
+                assert len(expected_dims) == 2 + len(in_spatial_dims)
+            else:
+                assert len(expected_dims) == 1 + len(in_spatial_dims)
             # There might be more dims in the input than we expect.
             assert set(input_data.dim_tags).issuperset(expected_dims)
             # Prepare to merge all remaining ones into the batch dim. We will later undo this at the end.

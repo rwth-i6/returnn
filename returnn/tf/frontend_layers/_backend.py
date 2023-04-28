@@ -853,6 +853,39 @@ class ReturnnLayersBackend(Backend[Layer]):
         return layer, out_spatial_dims
 
     @staticmethod
+    def stft(
+        x: Tensor,
+        *,
+        in_spatial_dim: Dim,
+        frame_step: int,
+        frame_length: int,
+        fft_length: int,
+        window_use_frame_length: bool = True,
+        align_window_left: bool = True,
+        window_enforce_even: bool = True,
+        out_spatial_dim: Dim,
+        out_dim: Dim,
+    ) -> Tensor:
+        """stft"""
+        if frame_length < fft_length:
+            assert window_use_frame_length, "not implemented otherwise"
+            assert align_window_left, "not implemented otherwise"
+        if fft_length % 2 != 0:
+            assert window_enforce_even, "not implemented otherwise"
+        return rfl.make_layer(
+            {
+                "class": "stft",
+                "from": x,
+                "in_spatial_dims": [in_spatial_dim],
+                "out_spatial_dims": [out_spatial_dim],
+                "out_dim": out_dim,
+                "frame_shift": frame_step,
+                "frame_size": frame_length,
+                "fft_size": fft_length,
+            }
+        )
+
+    @staticmethod
     def lstm(
         source: Tensor,
         *,

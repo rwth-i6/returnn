@@ -337,6 +337,7 @@ jobs:
           - TEST=rf_math
           - TEST=rf_normalization
           - TEST=rf_rec
+          - TEST=rf_signal
 
     steps:
     - uses: actions/checkout@v3
