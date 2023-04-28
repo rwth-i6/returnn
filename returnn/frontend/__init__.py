@@ -24,6 +24,7 @@ from .const import *
 from .container import *
 from .control_flow_ctx import *
 from .conv import *
+from .device import *
 from .dims import *
 from .dropout import *
 from .dtype import *

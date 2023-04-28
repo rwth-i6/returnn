@@ -135,6 +135,25 @@ class Backend(Generic[T]):
         raise NotImplementedError
 
     @staticmethod
+    def get_device(x: Tensor) -> Optional[str]:
+        """
+        :param x:
+        :return: device, or none if unknown or logic not supported
+        """
+        # default implementation: ignore device
+        return None
+
+    @staticmethod
+    def copy_to_device(x: Tensor, device: Optional[str]) -> Tensor:
+        """
+        :param x: tensor
+        :param device: e.g. "cpu" or "gpu"
+        :return: tensor on device
+        """
+        # default implementation: ignore device
+        return x
+
+    @staticmethod
     def fill_raw(shape: Union[Sequence[Union[int, T]], T], value: Union[Any, T]) -> T:
         """
         :param shape: shape

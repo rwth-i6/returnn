@@ -189,3 +189,12 @@ class Tensor(_TensorMixin, _TensorOpOverloadsMixin, Generic[RawTensorType]):
             self._feature_dim_axis = None
             return
         self._feature_dim_axis = self.get_axis_from_description(value, allow_int=False)
+
+    @property
+    def device(self) -> Optional[str]:
+        """
+        :return: device
+        """
+        if self.raw_tensor is None:
+            return None
+        return self._raw_backend.get_device(self)

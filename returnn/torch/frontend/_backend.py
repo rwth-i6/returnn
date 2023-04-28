@@ -118,6 +118,25 @@ class TorchBackend(Backend[torch.Tensor]):
         return Dim(raw_tensor.size(axis), name=name)
 
     @staticmethod
+    def get_device(x: Tensor[torch.Tensor]) -> Optional[str]:
+        """device"""
+        if x.raw_tensor is None:
+            return None
+        return x.raw_tensor.device.type
+
+    @staticmethod
+    def copy_to_device(x: Tensor, device: Optional[str]) -> Tensor:
+        """
+        :param x:
+        :param device:
+        """
+        if not device:
+            return x
+        x = x.copy()
+        x.raw_tensor = x.raw_tensor.to(device)
+        return x
+
+    @staticmethod
     def expand_dims_raw(raw_tensor: torch.Tensor, axis: int) -> torch.Tensor:
         """
         :param raw_tensor:
