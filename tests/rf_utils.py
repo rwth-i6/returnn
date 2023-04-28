@@ -3,7 +3,7 @@ RETURNN frontend (returnn.frontend) utils
 """
 
 from __future__ import annotations
-from typing import Union
+from typing import Optional, Union, Dict
 import contextlib
 import numpy
 import numpy.testing
@@ -27,20 +27,29 @@ def tf_scope():
         yield session
 
 
-def run_model(extern_data: TensorDict, get_model: rf.GetModelFunc, forward_step: rf.StepFunc) -> TensorDict:
+def run_model(
+    extern_data: TensorDict,
+    get_model: rf.GetModelFunc,
+    forward_step: rf.StepFunc,
+    *,
+    dyn_dim_max_sizes: Optional[Dict[Dim, int]] = None,
+) -> TensorDict:
     """run"""
+    print(f"* run_model with dyn_dim_max_sizes={dyn_dim_max_sizes!r}")
     for v in extern_data.data.values():
         _reset_tensor(v)
     rnd = numpy.random.RandomState(42)
     for v in extern_data.data.values():
-        _fill_random(v, rnd=rnd)
+        _fill_random(v, rnd=rnd, dyn_dim_max_sizes=dyn_dim_max_sizes)
 
+    print("** run with PyTorch backend")
     with rft.TorchBackend.random_journal_record() as random_journal:
         out_pt = run_model_torch(extern_data, get_model, forward_step)
         _pad_mask_zeros(out_pt)
         # get the values now because dims might get overwritten
         out_pt_raw = out_pt.as_raw_tensor_dict(include_const_sizes=True)
 
+    print("** run with TensorFlow-net-dict backend")
     with rfl.ReturnnLayersBackend.random_journal_replay(random_journal):
         out_tf = run_model_net_dict_tf(extern_data, get_model, forward_step)
         _pad_mask_zeros(out_tf)
@@ -167,13 +176,22 @@ def run_model_net_dict_tf(extern_data: TensorDict, get_model: rf.GetModelFunc, f
 
 def _reset_tensor(x: Tensor):
     """reset"""
+    x.batch = None
     x.raw_tensor = None
     for dim in x.dims:
+        dim.batch = None
         if dim.dyn_size_ext:
             _reset_tensor(dim.dyn_size_ext)
 
 
-def _fill_random(x: Tensor, *, min_val: int = 0, rnd: numpy.random.RandomState) -> bool:
+def _fill_random(
+    x: Tensor,
+    *,
+    min_val: int = 0,
+    max_val: Optional[int] = None,
+    rnd: numpy.random.RandomState,
+    dyn_dim_max_sizes: Optional[Dict[Dim, int]] = None,
+) -> bool:
     """fill. return whether sth was filled"""
     filled = False
     while True:
@@ -185,7 +203,17 @@ def _fill_random(x: Tensor, *, min_val: int = 0, rnd: numpy.random.RandomState) 
                 dim.dyn_size_ext = Tensor("batch", [], dtype="int32")
             if not dim.dyn_size_ext:
                 continue
-            if _fill_random(dim.dyn_size_ext, min_val=2, rnd=rnd):
+            if _fill_random(
+                dim.dyn_size_ext,
+                min_val=2,
+                max_val=dyn_dim_max_sizes.get(dim, None),
+                rnd=rnd,
+                dyn_dim_max_sizes=dyn_dim_max_sizes,
+            ):
+                if dim in dyn_dim_max_sizes:
+                    # Make sure at least one of the dyn sizes matches the max size.
+                    i = rnd.randint(0, dim.dyn_size_ext.raw_tensor.size)
+                    dim.dyn_size_ext.raw_tensor.flat[i] = dyn_dim_max_sizes[dim]
                 filled = True
                 filled_this_round = True
             if dim.dyn_size_ext.raw_tensor is None:
@@ -206,7 +234,8 @@ def _fill_random(x: Tensor, *, min_val: int = 0, rnd: numpy.random.RandomState) 
     if x.raw_tensor is None:
         shape = [d.get_dim_value() for d in x.dims]
         if x.dtype.startswith("int"):
-            max_val = 10
+            if max_val is None:
+                max_val = rnd.randint(5, 20)
             if x.sparse_dim and x.sparse_dim.dimension is not None:
                 max_val = x.sparse_dim.dimension
             x.raw_tensor = rnd.randint(min_val, max_val, size=shape, dtype=x.dtype)
