@@ -188,6 +188,7 @@ class RunCtx:
         if dims is None:
             # We try some reasonable defaults, specifically: BTF or BF.
             dims = _default_dim_order(tensor)
+        assert set(dims) == set(tensor.dims), f"mark_as_output: tensor {tensor} does not have the dims {dims}"
         tensor = tensor.copy_transpose(dims, allow_int=False)
         tensor = tensor.copy(name=name)
         self.outputs.data[name] = tensor
