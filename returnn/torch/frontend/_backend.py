@@ -985,6 +985,7 @@ class TorchBackend(Backend[torch.Tensor]):
             raise NotImplementedError("batch_norm with masking not implemented")
         if (running_mean is None) != (running_variance is None):
             raise ValueError("running_mean and running_variance must be both None or both not None")
+        assert isinstance(in_dim, Dim)  # multiple dims not supported yet
         if affine:
             if gamma is None or beta is None:
                 raise ValueError("gamma and beta must be given if affine=True")
