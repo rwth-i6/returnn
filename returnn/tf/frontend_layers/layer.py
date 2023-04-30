@@ -36,6 +36,8 @@ class Layer:
     and potentially child name contexts.
 
     See the documentation on name hierarchies for RETURNN and RETURNN-common in the module docstring at the top.
+
+    (Note: This class was previously called NameCtx in RETURNN-common.)
     """
 
     _stack = []  # type: List[Layer]
@@ -1108,6 +1110,10 @@ class _NetDictBuilderCtx:
 
             def _map_elem_resolve(obj: Any) -> Any:
                 if isinstance(obj, Tensor):
+                    assert isinstance(
+                        obj.raw_tensor, rfl.Layer
+                    ), f"unexpected tensor {obj} with raw tensor type {type(obj.raw_tensor)}, expected rfl.Layer"
+                    obj: Tensor[rfl.Layer]
                     assert obj.raw_tensor.parent or net.name_ctx == obj.raw_tensor
                     return obj.raw_tensor.get_name_in_ctx(ctx=net.name_ctx)
                 if isinstance(obj, Net):
