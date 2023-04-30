@@ -278,12 +278,20 @@ def register_extern_data(data: Tensor[rfl.Layer]):
         data.batch = _init_global_batch()
         root_scope = rfl.Layer.top().root  # must exist
         _get_raw_layer_by_name(f"data:{data.name}", scope=root_scope, data=data)
-    for tag in data.dim_tags:
+    for i, tag in enumerate(data.dim_tags):
         if not tag.is_batch_dim() and tag.is_dynamic() and not tag.dyn_size_ext:
             # Undefined dynamic dim tag. Set default data template.
             tag.dyn_size_ext = Tensor(
-                name=f"{data.name}_default_dyn_size_ext",
+                name=f"{tag.name or (data.name + f'[{i}]')}_default_dyn_size_ext",
                 dim_tags=[batch_dim],
+                dtype=data.size_dtype,
+                batch=data.batch,
+            )
+        if tag.is_batch_dim() and not tag.dyn_size_ext and tag.dimension is None:
+            # Undefined batch dim tag. Set default data template.
+            tag.dyn_size_ext = Tensor(
+                name=f"batch_dim_default_dyn_size_ext",
+                dim_tags=[],
                 dtype=data.size_dtype,
                 batch=data.batch,
             )

@@ -106,7 +106,7 @@ def _register_dim_via_dyn_layer(dim: Dim) -> bool:
     :param dim:
     :return: whether we registered the dim
     """
-    if dim.is_static():
+    if dim.is_static() or dim.is_batch_dim():
         return False
     if dim in _dim_deps:
         return False
