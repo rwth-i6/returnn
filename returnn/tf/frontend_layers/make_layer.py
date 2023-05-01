@@ -274,14 +274,24 @@ def register_extern_data(data: Tensor[rfl.Layer]):
     assert isinstance(data, Tensor)  # the usage was different before. make sure we get this correct
     if data.raw_tensor is not None:
         assert isinstance(data.raw_tensor, rfl.Layer)
+    # Assigning data.batch might get variants of the dim tags,
+    # but keep some refs to the original dim tags instances here,
+    # and also assign them below.
+    # This is a workaround the complexity of dim tags internals
+    # (https://github.com/rwth-i6/returnn/issues/975)
+    # which is actually not used by the RETURNN frontend,
+    # so we ignore this mostly, and thus use this workaround.
+    # It's only needed because we assign data.batch,
+    # which is needed for some of the layers to operate properly.
+    orig_dim_tags = data.dim_tags
     if data.raw_tensor is None:
         data.batch = _init_global_batch()
         root_scope = rfl.Layer.top().root  # must exist
         _get_raw_layer_by_name(f"data:{data.name}", scope=root_scope, data=data)
-    for i, tag in enumerate(data.dim_tags):
+    for i, (tag, orig_tag) in enumerate(zip(data.dim_tags, orig_dim_tags)):
         if not tag.is_batch_dim() and tag.is_dynamic() and not tag.dyn_size_ext:
             # Undefined dynamic dim tag. Set default data template.
-            tag.dyn_size_ext = Tensor(
+            orig_tag.dyn_size_ext = tag.dyn_size_ext = Tensor(
                 name=f"{tag.name or (data.name + f'[{i}]')}_default_dyn_size_ext",
                 dim_tags=[batch_dim],
                 dtype=data.size_dtype,
@@ -289,7 +299,7 @@ def register_extern_data(data: Tensor[rfl.Layer]):
             )
         if tag.is_batch_dim() and not tag.dyn_size_ext and tag.dimension is None:
             # Undefined batch dim tag. Set default data template.
-            tag.dyn_size_ext = Tensor(
+            batch_dim.dyn_size_ext = orig_tag.dyn_size_ext = tag.dyn_size_ext = Tensor(
                 name=f"batch_dim_default_dyn_size_ext",
                 dim_tags=[],
                 dtype=data.size_dtype,
