@@ -42,7 +42,15 @@ class Backend(Generic[T]):
 
     @staticmethod
     def cond(pred: Tensor, true_fn: Callable, false_fn: Callable):
-        """cond"""
+        """
+        cond: conditional execution.
+
+        Note that this does not need an implementation for eager-based frameworks
+        (:func:`executing_eagerly` returns True),
+        as the :func:`returnn.frontend.cond` function already covers that case.
+        """
+        # noinspection PyProtectedMember
+        assert not pred._raw_backend.executing_eagerly(), "should not get here"
         raise NotImplementedError
 
     @staticmethod
