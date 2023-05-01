@@ -245,7 +245,7 @@ class CondModule(rf.Module):
                 results.append(res)
             else:
                 # noinspection PyProtectedMember
-                results.append(rfl._get_sub_layer(res, name, data=true_v.data.copy_template()))
+                results.append(rfl._get_sub_layer(res, name, data=true_v.copy_template()))
             results[-1].raw_tensor.layer_extra_dependencies.extend(
                 (self.cond.condition.raw_tensor, true_v.raw_tensor, false_v.raw_tensor)
             )
