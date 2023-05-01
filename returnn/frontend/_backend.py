@@ -3,7 +3,7 @@ Backends for the frontend API
 """
 
 from __future__ import annotations
-from typing import TYPE_CHECKING, Optional, Any, Union, TypeVar, Generic, Type, Sequence, Dict, Tuple
+from typing import TYPE_CHECKING, Optional, Any, Union, TypeVar, Generic, Type, Callable, Sequence, Dict, Tuple
 import contextlib
 import numpy
 import returnn.frontend as rf
@@ -38,6 +38,11 @@ class Backend(Generic[T]):
         """
         :return: whether we are in eager execution mode
         """
+        raise NotImplementedError
+
+    @staticmethod
+    def cond(pred: Tensor, true_fn: Callable, false_fn: Callable):
+        """cond"""
         raise NotImplementedError
 
     @staticmethod

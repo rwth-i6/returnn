@@ -3,7 +3,7 @@ High-level backend for RETURNN layers
 """
 
 from __future__ import annotations
-from typing import Union, Sequence, Optional, Any, Tuple, Dict
+from typing import Union, Sequence, Optional, Any, Callable, Tuple, Dict
 import contextlib
 import numpy
 import tensorflow as tf
@@ -36,6 +36,14 @@ class ReturnnLayersBackend(Backend[Layer]):
     def executing_eagerly() -> bool:
         """executing eagerly"""
         return False
+
+    @staticmethod
+    def cond(pred: Tensor, true_fn: Callable, false_fn: Callable):
+        """cond"""
+        with rfl.Cond(pred) as cond:
+            cond.true = true_fn()
+            cond.false = false_fn()
+        return cond.result
 
     @staticmethod
     def set_random_seed(seed: int):

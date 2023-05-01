@@ -30,6 +30,25 @@ def copy(tensor: Tensor[rfl.Layer], *, name: Union[rfl.Layer, str]) -> Tensor[rf
     return rfl.make_layer({"class": "copy", "from": tensor}, name=name)
 
 
+def mark_as_output_in_scope(tensor: Tensor, scope: rfl.Layer) -> Tensor:
+    """
+    Mark this as an output.
+    """
+    assert tensor.raw_tensor.layer_dict, f"mark_as_output can only be called on a layer, not a layer-ref {tensor}."
+    res = tensor
+    if tensor.raw_tensor is scope.children.get("output"):
+        pass  # not needed
+    elif tensor.raw_tensor.parent is not scope:
+        res = copy(tensor, name=scope.get_new_child(suggested_name=tensor.raw_tensor.get_abs_name(join_str="_")))
+        res.raw_tensor.layer_dict["is_output_layer"] = True
+    else:
+        assert tensor.raw_tensor.parent is scope
+        assert tensor.raw_tensor.layer_dict
+        tensor.raw_tensor.layer_dict["is_output_layer"] = True
+    scope.marked_outputs.append(res)
+    return res
+
+
 def get_last_hidden_state(
     source: Tensor,
     *,

@@ -8,11 +8,14 @@ https://github.com/rwth-i6/returnn/issues/1282
 """
 
 from __future__ import annotations
-from typing import Union
+from typing import Union, TypeVar, Callable
 from returnn.tensor import Tensor
 
 
-def cond(pred: Union[bool, Tensor], true_fn, false_fn):
+T = TypeVar("T")
+
+
+def cond(pred: Union[bool, Tensor], true_fn: Callable[[], T], false_fn: Callable[[], T]) -> T:
     """
     :param pred:
     :param true_fn:
@@ -24,6 +27,7 @@ def cond(pred: Union[bool, Tensor], true_fn, false_fn):
             return true_fn()
         else:
             return false_fn()
+    assert isinstance(pred, Tensor) and pred.dims == () and pred.dtype == "bool"
     # noinspection PyProtectedMember
     backend = pred._raw_backend
     if backend.executing_eagerly():
@@ -31,4 +35,4 @@ def cond(pred: Union[bool, Tensor], true_fn, false_fn):
             return true_fn()
         else:
             return false_fn()
-    raise NotImplementedError("cond() not implemented for backend %r" % backend)
+    return backend.cond(pred, true_fn, false_fn)
