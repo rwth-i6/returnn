@@ -502,7 +502,8 @@ class TorchBackend(Backend[torch.Tensor]):
         assert isinstance(raw_param, torch.nn.Parameter)
         with torch.no_grad():
             if isinstance(value, Tensor):
-                raw_param.copy_(value.raw_tensor)
+                value_ = value.copy_compatible_to(param)
+                raw_param.copy_(value_.raw_tensor)
             elif isinstance(value, numpy.ndarray):
                 raw_param.copy_(torch.from_numpy(value))
             else:
