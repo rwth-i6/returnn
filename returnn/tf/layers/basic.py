@@ -430,16 +430,17 @@ class IdentityLayer(LayerBase):
 
     layer_class = "identity"
 
-    def __init__(self, sources: List[LayerBase], control_dependencies: Sequence[LayerBase], **kwargs):
+    def __init__(self, sources: List[LayerBase], control_dependencies: Optional[Sequence[LayerBase]] = None, **kwargs):
         super().__init__(sources=sources, **kwargs)
         assert len(sources) == 1
-        self.control_dependencies = control_dependencies
-        with tf.control_dependencies([src.output.placeholder.op for src in self.control_dependencies]):
+        self.control_dependencies = list(control_dependencies) if control_dependencies else []
+        deps = [src.output.placeholder.op for src in self.control_dependencies]
+        with tf.control_dependencies(deps) if deps else contextlib.nullcontext():
             self.output.placeholder = tf.identity(self.sources[0].output.placeholder)
 
     def get_dep_layers(self) -> List[LayerBase]:
         """deps"""
-        return super().get_dep_layers() + list(self.control_dependencies)
+        return super().get_dep_layers() + self.control_dependencies
 
     @classmethod
     def get_out_data_from_opts(cls, name: str, sources: List[LayerBase], **kwargs):
@@ -451,8 +452,9 @@ class IdentityLayer(LayerBase):
     def transform_config_dict(cls, d, network, get_layer):
         """transform"""
         super().transform_config_dict(d, network=network, get_layer=get_layer)
-        assert isinstance(d.get("control_dependencies"), (list, tuple))
-        d["control_dependencies"] = [get_layer(src_name) for src_name in d["control_dependencies"]]
+        if d.get("control_dependencies") is not None:
+            assert isinstance(d["control_dependencies"], (list, tuple))
+            d["control_dependencies"] = [get_layer(src_name) for src_name in d["control_dependencies"]]
 
 
 class ConcatLayer(LayerBase):
