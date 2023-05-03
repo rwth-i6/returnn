@@ -138,7 +138,12 @@ class Parameter(Tensor[T]):
     def trainable(self, trainable: Optional[bool]):
         self._trainable = trainable
         if trainable is None:
-            trainable = not self.auxiliary
+            if self.auxiliary:
+                trainable = False
+            elif self.dtype.startswith("int"):
+                trainable = False
+            else:
+                trainable = True
         self._raw_backend.set_parameter_trainable(self, trainable)
 
     @property
