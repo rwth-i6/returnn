@@ -483,8 +483,12 @@ class TorchBackend(Backend[torch.Tensor]):
         :return: parameter
         """
         assert all(d.is_static() for d in tensor.dims)
-        data = torch.zeros(*(d.dimension for d in tensor.dims), dtype=TorchBackend.as_dtype_raw(tensor.dtype))
-        return torch.nn.Parameter(data)
+        data = torch.zeros([d.dimension for d in tensor.dims], dtype=TorchBackend.as_dtype_raw(tensor.dtype))
+        if tensor.dtype.startswith("int"):
+            requires_grad = False
+        else:
+            requires_grad = True
+        return torch.nn.Parameter(data, requires_grad=requires_grad)
 
     @staticmethod
     def set_parameter_initial_value(param: rf.Parameter, value: Union[None, Tensor, rf.RawTensorTypes]) -> None:
