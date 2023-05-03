@@ -385,17 +385,27 @@ class VariableAssignLayer(LayerBase):
         self.var = var
         self.value = value
         self.control_dependencies = list(control_dependencies) if control_dependencies else []
+        deps = [src.output.placeholder.op for src in self.control_dependencies]
+
+        while not isinstance(var, VariableLayer):
+            if isinstance(var, VariableAssignLayer):
+                deps.append(var.output.placeholder.op)
+                var = var.var
+            elif isinstance(var, VariableReadLayer):
+                deps.append(var.output.placeholder.op)
+                var = var.var
+            else:
+                raise TypeError(f"{self}: invalid var {var!r}")
         assert isinstance(var, VariableLayer), f"{self}: var must be a VariableLayer, got {var}"
         assert var.wrapped_var is not None, f"{self}: var must be wrapped, got {var}"
-        self._var: _WrappedVariable = var.wrapped_var
+        self.tf_var: _WrappedVariable = var.wrapped_var
 
-        deps = [src.output.placeholder.op for src in self.control_dependencies]
         value_data = value.output.copy_compatible_to(self.var.output)
         with tf.control_dependencies(deps) if deps else contextlib.nullcontext():
             if op == "assign":
-                op_ = self._var.assign(value_data.placeholder, read_value=False)
+                op_ = self.tf_var.assign(value_data.placeholder, read_value=False)
             elif op == "add":
-                op_ = self._var.assign_add(value_data.placeholder, read_value=False)
+                op_ = self.tf_var.assign_add(value_data.placeholder, read_value=False)
             else:
                 raise ValueError(f"{self}: invalid op {op!r}")
         # op_ is only defined in graph-mode. in eager-mode, it's not relevant.
@@ -438,13 +448,21 @@ class VariableReadLayer(LayerBase):
         super().__init__(**kwargs)
         self.var = var
         self.control_dependencies = list(control_dependencies) if control_dependencies else []
+        deps = [src.output.placeholder.op for src in self.control_dependencies]
 
+        while not isinstance(var, VariableLayer):
+            if isinstance(var, VariableAssignLayer):
+                deps.append(var.output.placeholder.op)
+                var = var.var
+            elif isinstance(var, VariableReadLayer):
+                deps.append(var.output.placeholder.op)
+                var = var.var
+            else:
+                raise TypeError(f"{self}: invalid var {var!r}")
         assert isinstance(var, VariableLayer), f"{self}: var must be a VariableLayer, got {var}"
         self.tf_var = var.var
         assert isinstance(self.tf_var, tf.Variable), f"{self}: var must be a tf.Variable, got {self.tf_var}"
-        with tf.control_dependencies(
-            [src.output.placeholder.op for src in self.control_dependencies]
-        ) if self.control_dependencies else contextlib.nullcontext():
+        with tf.control_dependencies(deps) if deps else contextlib.nullcontext():
             self.output.placeholder = self.tf_var.read_value()
 
     def get_dep_layers(self) -> List[LayerBase]:
