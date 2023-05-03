@@ -10,7 +10,7 @@ from ._backend import global_backend
 import returnn.frontend as rf
 
 
-__all__ = ["full", "constant", "fill", "zeros", "ones"]
+__all__ = ["full", "constant", "fill", "zeros", "ones", "zeros_like", "ones_like"]
 
 
 def full(
@@ -54,3 +54,13 @@ def ones(dims: Sequence[Dim], *, dtype: Optional[str] = None, sparse_dim: Option
     ones. float by default.
     """
     return full(dims=dims, fill_value=1, dtype=dtype or rf.get_default_float_dtype(), sparse_dim=sparse_dim)
+
+
+def zeros_like(other: Tensor) -> Tensor:
+    """zeros like other"""
+    return zeros(dims=other.dims, dtype=other.dtype, sparse_dim=other.sparse_dim)
+
+
+def ones_like(other: Tensor) -> Tensor:
+    """ones like other"""
+    return ones(dims=other.dims, dtype=other.dtype, sparse_dim=other.sparse_dim)
