@@ -15,6 +15,7 @@ T = TypeVar("T")
 __all__ = [
     "convert_to_tensor",
     "constant",
+    "copy",
     "cast",
     "merge_dims",
     "split_dims",
@@ -96,6 +97,19 @@ def convert_to_tensor(
 
 
 constant = convert_to_tensor  # alias for some older code
+
+
+def copy(tensor: Tensor) -> Tensor:
+    """
+    :param tensor:
+    :return: copy of tensor.
+        In eager-based frameworks, it is really a copy.
+        In graph-based frameworks, it might be just a copied reference if it would be immutable.
+        This is really only relevant when operating on tensors which can conceptually be mutated,
+        such as variables (:class:`Parameter`).
+    """
+    # noinspection PyProtectedMember
+    return tensor._raw_backend.copy(tensor)
 
 
 def cast(tensor: Tensor, dtype: str) -> Tensor:

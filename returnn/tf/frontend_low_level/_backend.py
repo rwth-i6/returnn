@@ -195,6 +195,13 @@ class TFBackend(Backend[tf.Tensor]):
             return tf.tile(raw_tensor, [1] * axis + [dim] + [1] * (raw_tensor.shape.ndims - axis - 1))
 
     @staticmethod
+    def copy(tensor: Tensor) -> Tensor:
+        """copy"""
+        out = tensor.copy_template()
+        out.raw_tensor = tf.identity(tensor.raw_tensor)
+        return out
+
+    @staticmethod
     def cast_raw(raw_tensor: tf.Tensor, dtype: str) -> tf.Tensor:
         """cast"""
         return tf.cast(raw_tensor, dtype)

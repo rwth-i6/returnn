@@ -263,6 +263,11 @@ class Backend(Generic[T]):
         raise NotImplementedError
 
     @staticmethod
+    def copy(tensor: Tensor) -> Tensor:
+        """copy"""
+        raise NotImplementedError
+
+    @staticmethod
     def cast_raw(raw_tensor: T, dtype: str) -> T:
         """
         :param raw_tensor:

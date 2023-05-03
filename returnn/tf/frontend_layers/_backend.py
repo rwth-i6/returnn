@@ -132,6 +132,11 @@ class ReturnnLayersBackend(Backend[Layer]):
         return rfl.make_layer({"class": "transpose", "from": tensor, "perm": perm}, name="transpose")
 
     @staticmethod
+    def copy(tensor: Tensor) -> Tensor:
+        """copy"""
+        return rfl.make_layer({"class": "identity", "from": tensor}, name="copy")
+
+    @staticmethod
     def cast(tensor: Tensor, dtype: str) -> Tensor:
         """cast"""
         return rfl.make_layer({"class": "cast", "from": tensor, "dtype": dtype}, name="cast")

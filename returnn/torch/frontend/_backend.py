@@ -146,6 +146,13 @@ class TorchBackend(Backend[torch.Tensor]):
         return raw_tensor.unsqueeze(axis)
 
     @staticmethod
+    def copy(tensor: Tensor[torch.Tensor]) -> Tensor[torch.Tensor]:
+        """copy"""
+        out = tensor.copy_template()
+        out.raw_tensor = tensor.raw_tensor.clone()
+        return out
+
+    @staticmethod
     def cast_raw(raw_tensor: torch.Tensor, dtype: str) -> torch.Tensor:
         """cast"""
         return raw_tensor.to(dtype=TorchBackend.as_dtype_raw(dtype))
@@ -515,6 +522,20 @@ class TorchBackend(Backend[torch.Tensor]):
         raw_param = param.raw_tensor
         assert isinstance(raw_param, torch.nn.Parameter)
         raw_param.requires_grad = trainable
+
+    @staticmethod
+    def parameter_assign(param: rf.Parameter, value: Tensor, op: str = "assign") -> None:
+        """param assign"""
+        value_ = value.copy_compatible_to(param)
+        raw_param = param.raw_tensor
+        assert isinstance(raw_param, torch.nn.Parameter)
+        with torch.no_grad():
+            if op == "assign":
+                raw_param.copy_(value_.raw_tensor)
+            elif op == "add":
+                raw_param.add_(value_.raw_tensor)
+            else:
+                raise ValueError(f"Parameter {param} assign: Unsupported op: {op}")
 
     @staticmethod
     def compare_raw(a: torch.Tensor, kind: str, b: torch.Tensor) -> torch.Tensor:
