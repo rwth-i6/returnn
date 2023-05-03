@@ -5850,11 +5850,13 @@ def same_control_flow_ctx(x):
         with tf.control_dependencies(None) as dep:  # this will reset the context
             yield dep
         return
-    # noinspection PyProtectedMember
-    graph._set_control_flow_context(ctx)
-    yield ctx
-    # noinspection PyProtectedMember
-    graph._set_control_flow_context(cur_ctx)
+    try:
+        # noinspection PyProtectedMember
+        graph._set_control_flow_context(ctx)
+        yield ctx
+    finally:
+        # noinspection PyProtectedMember
+        graph._set_control_flow_context(cur_ctx)
 
 
 def get_protobuf_fields(obj):
