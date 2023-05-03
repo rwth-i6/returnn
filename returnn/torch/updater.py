@@ -241,8 +241,13 @@ class Updater(object):
         wd_params = set()
         no_wd_params = set()
         blacklist_wd_modules = (torch.nn.LayerNorm, torch.nn.Embedding)
+        # Tracker of visited parameters to only add each parameter once, in case two modules share common parameters.
+        visited_params = set()
         for mn, m in self.network.named_modules():
             for pn, p in m.named_parameters():
+                if p in visited_params:
+                    continue
+                visited_params.add(p)
                 fpn = "%s.%s" % (mn, pn) if mn else pn  # Full param name
                 if pn.endswith("bias"):
                     no_wd_params.add(fpn)
