@@ -10938,7 +10938,8 @@ def test_split_info_input():
         # TODO: multiple checks:
         # the split info itself
         # the param init handling...
-        # actually, for param init handling, input dim splits do not matter. they matter just for copying/growing-pretrain.
+        # actually, for param init handling, input dim splits do not matter.
+        # they matter just for copying/growing-pretrain.
         # for param init handling, output dim split do matter.
 
 
