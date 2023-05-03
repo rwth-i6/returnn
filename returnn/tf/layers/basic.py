@@ -10452,152 +10452,6 @@ class SubnetworkLayer(LayerBase):
         return shape_invariants
 
 
-class VariableLayer(LayerBase):
-    """
-    Represents a variable. Can add batch/time dimension if wanted. Can be trainable.
-    See defaults.
-    """
-
-    layer_class = "variable"
-
-    def __init__(
-        self,
-        shape,
-        dtype="float32",
-        add_batch_axis=False,
-        add_time_axis=False,
-        trainable=True,
-        non_critical_for_restore=False,
-        init=None,
-        init_by_layer=None,
-        param_name=None,
-        **kwargs,
-    ):
-        """
-        :param tuple[int|Dim]|list[int|Dim] shape:
-        :param str dtype:
-        :param bool add_batch_axis:
-        :param bool add_time_axis:
-        :param bool trainable:
-        :param bool non_critical_for_restore:
-        :param str|float|int|None init: see :func:`returnn.tf.util.basic.get_initializer`. 0 by default.
-          Alternatively, you can also use option `init_by_layer`.
-        :param LayerBase|None init_by_layer:
-        :param str|None param_name: self.name (layer name) by default
-        """
-        shape  # noqa  # used in get_out_data_from_opts
-        super(VariableLayer, self).__init__(trainable=trainable, **kwargs)
-        assert not self.sources, "%s: does not expect any sources" % self
-        self.init_by_layer = init_by_layer
-        dim_tags = list(self.output.dim_tags)
-        if add_batch_axis:
-            assert dim_tags[0].is_batch_dim()
-            dim_tags = dim_tags[1:]
-        if add_time_axis:
-            assert dim_tags[0].dimension == 1
-            dim_tags = dim_tags[1:]
-        shape_ = [d.dimension for d in dim_tags]
-        assert all(shape_), self.output  # all static
-        with self.var_creation_scope():
-            if init_by_layer is None:
-                if init is None:
-                    init = 0
-                initializer = tf_util.get_initializer(
-                    init, dtype=dtype, seed=self.network.random.randint(2**31), eval_local_ns={"layer": self}
-                )
-            else:
-                assert init_by_layer is not None
-                out_data_base = Data(name=self.output.name, dim_tags=dim_tags, dtype=dtype)
-                initializer = init_by_layer.output.copy_compatible_to(out_data_base).placeholder
-                shape_ = None  # get_variable requires shape to be not defined when the initializer is another tensor
-            var = self.add_param(
-                tf_compat.v1.get_variable(
-                    name=param_name or self.name,
-                    shape=shape_,
-                    dtype=dtype,
-                    initializer=initializer,
-                    trainable=trainable,
-                ),
-                axes_split_info=[d.axis_split_info() for d in dim_tags],
-                non_critical_for_restore=non_critical_for_restore,
-            )
-            out = var
-            if add_time_axis:
-                out = tf.expand_dims(out, axis=0)
-            if add_batch_axis:
-                # Unbroadcast to not confuse some other layers
-                batch_dim = self.output.get_batch_dim()
-                out = tf_util.expand_dims_unbroadcast(out, axis=0, dim=batch_dim)
-        self.output.placeholder = out
-
-    def get_dep_layers(self):
-        """
-        :rtype: list[LayerBase]
-        """
-        deps = super(VariableLayer, self).get_dep_layers()
-        if self.init_by_layer:
-            deps.append(self.init_by_layer)
-        return deps
-
-    @classmethod
-    def transform_config_dict(cls, d, network, get_layer):
-        """
-        :param dict[str] d: will modify inplace
-        :param returnn.tf.network.TFNetwork network:
-        :param ((str) -> LayerBase) get_layer: function to get or construct another layer
-        """
-        # Overwrite default behavior for default sources.
-        # Here: none by default.
-        d.setdefault("from", [])
-        super(VariableLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
-        if d.get("init_by_layer", None):
-            d["init_by_layer"] = get_layer(d["init_by_layer"])
-
-    @classmethod
-    def get_out_data_from_opts(
-        cls, name, network, shape, dtype="float32", add_batch_axis=False, add_time_axis=False, **kwargs
-    ):
-        """
-        :param str name:
-        :param returnn.tf.network.TFNetwork network:
-        :param tuple[int|Dim]|list[int|Dim] shape:
-        :param str dtype:
-        :param bool add_batch_axis:
-        :param bool add_time_axis:
-        :rtype: Data
-        """
-        assert isinstance(shape, (list, tuple))
-        assert len(shape) == 0 or all(shape)
-        dim_tags = []
-        for i, d in enumerate(shape):
-            if isinstance(d, Dim):
-                assert d.dimension is not None, "%r: need static dims but got %r" % (name, d)
-            elif isinstance(d, int):
-                d = Dim(
-                    kind=Dim.Types.Spatial if i < len(shape) - 1 else Dim.Types.Feature,
-                    description="%s:static:%i" % (name, i),
-                    auto_generated=True,
-                    dimension=d,
-                )
-            else:
-                raise TypeError("Layer %r: invalid type %s in shape %r" % (name, type(d), shape))
-            dim_tags.append(d)
-        if add_time_axis:
-            dim_tags.insert(
-                0, Dim(kind=Dim.Types.Time, description="%s:dummy-time" % name, dimension=1, auto_generated=True)
-            )
-        if add_batch_axis:
-            dim_tags.insert(
-                0, Dim(kind=Dim.Types.Batch, description="batch", batch=network.get_global_batch_info(), dimension=None)
-            )
-        return Data(
-            name="%s_output" % name,
-            dim_tags=dim_tags,
-            dtype=dtype,
-            batch=network.get_global_batch_info() if add_batch_axis else None,
-        )
-
-
 class TrainFlagLayer(LayerBase):
     """
     Returns the train flag (bool scalar) of the current network.
@@ -13510,11 +13364,12 @@ def _init_layer_class_dict():
     global _LayerClassDictInitialized
     _LayerClassDictInitialized = True
     from . import rec
+    from . import variable
     from . import signal_processing
     from . import segmental_model
 
     auto_register_layer_classes(list(globals().values()))
-    for mod in [rec, signal_processing, segmental_model]:
+    for mod in [rec, variable, signal_processing, segmental_model]:
         auto_register_layer_classes(list(vars(mod).values()))
 
     for alias, v in {"forward": LinearLayer, "hidden": LinearLayer}.items():

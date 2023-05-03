@@ -4,7 +4,7 @@ Lots of random utility functions for TensorFlow.
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Optional, List
 import typing
 import contextlib
 import os
@@ -26,6 +26,7 @@ try:
     from tensorflow.python.ops.control_flow_v2_func_graphs import ControlFlowFuncGraph
 except ImportError:
     ControlFlowFuncGraph = None
+from tensorflow.python.ops.control_flow_ops import ControlFlowContext
 
 
 class CollectionKeys:
@@ -5857,6 +5858,72 @@ def same_control_flow_ctx(x):
     finally:
         # noinspection PyProtectedMember
         graph._set_control_flow_context(cur_ctx)
+
+
+def op_in_right_control_flow_context(op: tf.Operation) -> tf.Operation:
+    """
+    :param op: op with some control flow.
+    :return: some op in a control flow context which can be accessed from the current control flow context
+    """
+    import tensorflow.python.ops.control_flow_ops as tf_control_flow_ops
+    import tensorflow.python.ops.control_flow_util as tf_control_flow_util
+
+    # Check that we get the right control flow context.
+    # noinspection PyProtectedMember
+    control_flow_ctx: Optional[tf_control_flow_ops.ControlFlowContext] = op._get_control_flow_context()
+    graph = tf_compat.v1.get_default_graph()
+    if not control_flow_ctx and graph is op.graph:  # Simple case, early exit.
+        return op
+
+    if ControlFlowFuncGraph:
+        if isinstance(op.graph, ControlFlowFuncGraph):
+            raise NotImplementedError(f"not implemented yet for control flow v2, op {op}, graph {op.graph}")
+    assert graph is op.graph  # if this is not the case, maybe control flow V2, or eager. not implemented yet...
+    # noinspection PyProtectedMember
+    cur_control_flow_ctx: Optional[tf_control_flow_ops.ControlFlowContext] = graph._get_control_flow_context()
+    while not tf_control_flow_util.IsContainingContext(cur_control_flow_ctx, control_flow_ctx):
+        assert control_flow_ctx
+        # Get op from outer control flow context.
+        assert isinstance(control_flow_ctx, tf_control_flow_ops.CondContext)  # not implemented otherwise yet...
+        merge_ops = _merge_ops_for_control_flow_ctx(control_flow_ctx)
+        assert merge_ops, f"no merge op found for control flow context {control_flow_ctx}"
+        merge_ops = [op_ for op_ in merge_ops if _output_op_has_path_to_input_op(op_, op)]
+        assert merge_ops, f"no merge op found which has path to op {op}"
+        # Just take the first.
+        op = merge_ops[0]
+        # noinspection PyProtectedMember
+        control_flow_ctx = op._get_control_flow_context()
+    return op
+
+
+def _merge_ops_for_control_flow_ctx(control_flow_ctx: ControlFlowContext) -> List[tf.Operation]:
+    graph = tf_compat.v1.get_default_graph()
+    ops = []
+    for op in graph.get_operations():
+        op: tf.Operation
+        if op.type == "Merge":
+            for in_ in op.inputs:
+                in_: tf.Tensor
+                # noinspection PyProtectedMember
+                in_control_flow_ctx = in_.op._get_control_flow_context()
+                if in_control_flow_ctx is control_flow_ctx:
+                    ops.append(op)
+    return ops
+
+
+def _output_op_has_path_to_input_op(output_op: tf.Operation, input_op: tf.Operation) -> bool:
+    queue = [output_op]
+    visited = set()
+    while queue:
+        op = queue.pop(0)
+        if op in visited:
+            continue
+        visited.add(op)
+        if op is input_op:
+            return True
+        queue.extend([t.op for t in op.inputs])
+        queue.extend(op.control_inputs)
+    return False
 
 
 def get_protobuf_fields(obj):
