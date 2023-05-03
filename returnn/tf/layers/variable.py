@@ -3,7 +3,7 @@ VariableLayer and related
 """
 
 from __future__ import annotations
-from typing import Optional, List, Callable, TypeVar
+from typing import Optional, Sequence, List, Callable, TypeVar
 import contextlib
 import tensorflow as tf
 import tensorflow.python.ops.resource_variable_ops as tf_resource_variable_ops
@@ -378,11 +378,6 @@ class VariableAssignLayer(LayerBase):
         assert isinstance(var, VariableLayer), f"{self}: var must be a VariableLayer, got {var}"
         assert var.wrapped_var is not None, f"{self}: var must be wrapped, got {var}"
         self._var: _WrappedVariable = var.wrapped_var
-        # This is a very ugly workaround for cases where the placeholder was overwritten
-        # (e.g. via debug_add_check_numerics_on_output or whatever).
-        # In such cases, reading the VariableLayer's output would always give the same output
-        # and not reflect an update from our assign op.
-        var.output.placeholder = self._var
 
         deps = [src.output.placeholder.op for src in self.sources]
         value_data = value.output.copy_compatible_to(self.var.output)
@@ -413,3 +408,47 @@ class VariableAssignLayer(LayerBase):
     def get_out_data_from_opts(cls, name: str, var: LayerBase, **kwargs):
         """out"""
         return Tensor(name, dims=(), dtype="int32")  # dummy, will be just the op
+
+
+class VariableReadLayer(LayerBase):
+    """
+    Read a variable (currently expected from VariableLayer).
+    Supports control dependencies to exactly specify when it should be read.
+    """
+
+    layer_class = "variable_read"
+
+    def __init__(self, var: LayerBase, control_dependencies: Optional[Sequence[LayerBase]] = None, **kwargs):
+        """
+        :param var: e.g. VariableLayer
+        :param control_dependencies: to control what ops must run before the var is read (e.g. assign ops)
+        """
+        super().__init__(**kwargs)
+        self.var = var
+        self.control_dependencies = list(control_dependencies) if control_dependencies else []
+
+        assert isinstance(var, VariableLayer), f"{self}: var must be a VariableLayer, got {var}"
+        self.tf_var = var.var
+        assert isinstance(self.tf_var, tf.Variable), f"{self}: var must be a tf.Variable, got {self.tf_var}"
+        with tf.control_dependencies(
+            [src.output.placeholder.op for src in self.control_dependencies]
+        ) if self.control_dependencies else contextlib.nullcontext():
+            self.output.placeholder = self.tf_var.read_value()
+
+    def get_dep_layers(self) -> List[LayerBase]:
+        """deps"""
+        return super().get_dep_layers() + [self.var] + self.control_dependencies
+
+    @classmethod
+    def transform_config_dict(cls, d, network, get_layer):
+        """transform"""
+        d.setdefault("from", [])
+        super().transform_config_dict(d, network=network, get_layer=get_layer)
+        d["var"] = get_layer(d["var"])
+        if d.get("control_dependencies"):
+            d["control_dependencies"] = [get_layer(layer) for layer in d["control_dependencies"]]
+
+    @classmethod
+    def get_out_data_from_opts(cls, name: str, var: LayerBase, **kwargs):
+        """out"""
+        return var.output.copy_template(name="%s_output" % name)
