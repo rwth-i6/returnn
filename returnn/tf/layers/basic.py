@@ -309,6 +309,7 @@ class _ConcatInputLayer(LayerBase):
 class CopyLayer(_ConcatInputLayer):
     """
     This layer does nothing, it copies its input.
+    This is not even a ``tf.identity``. It refers to the same TF tensor.
     If multiple sources are provided, they are concatenated in the feature-dim.
     """
 
@@ -323,6 +324,9 @@ class CopyLayer(_ConcatInputLayer):
           We only have this here for the :class:`CopyLayer` because the :func:`get_out_data_from_opts`
           must know about it and define the right beam.
           Also see the option ``collocate_with``, which is different in that it does *not* add a dependency.
+          Note that this will not be real TF control dependencies,
+          but it simply sets the dependency on the layer.
+          If you want to have a real TF control dependency, use :class:`IdentityLayer`.
         """
         if in_dim and out_dim:
             assert in_dim == out_dim
@@ -413,6 +417,42 @@ class CopyLayer(_ConcatInputLayer):
             if not isinstance(extra_deps, (list, tuple)):
                 extra_deps = [extra_deps]
             d["extra_deps"] = [get_layer(src_name) for src_name in extra_deps]
+
+
+class IdentityLayer(LayerBase):
+    """
+    Wraps ``tf.identity`` with potential control dependencies.
+
+    The difference to :class:`CopyLayer` is that this creates a new TF op (``tf.identity``),
+    which allows for potential control dependencies.
+    This is the whole purpose of this layer.
+    """
+
+    layer_class = "identity"
+
+    def __init__(self, sources: List[LayerBase], control_dependencies: Sequence[LayerBase], **kwargs):
+        super().__init__(sources=sources, **kwargs)
+        assert len(sources) == 1
+        self.control_dependencies = control_dependencies
+        with tf.control_dependencies([src.output.placeholder.op for src in self.control_dependencies]):
+            self.output.placeholder = tf.identity(self.sources[0].output.placeholder)
+
+    def get_dep_layers(self) -> List[LayerBase]:
+        """deps"""
+        return super().get_dep_layers() + list(self.control_dependencies)
+
+    @classmethod
+    def get_out_data_from_opts(cls, name: str, sources: List[LayerBase], **kwargs):
+        """out"""
+        assert sources
+        return sources[0].output.copy(name="%s_output" % name)
+
+    @classmethod
+    def transform_config_dict(cls, d, network, get_layer):
+        """transform"""
+        super().transform_config_dict(d, network=network, get_layer=get_layer)
+        assert isinstance(d.get("control_dependencies"), (list, tuple))
+        d["control_dependencies"] = [get_layer(src_name) for src_name in d["control_dependencies"]]
 
 
 class ConcatLayer(LayerBase):
