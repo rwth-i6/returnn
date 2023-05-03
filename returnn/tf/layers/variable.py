@@ -366,20 +366,29 @@ class VariableAssignLayer(LayerBase):
 
     layer_class = "variable_assign"
 
-    def __init__(self, var: LayerBase, value: LayerBase, op: str = "assign", **kwargs):
+    def __init__(
+        self,
+        var: LayerBase,
+        value: LayerBase,
+        control_dependencies: Optional[Sequence[LayerBase]] = None,
+        op: str = "assign",
+        **kwargs,
+    ):
         """
         :param var:
         :param value:
+        :param control_dependencies:
         :param op: "assign" or "add"
         """
         super().__init__(**kwargs)
         self.var = var
         self.value = value
+        self.control_dependencies = list(control_dependencies) if control_dependencies else []
         assert isinstance(var, VariableLayer), f"{self}: var must be a VariableLayer, got {var}"
         assert var.wrapped_var is not None, f"{self}: var must be wrapped, got {var}"
         self._var: _WrappedVariable = var.wrapped_var
 
-        deps = [src.output.placeholder.op for src in self.sources]
+        deps = [src.output.placeholder.op for src in self.control_dependencies]
         value_data = value.output.copy_compatible_to(self.var.output)
         with tf.control_dependencies(deps) if deps else contextlib.nullcontext():
             if op == "assign":
@@ -394,7 +403,7 @@ class VariableAssignLayer(LayerBase):
 
     def get_dep_layers(self) -> List[LayerBase]:
         """deps"""
-        return super().get_dep_layers() + [self.var, self.value]
+        return super().get_dep_layers() + [self.var, self.value] + self.control_dependencies
 
     @classmethod
     def transform_config_dict(cls, d, network, get_layer):
@@ -403,6 +412,8 @@ class VariableAssignLayer(LayerBase):
         super().transform_config_dict(d, network=network, get_layer=get_layer)
         d["var"] = get_layer(d["var"])
         d["value"] = get_layer(d["value"])
+        if d.get("control_dependencies"):
+            d["control_dependencies"] = [get_layer(layer) for layer in d["control_dependencies"]]
 
     @classmethod
     def get_out_data_from_opts(cls, name: str, var: LayerBase, **kwargs):
