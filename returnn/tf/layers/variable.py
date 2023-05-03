@@ -96,6 +96,7 @@ class VariableLayer(LayerBase):
             if isinstance(out, tf_resource_variable_ops.ResourceVariable):
                 self.wrapped_var = _WrappedVariable(variable_layer=self, variable=out)
                 out = self.wrapped_var
+                tf_util.set_param_axes_split_info(out, axes_split_info=[d.axis_split_info() for d in dim_tags])
         self.output.placeholder = out
 
     def get_dep_layers(self):
