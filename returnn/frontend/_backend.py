@@ -1066,41 +1066,47 @@ def get_backend_by_raw_tensor_type(tensor_type: Type[T]) -> Union[Type[Backend[T
 
     # We don't register all possible subclasses in the dispatch table.
     # Check through the MRO.
-    for type_ in tensor_type.__mro__:
-        if type_ in _dispatch_table:
+    for base_type in tensor_type.__mro__:
+        if base_type in _dispatch_table:
             # Also register it for faster future lookups.
-            register_backend_by_tensor_type(tensor_type, _dispatch_table[type_])
-            return _dispatch_table[type_]
+            register_backend_by_tensor_type(tensor_type, _dispatch_table[base_type])
+            return _dispatch_table[base_type]
 
     # It would be registered if there was any select_engine or select_backend_* call.
     # However, some code might not have done that, so for the common cases,
     # we do it here.
-    if tensor_type.__module__.split(".")[0] == "tensorflow":
-        from returnn.tf.frontend_low_level import TFBackend
+    for base_type in tensor_type.__mro__:
+        if base_type.__module__.split(".")[0] == "tensorflow":
+            from returnn.tf.frontend_low_level import TFBackend
 
-        backend_type = TFBackend
-        tensor_types = _get_tensor_types_tf()
-    elif tensor_type.__module__.split(".")[0] == "torch":
-        from returnn.torch.frontend import TorchBackend
+            backend_type = TFBackend
+            tensor_types = _get_tensor_types_tf()
+        elif base_type.__module__.split(".")[0] == "torch":
+            from returnn.torch.frontend import TorchBackend
 
-        backend_type = TorchBackend
-        tensor_types = _get_tensor_types_torch()
-    elif tensor_type.__module__.startswith("returnn.tf.frontend_layers."):
-        from returnn.tf.frontend_layers import ReturnnLayersBackend, Layer
+            backend_type = TorchBackend
+            tensor_types = _get_tensor_types_torch()
+        elif base_type.__module__.startswith("returnn.tf.frontend_layers."):
+            from returnn.tf.frontend_layers import ReturnnLayersBackend, Layer
 
-        backend_type = ReturnnLayersBackend
-        tensor_types = (Layer,)
-    elif issubclass(tensor_type, numpy.ndarray):
-        from ._numpy_backend import NumpyBackend
+            backend_type = ReturnnLayersBackend
+            tensor_types = (Layer,)
+        elif issubclass(base_type, numpy.ndarray):
+            from ._numpy_backend import NumpyBackend
 
-        backend_type = NumpyBackend
-        tensor_types = (numpy.ndarray,)
-    else:
-        raise TypeError(f"unknown tensor type {tensor_type}")
-    assert any(issubclass(tensor_type, type_) for type_ in tensor_types)
-    for type_ in tensor_types:
-        register_backend_by_tensor_type(type_, backend_type)
-    return backend_type
+            backend_type = NumpyBackend
+            tensor_types = (numpy.ndarray,)
+        else:
+            continue
+
+        assert any(
+            issubclass(base_type, type_) for type_ in tensor_types
+        ), f"tensor type {tensor_type} base_type {base_type} not in {tensor_types}, expected for backend {backend_type}"
+        for base_type_ in tensor_types:
+            register_backend_by_tensor_type(base_type_, backend_type)
+        return backend_type
+
+    raise TypeError(f"unknown tensor type {tensor_type} with mro {tensor_type.__mro__}")
 
 
 def register_backend_by_tensor_type(tensor_type: Type[T], backend: Type[Backend[T]]):
