@@ -13362,7 +13362,6 @@ _LayerClassDict = {}  # type: typing.Dict[str,typing.Type[LayerBase]]
 
 def _init_layer_class_dict():
     global _LayerClassDictInitialized
-    _LayerClassDictInitialized = True
     from . import rec
     from . import variable
     from . import signal_processing
@@ -13375,6 +13374,8 @@ def _init_layer_class_dict():
     for alias, v in {"forward": LinearLayer, "hidden": LinearLayer}.items():
         assert alias not in _LayerClassDict
         _LayerClassDict[alias] = v
+
+    _LayerClassDictInitialized = True
 
 
 def auto_register_layer_classes(vars_values):

@@ -203,8 +203,9 @@ class _WrappedVariable(tf_resource_variable_ops.BaseResourceVariable):
 
     @property
     def name(self):
+        """name"""
         if self._in_graph_mode:
-            return self._parent_op.name
+            return self.op.name
         else:
             return "UnreadVariable"
 
@@ -239,9 +240,11 @@ class _WrappedVariable(tf_resource_variable_ops.BaseResourceVariable):
         return res
 
     def value(self):
+        """value"""
         return self._read_variable_op()
 
     def read_value(self):
+        """read value"""
         return self._read_variable_op()
 
     @property
@@ -259,82 +262,98 @@ class _WrappedVariable(tf_resource_variable_ops.BaseResourceVariable):
         )
 
     def assign_sub(self, delta, use_locking=None, name=None, read_value=True):
+        """assign sub"""
         return self._wrap_func(
             lambda: super(_WrappedVariable, self).assign_sub(delta, use_locking, name, read_value), is_assign_op=True
         )
 
     def assign_add(self, delta, use_locking=None, name=None, read_value=True):
+        """assign add"""
         return self._wrap_func(
             lambda: super(_WrappedVariable, self).assign_add(delta, use_locking, name, read_value), is_assign_op=True
         )
 
     def assign(self, value, use_locking=None, name=None, read_value=True):
+        """assign"""
         return self._wrap_func(
             lambda: super(_WrappedVariable, self).assign(value, use_locking, name, read_value), is_assign_op=True
         )
 
     def scatter_sub(self, sparse_delta, use_locking=False, name=None):
+        """scatter sub"""
         return self._wrap_func(
             lambda: super(_WrappedVariable, self).scatter_sub(sparse_delta, use_locking, name), is_assign_op=True
         )
 
     def scatter_add(self, sparse_delta, use_locking=False, name=None):
+        """scatter add"""
         return self._wrap_func(
             lambda: super(_WrappedVariable, self).scatter_add(sparse_delta, use_locking, name), is_assign_op=True
         )
 
     def scatter_max(self, sparse_delta, use_locking=False, name=None):
+        """scatter max"""
         return self._wrap_func(
             lambda: super(_WrappedVariable, self).scatter_max(sparse_delta, use_locking, name), is_assign_op=True
         )
 
     def scatter_min(self, sparse_delta, use_locking=False, name=None):
+        """scatter min"""
         return self._wrap_func(
             lambda: super(_WrappedVariable, self).scatter_min(sparse_delta, use_locking, name), is_assign_op=True
         )
 
     def scatter_mul(self, sparse_delta, use_locking=False, name=None):
+        """scatter mul"""
         return self._wrap_func(
             lambda: super(_WrappedVariable, self).scatter_mul(sparse_delta, use_locking, name), is_assign_op=True
         )
 
     def scatter_div(self, sparse_delta, use_locking=False, name=None):
+        """scatter div"""
         return self._wrap_func(
             lambda: super(_WrappedVariable, self).scatter_div(sparse_delta, use_locking, name), is_assign_op=True
         )
 
     def scatter_update(self, sparse_delta, use_locking=False, name=None):
+        """scatter update"""
         return self._wrap_func(
             lambda: super(_WrappedVariable, self).scatter_update(sparse_delta, use_locking, name), is_assign_op=True
         )
 
     def batch_scatter_update(self, sparse_delta, use_locking=False, name=None):
+        """batch scatter update"""
         return self._wrap_func(
             lambda: super(_WrappedVariable, self).batch_scatter_update(sparse_delta, use_locking, name),
             is_assign_op=True,
         )
 
     def scatter_nd_sub(self, indices, updates, name=None):
+        """scatter nd sub"""
         return self._wrap_func(
             lambda: super(_WrappedVariable, self).scatter_nd_sub(indices, updates, name), is_assign_op=True
         )
 
     def scatter_nd_add(self, indices, updates, name=None):
+        """scatter nd add"""
         return self._wrap_func(
             lambda: super(_WrappedVariable, self).scatter_nd_add(indices, updates, name), is_assign_op=True
         )
 
     def scatter_nd_update(self, indices, updates, name=None):
+        """scatter nd update"""
         return self._wrap_func(
             lambda: super(_WrappedVariable, self).scatter_nd_update(indices, updates, name), is_assign_op=True
         )
 
     def scatter_nd_max(self, indices, updates, name=None):
+        """scatter nd max"""
         return self._wrap_func(
             lambda: super(_WrappedVariable, self).scatter_nd_max(indices, updates, name), is_assign_op=True
         )
 
     def scatter_nd_min(self, indices, updates, name=None):
+        """scatter nd min"""
         return self._wrap_func(
             lambda: super(_WrappedVariable, self).scatter_nd_min(indices, updates, name), is_assign_op=True
         )

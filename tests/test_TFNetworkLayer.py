@@ -11,6 +11,7 @@ from returnn.util import better_exchook
 from returnn.config import Config
 from returnn.tf.network import *
 from returnn.tf.layers.basic import *
+from returnn.tf.layers.variable import *
 import returnn.tf.compat as tf_compat
 import returnn.tf.util.basic as tf_util
 from returnn.tf.util.data import Dim, SpatialDim, FeatureDim, BatchInfo
