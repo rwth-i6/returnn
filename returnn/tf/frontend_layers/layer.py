@@ -416,7 +416,13 @@ class Layer:
                 for name, child in list(root_mod_call.children.items()):
                     child.assign_parent(parent=self, suggested_name=name)
 
-        # Check if we can rename some layers.
+        # Check if we can rename some layers
+        # based on the module hierarchy (parameters and module outputs).
+        # The layer names are not really relevant though,
+        # so this is just to make the config nicer.
+        # Only for parameters, we must make sure that the name is correct.
+        # However, this can always be done via the `name_scope` option,
+        # if the name would not match otherwise.
         queue = [self.root]  # type: List[Layer]
         mod_in_layer = {}  # type: Dict[Tuple[Layer, RefIdEq[rf.Module]], Layer]
         while queue:
