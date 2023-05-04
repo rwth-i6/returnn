@@ -92,14 +92,14 @@ class BatchNorm(rf.Module):
         *,
         affine: bool = True,
         momentum: float = 0.1,
-        epsilon: float = 1e-3,
+        eps: float = 1e-3,
         use_mask: Optional[bool] = None,
     ):
         """
         :param in_dim: the feature dimension of the input
         :param affine: whether to use learnable parameters gamma and beta
         :param momentum: momentum for the running mean and variance
-        :param epsilon: epsilon for the variance
+        :param eps: epsilon for the variance
         :param use_mask: whether to use a mask for dynamic spatial dims.
           This must be specified if the input has dynamic spatial dims.
           True would use the correct masking then. However, that is inconsistent to all other frameworks
@@ -112,7 +112,7 @@ class BatchNorm(rf.Module):
         self.in_dim = in_dim
         self.use_mask = use_mask
         self.momentum = momentum
-        self.epsilon = epsilon
+        self.eps = eps
         self.running_mean = rf.Parameter([in_dim], auxiliary=True)
         self.running_mean.initial = 0.0
         self.running_variance = rf.Parameter([in_dim], auxiliary=True)
@@ -162,7 +162,7 @@ class BatchNorm(rf.Module):
                 lambda: (self.running_mean, self.running_variance),
             )
 
-            bn = (source - mean) * rf.rsqrt(variance + self.epsilon)
+            bn = (source - mean) * rf.rsqrt(variance + self.eps)
             if self.gamma is not None:
                 bn *= self.gamma
             if self.beta is not None:
@@ -182,7 +182,7 @@ class BatchNorm(rf.Module):
             use_mask=use_mask,
             affine=self.affine,
             momentum=self.momentum,
-            epsilon=self.epsilon,
+            epsilon=self.eps,
             running_mean=self.running_mean,
             running_variance=self.running_variance,
             gamma=self.gamma,
