@@ -1083,7 +1083,8 @@ class _NetDictBuilderCtx:
                 set((d, d.match_priority if isinstance(d, Dim) else 0) for d in dim_tags)
             ), f"duplicate dims in {sub_name_ctx} {sub_name_ctx.tensor}"
             if len(dim_tags) == len(set(dim_tags)):  # might not be unique without match_priority
-                if layer_dict["class"] not in {"constant", "variable", "random", "subnetwork"}:  # redundant
+                # For some layer classes, the out_shape would be redundant.
+                if layer_dict["class"] not in {"constant", "variable", "random", "subnetwork", "transpose"}:
                     layer_dict["out_shape"] = set(dim_tags)
 
             assert "name_scope" not in layer_dict  # we explicitly want to assign it now (if needed)
