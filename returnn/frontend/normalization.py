@@ -47,8 +47,7 @@ class LayerNorm(rf.Module):
         self.bias.initial = 0.0
 
     def __call__(self, x: Tensor) -> Tensor:
-        mean = rf.reduce_mean(x, axis=self.in_dim)
-        variance = rf.reduce_mean(rf.squared_difference(x, mean), axis=self.in_dim)
+        mean, variance = rf.moments(x, axis=self.in_dim)
         norm_x = (x - mean) * rf.rsqrt(variance + self.eps)
         return norm_x * self.scale + self.bias
 
