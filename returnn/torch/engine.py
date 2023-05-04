@@ -7,6 +7,7 @@ from typing import Optional, Union, Callable, Dict
 
 import os
 import torch
+import torch.distributed as dist
 import torch.utils.data.datapipes as dp
 from torchdata.dataloader2 import DataLoader2
 from random import random
@@ -56,6 +57,8 @@ class Engine(EngineBase):
         self._device = _get_device_from_config(config)
         print("Using device:", self._device, file=log.v2)
 
+        self._use_DDP = None # type: Optional[bool]
+
     def init_train_from_config(
         self,
         config: Optional[Config] = None,
@@ -71,6 +74,14 @@ class Engine(EngineBase):
         """
         assert config is self.config
         super().init_train_from_config(config=config)
+        if config.is_true("use_DDP"):
+            # initializes the distributed backend which will take care of sychronizing nodes/GPUs
+            dist.init_process_group("nccl")
+            rank = dist.get_rank()
+            print(f"Start running basic DDP example on rank {rank}.", file=log.v2)
+            self._device = rank % torch.cuda.device_count()
+            self._use_DDP = True
+
         self.train_dataset = train_data
         self.eval_datasets.clear()
         if dev_data:
