@@ -59,6 +59,7 @@ class Engine(EngineBase):
         print("Using device:", self._device, file=log.v2)
 
         self._use_DDP = None # type: Optional[bool]
+        self._gradient_accumulation_steps = 1 
 
     def init_train_from_config(
         self,
@@ -119,6 +120,10 @@ class Engine(EngineBase):
         self._train_step_func = self.config.typed_value("train_step")
         assert self._train_step_func, "train_step not defined"
 
+        self._gradient_accumulation_steps = config.int("gradient_accumulation_steps", 1)
+        assert self._gradient_accumulation_steps % torch.cuda.device_count() == 0
+        self._gradient_accumulation_steps //= torch.cuda.device_count()
+
     def train(self):
         """
         Main training loop.
@@ -159,9 +164,15 @@ class Engine(EngineBase):
         accumulated_inv_norm_factors_dict = NumbersDict()
         step_idx = 0
         for data in self._train_dataloader:
+            # in DDP training we only need to sync gradients at the last micro step.
+            if self._use_DDP:
+                self._pt_model.require_backward_grad_sync = (step_idx % self._gradient_accumulation_steps == self._gradient_accumulation_steps - 1)
+            
             self._run_step(data, train_flag=True)
 
             train_ctx = rf.get_run_ctx()
+            # scale the loss to account for gradient accumulation
+            train_ctx.losses = {name:loss/self._gradient_accumulation_steps for name, loss in train_ctx.losses.items()}
             total_loss = train_ctx.total_loss()
             losses_dict = NumbersDict(
                 {
@@ -172,10 +183,13 @@ class Engine(EngineBase):
             inv_norm_factors_dict = NumbersDict(
                 {name: float(_to_raw(loss.get_inv_norm_factor())) for name, loss in train_ctx.losses.items()}
             )
-
-            self._updater.get_optimizer().zero_grad()
+            # clear the gradients when every gradient accumulation loop starts
+            if step_idx % self._gradient_accumulation_steps == 0:
+                self._updater.get_optimizer().zero_grad()
             total_loss.raw_tensor.backward()
-            self._updater.get_optimizer().step()
+            # only update the weights when every gradient accumulation loop ends
+            if self._pt_model.require_backward_grad_sync:
+                self._updater.get_optimizer().step()
 
             accumulated_losses_dict += losses_dict
             accumulated_inv_norm_factors_dict += inv_norm_factors_dict
