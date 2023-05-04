@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import torch
 import typing
+from typing import Set
 
 from returnn.log import log
 from returnn.util.basic import RefIdEq
