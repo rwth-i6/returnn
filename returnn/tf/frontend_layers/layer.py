@@ -674,7 +674,7 @@ class Layer:
 
     def _get_unique_name(self, suggested_name: Optional[str] = None) -> str:
         name = suggested_name or self._get_suggested_name()
-        reserved_names = set(self.parent.children.keys()) | self._ReservedNames
+        reserved_names = set(self.parent.children.keys()) | self.parent._ReservedNames
         if self.parent.module:
             # Also reserve all attrib names of the parent module.
             # However, we allow to use the name if it is the attrib itself.
