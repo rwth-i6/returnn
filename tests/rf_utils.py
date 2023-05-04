@@ -5,6 +5,7 @@ RETURNN frontend (returnn.frontend) utils
 from __future__ import annotations
 from typing import Optional, Union, Dict
 import contextlib
+import re
 import numpy
 import numpy.testing
 from tensorflow.python.util import nest
@@ -130,7 +131,7 @@ def run_model_net_dict_tf(extern_data: TensorDict, get_model: rf.GetModelFunc, f
     )
 
     with tf_scope() as session, global_config_ctx(config):
-        net_dict = get_net_dict(epoch=1, step=0)
+        net_dict, model = get_net_dict(epoch=1, step=0)
         print("*** TF net dict:")
         pprint(net_dict)
         outputs_layers = rf.get_run_ctx().outputs
@@ -138,6 +139,18 @@ def run_model_net_dict_tf(extern_data: TensorDict, get_model: rf.GetModelFunc, f
 
         net = TFNetwork(config=config, train_flag=False)
         net.construct_from_dict(net_dict)
+
+        rf_params = {name.replace(".", "/"): p for name, p in model.named_parameters()}
+        tf_params = {re.sub("/param:0$", "", p.name): p for p in net.get_params_list()}
+        rf_params_not_in_tf = set(rf_params.keys()) - set(tf_params.keys())
+        tf_params_not_in_rf = set(tf_params.keys()) - set(rf_params.keys())
+        if rf_params_not_in_tf or tf_params_not_in_rf:
+            raise Exception(
+                "params not equal:\n"
+                f"RF params not in TF: {rf_params_not_in_tf}\n"
+                f"TF params not in RF: {tf_params_not_in_rf}"
+            )
+
         session.run(tf_compat.v1.global_variables_initializer())
 
         outputs_tf = TensorDict()
