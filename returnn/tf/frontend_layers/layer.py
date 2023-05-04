@@ -646,6 +646,11 @@ class Layer:
         while frame:
             self._enter_stack_frames.add(frame)
             frame = frame.f_back
+        # make_layer() uses current_ctx() to get the parent scope.
+        # current_ctx() uses _auto_setup_parent_name_ctx() and this checks the recent layer.
+        # So, to make sure that we get the right parent scope in make_layer(),
+        # we need to set this.
+        self.__class__._recent = self
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
