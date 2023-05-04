@@ -246,18 +246,22 @@ class Updater(object):
         # Tracker of visited parameters to only add each parameter once, in case two modules share common parameters.
         # We need the wrapper class RefIdEq because Parameters are compared by value and not by reference.
         visited_params: Set[RefIdEq[torch.nn.Parameter]] = set()
-        for mn, m in self.network.named_modules():
-            for pn, p in m.named_parameters():
-                if RefIdEq(p) in visited_params:
+        for module_name, module in self.network.named_modules():
+            module_name: str
+            module: torch.nn.Module
+            for param_name, param in module.named_parameters(recurse=False):
+                param_name: str
+                param: torch.nn.Parameter
+                if RefIdEq(param) in visited_params:
                     continue
-                visited_params.add(RefIdEq(p))
-                fpn = "%s.%s" % (mn, pn) if mn else pn  # Full param name
-                if pn.endswith("bias"):
-                    no_wd_params.add(fpn)
-                elif pn.endswith("weight") and isinstance(m, blacklist_wd_modules):
-                    no_wd_params.add(fpn)
+                visited_params.add(RefIdEq(param))
+                full_param_name = "%s.%s" % (module_name, param_name) if module_name else param_name
+                if param_name.endswith("bias"):
+                    no_wd_params.add(full_param_name)
+                elif param_name.endswith("weight") and isinstance(module, blacklist_wd_modules):
+                    no_wd_params.add(full_param_name)
                 else:
-                    wd_params.add(fpn)
+                    wd_params.add(full_param_name)
 
         param_dict = {pn: p for pn, p in self.network.named_parameters()}
         optim_groups = [
