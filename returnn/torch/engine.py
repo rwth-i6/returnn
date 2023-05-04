@@ -4,10 +4,13 @@ Main engine for PyTorch
 
 from __future__ import annotations
 from typing import Optional, Union, Callable, Dict
+from contextlib import nullcontext
 
 import os
 import torch
 import torch.utils.data.datapipes as dp
+from torch import autocast
+from torch.cuda import amp
 from torchdata.dataloader2 import DataLoader2
 from random import random
 
@@ -52,6 +55,9 @@ class Engine(EngineBase):
         self._train_step_func = None  # type: Optional[Callable]
         self._save_model_epoch_interval = 1
         self._updater = None  # type: Optional[Updater]
+
+        self._amp_dtype = None  # type: Optional[str]
+        self._grad_scaler = None  # type: Optional[amp.GradScaler]
 
         self._device = _get_device_from_config(config)
         print("Using device:", self._device, file=log.v2)
@@ -104,6 +110,12 @@ class Engine(EngineBase):
         self._train_step_func = self.config.typed_value("train_step")
         assert self._train_step_func, "train_step not defined"
 
+        amp_options = self.config.typed_value("torch_amp_options")
+        if amp_options is not None:
+            assert isinstance(amp_options, dict)
+            self._amp_dtype = amp_options.get("dtype")
+            self._grad_scaler = amp.GradScaler()
+
     def train(self):
         """
         Main training loop.
@@ -144,7 +156,9 @@ class Engine(EngineBase):
         accumulated_inv_norm_factors_dict = NumbersDict()
         step_idx = 0
         for data in self._train_dataloader:
-            self._run_step(data, train_flag=True)
+            self._updater.get_optimizer().zero_grad()
+            with autocast(device_type=self._device, dtype=self._amp_dtype) if self._amp_dtype else nullcontext():
+                self._run_step(data, train_flag=True)
 
             train_ctx = rf.get_run_ctx()
             total_loss = train_ctx.total_loss()
@@ -158,9 +172,13 @@ class Engine(EngineBase):
                 {name: float(_to_raw(loss.get_inv_norm_factor())) for name, loss in train_ctx.losses.items()}
             )
 
-            self._updater.get_optimizer().zero_grad()
-            total_loss.raw_tensor.backward()
-            self._updater.get_optimizer().step()
+            if self._amp_dtype:
+                self._grad_scaler.scale(total_loss).backward()
+                self._grad_scaler.step(self._updater.get_optimizer())
+                self._grad_scaler.update()
+            else:
+                total_loss.raw_tensor.backward()
+                self._updater.get_optimizer().step()
 
             accumulated_losses_dict += losses_dict
             accumulated_inv_norm_factors_dict += inv_norm_factors_dict
@@ -211,7 +229,10 @@ class Engine(EngineBase):
             with torch.no_grad():
                 for data in data_loader:
 
-                    self._run_step(data)
+                    with autocast(
+                        device_type=self._device, dtype=self._amp_dtype
+                    ) if self._amp_dtype else nullcontext():
+                        self._run_step(data)
                     train_ctx = rf.get_run_ctx()
 
                     if score_keys is None:
