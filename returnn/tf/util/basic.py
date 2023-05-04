@@ -5860,10 +5860,11 @@ def same_control_flow_ctx(x):
         graph._set_control_flow_context(cur_ctx)
 
 
-def op_in_right_control_flow_context(op: tf.Operation) -> tf.Operation:
+def op_in_right_control_flow_context(op: tf.Operation) -> Optional[tf.Operation]:
     """
     :param op: op with some control flow.
-    :return: some op in a control flow context which can be accessed from the current control flow context
+    :return: some op in a control flow context which can be accessed from the current control flow context,
+        or None if there is no such op.
     """
     import tensorflow.python.ops.control_flow_ops as tf_control_flow_ops
     import tensorflow.python.ops.control_flow_util as tf_control_flow_util
@@ -5885,8 +5886,14 @@ def op_in_right_control_flow_context(op: tf.Operation) -> tf.Operation:
         assert control_flow_ctx
         # Get op from outer control flow context.
         assert isinstance(control_flow_ctx, tf_control_flow_ops.CondContext)  # not implemented otherwise yet...
+        # If the current control flow context is the False branch,
+        # and the op control flow context is from the corresponding True branch,
+        # then we cannot access it.
+        # Also, there would not be any Merge ops, as the cond is not finished yet.
+        if isinstance(cur_control_flow_ctx, tf_control_flow_ops.CondContext) and cur_control_flow_ctx.pred is control_flow_ctx.pred and control_flow_ctx.branch == 1 and cur_control_flow_ctx.branch == 0:
+            return None
         merge_ops = _merge_ops_for_control_flow_ctx(control_flow_ctx)
-        assert merge_ops, f"no merge op found for control flow context {control_flow_ctx}"
+        assert merge_ops, f"no merge op found for control flow context {control_flow_ctx}, cur {cur_control_flow_ctx}"
         merge_ops = [op_ for op_ in merge_ops if _output_op_has_path_to_input_op(op_, op)]
         assert merge_ops, f"no merge op found which has path to op {op}"
         # Just take the first.

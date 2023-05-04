@@ -221,7 +221,11 @@ class _WrappedVariable(tf_resource_variable_ops.BaseResourceVariable):
     def _get_recent_op(coll: List[tf.Operation]) -> Optional[tf.Operation]:
         if not coll:
             return None
-        recent_op = tf_util.op_in_right_control_flow_context(coll[-1])
+        recent_op = None
+        for op in reversed(coll):
+            recent_op = tf_util.op_in_right_control_flow_context(op)
+            if recent_op is not None:
+                break
         if recent_op is not coll[-1]:
             coll.append(recent_op)
         return recent_op
