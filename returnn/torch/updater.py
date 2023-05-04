@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import torch
 import typing
-from typing import Set
+from typing import Any, Set, Dict
 
 from returnn.log import log
 from returnn.util.basic import RefIdEq
@@ -35,7 +35,8 @@ def _init_optimizer_classes_dict():
 
 def get_optimizer_class(class_name):
     """
-    :param str|function|type[torch.optim.Optimizer] class_name: Optimizer data, e.g. "adam", torch.optim.Adam...
+    :param str|()->torch.optim.Optimizer|type[torch.optim.Optimizer] class_name:
+        Optimizer data, e.g. "adam", torch.optim.Adam...
     :return: Optimizer class
     :rtype: type[torch.optim.Optimizer]
     """
@@ -156,7 +157,7 @@ class Updater(object):
         if isinstance(optimizer_opts, torch.optim.Optimizer):
             return optimizer_opts
         elif callable(optimizer_opts):
-            optimizer_opts = {"class": optimizer_opts}
+            optimizer_opts: Dict[str, Any] = {"class": optimizer_opts}
         else:
             if not isinstance(optimizer_opts, dict):
                 raise ValueError("'optimizer' must of type dict, callable or torch.optim.Optimizer instance.")
