@@ -7,8 +7,10 @@ from __future__ import annotations
 
 import torch
 import typing
+from typing import Set
 
 from returnn.log import log
+from returnn.util.basic import RefIdEq
 
 _OptimizerClassesDictInitialized = False
 _OptimizerClassesDict = {}
@@ -241,8 +243,14 @@ class Updater(object):
         wd_params = set()
         no_wd_params = set()
         blacklist_wd_modules = (torch.nn.LayerNorm, torch.nn.Embedding)
+        # Tracker of visited parameters to only add each parameter once, in case two modules share common parameters.
+        # We need the wrapper class RefIdEq because Parameters are compared by value and not by reference.
+        visited_params: Set[RefIdEq[torch.nn.Parameter]] = set()
         for mn, m in self.network.named_modules():
             for pn, p in m.named_parameters():
+                if RefIdEq(p) in visited_params:
+                    continue
+                visited_params.add(RefIdEq(p))
                 fpn = "%s.%s" % (mn, pn) if mn else pn  # Full param name
                 if pn.endswith("bias"):
                     no_wd_params.add(fpn)
