@@ -604,6 +604,15 @@ class Backend(Generic[T]):
         raise NotImplementedError
 
     @staticmethod
+    def parameter_assign(param: rf.Parameter, value: Tensor, op: str = "assign") -> None:
+        """
+        :param param: parameter
+        :param value: new value
+        :param op: "assign" or "add"
+        """
+        raise NotImplementedError
+
+    @staticmethod
     def runtime_sanity_checks(tensor: Tensor) -> Any:
         """
         Checks whether the tensor.raw_tensor is consistent with the tensor metadata.

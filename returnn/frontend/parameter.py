@@ -3,7 +3,7 @@ Parameter / variable
 """
 
 from __future__ import annotations
-from typing import Optional, TypeVar, Sequence
+from typing import Optional, Union, TypeVar, Sequence
 from returnn.tensor import Tensor, Dim
 import returnn.frontend as rf
 from ._backend import global_backend as _global_backend
@@ -114,6 +114,27 @@ class Parameter(Tensor[T]):
         if isinstance(value, rf.init.ParamInit):
             value = value(dims=self.dims, dtype=self.dtype)
         self._raw_backend.set_parameter_initial_value(self, value)
+
+    def assign(self, value: Union[Tensor, rf.RawTensorTypes]):
+        """
+        Assign new value to this parameter.
+        This will also update the allocated raw tensor inplace.
+
+        For graph-based backends, handling the control flow is up to the backend,
+        e.g.~making sure it is being executed in the right order,
+        in the right control flow context, and at all.
+        There is no op or anything like that returned here which the user needs to take care of.
+        So the user can think of it just as imperative eager-style code.
+        """
+        self._raw_backend.parameter_assign(self, rf.convert_to_tensor(value, _backend=self._raw_backend), op="assign")
+
+    def assign_add(self, value: Union[Tensor, rf.RawTensorTypes]):
+        """
+        Add value to this parameter.
+        This will also update the raw tensor.
+        See :func:`assign`.
+        """
+        self._raw_backend.parameter_assign(self, rf.convert_to_tensor(value, _backend=self._raw_backend), op="add")
 
     @property
     def weight_decay(self) -> float:
