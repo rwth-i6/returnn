@@ -8,6 +8,7 @@ from typing import Optional, Union, Callable, Dict
 import os
 import torch
 import torch.distributed as dist
+from torch.nn.parallel import DistributedDataParallel as DDP
 import torch.utils.data.datapipes as dp
 from torchdata.dataloader2 import DataLoader2
 from random import random
@@ -107,6 +108,9 @@ class Engine(EngineBase):
         self._load_model(epoch=self._start_epoch)
         self._save_model_epoch_interval = config.int("save_interval", 1)
 
+        if self._use_DDP:
+            # wrap the model use DDP
+            self._pt_model = DDP(self._pt_model, device_ids=[self._device])
         self._updater = Updater(self.config, self._pt_model, self.learning_rate)
         self._updater.create_optimizer()
         if self._start_epoch > 1:
