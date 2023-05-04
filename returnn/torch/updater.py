@@ -245,7 +245,7 @@ class Updater(object):
         blacklist_wd_modules = (torch.nn.LayerNorm, torch.nn.Embedding)
         # Tracker of visited parameters to only add each parameter once, in case two modules share common parameters.
         # We need the wrapper class RefIdEq because Parameters are compared by value and not by reference.
-        visited_params: typing.Set[RefIdEq[torch.nn.Parameter]] = set()
+        visited_params: Set[RefIdEq[torch.nn.Parameter]] = set()
         for mn, m in self.network.named_modules():
             for pn, p in m.named_parameters():
                 if RefIdEq(p) in visited_params:
