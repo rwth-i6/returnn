@@ -77,6 +77,7 @@ def make_layer(
         # Do not assign name_ctx.tensor yet because we potentially could raise exceptions later.
         assert layer.tensor is None
         assert layer.layer_dict is None
+        assert not layer.usages
 
         assert layer_dict is not None
 
@@ -94,6 +95,12 @@ def make_layer(
                 out.batch = BatchInfo.get_common_batch_info(batches)
             elif layer.root.global_batch:
                 out.batch = layer.root.global_batch
+
+        for value in nest.flatten(layer_dict):
+            if isinstance(value, Tensor) and value.raw_tensor is not None:
+                value: Tensor[rfl.Layer]
+                assert isinstance(value.raw_tensor, rfl.Layer)
+                value.raw_tensor.usages.append(layer)
 
         layer.layer_dict = layer_dict
         layer.tensor = out

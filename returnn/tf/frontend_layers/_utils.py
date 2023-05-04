@@ -3,7 +3,7 @@ Some utilities for internal use
 """
 
 from __future__ import annotations
-from typing import Optional, Union, Iterable, List
+from typing import Optional, Union, Sequence, Iterable, List
 from returnn.util.basic import NotSpecified
 from returnn.tensor import Tensor, Dim
 from returnn.util.basic import RefIdEq
@@ -28,6 +28,48 @@ def unique_tensor_list(tensors: Iterable[Tensor]) -> List[Tensor]:
 def copy(tensor: Tensor[rfl.Layer], *, name: Union[rfl.Layer, str]) -> Tensor[rfl.Layer]:
     """copy"""
     return rfl.make_layer({"class": "copy", "from": tensor}, name=name)
+
+
+def identity_with_control_deps(
+    tensor: Tensor[rfl.Layer],
+    control_deps: Sequence[Tensor[rfl.Layer]],
+    *,
+    name: Optional[Union[str, rfl.Layer]] = None,
+) -> Tensor[rfl.Layer]:
+    """
+    :param tensor:
+    :param control_deps:
+    :param name:
+    :return: tensor with control deps
+    """
+    return rfl.make_layer({"class": "identity", "from": tensor, "control_dependencies": control_deps}, name=name)
+
+
+def zeros_like_as_output_in_scope(tensor: Tensor, *, name: rfl.Layer):
+    """
+    :param tensor:
+    :param name:
+    :return:
+    """
+    args = {}
+    if tensor.sparse_dim:
+        args["sparse_dim"] = tensor.sparse_dim
+    shape_deps = rfl.get_dim_deps(tensor.dims)
+    if shape_deps:
+        args["shape_deps"] = shape_deps
+    res = rfl.make_layer(
+        {
+            "class": "constant",
+            "value": 0,
+            "shape": tensor.dims,
+            "dtype": tensor.dtype,
+            **args,
+            "is_output_layer": True,
+        },
+        name=name,
+    )
+    name.parent.marked_outputs.append(res)
+    return res
 
 
 def mark_as_output_in_scope(tensor: Tensor, scope: rfl.Layer) -> Tensor:

@@ -47,8 +47,7 @@ class LayerNorm(rf.Module):
         self.bias.initial = 0.0
 
     def __call__(self, x: Tensor) -> Tensor:
-        mean = rf.reduce_mean(x, axis=self.in_dim)
-        variance = rf.reduce_mean(rf.squared_difference(x, mean), axis=self.in_dim)
+        mean, variance = rf.moments(x, axis=self.in_dim)
         norm_x = (x - mean) * rf.rsqrt(variance + self.eps)
         return norm_x * self.scale + self.bias
 
@@ -93,14 +92,14 @@ class BatchNorm(rf.Module):
         *,
         affine: bool = True,
         momentum: float = 0.1,
-        epsilon: float = 1e-3,
+        eps: float = 1e-3,
         use_mask: Optional[bool] = None,
     ):
         """
         :param in_dim: the feature dimension of the input
         :param affine: whether to use learnable parameters gamma and beta
         :param momentum: momentum for the running mean and variance
-        :param epsilon: epsilon for the variance
+        :param eps: epsilon for the variance
         :param use_mask: whether to use a mask for dynamic spatial dims.
           This must be specified if the input has dynamic spatial dims.
           True would use the correct masking then. However, that is inconsistent to all other frameworks
@@ -113,7 +112,7 @@ class BatchNorm(rf.Module):
         self.in_dim = in_dim
         self.use_mask = use_mask
         self.momentum = momentum
-        self.epsilon = epsilon
+        self.eps = eps
         self.running_mean = rf.Parameter([in_dim], auxiliary=True)
         self.running_mean.initial = 0.0
         self.running_variance = rf.Parameter([in_dim], auxiliary=True)
@@ -128,11 +127,8 @@ class BatchNorm(rf.Module):
             self.beta.initial = 0.0
 
     def __call__(self, source: Tensor) -> Tensor:
-        # We wrap the RETURNN layer because we want efficient handling if possible,
-        # which is potentially the use of a fused op,
-        # and maybe reordering of dims.
-        # https://github.com/rwth-i6/returnn_common/issues/89
         assert self.in_dim in source.dims
+
         if any(d.need_masking() for d in source.dims if d != self.in_dim):
             if self.use_mask is None:
                 raise ValueError(
@@ -141,6 +137,44 @@ class BatchNorm(rf.Module):
             use_mask = self.use_mask
         else:
             use_mask = False  # not needed. False because this potentially enables an efficient fused op.
+
+        if use_mask:
+            # Generic implementation which supports masking.
+            use_current_batch_stats = self.running_mean is None or rf.get_run_ctx().train_flag
+            update_running_stats = self.running_mean is not None and rf.get_run_ctx().train_flag
+            need_current_batch_stats = rf.opt_logical_or(use_current_batch_stats, update_running_stats)
+
+            mean_cur_batch, variance_cur_batch = rf.cond(
+                need_current_batch_stats,
+                lambda: rf.moments(source, axis=[d for d in source.dims if d != self.in_dim]),
+                lambda: (self.running_mean, self.running_variance),
+            )
+
+            def _update_running_stats():
+                self.running_mean.assign_add((mean_cur_batch - self.running_mean) * self.momentum)
+                self.running_variance.assign_add((variance_cur_batch - self.running_variance) * self.momentum)
+
+            rf.cond(update_running_stats, _update_running_stats, lambda: None)
+
+            mean, variance = rf.cond(
+                use_current_batch_stats,
+                lambda: (mean_cur_batch, variance_cur_batch),
+                lambda: (self.running_mean, self.running_variance),
+            )
+
+            bn = (source - mean) * rf.rsqrt(variance + self.eps)
+            if self.gamma is not None:
+                bn *= self.gamma
+            if self.beta is not None:
+                bn += self.beta
+            return bn
+
+        # Fallback to specific backend implementation for the standard case without masking.
+        # This fallback probably can internally use a more efficient implementation like from CuDNN.
+        # In case of TF-net-dict backend, we wrap the RETURNN layer because we want efficient handling if possible,
+        # which is potentially the use of a fused op,
+        # and maybe reordering of dims.
+        # https://github.com/rwth-i6/returnn_common/issues/89
         # noinspection PyProtectedMember
         return source._raw_backend.batch_norm(
             source=source,
@@ -148,7 +182,7 @@ class BatchNorm(rf.Module):
             use_mask=use_mask,
             affine=self.affine,
             momentum=self.momentum,
-            epsilon=self.epsilon,
+            epsilon=self.eps,
             running_mean=self.running_mean,
             running_variance=self.running_variance,
             gamma=self.gamma,

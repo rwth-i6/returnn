@@ -4,7 +4,7 @@ Math ops
 
 from __future__ import annotations
 import typing
-from typing import Optional, Sequence, Union, Tuple
+from typing import Optional, Sequence, Union, Tuple, overload
 import numpy
 from returnn.tensor import Tensor, Dim
 import returnn.frontend as rf
@@ -33,6 +33,7 @@ __all__ = [
     "logical_and",
     "logical_or",
     "logical_not",
+    "opt_logical_or",
     "maximum",
     "minimum",
     "identity",
@@ -297,6 +298,24 @@ def logical_not(a: Tensor) -> Tensor:
     """logical_not"""
     # noinspection PyProtectedMember
     return a._raw_backend.activation(a, "logical_not")
+
+
+@overload
+def opt_logical_or(a: bool, b: bool) -> bool:
+    """logical or"""
+
+
+def opt_logical_or(a: Union[Tensor, bool], b: Union[Tensor, bool]) -> Union[Tensor, bool]:
+    """logical or"""
+    if isinstance(a, bool):
+        if a:
+            return True
+        return b
+    if isinstance(b, bool):
+        if b:
+            return True
+        return a
+    return combine(a, "logical_or", b)
 
 
 def maximum(a: Tensor, b: Union[Tensor, _RawTensorTypes], *other_tensors) -> Tensor:
