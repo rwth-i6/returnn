@@ -1155,7 +1155,7 @@ class Engine(EngineBase):
             assert BackendEngine.get_selected_engine() == BackendEngine.TensorFlowNetDict  # not implemented otherwise
             assert not self.pretrain  # the RF API uses a different pretrain mechanism
             assert epoch is not None and step is not None
-            net_dict = rfl.get_net_dict(epoch=epoch, step=step)
+            net_dict, _ = rfl.get_net_dict(epoch=epoch, step=step)
         elif self.is_pretrain_epoch(epoch=epoch):
             # This would be obsolete if we don't want to load an existing model.
             # In self.init_train_epoch(), we initialize a new model.

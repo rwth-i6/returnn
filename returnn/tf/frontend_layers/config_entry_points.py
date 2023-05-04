@@ -6,7 +6,7 @@ https://github.com/rwth-i6/returnn/issues/1120
 """
 
 from __future__ import annotations
-from typing import Any, Dict
+from typing import Any, Dict, Tuple
 from tensorflow.python.util import nest
 from returnn.util.basic import BehaviorVersion
 from returnn.tensor import TensorDict, Tensor, Dim
@@ -23,7 +23,7 @@ def get_net_dict(
     *,
     epoch: int,
     step: int,
-) -> Dict[str, Any]:
+) -> Tuple[Dict[str, Any], rf.Module]:
     """called from the RETURNN config"""
     BehaviorVersion.set_min_behavior_version(rfl.min_returnn_behavior_version)
     rf.select_backend_returnn_layers_tf()
@@ -110,4 +110,4 @@ def get_net_dict(
         return elem
 
     net_dict = nest.map_structure(_cleanup_net_dict_value, net_dict)
-    return net_dict
+    return net_dict, model
