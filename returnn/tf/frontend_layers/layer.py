@@ -159,7 +159,7 @@ class Layer:
         self.extern_data = {}  # type: Dict[str, Tensor]  # only for the root name ctx
         self.global_batch = None  # type: Optional[BatchInfo]  # only for the root name ctx
         self.extra_net_dict = {}  # type: Dict[str, Any]  # only for the root name ctx
-        self.marked_outputs = []  # type: List[Tensor]
+        self.marked_outputs = []  # type: List[Tensor[rfl.Layer]]
         self.marked_losses = []  # type: List[Tensor]
         self.parent = parent if parent is not NotSpecified else self.current_ctx()
         self.name = name  # early assign such that debug repr works later
@@ -225,17 +225,19 @@ class Layer:
         Moves an existing layer ref (with assigned name ctx)
         to another name ctx (without assigned layer or layer ref).
 
-        This assumes that there are no other references to tensor.name_ctx
+        This assumes that there are no other references to tensor.raw_tensor
         because those would become invalid.
         References to tensor itself should be fine.
         """
         assert not self.layer_dict and not self.tensor  # none yet assigned
+        assert tensor.raw_tensor is not None
+        assert isinstance(tensor.raw_tensor, Layer)
 
         # Remove tensor.name_ctx from its parent name ctx.
         if tensor.raw_tensor.parent:
             old_name_ctx = tensor.raw_tensor.parent.children.pop(tensor.raw_tensor.name)
             assert old_name_ctx is tensor.raw_tensor
-        old_name_ctx = tensor.raw_tensor  # type: Layer
+        old_name_ctx: Layer = tensor.raw_tensor
 
         # Now reassign.
         tensor.raw_tensor = self
