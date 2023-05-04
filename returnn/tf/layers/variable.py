@@ -3,10 +3,9 @@ VariableLayer and related
 """
 
 from __future__ import annotations
-from typing import Optional, Sequence, List, Callable, TypeVar
+from typing import Optional, Sequence, List, TypeVar
 import contextlib
 import tensorflow as tf
-import tensorflow.python.ops.resource_variable_ops as tf_resource_variable_ops
 import returnn.tf.compat as tf_compat
 import returnn.tf.util.basic as tf_util
 from returnn.tensor import Tensor, Dim
@@ -85,7 +84,6 @@ class VariableLayer(LayerBase):
                 axes_split_info=[d.axis_split_info() for d in dim_tags],
                 non_critical_for_restore=non_critical_for_restore,
             )
-            self.wrapped_var = None  # type: Optional[_WrappedVariable]
             out = self.var
             if add_time_axis:
                 out = tf.expand_dims(out, axis=0)
@@ -93,10 +91,6 @@ class VariableLayer(LayerBase):
                 # Unbroadcast to not confuse some other layers
                 batch_dim = self.output.get_batch_dim()
                 out = tf_util.expand_dims_unbroadcast(out, axis=0, dim=batch_dim)
-            if isinstance(out, tf_resource_variable_ops.ResourceVariable):
-                self.wrapped_var = _WrappedVariable(variable_layer=self, variable=out)
-                out = self.wrapped_var
-                tf_util.set_param_axes_split_info(out, axes_split_info=[d.axis_split_info() for d in dim_tags])
         self.output.placeholder = out
 
     def get_dep_layers(self):
@@ -167,203 +161,6 @@ class VariableLayer(LayerBase):
         )
 
 
-class _WrappedVariable(tf_resource_variable_ops.BaseResourceVariable):
-    """
-    Similar as TF _WrappedVariable, this wraps an underlying variable.
-    We make sure that reads and assignments are in the right order.
-    If there is no assignment (via :class:`VariableAssignLayer`),
-    no extra logic will be done, and reads will just be direct.
-
-    The code is based on TF _WrappedVariable and adopted.
-    """
-
-    def __init__(
-        self,
-        *,
-        variable: tf_resource_variable_ops.BaseResourceVariable,
-        variable_layer: VariableLayer,
-    ):
-        assert isinstance(variable, tf_resource_variable_ops.BaseResourceVariable), f"{variable!r} is {type(variable)}"
-        handle: tf.Tensor = variable.handle
-        dtype: tf.DType = variable.dtype
-        shape: tf.TensorShape = variable.shape
-        unique_id = variable._unique_id
-        handle_name: str = getattr(handle, "name", "")  # if EagerTensor, raises AttributeError, thus we get ""
-        super(_WrappedVariable, self).__init__(
-            handle=handle,
-            shape=shape,
-            handle_name=handle_name,
-            unique_id=unique_id,
-            dtype=dtype,
-            graph_element=None,
-        )
-        self._variable: tf_resource_variable_ops.BaseResourceVariable = variable
-        self._variable_layer: VariableLayer = variable_layer
-        self._assign_ops: List[tf.Operation] = []
-        self._all_ops: List[tf.Operation] = []
-
-    @property
-    def name(self):
-        """name"""
-        if self._in_graph_mode:
-            return self.op.name
-        else:
-            return "UnreadVariable"
-
-    @property
-    def op(self):
-        """The op for this variable."""
-        if not self._all_ops:
-            return self._handle.op
-        return self._get_recent_op(self._all_ops)
-
-    @staticmethod
-    def _get_recent_op(coll: List[tf.Operation]) -> Optional[tf.Operation]:
-        if not coll:
-            return None
-        recent_op = None
-        for op in reversed(coll):
-            recent_op = tf_util.op_in_right_control_flow_context(op)
-            if recent_op is not None:
-                break
-        if recent_op is not coll[-1]:
-            coll.append(recent_op)
-        return recent_op
-
-    def _wrap_func(self, func: Callable[[], T], *, is_assign_op: bool) -> T:
-        recent_op = self._get_recent_op(self._all_ops if is_assign_op else self._assign_ops)
-        with tf.control_dependencies([recent_op]) if recent_op else contextlib.nullcontext():
-            res = func()
-        if isinstance(res, tf.Operation):
-            op = res
-        else:
-            assert isinstance(res.op, tf.Operation)
-            op = res.op
-        if is_assign_op:
-            self._assign_ops.append(op)
-        self._all_ops.append(op)
-        return res
-
-    def value(self):
-        """value"""
-        return self._read_variable_op()
-
-    def read_value(self):
-        """read value"""
-        return self._read_variable_op()
-
-    @property
-    def _graph_element(self):
-        return self._read_variable_op()
-
-    @_graph_element.setter
-    def _graph_element(self, value):
-        pass  # ignore
-
-    def _read_variable_op(self, *args, **kwargs):
-        assert not args and not kwargs
-        return self._wrap_func(
-            lambda: tf_resource_variable_ops.read_variable_op(self._handle, self._dtype), is_assign_op=False
-        )
-
-    def assign_sub(self, delta, use_locking=None, name=None, read_value=True):
-        """assign sub"""
-        return self._wrap_func(
-            lambda: super(_WrappedVariable, self).assign_sub(delta, use_locking, name, read_value), is_assign_op=True
-        )
-
-    def assign_add(self, delta, use_locking=None, name=None, read_value=True):
-        """assign add"""
-        return self._wrap_func(
-            lambda: super(_WrappedVariable, self).assign_add(delta, use_locking, name, read_value), is_assign_op=True
-        )
-
-    def assign(self, value, use_locking=None, name=None, read_value=True):
-        """assign"""
-        return self._wrap_func(
-            lambda: super(_WrappedVariable, self).assign(value, use_locking, name, read_value), is_assign_op=True
-        )
-
-    def scatter_sub(self, sparse_delta, use_locking=False, name=None):
-        """scatter sub"""
-        return self._wrap_func(
-            lambda: super(_WrappedVariable, self).scatter_sub(sparse_delta, use_locking, name), is_assign_op=True
-        )
-
-    def scatter_add(self, sparse_delta, use_locking=False, name=None):
-        """scatter add"""
-        return self._wrap_func(
-            lambda: super(_WrappedVariable, self).scatter_add(sparse_delta, use_locking, name), is_assign_op=True
-        )
-
-    def scatter_max(self, sparse_delta, use_locking=False, name=None):
-        """scatter max"""
-        return self._wrap_func(
-            lambda: super(_WrappedVariable, self).scatter_max(sparse_delta, use_locking, name), is_assign_op=True
-        )
-
-    def scatter_min(self, sparse_delta, use_locking=False, name=None):
-        """scatter min"""
-        return self._wrap_func(
-            lambda: super(_WrappedVariable, self).scatter_min(sparse_delta, use_locking, name), is_assign_op=True
-        )
-
-    def scatter_mul(self, sparse_delta, use_locking=False, name=None):
-        """scatter mul"""
-        return self._wrap_func(
-            lambda: super(_WrappedVariable, self).scatter_mul(sparse_delta, use_locking, name), is_assign_op=True
-        )
-
-    def scatter_div(self, sparse_delta, use_locking=False, name=None):
-        """scatter div"""
-        return self._wrap_func(
-            lambda: super(_WrappedVariable, self).scatter_div(sparse_delta, use_locking, name), is_assign_op=True
-        )
-
-    def scatter_update(self, sparse_delta, use_locking=False, name=None):
-        """scatter update"""
-        return self._wrap_func(
-            lambda: super(_WrappedVariable, self).scatter_update(sparse_delta, use_locking, name), is_assign_op=True
-        )
-
-    def batch_scatter_update(self, sparse_delta, use_locking=False, name=None):
-        """batch scatter update"""
-        return self._wrap_func(
-            lambda: super(_WrappedVariable, self).batch_scatter_update(sparse_delta, use_locking, name),
-            is_assign_op=True,
-        )
-
-    def scatter_nd_sub(self, indices, updates, name=None):
-        """scatter nd sub"""
-        return self._wrap_func(
-            lambda: super(_WrappedVariable, self).scatter_nd_sub(indices, updates, name), is_assign_op=True
-        )
-
-    def scatter_nd_add(self, indices, updates, name=None):
-        """scatter nd add"""
-        return self._wrap_func(
-            lambda: super(_WrappedVariable, self).scatter_nd_add(indices, updates, name), is_assign_op=True
-        )
-
-    def scatter_nd_update(self, indices, updates, name=None):
-        """scatter nd update"""
-        return self._wrap_func(
-            lambda: super(_WrappedVariable, self).scatter_nd_update(indices, updates, name), is_assign_op=True
-        )
-
-    def scatter_nd_max(self, indices, updates, name=None):
-        """scatter nd max"""
-        return self._wrap_func(
-            lambda: super(_WrappedVariable, self).scatter_nd_max(indices, updates, name), is_assign_op=True
-        )
-
-    def scatter_nd_min(self, indices, updates, name=None):
-        """scatter nd min"""
-        return self._wrap_func(
-            lambda: super(_WrappedVariable, self).scatter_nd_min(indices, updates, name), is_assign_op=True
-        )
-
-
 class VariableAssignLayer(LayerBase):
     """
     Assigns a new value to a variable.
@@ -401,8 +198,8 @@ class VariableAssignLayer(LayerBase):
             else:
                 raise TypeError(f"{self}: invalid var {var!r}")
         assert isinstance(var, VariableLayer), f"{self}: var must be a VariableLayer, got {var}"
-        assert var.wrapped_var is not None, f"{self}: var must be wrapped, got {var}"
-        self.tf_var: _WrappedVariable = var.wrapped_var
+        self.tf_var: tf.Variable = var.var
+        assert isinstance(self.tf_var, tf.Variable), f"{self}: var must be a tf.Variable, got {self.tf_var}"
 
         value_data = value.output.copy_compatible_to(self.var.output)
         with tf.control_dependencies(deps) if deps else contextlib.nullcontext():
@@ -464,7 +261,7 @@ class VariableReadLayer(LayerBase):
             else:
                 raise TypeError(f"{self}: invalid var {var!r}")
         assert isinstance(var, VariableLayer), f"{self}: var must be a VariableLayer, got {var}"
-        self.tf_var = var.var
+        self.tf_var: tf.Variable = var.var
         assert isinstance(self.tf_var, tf.Variable), f"{self}: var must be a tf.Variable, got {self.tf_var}"
         with tf.control_dependencies(deps) if deps else contextlib.nullcontext():
             self.output.placeholder = self.tf_var.read_value()
