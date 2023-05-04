@@ -186,3 +186,37 @@ def test_dim_value():
         out.mark_as_default_output(shape=())
 
     run_model(extern_data, lambda *, epoch, step: _Net(), _forward_step)
+
+
+def test_param_assign():
+    time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
+    in_dim = Dim(7, name="in")
+    extern_data = TensorDict(
+        {
+            "data": Tensor("data", [batch_dim, time_dim, in_dim], dtype="float32"),
+        }
+    )
+
+    class _Net(rf.Module):
+        def __init__(self):
+            super().__init__()
+            self.param = rf.Parameter(dims=(), dtype="int32")
+            self.param.initial = 2
+
+        def __call__(self, x: Tensor) -> Tuple[Tensor, Tensor, Tensor]:
+            # No extra care should be needed for graph-based backends.
+            a = rf.copy(self.param)
+            self.param.assign(5)
+            b = rf.copy(self.param)
+            self.param.assign(7)
+            return a, b, self.param
+
+    # noinspection PyShadowingNames
+    def _forward_step(*, model: _Net, extern_data: TensorDict):
+        a, b, c = model(extern_data["data"])
+        a.mark_as_output("a", shape=())
+        b.mark_as_output("b", shape=())
+        c.mark_as_output("c", shape=())
+
+    out = run_model(extern_data, lambda *, epoch, step: _Net(), _forward_step)
+    assert out["a"].raw_tensor == 2 and out["b"].raw_tensor == 5 and out["c"].raw_tensor == 7

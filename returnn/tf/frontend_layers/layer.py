@@ -147,6 +147,7 @@ class Layer:
         self.tensor_remove_unused_cleanup_hooks = []  # type: List[Callable[[Tensor], None]]
         self.layer_dict = None  # type: Optional[LayerDictRaw]
         self.layer_extra_dependencies = []  # type: List[Layer]
+        self.usages = []  # type: List[Layer]
         self.debug_layer = None  # type: Optional[LayerBase]
         self._enter_stack_frames = None  # type: Optional[Set[types.FrameType]]
         self.is_subnet = False  # it says whether it can have children
@@ -245,6 +246,7 @@ class Layer:
         self.tensor_remove_unused_cleanup_hooks = old_name_ctx.tensor_remove_unused_cleanup_hooks
         self.layer_dict = old_name_ctx.layer_dict
         self.layer_extra_dependencies = old_name_ctx.layer_extra_dependencies
+        self.usages = old_name_ctx.usages
         self.is_subnet = old_name_ctx.is_subnet
         self._subnet_main_output = old_name_ctx._subnet_main_output
         for name, child in old_name_ctx.children.items():
@@ -316,6 +318,7 @@ class Layer:
     def _assign_param_names(self, root_module: rf.Module):
         root = self.root
         for name, param in root_module.named_parameters(recurse=True):
+            param = _resolve_param_tensor(param)
             param_layer = param.raw_tensor
             assert isinstance(param_layer, Layer), f"param {param} has no layer"
             if not param_layer.parent and param_layer is not root:  # no parent yet?
@@ -1105,10 +1108,10 @@ class _NetDictBuilderCtx:
                 layer_abs_name_scope_default = layer_abs_name_scope_parent + sub_name_ctx.name
 
                 sub_layer_abs_name_scope = self._expected_layer_abs_name_scope(sub_name_ctx)
-                if isinstance(sub_name_ctx.tensor, rf.Parameter):
+                if sub_name_ctx.layer_dict["class"] == "variable":
                     assert (
                         sub_layer_abs_name_scope
-                    ), f"parameter {sub_name_ctx} must have a unique name in {self.root_module}"
+                    ), f"VariableLayer {sub_name_ctx} must have a unique name in {self.root_module}"
                 if sub_layer_abs_name_scope is not None:
                     if (
                         layer_abs_name_scope_default != sub_layer_abs_name_scope
@@ -1503,6 +1506,7 @@ class _NamePathCache:
                     queue.append(child)
             for name, param in parent.named_parameters(recurse=False):
                 assert isinstance(param.raw_tensor, rfl.Layer)
+                param = _resolve_param_tensor(param)
                 if param.raw_tensor not in self.tensor_to_name_path:
                     self.tensor_to_name_path[param.raw_tensor] = self.module_to_name_path[RefIdEq(parent)] + (name,)
 
@@ -1530,6 +1534,25 @@ class _NamePathCache:
                 return self.module_to_name_path.get(RefIdEq(child))
         else:
             raise TypeError(f"invalid type {type(child)}")
+
+
+def _resolve_param_tensor(param: rf.Parameter[rfl.Layer]) -> rf.Tensor[rfl.Layer]:
+    """
+    Get the original tensor from a parameter, pointing to the VariableLayer.
+    Via parameter_assign, the current param tensor might be some variable read,
+    not the original VariableLayer.
+
+    :param param:
+    :return: tensor pointing to the VariableLayr
+    """
+    while True:
+        if param.raw_tensor.layer_dict["class"] == "variable":
+            return param
+        if param.raw_tensor.layer_dict["class"] == "variable_read":
+            param = param.raw_tensor.layer_dict["var"]
+            assert isinstance(param, rf.Tensor)
+            continue
+        raise Exception(f"unexpected param tensor {param} {param.raw_tensor} with opts {param.raw_tensor.layer_dict}")
 
 
 _AutoSetupNameCtxPrevTopFrame = None  # type: Optional[types.FrameType]
