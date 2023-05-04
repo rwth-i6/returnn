@@ -5890,7 +5890,12 @@ def op_in_right_control_flow_context(op: tf.Operation) -> Optional[tf.Operation]
         # and the op control flow context is from the corresponding True branch,
         # then we cannot access it.
         # Also, there would not be any Merge ops, as the cond is not finished yet.
-        if isinstance(cur_control_flow_ctx, tf_control_flow_ops.CondContext) and cur_control_flow_ctx.pred is control_flow_ctx.pred and control_flow_ctx.branch == 1 and cur_control_flow_ctx.branch == 0:
+        if (
+            isinstance(cur_control_flow_ctx, tf_control_flow_ops.CondContext)
+            and cur_control_flow_ctx.pred is control_flow_ctx.pred
+            and control_flow_ctx.branch == 1
+            and cur_control_flow_ctx.branch == 0
+        ):
             return None
         merge_ops = _merge_ops_for_control_flow_ctx(control_flow_ctx)
         assert merge_ops, f"no merge op found for control flow context {control_flow_ctx}, cur {cur_control_flow_ctx}"
