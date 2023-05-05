@@ -7,7 +7,7 @@ from typing import Optional, Union, Callable, Dict
 
 import os
 import torch
-import torch.distributed as dist
+from torch.distributed import init_process_group, destroy_process_group
 from torch.nn.parallel import DistributedDataParallel as DDP
 import torch.utils.data.datapipes as dp
 from torchdata.dataloader2 import DataLoader2
@@ -76,13 +76,13 @@ class Engine(EngineBase):
         """
         assert config is self.config
         super().init_train_from_config(config=config)
-        if config.is_true("use_DDP"):
+        self._use_DDP = int(os.environ.get('RANK', -1)) != -1
+        if self._use_DDP:
             # initializes the distributed backend which will take care of sychronizing nodes/GPUs
-            dist.init_process_group("nccl")
-            rank = dist.get_rank()
-            print(f"Start running basic DDP example on rank {rank}.", file=log.v2)
-            self._device = rank % torch.cuda.device_count()
-            self._use_DDP = True
+            init_process_group("nccl")
+            ddp_local_rank = int(os.environ['LOCAL_RANK'])
+            print(f"Start running basic DDP example on local rank {ddp_local_rank}.", file=log.v2)
+            self._device = f'cuda:{ddp_local_rank}'
 
         self.train_dataset = train_data
         self.eval_datasets.clear()
@@ -111,7 +111,7 @@ class Engine(EngineBase):
 
         if self._use_DDP:
             # wrap the model use DDP
-            self._pt_model = DDP(self._pt_model, device_ids=[self._device])
+            self._pt_model = DDP(self._pt_model, device_ids=[int(os.environ['LOCAL_RANK'])])
         self._updater = Updater(self.config, self._pt_model, self.learning_rate)
         self._updater.create_optimizer()
         if self._start_epoch > 1:
@@ -141,6 +141,8 @@ class Engine(EngineBase):
             self.epoch += 1
             self._epoch_mp_shared.value = self.epoch
 
+        if self._use_DDP:
+            destroy_process_group()
         print("Finished training at epoch {}.".format(self.epoch), file=log.v3)
 
     def init_train_epoch(self):
