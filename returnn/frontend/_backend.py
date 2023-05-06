@@ -452,7 +452,7 @@ class Backend(Generic[T]):
         :param func: "tanh", "sigmoid", "relu", ...
         :return: tensor with elementwise activation applied
         """
-        out = tensor.copy_template()
+        out = tensor.copy_template(name=func)
         if func == "abs" and out.dtype.startswith("complex"):
             num_bits = int(out.dtype[len("complex") :])
             out.dtype = f"float{num_bits // 2}"
@@ -690,7 +690,7 @@ class Backend(Generic[T]):
             cls,
             a,
             b,
-            name="compare",
+            name=kind,
             res_dtype="bool",
             allow_broadcast_all_sources=allow_broadcast_all_sources,
             dim_order=dim_order,
@@ -715,7 +715,7 @@ class Backend(Generic[T]):
             cls,
             a,
             b,
-            name="combine",
+            name=kind,
             res_dtype=None,
             allow_broadcast_all_sources=allow_broadcast_all_sources,
             dim_order=dim_order,
@@ -816,7 +816,9 @@ class Backend(Generic[T]):
         # does not have special treatments of Tensor and dim tags itself (like TF net dict backend).
         if not out_dim.is_dim_known():
             out_dim.copy_from(in_dim)
-        out = source.copy_template_replace_dim_tag(axis=source.get_axis_from_description(in_dim), new_dim_tag=out_dim)
+        out = source.copy_template_replace_dim_tag(
+            axis=source.get_axis_from_description(in_dim), new_dim_tag=out_dim, name="replace_dim"
+        )
         out.raw_tensor = source.raw_tensor
         return out
 

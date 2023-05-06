@@ -1239,7 +1239,7 @@ class TorchBackend(Backend[torch.Tensor]):
             )
         else:
             raise ValueError(f"invalid number of filter dims {in_spatial_dims}, expected 1, 2, or 3")
-        out = Tensor("conv", dims=batch_dims + list(out_spatial_dims), dtype=source.dtype)
+        out = Tensor("pool", dims=batch_dims + list(out_spatial_dims), dtype=source.dtype)
         out.raw_tensor = torch.reshape(out_raw, [d.get_dim_value() for d in out.dims])
         if source.feature_dim and source.feature_dim in out.dims:
             out.feature_dim = source.feature_dim
