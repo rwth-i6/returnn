@@ -1068,7 +1068,6 @@ class TorchBackend(Backend[torch.Tensor]):
         """conv"""
         if not out_spatial_dims:
             out_spatial_dims = rf.make_conv_out_spatial_dims(
-                description_prefix="conv",
                 in_spatial_dims=in_spatial_dims,
                 filter_size=[d.dimension for d in filter_size],
                 strides=strides or 1,
@@ -1178,7 +1177,6 @@ class TorchBackend(Backend[torch.Tensor]):
         """pool"""
         if out_spatial_dims is None:
             out_spatial_dims = rf.make_conv_out_spatial_dims(
-                description_prefix="pool",
                 in_spatial_dims=in_spatial_dims,
                 filter_size=pool_size,
                 strides=strides,

@@ -67,7 +67,7 @@ def bin_op_out_template(
     :param backend:
     :param a:
     :param b:
-    :param name: str
+    :param name: for returned Tensor. no other functionality
     :param res_dtype: if not given, infer from a and b
     :param allow_broadcast_all_sources: if True, it is allowed that neither a nor b has all dims of the result.
         Not needed when out_dims is specified explicitly.
