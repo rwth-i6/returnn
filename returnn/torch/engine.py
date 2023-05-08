@@ -7,6 +7,7 @@ from typing import Optional, Union, Callable, Dict
 
 import os
 import torch
+import time
 from torch.distributed import init_process_group, destroy_process_group
 from torch.nn.parallel import DistributedDataParallel as DDP
 import torch.utils.data.datapipes as dp
@@ -21,6 +22,7 @@ from returnn.tensor import TensorDict, Tensor
 from returnn.datasets.basic import init_dataset, Dataset
 from returnn.util import basic as util
 from returnn.util import NumbersDict
+from returnn.util.basic import hms
 from .updater import Updater
 from .data import pipeline as data_pipeline
 from .data import returnn_dataset_wrapper
@@ -59,7 +61,6 @@ class Engine(EngineBase):
         print("Using device:", self._device, file=log.v2)
 
         self._use_DDP =  config.is_true("use_DDP") # type: Optional[bool]
-        self._gradient_accumulation_steps = 1 
 
     def init_train_from_config(
         self,
@@ -165,6 +166,7 @@ class Engine(EngineBase):
         accumulated_losses_dict = NumbersDict()
         accumulated_inv_norm_factors_dict = NumbersDict()
         step_idx = 0
+        epoch_start_time = time.time()
         for data in self._train_dataloader:
             # in DDP training we only need to sync gradients at the last micro step.
             if self._use_DDP:
@@ -190,7 +192,9 @@ class Engine(EngineBase):
                 self._updater.get_optimizer().zero_grad()
             total_loss.raw_tensor.backward()
             # only update the weights when every gradient accumulation loop ends
-            if self._pt_model.require_backward_grad_sync:
+            if not self._use_DDP:
+                self._updater.get_optimizer().step()
+            elif self._pt_model.require_backward_grad_sync:
                 self._updater.get_optimizer().step()
 
             accumulated_losses_dict += losses_dict
@@ -205,6 +209,7 @@ class Engine(EngineBase):
             self.global_train_step += 1
 
         print("Trained %i steps" % step_idx)
+        print("Elapsed time %s" % hms(time.time() - epoch_start_time))
 
         accumulated_losses_dict = accumulated_losses_dict / accumulated_inv_norm_factors_dict
         self.learning_rate_control.set_epoch_error(
@@ -214,11 +219,19 @@ class Engine(EngineBase):
 
         print(f"Total train loss:", _format_score(dict(accumulated_losses_dict)), file=log.v3)
 
-        if self.epoch % self._save_model_epoch_interval == 0 or self.epoch == self._final_epoch:
-            self._save_model()
-            self._save_optimizer()
+        if not self._use_DDP:
+            if self.epoch % self._save_model_epoch_interval == 0 or self.epoch == self._final_epoch:
+                self._save_model()
+                self._save_optimizer()
 
-        self.eval_model()
+            self.eval_model()
+        elif torch.distributed.get_rank() == 0:
+            if self.epoch % self._save_model_epoch_interval == 0 or self.epoch == self._final_epoch:
+                self._save_model()
+                self._save_optimizer()
+
+            self.eval_model()
+
 
     def eval_model(self):
         """
