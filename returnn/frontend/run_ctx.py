@@ -182,7 +182,9 @@ class RunCtx:
             if dims is None:
                 # We trust the user that the raw tensor has a well-defined dim order.
                 # So just create some dummy dims.
-                dims = [Dim(None, name=f"{name}-raw-axis-{i}") for i in _backend.global_backend.get_ndim_raw(tensor)]
+                dims = [
+                    Dim(None, name=f"{name}-raw-axis-{i}") for i in range(_backend.global_backend.get_ndim_raw(tensor))
+                ]
             tensor = rf.convert_to_tensor(tensor, dims=dims)
         assert name not in self.outputs.data
         if dims is None:
