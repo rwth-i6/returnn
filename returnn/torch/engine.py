@@ -58,7 +58,7 @@ class Engine(EngineBase):
         self._device = _get_device_from_config(config)
         print("Using device:", self._device, file=log.v2)
 
-        self._use_DDP = None # type: Optional[bool]
+        self._use_DDP =  config.is_true("use_DDP") # type: Optional[bool]
         self._gradient_accumulation_steps = 1 
 
     def init_train_from_config(
@@ -76,13 +76,12 @@ class Engine(EngineBase):
         """
         assert config is self.config
         super().init_train_from_config(config=config)
-        if config.is_true("use_DDP"):
+        if self._use_DDP:
             # initializes the distributed backend which will take care of sychronizing nodes/GPUs
             init_process_group("nccl")
             ddp_local_rank = int(os.environ['LOCAL_RANK'])
             print(f"Start running basic DDP example on local rank {ddp_local_rank}.", file=log.v2)
             self._device = f'cuda:{ddp_local_rank}'
-            self._use_DDP = True
 
         self.train_dataset = train_data
         self.eval_datasets.clear()
@@ -121,8 +120,9 @@ class Engine(EngineBase):
         assert self._train_step_func, "train_step not defined"
 
         self._gradient_accumulation_steps = config.int("gradient_accumulation_steps", 1)
-        assert self._gradient_accumulation_steps % torch.cuda.device_count() == 0
-        self._gradient_accumulation_steps //= torch.cuda.device_count()
+        if self._gradient_accumulation_steps > 1:
+            assert self._gradient_accumulation_steps % torch.cuda.device_count() == 0
+            self._gradient_accumulation_steps //= torch.cuda.device_count()
 
     def train(self):
         """
