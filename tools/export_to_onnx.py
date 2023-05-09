@@ -14,8 +14,10 @@ import numpy
 
 from returnn.config import Config
 from returnn.log import log
-from returnn.tensor import Dim, Tensor, batch_dim, TensorDict
-from returnn.torch.frontend.bridge import rf_module_to_pt_module, _RFModuleAsPTModule, _RFTensorAsPTTensor
+from returnn.tensor import Dim, Tensor, TensorDict
+
+# noinspection PyProtectedMember
+from returnn.torch.frontend.bridge import _RFModuleAsPTModule, _RFTensorAsPTTensor
 import returnn.frontend as rf
 import returnn.util.basic as util
 import returnn.__main__ as rnn
@@ -56,13 +58,24 @@ def init(config_filename: str, checkpoint: str, log_verbosity: int, device: str)
 
 
 class ForwardModulePT(torch.nn.Module):
+    """
+    Wrapper of a PyTorch module that's meant to call forward_step from the config when called.
+    """
+
     def __init__(self, pt_module: torch.nn.Module, forward_step: Callable):
+        """
+        :param pt_module: RF module as obtained from the config.
+        :param forward_step: forward_step function as obtained from the config.
+        """
         super().__init__()
 
         self.model = pt_module
         self.forward_step_func = forward_step
 
     def __call__(self, data: _RFTensorAsPTTensor):
+        """
+        Wrapper to forward_step from the config.
+        """
         extern_data = TensorDict()
         extern_data.update({"data": data.rf_tensor}, auto_convert=True)
         self.forward_step_func(model=self.model, extern_data=extern_data)
@@ -72,12 +85,23 @@ class ForwardModulePT(torch.nn.Module):
 
 
 class ForwardModuleRF(_RFModuleAsPTModule):
+    """
+    Wrapper of a RETURNN frontend module that's meant to call forward_step from the config when called.
+    """
+
     def __init__(self, rf_module: rf.Module, forward_step: Callable):
+        """
+        :param rf_module: RF module as obtained from the config.
+        :param forward_step: forward_step function as obtained from the config.
+        """
         super().__init__(rf_module)
 
         self.forward_step_func = forward_step
 
     def __call__(self, data: _RFTensorAsPTTensor):
+        """
+        Wrapper to forward_step from the config.
+        """
         extern_data = TensorDict()
         extern_data.update({"data": data.rf_tensor}, auto_convert=True)
         self.forward_step_func(model=self.rf_module, extern_data=extern_data)
