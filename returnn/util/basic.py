@@ -1625,7 +1625,7 @@ def prod(ls):
         return 1
     x = ls[0]
     for y in ls[1:]:
-        x *= y
+        x = x * y
     return x
 
 
