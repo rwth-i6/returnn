@@ -115,7 +115,7 @@ class TorchBackend(Backend[torch.Tensor]):
         :param name:
         :return: new Dim object
         """
-        return Dim(raw_tensor.size(axis), name=name)
+        return Dim(int(raw_tensor.size(axis)), name=name)
 
     @staticmethod
     def get_device(x: Tensor[torch.Tensor]) -> Optional[str]:
