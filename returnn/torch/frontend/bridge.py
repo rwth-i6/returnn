@@ -87,3 +87,14 @@ class _RFModuleAsPTModule(torch.nn.Module):
     def forward(self, *args, **kwargs):
         """forward"""
         return self._rf_module(*args, **kwargs)
+
+
+class _RFTensorAsPTTensor(torch.Tensor):
+    """
+    This class is meant to be instantiated through torch_tensor_object.as_subclass(_RFTensorAsPTTensor),
+    so it doesn't have __init__().
+    """
+
+    def __init__(self, rf_tensor: rf.Tensor):
+        super().__init__()
+        self.rf_tensor = rf_tensor
