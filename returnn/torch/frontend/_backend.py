@@ -1428,3 +1428,31 @@ class TorchBackend(Backend[torch.Tensor]):
         new_state_c.feature_dim = out_dim
 
         return out, (new_state_h, new_state_c)
+
+    TensorArrayType = List[Tensor]
+
+    @staticmethod
+    def tensor_array_unstack(tensor: Tensor, *, axis: Dim) -> TensorArrayType:
+        """unstack"""
+        axis_int = tensor.get_axis_from_description(axis)
+        out_tensors_raw = torch.unbind(tensor.raw_tensor, dim=axis_int)
+        out_tensor_template = tensor.copy_template().copy_template_excluding_axis(axis_int)
+        out_tensors = []
+        for out_tensor_raw in out_tensors_raw:
+            out_tensor = out_tensor_template.copy_template()
+            out_tensor.raw_tensor = out_tensor_raw
+            out_tensors.append(out_tensor)
+        return out_tensors
+
+    @staticmethod
+    def tensor_array_stack(tensor_array: TensorArrayType, *, axis: Dim, tensor_template: Tensor) -> Tensor:
+        """stack"""
+        out_tensor = tensor_template.copy_add_dim_by_tag(axis, unbroadcast=True, axis=0)
+        if not tensor_array:
+            return rf.zeros_like(out_tensor)
+        tensor_array_raw = [
+            tensor.copy_compatible_to(tensor_template, add_dims=False).raw_tensor for tensor in tensor_array
+        ]
+        out_tensor_raw = torch.stack(tensor_array_raw, dim=0)
+        out_tensor.raw_tensor = out_tensor_raw
+        return out_tensor

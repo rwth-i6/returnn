@@ -3,7 +3,7 @@ Backends for the frontend API
 """
 
 from __future__ import annotations
-from typing import TYPE_CHECKING, Optional, Any, Union, TypeVar, Generic, Type, Callable, Sequence, Dict, Tuple
+from typing import TYPE_CHECKING, Optional, Any, Union, TypeVar, Generic, Type, Callable, Sequence, Dict, Tuple, List
 import contextlib
 import numpy
 import returnn.frontend as rf
@@ -1010,6 +1010,63 @@ class Backend(Generic[T]):
         :param out_dim:
         :return: output, (state_h, state_c)
         """
+        raise NotImplementedError
+
+    # For eager-based backends, this is a reasonable default implementation and type.
+    TensorArrayType = List[Tensor]
+
+    @classmethod
+    def tensor_array_create(cls) -> TensorArrayType:
+        """
+        :return: empty TensorArray
+        """
+        if cls.executing_eagerly():
+            return []
+        raise NotImplementedError
+
+    @staticmethod
+    def tensor_array_unstack(tensor: Tensor, *, axis: Dim) -> TensorArrayType:
+        """
+        :param tensor:
+        :param axis:
+        :return: list of tensors
+        """
+        raise NotImplementedError
+
+    @staticmethod
+    def tensor_array_stack(tensor_array: TensorArrayType, *, axis: Dim, tensor_template: Tensor) -> Tensor:
+        """
+        :param tensor_array:
+        :param axis:
+        :param tensor_template: per element shape, excluding axis
+        :return: tensor
+        """
+        raise NotImplementedError
+
+    @classmethod
+    def tensor_array_push_back(cls, tensor_array: TensorArrayType, value: Tensor) -> TensorArrayType:
+        """
+        :param tensor_array:
+        :param value:
+        :return: tensor_array
+        """
+        if cls.executing_eagerly():
+            tensor_array.append(value)
+            return tensor_array
+        raise NotImplementedError
+
+    @classmethod
+    def tensor_array_get_item(cls, tensor_array: TensorArrayType, index: Union[int, Tensor]) -> Tensor:
+        """
+        :param tensor_array:
+        :param index:
+        :return: tensor
+        """
+        if cls.executing_eagerly():
+            if isinstance(index, Tensor):
+                assert index.dims == (), f"index {index} must be scalar"
+                index = int(index.raw_tensor)
+            return tensor_array[index]
         raise NotImplementedError
 
 
