@@ -67,6 +67,7 @@ def scan(
     cond: Optional[Callable[[S, X], Tensor]] = None,
     body: Callable[[S, X], Tuple[S, Y]],
     max_seq_len: Optional[int] = None,
+    return_tensor_arrays: bool = False,
 ) -> Tuple[S, Y, Dim]:
     """
     Extended variant of :func:`while_loop`.
@@ -82,9 +83,17 @@ def scan(
     :param xs: input, will be unstacked over spatial_dim. can be None.
     :param ys: output, as templates, per iteration (excluding spatial_dim)
     :param cond: if spatial_dim is None/unknown, need to provide this.
-        unlike while_loop cond, does not need to be scalar.
+        The shape will be the same as the dyn_size_ext of the resulting spatial_dim.
+        Unlike while_loop cond, does not need to be scalar. E.g. some shape like [B] is normal.
+        Once it returns False for all entries, the loop will stop.
+        Once it returns False for some entry, further values in further iterations for this entry will be ignored.
     :param body:
-    :param max_seq_len:
+    :param max_seq_len: If given, it is checked in addition to `cond`, and when reached, it stops the loop.
+    :param return_tensor_arrays: if True, will return TensorArray instead of Tensor for ys.
+        Internally, we work with TensorArray anyway, so this avoids the final stack().
+        In case of beam search, it might make more sense
+        to perform some post-processing on the TensorArray per entry,
+        like selecting the right beam entries.
     :return: final state, outputs ys, and the new spatial_dim
     """
     if spatial_dim is None or not spatial_dim.is_dim_known():
@@ -123,7 +132,9 @@ def scan(
         )
 
         spatial_dim.dyn_size_ext = seq_len
-        return final_s, tree.map_structure(lambda ys_: ys_.stack(axis=spatial_dim), ys), spatial_dim
+        if not return_tensor_arrays:
+            ys = tree.map_structure(lambda ys_: ys_.stack(axis=spatial_dim), ys)
+        return final_s, ys, spatial_dim
 
     else:
         assert cond is None, f"scan: spatial_dim {spatial_dim} is known, cannot use `end` {cond}"
