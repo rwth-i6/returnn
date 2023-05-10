@@ -66,4 +66,6 @@ class TensorArray:
 
     def stack(self, axis: Dim) -> Tensor:
         """stack"""
-        return self._backend.tensor_array_stack(self._backend_tensor_array, axis=axis)
+        return self._backend.tensor_array_stack(
+            self._backend_tensor_array, axis=axis, tensor_template=self.tensor_template
+        )
