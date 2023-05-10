@@ -173,8 +173,12 @@ class Engine(EngineBase):
             self._run_step(data, train_flag=True)
 
             train_ctx = rf.get_run_ctx()
+            
             # scale the loss to account for gradient accumulation
-            train_ctx.losses = {name:loss/self._gradient_accumulation_steps for name, loss in train_ctx.losses.items()}
+            if self._use_DDP and self._gradient_accumulation_steps > 1:
+                for loss_name in train_ctx.losses.keys():
+                    train_ctx.losses[loss_name].loss /= self._gradient_accumulation_steps
+
             total_loss = train_ctx.total_loss()
             losses_dict = NumbersDict(
                 {
