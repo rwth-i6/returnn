@@ -53,8 +53,8 @@ def init(config_filename: str, checkpoint: str, log_verbosity: int, device: str)
     rnn.init_log()
     print("RETURNN frontend module to ONNX conversion.", file=log.v1)
     rnn.returnn_greeting()
-    rnn.init_backend_engine()
     config.typed_dict.setdefault("backend", "torch")
+    rnn.init_backend_engine()
     assert util.BackendEngine.is_torch_selected(), "For now only the torch backend is supported."
     rnn.init_faulthandler()
 
