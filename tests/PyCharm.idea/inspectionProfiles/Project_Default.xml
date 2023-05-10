@@ -15,7 +15,7 @@
     <inspection_tool class="PyPackageRequirementsInspection" enabled="true" level="WARNING" enabled_by_default="true">
     <option name="ignoredPackages">
       <value>
-        <list size="17">
+        <list size="18">
           <item index="0" class="java.lang.String" itemvalue="tensorflow" />
           <item index="1" class="java.lang.String" itemvalue="theano" />
           <item index="2" class="java.lang.String" itemvalue="numpy" />
@@ -33,6 +33,7 @@
           <item index="14" class="java.lang.String" itemvalue="sentencepiece" />
           <item index="15" class="java.lang.String" itemvalue="torch" />
           <item index="16" class="java.lang.String" itemvalue="torchdata" />
+          <item index="17" class="java.lang.String" itemvalue="tree" />
         </list>
       </value>
     </option>
