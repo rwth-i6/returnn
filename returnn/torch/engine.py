@@ -78,8 +78,6 @@ class Engine(EngineBase):
         assert config is self.config
         super().init_train_from_config(config=config)
         if self._use_DDP:
-            # initializes the distributed backend which will take care of sychronizing nodes/GPUs
-            init_process_group("nccl")
             ddp_local_rank = int(os.environ['LOCAL_RANK'])
             print(f"Start running basic DDP example on local rank {ddp_local_rank}.", file=log.v2)
             self._device = f'cuda:{ddp_local_rank}'

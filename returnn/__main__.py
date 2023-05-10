@@ -335,6 +335,7 @@ def init_backend_engine():
             returnn.tf.distributed.init_distributed_tf(config)
     elif BackendEngine.is_torch_selected():
         if config.is_true("use_DDP"):
+            # initializes the distributed backend which will take care of sychronizing nodes/GPUs
             from torch.distributed import init_process_group
             init_process_group("nccl")
         print("PyTorch:", util.describe_torch_version(), file=log.v3)
