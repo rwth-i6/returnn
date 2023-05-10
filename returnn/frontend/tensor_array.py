@@ -21,8 +21,11 @@ class TensorArray:
     Reversely, unstacking a tensor of shape (N, B, D) on the N axis
     would give us a list of N tensors of shape (B, D).
 
-    Internally, there is a functional API in the backend,
-    using some opaque tensor array object given by the backend
+    We use a functional API,
+    and each modifying operation (push_back) returns a new TensorArray object.
+    This is to make sure it works well together with both eager-based and graph-based frameworks.
+
+    Internally, the backend functions give us some opaque tensor array object
     (e.g. TF TensorArray, or maybe just a pure Python list of tensors in case of eager-based frameworks).
     """
 
@@ -57,14 +60,17 @@ class TensorArray:
     def __getitem__(self, index: Tensor) -> Tensor:
         return self._backend.tensor_array_get_item(self._backend_tensor_array, index)
 
-    def push_back(self, tensor: Tensor):
+    def push_back(self, tensor: Tensor) -> TensorArray:
         """push_back"""
         assert tensor.dims == self.tensor_template.dims
         assert tensor.dtype == self.tensor_template.dtype
         assert tensor.sparse_dim == self.tensor_template.sparse_dim
-        self._backend_tensor_array = self._backend.tensor_array_push_back(self._backend_tensor_array, tensor)
+        backend_tensor_array = self._backend.tensor_array_push_back(self._backend_tensor_array, tensor)
+        return TensorArray(
+            tensor_template=self.tensor_template, _backend_tensor_array=backend_tensor_array, _backend=self._backend
+        )
 
-    def stack(self, axis: Dim) -> Tensor:
+    def stack(self, *, axis: Dim) -> Tensor:
         """stack"""
         return self._backend.tensor_array_stack(
             self._backend_tensor_array, axis=axis, tensor_template=self.tensor_template

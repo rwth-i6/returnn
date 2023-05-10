@@ -116,14 +116,14 @@ def scan(
             (
                 rf.constant(0, dtype=rf.get_default_array_index_dtype()),  # i
                 rf.constant(0, dtype=rf.get_default_array_index_dtype()),  # seq_len
-                cond(initial, None),
+                cond(initial, None),  # initial cond. keep this in state such that we can update seq_len in body
                 initial,  # state
                 tree.map_structure(lambda y: TensorArray(y), ys),
             ),
         )
 
         spatial_dim.dyn_size_ext = seq_len
-        return final_s, tree.map_structure(lambda ys_: ys_.stack(), ys), spatial_dim
+        return final_s, tree.map_structure(lambda ys_: ys_.stack(axis=spatial_dim), ys), spatial_dim
 
     else:
         assert cond is None, f"scan: spatial_dim {spatial_dim} is known, cannot use `end` {cond}"
