@@ -3,14 +3,12 @@ Backends for the frontend API
 """
 
 from __future__ import annotations
-from typing import TYPE_CHECKING, Optional, Any, Union, TypeVar, Generic, Type, Callable, Sequence, Dict, Tuple, List
+from typing import Optional, Any, Union, TypeVar, Generic, Type, Callable, Sequence, Dict, Tuple, List
 import contextlib
 import numpy
 import returnn.frontend as rf
-
-if TYPE_CHECKING:
-    from returnn.tensor import Tensor, Dim
-    from .types import RawTensorTypes
+from returnn.tensor import Tensor, Dim
+from .types import RawTensorTypes
 
 T = TypeVar("T")  # tf.Tensor, torch.Tensor or so
 T2 = TypeVar("T2")

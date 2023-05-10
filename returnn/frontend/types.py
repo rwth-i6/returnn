@@ -6,7 +6,6 @@ from __future__ import annotations
 from typing import Union, Type, TYPE_CHECKING
 import numpy
 from returnn.tensor import Tensor, Dim, TensorDict
-from ._backend import global_backend
 import returnn.frontend as rf
 
 
@@ -47,4 +46,6 @@ def get_raw_tensor_type() -> Type:
         import torch
 
         return torch.Tensor  # just as an example
+    from ._backend import global_backend
+
     return global_backend.RawTensorType
