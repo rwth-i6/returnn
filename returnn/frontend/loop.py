@@ -49,7 +49,13 @@ def while_loop(
     :return: final loop vars
     """
     # noinspection PyProtectedMember
-    backend = initial[0]._raw_backend if initial is not None else global_backend
+    if initial is None:
+        backend = global_backend
+    else:
+        v = tree.flatten(initial)[0]
+        assert isinstance(v, Tensor), f"while_loop: unexpected entries in initial {initial!r}, not Tensor but {type(v)}"
+        # noinspection PyProtectedMember
+        backend = v._raw_backend
     if backend.executing_eagerly():
         loop_vars = initial
         while cond(loop_vars):
