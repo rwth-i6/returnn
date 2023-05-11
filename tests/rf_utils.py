@@ -8,7 +8,6 @@ import contextlib
 import re
 import numpy
 import numpy.testing
-from tensorflow.python.util import nest
 
 from returnn.config import Config, global_config_ctx
 from returnn.util.pprint import pprint
@@ -180,7 +179,7 @@ def run_model_net_dict_tf(extern_data: TensorDict, get_model: rf.GetModelFunc, f
                 return x
             return numpy.array(x)
 
-        outputs_numpy_raw = nest.map_structure(_make_numpy_array, outputs_numpy_raw)
+        outputs_numpy_raw = {k: _make_numpy_array(v) for k, v in outputs_numpy_raw.items()}
 
         outputs_numpy = outputs_tf.copy_template()
         for v in outputs_numpy.data.values():
