@@ -8,7 +8,7 @@ import contextlib
 import torch
 import numpy
 
-from returnn.tensor import Tensor, Dim
+from returnn.tensor import Tensor, Dim, single_step_dim
 from returnn.util.basic import prod, get_global_inf_value
 
 # noinspection PyProtectedMember
@@ -101,6 +101,18 @@ class TorchBackend(Backend[torch.Tensor]):
         return raw_tensor.dim()
 
     @staticmethod
+    def get_shape_raw(raw_tensor: torch.Tensor) -> Tuple[int]:
+        """shape"""
+        return tuple(raw_tensor.shape)
+
+    @staticmethod
+    def get_shape_tuple_raw(raw_tensor: torch.Tensor) -> Tuple[int]:
+        """
+        :return: shape of raw tensor
+        """
+        return tuple(raw_tensor.shape)
+
+    @staticmethod
     def get_known_shape_raw(raw_tensor: torch.Tensor) -> Tuple[Optional[int]]:
         """
         :return: shape of raw tensor; here for PyTorch the full shape is always known
@@ -144,6 +156,18 @@ class TorchBackend(Backend[torch.Tensor]):
         :return: raw tensor with new axis
         """
         return raw_tensor.unsqueeze(axis)
+
+    @staticmethod
+    def expand_raw(raw_tensor: torch.Tensor, axis: int, dim: Union[int, torch.Tensor]) -> torch.Tensor:
+        """
+        :param raw_tensor:
+        :param axis: shape[axis] must be 1
+        :param dim: the new dim for shape[axis]
+        :return: shape[axis] expands to dim.
+            in PyTorch or other frameworks which support custom strides,
+            this is an efficient view and not a copy.
+        """
+        return raw_tensor.expand(*[-1 if i != axis else dim for i in range(raw_tensor.dim())])
 
     @staticmethod
     def copy(tensor: Tensor[torch.Tensor]) -> Tensor[torch.Tensor]:
@@ -572,6 +596,27 @@ class TorchBackend(Backend[torch.Tensor]):
         }.get(kind, kind)
         op = getattr(torch, kind)  # e.g. torch.add
         return op(a, b)
+
+    @staticmethod
+    def reshape_raw(
+        raw_tensor: torch.Tensor, shape: Union[Sequence[Union[int, torch.Tensor]], torch.Tensor]
+    ) -> torch.Tensor:
+        """
+        :param raw_tensor:
+        :param shape:
+        :return: reshaped raw tensor; wraps torch.reshape
+        """
+        return torch.reshape(raw_tensor, shape)
+
+    @classmethod
+    def squeeze_raw(cls, raw_tensor: torch.Tensor, axes: Sequence[int]) -> torch.Tensor:
+        """squeeze"""
+        if len(axes) == 1:
+            return raw_tensor.squeeze(dim=axes[0])
+        elif len(axes) == 0:
+            return raw_tensor
+        else:
+            return super().squeeze_raw(raw_tensor, axes=axes)
 
     @staticmethod
     def transpose_raw(raw_tensor: torch.Tensor, perm: Sequence[int]) -> torch.Tensor:
@@ -1374,6 +1419,12 @@ class TorchBackend(Backend[torch.Tensor]):
         :return: Tuple consisting of two elements: the result as a :class:`Tensor`
             and the new state as a :class:`State` (different from the previous one).
         """
+        squeeze_spatial_dim = False
+        if spatial_dim == single_step_dim:
+            spatial_dim = Dim(1, name="dummy-spatial-dim-single-step")
+            source = source.copy_add_dim_by_tag(spatial_dim, unbroadcast=True, axis=0)
+            squeeze_spatial_dim = True
+
         # The order in the parameters for lstm_params is specified as follows:
         # Feed-forward has priority over recurrent, and weights have priority over biases: (w_ih, w_hh, b_ih, b_hh).
         # See https://github.com/pytorch/pytorch/blob/c263bd43/torch/nn/modules/rnn.py#L107.
@@ -1474,6 +1525,9 @@ class TorchBackend(Backend[torch.Tensor]):
         new_state_c = state_c.copy_template()
         new_state_c.raw_tensor = new_state_c_raw
         new_state_c.feature_dim = out_dim
+
+        if squeeze_spatial_dim:
+            out = out.copy_squeeze_axes([out.get_axis_from_description(spatial_dim)])
 
         return out, (new_state_h, new_state_c)
 
