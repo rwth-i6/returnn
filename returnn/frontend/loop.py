@@ -157,10 +157,34 @@ def scan(
         )
 
         spatial_dim.dyn_size_ext = seq_len
-        if not return_tensor_arrays:
-            ys = tree.map_structure(lambda ys_: ys_.stack(axis=spatial_dim), ys)
-        return final_s, ys, spatial_dim
 
     else:
         assert cond is None, f"scan: spatial_dim {spatial_dim} is known, cannot use `end` {cond}"
-        raise NotImplementedError
+        assert max_seq_len is None
+
+        xs = tree.map_structure(lambda x: TensorArray.unstack(x, axis=spatial_dim), xs)
+
+        def _cond(_s: Tuple[Tensor, S, Y]) -> Tensor:
+            i, *_ = _s
+            return i < spatial_dim.get_dim_value_tensor()
+
+        def _body(_s: Tuple[Tensor, S, Y]) -> Tuple[Tensor, S, Y]:
+            i, s, ys_ = _s
+            s, y = body(s, tree.map_structure(lambda x: x[i], xs))
+            tree.assert_same_structure(ys_, y)
+            ys_ = tree.map_structure(lambda ys__, y_: ys__.push_back(y_), ys_, y)
+            return i + 1, s, ys_
+
+        _, final_s, ys = while_loop(
+            _cond,
+            _body,
+            (
+                rf.constant(0, dtype=rf.get_default_array_index_dtype(), dims=()),  # i
+                initial,  # state
+                tree.map_structure(lambda y: TensorArray(y), ys),
+            ),
+        )
+
+    if not return_tensor_arrays:
+        ys = tree.map_structure(lambda ys_: ys_.stack(axis=spatial_dim), ys)
+    return final_s, ys, spatial_dim
