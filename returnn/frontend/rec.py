@@ -4,7 +4,7 @@ Provides the :class:`LSTM` module.
 
 from __future__ import annotations
 
-from typing import Tuple
+from typing import Tuple, Sequence
 
 import returnn.frontend as rf
 from returnn.tensor import Tensor, Dim
@@ -72,6 +72,13 @@ class LSTM(rf.Module):
         new_state = LstmState(*new_state)
 
         return result, new_state
+
+    def default_initial_state(self, *, batch_dims: Sequence[Dim]) -> LstmState:
+        """initial state"""
+        return LstmState(
+            h=rf.zeros(list(batch_dims) + [self.out_dim]),
+            c=rf.zeros(list(batch_dims) + [self.out_dim]),
+        )
 
 
 class LstmState(rf.State):
