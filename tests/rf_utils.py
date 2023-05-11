@@ -37,8 +37,7 @@ def run_model(
 ) -> TensorDict:
     """run"""
     print(f"* run_model with dyn_dim_max_sizes={dyn_dim_max_sizes!r}")
-    for v in extern_data.data.values():
-        _reset_tensor(v)
+    extern_data.reset_content()
     rnd = numpy.random.RandomState(42)
     for v in extern_data.data.values():
         _fill_random(v, rnd=rnd, dyn_dim_max_sizes=dyn_dim_max_sizes)
@@ -116,8 +115,7 @@ def run_model_torch(extern_data: TensorDict, get_model: rf.GetModelFunc, forward
 def run_model_net_dict_tf(extern_data: TensorDict, get_model: rf.GetModelFunc, forward_step: rf.StepFunc) -> TensorDict:
     """run"""
     extern_data_raw = extern_data.as_raw_tensor_dict()
-    for v in extern_data.data.values():
-        _reset_tensor(v)
+    extern_data.reset_content()
     rf.select_backend_returnn_layers_tf()
     rf.set_random_seed(42)
 
@@ -182,22 +180,11 @@ def run_model_net_dict_tf(extern_data: TensorDict, get_model: rf.GetModelFunc, f
         outputs_numpy_raw = {k: _make_numpy_array(v) for k, v in outputs_numpy_raw.items()}
 
         outputs_numpy = outputs_tf.copy_template()
-        for v in outputs_numpy.data.values():
-            _reset_tensor(v)
+        outputs_numpy.reset_content()
         outputs_numpy.assign_from_raw_tensor_dict_(outputs_numpy_raw)
 
     extern_data.assign_from_raw_tensor_dict_(extern_data_raw)
     return outputs_numpy
-
-
-def _reset_tensor(x: Tensor):
-    """reset"""
-    x.batch = None
-    x.raw_tensor = None
-    for dim in x.dims:
-        dim.batch = None
-        if dim.dyn_size_ext:
-            _reset_tensor(dim.dyn_size_ext)
 
 
 def _fill_random(

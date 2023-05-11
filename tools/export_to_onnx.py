@@ -148,9 +148,8 @@ def main():
     extern_data_dict = config.typed_value("extern_data")
     extern_data = TensorDict()
     extern_data.update(extern_data_dict, auto_convert=True)
+    extern_data.reset_content()
 
-    for v in extern_data.data.values():
-        _reset_tensor(v)
     rnd = numpy.random.RandomState(42)
     for v in extern_data.data.values():
         _fill_random(v, rnd=rnd)
@@ -197,16 +196,6 @@ def main():
         output_names=model_outputs_raw_keys,
         dynamic_axes=dynamic_axes,
     )
-
-
-def _reset_tensor(x: Tensor):
-    """reset"""
-    x.batch = None
-    x.raw_tensor = None
-    for dim in x.dims:
-        dim.batch = None
-        if dim.dyn_size_ext:
-            _reset_tensor(dim.dyn_size_ext)
 
 
 def _fill_random(

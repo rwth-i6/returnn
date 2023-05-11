@@ -601,6 +601,13 @@ class _TensorMixin(_TensorMixinBase):
         for k, v in state.items():
             setattr(self, k, v)
 
+    def reset(self: Tensor):
+        """
+        Reset raw_tensor and batch info.
+        """
+        self._raw_tensor = None
+        self.batch = None
+
     def _adapt_batch_consistent_dim_tags(self):
         if not self._extra:
             return
