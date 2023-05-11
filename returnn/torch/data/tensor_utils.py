@@ -5,7 +5,15 @@ Tensor utils.
 from __future__ import annotations
 import numpy
 import torch
-from returnn.tensor import Tensor
+from returnn.tensor import Tensor, TensorDict
+
+
+def tensor_dict_numpy_to_torch_(x: TensorDict):
+    """
+    :func:`tensor_numpy_to_torch_` on all values
+    """
+    for v in x.data.values():
+        tensor_numpy_to_torch_(v)
 
 
 def tensor_numpy_to_torch_(x: Tensor[numpy.ndarray]):
@@ -20,6 +28,14 @@ def tensor_numpy_to_torch_(x: Tensor[numpy.ndarray]):
     for dim in x.dims:
         if dim.dyn_size_ext:
             tensor_numpy_to_torch_(dim.dyn_size_ext)
+
+
+def tensor_dict_torch_to_numpy_(x: TensorDict):
+    """
+    :func:`tensor_torch_to_numpy_` on all values
+    """
+    for v in x.data.values():
+        tensor_torch_to_numpy_(v)
 
 
 def tensor_torch_to_numpy_(x: Tensor[torch.Tensor]):

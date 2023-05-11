@@ -10,17 +10,17 @@ import torch
 from typing import Callable, Optional, Dict
 import argparse
 import os
-import numpy
 
 from returnn.config import Config
 from returnn.log import log
-from returnn.tensor import Dim, Tensor, TensorDict
+from returnn.tensor import TensorDict
 
 # noinspection PyProtectedMember
 from returnn.torch.frontend.bridge import _RFModuleAsPTModule
 import returnn.frontend as rf
 import returnn.util.basic as util
-from returnn.torch.data.tensor_utils import tensor_numpy_to_torch_
+from returnn.tensor.utils import tensor_dict_fill_random_numpy_
+from returnn.torch.data.tensor_utils import tensor_dict_numpy_to_torch_
 import returnn.__main__ as rnn
 
 
@@ -150,11 +150,8 @@ def main():
     extern_data.update(extern_data_dict, auto_convert=True)
     extern_data.reset_content()
 
-    rnd = numpy.random.RandomState(42)
-    for v in extern_data.data.values():
-        _fill_random(v, rnd=rnd)
-    for v in extern_data.data.values():
-        tensor_numpy_to_torch_(v)
+    tensor_dict_fill_random_numpy_(extern_data)
+    tensor_dict_numpy_to_torch_(extern_data)
     extern_data_raw = extern_data.as_raw_tensor_dict()
 
     if is_pt_module:
@@ -196,78 +193,6 @@ def main():
         output_names=model_outputs_raw_keys,
         dynamic_axes=dynamic_axes,
     )
-
-
-def _fill_random(
-    x: Tensor,
-    *,
-    min_val: int = 0,
-    max_val: Optional[int] = None,
-    rnd: numpy.random.RandomState,
-    dyn_dim_max_sizes: Optional[Dict[Dim, int]] = None,
-) -> bool:
-    """fill. return whether sth was filled"""
-    if dyn_dim_max_sizes is None:
-        dyn_dim_max_sizes = {}
-    filled = False
-    while True:
-        have_unfilled = False
-        filled_this_round = False
-
-        for dim in x.dims:
-            if dim.is_batch_dim() and not dim.dyn_size_ext:
-                dim.dyn_size_ext = Tensor("batch", [], dtype="int32")
-            if not dim.dyn_size_ext:
-                continue
-            if _fill_random(
-                dim.dyn_size_ext,
-                min_val=2,
-                max_val=dyn_dim_max_sizes.get(dim, None),
-                rnd=rnd,
-                dyn_dim_max_sizes=dyn_dim_max_sizes,
-            ):
-                if dim in dyn_dim_max_sizes:
-                    # Make sure at least one of the dyn sizes matches the max size.
-                    i = rnd.randint(0, dim.dyn_size_ext.raw_tensor.size)
-                    dim.dyn_size_ext.raw_tensor.flat[i] = dyn_dim_max_sizes[dim]
-                filled = True
-                filled_this_round = True
-            if dim.dyn_size_ext.raw_tensor is None:
-                have_unfilled = True
-            elif not isinstance(dim.dyn_size_ext.raw_tensor, numpy.ndarray):
-                have_unfilled = True
-
-        if have_unfilled:
-            assert filled_this_round, f"should have filled something, {x}"
-
-        if not have_unfilled:
-            break
-
-    if x.raw_tensor is not None:
-        if not isinstance(x.raw_tensor, numpy.ndarray):
-            x.raw_tensor = None
-
-    if x.raw_tensor is None:
-        shape = [d.get_dim_value() for d in x.dims]
-        if x.dtype.startswith("int"):
-            if max_val is None:
-                max_val = rnd.randint(5, 20)
-            if x.sparse_dim and x.sparse_dim.dimension is not None:
-                max_val = x.sparse_dim.dimension
-            x.raw_tensor = rnd.randint(min_val, max_val, size=shape, dtype=x.dtype)
-        elif x.dtype.startswith("float"):
-            x.raw_tensor = rnd.normal(0.0, 1.0, size=shape).astype(x.dtype)
-        elif x.dtype.startswith("complex"):
-            real = rnd.normal(0.0, 1.0, size=shape)
-            imag = rnd.normal(0.0, 1.0, size=shape)
-            x.raw_tensor = (real + 1j * imag).astype(x.dtype)
-        else:
-            raise NotImplementedError(f"not implemented for {x} dtype {x.dtype}")
-        filled = True
-
-    assert isinstance(x.raw_tensor, numpy.ndarray)
-
-    return filled
 
 
 if __name__ == "__main__":
