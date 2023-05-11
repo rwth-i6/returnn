@@ -59,4 +59,5 @@ class Embedding(rf.Module):
         if self.in_dim != source.sparse_dim:
             raise ValueError(f"{self}: input {source} does not have in_dim {self.in_dim}")
         out = rf.gather(self.weight, indices=source, axis=self.in_dim)
+        out.feature_dim = self.out_dim
         return out
