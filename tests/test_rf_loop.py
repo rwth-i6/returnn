@@ -44,3 +44,43 @@ def test_while_loop():
         out.mark_as_default_output(shape=(batch_dim, in_dim))
 
     run_model(extern_data, lambda *, epoch, step: _Net(), _forward_step, test_tensorflow=False)
+
+
+def test_scan_unknown_len():
+    time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
+    in_dim = Dim(7, name="in")
+    extern_data = TensorDict(
+        {
+            "data": Tensor("data", [batch_dim, time_dim, in_dim], dtype="float32"),
+        }
+    )
+
+    class _Net(rf.Module):
+        def __call__(self, x: Tensor) -> Tuple[Tensor, Dim]:
+            def _cond(s: Tuple[Tensor, Tensor], _):
+                t, s_ = s
+                if t.raw_tensor.__class__.__module__.startswith("torch"):
+                    print("**", t.raw_tensor, rf.reduce_sum(s_, axis=in_dim).raw_tensor)
+                return rf.logical_and(rf.reduce_sum(s_, axis=in_dim) < 20, t < time_dim.get_dim_value_tensor())
+
+            def _body(s, _):
+                t, s_ = s
+                y_ = s_ + rf.abs(rf.gather(x, indices=t, axis=time_dim))
+                return (t + 1, y_), y_
+
+            _, y, out_time_dim = rf.scan(
+                cond=_cond,
+                body=_body,
+                cond_dims=[batch_dim],
+                initial=(rf.zeros((), dtype=rf.get_default_array_index_dtype()), rf.zeros((batch_dim, in_dim))),
+                ys=Tensor("y", dims=(batch_dim, in_dim), dtype=x.dtype),
+            )
+
+            return y, out_time_dim
+
+    # noinspection PyShadowingNames
+    def _forward_step(*, model: _Net, extern_data: TensorDict):
+        out, out_time_dim = model(extern_data["data"])
+        out.mark_as_default_output(shape=(batch_dim, out_time_dim, in_dim))
+
+    run_model(extern_data, lambda *, epoch, step: _Net(), _forward_step, test_tensorflow=False)

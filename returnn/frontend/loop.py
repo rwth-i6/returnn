@@ -9,7 +9,7 @@ https://github.com/rwth-i6/returnn/issues/1324
 """
 
 from __future__ import annotations
-from typing import Optional, Union, TypeVar, Callable, Tuple
+from typing import Optional, Union, TypeVar, Callable, Sequence, Tuple
 import tree
 from returnn.tensor import Tensor, Dim
 import returnn.frontend as rf
@@ -77,6 +77,7 @@ def _get_bool_value_eager(v: Union[Tensor, bool]) -> bool:
 def scan(
     *,
     spatial_dim: Optional[Dim] = None,
+    cond_dims: Optional[Sequence[Dim]] = None,
     initial: S = None,
     xs: X = None,
     ys: Y = None,
@@ -95,6 +96,8 @@ def scan(
     https://github.com/rwth-i6/returnn/issues/1324
 
     :param spatial_dim: if None or unknown, need to provide cond. must be given if xs is not None.
+    :param cond_dims: if spatial_dim is not given, this must be given to know what shape to expect from cond.
+        This will also be the shape of the dyn_size_ext of the resulting spatial_dim.
     :param initial: state/carry
     :param xs: input, will be unstacked over spatial_dim. can be None.
     :param ys: output, as templates, per iteration (excluding spatial_dim)
@@ -127,21 +130,27 @@ def scan(
 
         def _body(_s: Tuple[Tensor, Tensor, Tensor, S, Y]) -> Tuple[Tensor, Tensor, Tensor, S, Y]:
             i, seq_len_, prev_cond, s, ys_ = _s
+            seq_len_ = seq_len_ + rf.cast(prev_cond, dtype=seq_len_.dtype)
             s, y = body(s, None)
             tree.assert_same_structure(ys_, y)
             ys_ = tree.map_structure(lambda ys__, y_: ys__.push_back(y_), ys_, y)
             c = cond(s, None)
             c = rf.logical_and(c, prev_cond)
-            seq_len_ = seq_len_ + rf.cast(c, dtype=seq_len_.dtype)
             return i + 1, seq_len_, c, s, ys_
 
+        initial_cond = cond(initial, None)
+        assert (
+            isinstance(initial_cond, Tensor)
+            and initial_cond.dtype == "bool"
+            and initial_cond.dims_set == set(cond_dims)
+        )
         _, seq_len, _, final_s, ys = while_loop(
             _cond,
             _body,
             (
-                rf.constant(0, dtype=rf.get_default_array_index_dtype()),  # i
-                rf.constant(0, dtype=rf.get_default_array_index_dtype()),  # seq_len
-                cond(initial, None),  # initial cond. keep this in state such that we can update seq_len in body
+                rf.constant(0, dtype=rf.get_default_array_index_dtype(), dims=()),  # i
+                rf.constant(0, dtype=rf.get_default_array_index_dtype(), dims=cond_dims),  # seq_len
+                initial_cond,  # initial cond. keep this in state such that we can update seq_len in body
                 initial,  # state
                 tree.map_structure(lambda y: TensorArray(y), ys),
             ),
