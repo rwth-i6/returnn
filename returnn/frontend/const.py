@@ -4,22 +4,25 @@ Constant / full / fill / zeros / ones, etc
 
 from __future__ import annotations
 from typing import Optional, Sequence
+import numpy
 from returnn.tensor import Tensor, Dim
 from .types import RawTensorTypes
 from ._backend import global_backend
 import returnn.frontend as rf
 
 
-__all__ = ["full", "constant", "fill", "zeros", "ones", "zeros_like", "ones_like"]
+__all__ = ["full", "fill", "constant", "zeros", "ones", "zeros_like", "ones_like"]
 
 
 def full(
     *, dims: Sequence[Dim], fill_value: RawTensorTypes, dtype: Optional[str] = None, sparse_dim: Optional[Dim] = None
 ) -> Tensor:
     """
-    full
+    full, fill, constant.
 
     https://data-apis.org/array-api/latest/API_specification/generated/array_api.full.html
+
+    Also see :func:`convert_to_tensor`.
 
     :param dims: shape
     :param fill_value: scalar to fill the tensor
@@ -35,11 +38,22 @@ def full(
             dtype = "bool"
         else:
             raise ValueError(f"cannot infer dtype from {fill_value!r} or type ({type(fill_value)})")
+    if isinstance(fill_value, numpy.ndarray):
+        assert fill_value.shape == (), (
+            f"full/fill/constant: expect scalar fill_value, got array with shape {fill_value.shape}.\n"
+            "Use rf.convert_to_tensor to convert an arbitrary array to a tensor."
+        )
     return global_backend.full(dims, fill_value, dtype=dtype, sparse_dim=sparse_dim)
 
 
-constant = full  # alias for some older code
 fill = full  # alias for TF users
+
+
+def constant(
+    fill_value: RawTensorTypes, *, dims: Sequence[Dim], dtype: Optional[str] = None, sparse_dim: Optional[Dim] = None
+) -> Tensor:
+    """alias to :func:`full`, mapping `value` to `fill_value`. also see :func:`convert_to_tensor`"""
+    return full(dims=dims, fill_value=fill_value, dtype=dtype, sparse_dim=sparse_dim)
 
 
 def zeros(dims: Sequence[Dim], *, dtype: Optional[str] = None, sparse_dim: Optional[Dim] = None) -> Tensor:
