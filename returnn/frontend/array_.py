@@ -23,6 +23,7 @@ __all__ = [
     "split",
     "expand_dim",
     "concat",
+    "concat_features",
     "pad",
     "cum_concat_step",
     "masked_select",
@@ -251,6 +252,20 @@ def concat(
         out_dim = sum(d for _, d in sources)
     # noinspection PyProtectedMember
     return sources[0][0]._raw_backend.concat(*sources, allow_broadcast=allow_broadcast, out_dim=out_dim), out_dim
+
+
+def concat_features(*sources: Tensor, allow_broadcast=False) -> Tensor:
+    """
+    Concatenates multiple sources, using feature_dim of each source,
+    so make sure that the feature_dim is correctly set.
+    """
+    src_pairs = []
+    for src in sources:
+        assert src.feature_dim is not None
+        src_pairs.append((src, src.feature_dim))
+    res, out_dim = concat(*src_pairs, allow_broadcast=allow_broadcast)
+    res.feature_dim = out_dim
+    return res
 
 
 def pad(
