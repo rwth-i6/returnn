@@ -29,6 +29,7 @@ __all__ = [
     "pack_padded",
     "gather",
     "slice",
+    "shift_right",
 ]
 
 
@@ -463,3 +464,10 @@ def slice(
         source._raw_backend.slice(source, axis=axis, start=start, end=end, step=step, size=size, out_dim=out_dim),
         out_dim,
     )
+
+
+def shift_right(source: Tensor, *, axis: Dim, pad_value: Union[rf.RawTensorTypes, Tensor], amount: int = 1) -> Tensor:
+    """shift right by amount, pad left with left_pad"""
+    padded, (padded_dim,) = rf.pad(source, axes=[axis], padding=[(amount, 0)], mode="constant", value=pad_value)
+    padded_slice, _ = rf.slice(padded, axis=padded_dim, size=axis)
+    return padded_slice
