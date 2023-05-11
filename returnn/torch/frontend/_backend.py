@@ -623,6 +623,52 @@ class TorchBackend(Backend[torch.Tensor]):
         return Tensor("full", dims=dims, sparse_dim=sparse_dim, dtype=dtype, raw_tensor=raw_tensor)
 
     @staticmethod
+    def gather(
+        source: Tensor,
+        *,
+        indices: Union[Tensor, int],
+        axis: Dim,
+        clip_to_valid: bool = False,
+    ) -> Tensor:
+        """gather"""
+        if isinstance(indices, Tensor):
+            indices: Tensor[torch.Tensor]
+        elif isinstance(indices, int):
+            indices = Tensor(
+                "indices_int",
+                dims=(),
+                dtype=rf.get_default_array_index_dtype(),
+                raw_tensor=torch.tensor(indices, dtype=TorchBackend.as_dtype_raw(rf.get_default_array_index_dtype())),
+            )
+        else:
+            raise TypeError(f"Unsupported type for indices: {type(indices)}")
+        axis_int = source.get_axis_from_description(axis, allow_int=False)
+        if clip_to_valid:
+            indices = indices.copy()
+            dim: Dim = source.dims[axis_int]
+            if dim.dyn_size_ext:
+                assert dim.dyn_size_ext.dims_set.issubset(
+                    indices.dims_set
+                ), f"gather with clip_to_valid: indices ({indices}) dims must be a superset of {dim} dyn-size"
+                size = dim.dyn_size_ext.copy_compatible_to(indices)
+                indices.raw_tensor = torch.clamp(indices.raw_tensor, 0, size.raw_tensor - 1)
+            else:
+                indices.raw_tensor = torch.clamp(indices.raw_tensor, 0, source.raw_tensor.shape[axis_int] - 1)
+        out = Tensor(
+            "gather",
+            dims=source.dims[:axis_int] + indices.dims + source.dims[axis_int + 1 :],
+            dtype=source.dtype,
+            sparse_dim=source.sparse_dim,
+        )
+        out_raw = torch.index_select(source.raw_tensor, dim=axis_int, index=indices.raw_tensor.flatten())
+        out_shape = (
+            source.raw_tensor.shape[:axis_int] + indices.raw_tensor.shape + source.raw_tensor.shape[axis_int + 1 :]
+        )
+        out_raw = out_raw.reshape(out_shape)
+        out.raw_tensor = out_raw
+        return out
+
+    @staticmethod
     def slice(
         source: Tensor,
         *,
