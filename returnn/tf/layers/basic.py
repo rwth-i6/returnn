@@ -1772,6 +1772,10 @@ class GatherLayer(_ConcatInputLayer):
             assert position_data.feature_dim_axis_or_unspecified is not NotSpecified
             pass  # keep the logic as before
 
+        out_type["version"] = input_data.version
+        if input_data.version:
+            out_type.pop("time_dim_axis", None)
+
         # If not sparse, the feature dim axis could now originate from position, let Data figure this out
         if not out_type.get("sparse", False):
             out_type["dim"] = NotSpecified
