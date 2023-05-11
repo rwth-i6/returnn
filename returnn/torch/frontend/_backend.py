@@ -200,6 +200,8 @@ class TorchBackend(Backend[torch.Tensor]):
         )
         out_shape = [d.get_dim_value() for d in out.dims]
         out.raw_tensor = torch.reshape(source.raw_tensor, out_shape)
+        if source.feature_dim and source.feature_dim in dims:
+            out.feature_dim = out_dim
         return out, out_dim
 
     @staticmethod
