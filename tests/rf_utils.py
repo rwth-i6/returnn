@@ -34,6 +34,7 @@ def run_model(
     forward_step: rf.StepFunc,
     *,
     dyn_dim_max_sizes: Optional[Dict[Dim, int]] = None,
+    test_tensorflow: bool = True,
 ) -> TensorDict:
     """run"""
     print(f"* run_model with dyn_dim_max_sizes={dyn_dim_max_sizes!r}")
@@ -49,6 +50,9 @@ def run_model(
         _pad_mask_zeros(out_pt)
         # get the values now because dims might get overwritten
         out_pt_raw = out_pt.as_raw_tensor_dict(include_const_sizes=True)
+
+    if not test_tensorflow:
+        return out_pt
 
     print("** run with TensorFlow-net-dict backend")
     with rfl.ReturnnLayersBackend.random_journal_replay(random_journal):

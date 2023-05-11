@@ -335,6 +335,7 @@ jobs:
           - TEST=rf_container
           - TEST=rf_conv
           - TEST=rf_encoder_conformer
+          - TEST=rf_loop
           - TEST=rf_math
           - TEST=rf_normalization
           - TEST=rf_rec

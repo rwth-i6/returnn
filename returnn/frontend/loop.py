@@ -58,10 +58,20 @@ def while_loop(
         backend = v._raw_backend
     if backend.executing_eagerly():
         loop_vars = initial
-        while cond(loop_vars):
+        while _get_bool_value_eager(cond(loop_vars)):
             loop_vars = body(loop_vars)
         return loop_vars
     raise NotImplementedError("while_loop() not implemented for backend %r" % backend)
+
+
+def _get_bool_value_eager(v: Union[Tensor, bool]) -> bool:
+    if isinstance(v, Tensor):
+        assert v.dims == () and v.dtype == "bool"
+        return bool(v.raw_tensor)
+    elif isinstance(v, bool):
+        return v
+    else:
+        raise TypeError(f"while_loop: cond: unexpected return type {type(v)}")
 
 
 def scan(
