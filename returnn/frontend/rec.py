@@ -170,31 +170,8 @@ class ZoneoutLSTM(LSTM):
             output = new_h
 
             # Now the ZoneoutLSTM part, which is optional (zoneout_factor_cell > 0 or zoneout_factor_output > 0).
-            # It has different behavior depending on the train flag.
-            is_training = rf.get_run_ctx().train_flag
-
-            if self.zoneout_factor_cell > 0.0:
-                c = rf.cond(
-                    is_training,
-                    lambda: (1 - self.zoneout_factor_cell)
-                    * rf.dropout(new_c - prev_c, drop_prob=self.zoneout_factor_cell, axis=self.out_dim)
-                    + prev_c,
-                    lambda: (1 - self.zoneout_factor_cell) * new_c + self.zoneout_factor_cell * prev_c,
-                )
-            else:
-                c = new_c
-
-            if self.zoneout_factor_output > 0.0:
-                h = rf.cond(
-                    is_training,
-                    lambda: (1 - self.zoneout_factor_output)
-                    * rf.dropout(new_h - prev_h, drop_prob=self.zoneout_factor_output, axis=self.out_dim)
-                    + prev_h,
-                    lambda: (1 - self.zoneout_factor_output) * new_h + self.zoneout_factor_output * prev_h,
-                )
-            else:
-                h = new_h
-
+            c = _zoneout(prev=prev_c, cur=new_c, factor=self.zoneout_factor_cell, out_dim=self.out_dim)
+            h = _zoneout(prev=prev_h, cur=new_h, factor=self.zoneout_factor_output, out_dim=self.out_dim)
             new_state = LstmState(c=c, h=h)
 
             if self.use_zoneout_output:  # really the default, sane and original behavior
@@ -214,3 +191,13 @@ class ZoneoutLSTM(LSTM):
             body=lambda x_, s: self(x_, state=s, spatial_dim=single_step_dim),
         )
         return output, new_state
+
+
+def _zoneout(*, prev: Tensor, cur: Tensor, factor: float, out_dim: Dim) -> Tensor:
+    if factor == 0.0:
+        return cur
+    return rf.cond(
+        rf.get_run_ctx().train_flag,
+        lambda: (1 - factor) * rf.dropout(cur - prev, drop_prob=factor, axis=out_dim) + prev,
+        lambda: (1 - factor) * cur + factor * prev,
+    )
