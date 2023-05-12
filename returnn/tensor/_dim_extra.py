@@ -948,7 +948,6 @@ class _DimMixin:
 
         import numpy
         import returnn.frontend as rf
-        from returnn.tensor import Tensor
 
         tf = tf_util = tensor_util = None
         if backend and backend.is_tensorflow:
