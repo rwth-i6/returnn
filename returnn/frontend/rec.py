@@ -165,7 +165,7 @@ class ZoneoutLSTM(LSTM):
             parts = {k: v for k, v in zip(self.parts_order, parts)}
             i, j, f, o = parts["i"], parts["j"], parts["f"], parts["o"]
 
-            new_c = rf.sigmoid(f) * prev_c + rf.sigmoid(i) * rf.tanh(j)
+            new_c = rf.sigmoid(f + self.forget_bias) * prev_c + rf.sigmoid(i) * rf.tanh(j)
             new_h = rf.sigmoid(o) * rf.tanh(new_c)
             output = new_h
 
