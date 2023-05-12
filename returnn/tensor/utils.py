@@ -58,7 +58,7 @@ def tensor_fill_random_numpy_(
                 continue
             if tensor_fill_random_numpy_(
                 dim.dyn_size_ext,
-                min_val=2,
+                min_val=dyn_dim_min_sizes.get(dim, 2),
                 max_val=dyn_dim_max_sizes.get(dim, None),
                 rnd=rnd,
                 dyn_dim_max_sizes=dyn_dim_max_sizes,
