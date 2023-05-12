@@ -373,15 +373,16 @@ class TorchBackend(Backend[torch.Tensor]):
         raw_pad = []
         for dim in reversed(source.dims):
             if dim not in remaining_dims:
+                raw_pad += [0, 0]
                 continue
             remaining_dims.remove(dim)
             pad_ = padding[axes.index(dim)]
-            raw_pad.extend(
-                (
-                    pad_[0].get_dim_value() if isinstance(pad_[0], Dim) else pad_[0],
-                    pad_[1].get_dim_value() if isinstance(pad_[1], Dim) else pad_[1],
-                )
-            )
+            raw_pad += [
+                pad_[0].get_dim_value() if isinstance(pad_[0], Dim) else pad_[0],
+                pad_[1].get_dim_value() if isinstance(pad_[1], Dim) else pad_[1],
+            ]
+            if not remaining_dims:
+                break
         if isinstance(value, Tensor):
             assert value.dims == (), f"value {value} must be a scalar"
             value = value.raw_tensor
