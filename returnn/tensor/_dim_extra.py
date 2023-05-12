@@ -1011,19 +1011,27 @@ class _DimMixin:
                 if isinstance(b, _t.Tensor):
                     return b
             if kind == "add":
-                return a + b
+                return _relu(a + b)
             elif kind == "sub":
-                return a - b
+                return _relu(a - b)
             elif kind == "mul":
                 return a * b
             elif kind in ("floordiv", "truediv"):  # truediv assumes there is no remainder
                 return a // b
             elif kind == "ceildiv":
-                if isinstance(a, Tensor):
+                if isinstance(a, _t.Tensor):
                     return rf.ceil_divide(a, b)
                 return -(-a // b)
             else:
                 raise ValueError("unknown op kind %r" % op.kind)
+
+        def _relu(a):
+            if isinstance(a, _t.Tensor):
+                return rf.relu(a)
+            elif isinstance(a, int):
+                return max(a, 0)
+            else:
+                raise TypeError(f"complete_dyn_size: _relu: unexpected type {type(a)}")
 
         y_name = self.description + ":seq-length"
         y: Optional[_t.Tensor] = None  # resulting dyn size

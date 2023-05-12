@@ -14,6 +14,7 @@ def tensor_dict_fill_random_numpy_(
     *,
     rnd: Union[int, numpy.random.RandomState] = 42,
     dyn_dim_max_sizes: Optional[Dict[Dim, int]] = None,
+    dyn_dim_min_sizes: Optional[Dict[Dim, int]] = None,
 ):
     """
     Random fill with NumPy arrays.
@@ -23,11 +24,12 @@ def tensor_dict_fill_random_numpy_(
     :param dyn_dim_max_sizes: you can specify max sizes for dim tags with dynamic sizes.
         The fill random code makes sure that there is at least one entry where we reach the max size,
         so that the dim value will be the max size.
+    :param dyn_dim_min_sizes:
     """
     if not isinstance(rnd, numpy.random.RandomState):
         rnd = numpy.random.RandomState(rnd)
     for v in tensor_dict.data.values():
-        tensor_fill_random_numpy_(v, rnd=rnd, dyn_dim_max_sizes=dyn_dim_max_sizes)
+        tensor_fill_random_numpy_(v, rnd=rnd, dyn_dim_max_sizes=dyn_dim_max_sizes, dyn_dim_min_sizes=dyn_dim_min_sizes)
 
 
 def tensor_fill_random_numpy_(
@@ -37,10 +39,13 @@ def tensor_fill_random_numpy_(
     max_val: Optional[int] = None,
     rnd: numpy.random.RandomState,
     dyn_dim_max_sizes: Optional[Dict[Dim, int]] = None,
+    dyn_dim_min_sizes: Optional[Dict[Dim, int]] = None,
 ) -> bool:
     """fill. return whether sth was filled"""
     if dyn_dim_max_sizes is None:
         dyn_dim_max_sizes = {}
+    if dyn_dim_min_sizes is None:
+        dyn_dim_min_sizes = {}
     filled = False
     while True:
         have_unfilled = False
@@ -62,6 +67,13 @@ def tensor_fill_random_numpy_(
                     # Make sure at least one of the dyn sizes matches the max size.
                     i = rnd.randint(0, dim.dyn_size_ext.raw_tensor.size)
                     dim.dyn_size_ext.raw_tensor.flat[i] = dyn_dim_max_sizes[dim]
+                    if dim in dyn_dim_min_sizes:
+                        j = rnd.randint(0, dim.dyn_size_ext.raw_tensor.size - 1)
+                        if j >= i:
+                            j += 1
+                        dim.dyn_size_ext.raw_tensor.flat[j] = dyn_dim_min_sizes[dim]
+                elif dim in dyn_dim_min_sizes:
+                    raise Exception(f"also define {dim} in dyn_dim_max_sizes, not just dyn_dim_min_sizes")
                 filled = True
                 filled_this_round = True
             if dim.dyn_size_ext.raw_tensor is None:

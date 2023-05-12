@@ -34,12 +34,15 @@ def run_model(
     forward_step: rf.StepFunc,
     *,
     dyn_dim_max_sizes: Optional[Dict[Dim, int]] = None,
+    dyn_dim_min_sizes: Optional[Dict[Dim, int]] = None,
     test_tensorflow: bool = True,
 ) -> TensorDict:
     """run"""
     print(f"* run_model with dyn_dim_max_sizes={dyn_dim_max_sizes!r}")
     extern_data.reset_content()
-    tensor_dict_fill_random_numpy_(extern_data, dyn_dim_max_sizes=dyn_dim_max_sizes)
+    tensor_dict_fill_random_numpy_(
+        extern_data, dyn_dim_max_sizes=dyn_dim_max_sizes, dyn_dim_min_sizes=dyn_dim_min_sizes
+    )
 
     print("** run with PyTorch backend")
     with rft.TorchBackend.random_journal_record() as random_journal:
