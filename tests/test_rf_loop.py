@@ -57,7 +57,7 @@ def test_scan_unknown_len():
 
     class _Net(rf.Module):
         def __call__(self, x: Tensor) -> Tuple[Tensor, Dim]:
-            def _cond(s: Tuple[Tensor, Tensor], _):
+            def _cond(_, s: Tuple[Tensor, Tensor]):
                 t, s_ = s
                 if t.raw_tensor.__class__.__module__.startswith("torch"):
                     print("**", t.raw_tensor, rf.reduce_sum(s_, axis=in_dim).raw_tensor)
