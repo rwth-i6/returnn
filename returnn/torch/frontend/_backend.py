@@ -677,7 +677,17 @@ class TorchBackend(Backend[torch.Tensor]):
         axis: Dim,
         clip_to_valid: bool = False,
     ) -> Tensor:
-        """gather"""
+        """
+        Gather.
+
+        There are a few options in PyTorch, all having somewhat different semantics
+        and different advantages or disadvantages and different limitations.
+
+        - torch.gather, most generic
+        - torch.index_select, similar as tf.gather, but does not support batch axes
+        - Tensor.__getitem__
+        - torch.embedding
+        """
         if isinstance(indices, Tensor):
             indices: Tensor[torch.Tensor]
         elif isinstance(indices, int):
@@ -689,6 +699,7 @@ class TorchBackend(Backend[torch.Tensor]):
             )
         else:
             raise TypeError(f"Unsupported type for indices: {type(indices)}")
+        assert axis not in indices.dims
         axis_int = source.get_axis_from_description(axis, allow_int=False)
         if clip_to_valid:
             indices = indices.copy()
@@ -701,18 +712,43 @@ class TorchBackend(Backend[torch.Tensor]):
                 indices.raw_tensor = torch.clamp(indices.raw_tensor, 0, size.raw_tensor - 1)
             else:
                 indices.raw_tensor = torch.clamp(indices.raw_tensor, 0, source.raw_tensor.shape[axis_int] - 1)
+        index_own_dims = [dim for dim in indices.dims if dim not in source.dims]
         out = Tensor(
             "gather",
-            dims=source.dims[:axis_int] + indices.dims + source.dims[axis_int + 1 :],
+            dims=list(source.dims[:axis_int]) + index_own_dims + list(source.dims[axis_int + 1 :]),
             dtype=source.dtype,
             sparse_dim=source.sparse_dim,
         )
-        out_raw = torch.index_select(source.raw_tensor, dim=axis_int, index=indices.raw_tensor.flatten())
-        out_shape = (
-            source.raw_tensor.shape[:axis_int] + indices.raw_tensor.shape + source.raw_tensor.shape[axis_int + 1 :]
-        )
-        out_raw = out_raw.reshape(out_shape)
-        out.raw_tensor = out_raw
+        if indices.dims_set.intersection(source.dims_set):
+            # We cannot use index_select in this case. Need to fallback to gather.
+            indices = indices.copy_compatible_to(out, check_dtype=False, check_sparse=False, unbroadcast=True)
+            if len(index_own_dims) == 1:
+                index_own_dims_flat = index_own_dims[0]  # good
+            elif len(index_own_dims) == 0:
+                index_own_dims_flat = Dim(1, name="dummy")
+                indices = indices.copy_add_dim_by_tag(index_own_dims_flat, unbroadcast=True, axis=axis_int)
+            else:
+                indices, index_own_dims_flat = rf.merge_dims(indices, dims=index_own_dims)
+            index_ext_dims = list(source.dims)
+            index_ext_dims[axis_int] = index_own_dims_flat
+            assert indices.dims == tuple(index_ext_dims)
+            out_raw = torch.gather(source.raw_tensor, dim=axis_int, index=indices.raw_tensor.type(torch.int64))
+            if len(index_own_dims) == 1:
+                pass  # nothing to do
+            elif len(index_own_dims) == 0:
+                out_raw = out_raw.squeeze(axis_int)
+            else:
+                out_raw = out_raw.reshape([d.get_dim_value() for d in out.dims])
+            out.raw_tensor = out_raw
+        elif axis_int == 0 and source.batch_ndim == 2:
+            # This is exactly what torch.embedding is intended for. Let's use that.
+            out.raw_tensor = torch.embedding(source.raw_tensor, indices.raw_tensor)
+        else:
+            out_raw = torch.index_select(source.raw_tensor, dim=axis_int, index=indices.raw_tensor.flatten())
+            out_shape = (
+                source.raw_tensor.shape[:axis_int] + indices.raw_tensor.shape + source.raw_tensor.shape[axis_int + 1 :]
+            )
+            out.raw_tensor = out_raw.reshape(out_shape)
         return out
 
     @staticmethod

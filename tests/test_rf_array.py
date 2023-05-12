@@ -139,6 +139,28 @@ def test_gather():
     run_model(extern_data, lambda *, epoch, step: _Net(), _forward_step)
 
 
+def test_gather_2d_indices():
+    time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
+    in_dim = Dim(7, name="in")
+    extern_data = TensorDict(
+        {
+            "data": Tensor("data", [batch_dim, time_dim, in_dim], dtype="float32"),
+            "classes": Tensor("classes", [batch_dim, time_dim], dtype="int32", sparse_dim=in_dim),
+        }
+    )
+
+    class _Net(rf.Module):
+        def __call__(self, x: Tensor, y: Tensor) -> Tensor:
+            return rf.gather(x, indices=y, axis=in_dim)
+
+    # noinspection PyShadowingNames
+    def _forward_step(*, model: _Net, extern_data: TensorDict):
+        out = model(extern_data["data"], extern_data["classes"])
+        out.mark_as_default_output(shape=(batch_dim, time_dim))
+
+    run_model(extern_data, lambda *, epoch, step: _Net(), _forward_step)
+
+
 def test_slice():
     time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
     in_dim = Dim(7, name="in")
