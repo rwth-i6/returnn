@@ -1144,9 +1144,12 @@ class _DimMixin:
         if self_kind == other_kind == DimTypes.Feature and ignore_feature_dim:
             return True
         if treat_feature_as_spatial:
-            if self_kind == DimTypes.Feature:
+            # Note: No kind at all: Reinterpret treat_feature_as_spatial a bit:
+            # Assume that we want them all to be handled the same, no matter the kind.
+            # (Except of batch dim kind, which is still excluded here.)
+            if self_kind == DimTypes.Feature or not self_kind:
                 self_kind = DimTypes.Spatial
-            if other_kind == DimTypes.Feature:
+            if other_kind == DimTypes.Feature or not other_kind:
                 other_kind = DimTypes.Spatial
         if self.dimension != other.dimension:
             if broadcast_matches and (self.dimension == 1 or other.dimension == 1):
