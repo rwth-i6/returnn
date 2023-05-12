@@ -137,6 +137,34 @@ class ZoneoutLSTM(LSTM):
         self.parts_order = parts_order.replace("c", "j").replace("g", "j")
         assert len(self.parts_order) == 4 and set(self.parts_order) == set("ijfo")
 
+    def _inner_step(self, x: Tensor, *, state: LstmState) -> Tuple[Tensor, LstmState]:
+        prev_c = state.c
+        prev_h = state.h
+
+        # Apply vanilla LSTM
+        rec = rf.dot(prev_h, self.rec_weight, reduce=self.out_dim)
+        x = x + rec
+        parts = rf.split(x, axis=4 * self.out_dim, out_dims=[self.out_dim] * 4)
+        parts = {k: v for k, v in zip(self.parts_order, parts)}
+        i, j, f, o = parts["i"], parts["j"], parts["f"], parts["o"]
+
+        new_c = rf.sigmoid(f + self.forget_bias) * prev_c + rf.sigmoid(i) * rf.tanh(j)
+        new_h = rf.sigmoid(o) * rf.tanh(new_c)
+        output = new_h
+
+        # Now the ZoneoutLSTM part, which is optional (zoneout_factor_cell > 0 or zoneout_factor_output > 0).
+        c = _zoneout(prev=prev_c, cur=new_c, factor=self.zoneout_factor_cell, out_dim=self.out_dim)
+        h = _zoneout(prev=prev_h, cur=new_h, factor=self.zoneout_factor_output, out_dim=self.out_dim)
+        new_state = LstmState(c=c, h=h)
+
+        if self.use_zoneout_output:  # really the default, sane and original behavior
+            output = h
+
+        output.feature_dim = self.out_dim
+        new_state.h.feature_dim = self.out_dim
+        new_state.c.feature_dim = self.out_dim
+        return output, new_state
+
     def __call__(self, source: Tensor, *, state: LstmState, spatial_dim: Dim) -> Tuple[Tensor, LstmState]:
         """
         Forward call of the LSTM.
@@ -151,44 +179,20 @@ class ZoneoutLSTM(LSTM):
         if self.in_dim not in source.dims_set:
             raise ValueError(f"{self}: input {source} does not have in_dim {self.in_dim}")
 
+        x = rf.dot(source, self.ff_weight, reduce=self.in_dim)
+        if self.bias is not None:
+            x = x + self.bias
+
         if spatial_dim == single_step_dim:
-            prev_c = state.c
-            prev_h = state.h
-
-            # Apply vanilla LSTM
-            in_ = rf.dot(source, self.ff_weight, reduce=self.in_dim)
-            rec = rf.dot(prev_h, self.rec_weight, reduce=self.out_dim)
-            x = in_ + rec
-            if self.bias is not None:
-                x = x + self.bias
-            parts = rf.split(x, axis=4 * self.out_dim, out_dims=[self.out_dim] * 4)
-            parts = {k: v for k, v in zip(self.parts_order, parts)}
-            i, j, f, o = parts["i"], parts["j"], parts["f"], parts["o"]
-
-            new_c = rf.sigmoid(f + self.forget_bias) * prev_c + rf.sigmoid(i) * rf.tanh(j)
-            new_h = rf.sigmoid(o) * rf.tanh(new_c)
-            output = new_h
-
-            # Now the ZoneoutLSTM part, which is optional (zoneout_factor_cell > 0 or zoneout_factor_output > 0).
-            c = _zoneout(prev=prev_c, cur=new_c, factor=self.zoneout_factor_cell, out_dim=self.out_dim)
-            h = _zoneout(prev=prev_h, cur=new_h, factor=self.zoneout_factor_output, out_dim=self.out_dim)
-            new_state = LstmState(c=c, h=h)
-
-            if self.use_zoneout_output:  # really the default, sane and original behavior
-                output = h
-
-            output.feature_dim = self.out_dim
-            new_state.h.feature_dim = self.out_dim
-            new_state.c.feature_dim = self.out_dim
-            return output, new_state
+            return self._inner_step(x, state=state)
 
         batch_dims = source.remaining_dims((spatial_dim, self.in_dim))
         output, new_state, _ = rf.scan(
             spatial_dim=spatial_dim,
             initial=state,
-            xs=source,
+            xs=x,
             ys=Tensor("lstm-out", dims=batch_dims + [self.out_dim], dtype=source.dtype),
-            body=lambda x_, s: self(x_, state=s, spatial_dim=single_step_dim),
+            body=lambda x_, s: self._inner_step(x_, state=s),
         )
         return output, new_state
 
