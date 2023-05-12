@@ -81,11 +81,11 @@ def scan(
     initial: S = None,
     xs: X = None,
     ys: Y = None,
-    cond: Optional[Callable[[S, X], Tensor]] = None,
-    body: Callable[[S, X], Tuple[S, Y]],
+    cond: Optional[Callable[[X, S], Tensor]] = None,
+    body: Callable[[X, S], Tuple[Y, S]],
     max_seq_len: Optional[int] = None,
     return_tensor_arrays: bool = False,
-) -> Tuple[S, Y, Dim]:
+) -> Tuple[Y, S, Dim]:
     """
     Extended variant of :func:`while_loop`.
 
@@ -113,7 +113,7 @@ def scan(
         In case of beam search, it might make more sense
         to perform some post-processing on the TensorArray per entry,
         like selecting the right beam entries.
-    :return: final state, outputs ys, and the new spatial_dim
+    :return: outputs ys, final state, and the new spatial_dim
     """
     if spatial_dim is None or not spatial_dim.is_dim_known():
         assert cond is not None, f"scan: spatial_dim {spatial_dim} is None/unknown, need to provide `end`"
@@ -131,14 +131,14 @@ def scan(
         def _body(_s: Tuple[Tensor, Tensor, Tensor, S, Y]) -> Tuple[Tensor, Tensor, Tensor, S, Y]:
             i, seq_len_, prev_cond, s, ys_ = _s
             seq_len_ = seq_len_ + rf.cast(prev_cond, dtype=seq_len_.dtype)
-            s, y = body(s, None)
+            y, s = body(None, s)
             tree.assert_same_structure(ys_, y)
             ys_ = tree.map_structure(lambda ys__, y_: ys__.push_back(y_), ys_, y)
-            c = cond(s, None)
+            c = cond(None, s)
             c = rf.logical_and(c, prev_cond)
             return i + 1, seq_len_, c, s, ys_
 
-        initial_cond = cond(initial, None)
+        initial_cond = cond(None, initial)
         assert (
             isinstance(initial_cond, Tensor)
             and initial_cond.dtype == "bool"
@@ -170,7 +170,7 @@ def scan(
 
         def _body(_s: Tuple[Tensor, S, Y]) -> Tuple[Tensor, S, Y]:
             i, s, ys_ = _s
-            s, y = body(s, tree.map_structure(lambda x: x[i], xs))
+            y, s = body(tree.map_structure(lambda x: x[i], xs), s)
             tree.assert_same_structure(ys_, y)
             ys_ = tree.map_structure(lambda ys__, y_: ys__.push_back(y_), ys_, y)
             return i + 1, s, ys_
@@ -187,4 +187,4 @@ def scan(
 
     if not return_tensor_arrays:
         ys = tree.map_structure(lambda ys_: ys_.stack(axis=spatial_dim), ys)
-    return final_s, ys, spatial_dim
+    return ys, final_s, spatial_dim

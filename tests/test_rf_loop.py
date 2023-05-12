@@ -63,12 +63,12 @@ def test_scan_unknown_len():
                     print("**", t.raw_tensor, rf.reduce_sum(s_, axis=in_dim).raw_tensor)
                 return rf.logical_and(rf.reduce_sum(s_, axis=in_dim) < 20, t < time_dim.get_dim_value_tensor())
 
-            def _body(s, _):
+            def _body(_, s):
                 t, s_ = s
                 y_ = s_ + rf.abs(rf.gather(x, indices=t, axis=time_dim))
-                return (t + 1, y_), y_
+                return y_, (t + 1, y_)
 
-            _, y, out_time_dim = rf.scan(
+            y, _, out_time_dim = rf.scan(
                 cond=_cond,
                 body=_body,
                 cond_dims=[batch_dim],
@@ -97,11 +97,11 @@ def test_scan_existing_spatial_dim():
 
     class _Net(rf.Module):
         def __call__(self, x: Tensor) -> Tensor:
-            def _body(s, x_):
+            def _body(x_, s):
                 y_ = s + x_
                 return y_, y_
 
-            _, y, _ = rf.scan(
+            y, _, _ = rf.scan(
                 spatial_dim=time_dim,
                 body=_body,
                 initial=rf.zeros((batch_dim, in_dim)),

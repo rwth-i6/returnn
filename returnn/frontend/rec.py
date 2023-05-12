@@ -205,16 +205,12 @@ class ZoneoutLSTM(LSTM):
             new_state.c.feature_dim = self.out_dim
             return output, new_state
 
-        def _body(s, x_):
-            y_, s = self(x_, state=s, spatial_dim=single_step_dim)
-            return s, y_
-
         batch_dims = source.remaining_dims((spatial_dim, self.in_dim))
-        new_state, output, _ = rf.scan(
+        output, new_state, _ = rf.scan(
             spatial_dim=spatial_dim,
             initial=state,
             xs=source,
             ys=Tensor("lstm-out", dims=batch_dims + [self.out_dim], dtype=source.dtype),
-            body=_body,
+            body=lambda x_, s: self(x_, state=s, spatial_dim=single_step_dim),
         )
         return output, new_state
