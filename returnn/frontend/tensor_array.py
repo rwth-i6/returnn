@@ -62,7 +62,7 @@ class TensorArray:
 
     def push_back(self, tensor: Tensor) -> TensorArray:
         """push_back"""
-        assert tensor.dims == self.tensor_template.dims
+        assert tensor.dims_set == self.tensor_template.dims_set
         assert tensor.dtype == self.tensor_template.dtype
         assert tensor.sparse_dim == self.tensor_template.sparse_dim
         backend_tensor_array = self._backend.tensor_array_push_back(self._backend_tensor_array, tensor)
