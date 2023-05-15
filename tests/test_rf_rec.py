@@ -157,12 +157,15 @@ def test_zoneout_lstm_tf_layers_vs_rf_pt():
     # Compare TF-layers ZoneoutLSTM vs RF ZoneoutLSTM with PyTorch backend.
     time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
     # Note: Use high dimension because only that triggers some inconsistencies.
-    in_dim, out_dim = Dim(7, name="in"), Dim(1024, name="out")
+    in_dim, out_dim = Dim(7, name="in"), Dim(100, name="out")
     extern_data = TensorDict(
         {
             "data": Tensor("data", [batch_dim, time_dim, in_dim], dtype="float32"),
         }
     )
+
+    zoneout_factor_cell = 0.15
+    zoneout_factor_output = 0.05
 
     tf_net_dict = {
         "lstm": {
@@ -170,8 +173,8 @@ def test_zoneout_lstm_tf_layers_vs_rf_pt():
             "unit": "ZoneoutLSTM",
             "from": "data",
             "unit_opts": {
-                "zoneout_factor_cell": 0.15,
-                "zoneout_factor_output": 0.05,
+                "zoneout_factor_cell": zoneout_factor_cell,
+                "zoneout_factor_output": zoneout_factor_output,
                 "use_zoneout_output": True,
             },
             "in_dim": in_dim,
@@ -200,6 +203,7 @@ def test_zoneout_lstm_tf_layers_vs_rf_pt():
     from returnn.torch.data.tensor_utils import tensor_dict_numpy_to_torch_
     from returnn.tf.network import TFNetwork
     import tensorflow as tf
+    import numpy
 
     print("*** Construct TF graph for TF model")
     extern_data = TensorDict()
@@ -207,6 +211,7 @@ def test_zoneout_lstm_tf_layers_vs_rf_pt():
     tensor_dict_fill_random_numpy_(extern_data, dyn_dim_max_sizes={time_dim: 20}, dyn_dim_min_sizes={time_dim: 10})
     extern_data_numpy_raw_dict = extern_data.as_raw_tensor_dict()
     extern_data.reset_content()
+    rnd = numpy.random.RandomState(43)
 
     rf.select_backend_returnn_layers_tf()
     tf1 = tf.compat.v1
@@ -215,6 +220,13 @@ def test_zoneout_lstm_tf_layers_vs_rf_pt():
         net.construct_from_dict(config.typed_dict["network"])
         print("*** Random init TF model")
         net.initialize_params(session)
+
+        # Overwrite again, such that the bias is also non-zero.
+        print("*** Set random weights")
+        params = net.get_params_list()
+        for param in params:
+            print("Param:", param, "shape:", param.shape, "dtype:", param.dtype)
+            param.load(rnd.normal(scale=0.1, size=tuple(param.shape)), session=session)
 
         print("*** Forward")
         extern_data_tf_raw_dict = net.extern_data.as_raw_tensor_dict()
@@ -248,8 +260,8 @@ def test_zoneout_lstm_tf_layers_vs_rf_pt():
             self.lstm = rf.ZoneoutLSTM(
                 in_dim,
                 out_dim,
-                zoneout_factor_cell=0.15,
-                zoneout_factor_output=0.05,
+                zoneout_factor_cell=zoneout_factor_cell,
+                zoneout_factor_output=zoneout_factor_output,
                 forget_bias=1.0,  # RETURNN TF-layers ZoneoutLSTM
                 parts_order="icfo",  # RETURNN TF-layers ZoneoutLSTM
             )
