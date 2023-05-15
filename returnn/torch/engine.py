@@ -60,7 +60,7 @@ class Engine(EngineBase):
         self._device = _get_device_from_config(config)
         print("Using device:", self._device, file=log.v2)
 
-        self._use_DDP =  config.is_true("use_DDP") # type: Optional[bool]
+        self._use_DDP = config.is_true("use_DDP")  # type: Optional[bool]
 
     def init_train_from_config(
         self,
@@ -165,15 +165,29 @@ class Engine(EngineBase):
         accumulated_inv_norm_factors_dict = NumbersDict()
         step_idx = 0
         epoch_start_time = time.time()
-        for data in self._train_dataloader:
+
+        data_iter = iter(self._train_dataloader)
+
+        while True:
+            data = next(data_iter, None)
+            _has_data = torch.tensor([data is not None], dtype=torch.int8).to(self._device)
+            # use all reduce to check if all workers have data, if at least one worker does not have data,
+            # all workers finish this epoch
+            torch.distributed.all_reduce(
+                _has_data, op=torch.distributed.ReduceOp.MIN
+            )
+            if not _has_data[0]:
+                break
+
             # in DDP training we only need to sync gradients at the last micro step.
             if self._use_DDP:
-                self._pt_model.require_backward_grad_sync = (step_idx % self._gradient_accumulation_steps == self._gradient_accumulation_steps - 1)
-            
+                self._pt_model.require_backward_grad_sync = (
+                        step_idx % self._gradient_accumulation_steps == self._gradient_accumulation_steps - 1)
+
             self._run_step(data, train_flag=True)
 
             train_ctx = rf.get_run_ctx()
-            
+
             # scale the loss to account for gradient accumulation
             if self._use_DDP and self._gradient_accumulation_steps > 1:
                 for loss_name in train_ctx.losses.keys():
@@ -213,21 +227,15 @@ class Engine(EngineBase):
         print("Trained %i steps" % step_idx)
         print("Elapsed time %s" % hms(time.time() - epoch_start_time))
 
-        accumulated_losses_dict = accumulated_losses_dict / accumulated_inv_norm_factors_dict
-        self.learning_rate_control.set_epoch_error(
-            self.epoch, {f"train_loss_{k}": v for k, v in accumulated_losses_dict.items()}
-        )
-        self.learning_rate_control.save()
+        if (not self._use_DDP) or (self._use_DDP and torch.distributed.get_rank() == 0):
+            accumulated_losses_dict = accumulated_losses_dict / accumulated_inv_norm_factors_dict
+            self.learning_rate_control.set_epoch_error(
+                self.epoch, {f"train_loss_{k}": v for k, v in accumulated_losses_dict.items()}
+            )
+            self.learning_rate_control.save()
 
-        print(f"Total train loss:", _format_score(dict(accumulated_losses_dict)), file=log.v3)
+            print(f"Total train loss:", _format_score(dict(accumulated_losses_dict)), file=log.v3)
 
-        if not self._use_DDP:
-            if self.epoch % self._save_model_epoch_interval == 0 or self.epoch == self._final_epoch:
-                self._save_model()
-                self._save_optimizer()
-
-            self.eval_model()
-        elif torch.distributed.get_rank() == 0:
             if self.epoch % self._save_model_epoch_interval == 0 or self.epoch == self._final_epoch:
                 self._save_model()
                 self._save_optimizer()
@@ -388,7 +396,7 @@ class Engine(EngineBase):
 
         # See :mod:`rf.rand` docstring for an explanation of this logic.
         random_seed = self.config.int("random_seed", 42)
-        random_seed = (epoch * 193939 + step * 19937 + random_seed * 27644437 + 479001599) % (2**31)
+        random_seed = (epoch * 193939 + step * 19937 + random_seed * 27644437 + 479001599) % (2 ** 31)
         rf.set_random_seed(random_seed)
 
         get_model_func = self.config.typed_value("get_model")
@@ -406,6 +414,10 @@ class Engine(EngineBase):
         print("Model:", self._pt_model, file=log.v4)
 
         if checkpoint_state is not None:
+            # remove the prefix of "module." from the DDP state dict
+            torch.nn.modules.utils.consume_prefix_in_state_dict_if_present(
+                checkpoint_state["model"], "module."
+            )
             self._pt_model.load_state_dict(checkpoint_state["model"])
         preload_from_files = self.config.typed_value("preload_from_files", {})
         if preload_from_files:
