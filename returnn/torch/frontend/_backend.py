@@ -1586,6 +1586,10 @@ class TorchBackend(Backend[torch.Tensor]):
     @staticmethod
     def tensor_array_stack(tensor_array: TensorArrayType, *, axis: Dim, tensor_template: Tensor) -> Tensor:
         """stack"""
+        if tensor_array:
+            # In the actual array, the tensors might be a better template (different dim order).
+            # We already checked in TensorArray that they are compatible.
+            tensor_template = tensor_array[0].copy_template()
         out_tensor = tensor_template.copy_add_dim_by_tag(axis, unbroadcast=True, axis=0)
         if not tensor_array:
             return rf.zeros_like(out_tensor)
