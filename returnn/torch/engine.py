@@ -56,11 +56,24 @@ class Engine(EngineBase):
         self._save_model_epoch_interval = 1
         self._updater = None  # type: Optional[Updater]
 
-        self._amp_dtype = None  # type: Optional[str]
+        self._use_autocast = False
+        self._autocast_dtype = None  # type: Optional[str]
         self._grad_scaler = None  # type: Optional[amp.GradScaler]
 
         self._device = _get_device_from_config(config)
         print("Using device:", self._device, file=log.v2)
+
+        amp_options = self.config.typed_value("torch_amp_options")
+        if amp_options:
+            assert isinstance(amp_options, dict)
+            amp_options = util.CollectionReadCheckCovered(amp_options)
+            self._use_autocast = True
+            self._autocast_dtype = amp_options["dtype"]
+            amp_options.assert_all_read()
+
+        use_grad_scaler = self.config.bool("use_grad_scaler", self._use_autocast)
+        if use_grad_scaler:
+            self._grad_scaler = amp.GradScaler()
 
     def init_train_from_config(
         self,
@@ -110,12 +123,6 @@ class Engine(EngineBase):
         self._train_step_func = self.config.typed_value("train_step")
         assert self._train_step_func, "train_step not defined"
 
-        amp_options = self.config.typed_value("torch_amp_options")
-        if amp_options is not None:
-            assert isinstance(amp_options, dict)
-            self._amp_dtype = amp_options.get("dtype")
-            self._grad_scaler = amp.GradScaler()
-
     def train(self):
         """
         Main training loop.
@@ -157,8 +164,7 @@ class Engine(EngineBase):
         step_idx = 0
         for data in self._train_dataloader:
             self._updater.get_optimizer().zero_grad()
-            with autocast(device_type=self._device, dtype=self._amp_dtype) if self._amp_dtype else nullcontext():
-                self._run_step(data, train_flag=True)
+            self._run_step(data, train_flag=True)
 
             train_ctx = rf.get_run_ctx()
             total_loss = train_ctx.total_loss()
@@ -172,7 +178,7 @@ class Engine(EngineBase):
                 {name: float(_to_raw(loss.get_inv_norm_factor())) for name, loss in train_ctx.losses.items()}
             )
 
-            if self._amp_dtype:
+            if self._grad_scaler is not None:
                 self._grad_scaler.scale(total_loss).backward()
                 self._grad_scaler.step(self._updater.get_optimizer())
                 self._grad_scaler.update()
@@ -229,10 +235,7 @@ class Engine(EngineBase):
             with torch.no_grad():
                 for data in data_loader:
 
-                    with autocast(
-                        device_type=self._device, dtype=self._amp_dtype
-                    ) if self._amp_dtype else nullcontext():
-                        self._run_step(data)
+                    self._run_step(data)
                     train_ctx = rf.get_run_ctx()
 
                     if score_keys is None:
@@ -341,8 +344,9 @@ class Engine(EngineBase):
 
         rf.init_train_step_run_ctx(train_flag=train_flag)
 
-        sentinel_kw = {"__fwd_compatible_random_arg_%i" % int(random() * 100): None}
-        self._train_step_func(model=self._orig_model, extern_data=extern_data, **sentinel_kw)
+        with autocast(device_type=self._device, dtype=self._autocast_dtype) if self._use_autocast else nullcontext():
+            sentinel_kw = {"__fwd_compatible_random_arg_%i" % int(random() * 100): None}
+            self._train_step_func(model=self._orig_model, extern_data=extern_data, **sentinel_kw)
 
     def _load_model(self, *, epoch: int):
         """
