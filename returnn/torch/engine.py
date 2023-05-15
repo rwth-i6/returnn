@@ -63,17 +63,30 @@ class Engine(EngineBase):
         self._device = _get_device_from_config(config)
         print("Using device:", self._device, file=log.v2)
 
-        amp_options = self.config.typed_value("torch_amp_options")
-        if amp_options:
-            assert isinstance(amp_options, dict)
-            amp_options = util.CollectionReadCheckCovered(amp_options)
+        amp_options = self.config.typed_value("torch_amp")
+        grad_scaler_opts = None
+        if amp_options is not None:
             self._use_autocast = True
-            self._autocast_dtype = amp_options["dtype"]
-            amp_options.assert_all_read()
+            grad_scaler_opts = {}
+            if isinstance(amp_options, dict):
+                amp_options = util.CollectionReadCheckCovered(amp_options)
+                dtype = amp_options.get("dtype", None)
+                grad_scaler_opts = amp_options.get("grad_scaler", grad_scaler_opts)
+                amp_options.assert_all_read()
+            elif isinstance(amp_options, str):
+                dtype = amp_options
+            else:
+                raise TypeError(f"Invalid type for torch_amp: {type(amp_options)}")
+            if isinstance(dtype, str):
+                dtype = getattr(torch, dtype)
+            assert isinstance(dtype, torch.dtype) or dtype is None
+            self._autocast_dtype = dtype
 
-        use_grad_scaler = self.config.bool("use_grad_scaler", self._use_autocast)
-        if use_grad_scaler:
-            self._grad_scaler = amp.GradScaler()
+        if grad_scaler_opts is None:
+            grad_scaler_opts = self.config.typed_value("grad_scaler")
+        if grad_scaler_opts is not None:
+            assert isinstance(grad_scaler_opts, dict)
+            self._grad_scaler = amp.GradScaler(**grad_scaler_opts)
 
     def init_train_from_config(
         self,
