@@ -156,7 +156,8 @@ def test_zoneout_lstm_single_step():
 def test_zoneout_lstm_tf_layers_vs_rf_pt():
     # Compare TF-layers ZoneoutLSTM vs RF ZoneoutLSTM with PyTorch backend.
     time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
-    in_dim, out_dim = Dim(7, name="in"), Dim(13, name="out")
+    # Note: Use high dimension because only that triggers some inconsistencies.
+    in_dim, out_dim = Dim(7, name="in"), Dim(1024, name="out")
     extern_data = TensorDict(
         {
             "data": Tensor("data", [batch_dim, time_dim, in_dim], dtype="float32"),
@@ -175,6 +176,10 @@ def test_zoneout_lstm_tf_layers_vs_rf_pt():
             },
             "in_dim": in_dim,
             "out_dim": out_dim,
+            # Better for the test to not have zeros in weights/bias.
+            "forward_weights_init": "random_normal_initializer(mean=0.0, stddev=1.)",
+            "recurrent_weights_init": "random_normal_initializer(mean=0.0, stddev=1.)",
+            "bias_init": "random_normal_initializer(mean=0.0, stddev=1.)",
         },
         "output": {"class": "copy", "from": "lstm"},
     }
@@ -282,45 +287,58 @@ def test_zoneout_lstm_tf_layers_vs_rf_pt():
 
     tf_out = old_model_outputs_fetch["layer:output"]
     pt_out = out.raw_tensor.detach().cpu().numpy()
+    print("out shape:", tf_out.shape)
     assert tf_out.shape == pt_out.shape
 
     size_v = old_model_outputs_fetch[f"layer:output:size0"]
+    print("* sizes:", size_v)
     for b in range(tf_out.shape[1]):
         tf_out[size_v[b] :] = 0
         pt_out[size_v[b] :] = 0
 
-    # Using equal_nan=False because we do not want any nan in any of the values.
-    if numpy.allclose(tf_out, pt_out, atol=1e-5):
-        return  # done
+    _pt_out = pt_out
+    _tf_out = tf_out
 
-    print("** not all close!")
-    print("close:")
-    # Iterate over all indices, and check if the values are close.
-    # If not, add the index to the mismatches list.
-    remarks = []
-    count_mismatches = 0
-    for idx in sorted(numpy.ndindex(tf_out.shape), key=sum):
-        if numpy.isnan(tf_out[idx]) and numpy.isnan(pt_out[idx]):
-            remarks.append("[%s]:? (both are nan)" % ",".join([str(i) for i in idx]))
-            count_mismatches += 1
-            continue
-        close = numpy.allclose(tf_out[idx], pt_out[idx], atol=1e-5)
-        if not close:
-            count_mismatches += 1
-        remarks.append(
-            "[%s]:" % ",".join([str(i) for i in idx])
-            + ("✓" if close else "✗ (%.5f diff)" % abs(tf_out[idx] - pt_out[idx]))
+    for t in range(_tf_out.shape[0]):
+        print("* t:", t)
+
+        tf_out = _tf_out[t]
+        pt_out = _pt_out[t]
+
+        # Using equal_nan=False because we do not want any nan in any of the values.
+        if numpy.allclose(tf_out, pt_out, atol=1e-5):
+            continue  # done
+
+        print("** not all close!")
+        print("close:")
+        # Iterate over all indices, and check if the values are close.
+        # If not, add the index to the mismatches list.
+        remarks = []
+        count_mismatches = 0
+        for idx in sorted(numpy.ndindex(tf_out.shape), key=sum):
+            if numpy.isnan(tf_out[idx]) and numpy.isnan(pt_out[idx]):
+                remarks.append("[%s]:? (both are nan)" % ",".join([str(i) for i in idx]))
+                count_mismatches += 1
+                continue
+            close = numpy.allclose(tf_out[idx], pt_out[idx], atol=1e-5)
+            if not close:
+                count_mismatches += 1
+            remarks.append(
+                "[%s]:" % ",".join([str(i) for i in idx])
+                + ("✓" if close else "✗ (%.5f diff)" % abs(tf_out[idx] - pt_out[idx]))
+            )
+            if len(remarks) >= 50 and count_mismatches > 0:
+                remarks.append("...")
+                break
+        print("\n".join(remarks))
+        numpy.testing.assert_allclose(
+            tf_out,
+            pt_out,
+            rtol=1e-5,
+            atol=1e-5,
+            equal_nan=False,
+            err_msg=f"TF-layers vs RF-PT mismatch",
         )
-        if len(remarks) >= 50 and count_mismatches > 0:
-            remarks.append("...")
-            break
-    print("\n".join(remarks))
-    numpy.testing.assert_allclose(
-        tf_out,
-        pt_out,
-        rtol=1e-5,
-        atol=1e-5,
-        equal_nan=False,
-        err_msg=f"TF-layers vs RF-PT mismatch",
-    )
-    raise Exception(f"should not get here, mismatches: {remarks}")
+        raise Exception(f"should not get here, mismatches: {remarks}")
+
+    print("all close!")
