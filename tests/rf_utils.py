@@ -71,18 +71,14 @@ def run_model(
         assert len(v_pt.dims) == len(v_tf.dims)
         assert v_pt.feature_dim_axis == v_tf.feature_dim_axis
         for d_pt, d_tf in zip(v_pt.dims, v_tf.dims):
-            assert isinstance(d_pt, Dim) and isinstance(d_tf, Dim)
-            assert _dim_is_scalar_size(d_pt) == _dim_is_scalar_size(d_tf)
-            if _dim_is_scalar_size(d_pt):
-                assert _dim_scalar_size(d_pt) == _dim_scalar_size(d_tf)
-            else:
-                assert d_pt.dyn_size_ext and d_tf.dyn_size_ext
-                # There might be cases where the dims are maybe not equal
-                # (same reasoning as above, or also different order),
-                # although this would be quite exotic.
-                # Let's just assume for now that this does not happen.
-                assert d_pt.dyn_size_ext.dims == d_tf.dyn_size_ext.dims
-                assert (d_pt.dyn_size_ext.raw_tensor == d_tf.dyn_size_ext.raw_tensor).all()
+            _check_dim(d_pt, d_tf)
+        if v_pt.dtype.startswith("int"):
+            assert v_tf.dtype.startswith("int")  # allow maybe different bit depth
+        else:
+            assert v_pt.dtype == v_tf.dtype
+        assert bool(v_pt.sparse_dim) == bool(v_tf.sparse_dim)
+        if v_pt.sparse_dim:
+            _check_dim(v_pt.sparse_dim, v_tf.sparse_dim)
     assert set(out_pt_raw.keys()) == set(out_tf_raw.keys())
     for k, v_pt in out_pt_raw.items():
         v_tf = out_tf_raw[k]
@@ -227,3 +223,18 @@ def _pad_mask_zeros(x: Union[TensorDict, Tensor, Dim]):
                 continue
             mask = mask.copy_compatible_to(x, check_sparse=False, check_dtype=False)
             x.raw_tensor = numpy.where(mask.raw_tensor, x.raw_tensor, 0)
+
+
+def _check_dim(d_pt: Dim, d_tf: Dim):
+    assert isinstance(d_pt, Dim) and isinstance(d_tf, Dim)
+    assert _dim_is_scalar_size(d_pt) == _dim_is_scalar_size(d_tf)
+    if _dim_is_scalar_size(d_pt):
+        assert _dim_scalar_size(d_pt) == _dim_scalar_size(d_tf)
+    else:
+        assert d_pt.dyn_size_ext and d_tf.dyn_size_ext
+        # There might be cases where the dims are maybe not equal
+        # (same reasoning as above, or also different order),
+        # although this would be quite exotic.
+        # Let's just assume for now that this does not happen.
+        assert d_pt.dyn_size_ext.dims == d_tf.dyn_size_ext.dims
+        assert (d_pt.dyn_size_ext.raw_tensor == d_tf.dyn_size_ext.raw_tensor).all()
