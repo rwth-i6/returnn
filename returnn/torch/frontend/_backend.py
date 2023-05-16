@@ -947,6 +947,32 @@ class TorchBackend(Backend[torch.Tensor]):
         )
         return res
 
+    # noinspection PyShadowingBuiltins
+    @staticmethod
+    def top_k(
+        source: Tensor,
+        *,
+        axis: Union[Dim, Sequence[Dim]],
+        k: Union[int, Tensor],
+        k_dim: Optional[Dim] = None,
+        sorted: bool = True,
+    ) -> Tuple[Tensor, Union[Tensor, Sequence[Tensor]], Dim]:
+        """top_k"""
+        if not k_dim:
+            k_dim = Dim(k, name="top-k-dim")
+        assert isinstance(axis, Dim)  # only single axis supported currently
+        assert not axis.need_masking()  # not supported currently
+        axis_int = source.get_axis_from_description(axis, allow_int=False)
+        values_raw, indices_raw = torch.topk(
+            source.raw_tensor, k=k_dim.get_dim_value(), dim=axis_int, largest=True, sorted=sorted
+        )
+        values = source.copy_template_replace_dim_tag(axis=axis_int, new_dim_tag=k_dim, name="top_k_values")
+        values.raw_tensor = values_raw
+        indices = source.copy_template_replace_dim_tag(axis=axis_int, new_dim_tag=k_dim, name="top_k_indices")
+        indices.dtype = "int64"
+        indices.raw_tensor = indices_raw
+        return values, indices, k_dim
+
     @staticmethod
     @contextlib.contextmanager
     def random_journal_record() -> List[Dict[str, Any]]:

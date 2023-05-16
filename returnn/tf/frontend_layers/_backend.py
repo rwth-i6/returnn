@@ -594,6 +594,51 @@ class ReturnnLayersBackend(Backend[Layer]):
             {"class": "reduce", "from": source, "mode": mode, "axis": axis, **kwargs}, name=f"reduce_{mode}"
         )
 
+    # noinspection PyShadowingBuiltins
+    @staticmethod
+    def top_k(
+        source: Tensor,
+        *,
+        axis: Union[Dim, Sequence[Dim]],
+        k: Union[int, Tensor],
+        k_dim: Optional[Dim] = None,
+        sorted: bool = True,
+    ) -> Tuple[Tensor, Union[Tensor, Sequence[Tensor]], Dim]:
+        """top_k"""
+        if not k_dim:
+            k_dim = Dim(k, name="top-k-dim")
+        values = rfl.make_layer(
+            {
+                "class": "top_k",
+                "from": source,
+                "axis": axis,
+                "k": k,
+                "k_dim": k_dim,
+                "sorted": sorted,
+            },
+            name="top_k",
+        )
+        if isinstance(axis, (tuple, list)):
+            axes = axis
+            single_axis = False
+        else:
+            assert isinstance(axis, Dim)
+            axes = [axis]
+            single_axis = True
+        indices = []
+        for i, a in enumerate(axes):
+            assert isinstance(a, Dim)
+            assert not a.need_masking()  # not supported currently
+            sub_name = "indices" if single_axis else f"indices{i}"
+            indices_data = values.copy_template(name=f"{values.name}_{sub_name}_{a.description}")
+            indices_data.dtype = "int32"
+            indices_data.sparse_dim = a
+            # noinspection PyProtectedMember
+            indices.append(rfl._get_sub_layer(values, sub_name, data=indices_data))
+        if single_axis:
+            indices = indices[0]
+        return values, indices, k_dim
+
     @staticmethod
     @contextlib.contextmanager
     def random_journal_replay(journal: Sequence[Dict[str, Any]]):

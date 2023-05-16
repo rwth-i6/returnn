@@ -841,6 +841,19 @@ class Backend(Generic[T]):
         """
         raise NotImplementedError
 
+    # noinspection PyShadowingBuiltins
+    @staticmethod
+    def top_k(
+        source: Tensor,
+        *,
+        axis: Union[Dim, Sequence[Dim]],
+        k: Union[int, Tensor],
+        k_dim: Optional[Dim] = None,
+        sorted: bool = True,
+    ) -> Tuple[Tensor, Union[Tensor, Sequence[Tensor]], Dim]:
+        """top_k. see :func:`top_k`"""
+        raise NotImplementedError
+
     @staticmethod
     def random(
         *,
