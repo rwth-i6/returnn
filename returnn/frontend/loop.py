@@ -78,12 +78,13 @@ def scan(
     *,
     spatial_dim: Optional[Dim] = None,
     cond_dims: Optional[Sequence[Dim]] = None,
+    cond_before_body: bool = True,
     initial: S = None,
     xs: X = None,
     ys: Y = None,
     cond: Optional[Callable[[X, S], Tensor]] = None,
     body: Callable[[X, S], Tuple[Y, S]],
-    max_seq_len: Optional[int] = None,
+    max_seq_len: Optional[Union[int, Tensor]] = None,
     return_tensor_arrays: bool = False,
 ) -> Tuple[Y, S, Dim]:
     """
@@ -98,6 +99,12 @@ def scan(
     :param spatial_dim: if None or unknown, need to provide cond. must be given if xs is not None.
     :param cond_dims: if spatial_dim is not given, this must be given to know what shape to expect from cond.
         This will also be the shape of the dyn_size_ext of the resulting spatial_dim.
+    :param cond_before_body: if True, will execute cond before body, otherwise after.
+        If True, corresponds to ``while cond(...): body(...)``,
+        otherwise ``while True: body(...); if not cond(...): break``.
+        Note that `cond` is executed in any case at the end of the loop
+        but with `cond_before_body=True` this final value would be ignored.
+        Be careful though that you do not have any side-effects in `cond`.
     :param initial: state/carry
     :param xs: input, will be unstacked over spatial_dim. can be None.
     :param ys: output, as templates, per iteration (excluding spatial_dim)
@@ -106,6 +113,7 @@ def scan(
         Unlike while_loop cond, does not need to be scalar. E.g. some shape like [B] is normal.
         Once it returns False for all entries, the loop will stop.
         Once it returns False for some entry, further values in further iterations for this entry will be ignored.
+        We do not expect any side-effects in `cond`.
     :param body:
     :param max_seq_len: If given, it is checked in addition to `cond`, and when reached, it stops the loop.
     :param return_tensor_arrays: if True, will return TensorArray instead of Tensor for ys.
@@ -116,7 +124,8 @@ def scan(
     :return: outputs ys, final state, and the new spatial_dim
     """
     if spatial_dim is None or not spatial_dim.is_dim_known():
-        assert cond is not None, f"scan: spatial_dim {spatial_dim} is None/unknown, need to provide `end`"
+        assert cond is not None, f"scan: spatial_dim {spatial_dim} is None/unknown, need to provide `cond`"
+        assert cond_dims is not None, f"scan: spatial_dim {spatial_dim} is None/unknown, need to provide `cond_dims`"
         assert xs is None, f"scan: spatial_dim {spatial_dim} is None/unknown, cannot use input `xs` {xs}"
         if spatial_dim is None:
             spatial_dim = Dim(None, name="scan_dim")
@@ -138,12 +147,15 @@ def scan(
             c = rf.logical_and(c, prev_cond)
             return i + 1, seq_len_, c, s, ys_
 
-        initial_cond = cond(None, initial)
-        assert (
-            isinstance(initial_cond, Tensor)
-            and initial_cond.dtype == "bool"
-            and initial_cond.dims_set == set(cond_dims)
-        )
+        if cond_before_body:
+            initial_cond = cond(None, initial)
+            assert (
+                isinstance(initial_cond, Tensor)
+                and initial_cond.dtype == "bool"
+                and initial_cond.dims_set == set(cond_dims)
+            )
+        else:
+            initial_cond = rf.constant(True, dtype="bool", dims=cond_dims)
         _, seq_len, _, final_s, ys = while_loop(
             _cond,
             _body,
