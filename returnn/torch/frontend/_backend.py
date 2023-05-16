@@ -960,7 +960,31 @@ class TorchBackend(Backend[torch.Tensor]):
         """top_k"""
         if not k_dim:
             k_dim = Dim(k, name="top-k-dim")
-        assert isinstance(axis, Dim)  # only single axis supported currently
+        if isinstance(axis, (list, tuple)):
+            # Move axis to the end, in the right order.
+            source = source.copy_transpose([d for d in source.dims if d not in axis] + list(axis))
+            source_raw_flat = source.raw_tensor.flatten(start_dim=source.batch_ndim - len(axis))
+            values_raw, indices_raw = torch.topk(
+                source_raw_flat, k=k_dim.get_dim_value(), dim=-1, largest=True, sorted=sorted
+            )
+            values = source.copy_template_new_dim_tags(
+                new_dim_tags=source.dims[: -len(axis)] + (k_dim,), name="top_k_values"
+            )
+            if source.feature_dim and source.feature_dim in values.dims:
+                values.feature_dim = source.feature_dim
+            values.raw_tensor = values_raw
+            indices_out = []
+            for i, a in reversed(list(enumerate(axis))):
+                assert isinstance(a, Dim)
+                indices_out_raw = indices_raw % a.dimension
+                indices_raw = indices_raw // a.dimension
+                indices = values.copy_template(name=f"top_k_indices_{a.name or i}")
+                indices.dtype = TorchBackend.get_dtype_name_raw(indices_out_raw)
+                indices.sparse_dim = a
+                indices.raw_tensor = indices_out_raw
+                indices_out.insert(0, indices)
+            return values, indices_out, k_dim
+        assert isinstance(axis, Dim)
         assert not axis.need_masking()  # not supported currently
         axis_int = source.get_axis_from_description(axis, allow_int=False)
         values_raw, indices_raw = torch.topk(

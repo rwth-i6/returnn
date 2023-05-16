@@ -72,3 +72,31 @@ def test_top_k():
         indices.mark_as_output("indices", shape=(batch_dim, time_dim, k_dim))
 
     run_model(extern_data, lambda *, epoch, step: _Net(), _forward_step)
+
+
+def test_top_k_beam_search():
+    time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
+    vocab_dim = Dim(7, name="vocab")
+    beam_in_dim = Dim(3, name="beam_in")
+    beam_out_dim = Dim(5, name="beam_out")
+    extern_data = TensorDict(
+        {
+            "log_probs": Tensor("log_probs", [batch_dim, beam_in_dim, time_dim, vocab_dim], dtype="float32"),
+        }
+    )
+
+    class _Net(rf.Module):
+        def __call__(self, x: Tensor) -> Tuple[Tensor, Tensor, Tensor]:
+            log_probs, (indices_beam_in, indices_vocab), _ = rf.top_k(
+                x, axis=[beam_in_dim, vocab_dim], k_dim=beam_out_dim, k=beam_out_dim.dimension
+            )
+            return log_probs, indices_beam_in, indices_vocab
+
+    # noinspection PyShadowingNames
+    def _forward_step(*, model: _Net, extern_data: TensorDict):
+        log_probs, indices_beam_in, indices_vocab = model(extern_data["log_probs"])
+        log_probs.mark_as_output("log_probs", shape=(batch_dim, time_dim, beam_out_dim))
+        indices_beam_in.mark_as_output("indices_beam_in", shape=(batch_dim, time_dim, beam_out_dim))
+        indices_vocab.mark_as_output("indices_vocab", shape=(batch_dim, time_dim, beam_out_dim))
+
+    run_model(extern_data, lambda *, epoch, step: _Net(), _forward_step)
