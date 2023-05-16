@@ -969,7 +969,8 @@ class TorchBackend(Backend[torch.Tensor]):
         values = source.copy_template_replace_dim_tag(axis=axis_int, new_dim_tag=k_dim, name="top_k_values")
         values.raw_tensor = values_raw
         indices = source.copy_template_replace_dim_tag(axis=axis_int, new_dim_tag=k_dim, name="top_k_indices")
-        indices.dtype = "int64"
+        indices.dtype = TorchBackend.get_dtype_name_raw(indices_raw)
+        indices.sparse_dim = axis
         indices.raw_tensor = indices_raw
         return values, indices, k_dim
 
