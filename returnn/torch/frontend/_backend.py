@@ -943,7 +943,7 @@ class TorchBackend(Backend[torch.Tensor]):
             raw_tensor=raw_result,
             dims=res_dims,
             dtype=TorchBackend.get_dtype_name_raw(raw_result),
-            sparse_dim=source.sparse_dim,
+            sparse_dim=axis[0] if mode.startswith("arg") else source.sparse_dim,
         )
         return res
 
