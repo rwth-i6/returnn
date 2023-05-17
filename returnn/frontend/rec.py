@@ -84,10 +84,11 @@ class LSTM(rf.Module):
 class LstmState(rf.State):
     """LSTM state"""
 
-    def __init__(self, h: Tensor, c: Tensor):
-        super().__init__()
-        self.h = h
-        self.c = c
+    def __init__(self, *_args, h: Tensor = None, c: Tensor = None):
+        super().__init__(*_args)
+        if not _args:
+            self.h = h
+            self.c = c
 
 
 class ZoneoutLSTM(LSTM):

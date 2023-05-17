@@ -205,16 +205,17 @@ class CausalSelfAttentionState(rf.State):
     State for :class:`StepwiseCausalSelfAttention`.
     """
 
-    def __init__(self, *, k_accum: Tensor = None, v_accum: Tensor = None, accum_axis: Dim = None):
+    def __init__(self, *_args, k_accum: Tensor = None, v_accum: Tensor = None, accum_axis: Dim = None):
         """
         :param k_accum: accumulated keys
         :param v_accum: accumulated values
         :param accum_axis:
         """
-        super().__init__()
-        self.k_accum = k_accum
-        self.v_accum = v_accum
-        self.accum_axis = accum_axis
+        super().__init__(*_args)
+        if not _args:
+            self.k_accum = k_accum
+            self.v_accum = v_accum
+            self.accum_axis = accum_axis
 
 
 class RelPosSelfAttention(SelfAttentionBase):
