@@ -76,8 +76,8 @@ class LSTM(rf.Module):
     def default_initial_state(self, *, batch_dims: Sequence[Dim]) -> LstmState:
         """initial state"""
         return LstmState(
-            h=rf.zeros(list(batch_dims) + [self.out_dim]),
-            c=rf.zeros(list(batch_dims) + [self.out_dim]),
+            h=rf.zeros(list(batch_dims) + [self.out_dim], feature_dim=self.out_dim),
+            c=rf.zeros(list(batch_dims) + [self.out_dim], feature_dim=self.out_dim),
         )
 
 
@@ -192,7 +192,7 @@ class ZoneoutLSTM(LSTM):
             spatial_dim=spatial_dim,
             initial=state,
             xs=x,
-            ys=Tensor("lstm-out", dims=batch_dims + [self.out_dim], dtype=source.dtype),
+            ys=Tensor("lstm-out", dims=batch_dims + [self.out_dim], dtype=source.dtype, feature_dim=self.out_dim),
             body=lambda x_, s: self._inner_step(x_, state=s),
         )
         return output, new_state

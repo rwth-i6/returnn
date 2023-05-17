@@ -86,7 +86,9 @@ class _TensorMixin(_TensorMixinBase):
         return _t.Tensor(name=str(x.op.name), shape=x_shape, batch_dim_axis=None, dtype=x.dtype.name, placeholder=x)
 
     @staticmethod
-    def template_from_constant(x, name, dtype=None, shape=None, with_batch_dim=False, sparse_dim=None) -> Tensor:
+    def template_from_constant(
+        x, name, dtype=None, shape=None, with_batch_dim=False, sparse_dim=None, feature_dim=None
+    ) -> Tensor:
         """
         :param int|float|bool|numpy.ndarray x: not actually assigned to the returned Data, just for the shape and dtype
         :param str name:
@@ -95,6 +97,7 @@ class _TensorMixin(_TensorMixinBase):
           might also already include the batch-dim. (Then with_batch_dim is ignored.)
         :param bool with_batch_dim:
         :param Dim|None sparse_dim:
+        :param Dim|None feature_dim:
         :return: data template
         """
         import numpy
@@ -138,7 +141,7 @@ class _TensorMixin(_TensorMixinBase):
             dim_tags.append(d)
         if with_batch_dim and batch_dim not in dim_tags:
             dim_tags.insert(0, batch_dim)
-        return _t.Tensor(name=name, dim_tags=dim_tags, dtype=dtype, sparse_dim=sparse_dim)
+        return _t.Tensor(name=name, dim_tags=dim_tags, dtype=dtype, sparse_dim=sparse_dim, feature_dim=feature_dim)
 
     def _handle_extra_kwargs(
         self,

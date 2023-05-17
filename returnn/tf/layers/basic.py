@@ -2928,6 +2928,7 @@ class RandomLayer(LayerBase):
         maxval=None,
         dtype="float32",
         sparse_dim=None,
+        feature_dim=None,
         seed=None,
         algorithm=None,
         explicit_state=None,
@@ -2947,6 +2948,7 @@ class RandomLayer(LayerBase):
         :param int|float|LayerBase|None maxval: for uniform
         :param str dtype:
         :param Dim|None sparse_dim:
+        :param Dim|None feature_dim:
         :param int|list[int]|numpy.ndarray|None seed: If not given, uses self.network.random.randint,
           i.e. then it is controlled by the global seed setting, and every layer would get its own seed.
           If you specify it explicitly, make sure every :class:`RandomLayer` uses a different seed,
@@ -2982,7 +2984,7 @@ class RandomLayer(LayerBase):
                 x = tf.stop_gradient(x)
             return x
 
-        shape, sparse_dim  # noqa  # handled in get_out_data_from_opts
+        shape, sparse_dim, feature_dim  # noqa  # handled in get_out_data_from_opts
         super(RandomLayer, self).__init__(**kwargs)
         self.shape_deps = shape_deps
         algorithm_int = RandomStateInitLayer.select_algorithm(algorithm)
@@ -3187,12 +3189,15 @@ class RandomLayer(LayerBase):
             d["shape_deps"] = [get_layer(src_name) for src_name in extra_deps]
 
     @classmethod
-    def get_out_data_from_opts(cls, name, shape, dtype="float32", sparse_dim=None, shape_deps=(), **kwargs):
+    def get_out_data_from_opts(
+        cls, name, shape, dtype="float32", sparse_dim=None, feature_dim=None, shape_deps=(), **kwargs
+    ):
         """
         :param str name:
         :param typing.Sequence[Dim|int] shape:
         :param str dtype:
         :param Dim|None sparse_dim:
+        :param Dim|None feature_dim:
         :param list[LayerBase] shape_deps: for dyn dim tags in shape
         :rtype: Data
         """
@@ -3200,7 +3205,9 @@ class RandomLayer(LayerBase):
             d if isinstance(d, Dim) else SpatialDim("%s:dim%i" % (name, i), d, auto_generated=True)
             for i, d in enumerate(shape)
         ]
-        out = Data(name="%s_output" % name, dim_tags=dim_tags, dtype=dtype, sparse_dim=sparse_dim)
+        out = Data(
+            name="%s_output" % name, dim_tags=dim_tags, dtype=dtype, sparse_dim=sparse_dim, feature_dim=feature_dim
+        )
         out.beam = SearchBeam.get_combined_beam(out.beam, *[dep.output.beam for dep in shape_deps if dep])
         return out
 
@@ -3557,7 +3564,16 @@ class ConstantLayer(LayerBase):
 
     # noinspection PyUnusedLocal
     def __init__(
-        self, sources, value=0.0, shape=None, dtype=None, with_batch_dim=False, sparse_dim=None, shape_deps=(), **kwargs
+        self,
+        sources,
+        value=0.0,
+        shape=None,
+        dtype=None,
+        with_batch_dim=False,
+        sparse_dim=None,
+        feature_dim=None,
+        shape_deps=(),
+        **kwargs,
     ):
         """
         :param list[LayerBase] sources:
@@ -3566,6 +3582,7 @@ class ConstantLayer(LayerBase):
         :param str|None dtype:
         :param bool with_batch_dim:
         :param Dim|None sparse_dim:
+        :param Dim|None feature_dim:
         :param list[LayerBase] shape_deps: for dyn dim tags in shape
         """
         import numpy
@@ -3607,7 +3624,16 @@ class ConstantLayer(LayerBase):
 
     @classmethod
     def get_out_data_from_opts(
-        cls, name, value=0.0, shape=None, dtype=None, with_batch_dim=False, sparse_dim=None, shape_deps=(), **kwargs
+        cls,
+        name,
+        value=0.0,
+        shape=None,
+        dtype=None,
+        with_batch_dim=False,
+        sparse_dim=None,
+        feature_dim=None,
+        shape_deps=(),
+        **kwargs,
     ):
         """
         :param str name:
@@ -3616,6 +3642,7 @@ class ConstantLayer(LayerBase):
         :param str|None dtype:
         :param bool with_batch_dim:
         :param Dim|None sparse_dim:
+        :param Dim|None feature_dim:
         :param list[LayerBase] shape_deps: for dyn dim tags in shape
         :rtype: Data
         """
@@ -3626,6 +3653,7 @@ class ConstantLayer(LayerBase):
             dtype=dtype,
             with_batch_dim=with_batch_dim,
             sparse_dim=sparse_dim,
+            feature_dim=feature_dim,
         )
         out.beam = SearchBeam.get_combined_beam(out.beam, *[dep.output.beam for dep in shape_deps if dep])
         return out

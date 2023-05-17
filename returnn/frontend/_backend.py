@@ -658,7 +658,12 @@ class Backend(Generic[T]):
 
     @staticmethod
     def full(
-        dims: Sequence[Dim], fill_value: RawTensorTypes, *, dtype: str, sparse_dim: Optional[Dim] = None
+        dims: Sequence[Dim],
+        fill_value: RawTensorTypes,
+        *,
+        dtype: str,
+        sparse_dim: Optional[Dim] = None,
+        feature_dim: Optional[Dim] = None,
     ) -> Tensor:
         """
         https://data-apis.org/array-api/latest/API_specification/generated/array_api.full.html
@@ -667,6 +672,7 @@ class Backend(Generic[T]):
         :param fill_value:
         :param dtype:
         :param sparse_dim:
+        :param feature_dim:
         :return: tensor
         """
         raise NotImplementedError
@@ -860,6 +866,7 @@ class Backend(Generic[T]):
         dims: Sequence[Dim],
         dtype: str,
         sparse_dim: Optional[Dim] = None,
+        feature_dim: Optional[Dim] = None,
         distribution: str,
         mean: Optional[Union[int, float, Tensor]] = None,
         stddev: Optional[Union[int, float, Tensor]] = None,

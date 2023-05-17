@@ -133,6 +133,7 @@ def random(
     dims: Sequence[Dim],
     dtype: Optional[str] = None,
     sparse_dim: Optional[Dim] = None,
+    feature_dim: Optional[Dim] = None,
     distribution: str,
     mean: Optional[Union[int, float, Tensor]] = None,
     stddev: Optional[Union[int, float, Tensor]] = None,
@@ -169,6 +170,7 @@ def random(
     :param Sequence[Dim] dims:
     :param str dtype:
     :param sparse_dim:
+    :param feature_dim:
     :param str distribution: "uniform", "normal" or "truncated_normal"
     :param int|float|Tensor|None mean:
     :param int|float|Tensor|None stddev:
@@ -203,6 +205,7 @@ def random(
         dims=dims,
         dtype=dtype,
         sparse_dim=sparse_dim,
+        feature_dim=feature_dim,
         distribution=distribution,
         mean=mean,
         stddev=stddev,
@@ -223,6 +226,7 @@ def random_uniform(
     dims: Sequence[Dim],
     dtype: Optional[str] = None,
     sparse_dim: Optional[Dim] = None,
+    feature_dim: Optional[Dim] = None,
     minval: Union[int, float, Tensor] = 0.0,
     maxval: Union[int, float, Tensor] = 1.0,
     seed: Optional[Union[int, Sequence[int], numpy.ndarray]] = None,
@@ -239,6 +243,7 @@ def random_uniform(
         dims=dims,
         dtype=dtype,
         sparse_dim=sparse_dim,
+        feature_dim=feature_dim,
         distribution="uniform",
         minval=minval,
         maxval=maxval,
@@ -256,6 +261,7 @@ def random_normal(
     dims: Sequence[Dim],
     dtype: Optional[str] = None,
     sparse_dim: Optional[Dim] = None,
+    feature_dim: Optional[Dim] = None,
     mean: Optional[Union[int, float, Tensor]] = 0.0,
     stddev: Optional[Union[int, float, Tensor]] = 1.0,
     seed: Optional[Union[int, Sequence[int], numpy.ndarray]] = None,
@@ -272,6 +278,7 @@ def random_normal(
         dims=dims,
         dtype=dtype,
         sparse_dim=sparse_dim,
+        feature_dim=feature_dim,
         distribution="normal",
         mean=mean,
         stddev=stddev,
@@ -289,6 +296,7 @@ def random_truncated_normal(
     dims: Sequence[Dim],
     dtype: Optional[str] = None,
     sparse_dim: Optional[Dim] = None,
+    feature_dim: Optional[Dim] = None,
     mean: Optional[Union[int, float, Tensor]] = 0.0,
     stddev: Optional[Union[int, float, Tensor]] = 1.0,
     minval: Union[int, float, Tensor] = None,
@@ -307,6 +315,7 @@ def random_truncated_normal(
         dims=dims,
         dtype=dtype,
         sparse_dim=sparse_dim,
+        feature_dim=feature_dim,
         distribution="truncated_normal",
         mean=mean,
         stddev=stddev,

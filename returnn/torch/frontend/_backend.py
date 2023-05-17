@@ -657,18 +657,19 @@ class TorchBackend(Backend[torch.Tensor]):
 
     @staticmethod
     def full(
-        dims: Sequence[Dim], fill_value: RawTensorTypes, *, dtype: str, sparse_dim: Optional[Dim] = None
+        dims: Sequence[Dim],
+        fill_value: RawTensorTypes,
+        *,
+        dtype: str,
+        sparse_dim: Optional[Dim] = None,
+        feature_dim: Optional[Dim] = None,
     ) -> Tensor:
-        """
-        :param dims:
-        :param fill_value:
-        :param dtype:
-        :param sparse_dim:
-        :return: tensor
-        """
+        """full"""
         shape = [dim.get_dim_value() for dim in dims]
         raw_tensor = torch.full(shape, fill_value, dtype=TorchBackend.as_dtype_raw(dtype))
-        return Tensor("full", dims=dims, sparse_dim=sparse_dim, dtype=dtype, raw_tensor=raw_tensor)
+        return Tensor(
+            "full", dims=dims, sparse_dim=sparse_dim, feature_dim=feature_dim, dtype=dtype, raw_tensor=raw_tensor
+        )
 
     @staticmethod
     def gather(
@@ -1021,6 +1022,7 @@ class TorchBackend(Backend[torch.Tensor]):
         dims: Sequence[Dim],
         dtype: str,
         sparse_dim: Optional[Dim] = None,
+        feature_dim: Optional[Dim] = None,
         distribution: str,
         mean: Optional[Union[int, float, Tensor]] = None,
         stddev: Optional[Union[int, float, Tensor]] = None,
@@ -1040,7 +1042,9 @@ class TorchBackend(Backend[torch.Tensor]):
         shape = [d.get_dim_value() for d in dims]
         dtype_ = TorchBackend.as_dtype_raw(dtype)
         if out is None:
-            out = Tensor(name=f"random_{distribution}", dims=dims, dtype=dtype, sparse_dim=sparse_dim)
+            out = Tensor(
+                name=f"random_{distribution}", dims=dims, dtype=dtype, sparse_dim=sparse_dim, feature_dim=feature_dim
+            )
             out.raw_tensor = torch.empty(shape, dtype=dtype_)
         assert explicit_state is None  # not implemented otherwise
         generator = None  # using the global default from PT

@@ -15,7 +15,12 @@ __all__ = ["full", "fill", "constant", "zeros", "ones", "zeros_like", "ones_like
 
 
 def full(
-    *, dims: Sequence[Dim], fill_value: RawTensorTypes, dtype: Optional[str] = None, sparse_dim: Optional[Dim] = None
+    *,
+    dims: Sequence[Dim],
+    fill_value: RawTensorTypes,
+    dtype: Optional[str] = None,
+    sparse_dim: Optional[Dim] = None,
+    feature_dim: Optional[Dim] = None,
 ) -> Tensor:
     """
     full, fill, constant.
@@ -28,6 +33,7 @@ def full(
     :param fill_value: scalar to fill the tensor
     :param dtype:
     :param sparse_dim:
+    :param feature_dim:
     """
     if dtype is None:
         if isinstance(fill_value, int):
@@ -43,38 +49,67 @@ def full(
             f"full/fill/constant: expect scalar fill_value, got array with shape {fill_value.shape}.\n"
             "Use rf.convert_to_tensor to convert an arbitrary array to a tensor."
         )
-    return global_backend.full(dims, fill_value, dtype=dtype, sparse_dim=sparse_dim)
+    return global_backend.full(dims, fill_value, dtype=dtype, sparse_dim=sparse_dim, feature_dim=feature_dim)
 
 
 fill = full  # alias for TF users
 
 
 def constant(
-    fill_value: RawTensorTypes, *, dims: Sequence[Dim], dtype: Optional[str] = None, sparse_dim: Optional[Dim] = None
+    fill_value: RawTensorTypes,
+    *,
+    dims: Sequence[Dim],
+    dtype: Optional[str] = None,
+    sparse_dim: Optional[Dim] = None,
+    feature_dim: Optional[Dim] = None,
 ) -> Tensor:
     """alias to :func:`full`, mapping `value` to `fill_value`. also see :func:`convert_to_tensor`"""
-    return full(dims=dims, fill_value=fill_value, dtype=dtype, sparse_dim=sparse_dim)
+    return full(dims=dims, fill_value=fill_value, dtype=dtype, sparse_dim=sparse_dim, feature_dim=feature_dim)
 
 
-def zeros(dims: Sequence[Dim], *, dtype: Optional[str] = None, sparse_dim: Optional[Dim] = None) -> Tensor:
+def zeros(
+    dims: Sequence[Dim],
+    *,
+    dtype: Optional[str] = None,
+    sparse_dim: Optional[Dim] = None,
+    feature_dim: Optional[Dim] = None,
+) -> Tensor:
     """
     zeros. float by default.
     """
-    return full(dims=dims, fill_value=0, dtype=dtype or rf.get_default_float_dtype(), sparse_dim=sparse_dim)
+    return full(
+        dims=dims,
+        fill_value=0,
+        dtype=dtype or rf.get_default_float_dtype(),
+        sparse_dim=sparse_dim,
+        feature_dim=feature_dim,
+    )
 
 
-def ones(dims: Sequence[Dim], *, dtype: Optional[str] = None, sparse_dim: Optional[Dim] = None) -> Tensor:
+def ones(
+    dims: Sequence[Dim],
+    *,
+    dtype: Optional[str] = None,
+    sparse_dim: Optional[Dim] = None,
+    feature_dim: Optional[Dim] = None,
+) -> Tensor:
     """
     ones. float by default.
     """
-    return full(dims=dims, fill_value=1, dtype=dtype or rf.get_default_float_dtype(), sparse_dim=sparse_dim)
+    return full(
+        dims=dims,
+        fill_value=1,
+        dtype=dtype or rf.get_default_float_dtype(),
+        sparse_dim=sparse_dim,
+        feature_dim=feature_dim,
+    )
 
 
 def zeros_like(other: Tensor) -> Tensor:
     """zeros like other"""
-    return zeros(dims=other.dims, dtype=other.dtype, sparse_dim=other.sparse_dim)
+    return zeros(dims=other.dims, dtype=other.dtype, sparse_dim=other.sparse_dim, feature_dim=other.feature_dim)
 
 
 def ones_like(other: Tensor) -> Tensor:
     """ones like other"""
-    return ones(dims=other.dims, dtype=other.dtype, sparse_dim=other.sparse_dim)
+    return ones(dims=other.dims, dtype=other.dtype, sparse_dim=other.sparse_dim, feature_dim=other.feature_dim)

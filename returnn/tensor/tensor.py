@@ -62,6 +62,7 @@ class Tensor(_TensorMixin, _TensorOpOverloadsMixin, Generic[RawTensorType]):
         dtype: Optional[str] = None,
         *,
         sparse_dim: Optional[Dim] = None,
+        feature_dim: Optional[Dim] = None,
         feature_dim_axis: Optional[Union[int, NotSpecified]] = NotSpecified,
         raw_tensor: Optional[RawTensorType] = None,
         version: Optional[int] = None,
@@ -126,6 +127,8 @@ class Tensor(_TensorMixin, _TensorOpOverloadsMixin, Generic[RawTensorType]):
         else:
             raise TypeError(f"unexpected feature_dim_axis type {type(feature_dim_axis)}")
         self._feature_dim_axis = feature_dim_axis
+        if feature_dim:
+            self.feature_dim = feature_dim
 
         if kwargs:
             self._handle_extra_kwargs(**kwargs)
@@ -188,6 +191,7 @@ class Tensor(_TensorMixin, _TensorOpOverloadsMixin, Generic[RawTensorType]):
         if value is None:
             self._feature_dim_axis = None
             return
+        assert not self.sparse_dim, "cannot have feature_dim_axis when sparse"
         self._feature_dim_axis = self.get_axis_from_description(value, allow_int=False)
 
     @property

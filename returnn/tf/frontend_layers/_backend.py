@@ -444,12 +444,19 @@ class ReturnnLayersBackend(Backend[Layer]):
 
     @staticmethod
     def full(
-        dims: Sequence[Dim], fill_value: RawTensorTypes, *, dtype: str, sparse_dim: Optional[Dim] = None
+        dims: Sequence[Dim],
+        fill_value: RawTensorTypes,
+        *,
+        dtype: str,
+        sparse_dim: Optional[Dim] = None,
+        feature_dim: Optional[Dim] = None,
     ) -> Tensor:
         """full"""
         kwargs = {}
         if sparse_dim:
             kwargs["sparse_dim"] = sparse_dim
+        if feature_dim:
+            kwargs["feature_dim"] = feature_dim
         dim_deps = _dims.get_dim_deps(dims)
         if dim_deps:
             kwargs["shape_deps"] = dim_deps
@@ -668,6 +675,7 @@ class ReturnnLayersBackend(Backend[Layer]):
         dims: Sequence[Dim],
         dtype: str,
         sparse_dim: Optional[Dim] = None,
+        feature_dim: Optional[Dim] = None,
         distribution: str,
         mean: Optional[Union[int, float, Tensor]] = None,
         stddev: Optional[Union[int, float, Tensor]] = None,
@@ -704,7 +712,7 @@ class ReturnnLayersBackend(Backend[Layer]):
                     "from": (),
                     "eval": _random_replay_eval,
                     "eval_locals": {"idx": idx},
-                    "out_type": {"dims": dims, "dtype": dtype, "sparse_dim": sparse_dim},
+                    "out_type": {"dims": dims, "dtype": dtype, "sparse_dim": sparse_dim, "feature_dim": feature_dim},
                 },
                 name="random_replay",
             )
@@ -728,6 +736,7 @@ class ReturnnLayersBackend(Backend[Layer]):
                 "shape_deps": _dims.get_dim_deps(dims),
                 "dtype": dtype,
                 "sparse_dim": sparse_dim,
+                "feature_dim": feature_dim,
                 "distribution": distribution,
                 "stop_grad": True,
                 **kwargs,
