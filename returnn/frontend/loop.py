@@ -20,7 +20,7 @@ from ._backend import global_backend
 __all__ = ["while_loop", "scan"]
 
 
-S = TypeVar("S")
+S = TypeVar("S")  # any nested structure, can be None
 X = TypeVar("X")  # any nested structure, can be None
 Y = TypeVar("Y")  # any nested structure, can be None
 
@@ -48,20 +48,22 @@ def while_loop(
     :param initial: initial loop vars
     :return: final loop vars
     """
-    # noinspection PyProtectedMember
-    if initial is None:
+    init_tensors = [v for v in tree.flatten(initial) if isinstance(v, Tensor)]
+    if not init_tensors:
         backend = global_backend
     else:
-        v = tree.flatten(initial)[0]
-        assert isinstance(v, Tensor), f"while_loop: unexpected entries in initial {initial!r}, not Tensor but {type(v)}"
+        v = init_tensors[0]
         # noinspection PyProtectedMember
         backend = v._raw_backend
     if backend.executing_eagerly():
         loop_vars = initial
+        loop_var_templates = _templates_for_loop_vars(loop_vars)
         while _get_bool_value_eager(cond(loop_vars)):
             loop_vars = body(loop_vars)
+            tree.assert_same_structure(loop_var_templates, loop_vars)
+            _check_matching_loop_var_templates(loop_var_templates, loop_vars)
         return loop_vars
-    raise NotImplementedError("while_loop() not implemented for backend %r" % backend)
+    raise NotImplementedError("while_loop() not implemented for non-eager backend %r" % backend)
 
 
 def _get_bool_value_eager(v: Union[Tensor, bool]) -> bool:
@@ -171,8 +173,8 @@ def scan(
         spatial_dim.dyn_size_ext = seq_len
 
     else:
-        assert cond is None, f"scan: spatial_dim {spatial_dim} is known, cannot use `end` {cond}"
-        assert max_seq_len is None
+        assert cond is None, f"scan: spatial_dim {spatial_dim} is known, cannot use `cond` {cond}"
+        assert max_seq_len is None, f"scan: spatial_dim {spatial_dim} is known, cannot use `max_seq_len` {max_seq_len}"
 
         xs = tree.map_structure(lambda x: TensorArray.unstack(x, axis=spatial_dim), xs)
 
@@ -200,3 +202,45 @@ def scan(
     if not return_tensor_arrays:
         ys = tree.map_structure(lambda ys_: ys_.stack(axis=spatial_dim), ys)
     return ys, final_s, spatial_dim
+
+
+def _templates_for_loop_vars(loop_vars: S) -> S:
+    def _get_template(x) -> Optional[Tensor]:
+        if isinstance(x, Tensor):
+            return x.copy_template()
+        return None
+
+    return tree.map_structure(_get_template, loop_vars)
+
+
+def _check_matching_loop_var_templates(loop_var_templates: S, loop_vars: S):
+    def _check(path, template: Optional[Tensor], x):
+        if template is not None:
+            assert isinstance(template, Tensor), f"loop var template {path} is not a Tensor"
+            assert isinstance(x, Tensor), f"loop var {path} is not a Tensor"
+
+            assert template.batch_ndim == x.batch_ndim, (
+                f"loop var {path} template {template} does not match var {x}, "
+                f"different batch_ndim {template.batch_ndim} vs {x.batch_ndim}"
+            )
+            assert template.dims_set == x.dims_set, (
+                f"loop var {path} template {template} does not match var {x}, "
+                f"different dims (no matter the order) {template.dims} vs {x.dims}"
+            )
+            assert template.dtype == x.dtype, (
+                f"loop var {path} template {template} does not match var {x}, "
+                f"different dtype {template.dtype} vs {x.dtype}"
+            )
+            assert template.sparse_dim == x.sparse_dim, (
+                f"loop var {path} template {template} does not match var {x}, "
+                f"different sparse_dim {template.sparse_dim} vs {x.sparse_dim}"
+            )
+            assert template.feature_dim == x.feature_dim, (
+                f"loop var {path} template {template} does not match var {x}, "
+                f"different feature_dim {template.feature_dim} vs {x.feature_dim}"
+            )
+
+        else:
+            assert not isinstance(x, Tensor), f"loop var {path} is a Tensor but should not be"
+
+    tree.map_structure_with_path(_check, loop_var_templates, loop_vars)
