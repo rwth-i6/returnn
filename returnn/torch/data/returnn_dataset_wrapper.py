@@ -5,9 +5,11 @@ We make use of TorchData data pipelines.
 """
 
 from __future__ import annotations
-from typing import Callable, Optional
+from typing import Callable, Dict, Iterable, Optional
 import torch.utils.data
 from returnn.datasets.basic import Dataset as ReturnnDataset
+
+from .pipeline import InputType
 
 
 ResetCallbackT = Callable[[], None]
@@ -67,10 +69,9 @@ class ReturnnDatasetIterDataPipe(torch.utils.data.IterDataPipe):
         """
         self._reset_callback()
 
-    def __iter__(self):
+    def __iter__(self) -> Iterable[Dict[str, InputType]]:
         """
         :return: generator providing data samples in the form of a dict data_key -> data
-        :rtype: Iterable[dict[str, numpy.ndarray]]
         """
         data_keys = self._dataset.get_data_keys()
 
@@ -78,6 +79,8 @@ class ReturnnDatasetIterDataPipe(torch.utils.data.IterDataPipe):
         while self._dataset.is_less_than_num_seqs(seq_index):
             self._dataset.load_seqs(seq_index, seq_index + 1)
             data = {data_key: self._dataset.get_data(seq_index, data_key) for data_key in data_keys}
+            data["seq_idx"] = seq_index
+            data["seq_tag"] = self._dataset.get_tag(seq_index)
             yield data
             seq_index += 1
 
