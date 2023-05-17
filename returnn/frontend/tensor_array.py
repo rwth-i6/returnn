@@ -35,6 +35,7 @@ class TensorArray:
         *,
         _backend_tensor_array: Optional[Any] = None,
         _backend: Optional[Type[Backend]] = None,
+        _enable_delayed_check: bool = False,
     ):
         self.tensor_template = tensor_template
         if _backend is None:
@@ -43,6 +44,7 @@ class TensorArray:
             _backend_tensor_array = _backend.tensor_array_create()
         self._backend = _backend
         self._backend_tensor_array = _backend_tensor_array  # type is specific by the backend
+        self._enable_delayed_check = _enable_delayed_check
 
     @classmethod
     def unstack(cls, tensor: Tensor, *, axis: Dim) -> TensorArray:
@@ -62,30 +64,43 @@ class TensorArray:
 
     def push_back(self, tensor: Tensor) -> TensorArray:
         """push_back"""
+        if not self._enable_delayed_check:
+            self._check_matching_tensor(tensor)
         backend_tensor_array = self._backend.tensor_array_push_back(self._backend_tensor_array, tensor)
         return TensorArray(
-            tensor_template=self.tensor_template, _backend_tensor_array=backend_tensor_array, _backend=self._backend
+            tensor_template=self.tensor_template,
+            _backend_tensor_array=backend_tensor_array,
+            _backend=self._backend,
+            _enable_delayed_check=self._enable_delayed_check,
         )
+
+    def _set_enable_delayed_check(self, enable: bool = True):
+        self._enable_delayed_check = enable
 
     def _push_back_delayed_check(self):
         """delayed because maybe dims are updated later"""
+        if not self._enable_delayed_check:
+            return
         assert self._backend.executing_eagerly()  # not implemented otherwise
         assert isinstance(self._backend_tensor_array, list)
         if self._backend_tensor_array:
             tensor = self._backend_tensor_array[-1]
-            assert isinstance(tensor, Tensor)
-            assert tensor.dims_set == self.tensor_template.dims_set, (
-                f"TensorArray push_back: template {self.tensor_template} does not match tensor {tensor},"
-                f" dims different, {self.tensor_template.dims} vs {tensor.dims}"
-            )
-            assert tensor.dtype == self.tensor_template.dtype, (
-                f"TensorArray push_back: template {self.tensor_template} does not match tensor {tensor},"
-                f" dtype different, {self.tensor_template.dtype} vs {tensor.dtype}"
-            )
-            assert tensor.sparse_dim == self.tensor_template.sparse_dim, (
-                f"TensorArray push_back: template {self.tensor_template} does not match tensor {tensor},"
-                f" sparse_dim different, {self.tensor_template.sparse_dim} vs {tensor.sparse_dim}"
-            )
+            self._check_matching_tensor(tensor)
+
+    def _check_matching_tensor(self, tensor: Tensor):
+        assert isinstance(tensor, Tensor)
+        assert tensor.dims_set == self.tensor_template.dims_set, (
+            f"TensorArray push_back: template {self.tensor_template} does not match tensor {tensor},"
+            f" dims different, {self.tensor_template.dims} vs {tensor.dims}"
+        )
+        assert tensor.dtype == self.tensor_template.dtype, (
+            f"TensorArray push_back: template {self.tensor_template} does not match tensor {tensor},"
+            f" dtype different, {self.tensor_template.dtype} vs {tensor.dtype}"
+        )
+        assert tensor.sparse_dim == self.tensor_template.sparse_dim, (
+            f"TensorArray push_back: template {self.tensor_template} does not match tensor {tensor},"
+            f" sparse_dim different, {self.tensor_template.sparse_dim} vs {tensor.sparse_dim}"
+        )
 
     def stack(self, *, axis: Dim) -> Tensor:
         """stack"""

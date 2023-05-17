@@ -303,6 +303,11 @@ class _DimUpdatesEager:
                 assert x not in self.dim_variants, f"dim {x} already in dim_variants, assumed to be unique in state"
                 self.dim_variants[x] = []
                 self._initial_dim[x] = x
+        for x in tree.flatten(state):
+            if isinstance(x, TensorArray):
+                if any(d in self._initial_dim for d in x.tensor_template.dims):
+                    # noinspection PyProtectedMember
+                    x._set_enable_delayed_check()
 
     def update_template_from_new(self, template_state: S, new_state: S) -> S:
         """
