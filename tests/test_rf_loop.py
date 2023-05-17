@@ -5,8 +5,9 @@ RETURNN frontend (returnn.frontend) tests
 from __future__ import annotations
 from typing import Tuple
 import _setup_test_env  # noqa
-import returnn.frontend as rf
 from returnn.tensor import Tensor, Dim, TensorDict, batch_dim
+import returnn.frontend as rf
+from returnn.frontend.tensor_array import TensorArray
 from rf_utils import run_model
 
 
@@ -115,5 +116,52 @@ def test_scan_existing_spatial_dim():
     def _forward_step(*, model: _Net, extern_data: TensorDict):
         out = model(extern_data["data"])
         out.mark_as_default_output(shape=(batch_dim, time_dim, in_dim))
+
+    run_model(extern_data, lambda *, epoch, step: _Net(), _forward_step, test_tensorflow=False)
+
+
+def test_scan_changing_dim():
+    # This is a common case for beam search.
+    # https://github.com/rwth-i6/returnn/issues/1327
+    time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
+    in_dim = Dim(7, name="in")
+    extern_data = TensorDict(
+        {
+            "data": Tensor("data", [batch_dim, time_dim, in_dim], dtype="float32"),
+        }
+    )
+
+    class _Net(rf.Module):
+        def __call__(self, x: Tensor) -> Tuple[Tensor, Dim]:
+            def _body(x_: Tensor, s):
+                s_ = s["state"]
+                beam_in_dim = s["beam_dim"]
+                y_ = s_ + x_
+                # Make new beam dim and then remove prev beam dim.
+                # Effectively, this is what you would get with top_k on the logits.
+                beam_dim = Dim(3, name="beam")
+                r = rf.range_over_dim(beam_dim, dtype=x_.dtype)
+                y_ = rf.combine_bc(y_, "mul", r)
+                y_ = rf.reduce_mean(y_, axis=beam_in_dim)
+                return y_, {"state": y_, "beam_dim": beam_dim}
+
+            initial_beam_dim = Dim(1, name="initial-beam")
+            y, last_state, _ = rf.scan(
+                spatial_dim=time_dim,
+                body=_body,
+                initial={"state": rf.zeros((batch_dim, initial_beam_dim, in_dim)), "beam_dim": initial_beam_dim},
+                xs=x,
+                ys=Tensor("y", dims=(batch_dim, initial_beam_dim, in_dim), dtype=x.dtype),
+                return_tensor_arrays=True,
+            )
+            final_beam_dim = last_state["beam_dim"]
+            assert isinstance(y, TensorArray)
+            last = y[-1]
+            return last, final_beam_dim
+
+    # noinspection PyShadowingNames
+    def _forward_step(*, model: _Net, extern_data: TensorDict):
+        out, beam_dim = model(extern_data["data"])
+        out.mark_as_default_output(shape=(batch_dim, beam_dim, in_dim))
 
     run_model(extern_data, lambda *, epoch, step: _Net(), _forward_step, test_tensorflow=False)

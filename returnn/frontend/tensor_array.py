@@ -4,7 +4,7 @@ This is mostly intended for loops, see for example :func:`scan`.
 """
 
 from __future__ import annotations
-from typing import Optional, Any, Type
+from typing import Optional, Union, Any, Type
 from returnn.tensor import Tensor, Dim
 from ._backend import global_backend, Backend
 
@@ -57,18 +57,35 @@ class TensorArray:
             _backend=backend,
         )
 
-    def __getitem__(self, index: Tensor) -> Tensor:
+    def __getitem__(self, index: Union[int, Tensor]) -> Tensor:
         return self._backend.tensor_array_get_item(self._backend_tensor_array, index)
 
     def push_back(self, tensor: Tensor) -> TensorArray:
         """push_back"""
-        assert tensor.dims_set == self.tensor_template.dims_set
-        assert tensor.dtype == self.tensor_template.dtype
-        assert tensor.sparse_dim == self.tensor_template.sparse_dim
         backend_tensor_array = self._backend.tensor_array_push_back(self._backend_tensor_array, tensor)
         return TensorArray(
             tensor_template=self.tensor_template, _backend_tensor_array=backend_tensor_array, _backend=self._backend
         )
+
+    def _push_back_delayed_check(self):
+        """delayed because maybe dims are updated later"""
+        assert self._backend.executing_eagerly()  # not implemented otherwise
+        assert isinstance(self._backend_tensor_array, list)
+        if self._backend_tensor_array:
+            tensor = self._backend_tensor_array[-1]
+            assert isinstance(tensor, Tensor)
+            assert tensor.dims_set == self.tensor_template.dims_set, (
+                f"TensorArray push_back: template {self.tensor_template} does not match tensor {tensor},"
+                f" dims different, {self.tensor_template.dims} vs {tensor.dims}"
+            )
+            assert tensor.dtype == self.tensor_template.dtype, (
+                f"TensorArray push_back: template {self.tensor_template} does not match tensor {tensor},"
+                f" dtype different, {self.tensor_template.dtype} vs {tensor.dtype}"
+            )
+            assert tensor.sparse_dim == self.tensor_template.sparse_dim, (
+                f"TensorArray push_back: template {self.tensor_template} does not match tensor {tensor},"
+                f" sparse_dim different, {self.tensor_template.sparse_dim} vs {tensor.sparse_dim}"
+            )
 
     def stack(self, *, axis: Dim) -> Tensor:
         """stack"""

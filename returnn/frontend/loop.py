@@ -9,7 +9,7 @@ https://github.com/rwth-i6/returnn/issues/1324
 """
 
 from __future__ import annotations
-from typing import Optional, Union, TypeVar, Callable, Sequence, Tuple
+from typing import Optional, Union, TypeVar, Callable, Sequence, Tuple, List, Dict
 import tree
 from returnn.tensor import Tensor, Dim
 import returnn.frontend as rf
@@ -58,9 +58,11 @@ def while_loop(
     if backend.executing_eagerly():
         loop_vars = initial
         loop_var_templates = _templates_for_loop_vars(loop_vars)
+        dim_updates = _DimUpdatesEager(initial_state=loop_vars)
         while _get_bool_value_eager(cond(loop_vars)):
             loop_vars = body(loop_vars)
             tree.assert_same_structure(loop_var_templates, loop_vars)
+            loop_var_templates = dim_updates.update_template_from_new(loop_var_templates, loop_vars)
             _check_matching_loop_var_templates(loop_var_templates, loop_vars)
         return loop_vars
     raise NotImplementedError("while_loop() not implemented for non-eager backend %r" % backend)
@@ -256,6 +258,8 @@ def _check_matching_loop_var_templates(loop_var_templates: S, loop_vars: S):
         elif isinstance(template, TensorArray):
             assert isinstance(x, TensorArray), f"loop var {path} is not a TensorArray but {type(x)}"
             _check(path, template.tensor_template, x.tensor_template)
+            # noinspection PyProtectedMember
+            x._push_back_delayed_check()
 
         else:  # other cases: just check same type
             assert type(template) is type(
@@ -264,3 +268,88 @@ def _check_matching_loop_var_templates(loop_var_templates: S, loop_vars: S):
             assert not isinstance(x, Tensor), f"loop var {path} is a Tensor but should not be"
 
     tree.map_structure_with_path(_check, loop_var_templates, loop_vars)
+
+
+class _DimUpdatesEager:
+    """
+    In case dims are updated in the loop body, we need to keep track of this.
+
+    This implementation is for eager-based backends.
+
+    A graph-based backend would need to distinguish:
+    - initial dim
+    - dim in loop body (temporarily), input from prev iteration state
+    - dim in loop body (temporarily), output for new state
+    - final dim
+
+    When collecting tensors with such dims in a :class:`TensorArray`,
+    we must later be able to iterate through it again, maybe backwards,
+    and then also iterate over the collected dims,
+    and be able to match it.
+
+    See here for some discussion and motivation:
+    https://github.com/rwth-i6/returnn/issues/1327
+    """
+
+    def __init__(self, *, initial_state: S):
+        self.dim_variants: Dict[Dim, List[Dim]] = {}  # initial -> variants in each iteration
+        self._initial_dim: Dict[Dim, Dim] = {}  # variant -> initial
+        self._init_initial(initial_state)
+
+    def _init_initial(self, state: S):
+        """init"""
+        for x in tree.flatten(state):
+            if isinstance(x, Dim):
+                assert x not in self.dim_variants, f"dim {x} already in dim_variants, assumed to be unique in state"
+                self.dim_variants[x] = []
+                self._initial_dim[x] = x
+
+    def update_template_from_new(self, template_state: S, new_state: S) -> S:
+        """
+        :param template_state: via :func:`_templates_for_loop_vars`
+        :param new_state: output from body(). Warning: we update TensorArray.tensor_template inplace here.
+        :return: updated template state
+        """
+        if not self.dim_variants:
+            # Fast path: No dims are updated in the loop. No change on the template.
+            return template_state
+
+        def _visit_add_dim_variants(template, x):
+            if isinstance(x, Dim):
+                assert isinstance(template, Dim)
+                initial_dim = self._initial_dim[template]
+                self.dim_variants[initial_dim].append(x)
+                self._initial_dim[x] = initial_dim
+
+        tree.map_structure(_visit_add_dim_variants, template_state, new_state)
+
+        def _visit_update_template(template, x):
+            if isinstance(x, Dim):
+                assert isinstance(template, Dim)
+                return x
+            if isinstance(x, Tensor):
+                assert isinstance(template, Tensor)
+                return self.template_for_current_iteration(template)
+            if isinstance(x, TensorArray):
+                assert isinstance(template, TensorArray)
+                # It's ugly that we replace this inplace,
+                # but we don't really have a better solution for now.
+                # This assumes that stack() would not be called on the tensor array,
+                # i.e. return_tensor_arrays=True for scan().
+                x.tensor_template = self.template_for_current_iteration(x.tensor_template)
+                template.tensor_template = self.template_for_current_iteration(template.tensor_template)
+                return template
+            return template
+
+        return tree.map_structure(_visit_update_template, template_state, new_state)
+
+    def template_for_current_iteration(self, template: Tensor) -> Tensor:
+        """
+        :param template: template for the current iteration
+        :return: template for the current iteration, with updated dims
+        """
+        if any(d in self._initial_dim for d in template.dims):
+            return template.copy_template_new_dim_tags(
+                [self.dim_variants[self._initial_dim[d]][-1] if d in self._initial_dim else d for d in template.dims]
+            )
+        return template
