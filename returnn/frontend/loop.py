@@ -205,19 +205,25 @@ def scan(
 
 
 def _templates_for_loop_vars(loop_vars: S) -> S:
-    def _get_template(x) -> Optional[Tensor]:
+    def _get_template(x):
         if isinstance(x, Tensor):
             return x.copy_template()
-        return None
+        elif isinstance(x, Dim):
+            return x
+        elif isinstance(x, TensorArray):
+            return x  # not really checked, but just leave it for now
+        elif x is None:
+            return None
+        else:
+            raise TypeError(f"unexpected type {type(x)} for loop var {x}")
 
     return tree.map_structure(_get_template, loop_vars)
 
 
 def _check_matching_loop_var_templates(loop_var_templates: S, loop_vars: S):
     def _check(path, template: Optional[Tensor], x):
-        if template is not None:
-            assert isinstance(template, Tensor), f"loop var template {path} is not a Tensor"
-            assert isinstance(x, Tensor), f"loop var {path} is not a Tensor"
+        if isinstance(template, Tensor):
+            assert isinstance(x, Tensor), f"loop var {path} is not a Tensor but {type(x)}"
 
             assert template.batch_ndim == x.batch_ndim, (
                 f"loop var {path} template {template} does not match var {x}, "
@@ -240,7 +246,17 @@ def _check_matching_loop_var_templates(loop_var_templates: S, loop_vars: S):
                 f"different feature_dim {template.feature_dim} vs {x.feature_dim}"
             )
 
-        else:
+        elif isinstance(template, Dim):
+            assert isinstance(x, Dim), f"loop var {path} is not a Dim but {type(x)}"
+            # Later, we actually want to support having different dims.
+            # See https://github.com/rwth-i6/returnn/issues/1327.
+            # For now, we don't support this.
+            assert template == x, f"loop var {path} template dim {template} does not match var dim {x}"
+
+        else:  # other cases: just check same type
+            assert type(template) is type(
+                x
+            ), f"loop var {path} template type {type(template)} does not match var type {type(x)}"
             assert not isinstance(x, Tensor), f"loop var {path} is a Tensor but should not be"
 
     tree.map_structure_with_path(_check, loop_var_templates, loop_vars)
