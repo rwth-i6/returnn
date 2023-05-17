@@ -58,7 +58,7 @@ class LSTM(rf.Module):
             raise ValueError(f"{self}: input {source} does not have in_dim {self.in_dim}")
 
         # noinspection PyProtectedMember
-        result, new_state = source._raw_backend.lstm(
+        result, (new_state_h, new_state_c) = source._raw_backend.lstm(
             source=source,
             state_c=state.c,
             state_h=state.h,
@@ -69,7 +69,7 @@ class LSTM(rf.Module):
             in_dim=self.in_dim,
             out_dim=self.out_dim,
         )
-        new_state = LstmState(*new_state)
+        new_state = LstmState(h=new_state_h, c=new_state_c)
 
         return result, new_state
 
