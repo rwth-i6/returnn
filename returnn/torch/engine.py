@@ -10,6 +10,7 @@ import torch
 import time
 from torch.distributed import init_process_group, destroy_process_group
 from torch.nn.parallel import DistributedDataParallel as DDP
+from torch.distributed.algorithms.join import Join
 import torch.utils.data.datapipes as dp
 from torchdata.dataloader2 import DataLoader2
 from random import random
@@ -61,6 +62,7 @@ class Engine(EngineBase):
         print("Using device:", self._device, file=log.v2)
 
         self._use_DDP = config.is_true("use_DDP")  # type: Optional[bool]
+        self._DDP_find_unused_parameters = config.is_true("DDP_find_unused_parameters")  # type: Optional[bool]
 
     def init_train_from_config(
         self,
@@ -109,7 +111,7 @@ class Engine(EngineBase):
 
         if self._use_DDP:
             # wrap the model use DDP
-            self._pt_model = DDP(self._pt_model, device_ids=[int(os.environ['LOCAL_RANK'])])
+            self._pt_model = DDP(self._pt_model, device_ids=[int(os.environ['LOCAL_RANK'])],  find_unused_parameters=self._DDP_find_unused_parameters)
         self._updater = Updater(self.config, self._pt_model, self.learning_rate)
         self._updater.create_optimizer()
         if self._start_epoch > 1:
@@ -223,6 +225,8 @@ class Engine(EngineBase):
 
             step_idx += 1
             self.global_train_step += 1
+            print("step idx {} rank {} encoder.layers.10.fc2.weight {}".format(self.global_train_step, torch.distributed.get_rank(), torch.sum(self._pt_model.state_dict()["module.encoder.layers.10.fc2.weight"])))
+
 
         print("Trained %i steps" % step_idx)
         print("Elapsed time %s" % hms(time.time() - epoch_start_time))
@@ -375,7 +379,68 @@ class Engine(EngineBase):
         rf.init_train_step_run_ctx(train_flag=train_flag)
 
         sentinel_kw = {"__fwd_compatible_random_arg_%i" % int(random() * 100): None}
-        self._train_step_func(model=self._orig_model, extern_data=extern_data, **sentinel_kw)
+
+        if self._use_DDP:
+            # run step for DDP wrapped model
+            # the code is copied from forward method in DDP class
+            if torch.is_grad_enabled() and self._pt_model.require_backward_grad_sync:
+                assert self._pt_model.logger is not None
+                self._pt_model.logger.set_runtime_stats_and_log()
+                self._pt_model.num_iterations += 1
+                self._pt_model.reducer.prepare_for_forward()
+
+            with torch.autograd.profiler.record_function(
+                "DistributedDataParallel.forward"
+            ):
+                if torch.is_grad_enabled() and self._pt_model.require_backward_grad_sync:
+                    assert self._pt_model.logger is not None
+                    self._pt_model.logger.set_runtime_stats_and_log()
+                    self._pt_model.num_iterations += 1
+                    self._pt_model.reducer.prepare_for_forward()
+
+                work = Join.notify_join_context(self._pt_model)
+                if work:
+                    self._pt_model.reducer._set_forward_pass_work_handle(
+                        work, self._pt_model._divide_by_initial_world_size  # type: ignore[arg-type]
+                    )
+
+                if torch.is_grad_enabled() and self._pt_model.reducer._rebuild_buckets():
+                    self._pt_model._has_rebuilt_buckets = True
+
+                if self._pt_model._check_sync_bufs_pre_fwd():
+                    self._pt_model._sync_buffers()
+
+                if self._pt_model._join_config.enable:
+                    # Notify joined ranks whether they should sync in backwards pass or not.
+                    self._pt_model._check_global_requires_backward_grad_sync(
+                        is_joined_rank=False
+                    )
+                with self._pt_model._inside_ddp_forward():
+                    output = self._train_step_func(model=self._orig_model, extern_data=extern_data, **sentinel_kw)
+
+                if self._pt_model._check_sync_bufs_post_fwd():
+                    self._pt_model._sync_buffers()
+
+                if torch.is_grad_enabled() and self._pt_model.require_backward_grad_sync:
+                    self._pt_model.require_forward_param_sync = True
+                    # We'll return the output object verbatim since it is a freeform
+                    # object. We need to find any tensors in this object, though,
+                    # because we need to figure out which parameters were used during
+                    # this forward pass, to ensure we short circuit reduction for any
+                    # unused parameters. Only if `find_unused_parameters` is set.
+                    if self._pt_model.find_unused_parameters and not self._pt_model.static_graph:
+                        # Do not need to populate this for static graph.
+                        self._pt_model.reducer.prepare_for_backward(
+                            list(torch.nn.parallel.distributed._find_tensors(output))
+                        )
+                    else:
+                        self._pt_model.reducer.prepare_for_backward([])
+                else:
+                    self._pt_model.require_forward_param_sync = False
+        else:
+            self._train_step_func(model=self._orig_model, extern_data=extern_data, **sentinel_kw)
+
+
 
     def _load_model(self, *, epoch: int):
         """
