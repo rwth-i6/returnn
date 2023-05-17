@@ -221,7 +221,7 @@ def _templates_for_loop_vars(loop_vars: S) -> S:
 
 
 def _check_matching_loop_var_templates(loop_var_templates: S, loop_vars: S):
-    def _check(path, template: Optional[Tensor], x):
+    def _check(path, template, x):
         if isinstance(template, Tensor):
             assert isinstance(x, Tensor), f"loop var {path} is not a Tensor but {type(x)}"
 
@@ -252,6 +252,10 @@ def _check_matching_loop_var_templates(loop_var_templates: S, loop_vars: S):
             # See https://github.com/rwth-i6/returnn/issues/1327.
             # For now, we don't support this.
             assert template == x, f"loop var {path} template dim {template} does not match var dim {x}"
+
+        elif isinstance(template, TensorArray):
+            assert isinstance(x, TensorArray), f"loop var {path} is not a TensorArray but {type(x)}"
+            _check(path, template.tensor_template, x.tensor_template)
 
         else:  # other cases: just check same type
             assert type(template) is type(
