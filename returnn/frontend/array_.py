@@ -370,7 +370,7 @@ def gather(
     source: Tensor,
     *,
     indices: Union[Tensor, int],
-    axis: Dim,
+    axis: Optional[Dim] = None,
     clip_to_valid: bool = False,
 ) -> Tensor:
     """
@@ -390,11 +390,15 @@ def gather(
     :param indices: indices used to select the slices of the source from.
         If another tensor, must be of type ``int32`` or ``int64``.
         Can also specify a constant ``int``.
-    :param axis: The axis into which we gather the indices into
+    :param axis: The axis into which we gather the indices into.
+        If not given, indices must be a tensor and the sparse_dim will be used.
     :param clip_to_valid: if True, the indices will be clipped to the valid range of the input
         Also taking seq lengths into account.
     :return: gathered values
     """
+    if not axis:
+        assert isinstance(indices, Tensor) and indices.sparse_dim
+        axis = indices.sparse_dim
     # noinspection PyProtectedMember
     return source._raw_backend.gather(source, indices=indices, axis=axis, clip_to_valid=clip_to_valid)
 
