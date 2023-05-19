@@ -184,6 +184,10 @@ class Engine(EngineBase):
             if not _has_data[0]:
                 break
 
+            # clear the gradients when every gradient accumulation loop starts
+            if step_idx % self._gradient_accumulation_steps == 0:
+                self._updater.get_optimizer().zero_grad()
+
             self._run_step(data, train_flag=True)
 
             train_ctx = rf.get_run_ctx()
@@ -203,9 +207,6 @@ class Engine(EngineBase):
             inv_norm_factors_dict = NumbersDict(
                 {name: float(_to_raw(loss.get_inv_norm_factor())) for name, loss in train_ctx.losses.items()}
             )
-            # clear the gradients when every gradient accumulation loop starts
-            if step_idx % self._gradient_accumulation_steps == 0:
-                self._updater.get_optimizer().zero_grad()
 
             if self._use_DDP and (step_idx % self._gradient_accumulation_steps) != (self._gradient_accumulation_steps - 1):
                 with self._pt_model.no_sync():
@@ -227,13 +228,13 @@ class Engine(EngineBase):
 
             step_idx += 1
             self.global_train_step += 1
-            if self._use_DDP:
-                print("step idx {} rank {} encoder.layers.10.fc2.weight {}".format(self.global_train_step,
-                                                                                   torch.distributed.get_rank(), torch.sum(
-                        self._pt_model.state_dict()["module.encoder.layers.10.fc2.weight"])))
-            else:
-                print("step idx {} encoder.layers.10.fc2.weight {}".format(self.global_train_step,torch.sum(
-                        self._pt_model.state_dict()["encoder.layers.10.fc2.weight"])))
+            # if self._use_DDP:
+            #     print("step idx {} rank {} encoder.layers.10.fc2.weight {}".format(self.global_train_step,
+            #                                                                        torch.distributed.get_rank(), torch.sum(
+            #             self._pt_model.state_dict()["module.encoder.layers.10.fc2.weight"])))
+            # else:
+            #     print("step idx {} encoder.layers.10.fc2.weight {}".format(self.global_train_step,torch.sum(
+            #             self._pt_model.state_dict()["encoder.layers.10.fc2.weight"])))
 
 
         print("Trained %i steps" % step_idx)
