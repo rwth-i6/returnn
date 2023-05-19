@@ -626,6 +626,8 @@ class TorchBackend(Backend[torch.Tensor]):
         :param perm: e.g. [0, 2, 1]
         :return: permuted (transposed) raw tensor; wraps torch.permute
         """
+        if all(p == i for i, p in enumerate(perm)):
+            return raw_tensor
         return torch.permute(raw_tensor, tuple(perm))
 
     @staticmethod
