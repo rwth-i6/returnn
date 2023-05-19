@@ -1271,14 +1271,10 @@ class TorchBackend(Backend[torch.Tensor]):
             [-1, in_dim.get_dim_value()] + [d.get_dim_value() for d in in_spatial_dims],
         )
         use_striding = strides and (strides > 1 if isinstance(strides, int) else any(s > 1 for s in strides))
-        if (padding == "same" and use_striding) or torch.onnx.is_in_onnx_export():
+        if padding == "same" and (use_striding or torch.onnx.is_in_onnx_export()):
             # padding='same' is not supported for strided convolutions.
             # Moreover, padding specified as a string isn't supported for ONNX exporting as of 2023/05/19.
-            if torch.onnx.is_in_onnx_export():
-                # Explicit padding will be calculated below.
-                padding = 0
-            else:
-                padding = "valid"
+            padding = 0
             pads = []
             for i, s in reversed(list(enumerate(filter_size))):
                 if use_striding:
@@ -1313,6 +1309,9 @@ class TorchBackend(Backend[torch.Tensor]):
                 pad_right = pad - pad_left
                 pads.extend([pad_left, pad_right])
             src_raw = torch.nn.functional.pad(src_raw, pads)
+        if padding == "valid":
+            # padding as string is not supported e.g. in ONNX.
+            padding = 0
         if len(filter_size) == 1:
             # There is also conv_tbc, but it's a bit limited (no dilation)
             # and also unclear when exactly it is faster.
