@@ -1279,6 +1279,7 @@ class TorchBackend(Backend[torch.Tensor]):
         if padding == "same" and (use_striding or torch.onnx.is_in_onnx_export()):
             # padding='same' is not supported for strided convolutions.
             # Moreover, padding specified as a string isn't supported for ONNX exporting as of 2023/05/19.
+            # Manual add the padding, and then do not use any padding in the conv.
             padding = 0
             pads = []
             for i, s in reversed(list(enumerate(filter_size))):
