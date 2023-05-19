@@ -3,14 +3,12 @@ Backends for the frontend API
 """
 
 from __future__ import annotations
-from typing import TYPE_CHECKING, Optional, Any, Union, TypeVar, Generic, Type, Callable, Sequence, Dict, Tuple
+from typing import Optional, Any, Union, TypeVar, Generic, Type, Callable, Sequence, Dict, Tuple, List
 import contextlib
 import numpy
 import returnn.frontend as rf
-
-if TYPE_CHECKING:
-    from returnn.tensor import Tensor, Dim
-    from .types import RawTensorTypes
+from returnn.tensor import Tensor, Dim
+from .types import RawTensorTypes
 
 T = TypeVar("T")  # tf.Tensor, torch.Tensor or so
 T2 = TypeVar("T2")
@@ -452,7 +450,7 @@ class Backend(Generic[T]):
         :param func: "tanh", "sigmoid", "relu", ...
         :return: tensor with elementwise activation applied
         """
-        out = tensor.copy_template()
+        out = tensor.copy_template(name=func)
         if func == "abs" and out.dtype.startswith("complex"):
             num_bits = int(out.dtype[len("complex") :])
             out.dtype = f"float{num_bits // 2}"
@@ -660,7 +658,12 @@ class Backend(Generic[T]):
 
     @staticmethod
     def full(
-        dims: Sequence[Dim], fill_value: RawTensorTypes, *, dtype: str, sparse_dim: Optional[Dim] = None
+        dims: Sequence[Dim],
+        fill_value: RawTensorTypes,
+        *,
+        dtype: str,
+        sparse_dim: Optional[Dim] = None,
+        feature_dim: Optional[Dim] = None,
     ) -> Tensor:
         """
         https://data-apis.org/array-api/latest/API_specification/generated/array_api.full.html
@@ -669,6 +672,7 @@ class Backend(Generic[T]):
         :param fill_value:
         :param dtype:
         :param sparse_dim:
+        :param feature_dim:
         :return: tensor
         """
         raise NotImplementedError
@@ -690,7 +694,7 @@ class Backend(Generic[T]):
             cls,
             a,
             b,
-            name="compare",
+            name=kind,
             res_dtype="bool",
             allow_broadcast_all_sources=allow_broadcast_all_sources,
             dim_order=dim_order,
@@ -715,7 +719,7 @@ class Backend(Generic[T]):
             cls,
             a,
             b,
-            name="combine",
+            name=kind,
             res_dtype=None,
             allow_broadcast_all_sources=allow_broadcast_all_sources,
             dim_order=dim_order,
@@ -816,7 +820,9 @@ class Backend(Generic[T]):
         # does not have special treatments of Tensor and dim tags itself (like TF net dict backend).
         if not out_dim.is_dim_known():
             out_dim.copy_from(in_dim)
-        out = source.copy_template_replace_dim_tag(axis=source.get_axis_from_description(in_dim), new_dim_tag=out_dim)
+        out = source.copy_template_replace_dim_tag(
+            axis=source.get_axis_from_description(in_dim), new_dim_tag=out_dim, name="replace_dim"
+        )
         out.raw_tensor = source.raw_tensor
         return out
 
@@ -841,12 +847,26 @@ class Backend(Generic[T]):
         """
         raise NotImplementedError
 
+    # noinspection PyShadowingBuiltins
+    @staticmethod
+    def top_k(
+        source: Tensor,
+        *,
+        axis: Union[Dim, Sequence[Dim]],
+        k: Union[int, Tensor],
+        k_dim: Optional[Dim] = None,
+        sorted: bool = True,
+    ) -> Tuple[Tensor, Union[Tensor, Sequence[Tensor]], Dim]:
+        """top_k. see :func:`top_k`"""
+        raise NotImplementedError
+
     @staticmethod
     def random(
         *,
         dims: Sequence[Dim],
         dtype: str,
         sparse_dim: Optional[Dim] = None,
+        feature_dim: Optional[Dim] = None,
         distribution: str,
         mean: Optional[Union[int, float, Tensor]] = None,
         stddev: Optional[Union[int, float, Tensor]] = None,
@@ -1008,6 +1028,63 @@ class Backend(Generic[T]):
         :param out_dim:
         :return: output, (state_h, state_c)
         """
+        raise NotImplementedError
+
+    # For eager-based backends, this is a reasonable default implementation and type.
+    TensorArrayType = List[Tensor]
+
+    @classmethod
+    def tensor_array_create(cls) -> TensorArrayType:
+        """
+        :return: empty TensorArray
+        """
+        if cls.executing_eagerly():
+            return []
+        raise NotImplementedError
+
+    @staticmethod
+    def tensor_array_unstack(tensor: Tensor, *, axis: Dim) -> TensorArrayType:
+        """
+        :param tensor:
+        :param axis:
+        :return: list of tensors
+        """
+        raise NotImplementedError
+
+    @staticmethod
+    def tensor_array_stack(tensor_array: TensorArrayType, *, axis: Dim, tensor_template: Tensor) -> Tensor:
+        """
+        :param tensor_array:
+        :param axis:
+        :param tensor_template: per element shape, excluding axis
+        :return: tensor
+        """
+        raise NotImplementedError
+
+    @classmethod
+    def tensor_array_push_back(cls, tensor_array: TensorArrayType, value: Tensor) -> TensorArrayType:
+        """
+        :param tensor_array:
+        :param value:
+        :return: tensor_array
+        """
+        if cls.executing_eagerly():
+            tensor_array.append(value)
+            return tensor_array
+        raise NotImplementedError
+
+    @classmethod
+    def tensor_array_get_item(cls, tensor_array: TensorArrayType, index: Union[int, Tensor]) -> Tensor:
+        """
+        :param tensor_array:
+        :param index:
+        :return: tensor
+        """
+        if cls.executing_eagerly():
+            if isinstance(index, Tensor):
+                assert index.dims == (), f"index {index} must be scalar"
+                index = int(index.raw_tensor)
+            return tensor_array[index]
         raise NotImplementedError
 
 

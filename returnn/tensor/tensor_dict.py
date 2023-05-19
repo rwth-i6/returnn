@@ -54,6 +54,21 @@ class TensorDict:
     def __getitem__(self, item: str) -> Tensor:
         return self.data[item]
 
+    def reset_content(self):
+        """reset content, i.e. all raw_tensor's to None, including dyn_size_ext of dim tags"""
+        dims = []
+        dims_set = set()
+        for value in self.data.values():
+            value.reset()
+            for dim in value.dims:
+                if dim not in dims_set:
+                    dims_set.add(dim)
+                    dims.append(dim)
+        for dim in dims:
+            dim.batch = None
+            if dim.dyn_size_ext:
+                dim.dyn_size_ext.reset()
+
     def copy_template(self) -> TensorDict:
         """copy template"""
         return TensorDict({k: v.copy_template() for k, v in self.data.items()})

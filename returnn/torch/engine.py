@@ -4,6 +4,7 @@ Main engine for PyTorch
 
 from __future__ import annotations
 from typing import Optional, Union, Callable, Dict
+from contextlib import nullcontext
 
 import os
 import torch
@@ -12,6 +13,8 @@ from torch.distributed import init_process_group, destroy_process_group
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.distributed.algorithms.join import Join
 import torch.utils.data.datapipes as dp
+from torch import autocast
+from torch.cuda import amp
 from torchdata.dataloader2 import DataLoader2
 from random import random
 
@@ -23,7 +26,7 @@ from returnn.tensor import TensorDict, Tensor
 from returnn.datasets.basic import init_dataset, Dataset
 from returnn.util import basic as util
 from returnn.util import NumbersDict
-from returnn.util.basic import hms
+from returnn.util.basic import hms, NotSpecified
 from .updater import Updater
 from .data import pipeline as data_pipeline
 from .data import returnn_dataset_wrapper
@@ -58,12 +61,42 @@ class Engine(EngineBase):
         self._save_model_epoch_interval = 1
         self._updater = None  # type: Optional[Updater]
 
+        self._use_autocast = False
+        self._autocast_dtype = None  # type: Optional[str]
+        self._grad_scaler = None  # type: Optional[amp.GradScaler]
+
         self._device = _get_device_from_config(config)
         print("Using device:", self._device, file=log.v2)
 
         self._use_DDP = config.is_true("use_DDP")  # type: Optional[bool]
         #  traversing the autograd graph from the model output and marking all unused parameters as ready for reduction
         self._DDP_find_unused_parameters = config.is_true("DDP_find_unused_parameters")  # type: Optional[bool]
+
+        amp_options = self.config.typed_value("torch_amp")
+        grad_scaler_opts = self.config.typed_value("grad_scaler", NotSpecified)
+        if amp_options is not None:
+            self._use_autocast = True
+            if isinstance(amp_options, dict):
+                amp_options = util.CollectionReadCheckCovered(amp_options)
+                dtype = amp_options.get("dtype", None)
+                grad_scaler_opts = amp_options.get("grad_scaler", grad_scaler_opts)
+                amp_options.assert_all_read()
+            elif isinstance(amp_options, str):
+                dtype = amp_options
+            else:
+                raise TypeError(f"Invalid type for torch_amp: {type(amp_options)}")
+            if isinstance(dtype, str):
+                dtype = getattr(torch, dtype)
+            assert isinstance(dtype, torch.dtype) or dtype is None
+            print(f"Using autocast (automatic mixed precision (AMP)) with dtype {dtype}", file=log.v2)
+            self._autocast_dtype = dtype
+
+        if grad_scaler_opts is NotSpecified:
+            grad_scaler_opts = {} if self._use_autocast else None
+        if grad_scaler_opts is not None:
+            assert isinstance(grad_scaler_opts, dict)
+            print("Using GradScaler with options:", grad_scaler_opts, file=log.v2)
+            self._grad_scaler = amp.GradScaler(**grad_scaler_opts)
 
     def init_train_from_config(
         self,
@@ -208,15 +241,26 @@ class Engine(EngineBase):
                 {name: float(_to_raw(loss.get_inv_norm_factor())) for name, loss in train_ctx.losses.items()}
             )
 
-            if self._use_DDP and (step_idx % self._gradient_accumulation_steps) != (self._gradient_accumulation_steps - 1):
+            if self._use_DDP and (step_idx % self._gradient_accumulation_steps) != (
+                self._gradient_accumulation_steps - 1):
                 with self._pt_model.no_sync():
-                    total_loss.raw_tensor.backward()
+                    if self._grad_scaler is not None:
+                        self._grad_scaler.scale(total_loss).backward()
+                    else:
+                        total_loss.raw_tensor.backward()
             else:
-                total_loss.raw_tensor.backward()
+                if self._grad_scaler is not None:
+                    self._grad_scaler.scale(total_loss).backward()
+                else:
+                    total_loss.raw_tensor.backward()
 
             # only update the weights when every gradient accumulation loop ends
             if (step_idx % self._gradient_accumulation_steps) == (self._gradient_accumulation_steps - 1):
-                self._updater.get_optimizer().step()
+                if self._grad_scaler is not None:
+                    self._grad_scaler.step(self._updater.get_optimizer())
+                    self._grad_scaler.update()
+                else:
+                    self._updater.get_optimizer().step()
 
             accumulated_losses_dict += losses_dict
             accumulated_inv_norm_factors_dict += inv_norm_factors_dict
@@ -235,7 +279,6 @@ class Engine(EngineBase):
             # else:
             #     print("step idx {} encoder.layers.10.fc2.weight {}".format(self.global_train_step,torch.sum(
             #             self._pt_model.state_dict()["encoder.layers.10.fc2.weight"])))
-
 
         print("Trained %i steps" % step_idx)
         print("Elapsed time %s" % hms(time.time() - epoch_start_time), file=log.v3)
@@ -424,7 +467,10 @@ class Engine(EngineBase):
                         is_joined_rank=False
                     )
                 with self._pt_model._inside_ddp_forward():
-                    output = self._train_step_func(model=self._orig_model, extern_data=extern_data, **sentinel_kw)
+                    with autocast(device_type=self._device,
+                                  dtype=self._autocast_dtype) if self._use_autocast else nullcontext():
+                        # If flag use_DDP is enabled, we need to return the model output in the train step function
+                        output = self._train_step_func(model=self._orig_model, extern_data=extern_data, **sentinel_kw)
 
                 if self._pt_model._check_sync_bufs_post_fwd():
                     self._pt_model._sync_buffers()
@@ -446,7 +492,9 @@ class Engine(EngineBase):
                 else:
                     self._pt_model.require_forward_param_sync = False
         else:
-            self._train_step_func(model=self._orig_model, extern_data=extern_data, **sentinel_kw)
+            with autocast(device_type=self._device,
+                          dtype=self._autocast_dtype) if self._use_autocast else nullcontext():
+                self._train_step_func(model=self._orig_model, extern_data=extern_data, **sentinel_kw)
 
     def _load_model(self, *, epoch: int):
         """

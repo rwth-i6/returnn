@@ -4,6 +4,7 @@ Recurrent state
 
 from __future__ import annotations
 from typing import Union, Any, List, Set
+import collections
 from returnn.tensor import Tensor
 
 
@@ -17,6 +18,21 @@ class State(dict):
     next time you call it as initial state.
 
     This behaves somewhat like a namedtuple, although we derive from dict.
+
+    When you derive further from this class, make sure that it works correctly with ``tree``,
+    which creates new instances of the same class
+    by calling ``type(instance)(keys_and_values)``
+    with ``keys_and_values = ((key, result[key]) for key in instance)``.
+    See :class:`LstmState` for an example::
+
+        class LstmState(rf.State):
+            def __init__(self, *_args, h: Tensor = None, c: Tensor = None):
+                super().__init__(*_args)
+                if not _args:
+                    self.h = h
+                    self.c = c
+
+    Also see: https://github.com/rwth-i6/returnn/issues/1329
     """
 
     def __init__(self, *args, **kwargs):
@@ -27,6 +43,8 @@ class State(dict):
             assert len(args) == 1
             if isinstance(args[0], dict):
                 super().__init__(**args[0])
+            elif isinstance(args[0], collections.Iterable):
+                super().__init__(args[0])
             else:
                 super().__init__(state=args[0])
         else:

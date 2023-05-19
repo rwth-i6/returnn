@@ -1625,7 +1625,7 @@ def prod(ls):
         return 1
     x = ls[0]
     for y in ls[1:]:
-        x *= y
+        x = x * y  # *= doesn't work because x might be a tensor, and for e.g. torch.Tensor this op is in-place
     return x
 
 

@@ -948,7 +948,6 @@ class _DimMixin:
 
         import numpy
         import returnn.frontend as rf
-        from returnn.tensor import Tensor
 
         tf = tf_util = tensor_util = None
         if backend and backend.is_tensorflow:
@@ -1011,19 +1010,27 @@ class _DimMixin:
                 if isinstance(b, _t.Tensor):
                     return b
             if kind == "add":
-                return a + b
+                return _relu(a + b)
             elif kind == "sub":
-                return a - b
+                return _relu(a - b)
             elif kind == "mul":
                 return a * b
             elif kind in ("floordiv", "truediv"):  # truediv assumes there is no remainder
                 return a // b
             elif kind == "ceildiv":
-                if isinstance(a, Tensor):
+                if isinstance(a, _t.Tensor):
                     return rf.ceil_divide(a, b)
                 return -(-a // b)
             else:
                 raise ValueError("unknown op kind %r" % op.kind)
+
+        def _relu(a):
+            if isinstance(a, _t.Tensor):
+                return rf.relu(a)
+            elif isinstance(a, int):
+                return max(a, 0)
+            else:
+                raise TypeError(f"complete_dyn_size: _relu: unexpected type {type(a)}")
 
         y_name = self.description + ":seq-length"
         y: Optional[_t.Tensor] = None  # resulting dyn size
@@ -1137,9 +1144,12 @@ class _DimMixin:
         if self_kind == other_kind == DimTypes.Feature and ignore_feature_dim:
             return True
         if treat_feature_as_spatial:
-            if self_kind == DimTypes.Feature:
+            # Note: No kind at all: Reinterpret treat_feature_as_spatial a bit:
+            # Assume that we want them all to be handled the same, no matter the kind.
+            # (Except of batch dim kind, which is still excluded here.)
+            if self_kind == DimTypes.Feature or not self_kind:
                 self_kind = DimTypes.Spatial
-            if other_kind == DimTypes.Feature:
+            if other_kind == DimTypes.Feature or not other_kind:
                 other_kind = DimTypes.Spatial
         if self.dimension != other.dimension:
             if broadcast_matches and (self.dimension == 1 or other.dimension == 1):

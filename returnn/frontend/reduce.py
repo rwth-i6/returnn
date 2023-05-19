@@ -3,8 +3,9 @@ Reduce
 """
 
 from __future__ import annotations
-from typing import Union, TypeVar, Sequence
+from typing import Optional, Union, TypeVar, Sequence, Tuple
 from returnn.tensor import Tensor, Dim
+import returnn.frontend as rf
 
 T = TypeVar("T")
 
@@ -19,6 +20,8 @@ __all__ = [
     "reduce_all",
     "reduce_argmin",
     "reduce_argmax",
+    "reduce_out",
+    "top_k",
 ]
 
 
@@ -148,3 +151,67 @@ def reduce_argmax(source: Tensor[T], *, axis: Union[Dim, Sequence[Dim]], use_mas
     :return: tensor with axis removed
     """
     return reduce(source=source, mode="argmax", axis=axis, use_mask=use_mask)
+
+
+def reduce_out(
+    source: Tensor,
+    *,
+    mode: str,
+    num_pieces: int,
+    out_dim: Optional[Dim] = None,
+) -> Tensor:
+    """
+    Combination of :class:`SplitDimsLayer` applied to the feature dim
+    and :class:`ReduceLayer` applied to the resulting feature dim.
+    This can e.g. be used to do maxout.
+
+    :param source:
+    :param mode: "sum" or "max" or "mean"
+    :param num_pieces: how many elements to reduce. The output dimension will be input.dim // num_pieces.
+    :param out_dim:
+    :return: out, with feature_dim set to new dim
+    """
+    assert source.feature_dim
+    parts_dim = Dim(num_pieces, name="readout-parts")
+    if not out_dim:
+        out_dim = source.feature_dim // parts_dim
+    out = rf.split_dims(source, axis=source.feature_dim, dims=(out_dim, parts_dim))
+    out = reduce(out, mode=mode, axis=parts_dim)
+    out.feature_dim = out_dim
+    return out
+
+
+# noinspection PyShadowingBuiltins
+def top_k(
+    source: Tensor,
+    *,
+    axis: Union[Dim, Sequence[Dim]],
+    k: Union[int, Tensor],
+    k_dim: Optional[Dim] = None,
+    sorted: bool = True,
+) -> Tuple[Tensor, Union[Tensor, Sequence[Tensor]], Dim]:
+    """
+    Basically wraps tf.nn.top_k.
+    Returns the top_k values and the indices.
+
+    For an input [B,D] with axis=D, the output and indices values are shape [B,K].
+
+    It's somewhat similar to :func:`reduce` with max and argmax.
+    The axis dim is reduced and then a new dim for K is added.
+
+    Axis can also cover multiple axes, such as [beam,classes].
+    In that cases, there is not a single "indices" sub-layer,
+    but sub-layers "indices0" .. "indices{N-1}"
+    corresponding to each axis, in the same order.
+
+    All other axes are treated as batch dims.
+
+    :param source:
+    :param axis: the axis to do the top_k on, which is reduced, or a sequence of axes
+    :param k: the "K" in "TopK"
+    :param k_dim: the new axis dim for K. if not provided, will be automatically created.
+    :param sorted:
+    :return: values, indices (sequence if axis is a sequence), k_dim
+    """
+    # noinspection PyProtectedMember
+    return source._raw_backend.top_k(source, axis=axis, k=k, k_dim=k_dim, sorted=sorted)

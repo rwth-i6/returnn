@@ -10,6 +10,9 @@ from returnn.tensor import Tensor, Dim, TensorDict, batch_dim
 from rf_utils import run_model
 
 
+# Keep test_linear_direct and test_linear first here to have some very canonical examples.
+
+
 def test_linear_direct():
     time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
     in_dim, out_dim = Dim(7, name="in"), Dim(13, name="out")
@@ -52,6 +55,23 @@ def test_linear():
         out.mark_as_default_output()
 
     run_model(extern_data, lambda *, epoch, step: _Net(), _forward_step)
+
+
+# Now come some tests for some base functionality.
+
+
+def test_state():
+    # https://github.com/rwth-i6/returnn/issues/1329
+    import tree
+
+    s = rf.LstmState(h=Tensor("h", (), "float32"), c=Tensor("c", (), "float32"))
+    res = tree.map_structure(lambda x: x, s)
+    assert isinstance(res, rf.LstmState)
+    assert res is not s
+    assert res.h is s.h and res.c is s.c
+
+
+# And now more module tests.
 
 
 def test_2layers():

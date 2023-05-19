@@ -179,11 +179,9 @@ class RunCtx:
         assert self.stage == "forward_step"
         if not isinstance(tensor, Tensor):
             assert isinstance(tensor, _backend.global_backend.RawTensorType)
-            if dims is None:
-                # We trust the user that the raw tensor has a well-defined dim order.
-                # So just create some dummy dims.
-                dims = [Dim(None, name=f"{name}-raw-axis-{i}") for i in _backend.global_backend.get_ndim_raw(tensor)]
             tensor = rf.convert_to_tensor(tensor, dims=dims)
+            # In case it was not specified, just accept whatever order we got.
+            dims = tensor.dims
         assert name not in self.outputs.data
         if dims is None:
             # We try some reasonable defaults, specifically: BTF or BF.

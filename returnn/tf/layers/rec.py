@@ -738,7 +738,8 @@ class RecLayer(_ConcatInputLayer):
         have_time_dim = self.time_dim_tag or add_time_dim
         expected_ndim = 3 if have_time_dim else 2
         assert self.input_data
-        in_data = self.input_data
+        in_data = self.input_data.copy()
+        in_data.version = 1  # to set time_dim_axis here
         if not self.time_dim_tag and add_time_dim:
             in_data = in_data.copy_add_spatial_dim(spatial_dim_axis=0)
             in_data.time_dim_axis = 0

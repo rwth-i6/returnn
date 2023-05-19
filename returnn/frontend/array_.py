@@ -23,12 +23,14 @@ __all__ = [
     "split",
     "expand_dim",
     "concat",
+    "concat_features",
     "pad",
     "cum_concat_step",
     "masked_select",
     "pack_padded",
     "gather",
     "slice",
+    "shift_right",
 ]
 
 
@@ -252,6 +254,20 @@ def concat(
     return sources[0][0]._raw_backend.concat(*sources, allow_broadcast=allow_broadcast, out_dim=out_dim), out_dim
 
 
+def concat_features(*sources: Tensor, allow_broadcast=False) -> Tensor:
+    """
+    Concatenates multiple sources, using feature_dim of each source,
+    so make sure that the feature_dim is correctly set.
+    """
+    src_pairs = []
+    for src in sources:
+        assert src.feature_dim is not None
+        src_pairs.append((src, src.feature_dim))
+    res, out_dim = concat(*src_pairs, allow_broadcast=allow_broadcast)
+    res.feature_dim = out_dim
+    return res
+
+
 def pad(
     source: Tensor,
     *,
@@ -354,7 +370,7 @@ def gather(
     source: Tensor,
     *,
     indices: Union[Tensor, int],
-    axis: Dim,
+    axis: Optional[Dim] = None,
     clip_to_valid: bool = False,
 ) -> Tensor:
     """
@@ -374,11 +390,15 @@ def gather(
     :param indices: indices used to select the slices of the source from.
         If another tensor, must be of type ``int32`` or ``int64``.
         Can also specify a constant ``int``.
-    :param axis: The axis into which we gather the indices into
+    :param axis: The axis into which we gather the indices into.
+        If not given, indices must be a tensor and the sparse_dim will be used.
     :param clip_to_valid: if True, the indices will be clipped to the valid range of the input
         Also taking seq lengths into account.
     :return: gathered values
     """
+    if not axis:
+        assert isinstance(indices, Tensor) and indices.sparse_dim
+        axis = indices.sparse_dim
     # noinspection PyProtectedMember
     return source._raw_backend.gather(source, indices=indices, axis=axis, clip_to_valid=clip_to_valid)
 
@@ -463,3 +483,10 @@ def slice(
         source._raw_backend.slice(source, axis=axis, start=start, end=end, step=step, size=size, out_dim=out_dim),
         out_dim,
     )
+
+
+def shift_right(source: Tensor, *, axis: Dim, pad_value: Union[rf.RawTensorTypes, Tensor], amount: int = 1) -> Tensor:
+    """shift right by amount, pad left with left_pad"""
+    padded, (padded_dim,) = rf.pad(source, axes=[axis], padding=[(amount, 0)], mode="constant", value=pad_value)
+    padded_slice, _ = rf.slice(padded, axis=padded_dim, size=axis)
+    return padded_slice

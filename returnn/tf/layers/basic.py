@@ -1772,6 +1772,10 @@ class GatherLayer(_ConcatInputLayer):
             assert position_data.feature_dim_axis_or_unspecified is not NotSpecified
             pass  # keep the logic as before
 
+        out_type["version"] = input_data.version
+        if input_data.version:
+            out_type.pop("time_dim_axis", None)
+
         # If not sparse, the feature dim axis could now originate from position, let Data figure this out
         if not out_type.get("sparse", False):
             out_type["dim"] = NotSpecified
@@ -2924,6 +2928,7 @@ class RandomLayer(LayerBase):
         maxval=None,
         dtype="float32",
         sparse_dim=None,
+        feature_dim=None,
         seed=None,
         algorithm=None,
         explicit_state=None,
@@ -2943,6 +2948,7 @@ class RandomLayer(LayerBase):
         :param int|float|LayerBase|None maxval: for uniform
         :param str dtype:
         :param Dim|None sparse_dim:
+        :param Dim|None feature_dim:
         :param int|list[int]|numpy.ndarray|None seed: If not given, uses self.network.random.randint,
           i.e. then it is controlled by the global seed setting, and every layer would get its own seed.
           If you specify it explicitly, make sure every :class:`RandomLayer` uses a different seed,
@@ -2978,7 +2984,7 @@ class RandomLayer(LayerBase):
                 x = tf.stop_gradient(x)
             return x
 
-        shape, sparse_dim  # noqa  # handled in get_out_data_from_opts
+        shape, sparse_dim, feature_dim  # noqa  # handled in get_out_data_from_opts
         super(RandomLayer, self).__init__(**kwargs)
         self.shape_deps = shape_deps
         algorithm_int = RandomStateInitLayer.select_algorithm(algorithm)
@@ -3183,12 +3189,15 @@ class RandomLayer(LayerBase):
             d["shape_deps"] = [get_layer(src_name) for src_name in extra_deps]
 
     @classmethod
-    def get_out_data_from_opts(cls, name, shape, dtype="float32", sparse_dim=None, shape_deps=(), **kwargs):
+    def get_out_data_from_opts(
+        cls, name, shape, dtype="float32", sparse_dim=None, feature_dim=None, shape_deps=(), **kwargs
+    ):
         """
         :param str name:
         :param typing.Sequence[Dim|int] shape:
         :param str dtype:
         :param Dim|None sparse_dim:
+        :param Dim|None feature_dim:
         :param list[LayerBase] shape_deps: for dyn dim tags in shape
         :rtype: Data
         """
@@ -3196,7 +3205,9 @@ class RandomLayer(LayerBase):
             d if isinstance(d, Dim) else SpatialDim("%s:dim%i" % (name, i), d, auto_generated=True)
             for i, d in enumerate(shape)
         ]
-        out = Data(name="%s_output" % name, dim_tags=dim_tags, dtype=dtype, sparse_dim=sparse_dim)
+        out = Data(
+            name="%s_output" % name, dim_tags=dim_tags, dtype=dtype, sparse_dim=sparse_dim, feature_dim=feature_dim
+        )
         out.beam = SearchBeam.get_combined_beam(out.beam, *[dep.output.beam for dep in shape_deps if dep])
         return out
 
@@ -3553,7 +3564,16 @@ class ConstantLayer(LayerBase):
 
     # noinspection PyUnusedLocal
     def __init__(
-        self, sources, value=0.0, shape=None, dtype=None, with_batch_dim=False, sparse_dim=None, shape_deps=(), **kwargs
+        self,
+        sources,
+        value=0.0,
+        shape=None,
+        dtype=None,
+        with_batch_dim=False,
+        sparse_dim=None,
+        feature_dim=None,
+        shape_deps=(),
+        **kwargs,
     ):
         """
         :param list[LayerBase] sources:
@@ -3562,6 +3582,7 @@ class ConstantLayer(LayerBase):
         :param str|None dtype:
         :param bool with_batch_dim:
         :param Dim|None sparse_dim:
+        :param Dim|None feature_dim:
         :param list[LayerBase] shape_deps: for dyn dim tags in shape
         """
         import numpy
@@ -3603,7 +3624,16 @@ class ConstantLayer(LayerBase):
 
     @classmethod
     def get_out_data_from_opts(
-        cls, name, value=0.0, shape=None, dtype=None, with_batch_dim=False, sparse_dim=None, shape_deps=(), **kwargs
+        cls,
+        name,
+        value=0.0,
+        shape=None,
+        dtype=None,
+        with_batch_dim=False,
+        sparse_dim=None,
+        feature_dim=None,
+        shape_deps=(),
+        **kwargs,
     ):
         """
         :param str name:
@@ -3612,6 +3642,7 @@ class ConstantLayer(LayerBase):
         :param str|None dtype:
         :param bool with_batch_dim:
         :param Dim|None sparse_dim:
+        :param Dim|None feature_dim:
         :param list[LayerBase] shape_deps: for dyn dim tags in shape
         :rtype: Data
         """
@@ -3622,6 +3653,7 @@ class ConstantLayer(LayerBase):
             dtype=dtype,
             with_batch_dim=with_batch_dim,
             sparse_dim=sparse_dim,
+            feature_dim=feature_dim,
         )
         out.beam = SearchBeam.get_combined_beam(out.beam, *[dep.output.beam for dep in shape_deps if dep])
         return out
@@ -9880,6 +9912,7 @@ class TopKLayer(LayerBase):
         if isinstance(d.get("k", None), str):
             d["k"] = get_layer(d["k"])
         if not d.get("k_dim", None):
+            # Make Dim here such that it is unique.
             k = d.get("k", None)  # should always be in there but throw errors later
             if isinstance(k, (str, LayerBase)):
                 k = None
@@ -9923,17 +9956,18 @@ class TopKLayer(LayerBase):
         if isinstance(k, int) and not k_dim.is_dim_known():
             k_dim.size = k
             k_dim.capacity = k
-        k_data = k.output if isinstance(k, LayerBase) else Data.template_from_constant(k, name="static-k")
-        if k_data.batch:
-            k_dim = k_dim.get_for_batch_ctx(k_data.batch, k_data.control_flow_ctx)
-        if not k_dim.dyn_size_ext or k_dim.dyn_size_ext.placeholder is None:
-            k_dim.dyn_size_ext = k_data.copy()
-            if k_dim.dyn_size_ext.placeholder is not None:
-                tag = Dim.get_tag_from_size_tensor(k_dim.dyn_size_ext.placeholder)
-                if tag:
-                    k_dim.declare_same_as(tag)
-                else:
-                    k_dim.set_tag_on_size_tensor(k_dim.dyn_size_ext.placeholder)
+        if not isinstance(k, int):
+            k_data = k.output
+            if k_data.batch:
+                k_dim = k_dim.get_for_batch_ctx(k_data.batch, k_data.control_flow_ctx)
+            if not k_dim.dyn_size_ext or k_dim.dyn_size_ext.placeholder is None:
+                k_dim.dyn_size_ext = k_data.copy()
+                if k_dim.dyn_size_ext.placeholder is not None:
+                    tag = Dim.get_tag_from_size_tensor(k_dim.dyn_size_ext.placeholder)
+                    if tag:
+                        k_dim.declare_same_as(tag)
+                    else:
+                        k_dim.set_tag_on_size_tensor(k_dim.dyn_size_ext.placeholder)
         return cls._get_out_data(name=name + "_output", in_data=in_data, axis=axis, k_dim=k_dim, for_indices=None)
 
     def get_sub_layer(self, layer_name):

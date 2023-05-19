@@ -8,7 +8,7 @@ import contextlib
 import torch
 import numpy
 
-from returnn.tensor import Tensor, Dim
+from returnn.tensor import Tensor, Dim, single_step_dim
 from returnn.util.basic import prod, get_global_inf_value
 
 # noinspection PyProtectedMember
@@ -101,6 +101,18 @@ class TorchBackend(Backend[torch.Tensor]):
         return raw_tensor.dim()
 
     @staticmethod
+    def get_shape_raw(raw_tensor: torch.Tensor) -> Tuple[int]:
+        """shape"""
+        return tuple(raw_tensor.shape)
+
+    @staticmethod
+    def get_shape_tuple_raw(raw_tensor: torch.Tensor) -> Tuple[int]:
+        """
+        :return: shape of raw tensor
+        """
+        return tuple(raw_tensor.shape)
+
+    @staticmethod
     def get_known_shape_raw(raw_tensor: torch.Tensor) -> Tuple[Optional[int]]:
         """
         :return: shape of raw tensor; here for PyTorch the full shape is always known
@@ -115,7 +127,7 @@ class TorchBackend(Backend[torch.Tensor]):
         :param name:
         :return: new Dim object
         """
-        return Dim(raw_tensor.size(axis), name=name)
+        return Dim(int(raw_tensor.size(axis)), name=name)
 
     @staticmethod
     def get_device(x: Tensor[torch.Tensor]) -> Optional[str]:
@@ -144,6 +156,18 @@ class TorchBackend(Backend[torch.Tensor]):
         :return: raw tensor with new axis
         """
         return raw_tensor.unsqueeze(axis)
+
+    @staticmethod
+    def expand_raw(raw_tensor: torch.Tensor, axis: int, dim: Union[int, torch.Tensor]) -> torch.Tensor:
+        """
+        :param raw_tensor:
+        :param axis: shape[axis] must be 1
+        :param dim: the new dim for shape[axis]
+        :return: shape[axis] expands to dim.
+            in PyTorch or other frameworks which support custom strides,
+            this is an efficient view and not a copy.
+        """
+        return raw_tensor.expand(*[-1 if i != axis else dim for i in range(raw_tensor.dim())])
 
     @staticmethod
     def copy(tensor: Tensor[torch.Tensor]) -> Tensor[torch.Tensor]:
@@ -200,6 +224,8 @@ class TorchBackend(Backend[torch.Tensor]):
         )
         out_shape = [d.get_dim_value() for d in out.dims]
         out.raw_tensor = torch.reshape(source.raw_tensor, out_shape)
+        if source.feature_dim and source.feature_dim in dims:
+            out.feature_dim = out_dim
         return out, out_dim
 
     @staticmethod
@@ -341,21 +367,22 @@ class TorchBackend(Backend[torch.Tensor]):
         """pad"""
         assert len(out_dims) == len(axes) == len(padding)
         out = source.copy_template_new_dim_tags(
-            [out_dims[axes.index(dim)] if dim in axes else dim for dim in source.dim_tags]
+            [out_dims[axes.index(dim)] if dim in axes else dim for dim in source.dim_tags], keep_special_axes=True
         )
         remaining_dims = set(axes)
         raw_pad = []
         for dim in reversed(source.dims):
             if dim not in remaining_dims:
+                raw_pad += [0, 0]
                 continue
             remaining_dims.remove(dim)
             pad_ = padding[axes.index(dim)]
-            raw_pad.extend(
-                (
-                    pad_[0].get_dim_value() if isinstance(pad_[0], Dim) else pad_[0],
-                    pad_[1].get_dim_value() if isinstance(pad_[1], Dim) else pad_[1],
-                )
-            )
+            raw_pad += [
+                pad_[0].get_dim_value() if isinstance(pad_[0], Dim) else pad_[0],
+                pad_[1].get_dim_value() if isinstance(pad_[1], Dim) else pad_[1],
+            ]
+            if not remaining_dims:
+                break
         if isinstance(value, Tensor):
             assert value.dims == (), f"value {value} must be a scalar"
             value = value.raw_tensor
@@ -572,6 +599,27 @@ class TorchBackend(Backend[torch.Tensor]):
         return op(a, b)
 
     @staticmethod
+    def reshape_raw(
+        raw_tensor: torch.Tensor, shape: Union[Sequence[Union[int, torch.Tensor]], torch.Tensor]
+    ) -> torch.Tensor:
+        """
+        :param raw_tensor:
+        :param shape:
+        :return: reshaped raw tensor; wraps torch.reshape
+        """
+        return torch.reshape(raw_tensor, shape)
+
+    @classmethod
+    def squeeze_raw(cls, raw_tensor: torch.Tensor, axes: Sequence[int]) -> torch.Tensor:
+        """squeeze"""
+        if len(axes) == 1:
+            return raw_tensor.squeeze(dim=axes[0])
+        elif len(axes) == 0:
+            return raw_tensor
+        else:
+            return super().squeeze_raw(raw_tensor, axes=axes)
+
+    @staticmethod
     def transpose_raw(raw_tensor: torch.Tensor, perm: Sequence[int]) -> torch.Tensor:
         """
         :param raw_tensor:
@@ -609,18 +657,101 @@ class TorchBackend(Backend[torch.Tensor]):
 
     @staticmethod
     def full(
-        dims: Sequence[Dim], fill_value: RawTensorTypes, *, dtype: str, sparse_dim: Optional[Dim] = None
+        dims: Sequence[Dim],
+        fill_value: RawTensorTypes,
+        *,
+        dtype: str,
+        sparse_dim: Optional[Dim] = None,
+        feature_dim: Optional[Dim] = None,
     ) -> Tensor:
-        """
-        :param dims:
-        :param fill_value:
-        :param dtype:
-        :param sparse_dim:
-        :return: tensor
-        """
+        """full"""
         shape = [dim.get_dim_value() for dim in dims]
         raw_tensor = torch.full(shape, fill_value, dtype=TorchBackend.as_dtype_raw(dtype))
-        return Tensor("full", dims=dims, sparse_dim=sparse_dim, dtype=dtype, raw_tensor=raw_tensor)
+        return Tensor(
+            "full", dims=dims, sparse_dim=sparse_dim, feature_dim=feature_dim, dtype=dtype, raw_tensor=raw_tensor
+        )
+
+    @staticmethod
+    def gather(
+        source: Tensor,
+        *,
+        indices: Union[Tensor, int],
+        axis: Dim,
+        clip_to_valid: bool = False,
+    ) -> Tensor:
+        """
+        Gather.
+
+        There are a few options in PyTorch, all having somewhat different semantics
+        and different advantages or disadvantages and different limitations.
+
+        - torch.gather, most generic
+        - torch.index_select, similar as tf.gather, but does not support batch axes
+        - Tensor.__getitem__
+        - torch.embedding
+        """
+        if isinstance(indices, Tensor):
+            indices: Tensor[torch.Tensor]
+        elif isinstance(indices, int):
+            indices = Tensor(
+                "indices_int",
+                dims=(),
+                dtype=rf.get_default_array_index_dtype(),
+                raw_tensor=torch.tensor(indices, dtype=TorchBackend.as_dtype_raw(rf.get_default_array_index_dtype())),
+            )
+        else:
+            raise TypeError(f"Unsupported type for indices: {type(indices)}")
+        assert axis not in indices.dims
+        axis_int = source.get_axis_from_description(axis, allow_int=False)
+        if clip_to_valid:
+            indices = indices.copy()
+            dim: Dim = source.dims[axis_int]
+            if dim.dyn_size_ext:
+                assert dim.dyn_size_ext.dims_set.issubset(
+                    indices.dims_set
+                ), f"gather with clip_to_valid: indices ({indices}) dims must be a superset of {dim} dyn-size"
+                size = dim.dyn_size_ext.copy_compatible_to(indices)
+                indices.raw_tensor = torch.clamp(indices.raw_tensor, 0, size.raw_tensor - 1)
+            else:
+                indices.raw_tensor = torch.clamp(indices.raw_tensor, 0, source.raw_tensor.shape[axis_int] - 1)
+        index_own_dims = [dim for dim in indices.dims if dim not in source.dims]
+        out = Tensor(
+            "gather",
+            dims=list(source.dims[:axis_int]) + index_own_dims + list(source.dims[axis_int + 1 :]),
+            dtype=source.dtype,
+            sparse_dim=source.sparse_dim,
+        )
+        if indices.dims_set.intersection(source.dims_set):
+            # We cannot use index_select in this case. Need to fallback to gather.
+            indices = indices.copy_compatible_to(out, check_dtype=False, check_sparse=False, unbroadcast=True)
+            if len(index_own_dims) == 1:
+                index_own_dims_flat = index_own_dims[0]  # good
+            elif len(index_own_dims) == 0:
+                index_own_dims_flat = Dim(1, name="dummy")
+                indices = indices.copy_add_dim_by_tag(index_own_dims_flat, unbroadcast=True, axis=axis_int)
+            else:
+                indices, index_own_dims_flat = rf.merge_dims(indices, dims=index_own_dims)
+            index_ext_dims = list(source.dims)
+            index_ext_dims[axis_int] = index_own_dims_flat
+            assert indices.dims == tuple(index_ext_dims)
+            out_raw = torch.gather(source.raw_tensor, dim=axis_int, index=indices.raw_tensor.type(torch.int64))
+            if len(index_own_dims) == 1:
+                pass  # nothing to do
+            elif len(index_own_dims) == 0:
+                out_raw = out_raw.squeeze(axis_int)
+            else:
+                out_raw = out_raw.reshape([d.get_dim_value() for d in out.dims])
+            out.raw_tensor = out_raw
+        elif axis_int == 0 and source.batch_ndim == 2:
+            # This is exactly what torch.embedding is intended for. Let's use that.
+            out.raw_tensor = torch.embedding(source.raw_tensor, indices.raw_tensor)
+        else:
+            out_raw = torch.index_select(source.raw_tensor, dim=axis_int, index=indices.raw_tensor.flatten())
+            out_shape = (
+                source.raw_tensor.shape[:axis_int] + indices.raw_tensor.shape + source.raw_tensor.shape[axis_int + 1 :]
+            )
+            out.raw_tensor = out_raw.reshape(out_shape)
+        return out
 
     @staticmethod
     def slice(
@@ -813,9 +944,60 @@ class TorchBackend(Backend[torch.Tensor]):
             raw_tensor=raw_result,
             dims=res_dims,
             dtype=TorchBackend.get_dtype_name_raw(raw_result),
-            sparse_dim=source.sparse_dim,
+            sparse_dim=axis[0] if mode.startswith("arg") else source.sparse_dim,
         )
         return res
+
+    # noinspection PyShadowingBuiltins
+    @staticmethod
+    def top_k(
+        source: Tensor,
+        *,
+        axis: Union[Dim, Sequence[Dim]],
+        k: Union[int, Tensor],
+        k_dim: Optional[Dim] = None,
+        sorted: bool = True,
+    ) -> Tuple[Tensor, Union[Tensor, Sequence[Tensor]], Dim]:
+        """top_k"""
+        if not k_dim:
+            k_dim = Dim(k, name="top-k-dim")
+        if isinstance(axis, (list, tuple)):
+            # Move axis to the end, in the right order.
+            source = source.copy_transpose([d for d in source.dims if d not in axis] + list(axis))
+            source_raw_flat = source.raw_tensor.flatten(start_dim=source.batch_ndim - len(axis))
+            values_raw, indices_raw = torch.topk(
+                source_raw_flat, k=k_dim.get_dim_value(), dim=-1, largest=True, sorted=sorted
+            )
+            values = source.copy_template_new_dim_tags(
+                new_dim_tags=source.dims[: -len(axis)] + (k_dim,), name="top_k_values"
+            )
+            if source.feature_dim and source.feature_dim in values.dims:
+                values.feature_dim = source.feature_dim
+            values.raw_tensor = values_raw
+            indices_out = []
+            for i, a in reversed(list(enumerate(axis))):
+                assert isinstance(a, Dim)
+                indices_out_raw = indices_raw % a.dimension
+                indices_raw = indices_raw // a.dimension
+                indices = values.copy_template(name=f"top_k_indices_{a.name or i}")
+                indices.dtype = TorchBackend.get_dtype_name_raw(indices_out_raw)
+                indices.sparse_dim = a
+                indices.raw_tensor = indices_out_raw
+                indices_out.insert(0, indices)
+            return values, indices_out, k_dim
+        assert isinstance(axis, Dim)
+        assert not axis.need_masking()  # not supported currently
+        axis_int = source.get_axis_from_description(axis, allow_int=False)
+        values_raw, indices_raw = torch.topk(
+            source.raw_tensor, k=k_dim.get_dim_value(), dim=axis_int, largest=True, sorted=sorted
+        )
+        values = source.copy_template_replace_dim_tag(axis=axis_int, new_dim_tag=k_dim, name="top_k_values")
+        values.raw_tensor = values_raw
+        indices = source.copy_template_replace_dim_tag(axis=axis_int, new_dim_tag=k_dim, name="top_k_indices")
+        indices.dtype = TorchBackend.get_dtype_name_raw(indices_raw)
+        indices.sparse_dim = axis
+        indices.raw_tensor = indices_raw
+        return values, indices, k_dim
 
     @staticmethod
     @contextlib.contextmanager
@@ -840,6 +1022,7 @@ class TorchBackend(Backend[torch.Tensor]):
         dims: Sequence[Dim],
         dtype: str,
         sparse_dim: Optional[Dim] = None,
+        feature_dim: Optional[Dim] = None,
         distribution: str,
         mean: Optional[Union[int, float, Tensor]] = None,
         stddev: Optional[Union[int, float, Tensor]] = None,
@@ -859,7 +1042,9 @@ class TorchBackend(Backend[torch.Tensor]):
         shape = [d.get_dim_value() for d in dims]
         dtype_ = TorchBackend.as_dtype_raw(dtype)
         if out is None:
-            out = Tensor(name=f"random_{distribution}", dims=dims, dtype=dtype, sparse_dim=sparse_dim)
+            out = Tensor(
+                name=f"random_{distribution}", dims=dims, dtype=dtype, sparse_dim=sparse_dim, feature_dim=feature_dim
+            )
             out.raw_tensor = torch.empty(shape, dtype=dtype_)
         assert explicit_state is None  # not implemented otherwise
         generator = None  # using the global default from PT
@@ -1068,7 +1253,6 @@ class TorchBackend(Backend[torch.Tensor]):
         """conv"""
         if not out_spatial_dims:
             out_spatial_dims = rf.make_conv_out_spatial_dims(
-                description_prefix="conv",
                 in_spatial_dims=in_spatial_dims,
                 filter_size=[d.dimension for d in filter_size],
                 strides=strides or 1,
@@ -1178,7 +1362,6 @@ class TorchBackend(Backend[torch.Tensor]):
         """pool"""
         if out_spatial_dims is None:
             out_spatial_dims = rf.make_conv_out_spatial_dims(
-                description_prefix="pool",
                 in_spatial_dims=in_spatial_dims,
                 filter_size=pool_size,
                 strides=strides,
@@ -1239,7 +1422,7 @@ class TorchBackend(Backend[torch.Tensor]):
             )
         else:
             raise ValueError(f"invalid number of filter dims {in_spatial_dims}, expected 1, 2, or 3")
-        out = Tensor("conv", dims=batch_dims + list(out_spatial_dims), dtype=source.dtype)
+        out = Tensor("pool", dims=batch_dims + list(out_spatial_dims), dtype=source.dtype)
         out.raw_tensor = torch.reshape(out_raw, [d.get_dim_value() for d in out.dims])
         if source.feature_dim and source.feature_dim in out.dims:
             out.feature_dim = source.feature_dim
@@ -1328,6 +1511,12 @@ class TorchBackend(Backend[torch.Tensor]):
         :return: Tuple consisting of two elements: the result as a :class:`Tensor`
             and the new state as a :class:`State` (different from the previous one).
         """
+        squeeze_spatial_dim = False
+        if spatial_dim == single_step_dim:
+            spatial_dim = Dim(1, name="dummy-spatial-dim-single-step")
+            source = source.copy_add_dim_by_tag(spatial_dim, unbroadcast=True, axis=0)
+            squeeze_spatial_dim = True
+
         # The order in the parameters for lstm_params is specified as follows:
         # Feed-forward has priority over recurrent, and weights have priority over biases: (w_ih, w_hh, b_ih, b_hh).
         # See https://github.com/pytorch/pytorch/blob/c263bd43/torch/nn/modules/rnn.py#L107.
@@ -1429,4 +1618,39 @@ class TorchBackend(Backend[torch.Tensor]):
         new_state_c.raw_tensor = new_state_c_raw
         new_state_c.feature_dim = out_dim
 
+        if squeeze_spatial_dim:
+            out = out.copy_squeeze_axes([out.get_axis_from_description(spatial_dim)])
+
         return out, (new_state_h, new_state_c)
+
+    TensorArrayType = List[Tensor]
+
+    @staticmethod
+    def tensor_array_unstack(tensor: Tensor, *, axis: Dim) -> TensorArrayType:
+        """unstack"""
+        axis_int = tensor.get_axis_from_description(axis)
+        out_tensors_raw = torch.unbind(tensor.raw_tensor, dim=axis_int)
+        out_tensor_template = tensor.copy_template().copy_template_excluding_axis(axis_int)
+        out_tensors = []
+        for out_tensor_raw in out_tensors_raw:
+            out_tensor = out_tensor_template.copy_template()
+            out_tensor.raw_tensor = out_tensor_raw
+            out_tensors.append(out_tensor)
+        return out_tensors
+
+    @staticmethod
+    def tensor_array_stack(tensor_array: TensorArrayType, *, axis: Dim, tensor_template: Tensor) -> Tensor:
+        """stack"""
+        if tensor_array:
+            # In the actual array, the tensors might be a better template (different dim order).
+            # We already checked in TensorArray that they are compatible.
+            tensor_template = tensor_array[0].copy_template()
+        out_tensor = tensor_template.copy_add_dim_by_tag(axis, unbroadcast=True, axis=0)
+        if not tensor_array:
+            return rf.zeros_like(out_tensor)
+        tensor_array_raw = [
+            tensor.copy_compatible_to(tensor_template, add_dims=False).raw_tensor for tensor in tensor_array
+        ]
+        out_tensor_raw = torch.stack(tensor_array_raw, dim=0)
+        out_tensor.raw_tensor = out_tensor_raw
+        return out_tensor
