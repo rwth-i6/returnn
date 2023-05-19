@@ -80,12 +80,14 @@ class Engine(EngineBase):
             if isinstance(dtype, str):
                 dtype = getattr(torch, dtype)
             assert isinstance(dtype, torch.dtype) or dtype is None
+            print(f"Using autocast (automatic mixed precision (AMP)) with dtype {dtype}", file=log.v2)
             self._autocast_dtype = dtype
 
         if grad_scaler_opts is None:
             grad_scaler_opts = self.config.typed_value("grad_scaler")
         if grad_scaler_opts is not None:
             assert isinstance(grad_scaler_opts, dict)
+            print("Using GradScaler with options:", grad_scaler_opts, file=log.v2)
             self._grad_scaler = amp.GradScaler(**grad_scaler_opts)
 
     def init_train_from_config(
