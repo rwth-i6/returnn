@@ -164,6 +164,9 @@ def main():
         pt_model_fwd.eval()
 
     model_outputs_dict = config.typed_value("model_outputs")
+    assert (
+        model_outputs_dict is not None
+    ), "The specified config needs to have explicit model outputs. Please define `model_outputs` in your config."
     model_outputs = TensorDict()
     model_outputs.update(model_outputs_dict, auto_convert=True)
     model_outputs_raw_keys = []
