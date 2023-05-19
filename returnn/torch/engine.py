@@ -272,13 +272,6 @@ class Engine(EngineBase):
 
             step_idx += 1
             self.global_train_step += 1
-            # if self._use_DDP:
-            #     print("step idx {} rank {} encoder.layers.10.fc2.weight {}".format(self.global_train_step,
-            #                                                                        torch.distributed.get_rank(), torch.sum(
-            #             self._pt_model.state_dict()["module.encoder.layers.10.fc2.weight"])))
-            # else:
-            #     print("step idx {} encoder.layers.10.fc2.weight {}".format(self.global_train_step,torch.sum(
-            #             self._pt_model.state_dict()["encoder.layers.10.fc2.weight"])))
 
         print("Trained %i steps" % step_idx)
         print("Elapsed time %s" % hms(time.time() - epoch_start_time), file=log.v3)
@@ -432,8 +425,8 @@ class Engine(EngineBase):
         sentinel_kw = {"__fwd_compatible_random_arg_%i" % int(random() * 100): None}
 
         if self._use_DDP:
-            # run step for DDP wrapped model
-            # the code is copied from forward method in DDP class
+            # the original (unwrapped) module is passed to the train step, therefore here we set up the right context
+            # as what DistributedDataParallel.forward does internally
             if torch.is_grad_enabled() and self._pt_model.require_backward_grad_sync:
                 assert self._pt_model.logger is not None
                 self._pt_model.logger.set_runtime_stats_and_log()
@@ -469,7 +462,7 @@ class Engine(EngineBase):
                 with self._pt_model._inside_ddp_forward():
                     with autocast(device_type=self._device,
                                   dtype=self._autocast_dtype) if self._use_autocast else nullcontext():
-                        # If flag use_DDP is enabled, we need to return the model output in the train step function
+                        # If the flag use_DDP is enabled, we need to return the forward output in the train step function
                         output = self._train_step_func(model=self._orig_model, extern_data=extern_data, **sentinel_kw)
 
                 if self._pt_model._check_sync_bufs_post_fwd():
