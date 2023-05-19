@@ -1267,11 +1267,14 @@ class TorchBackend(Backend[torch.Tensor]):
         batch_dims = [d for d in source.dims if d not in (in_dim,) + tuple(in_spatial_dims)]
         # Torch conv expects (N,C,<spatial dims>) as shape.
         source = source.copy_transpose(batch_dims + [in_dim] + list(in_spatial_dims))
-        src_raw = torch.reshape(
-            source.raw_tensor,
-            # potentially merge batch dims all together
-            [-1, in_dim.get_dim_value()] + [d.get_dim_value() for d in in_spatial_dims],
-        )
+        if len(batch_dims) == 1:
+            src_raw = source.raw_tensor
+        else:
+            src_raw = torch.reshape(
+                source.raw_tensor,
+                # potentially merge batch dims all together
+                [-1, in_dim.get_dim_value()] + [d.get_dim_value() for d in in_spatial_dims],
+            )
         use_striding = strides and (strides > 1 if isinstance(strides, int) else any(s > 1 for s in strides))
         if padding == "same" and not use_striding and all(d.dimension % 2 == 1 for d in filter_size):
             if all(filter_size[0].dimension == d.dimension for d in filter_size):  # all same
@@ -1355,7 +1358,10 @@ class TorchBackend(Backend[torch.Tensor]):
         else:
             raise ValueError(f"invalid number of filter dims {filter_size}, expected 1, 2, or 3")
         out = Tensor("conv", dims=batch_dims + [out_dim] + list(out_spatial_dims), dtype=source.dtype)
-        out.raw_tensor = torch.reshape(out_raw, [d.get_dim_value() for d in out.dims])
+        if len(batch_dims) == 1:
+            out.raw_tensor = out_raw
+        else:
+            out.raw_tensor = torch.reshape(out_raw, [d.get_dim_value() for d in out.dims])
         out.feature_dim = out_dim
         return out, out_spatial_dims
 
