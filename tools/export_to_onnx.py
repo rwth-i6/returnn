@@ -174,7 +174,14 @@ def main():
         model_outputs_raw_keys.append(k)
         for i, dim in enumerate(v.dims):
             if dim.is_batch_dim() or dim.is_dynamic():
-                model_outputs_raw_keys.append(f"{k}:size{i}")
+                # For PyTorch we usually don't have the output dimensions as Dim
+                # classes available in the final tensor, so we can't call
+                # mark_as_default_output(shape=(batch_dim, ...)).
+                # These dimensions are automatically instantiated to actual values when
+                # the output tensor is passed as parameter to mark_as_default_output
+                # without any shape. Therefore, we don't add these to the output.
+                if is_rf_module:
+                    model_outputs_raw_keys.append(f"{k}:size{i}")
 
     dynamic_axes = {}
     for k, v in list(extern_data.data.items()) + list(model_outputs.data.items()):
