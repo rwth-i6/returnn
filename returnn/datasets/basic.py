@@ -245,9 +245,10 @@ class Dataset(object):
 
             if returnn.tf.horovod.get_ctx().is_dataset_distribution_random_seed_offset():
                 return returnn.tf.horovod.get_ctx().rank() * 16127
-        
+
         if config.is_true("use_DDP"):
             import torch.distributed as dist
+
             return dist.get_rank() * 16127
         return 0
 

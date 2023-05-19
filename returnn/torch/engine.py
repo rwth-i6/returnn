@@ -114,9 +114,9 @@ class Engine(EngineBase):
         assert config is self.config
         super().init_train_from_config(config=config)
         if self._use_DDP:
-            ddp_local_rank = int(os.environ['LOCAL_RANK'])
+            ddp_local_rank = int(os.environ["LOCAL_RANK"])
             print(f"Start running basic DDP example on local rank {ddp_local_rank}.", file=log.v2)
-            self._device = f'cuda:{ddp_local_rank}'
+            self._device = f"cuda:{ddp_local_rank}"
 
         self.train_dataset = train_data
         self.eval_datasets.clear()
@@ -145,8 +145,11 @@ class Engine(EngineBase):
 
         if self._use_DDP:
             # wrap the model use DDP
-            self._pt_model = DDP(self._pt_model, device_ids=[int(os.environ['LOCAL_RANK'])],
-                                 find_unused_parameters=self._DDP_find_unused_parameters)
+            self._pt_model = DDP(
+                self._pt_model,
+                device_ids=[int(os.environ["LOCAL_RANK"])],
+                find_unused_parameters=self._DDP_find_unused_parameters,
+            )
         self._updater = Updater(self.config, self._pt_model, self.learning_rate)
         self._updater.create_optimizer()
         if self._start_epoch > 1:
@@ -211,9 +214,7 @@ class Engine(EngineBase):
             if self._use_DDP:
                 # use all reduce to check if all workers have data, if at least one worker does not have data,
                 # all workers finish this epoch
-                torch.distributed.all_reduce(
-                    _has_data, op=torch.distributed.ReduceOp.MIN
-                )
+                torch.distributed.all_reduce(_has_data, op=torch.distributed.ReduceOp.MIN)
             if not _has_data[0]:
                 break
 
@@ -242,7 +243,8 @@ class Engine(EngineBase):
             )
 
             if self._use_DDP and (step_idx % self._gradient_accumulation_steps) != (
-                self._gradient_accumulation_steps - 1):
+                self._gradient_accumulation_steps - 1
+            ):
                 with self._pt_model.no_sync():
                     if self._grad_scaler is not None:
                         self._grad_scaler.scale(total_loss).backward()
@@ -433,9 +435,7 @@ class Engine(EngineBase):
                 self._pt_model.num_iterations += 1
                 self._pt_model.reducer.prepare_for_forward()
 
-            with torch.autograd.profiler.record_function(
-                "DistributedDataParallel.forward"
-            ):
+            with torch.autograd.profiler.record_function("DistributedDataParallel.forward"):
                 if torch.is_grad_enabled() and self._pt_model.require_backward_grad_sync:
                     assert self._pt_model.logger is not None
                     self._pt_model.logger.set_runtime_stats_and_log()
@@ -456,12 +456,11 @@ class Engine(EngineBase):
 
                 if self._pt_model._join_config.enable:
                     # Notify joined ranks whether they should sync in backwards pass or not.
-                    self._pt_model._check_global_requires_backward_grad_sync(
-                        is_joined_rank=False
-                    )
+                    self._pt_model._check_global_requires_backward_grad_sync(is_joined_rank=False)
                 with self._pt_model._inside_ddp_forward():
-                    with autocast(device_type=self._device,
-                                  dtype=self._autocast_dtype) if self._use_autocast else nullcontext():
+                    with autocast(
+                        device_type=self._device, dtype=self._autocast_dtype
+                    ) if self._use_autocast else nullcontext():
                         # If the flag use_DDP is enabled, we need to return the forward output in the train step function
                         output = self._train_step_func(model=self._orig_model, extern_data=extern_data, **sentinel_kw)
 
@@ -485,8 +484,9 @@ class Engine(EngineBase):
                 else:
                     self._pt_model.require_forward_param_sync = False
         else:
-            with autocast(device_type=self._device,
-                          dtype=self._autocast_dtype) if self._use_autocast else nullcontext():
+            with autocast(
+                device_type=self._device, dtype=self._autocast_dtype
+            ) if self._use_autocast else nullcontext():
                 self._train_step_func(model=self._orig_model, extern_data=extern_data, **sentinel_kw)
 
     def _load_model(self, *, epoch: int):
@@ -508,7 +508,7 @@ class Engine(EngineBase):
 
         # See :mod:`rf.rand` docstring for an explanation of this logic.
         random_seed = self.config.int("random_seed", 42)
-        random_seed = (epoch * 193939 + step * 19937 + random_seed * 27644437 + 479001599) % (2 ** 31)
+        random_seed = (epoch * 193939 + step * 19937 + random_seed * 27644437 + 479001599) % (2**31)
         rf.set_random_seed(random_seed)
 
         get_model_func = self.config.typed_value("get_model")
@@ -527,9 +527,7 @@ class Engine(EngineBase):
 
         if checkpoint_state is not None:
             # remove the prefix of "module." from the DDP state dict
-            torch.nn.modules.utils.consume_prefix_in_state_dict_if_present(
-                checkpoint_state["model"], "module."
-            )
+            torch.nn.modules.utils.consume_prefix_in_state_dict_if_present(checkpoint_state["model"], "module.")
             self._pt_model.load_state_dict(checkpoint_state["model"])
         preload_from_files = self.config.typed_value("preload_from_files", {})
         if preload_from_files:

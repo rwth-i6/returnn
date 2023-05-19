@@ -192,12 +192,12 @@ class Log:
                 fn_ext = ".horovod-%i-%i%s" % (hvd.rank(), hvd.size(), fn_ext)
                 new_logs.append(fn_prefix + fn_ext)
             logs = new_logs
-        
+
         if config.is_true("use_DDP"):
             new_logs = []
             for fn in logs:
                 fn_prefix, fn_ext = os.path.splitext(fn)
-                fn_ext = ".nccl-%i-%i%s" % (int(os.environ['LOCAL_RANK']), int(os.environ['WORLD_SIZE']), fn_ext)
+                fn_ext = ".nccl-%i-%i%s" % (int(os.environ["LOCAL_RANK"]), int(os.environ["WORLD_SIZE"]), fn_ext)
                 new_logs.append(fn_prefix + fn_ext)
             logs = new_logs
 
