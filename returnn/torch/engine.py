@@ -22,6 +22,7 @@ from returnn.tensor import TensorDict, Tensor
 from returnn.datasets.basic import init_dataset, Dataset
 from returnn.util import basic as util
 from returnn.util import NumbersDict
+from returnn.util.basic import NotSpecified
 from .updater import Updater
 from .data import pipeline as data_pipeline
 from .data import returnn_dataset_wrapper
@@ -64,10 +65,9 @@ class Engine(EngineBase):
         print("Using device:", self._device, file=log.v2)
 
         amp_options = self.config.typed_value("torch_amp")
-        grad_scaler_opts = None
+        grad_scaler_opts = self.config.typed_value("grad_scaler", NotSpecified)
         if amp_options is not None:
             self._use_autocast = True
-            grad_scaler_opts = {}
             if isinstance(amp_options, dict):
                 amp_options = util.CollectionReadCheckCovered(amp_options)
                 dtype = amp_options.get("dtype", None)
@@ -83,8 +83,8 @@ class Engine(EngineBase):
             print(f"Using autocast (automatic mixed precision (AMP)) with dtype {dtype}", file=log.v2)
             self._autocast_dtype = dtype
 
-        if grad_scaler_opts is None:
-            grad_scaler_opts = self.config.typed_value("grad_scaler")
+        if grad_scaler_opts is NotSpecified:
+            grad_scaler_opts = {} if self._use_autocast else None
         if grad_scaler_opts is not None:
             assert isinstance(grad_scaler_opts, dict)
             print("Using GradScaler with options:", grad_scaler_opts, file=log.v2)
