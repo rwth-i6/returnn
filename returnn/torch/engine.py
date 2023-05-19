@@ -62,6 +62,7 @@ class Engine(EngineBase):
         print("Using device:", self._device, file=log.v2)
 
         self._use_DDP = config.is_true("use_DDP")  # type: Optional[bool]
+        #  traversing the autograd graph from the model output and marking all unused parameters as ready for reduction
         self._DDP_find_unused_parameters = config.is_true("DDP_find_unused_parameters")  # type: Optional[bool]
 
     def init_train_from_config(
@@ -111,7 +112,8 @@ class Engine(EngineBase):
 
         if self._use_DDP:
             # wrap the model use DDP
-            self._pt_model = DDP(self._pt_model, device_ids=[int(os.environ['LOCAL_RANK'])],  find_unused_parameters=self._DDP_find_unused_parameters)
+            self._pt_model = DDP(self._pt_model, device_ids=[int(os.environ['LOCAL_RANK'])],
+                                 find_unused_parameters=self._DDP_find_unused_parameters)
         self._updater = Updater(self.config, self._pt_model, self.learning_rate)
         self._updater.create_optimizer()
         if self._start_epoch > 1:
@@ -173,25 +175,21 @@ class Engine(EngineBase):
         while True:
             data = next(data_iter, None)
             _has_data = torch.tensor([data is not None], dtype=torch.int8).to(self._device)
-            # use all reduce to check if all workers have data, if at least one worker does not have data,
-            # all workers finish this epoch
-            torch.distributed.all_reduce(
-                _has_data, op=torch.distributed.ReduceOp.MIN
-            )
+            if self._use_DDP:
+                # use all reduce to check if all workers have data, if at least one worker does not have data,
+                # all workers finish this epoch
+                torch.distributed.all_reduce(
+                    _has_data, op=torch.distributed.ReduceOp.MIN
+                )
             if not _has_data[0]:
                 break
-
-            # in DDP training we only need to sync gradients at the last micro step.
-            if self._use_DDP:
-                self._pt_model.require_backward_grad_sync = (
-                        step_idx % self._gradient_accumulation_steps == self._gradient_accumulation_steps - 1)
 
             self._run_step(data, train_flag=True)
 
             train_ctx = rf.get_run_ctx()
 
             # scale the loss to account for gradient accumulation
-            if self._use_DDP and self._gradient_accumulation_steps > 1:
+            if self._gradient_accumulation_steps > 1:
                 for loss_name in train_ctx.losses.keys():
                     train_ctx.losses[loss_name].loss /= self._gradient_accumulation_steps
 
@@ -208,11 +206,15 @@ class Engine(EngineBase):
             # clear the gradients when every gradient accumulation loop starts
             if step_idx % self._gradient_accumulation_steps == 0:
                 self._updater.get_optimizer().zero_grad()
-            total_loss.raw_tensor.backward()
+
+            if self._use_DDP and (step_idx % self._gradient_accumulation_steps) != (self._gradient_accumulation_steps - 1):
+                with self._pt_model.no_sync():
+                    total_loss.raw_tensor.backward()
+            else:
+                total_loss.raw_tensor.backward()
+
             # only update the weights when every gradient accumulation loop ends
-            if not self._use_DDP:
-                self._updater.get_optimizer().step()
-            elif self._pt_model.require_backward_grad_sync:
+            if (step_idx % self._gradient_accumulation_steps) == (self._gradient_accumulation_steps - 1):
                 self._updater.get_optimizer().step()
 
             accumulated_losses_dict += losses_dict
@@ -225,11 +227,17 @@ class Engine(EngineBase):
 
             step_idx += 1
             self.global_train_step += 1
-            print("step idx {} rank {} encoder.layers.10.fc2.weight {}".format(self.global_train_step, torch.distributed.get_rank(), torch.sum(self._pt_model.state_dict()["module.encoder.layers.10.fc2.weight"])))
+            if self._use_DDP:
+                print("step idx {} rank {} encoder.layers.10.fc2.weight {}".format(self.global_train_step,
+                                                                                   torch.distributed.get_rank(), torch.sum(
+                        self._pt_model.state_dict()["module.encoder.layers.10.fc2.weight"])))
+            else:
+                print("step idx {} encoder.layers.10.fc2.weight {}".format(self.global_train_step,torch.sum(
+                        self._pt_model.state_dict()["encoder.layers.10.fc2.weight"])))
 
 
         print("Trained %i steps" % step_idx)
-        print("Elapsed time %s" % hms(time.time() - epoch_start_time))
+        print("Elapsed time %s" % hms(time.time() - epoch_start_time), file=log.v3)
 
         if (not self._use_DDP) or (self._use_DDP and torch.distributed.get_rank() == 0):
             accumulated_losses_dict = accumulated_losses_dict / accumulated_inv_norm_factors_dict
@@ -245,7 +253,6 @@ class Engine(EngineBase):
                 self._save_optimizer()
 
             self.eval_model()
-
 
     def eval_model(self):
         """
@@ -439,8 +446,6 @@ class Engine(EngineBase):
                     self._pt_model.require_forward_param_sync = False
         else:
             self._train_step_func(model=self._orig_model, extern_data=extern_data, **sentinel_kw)
-
-
 
     def _load_model(self, *, epoch: int):
         """
