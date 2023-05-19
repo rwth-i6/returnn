@@ -6,7 +6,7 @@ Some helper utils.
 from __future__ import annotations
 from typing import Optional, Union, Dict
 import numpy
-from returnn.tensor import Tensor, Dim, TensorDict
+from returnn.tensor import Tensor, Dim, TensorDict, batch_dim
 
 
 def tensor_dict_fill_random_numpy_(
@@ -54,6 +54,8 @@ def tensor_fill_random_numpy_(
         for dim in x.dims:
             if dim.is_batch_dim() and not dim.dyn_size_ext:
                 dim.dyn_size_ext = Tensor("batch", [], dtype="int32")
+            if dim.is_dynamic() and not dim.dyn_size_ext:
+                dim.dyn_size_ext = Tensor(dim.name or "time", dims=[batch_dim], dtype="int32")
             if not dim.dyn_size_ext:
                 continue
             if tensor_fill_random_numpy_(
