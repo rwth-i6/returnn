@@ -1,7 +1,5 @@
 numpy
 h5py
 typing
-# Nest alternative: https://github.com/rwth-i6/returnn/issues/1314
-# This is currently only used by returnn.frontend,
-# not needed otherwise.
+# Nest alternative, provides `tree`: https://github.com/rwth-i6/returnn/issues/1314
 dm-tree
