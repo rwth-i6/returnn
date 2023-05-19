@@ -1271,6 +1271,11 @@ class TorchBackend(Backend[torch.Tensor]):
             [-1, in_dim.get_dim_value()] + [d.get_dim_value() for d in in_spatial_dims],
         )
         use_striding = strides and (strides > 1 if isinstance(strides, int) else any(s > 1 for s in strides))
+        if padding == "same" and not use_striding and all(d.dimension % 2 == 1 for d in filter_size):
+            if all(filter_size[0].dimension == d.dimension for d in filter_size):  # all same
+                padding = (filter_size[0].dimension - 1) // 2
+            else:
+                padding = tuple(d.dimension // 2 for d in filter_size)
         if padding == "same" and (use_striding or torch.onnx.is_in_onnx_export()):
             # padding='same' is not supported for strided convolutions.
             # Moreover, padding specified as a string isn't supported for ONNX exporting as of 2023/05/19.
