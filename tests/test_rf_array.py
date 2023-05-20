@@ -224,3 +224,22 @@ def test_shift_right():
         out.mark_as_default_output(shape=(batch_dim, time_dim))
 
     run_model(extern_data, lambda *, epoch, step: _Net(), _forward_step)
+
+
+def test_where():
+    time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
+    in_dim = Dim(7, name="in")
+    extern_data = TensorDict(
+        {
+            "cond": Tensor("cond", [batch_dim, time_dim], dtype="bool"),
+            "true": Tensor("true", [batch_dim, time_dim, in_dim], dtype="float32"),
+            "false": Tensor("false", [batch_dim, in_dim], dtype="float32"),
+        }
+    )
+
+    # noinspection PyShadowingNames,PyUnusedLocal
+    def _forward_step(*, model: rf.Module, extern_data: TensorDict):
+        out = rf.where(extern_data["cond"], extern_data["true"], extern_data["false"])
+        out.mark_as_default_output(shape=(batch_dim, time_dim, in_dim))
+
+    run_model(extern_data, lambda *, epoch, step: rf.Module(), _forward_step)

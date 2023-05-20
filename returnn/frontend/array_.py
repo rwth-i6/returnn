@@ -31,6 +31,7 @@ __all__ = [
     "gather",
     "slice",
     "shift_right",
+    "where",
 ]
 
 
@@ -490,3 +491,19 @@ def shift_right(source: Tensor, *, axis: Dim, pad_value: Union[rf.RawTensorTypes
     padded, (padded_dim,) = rf.pad(source, axes=[axis], padding=[(amount, 0)], mode="constant", value=pad_value)
     padded_slice, _ = rf.slice(padded, axis=padded_dim, size=axis)
     return padded_slice
+
+
+def where(
+    cond: Tensor,
+    true_: Union[Tensor, rf.RawTensorTypes],
+    false_: Union[Tensor, rf.RawTensorTypes],
+    *,
+    allow_broadcast_all_sources: bool = False,
+) -> Tensor:
+    """
+    Wraps tf.where, which is SwitchLayer in RETURNN.
+
+    :return: true_ if cond else false_, elemwise.
+    """
+    # noinspection PyProtectedMember
+    return cond._raw_backend.where(cond, true_, false_, allow_broadcast_all_sources=allow_broadcast_all_sources)

@@ -101,6 +101,8 @@ def tensor_fill_random_numpy_(
             if x.sparse_dim and x.sparse_dim.dimension is not None:
                 max_val = x.sparse_dim.dimension
             x.raw_tensor = rnd.randint(min_val, max_val, size=shape, dtype=x.dtype)
+        elif x.dtype == "bool":
+            x.raw_tensor = rnd.randint(0, 2, size=shape, dtype=x.dtype)
         elif x.dtype.startswith("float"):
             x.raw_tensor = rnd.normal(0.0, 1.0, size=shape).astype(x.dtype)
         elif x.dtype.startswith("complex"):

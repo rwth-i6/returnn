@@ -789,6 +789,26 @@ class TorchBackend(Backend[torch.Tensor]):
         return out
 
     @staticmethod
+    def where(
+        cond: Tensor,
+        true_: Union[Tensor, rf.RawTensorTypes],
+        false_: Union[Tensor, rf.RawTensorTypes],
+        *,
+        allow_broadcast_all_sources: bool = False,
+    ) -> Tensor:
+        """where"""
+        true_ = rf.convert_to_tensor(true_, _backend=TorchBackend)
+        false_ = rf.convert_to_tensor(false_, _backend=TorchBackend)
+        out = Tensor.get_common_data([true_, false_, cond], allow_broadcast_all_sources=allow_broadcast_all_sources)
+        out.dtype = true_.dtype
+        out.sparse_dim = true_.sparse_dim
+        cond_bc = cond.copy_compatible_to(out, check_dtype=False, check_sparse=False)
+        true_bc = true_.copy_compatible_to(out, check_dtype=False, check_sparse=False)
+        false_bc = false_.copy_compatible_to(out, check_dtype=False, check_sparse=False)
+        out.raw_tensor = torch.where(cond_bc.raw_tensor, true_bc.raw_tensor, false_bc.raw_tensor)
+        return out
+
+    @staticmethod
     def matmul(a: _TT, b: _TT, *, reduce: Union[Dim, Sequence[Dim]], use_mask: bool = True) -> _TT:
         """
         batched matmul of a and b, see base class doc string
