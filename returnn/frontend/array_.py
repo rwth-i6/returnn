@@ -512,7 +512,11 @@ def where(
 
 
 def sparse_to_dense(
-    source: Tensor, *, label_value: Union[Tensor, rf.RawTensorTypes], other_value: Union[Tensor, rf.RawTensorTypes]
+    labels: Union[Tensor, rf.RawTensorTypes],
+    *,
+    label_value: Union[Tensor, rf.RawTensorTypes],
+    other_value: Union[Tensor, rf.RawTensorTypes],
+    axis: Optional[Dim] = None,
 ) -> Tensor:
     """
     Converts a sparse tensor to a dense one.
@@ -522,10 +526,12 @@ def sparse_to_dense(
     Note that usually this is not needed as most other functions should handle sparse tensors just fine
     and much more efficiently than they would be with dense tensors.
     """
-    assert source.sparse_dim
-    axis = source.sparse_dim
+    labels = rf.convert_to_tensor(labels)
+    if not axis:
+        assert labels.sparse_dim, "sparse_to_dense: either provide `axis` or `labels` with sparse_dim"
+        axis = labels.sparse_dim
     indices = rf.range_over_dim(axis)
-    return where(rf.compare_bc(source, "==", indices), label_value, other_value)
+    return where(rf.compare_bc(labels, "==", indices), label_value, other_value)
 
 
 def one_hot(source: Tensor) -> Tensor:
