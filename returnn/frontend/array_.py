@@ -32,6 +32,8 @@ __all__ = [
     "slice",
     "shift_right",
     "where",
+    "sparse_to_dense",
+    "one_hot",
 ]
 
 
@@ -507,3 +509,30 @@ def where(
     """
     # noinspection PyProtectedMember
     return cond._raw_backend.where(cond, true_, false_, allow_broadcast_all_sources=allow_broadcast_all_sources)
+
+
+def sparse_to_dense(
+    source: Tensor, *, label_value: Union[Tensor, rf.RawTensorTypes], other_value: Union[Tensor, rf.RawTensorTypes]
+) -> Tensor:
+    """
+    Converts a sparse tensor to a dense one.
+
+    This is a more generic variant of "one_hot".
+
+    Note that usually this is not needed as most other functions should handle sparse tensors just fine
+    and much more efficiently than they would be with dense tensors.
+    """
+    assert source.sparse_dim
+    axis = source.sparse_dim
+    indices = rf.range_over_dim(axis)
+    return where(rf.compare_bc(source, "==", indices), label_value, other_value)
+
+
+def one_hot(source: Tensor) -> Tensor:
+    """
+    one_hot. special case of :func:`sparse_to_dense`.
+
+    Note that usually this is not needed as most other functions should handle sparse tensors just fine
+    and much more efficiently than they would be with dense tensors.
+    """
+    return sparse_to_dense(source, label_value=1.0, other_value=0.0)
