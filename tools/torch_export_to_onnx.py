@@ -174,10 +174,12 @@ def main():
         model.load_state_dict(loaded_checkpoint["model"])
         model.eval()
         pt_model_fwd = ForwardModulePT(model, forward_step_func, extern_data)
-    else:
+    elif is_rf_module:
         pt_model_fwd = ForwardModuleRF(model, forward_step_func, extern_data)
         pt_model_fwd.load_state_dict(loaded_checkpoint["model"])
         pt_model_fwd.eval()
+    else:
+        assert False, "PT/RF module?"  # should not get here
 
     dynamic_axes = {}
     for k, v in list(extern_data.data.items()) + list(model_outputs.data.items()):
