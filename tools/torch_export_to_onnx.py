@@ -127,7 +127,21 @@ def main():
     args = parser.parse_args()
 
     init(config_filename=args.config, checkpoint=args.checkpoint, log_verbosity=args.verbosity, device=args.device)
-    rf.init_forward_step_run_ctx()
+
+    model_outputs_dict = config.typed_value("model_outputs")
+    assert (
+        model_outputs_dict is not None
+    ), "The specified config needs to have explicit model outputs. Please define `model_outputs` in your config."
+    model_outputs = TensorDict()
+    model_outputs.update(model_outputs_dict, auto_convert=True)
+    model_outputs_raw_keys = []
+    for k, v in model_outputs.data.items():
+        model_outputs_raw_keys.append(k)
+        for i, dim in enumerate(v.dims):
+            if dim.is_batch_dim() or dim.is_dynamic():
+                model_outputs_raw_keys.append(f"{k}:size{i}")
+
+    rf.init_forward_step_run_ctx(expected_outputs=model_outputs_raw_keys)
     rf.set_random_seed(42)
 
     get_model_func = config.typed_value("get_model")
@@ -162,19 +176,6 @@ def main():
         pt_model_fwd = ForwardModuleRF(model, forward_step_func, extern_data)
         pt_model_fwd.load_state_dict(loaded_checkpoint["model"])
         pt_model_fwd.eval()
-
-    model_outputs_dict = config.typed_value("model_outputs")
-    assert (
-        model_outputs_dict is not None
-    ), "The specified config needs to have explicit model outputs. Please define `model_outputs` in your config."
-    model_outputs = TensorDict()
-    model_outputs.update(model_outputs_dict, auto_convert=True)
-    model_outputs_raw_keys = []
-    for k, v in model_outputs.data.items():
-        model_outputs_raw_keys.append(k)
-        for i, dim in enumerate(v.dims):
-            if dim.is_batch_dim() or dim.is_dynamic():
-                model_outputs_raw_keys.append(f"{k}:size{i}")
 
     dynamic_axes = {}
     for k, v in list(extern_data.data.items()) + list(model_outputs.data.items()):

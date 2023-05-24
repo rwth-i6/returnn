@@ -7,7 +7,7 @@ or forwarding loop.
 """
 
 from __future__ import annotations
-from typing import Optional, Union, Any, Sequence, Dict
+from typing import Optional, Union, Any, Sequence, Dict, List
 from dataclasses import dataclass
 from returnn.tensor import Tensor, Dim, TensorDict
 import returnn.frontend as rf
@@ -37,12 +37,12 @@ def init_train_step_run_ctx(*, train_flag: Union[bool, Tensor]):
     _run_ctx = RunCtx(stage="train_step", train_flag=train_flag)
 
 
-def init_forward_step_run_ctx():
+def init_forward_step_run_ctx(expected_outputs: Optional[List[str]] = None):
     """
     Call this at the beginning of a new forward step.
     """
     global _run_ctx
-    _run_ctx = RunCtx(stage="forward_step")
+    _run_ctx = RunCtx(stage="forward_step", expected_outputs=expected_outputs)
 
 
 def get_run_ctx() -> RunCtx:
@@ -67,7 +67,9 @@ class RunCtx:
     In forwarding, we expect that some output is being defined via mark_as_output().
     """
 
-    def __init__(self, *, stage: str, train_flag: Union[bool, Tensor] = False):
+    def __init__(
+        self, *, stage: str, train_flag: Union[bool, Tensor] = False, expected_outputs: Optional[List[str]] = None
+    ):
         """
         :param stage:
             - "init"
@@ -78,6 +80,7 @@ class RunCtx:
         self._train_flag = train_flag
         self.losses = {}  # type: Dict[str, Loss]
         self.outputs = TensorDict()
+        self.expected_outputs = expected_outputs
 
     @property
     def stage(self) -> str:
@@ -190,6 +193,14 @@ class RunCtx:
         tensor = tensor.copy_transpose(dims, allow_int=False)
         tensor = tensor.copy(name=name)
         self.outputs.data[name] = tensor
+
+        # Sanity check: expected outputs should coincide with raw keys of output, including output sizes.
+        if self.expected_outputs is not None:
+            raw_outputs = self.outputs.as_raw_tensor_dict()
+            for k in self.expected_outputs:
+                assert (
+                    k in raw_outputs.keys()
+                ), f"Expected model output '{k}' not found in actual model output keys {list(raw_outputs.keys())}"
 
     def mark_as_default_output(self, tensor: Union[Tensor, Any], *, shape: Optional[Sequence[Dim]] = None) -> None:
         """
