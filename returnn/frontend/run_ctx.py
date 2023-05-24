@@ -193,7 +193,7 @@ class RunCtx:
                 expected_output.dims == dims
             ), f"mark_as_output: {name!r} dims mismatch from expected output, given {dims}, expected {expected_output}"
 
-        else:  # tensor is not Tensor
+        if not isinstance(tensor, Tensor):
             assert isinstance(tensor, _backend.global_backend.RawTensorType)
             tensor = rf.convert_to_tensor(tensor, dims=dims)
             # In case it was not specified, just accept whatever order we got.
