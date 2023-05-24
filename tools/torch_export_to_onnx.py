@@ -118,7 +118,9 @@ def main():
     """
     parser = argparse.ArgumentParser(description="Converts a RF/PT module to ONNX.")
     parser.add_argument(
-        "config", type=str, help="Filename to config file. Must have get_model(). Can optionally have export()."
+        "config",
+        type=str,
+        help="Filename to config file. Must have `get_model()` and `forward_step()`. Can optionally have `export()`.",
     )
     parser.add_argument("checkpoint", type=str, help="Checkpoint to RF module, considering the backend.")
     parser.add_argument("out_onnx_filename", type=str, help="Filename of the final ONNX model.")
