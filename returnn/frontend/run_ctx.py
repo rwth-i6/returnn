@@ -7,7 +7,7 @@ or forwarding loop.
 """
 
 from __future__ import annotations
-from typing import Optional, Union, Any, Sequence, Dict, List
+from typing import Optional, Union, Any, Sequence, Dict
 from dataclasses import dataclass
 from returnn.tensor import Tensor, Dim, TensorDict
 import returnn.frontend as rf
@@ -37,7 +37,7 @@ def init_train_step_run_ctx(*, train_flag: Union[bool, Tensor]):
     _run_ctx = RunCtx(stage="train_step", train_flag=train_flag)
 
 
-def init_forward_step_run_ctx(expected_outputs: Optional[List[str]] = None):
+def init_forward_step_run_ctx(expected_outputs: Optional[TensorDict] = None):
     """
     Call this at the beginning of a new forward step.
     """
@@ -68,7 +68,7 @@ class RunCtx:
     """
 
     def __init__(
-        self, *, stage: str, train_flag: Union[bool, Tensor] = False, expected_outputs: Optional[List[str]] = None
+        self, *, stage: str, train_flag: Union[bool, Tensor] = False, expected_outputs: Optional[TensorDict] = None
     ):
         """
         :param stage:
@@ -180,27 +180,47 @@ class RunCtx:
             If not specified, we try to infer BTF or BF as default, if that works, otherwise it will be an error.
         """
         assert self.stage == "forward_step"
-        if not isinstance(tensor, Tensor):
+
+        if self.expected_outputs is not None:
+            assert (
+                name in self.expected_outputs.data
+            ), f"mark_as_output: unexpected output {name!r}, we expect outputs: {self.expected_outputs}"
+        expected_output = self.expected_outputs.data[name] if self.expected_outputs else None
+        if dims is None and expected_output:
+            dims = expected_output.dims
+        if dims is not None and expected_output:
+            assert (
+                expected_output.dims == dims
+            ), f"mark_as_output: {name!r} dims mismatch from expected output, given {dims}, expected {expected_output}"
+
+        else:  # tensor is not Tensor
             assert isinstance(tensor, _backend.global_backend.RawTensorType)
             tensor = rf.convert_to_tensor(tensor, dims=dims)
             # In case it was not specified, just accept whatever order we got.
             dims = tensor.dims
-        assert name not in self.outputs.data
+
         if dims is None:
             # We try some reasonable defaults, specifically: BTF or BF.
             dims = _default_dim_order(tensor)
         assert set(dims) == set(tensor.dims), f"mark_as_output: tensor {tensor} does not have the dims {dims}"
         tensor = tensor.copy_transpose(dims, allow_int=False)
         tensor = tensor.copy(name=name)
+        assert name not in self.outputs.data
         self.outputs.data[name] = tensor
 
-        # Sanity check: expected outputs should coincide with raw keys of output, including output sizes.
-        if self.expected_outputs is not None:
-            raw_outputs = self.outputs.as_raw_tensor_dict()
-            for k in self.expected_outputs:
-                assert (
-                    k in raw_outputs.keys()
-                ), f"Expected model output '{k}' not found in actual model output keys {list(raw_outputs.keys())}"
+        if expected_output:  # Sanity checks for expected output
+            assert expected_output.dims == tensor.dims, (
+                f"mark_as_output: {name!r} dims mismatch from expected output,"
+                f" given {dims}, expected {expected_output}"
+            )
+            assert expected_output.dtype == tensor.dtype, (
+                f"mark_as_output: {name!r} dtype mismatch from expected output,"
+                f" given {tensor.dtype}, expected {expected_output.dtype}"
+            )
+            assert expected_output.sparse_dim == tensor.sparse_dim, (
+                f"mark_as_output: {name!r} sparse_dim mismatch from expected output,"
+                f" given {tensor.sparse_dim}, expected {expected_output.sparse_dim}"
+            )
 
     def mark_as_default_output(self, tensor: Union[Tensor, Any], *, shape: Optional[Sequence[Dim]] = None) -> None:
         """

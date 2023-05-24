@@ -143,7 +143,7 @@ def main():
             if dim.is_batch_dim() or dim.is_dynamic():
                 model_outputs_raw_keys.append(f"{k}:size{i}")
 
-    rf.init_forward_step_run_ctx(expected_outputs=model_outputs_raw_keys)
+    rf.init_forward_step_run_ctx(expected_outputs=model_outputs)
     rf.set_random_seed(42)
 
     get_model_func = config.typed_value("get_model")
