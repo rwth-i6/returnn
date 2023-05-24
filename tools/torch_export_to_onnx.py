@@ -83,6 +83,7 @@ class ForwardModulePT(torch.nn.Module):
         extern_data = self.extern_data.copy_template()
         extern_data.assign_from_raw_tensor_dict_(data)
         self.forward_step_func(model=self.model, extern_data=extern_data)
+        rf.get_run_ctx().check_outputs_complete()
         return rf.get_run_ctx().outputs.as_raw_tensor_dict()
 
 
@@ -109,6 +110,7 @@ class ForwardModuleRF(_RFModuleAsPTModule):
         extern_data = self.extern_data.copy_template()
         extern_data.assign_from_raw_tensor_dict_(data)
         self.forward_step_func(model=self.rf_module, extern_data=extern_data)
+        rf.get_run_ctx().check_outputs_complete()
         return rf.get_run_ctx().outputs.as_raw_tensor_dict()
 
 

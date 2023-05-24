@@ -234,6 +234,17 @@ class RunCtx:
         """
         self.mark_as_output(tensor, "output", dims=shape)
 
+    def check_outputs_complete(self):
+        """
+        If expected outputs are given, check that all expected outputs are present.
+        """
+        if self.expected_outputs:
+            assert set(self.expected_outputs.data.keys()) == set(self.outputs.data.keys()), (
+                f"check_outputs_complete: expected outputs {self.expected_outputs} do not match"
+                f" actual outputs {self.outputs}"
+            )
+            # We don't need to check the dims, dtype, etc, as this is already done in mark_as_output.
+
     def total_loss(self) -> Union[Tensor, float]:
         """
         :return: total loss, as it is used for backpropagation
