@@ -18,7 +18,6 @@ __license__ = "RWTHOCR"
 __maintainer__ = "Patrick Doetsch"
 __email__ = "doetsch@i6.informatik.rwth-aachen.de"
 
-
 import os
 import sys
 import time
@@ -334,11 +333,16 @@ def init_backend_engine():
 
             returnn.tf.distributed.init_distributed_tf(config)
     elif BackendEngine.is_torch_selected():
-        if config.is_true("use_DDP"):
-            # initializes the distributed backend which will take care of sychronizing nodes/GPUs
-            from torch.distributed import init_process_group
+        if config.typed_value("torch_distributed") is not None:
+            import socket
+            import returnn.torch.distributed
+            torch_distributed = returnn.torch.distributed.get_ctx(config=config)
+            print(
+                "Torch: Hostname %s, pid %i, using GPU %s."
+                % (socket.gethostname(), os.getpid(), str(torch_distributed.local_rank())),
+                file=log.v3,
+            )
 
-            init_process_group("nccl")
         print("PyTorch:", util.describe_torch_version(), file=log.v3)
     else:
         raise NotImplementedError
@@ -504,12 +508,12 @@ def execute_main_task():
         engine.init_network_from_config(config)
         engine.web_server(port=config.int("web_server_port", 12380))
     elif task.startswith("config:"):
-        action = config.typed_dict[task[len("config:") :]]
+        action = config.typed_dict[task[len("config:"):]]
         print("Task: %r" % action, file=log.v1)
         assert callable(action)
         action()
     elif task.startswith("optional-config:"):
-        action = config.typed_dict.get(task[len("optional-config:") :], None)
+        action = config.typed_dict.get(task[len("optional-config:"):], None)
         if action is None:
             print("No task found for %r, so just quitting." % task, file=log.v1)
         else:

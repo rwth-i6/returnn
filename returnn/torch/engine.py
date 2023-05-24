@@ -68,9 +68,15 @@ class Engine(EngineBase):
         self._device = _get_device_from_config(config)
         print("Using device:", self._device, file=log.v2)
 
-        self._use_DDP = config.is_true("use_DDP")  # type: Optional[bool]
-        #  traversing the autograd graph from the model output and marking all unused parameters as ready for reduction
-        self._DDP_find_unused_parameters = config.is_true("DDP_find_unused_parameters")  # type: Optional[bool]
+        self._use_torch_distributed = False
+        self._torch_distributed_class = None # type: Optional[Callable]
+        self._torch_distributed_options = None  # type: Optional[dict]
+
+        torch_distributed = config.typed_value("torch_distributed")
+        if torch_distributed is not None:
+            self._use_torch_distributed = True
+            self._torch_distributed_class = torch_distributed.get("class", None)
+            self._torch_distributed_options = torch_distributed.get("options", None)
 
         amp_options = self.config.typed_value("torch_amp")
         grad_scaler_opts = self.config.typed_value("grad_scaler", NotSpecified)
@@ -113,10 +119,12 @@ class Engine(EngineBase):
         """
         assert config is self.config
         super().init_train_from_config(config=config)
-        if self._use_DDP:
-            ddp_local_rank = int(os.environ["LOCAL_RANK"])
-            print(f"Start running basic DDP example on local rank {ddp_local_rank}.", file=log.v2)
-            self._device = f"cuda:{ddp_local_rank}"
+        if self._use_torch_distributed:
+            import returnn.torch.distributed
+            torch_distributed = returnn.torch.distributed.get_ctx(config=config)
+            local_rank = torch_distributed.local_rank()
+            print(f"Start running basic DDP example on local rank {local_rank}.", file=log.v2)
+            self._device = f"cuda:{local_rank}"
 
         self.train_dataset = train_data
         self.eval_datasets.clear()
@@ -143,12 +151,12 @@ class Engine(EngineBase):
         self._load_model(epoch=self._start_epoch)
         self._save_model_epoch_interval = config.int("save_interval", 1)
 
-        if self._use_DDP:
+        if self._use_torch_distributed:
             # wrap the model use DDP
-            self._pt_model = DDP(
+            self._pt_model = self._torch_distributed_class(
                 self._pt_model,
-                device_ids=[int(os.environ["LOCAL_RANK"])],
-                find_unused_parameters=self._DDP_find_unused_parameters,
+                device_ids=[self._device],
+                **self._torch_distributed_options
             )
         self._updater = Updater(self.config, self._pt_model, self.learning_rate)
         self._updater.create_optimizer()
@@ -158,10 +166,7 @@ class Engine(EngineBase):
         self._train_step_func = self.config.typed_value("train_step")
         assert self._train_step_func, "train_step not defined"
 
-        self._gradient_accumulation_steps = config.int("gradient_accumulation_steps", 1)
-        if self._gradient_accumulation_steps > 1:
-            assert self._gradient_accumulation_steps % torch.cuda.device_count() == 0
-            self._gradient_accumulation_steps //= torch.cuda.device_count()
+        self._accum_grad_multiple_step = config.int("accum_grad_multiple_step", 1)
 
     def train(self):
         """
@@ -180,7 +185,7 @@ class Engine(EngineBase):
             self.epoch += 1
             self._epoch_mp_shared.value = self.epoch
 
-        if self._use_DDP:
+        if self._use_torch_distributed:
             destroy_process_group()
         print("Finished training at epoch {}.".format(self.epoch), file=log.v3)
 
@@ -211,7 +216,7 @@ class Engine(EngineBase):
         while True:
             data = next(data_iter, None)
             _has_data = torch.tensor([data is not None], dtype=torch.int8).to(self._device)
-            if self._use_DDP:
+            if self._use_torch_distributed:
                 # use all reduce to check if all workers have data, if at least one worker does not have data,
                 # all workers finish this epoch
                 torch.distributed.all_reduce(_has_data, op=torch.distributed.ReduceOp.MIN)
@@ -219,7 +224,7 @@ class Engine(EngineBase):
                 break
 
             # clear the gradients when every gradient accumulation loop starts
-            if step_idx % self._gradient_accumulation_steps == 0:
+            if step_idx % self._accum_grad_multiple_step == 0:
                 self._updater.get_optimizer().zero_grad()
 
             self._run_step(data, train_flag=True)
@@ -227,9 +232,9 @@ class Engine(EngineBase):
             train_ctx = rf.get_run_ctx()
 
             # scale the loss to account for gradient accumulation
-            if self._gradient_accumulation_steps > 1:
+            if self._accum_grad_multiple_step > 1:
                 for loss_name in train_ctx.losses.keys():
-                    train_ctx.losses[loss_name].loss /= self._gradient_accumulation_steps
+                    train_ctx.losses[loss_name].loss /= self._accum_grad_multiple_step
 
             total_loss = train_ctx.total_loss()
             losses_dict = NumbersDict(
@@ -242,8 +247,8 @@ class Engine(EngineBase):
                 {name: float(_to_raw(loss.get_inv_norm_factor())) for name, loss in train_ctx.losses.items()}
             )
 
-            if self._use_DDP and (step_idx % self._gradient_accumulation_steps) != (
-                self._gradient_accumulation_steps - 1
+            if self._use_torch_distributed and (step_idx % self._accum_grad_multiple_step) != (
+                self._accum_grad_multiple_step - 1
             ):
                 with self._pt_model.no_sync():
                     if self._grad_scaler is not None:
@@ -257,7 +262,7 @@ class Engine(EngineBase):
                     total_loss.raw_tensor.backward()
 
             # only update the weights when every gradient accumulation loop ends
-            if (step_idx % self._gradient_accumulation_steps) == (self._gradient_accumulation_steps - 1):
+            if (step_idx % self._accum_grad_multiple_step) == (self._accum_grad_multiple_step - 1):
                 if self._grad_scaler is not None:
                     self._grad_scaler.step(self._updater.get_optimizer())
                     self._grad_scaler.update()
@@ -274,11 +279,20 @@ class Engine(EngineBase):
 
             step_idx += 1
             self.global_train_step += 1
+            if self._use_torch_distributed:
+                print("step idx {} rank {} encoder.layers.10.fc2.weight {}".format(self.global_train_step,
+                                                                                   torch.distributed.get_rank(),
+                                                                                   torch.sum(
+                                                                                       self._pt_model.state_dict()[
+                                                                                           "module.encoder.layers.10.fc2.weight"])))
+            else:
+                print("step idx {} encoder.layers.10.fc2.weight {}".format(self.global_train_step, torch.sum(
+                    self._pt_model.state_dict()["encoder.layers.10.fc2.weight"])))
 
         print("Trained %i steps" % step_idx)
         print("Elapsed time %s" % hms(time.time() - epoch_start_time), file=log.v3)
 
-        if (not self._use_DDP) or (self._use_DDP and torch.distributed.get_rank() == 0):
+        if (not self._use_torch_distributed) or (self._use_torch_distributed and torch.distributed.get_rank() == 0):
             accumulated_losses_dict = accumulated_losses_dict / accumulated_inv_norm_factors_dict
             self.learning_rate_control.set_epoch_error(
                 self.epoch, {f"train_loss_{k}": v for k, v in accumulated_losses_dict.items()}
@@ -426,68 +440,22 @@ class Engine(EngineBase):
 
         sentinel_kw = {"__fwd_compatible_random_arg_%i" % int(random() * 100): None}
 
-        if self._use_DDP:
-            # the original (unwrapped) module is passed to the train step, therefore here we set up the right context
-            # as what DistributedDataParallel.forward does internally
-            if torch.is_grad_enabled() and self._pt_model.require_backward_grad_sync:
-                assert self._pt_model.logger is not None
-                self._pt_model.logger.set_runtime_stats_and_log()
-                self._pt_model.num_iterations += 1
-                self._pt_model.reducer.prepare_for_forward()
-
-            with torch.autograd.profiler.record_function("DistributedDataParallel.forward"):
-                if torch.is_grad_enabled() and self._pt_model.require_backward_grad_sync:
-                    assert self._pt_model.logger is not None
-                    self._pt_model.logger.set_runtime_stats_and_log()
-                    self._pt_model.num_iterations += 1
-                    self._pt_model.reducer.prepare_for_forward()
-
-                work = Join.notify_join_context(self._pt_model)
-                if work:
-                    self._pt_model.reducer._set_forward_pass_work_handle(
-                        work, self._pt_model._divide_by_initial_world_size  # type: ignore[arg-type]
-                    )
-
-                if torch.is_grad_enabled() and self._pt_model.reducer._rebuild_buckets():
-                    self._pt_model._has_rebuilt_buckets = True
-
-                if self._pt_model._check_sync_bufs_pre_fwd():
-                    self._pt_model._sync_buffers()
-
-                if self._pt_model._join_config.enable:
-                    # Notify joined ranks whether they should sync in backwards pass or not.
-                    self._pt_model._check_global_requires_backward_grad_sync(is_joined_rank=False)
-                with self._pt_model._inside_ddp_forward():
-                    with autocast(
-                        device_type=self._device, dtype=self._autocast_dtype
-                    ) if self._use_autocast else nullcontext():
-                        # If the flag use_DDP is enabled, we need to return the forward output in the train step function
-                        output = self._train_step_func(model=self._orig_model, extern_data=extern_data, **sentinel_kw)
-
-                if self._pt_model._check_sync_bufs_post_fwd():
-                    self._pt_model._sync_buffers()
-
-                if torch.is_grad_enabled() and self._pt_model.require_backward_grad_sync:
-                    self._pt_model.require_forward_param_sync = True
-                    # We'll return the output object verbatim since it is a freeform
-                    # object. We need to find any tensors in this object, though,
-                    # because we need to figure out which parameters were used during
-                    # this forward pass, to ensure we short circuit reduction for any
-                    # unused parameters. Only if `find_unused_parameters` is set.
-                    if self._pt_model.find_unused_parameters and not self._pt_model.static_graph:
-                        # Do not need to populate this for static graph.
-                        self._pt_model.reducer.prepare_for_backward(
-                            list(torch.nn.parallel.distributed._find_tensors(output))
-                        )
-                    else:
-                        self._pt_model.reducer.prepare_for_backward([])
-                else:
-                    self._pt_model.require_forward_param_sync = False
-        else:
-            with autocast(
-                device_type=self._device, dtype=self._autocast_dtype
-            ) if self._use_autocast else nullcontext():
+        with autocast(
+            device_type=self._device, dtype=self._autocast_dtype
+        ) if self._use_autocast else nullcontext():
+            if not self._use_torch_distributed:
                 self._train_step_func(model=self._orig_model, extern_data=extern_data, **sentinel_kw)
+            else:
+                if isinstance(self._pt_model, DDP):
+                    args = {
+                        'extern_data': extern_data,
+                        'sentinel_kw': sentinel_kw,
+                        'orig_model': self._orig_model,
+                        'pt_model': self._pt_model,
+                        'train_step_func': self._train_step_func
+                    }
+                    import returnn.torch.distributed
+                    returnn.torch.distributed.DDP_pre_forward_context_helper(**args)
 
     def _load_model(self, *, epoch: int):
         """
