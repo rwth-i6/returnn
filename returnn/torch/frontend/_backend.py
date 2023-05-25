@@ -703,7 +703,6 @@ class TorchBackend(Backend[torch.Tensor]):
             )
         else:
             raise TypeError(f"Unsupported type for indices: {type(indices)}")
-        assert axis not in indices.dims
         axis_int = source.get_axis_from_description(axis, allow_int=False)
         if clip_to_valid:
             indices = indices.copy()
@@ -713,17 +712,17 @@ class TorchBackend(Backend[torch.Tensor]):
                     indices.dims_set
                 ), f"gather with clip_to_valid: indices ({indices}) dims must be a superset of {dim} dyn-size"
                 size = dim.dyn_size_ext.copy_compatible_to(indices)
-                indices.raw_tensor = torch.clamp(indices.raw_tensor, 0, size.raw_tensor - 1)
+                indices.raw_tensor = torch.clamp(indices.raw_tensor, torch.tensor(0), size.raw_tensor - 1)
             else:
                 indices.raw_tensor = torch.clamp(indices.raw_tensor, 0, source.raw_tensor.shape[axis_int] - 1)
-        index_own_dims = [dim for dim in indices.dims if dim not in source.dims]
+        index_own_dims = [dim for dim in indices.dims if dim not in source.dims or dim == axis]
         out = Tensor(
             "gather",
             dims=list(source.dims[:axis_int]) + index_own_dims + list(source.dims[axis_int + 1 :]),
             dtype=source.dtype,
             sparse_dim=source.sparse_dim,
         )
-        if indices.dims_set.intersection(source.dims_set):
+        if indices.dims_set.intersection(source.dims_set - {axis}):
             # We cannot use index_select in this case. Need to fallback to gather.
             indices = indices.copy_compatible_to(out, check_dtype=False, check_sparse=False, unbroadcast=True)
             if len(index_own_dims) == 1:
