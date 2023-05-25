@@ -31,6 +31,7 @@ __all__ = [
     "gather",
     "slice",
     "shift_right",
+    "reverse_sequence",
     "where",
     "sparse_to_dense",
     "one_hot",
@@ -493,6 +494,18 @@ def shift_right(source: Tensor, *, axis: Dim, pad_value: Union[rf.RawTensorTypes
     padded, (padded_dim,) = rf.pad(source, axes=[axis], padding=[(amount, 0)], mode="constant", value=pad_value)
     padded_slice, _ = rf.slice(padded, axis=padded_dim, size=axis)
     return padded_slice
+
+
+def reverse_sequence(tensor: Tensor, *, axis: Dim) -> Tensor:
+    """
+    Similar as tf.reverse_sequence, or Torch flip (but taking seq lengths into account).
+
+    :param tensor:
+    :param axis:
+    :return: reversed tensor, same dims
+    """
+    indices = rf.combine_bc(axis.get_size_tensor(), "-", rf.range_over_dim(axis)) - 1
+    return rf.gather(tensor, indices=indices, axis=axis, clip_to_valid=True)
 
 
 def where(
