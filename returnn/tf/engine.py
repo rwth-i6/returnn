@@ -2962,7 +2962,7 @@ class Engine(EngineBase):
                 self.seq_len += seq_len
 
         accumulator = Accumulator()
-        batch_size = config.int("batch_size", 1)
+        batch_size = config.typed_value("batch_size", default=1)
         max_seqs = config.int("max_seqs", -1)
         epoch = config.int("epoch", 1)
         max_seq_length = config.float("max_seq_length", 0)
