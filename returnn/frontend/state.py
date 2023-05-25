@@ -4,7 +4,7 @@ Recurrent state
 
 from __future__ import annotations
 from typing import Union, Any, List, Set
-import collections
+from collections.abc import Iterable
 from returnn.tensor import Tensor
 
 
@@ -43,7 +43,7 @@ class State(dict):
             assert len(args) == 1
             if isinstance(args[0], dict):
                 super().__init__(**args[0])
-            elif isinstance(args[0], collections.Iterable):
+            elif isinstance(args[0], Iterable):
                 super().__init__(args[0])
             else:
                 super().__init__(state=args[0])
