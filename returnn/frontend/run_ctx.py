@@ -233,7 +233,7 @@ class RunCtx:
                     f"expected {expected_dim}, got {actual_dim}"
                 )
                 if expected_dim.dyn_size_ext and expected_dim.dyn_size_ext.raw_tensor is None:
-                    if len(expected_dim.dyn_size_ext.shape) == 0:
+                    if expected_dim.dyn_size_ext.batch_ndim == 0:
                         # Automatically infer the expected dim from the actual output
                         expected_dim.dyn_size_ext.raw_tensor = backend.get_shape_tuple_raw(tensor.raw_tensor)[axis]
                     else:
