@@ -209,10 +209,40 @@ class RunCtx:
         self.outputs.data[name] = tensor
 
         if expected_output:  # Sanity checks for expected output
-            assert expected_output.dims == tensor.dims, (
-                f"mark_as_output: {name!r} dims mismatch from expected output,"
-                f" given {dims}, expected {expected_output}"
+            # The dimensions of `expected_output` and `tensor` should match, but we can't
+            # directly check for expected_output.dims == tensor.dims because we try to estimate
+            # `expected_output` before actually running the model, and we might not know
+            # the values of some dimensions, specifically the dynamic dims.
+            # Therefore, we do a more thorough check, and infer the values
+            # from the actual dynamic dims to the expected dynamic dims if possible.
+            assert len(expected_output.dims) == len(tensor.dims), (
+                f"mark_as_output: lengths of expected output {expected_output.dims}"
+                f" and actual output {tensor.dims} don't match."
             )
+            for axis, (expected_dim, actual_dim) in enumerate(zip(expected_output.dims, tensor.dims)):
+                if not expected_dim.is_dim_known():
+                    # The only way in which an expected dimension doesn't have
+                    # an actual value in advance is when it's dynamic.
+                    assert actual_dim.is_dynamic(), (
+                        f"mark_as_output: expected dimension {expected_dim} has unknown size."
+                        f" Expected matching actual dimension to be dynamic, but got {actual_dim}."
+                    )
+                else:
+                    if expected_dim != actual_dim:
+                        # Overtake the actual dimension
+                        expected_dim.declare_same_as(actual_dim)
+                    if expected_dim.is_dynamic() and expected_dim.dyn_size_ext is not None:
+                        assert actual_dim.is_dynamic()
+                        if len(expected_dim.dyn_size_ext.shape) == 0:
+                            # Automatically infer the expected dim from the actual output
+                            expected_dim.dyn_size_ext.raw_tensor = _backend.global_backend.fill_raw(
+                                value=_backend.global_backend.get_shape_tuple_raw(tensor)[axis], shape=[]
+                            )
+                        else:
+                            assert expected_dim.dyn_size_ext.raw_tensor is not None, (
+                                f"mark_as_output: expected dynamic size of {expected_dim}"
+                                "to have any value, but got None."
+                            )
             assert expected_output.dtype == tensor.dtype, (
                 f"mark_as_output: {name!r} dtype mismatch from expected output,"
                 f" given {tensor.dtype}, expected {expected_output.dtype}"
