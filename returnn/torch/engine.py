@@ -231,7 +231,6 @@ class Engine(EngineBase):
 
             step_begin_time = time.time()
             self._run_step(data, train_flag=True)
-            elapsed_computation_time += time.time() - step_begin_time
 
             train_ctx = rf.get_run_ctx()
 
@@ -272,6 +271,8 @@ class Engine(EngineBase):
                     self._grad_scaler.update()
                 else:
                     self._updater.get_optimizer().step()
+
+            elapsed_computation_time += time.time() - step_begin_time
 
             accumulated_losses_dict += losses_dict
             accumulated_inv_norm_factors_dict += inv_norm_factors_dict
