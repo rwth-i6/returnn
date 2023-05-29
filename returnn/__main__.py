@@ -18,6 +18,7 @@ __license__ = "RWTHOCR"
 __maintainer__ = "Patrick Doetsch"
 __email__ = "doetsch@i6.informatik.rwth-aachen.de"
 
+
 import os
 import sys
 import time
