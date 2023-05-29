@@ -336,6 +336,7 @@ def init_backend_engine():
         if config.typed_value("torch_distributed") is not None:
             import socket
             import returnn.torch.distributed
+
             torch_distributed = returnn.torch.distributed.get_ctx(config=config)
             print(
                 "Torch: Hostname %s, pid %i, using GPU %s."
@@ -508,12 +509,12 @@ def execute_main_task():
         engine.init_network_from_config(config)
         engine.web_server(port=config.int("web_server_port", 12380))
     elif task.startswith("config:"):
-        action = config.typed_dict[task[len("config:"):]]
+        action = config.typed_dict[task[len("config:") :]]
         print("Task: %r" % action, file=log.v1)
         assert callable(action)
         action()
     elif task.startswith("optional-config:"):
-        action = config.typed_dict.get(task[len("optional-config:"):], None)
+        action = config.typed_dict.get(task[len("optional-config:") :], None)
         if action is None:
             print("No task found for %r, so just quitting." % task, file=log.v1)
         else:

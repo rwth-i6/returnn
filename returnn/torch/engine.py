@@ -69,7 +69,7 @@ class Engine(EngineBase):
         print("Using device:", self._device, file=log.v2)
 
         self._use_torch_distributed = False
-        self._torch_distributed_class = None # type: Optional[Callable]
+        self._torch_distributed_class = None  # type: Optional[Callable]
         self._torch_distributed_options = None  # type: Optional[dict]
 
         torch_distributed = config.typed_value("torch_distributed")
@@ -121,6 +121,7 @@ class Engine(EngineBase):
         super().init_train_from_config(config=config)
         if self._use_torch_distributed:
             import returnn.torch.distributed
+
             torch_distributed = returnn.torch.distributed.get_ctx(config=config)
             local_rank = torch_distributed.local_rank()
             print(f"Start running basic DDP example on local rank {local_rank}.", file=log.v2)
@@ -152,13 +153,13 @@ class Engine(EngineBase):
         self._save_model_epoch_interval = config.int("save_interval", 1)
 
         if self._use_torch_distributed:
-            # wrap the model use DDP
-            self._pt_model = self._torch_distributed_class(
-                self._pt_model,
-                device_ids=[self._device],
-                **self._torch_distributed_options
+            # wrap the model use torch distributed class
+            self._ddp_pt_model = self._torch_distributed_class(
+                self._pt_model, device_ids=[int(os.environ["LOCAL_RANK"])], **self._torch_distributed_options
             )
-        self._updater = Updater(self.config, self._pt_model, self.learning_rate)
+            self._updater = Updater(self.config, self._ddp_pt_model, self.learning_rate)
+        else:
+            self._updater = Updater(self.config, self._pt_model, self.learning_rate)
         self._updater.create_optimizer()
         if self._start_epoch > 1:
             self._load_optimizer(self._start_epoch)
@@ -212,6 +213,7 @@ class Engine(EngineBase):
         epoch_start_time = time.time()
 
         data_iter = iter(self._train_dataloader)
+        elapsed_computation_time = 0
 
         while True:
             data = next(data_iter, None)
@@ -227,7 +229,9 @@ class Engine(EngineBase):
             if step_idx % self._accum_grad_multiple_step == 0:
                 self._updater.get_optimizer().zero_grad()
 
+            step_begin_time = time.time()
             self._run_step(data, train_flag=True)
+            elapsed_computation_time += time.time() - step_begin_time
 
             train_ctx = rf.get_run_ctx()
 
@@ -250,7 +254,7 @@ class Engine(EngineBase):
             if self._use_torch_distributed and (step_idx % self._accum_grad_multiple_step) != (
                 self._accum_grad_multiple_step - 1
             ):
-                with self._pt_model.no_sync():
+                with self._ddp_pt_model.no_sync():
                     if self._grad_scaler is not None:
                         self._grad_scaler.scale(total_loss).backward()
                     else:
@@ -279,18 +283,14 @@ class Engine(EngineBase):
 
             step_idx += 1
             self.global_train_step += 1
-            if self._use_torch_distributed:
-                print("step idx {} rank {} encoder.layers.10.fc2.weight {}".format(self.global_train_step,
-                                                                                   torch.distributed.get_rank(),
-                                                                                   torch.sum(
-                                                                                       self._pt_model.state_dict()[
-                                                                                           "module.encoder.layers.10.fc2.weight"])))
-            else:
-                print("step idx {} encoder.layers.10.fc2.weight {}".format(self.global_train_step, torch.sum(
-                    self._pt_model.state_dict()["encoder.layers.10.fc2.weight"])))
 
-        print("Trained %i steps" % step_idx)
-        print("Elapsed time %s" % hms(time.time() - epoch_start_time), file=log.v3)
+        elapsed = time.time() - epoch_start_time
+        elapsed_computation_percentage = elapsed_computation_time / elapsed
+        print(
+            "Trained %i steps, %s elapsed (%.1f%% computing time)"
+            % (step_idx, hms(elapsed), (elapsed_computation_percentage * 100.0)),
+            file=log.v3,
+        )
 
         if (not self._use_torch_distributed) or (self._use_torch_distributed and torch.distributed.get_rank() == 0):
             accumulated_losses_dict = accumulated_losses_dict / accumulated_inv_norm_factors_dict
@@ -440,22 +440,14 @@ class Engine(EngineBase):
 
         sentinel_kw = {"__fwd_compatible_random_arg_%i" % int(random() * 100): None}
 
+        from returnn.torch.distributed import _ddp_ctx
+
         with autocast(
             device_type=self._device, dtype=self._autocast_dtype
-        ) if self._use_autocast else nullcontext():
-            if not self._use_torch_distributed:
-                self._train_step_func(model=self._orig_model, extern_data=extern_data, **sentinel_kw)
-            else:
-                if isinstance(self._pt_model, DDP):
-                    args = {
-                        'extern_data': extern_data,
-                        'sentinel_kw': sentinel_kw,
-                        'orig_model': self._orig_model,
-                        'pt_model': self._pt_model,
-                        'train_step_func': self._train_step_func
-                    }
-                    import returnn.torch.distributed
-                    returnn.torch.distributed.DDP_pre_forward_context_helper(**args)
+        ) if self._use_autocast else nullcontext(), _ddp_ctx(pt_model=self._ddp_pt_model) if isinstance(
+            self._ddp_pt_model, DDP
+        ) else nullcontext():
+            self._train_step_func(model=self._orig_model, extern_data=extern_data, **sentinel_kw)
 
     def _load_model(self, *, epoch: int):
         """
@@ -494,8 +486,6 @@ class Engine(EngineBase):
         print("Model:", self._pt_model, file=log.v4)
 
         if checkpoint_state is not None:
-            # remove the prefix of "module." from the DDP state dict
-            torch.nn.modules.utils.consume_prefix_in_state_dict_if_present(checkpoint_state["model"], "module.")
             self._pt_model.load_state_dict(checkpoint_state["model"])
         preload_from_files = self.config.typed_value("preload_from_files", {})
         if preload_from_files:
