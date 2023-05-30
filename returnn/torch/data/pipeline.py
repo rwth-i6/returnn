@@ -19,7 +19,7 @@ other PyTorch datasets more directly, including also HuggingFace datasets.
 """
 
 from __future__ import annotations
-from typing import List, Dict
+from typing import Union, List, Dict
 import sys
 from copy import deepcopy
 
@@ -30,7 +30,7 @@ import torch.utils.data
 from returnn.util.basic import NumbersDict
 
 
-def create_tensor(array: numpy.ndarray) -> torch.Tensor:
+def create_tensor(array: numpy.ndarray) -> Union[torch.Tensor, numpy.ndarray]:
     """
     Adjust non-supported dtypes
 
@@ -38,12 +38,14 @@ def create_tensor(array: numpy.ndarray) -> torch.Tensor:
     """
     # The only supported PyTorch dtypes are:
     # float64, float32, float16, complex64, complex128, int64, int32, int16, int8, uint8, and bool.
+    if array.dtype.kind == "U":  # string (unicode)
+        return array  # keep as-is. e.g. seq_tag
     if array.dtype == numpy.uint32:
         array = numpy.asarray(array, dtype=numpy.int64)
     return torch.tensor(array)
 
 
-def collate_batch(batch: List[Dict[str, numpy.ndarray]]) -> Dict[str, torch.Tensor]:
+def collate_batch(batch: List[Dict[str, numpy.ndarray]]) -> Dict[str, Union[torch.Tensor, numpy.ndarray]]:
     """
     :param batch:
     """
@@ -55,9 +57,15 @@ def collate_batch(batch: List[Dict[str, numpy.ndarray]]) -> Dict[str, torch.Tens
     res = {}
     for key in data_keys:
         ls = [create_tensor(sample[key]) for sample in batch]
-        padded = torch.nn.utils.rnn.pad_sequence(ls, batch_first=True, padding_value=0)
-        res[key] = padded
-        res["%s:seq_len" % key] = torch.tensor([v.shape[0] for v in ls])
+        if not ls:
+            raise ValueError("batch is empty?")
+        if isinstance(ls[0], torch.Tensor):
+            padded = torch.nn.utils.rnn.pad_sequence(ls, batch_first=True, padding_value=0)
+            res[key] = padded
+            res["%s:seq_len" % key] = torch.tensor([v.shape[0] for v in ls])
+        elif isinstance(ls[0], numpy.ndarray):
+            padded = numpy.stack(ls, axis=0)
+            res[key] = padded
 
     return res
 
@@ -211,7 +219,9 @@ class BatchingIterDataPipe(torch.utils.data.IterDataPipe):
                 current_max_sequence_lengths = NumbersDict(0)
 
             # TODO: This assumes all data has time as first dimension. Currently we can't know better..
-            sequence_lengths = NumbersDict({data_key: data.shape[0] for data_key, data in data_dict.items()})
+            sequence_lengths = NumbersDict(
+                {data_key: data.shape[0] for data_key, data in data_dict.items() if data.shape}
+            )
 
             max_sequence_lengths_if_included = NumbersDict.max([current_max_sequence_lengths, sequence_lengths])
             batch_size_if_included = max_sequence_lengths_if_included * (len(current_batch) + 1)  # including padding
