@@ -7,6 +7,7 @@ from typing import Optional, Union, Callable, Dict
 from contextlib import nullcontext
 
 import os
+import numpy
 import torch
 import torch.utils.data.datapipes as dp
 from torch import autocast
@@ -18,7 +19,7 @@ from returnn.config import Config
 from returnn.log import log
 from returnn.engine.base import EngineBase
 import returnn.frontend as rf
-from returnn.tensor import TensorDict, Tensor
+from returnn.tensor import TensorDict, Tensor, Dim
 from returnn.datasets.basic import init_dataset, Dataset
 from returnn.util import basic as util
 from returnn.util import NumbersDict
@@ -118,6 +119,9 @@ class Engine(EngineBase):
         extern_data = TensorDict()
         extern_data_dict = self.config.typed_value("extern_data")
         extern_data.update(extern_data_dict, auto_convert=True)
+        if "seq_tag" not in extern_data.data:
+            batch_dim = _get_batch_dim_from_extern_data(extern_data)
+            extern_data.data["seq_tag"] = Tensor(name="seq_tag", dtype="string", dims=[batch_dim])
         self.extern_data = extern_data
 
         self._train_dataloader = self._create_data_loader(train_data) if train_data else None
@@ -498,20 +502,32 @@ def _raw_dict_to_extern_data(
     :return: tensor dict, like extern_data_template, but with raw tensors set to Torch tensors, on the right device.
     """
     assert isinstance(extern_data_raw, dict) and extern_data_raw
-    batch_dim = next(iter(extern_data_template.data.values())).dims[0]
+    batch_dim = _get_batch_dim_from_extern_data(extern_data_template)
     batch_dim.dyn_size_ext = None  # if it is dynamic, reset now, and set it below
     extern_data = TensorDict()
     for k, data in extern_data_template.data.items():
         data = data.copy_template()
-        raw_tensor = extern_data_raw[k].to(device)
-        data.dtype = str(raw_tensor.dtype).split(".")[-1]  # just overwrite for now...
-        data.raw_tensor = raw_tensor
+        raw_tensor = extern_data_raw[k]
+        if isinstance(raw_tensor, torch.Tensor):
+            data.dtype = str(raw_tensor.dtype).split(".")[-1]  # just overwrite for now...
+            data.raw_tensor = raw_tensor.to(device)
+        elif isinstance(raw_tensor, numpy.ndarray):
+            data.raw_tensor = raw_tensor  # leave it as it is
+        else:
+            raise TypeError(f"Unexpected type {type(raw_tensor)} for {k} in extern_data_raw.")
 
         if batch_dim.size is None and batch_dim.dyn_size_ext is None:
             batch_dim.dyn_size_ext = Tensor(batch_dim.name or "batch", dims=[], dtype="int32")
             batch_dim.dyn_size_ext.raw_tensor = torch.tensor(extern_data_raw[k].shape[0], dtype=torch.int32)
 
-        if k + ":seq_len" in extern_data_raw:
+        # This has certain assumptions on the dataset, the data pipeline and collate_batch.
+        # Namely, we expect that we get the batch dim in the first dim (see collate_batch).
+        # We also expect that the sequence lengths are in the second dim, if it is dynamic.
+        if len(data.dims) >= 2 and data.dims[1].dimension is None:
+            assert k + ":seq_len" in extern_data_raw, (
+                f"extern_data {data}, dyn spatial dim, missing {k}:seq_len in raw dict, "
+                f"check dataset or collate_batch"
+            )
             # Sequence lengths have to be on CPU for the later call to rnn.pack_padded_sequence
             size = extern_data_raw[k + ":seq_len"].cpu()
             size_dtype = str(size.dtype).split(".")[-1]
@@ -523,6 +539,13 @@ def _raw_dict_to_extern_data(
         extern_data.data[k] = data
 
     return extern_data
+
+
+def _get_batch_dim_from_extern_data(extern_data: TensorDict) -> Dim:
+    # We expect that the batch dim is the first dim in any of the tensors.
+    # See collate_batch.
+    batch_dim = next(iter(extern_data.data.values())).dims[0]
+    return batch_dim
 
 
 def _print_process(report_prefix, step, eval_info):

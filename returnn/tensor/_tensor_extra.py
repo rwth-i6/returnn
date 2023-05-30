@@ -330,7 +330,10 @@ class _TensorMixin(_TensorMixinBase):
                         + backend.format_graph_output(self._raw_tensor, max_depth=3)
                     )
             backend.set_known_shape_raw(self._raw_tensor, self.batch_shape)
-            assert backend.get_dtype_name_raw(self._raw_tensor) == self.dtype
+            assert backend.get_dtype_name_raw(self._raw_tensor) == self.dtype, (
+                f"{self} dtype {self.dtype} does not match "
+                f"raw tensor dtype {backend.get_dtype_name_raw(self._raw_tensor)}"
+            )
         if assume_complete:
             for tag in self.dim_tags:
                 if tag.is_batch_dim():

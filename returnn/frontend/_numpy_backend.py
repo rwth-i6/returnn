@@ -27,9 +27,12 @@ class NumpyBackend(Backend[numpy.ndarray]):
     @staticmethod
     def get_dtype_name_raw(raw_tensor: numpy.ndarray) -> str:
         """
-        :return: dtype of raw tensor, as string
+        :return: dtype of raw tensor, as string. e.g. "int64" etc.
         """
-        return raw_tensor.dtype.name
+        dtype_name = raw_tensor.dtype.name
+        if dtype_name.startswith("str"):
+            return "string"  # ignore the bit-length, it supports variable length
+        return dtype_name
 
     @staticmethod
     def as_dtype_raw(dtype_name: str) -> numpy.dtype:
