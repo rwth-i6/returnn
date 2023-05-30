@@ -332,30 +332,9 @@ class Engine(EngineBase):
         """
         :param dict[str, torch.Tensor] extern_data_raw: model inputs for the step
         """
-        assert isinstance(extern_data_raw, dict) and extern_data_raw
-        batch_dim = next(iter(self.extern_data.data.values())).dims[0]
-        batch_dim.dyn_size_ext = None  # if it is dynamic, reset now, and set it below
-        extern_data = TensorDict()
-        for k, data in self.extern_data.data.items():
-            data = data.copy_template()
-            raw_tensor = extern_data_raw[k].to(self._device)
-            data.dtype = str(raw_tensor.dtype).split(".")[-1]  # just overwrite for now...
-            data.raw_tensor = raw_tensor
-
-            if batch_dim.size is None and batch_dim.dyn_size_ext is None:
-                batch_dim.dyn_size_ext = Tensor(batch_dim.name or "batch", dims=[], dtype="int32")
-                batch_dim.dyn_size_ext.raw_tensor = torch.tensor(extern_data_raw[k].shape[0], dtype=torch.int32)
-
-            if k + ":seq_len" in extern_data_raw:
-                # Sequence lengths have to be on CPU for the later call to rnn.pack_padded_sequence
-                size = extern_data_raw[k + ":seq_len"].cpu()
-                size_dtype = str(size.dtype).split(".")[-1]
-                if data.dims[1].dyn_size_ext is None:
-                    data.dims[1].dyn_size_ext = Tensor(data.dims[1].name or "time", dims=[batch_dim], dtype=size_dtype)
-                data.dims[1].dyn_size_ext.dtype = size_dtype
-                data.dims[1].dyn_size_ext.raw_tensor = size
-
-            extern_data.data[k] = data
+        extern_data = _raw_dict_to_extern_data(
+            extern_data_raw, extern_data_template=self.extern_data, device=self._device
+        )
 
         rf.init_train_step_run_ctx(train_flag=train_flag)
 
@@ -507,6 +486,43 @@ def _to_raw(n: Union[int, float, Tensor]):
     if isinstance(n, Tensor):
         return n.raw_tensor.detach().cpu().numpy()
     raise TypeError(f"Unexpected {n} of type {type(n)}")
+
+
+def _raw_dict_to_extern_data(
+    extern_data_raw: Dict[str, torch.Tensor], *, extern_data_template: TensorDict, device: Union[str, torch.device]
+) -> TensorDict:
+    """
+    :param extern_data_raw: This comes out of the DataLoader.
+    :param extern_data_template: Specified via `extern_data` in the config.
+    :param device: E.g. the GPU.
+    :return: tensor dict, like extern_data_template, but with raw tensors set to Torch tensors, on the right device.
+    """
+    assert isinstance(extern_data_raw, dict) and extern_data_raw
+    batch_dim = next(iter(extern_data_template.data.values())).dims[0]
+    batch_dim.dyn_size_ext = None  # if it is dynamic, reset now, and set it below
+    extern_data = TensorDict()
+    for k, data in extern_data_template.data.items():
+        data = data.copy_template()
+        raw_tensor = extern_data_raw[k].to(device)
+        data.dtype = str(raw_tensor.dtype).split(".")[-1]  # just overwrite for now...
+        data.raw_tensor = raw_tensor
+
+        if batch_dim.size is None and batch_dim.dyn_size_ext is None:
+            batch_dim.dyn_size_ext = Tensor(batch_dim.name or "batch", dims=[], dtype="int32")
+            batch_dim.dyn_size_ext.raw_tensor = torch.tensor(extern_data_raw[k].shape[0], dtype=torch.int32)
+
+        if k + ":seq_len" in extern_data_raw:
+            # Sequence lengths have to be on CPU for the later call to rnn.pack_padded_sequence
+            size = extern_data_raw[k + ":seq_len"].cpu()
+            size_dtype = str(size.dtype).split(".")[-1]
+            if data.dims[1].dyn_size_ext is None:
+                data.dims[1].dyn_size_ext = Tensor(data.dims[1].name or "time", dims=[batch_dim], dtype=size_dtype)
+            data.dims[1].dyn_size_ext.dtype = size_dtype
+            data.dims[1].dyn_size_ext.raw_tensor = size
+
+        extern_data.data[k] = data
+
+    return extern_data
 
 
 def _print_process(report_prefix, step, eval_info):
