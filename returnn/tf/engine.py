@@ -37,6 +37,7 @@ from returnn.tf.data_pipeline import FeedDictDataProvider, DatasetDataProvider
 import returnn.tf.horovod as tf_horovod
 import returnn.util.basic as util
 from returnn.util.basic import hms, NumbersDict, BackendEngine, BehaviorVersion
+from returnn.forward_iface import ForwardCallbackIface
 from pprint import pprint
 
 
@@ -2456,6 +2457,11 @@ class Engine(EngineBase):
             forwarder.exit_due_to_error()
 
         writer.close()
+
+    def forward_with_callback(self, *, dataset: Dataset, callback: ForwardCallbackIface):
+        """forward"""
+        # https://github.com/rwth-i6/returnn/issues/1336
+        raise NotImplementedError("TF engine does not support the generic forward func yet...")
 
     # noinspection PyUnusedLocal
     def analyze(self, data, statistics):
