@@ -215,7 +215,12 @@ class Engine(EngineBase):
 
         while True:
             data = next(data_iter, None)
+            # WARNING: torch.distributed works only for the registered device,
+            # as it uses only one mechanism for communication, like NCCL.
+            # This is suboptimal here as we have the roundtrip CPU -> GPU -> NCCL -> GPU -> CPU.
+            # TODO: Use more direct CPU -> Ethernet -> CPU communication.
             _has_data = torch.tensor([data is not None], dtype=torch.int8).to(self._device)
+
             if self._use_torch_distributed:
                 # use all reduce to check if all workers have data, if at least one worker does not have data,
                 # all workers finish this epoch
