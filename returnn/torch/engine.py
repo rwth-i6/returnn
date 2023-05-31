@@ -24,6 +24,8 @@ from returnn.datasets.basic import init_dataset, Dataset
 from returnn.util import basic as util
 from returnn.util import NumbersDict
 from returnn.util.basic import NotSpecified
+from returnn.forward_iface import ForwardCallbackIface
+
 from .updater import Updater
 from .data import pipeline as data_pipeline
 from .data import returnn_dataset_wrapper
@@ -55,6 +57,11 @@ class Engine(EngineBase):
         self._orig_model = None  # type: Optional[Union[rf.Module, torch.nn.Module]]
         self._pt_model = None  # type: Optional[torch.nn.Module]
         self._train_step_func = None  # type: Optional[Callable]
+        self._forward_step_func = self.config.typed_value("forward_step")  # type: Optional[Callable]
+        self._forward_step_expected_outputs = None  # type: Optional[TensorDict]
+        if self.config.typed_value("model_outputs") is not None:
+            self._forward_step_expected_outputs = TensorDict()
+            self._forward_step_expected_outputs.update(self.config.typed_value("model_outputs"), auto_convert=True)
         self._save_model_epoch_interval = 1
         self._updater = None  # type: Optional[Updater]
 
@@ -98,6 +105,7 @@ class Engine(EngineBase):
 
         extern_data = TensorDict()
         extern_data_dict = self.config.typed_value("extern_data")
+        assert extern_data_dict, "extern_data is not specified in config"
         extern_data.update(extern_data_dict, auto_convert=True)
         if "seq_tag" not in extern_data.data:
             batch_dim = _get_batch_dim_from_extern_data(extern_data)
@@ -194,9 +202,12 @@ class Engine(EngineBase):
         accumulated_losses_dict = NumbersDict()
         accumulated_inv_norm_factors_dict = NumbersDict()
         step_idx = 0
-        for data in self._train_dataloader:
+        for extern_data_raw in self._train_dataloader:
             self._updater.get_optimizer().zero_grad()
-            self._run_step(data, train_flag=True)
+            extern_data = _raw_dict_to_extern_data(
+                extern_data_raw, extern_data_template=self.extern_data, device=self._device
+            )
+            self._run_step(extern_data, train_func=True, train_flag=True)
 
             train_ctx = rf.get_run_ctx()
             total_loss = train_ctx.total_loss()
@@ -265,9 +276,12 @@ class Engine(EngineBase):
             step_idx = 0
 
             with torch.no_grad():
-                for data in data_loader:
+                for extern_data_raw in data_loader:
+                    extern_data = _raw_dict_to_extern_data(
+                        extern_data_raw, extern_data_template=self.extern_data, device=self._device
+                    )
 
-                    self._run_step(data)
+                    self._run_step(extern_data, train_func=True)
                     train_ctx = rf.get_run_ctx()
 
                     if score_keys is None:
@@ -345,19 +359,23 @@ class Engine(EngineBase):
                 raise ModuleNotFoundError("Possible type error in DataLoader2 due to missing module 'dill'") from exc
             raise
 
-    def _run_step(self, extern_data_raw: Dict[str, torch.Tensor], *, train_flag: bool = False):
+    def _run_step(self, extern_data: TensorDict, *, train_flag: bool = False, train_func: bool):
         """
-        :param dict[str, torch.Tensor] extern_data_raw: model inputs for the step
+        :param extern_data: model inputs for the step
         """
-        extern_data = _raw_dict_to_extern_data(
-            extern_data_raw, extern_data_template=self.extern_data, device=self._device
-        )
-
-        rf.init_train_step_run_ctx(train_flag=train_flag)
+        if train_func:
+            assert self._train_step_func is not None
+            rf.init_train_step_run_ctx(train_flag=train_flag)
+        else:
+            assert self._forward_step_func is not None, "define forward_step in the config"
+            rf.init_forward_step_run_ctx(expected_outputs=self._forward_step_expected_outputs)
 
         with autocast(device_type=self._device, dtype=self._autocast_dtype) if self._use_autocast else nullcontext():
             sentinel_kw = {"__fwd_compatible_random_arg_%i" % int(random() * 100): None}
-            self._train_step_func(model=self._orig_model, extern_data=extern_data, **sentinel_kw)
+            if train_func:
+                self._train_step_func(model=self._orig_model, extern_data=extern_data, **sentinel_kw)
+            else:
+                self._forward_step_func(model=self._orig_model, extern_data=extern_data, **sentinel_kw)
 
     def _load_model(self):
         """
@@ -393,7 +411,7 @@ class Engine(EngineBase):
         rf.set_random_seed(random_seed)
 
         get_model_func = self.config.typed_value("get_model")
-        assert get_model_func, "get_model not defined"
+        assert get_model_func, "get_model not defined in config"
         sentinel_kw = {"__fwd_compatible_random_arg_%i" % int(random() * 100): None}
         # Note on the `epoch` and `step` args:
         # This is the current epoch and step, i.e. the epoch and step we are about to run.
@@ -520,6 +538,42 @@ class Engine(EngineBase):
             filename = self.get_epoch_model_filename(epoch=clean_epoch) + ".opt" + util.get_model_filename_postfix()
             if os.path.isfile(filename):
                 os.unlink(filename)
+
+    def forward_with_callback(self, *, dataset: Dataset, callback: ForwardCallbackIface):
+        """forward"""
+        assert isinstance(dataset, Dataset)
+        assert isinstance(callback, ForwardCallbackIface)
+
+        self._pt_model.eval()
+
+        data_loader = self._create_data_loader(dataset)
+        batch_dim = _get_batch_dim_from_extern_data(self.extern_data)
+
+        with torch.no_grad():
+            callback.init(model=self._orig_model)
+
+            for extern_data_raw in data_loader:
+                extern_data = _raw_dict_to_extern_data(
+                    extern_data_raw, extern_data_template=self.extern_data, device=self._device
+                )
+                self._run_step(extern_data, train_func=False)
+                ctx = rf.get_run_ctx()
+                ctx.check_outputs_complete()
+
+                model_outputs = ctx.outputs
+                model_outputs_per_batch_template = TensorDict(
+                    {k: v.copy_template_excluding_axis(0) for k, v in model_outputs.data.items()}
+                )
+                for batch_idx in range(batch_dim.get_dim_value()):
+                    seq_tag = extern_data["seq_tag"].raw_tensor[batch_idx].item()
+                    model_outputs_per_batch = TensorDict(
+                        {k: v.copy() for k, v in model_outputs_per_batch_template.data.items()}
+                    )
+                    for k, v in model_outputs.data.items():
+                        model_outputs_per_batch[k].raw_tensor = v.raw_tensor[batch_idx]
+                    callback.process_seq(seq_tag=seq_tag, outputs=model_outputs_per_batch)
+
+            callback.finish()
 
 
 def _to_raw(n: Union[int, float, Tensor]):

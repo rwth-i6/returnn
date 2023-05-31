@@ -13,6 +13,8 @@ from returnn.learning_rate_control import load_learning_rate_control_from_config
 from returnn.log import log
 from returnn.pretrain import Pretrain
 from returnn.util import basic as util
+from returnn.forward_iface import ForwardCallbackIface
+from returnn.datasets import Dataset
 
 
 class EngineBase:
@@ -241,3 +243,11 @@ class EngineBase:
         :rtype: bool
         """
         return self.pretrain and self.epoch == self.pretrain.get_train_num_epochs() + 1
+
+    def forward_with_callback(self, *, dataset: Dataset, callback: ForwardCallbackIface):
+        """
+        Iterate through the dataset, calling `forward_step` from user config,
+        collecting outputs in `rf.get_run_ctx()` via `mark_as_output` calls,
+        and then calling `callback` for each entry.
+        """
+        raise NotImplementedError

@@ -445,22 +445,36 @@ def execute_main_task():
             lr_control_update_scores=lr_control_update_scores,
         )
     elif task in ["forward", "hpx"]:
-        assert eval_data is not None, "no eval data provided"
-        combine_labels = config.value("combine_labels", "")
-        engine.use_search_flag = config.bool("forward_use_search", False)
-        if config.has("epoch"):
-            config.set("load_epoch", config.int("epoch", 0))
-        engine.init_network_from_config(config)
-        output_file = config.value("output_file", "dump-fwd-epoch-%i.hdf" % engine.epoch)
-        forward_batch_size = config.int("forward_batch_size", 0)
-        if not forward_batch_size:
-            raise Exception("forward_batch_size not set")
-        engine.forward_to_hdf(
-            data=eval_data,
-            output_file=output_file,
-            combine_labels=combine_labels,
-            batch_size=forward_batch_size,
-        )
+        if config.typed_value("forward_callback") or not BackendEngine.is_tensorflow_selected():
+            engine.init_network_from_config(config)
+            if config.value("forward_data", "eval") in ["train", "dev", "eval"]:
+                data = {"train": train_data, "dev": dev_data, "eval": eval_data}[config.value("forward_data", "eval")]
+                assert data, "set forward_data"
+            else:
+                data = init_dataset(config.opt_typed_value("forward_data"))
+            forward_callback = config.typed_value("forward_callback")
+            assert forward_callback, "no forward_callback specified"
+            if callable(forward_callback):
+                forward_callback = forward_callback()
+            engine.forward_with_callback(dataset=data, callback=forward_callback)
+        else:
+            assert BackendEngine.is_tensorflow_selected()
+            assert eval_data is not None, "no eval data provided"
+            combine_labels = config.value("combine_labels", "")
+            engine.use_search_flag = config.bool("forward_use_search", False)
+            if config.has("epoch"):
+                config.set("load_epoch", config.int("epoch", 0))
+            engine.init_network_from_config(config)
+            output_file = config.value("output_file", "dump-fwd-epoch-%i.hdf" % engine.epoch)
+            forward_batch_size = config.int("forward_batch_size", 0)
+            if not forward_batch_size:
+                raise Exception("forward_batch_size not set")
+            engine.forward_to_hdf(
+                data=eval_data,
+                output_file=output_file,
+                combine_labels=combine_labels,
+                batch_size=forward_batch_size,
+            )
     elif task == "search":
         engine.use_search_flag = True
         engine.use_eval_flag = config.bool("search_do_eval", True)
