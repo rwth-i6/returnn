@@ -91,6 +91,21 @@ class Engine(EngineBase):
             print("Using GradScaler with options:", grad_scaler_opts, file=log.v2)
             self._grad_scaler = amp.GradScaler(**grad_scaler_opts)
 
+    def init_network_from_config(self, config: Optional[Config] = None):
+        """init model"""
+        assert config is self.config or not config
+        super().init_network_from_config(config=config)
+
+        extern_data = TensorDict()
+        extern_data_dict = self.config.typed_value("extern_data")
+        extern_data.update(extern_data_dict, auto_convert=True)
+        if "seq_tag" not in extern_data.data:
+            batch_dim = _get_batch_dim_from_extern_data(extern_data)
+            extern_data.data["seq_tag"] = Tensor(name="seq_tag", dtype="string", dims=[batch_dim])
+        self.extern_data = extern_data
+
+        self._load_model()
+
     def init_train_from_config(
         self,
         config: Optional[Config] = None,
@@ -104,8 +119,9 @@ class Engine(EngineBase):
         :param dev_data:
         :param eval_data:
         """
-        assert config is self.config
+        assert config is self.config or not config
         super().init_train_from_config(config=config)
+
         self.train_dataset = train_data
         self.eval_datasets.clear()
         if dev_data:
@@ -116,14 +132,6 @@ class Engine(EngineBase):
             for dataset_name, dataset_opts in config.typed_value("eval_datasets", {}).items():
                 self.eval_datasets[dataset_name] = init_dataset(dataset_opts, default_kwargs={"name": dataset_name})
 
-        extern_data = TensorDict()
-        extern_data_dict = self.config.typed_value("extern_data")
-        extern_data.update(extern_data_dict, auto_convert=True)
-        if "seq_tag" not in extern_data.data:
-            batch_dim = _get_batch_dim_from_extern_data(extern_data)
-            extern_data.data["seq_tag"] = Tensor(name="seq_tag", dtype="string", dims=[batch_dim])
-        self.extern_data = extern_data
-
         self._train_dataloader = self._create_data_loader(train_data) if train_data else None
         for dataset_name, dataset in self.eval_datasets.items():
             self._eval_dataloaders[dataset_name] = self._create_data_loader(dataset)
@@ -131,13 +139,14 @@ class Engine(EngineBase):
         self._start_epoch = self.get_train_start_epoch(self.config)
         self._final_epoch = self.config_get_final_epoch(self.config)
 
-        self._load_model(epoch=self._start_epoch)
+        self.init_network_from_config(config=config)
+
         self._save_model_epoch_interval = config.int("save_interval", 1)
 
         self._updater = Updater(self.config, self._pt_model, self.learning_rate)
         self._updater.create_optimizer()
         if self._start_epoch > 1:
-            self._load_optimizer(self._start_epoch)
+            self._load_optimizer()
 
         self._train_step_func = self.config.typed_value("train_step")
         assert self._train_step_func, "train_step not defined"
@@ -146,20 +155,24 @@ class Engine(EngineBase):
         """
         Main training loop.
         """
-
-        print("Starting training at epoch {}.".format(self._start_epoch), file=log.v3)
         assert self._pt_model is not None, "Model not initialized, call init_train_from_config()."
 
-        self.epoch = self._start_epoch
-        self._epoch_mp_shared.value = self.epoch
-        while self.epoch <= self._final_epoch:
-            self.init_train_epoch()
-            self.train_epoch()
+        if self._start_epoch > self._final_epoch:
+            print(f"Already trained until final epoch {self._final_epoch}, nothing to do.", file=log.v3)
+            return
 
+        print(
+            f"Starting training at epoch {self._start_epoch}, global train step {self.global_train_step}", file=log.v3
+        )
+        self.epoch = self._start_epoch - 1
+        while self.epoch + 1 <= self._final_epoch:
             self.epoch += 1
             self._epoch_mp_shared.value = self.epoch
 
-        print("Finished training at epoch {}.".format(self.epoch), file=log.v3)
+            self.init_train_epoch()
+            self.train_epoch()
+
+        print(f"Finished training at epoch {self.epoch}, global train step {self.global_train_step}", file=log.v3)
 
     def init_train_epoch(self):
         """
@@ -346,22 +359,33 @@ class Engine(EngineBase):
             sentinel_kw = {"__fwd_compatible_random_arg_%i" % int(random() * 100): None}
             self._train_step_func(model=self._orig_model, extern_data=extern_data, **sentinel_kw)
 
-    def _load_model(self, *, epoch: int):
+    def _load_model(self):
         """
         Sets self._model to a torch.nn.Module.
-
-        :param epoch:
         """
+        # Check existing model. This takes `load` and `load_epoch` into account,
+        # and also whether we are in train or eval mode.
+        epoch, model_epoch_filename = self.get_epoch_model(self.config)
+
         checkpoint_state = None
-        if epoch > 1:
-            filename = self.get_epoch_model_filename(epoch=epoch - 1) + util.get_model_filename_postfix()
+        if model_epoch_filename:
+            filename = model_epoch_filename + util.get_model_filename_postfix()
             print("Load model %s" % (filename,), file=log.v4)
             checkpoint_state = torch.load(filename)
-            assert checkpoint_state["epoch"] == epoch - 1
+            if epoch is None:
+                epoch = checkpoint_state["epoch"]
             step = checkpoint_state["step"]
+            print(f"  epoch {epoch}, global train step {step}", file=log.v4)
+            # The checkpoint was saved when the step was already increased (but not the epoch yet).
+            # Restore the last step.
+            # Below, we will increase the step again in case we are training.
+            step -= 1
         else:
             step = 0
-        self.global_train_step = step
+            epoch = self._start_epoch or 1
+
+        is_training = self.config.value("task", "train") == "train"
+        is_first_train_epoch = not epoch and (is_training or self.config.value("task", "train") == "initialize_model")
 
         # See :mod:`rf.rand` docstring for an explanation of this logic.
         random_seed = self.config.int("random_seed", 42)
@@ -371,6 +395,15 @@ class Engine(EngineBase):
         get_model_func = self.config.typed_value("get_model")
         assert get_model_func, "get_model not defined"
         sentinel_kw = {"__fwd_compatible_random_arg_%i" % int(random() * 100): None}
+        # Note on the `epoch` and `step` args:
+        # This is the current epoch and step, i.e. the epoch and step we are about to run.
+        # This is not the epoch and step of the model we are loading.
+        # Epoch starts at 1, step starts at 0.
+        # It is the global train step, i.e. the number of train steps we have done so far over all epochs,
+        # so it does not reset to 0 at each epoch.
+        # In a checkpoint, we stored the epoch of the most recent epoch we just finished.
+        # We stored the global train step after we already incremented it.
+        # The checkpoint is always stored when we just have finished the epoch.
         model = get_model_func(epoch=epoch, step=step, **sentinel_kw)
         self._orig_model = model
         if isinstance(model, rf.Module):
@@ -387,10 +420,6 @@ class Engine(EngineBase):
         preload_from_files = self.config.typed_value("preload_from_files", {})
         if preload_from_files:
             # see `preload_from_files` in tf engine and `returnn.tf.network.CustomCheckpointLoader`
-            is_training = self.config.value("task", "train") == "train"
-            is_first_train_epoch = epoch == 1 and (
-                is_training or self.config.value("task", "train") == "initialize_model"
-            )
             # We use the reversed sorted order here to achieve consistent behavior with the TF engine.
             # There, the keys are used in sorted order but if a variable is loaded,
             # it will not be considered anymore afterward.
@@ -440,6 +469,15 @@ class Engine(EngineBase):
 
         self._pt_model.to(self._device)
 
+        if model_epoch_filename and is_training:
+            # We loaded a model from a checkpoint, and the epoch and step were taken from it.
+            # The epoch was just finished, so we need to increment it.
+            # We decremented the step above.
+            epoch += 1
+            step += 1
+        self.epoch = epoch  # in training, this will be reset to start_epoch
+        self.global_train_step = step
+
     def _save_model(self):
         """
         Saves the state of self._model to file.
@@ -454,14 +492,16 @@ class Engine(EngineBase):
             {"model": self._pt_model.state_dict(), "epoch": self.epoch, "step": self.global_train_step}, filename
         )
 
-    def _load_optimizer(self, epoch):
+    def _load_optimizer(self):
         """
         Loads a torch.optim.Optimizer from disk and uses it as the optimizer.
         This function is a wrapper to Updater.load_optimizer().
 
         :param int epoch: Epoch from which to load the optimizer state.
         """
-        filename = self.get_epoch_model_filename(epoch=epoch - 1) + ".opt" + util.get_model_filename_postfix()
+        filename = (
+            self.get_epoch_model_filename(epoch=self._start_epoch - 1) + ".opt" + util.get_model_filename_postfix()
+        )
         self._updater.load_optimizer(filename)
 
     def _save_optimizer(self):

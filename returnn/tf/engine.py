@@ -1175,11 +1175,12 @@ class Engine(EngineBase):
             net_dict = network_json_from_config(config)
         return net_dict
 
-    def init_network_from_config(self, config=None, net_dict_post_proc=None):
+    def init_network_from_config(self, config=None, *, net_dict_post_proc=None):
         """
         :param returnn.config.Config|None config:
         :param ((dict)->dict)|None net_dict_post_proc:
         """
+        super().init_network_from_config(config=config)
         if not config:
             config = self.config
         self.model_filename = config.value("model", None)

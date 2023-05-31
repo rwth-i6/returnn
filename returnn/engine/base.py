@@ -15,7 +15,7 @@ from returnn.pretrain import Pretrain
 from returnn.util import basic as util
 
 
-class EngineBase(object):
+class EngineBase:
     """
     Base class for a backend engine, such as :class:`TFEngine.Engine`.
     """
@@ -33,6 +33,13 @@ class EngineBase(object):
         self.model_filename = None  # type: Optional[str]
         self.learning_rate = 0.0  # set in init_train_epoch
         self.learning_rate_control = None  # type: Optional[LearningRateControl]
+
+    def init_network_from_config(self, config: Optional[Config] = None):
+        """
+        Initialize network/model
+
+        :param config:
+        """
 
     def init_train_from_config(self, config: Optional[Config] = None):
         """
