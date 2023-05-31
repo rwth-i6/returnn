@@ -496,8 +496,6 @@ class Engine(EngineBase):
         """
         Loads a torch.optim.Optimizer from disk and uses it as the optimizer.
         This function is a wrapper to Updater.load_optimizer().
-
-        :param int epoch: Epoch from which to load the optimizer state.
         """
         filename = (
             self.get_epoch_model_filename(epoch=self._start_epoch - 1) + ".opt" + util.get_model_filename_postfix()
