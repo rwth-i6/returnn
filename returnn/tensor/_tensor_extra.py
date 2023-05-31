@@ -4,7 +4,7 @@ or just rarely used attribs, such that we can save memory for the common case.
 """
 
 from __future__ import annotations
-from typing import TYPE_CHECKING, Optional, Union, Type, Sequence, Tuple, List, Dict
+from typing import TYPE_CHECKING, Optional, Union, Type, Sequence, Tuple, List, Dict, Set
 import os
 
 if TYPE_CHECKING:
@@ -3119,22 +3119,20 @@ class _TensorMixin(_TensorMixinBase):
         Looks up all other_axes of another Tensor in this Tensor. Does not allow duplicates.
 
         :param other:
-        :param list[int] other_axes: a list of axes of ``other``, counted with batch dim
-        :return: a dict mapping other axes to own axes, all counted with batch dim
+        :param list[int] other_axes: list of axes of ``other``, counted with batch dim, to be mapped
         :param dict[str,bool]|None is_equal_opts: passed to Dim.is_equal
-        :rtype: dict[int,int]
+        :return: dict mapping other axes (from ``other_axes``) to own axes, all counted with batch dim
         """
         if is_equal_opts is None:
             is_equal_opts = dict(
                 allow_same_feature_dim=True, allow_same_spatial_dim=True, treat_feature_as_spatial=True
             )
 
-        def map_other_axis_to_self(other_axis, taken_self_axes):
+        def map_other_axis_to_self(other_axis: int, taken_self_axes: Set[int]) -> int:
             """
-            :param int other_axis: counted with batch dim
-            :param set[int] taken_self_axes: axes that should not be used again
+            :param other_axis: counted with batch dim
+            :param taken_self_axes: axes that should not be used again
             :return: the axis of ``self`` that matches ``other_axis``, counted with batch dim
-            :rtype: int
             """
             other_axis_dim_tag = other.get_dim_tag(other_axis)
             is_equal_opts_ = None

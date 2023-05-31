@@ -8681,6 +8681,35 @@ def test_ConvLayer_stride_dilation():
         assert (seq_lens == [9, 8, 8]).all()
 
 
+def test_ConvLayer_custom_filter_no_dim_tags():
+    # https://github.com/rwth-i6/returnn/issues/1340
+    # By intention, do not use dim tags.
+    config = Config({"extern_data": {"data": {"shape": (None, 1)}}})
+    with make_scope() as session:
+        net = TFNetwork(config=config)
+        net_dict = {
+            "conv_h_filter": {
+                "class": "variable",
+                "shape": (6, 1, 15),
+                "init": "glorot_uniform",
+            },
+            "conv_h": {
+                "class": "conv",
+                "filter_size": (6,),
+                "strides": 2,
+                "n_out": 15,
+                "padding": "valid",
+                "filter": "conv_h_filter",
+                "from": "data",
+                "is_output_layer": True,
+            },
+        }
+        net.construct_from_dict(net_dict)
+        net.initialize_params(session)
+        out = net.layers["conv_h"].output
+        session.run(out.placeholder, feed_dict=make_feed_dict(net.extern_data))
+
+
 def test_pool_layer_NCHW():
     with make_scope() as session:
         import numpy as np

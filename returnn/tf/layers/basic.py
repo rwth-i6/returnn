@@ -6015,12 +6015,27 @@ class ConvLayer(_ConcatInputLayer):
             filter_in_dim = in_dim // groups
         else:
             filter_in_dim = in_dim
+        filter_data = None
+        self.filter_layer = None
+        if filter:
+            self.filter_layer = filter
+            filter_data = filter.output
+            filter_feat_dim_map = filter_data.find_matching_dim_map(
+                other=Data("dummy", [filter_in_dim, out_dim], dtype="float32"), other_axes=[0, 1]
+            )
+            # Replace dims that we have real dim equality. This is for old-style behavior without explicit dim tags.
+            filter_data_raw = filter_data.placeholder
+            filter_data = filter_data.copy_template_replace_dim_tag(
+                axis=filter_feat_dim_map[0], new_dim_tag=filter_in_dim
+            )
+            filter_data = filter_data.copy_template_replace_dim_tag(axis=filter_feat_dim_map[1], new_dim_tag=out_dim)
+            filter_data.placeholder = filter_data_raw
         if isinstance(filter_size[0], int):
             if not all(isinstance(s, int) for s in filter_size):
                 raise TypeError(f"filter_size {filter_size} types {[type(s) for s in filter_size]} inconsistent")
-            if filter:
-                assert filter.output.batch_ndim == len(filter_size) + 2
-                filter_dims = list(filter.output.dims)
+            if filter_data:
+                assert filter_data.batch_ndim == len(filter_size) + 2
+                filter_dims = list(filter_data.dims)
                 filter_dims.remove(filter_in_dim)
                 filter_dims.remove(out_dim)
                 assert all(d.dimension == s for d, s in zip(filter_dims, filter_size))
@@ -6030,8 +6045,8 @@ class ConvLayer(_ConcatInputLayer):
         elif isinstance(filter_size[0], Dim):
             if not all(isinstance(s, Dim) for s in filter_size):
                 raise TypeError(f"filter_size {filter_size} types {[type(s) for s in filter_size]} inconsistent")
-            if filter:
-                assert all(d in filter.output.dims for d in filter_size)
+            if filter_data:
+                assert all(d in filter_data.dims for d in filter_size)
         else:
             raise TypeError(
                 f"filter_size elems must be int or Dim, got {filter_size} with types {[type(s) for s in filter_size]}"
@@ -6039,10 +6054,7 @@ class ConvLayer(_ConcatInputLayer):
         filter_shape = list(filter_size) + [filter_in_dim, out_dim]
         from returnn.tf.util.basic import get_initializer
 
-        self.filter_layer = None
-        if filter:
-            self.filter_layer = filter
-            filter_data = filter.output
+        if filter_data:
             if filter_perm:
                 filter_data = TransposeLayer.transpose(filter_data, perm=filter_perm, name="filter_transposed")
             filter_data = filter_data.copy_transpose(filter_shape, allow_int=False)
