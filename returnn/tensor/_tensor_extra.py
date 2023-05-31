@@ -3172,9 +3172,12 @@ class _TensorMixin(_TensorMixinBase):
                 other_axis,
                 other.dim_tags[other_axis],
             )
+            if len(matching) == 1:
+                return matching[0]
             # If there are multiple matches (e.g. because two axes have the same feature dim), leave their order intact.
             # We do this by always choosing the first unused match which is the smallest axes
-            return matching[0]
+            # However, take match_priority into account, and prefer the highest match_priority.
+            return max(matching, key=lambda ax: self.dims[ax].match_priority)
 
         other_to_self_mapping = {}
         for axis in other_axes:
