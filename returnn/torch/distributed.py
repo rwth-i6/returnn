@@ -59,7 +59,7 @@ class DistributedContext:
 
 
 _is_set_up = False
-_ctx = None  # type: typing.Optional[HorovodContext]
+_ctx = None  # type: Optional[DistributedContext]
 
 
 def get_ctx(config=None):
