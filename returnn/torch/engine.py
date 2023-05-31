@@ -71,6 +71,7 @@ class Engine(EngineBase):
         self._torch_distributed_class = None  # type: Optional[Callable]
         self._torch_distributed_options = None  # type: Optional[dict]
         self._ddp_pt_model = None  # type: Optional[torch.nn.Module]
+        self._accum_grad_multiple_step = config.int("accum_grad_multiple_step", 1)
 
         torch_distributed = config.typed_value("torch_distributed")
         if torch_distributed is not None:
@@ -166,8 +167,6 @@ class Engine(EngineBase):
 
         self._train_step_func = self.config.typed_value("train_step")
         assert self._train_step_func, "train_step not defined"
-
-        self._accum_grad_multiple_step = config.int("accum_grad_multiple_step", 1)
 
     def train(self):
         """
