@@ -9,9 +9,8 @@ from contextlib import nullcontext
 import os
 import torch
 import time
-from torch.distributed import init_process_group, destroy_process_group
+from torch.distributed import init_process_group
 from torch.nn.parallel import DistributedDataParallel as DDP
-from torch.distributed.algorithms.join import Join
 import torch.utils.data.datapipes as dp
 from torch import autocast
 from torch.cuda import amp
@@ -71,6 +70,7 @@ class Engine(EngineBase):
         self._use_torch_distributed = False
         self._torch_distributed_class = None  # type: Optional[Callable]
         self._torch_distributed_options = None  # type: Optional[dict]
+        self._ddp_pt_model = None  # type: Optional[torch.nn.Module]
 
         torch_distributed = config.typed_value("torch_distributed")
         if torch_distributed is not None:
@@ -124,7 +124,7 @@ class Engine(EngineBase):
 
             torch_distributed = returnn.torch.distributed.get_ctx(config=config)
             local_rank = torch_distributed.local_rank()
-            print(f"Start running basic DDP example on local rank {local_rank}.", file=log.v2)
+            print(f"Start running torch distributed training on local rank {local_rank}.", file=log.v2)
             self._device = f"cuda:{local_rank}"
 
         self.train_dataset = train_data
@@ -153,13 +153,13 @@ class Engine(EngineBase):
         self._save_model_epoch_interval = config.int("save_interval", 1)
 
         if self._use_torch_distributed:
+            from returnn.torch.distributed import get_device_ids
+
             # wrap the model use torch distributed class
             self._ddp_pt_model = self._torch_distributed_class(
-                self._pt_model, device_ids=[int(os.environ["LOCAL_RANK"])], **self._torch_distributed_options
+                self._pt_model, device_ids=get_device_ids(), **self._torch_distributed_options
             )
-            self._updater = Updater(self.config, self._ddp_pt_model, self.learning_rate)
-        else:
-            self._updater = Updater(self.config, self._pt_model, self.learning_rate)
+        self._updater = Updater(self.config, self._pt_model, self.learning_rate)
         self._updater.create_optimizer()
         if self._start_epoch > 1:
             self._load_optimizer(self._start_epoch)
@@ -186,8 +186,6 @@ class Engine(EngineBase):
             self.epoch += 1
             self._epoch_mp_shared.value = self.epoch
 
-        if self._use_torch_distributed:
-            destroy_process_group()
         print("Finished training at epoch {}.".format(self.epoch), file=log.v3)
 
     def init_train_epoch(self):
@@ -250,15 +248,9 @@ class Engine(EngineBase):
                 {name: float(_to_raw(loss.get_inv_norm_factor())) for name, loss in train_ctx.losses.items()}
             )
 
-            if self._use_torch_distributed and (step_idx % self._accum_grad_multiple_step) != (
-                self._accum_grad_multiple_step - 1
-            ):
-                with self._ddp_pt_model.no_sync():
-                    if self._grad_scaler is not None:
-                        self._grad_scaler.scale(total_loss).backward()
-                    else:
-                        total_loss.raw_tensor.backward()
-            else:
+            with self._ddp_pt_model.no_sync() if self._use_torch_distributed and (
+                step_idx % self._accum_grad_multiple_step
+            ) != (self._accum_grad_multiple_step - 1) else nullcontext():
                 if self._grad_scaler is not None:
                     self._grad_scaler.scale(total_loss).backward()
                 else:
@@ -441,11 +433,11 @@ class Engine(EngineBase):
 
         sentinel_kw = {"__fwd_compatible_random_arg_%i" % int(random() * 100): None}
 
-        from returnn.torch.distributed import _ddp_ctx
+        from returnn.torch.distributed import ddp_train_forward_ctx
 
         with autocast(
             device_type=self._device, dtype=self._autocast_dtype
-        ) if self._use_autocast else nullcontext(), _ddp_ctx(pt_model=self._ddp_pt_model) if isinstance(
+        ) if self._use_autocast else nullcontext(), ddp_train_forward_ctx(pt_model=self._ddp_pt_model) if isinstance(
             self._ddp_pt_model, DDP
         ) else nullcontext():
             self._train_step_func(model=self._orig_model, extern_data=extern_data, **sentinel_kw)

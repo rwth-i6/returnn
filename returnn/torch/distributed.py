@@ -79,8 +79,24 @@ def get_ctx(config=None):
     return _ctx
 
 
+def get_device_ids():
+    # It depends on the specific setup what to return here,
+    # how CUDA_VISIBLE_DEVICES is set up, etc.
+    # This is currently a reasonable assumption
+    # but we might extend the logic later,
+    # or make it configurable.
+    return [get_local_rank()]
+
+
+def get_local_rank():
+    # torch.distributed does not seem to provide a function for this.
+    # Via mpirun (OpenMPI), this env variable would be set.
+    # It should fail with an error otherwise.
+    return int(os.environ["LOCAL_RANK"])
+
+
 @contextmanager
-def _ddp_ctx(pt_model):
+def ddp_train_forward_ctx(pt_model):
     # the original (unwrapped) module is passed to the train step, therefore here we set up the right context
     # as what DistributedDataParallel.forward does internally
     if torch.is_grad_enabled() and pt_model.require_backward_grad_sync:

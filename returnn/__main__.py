@@ -397,6 +397,11 @@ def finalize(error_occurred=False):
                 import horovod.tensorflow as hvd  # noqa
 
                 hvd.shutdown()
+        elif BackendEngine.is_torch_selected():
+            if config.typed_value("torch_distributed") is not None:
+                from torch.distributed import destroy_process_group
+
+                destroy_process_group()
 
 
 def need_data():
