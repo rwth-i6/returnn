@@ -30,6 +30,7 @@ class VariableLayer(LayerBase):
         add_batch_axis=False,
         add_time_axis=False,
         trainable=True,
+        saveable=True,
         non_critical_for_restore=False,
         init=None,
         init_by_layer=None,
@@ -41,8 +42,9 @@ class VariableLayer(LayerBase):
         :param str dtype:
         :param bool add_batch_axis:
         :param bool add_time_axis:
-        :param bool trainable:
-        :param bool non_critical_for_restore:
+        :param bool trainable: whether it is updated by grad descent
+        :param bool saveable: whether it is stored in the checkpoint
+        :param bool non_critical_for_restore: if True, and it cannot be found in a checkpoint, it will not be an error
         :param str|float|int|None init: see :func:`returnn.tf.util.basic.get_initializer`. 0 by default.
           Alternatively, you can also use option `init_by_layer`.
         :param LayerBase|None init_by_layer:
@@ -82,6 +84,8 @@ class VariableLayer(LayerBase):
                     trainable=trainable,
                 ),
                 axes_split_info=[d.axis_split_info() for d in dim_tags],
+                trainable=trainable,
+                saveable=saveable,
                 non_critical_for_restore=non_critical_for_restore,
             )
             out = self.var
