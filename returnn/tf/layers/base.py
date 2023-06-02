@@ -1232,14 +1232,18 @@ class LayerBase(object):
             if param_variational_noise and param.dtype.is_floating and isinstance(param, tf.Variable):
                 with default_control_flow_ctx():  # make independent from loop/cond
                     with reuse_name_scope_of_tensor(param, postfix="_variational_noise", add_tensor_name=True):
-                        param = self.network.cond_on_train(
-                            fn_train=lambda: param
-                            + tf_compat.v1.random_normal(
+
+                        def _apply_var_noise():
+                            noise = tf_compat.v1.random_normal(
                                 tf.shape(param),
                                 dtype=param.dtype.base_dtype,
                                 stddev=param_variational_noise,
                                 seed=self.network.random.randint(2**31),
-                            ),
+                            )
+                            return tf.recompute_grad(lambda param_: param_ + noise)(param)
+
+                        param = self.network.cond_on_train(
+                            fn_train=_apply_var_noise,
                             fn_eval=lambda: param,
                         )
 
