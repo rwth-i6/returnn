@@ -84,6 +84,7 @@ class LayerBase(object):
         darc1=None,
         spatial_smoothing=0.0,
         param_variational_noise=None,
+        param_dropout=None,
         updater_opts=None,
         initial_output=None,
         state=None,
@@ -139,6 +140,7 @@ class LayerBase(object):
         :param float|None darc1: for constraints. see Generalization in Deep Learning, https://arxiv.org/abs/1710.05468
         :param float|None spatial_smoothing: see :func:`returnn.tf.util.basic.spatial_smoothing_energy`
         :param float|None param_variational_noise: adds variational noise to the params during training
+        :param float|None param_dropout: dropout on params (weight dropout) during training
         :param dict[str]|None updater_opts: accepts similar opts as TFUpdater, e.g. "optimizer", "learning_rate", ...
         :param bool|None is_output_layer: triggers the construction of this layer in the root net.
             Inside a :class:`RecLayer`, it triggers the explicit accumulation of all frames.
@@ -241,6 +243,7 @@ class LayerBase(object):
         self.darc1 = darc1
         self.spatial_smoothing = spatial_smoothing
         self.param_variational_noise = param_variational_noise
+        self.param_dropout = param_dropout
         self.updater_opts = CollectionReadCheckCovered(updater_opts or {})
         self._is_output_layer = is_output_layer
         self.only_on_eval = only_on_eval
@@ -1203,9 +1206,13 @@ class LayerBase(object):
         param_variational_noise = self.param_variational_noise
         if param_variational_noise is None:
             param_variational_noise = self.network.get_config().float("param_variational_noise", 0)
+        param_dropout = self.param_dropout
+        if param_dropout is None:
+            param_dropout = self.network.get_config().float("param_dropout", 0)
         if self.network.train_flag is False:  # if True or tf.Tensor, it will use cond_on_train below
             param_variational_noise = None
-        need_custom_getter = bool(param_variational_noise)  # and param.dtype.is_floating
+            param_dropout = None
+        need_custom_getter = bool(param_variational_noise) or bool(param_dropout)  # and param.dtype.is_floating
         kwargs_custom_getter = kwargs.get("custom_getter", None)
 
         def layer_custom_getter(getter, **getter_kwargs):
@@ -1231,6 +1238,18 @@ class LayerBase(object):
                                 tf.shape(param),
                                 dtype=param.dtype.base_dtype,
                                 stddev=param_variational_noise,
+                                seed=self.network.random.randint(2**31),
+                            ),
+                            fn_eval=lambda: param,
+                        )
+
+            if param_dropout and param.dtype.is_floating and isinstance(param, tf.Variable):
+                with default_control_flow_ctx():  # make independent from loop/cond
+                    with reuse_name_scope_of_tensor(param, postfix="_weight_dropout", add_tensor_name=True):
+                        param = self.network.cond_on_train(
+                            fn_train=lambda: tf_util.dropout(
+                                param,
+                                keep_prob=1.0 - param_dropout,
                                 seed=self.network.random.randint(2**31),
                             ),
                             fn_eval=lambda: param,
