@@ -1794,7 +1794,16 @@ def get_initializer(s, seed=None, eval_local_ns=None, dtype=tf.float32):
     return f
 
 
-def dropout(x, keep_prob, noise_shape=None, seed=None, name=None, cond_on_train=False, apply_correction_factor=True):
+def dropout(
+    x,
+    keep_prob,
+    noise_shape=None,
+    seed=None,
+    name=None,
+    cond_on_train=False,
+    apply_correction_factor=True,
+    grad_checkpointing=False,
+):
     """
     Computes dropout.
     Like :func:`tf.nn.dropout` but avoid :func:`tf.div` if possible.
@@ -1808,6 +1817,7 @@ def dropout(x, keep_prob, noise_shape=None, seed=None, name=None, cond_on_train=
     :param str name:
     :param bool cond_on_train: automatically wrap through :func:`cond_on_train_flag`
     :param bool apply_correction_factor:
+    :param bool grad_checkpointing: use gradient checkpointing for the result
     """
     if cond_on_train:
         return cond_on_train_flag(
@@ -1845,7 +1855,11 @@ def dropout(x, keep_prob, noise_shape=None, seed=None, name=None, cond_on_train=
             binary_tensor = tf.floor(random_tensor)
             if apply_correction_factor:
                 binary_tensor *= inv_keep_prob
-        ret = x * binary_tensor
+
+        if grad_checkpointing:
+            ret = tf.recompute_grad(lambda x_: x_ * binary_tensor)(x)
+        else:
+            ret = x * binary_tensor
         assert isinstance(ret, tf.Tensor)
         ret.set_shape(x.get_shape())
 

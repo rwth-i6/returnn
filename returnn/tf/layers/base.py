@@ -1250,6 +1250,7 @@ class LayerBase(object):
                             fn_train=lambda: tf_util.dropout(
                                 param,
                                 keep_prob=1.0 - param_dropout,
+                                grad_checkpointing=True,
                                 seed=self.network.random.randint(2**31),
                             ),
                             fn_eval=lambda: param,
