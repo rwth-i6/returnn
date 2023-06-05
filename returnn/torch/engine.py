@@ -11,7 +11,7 @@ import numpy
 import torch
 import time
 from torch.distributed import init_process_group
-from torch.nn.parallel import DistributedDataParallel as DDP
+from torch.nn.parallel import DistributedDataParallel
 import torch.utils.data.datapipes as dp
 from torch import autocast
 from torch.cuda import amp
@@ -243,7 +243,7 @@ class Engine(EngineBase):
             # as it uses only one mechanism for communication, like NCCL.
             # This is suboptimal here as we have the roundtrip CPU -> GPU -> NCCL -> GPU -> CPU.
             # TODO: Use more direct CPU -> Ethernet -> CPU communication.
-            _has_data = torch.tensor([data is not None], dtype=torch.int8).to(self._device)
+            _has_data = torch.tensor([extern_data_raw is not None], dtype=torch.int8).to(self._device)
 
             if self._use_torch_distributed:
                 # use all reduce to check if all workers have data, if at least one worker does not have data,
@@ -261,7 +261,7 @@ class Engine(EngineBase):
             extern_data = _raw_dict_to_extern_data(
                 extern_data_raw, extern_data_template=self.extern_data, device=self._device
             )
-            self._run_step(extern_data, train_flag=True)
+            self._run_step(extern_data, train_flag=True, train_func=True)
 
             train_ctx = rf.get_run_ctx()
 
@@ -452,7 +452,7 @@ class Engine(EngineBase):
         with autocast(
             device_type=self._device, dtype=self._autocast_dtype
         ) if self._use_autocast else nullcontext(), ddp_train_forward_ctx(pt_model=self._ddp_pt_model) if isinstance(
-            self._ddp_pt_model, DDP
+            self._ddp_pt_model, DistributedDataParallel
         ) else nullcontext():
             sentinel_kw = {"__fwd_compatible_random_arg_%i" % int(random() * 100): None}
             if train_func:

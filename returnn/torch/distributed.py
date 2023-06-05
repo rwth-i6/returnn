@@ -128,7 +128,7 @@ def ddp_train_forward_ctx(pt_model):
         if work:
             # noinspection PyProtectedMember
             pt_model.reducer._set_forward_pass_work_handle(
-                work, pt_model._divide_by_initial_world_size  # type: ignore[arg-type]
+                work, pt_model._divide_by_initial_world_size
             )
 
         # noinspection PyProtectedMember
@@ -166,6 +166,7 @@ def ddp_train_forward_ctx(pt_model):
                 # Do not need to populate this for static graph.
                 train_ctx = rf.get_run_ctx()
                 loss = list(train_ctx.losses.values())[0].loss.raw_tensor
+                # noinspection PyProtectedMember
                 pt_model.reducer.prepare_for_backward(list(torch.nn.parallel.distributed._find_tensors(loss)))
             else:
                 pt_model.reducer.prepare_for_backward([])
