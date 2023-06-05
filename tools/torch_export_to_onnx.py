@@ -83,6 +83,7 @@ class ForwardModulePT(torch.nn.Module):
         extern_data = self.extern_data.copy_template()
         extern_data.assign_from_raw_tensor_dict_(data)
         self.forward_step_func(model=self.model, extern_data=extern_data)
+        rf.get_run_ctx().check_outputs_complete()
         return rf.get_run_ctx().outputs.as_raw_tensor_dict()
 
 
@@ -109,6 +110,7 @@ class ForwardModuleRF(_RFModuleAsPTModule):
         extern_data = self.extern_data.copy_template()
         extern_data.assign_from_raw_tensor_dict_(data)
         self.forward_step_func(model=self.rf_module, extern_data=extern_data)
+        rf.get_run_ctx().check_outputs_complete()
         return rf.get_run_ctx().outputs.as_raw_tensor_dict()
 
 
@@ -118,7 +120,9 @@ def main():
     """
     parser = argparse.ArgumentParser(description="Converts a RF/PT module to ONNX.")
     parser.add_argument(
-        "config", type=str, help="Filename to config file. Must have get_model(). Can optionally have export()."
+        "config",
+        type=str,
+        help="Filename to config file. Must have `get_model()` and `forward_step()`. Can optionally have `export()`.",
     )
     parser.add_argument("checkpoint", type=str, help="Checkpoint to RF module, considering the backend.")
     parser.add_argument("out_onnx_filename", type=str, help="Filename of the final ONNX model.")
@@ -127,7 +131,21 @@ def main():
     args = parser.parse_args()
 
     init(config_filename=args.config, checkpoint=args.checkpoint, log_verbosity=args.verbosity, device=args.device)
-    rf.init_forward_step_run_ctx()
+
+    model_outputs_dict = config.typed_value("model_outputs")
+    assert (
+        model_outputs_dict is not None
+    ), "The specified config needs to have explicit model outputs. Please define `model_outputs` in your config."
+    model_outputs = TensorDict()
+    model_outputs.update(model_outputs_dict, auto_convert=True)
+    model_outputs_raw_keys = []
+    for k, v in model_outputs.data.items():
+        model_outputs_raw_keys.append(k)
+        for i, dim in enumerate(v.dims):
+            if dim.is_batch_dim() or dim.is_dynamic():
+                model_outputs_raw_keys.append(f"{k}:size{i}")
+
+    rf.init_forward_step_run_ctx(expected_outputs=model_outputs)
     rf.set_random_seed(42)
 
     get_model_func = config.typed_value("get_model")
@@ -158,23 +176,12 @@ def main():
         model.load_state_dict(loaded_checkpoint["model"])
         model.eval()
         pt_model_fwd = ForwardModulePT(model, forward_step_func, extern_data)
-    else:
+    elif is_rf_module:
         pt_model_fwd = ForwardModuleRF(model, forward_step_func, extern_data)
         pt_model_fwd.load_state_dict(loaded_checkpoint["model"])
         pt_model_fwd.eval()
-
-    model_outputs_dict = config.typed_value("model_outputs")
-    assert (
-        model_outputs_dict is not None
-    ), "The specified config needs to have explicit model outputs. Please define `model_outputs` in your config."
-    model_outputs = TensorDict()
-    model_outputs.update(model_outputs_dict, auto_convert=True)
-    model_outputs_raw_keys = []
-    for k, v in model_outputs.data.items():
-        model_outputs_raw_keys.append(k)
-        for i, dim in enumerate(v.dims):
-            if dim.is_batch_dim() or dim.is_dynamic():
-                model_outputs_raw_keys.append(f"{k}:size{i}")
+    else:
+        assert False, "PT/RF module?"  # should not get here
 
     dynamic_axes = {}
     for k, v in list(extern_data.data.items()) + list(model_outputs.data.items()):

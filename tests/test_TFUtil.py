@@ -1437,6 +1437,18 @@ def test_Dim_MarkedDim_sorted():
     assert_equal(sorted(ls), [a, b, a_implicit2, a_implicit, b_implicit])
 
 
+def test_Dim_find_matching_dim_map_match_priority():
+    in_dim = Dim(7, name="in")
+    out_dim = in_dim
+    filter_in_dim = in_dim.copy(match_priority=1)
+    filter_size_dim = Dim(4, name="filter_size")
+    filter_ = Tensor("filter", [out_dim, filter_in_dim, filter_size_dim], dtype="float32")
+    filter_feat_dim_map = filter_.find_matching_dim_map(
+        other=Data("dummy", [filter_in_dim, out_dim], dtype="float32"), other_axes=[0, 1]
+    )
+    assert_equal(filter_feat_dim_map, {0: 1, 1: 0})
+
+
 def test_ExternData_ext_Data_batch_info():
     # https://github.com/rwth-i6/returnn_common/issues/193
     # https://github.com/rwth-i6/returnn/issues/975

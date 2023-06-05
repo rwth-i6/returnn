@@ -37,6 +37,7 @@ from returnn.tf.data_pipeline import FeedDictDataProvider, DatasetDataProvider
 import returnn.tf.horovod as tf_horovod
 import returnn.util.basic as util
 from returnn.util.basic import hms, NumbersDict, BackendEngine, BehaviorVersion
+from returnn.forward_iface import ForwardCallbackIface
 from pprint import pprint
 
 
@@ -1175,11 +1176,12 @@ class Engine(EngineBase):
             net_dict = network_json_from_config(config)
         return net_dict
 
-    def init_network_from_config(self, config=None, net_dict_post_proc=None):
+    def init_network_from_config(self, config=None, *, net_dict_post_proc=None):
         """
         :param returnn.config.Config|None config:
         :param ((dict)->dict)|None net_dict_post_proc:
         """
+        super().init_network_from_config(config=config)
         if not config:
             config = self.config
         self.model_filename = config.value("model", None)
@@ -2456,6 +2458,11 @@ class Engine(EngineBase):
 
         writer.close()
 
+    def forward_with_callback(self, *, dataset: Dataset, callback: ForwardCallbackIface):
+        """forward"""
+        # https://github.com/rwth-i6/returnn/issues/1336
+        raise NotImplementedError("TF engine does not support the generic forward func yet...")
+
     # noinspection PyUnusedLocal
     def analyze(self, data, statistics):
         """
@@ -2962,7 +2969,7 @@ class Engine(EngineBase):
                 self.seq_len += seq_len
 
         accumulator = Accumulator()
-        batch_size = config.int("batch_size", 1)
+        batch_size = config.typed_value("batch_size", default=1)
         max_seqs = config.int("max_seqs", -1)
         epoch = config.int("epoch", 1)
         max_seq_length = config.float("max_seq_length", 0)

@@ -774,6 +774,17 @@ class Backend(Generic[T]):
         raise NotImplementedError
 
     @staticmethod
+    def where(
+        cond: Tensor,
+        true_: Union[Tensor, rf.RawTensorTypes],
+        false_: Union[Tensor, rf.RawTensorTypes],
+        *,
+        allow_broadcast_all_sources: bool = False,
+    ) -> Tensor:
+        """where"""
+        raise NotImplementedError
+
+    @staticmethod
     def matmul(a: Tensor[T], b: Tensor[T], *, reduce: Union[Dim, Sequence[Dim]], use_mask: bool = True) -> Tensor[T]:
         """
         This performs a batched matmul of two sources a and b

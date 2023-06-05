@@ -559,6 +559,20 @@ class ReturnnLayersBackend(Backend[Layer]):
         )
 
     @staticmethod
+    def where(
+        cond: Tensor,
+        true_: Union[Tensor, rf.RawTensorTypes],
+        false_: Union[Tensor, rf.RawTensorTypes],
+        *,
+        allow_broadcast_all_sources: bool = False,
+    ) -> Tensor:
+        """where"""
+        allow_broadcast_all_sources  # noqa # ignore allow_broadcast_all_sources for now..., not implemented
+        return rfl.make_layer(
+            {"class": "switch", "condition": cond, "true_from": true_, "false_from": false_}, name="where"
+        )
+
+    @staticmethod
     def matmul(a: Tensor, b: Tensor, *, reduce: Union[Dim, Sequence[Dim]], use_mask: bool = True) -> Tensor:
         """matmul"""
         args = {}

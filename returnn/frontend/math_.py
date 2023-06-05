@@ -12,6 +12,7 @@ from .types import RawTensorTypes as _RawTensorTypes
 
 __all__ = [
     "compare",
+    "compare_bc",
     "combine",
     "combine_bc",
     "equal",
@@ -113,6 +114,17 @@ def compare(
 
     backend = utils.get_backend_from_tensors(a, b)
     return backend.compare(a, kind, b, allow_broadcast_all_sources=allow_broadcast_all_sources, dim_order=dim_order)
+
+
+def compare_bc(
+    a: Tensor,
+    kind: str,
+    b: Tensor,
+    *,
+    dim_order: Optional[Sequence[Dim]] = None,
+) -> Tensor:
+    """:func:`compare` with allow_broadcast_all_sources=True"""
+    return compare(a, kind, b, allow_broadcast_all_sources=True, dim_order=dim_order)
 
 
 @typing.overload

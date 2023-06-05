@@ -186,7 +186,7 @@ def top_k(
     source: Tensor,
     *,
     axis: Union[Dim, Sequence[Dim]],
-    k: Union[int, Tensor],
+    k: Optional[Union[int, Tensor]] = None,
     k_dim: Optional[Dim] = None,
     sorted: bool = True,
 ) -> Tuple[Tensor, Union[Tensor, Sequence[Tensor]], Dim]:
@@ -213,5 +213,9 @@ def top_k(
     :param sorted:
     :return: values, indices (sequence if axis is a sequence), k_dim
     """
+    if k is None:
+        assert k_dim, "top_k: either provide `k` or `k_dim`"
+        k = k_dim.dimension or k_dim.dyn_size_ext
+        assert k is not None, f"top_k: k_dim {k_dim} undefined and no k provided"
     # noinspection PyProtectedMember
     return source._raw_backend.top_k(source, axis=axis, k=k, k_dim=k_dim, sorted=sorted)

@@ -626,6 +626,8 @@ class TorchBackend(Backend[torch.Tensor]):
         :param perm: e.g. [0, 2, 1]
         :return: permuted (transposed) raw tensor; wraps torch.permute
         """
+        if all(p == i for i, p in enumerate(perm)):
+            return raw_tensor
         return torch.permute(raw_tensor, tuple(perm))
 
     @staticmethod
@@ -701,7 +703,6 @@ class TorchBackend(Backend[torch.Tensor]):
             )
         else:
             raise TypeError(f"Unsupported type for indices: {type(indices)}")
-        assert axis not in indices.dims
         axis_int = source.get_axis_from_description(axis, allow_int=False)
         if clip_to_valid:
             indices = indices.copy()
@@ -711,17 +712,17 @@ class TorchBackend(Backend[torch.Tensor]):
                     indices.dims_set
                 ), f"gather with clip_to_valid: indices ({indices}) dims must be a superset of {dim} dyn-size"
                 size = dim.dyn_size_ext.copy_compatible_to(indices)
-                indices.raw_tensor = torch.clamp(indices.raw_tensor, 0, size.raw_tensor - 1)
+                indices.raw_tensor = torch.clamp(indices.raw_tensor, torch.tensor(0), size.raw_tensor - 1)
             else:
                 indices.raw_tensor = torch.clamp(indices.raw_tensor, 0, source.raw_tensor.shape[axis_int] - 1)
-        index_own_dims = [dim for dim in indices.dims if dim not in source.dims]
+        index_own_dims = [dim for dim in indices.dims if dim not in source.dims or dim == axis]
         out = Tensor(
             "gather",
             dims=list(source.dims[:axis_int]) + index_own_dims + list(source.dims[axis_int + 1 :]),
             dtype=source.dtype,
             sparse_dim=source.sparse_dim,
         )
-        if indices.dims_set.intersection(source.dims_set):
+        if indices.dims_set.intersection(source.dims_set - {axis}):
             # We cannot use index_select in this case. Need to fallback to gather.
             indices = indices.copy_compatible_to(out, check_dtype=False, check_sparse=False, unbroadcast=True)
             if len(index_own_dims) == 1:
@@ -784,6 +785,26 @@ class TorchBackend(Backend[torch.Tensor]):
             if end is None:
                 end = axis.get_dim_value()
             out.raw_tensor = torch.narrow(source.raw_tensor, dim=axis_int, start=start, length=end - start)
+        return out
+
+    @staticmethod
+    def where(
+        cond: Tensor,
+        true_: Union[Tensor, rf.RawTensorTypes],
+        false_: Union[Tensor, rf.RawTensorTypes],
+        *,
+        allow_broadcast_all_sources: bool = False,
+    ) -> Tensor:
+        """where"""
+        true_ = rf.convert_to_tensor(true_, _backend=TorchBackend)
+        false_ = rf.convert_to_tensor(false_, _backend=TorchBackend)
+        out = Tensor.get_common_data([true_, false_, cond], allow_broadcast_all_sources=allow_broadcast_all_sources)
+        out.dtype = true_.dtype
+        out.sparse_dim = true_.sparse_dim
+        cond_bc = cond.copy_compatible_to(out, check_dtype=False, check_sparse=False)
+        true_bc = true_.copy_compatible_to(out, check_dtype=False, check_sparse=False)
+        false_bc = false_.copy_compatible_to(out, check_dtype=False, check_sparse=False)
+        out.raw_tensor = torch.where(cond_bc.raw_tensor, true_bc.raw_tensor, false_bc.raw_tensor)
         return out
 
     @staticmethod
@@ -1265,15 +1286,25 @@ class TorchBackend(Backend[torch.Tensor]):
         batch_dims = [d for d in source.dims if d not in (in_dim,) + tuple(in_spatial_dims)]
         # Torch conv expects (N,C,<spatial dims>) as shape.
         source = source.copy_transpose(batch_dims + [in_dim] + list(in_spatial_dims))
-        src_raw = torch.reshape(
-            source.raw_tensor,
-            # potentially merge batch dims all together
-            [-1, in_dim.get_dim_value()] + [d.get_dim_value() for d in in_spatial_dims],
-        )
+        if len(batch_dims) == 1:
+            src_raw = source.raw_tensor
+        else:
+            src_raw = torch.reshape(
+                source.raw_tensor,
+                # potentially merge batch dims all together
+                [-1, in_dim.get_dim_value()] + [d.get_dim_value() for d in in_spatial_dims],
+            )
         use_striding = strides and (strides > 1 if isinstance(strides, int) else any(s > 1 for s in strides))
-        if padding == "same" and use_striding:
-            # padding='same' is not supported for strided convolutions
-            padding = "valid"
+        if padding == "same" and not use_striding and all(d.dimension % 2 == 1 for d in filter_size):
+            if all(filter_size[0].dimension == d.dimension for d in filter_size):  # all same
+                padding = (filter_size[0].dimension - 1) // 2
+            else:
+                padding = tuple(d.dimension // 2 for d in filter_size)
+        if padding == "same" and (use_striding or torch.onnx.is_in_onnx_export()):
+            # padding='same' is not supported for strided convolutions.
+            # Moreover, padding specified as a string isn't supported for ONNX exporting as of 2023/05/19.
+            # Manual add the padding, and then do not use any padding in the conv.
+            padding = 0
             pads = []
             for i, s in reversed(list(enumerate(filter_size))):
                 if use_striding:
@@ -1308,6 +1339,9 @@ class TorchBackend(Backend[torch.Tensor]):
                 pad_right = pad - pad_left
                 pads.extend([pad_left, pad_right])
             src_raw = torch.nn.functional.pad(src_raw, pads)
+        if padding == "valid":
+            # padding as string is not supported e.g. in ONNX.
+            padding = 0
         if len(filter_size) == 1:
             # There is also conv_tbc, but it's a bit limited (no dilation)
             # and also unclear when exactly it is faster.
@@ -1343,7 +1377,10 @@ class TorchBackend(Backend[torch.Tensor]):
         else:
             raise ValueError(f"invalid number of filter dims {filter_size}, expected 1, 2, or 3")
         out = Tensor("conv", dims=batch_dims + [out_dim] + list(out_spatial_dims), dtype=source.dtype)
-        out.raw_tensor = torch.reshape(out_raw, [d.get_dim_value() for d in out.dims])
+        if len(batch_dims) == 1:
+            out.raw_tensor = out_raw
+        else:
+            out.raw_tensor = torch.reshape(out_raw, [d.get_dim_value() for d in out.dims])
         out.feature_dim = out_dim
         return out, out_spatial_dims
 

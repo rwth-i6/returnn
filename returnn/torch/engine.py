@@ -7,6 +7,7 @@ from typing import Optional, Union, Callable, Dict
 from contextlib import nullcontext
 
 import os
+import numpy
 import torch
 import time
 from torch.distributed import init_process_group
@@ -21,11 +22,13 @@ from returnn.config import Config
 from returnn.log import log
 from returnn.engine.base import EngineBase
 import returnn.frontend as rf
-from returnn.tensor import TensorDict, Tensor
+from returnn.tensor import TensorDict, Tensor, Dim
 from returnn.datasets.basic import init_dataset, Dataset
 from returnn.util import basic as util
 from returnn.util import NumbersDict
 from returnn.util.basic import hms, NotSpecified
+from returnn.forward_iface import ForwardCallbackIface
+
 from .updater import Updater
 from .data import pipeline as data_pipeline
 from .data import returnn_dataset_wrapper
@@ -57,6 +60,11 @@ class Engine(EngineBase):
         self._orig_model = None  # type: Optional[Union[rf.Module, torch.nn.Module]]
         self._pt_model = None  # type: Optional[torch.nn.Module]
         self._train_step_func = None  # type: Optional[Callable]
+        self._forward_step_func = self.config.typed_value("forward_step")  # type: Optional[Callable]
+        self._forward_step_expected_outputs = None  # type: Optional[TensorDict]
+        if self.config.typed_value("model_outputs") is not None:
+            self._forward_step_expected_outputs = TensorDict()
+            self._forward_step_expected_outputs.update(self.config.typed_value("model_outputs"), auto_convert=True)
         self._save_model_epoch_interval = 1
         self._updater = None  # type: Optional[Updater]
 
@@ -105,6 +113,22 @@ class Engine(EngineBase):
             print("Using GradScaler with options:", grad_scaler_opts, file=log.v2)
             self._grad_scaler = amp.GradScaler(**grad_scaler_opts)
 
+    def init_network_from_config(self, config: Optional[Config] = None):
+        """init model"""
+        assert config is self.config or not config
+        super().init_network_from_config(config=config)
+
+        extern_data = TensorDict()
+        extern_data_dict = self.config.typed_value("extern_data")
+        assert extern_data_dict, "extern_data is not specified in config"
+        extern_data.update(extern_data_dict, auto_convert=True)
+        if "seq_tag" not in extern_data.data:
+            batch_dim = _get_batch_dim_from_extern_data(extern_data)
+            extern_data.data["seq_tag"] = Tensor(name="seq_tag", dtype="string", dims=[batch_dim])
+        self.extern_data = extern_data
+
+        self._load_model()
+
     def init_train_from_config(
         self,
         config: Optional[Config] = None,
@@ -118,8 +142,9 @@ class Engine(EngineBase):
         :param dev_data:
         :param eval_data:
         """
-        assert config is self.config
+        assert config is self.config or not config
         super().init_train_from_config(config=config)
+
         if self._use_torch_distributed:
             import returnn.torch.distributed
 
@@ -138,11 +163,6 @@ class Engine(EngineBase):
             for dataset_name, dataset_opts in config.typed_value("eval_datasets", {}).items():
                 self.eval_datasets[dataset_name] = init_dataset(dataset_opts, default_kwargs={"name": dataset_name})
 
-        extern_data = TensorDict()
-        extern_data_dict = self.config.typed_value("extern_data")
-        extern_data.update(extern_data_dict, auto_convert=True)
-        self.extern_data = extern_data
-
         self._train_dataloader = self._create_data_loader(train_data) if train_data else None
         for dataset_name, dataset in self.eval_datasets.items():
             self._eval_dataloaders[dataset_name] = self._create_data_loader(dataset)
@@ -150,7 +170,8 @@ class Engine(EngineBase):
         self._start_epoch = self.get_train_start_epoch(self.config)
         self._final_epoch = self.config_get_final_epoch(self.config)
 
-        self._load_model(epoch=self._start_epoch)
+        self.init_network_from_config(config=config)
+
         self._save_model_epoch_interval = config.int("save_interval", 1)
 
         if self._use_torch_distributed:
@@ -163,7 +184,7 @@ class Engine(EngineBase):
         self._updater = Updater(self.config, self._pt_model, self.learning_rate)
         self._updater.create_optimizer()
         if self._start_epoch > 1:
-            self._load_optimizer(self._start_epoch)
+            self._load_optimizer()
 
         self._train_step_func = self.config.typed_value("train_step")
         assert self._train_step_func, "train_step not defined"
@@ -172,20 +193,24 @@ class Engine(EngineBase):
         """
         Main training loop.
         """
-
-        print("Starting training at epoch {}.".format(self._start_epoch), file=log.v3)
         assert self._pt_model is not None, "Model not initialized, call init_train_from_config()."
 
-        self.epoch = self._start_epoch
-        self._epoch_mp_shared.value = self.epoch
-        while self.epoch <= self._final_epoch:
-            self.init_train_epoch()
-            self.train_epoch()
+        if self._start_epoch > self._final_epoch:
+            print(f"Already trained until final epoch {self._final_epoch}, nothing to do.", file=log.v3)
+            return
 
+        print(
+            f"Starting training at epoch {self._start_epoch}, global train step {self.global_train_step}", file=log.v3
+        )
+        self.epoch = self._start_epoch - 1
+        while self.epoch + 1 <= self._final_epoch:
             self.epoch += 1
             self._epoch_mp_shared.value = self.epoch
 
-        print("Finished training at epoch {}.".format(self.epoch), file=log.v3)
+            self.init_train_epoch()
+            self.train_epoch()
+
+        print(f"Finished training at epoch {self.epoch}, global train step {self.global_train_step}", file=log.v3)
 
     def init_train_epoch(self):
         """
@@ -213,7 +238,7 @@ class Engine(EngineBase):
         elapsed_computation_time = 0
 
         while True:
-            data = next(data_iter, None)
+            extern_data_raw = next(data_iter, None)
             # WARNING: torch.distributed works only for the registered device,
             # as it uses only one mechanism for communication, like NCCL.
             # This is suboptimal here as we have the roundtrip CPU -> GPU -> NCCL -> GPU -> CPU.
@@ -232,7 +257,11 @@ class Engine(EngineBase):
                 self._updater.get_optimizer().zero_grad()
 
             step_begin_time = time.time()
-            self._run_step(data, train_flag=True)
+
+            extern_data = _raw_dict_to_extern_data(
+                extern_data_raw, extern_data_template=self.extern_data, device=self._device
+            )
+            self._run_step(extern_data, train_flag=True)
 
             train_ctx = rf.get_run_ctx()
 
@@ -324,9 +353,12 @@ class Engine(EngineBase):
             step_idx = 0
 
             with torch.no_grad():
-                for data in data_loader:
+                for extern_data_raw in data_loader:
+                    extern_data = _raw_dict_to_extern_data(
+                        extern_data_raw, extern_data_template=self.extern_data, device=self._device
+                    )
 
-                    self._run_step(data)
+                    self._run_step(extern_data, train_func=True)
                     train_ctx = rf.get_run_ctx()
 
                     if score_keys is None:
@@ -404,38 +436,16 @@ class Engine(EngineBase):
                 raise ModuleNotFoundError("Possible type error in DataLoader2 due to missing module 'dill'") from exc
             raise
 
-    def _run_step(self, extern_data_raw: Dict[str, torch.Tensor], *, train_flag: bool = False):
+    def _run_step(self, extern_data: TensorDict, *, train_flag: bool = False, train_func: bool):
         """
-        :param dict[str, torch.Tensor] extern_data_raw: model inputs for the step
+        :param extern_data: model inputs for the step
         """
-        assert isinstance(extern_data_raw, dict) and extern_data_raw
-        batch_dim = next(iter(self.extern_data.data.values())).dims[0]
-        batch_dim.dyn_size_ext = None  # if it is dynamic, reset now, and set it below
-        extern_data = TensorDict()
-        for k, data in self.extern_data.data.items():
-            data = data.copy_template()
-            raw_tensor = extern_data_raw[k].to(self._device)
-            data.dtype = str(raw_tensor.dtype).split(".")[-1]  # just overwrite for now...
-            data.raw_tensor = raw_tensor
-
-            if batch_dim.size is None and batch_dim.dyn_size_ext is None:
-                batch_dim.dyn_size_ext = Tensor(batch_dim.name or "batch", dims=[], dtype="int32")
-                batch_dim.dyn_size_ext.raw_tensor = torch.tensor(extern_data_raw[k].shape[0], dtype=torch.int32)
-
-            if k + ":seq_len" in extern_data_raw:
-                # Sequence lengths have to be on CPU for the later call to rnn.pack_padded_sequence
-                size = extern_data_raw[k + ":seq_len"].cpu()
-                size_dtype = str(size.dtype).split(".")[-1]
-                if data.dims[1].dyn_size_ext is None:
-                    data.dims[1].dyn_size_ext = Tensor(data.dims[1].name or "time", dims=[batch_dim], dtype=size_dtype)
-                data.dims[1].dyn_size_ext.dtype = size_dtype
-                data.dims[1].dyn_size_ext.raw_tensor = size
-
-            extern_data.data[k] = data
-
-        rf.init_train_step_run_ctx(train_flag=train_flag)
-
-        sentinel_kw = {"__fwd_compatible_random_arg_%i" % int(random() * 100): None}
+        if train_func:
+            assert self._train_step_func is not None
+            rf.init_train_step_run_ctx(train_flag=train_flag)
+        else:
+            assert self._forward_step_func is not None, "define forward_step in the config"
+            rf.init_forward_step_run_ctx(expected_outputs=self._forward_step_expected_outputs)
 
         from returnn.torch.distributed import ddp_train_forward_ctx
 
@@ -444,24 +454,39 @@ class Engine(EngineBase):
         ) if self._use_autocast else nullcontext(), ddp_train_forward_ctx(pt_model=self._ddp_pt_model) if isinstance(
             self._ddp_pt_model, DDP
         ) else nullcontext():
-            self._train_step_func(model=self._orig_model, extern_data=extern_data, **sentinel_kw)
+            sentinel_kw = {"__fwd_compatible_random_arg_%i" % int(random() * 100): None}
+            if train_func:
+                self._train_step_func(model=self._orig_model, extern_data=extern_data, **sentinel_kw)
+            else:
+                self._forward_step_func(model=self._orig_model, extern_data=extern_data, **sentinel_kw)
 
-    def _load_model(self, *, epoch: int):
+    def _load_model(self):
         """
         Sets self._model to a torch.nn.Module.
-
-        :param epoch:
         """
+        # Check existing model. This takes `load` and `load_epoch` into account,
+        # and also whether we are in train or eval mode.
+        epoch, model_epoch_filename = self.get_epoch_model(self.config)
+
         checkpoint_state = None
-        if epoch > 1:
-            filename = self.get_epoch_model_filename(epoch=epoch - 1) + util.get_model_filename_postfix()
+        if model_epoch_filename:
+            filename = model_epoch_filename + util.get_model_filename_postfix()
             print("Load model %s" % (filename,), file=log.v4)
             checkpoint_state = torch.load(filename)
-            assert checkpoint_state["epoch"] == epoch - 1
+            if epoch is None:
+                epoch = checkpoint_state["epoch"]
             step = checkpoint_state["step"]
+            print(f"  epoch {epoch}, global train step {step}", file=log.v4)
+            # The checkpoint was saved when the step was already increased (but not the epoch yet).
+            # Restore the last step.
+            # Below, we will increase the step again in case we are training.
+            step -= 1
         else:
             step = 0
-        self.global_train_step = step
+            epoch = self._start_epoch or 1
+
+        is_training = self.config.value("task", "train") == "train"
+        is_first_train_epoch = not epoch and (is_training or self.config.value("task", "train") == "initialize_model")
 
         # See :mod:`rf.rand` docstring for an explanation of this logic.
         random_seed = self.config.int("random_seed", 42)
@@ -469,8 +494,17 @@ class Engine(EngineBase):
         rf.set_random_seed(random_seed)
 
         get_model_func = self.config.typed_value("get_model")
-        assert get_model_func, "get_model not defined"
+        assert get_model_func, "get_model not defined in config"
         sentinel_kw = {"__fwd_compatible_random_arg_%i" % int(random() * 100): None}
+        # Note on the `epoch` and `step` args:
+        # This is the current epoch and step, i.e. the epoch and step we are about to run.
+        # This is not the epoch and step of the model we are loading.
+        # Epoch starts at 1, step starts at 0.
+        # It is the global train step, i.e. the number of train steps we have done so far over all epochs,
+        # so it does not reset to 0 at each epoch.
+        # In a checkpoint, we stored the epoch of the most recent epoch we just finished.
+        # We stored the global train step after we already incremented it.
+        # The checkpoint is always stored when we just have finished the epoch.
         model = get_model_func(epoch=epoch, step=step, **sentinel_kw)
         self._orig_model = model
         if isinstance(model, rf.Module):
@@ -487,10 +521,6 @@ class Engine(EngineBase):
         preload_from_files = self.config.typed_value("preload_from_files", {})
         if preload_from_files:
             # see `preload_from_files` in tf engine and `returnn.tf.network.CustomCheckpointLoader`
-            is_training = self.config.value("task", "train") == "train"
-            is_first_train_epoch = epoch == 1 and (
-                is_training or self.config.value("task", "train") == "initialize_model"
-            )
             # We use the reversed sorted order here to achieve consistent behavior with the TF engine.
             # There, the keys are used in sorted order but if a variable is loaded,
             # it will not be considered anymore afterward.
@@ -540,6 +570,15 @@ class Engine(EngineBase):
 
         self._pt_model.to(self._device)
 
+        if model_epoch_filename and is_training:
+            # We loaded a model from a checkpoint, and the epoch and step were taken from it.
+            # The epoch was just finished, so we need to increment it.
+            # We decremented the step above.
+            epoch += 1
+            step += 1
+        self.epoch = epoch  # in training, this will be reset to start_epoch
+        self.global_train_step = step
+
     def _save_model(self):
         """
         Saves the state of self._model to file.
@@ -554,14 +593,14 @@ class Engine(EngineBase):
             {"model": self._pt_model.state_dict(), "epoch": self.epoch, "step": self.global_train_step}, filename
         )
 
-    def _load_optimizer(self, epoch):
+    def _load_optimizer(self):
         """
         Loads a torch.optim.Optimizer from disk and uses it as the optimizer.
         This function is a wrapper to Updater.load_optimizer().
-
-        :param int epoch: Epoch from which to load the optimizer state.
         """
-        filename = self.get_epoch_model_filename(epoch=epoch - 1) + ".opt" + util.get_model_filename_postfix()
+        filename = (
+            self.get_epoch_model_filename(epoch=self._start_epoch - 1) + ".opt" + util.get_model_filename_postfix()
+        )
         self._updater.load_optimizer(filename)
 
     def _save_optimizer(self):
@@ -583,6 +622,42 @@ class Engine(EngineBase):
             if os.path.isfile(filename):
                 os.unlink(filename)
 
+    def forward_with_callback(self, *, dataset: Dataset, callback: ForwardCallbackIface):
+        """forward"""
+        assert isinstance(dataset, Dataset)
+        assert isinstance(callback, ForwardCallbackIface)
+
+        self._pt_model.eval()
+
+        data_loader = self._create_data_loader(dataset)
+        batch_dim = _get_batch_dim_from_extern_data(self.extern_data)
+
+        with torch.no_grad():
+            callback.init(model=self._orig_model)
+
+            for extern_data_raw in data_loader:
+                extern_data = _raw_dict_to_extern_data(
+                    extern_data_raw, extern_data_template=self.extern_data, device=self._device
+                )
+                self._run_step(extern_data, train_func=False)
+                ctx = rf.get_run_ctx()
+                ctx.check_outputs_complete()
+
+                model_outputs = ctx.outputs
+                model_outputs_per_batch_template = TensorDict(
+                    {k: v.copy_template_excluding_axis(0) for k, v in model_outputs.data.items()}
+                )
+                for batch_idx in range(batch_dim.get_dim_value()):
+                    seq_tag = extern_data["seq_tag"].raw_tensor[batch_idx].item()
+                    model_outputs_per_batch = TensorDict(
+                        {k: v.copy() for k, v in model_outputs_per_batch_template.data.items()}
+                    )
+                    for k, v in model_outputs.data.items():
+                        model_outputs_per_batch[k].raw_tensor = v.raw_tensor[batch_idx]
+                    callback.process_seq(seq_tag=seq_tag, outputs=model_outputs_per_batch)
+
+            callback.finish()
+
 
 def _to_raw(n: Union[int, float, Tensor]):
     if isinstance(n, (int, float)):
@@ -590,6 +665,62 @@ def _to_raw(n: Union[int, float, Tensor]):
     if isinstance(n, Tensor):
         return n.raw_tensor.detach().cpu().numpy()
     raise TypeError(f"Unexpected {n} of type {type(n)}")
+
+
+def _raw_dict_to_extern_data(
+    extern_data_raw: Dict[str, torch.Tensor], *, extern_data_template: TensorDict, device: Union[str, torch.device]
+) -> TensorDict:
+    """
+    :param extern_data_raw: This comes out of the DataLoader.
+    :param extern_data_template: Specified via `extern_data` in the config.
+    :param device: E.g. the GPU.
+    :return: tensor dict, like extern_data_template, but with raw tensors set to Torch tensors, on the right device.
+    """
+    assert isinstance(extern_data_raw, dict) and extern_data_raw
+    batch_dim = _get_batch_dim_from_extern_data(extern_data_template)
+    batch_dim.dyn_size_ext = None  # if it is dynamic, reset now, and set it below
+    extern_data = TensorDict()
+    for k, data in extern_data_template.data.items():
+        data = data.copy_template()
+        raw_tensor = extern_data_raw[k]
+        if isinstance(raw_tensor, torch.Tensor):
+            data.dtype = str(raw_tensor.dtype).split(".")[-1]  # just overwrite for now...
+            data.raw_tensor = raw_tensor.to(device)
+        elif isinstance(raw_tensor, numpy.ndarray):
+            data.raw_tensor = raw_tensor  # leave it as it is
+        else:
+            raise TypeError(f"Unexpected type {type(raw_tensor)} for {k} in extern_data_raw.")
+
+        if batch_dim.size is None and batch_dim.dyn_size_ext is None:
+            batch_dim.dyn_size_ext = Tensor(batch_dim.name or "batch", dims=[], dtype="int32")
+            batch_dim.dyn_size_ext.raw_tensor = torch.tensor(extern_data_raw[k].shape[0], dtype=torch.int32)
+
+        # This has certain assumptions on the dataset, the data pipeline and collate_batch.
+        # Namely, we expect that we get the batch dim in the first dim (see collate_batch).
+        # We also expect that the sequence lengths are in the second dim, if it is dynamic.
+        if len(data.dims) >= 2 and data.dims[1].dimension is None:
+            assert k + ":seq_len" in extern_data_raw, (
+                f"extern_data {data}, dyn spatial dim, missing {k}:seq_len in raw dict, "
+                f"check dataset or collate_batch"
+            )
+            # Sequence lengths have to be on CPU for the later call to rnn.pack_padded_sequence
+            size = extern_data_raw[k + ":seq_len"].cpu()
+            size_dtype = str(size.dtype).split(".")[-1]
+            if data.dims[1].dyn_size_ext is None:
+                data.dims[1].dyn_size_ext = Tensor(data.dims[1].name or "time", dims=[batch_dim], dtype=size_dtype)
+            data.dims[1].dyn_size_ext.dtype = size_dtype
+            data.dims[1].dyn_size_ext.raw_tensor = size
+
+        extern_data.data[k] = data
+
+    return extern_data
+
+
+def _get_batch_dim_from_extern_data(extern_data: TensorDict) -> Dim:
+    # We expect that the batch dim is the first dim in any of the tensors.
+    # See collate_batch.
+    batch_dim = next(iter(extern_data.data.values())).dims[0]
+    return batch_dim
 
 
 def _print_process(report_prefix, step, eval_info):

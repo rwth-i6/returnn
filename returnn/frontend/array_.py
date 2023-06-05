@@ -31,6 +31,10 @@ __all__ = [
     "gather",
     "slice",
     "shift_right",
+    "reverse_sequence",
+    "where",
+    "sparse_to_dense",
+    "one_hot",
 ]
 
 
@@ -490,3 +494,64 @@ def shift_right(source: Tensor, *, axis: Dim, pad_value: Union[rf.RawTensorTypes
     padded, (padded_dim,) = rf.pad(source, axes=[axis], padding=[(amount, 0)], mode="constant", value=pad_value)
     padded_slice, _ = rf.slice(padded, axis=padded_dim, size=axis)
     return padded_slice
+
+
+def reverse_sequence(tensor: Tensor, *, axis: Dim) -> Tensor:
+    """
+    Similar as tf.reverse_sequence, or Torch flip (but taking seq lengths into account).
+
+    :param tensor:
+    :param axis:
+    :return: reversed tensor, same dims
+    """
+    indices = rf.combine_bc(axis.get_size_tensor(), "-", rf.range_over_dim(axis)) - 1
+    return rf.gather(tensor, indices=indices, axis=axis, clip_to_valid=True)
+
+
+def where(
+    cond: Tensor,
+    true_: Union[Tensor, rf.RawTensorTypes],
+    false_: Union[Tensor, rf.RawTensorTypes],
+    *,
+    allow_broadcast_all_sources: bool = False,
+) -> Tensor:
+    """
+    Wraps tf.where, which is SwitchLayer in RETURNN.
+
+    :return: true_ if cond else false_, elemwise.
+    """
+    # noinspection PyProtectedMember
+    return cond._raw_backend.where(cond, true_, false_, allow_broadcast_all_sources=allow_broadcast_all_sources)
+
+
+def sparse_to_dense(
+    labels: Union[Tensor, rf.RawTensorTypes],
+    *,
+    label_value: Union[Tensor, rf.RawTensorTypes],
+    other_value: Union[Tensor, rf.RawTensorTypes],
+    axis: Optional[Dim] = None,
+) -> Tensor:
+    """
+    Converts a sparse tensor to a dense one.
+
+    This is a more generic variant of "one_hot".
+
+    Note that usually this is not needed as most other functions should handle sparse tensors just fine
+    and much more efficiently than they would be with dense tensors.
+    """
+    labels = rf.convert_to_tensor(labels)
+    if not axis:
+        assert labels.sparse_dim, "sparse_to_dense: either provide `axis` or `labels` with sparse_dim"
+        axis = labels.sparse_dim
+    indices = rf.range_over_dim(axis)
+    return where(rf.compare_bc(labels, "==", indices), label_value, other_value)
+
+
+def one_hot(source: Tensor) -> Tensor:
+    """
+    one_hot. special case of :func:`sparse_to_dense`.
+
+    Note that usually this is not needed as most other functions should handle sparse tensors just fine
+    and much more efficiently than they would be with dense tensors.
+    """
+    return sparse_to_dense(source, label_value=1.0, other_value=0.0)

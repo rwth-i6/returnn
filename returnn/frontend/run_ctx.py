@@ -37,12 +37,12 @@ def init_train_step_run_ctx(*, train_flag: Union[bool, Tensor]):
     _run_ctx = RunCtx(stage="train_step", train_flag=train_flag)
 
 
-def init_forward_step_run_ctx():
+def init_forward_step_run_ctx(expected_outputs: Optional[TensorDict] = None):
     """
     Call this at the beginning of a new forward step.
     """
     global _run_ctx
-    _run_ctx = RunCtx(stage="forward_step")
+    _run_ctx = RunCtx(stage="forward_step", expected_outputs=expected_outputs)
 
 
 def get_run_ctx() -> RunCtx:
@@ -67,7 +67,9 @@ class RunCtx:
     In forwarding, we expect that some output is being defined via mark_as_output().
     """
 
-    def __init__(self, *, stage: str, train_flag: Union[bool, Tensor] = False):
+    def __init__(
+        self, *, stage: str, train_flag: Union[bool, Tensor] = False, expected_outputs: Optional[TensorDict] = None
+    ):
         """
         :param stage:
             - "init"
@@ -78,6 +80,7 @@ class RunCtx:
         self._train_flag = train_flag
         self.losses = {}  # type: Dict[str, Loss]
         self.outputs = TensorDict()
+        self.expected_outputs = expected_outputs
 
     @property
     def stage(self) -> str:
@@ -177,19 +180,76 @@ class RunCtx:
             If not specified, we try to infer BTF or BF as default, if that works, otherwise it will be an error.
         """
         assert self.stage == "forward_step"
+
+        if self.expected_outputs is not None:
+            assert (
+                name in self.expected_outputs.data
+            ), f"mark_as_output: unexpected output {name!r}, we expect outputs: {self.expected_outputs}"
+        expected_output = self.expected_outputs.data[name] if self.expected_outputs else None
+        if dims is None and expected_output:
+            dims = expected_output.dims
+        if dims is not None and expected_output:
+            assert (
+                expected_output.dims == dims
+            ), f"mark_as_output: {name!r} dims mismatch from expected output, given {dims}, expected {expected_output}"
+
         if not isinstance(tensor, Tensor):
             assert isinstance(tensor, _backend.global_backend.RawTensorType)
             tensor = rf.convert_to_tensor(tensor, dims=dims)
             # In case it was not specified, just accept whatever order we got.
             dims = tensor.dims
-        assert name not in self.outputs.data
+
         if dims is None:
             # We try some reasonable defaults, specifically: BTF or BF.
             dims = _default_dim_order(tensor)
         assert set(dims) == set(tensor.dims), f"mark_as_output: tensor {tensor} does not have the dims {dims}"
         tensor = tensor.copy_transpose(dims, allow_int=False)
         tensor = tensor.copy(name=name)
+        assert name not in self.outputs.data
         self.outputs.data[name] = tensor
+        # noinspection PyProtectedMember
+        backend = tensor._raw_backend
+
+        if expected_output:
+            # Perform sanity checks using the expected output.
+            # The expected output usually comes from `model_outputs` from the user config.
+            # The dimensions of `expected_output` and `tensor` should match,
+            # but we can't directly check for expected_output.dims == tensor.dims
+            # because not all dims can be known in advance in `expected_output`,
+            # e.g. dynamic dims.
+            # Thus, we allow undefined dims in the expected output,
+            # and ignore them when checking for equality.
+            assert len(expected_output.dims) == len(tensor.dims), (
+                f"mark_as_output: lengths of expected output {expected_output.dims}"
+                f" and actual output {tensor.dims} don't match."
+            )
+            for axis, (expected_dim, actual_dim) in enumerate(zip(expected_output.dims, tensor.dims)):
+                expected_dim: Dim
+                actual_dim: Dim
+                if not expected_dim.is_dim_known():
+                    continue  # ignore undefined dims
+                assert expected_dim == actual_dim, (
+                    f"mark_as_output {name!r}: expected output {expected_output} does not match {tensor}, "
+                    f"expected {expected_dim}, got {actual_dim}"
+                )
+                if expected_dim.dyn_size_ext and expected_dim.dyn_size_ext.raw_tensor is None:
+                    if expected_dim.dyn_size_ext.batch_ndim == 0:
+                        # Automatically infer the expected dim from the actual output
+                        expected_dim.dyn_size_ext.raw_tensor = backend.convert_to_tensor(
+                            backend.get_shape_tuple_raw(tensor.raw_tensor)[axis],
+                            dims=(),
+                            dtype=expected_dim.dyn_size_ext.dtype,
+                        ).raw_tensor
+                    else:
+                        raise Exception(f"mark_as_output {name!r}: expected {expected_dim} dyn_size_ext to be defined")
+            assert expected_output.dtype == tensor.dtype, (
+                f"mark_as_output: {name!r} dtype mismatch from expected output,"
+                f" given {tensor.dtype}, expected {expected_output.dtype}"
+            )
+            assert expected_output.sparse_dim == tensor.sparse_dim, (
+                f"mark_as_output: {name!r} sparse_dim mismatch from expected output,"
+                f" given {tensor.sparse_dim}, expected {expected_output.sparse_dim}"
+            )
 
     def mark_as_default_output(self, tensor: Union[Tensor, Any], *, shape: Optional[Sequence[Dim]] = None) -> None:
         """
@@ -202,6 +262,17 @@ class RunCtx:
         :param shape:
         """
         self.mark_as_output(tensor, "output", dims=shape)
+
+    def check_outputs_complete(self):
+        """
+        If expected outputs are given, check that all expected outputs are present.
+        """
+        if self.expected_outputs:
+            assert set(self.expected_outputs.data.keys()) == set(self.outputs.data.keys()), (
+                f"check_outputs_complete: expected outputs {self.expected_outputs} do not match"
+                f" actual outputs {self.outputs}"
+            )
+            # We don't need to check the dims, dtype, etc, as this is already done in mark_as_output.
 
     def total_loss(self) -> Union[Tensor, float]:
         """
