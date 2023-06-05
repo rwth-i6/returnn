@@ -3,6 +3,7 @@ torch.distributed utils
 """
 
 from __future__ import annotations
+import itertools
 from typing import Optional
 import os
 import socket
@@ -105,6 +106,20 @@ def get_local_rank():
     return int(os.environ["LOCAL_RANK"])
 
 
+def _find_tensors(obj):
+    """
+    Recursively find all tensors contained in the specified object,
+    cf. torch.nn.parallel.distributed._find_tensors
+    """
+    if isinstance(obj, torch.Tensor):
+        return [obj]
+    if isinstance(obj, (list, tuple)):
+        return itertools.chain(*map(_find_tensors, obj))
+    if isinstance(obj, dict):
+        return itertools.chain(*map(_find_tensors, obj.values()))
+    return []
+
+
 @contextmanager
 def ddp_train_forward_ctx(pt_model):
     """
@@ -127,9 +142,7 @@ def ddp_train_forward_ctx(pt_model):
         work = Join.notify_join_context(pt_model)
         if work:
             # noinspection PyProtectedMember
-            pt_model.reducer._set_forward_pass_work_handle(
-                work, pt_model._divide_by_initial_world_size
-            )
+            pt_model.reducer._set_forward_pass_work_handle(work, pt_model._divide_by_initial_world_size)
 
         # noinspection PyProtectedMember
         if torch.is_grad_enabled() and pt_model.reducer._rebuild_buckets():
@@ -167,7 +180,7 @@ def ddp_train_forward_ctx(pt_model):
                 train_ctx = rf.get_run_ctx()
                 loss = list(train_ctx.losses.values())[0].loss.raw_tensor
                 # noinspection PyProtectedMember
-                pt_model.reducer.prepare_for_backward(list(torch.nn.parallel.distributed._find_tensors(loss)))
+                pt_model.reducer.prepare_for_backward(list(_find_tensors(loss)))
             else:
                 pt_model.reducer.prepare_for_backward([])
         else:
