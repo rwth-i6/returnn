@@ -86,25 +86,31 @@ def get_ctx(config=None):
 
 
 def get_device_ids():
-    # It depends on the specific setup what to return here,
-    # how CUDA_VISIBLE_DEVICES is set up, etc.
-    # This is currently a reasonable assumption
-    # but we might extend the logic later,
-    # or make it configurable.
+    """
+    It depends on the specific setup what to return here,
+    how CUDA_VISIBLE_DEVICES is set up, etc.
+    This is currently a reasonable assumption,
+    but we might extend the logic later,
+    or make it configurable.
+    """
     return [get_local_rank()]
 
 
 def get_local_rank():
-    # torch.distributed does not seem to provide a function for this.
-    # Via mpirun (OpenMPI), this env variable would be set.
-    # It should fail with an error otherwise.
+    """
+    torch.distributed does not seem to provide a function for this.
+    Via mpirun (OpenMPI), this env variable would be set.
+    It should fail with an error otherwise.
+    """
     return int(os.environ["LOCAL_RANK"])
 
 
 @contextmanager
 def ddp_train_forward_ctx(pt_model):
-    # the original (unwrapped) module is passed to the train step, therefore here we set up the right context
-    # as what DistributedDataParallel.forward does internally
+    """
+    the original (unwrapped) module is passed to the train step, therefore here we set up the right context
+    as what DistributedDataParallel.forward does internally
+    """
     if torch.is_grad_enabled() and pt_model.require_backward_grad_sync:
         assert pt_model.logger is not None
         pt_model.logger.set_runtime_stats_and_log()
@@ -120,23 +126,33 @@ def ddp_train_forward_ctx(pt_model):
 
         work = Join.notify_join_context(pt_model)
         if work:
+            # noinspection PyProtectedMember
             pt_model.reducer._set_forward_pass_work_handle(
                 work, pt_model._divide_by_initial_world_size  # type: ignore[arg-type]
             )
 
+        # noinspection PyProtectedMember
         if torch.is_grad_enabled() and pt_model.reducer._rebuild_buckets():
             pt_model._has_rebuilt_buckets = True
 
+        # noinspection PyProtectedMember
         if pt_model._check_sync_bufs_pre_fwd():
+            # noinspection PyProtectedMember
             pt_model._sync_buffers()
 
+        # noinspection PyProtectedMember
         if pt_model._join_config.enable:
             # Notify joined ranks whether they should sync in backwards pass or not.
+            # noinspection PyProtectedMember
             pt_model._check_global_requires_backward_grad_sync(is_joined_rank=False)
+
+        # noinspection PyProtectedMember
         with pt_model._inside_ddp_forward():
             yield
 
+        # noinspection PyProtectedMember
         if pt_model._check_sync_bufs_post_fwd():
+            # noinspection PyProtectedMember
             pt_model._sync_buffers()
 
         if torch.is_grad_enabled() and pt_model.require_backward_grad_sync:
