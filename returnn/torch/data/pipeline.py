@@ -108,6 +108,10 @@ class ChunkingIterDataPipe(torch.utils.data.IterDataPipe):
 
             if not chunking_data_keys:
                 chunking_data_keys = list(data_dict.keys())  # use all if not configured separately
+                chunking_data_key_black_list = ["seq_tag"]
+                for key in chunking_data_key_black_list:
+                    if key in chunking_data_keys:
+                        chunking_data_keys.remove(key)
                 assert chunking_data_keys, "Dataset produced sequence without any data."
 
             data_chunks = {}
