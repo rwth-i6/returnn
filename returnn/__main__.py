@@ -334,6 +334,17 @@ def init_backend_engine():
 
             returnn.tf.distributed.init_distributed_tf(config)
     elif BackendEngine.is_torch_selected():
+        if config.typed_value("torch_distributed") is not None:
+            import socket
+            import returnn.torch.distributed
+
+            torch_distributed = returnn.torch.distributed.get_ctx(config=config)
+            print(
+                "Torch: Hostname %s, pid %i, using GPU %s."
+                % (socket.gethostname(), os.getpid(), str(torch_distributed.local_rank())),
+                file=log.v3,
+            )
+
         print("PyTorch:", util.describe_torch_version(), file=log.v3)
     else:
         raise NotImplementedError
@@ -386,6 +397,11 @@ def finalize(error_occurred=False):
                 import horovod.tensorflow as hvd  # noqa
 
                 hvd.shutdown()
+        elif BackendEngine.is_torch_selected():
+            if config.typed_value("torch_distributed") is not None:
+                from torch.distributed import destroy_process_group
+
+                destroy_process_group()
 
 
 def need_data():

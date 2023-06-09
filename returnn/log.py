@@ -192,6 +192,18 @@ class Log:
                 fn_ext = ".horovod-%i-%i%s" % (hvd.rank(), hvd.size(), fn_ext)
                 new_logs.append(fn_prefix + fn_ext)
             logs = new_logs
+
+        if config.typed_value("torch_distributed") is not None:
+            import returnn.torch.distributed
+
+            torch_distributed = returnn.torch.distributed.get_ctx(config=config)
+            new_logs = []
+            for fn in logs:
+                fn_prefix, fn_ext = os.path.splitext(fn)
+                fn_ext = ".torch-distrib-%i-%i%s" % (torch_distributed.rank(), torch_distributed.size(), fn_ext)
+                new_logs.append(fn_prefix + fn_ext)
+            logs = new_logs
+
         self.initialize(logs=logs, verbosity=log_verbosity, formatter=log_format)
 
     def print_warning(self, text, prefix_text="WARNING:", extra_text=None):

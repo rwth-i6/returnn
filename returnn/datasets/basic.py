@@ -245,6 +245,11 @@ class Dataset(object):
 
             if returnn.tf.horovod.get_ctx().is_dataset_distribution_random_seed_offset():
                 return returnn.tf.horovod.get_ctx().rank() * 16127
+
+        if config.typed_value("torch_distributed") is not None:
+            import returnn.torch.distributed
+
+            return returnn.torch.distributed.get_ctx().rank() * 16127
         return 0
 
     @staticmethod

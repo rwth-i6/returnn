@@ -9,6 +9,9 @@ from contextlib import nullcontext
 import os
 import numpy
 import torch
+import time
+from torch.distributed import init_process_group
+from torch.nn.parallel import DistributedDataParallel
 import torch.utils.data.datapipes as dp
 from torch import autocast
 from torch.cuda import amp
@@ -23,7 +26,7 @@ from returnn.tensor import TensorDict, Tensor, Dim
 from returnn.datasets.basic import init_dataset, Dataset
 from returnn.util import basic as util
 from returnn.util import NumbersDict
-from returnn.util.basic import NotSpecified
+from returnn.util.basic import hms, NotSpecified
 from returnn.forward_iface import ForwardCallbackIface
 
 from .updater import Updater
@@ -71,6 +74,18 @@ class Engine(EngineBase):
 
         self._device = _get_device_from_config(config)
         print("Using device:", self._device, file=log.v2)
+
+        self._use_torch_distributed = False
+        self._torch_distributed_class = None  # type: Optional[Callable]
+        self._torch_distributed_options = None  # type: Optional[dict]
+        self._ddp_pt_model = None  # type: Optional[torch.nn.Module]
+        self._accum_grad_multiple_step = config.int("accum_grad_multiple_step", 1)
+
+        torch_distributed = config.typed_value("torch_distributed")
+        if torch_distributed is not None:
+            self._use_torch_distributed = True
+            self._torch_distributed_class = torch_distributed.get("class", None)
+            self._torch_distributed_options = torch_distributed.get("options", None)
 
         amp_options = self.config.typed_value("torch_amp")
         grad_scaler_opts = self.config.typed_value("grad_scaler", NotSpecified)
@@ -130,6 +145,14 @@ class Engine(EngineBase):
         assert config is self.config or not config
         super().init_train_from_config(config=config)
 
+        if self._use_torch_distributed:
+            import returnn.torch.distributed
+
+            torch_distributed = returnn.torch.distributed.get_ctx(config=config)
+            local_rank = torch_distributed.local_rank()
+            print(f"Start running torch distributed training on local rank {local_rank}.", file=log.v2)
+            self._device = f"cuda:{local_rank}"
+
         self.train_dataset = train_data
         self.eval_datasets.clear()
         if dev_data:
@@ -151,6 +174,13 @@ class Engine(EngineBase):
 
         self._save_model_epoch_interval = config.int("save_interval", 1)
 
+        if self._use_torch_distributed:
+            from returnn.torch.distributed import get_device_ids
+
+            # wrap the model use torch distributed class
+            self._ddp_pt_model = self._torch_distributed_class(
+                self._pt_model, device_ids=get_device_ids(), **self._torch_distributed_options
+            )
         self._updater = Updater(self.config, self._pt_model, self.learning_rate)
         self._updater.create_optimizer()
         if self._start_epoch > 1:
@@ -202,14 +232,44 @@ class Engine(EngineBase):
         accumulated_losses_dict = NumbersDict()
         accumulated_inv_norm_factors_dict = NumbersDict()
         step_idx = 0
-        for extern_data_raw in self._train_dataloader:
-            self._updater.get_optimizer().zero_grad()
+        epoch_start_time = time.time()
+
+        data_iter = iter(self._train_dataloader)
+        elapsed_computation_time = 0
+
+        while True:
+            extern_data_raw = next(data_iter, None)
+            # WARNING: torch.distributed works only for the registered device,
+            # as it uses only one mechanism for communication, like NCCL.
+            # This is suboptimal here as we have the roundtrip CPU -> GPU -> NCCL -> GPU -> CPU.
+            # TODO: Use more direct CPU -> Ethernet -> CPU communication.
+            _has_data = torch.tensor([extern_data_raw is not None], dtype=torch.int8).to(self._device)
+
+            if self._use_torch_distributed:
+                # use all reduce to check if all workers have data, if at least one worker does not have data,
+                # all workers finish this epoch
+                torch.distributed.all_reduce(_has_data, op=torch.distributed.ReduceOp.MIN)
+            if not _has_data[0]:
+                break
+
+            # clear the gradients when every gradient accumulation loop starts
+            if step_idx % self._accum_grad_multiple_step == 0:
+                self._updater.get_optimizer().zero_grad()
+
+            step_begin_time = time.time()
+
             extern_data = _raw_dict_to_extern_data(
                 extern_data_raw, extern_data_template=self.extern_data, device=self._device
             )
-            self._run_step(extern_data, train_func=True, train_flag=True)
+            self._run_step(extern_data, train_flag=True, train_func=True)
 
             train_ctx = rf.get_run_ctx()
+
+            # scale the loss to account for gradient accumulation
+            if self._accum_grad_multiple_step > 1:
+                for loss_name in train_ctx.losses.keys():
+                    train_ctx.losses[loss_name].loss /= self._accum_grad_multiple_step
+
             total_loss = train_ctx.total_loss()
             losses_dict = NumbersDict(
                 {
@@ -221,13 +281,23 @@ class Engine(EngineBase):
                 {name: float(_to_raw(loss.get_inv_norm_factor())) for name, loss in train_ctx.losses.items()}
             )
 
-            if self._grad_scaler is not None:
-                self._grad_scaler.scale(total_loss).backward()
-                self._grad_scaler.step(self._updater.get_optimizer())
-                self._grad_scaler.update()
-            else:
-                total_loss.raw_tensor.backward()
-                self._updater.get_optimizer().step()
+            with self._ddp_pt_model.no_sync() if self._use_torch_distributed and (
+                step_idx % self._accum_grad_multiple_step
+            ) != (self._accum_grad_multiple_step - 1) else nullcontext():
+                if self._grad_scaler is not None:
+                    self._grad_scaler.scale(total_loss).backward()
+                else:
+                    total_loss.raw_tensor.backward()
+
+            # only update the weights when every gradient accumulation loop ends
+            if (step_idx % self._accum_grad_multiple_step) == (self._accum_grad_multiple_step - 1):
+                if self._grad_scaler is not None:
+                    self._grad_scaler.step(self._updater.get_optimizer())
+                    self._grad_scaler.update()
+                else:
+                    self._updater.get_optimizer().step()
+
+            elapsed_computation_time += time.time() - step_begin_time
 
             accumulated_losses_dict += losses_dict
             accumulated_inv_norm_factors_dict += inv_norm_factors_dict
@@ -240,21 +310,28 @@ class Engine(EngineBase):
             step_idx += 1
             self.global_train_step += 1
 
-        print("Trained %i steps" % step_idx)
-
-        accumulated_losses_dict = accumulated_losses_dict / accumulated_inv_norm_factors_dict
-        self.learning_rate_control.set_epoch_error(
-            self.epoch, {f"train_loss_{k}": v for k, v in accumulated_losses_dict.items()}
+        elapsed = time.time() - epoch_start_time
+        elapsed_computation_percentage = elapsed_computation_time / elapsed
+        print(
+            "Trained %i steps, %s elapsed (%.1f%% computing time)"
+            % (step_idx, hms(elapsed), (elapsed_computation_percentage * 100.0)),
+            file=log.v3,
         )
-        self.learning_rate_control.save()
 
-        print(f"Total train loss:", _format_score(dict(accumulated_losses_dict)), file=log.v3)
+        if (not self._use_torch_distributed) or (self._use_torch_distributed and torch.distributed.get_rank() == 0):
+            accumulated_losses_dict = accumulated_losses_dict / accumulated_inv_norm_factors_dict
+            self.learning_rate_control.set_epoch_error(
+                self.epoch, {f"train_loss_{k}": v for k, v in accumulated_losses_dict.items()}
+            )
+            self.learning_rate_control.save()
 
-        if self.epoch % self._save_model_epoch_interval == 0 or self.epoch == self._final_epoch:
-            self._save_model()
-            self._save_optimizer()
+            print(f"Total train loss:", _format_score(dict(accumulated_losses_dict)), file=log.v3)
 
-        self.eval_model()
+            if self.epoch % self._save_model_epoch_interval == 0 or self.epoch == self._final_epoch:
+                self._save_model()
+                self._save_optimizer()
+
+            self.eval_model()
 
     def eval_model(self):
         """
@@ -370,7 +447,13 @@ class Engine(EngineBase):
             assert self._forward_step_func is not None, "define forward_step in the config"
             rf.init_forward_step_run_ctx(expected_outputs=self._forward_step_expected_outputs)
 
-        with autocast(device_type=self._device, dtype=self._autocast_dtype) if self._use_autocast else nullcontext():
+        from returnn.torch.distributed import ddp_train_forward_ctx
+
+        with autocast(
+            device_type=self._device, dtype=self._autocast_dtype
+        ) if self._use_autocast else nullcontext(), ddp_train_forward_ctx(pt_model=self._ddp_pt_model) if isinstance(
+            self._ddp_pt_model, DistributedDataParallel
+        ) else nullcontext():
             sentinel_kw = {"__fwd_compatible_random_arg_%i" % int(random() * 100): None}
             if train_func:
                 self._train_step_func(model=self._orig_model, extern_data=extern_data, **sentinel_kw)
