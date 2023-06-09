@@ -207,8 +207,6 @@ class RunCtx:
         tensor = tensor.copy(name=name)
         assert name not in self.outputs.data
         self.outputs.data[name] = tensor
-        # noinspection PyProtectedMember
-        backend = tensor._raw_backend
 
         if expected_output:
             # Perform sanity checks using the expected output.
@@ -223,25 +221,24 @@ class RunCtx:
                 f"mark_as_output: lengths of expected output {expected_output.dims}"
                 f" and actual output {tensor.dims} don't match."
             )
-            for axis, (expected_dim, actual_dim) in enumerate(zip(expected_output.dims, tensor.dims)):
+            for expected_dim, actual_dim in zip(expected_output.dims, tensor.dims):
                 expected_dim: Dim
                 actual_dim: Dim
                 if not expected_dim.is_dim_known():
-                    continue  # ignore undefined dims
-                assert expected_dim == actual_dim, (
-                    f"mark_as_output {name!r}: expected output {expected_output} does not match {tensor}, "
-                    f"expected {expected_dim}, got {actual_dim}"
-                )
-                if expected_dim.dyn_size_ext and expected_dim.dyn_size_ext.raw_tensor is None:
-                    if expected_dim.dyn_size_ext.batch_ndim == 0:
-                        # Automatically infer the expected dim from the actual output
-                        expected_dim.dyn_size_ext.raw_tensor = backend.convert_to_tensor(
-                            backend.get_shape_tuple_raw(tensor.raw_tensor)[axis],
-                            dims=(),
-                            dtype=expected_dim.dyn_size_ext.dtype,
-                        ).raw_tensor
-                    else:
-                        raise Exception(f"mark_as_output {name!r}: expected {expected_dim} dyn_size_ext to be defined")
+                    assert actual_dim.is_dynamic(), (
+                        f"mark_as_output: expected dim {expected_dim} doesn't have a known value."
+                        f" Matching actual dim assumed to be dynamic, but got non-dynamic dim {actual_dim}."
+                    )
+                elif expected_dim.is_dynamic():
+                    assert actual_dim.is_dynamic(), (
+                        f"mark_as_output: expected dim {expected_dim} is dynamic."
+                        f" Matching actual dim assumed to be dynamic, but got non-dynamic dim {actual_dim}."
+                    )
+                elif expected_dim.is_static():
+                    assert actual_dim is expected_dim, (
+                        f"mark_as_output: expected dim {expected_dim} is static."
+                        f" Matching actual dim assumed to be the same static dim, but got {actual_dim}."
+                    )
             assert expected_output.dtype == tensor.dtype, (
                 f"mark_as_output: {name!r} dtype mismatch from expected output,"
                 f" given {tensor.dtype}, expected {expected_output.dtype}"
