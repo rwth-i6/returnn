@@ -217,6 +217,8 @@ class RunCtx:
             # e.g. dynamic dims.
             # Thus, we allow undefined dims in the expected output,
             # and ignore them when checking for equality.
+            # The most important thing for the user is to define what dims are dynamic and what dims are static.
+            # This is also necessary for ONNX export.
             assert len(expected_output.dims) == len(tensor.dims), (
                 f"mark_as_output: lengths of expected output {expected_output.dims}"
                 f" and actual output {tensor.dims} don't match."
@@ -235,10 +237,12 @@ class RunCtx:
                         f" Matching actual dim assumed to be dynamic, but got non-dynamic dim {actual_dim}."
                     )
                 elif expected_dim.is_static():
-                    assert actual_dim is expected_dim, (
+                    assert expected_dim.is_static() and actual_dim.dimension == expected_dim.dimension, (
                         f"mark_as_output: expected dim {expected_dim} is static."
-                        f" Matching actual dim assumed to be the same static dim, but got {actual_dim}."
+                        f" Matching actual dim assumed to be the same static dim value, but got {actual_dim}."
                     )
+                else:
+                    assert False, f"mark_as_output: unexpected expected dim {expected_dim}."
             assert expected_output.dtype == tensor.dtype, (
                 f"mark_as_output: {name!r} dtype mismatch from expected output,"
                 f" given {tensor.dtype}, expected {expected_output.dtype}"
