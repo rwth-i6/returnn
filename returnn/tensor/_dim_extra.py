@@ -1540,13 +1540,13 @@ class _DimMixin:
                 assert self_base_extra.derived_from_tag == base
             else:
                 self_base_extra.derived_from_tag = base
-        if not self.batch and base.batch:
-            self.batch = base.batch
-            self.control_flow_ctx = base.control_flow_ctx
-            key = base.batch, base.control_flow_ctx
-            assert key not in self_base_extra.same_for_batch_ctx
-            self_base_extra.same_for_batch_ctx[key] = self
         if self.is_dynamic() or not self.is_dim_known():
+            if not self.batch and base.batch:
+                self.batch = base.batch
+                self.control_flow_ctx = base.control_flow_ctx
+                key = base.batch, base.control_flow_ctx
+                assert key not in self_base_extra.same_for_batch_ctx
+                self_base_extra.same_for_batch_ctx[key] = self
             if not self.dyn_size_ext:
                 if base.dyn_size_ext:
                     if base.batch and base.batch == self.batch and base.control_flow_ctx == self.control_flow_ctx:
