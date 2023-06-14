@@ -7823,6 +7823,8 @@ def test_SliceNdLayer():
     size = 5
     with make_scope() as session:
         net = TFNetwork(extern_data=ExternData())
+        batch = BatchInfo.make_global_batch_info(tf.constant(n_batch))
+        net.extern_data.set_batch_info(batch)
         src = InternalLayer(name="src", network=net, output=Data(name="src", dim=n_dim))
         src.output.placeholder = tf.constant(seqs)
         src.output.size_placeholder = {0: tf.constant(seq_lens)}
@@ -9295,6 +9297,7 @@ def test_PostfixInTimeLayer():
 
         net = TFNetwork(extern_data=ExternData())
         batch = BatchInfo.make_global_batch_info(tf.constant(2))
+        net.extern_data.set_batch_info(batch)
         src = InternalLayer(name="src", network=net, output=Data(name="src", dim=2, dtype="int32", batch=batch))
         src_seqs = np.array([[[1, 1], [2, 2], [3, 3], [4, 4], [5, 5]], [[6, 6], [7, 7], [8, 8], [0, 0], [0, 0]]])
         src_seq_lens = [5, 3]
