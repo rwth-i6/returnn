@@ -248,8 +248,6 @@ class LenFilterDataPipe(torch.utils.data.IterDataPipe):
     Returns dataset yielding list of data lengths within the defined range
     """
 
-    def __getitem__(self, index):
-        raise Exception(f"{self.__class__.__name__}.__getitem__ not supported")
 
     def __init__(
         self,
@@ -283,3 +281,6 @@ class LenFilterDataPipe(torch.utils.data.IterDataPipe):
             if sequence_lengths.any_compare(self._max_seq_length, lambda a, b: a > b):
                 continue
             yield data_dict
+
+    def __getitem__(self, index):
+        raise Exception(f"{self.__class__.__name__}.__getitem__ not supported")      
