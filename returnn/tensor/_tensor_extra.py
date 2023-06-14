@@ -1546,7 +1546,12 @@ class _TensorMixin(_TensorMixinBase):
                         batch = batch.copy_remove_dim(virtual_dim)
                     elif isinstance(virtual_dim, BatchInfo.GlobalBatchDim):
                         assert not new_batch_dim_tag
-                        new_batch_dim_tag = Dim(kind=Dim.Types.Batch, description=dim_tag.description, dimension=None)
+                        if batch is None or batch.is_global_batch():
+                            new_batch_dim_tag = batch_dim  # reuse global batch dim
+                        else:
+                            new_batch_dim_tag = Dim(
+                                kind=Dim.Types.Batch, description=dim_tag.description, dimension=None
+                            )
                         dim_tags.append(new_batch_dim_tag)
                 assert new_batch_dim_tag, "%s: batch info %r invalid" % (self, batch)
                 new_batch_dim_tag.batch = batch
@@ -3574,7 +3579,11 @@ def _infer_dim_tags_tuple_from_shape(
         assert 0 <= feature_dim_axis < len(batch_shape)
     dim_tags = {}
     if batch_dim_axis is not None and batch_dim_axis not in dim_tags:
-        dim_tags[batch_dim_axis] = Dim(kind=Dim.Types.Batch, description="batch:%s" % name, dimension=None)
+        if batch is None or batch.is_global_batch():
+            batch_dim_ = batch_dim  # global batch dim
+        else:
+            batch_dim_ = Dim(kind=Dim.Types.Batch, description="batch:%s" % name, batch=batch, dimension=None)
+        dim_tags[batch_dim_axis] = batch_dim_
     # Note: Consistent to Tensor.get_dim_tag,
     # prefer interpretation as spatial axis if there is a dynamic size or this is marked as time axis.
     if size_placeholder:
