@@ -248,7 +248,6 @@ class LenFilterDataPipe(torch.utils.data.IterDataPipe):
     Returns dataset yielding list of data lengths within the defined range
     """
 
-
     def __init__(
         self,
         dataset: torch.utils.data.IterableDataset,
