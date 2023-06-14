@@ -248,9 +248,12 @@ class LenFilterDataPipe(torch.utils.data.IterDataPipe):
     Returns dataset yielding list of data lengths within the defined range
     """
 
-    def __init__(self, dataset: torch.utils.data.IterableDataset,
+    def __init__(
+        self,
+        dataset: torch.utils.data.IterableDataset,
         min_seq_len: Union[int, NumbersDict] = None,
-        max_seq_len: Union[int, NumbersDict] = None):
+        max_seq_len: Union[int, NumbersDict] = None,
+    ):
         """
         :param dataset: dataset to apply the filter to
         :param min_seq_len: minimum sequence length either in general or per data_key via dict
@@ -274,6 +277,6 @@ class LenFilterDataPipe(torch.utils.data.IterDataPipe):
             )
             if sequence_lengths.any_compare(self._min_seq_len, lambda a, b: a < b):
                 continue
-            if sequence_lengths.any_compare(self._max_seq_len, lambda a,b: a > b):
+            if sequence_lengths.any_compare(self._max_seq_len, lambda a, b: a > b):
                 continue
             yield data_dict
