@@ -8,6 +8,7 @@ import contextlib
 import re
 import numpy
 import numpy.testing
+import tensorflow as tf
 
 from returnn.config import Config, global_config_ctx
 from returnn.util.pprint import pprint
@@ -88,7 +89,7 @@ def run_model(
 
 def run_model_torch(extern_data: TensorDict, get_model: rf.GetModelFunc, forward_step: rf.StepFunc) -> TensorDict:
     """run"""
-    extern_data_raw = extern_data.as_raw_tensor_dict()
+    extern_data_raw = extern_data.as_raw_tensor_dict(expected_type=numpy.ndarray)
     rf.select_backend_torch()
     rf.set_random_seed(42)
 
@@ -110,7 +111,7 @@ def run_model_torch(extern_data: TensorDict, get_model: rf.GetModelFunc, forward
 
 def run_model_net_dict_tf(extern_data: TensorDict, get_model: rf.GetModelFunc, forward_step: rf.StepFunc) -> TensorDict:
     """run"""
-    extern_data_raw = extern_data.as_raw_tensor_dict()
+    extern_data_raw = extern_data.as_raw_tensor_dict(expected_type=numpy.ndarray)
     extern_data.reset_content()
     rf.select_backend_returnn_layers_tf()
     rf.set_random_seed(42)
@@ -158,9 +159,9 @@ def run_model_net_dict_tf(extern_data: TensorDict, get_model: rf.GetModelFunc, f
             layer = net.get_layer(layer_name)
             outputs_tf.data[k] = layer.output.copy()
 
-        fetches = outputs_tf.as_raw_tensor_dict()
+        fetches = outputs_tf.as_raw_tensor_dict(expected_type=tf.Tensor)
         assert set(extern_data.data.keys()) == set(net.extern_data.data.keys())
-        extern_data_tf_placeholders = net.extern_data.as_raw_tensor_dict()
+        extern_data_tf_placeholders = net.extern_data.as_raw_tensor_dict(expected_type=tf.Tensor)
         assert set(extern_data_tf_placeholders.keys()) == set(extern_data_raw.keys())
         feed_dict = {extern_data_tf_placeholders[k]: v for k, v in extern_data_raw.items()}
 
