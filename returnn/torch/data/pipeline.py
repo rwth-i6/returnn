@@ -282,4 +282,4 @@ class LenFilterDataPipe(torch.utils.data.IterDataPipe):
             yield data_dict
 
     def __getitem__(self, index):
-        raise Exception(f"{self.__class__.__name__}.__getitem__ not supported")      
+        raise Exception(f"{self.__class__.__name__}.__getitem__ not supported")
