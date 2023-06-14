@@ -26,7 +26,6 @@ from copy import deepcopy
 import numpy
 import torch
 import torch.utils.data
-from torch.utils.data.dataset import T_co
 
 from returnn.util.basic import NumbersDict
 
@@ -249,7 +248,7 @@ class LenFilterDataPipe(torch.utils.data.IterDataPipe):
     Returns dataset yielding list of data lengths within the defined range
     """
 
-    def __getitem__(self, index) -> T_co:
+    def __getitem__(self, index):
         raise Exception(f"{self.__class__.__name__}.__getitem__ not supported")
 
     def __init__(
