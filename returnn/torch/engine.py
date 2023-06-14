@@ -57,6 +57,12 @@ class Engine(EngineBase):
 
         self._start_epoch = None  # type: Optional[int]
         self._final_epoch = None  # type: Optional[int]
+        self._min_seq_length = config.typed_value("min_seq_length", None) or config.int(
+            "min_seq_length", None
+        )  # type: Union[int,float,Dict[str,int],NumbersDict]
+        self._max_seq_length = config.typed_value("max_seq_length", None) or config.int(
+            "max_seq_length", None
+        )  # type: Union[int,float,Dict[str,int],NumbersDict]
         self._orig_model = None  # type: Optional[Union[rf.Module, torch.nn.Module]]
         self._pt_model = None  # type: Optional[torch.nn.Module]
         self._train_step_func = None  # type: Optional[Callable]
@@ -416,7 +422,10 @@ class Engine(EngineBase):
         )
 
         wrapped_dataset = returnn_dataset_wrapper.ReturnnDatasetIterDataPipe(dataset, reset_callback=dataset_reset)
-
+        if (self._min_seq_length is not None) or (self._max_seq_length is not None):
+            wrapped_dataset = data_pipeline.LenFilterDataPipe(
+                wrapped_dataset, min_seq_length=self._min_seq_length, max_seq_length=self._max_seq_length
+            )
         chunking = self.config.typed_value("chunking", None)
         if chunking:
             wrapped_dataset = data_pipeline.ChunkingIterDataPipe(wrapped_dataset, chunking)
