@@ -154,9 +154,9 @@ class VariableLayer(LayerBase):
                 0, Dim(kind=Dim.Types.Time, description="%s:dummy-time" % name, dimension=1, auto_generated=True)
             )
         if add_batch_axis:
-            dim_tags.insert(
-                0, Dim(kind=Dim.Types.Batch, description="batch", batch=network.get_global_batch_info(), dimension=None)
-            )
+            from returnn.tensor.dim import batch_dim
+
+            dim_tags.insert(0, batch_dim)
         return Tensor(
             name="%s_output" % name,
             dim_tags=dim_tags,

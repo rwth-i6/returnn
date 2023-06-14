@@ -436,6 +436,8 @@ class _DimMixin:
             # We ignore the ctx for the batch dim currently.
             if self.batch == batch:
                 return self
+            if batch.is_global_batch():
+                return _d.batch_dim  # reuse global batch dim if possible
             return _d.Dim(kind=DimTypes.Batch, description="batch:%s" % batch.short_repr(), batch=batch, dimension=None)
         if not self.is_dynamic():
             # If static dim, no effect.
