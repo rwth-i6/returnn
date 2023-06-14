@@ -9,7 +9,7 @@ We also might have model_outputs in the user config.
 """
 
 from __future__ import annotations
-from typing import Optional, Union, Any, Dict, Sequence
+from typing import Optional, Union, Any, Type, Dict, Sequence
 from .tensor import Tensor
 
 
@@ -73,23 +73,39 @@ class TensorDict:
         """copy template"""
         return TensorDict({k: v.copy_template() for k, v in self.data.items()})
 
-    def as_raw_tensor_dict(self, *, include_const_sizes: bool = False) -> Dict[str, Any]:
+    def as_raw_tensor_dict(
+        self, *, include_const_sizes: bool = False, expected_type: Union[Type, Sequence[Type]] = object
+    ) -> Dict[str, Any]:
         """
         :return: dict of raw tensors, including any sequence lengths / dynamic sizes
         """
         out = {}
         for key, value in self.data.items():
             assert key not in out
+            assert isinstance(
+                value.raw_tensor, expected_type
+            ), f"key {key} {value}: unexpected {type(value.raw_tensor)}, expected {expected_type}"
             out[key] = value.raw_tensor
             for i, dim in enumerate(value.dims):
                 key_ = f"{key}:size{i}"
                 assert key_ not in out
                 if dim.is_batch_dim() and (not dim.dyn_size_ext or dim.dyn_size_ext.raw_tensor is None):
-                    out[key_] = dim.get_dim_value()
+                    dim_value = dim.get_dim_value()
+                    assert isinstance(
+                        dim_value, expected_type
+                    ), f"key {key_} {dim}: unexpected {type(dim_value)}, expected {expected_type}"
+                    out[key_] = dim_value
                 elif dim.dyn_size_ext:
+                    assert isinstance(dim.dyn_size_ext.raw_tensor, expected_type), (
+                        f"key {key_} {dim} {dim.dyn_size_ext}:"
+                        f" unexpected {type(dim.dyn_size_ext.raw_tensor)}, expected {expected_type}"
+                    )
                     out[key_] = dim.dyn_size_ext.raw_tensor
                 elif dim.size is not None:
                     if include_const_sizes:
+                        assert isinstance(
+                            dim.size, expected_type
+                        ), f"key {key_} {dim}: unexpected {type(dim.size)}, expected {expected_type}"
                         out[key_] = dim.size
                 else:
                     raise Exception(f"cannot handle dim: {dim}")
