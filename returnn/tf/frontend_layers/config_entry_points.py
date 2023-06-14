@@ -9,7 +9,7 @@ from __future__ import annotations
 from typing import Any, Dict, Tuple
 from tensorflow.python.util import nest
 from returnn.util.basic import BehaviorVersion
-from returnn.tensor import TensorDict, Tensor, Dim
+from returnn.tensor import TensorDict, Tensor, Dim, batch_dim
 from returnn.config import get_global_config
 import returnn.frontend as rf
 from .. import frontend_layers as rfl
@@ -109,5 +109,10 @@ def get_net_dict(
                 elem.dyn_size_ext.raw_tensor = None
         return elem
 
-    net_dict = nest.map_structure(_cleanup_net_dict_value, net_dict)
+    # Do some cleanup.
+    nest.map_structure(_cleanup_net_dict_value, net_dict)
+    _cleanup_net_dict_value(batch_dim)
+    for data in extern_data.data.values():
+        for dim in data.dims:
+            _cleanup_net_dict_value(dim)
     return net_dict, model
