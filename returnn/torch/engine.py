@@ -3,7 +3,6 @@ Main engine for PyTorch
 """
 
 from __future__ import annotations
-import sys
 from typing import Optional, Union, Callable, Dict
 from contextlib import nullcontext
 
