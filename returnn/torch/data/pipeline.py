@@ -240,3 +240,40 @@ class BatchingIterDataPipe(torch.utils.data.IterDataPipe):
 
         if current_batch:
             yield current_batch
+
+
+class LenFilterDataPipe(torch.utils.data.IterDataPipe):
+    """
+    Removes sequences which are either too long or too short from a dataset
+    Returns dataset yielding list of data lengths within the defined range
+    """
+
+    def __init__(self, dataset: torch.utils.data.IterableDataset,
+        min_seq_len: Union[int, NumbersDict] = None,
+        max_seq_len: Union[int, NumbersDict] = None):
+        """
+        :param dataset: dataset to apply the filter to
+        :param min_seq_len: minimum sequence length either in general or per data_key via dict
+        :param max_seq_len: maximum sequence length either in general or per data_key via dict
+        """
+        super().__init__()
+        self._dataset = dataset
+        self._min_seq_len = NumbersDict(0 if min_seq_len is None else min_seq_len)
+        self._max_seq_len = NumbersDict(sys.maxsize if max_seq_len is None else max_seq_len)
+
+    def __iter__(self):
+        """
+        :return: generator providing filtered data where each sequence is a dict
+          data_key -> data_array.
+        :rtype: Iterable[dict[str, numpy.ndarray]]
+        """
+        for data_dict in self._dataset:
+            # TODO: This assumes all data has time as first dimension. Currently we can't know better..
+            sequence_lengths = NumbersDict(
+                {data_key: data.shape[0] for data_key, data in data_dict.items() if data.shape}
+            )
+            if sequence_lengths.any_compare(self._min_seq_len, lambda a, b: a < b):
+                continue
+            if sequence_lengths.any_compare(self._max_seq_len, lambda a,b: a > b):
+                continue
+            yield data_dict

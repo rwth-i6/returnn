@@ -3,6 +3,7 @@ Main engine for PyTorch
 """
 
 from __future__ import annotations
+import sys
 from typing import Optional, Union, Callable, Dict
 from contextlib import nullcontext
 
@@ -57,6 +58,8 @@ class Engine(EngineBase):
 
         self._start_epoch = None  # type: Optional[int]
         self._final_epoch = None  # type: Optional[int]
+        self._min_seq_len = config.typed_value("min_seq_len", None) or config.int("min_seq_len", 0) # type: Union[int,float,Dict[str,int],NumbersDict]
+        self._max_seq_len = config.typed_value("max_seq_len", None) or config.int("max_seq_len", sys.maxsize) # type: Union[int,float,Dict[str,int],NumbersDict]
         self._orig_model = None  # type: Optional[Union[rf.Module, torch.nn.Module]]
         self._pt_model = None  # type: Optional[torch.nn.Module]
         self._train_step_func = None  # type: Optional[Callable]
@@ -416,7 +419,8 @@ class Engine(EngineBase):
         )
 
         wrapped_dataset = returnn_dataset_wrapper.ReturnnDatasetIterDataPipe(dataset, reset_callback=dataset_reset)
-
+        wrapped_dataset = data_pipeline.LenFilterDataPipe(wrapped_dataset, min_seq_len=self._min_seq_len,
+            max_seq_len=self._max_seq_len)
         chunking = self.config.typed_value("chunking", None)
         if chunking:
             wrapped_dataset = data_pipeline.ChunkingIterDataPipe(wrapped_dataset, chunking)
