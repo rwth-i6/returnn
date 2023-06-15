@@ -641,6 +641,10 @@ class Runner(object):
         run_metadata = tf_compat.v1.RunMetadata()
         debug_shell_in_runner = self.engine.config.bool("debug_shell_in_runner", False)
         debug_shell_in_runner_step = self.engine.config.int("debug_shell_in_runner_step", 1)
+        run_options_dict = self.engine.config.typed_value("tf_run_options", None)
+        run_options = None
+        if run_options_dict:
+            run_options = tf_compat.v1.RunOptions(**run_options_dict)
 
         # Not sure if this is the best thing to do for an evaluation but it's ok for now.
         # We could also set it to 0 for non train epochs.
@@ -715,11 +719,13 @@ class Runner(object):
                     if self.store_metadata_mod_step and step % self.store_metadata_mod_step == 0:
                         # Slow run that stores extra information for debugging.
                         print("Storing metadata", file=log.v5)
-                        run_options = tf_compat.v1.RunOptions(trace_level=tf_compat.v1.RunOptions.FULL_TRACE)
+                        run_options_ = tf_compat.v1.RunOptions(trace_level=tf_compat.v1.RunOptions.FULL_TRACE)
+                        if run_options:
+                            run_options_.MergeFrom(run_options)
                         # We could use tfdbg.add_debug_tensor_watch here.
                         session_run_start_time = time.time()
                         fetches_results = sess.run(
-                            fetches_dict, feed_dict=feed_dict, options=run_options, run_metadata=run_metadata
+                            fetches_dict, feed_dict=feed_dict, options=run_options_, run_metadata=run_metadata
                         )  # type: typing.Dict[str,typing.Union[numpy.ndarray,str]]
                         elapsed_time_tf += time.time() - session_run_start_time
                         writer.add_summary(fetches_results["summary"], step + step_offset)
@@ -733,11 +739,11 @@ class Runner(object):
                         if self.store_tf_profile:
                             with tf.profiler.experimental.Trace(name=report_prefix, step_num=step + step_offset):
                                 fetches_results = sess.run(
-                                    fetches_dict, feed_dict=feed_dict
+                                    fetches_dict, feed_dict=feed_dict, options=run_options
                                 )  # type: typing.Dict[str,typing.Union[numpy.ndarray,str]]
                         else:
                             fetches_results = sess.run(
-                                fetches_dict, feed_dict=feed_dict
+                                fetches_dict, feed_dict=feed_dict, options=run_options
                             )  # type: typing.Dict[str,typing.Union[numpy.ndarray,str]]
                         elapsed_time_tf += time.time() - session_run_start_time
                         if writer and "summary" in fetches_results:
