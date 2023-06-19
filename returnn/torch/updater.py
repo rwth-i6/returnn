@@ -122,8 +122,9 @@ class Updater(object):
         :param str filename: File from which to load the optimizer state.
         """
         print("Load optimizer %s" % filename, file=log.v4)
-        optimizer_state = torch.load(filename)
+        optimizer_state = torch.load(filename, map_location=torch.device("cpu"))
         self.optimizer.load_state_dict(optimizer_state)
+        del optimizer_state
 
     def save_optimizer(self, filename):
         """

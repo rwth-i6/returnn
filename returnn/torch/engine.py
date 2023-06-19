@@ -481,7 +481,7 @@ class Engine(EngineBase):
         if model_epoch_filename:
             filename = model_epoch_filename + util.get_model_filename_postfix()
             print("Load model %s" % (filename,), file=log.v4)
-            checkpoint_state = torch.load(filename)
+            checkpoint_state = torch.load(filename, map_location=self._device)
             if epoch is None:
                 epoch = checkpoint_state["epoch"]
             step = checkpoint_state["step"]
@@ -577,6 +577,8 @@ class Engine(EngineBase):
                     assert not missing_prefix_keys, f"Missing keys and ignore_missing=False: {missing_prefix_keys}"
                 print(f"Missing keys: {missing_keys}", file=log.v4)
 
+        del checkpoint_state
+        torch.cuda.empty_cache()
         self._pt_model.to(self._device)
 
         if model_epoch_filename and is_training:
