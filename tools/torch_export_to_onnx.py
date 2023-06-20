@@ -117,7 +117,7 @@ class ForwardModuleRF(_RFModuleAsPTModule):
 def _check_matching_outputs():
     rf.get_run_ctx().check_outputs_complete()
     model_outputs_raw_keys = set(_get_model_outputs_raw_keys())
-    outputs_raw_keys = set(rf.get_run_ctx().outputs.data.keys())
+    outputs_raw_keys = set(rf.get_run_ctx().outputs.as_raw_tensor_dict().keys())
     assert model_outputs_raw_keys == outputs_raw_keys, (
         f"Model outputs raw keys and output raw keys from forward_step don't match.\n"
         f"Model outputs raw keys: {sorted(model_outputs_raw_keys)}\n"
