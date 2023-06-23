@@ -11,6 +11,7 @@ from typing import Callable, Optional, Dict
 import argparse
 import os
 
+import _setup_returnn_env  # noqa
 from returnn.config import Config
 from returnn.log import log
 from returnn.tensor import TensorDict
