@@ -471,7 +471,7 @@ class MetaDataset(CachedDataset2):
         self_seq_tag = self.seq_list_ordered[dataset_key][seq_idx]
         assert dataset_seq_tag == self_seq_tag
 
-    def _get_data(self, seq_idx, data_key):
+    def get_data(self, seq_idx, data_key):
         """
         :type seq_idx: int
         :type data_key: str
@@ -487,7 +487,7 @@ class MetaDataset(CachedDataset2):
         :rtype: DatasetSeq
         """
         seq_tag = self.seq_list_ordered[self.default_dataset_key][seq_idx]
-        features = {data_key: self._get_data(seq_idx, data_key) for data_key in self.data_keys}
+        features = {data_key: self.get_data(seq_idx, data_key) for data_key in self.data_keys}
         return DatasetSeq(seq_idx=seq_idx, seq_tag=seq_tag, features=features)
 
     def get_seq_length(self, sorted_seq_idx):
