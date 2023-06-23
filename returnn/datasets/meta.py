@@ -429,10 +429,10 @@ class MetaDataset(CachedDataset2):
 
     def get_current_seq_order(self):
         """
-        :return: returnsthe current seq order for the current epoch, after self.init_seq_order was called.
+        :return: current seq order for the current epoch, after self.init_seq_order was called.
         :rtype: list[int]
         """
-        return [self.tag_idx[t] for t in self.seq_list_ordered[self.default_dataset_key]]
+        return [self.tag_idx[tag] for tag in self.seq_list_ordered[self.default_dataset_key]]
 
     def get_all_tags(self):
         """
