@@ -6,6 +6,7 @@ from __future__ import annotations
 from typing import Optional, Union, Callable, Dict
 from contextlib import nullcontext
 
+import gc
 import os
 import numpy
 import torch
@@ -187,7 +188,7 @@ class Engine(EngineBase):
             self._ddp_pt_model = self._torch_distributed_class(
                 self._pt_model, device_ids=get_device_ids(), **self._torch_distributed_options
             )
-        self._updater = Updater(self.config, self._pt_model, self.learning_rate)
+        self._updater = Updater(self.config, self._pt_model, self._device, self.learning_rate)
         self._updater.create_optimizer()
         if self._start_epoch > 1:
             self._load_optimizer()
@@ -578,7 +579,7 @@ class Engine(EngineBase):
                 print(f"Missing keys: {missing_keys}", file=log.v4)
 
         del checkpoint_state
-        torch.cuda.empty_cache()
+        gc.collect()
         self._pt_model.to(self._device)
 
         if model_epoch_filename and is_training:
