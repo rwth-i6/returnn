@@ -63,6 +63,15 @@ def setup():
     # No propagate, use stdout directly.
     log.initialize(verbosity=[5], propagate=False)
 
+    # PyTorch is optional.
+    if "RETURNN_DISABLE_TORCH" in os.environ and int(os.environ["RETURNN_DISABLE_TORCH"]) == 1:
+        pass
+    else:
+        # Import order of TF and PyTorch can have an influence...
+        # I have a case where only this order works: torch, tensorflow
+        # noinspection PyUnresolvedReferences,PyPackageRequirements
+        import torch
+
     # TF is optional.
     if "RETURNN_DISABLE_TF" in os.environ and int(os.environ["RETURNN_DISABLE_TF"]) == 1:
         tf = None
@@ -168,7 +177,6 @@ def _try_hook_into_tests():
 
     # Skip this if we are not in a debugger.
     if test_program and in_debugger:  # nosetest, unittest
-
         # Ok, try to install our plugin.
         class _ReraiseExceptionTestHookPlugin:
             @staticmethod
