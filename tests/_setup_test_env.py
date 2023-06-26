@@ -69,8 +69,11 @@ def setup():
     else:
         # Import order of TF and PyTorch can have an influence...
         # I have a case where only this order works: torch, tensorflow
-        # noinspection PyUnresolvedReferences,PyPackageRequirements
-        import torch
+        try:
+            # noinspection PyUnresolvedReferences,PyPackageRequirements
+            import torch
+        except ImportError:
+            pass
 
     # TF is optional.
     if "RETURNN_DISABLE_TF" in os.environ and int(os.environ["RETURNN_DISABLE_TF"]) == 1:
