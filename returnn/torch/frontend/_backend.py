@@ -670,6 +670,10 @@ class TorchBackend(Backend[torch.Tensor]):
         shape = [dim.get_dim_value() for dim in dims]
         if isinstance(fill_value, Tensor):
             fill_value = fill_value.raw_tensor
+        if torch.onnx.is_in_onnx_export():
+            # onnx::ConstantOfShape (via torch.full) must get shape as int64.
+            # https://github.com/rwth-i6/returnn/issues/1333#issuecomment-1607236783
+            shape = torch.tensor(shape, dtype=torch.long)
         raw_tensor = torch.full(shape, fill_value, dtype=TorchBackend.as_dtype_raw(dtype))
         return Tensor(
             "full", dims=dims, sparse_dim=sparse_dim, feature_dim=feature_dim, dtype=dtype, raw_tensor=raw_tensor
