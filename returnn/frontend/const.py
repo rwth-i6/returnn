@@ -3,7 +3,7 @@ Constant / full / fill / zeros / ones, etc
 """
 
 from __future__ import annotations
-from typing import Optional, Sequence
+from typing import Optional, Union, Sequence
 import numpy
 from returnn.tensor import Tensor, Dim
 from .types import RawTensorTypes
@@ -17,7 +17,7 @@ __all__ = ["full", "fill", "constant", "zeros", "ones", "zeros_like", "ones_like
 def full(
     *,
     dims: Sequence[Dim],
-    fill_value: RawTensorTypes,
+    fill_value: Union[RawTensorTypes, Tensor],
     dtype: Optional[str] = None,
     sparse_dim: Optional[Dim] = None,
     feature_dim: Optional[Dim] = None,
@@ -42,6 +42,8 @@ def full(
             dtype = rf.get_default_float_dtype()
         elif isinstance(fill_value, bool):
             dtype = "bool"
+        elif isinstance(fill_value, Tensor):
+            dtype = fill_value.dtype
         else:
             raise ValueError(f"cannot infer dtype from {fill_value!r} or type ({type(fill_value)})")
     if isinstance(fill_value, numpy.ndarray):
@@ -49,6 +51,10 @@ def full(
             f"full/fill/constant: expect scalar fill_value, got array with shape {fill_value.shape}.\n"
             "Use rf.convert_to_tensor to convert an arbitrary array to a tensor."
         )
+    if isinstance(fill_value, Tensor):
+        assert (
+            fill_value.dims == ()
+        ), f"full/fill/constant: expect scalar fill_value, got tensor with shape {fill_value.dims}."
     return global_backend.full(dims, fill_value, dtype=dtype, sparse_dim=sparse_dim, feature_dim=feature_dim)
 
 

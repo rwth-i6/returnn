@@ -445,13 +445,15 @@ class ReturnnLayersBackend(Backend[Layer]):
     @staticmethod
     def full(
         dims: Sequence[Dim],
-        fill_value: RawTensorTypes,
+        fill_value: Union[RawTensorTypes, Tensor],
         *,
         dtype: str,
         sparse_dim: Optional[Dim] = None,
         feature_dim: Optional[Dim] = None,
     ) -> Tensor:
         """full"""
+        if isinstance(fill_value, Tensor):
+            return fill_value + rf.zeros_like(fill_value)
         kwargs = {}
         if sparse_dim:
             kwargs["sparse_dim"] = sparse_dim

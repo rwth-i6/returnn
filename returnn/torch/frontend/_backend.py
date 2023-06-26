@@ -660,7 +660,7 @@ class TorchBackend(Backend[torch.Tensor]):
     @staticmethod
     def full(
         dims: Sequence[Dim],
-        fill_value: RawTensorTypes,
+        fill_value: Union[RawTensorTypes, Tensor],
         *,
         dtype: str,
         sparse_dim: Optional[Dim] = None,
@@ -668,6 +668,8 @@ class TorchBackend(Backend[torch.Tensor]):
     ) -> Tensor:
         """full"""
         shape = [dim.get_dim_value() for dim in dims]
+        if isinstance(fill_value, Tensor):
+            fill_value = fill_value.raw_tensor
         raw_tensor = torch.full(shape, fill_value, dtype=TorchBackend.as_dtype_raw(dtype))
         return Tensor(
             "full", dims=dims, sparse_dim=sparse_dim, feature_dim=feature_dim, dtype=dtype, raw_tensor=raw_tensor
