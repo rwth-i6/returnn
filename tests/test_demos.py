@@ -149,6 +149,27 @@ def test_demo_torch_task12ax():
     assert_less(fer, 0.02)
 
 
+def _test_torch_export_to_onnx(cfg_filename: str):
+    cleanup_tmp_models(cfg_filename)
+    out = run(py, "rnn.py", cfg_filename, "--num_epochs", "1")
+    out_pt_model = re.search(r"\nSave model under (.*)\n", out, re.MULTILINE)
+    assert out_pt_model, "Could not find the model filename in the output:\n%s" % out
+    out_pt_model = out_pt_model.group(1)
+    print("*** PT model:", out_pt_model)
+    out_onnx_model = out_pt_model.replace(".pt", ".onnx")
+    run(py, "tools/torch_export_to_onnx.py", cfg_filename, out_pt_model, out_onnx_model)
+
+
+@unittest.skipIf(not torch, "no PyTorch")
+def test_demo_torch_export_to_onnx():
+    _test_torch_export_to_onnx("demos/demo-torch.config")
+
+
+@unittest.skipIf(not torch, "no PyTorch")
+def test_demo_rf_torch_export_to_onnx():
+    _test_torch_export_to_onnx("demos/demo-rf.config")
+
+
 @unittest.skipIf(not torch, "no PyTorch")
 def test_demo_rf_torch_task12ax():
     cleanup_tmp_models("demos/demo-rf.config")
