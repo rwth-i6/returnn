@@ -406,7 +406,7 @@ def _output_tensor_from_raw(raw_tensor, *, dims: Sequence[Dim], name: str) -> Te
             if dim.dyn_size_ext.dims:
                 dyn_size = rf.full(dims=dim.dyn_size_ext.dims, fill_value=dim_value)
                 logging.warning(
-                    f"Cannot infer dynamic size for dim {dim} from output {name!r} {tensor}."
+                    f"Output {name!r} {tensor}: Cannot infer dynamic size for dim {dim}. "
                     f"Using {dyn_size} as fallback."
                 )
             else:
