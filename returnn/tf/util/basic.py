@@ -4867,15 +4867,21 @@ def check_base_op_type_and_replace(x, op_type, new_op_type):
     return op.outputs[0]
 
 
-def copy_op(op, op_type=None, inputs=None):
+def copy_op(
+    op: tf.Operation,
+    *,
+    op_type: Optional[str] = None,
+    inputs: Optional[Sequence[tf.Tensor]] = None,
+    name: Optional[str] = None,
+) -> tf.Operation:
     """
     Copies a tf.Operation.
 
-    :param tf.Operation op:
-    :param str|None op_type: if given, overwrites op.type, otherwise uses the same op.type
-    :param list[tf.Tensor]|None inputs: if given, overwrites op.inputs, otherwise uses the same op.inputs
+    :param op:
+    :param op_type: if given, overwrites op.type, otherwise uses the same op.type
+    :param inputs: if given, overwrites op.inputs, otherwise uses the same op.inputs
+    :param name:
     :return: copy of op but optionally change op.type == op_type or op.inputs == inputs
-    :rtype: tf.Operation
     """
     assert isinstance(op, tf.Operation)
     g = op.graph
@@ -4887,10 +4893,11 @@ def copy_op(op, op_type=None, inputs=None):
     # Maybe in the future we would also wrap some deprecated/outdated ops.
     if op_type == "LogSigmoid":
         assert len(inputs) == 1
-        return tf_compat.v1.log_sigmoid(inputs[0]).op
+        return tf_compat.v1.log_sigmoid(inputs[0], name=name).op
     # Fallback to the generic case.
     new_op = g.create_op(
         op_type=op_type,
+        name=name,
         op_def=op.op_def if op_type == op.type else None,  # Can only copy op_def if it is the same op_type.
         inputs=inputs,
         input_types=[x.dtype for x in inputs],
