@@ -4,9 +4,10 @@ Lots of random utility functions for TensorFlow.
 
 from __future__ import annotations
 
-from typing import Optional, List
+from typing import Optional, Union, Sequence, List
 import typing
 import contextlib
+from dataclasses import dataclass
 import os
 import sys
 import threading
@@ -4341,6 +4342,88 @@ def get_random_seed():
     if network:
         return network.random.randint(2**31)
     return tf_compat.v1.get_seed(None)[1]
+
+
+def get_global_random_generator(*, create: bool = True) -> Optional[tf.random.Generator]:
+    """
+    :param create: if True and no generator exists yet, it will create one
+    :return: random generator
+    """
+    # Note: Do not use tf.random.get_global_generator() here
+    # because we want to be able to define the creation logic
+    # in case the generator does not exist yet.
+    from tensorflow.python.ops import stateful_random_ops
+
+    if stateful_random_ops.global_generator is not None:
+        return stateful_random_ops.global_generator
+    if not create:
+        return None
+    with default_control_flow_ctx(), reuse_name_scope("global_random_generator", absolute=True):
+        stateful_random_ops.global_generator = tf.random.Generator.from_seed(get_random_seed())
+    return stateful_random_ops.global_generator
+
+
+@dataclass
+class StatelessRandomSeed:
+    """
+    State to create some random numbers.
+
+    The random numbers can be created multiple times,
+    and it will always return the same value for the same instance.
+    This is useful to save memory.
+    """
+
+    _shape: Union[tf.Tensor, Sequence[Union[int, tf.Tensor]]]
+    _key: tf.Tensor
+    _counter: tf.Tensor
+    _algorithm: Union[int, tf.Tensor]
+
+    @classmethod
+    def create(
+        cls,
+        *,
+        shape: Union[tf.Tensor, Sequence[Union[int, tf.Tensor]]],
+        generator: Optional[tf.random.Generator] = None,
+    ) -> StatelessRandomSeed:
+        """
+        :param shape:
+        :param generator:
+        :return: new instance
+        """
+        if generator is None:
+            generator = get_global_random_generator()
+        # noinspection PyProtectedMember
+        key, counter = generator._prepare_key_counter(shape)
+        algorithm = generator.algorithm
+        return cls(_shape=shape, _key=key, _counter=counter, _algorithm=algorithm)
+
+    def uniform(
+        self,
+        *,
+        minval: Union[float, tf.Tensor] = 0,
+        maxval: Optional[Union[float, tf.Tensor]] = None,
+        dtype: tf.DType = tf.float32,
+    ) -> tf.Tensor:
+        """
+        Basically copy of tf.random.Generator.uniform.
+
+        :param minval:
+        :param maxval:
+        :param dtype:
+        :return: random tensor with given shape. Note that this op is deterministic,
+            i.e. it will always return the same value for multiple calls on the same instance,
+            as the instance encapsulates all random state.
+        """
+        from tensorflow.python.ops import gen_stateless_random_ops_v2
+
+        if maxval is None:
+            if dtype.is_integer:
+                raise ValueError("Must specify maxval for integer dtype %r" % dtype)
+            maxval = 1
+        rnd = gen_stateless_random_ops_v2.stateless_random_uniform_v2(
+            shape=self._shape, key=self._key, counter=self._counter, dtype=dtype, alg=self._algorithm
+        )
+        return rnd * (maxval - minval) + minval
 
 
 def encode_raw(x, axis=-1, seq_lens=None):
