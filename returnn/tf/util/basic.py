@@ -1820,9 +1820,19 @@ def dropout(
     :param bool apply_correction_factor:
     :param bool grad_checkpointing: use gradient checkpointing for the result
     """
+    from .gradient_checkpoint import gradient_checkpoint_scope, gradient_checkpoint_exclude_scope
+
     if cond_on_train:
         return cond_on_train_flag(
-            lambda: dropout(x, keep_prob=keep_prob, noise_shape=noise_shape, seed=seed, name=name), lambda: x
+            lambda: dropout(
+                x,
+                keep_prob=keep_prob,
+                noise_shape=noise_shape,
+                seed=seed,
+                name=name,
+                grad_checkpointing=grad_checkpointing,
+            ),
+            lambda: x,
         )
     with tf.name_scope(name or "dropout"):
         x = tf.convert_to_tensor(x, name="x")
@@ -1846,23 +1856,29 @@ def dropout(
             noise_shape_v = tensor_util.constant_value(noise_shape)
             if noise_shape_v is not None:
                 noise_shape = [int(noise_shape_v[i]) for i in range(x.shape.ndims)]
-        # If noise_shape is fully static, calculate it outside of any ctx (e.g. recurrent loop).
-        # This effectively means that the mask would get reused for multiple frames, if `x` is inside a recurrent loop.
-        with same_control_flow_ctx(noise_shape):
-            # uniform [keep_prob, 1.0 + keep_prob)
-            random_tensor = keep_prob
-            random_tensor += tf_compat.v1.random_uniform(noise_shape, seed=seed, dtype=x.dtype)
-            # 0. if [keep_prob, 1.0) and 1. if [1.0, 1.0 + keep_prob)
-            binary_tensor = tf.floor(random_tensor)
-            if apply_correction_factor:
-                binary_tensor *= inv_keep_prob
 
-        if grad_checkpointing:
-            ret = tf.recompute_grad(lambda x_: x_ * binary_tensor)(x)
-        else:
+        scope_func = gradient_checkpoint_scope if grad_checkpointing else contextlib.nullcontext
+        with scope_func():
+            # If noise_shape is fully static, calculate it outside of any ctx (e.g. recurrent loop).
+            # This effectively means that the mask would get reused for multiple frames,
+            # if `x` is inside a recurrent loop.
+            with same_control_flow_ctx(noise_shape):
+                # uniform [keep_prob, 1.0 + keep_prob)
+                random_tensor = keep_prob
+                if grad_checkpointing:
+                    with gradient_checkpoint_exclude_scope():
+                        rnd_state = StatelessRandomSeed.create(shape=noise_shape)
+                    random_tensor += rnd_state.uniform(dtype=x.dtype)
+                else:
+                    random_tensor += tf_compat.v1.random_uniform(noise_shape, seed=seed, dtype=x.dtype)
+                # 0. if [keep_prob, 1.0) and 1. if [1.0, 1.0 + keep_prob)
+                binary_tensor = tf.floor(random_tensor)
+                if apply_correction_factor:
+                    binary_tensor *= inv_keep_prob
+
             ret = x * binary_tensor
-        assert isinstance(ret, tf.Tensor)
-        ret.set_shape(x.get_shape())
+            assert isinstance(ret, tf.Tensor)
+            ret.set_shape(x.get_shape())
 
         # zero padded dims stay zero padded
         ret_padding_info = get_padding_info_dict_ref(ret)
