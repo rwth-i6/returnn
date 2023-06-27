@@ -1195,6 +1195,7 @@ class LayerBase(object):
         """
         from returnn.tf.util.basic import get_current_var_scope_name, reuse_name_scope
         from returnn.tf.util.basic import default_control_flow_ctx, reuse_name_scope_of_tensor
+        from returnn.tf.util.gradient_checkpoint import gradient_checkpoint_scope
 
         self_base_scope = self.get_base_absolute_name_scope_prefix()
         assert self_base_scope.endswith("/") or self_base_scope == ""
@@ -1239,13 +1240,10 @@ class LayerBase(object):
                     with reuse_name_scope_of_tensor(param, postfix="_variational_noise", add_tensor_name=True):
 
                         def _apply_var_noise():
-                            noise = tf_compat.v1.random_normal(
-                                tf.shape(param),
-                                dtype=param.dtype.base_dtype,
-                                stddev=param_variational_noise,
-                                seed=self.network.random.randint(2**31),
-                            )
-                            return tf.recompute_grad(lambda param_: param_ + noise)(param)
+                            rnd_state = tf_util.StatelessRandomSeed.create(shape=tf_util.get_shape(param))
+                            with gradient_checkpoint_scope():
+                                noise = rnd_state.normal(stddev=param_variational_noise, dtype=param.dtype.base_dtype)
+                                return param + noise
 
                         param = self.network.cond_on_train(
                             fn_train=_apply_var_noise,
