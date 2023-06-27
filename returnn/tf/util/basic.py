@@ -4441,6 +4441,26 @@ class StatelessRandomSeed:
         )
         return rnd * (maxval - minval) + minval
 
+    def normal(
+        self, mean: Union[float, tf.Tensor] = 0.0, stddev: Union[float, tf.Tensor] = 1.0, dtype: tf.DType = tf.float32
+    ) -> tf.Tensor:
+        """
+        Basically copy of tf.random.Generator.normal.
+
+        :param mean:
+        :param stddev:
+        :param dtype:
+        :return: random tensor with given shape. Note that this op is deterministic,
+            i.e. it will always return the same value for multiple calls on the same instance,
+            as the instance encapsulates all random state.
+        """
+        from tensorflow.python.ops import gen_stateless_random_ops_v2
+
+        rnd = gen_stateless_random_ops_v2.stateless_random_normal_v2(
+            self._shape, key=self._key, counter=self._counter, dtype=dtype, alg=self._algorithm
+        )
+        return rnd * stddev + mean
+
 
 def encode_raw(x, axis=-1, seq_lens=None):
     """
