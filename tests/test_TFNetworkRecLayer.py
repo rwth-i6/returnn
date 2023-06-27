@@ -12684,6 +12684,142 @@ def test_RelativePositionalEncodingLayer_values():
         numpy.testing.assert_almost_equal(out_np, ref_np, decimal=7)
 
 
+def test_RelativePositionalEncodingLayer_rec_values():
+    n_batch, n_out, n_time = 3, 5, 7
+    collected_pos_encs = [None] * n_time  # type: typing.List[typing.Optional[numpy.ndarray]]
+
+    def _py_func(x, pos_enc, step):
+        collected_pos_encs[step] = pos_enc
+        print(f"rec step {step}: pos enc shape {pos_enc.shape}")
+        return x
+
+    def _custom_eval(source, **_kwargs):
+        src = source(0, as_data=True, auto_convert=False)
+        pos_enc = source(1, as_data=True, auto_convert=False)
+        step = source(2, as_data=True, auto_convert=False)
+        print("src:", src, src.placeholder)
+        print("pos enc:", pos_enc, pos_enc.placeholder)
+        print("step:", step, step.placeholder)
+
+        y = tf.numpy_function(_py_func, [src.placeholder, pos_enc.placeholder, step.placeholder], tf.float32)
+        y.set_shape(src.placeholder.shape)
+
+        return y
+
+    net_dict = {
+        "output": {
+            "class": "rec",
+            "from": "data",
+            "unit": {
+                "pos_enc": {
+                    "class": "relative_positional_encoding",
+                    "from": "prev:output",
+                    "n_out": n_out,
+                    "fixed": True,
+                },
+                "output": {
+                    "class": "eval",
+                    "from": ["data:source", "pos_enc", ":i"],
+                    "eval": _custom_eval,
+                    "out_type": {"shape": (n_out,), "dim": n_out},
+                },
+            },
+        },
+    }
+    config = Config({"extern_data": {"data": {"dim": n_out}}})
+    with make_scope() as session:
+        network = TFNetwork(config=config, train_flag=True)
+        network.construct_from_dict(net_dict)
+        in_ = network.extern_data.data["data"]
+        out = network.get_layer("output").output
+        session.run(
+            out.placeholder,
+            feed_dict={
+                network.extern_data.get_batch_info().dim: n_batch,
+                in_.placeholder: numpy.zeros((n_batch, n_time, n_out), dtype="float32"),
+                in_.size_placeholder[0]: numpy.array([n_time] * n_batch, dtype="float32"),
+            },
+        )
+        print(collected_pos_encs)
+        array = numpy.array
+        float32 = numpy.float32
+        ref_pos_encs = [
+            array([[[-0.28790334, 0.0016, -0.9576595, 0.99999875, 0.0]]], dtype=float32),
+            array(
+                [
+                    [
+                        [0.65028787, 0.0015, -0.7596879, 0.99999887, 0.0],
+                        [-0.28790334, 0.0016, -0.9576595, 0.99999875, 0.0],
+                    ]
+                ],
+                dtype=float32,
+            ),
+            array(
+                [
+                    [
+                        [0.9906074, 0.0014, 0.13673723, 0.99999905, 0.0],
+                        [0.65028787, 0.0015, -0.7596879, 0.99999887, 0.0],
+                        [-0.28790334, 0.0016, -0.9576595, 0.99999875, 0.0],
+                    ]
+                ],
+                dtype=float32,
+            ),
+            array(
+                [
+                    [
+                        [0.42016703, 0.0013, 0.9074468, 0.99999917, 0.0],
+                        [0.9906074, 0.0014, 0.13673723, 0.99999905, 0.0],
+                        [0.65028787, 0.0015, -0.7596879, 0.99999887, 0.0],
+                        [-0.28790334, 0.0016, -0.9576595, 0.99999875, 0.0],
+                    ]
+                ],
+                dtype=float32,
+            ),
+            array(
+                [
+                    [
+                        [-0.53657293, 0.0012, 0.84385395, 0.9999993, 0.0],
+                        [0.42016703, 0.0013, 0.9074468, 0.99999917, 0.0],
+                        [0.9906074, 0.0014, 0.13673723, 0.99999905, 0.0],
+                        [0.65028787, 0.0015, -0.7596879, 0.99999887, 0.0],
+                        [-0.28790334, 0.0016, -0.9576595, 0.99999875, 0.0],
+                    ]
+                ],
+                dtype=float32,
+            ),
+            array(
+                [
+                    [
+                        [-0.9999902, 0.0011, 0.0044257, 0.9999994, 0.0],
+                        [-0.53657293, 0.0012, 0.84385395, 0.9999993, 0.0],
+                        [0.42016703, 0.0013, 0.9074468, 0.99999917, 0.0],
+                        [0.9906074, 0.0014, 0.13673723, 0.99999905, 0.0],
+                        [0.65028787, 0.0015, -0.7596879, 0.99999887, 0.0],
+                        [-0.28790334, 0.0016, -0.9576595, 0.99999875, 0.0],
+                    ]
+                ],
+                dtype=float32,
+            ),
+            array(
+                [
+                    [
+                        [-0.54402107, 0.001, -0.8390715, 0.9999995, 0.0],
+                        [-0.9999902, 0.0011, 0.0044257, 0.9999994, 0.0],
+                        [-0.53657293, 0.0012, 0.84385395, 0.9999993, 0.0],
+                        [0.42016703, 0.0013, 0.9074468, 0.99999917, 0.0],
+                        [0.9906074, 0.0014, 0.13673723, 0.99999905, 0.0],
+                        [0.65028787, 0.0015, -0.7596879, 0.99999887, 0.0],
+                        [-0.28790334, 0.0016, -0.9576595, 0.99999875, 0.0],
+                    ]
+                ],
+                dtype=float32,
+            ),
+        ]
+        assert len(collected_pos_encs) == len(ref_pos_encs) == n_time
+        for i in range(n_time):
+            assert_allclose(ref_pos_encs[i], collected_pos_encs[i], rtol=1e-06, err_msg=f"step {i}")
+
+
 def _build_self_attention_layer(
     d, input, output, inside_rec_layer, query_axis=None, num_heads=3, key_dim=7, value_dim=11, dropout=0.0
 ):
