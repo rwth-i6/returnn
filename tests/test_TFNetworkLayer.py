@@ -6,6 +6,7 @@ import tensorflow as tf
 from nose.tools import assert_equal, assert_not_equal, assert_is_instance
 import unittest
 import numpy.testing
+import tempfile
 from pprint import pprint
 from returnn.util import better_exchook
 from returnn.config import Config
@@ -10679,6 +10680,82 @@ def test_param_variational_noise():
             print_graph_output(ops)
             # There can be multiple ops due to gradient checkpointing.
             assert 1 <= len(ops) and all("_variational_noise/" in op.name for op in ops)
+
+
+def test_param_weight_dropout():
+    from returnn.tensor import Dim, batch_dim
+    from returnn.tf.util.basic import print_graph_output, find_ops_with_tensor_input
+    from returnn.tf.util.gradient_checkpoint import prepare_gradient_checkpointing
+
+    time_dim = Dim(None, name="time")
+    feature_dim = Dim(7, name="feature")
+    classes_dim = Dim(13, name="classes")
+
+    config = Config(
+        {
+            "param_dropout": 0.1,
+            "extern_data": {
+                "data": {
+                    "dim_tags": [batch_dim, time_dim, feature_dim],
+                    "time_dim_axis": 1,
+                    "feature_dim": feature_dim,
+                    "dtype": "float32",
+                },
+                "classes": {"dim_tags": [batch_dim, time_dim], "sparse_dim": classes_dim, "dtype": "int32"},
+            },
+        }
+    )
+    with make_scope() as session:
+        network = TFNetwork(config=config, train_flag=True)
+        # Do subnetwork by intention, to test when we have multiple variable scopes.
+        network.construct_from_dict(
+            {
+                "output": {
+                    "class": "linear",
+                    "out_dim": classes_dim,
+                    "activation": "softmax",
+                    "from": "data",
+                    "loss": "ce",
+                    "target": "classes",
+                }
+            }
+        )
+        loss = network.get_total_loss()
+
+        prepare_gradient_checkpointing()
+        opt = tf_compat.v1.train.GradientDescentOptimizer(learning_rate=0.1)
+        opt_op = opt.minimize(loss)
+        print("optimizer:")
+        print_graph_output(opt_op)
+
+        tf_log_dir = tempfile.mkdtemp()
+        print("TF log dir:", tf_log_dir)
+        writer = tf_compat.v1.summary.FileWriter(logdir=tf_log_dir, graph=session.graph, session=session)
+        params = network.get_params_list()
+        print("params:", params)
+        assert len(params) == 2  # weights and bias
+        for param in params:
+            print("param:", param)
+            ops = find_ops_with_tensor_input(param, fetches=opt_op)
+            print("param graph:")
+            print_graph_output(ops)
+            # There can be multiple ops due to gradient checkpointing.
+            assert (
+                1 <= len(ops)
+                and all("_weight_dropout/" in op.name or "/ResourceApply" in op.name for op in ops)
+                and any("_weight_dropout/" in op.name for op in ops)
+            )
+
+        network.initialize_params(session=session)
+
+        run_metadata = tf_compat.v1.RunMetadata()
+        run_options = tf_compat.v1.RunOptions(trace_level=tf_compat.v1.RunOptions.FULL_TRACE)
+        session.run(
+            opt_op, feed_dict=make_feed_dict(network.extern_data), options=run_options, run_metadata=run_metadata
+        )
+        writer.add_run_metadata(run_metadata, tag="step_0")
+        writer.close()
+        print("TF log dir:", tf_log_dir)
 
 
 def test_LinearLayer_simple_train():
