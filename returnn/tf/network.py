@@ -2400,7 +2400,12 @@ class TFNetwork(object):
         """
         :rtype: list[tf.Variable]
         """
-        return [self.global_train_step_var]
+        var_list = [self.global_train_step_var]
+        rnd_generator = tf_util.get_global_random_generator(create=False)
+        if rnd_generator is not None:
+            assert isinstance(rnd_generator.state, tf.Variable)
+            var_list.append(rnd_generator.state)
+        return var_list
 
     def get_params_serialized(self, session):
         """
