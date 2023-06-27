@@ -503,11 +503,9 @@ class LayerBase(object):
                 # Special case: Input feature or sparse dim looks the same, so overtake it.
                 out_dim = sources_data.feature_dim_or_sparse_dim
         if out_dim:
-            assert out_dim.dimension == output.dim, "Layer %r out_dim %s does not match Data via out_type %s" % (
-                name,
-                out_dim,
-                output,
-            )
+            assert (
+                out_dim.dimension == output.dim
+            ), f"Layer {name!r} out_dim {out_dim} does not match Data {output} via out_type {out_type}"
             if output.sparse:
                 output.sparse_dim = out_dim
             else:
