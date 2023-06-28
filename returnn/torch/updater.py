@@ -126,6 +126,7 @@ class Updater(object):
         print("Load optimizer %s" % filename, file=log.v4)
         optimizer_state = torch.load(filename, map_location=self._device)
         self.optimizer.load_state_dict(optimizer_state)
+        # https://github.com/rwth-i6/returnn/issues/1345
         del optimizer_state
         gc.collect()
 
