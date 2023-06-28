@@ -188,7 +188,7 @@ class Engine(EngineBase):
             self._ddp_pt_model = self._torch_distributed_class(
                 self._pt_model, device_ids=get_device_ids(), **self._torch_distributed_options
             )
-        self._updater = Updater(self.config, self._pt_model, self._device, self.learning_rate)
+        self._updater = Updater(config=self.config, network=self._pt_model, device=self._device, initial_learning_rate=self.learning_rate)
         self._updater.create_optimizer()
         if self._start_epoch > 1:
             self._load_optimizer()
