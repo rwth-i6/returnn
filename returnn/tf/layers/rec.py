@@ -11020,6 +11020,16 @@ class RelativePositionalEncodingLayer(_ConcatInputLayer):
     Usually added to Self-Attention using key_shift.
     Parts of the code are adapted from Tensor2Tensor (https://github.com/tensorflow/tensor2tensor).
 
+    In general, the output is [length|1 (query-len), length (key|value-len), n_out],
+    intended for self-attention.
+
+    If inside a recurrent loop, will take the current rec step as the position,
+    and relates it to self or previous positions, so the output is [1 (query-len), t+1 (key|value-len), n_out].
+    Otherwise, it assumes that the input has a time dimension, and relates each position to all others,
+    so the output is [length (query-len), length (key|value-len), n_out].
+
+    The input defines the query/key/value length by default.
+
     Example usage::
 
         d[output + '_rel_pos'] = {"class": "relative_positional_encoding",
@@ -11040,7 +11050,16 @@ class RelativePositionalEncodingLayer(_ConcatInputLayer):
     recurrent = True
 
     def __init__(
-        self, out_dim=None, n_out=None, forward_weights_init="glorot_uniform", clipping=16, fixed=False, **kwargs
+        self,
+        out_dim=None,
+        n_out=None,
+        forward_weights_init="glorot_uniform",
+        clipping=16,
+        fixed=False,
+        query_spatial_dim=NotSpecified,
+        key_value_spatial_dim=NotSpecified,
+        query_offset=NotSpecified,
+        **kwargs,
     ):
         """
         :param Dim|None out_dim: Feature dimension of encoding.
@@ -11048,25 +11067,50 @@ class RelativePositionalEncodingLayer(_ConcatInputLayer):
         :param int clipping: After which distance to fallback to the last encoding
         :param bool fixed: Uses sinusoid positional encoding instead of learned parameters
         :param str forward_weights_init: see :func:`returnn.tf.util.basic.get_initializer`
+        :param Dim|str|None|NotSpecified query_spatial_dim: spatial dimension of query
+        :param Dim|str|NotSpecified key_value_spatial_dim: spatial dimension of key/value
+        :param int|NotSpecified query_offset: offset for query position.
+            The default behavior: In case key_value_spatial_dim is not specified, input has no time dim,
+            we assume that we are inside a rec loop and use the current step.
         """
         super(RelativePositionalEncodingLayer, self).__init__(**kwargs)
         from returnn.tf.util.basic import get_initializer
+        from returnn.tf.util.basic import is_axis_from_description_recurrent
 
         if out_dim:
             n_out = out_dim.dimension
 
-        if not self.input_data.have_time_axis():
-            offset = self.network.get_rec_step_index()
-            length = self.network.get_rec_step_index() + 1
-            time_dim_tag = self.output.dim_tags[1]
-            assert time_dim_tag.dimension is None, "%s: unexpected output time dim tag %r" % (self, time_dim_tag)
-            assert time_dim_tag.dyn_size_ext is not None
-            # See CumConcatLayer for similar logic
-            if time_dim_tag.dyn_size_ext.placeholder is None:
-                time_dim_tag.dyn_size_ext.placeholder = length
+        if self.output.batch_ndim == 3:
+            query_spatial_dim_ = self.output.dim_tags[0]
+            key_value_spatial_dim_ = self.output.dim_tags[1]
+        elif self.output.batch_ndim == 2:
+            query_spatial_dim_ = None
+            key_value_spatial_dim_ = self.output.dim_tags[0]
         else:
-            offset = 0
-            length = tf_util.get_shape_dim(self.input_data.placeholder, self.input_data.time_dim_axis)
+            raise RuntimeError(f"{self}: unexpected output {self.output}")
+
+        if (key_value_spatial_dim is NotSpecified and not self.input_data.have_time_axis()) or (
+            key_value_spatial_dim is not NotSpecified
+            and is_axis_from_description_recurrent(key_value_spatial_dim, network=self.network, data=self.input_data)
+        ):
+            length = self.network.get_rec_step_index() + 1
+            assert (
+                key_value_spatial_dim_.dimension is None
+            ), f"{self}: unexpected kv spatial dim {key_value_spatial_dim_}"
+            assert key_value_spatial_dim_.dyn_size_ext is not None
+            # See CumConcatLayer for similar logic
+            if key_value_spatial_dim_.dyn_size_ext.placeholder is None:
+                assert key_value_spatial_dim_.dyn_size_ext.batch_shape == ()  # scalar
+                key_value_spatial_dim_.dyn_size_ext.placeholder = length
+
+        if query_offset is NotSpecified:
+            if (query_spatial_dim is NotSpecified and not self.input_data.have_time_axis()) or (
+                query_spatial_dim is not NotSpecified
+                and is_axis_from_description_recurrent(query_spatial_dim, network=self.network, data=self.input_data)
+            ):
+                query_offset = self.network.get_rec_step_index()
+            else:
+                query_offset = 0
 
         if fixed:
             from returnn.tf.util.basic import get_positional_encoding
@@ -11086,30 +11130,39 @@ class RelativePositionalEncodingLayer(_ConcatInputLayer):
                 )
         # encoding_matrix has shape [2 * clipping + 1, n_out]
 
-        range_vec = tf.range(length) - offset  # [length]
+        kv_pos_vec = tf.range(key_value_spatial_dim_.get_dim_value())  # [kv_len]
+        q_pos_vec = tf.range(query_spatial_dim_.get_dim_value()) + query_offset  # [q_len]
 
-        if self.input_data.have_time_axis():
-            range_mat = tf.reshape(tf.tile(range_vec, [length]), [length, length])
-            distance_mat = range_mat - tf.transpose(range_mat)  # [length,length]
-        else:
-            distance_mat = tf.reshape(range_vec, [1, length])  # [1,length]
+        distance_mat = tf.expand_dims(kv_pos_vec, axis=0) - tf.expand_dims(q_pos_vec, axis=1)  # [q_len,kv_len]
         distance_mat_clipped = tf.clip_by_value(distance_mat, -clipping, clipping)
         # Shift values to be >= 0. Each integer still uniquely identifies a relative
         # position difference.
-        position_info_indices = distance_mat_clipped + clipping  # [length|1,length]
+        position_info_indices = distance_mat_clipped + clipping  # [q_len,kv_len]
 
-        encoding = tf.gather(encoding_matrix, position_info_indices)  # [length|1,length,n_out]
+        encoding = tf.gather(encoding_matrix, position_info_indices)  # [q_len,kv_len,n_out]
 
         self.output.placeholder = encoding
 
     @classmethod
-    def get_out_data_from_opts(cls, name, sources, network, out_dim=None, n_out=None, **kwargs):
+    def get_out_data_from_opts(
+        cls,
+        name,
+        sources,
+        network,
+        out_dim=None,
+        n_out=None,
+        query_spatial_dim=NotSpecified,
+        key_value_spatial_dim=NotSpecified,
+        **kwargs,
+    ):
         """
         :param str name:
         :param list[LayerBase] sources:
         :param Dim|None out_dim: Feature dimension of encoding.
         :param int|None n_out: Feature dimension of encoding.
         :param returnn.tf.network.TFNetwork network:
+        :param Dim|str|None|NotSpecified query_spatial_dim: spatial dimension of query
+        :param Dim|str|NotSpecified key_value_spatial_dim: spatial dimension of key/value
         :rtype: Data
         """
         data = get_concat_sources_data_template(sources, name="%s_output" % name)
@@ -11121,29 +11174,46 @@ class RelativePositionalEncodingLayer(_ConcatInputLayer):
             feature_dim_tag = Dim(
                 kind=Dim.Types.Feature, description="%s_rel_pos_enc_feat" % name, dimension=n_out, auto_generated=True
             )
-        if data.have_time_axis():
-            time_dim_tag = data.get_time_dim_tag()
-            # TODO using same dim tag twice will not be supported at some future point...
-            data = data.copy_template_new_dim_tags((time_dim_tag, time_dim_tag, feature_dim_tag))
-        else:
-            # length will be ``network.get_rec_step_index() + 1``.
-            dummy_dim_tag = Dim(
-                kind=Dim.Types.Spatial, description="%s_rel_pos_enc_dummy" % name, dimension=1, auto_generated=True
-            )
-            time_dim_tag = Dim(
-                kind=Dim.Types.Spatial, description="%s_rel_pos_enc_time" % name, dimension=None, auto_generated=True
-            )
-            time_dim_tag.batch = data.batch
-            time_dim_tag.control_flow_ctx = network.get_control_flow_ctx()
-            time_dim_tag.dyn_size_ext = Data(
-                name="%s:size-inside" % name,
-                dim_tags=[],  # scalar
-                dtype="int32",
-                batch=data.batch,
-                control_flow_ctx=network.get_control_flow_ctx(),
-            )
-            data = data.copy_template_new_dim_tags((dummy_dim_tag, time_dim_tag, feature_dim_tag))
-        return data
+        if query_spatial_dim is NotSpecified:
+            if data.have_time_axis():
+                query_spatial_dim = data.get_time_dim_tag()
+            else:
+                query_spatial_dim = Dim(
+                    kind=Dim.Types.Spatial, description="%s_rel_pos_enc_dummy" % name, dimension=1, auto_generated=True
+                )
+        if query_spatial_dim is not None:
+            if isinstance(query_spatial_dim, str):
+                query_spatial_dim = data.get_dim_tag_from_description(query_spatial_dim)
+            assert isinstance(query_spatial_dim, Dim)
+        if key_value_spatial_dim is NotSpecified:
+            if data.have_time_axis():
+                key_value_spatial_dim = data.get_time_dim_tag()
+            else:
+                key_value_spatial_dim = Dim(
+                    kind=Dim.Types.Spatial,
+                    description="%s_rel_pos_enc_time" % name,
+                    dimension=None,
+                    auto_generated=True,
+                )
+                key_value_spatial_dim.batch = data.batch
+                key_value_spatial_dim.control_flow_ctx = network.get_control_flow_ctx()
+                key_value_spatial_dim.dyn_size_ext = Data(
+                    name="%s:size-inside" % name,
+                    dim_tags=[],  # scalar
+                    dtype="int32",
+                    batch=data.batch,
+                    control_flow_ctx=network.get_control_flow_ctx(),
+                )
+        if isinstance(key_value_spatial_dim, str):
+            key_value_spatial_dim = data.get_dim_tag_from_description(key_value_spatial_dim)
+        assert isinstance(key_value_spatial_dim, Dim)
+        # Note: The defaults would use the same dim tag twice when data.have_time_axis().
+        #   This will not be supported at some future point...
+        return data.copy_template_new_dim_tags(
+            (query_spatial_dim, key_value_spatial_dim, feature_dim_tag)
+            if query_spatial_dim is not None
+            else (key_value_spatial_dim, feature_dim_tag)
+        )
 
 
 class CumConcatLayer(_ConcatInputLayer):

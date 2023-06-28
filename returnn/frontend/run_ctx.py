@@ -8,6 +8,7 @@ or forwarding loop.
 
 from __future__ import annotations
 from typing import Optional, Union, Any, Sequence, Dict
+import logging
 from dataclasses import dataclass
 from returnn.tensor import Tensor, Dim, TensorDict
 import returnn.frontend as rf
@@ -194,8 +195,7 @@ class RunCtx:
             ), f"mark_as_output: {name!r} dims mismatch from expected output, given {dims}, expected {expected_output}"
 
         if not isinstance(tensor, Tensor):
-            assert isinstance(tensor, _backend.global_backend.RawTensorType)
-            tensor = rf.convert_to_tensor(tensor, dims=dims)
+            tensor = _output_tensor_from_raw(tensor, dims=dims, name=name)
             # In case it was not specified, just accept whatever order we got.
             dims = tensor.dims
 
@@ -386,3 +386,30 @@ def _default_dim_order(tensor: Tensor) -> Sequence[Dim]:
     elif len(rem_dims) == 1:
         dims.append(rem_dims[0])
     return dims
+
+
+def _output_tensor_from_raw(raw_tensor, *, dims: Sequence[Dim], name: str) -> Tensor:
+    assert isinstance(raw_tensor, _backend.global_backend.RawTensorType)
+    tensor = rf.convert_to_tensor(raw_tensor, dims=dims)
+    # This is called when the user passed some raw tensor directly to mark_as_output.
+    # So e.g. in case of pure PyTorch code.
+    # In this case, it is common that the user does not explicitly specify the dyn sizes of the dim tags.
+    # We accept this, but for ONNX export and maybe other cases,
+    # we automatically fill in the dyn sizes from the raw tensor.
+    # In case the dim tag has scalar size, this is non-ambiguous,
+    # however, otherwise, it is ambiguous, so we print a warning that we always use the highest dim size.
+    for axis, dim in enumerate(tensor.dims):
+        if dim.dyn_size_ext and dim.dyn_size_ext.raw_tensor is None:
+            dim_value_raw = _backend.global_backend.get_shape_tuple_raw(raw_tensor)[axis]
+            dim_value = rf.convert_to_tensor(dim_value_raw, dims=())
+            dim_value = rf.cast(dim_value, dtype=dim.dyn_size_ext.dtype)
+            if dim.dyn_size_ext.dims:
+                dyn_size = rf.full(dims=dim.dyn_size_ext.dims, fill_value=dim_value)
+                logging.warning(
+                    f"Output {name!r} {tensor}: Cannot infer dynamic size for dim {dim}. "
+                    f"Using {dyn_size} as fallback."
+                )
+            else:
+                dyn_size = dim_value
+            dim.dyn_size_ext.raw_tensor = dyn_size.raw_tensor
+    return tensor

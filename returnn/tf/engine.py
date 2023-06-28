@@ -1265,6 +1265,7 @@ class Engine(EngineBase):
                     ignore_params=opts.get("ignore_params", ()),
                     ignore_params_prefixes=opts.get("ignore_params_prefixes", ()),
                     var_name_mapping=opts.get("var_name_mapping", {}),
+                    custom_missing_load_func=opts.get("custom_missing_load_func", None),
                 )
                 # `set_as_custom_init` is also a marker for the vars, that they are preloaded,
                 # such that further checkpoint loaders will not load them again.

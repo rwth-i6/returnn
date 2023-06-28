@@ -3,7 +3,7 @@ Defines the :class:`TFNetwork` and :class:`ExternData`.
 """
 
 from __future__ import annotations
-from typing import Optional, List
+from typing import Optional, List, Tuple
 import tensorflow as tf
 import sys
 import re
@@ -18,6 +18,7 @@ import returnn.tf.util.basic as tf_util
 from returnn.tensor import Tensor, Dim, TensorDict
 from returnn.tf.util.data import Data
 from returnn.util import basic as util
+from returnn.util.py_compat import Protocol
 
 
 class DataNotFound(Exception):
@@ -2399,7 +2400,12 @@ class TFNetwork(object):
         """
         :rtype: list[tf.Variable]
         """
-        return [self.global_train_step_var]
+        var_list = [self.global_train_step_var]
+        rnd_generator = tf_util.get_global_random_generator(create=False)
+        if rnd_generator is not None:
+            assert isinstance(rnd_generator.state, tf.Variable)
+            var_list.append(rnd_generator.state)
+        return var_list
 
     def get_params_serialized(self, session):
         """
@@ -4440,6 +4446,7 @@ class CustomCheckpointLoader:
         ignore_params_prefixes=(),
         var_name_mapping=None,
         network=None,
+        custom_missing_load_func: Optional[CustomLoadParamFunc] = None,
     ):
         """
         :param str filename: filepattern for NewCheckpointReader or .index/.meta file path
@@ -4454,9 +4461,11 @@ class CustomCheckpointLoader:
         :param dict[str,str] var_name_mapping: defines a custom mapping (new_name -> name_in_checkpoint) for
           renamed vars in the checkpoint
         :param TFNetwork network:
+        :param custom_missing_load_func:
         """
         self.filepattern = util.get_checkpoint_filepattern(filename)
         self.network = network
+        self.custom_missing_load_func = custom_missing_load_func
         self.ignore_missing = ignore_missing
         self.params_prefix = params_prefix
         self.load_if_prefix = load_if_prefix
@@ -4971,6 +4980,24 @@ class CustomCheckpointLoader:
                 )
         var_name_map.update({name: make_load_renamed(old_name) for name, old_name in self.var_name_mapping.items()})
 
+        if self.custom_missing_load_func:
+            for var_name in missing_var_names:
+                if var_name in var_name_map:
+                    continue
+                var = self.var_net_names[var_name]
+                var_shape = tuple(var.get_shape().as_list())
+                assert all(isinstance(d, int) for d in var_shape), f"var {var_name} {var} unknown?"
+                res = self.custom_missing_load_func(
+                    name=var_name,
+                    shape=var_shape,
+                    reader=self.reader,
+                )
+                if res is not None:
+                    assert isinstance(res, numpy.ndarray)
+                    assert res.shape == var_shape
+                    print(f"custom_missing_load_func loaded {var_name} with shape {var_shape}.", file=log.v4)
+                    var_name_map[var_name] = (lambda res_: (lambda: res_))(res)
+
         could_not_find_map_list = [v for v in missing_var_names if v not in var_name_map]
         if self.ignore_missing or not could_not_find_map_list:
             # We can restore all.
@@ -5083,6 +5110,17 @@ class CustomCheckpointLoader:
             if self.load_if_prefix:
                 print("%s registered for pre-loading via prefix %r." % (var.name, self.load_if_prefix), file=log.v2)
             set_custom_post_init(var=var, func=make_var_post_init(var))
+
+
+class CustomLoadParamFunc(Protocol):
+    """
+    This is a custom param importer function.
+    """
+
+    def __call__(
+        self, *, name: str, shape: Tuple[int], reader: tf.compat.v1.train.NewCheckpointReader
+    ) -> Optional[numpy.ndarray]:
+        ...
 
 
 def set_custom_post_init(var, func):

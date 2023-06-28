@@ -11,6 +11,7 @@ from typing import Callable, Optional, Dict
 import argparse
 import os
 
+import _setup_returnn_env  # noqa
 from returnn.config import Config
 from returnn.log import log
 from returnn.tensor import TensorDict
@@ -83,7 +84,7 @@ class ForwardModulePT(torch.nn.Module):
         extern_data = self.extern_data.copy_template()
         extern_data.assign_from_raw_tensor_dict_(data)
         self.forward_step_func(model=self.model, extern_data=extern_data)
-        rf.get_run_ctx().check_outputs_complete()
+        _check_matching_outputs()
         return rf.get_run_ctx().outputs.as_raw_tensor_dict()
 
 
@@ -110,8 +111,35 @@ class ForwardModuleRF(_RFModuleAsPTModule):
         extern_data = self.extern_data.copy_template()
         extern_data.assign_from_raw_tensor_dict_(data)
         self.forward_step_func(model=self.rf_module, extern_data=extern_data)
-        rf.get_run_ctx().check_outputs_complete()
+        _check_matching_outputs()
         return rf.get_run_ctx().outputs.as_raw_tensor_dict()
+
+
+def _check_matching_outputs():
+    rf.get_run_ctx().check_outputs_complete()
+    model_outputs_raw_keys = set(_get_model_outputs_raw_keys())
+    outputs_raw = rf.get_run_ctx().outputs.as_raw_tensor_dict()
+    outputs_raw_keys = set(outputs_raw.keys())
+    assert model_outputs_raw_keys == outputs_raw_keys, (
+        f"Model outputs raw keys and output raw keys from forward_step don't match.\n"
+        f"Model outputs raw keys: {sorted(model_outputs_raw_keys)}\n"
+        f"Output raw keys: {sorted(outputs_raw_keys)}"
+    )
+    assert all(v is not None for k, v in outputs_raw.items()), (
+        f"Output raw keys from forward_step contain None values.\n"
+        f"Output raw keys with None: {list(k for k, v in outputs_raw.items() if v is None)}"
+    )
+
+
+def _get_model_outputs_raw_keys():
+    model_outputs = rf.get_run_ctx().expected_outputs
+    model_outputs_raw_keys = []
+    for k, v in model_outputs.data.items():
+        model_outputs_raw_keys.append(k)
+        for i, dim in enumerate(v.dims):
+            if dim.is_batch_dim() or dim.is_dynamic():
+                model_outputs_raw_keys.append(f"{k}:size{i}")
+    return model_outputs_raw_keys
 
 
 def main():
@@ -138,13 +166,6 @@ def main():
     ), "The specified config needs to have explicit model outputs. Please define `model_outputs` in your config."
     model_outputs = TensorDict()
     model_outputs.update(model_outputs_dict, auto_convert=True)
-    model_outputs_raw_keys = []
-    for k, v in model_outputs.data.items():
-        model_outputs_raw_keys.append(k)
-        for i, dim in enumerate(v.dims):
-            if dim.is_batch_dim() or dim.is_dynamic():
-                model_outputs_raw_keys.append(f"{k}:size{i}")
-
     rf.init_forward_step_run_ctx(expected_outputs=model_outputs)
     rf.set_random_seed(42)
 
@@ -171,6 +192,7 @@ def main():
     tensor_dict_fill_random_numpy_(extern_data)
     tensor_dict_numpy_to_torch_(extern_data)
     extern_data_raw = extern_data.as_raw_tensor_dict()
+    model_outputs_raw_keys = _get_model_outputs_raw_keys()
 
     if is_pt_module:
         model.load_state_dict(loaded_checkpoint["model"])

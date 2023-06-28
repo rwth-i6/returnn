@@ -85,6 +85,7 @@ class LayerBase(object):
         spatial_smoothing=0.0,
         param_variational_noise=None,
         param_dropout=None,
+        param_dropout_min_ndim=None,
         updater_opts=None,
         initial_output=None,
         state=None,
@@ -141,6 +142,8 @@ class LayerBase(object):
         :param float|None spatial_smoothing: see :func:`returnn.tf.util.basic.spatial_smoothing_energy`
         :param float|None param_variational_noise: adds variational noise to the params during training
         :param float|None param_dropout: dropout on params (weight dropout) during training
+        :param int|None param_dropout_min_ndim: if param dropout is enabled, only use if for params whose ndim >= this.
+            E.g. it might make sense to disable it for bias params or scalars, so set param_dropout_min_ndim=2.
         :param dict[str]|None updater_opts: accepts similar opts as TFUpdater, e.g. "optimizer", "learning_rate", ...
         :param bool|None is_output_layer: triggers the construction of this layer in the root net.
             Inside a :class:`RecLayer`, it triggers the explicit accumulation of all frames.
@@ -244,6 +247,7 @@ class LayerBase(object):
         self.spatial_smoothing = spatial_smoothing
         self.param_variational_noise = param_variational_noise
         self.param_dropout = param_dropout
+        self.param_dropout_min_ndim = param_dropout_min_ndim
         self.updater_opts = CollectionReadCheckCovered(updater_opts or {})
         self._is_output_layer = is_output_layer
         self.only_on_eval = only_on_eval
@@ -503,11 +507,9 @@ class LayerBase(object):
                 # Special case: Input feature or sparse dim looks the same, so overtake it.
                 out_dim = sources_data.feature_dim_or_sparse_dim
         if out_dim:
-            assert out_dim.dimension == output.dim, "Layer %r out_dim %s does not match Data via out_type %s" % (
-                name,
-                out_dim,
-                output,
-            )
+            assert (
+                out_dim.dimension == output.dim
+            ), f"Layer {name!r} out_dim {out_dim} does not match Data {output} via out_type {out_type}"
             if output.sparse:
                 output.sparse_dim = out_dim
             else:
@@ -1193,6 +1195,7 @@ class LayerBase(object):
         """
         from returnn.tf.util.basic import get_current_var_scope_name, reuse_name_scope
         from returnn.tf.util.basic import default_control_flow_ctx, reuse_name_scope_of_tensor
+        from returnn.tf.util.gradient_checkpoint import gradient_checkpoint_scope
 
         self_base_scope = self.get_base_absolute_name_scope_prefix()
         assert self_base_scope.endswith("/") or self_base_scope == ""
@@ -1209,6 +1212,9 @@ class LayerBase(object):
         param_dropout = self.param_dropout
         if param_dropout is None:
             param_dropout = self.network.get_config().float("param_dropout", 0)
+        param_dropout_min_ndim = self.param_dropout_min_ndim
+        if param_dropout_min_ndim is None:
+            param_dropout_min_ndim = self.network.get_config().int("param_dropout_min_ndim", 0)
         if self.network.train_flag is False:  # if True or tf.Tensor, it will use cond_on_train below
             param_variational_noise = None
             param_dropout = None
@@ -1234,20 +1240,22 @@ class LayerBase(object):
                     with reuse_name_scope_of_tensor(param, postfix="_variational_noise", add_tensor_name=True):
 
                         def _apply_var_noise():
-                            noise = tf_compat.v1.random_normal(
-                                tf.shape(param),
-                                dtype=param.dtype.base_dtype,
-                                stddev=param_variational_noise,
-                                seed=self.network.random.randint(2**31),
-                            )
-                            return tf.recompute_grad(lambda param_: param_ + noise)(param)
+                            rnd_state = tf_util.StatelessRandomSeed.create(shape=tf_util.get_shape(param))
+                            with gradient_checkpoint_scope():
+                                noise = rnd_state.normal(stddev=param_variational_noise, dtype=param.dtype.base_dtype)
+                                return param + noise
 
                         param = self.network.cond_on_train(
                             fn_train=_apply_var_noise,
                             fn_eval=lambda: param,
                         )
 
-            if param_dropout and param.dtype.is_floating and isinstance(param, tf.Variable):
+            if (
+                param_dropout
+                and param.dtype.is_floating
+                and isinstance(param, tf.Variable)
+                and param.shape.ndims >= param_dropout_min_ndim
+            ):
                 with default_control_flow_ctx():  # make independent from loop/cond
                     with reuse_name_scope_of_tensor(param, postfix="_weight_dropout", add_tensor_name=True):
                         param = self.network.cond_on_train(

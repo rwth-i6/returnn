@@ -659,7 +659,7 @@ class Backend(Generic[T]):
     @staticmethod
     def full(
         dims: Sequence[Dim],
-        fill_value: RawTensorTypes,
+        fill_value: Union[RawTensorTypes, Tensor],
         *,
         dtype: str,
         sparse_dim: Optional[Dim] = None,

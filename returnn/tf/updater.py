@@ -257,6 +257,9 @@ class Updater(object):
         assert isinstance(self.loss, tf.Tensor), "no loss defined?"
         assert self.trainable_vars, "no variables to update/optimize"
         from returnn.tf.util.basic import MetaLosses
+        from returnn.tf.util.gradient_checkpoint import prepare_gradient_checkpointing
+
+        prepare_gradient_checkpointing()
 
         # Keep track of all current available vars.
         # The optimizer could add some, even some which are not so-called "slot-vars",

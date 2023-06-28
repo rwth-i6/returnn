@@ -4,9 +4,10 @@ Lots of random utility functions for TensorFlow.
 
 from __future__ import annotations
 
-from typing import Optional, List
+from typing import Optional, Union, Sequence, List
 import typing
 import contextlib
+from dataclasses import dataclass
 import os
 import sys
 import threading
@@ -1819,9 +1820,19 @@ def dropout(
     :param bool apply_correction_factor:
     :param bool grad_checkpointing: use gradient checkpointing for the result
     """
+    from .gradient_checkpoint import gradient_checkpoint_scope, gradient_checkpoint_exclude_scope
+
     if cond_on_train:
         return cond_on_train_flag(
-            lambda: dropout(x, keep_prob=keep_prob, noise_shape=noise_shape, seed=seed, name=name), lambda: x
+            lambda: dropout(
+                x,
+                keep_prob=keep_prob,
+                noise_shape=noise_shape,
+                seed=seed,
+                name=name,
+                grad_checkpointing=grad_checkpointing,
+            ),
+            lambda: x,
         )
     with tf.name_scope(name or "dropout"):
         x = tf.convert_to_tensor(x, name="x")
@@ -1845,23 +1856,29 @@ def dropout(
             noise_shape_v = tensor_util.constant_value(noise_shape)
             if noise_shape_v is not None:
                 noise_shape = [int(noise_shape_v[i]) for i in range(x.shape.ndims)]
-        # If noise_shape is fully static, calculate it outside of any ctx (e.g. recurrent loop).
-        # This effectively means that the mask would get reused for multiple frames, if `x` is inside a recurrent loop.
-        with same_control_flow_ctx(noise_shape):
-            # uniform [keep_prob, 1.0 + keep_prob)
-            random_tensor = keep_prob
-            random_tensor += tf_compat.v1.random_uniform(noise_shape, seed=seed, dtype=x.dtype)
-            # 0. if [keep_prob, 1.0) and 1. if [1.0, 1.0 + keep_prob)
-            binary_tensor = tf.floor(random_tensor)
-            if apply_correction_factor:
-                binary_tensor *= inv_keep_prob
 
-        if grad_checkpointing:
-            ret = tf.recompute_grad(lambda x_: x_ * binary_tensor)(x)
-        else:
+        scope_func = gradient_checkpoint_scope if grad_checkpointing else contextlib.nullcontext
+        with scope_func():
+            # If noise_shape is fully static, calculate it outside of any ctx (e.g. recurrent loop).
+            # This effectively means that the mask would get reused for multiple frames,
+            # if `x` is inside a recurrent loop.
+            with same_control_flow_ctx(noise_shape):
+                # uniform [keep_prob, 1.0 + keep_prob)
+                random_tensor = keep_prob
+                if grad_checkpointing:
+                    with gradient_checkpoint_exclude_scope():
+                        rnd_state = StatelessRandomSeed.create(shape=noise_shape)
+                    random_tensor += rnd_state.uniform(dtype=x.dtype)
+                else:
+                    random_tensor += tf_compat.v1.random_uniform(noise_shape, seed=seed, dtype=x.dtype)
+                # 0. if [keep_prob, 1.0) and 1. if [1.0, 1.0 + keep_prob)
+                binary_tensor = tf.floor(random_tensor)
+                if apply_correction_factor:
+                    binary_tensor *= inv_keep_prob
+
             ret = x * binary_tensor
-        assert isinstance(ret, tf.Tensor)
-        ret.set_shape(x.get_shape())
+            assert isinstance(ret, tf.Tensor)
+            ret.set_shape(x.get_shape())
 
         # zero padded dims stay zero padded
         ret_padding_info = get_padding_info_dict_ref(ret)
@@ -4343,6 +4360,115 @@ def get_random_seed():
     return tf_compat.v1.get_seed(None)[1]
 
 
+def get_global_random_generator(*, create: bool = True) -> Optional[tf.random.Generator]:
+    """
+    :param create: if True and no generator exists yet, it will create one
+    :return: random generator
+    """
+    # Note: Do not use tf.random.get_global_generator() here
+    # because we want to be able to define the creation logic
+    # in case the generator does not exist yet.
+    from tensorflow.python.ops import stateful_random_ops
+
+    cur_root_graph = get_root_graph()
+    if stateful_random_ops.global_generator is not None:
+        if stateful_random_ops.global_generator.state.graph is not cur_root_graph:
+            # Reset, this is from an old graph.
+            stateful_random_ops.global_generator = None
+    if stateful_random_ops.global_generator is not None:
+        return stateful_random_ops.global_generator
+    if not create:
+        return None
+    with default_control_flow_ctx(), reuse_name_scope("global_random_generator", absolute=True):
+        stateful_random_ops.global_generator = tf.random.Generator.from_seed(get_random_seed())
+        assert isinstance(stateful_random_ops.global_generator, tf.random.Generator)
+        assert stateful_random_ops.global_generator.state.graph is cur_root_graph
+    return stateful_random_ops.global_generator
+
+
+@dataclass
+class StatelessRandomSeed:
+    """
+    State to create some random numbers.
+
+    The random numbers can be created multiple times,
+    and it will always return the same value for the same instance.
+    This is useful to save memory.
+    """
+
+    _shape: Union[tf.Tensor, Sequence[Union[int, tf.Tensor]]]
+    _key: tf.Tensor
+    _counter: tf.Tensor
+    _algorithm: Union[int, tf.Tensor]
+
+    @classmethod
+    def create(
+        cls,
+        *,
+        shape: Union[tf.Tensor, Sequence[Union[int, tf.Tensor]]],
+        generator: Optional[tf.random.Generator] = None,
+    ) -> StatelessRandomSeed:
+        """
+        :param shape:
+        :param generator:
+        :return: new instance
+        """
+        if generator is None:
+            generator = get_global_random_generator()
+        # noinspection PyProtectedMember
+        key, counter = generator._prepare_key_counter(shape)
+        algorithm = generator.algorithm
+        return cls(_shape=shape, _key=key, _counter=counter, _algorithm=algorithm)
+
+    def uniform(
+        self,
+        *,
+        minval: Union[float, tf.Tensor] = 0,
+        maxval: Optional[Union[float, tf.Tensor]] = None,
+        dtype: tf.DType = tf.float32,
+    ) -> tf.Tensor:
+        """
+        Basically copy of tf.random.Generator.uniform.
+
+        :param minval:
+        :param maxval:
+        :param dtype:
+        :return: random tensor with given shape. Note that this op is deterministic,
+            i.e. it will always return the same value for multiple calls on the same instance,
+            as the instance encapsulates all random state.
+        """
+        from tensorflow.python.ops import gen_stateless_random_ops_v2
+
+        if maxval is None:
+            if dtype.is_integer:
+                raise ValueError("Must specify maxval for integer dtype %r" % dtype)
+            maxval = 1
+        rnd = gen_stateless_random_ops_v2.stateless_random_uniform_v2(
+            shape=self._shape, key=self._key, counter=self._counter, dtype=dtype, alg=self._algorithm
+        )
+        return rnd * (maxval - minval) + minval
+
+    def normal(
+        self, mean: Union[float, tf.Tensor] = 0.0, stddev: Union[float, tf.Tensor] = 1.0, dtype: tf.DType = tf.float32
+    ) -> tf.Tensor:
+        """
+        Basically copy of tf.random.Generator.normal.
+
+        :param mean:
+        :param stddev:
+        :param dtype:
+        :return: random tensor with given shape. Note that this op is deterministic,
+            i.e. it will always return the same value for multiple calls on the same instance,
+            as the instance encapsulates all random state.
+        """
+        from tensorflow.python.ops import gen_stateless_random_ops_v2
+
+        rnd = gen_stateless_random_ops_v2.stateless_random_normal_v2(
+            self._shape, key=self._key, counter=self._counter, dtype=dtype, alg=self._algorithm
+        )
+        return rnd * stddev + mean
+
+
 def encode_raw(x, axis=-1, seq_lens=None):
     """
     The inverse function of tf.compat.v1.decode_raw().
@@ -4867,15 +4993,21 @@ def check_base_op_type_and_replace(x, op_type, new_op_type):
     return op.outputs[0]
 
 
-def copy_op(op, op_type=None, inputs=None):
+def copy_op(
+    op: tf.Operation,
+    *,
+    op_type: Optional[str] = None,
+    inputs: Optional[Sequence[tf.Tensor]] = None,
+    name: Optional[str] = None,
+) -> tf.Operation:
     """
     Copies a tf.Operation.
 
-    :param tf.Operation op:
-    :param str|None op_type: if given, overwrites op.type, otherwise uses the same op.type
-    :param list[tf.Tensor]|None inputs: if given, overwrites op.inputs, otherwise uses the same op.inputs
+    :param op:
+    :param op_type: if given, overwrites op.type, otherwise uses the same op.type
+    :param inputs: if given, overwrites op.inputs, otherwise uses the same op.inputs
+    :param name:
     :return: copy of op but optionally change op.type == op_type or op.inputs == inputs
-    :rtype: tf.Operation
     """
     assert isinstance(op, tf.Operation)
     g = op.graph
@@ -4887,10 +5019,11 @@ def copy_op(op, op_type=None, inputs=None):
     # Maybe in the future we would also wrap some deprecated/outdated ops.
     if op_type == "LogSigmoid":
         assert len(inputs) == 1
-        return tf_compat.v1.log_sigmoid(inputs[0]).op
+        return tf_compat.v1.log_sigmoid(inputs[0], name=name).op
     # Fallback to the generic case.
     new_op = g.create_op(
         op_type=op_type,
+        name=name,
         op_def=op.op_def if op_type == op.type else None,  # Can only copy op_def if it is the same op_type.
         inputs=inputs,
         input_types=[x.dtype for x in inputs],
