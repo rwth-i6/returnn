@@ -4370,12 +4370,19 @@ def get_global_random_generator(*, create: bool = True) -> Optional[tf.random.Ge
     # in case the generator does not exist yet.
     from tensorflow.python.ops import stateful_random_ops
 
+    cur_root_graph = get_root_graph()
+    if stateful_random_ops.global_generator is not None:
+        if stateful_random_ops.global_generator.state.graph is not cur_root_graph:
+            # Reset, this is from an old graph.
+            stateful_random_ops.global_generator = None
     if stateful_random_ops.global_generator is not None:
         return stateful_random_ops.global_generator
     if not create:
         return None
     with default_control_flow_ctx(), reuse_name_scope("global_random_generator", absolute=True):
         stateful_random_ops.global_generator = tf.random.Generator.from_seed(get_random_seed())
+        assert isinstance(stateful_random_ops.global_generator, tf.random.Generator)
+        assert stateful_random_ops.global_generator.state.graph is cur_root_graph
     return stateful_random_ops.global_generator
 
 
