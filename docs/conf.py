@@ -186,18 +186,12 @@ def linkcode_resolve(domain, info):
 # }
 
 ## Read the docs style:
-if os.environ.get("READTHEDOCS") != "True":
-    try:
-        import furo
-    except ImportError:
-        pass  # assume we have sphinx >= 1.3
-    else:
-        html_theme = "furo"
-
-
-def setup(app):
-    app.add_css_file("fix_rtd.css")
-
+try:
+    import furo
+except ImportError:
+    pass
+else:
+    html_theme = "furo"
 
 ## Bootstrap style:
 # import sphinx_bootstrap_theme
