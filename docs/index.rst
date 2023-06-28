@@ -80,6 +80,7 @@ Some recent development changelog can be seen `here <https://github.com/rwth-i6/
     :caption: Getting Started
     :maxdepth: 2
 
+    getting_started/installation.rst
     getting_started/basic_usage.rst
     getting_started/returnn_frontend.rst
     getting_started/tech_overview.rst
@@ -87,7 +88,6 @@ Some recent development changelog can be seen `here <https://github.com/rwth-i6/
     getting_started/recurrency.rst
     getting_started/training.rst
     getting_started/native_ops.rst
-    getting_started/installation.rst
     getting_started/framework.rst
     getting_started/recent_development.rst
     getting_started/tf_lstm_benchmark.rst
