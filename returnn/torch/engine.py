@@ -578,6 +578,7 @@ class Engine(EngineBase):
                     assert not missing_prefix_keys, f"Missing keys and ignore_missing=False: {missing_prefix_keys}"
                 print(f"Missing keys: {missing_keys}", file=log.v4)
 
+        # https://github.com/rwth-i6/returnn/issues/1345
         del checkpoint_state
         gc.collect()
         self._pt_model.to(self._device)
