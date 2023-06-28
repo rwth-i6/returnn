@@ -16,7 +16,8 @@ You might want to use :code:`pip3` instead of :code:`pip`,
 and you also might want to add the option :code:`--user`
 (if you are not using ``virtualenv``).
 
-For TensorFlow, use :code:`pip install tensorflow`.
+For TensorFlow, use :code:`pip install tensorflow`,
+and for PyTorch, use :code:`pip install torch torchdata torchaudio`.
 
 For some specific datasets or special layers, additional dependencies might be needed,
 such as ``librosa``.
