@@ -81,7 +81,7 @@ class Updater(object):
     Wraps a torch.optim.Optimizer, and extends it by some further functionality.
     """
 
-    def __init__(self, config, network, device, initial_learning_rate=1.0):
+    def __init__(self, *, config, network, device, initial_learning_rate=1.0):
         """
         :param returnn.config.Config config: config defining the training conditions.
         :param torch.nn.Module network: PyTorch Module defining the network.
