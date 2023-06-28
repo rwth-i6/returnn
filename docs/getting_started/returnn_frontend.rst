@@ -13,7 +13,9 @@ This common interface supports multiple backends, namely:
 * TensorFlow layer dictionaries
 * TensorFlow directly
 
-Code::
+Code:
+
+.. code-block:: python
 
     import returnn.frontend as rf
 

@@ -8,7 +8,9 @@ Install RETURNN via ``pip`` (`PyPI entry <https://pypi.org/project/returnn/>`__)
 Then :code:`import returnn` should work.
 See `demo-returnn-as-framework.py <https://github.com/rwth-i6/returnn/blob/master/demos/demo-returnn-as-framework.py>`__ as a full example.
 
-Basically you can write very high level code like this::
+Basically you can write very high level code like this:
+
+.. code-block:: python
 
     from returnn.TFEngine import Engine
     from returnn.Dataset import init_dataset
@@ -26,7 +28,9 @@ Basically you can write very high level code like this::
 
     engine.init_train_from_config(train_data=train_data, dev_data=dev_data)
 
-Or you go lower level and construct the computation graph yourself::
+Or you go lower level and construct the computation graph yourself:
+
+.. code-block:: python
 
     from returnn.TFNetwork import TFNetwork
 
@@ -44,7 +48,9 @@ Or you go lower level and construct the computation graph yourself::
             # you could use FeedDictDataProvider
         })
 
-Or even lower level and just use parts from ``TFUtil``, ``TFNativeOp``, etc.::
+Or even lower level and just use parts from ``TFUtil``, ``TFNativeOp``, etc.:
+
+.. code-block:: python
 
     from returnn.TFNativeOp import ctc_loss
     from returnn.TFNativeOp import edit_distance

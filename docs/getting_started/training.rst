@@ -117,7 +117,9 @@ Not only the learning rate can be scheduled, but many other aspects as well, suc
 This can be done by overwriting config parameters using the :ref:`_pretraining` logic or
 ``get_network()`` (see :ref:`_custom_train_pipeline`).
 In either case, parameters set under ``net_dict["#config"]`` will be used to overwrite existing config parameters.
-Example::
+Example:
+
+.. code-block:: python
 
     gradient_clip = 0
 

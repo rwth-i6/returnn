@@ -15,9 +15,9 @@ See `here for an example <https://github.com/rwth-i6/returnn/blob/master/demos/d
 and `many more examples from the demos <https://github.com/rwth-i6/returnn/blob/master/demos/>`_.
 The configuration syntax can be in three different forms:
 
-  - a simple line-based file with ``key value`` pairs
-  - a JSON file (determined by a "``{``" at the beginning of the file)
-  - executable python code (determined by a "``#!``" at the beginning of the file)
+- a simple line-based file with ``key value`` pairs
+- a JSON file (determined by a "``{``" at the beginning of the file)
+- executable python code (determined by a "``#!``" at the beginning of the file)
 
 Config files using the python code syntax are the de-facto standard for all current examples and setups.
 The parameters can be set by defining global variables, but it is possible to use any form of python code such
@@ -64,14 +64,14 @@ train / dev / eval
     ``seq_ordering``: This defines the order of the sequences provided by the dataset.
     Possible values are:
 
-        - ``default``: Keep the sequences as is
-        - ``reverse``: Use the default sequences in reversed order
-        - ``random``: Shuffle the data with a predefined fixed seed
-        - ``random:<seed>``: Shuffle the data with the seed given
-        - ``sorted``: Sort by length (only if available), beginning with shortest sequences
-        - ``sorted_reverse``: Sort by length, beginning with longest sequences
-        - ``laplace:<n_buckets>``: Sort by length with n laplacian buckets (one bucket means going from shortest to longest and back with 1/n of the data).
-        - ``laplace:.<n_sequences>``: sort by length with n sequences per laplacian bucket.
+    - ``default``: Keep the sequences as is
+    - ``reverse``: Use the default sequences in reversed order
+    - ``random``: Shuffle the data with a predefined fixed seed
+    - ``random:<seed>``: Shuffle the data with the seed given
+    - ``sorted``: Sort by length (only if available), beginning with shortest sequences
+    - ``sorted_reverse``: Sort by length, beginning with longest sequences
+    - ``laplace:<n_buckets>``: Sort by length with n laplacian buckets (one bucket means going from shortest to longest and back with 1/n of the data).
+    - ``laplace:.<n_sequences>``: sort by length with n sequences per laplacian bucket.
 
     Note that not all sequence order modes are available for all datasets,
     and some datasets may provide additional modes.
@@ -84,6 +84,7 @@ extern_data
     and the standard target data is called "``classes``" by default.
 
     A common example for an ASR system would be:
+
     .. code-block:: python
 
         extern_data = {

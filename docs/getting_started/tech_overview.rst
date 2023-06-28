@@ -13,13 +13,13 @@ see the slides of `our Interspeech 2020 tutorial about machine learning framewor
 
 The main tasks of RETURNN are:
 
-    - Network construction, i.e. definition of the computation graph
-    - Dataset loading with predefined and extendable :class:`returnn.datasets.Dataset` objects
-    - Automatic management of layer outputs (such as tensor axes and time dimensions)
-      with a :ref:`Data <data>` object
-    - Support of dynamic training schemes that allow for network structure and parameter changes during training
-    - Managing the losses and optimizer functions
-    - Learning rate scheduling based on training scores
+- Network construction, i.e. definition of the computation graph
+- Dataset loading with predefined and extendable :class:`returnn.datasets.Dataset` objects
+- Automatic management of layer outputs (such as tensor axes and time dimensions)
+  with a :ref:`Data <data>` object
+- Support of dynamic training schemes that allow for network structure and parameter changes during training
+- Managing the losses and optimizer functions
+- Learning rate scheduling based on training scores
 
 RETURNN supports two calculation backends: TensorFlow and Theano.
 It is recommended to stick to the TensorFlow backend, as Theano is deprecated.
@@ -114,7 +114,7 @@ The goal of every execution in RETURNN tries to achieve one of the tasks:
 - **train**: Trains the network with the given dataset. It requires at least a valid ``train`` dataset. If ``eval``, ``dev`` or ``eval_datasets`` are specified they are evaluated at the end of each epoch. Further informations can be found in :py:func:`returnn.tf.engine.Engine.train`.
 - **eval**:  Evaluates on ``eval``, ``dev`` or ``eval_datasets`` if specified. It requires ``load_epoch`` or ``epoch`` for loading the weights of the network.
 - **search**: Performs beam search on the dataset as specified by ``search_data``. The networks weights are loaded according to ``load_epoch`` or ``epoch``. The beam size can be specified with ``beam_size``. For futher information look in :py:func:`returnn.tf.engine.Engine.search`.
-- **nop**: This task is used to proof check everything not related to the network and the dataset. So datasets and the nework are not initialized at all. 
+- **nop**: This task is used to proof check everything not related to the network and the dataset. So datasets and the nework are not initialized at all.
 - **nop_init_net_train**: Initializes the network and training dataset ``train`` but doesn't start training.
 - **initialize_model**: Similiar to **nop_init_net_train** but it saves a checkpoint at the end.
 - **cleanup_old_models**: Cleans up models if we have done some lr control. With ``cleanup_old_models`` more options can be specified.
