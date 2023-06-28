@@ -188,12 +188,11 @@ def linkcode_resolve(domain, info):
 ## Read the docs style:
 if os.environ.get("READTHEDOCS") != "True":
     try:
-        import sphinx_rtd_theme
+        import furo
     except ImportError:
         pass  # assume we have sphinx >= 1.3
     else:
-        html_theme_path = [sphinx_rtd_theme.get_html_theme_path()]
-    html_theme = "sphinx_rtd_theme"
+        html_theme = "furo"
 
 
 def setup(app):

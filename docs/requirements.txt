@@ -9,4 +9,5 @@ torchdata
 torchaudio
 numpydoc
 better_exchook
-sphinx_rtd_theme
+sphinx
+furo
