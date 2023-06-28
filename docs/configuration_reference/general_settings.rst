@@ -55,7 +55,11 @@ model
     If ``load_from`` is not set, the model will also be loaded from this path.
 
 network
-    This is a nested dict which defines the network topology.
+    This is a nested dict which defines the network topology,
+    used for the TensorFlow layers backend.
+    See also :ref:`returnn_frontend` as an alternative.
+    Or you can also write pure PyTorch code.
+
     It consists of layer-names as strings, mapped on dicts, which defines the layers.
     The layer dict consists of keys as strings and the value type depends on the key.
     The layer dict should contain the key ``class`` which defines the class or type of the layer,

@@ -43,7 +43,9 @@ preload_from_files
     with the given prefix. The layer name in the checkpoint should match the name of the layer without the prefix
     (e.g. the parameters of "submodel1_layer1" in the network would be set to the parameters of "layer1" in the
     checkpoint).
-    Example (containing all possible parameters)::
+    Example (containing all possible parameters):
+
+    .. code-block:: python
 
         preload_from_files = {
           "existing-model": {

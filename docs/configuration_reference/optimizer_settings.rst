@@ -89,10 +89,10 @@ learning_rates
 learning_rate_control
     This defines which type of learning rate control mechanism is used. Possible values are:
 
-        - ``constant`` for a constant learning rate which is never modified
-        - ``newbob_abs`` for a scheduling based on absolute improvement
-        - ``newbob_rel`` for a scheduling based on relative improvement
-        - ``newbob_multi_epoch`` for a scheduling based on relative improvement averaged over multiple epochs
+    - ``constant`` for a constant learning rate which is never modified
+    - ``newbob_abs`` for a scheduling based on absolute improvement
+    - ``newbob_rel`` for a scheduling based on relative improvement
+    - ``newbob_multi_epoch`` for a scheduling based on relative improvement averaged over multiple epochs
 
     Please also look at setting values with the ``newbob`` prefix for further customization
 

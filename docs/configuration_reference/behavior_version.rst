@@ -164,10 +164,12 @@ See issue `#594 <https://github.com/rwth-i6/returnn/issues/594>`__.
 Usually, you would use :class:`DimensionTag` to specify ``in_spatial_dims``.
 However, to make the transition easier for this specific new behavior,
 you can also use a string description for a dimension.
-So example usages look like::
+So example usages look like:
 
-    enc_dim = DimensionTag(...)
-    dec_dim = DimensionTag(...)
+.. code-block:: python
+
+    enc_dim = Dim(...)
+    dec_dim = Dim(...)
 
     in_spatial_dims = (enc_dim, dec_tim)
     in_spatial_dims = ("T", "dim:16")

@@ -24,7 +24,9 @@ describes all available tools that are available here.
 
 
 There is also the option ``store_metadata_mod_step`` which has the effect that
-every Nth step, it will do the ``session.run`` with these additional options::
+every Nth step, it will do the ``session.run`` with these additional options:
+
+.. code-block:: python
 
     run_metadata = tf.RunMetadata()
     session.run(

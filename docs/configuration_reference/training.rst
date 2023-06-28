@@ -18,15 +18,15 @@ batching
     but rather define ``seq_ordering`` explicitly in the datasets for better readability.
     Possible values are:
 
-        - ``default``: Keep the sequences as is
-        - ``reverse``: Use the default sequences in reversed order
-        - ``random``: Shuffle the data with a predefined fixed seed
-        - ``random:<seed>``: Shuffle the data with the seed given
-        - ``sorted``: Sort by length (only if available), beginning with shortest sequences
-        - ``sorted_reverse``: Sort by length, beginning with longest sequences
-        - ``laplace:<n_buckets>``: Sort by length with n laplacian buckets
-          (one bucket means going from shortest to longest and back with 1/n of the data).
-        - ``laplace:.<n_sequences>``: sort by length with n sequences per laplacian bucket.
+    - ``default``: Keep the sequences as is
+    - ``reverse``: Use the default sequences in reversed order
+    - ``random``: Shuffle the data with a predefined fixed seed
+    - ``random:<seed>``: Shuffle the data with the seed given
+    - ``sorted``: Sort by length (only if available), beginning with shortest sequences
+    - ``sorted_reverse``: Sort by length, beginning with longest sequences
+    - ``laplace:<n_buckets>``: Sort by length with n laplacian buckets
+      (one bucket means going from shortest to longest and back with 1/n of the data).
+    - ``laplace:.<n_sequences>``: sort by length with n sequences per laplacian bucket.
 
     Note that not all sequence order modes are available for all datasets,
     and some datasets may provide additional modes.
@@ -44,9 +44,9 @@ cleanup_old_models
     Per default, 2 recent, 4 best, and the checkpoints 20,40,80,160,240 are kept.
     Can be set as a dictionary to specify additional options.
 
-        - ``keep_last_n``: integer defining how many recent checkpoints to keep
-        - ``keep_best_n``: integer defining how many best checkpoints to keep
-        - ``keep``: list or set of integers defining which checkpoints to keep
+    - ``keep_last_n``: integer defining how many recent checkpoints to keep
+    - ``keep_best_n``: integer defining how many best checkpoints to keep
+    - ``keep``: list or set of integers defining which checkpoints to keep
 
 max_seq_length
     A dict with string:integer pairs. The string must be a valid data key,

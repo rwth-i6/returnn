@@ -9,19 +9,19 @@ RETURNN can perform beam search on an arbitrary network architecture with an arb
 Mostly due to this fact, there is no single place in the code where beam search happens.
 The following classes and functions are related to beam search:
 
-    - :class:`returnn.tf.layers.rec.ChoiceLayer`
+- :class:`returnn.tf.layers.rec.ChoiceLayer`
 
-    - :class:`returnn.tf.layers.rec.DecideLayer`
+- :class:`returnn.tf.layers.rec.DecideLayer`
 
-    - :class:`returnn.tf.util.data.SearchBeam`
+- :class:`returnn.tf.util.data.SearchBeam`
 
-    - :class:`returnn.tf.layers.base.SearchChoices`
+- :class:`returnn.tf.layers.base.SearchChoices`
 
-    - :class:`returnn.tf.layers.basic.SelectSearchSourcesLayer`
+- :class:`returnn.tf.layers.basic.SelectSearchSourcesLayer`
 
-    - :func:`returnn.tf.layers.rec._SubnetworkRecCell._opt_search_resolve()`
+- :func:`returnn.tf.layers.rec._SubnetworkRecCell._opt_search_resolve()`
 
-    - :func:`returnn.tf.network.TFNetwork.get_search_choices()`
+- :func:`returnn.tf.network.TFNetwork.get_search_choices()`
 
 For an example implementation of search, please have a look at :ref:`recurrent_subnet_independent`.
 
