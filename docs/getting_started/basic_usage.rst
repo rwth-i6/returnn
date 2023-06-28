@@ -101,7 +101,12 @@ extern_data
 
 
 network
-    This is a dict which defines the network topology.
+    This is a dict which defines the network topology
+    for the TF layers backend.
+    Note that the TF layers backend is only one possibility to define a network
+    and loss function,
+    but you can also use the :ref:`returnn_frontend` or pure PyTorch code directly.
+
     It consists of layer-names as strings, mapped on dicts, which defines the layers.
     The layer dict consists of keys as strings and the value type depends on the key.
     The layer dict should contain the key ``class`` which defines the class or type of the layer,
@@ -174,6 +179,8 @@ As the reference is still incomplete, please watch out for additional parameters
 All configuration params can also be passed as command line parameters.
 The generic form is ``++param value``, but more options are available.
 Please See the code for some usage.
+
+See also :ref:`returnn_frontend`.
 
 See also :ref:`general_settings`.
 
