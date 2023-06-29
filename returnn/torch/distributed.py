@@ -27,7 +27,7 @@ class DistributedContext:
         """
         import torch.distributed as dist
 
-        dist.init_process_group("gloo")
+        dist.init_process_group()
 
         self._config = config
         self._local_rank = os.environ["LOCAL_RANK"]
