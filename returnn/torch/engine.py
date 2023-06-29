@@ -6,6 +6,7 @@ from __future__ import annotations
 from typing import Optional, Union, Callable, Dict
 from contextlib import nullcontext
 
+import gc
 import os
 import numpy
 import torch
@@ -187,7 +188,9 @@ class Engine(EngineBase):
             self._ddp_pt_model = self._torch_distributed_class(
                 self._pt_model, device_ids=get_device_ids(), **self._torch_distributed_options
             )
-        self._updater = Updater(self.config, self._pt_model, self.learning_rate)
+        self._updater = Updater(
+            config=self.config, network=self._pt_model, device=self._device, initial_learning_rate=self.learning_rate
+        )
         self._updater.create_optimizer()
         if self._start_epoch > 1:
             self._load_optimizer()
@@ -481,7 +484,7 @@ class Engine(EngineBase):
         if model_epoch_filename:
             filename = model_epoch_filename + util.get_model_filename_postfix()
             print("Load model %s" % (filename,), file=log.v4)
-            checkpoint_state = torch.load(filename)
+            checkpoint_state = torch.load(filename, map_location=self._device)
             if epoch is None:
                 epoch = checkpoint_state["epoch"]
             step = checkpoint_state["step"]
@@ -577,6 +580,9 @@ class Engine(EngineBase):
                     assert not missing_prefix_keys, f"Missing keys and ignore_missing=False: {missing_prefix_keys}"
                 print(f"Missing keys: {missing_keys}", file=log.v4)
 
+        # https://github.com/rwth-i6/returnn/issues/1345
+        del checkpoint_state
+        gc.collect()
         self._pt_model.to(self._device)
 
         if model_epoch_filename and is_training:

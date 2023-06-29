@@ -5,6 +5,7 @@ and model param update logic in general.
 
 from __future__ import annotations
 
+import gc
 import torch
 import typing
 from typing import Any, Set, Dict
@@ -80,7 +81,7 @@ class Updater(object):
     Wraps a torch.optim.Optimizer, and extends it by some further functionality.
     """
 
-    def __init__(self, config, network, initial_learning_rate=1.0):
+    def __init__(self, *, config, network, device, initial_learning_rate=1.0):
         """
         :param returnn.config.Config config: config defining the training conditions.
         :param torch.nn.Module network: PyTorch Module defining the network.
@@ -89,6 +90,7 @@ class Updater(object):
         self.config = config
         self.learning_rate = initial_learning_rate
         self.network = network
+        self._device = device
         self.optimizer = None  # type: typing.Optional[torch.optim.Optimizer]
 
     def set_learning_rate(self, value):
@@ -122,8 +124,11 @@ class Updater(object):
         :param str filename: File from which to load the optimizer state.
         """
         print("Load optimizer %s" % filename, file=log.v4)
-        optimizer_state = torch.load(filename)
+        optimizer_state = torch.load(filename, map_location=self._device)
         self.optimizer.load_state_dict(optimizer_state)
+        # https://github.com/rwth-i6/returnn/issues/1345
+        del optimizer_state
+        gc.collect()
 
     def save_optimizer(self, filename):
         """
