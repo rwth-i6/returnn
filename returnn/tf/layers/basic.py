@@ -932,7 +932,7 @@ class BatchNormLayer(CopyLayer):
         **kwargs,
     ):
         """
-        :param returnn.tf.util.data.Dim|None in_dim:
+        :param returnn.tensor.Dim|None in_dim:
         :param bool use_shift:
         :param bool use_std:
         :param float use_sample: defaults to 0.0 which is used in training
@@ -4625,11 +4625,11 @@ class SplitDimsLayer(_ConcatInputLayer):
     ):
         """
         :param int split_axis:
-        :param tuple[returnn.tf.util.data.Dim] dims: might include -1
+        :param tuple[returnn.tensor.Dim] dims: might include -1
         :param int|None rem_dim_idx:
         :param int old_axis:
-        :param returnn.tf.util.data.Dim old_dim:
-        :param returnn.tf.util.data.Dim.Types kind:
+        :param returnn.tensor.Dim old_dim:
+        :param returnn.tensor.Dim.Types kind:
         :param bool use_remaining: whether to make use of -1 in dims
         :param int|None split_offset:
         :rtype: int
@@ -12129,8 +12129,8 @@ class CtcLoss(Loss):
     @classmethod
     def get_auto_output_layer_dim(cls, target_dim):
         """
-        :param returnn.tf.util.data.Dim target_dim:
-        :rtype: returnn.tf.util.data.Dim
+        :param returnn.tensor.Dim target_dim:
+        :rtype: returnn.tensor.Dim
         """
         return target_dim + 1  # one added for blank
 

@@ -1,16 +1,16 @@
 .. _data:
 
-====================
-``Data`` and ``Dim``
-====================
+======================
+``Tensor`` and ``Dim``
+======================
 
-``Data``
---------
+``Tensor``
+----------
 
-This wraps a ``tf.Tensor``
+This wraps a ``tf.Tensor`` or ``torch.Tensor``
 by adding a lot of meta information about it
 and its axes.
-This is all in the :class:`returnn.tf.util.data.Data` class.
+This is all in the :class:`returnn.tensor.Tensor` class.
 
 This was introduced with the TF backend in 2016.
 The idea and concept is also explained in the slides of
@@ -21,13 +21,13 @@ in other frameworks,
 but goes much beyond that by having lots of other meta information
 about a tensor and its axes.
 Also, an axis name is not simply a string like in other frameworks,
-but a :class:`returnn.tf.util.data.Dim` object.
+but a :class:`returnn.tensor.Dim` object.
 
-Specifically, the information :class:`returnn.tf.util.data.Data` covers:
+Specifically, the information :class:`returnn.tensor.Tensor` covers:
 
 * **Shape**
 
-  * Dimension tags for each axis (:class:`returnn.tf.util.data.Dim`), see below
+  * Dimension tags for each axis (:class:`returnn.tensor.Dim`), see below
   * Specific handling of batch axis
   * Default spatial/time axis
   * Default feature axis
@@ -51,16 +51,18 @@ Specifically, the information :class:`returnn.tf.util.data.Data` covers:
 
 * Flag whether data is available at decoding/inference time
 
-:class:`returnn.tf.util.data.Data` is used **everywhere** in the TF backend of RETURNN.
-Specifically, the inputs/outputs of **layers** are :class:`returnn.tf.util.data.Data`.
+:class:`returnn.tensor.Tensor` is the main tensor object
+used in the :ref:`_returnn_frontend`.
+:class:`returnn.tensor.Tensor` is also used everywhere in the TF backend of RETURNN.
+Specifically, the inputs/outputs of layers are :class:`returnn.tensor.Tensor`.
 
-Layers are flexible w.r.t. the input format:
+Layers and RETURNN frontend modules and functions are flexible w.r.t. the input format:
 
 * Order of axis should not matter.
   The specific operation will be done on the logical axis
   (e.g. :class:`returnn.tf.layers.basic.LinearLayer` operates on the feature dimension).
 
-* A layer potentially changes the order of axes for efficiency.
+* Any code can potentially change the order of axes for efficiency.
 
   * [Time,Batch,Feature] is more efficient for RNNs
   * [Batch,Feature,Time] is more efficient for CNNs
@@ -70,8 +72,8 @@ Layers are flexible w.r.t. the input format:
 ``Dim``
 -------
 
-A :class:`returnn.tf.util.data.Dim` object,
-representing a dimension (axis) of a :class:`returnn.tf.util.data.Data` object.
+A :class:`returnn.tensor.Dim` object,
+representing a dimension (axis) of a :class:`returnn.tensor.Tensor` object.
 We also refer to this as dimension tag,
 as it covers more meta information than just the size.
 
@@ -81,7 +83,7 @@ It stores:
 - (Sequence) lengths in case of dynamic sizes.
   Usually, these are per batch entry, i.e. of shape [Batch].
   However, this is not a requirement, and they can also have any shape.
-  In fact, the dynamic size is again another :class:`returnn.tf.util.data.Data` object.
+  In fact, the dynamic size is again another :class:`returnn.tensor.Tensor` object.
 - Optional some vocabulary
 - Its kind: batch, spatial or feature
   (although in most cases there is no real difference between spatial or feature)
@@ -90,14 +92,7 @@ Many layers allow to specify a custom dimension tag as output,
 via ``out_dim`` or similar options.
 See `#597 <https://github.com/rwth-i6/returnn/issues/597>`__.
 
-To make it easier for the user to create custom new dimension tags
-(and then set them in the network via ``out_dim`` or related options),
-there are the helper functions:
-
-* ``SpatialDim(...)``
-* ``FeatureDim(...)``
-
-Further, it is possible to perform elementary algebra on dimension tags
+It is possible to perform elementary algebra on dimension tags
 such as addition, subtraction, multiplication and division.
 These operations are not commutative,
 i.e. ``a + b != b + a`` and ``a * b != b * a``,

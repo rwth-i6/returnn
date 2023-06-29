@@ -23,7 +23,7 @@ In the case of the hdf file it could be that the input data are 100-dimensional 
 and the target data are 5,000 word classes.
 
 The parameter ``extern_data`` can be used to give an explicit definition of the shapes.
-All constructor parameters to :class:`returnn.tf.util.data.Data` can be provided as dictionary for each data stream.
+All constructor parameters to :class:`returnn.tensor.Tensor` can be provided as dictionary for each data stream.
 
 For the above example, ``extern_data`` could be defined as:
 
@@ -72,7 +72,7 @@ Synchronizing Dynamic Axes
 
 In the case that there are multiple data streams that have exactly the same length,
 RETURNN does not automatically match those axis while broadcasting.
-The dynamic axes of different datastreams can be synchronized by using :class:`returnn.tf.util.data.DimensionTag`.
+The dynamic axes of different datastreams can be synchronized by using :class:`returnn.tensor.DimensionTag`.
 
 .. code-block:: python
 

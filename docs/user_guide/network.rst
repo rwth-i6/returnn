@@ -102,7 +102,7 @@ See **out_type** for a more generic parameter.
 
 **out_type** [:class:`dict[str]`] specifies the output shape in more details
 (i.e. a more generic version than **n_out**).
-The keys are ``dim`` and ``shape`` and others from :class:`returnn.tf.util.data.Data`.
+The keys are ``dim`` and ``shape`` and others from :class:`returnn.tensor.Tensor`.
 Usually it is automatically derived via :func:`returnn.tf.layers.base.LayerBase.get_out_data_from_opts`.
 
 **loss** [:class:`str`] every layer can have its output connected to a loss function.
@@ -201,7 +201,7 @@ Managing Axes
 
 In the default case, the axes of data that is passed between layers (such as batch, time, spatial and feature)
 are not visible to the user, and handled by RETURNN internally
-with the help of :class:`returnn.tf.util.data.Data` objects.
+with the help of :class:`returnn.tensor.Tensor` objects.
 For layers that operate on specific axes, meaning they have an ``axis`` or ``axes`` parameter, different identifier
 (strings) can be used to select the correct axes. These identifier are e.g.
 
@@ -226,4 +226,4 @@ For layers that operate on specific axes, meaning they have an ``axis`` or ``axe
 Note that all identifier can be used case-insensitive.
 For ``axes`` parameter it is also possible to provide a tuple or list of the above identifiers.
 If something is unclear, or not working as intended, please refer to
-:func:`Data.get_axes_from_description() <returnn.tf.util.data.Data.get_axes_from_description()>`.
+:func:`Data.get_axes_from_description() <returnn.tensor.Tensor.get_axes_from_description()>`.

@@ -62,7 +62,7 @@ Many components are implemented separately for both Theano and TensorFlow:
   This also means that Theano and TensorFlow don't support the same layers and
   even parameters can be different.
 - Some utilities :mod:`returnn.theano.util` and :mod:`returnn.tf.util`,
-  which contains the :class:`returnn.tf.util.data.Data` class.
+  which contains the :class:`returnn.tensor.Tensor` class.
 - Multi-GPU logic.
   :mod:`returnn.theano.device`, :mod:`returnn.theano.engine_task` for Theano,
   :mod:`returnn.tf.distributed`, :mod:`returnn.tf.horovod` for TensorFlow.
@@ -153,7 +153,7 @@ If a layer does not define ``"from"``, it will automatically get the input from 
 
 The network itself is stored in a :class:`returnn.tf.network.TFNetwork`.
 
-The network, layers, and the dataset make heavy use of :class:`returnn.tf.util.data.Data`,
+The network, layers, and the dataset make heavy use of :class:`returnn.tensor.Tensor`,
 see :ref:`data`.
 
 Here is a 2 layer unidirectional LSTM network:

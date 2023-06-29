@@ -96,7 +96,7 @@ extern_data
     ``classes`` defines sparse target labels, and the dimension then defines the number of labels.
     The shape entries ``None`` indicate a dynamic length of an axis.
 
-    In general, all input parameters to :class:`returnn.tf.util.data.Data` can be provided
+    In general, all input parameters to :class:`returnn.tensor.Tensor` can be provided
     The parameters ``dim`` and ``shape`` should always be used, the other parameters are optional.
     Note that only for ``data`` the parameter ``available_for_inference`` is per default `True``.
 

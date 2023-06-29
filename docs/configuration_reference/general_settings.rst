@@ -32,7 +32,7 @@ extern_data (former num_outputs)
     ``available_for_inference`` defines if the data stream is also available during the "search" or "forward" task,
     so basically marking if a data stream is an input or only a target.
 
-    In general, all input parameters to :class:`returnn.tf.util.data.Data` can be provided
+    In general, all input parameters to :class:`returnn.tensor.Tensor` can be provided
     The parameters ``dim`` and ``shape`` should always be used, the other parameters are optional.
     Nevertheless ``available_for_inference`` should always be provided explicitely as
     only for ``data`` the parameter ``available_for_inference`` is per default `True`.

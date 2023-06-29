@@ -111,12 +111,12 @@ class LayerBase(object):
         :param returnn.tf.network.TFNetwork network:
         :param Data output: Set a specific output instead of using :func:`get_out_data_from_opts`
         :param NotSpecified|None|int n_out: output dim
-        :param returnn.tf.util.data.Dim|None out_dim: output feature dim tag
+        :param returnn.tensor.Dim|None out_dim: output feature dim tag
         :param dict[str] out_type: kwargs for Data class. more explicit than n_out.
-        :param set[returnn.tf.util.data.Dim|returnn.tf.util.data._MarkedDim]|tuple|list|None out_shape:
+        :param set[returnn.tensor.Dim|returnn.tf.util.data._MarkedDim]|tuple|list|None out_shape:
             verifies the output shape (dim tags). See :func:`Data.verify_out_shape`.
         :param list[LayerBase] sources: via self.transform_config_dict()
-        :param returnn.tf.util.data.Dim|None in_dim: input feature dim tag
+        :param returnn.tensor.Dim|None in_dim: input feature dim tag
         :param str|list[str]|None target: if some loss is set, this is the target data-key,
             i.e. network.extern_data.get_data(target). alternatively, this also can be a layer name.
         :param dict[str,LayerBase]|None _target_layers: if target.startswith("layer:"), then this is target -> layer
@@ -381,7 +381,7 @@ class LayerBase(object):
         :param returnn.tf.network.TFNetwork network:
         :param str name:
         :param dict[str]|None|(()->Data) out_type:
-        :param returnn.tf.util.data.Dim|None out_dim:
+        :param returnn.tensor.Dim|None out_dim:
         :param int|None|NotSpecified n_out:
         :param set[Dim|_MarkedDim]|tuple|list|None out_shape: verifies the output shape (dim tags).
         :param str|list[str]|None target:
@@ -873,7 +873,7 @@ class LayerBase(object):
         :param str|None loss_class_name: e.g. "ce" or None
         :param ((str) -> LayerBase) get_layer: function to get or construct another layer
         :return: out_dim value
-        :rtype: returnn.tf.util.data.Dim|None
+        :rtype: returnn.tensor.Dim|None
         """
         from .basic import get_loss_class
 
@@ -3229,9 +3229,9 @@ class Loss(object):
     @classmethod
     def get_auto_output_layer_dim(cls, target_dim):
         """
-        :param returnn.tf.util.data.Dim target_dim:
+        :param returnn.tensor.Dim target_dim:
         :return: normally just the same as target_dim. e.g. for CTC, we would add 1 for the blank label
-        :rtype: returnn.tf.util.data.Dim
+        :rtype: returnn.tensor.Dim
         """
         return target_dim
 

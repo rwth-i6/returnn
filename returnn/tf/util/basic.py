@@ -249,7 +249,7 @@ def set_padding_info(x, dim, pad_value):
     Stores the information what kind of padding value to expect after masking in the given dynamic dim.
 
     :param tf.Tensor x:
-    :param returnn.tf.util.data.Dim dim: dynamic seq len axis
+    :param returnn.tensor.Dim dim: dynamic seq len axis
     :param float|int pad_value:
     """
     d = get_padding_info_dict_ref(x)
