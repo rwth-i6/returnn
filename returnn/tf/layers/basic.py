@@ -3631,7 +3631,7 @@ class ConstantLayer(LayerBase):
         dtype=None,
         with_batch_dim=False,
         sparse_dim=None,
-        feature_dim=None,
+        feature_dim=NotSpecified,
         shape_deps=(),
         **kwargs,
     ):
@@ -3642,7 +3642,7 @@ class ConstantLayer(LayerBase):
         :param str|None dtype:
         :param bool with_batch_dim:
         :param Dim|None sparse_dim:
-        :param Dim|None feature_dim:
+        :param Dim|None|NotSpecified feature_dim:
         :param list[LayerBase] shape_deps: for dyn dim tags in shape
         :rtype: Data
         """
@@ -3653,9 +3653,11 @@ class ConstantLayer(LayerBase):
             dtype=dtype,
             with_batch_dim=with_batch_dim,
             sparse_dim=sparse_dim,
-            feature_dim=feature_dim,
+            feature_dim=feature_dim if feature_dim is not NotSpecified else None,
         )
         out.beam = SearchBeam.get_combined_beam(out.beam, *[dep.output.beam for dep in shape_deps if dep])
+        if feature_dim is not NotSpecified:
+            out.feature_dim = feature_dim
         return out
 
 

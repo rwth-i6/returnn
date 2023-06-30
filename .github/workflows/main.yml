@@ -333,6 +333,7 @@ jobs:
           - TEST=rf_attention
           - TEST=rf_base
           - TEST=rf_cond
+          - TEST=rf_const
           - TEST=rf_container
           - TEST=rf_conv
           - TEST=rf_encoder_conformer

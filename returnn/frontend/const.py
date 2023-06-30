@@ -36,12 +36,12 @@ def full(
     :param feature_dim:
     """
     if dtype is None:
-        if isinstance(fill_value, int):
+        if isinstance(fill_value, bool):
+            dtype = "bool"
+        elif isinstance(fill_value, int):
             dtype = rf.get_default_int_dtype()
         elif isinstance(fill_value, float):
             dtype = rf.get_default_float_dtype()
-        elif isinstance(fill_value, bool):
-            dtype = "bool"
         elif isinstance(fill_value, Tensor):
             dtype = fill_value.dtype
         else:

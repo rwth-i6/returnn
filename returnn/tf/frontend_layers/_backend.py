@@ -462,8 +462,7 @@ class ReturnnLayersBackend(Backend[Layer]):
         kwargs = {}
         if sparse_dim:
             kwargs["sparse_dim"] = sparse_dim
-        if feature_dim:
-            kwargs["feature_dim"] = feature_dim
+        kwargs["feature_dim"] = feature_dim
         dim_deps = _dims.get_dim_deps(dims)
         if dim_deps:
             kwargs["shape_deps"] = dim_deps
