@@ -233,7 +233,6 @@ def test_Updater_simple_batch():
             used_data_keys=network.used_data_keys,
         )
         data_provider = FeedDictDataProvider(
-            tf_session=session,
             extern_data=extern_data,
             data_keys=network.used_data_keys,
             dataset=dataset,
@@ -282,7 +281,6 @@ def test_Updater_decouple_constraints():
             used_data_keys=network.used_data_keys,
         )
         data_provider = FeedDictDataProvider(
-            tf_session=session,
             extern_data=extern_data,
             data_keys=network.used_data_keys,
             dataset=dataset,
@@ -442,7 +440,6 @@ def test_Updater_multiple_optimizers():
             used_data_keys=network.used_data_keys,
         )
         data_provider = FeedDictDataProvider(
-            tf_session=session,
             extern_data=extern_data,
             data_keys=network.used_data_keys,
             dataset=dataset,
@@ -507,7 +504,6 @@ def test_Updater_multiple_optimizers_and_opts():
             used_data_keys=network.used_data_keys,
         )
         data_provider = FeedDictDataProvider(
-            tf_session=session,
             extern_data=extern_data,
             data_keys=network.used_data_keys,
             dataset=dataset,

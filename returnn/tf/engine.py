@@ -2291,7 +2291,6 @@ class Engine(EngineBase):
             if tf_horovod.get_ctx() and tf_horovod.get_ctx().is_dataset_distribution_shard():
                 batch_slice = tf_horovod.get_ctx().get_dataset_shard_batch_slice()
             data_provider = FeedDictDataProvider(
-                tf_session=self.tf_session,
                 extern_data=self.network.extern_data,
                 data_keys=self.network.get_used_data_keys(),
                 dataset=dataset,

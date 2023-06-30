@@ -2733,7 +2733,7 @@ def test_rec_layer_multi_choice_search_resolve():
         assert isinstance(out_layer, RecLayer)
         net.initialize_params(session)
         data_provider = FeedDictDataProvider(
-            tf_session=session, extern_data=extern_data, data_keys=["data"], dataset=dataset, batches=batches
+            extern_data=extern_data, data_keys=["data"], dataset=dataset, batches=batches
         )
         feed_dict, meta_step_info = data_provider.get_feed_dict(single_threaded=True)
         try:
@@ -3440,7 +3440,6 @@ def test_rec_layer_move_out_of_loop():
         with tf_compat.v1.Session() as session:
             net.initialize_params(session)
             data_provider = FeedDictDataProvider(
-                tf_session=session,
                 extern_data=extern_data,
                 data_keys=["data", "classes"],
                 dataset=dataset,
@@ -3924,7 +3923,6 @@ def test_rec_layer_move_out_of_loop_ref_att_generic_att():
 
         net.initialize_params(session)
         data_provider = FeedDictDataProvider(
-            tf_session=session,
             extern_data=extern_data,
             data_keys=["data", "classes", "att_weights", "att_weights_sizes"],
             dataset=dataset,
@@ -4253,7 +4251,6 @@ def test_rec_layer_rnn_train_and_search():
             assert isinstance(out_layer.cell, _SubnetworkRecCell)
             net.initialize_params(session)
             data_provider = FeedDictDataProvider(
-                tf_session=session,
                 extern_data=extern_data,
                 data_keys=["data", "classes"] if train_flag else ["data"],
                 dataset=dataset,
@@ -4534,7 +4531,6 @@ def test_rec_layer_local_att_train_and_search():
             assert isinstance(out_layer.cell, _SubnetworkRecCell)
             net.initialize_params(session)
             data_provider = FeedDictDataProvider(
-                tf_session=session,
                 extern_data=extern_data,
                 data_keys=["data", "classes"] if train_flag else ["data"],
                 dataset=dataset,

@@ -111,7 +111,7 @@ def test_FeedDictDataProvider():
     from returnn.tf.data_pipeline import FeedDictDataProvider
 
     data_provider = FeedDictDataProvider(
-        tf_session=session, extern_data=extern_data, data_keys=["data", "classes"], dataset=dataset, batches=batches
+        extern_data=extern_data, data_keys=["data", "classes"], dataset=dataset, batches=batches
     )
 
     # The values that happen to be produced by DummyDataset for the two sequences.

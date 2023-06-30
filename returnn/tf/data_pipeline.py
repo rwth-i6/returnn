@@ -223,37 +223,31 @@ class FeedDictDataProvider(DataProviderBase):
 
     def __init__(
         self,
-        tf_session,
+        *,
         dataset,
         batches,
         enforce_min_len1=False,
         capacity=10,
-        tf_queue=None,
         batch_slice=None,
         **kwargs,
     ):
         """
-        :param tf.compat.v1.Session|tf.compat.v1.InteractiveSession tf_session:
         :param Dataset dataset:
         :param BatchSetGenerator batches:
         :param bool enforce_min_len1:
         :param ExternData extern_data:
         :param set(str)|None data_keys:
         :param int capacity:
-        :param TFDataQueues|None tf_queue:
         :param slice|None batch_slice: select a subset of the batches
         """
         super(FeedDictDataProvider, self).__init__(**kwargs)
-        self.tf_session = tf_session
         self.dataset = dataset
         self.batches = batches
         self.enforce_min_len1 = enforce_min_len1
         self.batch_slice = batch_slice
         self.state_change_cond = Condition()
         self.queue = None  # type: typing.Optional[Queue]
-        self.tf_queue = tf_queue
-        if not self.tf_queue:
-            self.queue = Queue(maxsize=capacity)
+        self.queue = Queue(maxsize=capacity)
         self.thread = None  # type: typing.Optional[Thread]
         self.thread_finished = False
         self.cur_batch_idx = 0
@@ -386,10 +380,7 @@ class FeedDictDataProvider(DataProviderBase):
             while self.batches.has_more() and not self.coord.should_stop():
                 enqueue_args = self.get_next_batch(consider_batch_slice=True)
                 if enqueue_args is not None:
-                    if self.queue:
-                        self.queue.put(enqueue_args)
-                    else:
-                        self.tf_queue.enqueue(tf_session=self.tf_session, data=enqueue_args)
+                    self.queue.put(enqueue_args)
                 with self.state_change_cond:
                     self.state_change_cond.notifyAll()
                 self.batches.advance(1)
@@ -417,8 +408,6 @@ class FeedDictDataProvider(DataProviderBase):
             while True:
                 # First check if there is still data in the queue to be processed.
                 if self.queue and not self.queue.empty():
-                    return True
-                if self.tf_queue and self.tf_queue.have_more(self.tf_session):
                     return True
                 if self.thread_finished:
                     return False
@@ -449,8 +438,6 @@ class FeedDictDataProvider(DataProviderBase):
           and additionally return some meta information.
         :rtype: (dict[tf.Tensor,numpy.ndarray],dict[str])
         """
-        if self.tf_queue:
-            return {}  # not needed to feed anything, it gets it via the queues
         if single_threaded:
             assert self.batches.has_more()
             assert self.batch_slice is None
