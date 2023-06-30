@@ -2160,14 +2160,14 @@ class TFNetwork(object):
         """
         layer_set = set()
         layers = []
-        for (_, layer) in sorted(self.layers.items()):
+        for _, layer in sorted(self.layers.items()):
             if layer not in layer_set:
                 layers.append(layer)
                 layer_set.add(layer)
         if self.extra_nets:
             for _, extra_net in sorted(self.extra_nets.items()):
                 assert isinstance(extra_net, TFNetwork)
-                for (_, layer) in sorted(extra_net.layers.items()):
+                for _, layer in sorted(extra_net.layers.items()):
                     if layer not in layer_set:
                         layers.append(layer)
                         layer_set.add(layer)
@@ -2213,7 +2213,7 @@ class TFNetwork(object):
                 net = net_queue.pop(0)
                 if net.extra_nets:
                     net_queue[:0] = [extra_net for _, extra_net in sorted(self.extra_nets.items())]
-                for (_, layer) in sorted(net.layers.items()):
+                for _, layer in sorted(net.layers.items()):
                     if layer not in layer_set:
                         layer_queue.append(layer)
                 continue
@@ -2587,7 +2587,10 @@ class TFNetwork(object):
         try:
             self.saver.restore(sess=session, save_path=filename)
         except tf.errors.NotFoundError as exc:
-            print("load_params_from_file: some variables not found", file=log.v2)
+            print("load_params_from_file: some variables not found:", file=log.v2)
+            for line in str(exc).splitlines():
+                if "not found" in line:
+                    print(f"  {line}", file=log.v4)
             try:
                 loader = CustomCheckpointLoader(
                     filename=filename,
