@@ -8444,9 +8444,7 @@ class DotLayer(LayerBase):
         if BehaviorVersion.get() >= 14:
             is_equal_opts = {}
         else:
-            is_equal_opts = dict(
-                treat_feature_as_spatial=True, allow_same_spatial_dim=True, undefined_matches=True, derived_matches=True
-            )
+            is_equal_opts = dict(treat_feature_as_spatial=True, allow_same_spatial_dim=True, undefined_matches=True)
         tags1 = [None if i in red1 else tag for (i, tag) in enumerate(source1.dim_tags)]
         tags2 = [None if i in red2 else tag for (i, tag) in enumerate(source2.dim_tags)]
         var1 = [
