@@ -238,6 +238,11 @@ class ReturnnLayersBackend(Backend[Layer]):
         return rfl.make_layer({"class": "expand_dims", "from": source, "axis": axis, "dim": dim}, name="expand_dims")
 
     @staticmethod
+    def squeeze(source: Tensor, axis: Dim) -> Tensor:
+        """squeeze"""
+        return rfl.make_layer({"class": "squeeze", "from": source, "axis": axis}, name="squeeze")
+
+    @staticmethod
     def concat(
         *sources: Tuple[Tensor, Dim],
         allow_broadcast: bool = False,

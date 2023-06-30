@@ -7462,7 +7462,7 @@ class SqueezeLayer(_ConcatInputLayer):
     # noinspection PyUnusedLocal
     def __init__(self, axis, enforce_batch_dim_axis=None, allow_no_op=False, **kwargs):
         """
-        :param int|list[int]|str axis: one axis or multiple axis to squeeze.
+        :param Dim|int|list[int]|str axis: one axis or multiple axis to squeeze.
           this is counted with batch-dim, which by default is axis 0 (see enforce_batch_dim_axis).
           it also accepts the special tokens "B"|"batch", "spatial", "spatial_except_time", or "F"|"feature"
         :param int|None enforce_batch_dim_axis:
@@ -7486,7 +7486,7 @@ class SqueezeLayer(_ConcatInputLayer):
     @classmethod
     def _get_axes(cls, axis, input_data):
         """
-        :param int|list[int]|str axis: one axis or multiple axis to squeeze.
+        :param Dim|int|list[int]|str axis: one axis or multiple axis to squeeze.
         :param Data input_data:
         :rtype: list[int]
         """
@@ -7497,7 +7497,7 @@ class SqueezeLayer(_ConcatInputLayer):
     @classmethod
     def get_out_data_from_opts(cls, axis, enforce_batch_dim_axis=None, allow_no_op=False, sources=(), **kwargs):
         """
-        :param int|list[int]|str axis:
+        :param Dim|int|list[int]|str axis:
         :param int|None enforce_batch_dim_axis:
         :param bool allow_no_op:
         :param list[LayerBase] sources:

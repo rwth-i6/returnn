@@ -316,6 +316,14 @@ class TorchBackend(Backend[torch.Tensor]):
         return out
 
     @staticmethod
+    def squeeze(source: Tensor, axis: Dim) -> Tensor:
+        """squeeze"""
+        axis = source.get_axis_from_description(axis)
+        out = source.copy_template_excluding_axis(axis)
+        out.raw_tensor = torch.squeeze(source.raw_tensor, axis)
+        return out
+
+    @staticmethod
     def concat(
         *sources: Tuple[Tensor, Dim],
         allow_broadcast: bool = False,

@@ -371,6 +371,15 @@ class Backend(Generic[T]):
         raise NotImplementedError
 
     @staticmethod
+    def squeeze(source: Tensor, axis: Dim) -> Tensor:
+        """
+        :param source:
+        :param axis:
+        :return: source with axis removed
+        """
+        raise NotImplementedError
+
+    @staticmethod
     def concat(
         *sources: Tuple[Tensor, Dim],
         allow_broadcast: bool = False,

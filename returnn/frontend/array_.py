@@ -22,6 +22,7 @@ __all__ = [
     "reshape",
     "split",
     "expand_dim",
+    "squeeze",
     "concat",
     "concat_features",
     "pad",
@@ -237,6 +238,15 @@ def expand_dim(source: Tensor, dim: Dim) -> Tensor:
     """
     # noinspection PyProtectedMember
     return source._raw_backend.expand_dim(source, dim=dim)
+
+
+def squeeze(source: Tensor, axis: Dim) -> Tensor:
+    """
+    Removes the axis with dimension of extend 1 from the source.
+    """
+    assert axis.dimension == 1, f"squeeze {source}: axis {axis} is not of extend 1"
+    # noinspection PyProtectedMember
+    return source._raw_backend.squeeze(source, axis=axis)
 
 
 def concat(
