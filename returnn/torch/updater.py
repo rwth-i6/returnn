@@ -102,11 +102,23 @@ class Updater(object):
         for param_group in self.optimizer.param_groups:
             param_group["lr"] = value
 
-    def get_current_step_learning_rate(self):
+    def get_current_step_learning_rate(self, global_train_step):
         """
         Obtains an updated learning rate for the current training step inside a (sub)epoch.
         """
-        pass
+        lr = self.learning_rate
+        if callable(self.config.typed_value("dynamic_learning_rate", None)):
+            import inspect
+
+            learning_rate_function = self.config.typed_value("dynamic_learning_rate")
+            signature = inspect.signature(learning_rate_function)
+            assert any(
+                [arg.kind == inspect.Parameter.VAR_KEYWORD for arg in signature.parameters.values()]
+            ), "please specify **kwargs in dynamic_learning_rate for future compatibility"
+            lr = learning_rate_function(global_train_step=global_train_step, learning_rate=lr)
+        else:
+            raise NotImplementedError(f"not implemented for not callable dynamic_learning_rate")
+        return lr
 
     def create_optimizer(self):
         """
