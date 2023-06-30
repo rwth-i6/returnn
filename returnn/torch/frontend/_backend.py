@@ -736,6 +736,8 @@ class TorchBackend(Backend[torch.Tensor]):
             dtype=source.dtype,
             sparse_dim=source.sparse_dim,
         )
+        if source.feature_dim and source.feature_dim in out.dims:
+            out.feature_dim = source.feature_dim
         if indices.dims_set.intersection(source.dims_set - {axis}):
             # We cannot use index_select in this case. Need to fallback to gather.
             indices = indices.copy_compatible_to(out, check_dtype=False, check_sparse=False, unbroadcast=True)
