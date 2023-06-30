@@ -101,6 +101,7 @@ class Updater(object):
         """
         for param_group in self.optimizer.param_groups:
             param_group["lr"] = value
+        self.learning_rate = value
 
     def get_current_step_learning_rate(self, global_train_step):
         """
@@ -117,7 +118,7 @@ class Updater(object):
             ), "please specify **kwargs in dynamic_learning_rate for future compatibility"
             lr = learning_rate_function(global_train_step=global_train_step, learning_rate=lr)
         else:
-            raise NotImplementedError(f"not implemented for not callable dynamic_learning_rate")
+            raise NotImplementedError("not implemented for not callable dynamic_learning_rate")
         return lr
 
     def create_optimizer(self):
