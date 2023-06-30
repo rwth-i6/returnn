@@ -275,7 +275,7 @@ class FeedDictDataProvider(DataProviderBase):
             self.thread = None
         self.dataset.finish_epoch()
 
-    def get_next_batch(self, consider_batch_slice):
+    def get_next_batch(self, *, consider_batch_slice: bool = False):
         """
         This assumes that we have more data, i.e. self.batches.has_more().
 
