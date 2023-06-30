@@ -118,19 +118,16 @@ from __future__ import annotations
 import contextlib
 import sys
 import typing
+from typing import Optional, Dict
 
-try:
-    # noinspection PyCompatibility
-    from Queue import Queue
-except ImportError:
-    # noinspection PyCompatibility,PyUnresolvedReferences
-    from queue import Queue
+from queue import Queue
 from threading import Thread, Condition
 
 import numpy
 import tensorflow as tf
 
 from returnn.datasets.basic import Dataset, BatchSetGenerator
+from returnn.tensor import TensorDict
 from returnn.tf.network import ExternData
 import returnn.tf.compat as tf_compat
 import returnn.tf.horovod as tf_horovod
@@ -142,16 +139,26 @@ class DataProviderBase(object):
     Base class which wraps up the logic in this class. See derived classes.
     """
 
-    def __init__(self, extern_data, data_keys=None):
+    def __init__(self, *, extern_data: TensorDict, data_keys: Optional[str] = None):
         """
-        :param ExternData extern_data:
-        :param set(str)|None data_keys:
+        :param extern_data:
+        :param data_keys:
         """
         self.coord = tf.train.Coordinator()
         self.extern_data = extern_data
         if data_keys is None:
             data_keys = extern_data.data.keys()
         self.data_keys = sorted(data_keys)  # type: typing.List[str]
+
+    def _exclude_data_key(self, key: str) -> bool:
+        """
+        :param key:
+        :return: whether to exclude this data-key, even if in data_keys
+        """
+        if isinstance(self.extern_data, ExternData):
+            if key in self.extern_data.extra_added_keys:
+                return True
+        return False
 
     def start_threads(self, session):
         """
@@ -218,27 +225,31 @@ class FeedDictDataProvider(DataProviderBase):
     """
     This class will fill all the placeholders used for training or forwarding or evaluation etc.
     of a :class:`returnn.tf.network.TFNetwork`.
-    It will run a background thread which reads the data from a dataset and puts it into a queue.
+
+    It will run a background thread which reads the data from a dataset and puts it into a queue
+    when you call start_threads().
+
+    In principle, this class can also be used independently of TensorFlow.
     """
 
     def __init__(
         self,
         *,
-        dataset,
-        batches,
-        enforce_min_len1=False,
-        capacity=10,
-        batch_slice=None,
+        dataset: Dataset,
+        batches: BatchSetGenerator,
+        enforce_min_len1: bool = False,
+        capacity: int = 10,
+        batch_slice: Optional[slice] = None,
         **kwargs,
     ):
         """
-        :param Dataset dataset:
-        :param BatchSetGenerator batches:
-        :param bool enforce_min_len1:
-        :param ExternData extern_data:
-        :param set(str)|None data_keys:
-        :param int capacity:
-        :param slice|None batch_slice: select a subset of the batches
+        :param dataset:
+        :param batches:
+        :param enforce_min_len1:
+        :param capacity:
+        :param batch_slice: select a subset of the batches
+        :param extern_data:
+        :param data_keys:
         """
         super(FeedDictDataProvider, self).__init__(**kwargs)
         self.dataset = dataset
@@ -275,13 +286,15 @@ class FeedDictDataProvider(DataProviderBase):
             self.thread = None
         self.dataset.finish_epoch()
 
-    def get_next_batch(self, *, consider_batch_slice: bool = False):
+    def get_next_batch(self, *, consider_batch_slice: bool = False) -> Optional[Dict[str, numpy.ndarray]]:
         """
         This assumes that we have more data, i.e. self.batches.has_more().
 
-        :param bool consider_batch_slice:
+        The code is basically independent of TF now.
+        self.extern_data can be any TensorDict.
+
+        :param consider_batch_slice:
         :returns: batch-data-value-dict or None. if not consider_batch_slice, will never be None
-        :rtype: dict[str,numpy.ndarray]|None
         """
         # See EngineUtil.assign_dev_data() for reference.
         cur_batch_idx = self.cur_batch_idx
@@ -335,7 +348,7 @@ class FeedDictDataProvider(DataProviderBase):
                     # See also :func:`TFNetwork.get_extern_data`.
                     if k in ["seq_idx", "seq_tag"]:
                         continue  # handled below. will always be added
-                    if k in self.extern_data.extra_added_keys:
+                    if self._exclude_data_key(k):
                         continue
                     data_ = self.extern_data.data[k]
                     # Do not rely on time_dim_axis but check for any dynamic axes.
@@ -447,16 +460,12 @@ class FeedDictDataProvider(DataProviderBase):
             output = self.queue.get()
         assert isinstance(output, dict)
         # The data itself.
-        d = {
-            self.extern_data.get_data(k).placeholder: output[k]
-            for k in self.data_keys
-            if k not in self.extern_data.extra_added_keys
-        }
+        d = {self.extern_data.data[k].placeholder: output[k] for k in self.data_keys if not self._exclude_data_key(k)}
         # And seq lengths info.
         for k in self.data_keys:
-            if k in self.extern_data.extra_added_keys:
+            if self._exclude_data_key(k):
                 continue
-            data = self.extern_data.get_data(k)
+            data = self.extern_data.data[k]
             for dim, len_placeholder in data.size_placeholder.items():
                 if dim == 0:  # time-dim
                     d[len_placeholder] = output["%s_seq_lens" % k]
@@ -465,6 +474,7 @@ class FeedDictDataProvider(DataProviderBase):
                         "dataset currently does not support variable shape in other dimensions than the first. "
                         "dim=%i, placeholder=%r" % (dim, len_placeholder)
                     )
+        assert isinstance(self.extern_data, ExternData)
         batch_info = self.extern_data.get_batch_info()
         batch_dim = batch_info.dim
         if isinstance(batch_dim, int):

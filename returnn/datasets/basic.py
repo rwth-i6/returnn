@@ -19,12 +19,13 @@ import os
 import numpy
 import functools
 import typing
-from typing import Optional, Union, Type, Dict, List
+from typing import Optional, Union, Type, Dict, Sequence, List
 
 from returnn.log import log
 from returnn.engine.batch import Batch, BatchSetGenerator
 from returnn.datasets.util.vocabulary import Vocabulary
 from returnn.util.basic import try_run, NumbersDict, OptionalNotImplementedError
+from returnn.tensor import TensorDict
 
 
 class Dataset(object):
@@ -1469,14 +1470,20 @@ def convert_data_dims(data_dims, leave_dict_as_is=False):
     return data_dims
 
 
-def shapes_for_batches(batches, *, data_keys, dataset=None, extern_data, enforce_min_len1=False):
+def shapes_for_batches(
+    batches: Sequence[Batch],
+    *,
+    data_keys: Sequence[str],
+    dataset: Optional[Dataset] = None,
+    extern_data: Optional[TensorDict],
+    enforce_min_len1: bool = False,
+) -> Optional[Dict[str, List[int]]]:
     """
-    :param list[EngineBatch.Batch] batches:
-    :param list[str] data_keys:
-    :param Dataset dataset:
-    :param returnn.tf.network.ExternData extern_data: detailed data description
-    :param bool enforce_min_len1:
-    :rtype: dict[str,list[int]] | None
+    :param batches:
+    :param data_keys:
+    :param dataset:
+    :param extern_data: detailed data description
+    :param enforce_min_len1:
     """
     assert dataset or extern_data
     all_data_keys = set(data_keys)
