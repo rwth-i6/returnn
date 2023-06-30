@@ -1134,8 +1134,8 @@ class _DimMixin:
             return False  # only true if same instance, check above
         if allow_same_spatial_dim is None:
             allow_same_spatial_dim = allow_same_feature_dim
-        self_base = self.get_same_derived_base() if derived_matches else self.get_same_base()
-        other_base = other.get_same_derived_base() if derived_matches else other.get_same_base()
+        self_base = self.get_same_derived_base(same_dim=True) if derived_matches else self.get_same_base()
+        other_base = other.get_same_derived_base(same_dim=True) if derived_matches else other.get_same_base()
         if self_base is other_base:
             return True
         if self_base.derived_from_op and other_base.derived_from_op:
@@ -1278,10 +1278,15 @@ class _DimMixin:
             base = base.same_as
         return base
 
-    def get_same_derived_base(self: _d.Dim) -> _d.Dim:
+    def get_same_derived_base(self: _d.Dim, *, same_dim: bool = False) -> _d.Dim:
         """
+        :param same_dim: if True, return the last base which has the same dimension.
+            The derived base might have a different dimension.
+            In case it is dynamic, the dimension is None, so it is always the same.
+            In case it is static, there might be a different dimension.
         :return: same base, but also consider derived_from_...
         """
+        last_base_self_dim = self
         base = self
         visited = {}
         while base.same_as or base.derived_from_tag:
@@ -1292,7 +1297,9 @@ class _DimMixin:
                 continue
             base = base.derived_from_tag
             assert base
-        return base
+            if base.dimension == self.dimension:
+                last_base_self_dim = base
+        return last_base_self_dim if same_dim else base
 
     def get_derived_bases_set(self):
         """
