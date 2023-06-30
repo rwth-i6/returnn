@@ -219,7 +219,9 @@ class Engine(EngineBase):
             self.epoch += 1
             self._epoch_mp_shared.value = self.epoch
 
-            self.init_train_epoch()
+            # update learning rate sub-epoch wise
+            if not self._use_dynamic_lr:
+                self.init_train_epoch()
             self.train_epoch()
 
         print(f"Finished training at epoch {self.epoch}, global train step {self.global_train_step}", file=log.v3)
