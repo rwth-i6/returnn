@@ -5450,15 +5450,16 @@ class RnnCellLayer(_ConcatInputLayer):
 
     @classmethod
     def get_rec_initial_state_inner(
-        cls, initial_shape, name, state_key="state", key=None, initial_state=None, shape_invariant=None, rec_layer=None
+        cls, initial_shape, name, state_key=None, key=None, initial_state=None, shape_invariant=None, rec_layer=None
     ):
         """
         Generate initial hidden state. Primarily used as a inner function for RnnCellLayer.get_rec_initial_state.
 
         :param tuple initial_shape: shape of the initial state.
         :param str name: layer name.
-        :param str state_key: key to be used to get the state from final_rec_vars.
-        :param str|None key: key/attribute of the state if state is a dictionary/namedtuple
+        :param str|None state_key: key to be used to get the state from final_rec_vars.
+            "state" by default.
+        :param str|int|None key: key/attribute of the state if state is a dictionary/namedtuple
             (like 'c' and 'h' for LSTM states).
         :param LayerBase|str|int|float|None|list|tuple|namedtuple initial_state: see code
         :param tuple shape_invariant: If provided, directly used.
@@ -5473,13 +5474,14 @@ class RnnCellLayer(_ConcatInputLayer):
             # https://github.com/rwth-i6/returnn/pull/1248#issuecomment-1618125397
             if isinstance(rec_layer, RecLayer) and isinstance(rec_layer.cell, _SubnetworkRecCell):
                 final_rec_vars = rec_layer.cell.get_final_rec_vars(name)
-                last_state = cls.get_state_by_key(final_rec_vars[state_key], key=key, shape=initial_shape)
+                last_state = cls.get_state_by_key(final_rec_vars[state_key or "state"], key=key, shape=initial_shape)
             else:
-                last_state = rec_layer.get_last_hidden_state(key=key)
+                assert key is None or not state_key
+                last_state = rec_layer.get_last_hidden_state(key=key if key is not None else state_key)
             last_state.set_shape(shape_invariant)
             return last_state
 
-        if state_key == "state":
+        if not state_key:
             if key is None:
                 key_name = "var"
             else:
