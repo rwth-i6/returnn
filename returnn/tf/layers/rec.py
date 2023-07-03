@@ -7968,9 +7968,9 @@ class SelfAttentionLayer(_ConcatInputLayer):
                 from returnn.tf.util.basic import matrix_triangular
 
                 # (1,1,num_queries,num_keys)
-                energy_mask = matrix_triangular((1, 1, num_queries, num_keys), dtype=tf.bool, lower=True)
-                if have_prev_kv_left:
-                    energy_mask_left = tf.ones((1, 1, num_queries, tf.shape(prev_k_left)[2]), dtype=tf.bool)
+                energy_mask = matrix_triangular((1, 1, num_queries, num_queries), dtype=tf.bool, lower=True)
+                if num_queries is not num_keys:
+                    energy_mask_left = tf.ones((1, 1, num_queries, num_keys - num_queries), dtype=tf.bool)
                     energy_mask = tf.concat([energy_mask_left, energy_mask], axis=-1)
             else:
                 energy_mask = tf.sequence_mask(input_data.get_sequence_lengths(), maxlen=num_keys)  # (batch,time)
