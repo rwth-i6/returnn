@@ -4186,14 +4186,6 @@ def ensure_list_of_type(ls, type_):
     return ls
 
 
-@contextlib.contextmanager
-def dummy_noop_ctx():
-    """
-    Provides a no-op context manager.
-    """
-    yield None
-
-
 def _get_ngrams(segment, max_order):
     """Extracts all n-grams upto a given maximum order from an input segment.
     Code adapted from Google Tensor2Tensor.

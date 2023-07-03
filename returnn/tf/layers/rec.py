@@ -4,6 +4,7 @@ Defines multiple recurrent layers, most importantly :class:`RecLayer`.
 
 from __future__ import annotations
 
+import contextlib
 import typing
 import tensorflow as tf
 import returnn.tf.compat as tf_compat
@@ -5491,7 +5492,6 @@ class RnnCellLayer(_ConcatInputLayer):
                 key_name = state_key
             else:
                 key_name = f"{state_key}_{key}"
-        from returnn.util.basic import dummy_noop_ctx
 
         if shape_invariant is None:
             shape_invariant = tuple([d if isinstance(d, int) and d != 0 else None for d in initial_shape])
@@ -5512,7 +5512,7 @@ class RnnCellLayer(_ConcatInputLayer):
         elif initial_state == "var":  # Initial state is a trainable variable.
             # Assume the first dimension to be batch_dim.
             assert shape_invariant[0] is None and all([d is not None for d in shape_invariant[1:]])
-            with rec_layer.var_creation_scope() if rec_layer else dummy_noop_ctx():
+            with rec_layer.var_creation_scope() if rec_layer else contextlib.nullcontext():
                 var = tf_compat.v1.get_variable(
                     "initial_%s" % key_name, shape=initial_shape[1:], initializer=tf.zeros_initializer()
                 )
