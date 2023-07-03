@@ -5475,7 +5475,8 @@ class RnnCellLayer(_ConcatInputLayer):
                 final_rec_vars = rec_layer.cell.get_final_rec_vars(name)
                 last_state = cls.get_state_by_key(final_rec_vars[state_key], key=key, shape=initial_shape)
             else:
-                last_state = rec_layer.get_last_hidden_state(key=key)
+                assert (key and not state_key) or (state_key and not key)
+                last_state = rec_layer.get_last_hidden_state(key=key or state_key)
             last_state.set_shape(shape_invariant)
             return last_state
 
