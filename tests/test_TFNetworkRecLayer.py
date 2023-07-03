@@ -11355,17 +11355,103 @@ def test_subnet_keep_over_epoch_state_vars_saveable_params():
         network = TFNetwork(config=config)
         network.construct_from_dict(net_dict)
 
+        expected_model_params = {
+            "base_blstm/lstm0_fw/rec/W",
+            "base_blstm/lstm0_fw/rec/W_re",
+            "base_blstm/lstm0_fw/rec/b",
+            "output/W",
+            "output/b",
+        }
+
         print("All global variables:")
         params = tf_compat.v1.global_variables()
+        params = {v.op.name: v for v in params}
         pprint(params)
-        assert any("base_blstm/lstm0_fw/rec/W_re:0" == param.name for param in params)
-        assert any("keep_state" in param.name for param in params)
+        params.pop("global_step", None)
+        assert set(params.keys()) == {
+            "base_blstm/lstm0_fw/rec/keep_state_c",
+            "base_blstm/lstm0_fw/rec/keep_state_h",
+        }.union(expected_model_params)
 
         print("Network saveable params:")
         params = network.get_saveable_params_list()
+        params = {v.op.name: v for v in params}
         pprint(params)
-        assert any("base_blstm/lstm0_fw/rec/W_re:0" == param.name for param in params)
-        assert not any("keep_state" in param.name for param in params)
+        params.pop("global_step", None)
+        assert not any("keep_state" in name for name in params)
+        assert set(params.keys()) == expected_model_params
+
+        from test_TFNetworkLayer import make_feed_dict
+
+        network.initialize_params(session)
+        out = network.get_default_output_layer().output
+        post_control_deps = network.get_post_control_dependencies()
+        feed_dict = make_feed_dict(network.extern_data)
+        feed_dict[network.get_epoch_step()] = 0
+        session.run((out.placeholder, post_control_deps), feed_dict=feed_dict)
+        feed_dict[network.get_epoch_step()] = 1
+        session.run((out.placeholder, post_control_deps), feed_dict=feed_dict)
+
+
+def test_self_attention_keep_over_epoch_state():
+    with make_scope() as session:
+        n_in, n_out = 2, 3
+        config = Config(
+            {
+                "extern_data": {"data": {"dim": n_in}, "classes": {"dim": n_out, "sparse": True}},
+            }
+        )
+        net_dict = {
+            "loop": {
+                "class": "rec",
+                "from": "data",
+                "unit": {
+                    "self_att": {
+                        "class": "self_attention",
+                        "from": "data:source",
+                        "attention_left_only": True,
+                        "num_heads": 2,
+                        "total_key_dim": 8,
+                        "n_out": 8,
+                        "initial_state": "keep_over_epoch",
+                    },
+                    "output": {"class": "copy", "from": "self_att"},
+                },
+                "optimize_move_layers_out": False,
+            },
+            "output": {"class": "softmax", "loss": "ce", "target": "classes", "from": "loop", "n_out": n_out},
+        }
+        network = TFNetwork(config=config)
+        network.construct_from_dict(net_dict)
+
+        expected_model_params = {"loop/rec/self_att/QKV", "output/W", "output/b"}
+
+        print("All global variables:")
+        params = tf_compat.v1.global_variables()
+        params = {v.op.name: v for v in params}
+        pprint(params)
+        params.pop("global_step", None)
+        assert set(params.keys()) == expected_model_params.union(
+            {"loop/rec/self_att/keep_state_k_left", "loop/rec/self_att/keep_state_v_left"}
+        )
+
+        print("Network saveable params:")
+        params = network.get_saveable_params_list()
+        params = {v.op.name: v for v in params}
+        pprint(params)
+        params.pop("global_step", None)
+        assert set(params.keys()) == expected_model_params
+
+        from test_TFNetworkLayer import make_feed_dict
+
+        network.initialize_params(session)
+        out = network.get_default_output_layer().output
+        post_control_deps = network.get_post_control_dependencies()
+        feed_dict = make_feed_dict(network.extern_data)
+        feed_dict[network.get_epoch_step()] = 0
+        session.run((out.placeholder, post_control_deps), feed_dict=feed_dict)
+        feed_dict[network.get_epoch_step()] = 1
+        session.run((out.placeholder, post_control_deps), feed_dict=feed_dict)
 
 
 def test_OptimalCompletionsLayer():
