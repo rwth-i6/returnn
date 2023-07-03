@@ -11454,6 +11454,64 @@ def test_self_attention_keep_over_epoch_state():
         session.run((out.placeholder, post_control_deps), feed_dict=feed_dict)
 
 
+def test_self_attention_placeholder_state():
+    num_heads = 2
+    total_key_dim = 6
+    total_value_dim = 14
+    with make_scope() as session:
+        n_in, n_out = 2, 3
+        config = Config(
+            {
+                "extern_data": {"data": {"dim": n_in}, "classes": {"dim": n_out, "sparse": True}},
+            }
+        )
+        net_dict = {
+            "loop": {
+                "class": "rec",
+                "from": "data",
+                "unit": {
+                    "self_att": {
+                        "class": "self_attention",
+                        "from": "data:source",
+                        "attention_left_only": True,
+                        "num_heads": num_heads,
+                        "total_key_dim": total_key_dim,
+                        "n_out": total_value_dim,
+                        "initial_state": "placeholder",
+                    },
+                    "output": {"class": "copy", "from": "self_att"},
+                },
+                "optimize_move_layers_out": False,
+            },
+            "output": {"class": "softmax", "loss": "ce", "target": "classes", "from": "loop", "n_out": n_out},
+        }
+        network = TFNetwork(config=config)
+        network.construct_from_dict(net_dict)
+
+        expected_model_params = {"loop/rec/self_att/QKV", "output/W", "output/b"}
+
+        print("All global variables:")
+        params = tf_compat.v1.global_variables()
+        params = {v.op.name: v for v in params}
+        pprint(params)
+        params.pop("global_step", None)
+        assert set(params.keys()) == expected_model_params
+
+        from test_TFNetworkLayer import make_feed_dict
+
+        network.initialize_params(session)
+        out = network.get_default_output_layer().output
+        n_batch = 3
+        feed_dict = make_feed_dict(network.extern_data, n_batch=n_batch)
+        k_init = session.graph.get_tensor_by_name("loop/rec/self_att/initial_state_placeholder_k_left:0")
+        v_init = session.graph.get_tensor_by_name("loop/rec/self_att/initial_state_placeholder_v_left:0")
+        k_last = session.graph.get_tensor_by_name("loop/rec/self_att/last_state_k_left:0")
+        v_last = session.graph.get_tensor_by_name("loop/rec/self_att/last_state_v_left:0")
+        feed_dict[k_init] = numpy.zeros((n_batch, num_heads, 0, total_key_dim // num_heads), dtype="float32")
+        feed_dict[v_init] = numpy.zeros((n_batch, num_heads, 0, total_value_dim // num_heads), dtype="float32")
+        session.run((out.placeholder, k_last, v_last), feed_dict=feed_dict)
+
+
 def test_OptimalCompletionsLayer():
     with make_scope() as session:
         from returnn.tf.layers.base import InternalLayer

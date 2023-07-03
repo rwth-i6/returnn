@@ -5466,6 +5466,19 @@ class RnnCellLayer(_ConcatInputLayer):
         :param RecLayer|LayerBase|None rec_layer: For the scope.
         :rtype: tf.Tensor
         """
+
+        def _get_last_state() -> tf.Tensor:
+            # Note: The rec_layer is always the outer rec layer.
+            # `name` refers to the inner rec layer.
+            # https://github.com/rwth-i6/returnn/pull/1248#issuecomment-1618125397
+            if isinstance(rec_layer, RecLayer) and isinstance(rec_layer.cell, _SubnetworkRecCell):
+                final_rec_vars = rec_layer.cell.get_final_rec_vars(name)
+                last_state = cls.get_state_by_key(final_rec_vars[state_key], key=key, shape=initial_shape)
+            else:
+                last_state = rec_layer.get_last_hidden_state(key=key)
+            last_state.set_shape(shape_invariant)
+            return last_state
+
         if state_key == "state":
             if key is None:
                 key_name = "var"
@@ -5524,12 +5537,7 @@ class RnnCellLayer(_ConcatInputLayer):
                 """
                 :return: nothing, calls :func:`TFNetwork.register_post_control_dependencies`.
                 """
-                if isinstance(rec_layer, RecLayer) and isinstance(rec_layer.cell, _SubnetworkRecCell):
-                    final_rec_vars = rec_layer.cell.get_final_rec_vars(name)
-                    last_state = cls.get_state_by_key(final_rec_vars[state_key], key=key, shape=initial_shape)
-                else:
-                    last_state = rec_layer.get_last_hidden_state(key=key)
-                last_state.set_shape(shape_invariant)
+                last_state = _get_last_state()
                 rec_layer.network.register_post_control_dependencies(
                     [tf_compat.v1.assert_equal(tf.rank(last_state), len(shape_invariant), name="check_last_state_rank")]
                     + [
@@ -5556,6 +5564,16 @@ class RnnCellLayer(_ConcatInputLayer):
                 ph = tf_compat.v1.placeholder(
                     tf.float32, shape=shape_invariant, name="initial_state_placeholder_%s" % key_name
                 )
+
+            def _setup_last_state_tensor():
+                """
+                Renames final hidden states to have a readable name.
+                """
+                with tf_util.reuse_name_scope_of_tensor(ph):
+                    last_state = _get_last_state()
+                    tf.identity(last_state, name="last_state_%s" % key_name)
+
+            rec_layer.post_init_hooks.append(_setup_last_state_tensor)
             return ph
         else:
             raise Exception("invalid initial state type %r for sub-layer %r, key %r" % (initial_state, name, key))
