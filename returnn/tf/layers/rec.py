@@ -5466,7 +5466,16 @@ class RnnCellLayer(_ConcatInputLayer):
         :param RecLayer|LayerBase|None rec_layer: For the scope.
         :rtype: tf.Tensor
         """
-        key_name = str(key if key is not None else "var")
+        if state_key == "state":
+            if key is None:
+                key_name = "var"
+            else:
+                key_name = str(key)
+        else:
+            if key is None:
+                key_name = state_key
+            else:
+                key_name = f"{state_key}_{key}"
         from returnn.util.basic import dummy_noop_ctx
 
         if shape_invariant is None:
