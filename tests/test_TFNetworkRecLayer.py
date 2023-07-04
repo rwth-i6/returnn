@@ -12976,6 +12976,289 @@ def test_RelativePositionalEncodingLayer_rec_values():
             assert_allclose(ref_pos_encs[i], collected_pos_encs[i], rtol=1e-06, err_msg=f"step {i}")
 
 
+def test_rel_pos_self_attention_left_ctx_explicit_vs_layer():
+    # We have some left context, which we want to add to the keys and values,
+    # but not to the queries.
+    # We can either implement self-attention by hand,
+    # or use the layer, but for the layer, it operates on the whole sequence,
+    # so it would calculate unnecessary queries for the left context,
+    # and we would then slice the output.
+    # So via the layer, it would be less efficient.
+    # Anyway, this test here is to compare both outputs for equality.
+    # Additionally, it uses relative positional encoding.
+    # Originally, the concatenated input was [B*C, 2*W, D].
+
+    import math
+    from returnn.tensor import batch_dim
+    from test_TFNetworkLayer import make_feed_dict
+
+    n_total_dim = 64
+    n_head = 2
+    enc_att_num_heads_dim = Dim(n_head, name="heads")
+    enc_dim_per_head_dim = Dim(n_total_dim // n_head, name="dim_per_head")
+    chunk_size_dim = Dim(23, name="chunk_size")
+    concat_window_dim = 2 * chunk_size_dim
+    in_feat_dim = Dim(13, name="in_feat")
+
+    extern_data_dict = {
+        "left_ctx": {
+            "dim_tags": [batch_dim, chunk_size_dim, in_feat_dim],
+            "time_dim_axis": 1,
+            "available_for_inference": True,
+        },
+        "data": {"dim_tags": [batch_dim, chunk_size_dim, in_feat_dim], "time_dim_axis": 1},
+    }
+
+    net_dict_common = {
+        "conformer_block_01_self_att_ln": {"class": "copy", "from": "data"},
+        "conformer_block_01_self_att_ln_concat": {
+            "class": "concat",
+            "from": [("data:left_ctx", chunk_size_dim), ("data", chunk_size_dim)],
+            "out_dim": concat_window_dim,
+        },
+        "output": {"class": "copy", "from": "conformer_block_01_self_att_dropout"},
+    }
+
+    net_dict_w_layer = {
+        "conformer_block_01_self_att_ln_rel_pos_enc": {
+            "class": "relative_positional_encoding",
+            "clipping": 16,
+            "forward_weights_init": "variance_scaling_initializer(mode='fan_avg', distribution='uniform', "
+            "scale=1.0)",
+            "from": "conformer_block_01_self_att_ln_concat",  # [B*C, 2*W, D]
+            "n_out": n_total_dim // n_head,
+        },
+        "conformer_block_01_self_att": {
+            "attention_dropout": 0.1,
+            "class": "self_attention",
+            "forward_weights_init": "variance_scaling_initializer(mode='fan_avg', distribution='uniform', scale=0.5)",
+            "from": "conformer_block_01_self_att_ln_concat",
+            "key_shift": "conformer_block_01_self_att_ln_rel_pos_enc",
+            "n_out": n_total_dim,
+            "num_heads": n_head,
+            "total_key_dim": n_total_dim,
+        },
+        "conformer_block_01_self_att_splits": {
+            "axis": "T",
+            "class": "split",
+            "from": "conformer_block_01_self_att",
+            "num_splits": 2,
+        },
+        "conformer_block_01_self_att_split_2": {
+            "class": "copy",
+            "from": "conformer_block_01_self_att_splits/1",
+        },
+        "conformer_block_01_self_att_linear": {
+            "L2": 0.0001,
+            "activation": None,
+            "class": "linear",
+            "forward_weights_init": "variance_scaling_initializer(mode='fan_avg', distribution='uniform', scale=1.0)",
+            "from": "conformer_block_01_self_att_split_2",
+            "n_out": n_total_dim,
+            "with_bias": False,
+        },
+        "conformer_block_01_self_att_dropout": {
+            "class": "dropout",
+            "dropout": 0.1,
+            "from": "conformer_block_01_self_att_linear",
+        },
+    }
+
+    net_dict_explicit = {
+        "conformer_block_01_self_att_ln_K": {
+            "L2": 0.0,
+            "class": "linear",
+            "forward_weights_init": "variance_scaling_initializer(mode='fan_avg', distribution='uniform', scale=0.5)",
+            "from": "conformer_block_01_self_att_ln_concat",  # [B*C, 2*W, D]
+            "n_out": n_total_dim,
+            "with_bias": False,
+        },
+        "conformer_block_01_self_att_ln_K_H": {
+            "axis": "f",
+            "class": "split_dims",
+            "dims": (enc_att_num_heads_dim, enc_dim_per_head_dim),
+            "from": "conformer_block_01_self_att_ln_K",
+        },
+        "conformer_block_01_self_att_ln_Q": {
+            "L2": 0.0,
+            "class": "linear",
+            "forward_weights_init": "variance_scaling_initializer(mode='fan_avg', distribution='uniform', scale=0.5)",
+            "from": "conformer_block_01_self_att_ln",  # [B*C, W, D]
+            "n_out": n_total_dim,
+            "with_bias": False,
+        },
+        "conformer_block_01_self_att_ln_Q_H": {
+            "axis": "f",
+            "class": "split_dims",
+            "dims": (enc_att_num_heads_dim, enc_dim_per_head_dim),
+            "from": "conformer_block_01_self_att_ln_Q",
+        },
+        "conformer_block_01_self_att_ln_V": {
+            "L2": 0.0,
+            "class": "linear",
+            "forward_weights_init": "variance_scaling_initializer(mode='fan_avg', distribution='uniform', scale=0.5)",
+            "from": "conformer_block_01_self_att_ln_concat",
+            "n_out": n_total_dim,
+            "with_bias": False,
+        },
+        "conformer_block_01_self_att_ln_V_H": {
+            "axis": "f",
+            "class": "split_dims",
+            "dims": (enc_att_num_heads_dim, enc_dim_per_head_dim),
+            "from": "conformer_block_01_self_att_ln_V",
+        },
+        "conformer_block_01_self_att_ln_energy": {
+            "class": "dot",
+            "from": [
+                "conformer_block_01_self_att_ln_K_H",
+                "conformer_block_01_self_att_ln_Q_H",
+            ],
+            "reduce": enc_dim_per_head_dim,
+            "var1": "auto",
+            "var2": "auto",
+        },
+        "conformer_block_01_self_att_ln_rel_pos_enc": {
+            "class": "relative_positional_encoding",
+            "clipping": 16,
+            "forward_weights_init": "variance_scaling_initializer(mode='fan_avg', distribution='uniform', "
+            "scale=1.0)",
+            "from": "conformer_block_01_self_att_ln_concat",
+            "key_value_spatial_dim": concat_window_dim,
+            "out_dim": enc_dim_per_head_dim,
+            "query_offset": chunk_size_dim.dimension,
+            "query_spatial_dim": chunk_size_dim,
+        },
+        "conformer_block_01_self_att_ln_energy_rel_pos": {
+            "class": "dot",
+            "from": [
+                "conformer_block_01_self_att_ln_Q_H",
+                "conformer_block_01_self_att_ln_rel_pos_enc",
+            ],
+            "reduce": enc_dim_per_head_dim,
+            "var1": "auto",
+            "var2": "auto",
+        },
+        "conformer_block_01_self_att_ln_energy_": {
+            "allow_broadcast_all_sources": False,
+            "class": "combine",
+            "from": [
+                "conformer_block_01_self_att_ln_energy",
+                "conformer_block_01_self_att_ln_energy_rel_pos",
+            ],
+            "kind": "add",
+        },
+        "conformer_block_01_self_att_ln_weights": {
+            "class": "softmax_over_spatial",
+            "energy_factor": 1 / math.sqrt(enc_dim_per_head_dim.dimension),
+            "from": "conformer_block_01_self_att_ln_energy_",
+        },
+        "conformer_block_01_self_att_ln_weights_drop": {
+            "class": "dropout",
+            "dropout": 0.1,
+            "dropout_noise_shape": {"*": None},
+            "from": "conformer_block_01_self_att_ln_weights",
+        },
+        "conformer_block_01_self_att_ln_att0": {
+            "class": "dot",
+            "from": [
+                "conformer_block_01_self_att_ln_weights_drop",
+                "conformer_block_01_self_att_ln_V_H",
+            ],
+            "reduce": concat_window_dim,
+            "var1": "auto",
+            "var2": "auto",
+        },
+        "conformer_block_01_self_att_ln_att_": {
+            "axes": (enc_att_num_heads_dim, enc_dim_per_head_dim),
+            "class": "merge_dims",
+            "from": "conformer_block_01_self_att_ln_att0",
+        },
+        "conformer_block_01_self_att_ln_att": {
+            "class": "reinterpret_data",
+            "from": "conformer_block_01_self_att_ln_att_",
+            "set_axes": {"T": f"dim:{chunk_size_dim.dimension}"},
+        },
+        "conformer_block_01_self_att_linear": {
+            "L2": 0.0001,
+            "activation": None,
+            "class": "linear",
+            "forward_weights_init": "variance_scaling_initializer(mode='fan_avg', distribution='uniform', scale=1.0)",
+            "from": "conformer_block_01_self_att_ln_att",
+            "n_out": n_total_dim,
+            "with_bias": False,
+        },
+        "conformer_block_01_self_att_dropout": {
+            "class": "dropout",
+            "dropout": 0.1,
+            "from": "conformer_block_01_self_att_linear",
+        },
+    }
+
+    with make_scope() as session:
+        net_dict = {**net_dict_common, **net_dict_w_layer}
+        net = TFNetwork(config=Config({"extern_data": extern_data_dict}))
+        net.construct_from_dict(net_dict)
+        net.initialize_params(session=session)
+        params_serialized = net.get_params_serialized(session=session)
+
+        out = net.get_default_output_layer().output
+        k_raw = session.graph.get_tensor_by_name("conformer_block_01_self_att/qkv_1:1")  # (B,H,2*W,D//H)
+        feed_dict = make_feed_dict(net.extern_data)
+        outputs_w_layer_v = session.run(
+            {
+                "input_concat": net.layers["conformer_block_01_self_att_ln_concat"].output.placeholder,
+                "k_raw": k_raw,
+                "output": out.placeholder,
+            },
+            feed_dict=feed_dict,
+        )
+
+    # Convert params.
+    att_params = params_serialized.values_dict.pop("conformer_block_01_self_att")
+    qkv_matrix = att_params.pop("QKV")
+    assert qkv_matrix.shape == (in_feat_dim.dimension, n_total_dim * 3)
+    # Note: Just numpy.split is wrong, because SelfAttentionLayer does matmul first on all,
+    # then reshapes (separate head), then splits.
+    # In the explicit variant here, we however do separate matmuls,
+    # then reshape.
+    qkv_matrix_ = qkv_matrix.reshape((in_feat_dim.dimension, n_head, 3, n_total_dim // n_head))
+    q_mat = qkv_matrix_[:, :, 0, :].reshape((in_feat_dim.dimension, n_total_dim))
+    k_mat = qkv_matrix_[:, :, 1, :].reshape((in_feat_dim.dimension, n_total_dim))
+    v_mat = qkv_matrix_[:, :, 2, :].reshape((in_feat_dim.dimension, n_total_dim))
+    params_serialized.values_dict["conformer_block_01_self_att_ln_Q"] = {"W": q_mat}
+    params_serialized.values_dict["conformer_block_01_self_att_ln_K"] = {"W": k_mat}
+    params_serialized.values_dict["conformer_block_01_self_att_ln_V"] = {"W": v_mat}
+
+    with make_scope() as session:
+        net_dict = {**net_dict_common, **net_dict_explicit}
+        net = TFNetwork(config=Config({"extern_data": extern_data_dict}))
+        net.construct_from_dict(net_dict)
+        net.set_params_by_serialized(params_serialized, session=session)
+
+        out = net.get_default_output_layer().output
+        keys = net.layers["conformer_block_01_self_att_ln_K"].output  # (B,2*W,D)
+        k_raw = tf.reshape(
+            keys.placeholder, [batch_dim.get_dim_value(), concat_window_dim.dimension, n_head, n_total_dim // n_head]
+        )  # (B,2*W,H,D//H)
+        k_raw = tf.transpose(k_raw, [0, 2, 1, 3])  # (B,H,2*W,D//H)
+        feed_dict = make_feed_dict(net.extern_data)
+        outputs_explicit_v = session.run(
+            {
+                "input_concat": net.layers["conformer_block_01_self_att_ln_concat"].output.placeholder,
+                "k_raw": k_raw,
+                "output": out.placeholder,
+            },
+            feed_dict=feed_dict,
+        )
+
+        assert set(outputs_w_layer_v.keys()) == set(outputs_explicit_v.keys())
+        for k in outputs_w_layer_v.keys():
+            print(f"*** Compare {k} ***")
+            w_layer_v = outputs_w_layer_v[k]
+            explicit_v = outputs_explicit_v[k]
+            assert_allclose(w_layer_v, explicit_v, rtol=1e-5, atol=1e-5, err_msg=f"{k} different")
+
+
 def _build_self_attention_layer(
     d, input, output, inside_rec_layer, query_axis=None, num_heads=3, key_dim=7, value_dim=11, dropout=0.0
 ):
