@@ -13217,7 +13217,14 @@ def test_rel_pos_self_attention_left_ctx_explicit_vs_layer():
     att_params = params_serialized.values_dict.pop("conformer_block_01_self_att")
     qkv_matrix = att_params.pop("QKV")
     assert qkv_matrix.shape == (in_feat_dim.dimension, n_total_dim * 3)
-    q_mat, k_mat, v_mat = numpy.split(qkv_matrix, 3, axis=-1)
+    # Note: Just numpy.split is wrong, because SelfAttentionLayer does matmul first on all,
+    # then reshapes (separate head), then splits.
+    # In the explicit variant here, we however do separate matmuls,
+    # then reshape.
+    qkv_matrix_ = qkv_matrix.reshape((in_feat_dim.dimension, n_head, 3, n_total_dim // n_head))
+    q_mat = qkv_matrix_[:, :, 0, :].reshape((in_feat_dim.dimension, n_total_dim))
+    k_mat = qkv_matrix_[:, :, 1, :].reshape((in_feat_dim.dimension, n_total_dim))
+    v_mat = qkv_matrix_[:, :, 2, :].reshape((in_feat_dim.dimension, n_total_dim))
     params_serialized.values_dict["conformer_block_01_self_att_ln_Q"] = {"W": q_mat}
     params_serialized.values_dict["conformer_block_01_self_att_ln_K"] = {"W": k_mat}
     params_serialized.values_dict["conformer_block_01_self_att_ln_V"] = {"W": v_mat}
