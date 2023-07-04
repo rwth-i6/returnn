@@ -13202,8 +13202,9 @@ def test_rel_pos_self_attention_left_ctx_explicit_vs_layer():
         params_serialized = net.get_params_serialized(session=session)
 
         out = net.get_default_output_layer().output
+        k_raw = session.graph.get_tensor_by_name("conformer_block_01_self_att/qkv_1:1")  # (B,H,2*W,D//H)
         feed_dict = make_feed_dict(net.extern_data)
-        out_w_layer_v = session.run(out.placeholder, feed_dict=feed_dict)
+        outputs_w_layer_v = session.run({"k_raw": k_raw, "output": out.placeholder}, feed_dict=feed_dict)
 
     # Convert params.
     att_params = params_serialized.values_dict.pop("conformer_block_01_self_att")
@@ -13221,10 +13222,20 @@ def test_rel_pos_self_attention_left_ctx_explicit_vs_layer():
         net.set_params_by_serialized(params_serialized, session=session)
 
         out = net.get_default_output_layer().output
+        keys = net.layers["conformer_block_01_self_att_ln_K"].output  # (B,2*W,D)
+        k_raw = tf.reshape(
+            keys.placeholder, [batch_dim.get_dim_value(), concat_window_dim.dimension, n_head, n_total_dim // n_head]
+        )  # (B,2*W,H,D//H)
+        k_raw = tf.transpose(k_raw, [0, 2, 1, 3])  # (B,H,2*W,D//H)
         feed_dict = make_feed_dict(net.extern_data)
-        out_explicit_v = session.run(out.placeholder, feed_dict=feed_dict)
+        outputs_explicit_v = session.run({"k_raw": k_raw, "output": out.placeholder}, feed_dict=feed_dict)
 
-        assert_allclose(out_w_layer_v, out_explicit_v, rtol=1e-5, atol=1e-5)
+        assert set(outputs_w_layer_v.keys()) == set(outputs_explicit_v.keys())
+        for k in outputs_w_layer_v.keys():
+            print(f"*** Compare {k} ***")
+            w_layer_v = outputs_w_layer_v[k]
+            explicit_v = outputs_explicit_v[k]
+            assert_allclose(w_layer_v, explicit_v, rtol=1e-5, atol=1e-5, err_msg=f"{k} different")
 
 
 def _build_self_attention_layer(
