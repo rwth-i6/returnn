@@ -13204,7 +13204,14 @@ def test_rel_pos_self_attention_left_ctx_explicit_vs_layer():
         out = net.get_default_output_layer().output
         k_raw = session.graph.get_tensor_by_name("conformer_block_01_self_att/qkv_1:1")  # (B,H,2*W,D//H)
         feed_dict = make_feed_dict(net.extern_data)
-        outputs_w_layer_v = session.run({"k_raw": k_raw, "output": out.placeholder}, feed_dict=feed_dict)
+        outputs_w_layer_v = session.run(
+            {
+                "input_concat": net.layers["conformer_block_01_self_att_ln_concat"].output.placeholder,
+                "k_raw": k_raw,
+                "output": out.placeholder,
+            },
+            feed_dict=feed_dict,
+        )
 
     # Convert params.
     att_params = params_serialized.values_dict.pop("conformer_block_01_self_att")
@@ -13228,7 +13235,14 @@ def test_rel_pos_self_attention_left_ctx_explicit_vs_layer():
         )  # (B,2*W,H,D//H)
         k_raw = tf.transpose(k_raw, [0, 2, 1, 3])  # (B,H,2*W,D//H)
         feed_dict = make_feed_dict(net.extern_data)
-        outputs_explicit_v = session.run({"k_raw": k_raw, "output": out.placeholder}, feed_dict=feed_dict)
+        outputs_explicit_v = session.run(
+            {
+                "input_concat": net.layers["conformer_block_01_self_att_ln_concat"].output.placeholder,
+                "k_raw": k_raw,
+                "output": out.placeholder,
+            },
+            feed_dict=feed_dict,
+        )
 
         assert set(outputs_w_layer_v.keys()) == set(outputs_explicit_v.keys())
         for k in outputs_w_layer_v.keys():
