@@ -2880,7 +2880,10 @@ class CudaEnv(object):
         p = os.path.dirname(os.path.dirname(fn))
         while not cls._check_valid_cuda_path(p):
             p = os.path.dirname(p)
-            assert p not in ["", "/"], "No parent dir of %r is a valid CUDA path." % fn
+            if p in ["", "/"]:
+                if cls.verbose_find_cuda:
+                    print(f"Loaded lib {fn} does not seem to be in valid CUDA path.")
+                return None
         assert cls._check_valid_cuda_path(p)
         return p
 
