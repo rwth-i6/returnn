@@ -305,7 +305,7 @@ class Engine(EngineBase):
 
             # update the learning rate per step
             if self._use_dynamic_lr:
-                self._updater.set_current_step_learning_rate(lr)
+                self._updater.set_current_step_learning_rate(self.global_train_step)
 
             # only update the weights when every gradient accumulation loop ends
             if (step_idx % self._accum_grad_multiple_step) == (self._accum_grad_multiple_step - 1):
