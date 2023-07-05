@@ -103,7 +103,7 @@ class Updater(object):
             param_group["lr"] = value
         self.learning_rate = value
 
-    def get_current_step_learning_rate(self, global_train_step):
+    def set_current_step_learning_rate(self, global_train_step):
         """
         Obtains an updated learning rate for the current training step inside a (sub)epoch.
         """
@@ -119,7 +119,10 @@ class Updater(object):
             lr = learning_rate_function(global_train_step=global_train_step, learning_rate=lr)
         else:
             raise NotImplementedError("not implemented for not callable dynamic_learning_rate")
-        return lr
+
+        for param_group in self.optimizer.param_groups:
+            param_group["lr"] = lr
+        self.learning_rate = lr
 
     def create_optimizer(self):
         """
