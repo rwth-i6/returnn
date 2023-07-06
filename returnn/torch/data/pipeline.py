@@ -76,7 +76,7 @@ class ChunkingIterDataPipe(torch.utils.data.IterDataPipe):
     So it transforms one sequences into multiple sequences.
     """
 
-    def __init__(self, dataset: torch.utils.data.IterableDataset, chunking):
+    def __init__(self, dataset: torch.utils.data.IterableDataset, chunking, *, min_chunk_size=0):
         """
         :param dataset: dataset to apply chunking to
         :param None|int|(int,int)|dict|(dict,dict) chunking: tuple (chunk_size, chunk_step).
@@ -95,6 +95,8 @@ class ChunkingIterDataPipe(torch.utils.data.IterDataPipe):
         self._dataset = dataset
         # noinspection PyProtectedMember
         self._chunk_size, self._chunk_step, custom_chunk_func = ReturnnDataset._parse_chunking(chunking)
+        self._min_chunk_size = NumbersDict(min_chunk_size)
+
         assert not custom_chunk_func, f"Custom chunking function not supported, {chunking!r}"
 
     def __iter__(self):
@@ -120,10 +122,13 @@ class ChunkingIterDataPipe(torch.utils.data.IterDataPipe):
             for data_key in chunking_data_keys:
                 chunk_size = self._chunk_size[data_key]
                 chunk_step = self._chunk_step[data_key]
+                min_chunk_size = self._min_chunk_size[data_key]
 
                 data = data_dict[data_key]
                 chunks = [
-                    data[start_index : start_index + chunk_size] for start_index in range(0, len(data), chunk_step)
+                    data[start_index : start_index + chunk_size]
+                    for start_index in range(0, len(data), chunk_step)
+                    if len(data[start_index : start_index + chunk_size]) >= min_chunk_size
                 ]
 
                 if num_chunks is None:
@@ -135,6 +140,8 @@ class ChunkingIterDataPipe(torch.utils.data.IterDataPipe):
 
                 data_chunks[data_key] = chunks
 
+            if num_chunks == 0:
+                continue
             assert num_chunks, "Bug: no chunk produced from current sequence."
             for chunk_index in range(num_chunks):
                 chunk_data = {data_key: data_chunks[data_key][chunk_index] for data_key in data_chunks.keys()}
