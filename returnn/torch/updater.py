@@ -91,6 +91,10 @@ class Updater(object):
         self.learning_rate = initial_learning_rate
         self.network = network
         self._device = device
+
+        self._use_dynamic_lr = False if self.config.typed_value("dynamic_learning_rate", None) is None else True
+        print("Using dynamic learning rate scheduler that updates based on global train steps", file=log.v2)
+
         self.optimizer = None  # type: typing.Optional[torch.optim.Optimizer]
 
     def set_learning_rate(self, value):
@@ -103,26 +107,27 @@ class Updater(object):
             param_group["lr"] = value
         self.learning_rate = value
 
-    def set_current_step_learning_rate(self, global_train_step):
+    def set_current_train_step(self, global_train_step):
         """
         Obtains an updated learning rate for the current training step inside a (sub)epoch.
         """
-        lr = self.learning_rate
-        if callable(self.config.typed_value("dynamic_learning_rate", None)):
-            import inspect
+        if self._use_dynamic_lr:
+            lr = self.learning_rate
+            if callable(self.config.typed_value("dynamic_learning_rate", None)):
+                import inspect
 
-            learning_rate_function = self.config.typed_value("dynamic_learning_rate")
-            signature = inspect.signature(learning_rate_function)
-            assert any(
-                [arg.kind == inspect.Parameter.VAR_KEYWORD for arg in signature.parameters.values()]
-            ), "please specify **kwargs in dynamic_learning_rate for future compatibility"
-            lr = learning_rate_function(global_train_step=global_train_step, learning_rate=lr)
-        else:
-            raise NotImplementedError("not implemented for not callable dynamic_learning_rate")
+                learning_rate_function = self.config.typed_value("dynamic_learning_rate")
+                signature = inspect.signature(learning_rate_function)
+                assert any(
+                    [arg.kind == inspect.Parameter.VAR_KEYWORD for arg in signature.parameters.values()]
+                ), "please specify **kwargs in dynamic_learning_rate for future compatibility"
+                lr = learning_rate_function(global_train_step=global_train_step, learning_rate=lr)
+            else:
+                raise NotImplementedError("not implemented for not callable dynamic_learning_rate")
 
-        for param_group in self.optimizer.param_groups:
-            param_group["lr"] = lr
-        self.learning_rate = lr
+            for param_group in self.optimizer.param_groups:
+                param_group["lr"] = lr
+            self.learning_rate = lr
 
     def create_optimizer(self):
         """

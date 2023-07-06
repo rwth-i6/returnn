@@ -82,9 +82,6 @@ class Engine(EngineBase):
         self._device = _get_device_from_config(config)
         print("Using device:", self._device, file=log.v2)
 
-        self._use_dynamic_lr = False if self.config.typed_value("dynamic_learning_rate", None) is None else True
-        print("Using dynamic learning rate scheduler that updates based on global train steps", file=log.v2)
-
         self._use_torch_distributed = False
         self._torch_distributed_class = None  # type: Optional[Callable]
         self._torch_distributed_options = None  # type: Optional[dict]
@@ -219,9 +216,7 @@ class Engine(EngineBase):
             self.epoch += 1
             self._epoch_mp_shared.value = self.epoch
 
-            # update learning rate sub-epoch wise
-            if not self._use_dynamic_lr:
-                self.init_train_epoch()
+            self.init_train_epoch()
             self.train_epoch()
 
         print(f"Finished training at epoch {self.epoch}, global train step {self.global_train_step}", file=log.v3)
@@ -303,9 +298,8 @@ class Engine(EngineBase):
                 else:
                     total_loss.raw_tensor.backward()
 
-            # update the learning rate per step
-            if self._use_dynamic_lr:
-                self._updater.set_current_step_learning_rate(self.global_train_step)
+            # update the optimizer per step
+            self._updater.set_current_train_step(self.global_train_step)
 
             # only update the weights when every gradient accumulation loop ends
             if (step_idx % self._accum_grad_multiple_step) == (self._accum_grad_multiple_step - 1):
