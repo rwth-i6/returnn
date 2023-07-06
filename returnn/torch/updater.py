@@ -97,6 +97,7 @@ class Updater(object):
             print("Using dynamic learning rate scheduler that updates based on global train steps", file=log.v2)
             if callable(self.learning_rate_function):
                 import inspect
+
                 signature = inspect.signature(self.learning_rate_function)
                 assert any(
                     [arg.kind == inspect.Parameter.VAR_KEYWORD for arg in signature.parameters.values()]
