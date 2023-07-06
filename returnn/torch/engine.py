@@ -428,7 +428,9 @@ class Engine(EngineBase):
         chunking = self.config.typed_value("chunking", None)
         min_chunk_size = self.config.typed_value("min_chunk_size", 0)
         if chunking:
-            wrapped_dataset = data_pipeline.ChunkingIterDataPipe(wrapped_dataset, chunking, min_chunk_size=min_chunk_size)
+            wrapped_dataset = data_pipeline.ChunkingIterDataPipe(
+                wrapped_dataset, chunking, min_chunk_size=min_chunk_size
+            )
 
         batch_size = self.config.typed_value("batch_size", 1)
         max_seqs = self.config.int("max_seqs", -1)
