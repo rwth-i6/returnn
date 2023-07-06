@@ -105,7 +105,6 @@ class Updater(object):
         """
         for param_group in self.optimizer.param_groups:
             param_group["lr"] = value
-        self.learning_rate = value
 
     def set_current_train_step(self, global_train_step):
         """
@@ -127,7 +126,6 @@ class Updater(object):
 
             for param_group in self.optimizer.param_groups:
                 param_group["lr"] = lr
-            self.learning_rate = lr
 
     def create_optimizer(self):
         """
