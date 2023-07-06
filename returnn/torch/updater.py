@@ -92,8 +92,17 @@ class Updater(object):
         self.network = network
         self._device = device
 
-        self._use_dynamic_lr = False if self.config.typed_value("dynamic_learning_rate", None) is None else True
-        print("Using dynamic learning rate scheduler that updates based on global train steps", file=log.v2)
+        self.learning_rate_function = self.config.typed_value("dynamic_learning_rate", None)
+        if self.learning_rate_function is not None:
+            print("Using dynamic learning rate scheduler that updates based on global train steps", file=log.v2)
+            if callable(self.learning_rate_function):
+                import inspect
+                signature = inspect.signature(self.learning_rate_function)
+                assert any(
+                    [arg.kind == inspect.Parameter.VAR_KEYWORD for arg in signature.parameters.values()]
+                ), "please specify **kwargs in dynamic_learning_rate for future compatibility"
+            else:
+                raise NotImplementedError("not implemented for not callable dynamic_learning_rate")
 
         self.optimizer = None  # type: typing.Optional[torch.optim.Optimizer]
 
@@ -110,20 +119,8 @@ class Updater(object):
         """
         Obtains an updated learning rate for the current training step inside a (sub)epoch.
         """
-        if self._use_dynamic_lr:
-            lr = self.learning_rate
-            if callable(self.config.typed_value("dynamic_learning_rate", None)):
-                import inspect
-
-                learning_rate_function = self.config.typed_value("dynamic_learning_rate")
-                signature = inspect.signature(learning_rate_function)
-                assert any(
-                    [arg.kind == inspect.Parameter.VAR_KEYWORD for arg in signature.parameters.values()]
-                ), "please specify **kwargs in dynamic_learning_rate for future compatibility"
-                lr = learning_rate_function(global_train_step=global_train_step, learning_rate=lr)
-            else:
-                raise NotImplementedError("not implemented for not callable dynamic_learning_rate")
-
+        if self.learning_rate_function is not None:
+            lr = self.learning_rate_function(global_train_step=global_train_step, learning_rate=self.learning_rate)
             for param_group in self.optimizer.param_groups:
                 param_group["lr"] = lr
 
