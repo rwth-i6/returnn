@@ -76,7 +76,7 @@ class ChunkingIterDataPipe(torch.utils.data.IterDataPipe):
     So it transforms one sequences into multiple sequences.
     """
 
-    def __init__(self, dataset: torch.utils.data.IterableDataset, chunking, min_chunk_size):
+    def __init__(self, dataset: torch.utils.data.IterableDataset, chunking, *, min_chunk_size=0):
         """
         :param dataset: dataset to apply chunking to
         :param None|int|(int,int)|dict|(dict,dict) chunking: tuple (chunk_size, chunk_step).
