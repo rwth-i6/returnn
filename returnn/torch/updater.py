@@ -91,6 +91,20 @@ class Updater(object):
         self.learning_rate = initial_learning_rate
         self.network = network
         self._device = device
+
+        self.learning_rate_function = self.config.typed_value("dynamic_learning_rate", None)
+        if self.learning_rate_function is not None:
+            print("Using dynamic learning rate scheduler that updates based on global train steps", file=log.v2)
+            if callable(self.learning_rate_function):
+                import inspect
+
+                signature = inspect.signature(self.learning_rate_function)
+                assert any(
+                    [arg.kind == inspect.Parameter.VAR_KEYWORD for arg in signature.parameters.values()]
+                ), "please specify **kwargs in dynamic_learning_rate for future compatibility"
+            else:
+                raise NotImplementedError("not implemented for not callable dynamic_learning_rate")
+
         self.optimizer = None  # type: typing.Optional[torch.optim.Optimizer]
 
     def set_learning_rate(self, value):
@@ -101,12 +115,16 @@ class Updater(object):
         """
         for param_group in self.optimizer.param_groups:
             param_group["lr"] = value
+        self.learning_rate = value
 
-    def get_current_step_learning_rate(self):
+    def set_current_train_step(self, global_train_step):
         """
         Obtains an updated learning rate for the current training step inside a (sub)epoch.
         """
-        pass
+        if self.learning_rate_function is not None:
+            lr = self.learning_rate_function(global_train_step=global_train_step, learning_rate=self.learning_rate)
+            for param_group in self.optimizer.param_groups:
+                param_group["lr"] = lr
 
     def create_optimizer(self):
         """
