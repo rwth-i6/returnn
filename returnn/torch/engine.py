@@ -340,6 +340,7 @@ class Engine(EngineBase):
         if self.config.bool_or_other("cleanup_old_models", None):
             self.cleanup_old_models()
 
+
     def eval_model(self):
         """
         Runs model on all eval datasets and calculates the loss.
@@ -679,14 +680,14 @@ class Engine(EngineBase):
         :rtype: int
         """
         # This assumes PyTorch models here.
-        # They consist of multiple files with the extensions ".index", ".meta" and ".data*".
+        # They consist of a file with the extension ".pt".
         from glob import glob
 
         count_bytes = 0
         assert os.path.exists(filename + ".pt")
         for fn in glob(filename + "*"):
             fn_ext = os.path.splitext(fn)[1]
-            if fn_ext not in [".pt", ".meta"]:
+            if fn_ext not in [".pt"]:
                 continue
             count_bytes += os.stat(fn).st_size
             os.remove(fn)
@@ -803,6 +804,8 @@ class Engine(EngineBase):
         for epoch in remove_epochs:
             count_bytes += self.delete_model(existing_models[epoch])
         print("Deleted %s." % human_bytes_size(count_bytes), file=log.v2)
+
+
 
 
 def _to_raw(n: Union[int, float, Tensor]):
