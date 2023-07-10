@@ -29,6 +29,7 @@ from returnn.util import basic as util
 from returnn.util import NumbersDict
 from returnn.util.basic import hms, NotSpecified
 from returnn.forward_iface import ForwardCallbackIface
+from returnn.learning_rate_control import load_learning_rate_control_from_config
 
 from .updater import Updater
 from .data import pipeline as data_pipeline
@@ -339,7 +340,6 @@ class Engine(EngineBase):
             self.eval_model()
         if self.config.bool_or_other("cleanup_old_models", None):
             self.cleanup_old_models()
-
 
     def eval_model(self):
         """
@@ -706,7 +706,7 @@ class Engine(EngineBase):
         if hasattr(self, "learning_rate_control"):
             lr_control = self.learning_rate_control
         else:
-            raise NotImplementedError
+            raise load_learning_rate_control_from_config(self.config)
 
         epochs = sorted(existing_models.keys())
         if not epochs:
@@ -804,8 +804,6 @@ class Engine(EngineBase):
         for epoch in remove_epochs:
             count_bytes += self.delete_model(existing_models[epoch])
         print("Deleted %s." % human_bytes_size(count_bytes), file=log.v2)
-
-
 
 
 def _to_raw(n: Union[int, float, Tensor]):
