@@ -3,7 +3,7 @@ Main engine for PyTorch
 """
 
 from __future__ import annotations
-from typing import Optional, Union, Callable, Dict, Set
+from typing import Optional, Union, Callable, Dict
 from contextlib import nullcontext
 
 import gc
@@ -29,7 +29,6 @@ from returnn.util import basic as util
 from returnn.util import NumbersDict
 from returnn.util.basic import hms, NotSpecified
 from returnn.forward_iface import ForwardCallbackIface
-from returnn.learning_rate_control import load_learning_rate_control_from_config
 
 from .updater import Updater
 from .data import pipeline as data_pipeline
