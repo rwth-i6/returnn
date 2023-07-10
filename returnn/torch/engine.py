@@ -478,6 +478,7 @@ class Engine(EngineBase):
         # Check existing model. This takes `load` and `load_epoch` into account,
         # and also whether we are in train or eval mode.
         epoch, model_epoch_filename = self.get_epoch_model(self.config)
+        step = None
 
         checkpoint_state = None
         if model_epoch_filename:
