@@ -340,7 +340,6 @@ class Engine(EngineBase):
         if self.config.bool_or_other("cleanup_old_models", None):
             self.cleanup_old_models()
 
-        
     def eval_model(self):
         """
         Runs model on all eval datasets and calculates the loss.
@@ -804,8 +803,6 @@ class Engine(EngineBase):
         for epoch in remove_epochs:
             count_bytes += self.delete_model(existing_models[epoch])
         print("Deleted %s." % human_bytes_size(count_bytes), file=log.v2)
-
-
 
 
 def _to_raw(n: Union[int, float, Tensor]):
