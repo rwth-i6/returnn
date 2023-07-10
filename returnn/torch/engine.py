@@ -481,6 +481,7 @@ class Engine(EngineBase):
         # Check existing model. This takes `load` and `load_epoch` into account,
         # and also whether we are in train or eval mode.
         epoch, model_epoch_filename = self.get_epoch_model(self.config)
+        step = None
 
         checkpoint_state = None
         if model_epoch_filename:
@@ -495,12 +496,13 @@ class Engine(EngineBase):
             # Restore the last step.
             # Below, we will increase the step again in case we are training.
             step -= 1
-        else:
-            step = 0
-            epoch = self._start_epoch or 1
 
         is_training = self.config.value("task", "train") == "train"
         is_first_train_epoch = not epoch and (is_training or self.config.value("task", "train") == "initialize_model")
+
+        if not model_epoch_filename:
+            step = 0
+            epoch = self._start_epoch or 1
 
         # See :mod:`rf.rand` docstring for an explanation of this logic.
         random_seed = self.config.int("random_seed", 42)
