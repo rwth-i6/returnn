@@ -340,6 +340,8 @@ class Engine(EngineBase):
                 self._save_optimizer()
 
             self.eval_model()
+        if self.config.bool_or_other("cleanup_old_models", None):
+            self.cleanup_old_models()
 
     def eval_model(self):
         """
@@ -676,6 +678,26 @@ class Engine(EngineBase):
                     callback.process_seq(seq_tag=seq_tag, outputs=model_outputs_per_batch)
 
             callback.finish()
+
+    @staticmethod
+    def delete_model(filename):
+        """
+        :param str filename:
+        :return: accumulated file-size in bytes of deleted files
+        :rtype: int
+        """
+        # This assumes PyTorch models here.
+        # They consist of a file with the extension ".pt" and potentially an optimizer state with extension ".opt.pt"
+
+        count_bytes = 0
+        assert os.path.exists(filename + ".pt")
+        count_bytes += os.stat(filename + ".pt").st_size
+        os.remove(filename + ".pt")
+        if os.path.exists(filename + "opt.pt"):
+            count_bytes += os.stat(filename + "opt.pt").st_size
+            os.remove(filename + "opt.pt")
+        assert count_bytes > 0
+        return count_bytes
 
 
 def _to_raw(n: Union[int, float, Tensor]):
