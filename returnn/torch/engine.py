@@ -684,7 +684,7 @@ class Engine(EngineBase):
 
         count_bytes = 0
         assert os.path.exists(filename + ".pt")
-        for fn in glob(filename + "*"):
+        for fn in glob(filename + "*.pt"):
             fn_ext = os.path.splitext(fn)[1]
             if fn_ext not in [".pt"]:
                 continue
