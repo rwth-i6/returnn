@@ -679,17 +679,15 @@ class Engine(EngineBase):
         :rtype: int
         """
         # This assumes PyTorch models here.
-        # They consist of a file with the extension ".pt".
-        from glob import glob
+        # They consist of a file with the extension ".pt" and potentially an optimizer state with extension ".opt.pt"
 
         count_bytes = 0
         assert os.path.exists(filename + ".pt")
-        for fn in glob(filename + "*.pt"):
-            fn_ext = os.path.splitext(fn)[1]
-            if fn_ext not in [".pt"]:
-                continue
-            count_bytes += os.stat(fn).st_size
-            os.remove(fn)
+        count_bytes += os.stat(filename + ".pt").st_size
+        os.remove(filename + ".pt")
+        if os.path.exists(filename + "opt.pt"):
+            count_bytes += os.stat(filename + "opt.pt").st_size
+            os.remove(filename + "opt.pt")
         assert count_bytes > 0
         return count_bytes
 
