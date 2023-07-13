@@ -388,6 +388,10 @@ def main():
                 os.remove(dest_filename)
             if args.no_conversion:
                 assert source_filename.endswith(".ogg")
+                assert not start_time and not limit_duration, (
+                    f"With no_conversion=True, start_time {start_time} or duration {duration} is not supported. "
+                    "Use no_conversion=False, even if the input is already in OGG."
+                )
                 print(
                     "skip ffmpeg, copy instead (%s -> %s)"
                     % (os.path.basename(source_filename), dest_filename[len(dest_dirname) + 1 :])
