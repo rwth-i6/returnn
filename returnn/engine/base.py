@@ -281,7 +281,7 @@ class EngineBase:
 
         opts = CollectionReadCheckCovered(self.config.get_of_type("cleanup_old_models", dict, {}))
         existing_models = self.get_existing_models(config=self.config)
-        if hasattr(self, "learning_rate_control"):
+        if self.learning_rate_control is not None:
             lr_control = self.learning_rate_control
         else:
             lr_control = load_learning_rate_control_from_config(self.config)
