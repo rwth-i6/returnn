@@ -533,6 +533,8 @@ class Engine(EngineBase):
             raise TypeError(f"get_model returned {model} of type {type(model)}, expected rf.Module or torch.nn.Module")
         assert isinstance(self._pt_model, torch.nn.Module)
         print("Model:", self._pt_model, file=log.v4)
+        params = sum([parameter.data.size().numel() for parameter in self._pt_model.parameters()])
+        print(f"Total number of parameters: {params}", file=log.v4)
 
         if checkpoint_state is not None:
             self._pt_model.load_state_dict(checkpoint_state["model"])
