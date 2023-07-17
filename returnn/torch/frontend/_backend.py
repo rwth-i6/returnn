@@ -1520,7 +1520,7 @@ class TorchBackend(Backend[torch.Tensor]):
         if window_enforce_even:
             frame_length -= frame_length % 2
 
-        window_pt = torch.hann_window(frame_length)
+        window_pt = torch.hann_window(frame_length, device=x_raw.device)
         if frame_length < fft_length:
             if align_window_left:  # this is how TF/SciPy do it
                 window_pt = torch.nn.functional.pad(window_pt, (0, (fft_length - frame_length)))
