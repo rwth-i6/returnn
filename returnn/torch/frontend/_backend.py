@@ -759,6 +759,8 @@ class TorchBackend(Backend[torch.Tensor]):
             else:
                 out_raw = out_raw.reshape([d.get_dim_value() for d in out.dims])
             out.raw_tensor = out_raw
+        elif axis_int == 0 and indices.batch_ndim == 0:
+            out.raw_tensor = source.raw_tensor[indices.raw_tensor]
         elif axis_int == 0 and source.batch_ndim == 2:
             # This is exactly what torch.embedding is intended for. Let's use that.
             out.raw_tensor = torch.embedding(source.raw_tensor, indices.raw_tensor)
