@@ -116,7 +116,7 @@ class TFBackend(Backend[tf.Tensor]):
         :param b:
         :return: a `kind` b
         """
-        assert a.shape.ndims == b.shape.ndims
+        assert a.shape.ndims == b.shape.ndims or a.shape.ndims == 0 or b.shape.ndims == 0
         op = getattr(tf, kind)  # e.g. tf.equal
         return op(a, b)
 
@@ -129,7 +129,7 @@ class TFBackend(Backend[tf.Tensor]):
         :param b:
         :return: a `kind` b
         """
-        assert a.shape.ndims == b.shape.ndims
+        assert a.shape.ndims == b.shape.ndims or a.shape.ndims == 0 or b.shape.ndims == 0
         kind = {
             "sub": "subtract",
             "mul": "multiply",

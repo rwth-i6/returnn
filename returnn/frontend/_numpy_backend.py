@@ -90,7 +90,7 @@ class NumpyBackend(Backend[numpy.ndarray]):
         :param b:
         :return: a `kind` b
         """
-        assert a.ndim == b.ndim
+        assert a.ndim == b.ndim or a.ndim == 0 or b.ndim == 0
         op = getattr(numpy, kind)  # e.g. numpy.equal
         return op(a, b)
 
@@ -103,7 +103,7 @@ class NumpyBackend(Backend[numpy.ndarray]):
         :param b:
         :return: a `kind` b
         """
-        assert a.ndim == b.ndim
+        assert a.ndim == b.ndim or a.ndim == 0 or b.ndim == 0
         op = getattr(numpy, kind)  # e.g. numpy.add
         return op(a, b)
 

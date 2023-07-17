@@ -580,7 +580,7 @@ class TorchBackend(Backend[torch.Tensor]):
         :param b:
         :return: a `kind` b
         """
-        assert a.dim() == b.dim()
+        assert a.dim() == b.dim() or a.dim() == 0 or b.dim() == 0
         if kind == "equal":
             kind = "eq"  # eq is different to equal; eq returns a torch Tensor
         op = getattr(torch, kind)  # e.g. torch.equal
@@ -595,7 +595,7 @@ class TorchBackend(Backend[torch.Tensor]):
         :param b:
         :return: a `kind` b
         """
-        assert a.dim() == b.dim()
+        assert a.dim() == b.dim() or a.dim() == 0 or b.dim() == 0
         if kind == "squared_difference":
             return (a - b) ** 2
         kind = {
