@@ -60,6 +60,7 @@ def bin_op_out_template(
     res_dtype: Optional[str],
     allow_broadcast_all_sources: Optional[bool] = None,
     dim_order: Optional[Sequence[Dim]] = None,
+    allow_scalar: bool = True,
 ) -> Tuple[Tensor[T], Tensor[T], Tensor[T]]:
     """
     make template for output tensor of binary op
@@ -73,6 +74,8 @@ def bin_op_out_template(
         Not needed when out_dims is specified explicitly.
     :param dim_order: defines the order of the resulting dims. if None, it is automatically inferred from a and b.
         Not all the dims of a and b need to be specified here, and there could also be other dims in the dim_order.
+    :param allow_scalar: if True, it is allowed that a or b is a scalar, and then no broadcast dims are added.
+        This can be relevant to allow things like x * 2, where x in on GPU, and then PyTorch allows 2 to stay on CPU.
     :return: out, a, b
     """
     src_dtype = None
@@ -122,8 +125,10 @@ def bin_op_out_template(
         res_dtype = src_dtype
     out = Tensor(name, dims=all_dims, dtype=res_dtype)
     out.feature_dim = res_feature_dim(a, b)
-    a = a.copy_compatible_to(out, check_dtype=False, check_sparse=False)
-    b = b.copy_compatible_to(out, check_dtype=False, check_sparse=False)
+    if not allow_scalar or a.dims:
+        a = a.copy_compatible_to(out, check_dtype=False, check_sparse=False)
+    if not allow_scalar or b.dims:
+        b = b.copy_compatible_to(out, check_dtype=False, check_sparse=False)
     return out, a, b
 
 
