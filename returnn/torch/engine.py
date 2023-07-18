@@ -744,8 +744,9 @@ def _raw_dict_to_extern_data(
                 f"extern_data {data}, dyn spatial dim, missing {k}:seq_len in raw dict, "
                 f"check dataset or collate_batch"
             )
+            size = extern_data_raw[k + ":seq_len"]
             # Sequence lengths have to be on CPU for the later call to rnn.pack_padded_sequence
-            size = extern_data_raw[k + ":seq_len"].cpu()
+            assert size.device.type == "cpu"
             size_dtype = str(size.dtype).split(".")[-1]
             if data.dims[1].dyn_size_ext is None:
                 data.dims[1].dyn_size_ext = Tensor(data.dims[1].name or "time", dims=[batch_dim], dtype=size_dtype)
