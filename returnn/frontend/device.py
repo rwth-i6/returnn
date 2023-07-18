@@ -15,7 +15,7 @@ __all__ = ["copy_to_device", "get_default_device", "set_default_device_ctx"]
 _default_device: Optional[str] = None
 
 
-def copy_to_device(x: Tensor, device: Optional[str]) -> Tensor:
+def copy_to_device(x: Tensor, device: Optional[str] = None) -> Tensor:
     """
     Copy tensor to device.
 
@@ -23,6 +23,8 @@ def copy_to_device(x: Tensor, device: Optional[str]) -> Tensor:
     :param device:
     :return: tensor on device
     """
+    if not device:
+        device = get_default_device()
     if not device:
         return x
     if x.raw_tensor is None:
