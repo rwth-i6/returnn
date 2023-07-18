@@ -370,6 +370,7 @@ class TFBackend(Backend[tf.Tensor]):
         dims: Sequence[Dim],
         dtype: str,
         sparse_dim: Optional[Dim] = None,
+        device: Optional[str] = None,
         name: Optional[str] = None,
     ) -> _TT:
         """
@@ -377,6 +378,7 @@ class TFBackend(Backend[tf.Tensor]):
         :param dims:
         :param dtype:
         :param sparse_dim:
+        :param device:
         :param name:
         :return: tensor
         """

@@ -431,6 +431,7 @@ class ReturnnLayersBackend(Backend[Layer]):
         dims: Sequence[Dim],
         dtype: str,
         sparse_dim: Optional[Dim] = None,
+        device: Optional[str] = None,
         name: Optional[str] = None,
     ) -> Tensor[Layer]:
         """convert to tensor"""

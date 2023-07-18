@@ -653,6 +653,7 @@ class Backend(Generic[T]):
         dims: Sequence[Dim],
         dtype: str,
         sparse_dim: Optional[Dim] = None,
+        device: Optional[str] = None,
         name: Optional[str] = None,
     ) -> Tensor[T]:
         """
@@ -660,6 +661,7 @@ class Backend(Generic[T]):
         :param dims:
         :param dtype:
         :param sparse_dim:
+        :param device:
         :param name:
         :return: tensor
         """

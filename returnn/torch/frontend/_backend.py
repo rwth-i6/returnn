@@ -525,7 +525,11 @@ class TorchBackend(Backend[torch.Tensor]):
         :return: parameter
         """
         assert all(d.is_static() for d in tensor.dims)
-        data = torch.zeros([d.dimension for d in tensor.dims], dtype=TorchBackend.as_dtype_raw(tensor.dtype))
+        data = torch.zeros(
+            [d.dimension for d in tensor.dims],
+            dtype=TorchBackend.as_dtype_raw(tensor.dtype),
+            device=rf.get_default_device(),
+        )
         if tensor.dtype.startswith("int"):
             requires_grad = False
         else:
@@ -645,6 +649,7 @@ class TorchBackend(Backend[torch.Tensor]):
         dims: Sequence[Dim],
         dtype: str,
         sparse_dim: Optional[Dim] = None,
+        device: Optional[str] = None,
         name: Optional[str] = None,
     ) -> Tensor[torch.Tensor]:
         """
@@ -652,6 +657,7 @@ class TorchBackend(Backend[torch.Tensor]):
         :param dims:
         :param dtype:
         :param sparse_dim:
+        :param device:
         :param name:
         :return: tensor
         """
@@ -661,7 +667,12 @@ class TorchBackend(Backend[torch.Tensor]):
             name = name or "raw_tensor"
         else:
             name = name or "const"
-            value = torch.tensor(value, dtype=TorchBackend.as_dtype_raw(dtype))
+            value = torch.tensor(
+                value,
+                dtype=TorchBackend.as_dtype_raw(dtype),
+                # Keep scalars on CPU.
+                device=(device or rf.get_default_device()) if dims else "cpu",
+            )
         assert isinstance(value, torch.Tensor)
         return Tensor(name, dims=dims, dtype=dtype, sparse_dim=sparse_dim, raw_tensor=value)
 
@@ -682,7 +693,9 @@ class TorchBackend(Backend[torch.Tensor]):
             # onnx::ConstantOfShape (via torch.full) must get shape as int64.
             # https://github.com/rwth-i6/returnn/issues/1333#issuecomment-1607236783
             shape = [dim.long() if isinstance(dim, torch.Tensor) else dim for dim in shape]
-        raw_tensor = torch.full(shape, fill_value, dtype=TorchBackend.as_dtype_raw(dtype))
+        raw_tensor = torch.full(
+            shape, fill_value, dtype=TorchBackend.as_dtype_raw(dtype), device=rf.get_default_device()
+        )
         return Tensor(
             "full", dims=dims, sparse_dim=sparse_dim, feature_dim=feature_dim, dtype=dtype, raw_tensor=raw_tensor
         )
@@ -934,7 +947,9 @@ class TorchBackend(Backend[torch.Tensor]):
             sparse_dim=dim,
             dtype=dtype,
         )
-        out.raw_tensor = torch.arange(dim.get_dim_value(), dtype=TorchBackend.as_dtype_raw(out.dtype))
+        out.raw_tensor = torch.arange(
+            dim.get_dim_value(), dtype=TorchBackend.as_dtype_raw(out.dtype), device=rf.get_default_device()
+        )
         return out
 
     @staticmethod
@@ -1084,7 +1099,7 @@ class TorchBackend(Backend[torch.Tensor]):
             out = Tensor(
                 name=f"random_{distribution}", dims=dims, dtype=dtype, sparse_dim=sparse_dim, feature_dim=feature_dim
             )
-            out.raw_tensor = torch.empty(shape, dtype=dtype_)
+            out.raw_tensor = torch.empty(shape, dtype=dtype_, device=rf.get_default_device())
         assert explicit_state is None  # not implemented otherwise
         generator = None  # using the global default from PT
         assert isinstance(static, bool)
