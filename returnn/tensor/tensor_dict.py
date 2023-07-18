@@ -68,6 +68,7 @@ class TensorDict:
             dim.batch = None
             if dim.dyn_size_ext:
                 dim.dyn_size_ext.reset()
+            dim.reset_eager()
 
     def copy_template(self) -> TensorDict:
         """copy template"""
