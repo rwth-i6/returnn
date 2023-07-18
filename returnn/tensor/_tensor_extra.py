@@ -2781,7 +2781,7 @@ class _TensorMixin(_TensorMixinBase):
         assert 0 <= axis < self.batch_ndim
         assert axis != self.batch_dim_axis
         tag: Dim = self.dim_tags[axis]
-        return tag.get_mask(dim_order=self.dims)
+        return tag.get_mask(dim_order=self.dims, device=self.device)
 
     def get_sequence_lengths_broadcast(self, axis=None):
         """

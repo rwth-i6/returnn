@@ -114,6 +114,8 @@ class _DimExtra:
         # We can have different tag variants per batch info (e.g. with beam), or per control flow ctx.
         # They each have same_as = self. The same_base should have the base (global) batch info.
         self.same_for_batch_ctx = {}  # type: Dict[Tuple[BatchInfo,Optional[ControlFlowContext]],_d.Dim]
+        self.cache_dyn_size_ext_dev = {}  # type: Dict[str,_t.Tensor]  # device -> dyn_size_ext
+        self.cache_seq_mask = {}  # type: Dict[str,_t.Tensor]  # device -> seq_mask
 
     def __getstate__(self):
         d = vars(self).copy()
@@ -349,6 +351,9 @@ class _DimMixin:
         """
         if self.dyn_size_ext:
             self.dyn_size_ext.raw_tensor = None
+        if self._extra:
+            self._extra.cache_dyn_size_ext_dev.clear()
+            self._extra.cache_seq_mask.clear()
 
     def _can_use_in_ctx(self, ctx):
         """
@@ -701,10 +706,23 @@ class _DimMixin:
             )
         self.dyn_size_ext.placeholder = dyn_size
 
-    def get_mask(self: Dim, *, dim_order: Optional[Sequence[Dim]] = None) -> _t.Tensor:
+    def _get_dyn_size_ext_for_device(self: Dim, device: Optional[str]) -> _t.Tensor:
+        if not device:
+            return self.dyn_size_ext
+
+        import returnn.frontend as rf
+
+        self._make_extra()
+        if device in self._extra.cache_dyn_size_ext_dev:
+            return self._extra.cache_dyn_size_ext_dev[device]
+        self._extra.cache_dyn_size_ext_dev[device] = rf.copy_to_device(self.dyn_size_ext, device=device)
+        return self._extra.cache_dyn_size_ext_dev[device]
+
+    def get_mask(self: Dim, *, dim_order: Optional[Sequence[Dim]] = None, device: Optional[str] = None) -> _t.Tensor:
         """
         :param dim_order: if given, the dims of the mask will be in this order.
             This can be useful if the mask is broadcasted against some other tensor.
+        :param str|None device: if given, will move the mask to this device
         :return: if need_masking(), the corresponding mask.
             If this is e.g. the time-dim T of shape [B], then the mask will be of shape [B,T].
             The mask could be used with :func:`masked_select` (``boolean_mask``) or ``where``.
@@ -715,9 +733,17 @@ class _DimMixin:
         # noinspection PyProtectedMember
         backend = self.dyn_size_ext._raw_backend
 
+        if not device:
+            device = rf.get_default_device()
+
+        if self._extra and device in self._extra.cache_seq_mask:
+            return self._extra.cache_seq_mask[device]
+
+        size_ext = self._get_dyn_size_ext_for_device(device)
+
         max_idx = rf.reduce(
-            self.dyn_size_ext,
-            axis=self.dyn_size_ext.dims,
+            size_ext,
+            axis=size_ext.dims,
             mode="max",
             # Masking here is not always possible, e.g. if we have
             # tag = Dim{'self-att-keys'['time:var:extern_data:classes'[B]]}
@@ -731,9 +757,11 @@ class _DimMixin:
         # and this likely produces nan in backprop or elsewhere.
         # Thus, mask size_ext itself, and set the padded values to 1.
         # This assumes that max_idx >= 1.
-        size_ext = self.dyn_size_ext.copy_masked(max_idx)
-        idx_range = backend.range_over_dim(self)
+        size_ext = size_ext.copy_masked(max_idx)
+        with rf.set_default_device_ctx(device):
+            idx_range = backend.range_over_dim(self)
         seq_mask = rf.compare(idx_range, "<", size_ext, allow_broadcast_all_sources=True, dim_order=dim_order)
+        self._make_extra().cache_seq_mask[device] = seq_mask
         return seq_mask
 
     def is_batch_dim(self):
@@ -1053,7 +1081,8 @@ class _DimMixin:
                 assert x.dimension is not None
                 if y is None:
                     if not template_only and backend and not tf:
-                        y = backend.convert_to_tensor(x.dimension, dims=[], dtype=size_dtype, name=y_name)
+                        with rf.set_default_device_ctx(None):
+                            y = backend.convert_to_tensor(x.dimension, dims=[], dtype=size_dtype, name=y_name)
                     else:
                         y = _t.Tensor(
                             name=y_name,
