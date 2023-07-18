@@ -86,9 +86,9 @@ def bin_op_out_template(
     elif isinstance(b, Tensor):
         src_dtype = b.dtype
         src_device = b.device
-    a = rf.convert_to_tensor(a, dtype=src_dtype, device=src_device, _backend=backend)
+    a = rf.convert_to_tensor(a, dtype=src_dtype, device=src_device, keep_scalar_on_cpu=allow_scalar, _backend=backend)
     src_dtype = src_dtype or a.dtype
-    b = rf.convert_to_tensor(b, dtype=src_dtype, device=src_device, _backend=backend)
+    b = rf.convert_to_tensor(b, dtype=src_dtype, device=src_device, keep_scalar_on_cpu=allow_scalar, _backend=backend)
     # sanity checks
     # noinspection PyProtectedMember
     assert a._raw_backend == b._raw_backend, "Cannot combine tensors from two different frontends, e.g. TF and PT"

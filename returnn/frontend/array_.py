@@ -47,6 +47,7 @@ def convert_to_tensor(
     sparse_dim: Optional[Dim] = None,
     shape: Sequence[Dim] = None,
     device: Optional[str] = None,
+    keep_scalar_on_cpu: bool = False,
     name: Optional[str] = None,
     _backend: Optional[Type[Backend]] = None,
 ) -> Tensor[T]:
@@ -58,6 +59,7 @@ def convert_to_tensor(
     :param shape: alias for dims, for some older code
     :param name:
     :param device:
+    :param keep_scalar_on_cpu: if the value is already on the CPU, keep it there, even if `device` is sth else
     :param _backend:
     :return: tensor
     """
@@ -83,6 +85,8 @@ def convert_to_tensor(
                 dtype = value.dtype.name
             else:
                 raise ValueError(f"number {value} type {type(value)} needs explicit `dtype` specification")
+        if keep_scalar_on_cpu:
+            device = "cpu"
     elif isinstance(value, numpy.ndarray):
         if _backend is None:
             # Small exception: Do not use the NumpyBackend but the global backend in this case.

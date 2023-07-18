@@ -670,8 +670,7 @@ class TorchBackend(Backend[torch.Tensor]):
             value = torch.tensor(
                 value,
                 dtype=TorchBackend.as_dtype_raw(dtype),
-                # Keep scalars on CPU.
-                device=(device or rf.get_default_device()) if dims else "cpu",
+                device=device or rf.get_default_device(),
             )
         assert isinstance(value, torch.Tensor)
         return Tensor(name, dims=dims, dtype=dtype, sparse_dim=sparse_dim, raw_tensor=value)
