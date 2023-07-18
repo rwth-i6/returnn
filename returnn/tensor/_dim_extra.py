@@ -341,6 +341,15 @@ class _DimMixin:
             tag.same_as = self  # not declare_same_as, none of the extra checks needed
         return tag
 
+    def reset_eager(self: Dim):
+        """
+        In an eager-based framework, dyn_size_ext.raw_tensor etc will be different in each step.
+        This resets everything related.
+        This can also include caches.
+        """
+        if self.dyn_size_ext:
+            self.dyn_size_ext.raw_tensor = None
+
     def _can_use_in_ctx(self, ctx):
         """
         :param ControlFlowContext|None ctx:

@@ -3,7 +3,7 @@ Main engine for PyTorch
 """
 
 from __future__ import annotations
-from typing import Optional, Union, Callable, Dict
+from typing import Optional, Union, Callable, Dict, List
 from contextlib import nullcontext
 
 import gc
@@ -719,7 +719,10 @@ def _raw_dict_to_extern_data(
     """
     assert isinstance(extern_data_raw, dict) and extern_data_raw
     batch_dim = _get_batch_dim_from_extern_data(extern_data_template)
-    batch_dim.dyn_size_ext = None  # if it is dynamic, reset now, and set it below
+    for dim in _get_dyn_dims_from_extern_data(extern_data_template):
+        dim.reset_eager()  # they will be reset below
+    if batch_dim.size is None and batch_dim.dyn_size_ext is None:
+        batch_dim.dyn_size_ext = Tensor(batch_dim.name or "batch", dims=[], dtype="int32")
     extern_data = TensorDict()
     for k, data in extern_data_template.data.items():
         data = data.copy_template()
@@ -732,14 +735,17 @@ def _raw_dict_to_extern_data(
         else:
             raise TypeError(f"Unexpected type {type(raw_tensor)} for {k} in extern_data_raw.")
 
-        if batch_dim.size is None and batch_dim.dyn_size_ext is None:
-            batch_dim.dyn_size_ext = Tensor(batch_dim.name or "batch", dims=[], dtype="int32")
+        if batch_dim.dyn_size_ext and batch_dim.dyn_size_ext.raw_tensor is None:
             batch_dim.dyn_size_ext.raw_tensor = torch.tensor(extern_data_raw[k].shape[0], dtype=torch.int32)
 
         # This has certain assumptions on the dataset, the data pipeline and collate_batch.
         # Namely, we expect that we get the batch dim in the first dim (see collate_batch).
         # We also expect that the sequence lengths are in the second dim, if it is dynamic.
-        if len(data.dims) >= 2 and data.dims[1].dimension is None:
+        if (
+            len(data.dims) >= 2
+            and data.dims[1].size is None
+            and (not data.dims[1].dyn_size_ext or data.dims[1].dyn_size_ext.raw_tensor is None)
+        ):
             assert k + ":seq_len" in extern_data_raw, (
                 f"extern_data {data}, dyn spatial dim, missing {k}:seq_len in raw dict, "
                 f"check dataset or collate_batch"
@@ -763,6 +769,17 @@ def _get_batch_dim_from_extern_data(extern_data: TensorDict) -> Dim:
     # See collate_batch.
     batch_dim = next(iter(extern_data.data.values())).dims[0]
     return batch_dim
+
+
+def _get_dyn_dims_from_extern_data(extern_data: TensorDict) -> List[Dim]:
+    visited = set()
+    res = []
+    for k, v in extern_data.data.items():
+        for dim in v.dims:
+            if dim not in visited and dim.size is None:
+                visited.add(dim)
+                res.append(dim)
+    return res
 
 
 def _print_process(report_prefix, step, eval_info):
