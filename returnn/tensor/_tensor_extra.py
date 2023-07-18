@@ -2730,7 +2730,6 @@ class _TensorMixin(_TensorMixinBase):
           if BT or TB major, and axis is T or None.
           In general compatible to placeholder, i.e. same ndim, with broadcast dims.
           We assert here that the axis is dynamic (:func:`is_axis_dynamic`), i.e. we have the size.
-        :rtype: tf.Tensor
         """
         if isinstance(axis, Dim):
             axis = self.get_axis_from_description(axis)
