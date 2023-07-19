@@ -441,10 +441,10 @@ class _DimMixin:
         :param bool allow_none:
         """
         assert self.can_be_used_as_dim()
-        if self.batch == batch and self.control_flow_ctx == ctx and self.dyn_size_ext:
+        if self.batch == batch and self._can_use_in_ctx(ctx) and self.dyn_size_ext:
             self._validate_in_current_graph()
             self._maybe_update()
-            if self.batch == batch and self.control_flow_ctx == ctx and self.dyn_size_ext:  # check again
+            if self.batch == batch and self._can_use_in_ctx(ctx) and self.dyn_size_ext:  # check again
                 return self
         if self.is_batch_dim():
             # We ignore the ctx for the batch dim currently.
