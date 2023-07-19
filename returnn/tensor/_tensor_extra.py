@@ -2613,9 +2613,6 @@ class _TensorMixin(_TensorMixinBase):
             if sizes_tag:  # special rule for older code: overtake previous existing
                 assert sizes_tag.is_same_size_tensor(sizes)
                 self._dims = self._dims[:axis] + (sizes_tag,) + self._dims[axis + 1 :]
-                # Also assume the existing dim tag should be expected as equal.
-                # Likely there is anyway no reference so this does not matter.
-                tag.declare_same_as(sizes_tag)
             else:
                 # Assign now. This should also set the dim tag on sizes.
                 new_tag = tag.set_tag_on_size_tensor(sizes, batch=self.batch)
