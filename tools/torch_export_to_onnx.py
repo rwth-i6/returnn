@@ -172,7 +172,7 @@ def main():
     get_model_func = config.typed_value("get_model")
     assert get_model_func, "get_model() isn't specified in the config passed as a parameter."
     model = get_model_func()
-    loaded_checkpoint = torch.load(args.checkpoint)
+    loaded_checkpoint = torch.load(args.checkpoint, map_location=torch.device(args.device))
 
     is_rf_module = isinstance(model, rf.Module)
     is_pt_module = isinstance(model, torch.nn.Module)
