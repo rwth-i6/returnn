@@ -2010,6 +2010,11 @@ class LayerBase(object):
         data = output
         if isinstance(v, tf.Tensor):
             return v
+        if isinstance(v, LayerBase):
+            v = v.output.copy_compatible_to(output)
+            if output.beam:
+                v = v.copy_extend_with_beam(output.beam)
+            return v.placeholder
         if v is None and data.sparse:
             raise Exception(
                 ("You must explicitly provide an initial output value for sparse data %r." % data)
@@ -2028,11 +2033,6 @@ class LayerBase(object):
                 from returnn.tf.util.basic import constant_with_shape
 
                 return tf.cast(constant_with_shape(v, shape=shape), dtype=data.dtype)
-        if isinstance(v, LayerBase):
-            v = v.output.copy_compatible_to(output)
-            if output.beam:
-                v = v.copy_extend_with_beam(output.beam)
-            return v.placeholder
         assert isinstance(v, str)
         if v == "zeros":
             return tf.zeros(shape, dtype=data.dtype, name="init_%s_zeros" % name)
