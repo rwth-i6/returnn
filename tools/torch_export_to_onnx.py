@@ -10,6 +10,7 @@ import torch
 from typing import Callable, Optional, Dict
 import argparse
 import os
+from random import random
 
 import _setup_returnn_env  # noqa
 from returnn.config import Config
@@ -156,6 +157,8 @@ def main():
     parser.add_argument("out_onnx_filename", type=str, help="Filename of the final ONNX model.")
     parser.add_argument("--verbosity", default=4, type=int, help="5 for all seqs (default: 4)")
     parser.add_argument("--device", type=str, default="cpu", help="'cpu' (default) or 'gpu'.")
+    parser.add_argument("--epoch", type=int, default=1, help="for get_model, default 1")
+    parser.add_argument("--step", type=int, default=0, help="for get_model, default 0")
     args = parser.parse_args()
 
     init(config_filename=args.config, checkpoint=args.checkpoint, log_verbosity=args.verbosity, device=args.device)
@@ -171,7 +174,8 @@ def main():
 
     get_model_func = config.typed_value("get_model")
     assert get_model_func, "get_model() isn't specified in the config passed as a parameter."
-    model = get_model_func()
+    sentinel_kw = {"__fwd_compatible_random_arg_%i" % int(random() * 100): None}
+    model = get_model_func(epoch=args.epoch, step=args.step, **sentinel_kw)
     loaded_checkpoint = torch.load(args.checkpoint)
 
     is_rf_module = isinstance(model, rf.Module)
