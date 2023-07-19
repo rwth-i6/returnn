@@ -176,7 +176,7 @@ def main():
     assert get_model_func, "get_model() isn't specified in the config passed as a parameter."
     sentinel_kw = {"__fwd_compatible_random_arg_%i" % int(random() * 100): None}
     model = get_model_func(epoch=args.epoch, step=args.step, **sentinel_kw)
-    loaded_checkpoint = torch.load(args.checkpoint)
+    loaded_checkpoint = torch.load(args.checkpoint, map_location=torch.device(args.device))
 
     is_rf_module = isinstance(model, rf.Module)
     is_pt_module = isinstance(model, torch.nn.Module)
