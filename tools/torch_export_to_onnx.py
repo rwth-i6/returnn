@@ -1,8 +1,33 @@
 """
-Converts a module from a config to ONNX. For that, it uses get_model() which must be available in the config
+Converts a RF/PT module to ONNX.
+
+For that, it uses `get_model(*, epoch, step, **_other_kwargs)` which must be available in the config
 and creates dummy data to be forwarded to the model.
 
-Since get_model() can return either a torch.nn.Module or a rf.Module, both cases must be taken into account.
+Since `get_model(...)` can return either a torch.nn.Module or a rf.Module, both cases are handled.
+
+`extern_data` defines the inputs.
+  - It strips away all entries with available_for_inference=False.
+  - Dynamic dimensions with dyn_size_ext being a scalar are excluded.
+  - If dynamic dims occur multiple times, only the first occurence is kept.
+    Note that the order depends on the order of the dict, as it is defined (not sorted alphabetically).
+
+`model_outputs` defines the output dimensions.
+  - Dynamic dimensions with dyn_size_ext being a scalar are excluded.
+
+For RASR, we usually expect that the input and output are always of the format [B, T, D] (batch, time, dim).
+We distinguish three cases on RASR side:
+
+- Input without sequence length are provided, output also without sequence lengths:
+    Define the input time dimension in `extern_data` to have `dyn_size_ext` being a scalar,
+    and same for `model_outputs`.
+
+- Input with sequence length are provided, output without sequence lengths,
+  meaning that RASR expects that the outputs have the same sequence length as the inputs:
+    Define the output time dimension in `model_outputs` to have `dyn_size_ext` being a scalar.
+
+- Input with sequence length are provided, output with sequence lengths:
+    The input and output time dimensions are as usual, having `dyn_size_ext` of shape [B].
 """
 
 from __future__ import annotations
@@ -147,7 +172,7 @@ def main():
     """
     Main entry point
     """
-    parser = argparse.ArgumentParser(description="Converts a RF/PT module to ONNX.")
+    parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "config",
         type=str,
