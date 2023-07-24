@@ -75,46 +75,54 @@ class TensorDict:
         return TensorDict({k: v.copy_template() for k, v in self.data.items()})
 
     def as_raw_tensor_dict(
-        self, *, include_const_sizes: bool = False, expected_type: Union[Type, Sequence[Type]] = object
+        self,
+        *,
+        include_const_sizes: bool = False,
+        include_scalar_dyn_sizes: bool = True,
+        expected_value_type: Union[Type, Sequence[Type]] = object,
     ) -> Dict[str, Any]:
         """
         :return: dict of raw tensors, including any sequence lengths / dynamic sizes
         """
+        assert not (include_const_sizes and not include_scalar_dyn_sizes)
         out = {}
         for key, value in self.data.items():
             assert key not in out
             assert isinstance(
-                value.raw_tensor, expected_type
-            ), f"key {key} {value}: unexpected {type(value.raw_tensor)}, expected {expected_type}"
+                value.raw_tensor, expected_value_type
+            ), f"key {key} {value}: unexpected {type(value.raw_tensor)}, expected {expected_value_type}"
             out[key] = value.raw_tensor
             for i, dim in enumerate(value.dims):
                 key_ = f"{key}:size{i}"
                 assert key_ not in out
                 if dim.is_batch_dim() and (not dim.dyn_size_ext or dim.dyn_size_ext.raw_tensor is None):
-                    dim_value = dim.get_dim_value()
-                    assert isinstance(
-                        dim_value, expected_type
-                    ), f"key {key_} {dim}: unexpected {type(dim_value)}, expected {expected_type}"
-                    out[key_] = dim_value
-                elif dim.dyn_size_ext:
-                    assert isinstance(dim.dyn_size_ext.raw_tensor, expected_type), (
-                        f"key {key_} {dim} {dim.dyn_size_ext}:"
-                        f" unexpected {type(dim.dyn_size_ext.raw_tensor)}, expected {expected_type}"
-                    )
-                    out[key_] = dim.dyn_size_ext.raw_tensor
-                elif dim.size is not None:
-                    if include_const_sizes:
+                    if include_scalar_dyn_sizes:
+                        dim_value = dim.get_dim_value()
                         assert isinstance(
-                            dim.size, expected_type
-                        ), f"key {key_} {dim}: unexpected {type(dim.size)}, expected {expected_type}"
+                            dim_value, expected_value_type
+                        ), f"key {key_} {dim}: unexpected {type(dim_value)}, expected {expected_value_type}"
+                        out[key_] = dim_value
+                elif dim.dyn_size_ext:
+                    if include_scalar_dyn_sizes or dim.dyn_size_ext.dims:
+                        assert isinstance(dim.dyn_size_ext.raw_tensor, expected_value_type), (
+                            f"key {key_} {dim} {dim.dyn_size_ext}:"
+                            f" unexpected {type(dim.dyn_size_ext.raw_tensor)}, expected {expected_value_type}"
+                        )
+                        out[key_] = dim.dyn_size_ext.raw_tensor
+                elif dim.size is not None:
+                    if include_scalar_dyn_sizes and include_const_sizes:
+                        assert isinstance(
+                            dim.size, expected_value_type
+                        ), f"key {key_} {dim}: unexpected {type(dim.size)}, expected {expected_value_type}"
                         out[key_] = dim.size
                 else:
                     raise Exception(f"cannot handle dim: {dim}")
         return out
 
-    def assign_from_raw_tensor_dict_(self, raw_tensor_dict: Dict[str, Any]):
+    def assign_from_raw_tensor_dict_(self, raw_tensor_dict: Dict[str, Any], *, with_scalar_dyn_sizes: bool = True):
         """
         :param raw_tensor_dict: dict of raw tensors, including any sequence lengths / dynamic sizes
+        :param with_scalar_dyn_sizes: `include_scalar_dyn_sizes` was used in :func:`as_raw_tensor_dict`
         """
         for key, value in self.data.items():
             assert key in raw_tensor_dict
@@ -124,7 +132,9 @@ class TensorDict:
                 if dim.is_batch_dim() and not dim.dyn_size_ext:
                     dim.dyn_size_ext = Tensor("batch", [], dtype="int32")
                 if dim.dyn_size_ext:
-                    assert key_ in raw_tensor_dict
+                    if not with_scalar_dyn_sizes and not dim.dyn_size_ext.dims:
+                        continue
+                    assert key_ in raw_tensor_dict, f"keys: f{raw_tensor_dict.keys()}"
                     dim.dyn_size_ext.raw_tensor = raw_tensor_dict[key_]
                 else:
                     if key_ in raw_tensor_dict:

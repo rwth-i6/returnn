@@ -168,7 +168,7 @@ def _test_torch_export_to_onnx(cfg_filename: str) -> str:
     return out_onnx_model
 
 
-def _test_torch_onnx_inference(out_onnx_model: str):
+def _test_torch_onnx_inference_no_seq_lens(out_onnx_model: str):
     """
     Tests the inference of the torch demo with an ONNX model passed as parameter.
     """
@@ -177,14 +177,12 @@ def _test_torch_onnx_inference(out_onnx_model: str):
     torch.manual_seed(42)
     # Set arbitrary values to pass to the model, respecting the input size (9).
     dummy_data = torch.randn([3, 50, 9])
-    dummy_batch_size = torch.tensor(3, dtype=torch.int32)
 
     session = ort.InferenceSession(out_onnx_model)
     outputs_onnx = session.run(
         None,
         {
             "data": dummy_data.numpy(),
-            "classes:size0": dummy_batch_size.numpy(),
         },
     )
     print("*** Result:", torch.FloatTensor(outputs_onnx[0]))
@@ -192,13 +190,7 @@ def _test_torch_onnx_inference(out_onnx_model: str):
     print("*** Sequence lengths:", torch.IntTensor(outputs_onnx[2]))
 
 
-@unittest.skipIf(not torch, "no PyTorch")
-def test_demo_torch_export_to_onnx():
-    out_onnx_model = _test_torch_export_to_onnx("demos/demo-torch.config")
-    _test_torch_onnx_inference(out_onnx_model)
-
-
-def _test_rf_onnx_inference(out_onnx_model: str):
+def _test_torch_onnx_inference_seq_lens_in_out(out_onnx_model: str):
     """
     Tests the inference of the torch demo with an ONNX model passed as parameter.
     """
@@ -208,32 +200,34 @@ def _test_rf_onnx_inference(out_onnx_model: str):
     torch.manual_seed(42)
     # Set arbitrary values to pass to the model, respecting the input size (9).
     dummy_data = torch.randn([3, 50, 9])
-    dummy_batch_size = torch.tensor(3, dtype=torch.int32)
-    dummy_seq_lens = torch.tensor([3, 50, 1], dtype=torch.int32)
+    dummy_seq_lens = torch.tensor([27, 50, 43], dtype=torch.int32)
 
     session = ort.InferenceSession(out_onnx_model)
     outputs_onnx = session.run(
         None,
         {
             "data": dummy_data.numpy(),
-            "classes:size0": dummy_batch_size.numpy(),
-            "classes:size1": dummy_seq_lens.numpy(),
+            "data:size1": dummy_seq_lens.numpy(),
         },
     )
     out_result = torch.FloatTensor(outputs_onnx[0])
-    out_batch_size = torch.IntTensor(outputs_onnx[1])
-    out_seq_lens = torch.IntTensor(outputs_onnx[2])
+    out_seq_lens = torch.IntTensor(outputs_onnx[1])
     print("*** Result:", out_result)
-    print("*** Batch size:", out_batch_size)
     print("*** Sequence lengths:", out_seq_lens)
 
     assert out_result.shape == torch.Size([3, 50, 2])
 
 
 @unittest.skipIf(not torch, "no PyTorch")
+def test_demo_torch_export_to_onnx():
+    out_onnx_model = _test_torch_export_to_onnx("demos/demo-torch.config")
+    _test_torch_onnx_inference_seq_lens_in_out(out_onnx_model)
+
+
+@unittest.skipIf(not torch, "no PyTorch")
 def test_demo_rf_export_to_onnx():
     out_onnx_model = _test_torch_export_to_onnx("demos/demo-rf.config")
-    _test_rf_onnx_inference(out_onnx_model)
+    _test_torch_onnx_inference_seq_lens_in_out(out_onnx_model)
 
 
 @unittest.skipIf(not torch, "no PyTorch")

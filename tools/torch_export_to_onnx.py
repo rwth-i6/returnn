@@ -83,10 +83,10 @@ class ForwardModulePT(torch.nn.Module):
         Wrapper to forward_step from the config.
         """
         extern_data = self.extern_data.copy_template()
-        extern_data.assign_from_raw_tensor_dict_(data)
+        extern_data.assign_from_raw_tensor_dict_(data, with_scalar_dyn_sizes=False)
         self.forward_step_func(model=self.model, extern_data=extern_data)
         _check_matching_outputs()
-        return rf.get_run_ctx().outputs.as_raw_tensor_dict()
+        return rf.get_run_ctx().outputs.as_raw_tensor_dict(include_scalar_dyn_sizes=False)
 
 
 class ForwardModuleRF(_RFModuleAsPTModule):
@@ -110,16 +110,16 @@ class ForwardModuleRF(_RFModuleAsPTModule):
         Wrapper to forward_step from the config.
         """
         extern_data = self.extern_data.copy_template()
-        extern_data.assign_from_raw_tensor_dict_(data)
+        extern_data.assign_from_raw_tensor_dict_(data, with_scalar_dyn_sizes=False)
         self.forward_step_func(model=self.rf_module, extern_data=extern_data)
         _check_matching_outputs()
-        return rf.get_run_ctx().outputs.as_raw_tensor_dict()
+        return rf.get_run_ctx().outputs.as_raw_tensor_dict(include_scalar_dyn_sizes=False)
 
 
 def _check_matching_outputs():
     rf.get_run_ctx().check_outputs_complete()
     model_outputs_raw_keys = set(_get_model_outputs_raw_keys())
-    outputs_raw = rf.get_run_ctx().outputs.as_raw_tensor_dict()
+    outputs_raw = rf.get_run_ctx().outputs.as_raw_tensor_dict(include_scalar_dyn_sizes=False)
     outputs_raw_keys = set(outputs_raw.keys())
     assert model_outputs_raw_keys == outputs_raw_keys, (
         f"Model outputs raw keys and output raw keys from forward_step don't match.\n"
@@ -138,7 +138,7 @@ def _get_model_outputs_raw_keys():
     for k, v in model_outputs.data.items():
         model_outputs_raw_keys.append(k)
         for i, dim in enumerate(v.dims):
-            if dim.is_batch_dim() or dim.is_dynamic():
+            if dim.dyn_size_ext and dim.dyn_size_ext.dims:
                 model_outputs_raw_keys.append(f"{k}:size{i}")
     return model_outputs_raw_keys
 
@@ -196,7 +196,7 @@ def main():
 
     tensor_dict_fill_random_numpy_(extern_data)
     tensor_dict_numpy_to_torch_(extern_data)
-    extern_data_raw = extern_data.as_raw_tensor_dict()
+    extern_data_raw = extern_data.as_raw_tensor_dict(include_scalar_dyn_sizes=False)
     model_outputs_raw_keys = _get_model_outputs_raw_keys()
 
     if is_pt_module:
@@ -214,12 +214,18 @@ def main():
     for k, v in list(extern_data.data.items()) + list(model_outputs.data.items()):
         dynamic_axes[k] = {i: dim.name for i, dim in enumerate(v.dims) if dim.is_dynamic() or dim.is_batch_dim()}
         for i, dim in enumerate(v.dims):
+            if dim.dyn_size_ext and dim.dyn_size_ext.dims == ():
+                continue
             if dim.dyn_size_ext:
                 dynamic_axes[f"{k}:size{i}"] = {
                     j: dim_.name
                     for j, dim_ in enumerate(dim.dyn_size_ext.dims)
                     if dim_.is_dynamic() or dim_.is_batch_dim()
                 }
+
+    print("*** Input names:", list(extern_data_raw.keys()))
+    print("*** Output names:", model_outputs_raw_keys)
+    print("*** Dynamic axes:", dynamic_axes)
 
     export_func(
         pt_model_fwd,
