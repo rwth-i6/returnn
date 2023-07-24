@@ -79,12 +79,14 @@ class TensorDict:
         *,
         include_const_sizes: bool = False,
         include_scalar_dyn_sizes: bool = True,
+        exclude_duplicate_dims: bool = False,
         expected_value_type: Union[Type, Sequence[Type]] = object,
     ) -> Dict[str, Any]:
         """
         :return: dict of raw tensors, including any sequence lengths / dynamic sizes
         """
         assert not (include_const_sizes and not include_scalar_dyn_sizes)
+        visited_dims = set()
         out = {}
         for key, value in self.data.items():
             assert key not in out
@@ -93,6 +95,8 @@ class TensorDict:
             ), f"key {key} {value}: unexpected {type(value.raw_tensor)}, expected {expected_value_type}"
             out[key] = value.raw_tensor
             for i, dim in enumerate(value.dims):
+                if exclude_duplicate_dims and dim in visited_dims:
+                    continue
                 key_ = f"{key}:size{i}"
                 assert key_ not in out
                 if dim.is_batch_dim() and (not dim.dyn_size_ext or dim.dyn_size_ext.raw_tensor is None):
@@ -117,28 +121,41 @@ class TensorDict:
                         out[key_] = dim.size
                 else:
                     raise Exception(f"cannot handle dim: {dim}")
+                visited_dims.add(dim)
         return out
 
-    def assign_from_raw_tensor_dict_(self, raw_tensor_dict: Dict[str, Any], *, with_scalar_dyn_sizes: bool = True):
+    def assign_from_raw_tensor_dict_(
+        self,
+        raw_tensor_dict: Dict[str, Any],
+        *,
+        with_scalar_dyn_sizes: bool = True,
+        duplicate_dims_are_excluded: bool = False,
+    ):
         """
         :param raw_tensor_dict: dict of raw tensors, including any sequence lengths / dynamic sizes
         :param with_scalar_dyn_sizes: `include_scalar_dyn_sizes` was used in :func:`as_raw_tensor_dict`
+        :param duplicate_dims_are_excluded: `exclude_duplicate_dims` was used in :func:`as_raw_tensor_dict`
         """
+        visited_dims = set()
         for key, value in self.data.items():
             assert key in raw_tensor_dict
             value.raw_tensor = raw_tensor_dict[key]
             for i, dim in enumerate(value.dims):
+                if duplicate_dims_are_excluded and dim in visited_dims:
+                    continue
                 key_ = f"{key}:size{i}"
                 if dim.is_batch_dim() and not dim.dyn_size_ext:
                     dim.dyn_size_ext = Tensor("batch", [], dtype="int32")
                 if dim.dyn_size_ext:
                     if not with_scalar_dyn_sizes and not dim.dyn_size_ext.dims:
-                        continue
-                    assert key_ in raw_tensor_dict, f"keys: f{raw_tensor_dict.keys()}"
-                    dim.dyn_size_ext.raw_tensor = raw_tensor_dict[key_]
+                        pass
+                    else:
+                        assert key_ in raw_tensor_dict, f"keys: f{raw_tensor_dict.keys()}"
+                        dim.dyn_size_ext.raw_tensor = raw_tensor_dict[key_]
                 else:
                     if key_ in raw_tensor_dict:
                         assert dim.size == raw_tensor_dict[key_]
+                visited_dims.add(dim)
 
 
 def _convert_to_tensor(opts: _TensorT, *, name: Optional[str] = None) -> Tensor:

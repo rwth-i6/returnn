@@ -83,7 +83,7 @@ class ForwardModulePT(torch.nn.Module):
         Wrapper to forward_step from the config.
         """
         extern_data = self.extern_data.copy_template()
-        extern_data.assign_from_raw_tensor_dict_(data, with_scalar_dyn_sizes=False)
+        extern_data.assign_from_raw_tensor_dict_(data, with_scalar_dyn_sizes=False, duplicate_dims_are_excluded=True)
         self.forward_step_func(model=self.model, extern_data=extern_data)
         _check_matching_outputs()
         return rf.get_run_ctx().outputs.as_raw_tensor_dict(include_scalar_dyn_sizes=False)
@@ -110,7 +110,7 @@ class ForwardModuleRF(_RFModuleAsPTModule):
         Wrapper to forward_step from the config.
         """
         extern_data = self.extern_data.copy_template()
-        extern_data.assign_from_raw_tensor_dict_(data, with_scalar_dyn_sizes=False)
+        extern_data.assign_from_raw_tensor_dict_(data, with_scalar_dyn_sizes=False, duplicate_dims_are_excluded=True)
         self.forward_step_func(model=self.rf_module, extern_data=extern_data)
         _check_matching_outputs()
         return rf.get_run_ctx().outputs.as_raw_tensor_dict(include_scalar_dyn_sizes=False)
@@ -193,10 +193,13 @@ def main():
     extern_data = TensorDict()
     extern_data.update(extern_data_dict, auto_convert=True)
     extern_data.reset_content()
+    for k, v in list(extern_data.data.items()):
+        if not v.available_for_inference:
+            del extern_data.data[k]
 
     tensor_dict_fill_random_numpy_(extern_data)
     tensor_dict_numpy_to_torch_(extern_data)
-    extern_data_raw = extern_data.as_raw_tensor_dict(include_scalar_dyn_sizes=False)
+    extern_data_raw = extern_data.as_raw_tensor_dict(include_scalar_dyn_sizes=False, exclude_duplicate_dims=True)
     model_outputs_raw_keys = _get_model_outputs_raw_keys()
 
     if is_pt_module:
