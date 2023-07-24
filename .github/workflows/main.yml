@@ -300,6 +300,7 @@ jobs:
         pip install --user scipy | cat  # for some tests
         pip install --user --upgrade torch==${{ matrix.torch-version }} | cat
         pip install --user torchdata | cat
+        pip install --user onnxruntime | cat
 
     - name: Test Python/Numpy/PyTorch versions.
       run: |

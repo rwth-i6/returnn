@@ -8,7 +8,6 @@ or forwarding loop.
 
 from __future__ import annotations
 from typing import Optional, Union, Any, Sequence, Dict
-import logging
 from dataclasses import dataclass
 from returnn.tensor import Tensor, Dim, TensorDict
 import returnn.frontend as rf
@@ -400,16 +399,10 @@ def _output_tensor_from_raw(raw_tensor, *, dims: Sequence[Dim], name: str) -> Te
     # however, otherwise, it is ambiguous, so we print a warning that we always use the highest dim size.
     for axis, dim in enumerate(tensor.dims):
         if dim.dyn_size_ext and dim.dyn_size_ext.raw_tensor is None:
-            dim_value_raw = _backend.global_backend.get_shape_tuple_raw(raw_tensor)[axis]
-            dim_value = rf.convert_to_tensor(dim_value_raw, dims=())
-            dim_value = rf.cast(dim_value, dtype=dim.dyn_size_ext.dtype)
+            # Only non-scalar dyn sizes matter.
             if dim.dyn_size_ext.dims:
-                dyn_size = rf.full(dims=dim.dyn_size_ext.dims, fill_value=dim_value)
-                logging.warning(
+                raise Exception(
                     f"Output {name!r} {tensor}: Cannot infer dynamic size for dim {dim}. "
-                    f"Using {dyn_size} as fallback."
+                    f"You must explicitly specify the dyn size by assigning `{dim}.dyn_size_ext.raw_tensor = ...`."
                 )
-            else:
-                dyn_size = dim_value
-            dim.dyn_size_ext.raw_tensor = dyn_size.raw_tensor
     return tensor
