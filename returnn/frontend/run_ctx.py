@@ -8,7 +8,6 @@ or forwarding loop.
 
 from __future__ import annotations
 from typing import Optional, Union, Any, Sequence, Dict
-import logging
 from dataclasses import dataclass
 from returnn.tensor import Tensor, Dim, TensorDict
 import returnn.frontend as rf
