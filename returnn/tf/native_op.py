@@ -267,7 +267,7 @@ class OpMaker(object):
       if(c->num_outputs() != %(num_outputs)i)
         return errors::InvalidArgument("wrong number of outputs. required %(num_outputs)i but got ", c->num_outputs());
       %(code_set_out_shape)s
-      return Status::OK();
+      return Status();
     })
     """ % {
             "num_inputs": len(in_info),
