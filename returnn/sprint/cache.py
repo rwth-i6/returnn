@@ -60,12 +60,14 @@ class FileArchive:
         """
         return int(unpack("I", self.f.read(4))[0])
 
+    # noinspection PyPep8Naming
     def read_U8(self):
         """
         :rtype: int
         """
         return int(unpack("B", self.f.read(1))[0])
 
+    # noinspection PyPep8Naming
     def read_packed_U32(self):
         """
         :rtype: int
@@ -110,6 +112,7 @@ class FileArchive:
         """
         return self.read_bytes(length).decode(encoding)
 
+    # noinspection PyPep8Naming
     def read_S16(self):
         """
         :rtype: float
@@ -154,6 +157,7 @@ class FileArchive:
     def write_str(self, s, enc="ascii"):
         """
         :param str s:
+        :param str encoding:
         :rtype: int
         """
         return self.f.write(pack("%ds" % len(s.encode(enc)), s.encode(enc)))
@@ -391,11 +395,11 @@ class FileArchive:
                     t = 0
                     alignment = []
                     while len(alignment) < size:
-                        nItems = self.read_packed_U32()
-                        if nItems & 1:
+                        num_items = self.read_packed_U32()
+                        if num_items & 1:
                             t = self.read_packed_U32()
-                        nItems /= 2
-                        while nItems > 0:
+                        num_items /= 2
+                        while num_items > 0:
                             emission = self.read_packed_U32()
                             mix, state = self.get_state(emission)
 
@@ -403,7 +407,9 @@ class FileArchive:
                                 weight = self.read_S16() / 65535  # not tested yet
                             elif version == 2:
                                 weight = self.read_f32()
-                            nItems -= 1
+                            else:
+                                raise NotImplementedError(f"Version {version} not implemented.")
+                            num_items -= 1
                             alignment.append((t, mix, state, weight))
                         t += 1
                     return alignment
@@ -576,6 +582,7 @@ class FileArchiveBundle:
     def add_bundle(self, filename, encoding="ascii"):
         """
         :param str filename: bundle
+        :param str encoding:
         """
         for line in open(filename).read().splitlines():
             self.add_archive(filename=line, encoding=encoding)
@@ -583,6 +590,7 @@ class FileArchiveBundle:
     def add_archive(self, filename, encoding="ascii"):
         """
         :param str filename: single archive
+        :param str encoding:
         """
         if filename in self.archives:
             return
@@ -595,6 +603,7 @@ class FileArchiveBundle:
     def add_bundle_or_archive(self, filename, encoding="ascii"):
         """
         :param str filename:
+        :param str encoding:
         """
         if filename.endswith(".bundle"):
             self.add_bundle(filename, encoding=encoding)
@@ -646,6 +655,7 @@ def open_file_archive(archive_filename, must_exists=True, encoding="ascii"):
     """
     :param str archive_filename:
     :param bool must_exists:
+    :param str encoding:
     :rtype: FileArchiveBundle|FileArchive
     """
     if archive_filename.endswith(".bundle"):
