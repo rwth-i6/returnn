@@ -157,7 +157,7 @@ class FileArchive:
     def write_str(self, s, enc="ascii"):
         """
         :param str s:
-        :param str encoding:
+        :param str enc:
         :rtype: int
         """
         return self.f.write(pack("%ds" % len(s.encode(enc)), s.encode(enc)))
