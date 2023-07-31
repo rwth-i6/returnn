@@ -60,6 +60,29 @@ class FileArchive:
         """
         return int(unpack("I", self.f.read(4))[0])
 
+    def read_U8(self):
+        """
+        :rtype: int
+        """
+        return int(unpack("B", self.f.read(1))[0])
+
+    def read_packed_U32(self):
+        """
+        :rtype: int
+        """
+        result = 0
+        s = 0
+        while True:
+            b = self.read_U8()
+            if (b & 0b10000000) == 0:
+                result |= b << s
+            else:
+                result |= (b & 0b01111111) << s
+            s += 7
+            if (b & 0b10000000) == 0:
+                break
+        return result
+
     def read_u64(self):
         """
         :rtype: int
@@ -86,6 +109,12 @@ class FileArchive:
         :rtype: str
         """
         return self.read_bytes(length).decode(encoding)
+
+    def read_S16(self):
+        """
+        :rtype: float
+        """
+        return float(unpack("H", self.f.read(2))[0])
 
     def read_f32(self):
         """
@@ -122,12 +151,12 @@ class FileArchive:
         return res
 
     # write routines
-    def write_str(self, s):
+    def write_str(self, s, enc="ascii"):
         """
         :param str s:
         :rtype: int
         """
-        return self.f.write(pack("%ds" % len(s), s))
+        return self.f.write(pack("%ds" % len(s.encode(enc)), s.encode(enc)))
 
     def write_char(self, i):
         """
@@ -176,7 +205,8 @@ class FileArchive:
     start_recovery_tag = 0xAA55AA55
     end_recovery_tag = 0x55AA55AA
 
-    def __init__(self, filename, must_exists=True):
+    def __init__(self, filename, must_exists=True, encoding="ascii"):
+        self.encoding = encoding
 
         self.ft = {}  # type: typing.Dict[str,FileInfo]
         if os.path.exists(filename):
@@ -229,7 +259,7 @@ class FileArchive:
             return
         for i in range(count):
             str_len = self.read_u32()
-            name = self.read_str(str_len)
+            name = self.read_str(str_len, self.encoding)
             pos = self.read_u64()
             size = self.read_u32()
             comp = self.read_u32()
@@ -244,8 +274,8 @@ class FileArchive:
         self.write_u32(len(self.ft))
 
         for fi in self.ft.values():
-            self.write_u32(len(fi.name))
-            self.write_str(fi.name)
+            self.write_u32(len(fi.name.encode(self.encoding)))
+            self.write_str(fi.name, self.encoding)
             self.write_u64(fi.pos)
             self.write_u32(fi.size)
             self.write_u32(fi.compressed)
@@ -266,7 +296,7 @@ class FileArchive:
                 continue
 
             fn_len = self.read_u32()
-            name = self.read_str(fn_len)
+            name = self.read_str(fn_len, self.encoding)
             pos = self.f.tell()
             size = self.read_u32()
             comp = self.read_u32()
@@ -295,7 +325,7 @@ class FileArchive:
         """
 
         if typ == "str":
-            return self.read_str(size)
+            return self.read_str(size, self.encoding)
 
         elif typ == "feat":
             type_len = self.read_U32()
@@ -335,7 +365,7 @@ class FileArchive:
                                     mix, state = self.get_state(mix)
                                 # print(mix, state)
                                 # print(time, self.allophones[mix])
-                                alignment.append((time, mix, state))
+                                alignment.append((time, mix, state, 1))
                                 time += 1
                                 n -= 1
                         elif n < 0:
@@ -345,7 +375,7 @@ class FileArchive:
                             while n < 0:
                                 # print(mix, state)
                                 # print(time, self.allophones[mix])
-                                alignment.append((time, mix, state))
+                                alignment.append((time, mix, state, 1))
                                 time += 1
                                 n += 1
                         else:
@@ -353,7 +383,30 @@ class FileArchive:
                             # print("time", time)
                     return alignment
                 else:
-                    raise NotImplementedError("No support for weighted " "alignments yet.")
+                    # weighted RLE scheme
+                    version = size
+                    version &= (1 << 31) - 1
+                    assert version <= 2
+                    size = self.read_packed_U32()
+                    t = 0
+                    alignment = []
+                    while len(alignment) < size:
+                        nItems = self.read_packed_U32()
+                        if nItems & 1:
+                            t = self.read_packed_U32()
+                        nItems /= 2
+                        while nItems > 0:
+                            emission = self.read_packed_U32()
+                            mix, state = self.get_state(emission)
+
+                            if version == 1:
+                                weight = self.read_S16() / 65535  # not tested yet
+                            elif version == 2:
+                                weight = self.read_f32()
+                            nItems -= 1
+                            alignment.append((t, mix, state, weight))
+                        t += 1
+                    return alignment
             else:
                 raise Exception("No valid alignment header found (found: %r). Wrong cache?" % alignment_header)
 
@@ -444,10 +497,17 @@ class FileArchive:
         :param times:
         """
         self.write_U32(self.start_recovery_tag)
-        self.write_u32(len(filename))
-        self.write_str(filename)
+        self.write_u32(len(filename.encode(self.encoding)))
+        self.write_str(filename, self.encoding)
         pos = self.f.tell()
-        size = 4 + 10 + 4 + len(features) * (4 + len(features[0]) * 4 + 2 * 8)
+        if len(features) > 0:
+            dim = len(features[0])
+            size = 4 + 10 + 4 + len(features) * (4 + dim * 4 + 2 * 8)
+            duration = times[-1][1]
+        else:
+            dim = 0
+            size = 4 + 10 + 4
+            duration = 1
         self.write_u32(size)
         self.write_u32(0)
         self.write_u32(0)
@@ -466,7 +526,7 @@ class FileArchive:
         self.ft[filename] = FileInfo(filename, pos, size, 0, len(self.ft))
         self.write_U32(self.end_recovery_tag)
 
-        self.add_attributes(filename, len(features[0]), times[-1][1])
+        self.add_attributes(filename, dim, duration)
 
     def add_attributes(self, filename, dim, duration):
         """
@@ -483,8 +543,8 @@ class FileArchive:
         ) % (dim, duration)
         self.write_U32(self.start_recovery_tag)
         filename = "%s.attribs" % filename
-        self.write_u32(len(filename))
-        self.write_str(filename)
+        self.write_u32(len(filename.encode(self.encoding)))
+        self.write_str(filename, self.encoding)
         pos = self.f.tell()
         size = len(data)
         self.write_u32(size)
@@ -500,9 +560,10 @@ class FileArchiveBundle:
     File archive bundle.
     """
 
-    def __init__(self, filename=None):
+    def __init__(self, filename=None, encoding="ascii"):
         """
         :param str|None filename: .bundle file
+        :param str encoding: encoding used in the files
         """
         # filename -> FileArchive
         self.archives = {}  # type: typing.Dict[str,FileArchive]
@@ -510,35 +571,35 @@ class FileArchiveBundle:
         self.files = {}  # type: typing.Dict[str,FileArchive]
         self._short_seg_names = {}
         if filename is not None:
-            self.add_bundle(filename=filename)
+            self.add_bundle(filename=filename, encoding=encoding)
 
-    def add_bundle(self, filename):
+    def add_bundle(self, filename, encoding="ascii"):
         """
         :param str filename: bundle
         """
         for line in open(filename).read().splitlines():
-            self.add_archive(filename=line)
+            self.add_archive(filename=line, encoding=encoding)
 
-    def add_archive(self, filename):
+    def add_archive(self, filename, encoding="ascii"):
         """
         :param str filename: single archive
         """
         if filename in self.archives:
             return
-        self.archives[filename] = a = FileArchive(filename, must_exists=True)
+        self.archives[filename] = a = FileArchive(filename, must_exists=True, encoding=encoding)
         for f in a.ft.keys():
             self.files[f] = a
         # noinspection PyProtectedMember
         self._short_seg_names.update(a._short_seg_names)
 
-    def add_bundle_or_archive(self, filename):
+    def add_bundle_or_archive(self, filename, encoding="ascii"):
         """
         :param str filename:
         """
         if filename.endswith(".bundle"):
-            self.add_bundle(filename)
+            self.add_bundle(filename, encoding=encoding)
         else:
-            self.add_archive(filename)
+            self.add_archive(filename, encoding=encoding)
 
     def file_list(self):
         """
@@ -581,7 +642,7 @@ class FileArchiveBundle:
             a.set_allophones(filename)
 
 
-def open_file_archive(archive_filename, must_exists=True):
+def open_file_archive(archive_filename, must_exists=True, encoding="ascii"):
     """
     :param str archive_filename:
     :param bool must_exists:
@@ -589,9 +650,9 @@ def open_file_archive(archive_filename, must_exists=True):
     """
     if archive_filename.endswith(".bundle"):
         assert must_exists
-        return FileArchiveBundle(archive_filename)
+        return FileArchiveBundle(archive_filename, encoding=encoding)
     else:
-        return FileArchive(archive_filename, must_exists=must_exists)
+        return FileArchive(archive_filename, must_exists=must_exists, encoding=encoding)
 
 
 def is_sprint_cache_file(filename):
