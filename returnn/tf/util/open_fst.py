@@ -96,7 +96,7 @@ REGISTER_OP("OpenFstTransition")
   c->set_output(0, c->input(1));
   c->set_output(1, c->input(1));
   c->set_output(2, c->input(1));
-  return Status::OK();
+  return Status();
 })
 .Doc("OpenFstTransition: performs a transition");
 
@@ -170,14 +170,14 @@ class OpenFstLoadOp : public ResourceOpKernel<OpenFstInstance> {
     }
     if(*ret == nullptr)
       return errors::ResourceExhausted("Failed to allocate");
-    return Status::OK();
+    return Status();
   }
 
   Status VerifyResource(OpenFstInstance* fst) override {
     if(fst->filename_ != filename_)
       return errors::InvalidArgument("Filename mismatch: expected ", filename_,
                                      " but got ", fst->filename_, ".");
-    return Status::OK();
+    return Status();
   }
 
   string filename_;

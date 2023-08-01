@@ -64,7 +64,7 @@ REGISTER_OP("KenLmAbsScoreStrings")
 .Output("scores: float32")
 .SetShapeFn([](::tensorflow::shape_inference::InferenceContext* c) {
   c->set_output(0, c->input(1));
-  return Status::OK();
+  return Status();
 })
 .Doc("KenLmScoreStrings: scores texts. returns in +log space (natural log, not base 10)");
 
@@ -76,7 +76,7 @@ REGISTER_OP("KenLmAbsScoreBpeStrings")
 .Output("scores: float32")
 .SetShapeFn([](::tensorflow::shape_inference::InferenceContext* c) {
   c->set_output(0, c->input(2));
-  return Status::OK();
+  return Status();
 })
 .Doc("KenLmAbsScoreBpeStrings: optionally BPE-merges, remove surrounding whitespaces and scores texts."
   " returns in +log space (natural log, not base 10)."
@@ -96,7 +96,7 @@ REGISTER_OP("KenLmAbsScoreBpeStringsDense")
   ::tensorflow::shape_inference::ShapeHandle out_shape;
   TF_RETURN_IF_ERROR(c->Concatenate(c->input(2), c->input(3), &out_shape));
   c->set_output(1, out_shape);
-  return Status::OK();
+  return Status();
 })
 .Doc("KenLmAbsScoreBpeStrings: optionally BPE-merges, remove surrounding whitespaces and scores texts."
   " returns in +log space (natural log, not base 10)."
@@ -202,14 +202,14 @@ class KenLmLoadModelOp : public ResourceOpKernel<KenLmModel> {
     }
     if(*ret == nullptr)
       return errors::ResourceExhausted("Failed to allocate");
-    return Status::OK();
+    return Status();
   }
 
   Status VerifyResource(KenLmModel* lm) override {
     if(lm->filename_ != filename_)
       return errors::InvalidArgument("Filename mismatch: expected ", filename_,
                                      " but got ", lm->filename_, ".");
-    return Status::OK();
+    return Status();
   }
 
   string filename_;
