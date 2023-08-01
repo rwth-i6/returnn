@@ -103,6 +103,7 @@ class RunCtx:
         loss: Union[Tensor, Any],
         name: str,
         *,
+        dims: Optional[Sequence[Dim]] = None,
         scale: float = 1.0,
         as_error: bool = False,
         use_normalized_loss: bool = False,
@@ -123,6 +124,7 @@ class RunCtx:
             do accumulation taking different seq lengths into account.
             A :class:`Tensor` is usually expected, but a raw tensor is also possible.
         :param name: name of the loss. this name is used for reporting by RETURNN, and also for LR scheduling.
+        :param dims: in case `loss` is not a :class:`Tensor`, but a raw tensor
         :param scale: scale the loss by this factor for the training optimizer
           (but not for any reporting). setting to 0.0 has the effect that this loss is not used by the optimizer.
         :param as_error: if True, this loss is reported as an error instead of a loss,
@@ -151,7 +153,10 @@ class RunCtx:
         assert self.stage == "train_step"
         if not isinstance(loss, Tensor):
             assert isinstance(loss, _backend.global_backend.RawTensorType)
-            loss = rf.convert_to_tensor(loss)
+            if dims is None:
+                loss = rf.convert_to_tensor(loss)
+            else:
+                loss = _output_tensor_from_raw(loss, name=name, dims=dims)
         assert name not in self.losses
         self.losses[name] = Loss(
             loss=loss,
