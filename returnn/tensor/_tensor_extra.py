@@ -3526,14 +3526,19 @@ def _create_size_placeholder(name, axis_wo_b, tag, batch_dim):
     from returnn.tf.util.basic import reuse_name_scope
 
     with reuse_name_scope("extern_data/placeholders/%s" % name, absolute=True):
-        dyn_size_ext = _t.Tensor(
-            name="%s_dim%i_size" % (name, axis_wo_b),
-            dtype=_t.Tensor.size_dtype,
-            dim_tags=[batch_dim] if batch_dim else [],
-            batch=None,  # expected in ExternData.init_batch_info
-        )
+        dyn_size_name = "%s_dim%i_size" % (name, axis_wo_b)
+        if not tag.dyn_size_ext:
+            dyn_size_ext = _t.Tensor(
+                name=dyn_size_name,
+                dtype=_t.Tensor.size_dtype,
+                dim_tags=[batch_dim] if batch_dim else [],
+                batch=None,  # expected in ExternData.init_batch_info
+            )
+        else:
+            dyn_size_ext = tag.dyn_size_ext.copy_template()
+            dyn_size_ext.batch = None  # expected in ExternData.init_batch_info
         dyn_size = tf_compat.v1.placeholder(
-            name=dyn_size_ext.name, dtype=dyn_size_ext.dtype, shape=dyn_size_ext.batch_shape
+            name=dyn_size_name, dtype=dyn_size_ext.dtype, shape=dyn_size_ext.batch_shape
         )
         dyn_size_ext.placeholder = dyn_size
         if dyn_size_ext.batch:
