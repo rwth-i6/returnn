@@ -2120,7 +2120,8 @@ class _TensorMixin(_TensorMixinBase):
         # flatten_with_seq_len_mask only works if either time_dim_axis or batch_dim_axis is 0:
         assert 0 in [self.time_dim_axis, self.batch_dim_axis]
         time_dim = self.get_time_dim_tag()
-        if time_dim.is_dynamic():
+        if time_dim.need_masking():
+            assert time_dim.dyn_size_ext.dims == (self.get_batch_dim_tag(),)  # not implemented otherwise
             return flatten_with_seq_len_mask(
                 self.placeholder,
                 time_dim.dyn_size,
