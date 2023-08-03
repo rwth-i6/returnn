@@ -39,13 +39,19 @@ def make_feed_dict(data_list, same_time=False, n_batch=3, n_time=7):
     :param int n_time:
     :rtype: dict[tf.Tensor,numpy.ndarray]
     """
+    from returnn.tensor import batch_dim
+    from returnn.util.basic import RefIdEq
+
     if isinstance(data_list, ExternData):
         data_list = [value for (key, value) in sorted(data_list.data.items())]
     assert n_time > 0 and n_batch > 0
     rnd = numpy.random.RandomState(42)
-    existing_sizes = {}  # type: typing.Dict[tf.Tensor,int]
+    existing_sizes = {}  # type: typing.Dict[RefIdEq[tf.Tensor],int]
     d = {}
     batch_info = None
+    for data in data_list:
+        if data.batch and not batch_info:
+            batch_info = data.batch
     for data in data_list:
         if data.batch and not batch_info:
             batch_info = data.batch
@@ -54,21 +60,25 @@ def make_feed_dict(data_list, same_time=False, n_batch=3, n_time=7):
             shape[data.batch_dim_axis] = n_batch
         for axis, dim in enumerate(shape):
             if dim is None:
-                axis_wo_b = data.get_batch_axis_excluding_batch(axis)
-                assert axis_wo_b in data.size_placeholder
-                dyn_size = data.size_placeholder[axis_wo_b]
-                if dyn_size in existing_sizes:
-                    shape[axis] = existing_sizes[dyn_size]
+                tag: Dim = data.dims[axis]
+                dyn_size = tag.dyn_size
+                if RefIdEq(dyn_size) in existing_sizes:
+                    shape[axis] = existing_sizes[RefIdEq(dyn_size)]
                     continue
-                existing_sizes[dyn_size] = n_time
+                existing_sizes[RefIdEq(dyn_size)] = n_time
                 shape[axis] = n_time
-                dyn_size_v = numpy.array([n_time, max(n_time - 2, 1), max(n_time - 3, 1)])
-                if dyn_size_v.shape[0] > n_batch:
-                    dyn_size_v = dyn_size_v[:n_batch]
-                elif dyn_size_v.shape[0] < n_batch:
-                    dyn_size_v = numpy.concatenate(
-                        [dyn_size_v, rnd.randint(1, n_time + 1, size=(n_batch - dyn_size_v.shape[0],))], axis=0
-                    )
+                if tag.dyn_size_ext.dims == (batch_dim,):
+                    dyn_size_v = numpy.array([n_time, max(n_time - 2, 1), max(n_time - 3, 1)])
+                    if dyn_size_v.shape[0] > n_batch:
+                        dyn_size_v = dyn_size_v[:n_batch]
+                    elif dyn_size_v.shape[0] < n_batch:
+                        dyn_size_v = numpy.concatenate(
+                            [dyn_size_v, rnd.randint(1, n_time + 1, size=(n_batch - dyn_size_v.shape[0],))], axis=0
+                        )
+                elif tag.dyn_size_ext.dims == ():  # scalar
+                    dyn_size_v = numpy.array(n_time)
+                else:
+                    raise NotImplementedError(f"tag {tag} with dyn_size_ext: {tag.dyn_size_ext}")
                 d[dyn_size] = dyn_size_v
                 if not same_time:
                     n_time += 1
