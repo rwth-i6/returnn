@@ -105,7 +105,7 @@ class _DimExtra:
         self.control_flow_ctx = control_flow_ctx
         self.src_data = src_data
         self.src_axis = src_axis
-        self.dyn_size_same = set()  # set of TensorRef
+        self.dyn_size_same = set()  # set of RefIdEq (earlier TensorRef)
         self.undefined = undefined
         self.special = special
         if derived_from_tag:
