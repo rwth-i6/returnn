@@ -335,13 +335,6 @@ class RecLayer(_ConcatInputLayer):
             assert p.name.startswith(scope_name_prefix) and p.name.endswith(":0")
             self.add_param(p)
 
-            # Sublayers do not know whether the RecLayer is trainable.
-            # If it is not, we need to mark all defined parameters as untrainable
-            if not self.trainable:
-                trainable_collection_ref = p.graph.get_collection_ref(tf_compat.v1.GraphKeys.TRAINABLE_VARIABLES)
-                if p in trainable_collection_ref:
-                    trainable_collection_ref.remove(p)
-
     def get_dep_layers(self):
         """
         :rtype: list[LayerBase]
@@ -5154,7 +5147,7 @@ class RnnCellLayer(_ConcatInputLayer):
             self._hidden_state = state
             self.rec_vars_outputs["state"] = state
             params = tf_compat.v1.get_collection(
-                tf_compat.v1.GraphKeys.TRAINABLE_VARIABLES, scope=re.escape(scope_name_prefix)
+                tf_compat.v1.GraphKeys.GLOBAL_VARIABLES, scope=re.escape(scope_name_prefix)
             )
             for p in params:
                 self.add_param(p)

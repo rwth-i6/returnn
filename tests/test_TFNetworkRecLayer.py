@@ -11327,6 +11327,37 @@ def test_trainable_sublayers():
         assert weight_internal in set(network.get_trainable_params())
 
 
+def test_partly_trainable_reclayer():
+    with make_scope() as session:
+        net_dict = {
+            "output": {
+                "class": "rec",
+                "from": "data",
+                "unit": {
+                    "a": {"class": "linear", "from": "data:source", "n_out": 3},
+                    "output": {"class": "copy", "from": "a"},
+                },
+            },
+            "label_model": {
+                "class": "rec",
+                "from": "output",
+                "trainable": False,
+                "name_scope": "output/rec",
+                "unit": {
+                    "b": {"class": "linear", "from": "data:source", "n_out": 2, "trainable": False},
+                    "output": {"class": "copy", "from": "b"},
+                },
+                "is_output_layer": True,
+            },
+        }
+        config = Config({"num_inputs": 2, "num_outputs": 3, "network": net_dict})
+        network = TFNetwork(config=config, train_flag=True)
+        network.construct_from_dict(net_dict)
+        params = network.get_trainable_params()
+        print(params)
+        assert len(params) == 2
+
+
 def test_subnet_keep_over_epoch_state_vars_saveable_params():
     with make_scope() as session:
         n_in, n_out = 2, 3

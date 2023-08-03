@@ -4,7 +4,7 @@ This module contains the layer base class :class:`LayerBase`.
 
 from __future__ import annotations
 
-from typing import Optional, Dict
+from typing import Optional, Dict, List
 import typing
 import contextlib
 import numpy
@@ -93,7 +93,7 @@ class LayerBase(object):
         rec_previous_layer=None,
         encapsulate=False,
         collocate_with=None,
-        trainable=None,
+        trainable=True,
         custom_param_importer=None,
         register_as_extern_data=None,
         control_dependencies_on_output=None,
@@ -168,8 +168,10 @@ class LayerBase(object):
                 and the logic in :func:`cls_get_sub_network` will not be used.
             If False, the logic in :func:`cls_get_sub_network` will be used.
         :param list[str]|None collocate_with: in the rec layer, collocate with the specified other layers
-        :param bool|None trainable: whether the parameters of this layer will be trained.
-           default (None) inherits from the parent layer if there is one, or otherwise True.
+        :param bool trainable: whether the parameters of this layer will be trained.
+            Default is True.
+            However, if this is inside a subnetwork, all the parent layers must be set to trainable,
+            otherwise the parameters will not be trainable.
         :param str|callable|None custom_param_importer: used by :func:`set_param_values_by_dict`
         :param str|None register_as_extern_data: registers output in network.extern_data
         :param None|((LayerBase)->list[tf.Operation]) control_dependencies_on_output:
@@ -253,8 +255,6 @@ class LayerBase(object):
         self.only_on_eval = only_on_eval
         self.only_on_search = only_on_search
         self.use_batch_norm = batch_norm
-        if trainable is None:
-            trainable = self.network.parent_layer.trainable if self.network.parent_layer else True
         self.trainable = trainable
         self.custom_param_importer = custom_param_importer
         self.control_dependencies_on_output = control_dependencies_on_output
@@ -1117,6 +1117,16 @@ class LayerBase(object):
         """
         return []
 
+    def _get_abs_layer_path(self) -> List[LayerBase]:
+        ls = [self]
+        net = self.network
+        while net:
+            if net.parent_layer:
+                ls.append(net.parent_layer)
+            net = net.parent_net
+        ls.reverse()
+        return ls
+
     def get_search_choices(self):
         """
         :rtype: SearchChoices|None
@@ -1339,10 +1349,16 @@ class LayerBase(object):
             assert len(possible_params) == 1
             param = possible_params[0]
         assert isinstance(param, tf.Variable)
-        if not self.trainable:
-            trainable_collection_ref = tf_compat.v1.get_collection_ref(tf_compat.v1.GraphKeys.TRAINABLE_VARIABLES)
-            if param in trainable_collection_ref:
-                trainable_collection_ref.remove(param)
+        if getattr(param, "RETURNN_layer", None) is None:  # we see it for the first time
+            if any(not layer.trainable for layer in self._get_abs_layer_path()):
+                # We need to be careful here that this removing is not done multiple times.
+                # It can happen multiple times when the layer is inside another subnetwork layer or rec layer.
+                # It can also happen when you use name_scope and the another subnetwork layer or rec layer
+                # picks it up through logic like `update_params_from_subnet` which goes through all params
+                # and checks the name scope.
+                trainable_collection_ref = tf_compat.v1.get_collection_ref(tf_compat.v1.GraphKeys.TRAINABLE_VARIABLES)
+                if param in trainable_collection_ref:
+                    trainable_collection_ref.remove(param)
         if trainable is None:
             trainable = param in tf_compat.v1.get_collection_ref(tf_compat.v1.GraphKeys.TRAINABLE_VARIABLES)
         if saveable is None:
