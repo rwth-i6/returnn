@@ -154,6 +154,7 @@ class MultiProcDataset(CachedDataset2):
                 return False
             if not dataset.is_less_than_num_seqs(next_seq_idx):
                 return False
+            dataset.load_seqs(next_seq_idx, next_seq_idx + 1)
             seq_tag = dataset.get_tag(next_seq_idx)
             features = {data_key: dataset.get_data(next_seq_idx, data_key) for data_key in dataset.get_data_keys()}
             res = DatasetSeq(seq_idx=next_seq_idx, seq_tag=seq_tag, features=features)
