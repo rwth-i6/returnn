@@ -159,9 +159,16 @@ class ExternData(TensorDict):
                 # which is the case for the TFEngine.
                 # https://github.com/rwth-i6/returnn/issues/1121
                 with tf_util.reuse_name_scope_of_tensor(data.placeholder):
-                    if data.size_placeholder and 0 in data.size_placeholder:
-                        batch_dim_value = tf_util.get_shape_dim(data.size_placeholder[0], 0, name="batch_dim")
-                    else:
+                    for dim in data.dims:
+                        if dim.dyn_size_ext and global_batch_dim_tag in dim.dyn_size_ext.dims:
+                            if dim.dyn_size_ext.raw_tensor is not None:
+                                batch_dim_value = tf_util.get_shape_dim(
+                                    dim.dyn_size_ext.raw_tensor,
+                                    dim.dyn_size_ext.dims.index(global_batch_dim_tag),
+                                    name="batch_dim",
+                                )
+                                break
+                    if batch_dim_value is None:
                         batch_dim_value = tf_util.get_shape_dim(data.placeholder, data.batch_dim_axis, name="batch_dim")
                     break
             # In any case, RETURNN will explicitly feed the batch_dim tensor, unless it is static.
@@ -203,6 +210,7 @@ class ExternData(TensorDict):
                     and tag.dyn_size_ext.placeholder is not None
                     and not tag.batch
                     and not tag.dyn_size_ext.batch
+                    and global_batch_dim_tag in tag.dyn_size_ext.dims
                 ):
                     tag.dyn_size_ext.batch = batch_info
                     tag.batch = batch_info
