@@ -10236,15 +10236,7 @@ class SubnetworkLayer(LayerBase):
         )
         for p in params:
             assert p.name.startswith(scope_name_prefix) and p.name.endswith(":0")
-            param_name = p.name[len(scope_name_prefix) : -len(":0")]
-            self.params[param_name] = p
-
-            # Sublayers do not know whether the RecLayer is trainable.
-            # If it is not, we need to mark all defined parameters as untrainable.
-            if not self.trainable:
-                trainable_collection_ref = p.graph.get_collection_ref(tf_compat.v1.GraphKeys.TRAINABLE_VARIABLES)
-                if p in trainable_collection_ref:
-                    trainable_collection_ref.remove(p)
+            self.add_param(p)
 
     def update_rec_vars_outputs(self):
         """
