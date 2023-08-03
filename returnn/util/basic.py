@@ -2328,6 +2328,7 @@ class RefIdEq(Generic[T]):
     (In case of tf.Tensor, this is for compatibility
      because tf.Tensor.ref() was not available in earlier TF versions.
      However, we also need this for :class:`DictRefKeys`.)
+    (This was TensorRef in earlier RETURNN versions.)
     """
 
     def __init__(self, obj: T):
