@@ -42,9 +42,10 @@ from returnn.util.basic import init_thread_join_hack, describe_returnn_version
 
 if typing.TYPE_CHECKING:
     import returnn.tf.engine
+    import returnn.torch.engine
 
 config = None  # type: typing.Optional[Config]
-engine = None  # type: typing.Optional[typing.Union[returnn.tf.engine.Engine]]
+engine = None  # type: typing.Optional[typing.Union[returnn.tf.engine.Engine, returnn.torch.engine.Engine]]
 train_data = None  # type: typing.Optional[Dataset]
 dev_data = None  # type: typing.Optional[Dataset]
 eval_data = None  # type: typing.Optional[Dataset]
