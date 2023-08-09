@@ -2,16 +2,17 @@
 
 from __future__ import annotations
 
+import os
 import sys
 import _setup_test_env  # noqa
 import unittest
 import numpy
+import tempfile
 from nose.tools import assert_equal, assert_is_instance, assert_in, assert_not_in, assert_true, assert_false
 from returnn.datasets.generating import Task12AXDataset, DummyDataset, DummyDatasetMultipleSequenceLength
 from returnn.engine.batch import Batch
 from returnn.datasets.basic import Dataset
 from returnn.util.basic import NumbersDict
-
 from returnn.util import better_exchook
 
 
@@ -439,6 +440,51 @@ def test_get_seq_order():
         # Make sure partitions combined result in full epoch. This tests the random seed of Dataset which should be
         # fixed across partitions.
         assert set(all_partitions_seq_index) == set(seq_index)
+
+
+def test_OggZipDataset():
+    import zipfile
+    from returnn.datasets.audio import OggZipDataset
+
+    _demo_txt = "some utterance text"
+
+    with tempfile.NamedTemporaryFile(suffix=".zip") as tmp_zip_file, tempfile.NamedTemporaryFile(
+        suffix=".txt"
+    ) as tmp_vocab_file:
+        with zipfile.ZipFile(tmp_zip_file.name, "w") as zip_file:
+            zip_file.writestr(
+                os.path.basename(tmp_zip_file.name)[:-4] + ".txt",
+                repr([{"text": _demo_txt, "duration": 2.3, "file": "sequence0.wav"}]),
+            )
+        vocab = {"@": 2, " ": 1, ".": 0}
+        vocab.update({chr(i): i - ord("a") + 3 for i in range(ord("a"), ord("z") + 1)})
+        tmp_vocab_file.write(repr(vocab).encode("utf8"))
+        tmp_vocab_file.flush()
+
+        dataset = OggZipDataset(
+            path=tmp_zip_file.name,
+            audio=None,
+            targets={"class": "CharacterTargets", "vocab_file": tmp_vocab_file.name, "seq_postfix": [0]},
+        )
+        dataset.initialize()
+        dataset.init_seq_order(epoch=1)
+        dataset.load_seqs(0, 1)
+        raw = dataset.get_data(0, "raw")
+        orth = dataset.get_data(0, "orth")
+        classes = dataset.get_data(0, "classes")
+        print("raw:", raw)
+        print("orth:", orth)
+        print("classes:", classes)
+        assert isinstance(raw, numpy.ndarray) and raw.dtype == numpy.object and raw.shape == ()
+        raw_ = raw.item()
+        assert isinstance(raw_, str) and raw_ == _demo_txt
+        assert isinstance(orth, numpy.ndarray) and orth.dtype == numpy.uint8 and orth.ndim == 1
+        orth_ = orth.tostring()
+        assert orth_.decode("utf8") == _demo_txt
+        assert isinstance(classes, numpy.ndarray) and classes.dtype == numpy.int32 and classes.ndim == 1
+        reverse_vocab = {v: k for (k, v) in vocab.items()}
+        classes_ = "".join([reverse_vocab[c] for c in classes])
+        assert classes_ == _demo_txt + "."
 
 
 if __name__ == "__main__":
