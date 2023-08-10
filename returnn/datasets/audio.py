@@ -436,7 +436,7 @@ class OggZipDataset(CachedDataset2):
             with self._open_audio_file(corpus_seq_idx) as audio_file:
                 features = self.feature_extractor.get_audio_features_from_raw_bytes(audio_file, seq_name=seq_tag)
         else:
-            features = numpy.zeros(())  # currently the API requires some dummy values...
+            features = numpy.zeros((), dtype=numpy.float32)  # currently the API requires some dummy values...
         targets, txt = self._get_transcription(corpus_seq_idx)
         targets = numpy.array(targets, dtype="int32")
         raw_txt = numpy.array(txt, dtype="object")
