@@ -56,7 +56,8 @@ class OggZipDataset(CachedDataset2):
         :param str|list[str] path: filename to zip
         :param dict[str]|None audio: options for :class:`ExtractAudioFeatures`.
             use {} for default. None means to disable.
-        :param dict[str]|None targets: options for :func:`Vocabulary.create_vocab` (e.g. :class:`BytePairEncoding`)
+        :param Vocabulary|dict[str]|None targets: options for :func:`Vocabulary.create_vocab`
+            (e.g. :class:`BytePairEncoding`)
         :param str|list[str]|((str)->str)|None targets_post_process: :func:`get_post_processor_function`,
             applied on orth
         :param bool use_cache_manager: uses :func:`Util.cf`
