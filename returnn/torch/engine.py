@@ -711,7 +711,10 @@ def _to_raw(n: Union[int, float, Tensor]):
 
 
 def _raw_dict_to_extern_data(
-    extern_data_raw: Dict[str, torch.Tensor], *, extern_data_template: TensorDict, device: Union[str, torch.device]
+    extern_data_raw: Dict[str, Union[torch.Tensor, numpy.ndarray]],
+    *,
+    extern_data_template: TensorDict,
+    device: Union[str, torch.device],
 ) -> TensorDict:
     """
     :param extern_data_raw: This comes out of the DataLoader.
