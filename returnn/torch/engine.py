@@ -677,10 +677,20 @@ class Engine(EngineBase):
                     )
                     for k, v in model_outputs.data.items():
                         if v.batch_ndim > 1:
-                            model_outputs_per_batch[k].raw_tensor = v.raw_tensor[batch_idx]
+                            raw = v.raw_tensor[batch_idx]
                         else:
                             # Keep it as ndarray.
-                            model_outputs_per_batch[k].raw_tensor = v.raw_tensor[batch_idx : batch_idx + 1].reshape(())
+                            raw = v.raw_tensor[batch_idx : batch_idx + 1].reshape(())
+                        # Convert it to Numpy array.
+                        # Note that users might also want to get the PyTorch tensors instead.
+                        # They might even want to get the whole batched tensor.
+                        # If that use cases comes up at some later point,
+                        # we can introduce it as an option, sth like "forward_raw_tensors" or so.
+                        # Currently, this callback interface is intended to also be used by other backends,
+                        # and then the user can always assume Numpy arrays.
+                        if isinstance(raw, torch.Tensor):  # might already be numpy array
+                            raw = raw.detach().cpu().numpy()
+                        model_outputs_per_batch[k].raw_tensor = raw
                     callback.process_seq(seq_tag=seq_tag, outputs=model_outputs_per_batch)
 
             callback.finish()
