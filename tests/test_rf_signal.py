@@ -28,3 +28,32 @@ def test_stft():
         out.mark_as_default_output(shape=(batch_dim, out_spatial_dim, out_dim))
 
     run_model(extern_data, lambda *, epoch, step: _Net(), _forward_step)
+
+
+def test_mel_filterbank():
+    time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
+    feat_dim = Dim(10, name="mel")
+    extern_data = TensorDict(
+        {
+            "data": Tensor("data", [batch_dim, time_dim], dtype="float32"),
+        }
+    )
+
+    class _Net(rf.Module):
+        def __call__(self, source: rf.Tensor, *, in_spatial_dim: Dim) -> Tuple[Tensor, Dim]:
+            # log mel filterbank features
+            source, in_spatial_dim, in_dim_ = rf.stft(
+                source, in_spatial_dim=in_spatial_dim, frame_step=3, frame_length=5, fft_length=6
+            )
+            source = rf.abs(source) ** 2.0
+            source = rf.mel_filterbank(source, in_dim=in_dim_, out_dim=feat_dim, sampling_rate=16)
+            return source, in_spatial_dim
+
+    # noinspection PyShadowingNames
+    def _forward_step(*, model: _Net, extern_data: TensorDict):
+        out, out_spatial_dim = model(extern_data["data"], in_spatial_dim=time_dim)
+        out.mark_as_default_output(shape=(batch_dim, out_spatial_dim, feat_dim))
+
+    run_model(extern_data, lambda *, epoch, step: _Net(), _forward_step)
+    # Run again to specifically test the caching logic.
+    run_model(extern_data, lambda *, epoch, step: _Net(), _forward_step)

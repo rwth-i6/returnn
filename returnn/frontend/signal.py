@@ -126,7 +126,11 @@ def mel_filterbank(
     backend = x._raw_backend
     cache_key = (f_min, f_max, sampling_rate, fft_length, out_dim.dimension, backend, x.dtype, x.device)
     if cache_key in _mel_filter_bank_matrix_cache:
-        filter_bank_matrix = _mel_filter_bank_matrix_cache[cache_key]
+        filter_bank_matrix_: Tensor = _mel_filter_bank_matrix_cache[cache_key]
+        # The in_dim might be temporarily created, so replace it by the new one.
+        # Even allow for temporary out_dim.
+        filter_bank_matrix = Tensor("mel-filter-bank", dims=(in_dim, out_dim), dtype=x.dtype)
+        filter_bank_matrix.raw_tensor = filter_bank_matrix_.raw_tensor
     else:
         filter_bank_matrix_np = _mel_filter_bank_matrix_np(
             f_min=f_min, f_max=f_max, sampling_rate=sampling_rate, fft_size=fft_length, nr_of_filters=out_dim.dimension
