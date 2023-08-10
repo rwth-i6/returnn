@@ -38,7 +38,7 @@ def create_tensor(array: numpy.ndarray) -> Union[torch.Tensor, numpy.ndarray]:
     """
     # The only supported PyTorch dtypes are:
     # float64, float32, float16, complex64, complex128, int64, int32, int16, int8, uint8, and bool.
-    if array.dtype.kind == "U":  # string (unicode)
+    if array.dtype.kind in "UO":  # string (unicode) or object
         return array  # keep as-is. e.g. seq_tag
     if array.dtype == numpy.uint32:
         array = numpy.asarray(array, dtype=numpy.int64)
