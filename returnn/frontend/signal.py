@@ -139,7 +139,9 @@ def mel_filterbank(
                 # Very simple cache management. No LRU logic or anything like that.
                 _mel_filter_bank_matrix_cache.clear()
             _mel_filter_bank_matrix_cache[cache_key] = filter_bank_matrix
-    return rf.matmul(x, filter_bank_matrix, reduce=in_dim)
+    out = rf.matmul(x, filter_bank_matrix, reduce=in_dim)
+    out.feature_dim = out_dim
+    return out
 
 
 # Used for eager frameworks. See mel_filterbank.
