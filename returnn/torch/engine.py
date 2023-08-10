@@ -655,6 +655,21 @@ class Engine(EngineBase):
 
         self._pt_model.eval()
 
+        if dataset.supports_seq_order_sorting():
+            # We can sort it. Sort it in reverse to make sure that we have enough memory right at the beginning.
+            print("Dataset supports sorting, i.e. it will be sorted for optimal performance.", file=log.v3)
+            dataset.seq_ordering = "sorted_reverse"
+        else:
+            print(
+                "Dataset does not support sorting, i.e. it will not be sorted for optimal performance.",
+                file=log.v3,
+            )
+
+        assert (self._min_seq_length is None) and (self._max_seq_length is None), (
+            f"min_seq_length {self._min_seq_length}, max_seq_length {self._max_seq_length} not allowed,"
+            f" we want to keep all source sentences."
+        )
+
         data_loader = self._create_data_loader(dataset)
         batch_dim = _get_batch_dim_from_extern_data(self.extern_data)
 
