@@ -729,6 +729,12 @@ def _raw_dict_to_extern_data(
     for k, data in extern_data_template.data.items():
         data = data.copy_template()
         raw_tensor = extern_data_raw[k]
+        assert len(raw_tensor.shape) == data.batch_ndim, f"ndim mismatch for {k}: {raw_tensor.shape} vs {data}"
+        for i, dim in enumerate(data.dims):
+            if dim.dimension is not None:
+                assert (
+                    dim.dimension == raw_tensor.shape[i]
+                ), f"shape mismatch for {k}: {raw_tensor.shape} vs {data.batch_shape}"
         if isinstance(raw_tensor, torch.Tensor):
             data.dtype = str(raw_tensor.dtype).split(".")[-1]  # just overwrite for now...
             data.raw_tensor = raw_tensor.to(device)
