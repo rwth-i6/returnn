@@ -658,6 +658,46 @@ class Engine(EngineBase):
         data_loader = self._create_data_loader(dataset)
         batch_dim = _get_batch_dim_from_extern_data(self.extern_data)
 
+        def _get_tensor_wo_batch_numpy(x: Tensor) -> Tensor:
+            if x.dims.index(batch_dim) != 0:
+                x = x.copy_move_axis(x.dims.index(batch_dim), 0)
+
+            y_kwargs = x.copy_template_excluding_axis(0).get_kwargs()
+            y_kwargs["dims"] = [_get_dim_tag_wo_batch(dim) for dim in y_kwargs["dims"]]
+            y = Tensor(**y_kwargs)
+
+            if x.batch_ndim > 1:
+                raw = x.raw_tensor[batch_idx]
+            else:
+                # Keep it as ndarray.
+                raw = x.raw_tensor[batch_idx : batch_idx + 1].reshape(())
+            # Convert it to Numpy array.
+            # Note that users might also want to get the PyTorch tensors instead.
+            # They might even want to get the whole batched tensor.
+            # If that use cases comes up at some later point,
+            # we can introduce it as an option, sth like "forward_raw_tensors" or so.
+            # Currently, this callback interface is intended to also be used by other backends,
+            # and then the user can always assume Numpy arrays.
+            if isinstance(raw, torch.Tensor):  # might already be numpy array
+                raw = raw.detach().cpu().numpy()
+            y.raw_tensor = raw
+            return y
+
+        def _get_dim_tag_wo_batch(dim: Dim) -> Dim:
+            """
+            This is for dim tags with dyn_size_ext which include the batch_dim,
+            e.g. the standard [batch] sizes.
+            In the callback, we pass each sequence without the batch dim,
+            so we must adapt the dim tags.
+            """
+            if not dim.dyn_size_ext:
+                return dim
+            if batch_dim not in dim.dyn_size_ext.dims:
+                return dim
+            new_dim = dim.copy()
+            new_dim.dyn_size_ext = _get_tensor_wo_batch_numpy(dim.dyn_size_ext)
+            return new_dim
+
         with torch.no_grad():
             callback.init(model=self._orig_model)
 
@@ -670,30 +710,11 @@ class Engine(EngineBase):
                 ctx.check_outputs_complete()
 
                 model_outputs = ctx.outputs
-                model_outputs_per_batch_template = TensorDict(
-                    {k: v.copy_template_excluding_axis(0) for k, v in model_outputs.data.items()}
-                )
                 for batch_idx in range(batch_dim.get_dim_value()):
                     seq_tag = extern_data["seq_tag"].raw_tensor[batch_idx].item()
-                    model_outputs_per_batch = TensorDict(
-                        {k: v.copy() for k, v in model_outputs_per_batch_template.data.items()}
-                    )
+                    model_outputs_per_batch = TensorDict()
                     for k, v in model_outputs.data.items():
-                        if v.batch_ndim > 1:
-                            raw = v.raw_tensor[batch_idx]
-                        else:
-                            # Keep it as ndarray.
-                            raw = v.raw_tensor[batch_idx : batch_idx + 1].reshape(())
-                        # Convert it to Numpy array.
-                        # Note that users might also want to get the PyTorch tensors instead.
-                        # They might even want to get the whole batched tensor.
-                        # If that use cases comes up at some later point,
-                        # we can introduce it as an option, sth like "forward_raw_tensors" or so.
-                        # Currently, this callback interface is intended to also be used by other backends,
-                        # and then the user can always assume Numpy arrays.
-                        if isinstance(raw, torch.Tensor):  # might already be numpy array
-                            raw = raw.detach().cpu().numpy()
-                        model_outputs_per_batch[k].raw_tensor = raw
+                        model_outputs_per_batch.data[k] = _get_tensor_wo_batch_numpy(v)
                     callback.process_seq(seq_tag=seq_tag, outputs=model_outputs_per_batch)
 
             callback.finish()
@@ -793,8 +814,13 @@ def _raw_dict_to_extern_data(
 
 
 def _get_batch_dim_from_extern_data(extern_data: TensorDict) -> Dim:
-    # We expect that the batch dim is the first dim in any of the tensors.
-    # See collate_batch.
+    """
+    We expect that the batch dim is the first dim in any of the tensors.
+    See collate_batch.
+
+    We allow that the batch dim is not necessarily the global batch_dim object.
+    We also allow that this is not even marked as batch dim (is_batch_dim() can be False).
+    """
     batch_dim = next(iter(extern_data.data.values())).dims[0]
     return batch_dim
 

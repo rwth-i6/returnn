@@ -112,6 +112,58 @@ def test_torch_forward_raw_strings():
         engine.forward_with_callback(callback=_ForwardCallback(), dataset=dataset)
 
 
+def test_forward_beam_seq_lens():
+    from returnn.tensor import Dim, batch_dim
+
+    def _get_model(**_kwargs):
+        return torch.nn.Module()
+
+    def _forward_step(*, extern_data: TensorDict, **_kwargs):
+        data = extern_data["data"]  # [batch, time, dim]
+        assert data.dims[0] == batch_dim
+        time_dim = data.dims[1]
+        feat_dim = data.dims[2]
+        beam_dim = Dim(dimension=5, name="beam")
+        with rf.set_default_device_ctx(time_dim.dyn_size_ext.device):
+            ext_seq_lens = rf.relu(
+                rf.combine_bc(
+                    time_dim.dyn_size_ext, "-", rf.range_over_dim(beam_dim, dtype=time_dim.dyn_size_ext.dtype)
+                )
+            )
+        assert set(ext_seq_lens.dims) == {batch_dim, beam_dim}
+        ext_time_dim = Dim(ext_seq_lens, name="time_with_beam")
+        ext_data = rf.expand_dim(data, beam_dim)
+        ext_data, _ = rf.replace_dim(ext_data, in_dim=time_dim, out_dim=ext_time_dim)
+        assert set(ext_data.dims) == {batch_dim, beam_dim, ext_time_dim, feat_dim}
+        rf.get_run_ctx().mark_as_output(ext_data, "ext_data", dims=(batch_dim, beam_dim, ext_time_dim, feat_dim))
+
+    max_sizes = set()
+
+    class _ForwardCallback(ForwardCallbackIface):
+        def process_seq(self, *, seq_tag: str, outputs: TensorDict):
+            out: Tensor = outputs["ext_data"]
+            beam_dim, ext_time_dim, feat_dim = out.dims
+            assert isinstance(ext_time_dim.dyn_size_ext.raw_tensor, numpy.ndarray)
+            assert ext_time_dim.dyn_size_ext.dims == (beam_dim,)
+            max_size = max(ext_time_dim.dyn_size_ext.raw_tensor)
+            assert set(ext_time_dim.dyn_size_ext.raw_tensor) == set(
+                range(max(max_size - beam_dim.dimension + 1, 0), max_size + 1)
+            )
+            max_sizes.add(max_size)
+
+    config = Config(
+        dict(task="forward", extern_data={"data": {"dim": 9}}, get_model=_get_model, forward_step=_forward_step)
+    )
+    dataset = init_dataset({"class": "Task12AXDataset", "num_seqs": 100, "name": "dev", "fixed_random_seed": 1})
+    callback = _ForwardCallback()
+
+    with global_config_ctx(config):
+        engine = Engine(config=config)
+        engine.init_network_from_config()
+        engine.forward_with_callback(callback=callback, dataset=dataset)
+        assert len(max_sizes) > 1
+
+
 def test_min_seq_len():
 
     from returnn.datasets.generating import DummyDataset
