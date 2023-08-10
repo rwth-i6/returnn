@@ -676,7 +676,11 @@ class Engine(EngineBase):
                         {k: v.copy() for k, v in model_outputs_per_batch_template.data.items()}
                     )
                     for k, v in model_outputs.data.items():
-                        model_outputs_per_batch[k].raw_tensor = v.raw_tensor[batch_idx]
+                        if v.batch_ndim > 1:
+                            model_outputs_per_batch[k].raw_tensor = v.raw_tensor[batch_idx]
+                        else:
+                            # Keep it as ndarray.
+                            model_outputs_per_batch[k].raw_tensor = v.raw_tensor[batch_idx : batch_idx + 1].reshape(())
                     callback.process_seq(seq_tag=seq_tag, outputs=model_outputs_per_batch)
 
             callback.finish()
