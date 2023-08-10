@@ -247,7 +247,8 @@ class Engine(EngineBase):
         elapsed_computation_time = 0
 
         while True:
-            extern_data_raw = next(data_iter, None)
+            with torch.no_grad():
+                extern_data_raw = next(data_iter, None)
             _has_data = torch.tensor([extern_data_raw is not None], dtype=torch.int8)
 
             if self._use_torch_distributed:
