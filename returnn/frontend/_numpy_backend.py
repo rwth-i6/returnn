@@ -30,6 +30,7 @@ class NumpyBackend(Backend[numpy.ndarray]):
         :return: dtype of raw tensor, as string. e.g. "int64" etc.
         """
         dtype_name = raw_tensor.dtype.name
+        # See returnn.datasets.util.strings.str_to_numpy_array.
         if dtype_name.startswith("str"):
             return "string"  # ignore the bit-length, it supports variable length
         return dtype_name

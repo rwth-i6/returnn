@@ -9,7 +9,7 @@ from typing import Callable, Optional, Iterable, Dict
 import numpy
 import torch.utils.data
 from returnn.datasets.basic import Dataset as ReturnnDataset
-
+from returnn.datasets.util.strings import str_to_numpy_array
 
 ResetCallbackT = Callable[[], None]
 
@@ -78,7 +78,7 @@ class ReturnnDatasetIterDataPipe(torch.utils.data.IterDataPipe):
         while self._dataset.is_less_than_num_seqs(seq_index):
             self._dataset.load_seqs(seq_index, seq_index + 1)
             data = {data_key: self._dataset.get_data(seq_index, data_key) for data_key in data_keys}
-            data["seq_tag"] = numpy.array(self._dataset.get_tag(seq_index))
+            data["seq_tag"] = str_to_numpy_array(self._dataset.get_tag(seq_index))
             yield data
             seq_index += 1
 

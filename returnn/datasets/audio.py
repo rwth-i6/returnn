@@ -11,6 +11,7 @@ from .basic import DatasetSeq
 from .cached2 import CachedDataset2
 from .util.feature_extraction import ExtractAudioFeatures
 from .util.vocabulary import Vocabulary
+from .util.strings import str_to_numpy_array
 from returnn.util.basic import PY3
 
 
@@ -439,7 +440,7 @@ class OggZipDataset(CachedDataset2):
             features = numpy.zeros((), dtype=numpy.float32)  # currently the API requires some dummy values...
         targets, txt = self._get_transcription(corpus_seq_idx)
         targets = numpy.array(targets, dtype="int32")
-        raw_txt = numpy.array(txt, dtype="object")
+        raw_txt = str_to_numpy_array(txt)
         orth = txt.encode("utf8")
         if PY3:
             assert isinstance(orth, bytes)
