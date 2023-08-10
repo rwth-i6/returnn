@@ -84,6 +84,17 @@ class NumpyBackend(Backend[numpy.ndarray]):
         return numpy.expand_dims(raw_tensor, axis)
 
     @staticmethod
+    def transpose_raw(raw_tensor: numpy.ndarray, perm: Sequence[int]) -> numpy.ndarray:
+        """
+        :param raw_tensor:
+        :param perm: e.g. [0, 2, 1]
+        :return: permuted (transposed) raw tensor
+        """
+        if all(p == i for i, p in enumerate(perm)):
+            return raw_tensor
+        return raw_tensor.transpose(tuple(perm))
+
+    @staticmethod
     def compare_raw(a: numpy.ndarray, kind: str, b: numpy.ndarray) -> numpy.ndarray:
         """
         :param a:
