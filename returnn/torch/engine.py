@@ -470,7 +470,9 @@ class Engine(EngineBase):
             device_type=self._device, dtype=self._autocast_dtype
         ) if self._use_autocast else nullcontext(), ddp_train_forward_ctx(pt_model=self._ddp_pt_model) if isinstance(
             self._ddp_pt_model, DistributedDataParallel
-        ) else nullcontext():
+        ) else nullcontext(), rf.set_default_device_ctx(
+            self._device
+        ):
             sentinel_kw = {"__fwd_compatible_random_arg_%i" % int(random() * 100): None}
             if train_func:
                 self._train_step_func(model=self._orig_model, extern_data=extern_data, **sentinel_kw)
