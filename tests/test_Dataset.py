@@ -444,7 +444,7 @@ def test_get_seq_order():
 
 
 @contextlib.contextmanager
-def create_ogg_zip_txt_only_dataset(txt: str):
+def create_ogg_zip_txt_only_dataset(*, text: str = "hello world", seq_tag: str = "sequence0.wav"):
     import zipfile
     from returnn.datasets.audio import OggZipDataset
 
@@ -454,7 +454,7 @@ def create_ogg_zip_txt_only_dataset(txt: str):
         with zipfile.ZipFile(tmp_zip_file.name, "w") as zip_file:
             zip_file.writestr(
                 os.path.basename(tmp_zip_file.name)[:-4] + ".txt",
-                repr([{"text": txt, "duration": 2.3, "file": "sequence0.wav"}]),
+                repr([{"text": text, "duration": 2.3, "file": seq_tag}]),
             )
         vocab = {"@": 2, " ": 1, ".": 0}
         vocab.update({chr(i): i - ord("a") + 3 for i in range(ord("a"), ord("z") + 1)})
@@ -475,7 +475,7 @@ def test_OggZipDataset():
 
     _demo_txt = "some utterance text"
 
-    with create_ogg_zip_txt_only_dataset(_demo_txt) as dataset:
+    with create_ogg_zip_txt_only_dataset(text=_demo_txt) as dataset:
         assert isinstance(dataset, OggZipDataset)
         dataset.init_seq_order(epoch=1)
         dataset.load_seqs(0, 1)
@@ -485,7 +485,7 @@ def test_OggZipDataset():
         print("raw:", raw)
         print("orth:", orth)
         print("classes:", classes)
-        assert isinstance(raw, numpy.ndarray) and raw.dtype == numpy.object and raw.shape == ()
+        assert isinstance(raw, numpy.ndarray) and raw.dtype.name.startswith("str") and raw.shape == ()
         raw_ = raw.item()
         assert isinstance(raw_, str) and raw_ == _demo_txt
         assert isinstance(orth, numpy.ndarray) and orth.dtype == numpy.uint8 and orth.ndim == 1
