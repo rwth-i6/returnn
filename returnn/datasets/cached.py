@@ -129,6 +129,10 @@ class CachedDataset(Dataset):
                 return False
         return True
 
+    def supports_seq_order_sorting(self) -> bool:
+        """supports sorting"""
+        return True
+
     def get_current_seq_order(self):
         assert self.cache_byte_size_limit_at_start == 0  # not implemented otherwise, we ignore _index_map
         return self._seq_index

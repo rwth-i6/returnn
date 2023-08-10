@@ -427,6 +427,14 @@ class MetaDataset(CachedDataset2):
             dataset.init_seq_order(epoch=epoch, seq_list=self.seq_list_ordered[dataset_key])
         return True
 
+    def supports_seq_order_sorting(self) -> bool:
+        """supports sorting"""
+        if self.seq_order_control_dataset:
+            return self.datasets[self.seq_order_control_dataset].supports_seq_order_sorting()
+        if self._seq_lens or self._seq_order_seq_lens_file:
+            return True
+        return False
+
     def get_current_seq_order(self):
         """
         :return: current seq order for the current epoch, after self.init_seq_order was called.
@@ -1446,6 +1454,10 @@ class ConcatSeqsDataset(CachedDataset2):
         assert sub_seq_idx == len(sub_seq_list) and len(seq_list) == len(sub_seq_idxs)
         self.cur_sub_seq_idxs = sub_seq_idxs
         return self.sub_dataset.init_seq_order(seq_list=sub_seq_list)
+
+    def supports_seq_order_sorting(self) -> bool:
+        """supports sorting"""
+        return True
 
     def have_corpus_seq_idx(self):
         """

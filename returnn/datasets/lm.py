@@ -301,6 +301,10 @@ class LmDataset(CachedDataset2):
             self.seq_gen.random_seed(epoch)
         return True
 
+    def supports_seq_order_sorting(self) -> bool:
+        """supports sorting"""
+        return True
+
     def _reduce_log_skipped_seqs(self):
         if isinstance(self.log_skipped_seqs, bool):
             return
@@ -1468,6 +1472,10 @@ class TranslationDataset(CachedDataset2):
                 get_seq_len=lambda i: len(self._get_data(key=self.main_source_data_key, line_nr=i)),
             )
         self._num_seqs = len(self._seq_order)
+        return True
+
+    def supports_seq_order_sorting(self) -> bool:
+        """supports sorting"""
         return True
 
     def get_estimated_seq_length(self, seq_idx):

@@ -134,6 +134,14 @@ class MapDatasetWrapper(CachedDataset2):
 
         return True
 
+    def supports_seq_order_sorting(self) -> bool:
+        """supports sorting"""
+        try:
+            self._dataset.get_seq_len(0)
+            return True
+        except OptionalNotImplementedError:
+            return False
+
     def _collect_single_seq(self, seq_idx):
         """
         :param int seq_idx: sorted seq idx

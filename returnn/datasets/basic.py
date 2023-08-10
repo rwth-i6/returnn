@@ -648,6 +648,12 @@ class Dataset(object):
         """
         raise OptionalNotImplementedError
 
+    def supports_seq_order_sorting(self) -> bool:
+        """
+        :return: whether "sorted" or "sorted_reverse" is supported for seq_ordering
+        """
+        return False
+
     def _base_init(self):
         self.zpad = None
         # We expect that the following attributes are already set elsewhere, by a derived class.

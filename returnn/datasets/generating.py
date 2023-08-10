@@ -1061,6 +1061,10 @@ class StaticDataset(CachedDataset2):
         self._num_seqs = len(self._seq_order)
         return True
 
+    def supports_seq_order_sorting(self) -> bool:
+        """supports sorting"""
+        return True
+
     def _collect_single_seq(self, seq_idx):
         """
         :param int seq_idx:
@@ -1662,9 +1666,13 @@ class TimitDataset(CachedDataset2):
         super(TimitDataset, self).init_seq_order(epoch=epoch, seq_list=seq_list, seq_order=seq_order)
         self._num_seqs = len(self._seq_tags)
         self._seq_order = self.get_seq_order_for_epoch(
-            epoch=epoch, num_seqs=self._num_seqs, get_seq_len=lambda i: len(self._seq_tags[i][1])
+            epoch=epoch, num_seqs=self._num_seqs, get_seq_len=lambda i: len(self._audio_data[self._seq_tags[i]][0])
         )
         self._random.seed(self._get_random_seed_for_epoch(epoch=epoch))
+        return True
+
+    def supports_seq_order_sorting(self) -> bool:
+        """supports sorting"""
         return True
 
     def _collect_single_seq(self, seq_idx):
@@ -2173,6 +2181,10 @@ class LibriSpeechCorpus(CachedDataset2):
                 )
             else:
                 print("%s, epoch %i. No filter for this epoch." % (self, epoch), file=log.v4)
+        return True
+
+    def supports_seq_order_sorting(self) -> bool:
+        """supports sorting"""
         return True
 
     def get_current_seq_order(self):

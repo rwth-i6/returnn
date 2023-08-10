@@ -729,6 +729,10 @@ class NextGenHDFDataset(CachedDataset2):
             epoch = epoch or 1
             self.seq_order = self.get_seq_order_for_epoch(epoch, len(self.all_seq_names), self._get_seq_length)
 
+    def supports_seq_order_sorting(self) -> bool:
+        """supports sorting"""
+        return True
+
     def _get_seq_length(self, orig_seq_idx):
         """
         :type orig_seq_idx: int

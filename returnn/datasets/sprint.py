@@ -1238,6 +1238,10 @@ class SprintCacheDataset(CachedDataset2):
         self._num_seqs = len(self.seq_list_ordered)
         return True
 
+    def supports_seq_order_sorting(self) -> bool:
+        """supports sorting"""
+        return True
+
     def get_dataset_seq_for_name(self, name, seq_idx=-1):
         """
         :param str name:
