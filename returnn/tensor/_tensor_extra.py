@@ -319,8 +319,8 @@ class _TensorMixin(_TensorMixinBase):
             # However, we are more explicit.
             # We assume that the placeholder has already a known shape, and error otherwise.
             backend = self._raw_backend
-            assert backend.get_ndim_raw(self._raw_tensor) == self.batch_ndim
             raw_shape = backend.get_known_shape_raw(self._raw_tensor)
+            assert len(raw_shape) == self.batch_ndim, f"Mismatching shape ndim: Raw tensor {raw_shape} vs Tensor {self}"
             for i in range(self.batch_ndim):
                 if self.batch_shape[i] is None:
                     continue  # we allow anything in the placeholder
