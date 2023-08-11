@@ -3,7 +3,7 @@ Main engine for PyTorch
 """
 
 from __future__ import annotations
-from typing import Optional, Union, Callable, Dict, List
+from typing import Optional, Any, Union, Callable, Dict, List
 from contextlib import nullcontext
 
 import gc
@@ -653,6 +653,9 @@ class Engine(EngineBase):
         assert isinstance(dataset, Dataset)
         assert isinstance(callback, ForwardCallbackIface)
 
+        epoch_start_time = time.time()
+        elapsed_computation_time = 0.0
+
         self._pt_model.eval()
 
         if dataset.supports_seq_order_sorting():
@@ -716,7 +719,9 @@ class Engine(EngineBase):
         with torch.no_grad():
             callback.init(model=self._orig_model)
 
+            step_idx = 0
             for extern_data_raw in data_loader:
+                step_begin_time = time.time()
                 extern_data = _raw_dict_to_extern_data(
                     extern_data_raw, extern_data_template=self.extern_data, device=self._device
                 )
@@ -732,7 +737,19 @@ class Engine(EngineBase):
                         model_outputs_per_batch.data[k] = _get_tensor_wo_batch_numpy(v)
                     callback.process_seq(seq_tag=seq_tag, outputs=model_outputs_per_batch)
 
+                elapsed_computation_time += time.time() - step_begin_time
+                _print_process(f"ep {self.epoch} {dataset.name} forward", step=step_idx, eval_info=None)
+                step_idx += 1
+
             callback.finish()
+
+        elapsed = time.time() - epoch_start_time
+        elapsed_computation_percentage = elapsed_computation_time / elapsed
+        print(
+            "Forward %i steps, %s elapsed (%.1f%% computing time)"
+            % (step_idx, hms(elapsed), (elapsed_computation_percentage * 100.0)),
+            file=log.v3,
+        )
 
     @staticmethod
     def delete_model(filename):
@@ -851,13 +868,13 @@ def _get_dyn_dims_from_extern_data(extern_data: TensorDict) -> List[Dim]:
     return res
 
 
-def _print_process(report_prefix, step, eval_info):
+def _print_process(report_prefix: str, step: int, eval_info: Optional[Dict[str, Any]] = None):
     """
     Similar but simplified from TF engine _print_process.
 
-    :param str report_prefix:
-    :param int step:
-    :param dict[str] eval_info: via :func:`_collect_eval_info`
+    :param report_prefix:
+    :param step:
+    :param eval_info:
     :return: nothing, will be printed to log
     """
     if log.verbose[5]:
