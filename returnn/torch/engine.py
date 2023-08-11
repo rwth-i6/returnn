@@ -236,8 +236,6 @@ class Engine(EngineBase):
         """
         print("start", self.get_epoch_str(), "with learning rate", self.learning_rate, "...", file=log.v4)
 
-        self._pt_model.train()
-
         accumulated_losses_dict = NumbersDict()
         accumulated_inv_norm_factors_dict = NumbersDict()
         step_idx = 0
@@ -246,11 +244,15 @@ class Engine(EngineBase):
         data_iter = iter(self._train_dataloader)
         elapsed_computation_time = 0
 
+        self._pt_model.train()
+
         while True:
             with torch.no_grad():
                 extern_data_raw = next(data_iter, None)
-            _has_data = torch.tensor([extern_data_raw is not None], dtype=torch.int8)
 
+            step_begin_time = time.time()
+
+            _has_data = torch.tensor([extern_data_raw is not None], dtype=torch.int8)
             if self._use_torch_distributed:
                 # use all reduce to check if all workers have data, if at least one worker does not have data,
                 # all workers finish this epoch
@@ -261,8 +263,6 @@ class Engine(EngineBase):
             # clear the gradients when every gradient accumulation loop starts
             if step_idx % self._accum_grad_multiple_step == 0:
                 self._updater.get_optimizer().zero_grad()
-
-            step_begin_time = time.time()
 
             extern_data = _raw_dict_to_extern_data(
                 extern_data_raw, extern_data_template=self.extern_data, device=self._device
