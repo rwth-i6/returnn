@@ -8689,23 +8689,21 @@ class ShiftAxisLayer(_ConcatInputLayer):
         :param int|float|bool pad_value: padding value
         :param bool adjust_size_info: whether to adjust the size_placeholder
         """
-        from returnn.tf.util.basic import single_strided_slice
-        import numpy
-
         super(ShiftAxisLayer, self).__init__(**kwargs)
         assert isinstance(amount, int)
         axis = self.input_data.get_axis_from_description(axis)
-        paddings = numpy.zeros(shape=(self.input_data.batch_ndim, 2), dtype="int32")
         if amount < 0:  # left-shift
-            shifted = single_strided_slice(self.input_data.placeholder, axis=axis, begin=-amount)
-            paddings[axis] = [0, -amount]
+            shifted = tf_util.single_strided_slice(self.input_data.placeholder, axis=axis, begin=-amount)
         elif amount > 0:  # right-shift
             # discard `amount` values in the end of the axis
-            shifted = single_strided_slice(self.input_data.placeholder, axis=axis, end=-amount)
-            paddings[axis] = [amount, 0]
+            shifted = tf_util.single_strided_slice(self.input_data.placeholder, axis=axis, end=-amount)
         else:
             assert False, "amount == 0 equals no operation"
         if pad:
+            dim = tf_util.get_shape_dim(self.input_data.placeholder, axis)
+            pad_amount = (tf.minimum if isinstance(dim, tf.Tensor) else min)(abs(amount), dim)
+            paddings = [[0, 0] for _ in range(self.input_data.batch_ndim)]
+            paddings[axis] = [pad_amount, 0] if amount > 0 else [0, pad_amount]
             # insert missing values, so that the shape is preserved
             shifted = tf.pad(shifted, paddings, constant_values=pad_value)
         self.output.placeholder = shifted

@@ -2550,7 +2550,7 @@ def test_compare_layer():
         assert_equal(v, True)
 
 
-def test_shift_layer():
+def test_ShiftAxisLayer():
     with make_scope() as session:
         import numpy as np
 
@@ -2570,6 +2570,7 @@ def test_shift_layer():
                         "amount": shift_amount,
                         "pad": True,
                         "axis": "T",
+                        "adjust_size_info": False,
                     }
                 },
             }
@@ -2577,15 +2578,51 @@ def test_shift_layer():
         network = TFNetwork(config=config, train_flag=True)
         network.construct_from_dict(config.typed_dict["network"])
         out = network.get_default_output_layer(must_exist=True)
-        input_data = np.ones(shape=(batch_size, time_size, feat_size))
-        input_data[0, :, 0] = np.arange(time_size)  # 0..time_size in time-axis
-        feed_dict = {network.layers["data"].output.placeholder: input_data}
+        input_np = np.ones(shape=(batch_size, time_size, feat_size))
+        input_np[0, :, 0] = np.arange(time_size)  # 0..time_size in time-axis
+        feed_dict = {network.layers["data"].output.placeholder: input_np}
         v = session.run(out.output.placeholder, feed_dict)
 
         assert_equal(v.shape, (batch_size, time_size, feat_size))
         assert_equal(np.equal(v[0, shift_amount:, 0], np.arange(time_size - shift_amount)).all(), True)
         assert_equal((v[:, :shift_amount, :] == 0).all(), True)  # padding
         assert_equal((v[1:, shift_amount:, :] == 1).all(), True)
+
+
+def test_ShiftAxisLayer_small_time():
+    with make_scope() as session:
+        import numpy as np
+
+        batch_size = 3
+        time_size = 4
+        feat_size = 2
+        shift_amount = 5  # right-shift of 5 elements, more than time_size
+        config = Config()
+        config.update(
+            {
+                "num_outputs": feat_size,
+                "num_inputs": feat_size,
+                "network": {
+                    "output": {
+                        "class": "shift_axis",
+                        "from": ["data"],
+                        "amount": shift_amount,
+                        "pad": True,
+                        "axis": "T",
+                        "adjust_size_info": False,
+                    }
+                },
+            }
+        )
+        network = TFNetwork(config=config, train_flag=True)
+        network.construct_from_dict(config.typed_dict["network"])
+        out = network.get_default_output_layer(must_exist=True)
+        input_np = np.ones(shape=(batch_size, time_size, feat_size))
+        feed_dict = {network.layers["data"].output.placeholder: input_np}
+        v = session.run(out.output.placeholder, feed_dict)
+
+        assert_equal(v.shape, (batch_size, time_size, feat_size))
+        assert_equal((v == 0).all(), True)  # padding
 
 
 def test_ReinterpretDataLayer_change_batch_to_spatial():
