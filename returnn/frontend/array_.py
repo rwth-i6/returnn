@@ -73,12 +73,12 @@ def convert_to_tensor(
         if dims is None:
             dims = ()
         if dtype is None:
-            if isinstance(value, int):
+            if isinstance(value, bool):
+                dtype = "bool"
+            elif isinstance(value, int):
                 dtype = rf.get_default_int_dtype()
             elif isinstance(value, float):
                 dtype = rf.get_default_float_dtype()
-            elif isinstance(value, bool):
-                dtype = "bool"
             elif isinstance(value, str):
                 dtype = "string"
             elif isinstance(value, numpy.number):
