@@ -429,9 +429,13 @@ class Layer:
         # However, this can always be done via the `name_scope` option,
         # if the name would not match otherwise.
         queue = [self.root]  # type: List[Layer]
+        visited: Set[Layer] = set()
         mod_in_layer = {}  # type: Dict[Tuple[Layer, RefIdEq[rf.Module]], Layer]
         while queue:
             ctx = queue.pop(0)
+            if ctx in visited:  # can happen when parents are reassigned
+                continue
+            visited.add(ctx)
 
             assert not ctx.parent or ctx.parent.children[ctx.name] is ctx
             for child in ctx.children.values():
