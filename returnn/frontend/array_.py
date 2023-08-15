@@ -527,7 +527,7 @@ def reverse_sequence(tensor: Tensor, *, axis: Dim) -> Tensor:
 
 
 def where(
-    cond: Tensor,
+    cond: Union[Tensor, rf.RawTensorTypes],
     true_: Union[Tensor, rf.RawTensorTypes],
     false_: Union[Tensor, rf.RawTensorTypes],
     *,
@@ -538,6 +538,7 @@ def where(
 
     :return: true_ if cond else false_, elemwise.
     """
+    cond = rf.convert_to_tensor(cond)
     # noinspection PyProtectedMember
     return cond._raw_backend.where(cond, true_, false_, allow_broadcast_all_sources=allow_broadcast_all_sources)
 
