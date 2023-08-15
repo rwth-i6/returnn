@@ -339,6 +339,7 @@ jobs:
           - TEST=rf_conv
           - TEST=rf_encoder_conformer
           - TEST=rf_gradient
+          - TEST=rf_label_smoothing
           - TEST=rf_loop
           - TEST=rf_math
           - TEST=rf_normalization
