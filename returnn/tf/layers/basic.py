@@ -9850,7 +9850,7 @@ class TopKLayer(LayerBase):
         :param bool sorted:
         """
         super(TopKLayer, self).__init__(**kwargs)
-        in_data = self.sources[0].output
+        in_data = self.sources[0].output.copy()
 
         if isinstance(axis, (str, Dim)):
             single_axis = True
@@ -9864,6 +9864,14 @@ class TopKLayer(LayerBase):
         remaining_axes = [a for a in in_data.dim_tags if a not in axes]
         in_data = in_data.copy_transpose([in_data.get_axis_from_description(a) for a in remaining_axes + axes])
         assert in_data.dim_tags == tuple(remaining_axes + axes)
+
+        for a in axes:
+            if a.need_masking():
+                in_data.raw_tensor = tf_util.where_bc(
+                    a.get_mask(dim_order=in_data.dims, device=in_data.device).raw_tensor,
+                    in_data.raw_tensor,
+                    in_data.raw_tensor.dtype.min,
+                )
 
         # Merge the axes because top_k will do a joint search over them.
         if len(axes) > 1:

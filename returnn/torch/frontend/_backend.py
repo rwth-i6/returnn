@@ -1043,7 +1043,7 @@ class TorchBackend(Backend[torch.Tensor]):
     # noinspection PyShadowingBuiltins
     @staticmethod
     def top_k(
-        source: Tensor,
+        source: Tensor[torch.Tensor],
         *,
         axis: Union[Dim, Sequence[Dim]],
         k: Union[int, Tensor],
@@ -1053,6 +1053,21 @@ class TorchBackend(Backend[torch.Tensor]):
         """top_k"""
         if not k_dim:
             k_dim = Dim(k, name="top-k-dim")
+        axes = [axis] if isinstance(axis, Dim) else axis
+        if any(a.need_masking() for a in axes):
+            mask_value = (
+                torch.finfo(source.raw_tensor.dtype).min
+                if source.raw_tensor.dtype.is_floating_point
+                else torch.iinfo(source.raw_tensor.dtype).min
+            )
+            source = source.copy()
+            for a in axes:
+                if a.need_masking():
+                    source = rf.where(
+                        a.get_mask(dim_order=source.dims, device=source.device),
+                        source,
+                        mask_value,
+                    )
         if isinstance(axis, (list, tuple)):
             # Move axis to the end, in the right order.
             source = source.copy_transpose([d for d in source.dims if d not in axis] + list(axis))
@@ -1078,7 +1093,6 @@ class TorchBackend(Backend[torch.Tensor]):
                 indices_out.insert(0, indices)
             return values, indices_out, k_dim
         assert isinstance(axis, Dim)
-        assert not axis.need_masking()  # not supported currently
         axis_int = source.get_axis_from_description(axis, allow_int=False)
         values_raw, indices_raw = torch.topk(
             source.raw_tensor, k=k_dim.get_dim_value(), dim=axis_int, largest=True, sorted=sorted
