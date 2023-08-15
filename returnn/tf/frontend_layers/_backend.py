@@ -142,6 +142,17 @@ class ReturnnLayersBackend(Backend[Layer]):
         return rfl.make_layer({"class": "cast", "from": tensor, "dtype": dtype}, name="cast")
 
     @staticmethod
+    def set_requires_gradient(tensor: Tensor):
+        """
+        set requires gradient; not needed for TensorFlow, will always calculate whatever is needed
+        """
+
+    @staticmethod
+    def gradient(y: Tensor, x: Tensor) -> Tensor:
+        """gradient"""
+        return rfl.make_layer({"class": "gradient", "y": y, "x": x}, name="gradient")
+
+    @staticmethod
     def stop_gradient(tensor: Tensor) -> Tensor:
         """stop grad"""
         return rfl.make_layer({"class": "scaled_grad", "from": tensor, "scale": 0}, name="stop_gradient")

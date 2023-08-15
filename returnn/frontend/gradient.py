@@ -7,7 +7,26 @@ from typing import Optional, Union
 from returnn.tensor import Tensor, Dim
 
 
-__all__ = ["stop_gradient", "scaled_gradient", "scaled_gradient_ext"]
+__all__ = ["set_requires_gradient", "gradient", "stop_gradient", "scaled_gradient", "scaled_gradient_ext"]
+
+
+def set_requires_gradient(source: Tensor):
+    """
+    :param source:
+    :return: nothing, modifies source in-place
+    """
+    # noinspection PyProtectedMember
+    return source._raw_backend.set_requires_gradient(source)
+
+
+def gradient(y: Tensor, x: Tensor) -> Tensor:
+    """
+    :param y: some scalar
+    :param x: some tensor
+    :return: gradient of y w.r.t. x
+    """
+    # noinspection PyProtectedMember
+    return y._raw_backend.gradient(y, x)
 
 
 def stop_gradient(source: Tensor) -> Tensor:
