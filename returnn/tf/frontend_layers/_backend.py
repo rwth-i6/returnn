@@ -147,6 +147,27 @@ class ReturnnLayersBackend(Backend[Layer]):
         return rfl.make_layer({"class": "scaled_grad", "from": tensor, "scale": 0}, name="stop_gradient")
 
     @staticmethod
+    def scaled_gradient(tensor: Tensor, scale: Union[float, Tensor]) -> Tensor:
+        """scaled gradient"""
+        return rfl.make_layer({"class": "scaled_grad", "from": tensor, "scale": scale}, name="scaled_gradient")
+
+    @staticmethod
+    def scaled_gradient_ext(
+        x: Tensor, *, scale: float = 1.0, shift: float = 0.0, scale_shift_by_sum_over_axis: Optional[Dim] = None
+    ):
+        """scaled gradient ext"""
+        return rfl.make_layer(
+            {
+                "class": "scaled_grad",
+                "from": x,
+                "scale": scale,
+                "shift": shift,
+                "scale_shift_by_sum_over_axis": scale_shift_by_sum_over_axis,
+            },
+            name="scaled_gradient_ext",
+        )
+
+    @staticmethod
     def merge_dims(
         source: Tensor,
         *,

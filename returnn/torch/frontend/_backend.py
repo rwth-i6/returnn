@@ -189,6 +189,33 @@ class TorchBackend(Backend[torch.Tensor]):
         return out
 
     @staticmethod
+    def scaled_gradient(tensor: Tensor, scale: Union[float, Tensor]) -> Tensor:
+        """scaled gradient"""
+        from returnn.torch.functional.scaled_gradient import scaled_gradient
+
+        out = tensor.copy()
+        out.raw_tensor = scaled_gradient(out.raw_tensor, scale=scale)
+        return out
+
+    @staticmethod
+    def scaled_gradient_ext(
+        x: Tensor, *, scale: float = 1.0, shift: float = 0.0, scale_shift_by_sum_over_axis: Optional[Dim] = None
+    ):
+        """scaled gradient ext"""
+        from returnn.torch.functional.scaled_gradient import scaled_gradient_ext
+
+        out = x.copy()
+        out.raw_tensor = scaled_gradient_ext(
+            out.raw_tensor,
+            scale=scale,
+            shift=shift,
+            scale_shift_by_sum_over_axis=x.get_axis_from_description(scale_shift_by_sum_over_axis, allow_int=False)
+            if scale_shift_by_sum_over_axis is not None
+            else None,
+        )
+        return out
+
+    @staticmethod
     def merge_dims(
         source: Tensor,
         *,

@@ -297,6 +297,28 @@ class Backend(Generic[T]):
         raise NotImplementedError
 
     @staticmethod
+    def scaled_gradient(tensor: Tensor, scale: Union[float, Tensor]) -> Tensor:
+        """
+        :param tensor:
+        :param scale:
+        :return: tensor with scaled gradient
+        """
+        raise NotImplementedError
+
+    @staticmethod
+    def scaled_gradient_ext(
+        x: Tensor, *, scale: float = 1.0, shift: float = 0.0, scale_shift_by_sum_over_axis: Optional[Dim] = None
+    ):
+        """
+        :param x:
+        :param scale: will scale gradient by this value
+        :param shift: will shift gradient by this value
+        :param scale_shift_by_sum_over_axis: if given, will scale and shift by the sum over the given axis
+        :return: just x, but gradient in backward pass will be transformed accordingly
+        """
+        raise NotImplementedError
+
+    @staticmethod
     def merge_dims(
         source: Tensor,
         *,
