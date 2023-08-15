@@ -50,6 +50,7 @@ from __future__ import annotations
 from typing import Optional, Union, Sequence, Dict
 import numpy
 from returnn.tensor import Tensor, Dim
+import returnn.frontend as rf
 from ._backend import global_backend as _global_backend
 
 
@@ -201,6 +202,8 @@ def random(
         if static:
             if seed is None:
                 seed = get_static_step_based_seed()
+    if dtype is None:
+        dtype = rf.get_default_float_dtype()
     return _global_backend.random(
         dims=dims,
         dtype=dtype,
