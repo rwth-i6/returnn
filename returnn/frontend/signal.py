@@ -5,10 +5,15 @@ stft etc
 
 from __future__ import annotations
 from typing import Optional, Union, Tuple
+import math
 import numpy
 import functools
+from returnn.util import math as util_math
 from returnn.tensor import Tensor, Dim
 import returnn.frontend as rf
+
+
+__all__ = ["stft", "mel_filterbank", "log_mel_filterbank_from_raw"]
 
 
 def stft(
@@ -230,3 +235,48 @@ def _mel_filter_bank_matrix_np(
             f_mat[i1, i2 - 1] = el_val
 
     return f_mat
+
+
+def log_mel_filterbank_from_raw(
+    raw_audio: Tensor,
+    *,
+    in_spatial_dim: Dim,
+    out_dim: Dim,
+    sampling_rate: int = 16_000,
+    window_len: float = 0.025,
+    step_len: float = 0.010,
+    n_fft: Optional[int] = None,
+    log_base: Union[int, float] = 10,
+) -> Tuple[Tensor, Dim]:
+    """
+    log mel filterbank features
+
+    :param raw_audio: (..., in_spatial_dim, ...). if it has a feature_dim with dimension 1, it is squeezed away.
+    :param in_spatial_dim:
+    :param out_dim: nr of mel filters.
+    :param sampling_rate: samples per second
+    :param window_len: in seconds
+    :param step_len: in seconds
+    :param n_fft: fft_size, n_fft. Should match fft_length from :func:`stft`.
+        If not provided, next power-of-two from window_num_frames.
+    :param log_base: e.g. 10 or math.e
+    """
+    if raw_audio.feature_dim and raw_audio.feature_dim.dimension == 1:
+        raw_audio = rf.squeeze(raw_audio, axis=raw_audio.feature_dim)
+    window_num_frames = int(window_len * sampling_rate)
+    step_num_frames = int(step_len * sampling_rate)
+    if not n_fft:
+        n_fft = util_math.next_power_of_two(window_num_frames)
+    spectrogram, out_spatial_dim, in_dim_ = rf.stft(
+        raw_audio,
+        in_spatial_dim=in_spatial_dim,
+        frame_step=step_num_frames,
+        frame_length=window_num_frames,
+        fft_length=n_fft,
+    )
+    power_spectrogram = rf.abs(spectrogram) ** 2.0
+    mel_fbank = rf.mel_filterbank(power_spectrogram, in_dim=in_dim_, out_dim=out_dim, sampling_rate=sampling_rate)
+    log_mel_fbank = rf.safe_log(mel_fbank, eps=1e-10)
+    if log_base != math.e:
+        log_mel_fbank = log_mel_fbank * (1.0 / math.log(log_base))
+    return log_mel_fbank, out_spatial_dim
