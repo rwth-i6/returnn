@@ -29,20 +29,20 @@ def reset_run_ctx():
     _run_ctx = None
 
 
-def init_train_step_run_ctx(*, train_flag: Union[bool, Tensor]):
+def init_train_step_run_ctx(*, train_flag: Union[bool, Tensor], step: Union[int, Tensor]):
     """
     Call this at the beginning of a new train step.
     """
     global _run_ctx
-    _run_ctx = RunCtx(stage="train_step", train_flag=train_flag)
+    _run_ctx = RunCtx(stage="train_step", train_flag=train_flag, step=step)
 
 
-def init_forward_step_run_ctx(expected_outputs: Optional[TensorDict] = None):
+def init_forward_step_run_ctx(*, expected_outputs: Optional[TensorDict] = None, step: Union[int, Tensor]):
     """
     Call this at the beginning of a new forward step.
     """
     global _run_ctx
-    _run_ctx = RunCtx(stage="forward_step", expected_outputs=expected_outputs)
+    _run_ctx = RunCtx(stage="forward_step", expected_outputs=expected_outputs, step=step)
 
 
 def get_run_ctx() -> RunCtx:
@@ -68,7 +68,12 @@ class RunCtx:
     """
 
     def __init__(
-        self, *, stage: str, train_flag: Union[bool, Tensor] = False, expected_outputs: Optional[TensorDict] = None
+        self,
+        *,
+        stage: str,
+        train_flag: Union[bool, Tensor] = False,
+        step: Union[int, Tensor] = 0,
+        expected_outputs: Optional[TensorDict] = None,
     ):
         """
         :param stage:
@@ -78,6 +83,7 @@ class RunCtx:
         """
         self._stage = stage
         self._train_flag = train_flag
+        self._step = step
         self.losses = {}  # type: Dict[str, Loss]
         self.outputs = TensorDict()
         self.expected_outputs = expected_outputs
@@ -97,6 +103,14 @@ class RunCtx:
             In a graph-based backend, this can be dynamic.
         """
         return self._train_flag
+
+    @property
+    def step(self) -> Union[int, Tensor]:
+        """
+        :return: global train step, starting with 0, not reset after an epoch, i.e. ignoring the epochs.
+            In a graph-based backend, this can be dynamic.
+        """
+        return self._step
 
     def mark_as_loss(
         self,

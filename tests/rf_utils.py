@@ -99,7 +99,7 @@ def run_model_torch(extern_data: TensorDict, get_model: rf.GetModelFunc, forward
     tensor_dict_numpy_to_torch_(extern_data)
 
     model = get_model(epoch=1, step=0)
-    rf.init_forward_step_run_ctx()
+    rf.init_forward_step_run_ctx(step=0)
     forward_step(model=model, extern_data=extern_data)
     outputs = rf.get_run_ctx().outputs
     assert outputs.data

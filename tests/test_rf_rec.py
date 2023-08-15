@@ -285,7 +285,7 @@ def test_zoneout_lstm_tf_layers_vs_rf_pt():
         new_model.lstm.bias.raw_tensor.copy_(torch.from_numpy(tf_lstm_bias))
 
     print("*** Forward")
-    rf.init_train_step_run_ctx(train_flag=False)
+    rf.init_train_step_run_ctx(train_flag=False, step=0)
     extern_data.reset_content()
     extern_data.assign_from_raw_tensor_dict_(extern_data_numpy_raw_dict)
     tensor_dict_numpy_to_torch_(extern_data)

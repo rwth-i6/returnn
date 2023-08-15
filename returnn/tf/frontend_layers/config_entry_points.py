@@ -47,15 +47,19 @@ def get_net_dict(
     model = get_model_func(epoch=epoch, step=step)
 
     task = config.value("task", None)
+    step_tensor = rfl.make_layer({"class": "global_train_step"}, name="global_train_step")
     if task in {"train", "eval"}:
-        rf.init_train_step_run_ctx(train_flag=rfl.make_layer({"class": "train_flag"}, name="train_flag"))
+        rf.init_train_step_run_ctx(
+            train_flag=rfl.make_layer({"class": "train_flag"}, name="train_flag"),
+            step=step_tensor,
+        )
         train_step_func = get_global_config().typed_value("train_step")
         train_step_func(
             model=model,
             extern_data=extern_data,
         )
     elif task in {"forward", "search"}:
-        rf.init_forward_step_run_ctx()
+        rf.init_forward_step_run_ctx(step=step_tensor)
         forward_step_func = get_global_config().typed_value("forward_step")
         forward_step_func(
             model=model,

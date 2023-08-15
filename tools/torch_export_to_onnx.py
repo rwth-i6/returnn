@@ -192,12 +192,13 @@ def main():
     ), "The specified config needs to have explicit model outputs. Please define `model_outputs` in your config."
     model_outputs = TensorDict()
     model_outputs.update(model_outputs_dict, auto_convert=True)
-    rf.init_forward_step_run_ctx(expected_outputs=model_outputs)
-    rf.set_random_seed(42)
 
     loaded_checkpoint = torch.load(args.checkpoint, map_location=torch.device(args.device))
     epoch = loaded_checkpoint["epoch"]
     step = loaded_checkpoint["step"]
+
+    rf.init_forward_step_run_ctx(expected_outputs=model_outputs, step=step)
+    rf.set_random_seed(42)
 
     get_model_func = config.typed_value("get_model")
     assert get_model_func, "get_model() isn't specified in the config passed as a parameter."
