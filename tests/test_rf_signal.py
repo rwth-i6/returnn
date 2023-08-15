@@ -46,7 +46,7 @@ def test_mel_filterbank():
                 source, in_spatial_dim=in_spatial_dim, frame_step=3, frame_length=5, fft_length=6
             )
             source = rf.abs(source) ** 2.0
-            source = rf.mel_filterbank(source, in_dim=in_dim_, out_dim=feat_dim, sampling_rate=16)
+            source = rf.audio.mel_filterbank(source, in_dim=in_dim_, out_dim=feat_dim, sampling_rate=16)
             return source, in_spatial_dim
 
     # noinspection PyShadowingNames

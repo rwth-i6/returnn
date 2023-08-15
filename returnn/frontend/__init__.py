@@ -45,6 +45,7 @@ from .signal import *
 from .types import *
 
 # Modules not in the main namespace but in sub namespaces.
+from . import audio
 from . import init
 
 # And some functions from the internal backend API.
