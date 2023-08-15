@@ -129,8 +129,8 @@ def get_static_step_based_seed(*, size=None) -> Union[int, numpy.ndarray]:
 
 
 def random(
-    *,
     dims: Sequence[Dim],
+    *,
     dtype: Optional[str] = None,
     sparse_dim: Optional[Dim] = None,
     feature_dim: Optional[Dim] = None,
@@ -222,8 +222,8 @@ def random(
 
 
 def random_uniform(
-    *,
     dims: Sequence[Dim],
+    *,
     dtype: Optional[str] = None,
     sparse_dim: Optional[Dim] = None,
     feature_dim: Optional[Dim] = None,
@@ -257,8 +257,8 @@ def random_uniform(
 
 
 def random_normal(
-    *,
     dims: Sequence[Dim],
+    *,
     dtype: Optional[str] = None,
     sparse_dim: Optional[Dim] = None,
     feature_dim: Optional[Dim] = None,
@@ -292,8 +292,8 @@ def random_normal(
 
 
 def random_truncated_normal(
-    *,
     dims: Sequence[Dim],
+    *,
     dtype: Optional[str] = None,
     sparse_dim: Optional[Dim] = None,
     feature_dim: Optional[Dim] = None,
