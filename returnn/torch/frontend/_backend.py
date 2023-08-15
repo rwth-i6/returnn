@@ -182,6 +182,18 @@ class TorchBackend(Backend[torch.Tensor]):
         return raw_tensor.to(dtype=TorchBackend.as_dtype_raw(dtype))
 
     @staticmethod
+    def set_requires_gradient(tensor: Tensor[torch.Tensor]):
+        """set requires grad"""
+        tensor.raw_tensor.requires_grad = True
+
+    @staticmethod
+    def gradient(y: Tensor, x: Tensor) -> Tensor:
+        """gradient"""
+        out = x.copy_template(name="gradient")
+        out.raw_tensor = torch.autograd.grad(y.raw_tensor, x.raw_tensor, create_graph=True)[0]
+        return out
+
+    @staticmethod
     def stop_gradient(tensor: Tensor) -> Tensor:
         """stop grad"""
         out = tensor.copy()

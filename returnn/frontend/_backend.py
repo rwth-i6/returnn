@@ -289,6 +289,22 @@ class Backend(Generic[T]):
         return res
 
     @staticmethod
+    def set_requires_gradient(tensor: Tensor):
+        """
+        :param tensor:
+        """
+        raise NotImplementedError
+
+    @staticmethod
+    def gradient(y: Tensor, x: Tensor) -> Tensor:
+        """
+        :param y:
+        :param x:
+        :return: gradient of y w.r.t. x
+        """
+        raise NotImplementedError
+
+    @staticmethod
     def stop_gradient(tensor: Tensor) -> Tensor:
         """
         :param tensor:

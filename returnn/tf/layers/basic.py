@@ -11153,6 +11153,45 @@ class FastBaumWelchLayer(_ConcatInputLayer):
         return get_concat_sources_data_template(sources, name="%s_output" % name).copy_as_time_major()
 
 
+class GradientLayer(_ConcatInputLayer):
+    """
+    Calculates the gradient of y w.r.t. x.
+    """
+
+    layer_class = "gradient"
+
+    def __init__(self, y: LayerBase, x: LayerBase, **kwargs):
+        """
+        :param y:
+        :param x:
+        """
+        super(GradientLayer, self).__init__(**kwargs)
+        self.output.placeholder = tf.gradients(ys=y.output.placeholder, xs=x.output.placeholder)[0]
+
+    @classmethod
+    def transform_config_dict(cls, d, network, get_layer):
+        """
+        :param dict[str] d:
+        :param returnn.tf.network.TFNetwork network:
+        :param get_layer:
+        """
+        d.setdefault("from", [])
+        super(GradientLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
+        d["y"] = get_layer(d["y"])
+        d["x"] = get_layer(d["x"])
+
+    @classmethod
+    def get_out_data_from_opts(cls, y: LayerBase, x: LayerBase, name: str, **kwargs):
+        """
+        :param LayerBase y:
+        :param LayerBase x:
+        :param str name:
+        :rtype: Data
+        """
+        assert y.output.batch_ndim == 0, f"GradientLayer {name!r}: y should be a scalar, got {y}"
+        return x.output.copy_template(name="%s_output" % name)
+
+
 class SyntheticGradientLayer(_ConcatInputLayer):
     """
     This is a generalized way to be able to replace the true gradient with any kind of predicted gradient.
