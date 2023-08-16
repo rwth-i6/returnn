@@ -5184,6 +5184,8 @@ class ExpandDimsLayer(_ConcatInputLayer):
         :return: axis as int for data.placeholder
         :rtype: int
         """
+        if not data.dims:
+            return 0
         if isinstance(axis, int):
             return axis
         assert isinstance(axis, str)
@@ -5227,7 +5229,11 @@ class ExpandDimsLayer(_ConcatInputLayer):
         data = data.copy_template(name="%s_output" % name)
         data = data.copy_add_dim_by_tag(new_dim, unbroadcast=True, axis=axis)
         if isinstance(init_axis, str):
-            if init_axis.lower() in ["spatial", "time", "t"] and data.time_dim_axis is None:
+            if (
+                init_axis.lower() in ["spatial", "time", "t"]
+                and data.time_dim_axis is None
+                and axis not in {data.batch_dim_axis, data.feature_dim_axis}
+            ):
                 data.time_dim_axis = axis
         return data
 
