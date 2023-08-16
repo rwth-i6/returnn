@@ -810,14 +810,24 @@ class _DimMixin:
         """
         :return: whether :func:`get_for_batch_ctx` would return a valid existing dim tag
         """
+        from returnn.tensor import ControlFlowContext
+
         if self.is_batch_dim():
             return True
         if not self.is_dynamic():
             return self.dimension is not None
         dim = self.get_for_batch_ctx(batch=batch, ctx=ctx, allow_none=True)
-        if not dim:
-            return False
-        return bool(dim.dyn_size_ext)
+        if dim:
+            return bool(dim.dyn_size_ext)
+        candidates = [self, self.get_same_base()]
+        if self._extra:
+            candidates += list(self._extra.same_for_batch_ctx.values())
+        for dim in candidates:
+            # By intention, ignore the batch, only check the ctx.
+            # Keep logic in sync with get_for_batch_ctx.
+            if ControlFlowContext.is_parent_or_same(dim.control_flow_ctx, ctx) and dim.dyn_size_ext:
+                return True
+        return False
 
     def is_dynamic(self) -> bool:
         """
