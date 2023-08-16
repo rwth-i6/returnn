@@ -442,6 +442,8 @@ class _DimMixin:
         :param ControlFlowContext|None ctx:
         :param bool allow_none:
         """
+        from returnn.tensor import ControlFlowContext
+
         assert self.can_be_used_as_dim()
         if self.batch == batch and self._can_use_in_ctx(ctx) and self.dyn_size_ext:
             self._validate_in_current_graph()
@@ -461,13 +463,12 @@ class _DimMixin:
             return self
         if batch.is_broadcast():
             return self  # just leave as-is. should not matter.
+        dim_tag = None
         if self._extra:
             same_base = self.get_same_base()
             same_base._validate_in_current_graph()
             # noinspection PyProtectedMember
             if same_base._extra:
-                from returnn.tf.util.data import ControlFlowContext
-
                 for ctx_ in ControlFlowContext.abs_ctx_stack_with_root(ctx):
                     # noinspection PyProtectedMember
                     tag = same_base._extra.same_for_batch_ctx.get((batch, ctx_), None)
@@ -475,7 +476,10 @@ class _DimMixin:
                         assert (
                             tag.batch == batch
                         )  # some code updated batch directly (incorrectly) and could trigger this
-                        return tag
+                        if tag.dyn_size_ext:
+                            return tag
+                        dim_tag = tag
+                        break
             if same_base.batch == batch and same_base._can_use_in_ctx(ctx) and same_base.dyn_size_ext:
                 return same_base
         else:
@@ -499,6 +503,8 @@ class _DimMixin:
                     ctx = derived_ctxs.pop()
                 else:
                     raise NotImplementedError("not yet implemented: multiple derived ctxs: %r" % (derived_ctxs,))
+        if dim_tag:
+            assert not dim_tag.dyn_size_ext
         dyn_size_ext = None
         # Maybe we have sth with the base batch without beam or padded batch which we can extend.
         if batch != batch.get_global_base():
@@ -549,17 +555,20 @@ class _DimMixin:
                         if batch.beam:
                             dyn_size_ext.placeholder._RETURNN_dyn_size_beam = batch.beam
                             dyn_size_ext.placeholder._RETURNN_beam_expanded_base_data = beam_expanded_base_data
-        if not dyn_size_ext and same_base_extra.same_for_batch_ctx:
-            # There are earlier entries in _same_for_batch_ctx
-            # -- maybe we can infer dyn_size_ext, even with different batch.
-            for (batch_, ctx_), other in same_base_extra.same_for_batch_ctx.items():
-                if ctx_ == ctx and other.dyn_size_ext:
+        if not dyn_size_ext:
+            # Maybe we can infer dyn_size_ext, even with different batch.
+            # Keep logic in sync with is_dim_known_in_batch_ctx.
+            candidates = [self, same_base] + list(same_base_extra.same_for_batch_ctx.values())
+            for other in candidates:
+                if other.dyn_size_ext and ControlFlowContext.is_parent_or_same(other.control_flow_ctx, ctx):
                     dyn_size_ext = other.dyn_size_ext.copy_template()
                     dyn_size_ext.beam = batch.beam
                     dyn_size_ext.batch = batch
                     break
-        ctx = dyn_size_ext.control_flow_ctx if dyn_size_ext else ctx
-        dim_tag = None
+        if dyn_size_ext:
+            ctx = dyn_size_ext.control_flow_ctx
+        elif dim_tag:
+            ctx = dim_tag.control_flow_ctx
         for candidate in [self, same_base]:
             if (
                 (candidate.batch == batch or (not candidate.batch and batch.is_global_batch()))
@@ -581,8 +590,8 @@ class _DimMixin:
                     candidate.dyn_size_ext.batch = batch
                 else:
                     candidate.complete_dyn_size(template_only=True)
-                dim_tag = candidate
-                break
+                if not dim_tag:
+                    dim_tag = candidate
         if not dim_tag:
             if allow_none:
                 return None
@@ -600,7 +609,15 @@ class _DimMixin:
             if _d.Dim.get_tag_from_size_tensor(dyn_size_ext.placeholder) is None:
                 dim_tag.set_tag_on_size_tensor(dyn_size_ext.placeholder, batch=batch)
         same_base_extra.same_for_batch_ctx[(batch, ctx)] = dim_tag
-        dim_tag.complete_dyn_size(template_only=True)
+        if dyn_size_ext:
+            if not dim_tag.dyn_size_ext:
+                dim_tag.dyn_size_ext = dyn_size_ext
+            else:
+                assert dim_tag.dyn_size_ext.dims == dyn_size_ext.dims
+        elif dim_tag.dyn_size_ext:
+            pass
+        else:
+            dim_tag.complete_dyn_size(template_only=True)
         return dim_tag
 
     def reset_batch_ctx(self: Dim):
