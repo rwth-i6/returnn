@@ -58,6 +58,7 @@ class Backend(Generic[T]):
         body: Callable[[S], S],
         initial: S,
     ) -> S:
+        """while loop"""
         raise NotImplementedError
 
     @staticmethod

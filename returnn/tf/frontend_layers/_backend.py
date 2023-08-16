@@ -54,6 +54,7 @@ class ReturnnLayersBackend(Backend[Layer]):
         body: Callable[[S], S],
         initial: S,
     ) -> S:
+        """while loop"""
         # Have to put some arbitrary limit here, otherwise the RecLayer will complain.
         loop = rfl.Loop(max_seq_len=rf.constant(2**31 - 1, dims=()))
         loop.state.state = initial
