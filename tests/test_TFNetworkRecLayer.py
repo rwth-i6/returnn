@@ -6588,6 +6588,85 @@ def test_reclayer_reuse_params_partly_moved_out():
         session.run(rec_layer.output.placeholder, feed_dict=make_feed_dict(net.extern_data))
 
 
+def test_reclayer_simple_loop():
+    from returnn.tensor import Tensor, Dim, batch_dim
+    from test_TFNetworkLayer import make_feed_dict
+
+    time_dim = Dim(None, name="time")
+    feat_dim = Dim(3, name="feature")
+    loop_dim = Dim(Tensor("loop", [batch_dim], dtype="int32"))
+
+    net_dict = {
+        "time": {
+            "class": "length",
+            "from": ["data:data"],
+            "axis": time_dim,
+            "dtype": "int32",
+            "out_shape": {batch_dim},
+        },
+        "init": {"class": "constant", "value": 0, "shape": [batch_dim], "dtype": "int32"},
+        "loop": {
+            "class": "rec",
+            "from": [],
+            "unit": {
+                "reduce_max": {
+                    "class": "reduce",
+                    "from": "base:time",
+                    "mode": "max",
+                    "axis": (batch_dim,),
+                    "use_time_mask": False,
+                    "out_shape": set(),
+                },
+                "end_": {
+                    "class": "compare",
+                    "from": ["prev:add", "reduce_max"],
+                    "kind": "greater_equal",
+                    "out_shape": {batch_dim},
+                },
+                "end": {"class": "print", "from": "end_"},
+                "convert_to_tensor": {"class": "constant", "value": 1, "shape": (), "dtype": "int32"},
+                "add_": {
+                    "class": "combine",
+                    "from": ["prev:add", "convert_to_tensor"],
+                    "kind": "add",
+                    "out_shape": {batch_dim},
+                },
+                "add": {
+                    "class": "print",
+                    "from": "add_",
+                    "initial_output": "base:init",
+                    "need_last": True,
+                    "out_shape": {batch_dim},
+                },
+                "output": {"class": "copy", "from": "end", "out_shape": {batch_dim}},
+            },
+            "axis": loop_dim,
+            "include_eos": False,
+            "max_seq_len": 10,
+            "out_shape": {batch_dim, loop_dim},
+            "name_scope": "",
+        },
+        "final": {"class": "rec_last_output", "rec_layer": "loop", "sub_layer_name": "add", "out_shape": {batch_dim}},
+        "output": {"class": "copy", "from": "final"},
+    }
+    with make_scope() as session:
+        config = Config(
+            {
+                "extern_data": {
+                    "data": {"dim_tags": [batch_dim, time_dim, feat_dim], "time_dim_axis": 1, "feature_dim_axis": 2}
+                }
+            }
+        )
+        net = TFNetwork(config=config)
+        net.construct_from_dict(net_dict)
+        out = net.get_layer("output").output
+        n_batch, n_time = 3, 7
+        y = session.run(out.placeholder, feed_dict=make_feed_dict(net.extern_data, n_batch=n_batch, n_time=n_time))
+        assert isinstance(y, numpy.ndarray)
+        assert y.shape == (n_batch,)
+        assert (y == n_time).all()
+
+
 class TransformerNetwork:
     def __init__(self):
         self.encN = 3

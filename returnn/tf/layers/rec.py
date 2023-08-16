@@ -1404,7 +1404,12 @@ class _SubnetworkRecCell(object):
         if not time_dim_tag.is_dim_known() and self.net.used_data_keys:
             data = self.parent_net.get_extern_data(min(self.net.used_data_keys), mark_data_key_as_used=False)
             time_dim_tag.declare_same_as(data.get_time_dim_tag())
-        if not time_dim_tag.is_dim_known() and "end" in self.layer_data_templates:
+        if (
+            not time_dim_tag.is_dim_known_in_batch_ctx(
+                parent_net.get_global_batch_info(), parent_net.get_control_flow_ctx()
+            )
+            and "end" in self.layer_data_templates
+        ):
             end_data = self.layer_data_templates["end"].output
             dyn_size_ext = end_data.copy_template("%s:dyn-size" % rec_layer_name)
             dyn_size_ext.control_flow_ctx = parent_net.get_control_flow_ctx()

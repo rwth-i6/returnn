@@ -431,7 +431,9 @@ class _DimMixin:
                     if not same.dyn_size_ext or same.dyn_size_ext.placeholder is None:
                         same.dyn_size_ext = self.dyn_size_ext
 
-    def get_for_batch_ctx(self: Dim, batch, ctx, allow_none=False) -> Optional[Dim]:
+    def get_for_batch_ctx(
+        self: Dim, batch: BatchInfo, ctx: Optional[ControlFlowContext], *, allow_none: bool = False
+    ) -> Optional[Dim]:
         """
         Warning: This is only for TensorFlow, and also we might want to remove it.
         https://github.com/rwth-i6/returnn/issues/975
@@ -547,8 +549,6 @@ class _DimMixin:
                         if batch.beam:
                             dyn_size_ext.placeholder._RETURNN_dyn_size_beam = batch.beam
                             dyn_size_ext.placeholder._RETURNN_beam_expanded_base_data = beam_expanded_base_data
-        if not dyn_size_ext and allow_none and not same_base.derived_from_op:
-            return None
         if not dyn_size_ext and same_base_extra.same_for_batch_ctx:
             # There are earlier entries in _same_for_batch_ctx
             # -- maybe we can infer dyn_size_ext, even with different batch.
@@ -584,6 +584,8 @@ class _DimMixin:
                 dim_tag = candidate
                 break
         if not dim_tag:
+            if allow_none:
+                return None
             dim_tag = _d.Dim(
                 kind=self.kind,
                 description=self.description,
@@ -803,6 +805,19 @@ class _DimMixin:
                 if other.dyn_size_ext:
                     return True
         return False
+
+    def is_dim_known_in_batch_ctx(self: Dim, batch: BatchInfo, ctx: Optional[ControlFlowContext]) -> bool:
+        """
+        :return: whether :func:`get_for_batch_ctx` would return a valid existing dim tag
+        """
+        if self.is_batch_dim():
+            return True
+        if not self.is_dynamic():
+            return self.dimension is not None
+        dim = self.get_for_batch_ctx(batch=batch, ctx=ctx, allow_none=True)
+        if not dim:
+            return False
+        return bool(dim.dyn_size_ext)
 
     def is_dynamic(self) -> bool:
         """
