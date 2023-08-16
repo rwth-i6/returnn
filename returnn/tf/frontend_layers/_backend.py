@@ -688,7 +688,6 @@ class ReturnnLayersBackend(Backend[Layer]):
         indices = []
         for i, a in enumerate(axes):
             assert isinstance(a, Dim)
-            assert not a.need_masking()  # not supported currently
             sub_name = "indices" if single_axis else f"indices{i}"
             indices_data = values.copy_template(name=f"{values.name}_{sub_name}_{a.description}")
             indices_data.dtype = "int32"
