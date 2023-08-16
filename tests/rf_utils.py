@@ -121,6 +121,7 @@ def run_model_net_dict_tf(extern_data: TensorDict, get_model: rf.GetModelFunc, f
     config = Config(
         {
             "debug_runtime_sanity_checks": True,
+            # "debug_print_layer_output": True,  # enable temporarily for debugging
             "extern_data": extern_data,
             "get_model": get_model,
             "task": "forward",

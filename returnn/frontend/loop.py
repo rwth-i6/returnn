@@ -65,7 +65,7 @@ def while_loop(
             loop_var_templates = dim_updates.update_template_from_new(loop_var_templates, loop_vars)
             _check_matching_loop_var_templates(loop_var_templates, loop_vars)
         return loop_vars
-    raise NotImplementedError("while_loop() not implemented for non-eager backend %r" % backend)
+    return backend.while_loop(cond, body, initial)
 
 
 def _get_bool_value_eager(v: Union[Tensor, bool]) -> bool:

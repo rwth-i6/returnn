@@ -11,6 +11,29 @@ from returnn.frontend.tensor_array import TensorArray
 from rf_utils import run_model
 
 
+def test_while_loop_simple():
+    time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
+    in_dim = Dim(7, name="in")
+    extern_data = TensorDict(
+        {
+            "data": Tensor("data", [batch_dim, time_dim, in_dim], dtype="float32"),
+        }
+    )
+
+    # noinspection PyShadowingNames
+    def _forward_step(*, model: rf.Module, extern_data: TensorDict):
+        model, extern_data  # noqa  # unused
+        i = rf.while_loop(
+            cond=lambda i_: rf.reduce_min(i_, axis=i_.dims) < time_dim.get_dim_value_tensor(),
+            body=lambda i_: i_ + 1,
+            # Using batch dim here because currently the TF-layers backend does require that.
+            initial=rf.constant(0, dims=[batch_dim]),
+        )
+        i.mark_as_default_output(shape=[batch_dim])
+
+    run_model(extern_data, lambda *, epoch, step: rf.Module(), _forward_step)
+
+
 def test_while_loop():
     time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
     in_dim = Dim(7, name="in")

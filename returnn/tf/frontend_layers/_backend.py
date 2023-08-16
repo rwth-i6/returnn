@@ -3,7 +3,7 @@ High-level backend for RETURNN layers
 """
 
 from __future__ import annotations
-from typing import Union, Sequence, Optional, Any, Callable, Tuple, Dict
+from typing import TypeVar, Union, Sequence, Optional, Any, Callable, Tuple, Dict
 import contextlib
 import numpy
 import tensorflow as tf
@@ -20,6 +20,9 @@ from .. import frontend_layers as rfl
 from ... import frontend as rf
 from . import dims as _dims
 from returnn.frontend import RawTensorTypes
+
+
+S = TypeVar("S")  # any nested structure, can be None
 
 
 # Ignore this warning until we really expect that we implemented everything.
@@ -44,6 +47,20 @@ class ReturnnLayersBackend(Backend[Layer]):
             cond.true = true_fn()
             cond.false = false_fn()
         return cond.result
+
+    @staticmethod
+    def while_loop(
+        cond: Callable[[S], Union[bool, Tensor]],
+        body: Callable[[S], S],
+        initial: S,
+    ) -> S:
+        # Have to put some arbitrary limit here, otherwise the RecLayer will complain.
+        loop = rfl.Loop(max_seq_len=rf.constant(2**31 - 1, dims=()))
+        loop.state.state = initial
+        with loop:
+            loop.end(rf.logical_not(cond(loop.state.state)), include_eos=False)
+            loop.state.state = body(loop.state.state)
+        return loop.state.state
 
     @staticmethod
     def set_random_seed(seed: int):

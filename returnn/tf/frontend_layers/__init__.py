@@ -10,7 +10,9 @@ from .config_entry_points import *
 from .debug_eager_mode import *
 from .dims import *
 from .layer import *
+from .loop import *
 from .make_layer import *
+from .masked_computation import *
 from .prev_tensor_ref import *
 
 

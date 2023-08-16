@@ -12,6 +12,7 @@ from .types import RawTensorTypes
 
 T = TypeVar("T")  # tf.Tensor, torch.Tensor or so
 T2 = TypeVar("T2")
+S = TypeVar("S")  # any nested structure, can be None
 
 
 class Backend(Generic[T]):
@@ -49,6 +50,14 @@ class Backend(Generic[T]):
         """
         # noinspection PyProtectedMember
         assert not pred._raw_backend.executing_eagerly(), "should not get here"
+        raise NotImplementedError
+
+    @staticmethod
+    def while_loop(
+        cond: Callable[[S], Union[bool, Tensor]],
+        body: Callable[[S], S],
+        initial: S,
+    ) -> S:
         raise NotImplementedError
 
     @staticmethod
