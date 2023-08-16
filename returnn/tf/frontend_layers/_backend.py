@@ -263,7 +263,7 @@ class ReturnnLayersBackend(Backend[Layer]):
         # Some heuristic on the kind, which just determines where RETURNN puts the new axis.
         if source.have_feature_axis():
             axis = "spatial"
-        elif dim.is_static():
+        elif dim.dimension is not None:
             axis = "feature"
         else:
             axis = "spatial"
