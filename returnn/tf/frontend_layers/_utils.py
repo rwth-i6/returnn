@@ -45,6 +45,20 @@ def identity_with_control_deps(
     return rfl.make_layer({"class": "identity", "from": tensor, "control_dependencies": control_deps}, name=name)
 
 
+def constant(value: Union[int, float], *, name: Union[str, rfl.Layer]):
+    """constant"""
+    return rfl.make_layer({"class": "constant", "value": value, "is_output_layer": True}, name=name)
+
+
+def constant_value(x: Tensor[rfl.Layer]) -> Optional[Union[int, float, complex, bool, str]]:
+    """
+    If the tensor is a constant, return its value.
+    """
+    if x.raw_tensor.layer_dict and x.raw_tensor.layer_dict["class"] == "constant":
+        return x.raw_tensor.layer_dict["value"]
+    return None
+
+
 def zeros_like_as_output_in_scope(tensor: Tensor, *, name: rfl.Layer):
     """
     :param tensor:

@@ -241,8 +241,8 @@ class Layer:
         old_name_ctx: Layer = tensor.raw_tensor
 
         # Now reassign.
-        tensor.raw_tensor = self
         self.tensor = tensor
+        tensor.raw_tensor = self
         self.tensor_remove_unused_cleanup_hooks = old_name_ctx.tensor_remove_unused_cleanup_hooks
         self.layer_dict = old_name_ctx.layer_dict
         self.layer_extra_dependencies = old_name_ctx.layer_extra_dependencies
@@ -644,6 +644,21 @@ class Layer:
         Get child layer ref. Makes sure it exists.
         """
         return self.get_child_with_tensor(name, data=data).tensor
+
+    def get_recent_tensor(self, *, only_same_control_flow: bool = False) -> Optional[Tensor]:
+        """
+        Get recent tensor if it exists. Can go deeply through children.
+        """
+        queue = [self]
+        while queue:
+            ctx = queue.pop(-1)  # depth-first
+            if only_same_control_flow and ctx.control_flow_ctx() != self.control_flow_ctx():
+                continue
+            if ctx.tensor is not None:
+                return ctx.tensor
+            # due to pop(-1), this will be accessed in reverse order, which is what we want
+            queue.extend(ctx.children.values())
+        return None
 
     def __enter__(self):
         self._maybe_init_default_root()

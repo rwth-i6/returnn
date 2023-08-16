@@ -4,9 +4,11 @@ make layer
 
 from __future__ import annotations
 from typing import Optional, Union, Dict, Type
+from types import FunctionType
+import numpy
 import tensorflow as tf
 from tensorflow.python.util import nest
-from returnn.tensor import Tensor, batch_dim
+from returnn.tensor import Tensor, Dim, batch_dim
 from returnn.tf.util.data import BatchInfo
 from .. import frontend_layers as rfl
 from . import dims as _dims
@@ -63,6 +65,13 @@ def make_layer(
         raise TypeError(f"name must be str or Layer, not {type(name)}; or you should pass a module")
     assert not layer.tensor and not layer.layer_dict  # not yet assigned
     layer_dict = layer_dict.copy()
+
+    # Just some sanity checks.
+    for value in nest.flatten(layer_dict):
+        if isinstance(value, (Tensor, Dim, bool, int, float, str, numpy.ndarray, type(None), FunctionType, rfl.Net)):
+            pass
+        else:
+            raise TypeError(f"{layer}: unexpected type {type(value)} in layer_dict: {layer_dict}")
 
     try:
 

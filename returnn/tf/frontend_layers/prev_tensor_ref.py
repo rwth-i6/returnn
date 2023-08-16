@@ -36,6 +36,7 @@ class PrevTensorRef(Tensor):
     def __init__(self, *, name_ctx: rfl.Layer, cur_layer_name_ctx: rfl.Layer, data: Tensor):
         # At the time we instantiate this, cur_layer_name_ctx.tensor probably does not exist yet.
         super().__init__(**data.get_kwargs())
+        name_ctx.tensor = self
         self.raw_tensor = name_ctx
         self.cur_layer_name_ctx = cur_layer_name_ctx
         self.raw_tensor.layer_extra_dependencies.append(self.cur_layer_name_ctx)
