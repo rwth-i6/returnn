@@ -146,7 +146,7 @@ def scan(
             seq_len_ = seq_len_ + rf.cast(prev_cond, dtype=seq_len_.dtype)
             y, s = body(None, s)
             tree.assert_same_structure(ys_, y)
-            ys_ = tree.map_structure(lambda ys__, y_: ys__.push_back(y_), ys_, y)
+            ys_ = tree.map_structure(lambda ys__, y_: ys__.push_back(y_) if ys__ is not None else None, ys_, y)
             c = cond(None, s)
             c = rf.logical_and(c, prev_cond)
             return i + 1, seq_len_, c, s, ys_
@@ -168,7 +168,7 @@ def scan(
                 rf.constant(0, dtype=rf.get_default_array_index_dtype(), dims=cond_dims),  # seq_len
                 initial_cond,  # initial cond. keep this in state such that we can update seq_len in body
                 initial,  # state
-                tree.map_structure(lambda y: TensorArray(y), ys),
+                tree.map_structure(lambda y: TensorArray(y) if y is not None else None, ys),
             ),
         )
 
@@ -188,7 +188,7 @@ def scan(
             i, s, ys_ = _s
             y, s = body(tree.map_structure(lambda x: x[i], xs), s)
             tree.assert_same_structure(ys_, y)
-            ys_ = tree.map_structure(lambda ys__, y_: ys__.push_back(y_), ys_, y)
+            ys_ = tree.map_structure(lambda ys__, y_: ys__.push_back(y_) if ys__ is not None else None, ys_, y)
             return i + 1, s, ys_
 
         _, final_s, ys = while_loop(
@@ -197,12 +197,12 @@ def scan(
             (
                 rf.constant(0, dtype=rf.get_default_array_index_dtype(), dims=()),  # i
                 initial,  # state
-                tree.map_structure(lambda y: TensorArray(y), ys),
+                tree.map_structure(lambda y: TensorArray(y) if y is not None else None, ys),
             ),
         )
 
     if not return_tensor_arrays:
-        ys = tree.map_structure(lambda ys_: ys_.stack(axis=spatial_dim), ys)
+        ys = tree.map_structure(lambda ys_: ys_.stack(axis=spatial_dim) if ys_ is not None else None, ys)
     return ys, final_s, spatial_dim
 
 

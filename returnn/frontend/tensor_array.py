@@ -37,6 +37,7 @@ class TensorArray:
         _backend: Optional[Type[Backend]] = None,
         _enable_delayed_check: bool = False,
     ):
+        assert isinstance(tensor_template, Tensor)
         self.tensor_template = tensor_template
         if _backend is None:
             _backend = global_backend
