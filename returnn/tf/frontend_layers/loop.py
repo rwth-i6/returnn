@@ -79,14 +79,17 @@ class Loop:
             if value is not NotSpecified and value is not None and key not in {"self", "__class__", "name"}
         }
         self.layer_module = LoopModule(loop=self)
+        parent_name_ctx = rfl.Layer.current_ctx()
         self.control_flow_ctx = ControlFlowContext(
-            kind=ControlFlowContext.Types.Loop, outer_ctx=rfl.Layer.inner_control_flow()
+            kind=ControlFlowContext.Types.Loop,
+            outer_ctx=rfl.Layer.inner_control_flow(),
+            identifier=parent_name_ctx.get_abs_name(),
         )
         self.control_flow_ctx.loop_spatial_dim = axis
         self.name_ctx = rfl.Layer(
             module=self.layer_module,
             suggested_name=name,
-            parent=rfl.Layer.current_ctx(),
+            parent=parent_name_ctx,
             new_control_flow_ctx=self.control_flow_ctx,
             can_access_children=False,
         )

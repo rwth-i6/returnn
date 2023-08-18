@@ -1360,7 +1360,9 @@ class _SubnetworkRecCell(object):
         from returnn.tf.util.data import ControlFlowContext
 
         control_flow_ctx = ControlFlowContext(
-            kind=ControlFlowContext.Types.Loop, outer_ctx=parent_net.get_control_flow_ctx()
+            kind=ControlFlowContext.Types.Loop,
+            outer_ctx=parent_net.get_control_flow_ctx(),
+            identifier="%s%s" % (parent_net.get_absolute_name_scope_prefix(), rec_layer_name),
         )
         control_flow_ctx.loop_spatial_dim = time_dim_tag
         self.net = TFNetwork(

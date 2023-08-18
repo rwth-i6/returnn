@@ -31,14 +31,16 @@ class ControlFlowContext:
         """
 
         Loop = "loop"
-        Cond = "cond"
+        CondTrue = "cond-true"
+        CondFalse = "cond-false"
 
-    def __init__(self, kind: str, outer_ctx: Optional[ControlFlowContext] = None):
+    def __init__(self, *, kind: str, identifier: str, outer_ctx: Optional[ControlFlowContext] = None):
         """
         :param kind: from ControlFlowContext.Types
         :param outer_ctx:
         """
         self.kind = kind
+        self.identifier = identifier
         self._outer_ctx = outer_ctx
         self._tf_control_flow_ctx = None  # type: Optional[_TFControlFlowCtx]
         self._loop_spatial_dim = None  # type: Optional[Dim]
@@ -142,7 +144,7 @@ class ControlFlowContext:
         """
         :rtype: bool
         """
-        return self.kind == self.Types.Cond
+        return self.kind in {self.Types.CondTrue, self.Types.CondFalse}
 
     @property
     def outer_ctx(self):

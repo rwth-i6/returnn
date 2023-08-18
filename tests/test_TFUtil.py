@@ -1653,7 +1653,7 @@ def test_dim_math_pad_conv_valid_in_ctx():
     time = SpatialDim("time:var:extern_data:data")
     loop_dim = SpatialDim("time:var:extern_data:classes")
     batch_info = BatchInfo.make_global_batch_info(-1)
-    ctx = ControlFlowContext(kind=ControlFlowContext.Types.Loop)
+    ctx = ControlFlowContext(kind=ControlFlowContext.Types.Loop, identifier="loop")
     ctx.loop_spatial_dim = loop_dim
     time_ = time.get_for_batch_ctx(batch=batch_info, ctx=ctx)
     # Note: once time is actually defined (dyn_size_ext is set), the following assert would not be the case,
@@ -1676,7 +1676,7 @@ def test_dim_math_pad_conv_valid_in_ctx_derived():
 
     loop_dim = SpatialDim("time:var:extern_data:classes")
     batch_info = BatchInfo.make_global_batch_info(-1)
-    ctx = ControlFlowContext(kind=ControlFlowContext.Types.Loop)
+    ctx = ControlFlowContext(kind=ControlFlowContext.Types.Loop, identifier="loop")
     ctx.loop_spatial_dim = loop_dim
     time_undefined = Dim(kind=Dim.Types.Spatial, description="time_undefined", dimension=None)
     time_ = time_undefined.get_for_batch_ctx(batch=batch_info, ctx=ctx)

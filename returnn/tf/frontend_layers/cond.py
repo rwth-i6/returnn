@@ -59,7 +59,9 @@ class Cond(Generic[T]):
         )
         self.name_ctx.custom_layer_name_scope = ""
         self.true_branch_control_flow_ctx = ControlFlowContext(
-            kind=ControlFlowContext.Types.Cond, outer_ctx=self.name_ctx.control_flow_ctx()
+            kind=ControlFlowContext.Types.CondTrue,
+            outer_ctx=self.name_ctx.control_flow_ctx(),
+            identifier=self.name_ctx.get_abs_name(),
         )
         self.true_branch_name_ctx = rfl.Layer(
             module=self.layer_module,
@@ -72,7 +74,9 @@ class Cond(Generic[T]):
         self.true_branch_name_ctx.is_subnet = True
         self.true_branch_name_ctx.extend_reserved_names({"output"})
         self.false_branch_control_flow_ctx = ControlFlowContext(
-            kind=ControlFlowContext.Types.Cond, outer_ctx=self.name_ctx.control_flow_ctx()
+            kind=ControlFlowContext.Types.CondFalse,
+            outer_ctx=self.name_ctx.control_flow_ctx(),
+            identifier=self.true_branch_control_flow_ctx.identifier,
         )
         self.false_branch_name_ctx = rfl.Layer(
             module=self.layer_module,
