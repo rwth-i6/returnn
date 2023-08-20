@@ -21,6 +21,9 @@ import returnn.tf.frontend_layers as rfl
 from returnn.tf.network import TFNetwork
 from returnn.torch.data.tensor_utils import tensor_dict_numpy_to_torch_, tensor_dict_torch_to_numpy_
 
+# noinspection PyProtectedMember
+from returnn.frontend._random_journal import RandomJournal
+
 
 @contextlib.contextmanager
 def tf_scope():
@@ -60,6 +63,9 @@ def run_model(
         out_tf = run_model_net_dict_tf(extern_data, get_model, forward_step)
         _pad_mask_zeros(out_tf)
         out_tf_raw = out_tf.as_raw_tensor_dict(include_const_sizes=True)
+
+    random_journal: RandomJournal
+    assert random_journal.reached_end()
 
     print(out_pt, out_tf)
     assert set(out_pt.data.keys()) == set(out_tf.data.keys())

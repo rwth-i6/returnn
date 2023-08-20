@@ -3,7 +3,7 @@ Backend for exposing PyTorch-specific functionality.
 """
 
 from __future__ import annotations
-from typing import Optional, Union, Any, Sequence, Tuple, List, Dict
+from typing import Optional, Union, Sequence, Tuple, List, Dict, Generator
 import contextlib
 import torch
 import numpy
@@ -16,6 +16,8 @@ from returnn.frontend._backend import Backend
 from returnn.frontend import RawTensorTypes
 import returnn.frontend as rf
 
+# noinspection PyProtectedMember
+from returnn.frontend import _random_journal
 
 _TT = Tensor[torch.Tensor]
 
@@ -1107,20 +1109,18 @@ class TorchBackend(Backend[torch.Tensor]):
 
     @staticmethod
     @contextlib.contextmanager
-    def random_journal_record() -> List[Dict[str, Any]]:
+    def random_journal_record() -> Generator[_random_journal.RandomJournal]:
         """
         :return: the journal
         """
+        prev_journal = TorchBackend._random_journal
         try:
-            TorchBackend._random_journal_record_enabled = True
-            TorchBackend._random_journal = []
+            TorchBackend._random_journal = _random_journal.RandomJournal()
             yield TorchBackend._random_journal
         finally:
-            TorchBackend._random_journal_record_enabled = False
-            TorchBackend._random_journal = None
+            TorchBackend._random_journal = prev_journal
 
-    _random_journal_record_enabled = False
-    _random_journal = None  # type: Optional[List[Dict[str, Any]]]
+    _random_journal = None  # type: Optional[_random_journal.RandomJournal]
 
     @staticmethod
     def random(
@@ -1218,24 +1218,19 @@ class TorchBackend(Backend[torch.Tensor]):
             _rand.no_grad_trunc_normal_(out.raw_tensor, mean=mean, std=stddev, a=minval, b=maxval, generator=generator)
         else:
             raise NotImplementedError(f"random distribution {distribution} not implemented")
-        if TorchBackend._random_journal_record_enabled:
+        if TorchBackend._random_journal:
             out_ = out.copy()
             out_.raw_tensor = out_.raw_tensor.detach().cpu().numpy()
             TorchBackend._random_journal.append(
-                {
-                    "dims": tuple(dims),
-                    "dtype": dtype,
-                    "sparse_dim": sparse_dim,
-                    "distribution": distribution,
-                    "mean": mean,
-                    "stddev": stddev,
-                    "bound": bound,
-                    "minval": minval,
-                    "maxval": maxval,
-                    "seed": seed,
-                    "static": static,
-                    "out": out_,
-                }
+                distribution=distribution,
+                mean=mean,
+                stddev=stddev,
+                bound=bound,
+                minval=minval,
+                maxval=maxval,
+                seed=seed,
+                static=static,
+                out=out_,
             )
         return out
 

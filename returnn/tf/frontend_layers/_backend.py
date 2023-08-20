@@ -21,6 +21,9 @@ from ... import frontend as rf
 from . import dims as _dims
 from returnn.frontend import RawTensorTypes
 
+# noinspection PyProtectedMember
+from returnn.frontend import _random_journal
+
 
 S = TypeVar("S")  # any nested structure, can be None
 
@@ -746,26 +749,18 @@ class ReturnnLayersBackend(Backend[Layer]):
 
     @staticmethod
     @contextlib.contextmanager
-    def random_journal_replay(journal: Sequence[Dict[str, Any]]):
+    def random_journal_replay(journal: _random_journal.RandomJournal):
         """
         Replays the journal.
         At exit, the journal is cleared, and we check that we replayed everything.
         """
         try:
-            ReturnnLayersBackend._random_journal_replay_enabled = True
-            ReturnnLayersBackend._random_journal_replay_idx = 0
             ReturnnLayersBackend._random_journal = journal
             yield
         finally:
-            final_replay_idx = ReturnnLayersBackend._random_journal_replay_idx
-            ReturnnLayersBackend._random_journal_replay_enabled = False
-            ReturnnLayersBackend._random_journal_replay_idx = 0
             ReturnnLayersBackend._random_journal = None
-        assert final_replay_idx == len(journal)
 
-    _random_journal_replay_enabled = False
-    _random_journal_replay_idx = 0
-    _random_journal = None  # type: Optional[Sequence[Dict[str, Any]]]
+    _random_journal = None  # type: Optional[_random_journal.RandomJournal]
 
     @staticmethod
     def random(
@@ -788,32 +783,32 @@ class ReturnnLayersBackend(Backend[Layer]):
         out: Optional[Tensor] = None,
     ) -> Tensor:
         """random"""
-        if ReturnnLayersBackend._random_journal_replay_enabled:
-            idx = ReturnnLayersBackend._random_journal_replay_idx
-            ReturnnLayersBackend._random_journal_replay_idx += 1
-            elem = ReturnnLayersBackend._random_journal[idx]
-            assert isinstance(elem, dict)
-            # Different calls might create their own dims, so we cannot directly compare dim tags for equality.
-            assert len(elem["dims"]) == len(dims)
-            # We still check static dimension equality.
-            for dim_journal, dim_tf in zip(elem["dims"], dims):
-                assert (
-                    dim_journal.dimension == dim_tf.dimension
-                ), f"random with dims {dims} does not match random journal replay\n{elem!r}"
-            assert elem["dtype"] == dtype
-            assert elem["sparse_dim"] == sparse_dim
-            assert elem["distribution"] == distribution
-            assert rfl.Layer.inner_control_flow() is None  # not implemented yet
-            return rfl.make_layer(
+        if ReturnnLayersBackend._random_journal:
+            recent = ReturnnLayersBackend._random_journal.get_recent_graph_reader_node_in_accessible_ctx()
+            out = rfl.make_layer(
                 {
                     "class": "eval",
-                    "from": (),
+                    "from": [recent] if recent else [],  # use as control dependency
                     "eval": _random_replay_eval,
-                    "eval_locals": {"idx": idx},
+                    "eval_locals": {"idx": ReturnnLayersBackend._random_journal.get_graph_reader_idx()},
                     "out_type": {"dims": dims, "dtype": dtype, "sparse_dim": sparse_dim, "feature_dim": feature_dim},
                 },
                 name="random_replay",
             )
+            if out.control_flow_ctx and out.control_flow_ctx.is_loop():
+                # Make sure it stays inside the loop.
+                out.raw_tensor.layer_dict["from"].append(
+                    rfl.PrevTensorRef.get_prev_ref(
+                        cur_layer_name_ctx=out.raw_tensor,
+                        initial=rf.zeros(dims, dtype=dtype, sparse_dim=sparse_dim, feature_dim=feature_dim),
+                    )
+                )
+                # We must check whether we are already one iteration past the end
+                # -- see the while_loop implementation.
+                out.raw_tensor.layer_dict["from"].append("end")
+                out.raw_tensor.layer_dict["eval_locals"]["in_loop"] = True
+            ReturnnLayersBackend._random_journal.add_graph_reader_node(out)
+            return out
         kwargs = {
             "mean": mean,
             "stddev": stddev,
@@ -1154,11 +1149,32 @@ class ReturnnLayersBackend(Backend[Layer]):
         return output, (h, c)
 
 
-def _random_replay_eval(idx, **_kwargs):
-    # noinspection PyProtectedMember
-    elem = ReturnnLayersBackend._random_journal[idx]
-    assert isinstance(elem, dict)
-    out = elem["out"]
-    assert isinstance(out, Tensor)
-    assert isinstance(out.raw_tensor, numpy.ndarray)
-    return tf.constant(out.raw_tensor, dtype=out.dtype)
+def _random_replay_eval(*, self, source, idx: int, in_loop: bool = False, **_kwargs):
+    from returnn.tf.layers.basic import LayerBase
+
+    assert isinstance(self, LayerBase)
+    idx  # noqa  # unused - this can be helpful for debugging that the execution order is correct
+
+    def _py_func() -> numpy.ndarray:
+        # noinspection PyProtectedMember
+        elem = ReturnnLayersBackend._random_journal.get_next(new_out_template=self.output)
+        assert isinstance(elem.out, Tensor)
+        assert isinstance(elem.out.raw_tensor, numpy.ndarray)
+        return elem.out.raw_tensor
+
+    def _func() -> tf.Tensor:
+        (out,) = tf.numpy_function(_py_func, [], [self.output.dtype])
+        assert isinstance(out, tf.Tensor)
+        out.set_shape(self.output.batch_shape)
+        return out
+
+    with tf.control_dependencies(
+        [source(i, auto_convert=False) for i in range(len(self.sources))]
+    ) if self.sources else contextlib.nullcontext():
+        if in_loop:
+            # Must not always execute the logic, as we might be in the last iteration, already past the end.
+            end_flag = source(2, auto_convert=False)
+            prev_out = source(1, auto_convert=False)
+            return tf.cond(tf.reduce_all(end_flag), lambda: prev_out, _func)
+        else:
+            return _func()
