@@ -88,6 +88,9 @@ class RunCtx:
         self.outputs = TensorDict()
         self.expected_outputs = expected_outputs
 
+    def __repr__(self):
+        return f"<RunCtx stage={self.stage!r} train_flag={self.train_flag!r} step={self.step!r}>"
+
     @property
     def stage(self) -> str:
         """
