@@ -9157,7 +9157,7 @@ class CombineLayer(LayerBase):
             out_type_["dim"] = n_out
         if out_type:
             if isinstance(out_type, dict):
-                if "shape" in out_type or "dim_tags" in out_type:
+                if "shape" in out_type or "dim_tags" in out_type or "dims" in out_type:
                     out_type_.pop("dims", None)
                     out_type_.pop("batch_dim_axis", None)
                     out_type_.pop("feature_dim_axis", None)
