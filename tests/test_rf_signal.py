@@ -57,3 +57,22 @@ def test_mel_filterbank():
     run_model(extern_data, lambda *, epoch, step: _Net(), _forward_step)
     # Run again to specifically test the caching logic.
     run_model(extern_data, lambda *, epoch, step: _Net(), _forward_step)
+
+
+def test_audio_specaugment():
+    time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
+    in_dim = Dim(7, name="in")
+    extern_data = TensorDict(
+        {
+            "data": Tensor("data", [batch_dim, time_dim, in_dim], dtype="float32", feature_dim=in_dim),
+        }
+    )
+
+    # noinspection PyShadowingNames
+    def _forward_step(*, model: rf.Module, extern_data: TensorDict):
+        model  # noqa  # unused
+        data = extern_data["data"]
+        out = rf.audio.specaugment(data, spatial_dim=time_dim, feature_dim=in_dim, only_on_train=False)
+        out.mark_as_default_output(shape=(batch_dim, time_dim, in_dim))
+
+    run_model(extern_data, lambda *, epoch, step: rf.Module(), _forward_step)
