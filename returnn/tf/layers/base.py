@@ -175,6 +175,9 @@ class LayerBase(object):
         :param str|callable|None custom_param_importer: used by :func:`set_param_values_by_dict`
         :param str|None register_as_extern_data: registers output in network.extern_data
         :param None|((LayerBase)->list[tf.Operation]) control_dependencies_on_output:
+            This is mostly to perform some checks *after* the layer output has been computed,
+            *before* the layer output is used anywhere else.
+            There is also the :class:`IdentityLayer` with the option ``control_dependencies``.
         :param None|bool|dict[str] debug_print_layer_output: same as global config option but per layer
         :param str _name: just for internal construction, should be the same as ``name``
         :param returnn.tf.network.TFNetwork _network: just for internal construction, should be the same as ``network``
