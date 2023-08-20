@@ -9588,6 +9588,15 @@ class CondLayer(LayerBase):
     See also :class:`SwitchLayer`, which uses :func:`tf.where`.
     Here, we use `tf.cond` instead. I.e. the condition has to be a scalar bool,
     and only the corresponding true/false branch is computed.
+
+    ``true_layer``/``false_layer`` are layer dicts, which are in the same namescope as this layer,
+    however, they are in the corresponding control flow context (tf.cond).
+
+    You can use :class:`SubnetworkLayer` inside to embed any more complex logic.
+
+    There can be more than one output via sub-layers.
+    Specifically, it will make all from :func:`get_available_sub_layer_names` available.
+    In :class:`SubnetworkLayer`, that are all the output layers in the sub-network.
     """
 
     layer_class = "cond"
