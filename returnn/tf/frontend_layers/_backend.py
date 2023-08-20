@@ -3,7 +3,7 @@ High-level backend for RETURNN layers
 """
 
 from __future__ import annotations
-from typing import TypeVar, Union, Sequence, Optional, Any, Callable, Tuple, Dict
+from typing import TypeVar, Union, Sequence, Optional, Any, Callable, Tuple, Dict, List
 import contextlib
 import numpy
 import tensorflow as tf
@@ -39,6 +39,30 @@ class ReturnnLayersBackend(Backend[Layer]):
     def executing_eagerly() -> bool:
         """executing eagerly"""
         return False
+
+    @staticmethod
+    def get_tensor_dependencies(x: Tensor[Layer]) -> Sequence[Tensor]:
+        """get tensor inputs"""
+        deps: List[Tensor] = []
+        visited = set()
+        for dep in x.raw_tensor.get_tensor_dependencies():
+            if not dep.tensor or dep.tensor in visited:
+                continue
+            visited.add(dep.tensor)
+            deps.append(dep.tensor)
+        return deps
+
+    @staticmethod
+    def get_tensor_consumers(x: Tensor[Layer]) -> Sequence[Tensor]:
+        """get tensor consumers"""
+        usages: List[Tensor] = []
+        visited = set()
+        for use in x.raw_tensor.usages:
+            if not use.tensor or use.tensor in visited:
+                continue
+            visited.add(use.tensor)
+            usages.append(use.tensor)
+        return usages
 
     @staticmethod
     def cond(pred: Tensor, true_fn: Callable, false_fn: Callable):

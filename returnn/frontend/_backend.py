@@ -40,6 +40,30 @@ class Backend(Generic[T]):
         raise NotImplementedError
 
     @staticmethod
+    def get_tensor_dependencies(x: Tensor) -> Sequence[Tensor]:
+        """
+        :param x: tensor
+        :return: list of all tensors which are inputs to `x`, ancestor tensors, dependencies.
+            E.g. :func:`tf.Tensor.op.inputs`.
+            This mostly makes sense for graph-based frameworks
+            but eager-based frameworks might have this too with enabled gradient tape,
+            as they should know the inputs.
+        """
+        raise NotImplementedError
+
+    @staticmethod
+    def get_tensor_consumers(x: Tensor) -> Sequence[Tensor]:
+        """
+        :param x: tensor
+        :return: list of all tensors depending on `x`, descendant tensors, used by.
+            E.g. :func:`tf.Tensor.consumers`.
+            This mostly makes sense for graph-based frameworks
+            but eager-based frameworks might have this too with enabled gradient tape,
+            as they should know the consumers.
+        """
+        raise NotImplementedError
+
+    @staticmethod
     def cond(pred: Tensor, true_fn: Callable, false_fn: Callable):
         """
         cond: conditional execution.

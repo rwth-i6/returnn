@@ -29,6 +29,7 @@ from .dims import *
 from .dropout import *
 from .dtype import *
 from .gradient import *
+from .graph import *
 from .label_smoothing import *
 from .linear import *
 from .loop import *
