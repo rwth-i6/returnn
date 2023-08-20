@@ -307,6 +307,8 @@ class CondModule(rf.Module):
             results = []
             for i, (true_v, false_v) in enumerate(zip(true_values_flat, false_values_flat)):
                 assert isinstance(true_v, Tensor) and isinstance(false_v, Tensor)
+                true_v: Tensor[rfl.Layer]
+                false_v: Tensor[rfl.Layer]
                 assert true_v.raw_tensor.parent is self.cond.true_branch_name_ctx
                 name = true_v.raw_tensor.name
                 if i == 0:
@@ -317,6 +319,8 @@ class CondModule(rf.Module):
                 results[-1].raw_tensor.layer_extra_dependencies.extend(
                     (self.cond.condition.raw_tensor, true_v.raw_tensor, false_v.raw_tensor)
                 )
+                true_v.raw_tensor.usages.append(results[-1].raw_tensor)
+                false_v.raw_tensor.usages.append(results[-1].raw_tensor)
             res = nest.pack_sequence_as(true_value, results)
             if not results:
                 results = [res]

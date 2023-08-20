@@ -233,6 +233,7 @@ class Loop:
                 lambda _: source.raw_tensor.layer_dict.pop("need_last")
             )
             res.raw_tensor.layer_extra_dependencies.append(source.raw_tensor)
+            source.raw_tensor.usages.append(res.raw_tensor)
             self._last_frames[source.raw_tensor] = res
             return res
 
