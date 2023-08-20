@@ -79,7 +79,11 @@ class ReturnnLayersBackend(Backend[Layer]):
         initial: S,
     ) -> S:
         """while loop"""
-        # Have to put some arbitrary limit here, otherwise the RecLayer will complain.
+        # Have to put some arbitrary max_seq_len limit, otherwise the RecLayer will complain.
+        # Note that layers usually run one more iteration than you might expect,
+        # specifically the last iteration will be run with end being True (condition being False).
+        # This is usually not a problem, but when layers might have side-effects,
+        # this might be unexpected.
         loop = rfl.Loop(max_seq_len=rf.constant(2**31 - 1, dims=()))
         loop.state.state = initial
         with loop:
