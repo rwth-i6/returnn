@@ -811,10 +811,6 @@ class ReturnnLayersBackend(Backend[Layer]):
                         initial=rf.zeros(dims, dtype=dtype, sparse_dim=sparse_dim, feature_dim=feature_dim),
                     )
                 )
-                # We must check whether we are already one iteration past the end
-                # -- see the while_loop implementation.
-                out.raw_tensor.layer_dict["from"].append("end")
-                out.raw_tensor.layer_dict["eval_locals"]["in_loop"] = True
             ReturnnLayersBackend._random_journal.add_graph_reader_node(out)
             return out
         kwargs = {
@@ -1157,7 +1153,7 @@ class ReturnnLayersBackend(Backend[Layer]):
         return output, (h, c)
 
 
-def _random_replay_eval(*, self, source, idx: int, in_loop: bool = False, **_kwargs):
+def _random_replay_eval(*, self, source, idx: int, **_kwargs):
     from returnn.tf.layers.basic import LayerBase
 
     assert isinstance(self, LayerBase)
@@ -1179,10 +1175,4 @@ def _random_replay_eval(*, self, source, idx: int, in_loop: bool = False, **_kwa
     with tf.control_dependencies(
         [source(i, auto_convert=False) for i in range(len(self.sources))]
     ) if self.sources else contextlib.nullcontext():
-        if in_loop:
-            # Must not always execute the logic, as we might be in the last iteration, already past the end.
-            end_flag = source(2, auto_convert=False)
-            prev_out = source(1, auto_convert=False)
-            return tf.cond(tf.reduce_all(end_flag), lambda: prev_out, _func)
-        else:
-            return _func()
+        return _func()
