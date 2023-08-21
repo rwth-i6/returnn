@@ -3451,9 +3451,10 @@ class _SubnetworkRecCell(object):
         if not have_known_seq_len:
             # See body().
             end_template = self.layer_data_templates["end"].output
+            end_shape = [d.get_dim_value() for d in end_template.dims]
             init_seq_len_info = (
-                constant_with_shape(False, shape=end_template.get_dynamic_batch_shape(), name="initial_end_flag"),
-                constant_with_shape(0, shape=end_template.get_dynamic_batch_shape(), name="initial_seq_len"),
+                constant_with_shape(False, shape=end_shape, name="initial_end_flag"),
+                constant_with_shape(0, shape=end_shape, name="initial_seq_len"),
             )
             init_loop_vars += (init_seq_len_info,)
             shape_invariants += ((tf.TensorShape(end_template.batch_shape), tf.TensorShape(end_template.batch_shape)),)
