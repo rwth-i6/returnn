@@ -245,8 +245,6 @@ class Loop:
         :param source: the ending condition
         :param include_eos: if True, the last() and stack() function include the current ending frame, otherwise not
         """
-        from returnn.tensor import batch_dim
-
         assert not self.end_ref, f"{self}.end() can only be called once"
         assert source.dtype == "bool", f"{self}: end expects boolean condition, got {source}"
         if not self.axis.dyn_size_ext:
