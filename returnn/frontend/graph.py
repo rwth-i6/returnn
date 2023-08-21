@@ -39,7 +39,7 @@ def walk_tensor_consumers(
     seed: Union[Tensor, Sequence[Tensor]],
     *,
     filter_outputs: Callable[[Tensor], bool] = None,
-    ending_condition: Callable[[Tensor], bool],
+    ending_condition: Callable[[Tensor], bool] = None,
 ) -> List[Tensor]:
     """
     :param seed: tensor
