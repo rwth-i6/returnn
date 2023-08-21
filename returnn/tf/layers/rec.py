@@ -3005,7 +3005,6 @@ class _SubnetworkRecCell(object):
                 end_template = self.layer_data_templates["end"]
                 needed_outputs.add("end")
                 assert tf.as_dtype(end_template.output.dtype) is tf.bool
-                assert end_template.output.batch_shape == (None,)  # (batch*beam,)
             else:
                 assert (
                     have_known_seq_len
@@ -3343,11 +3342,9 @@ class _SubnetworkRecCell(object):
 
                 if seq_len_info is not None:
                     end_layer = maybe_transform(self.net.layers["end"])
-                    assert end_layer.output.shape == (), "end layer %r unexpected shape" % end_layer
                     end_flag = (
                         end_layer.output.placeholder
                     )  # we handled the logical_or(prev_end...) in construct get_layer
-                    end_flag.set_shape([None])
                     choices = end_layer.get_search_choices()
                     if choices:
                         from .basic import SelectSearchSourcesLayer
@@ -3453,13 +3450,13 @@ class _SubnetworkRecCell(object):
         )
         if not have_known_seq_len:
             # See body().
-            end_layer_batch_dim = self.layer_data_templates["end"].get_batch_dim()
+            end_template = self.layer_data_templates["end"].output
             init_seq_len_info = (
-                constant_with_shape(False, shape=[end_layer_batch_dim], name="initial_end_flag"),
-                constant_with_shape(0, shape=[end_layer_batch_dim], name="initial_seq_len"),
+                constant_with_shape(False, shape=end_template.get_dynamic_batch_shape(), name="initial_end_flag"),
+                constant_with_shape(0, shape=end_template.get_dynamic_batch_shape(), name="initial_seq_len"),
             )
             init_loop_vars += (init_seq_len_info,)
-            shape_invariants += ((tf.TensorShape([None]), tf.TensorShape([None])),)
+            shape_invariants += ((tf.TensorShape(end_template.batch_shape), tf.TensorShape(end_template.batch_shape)),)
         if self.layers_in_loop:
             final_loop_vars = self._while_loop(
                 cond=cond, body=body, loop_vars=init_loop_vars, shape_invariants=shape_invariants

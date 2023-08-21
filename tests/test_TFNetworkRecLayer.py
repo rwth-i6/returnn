@@ -8297,6 +8297,76 @@ def test_reclayer_scalar_size_last():
         session.run((out.placeholder, out.get_sequence_lengths()), feed_dict=make_feed_dict(net.extern_data))
 
 
+def test_reclayer_scalar_end():
+    from returnn.tensor import batch_dim, Dim
+    from test_TFNetworkLayer import make_feed_dict
+
+    time_dim = Dim(None, name="time")
+    input_dim = Dim(3, name="in")
+    loop_dim = Dim(None, name="loop-dim")
+    n_time = 7
+
+    net_dict = {
+        "time": {
+            "class": "length",
+            "from": ["data:data"],
+            "axis": time_dim,
+            "dtype": "int32",
+            "out_shape": {batch_dim},
+        },
+        "loop": {
+            "class": "rec",
+            "from": [],
+            "unit": {
+                "one": {"class": "constant", "value": 1, "shape": (), "dtype": "int32"},
+                "i": {
+                    "class": "combine",
+                    "from": ["one", "prev:i"],
+                    "kind": "add",
+                    "initial_output": 0,
+                    "need_last": True,
+                    "out_shape": set(),
+                },
+                "reduce_max": {
+                    "class": "reduce",
+                    "from": "base:time",
+                    "mode": "max",
+                    "axis": (batch_dim,),
+                    "out_shape": set(),
+                },
+                "end": {
+                    "class": "compare",
+                    "from": ["i", "reduce_max"],
+                    "kind": "greater_equal",
+                    "out_shape": set(),
+                },
+                "output": {"class": "copy", "from": "end", "out_shape": set()},
+            },
+            "max_seq_len": 2147483647,
+            "axis": loop_dim,
+            "include_eos": True,
+            "out_shape": {loop_dim},
+            "name_scope": "",
+        },
+        "output": {
+            "class": "rec_last_output",
+            "rec_layer": "loop",
+            "sub_layer_name": "i",
+            "out_shape": set(),
+        },
+    }
+
+    config = Config({"extern_data": {"data": {"dim_tags": (batch_dim, time_dim, input_dim)}}})
+
+    with make_scope() as session:
+        net = TFNetwork(config=config)
+        net.construct_from_dict(net_dict)
+        out = net.get_default_output_layer().output
+        assert not out.dims
+        y = session.run(out.placeholder, feed_dict=make_feed_dict(net.extern_data, n_time=n_time))
+        assert y == n_time
+
+
 def test_reclayer_shape_from_initial():
     from returnn.tf.util.data import batch_dim, SpatialDim, FeatureDim
 
