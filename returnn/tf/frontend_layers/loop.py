@@ -249,10 +249,6 @@ class Loop:
 
         assert not self.end_ref, f"{self}.end() can only be called once"
         assert source.dtype == "bool", f"{self}: end expects boolean condition, got {source}"
-        if source.dims == ():
-            # Currently the RETURNN RecLayer does not support a scalar end condition, only batched.
-            # We just broadcast it.
-            source = rf.expand_dim(source, dim=batch_dim)
         if not self.axis.dyn_size_ext:
             dyn_size_ext = source.copy_template()
             dyn_size_ext.dtype = "int32"

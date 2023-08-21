@@ -24,12 +24,11 @@ def test_while_loop_simple():
     def _forward_step(*, model: rf.Module, extern_data: TensorDict):
         model, extern_data  # noqa  # unused
         i = rf.while_loop(
-            cond=lambda i_: rf.reduce_min(i_, axis=i_.dims) < time_dim.get_dim_value_tensor(),
+            cond=lambda i_: i_ < time_dim.get_dim_value_tensor(),
             body=lambda i_: i_ + 1,
-            # Using batch dim here because currently the TF-layers backend does require that.
-            initial=rf.constant(0, dims=[batch_dim]),
+            initial=rf.constant(0, dims=()),
         )
-        i.mark_as_default_output(shape=[batch_dim])
+        i.mark_as_default_output(shape=())
 
     run_model(extern_data, lambda *, epoch, step: rf.Module(), _forward_step)
 
