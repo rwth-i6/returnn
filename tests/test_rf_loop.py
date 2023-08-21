@@ -33,6 +33,28 @@ def test_while_loop_simple():
     run_model(extern_data, lambda *, epoch, step: rf.Module(), _forward_step)
 
 
+def test_while_loop_two_state():
+    time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
+    in_dim = Dim(7, name="in")
+    extern_data = TensorDict(
+        {
+            "data": Tensor("data", [batch_dim, time_dim, in_dim], dtype="float32", feature_dim=in_dim),
+        }
+    )
+
+    # noinspection PyShadowingNames
+    def _forward_step(*, model: rf.Module, extern_data: TensorDict):
+        model  # noqa  # unused
+        data = extern_data["data"]
+        _, out = rf.while_loop(
+            cond=lambda s: s[0] < 2, body=lambda s: (s[0] + 1, s[1] * 0.9), initial=(rf.constant(0, dims=()), data)
+        )
+        assert out.control_flow_ctx is None
+        out.mark_as_default_output(shape=(batch_dim, time_dim, in_dim))
+
+    run_model(extern_data, lambda *, epoch, step: rf.Module(), _forward_step)
+
+
 def test_while_loop():
     time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
     in_dim = Dim(7, name="in")

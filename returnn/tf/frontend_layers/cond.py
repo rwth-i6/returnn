@@ -314,8 +314,9 @@ class CondModule(rf.Module):
                 if i == 0:
                     results.append(res)
                 else:
+                    template = true_v.copy_template_set_ctx(name_ctx.control_flow_ctx())
                     # noinspection PyProtectedMember
-                    results.append(rfl._get_sub_layer(res, name, data=true_v.copy_template()))
+                    results.append(rfl._get_sub_layer(res, name, data=template))
                 results[-1].raw_tensor.layer_extra_dependencies.extend(
                     (self.cond.condition.raw_tensor, true_v.raw_tensor, false_v.raw_tensor)
                 )
@@ -332,7 +333,8 @@ class CondModule(rf.Module):
             # Make sure this is registered as output layer.
             assert not name_ctx.inner_control_flow()  # not implemented
             out = results[0]
-            out = _utils.copy(out, name=name_ctx.root.get_new_child(out.name))
+            with rf.control_flow_ctx(name_ctx.control_flow_ctx()):
+                out = _utils.copy(out, name=name_ctx.root.get_new_child(out.name))
             out.raw_tensor.layer_dict["is_output_layer"] = True
             name_ctx.root.marked_outputs.append(out)
 
