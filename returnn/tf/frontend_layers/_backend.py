@@ -83,16 +83,24 @@ class ReturnnLayersBackend(Backend[Layer]):
     ) -> S:
         """while loop"""
         # Have to put some arbitrary max_seq_len limit, otherwise the RecLayer will complain.
-        # Note that layers usually run one more iteration than you might expect,
+        # Note that we could put the `loop.end(..., include_eos=False)` at the beginning of the loop.
+        # However, then all layers run one more iteration than you might expect,
         # specifically the last iteration will be run with end being True (condition being False).
-        # This is usually not a problem, but when layers might have side-effects,
-        # this might be unexpected.
-        loop = rfl.Loop(max_seq_len=rf.constant(2**31 - 1, dims=()))
-        loop.state.state = initial
-        with loop:
-            loop.end(rf.logical_not(cond(loop.state.state)), include_eos=False)
-            loop.state.state = body(loop.state.state)
-        return loop.state.state
+        # There are multiple cases when this can be problematic:
+        #  - Layers with side-effects.
+        #  - Gathering or similar where the indices can get out of bounds.
+        # When we have `loop.end(..., include_eos=True)` at the end of the loop, this is fixed.
+        # However, the case where the `cond(...)` is False already in the very beginning is wrong now.
+        # To check for this, we have to add an additional `cond(...)` around the loop.
+        def _loop():
+            loop = rfl.Loop(max_seq_len=rf.constant(2**31 - 1, dims=()))
+            loop.state.state = initial
+            with loop:
+                loop.state.state = body(loop.state.state)
+                loop.end(rf.logical_not(cond(loop.state.state)), include_eos=True)
+            return loop.state.state
+
+        return ReturnnLayersBackend.cond(cond(initial), _loop, lambda: initial)
 
     @staticmethod
     def set_random_seed(seed: int):
