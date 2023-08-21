@@ -9617,7 +9617,7 @@ class CondLayer(LayerBase):
         :param LayerBase|dict[str] condition:
         :param LayerBase|dict[str] true_layer:
         :param LayerBase|dict[str] false_layer:
-        :param dict[str,Data] _extra_out:
+        :param dict[str,(Data, type, dict[str])] _extra_out:
         """
         import os
         from ..util.data import Dim
@@ -9631,7 +9631,7 @@ class CondLayer(LayerBase):
         self.false_layer_desc = false_layer
         self.false_layer = None  # type: typing.Optional[LayerBase]
         assert self.condition_layer.output.batch_ndim == 0 and self.condition_layer.output.dtype == "bool"
-        self._extra_out_templates = _extra_out
+        self._extra_out_templates = {k: v[0] for k, v in _extra_out.items()}
         x, extra_out, sizes = tf_util.cond(
             pred=self.condition_layer.output.placeholder, true_fn=self._true_fn, false_fn=self._false_fn
         )
@@ -9770,9 +9770,7 @@ class CondLayer(LayerBase):
                 name,
                 true_layer_class.__name__,
             )
-            sub_out_, _, _ = sub_out
-            assert isinstance(sub_out_, Data), "unexpected sub_out %r" % (sub_out,)
-            extra_out[name] = sub_out_
+            extra_out[name] = sub_out
         d["_extra_out"] = extra_out
 
     @classmethod
@@ -9822,6 +9820,16 @@ class CondLayer(LayerBase):
         :rtype: list[str]
         """
         return sorted(parent_layer_kwargs["_extra_out"].keys())
+
+    @classmethod
+    def get_sub_layer_out_data_from_opts(cls, layer_name, parent_layer_kwargs):
+        """
+        :param str layer_name: name of the sub_layer (right part of '/' separated path)
+        :param dict[str] parent_layer_kwargs: kwargs for the parent layer (as kwargs in cls.get_out_data_from_opts())
+        :return: Data template, class type of sub-layer, layer opts (transformed)
+        :rtype: (Data, type, dict[str])|None
+        """
+        return parent_layer_kwargs["_extra_out"].get(layer_name)
 
     def get_sub_layers(self):
         """
