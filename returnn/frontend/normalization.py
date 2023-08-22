@@ -93,6 +93,7 @@ class BatchNorm(rf.Module):
         affine: bool = True,
         momentum: float = 0.1,
         eps: float = 1e-3,
+        track_running_stats: bool = True,
         use_mask: Optional[bool] = None,
     ):
         """
@@ -100,6 +101,10 @@ class BatchNorm(rf.Module):
         :param affine: whether to use learnable parameters gamma and beta
         :param momentum: momentum for the running mean and variance
         :param eps: epsilon for the variance
+        :param track_running_stats:
+            If True, uses statistics of the current batch for normalization during training,
+            and the tracked statistics (running mean and variance) during evaluation.
+            If False, uses statistics of the current batch for normalization during both training and evaluation.
         :param use_mask: whether to use a mask for dynamic spatial dims.
           This must be specified if the input has dynamic spatial dims.
           True would use the correct masking then. However, that is inconsistent to all other frameworks
@@ -113,10 +118,14 @@ class BatchNorm(rf.Module):
         self.use_mask = use_mask
         self.momentum = momentum
         self.eps = eps
-        self.running_mean = rf.Parameter([in_dim], auxiliary=True)
-        self.running_mean.initial = 0.0
-        self.running_variance = rf.Parameter([in_dim], auxiliary=True)
-        self.running_variance.initial = 1.0
+        if track_running_stats:
+            self.running_mean = rf.Parameter([in_dim], auxiliary=True)
+            self.running_mean.initial = 0.0
+            self.running_variance = rf.Parameter([in_dim], auxiliary=True)
+            self.running_variance.initial = 1.0
+        else:
+            self.running_mean = None
+            self.running_variance = None
         self.affine = affine
         self.gamma = None  # type: Optional[rf.Parameter]
         self.beta = None  # type: Optional[rf.Parameter]
