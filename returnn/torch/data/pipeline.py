@@ -63,7 +63,7 @@ def collate_batch(batch: List[Dict[str, numpy.ndarray]]) -> Dict[str, Union[torc
             if ls[0].ndim > 0:
                 padded = torch.nn.utils.rnn.pad_sequence(ls, batch_first=True, padding_value=0)
                 res[key] = padded
-                res["%s:seq_len" % key] = torch.tensor([v.shape[0] for v in ls])
+                res["%s:seq_len" % key] = torch.tensor([v.shape[0] for v in ls], dtype=torch.int32)
             else:
                 res[key] = torch.stack(ls, dim=0)
         elif isinstance(ls[0], numpy.ndarray):
