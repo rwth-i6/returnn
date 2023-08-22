@@ -174,6 +174,8 @@ class RunCtx:
                 loss = rf.convert_to_tensor(loss)
             else:
                 loss = _output_tensor_from_raw(loss, name=name, dims=dims)
+        if not rf.is_float_dtype(loss.dtype):
+            loss = rf.cast(loss, rf.get_default_float_dtype())
         assert name not in self.losses
         self.losses[name] = Loss(
             loss=loss,

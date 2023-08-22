@@ -5,7 +5,7 @@ DType helpers
 from __future__ import annotations
 
 
-__all__ = ["get_default_float_dtype", "get_default_int_dtype", "get_default_array_index_dtype"]
+__all__ = ["get_default_float_dtype", "get_default_int_dtype", "get_default_array_index_dtype", "is_float_dtype"]
 
 
 _default_float_dtype: str = "float32"
@@ -37,3 +37,10 @@ def get_default_array_index_dtype() -> str:
     :return: default dtype for array index - currently just the same as :func:`get_default_int_dtype`
     """
     return get_default_int_dtype()
+
+
+def is_float_dtype(dtype: str) -> bool:
+    """
+    :return: whether the dtype is float, e.g. it supports backprop etc
+    """
+    return dtype.startswith("float")
