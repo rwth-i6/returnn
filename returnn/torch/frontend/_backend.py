@@ -1005,6 +1005,9 @@ class TorchBackend(Backend[torch.Tensor]):
         if isinstance(axis, Dim):
             axis = [axis]
         assert all(isinstance(dim, Dim) for dim in axis)
+        raw_dims = [source.get_axis_from_description(dim) for dim in axis]
+        res_dims = [dim for i, dim in enumerate(source.dims) if i not in raw_dims]
+        correction_factor = None
         if use_mask and any(dim.need_masking() for dim in axis):
             source = source.copy()
             dtype = source.raw_tensor.dtype
@@ -1014,6 +1017,19 @@ class TorchBackend(Backend[torch.Tensor]):
                 mask_value = torch.finfo(dtype).max if dtype.is_floating_point else torch.iinfo(dtype).max
             elif mode == "sum":
                 mask_value = 0
+            elif mode == "mean":
+                mask_value = 0
+                if len(axis) == 1:
+                    correction_factor_ = rf.cast(axis[0].get_dim_value_tensor(), source.dtype) / rf.cast(
+                        axis[0].get_size_tensor(), source.dtype
+                    )
+                    correction_factor = correction_factor_.copy_compatible_to(
+                        Tensor("template", res_dims, source.dtype)
+                    ).raw_tensor
+                else:
+                    raise NotImplementedError(
+                        f"reduce_{mode} not implemented with masking on tensor {source!r} with multiple axes {axis}."
+                    )
             else:
                 raise NotImplementedError(f"reduce_{mode} not implemented with masking on tensor {source!r}.")
             for dim in axis:
@@ -1021,8 +1037,6 @@ class TorchBackend(Backend[torch.Tensor]):
                     mask = source.get_sequence_mask_broadcast(dim)
                     source.raw_tensor = torch.where(mask, source.raw_tensor, mask_value)
         func = getattr(torch, mode)
-        raw_dims = [source.get_axis_from_description(dim) for dim in axis]
-        res_dims = [dim for i, dim in enumerate(source.dims) if i not in raw_dims]
         if not res_dims:
             raw_result = func(source.raw_tensor)
         elif len(raw_dims) == 1:
@@ -1033,6 +1047,8 @@ class TorchBackend(Backend[torch.Tensor]):
         else:
             assert mode == "sum"  # not implemented otherwise for multiple axes
             raw_result = func(source.raw_tensor, dim=raw_dims)
+        if correction_factor is not None:
+            raw_result *= correction_factor
         res = Tensor(
             name=f"reduce_{mode}",
             raw_tensor=raw_result,
