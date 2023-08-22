@@ -1007,7 +1007,7 @@ class TorchBackend(Backend[torch.Tensor]):
         assert all(isinstance(dim, Dim) for dim in axis)
         raw_dims = [source.get_axis_from_description(dim) for dim in axis]
         res_dims = [dim for i, dim in enumerate(source.dims) if i not in raw_dims]
-        correction_factor = None
+        correction_factor: Optional[torch.Tensor] = None
         if use_mask and any(dim.need_masking() for dim in axis):
             source = source.copy()
             dtype = source.raw_tensor.dtype
@@ -1053,7 +1053,7 @@ class TorchBackend(Backend[torch.Tensor]):
         else:
             raw_result = func(source.raw_tensor, dim=raw_dims)
         if correction_factor is not None:
-            raw_result *= correction_factor
+            raw_result *= correction_factor.to(raw_result.device)
         res = Tensor(
             name=f"reduce_{mode}",
             raw_tensor=raw_result,
