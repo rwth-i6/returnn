@@ -5,6 +5,9 @@ tests for MultiProcDataset
 from __future__ import annotations
 import _setup_test_env  # noqa
 import sys
+import numpy
+import signal
+import contextlib
 import unittest
 from returnn.util import better_exchook
 from returnn.datasets.basic import init_dataset
@@ -14,17 +17,37 @@ from test_HDFDataset import generate_hdf_from_other
 from test_Dataset import dummy_iter_dataset, compare_dataset_seqs
 
 
+def _sig_alarm_handler(signum, frame):
+    raise Exception(f"Alarm (timeout) signal handler")
+
+
+signal.signal(signal.SIGALRM, _sig_alarm_handler)
+
+
+@contextlib.contextmanager
+def timeout(seconds=10):
+    """
+    :param seconds: when the context is not closed within this time, an exception will be raised
+    """
+    signal.alarm(seconds)
+    try:
+        yield
+    finally:
+        signal.alarm(0)
+
+
 def test_MultiProcDataset_n1_b1_default():
     hdf_fn = generate_hdf_from_other({"class": "Task12AXDataset", "num_seqs": 23})
     hdf_dataset_dict = {"class": "HDFDataset", "files": [hdf_fn]}
     hdf_dataset = init_dataset(hdf_dataset_dict)
     hdf_dataset_seqs = dummy_iter_dataset(hdf_dataset)
 
-    mp_dataset = MultiProcDataset(dataset=hdf_dataset_dict, num_workers=1, buffer_size=1)
-    mp_dataset.initialize()
-    mp_dataset_seqs = dummy_iter_dataset(mp_dataset)
+    with timeout():
+        mp_dataset = MultiProcDataset(dataset=hdf_dataset_dict, num_workers=1, buffer_size=1)
+        mp_dataset.initialize()
+        mp_dataset_seqs = dummy_iter_dataset(mp_dataset)
 
-    compare_dataset_seqs(hdf_dataset_seqs, mp_dataset_seqs)
+        compare_dataset_seqs(hdf_dataset_seqs, mp_dataset_seqs)
 
 
 def test_MultiProcDataset_n3_b5_shuffle():
@@ -33,11 +56,12 @@ def test_MultiProcDataset_n3_b5_shuffle():
     hdf_dataset = init_dataset(hdf_dataset_dict)
     hdf_dataset_seqs = dummy_iter_dataset(hdf_dataset)
 
-    mp_dataset = MultiProcDataset(dataset=hdf_dataset_dict, num_workers=3, buffer_size=5)
-    mp_dataset.initialize()
-    mp_dataset_seqs = dummy_iter_dataset(mp_dataset)
+    with timeout():
+        mp_dataset = MultiProcDataset(dataset=hdf_dataset_dict, num_workers=3, buffer_size=5)
+        mp_dataset.initialize()
+        mp_dataset_seqs = dummy_iter_dataset(mp_dataset)
 
-    compare_dataset_seqs(hdf_dataset_seqs, mp_dataset_seqs)
+        compare_dataset_seqs(hdf_dataset_seqs, mp_dataset_seqs)
 
 
 def test_MultiProcDataset_meta():
@@ -50,11 +74,68 @@ def test_MultiProcDataset_meta():
     meta_dataset = init_dataset(meta_dataset_dict)
     meta_dataset_seqs = dummy_iter_dataset(meta_dataset)
 
-    mp_dataset = MultiProcDataset(dataset=meta_dataset_dict, num_workers=1, buffer_size=1)
-    mp_dataset.initialize()
-    mp_dataset_seqs = dummy_iter_dataset(mp_dataset)
+    with timeout():
+        mp_dataset = MultiProcDataset(dataset=meta_dataset_dict, num_workers=1, buffer_size=1)
+        mp_dataset.initialize()
+        mp_dataset_seqs = dummy_iter_dataset(mp_dataset)
 
-    compare_dataset_seqs(meta_dataset_seqs, mp_dataset_seqs)
+        compare_dataset_seqs(meta_dataset_seqs, mp_dataset_seqs)
+
+
+class _MyCustomMapDatasetException(Exception):
+    pass
+
+
+class _MyCustomMapDatasetThrowingExceptionAtInit(MapDatasetBase):
+    def __init__(self):
+        super().__init__()
+        raise _MyCustomMapDatasetException("test exception at init")
+
+
+class _MyCustomMapDatasetThrowingExceptionAtItem(MapDatasetBase):
+    def __init__(self):
+        super().__init__(data_types={"data": {"shape": (None, 3)}})
+
+    def __len__(self):
+        return 2
+
+    def __getitem__(self, item):
+        if item == 0:
+            return {"data": numpy.zeros((5, 3))}
+        raise _MyCustomMapDatasetException("test exception at getitem")
+
+
+def test_MultiProcDataset_exception_at_init():
+    with timeout():
+        mp_dataset = MultiProcDataset(
+            dataset={"class": "MapDatasetWrapper", "map_dataset": _MyCustomMapDatasetThrowingExceptionAtInit},
+            num_workers=1,
+            buffer_size=1,
+        )
+        try:
+            mp_dataset.initialize()
+        except Exception as exc:
+            # Accept any exception. We do not properly forward it. But this is ok.
+            print("Got expected exception:", exc)
+        else:
+            raise Exception("Expected exception")
+
+
+def test_MultiProcDataset_exception_at_item():
+    with timeout():
+        mp_dataset = MultiProcDataset(
+            dataset={"class": "MapDatasetWrapper", "map_dataset": _MyCustomMapDatasetThrowingExceptionAtItem},
+            num_workers=1,
+            buffer_size=1,
+        )
+        mp_dataset.initialize()
+        try:
+            dummy_iter_dataset(mp_dataset)
+        except Exception as exc:
+            # Accept any exception. We do not properly forward it. But this is ok.
+            print("Got expected exception:", exc)
+        else:
+            raise Exception("Expected exception")
 
 
 if __name__ == "__main__":

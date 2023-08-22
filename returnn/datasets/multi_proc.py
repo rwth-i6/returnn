@@ -74,6 +74,12 @@ class MultiProcDataset(CachedDataset2):
                 args=(self.dataset, seq_order_proc_child_conn, seq_order_to_worker),
             )
             seq_order_proc.start()
+            # Make sure the child connection is closed here.
+            # It stays open in the child, until the child dies.
+            # When that happens, now any consecutive read on the pipe
+            # should yield an exception -- which is what we want,
+            # otherwise it would just hang.
+            seq_order_proc_child_conn.close()
 
             worker_procs = []
             for i in range(self.num_workers):
@@ -84,6 +90,7 @@ class MultiProcDataset(CachedDataset2):
                 )
                 worker_proc.start()
                 worker_procs.append(worker_proc)
+                worker_child_conns[i].close()
 
             self._seq_order_proc_parent_conn = seq_order_proc_parent_conn  # type: mpConnection
             self._seq_order_proc = seq_order_proc
