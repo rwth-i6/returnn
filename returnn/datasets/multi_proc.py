@@ -19,6 +19,10 @@ class MultiProcDataset(CachedDataset2):
     Dataset which uses multi-processing to load the data from another dataset.
 
     To get deterministic behavior, it will use round-robin scheduling.
+
+    There is one process just for generating the sequence order, i.e. list of sequences.
+    Then there are ``num_workers`` processes which will load the data for the shard of the sequences.
+    This means, one epoch (or subepoch) is exactly as in the original dataset.
     """
 
     def __init__(self, dataset: Dict[str, Any], num_workers: int, buffer_size: int, **kwargs):
