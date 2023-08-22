@@ -5,31 +5,12 @@ Provides :class:`Config` and some related helpers.
 from __future__ import annotations
 
 __author__ = "Patrick Doetsch"
-__copyright__ = "Copyright 2014"
 __credits__ = ["Patrick Doetsch", "Paul Voigtlaender"]
-__license__ = "GPL"
-__version__ = "0.9"
-__maintainer__ = "Patrick Doetsch"
-__email__ = "doetsch@i6.informatik.rwth-aachen.de"
 
 import contextlib
 import sys
 import typing
 import os
-
-PY3 = sys.version_info[0] >= 3
-
-if PY3:
-    import builtins
-
-    unicode = str
-    long = int
-else:
-    # noinspection PyUnresolvedReferences
-    import __builtin__ as builtins
-
-    unicode = builtins.unicode  # type: typing.Type[str]
-    long = builtins.long  # type: typing.Type[int]
 
 
 class Config:
@@ -68,7 +49,7 @@ class Config:
             content = f.read()
         content = content.strip()
         if content.startswith("#!") or filename.endswith(".py"):  # assume Python
-            if dirname and os.path.exists(f"{dirname}/__init__.py"):
+            if dirname and os.path.exists(f"{dirname}/__init__.py") and filename.endswith(".py"):
                 # It looks like a Python module inside a Python package.
                 # Import it as a module.
                 import importlib
@@ -88,7 +69,7 @@ class Config:
 
                 # Operate inplace on ourselves.
                 # Also, we want that it's available as the globals() dict, so that defined functions behave well
-                # (they would loose the local context otherwise).
+                # (they would lose the local context otherwise).
                 user_ns = self.typed_dict
                 # Always overwrite:
                 user_ns.update({"config": self, "__file__": filename, "__name__": "__returnn_config__"})
@@ -485,7 +466,7 @@ class Config:
         else:
             value = self.value(key, default, index)
         if value is not None:
-            if isinstance(value, (str, unicode)):
+            if isinstance(value, str):
                 # Special case for float as str. We automatically cast this case.
                 # This is also to handle special values such as "inf".
                 value = float(value)
