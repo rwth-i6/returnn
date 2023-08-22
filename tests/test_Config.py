@@ -3,12 +3,10 @@ import _setup_test_env  # noqa
 import unittest
 from nose.tools import assert_equal, assert_is_instance, assert_in, assert_greater, assert_true, assert_false
 from pprint import pprint
-from returnn.config import Config
-from returnn.util.basic import PY3
+from returnn.config import *
 from returnn.util import better_exchook
-
-better_exchook.replace_traceback_format_tb()
 from io import StringIO
+import textwrap
 
 
 def test_old_format():
@@ -221,6 +219,36 @@ tf_version_tuple = returnn.TFUtil.tf_version_tuple()
     assert config.typed_dict["tf_version_tuple"] == tf_util.tf_version_tuple()
     assert config.typed_dict["returnn_version"] == util.describe_returnn_version()
     assert config.typed_dict["returnn"].TFUtil is tf_util
+
+
+def test_config_pickle_function():
+    # Having some function inside the config, there are cases when we need to pickle it,
+    # e.g. when it is the post_process function of a dataset,
+    # and then used as the PyTorch dataset -- see test_PTDataset.py, test_HDFDataset_pickle.
+    # Currently, it fails with:
+    #   PicklingError: Can't pickle <function speed_pert_...>:
+    #     import of module '__returnn_config__' failed
+    # Functions are pickled by reference, storing the module name and function name.
+    import pickle
+
+    config = Config()
+    config.load_file(
+        StringIO(
+            textwrap.dedent(
+                """\
+                #!returnn.py
+
+                def my_custom_func():
+                    return 42
+                """
+            )
+        )
+    )
+    with global_config_ctx(config):
+        f = config.typed_dict["my_custom_func"]
+        f_ = pickle.loads(pickle.dumps(f))
+        assert f_ is f
+        assert f_() == 42
 
 
 if __name__ == "__main__":

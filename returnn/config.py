@@ -7,10 +7,12 @@ from __future__ import annotations
 __author__ = "Patrick Doetsch"
 __credits__ = ["Patrick Doetsch", "Paul Voigtlaender"]
 
+from typing import Optional
 import contextlib
 import sys
 import typing
 import os
+import types as _types
 
 
 class Config:
@@ -74,6 +76,8 @@ class Config:
                 # Always overwrite:
                 user_ns.update({"config": self, "__file__": filename, "__name__": "__returnn_config__"})
                 custom_exec(content, filename, user_ns, user_ns)
+                if "__returnn_config__" not in sys.modules:
+                    sys.modules["__returnn_config__"] = _GlobalConfigAsPyModuleProxy("__returnn_config__")
             return
         if content.startswith("{"):  # assume JSON
             from returnn.util.basic import load_json
@@ -678,3 +682,47 @@ def tf_should_use_gpu(config):
             return False
     else:
         raise ValueError("Currently unsupported TF device %r specified" % (cfg_dev,))
+
+
+class _GlobalConfigAsPyModuleProxy(_types.ModuleType):
+    """
+    Takes :func:`get_global_config`, and makes its ``typed_dict`` available as module attributes.
+    """
+
+    @staticmethod
+    def _get_config() -> Optional[Config]:
+        """
+        :return: config or None if not available anymore
+        """
+        return get_global_config(raise_exception=False)
+
+    def __getattribute__(self, item):
+        # Implement also __getattribute__ such that early access to just self.__dict__ (e.g. via vars(self)) also works.
+        if item == "__dict__":
+            cfg: Optional[Config] = self._get_config()
+            if not cfg:
+                return {}
+            return cfg
+        return super().__getattribute__(item)
+
+    def __getattr__(self, item):
+        cfg: Optional[Config] = self._get_config()
+        if not cfg:
+            raise AttributeError("config %s not loaded anymore" % self.__name__)
+        if item not in cfg.typed_dict:
+            raise AttributeError("config %s has no attribute %r" % (self.__name__, item))
+        return cfg.typed_dict[item]
+
+    def __dir__(self):
+        cfg: Optional[Config] = self._get_config()
+        if not cfg:
+            return []
+        return sorted(cfg.typed_dict.keys())
+
+    def __setattr__(self, key, value):
+        if key in ["__file__"]:
+            super().__setattr__(key, value)
+            return
+        cfg: Optional[Config] = self._get_config()
+        if cfg:
+            cfg.typed_dict[key] = value
