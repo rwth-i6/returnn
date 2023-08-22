@@ -1019,17 +1019,23 @@ class TorchBackend(Backend[torch.Tensor]):
                 mask_value = 0
             elif mode == "mean":
                 mask_value = 0
-                if len(axis) == 1:
-                    correction_factor_ = rf.cast(axis[0].get_dim_value_tensor(), source.dtype) / rf.cast(
-                        axis[0].get_size_tensor(), source.dtype
-                    )
-                    correction_factor = correction_factor_.copy_compatible_to(
-                        Tensor("template", res_dims, source.dtype)
-                    ).raw_tensor
-                else:
-                    raise NotImplementedError(
-                        f"reduce_{mode} not implemented with masking on tensor {source!r} with multiple axes {axis}."
-                    )
+                for dim in axis:
+                    if dim.need_masking():
+                        total_num_el = dim.get_dim_value_tensor()
+                        actual_num_el = dim.get_size_tensor()
+                        num_el_reduce_dims = [dim_ for dim_ in axis if dim_ in actual_num_el.dims]
+                        if num_el_reduce_dims:
+                            actual_num_el = rf.reduce_sum(actual_num_el, axis=num_el_reduce_dims)
+                            for dim_ in num_el_reduce_dims:
+                                total_num_el *= dim_.get_dim_value_tensor()
+                        correction_factor_ = rf.cast(total_num_el, source.dtype) / rf.cast(actual_num_el, source.dtype)
+                        correction_factor__ = correction_factor_.copy_compatible_to(
+                            Tensor("template", res_dims, source.dtype)
+                        ).raw_tensor
+                        if correction_factor is None:
+                            correction_factor = correction_factor__
+                        else:
+                            correction_factor *= correction_factor__
             else:
                 raise NotImplementedError(f"reduce_{mode} not implemented with masking on tensor {source!r}.")
             for dim in axis:
@@ -1045,7 +1051,6 @@ class TorchBackend(Backend[torch.Tensor]):
                 # result is a tuple (values, indices). https://pytorch.org/docs/stable/generated/torch.max.html
                 raw_result, _ = raw_result
         else:
-            assert mode == "sum"  # not implemented otherwise for multiple axes
             raw_result = func(source.raw_tensor, dim=raw_dims)
         if correction_factor is not None:
             raw_result *= correction_factor
