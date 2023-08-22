@@ -51,7 +51,7 @@ def test_batch_norm_masking():
     class _Net(rf.Module):
         def __init__(self):
             super().__init__()
-            self.bn = rf.BatchNorm(in_dim, use_mask=True)
+            self.bn = rf.BatchNorm(in_dim, use_mask=True, track_running_stats=False)
 
         def __call__(self, out: Tensor) -> Tensor:
             out = self.bn(out)
