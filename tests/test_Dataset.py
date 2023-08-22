@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from typing import List
 import os
 import sys
 import _setup_test_env  # noqa
@@ -12,9 +13,47 @@ import contextlib
 from nose.tools import assert_equal, assert_is_instance, assert_in, assert_not_in, assert_true, assert_false
 from returnn.datasets.generating import Task12AXDataset, DummyDataset, DummyDatasetMultipleSequenceLength
 from returnn.engine.batch import Batch
-from returnn.datasets.basic import Dataset
+from returnn.datasets.basic import Dataset, DatasetSeq, init_dataset
 from returnn.util.basic import NumbersDict
 from returnn.util import better_exchook
+
+
+def dummy_iter_dataset(dataset: Dataset) -> List[DatasetSeq]:
+    """
+    :param Dataset dataset:
+    :return: seqs
+    """
+    dataset.init_seq_order(epoch=1)
+    data_keys = dataset.get_data_keys()
+    seq_idx = 0
+    seqs = []
+    while dataset.is_less_than_num_seqs(seq_idx):
+        dataset.load_seqs(seq_idx, seq_idx + 1)
+        data = {}
+        for key in data_keys:
+            data[key] = dataset.get_data(seq_idx=seq_idx, key=key)
+        tag = dataset.get_tag(seq_idx)
+        seq = DatasetSeq(seq_idx=seq_idx, seq_tag=tag, features=data)
+        seqs.append(seq)
+        seq_idx += 1
+    print("Iterated through %r, num seqs %i" % (dataset, seq_idx))
+    return seqs
+
+
+def compare_dataset_seqs(seqs1: List[DatasetSeq], seqs2: List[DatasetSeq]):
+    """
+    :param list[DatasetSeq] seqs1:
+    :param list[DatasetSeq] seqs2:
+    """
+    assert len(seqs1) == len(seqs2)
+    for i, (seq1, seq2) in enumerate(zip(seqs1, seqs2)):
+        assert seq1.seq_idx == seq2.seq_idx == i
+        assert seq1.seq_tag == seq2.seq_tag, f"seq1 tag {seq1.seq_tag!r} != seq2 tag {seq2.seq_tag!r} for seq idx {i}"
+        assert set(seq1.features.keys()) == set(seq2.features.keys())
+        for key in seq1.features.keys():
+            assert seq1.features[key].shape == seq2.features[key].shape
+            assert seq1.features[key].dtype == seq2.features[key].dtype
+            assert (seq1.features[key] == seq2.features[key]).all()
 
 
 def test_Task12AXDataset_deepcopy():
@@ -494,6 +533,25 @@ def test_OggZipDataset():
         assert isinstance(classes, numpy.ndarray) and classes.dtype == numpy.int32 and classes.ndim == 1
         classes_ = "".join([dataset.targets.id_to_label(c) for c in classes])
         assert classes_ == _demo_txt + "."
+
+
+def test_MapDatasetWrapper():
+    from returnn.datasets.map import MapDatasetBase
+
+    class _MyCustomMapDataset(MapDatasetBase):
+        def __init__(self):
+            super().__init__(data_types={"data": {"shape": (None, 3)}})
+
+        def __len__(self):
+            return 1
+
+        def __getitem__(self, item):
+            return {"data": numpy.zeros((5, 3))}
+
+    ds = init_dataset({"class": "MapDatasetWrapper", "map_dataset": _MyCustomMapDataset})
+    (res,) = dummy_iter_dataset(ds)
+    assert isinstance(res, DatasetSeq)
+    assert res.features["data"].shape == (5, 3)
 
 
 if __name__ == "__main__":

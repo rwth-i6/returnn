@@ -2,7 +2,8 @@
 Provides :class:`MapDatasetBase`
 """
 
-from typing import List
+from __future__ import annotations
+from typing import Any, List, Tuple, Dict
 from returnn.datasets.basic import DatasetSeq
 from returnn.datasets.cached2 import CachedDataset2
 from returnn.util.basic import OptionalNotImplementedError
@@ -88,6 +89,8 @@ class MapDatasetWrapper(CachedDataset2):
 
         self._dataset = map_dataset
         self._seq_order = None
+        assert map_dataset.data_types, f"{self}: map_dataset {map_dataset} needs to provide data_types"
+        self.num_outputs = {key: _get_num_outputs_entry(key, opts) for key, opts in map_dataset.data_types.items()}
 
     @property
     def num_seqs(self):
@@ -188,6 +191,12 @@ class MapDatasetWrapper(CachedDataset2):
         """
         return True
 
+    def get_data_keys(self) -> List[str]:
+        """
+        :return: keys
+        """
+        return list(self._dataset.data_types.keys())
+
     def get_data_dim(self, key):
         """
         :param str key: e.g. "data" or "classes"
@@ -274,3 +283,16 @@ class FromListDataset(MapDatasetBase):
         """
         assert self._sort_data_key, "Specify which data key should be used for sequence sorting via 'sort_data_key'."
         return len(self._data_list[seq_idx][self._sort_data_key])
+
+
+def _get_num_outputs_entry(name: str, opts: Dict[str, Any]) -> Tuple[int, int]:
+    """
+    :param opts: data opts from data_types in MapDatasetBase
+    :return: num_outputs entry: (num-classes, len(shape))
+
+    This is maybe optional at some point when we remove num_outputs in Dataset.
+    """
+    from returnn.tensor import Tensor
+
+    data = Tensor(name, **opts)
+    return data.dim or (data.shape[-1] if data.shape else 0), len(data.shape)
