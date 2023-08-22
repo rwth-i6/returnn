@@ -1016,9 +1016,9 @@ class TorchBackend(Backend[torch.Tensor]):
                 mask_value = 0
             else:
                 raise NotImplementedError(f"reduce_{mode} not implemented with masking on tensor {source!r}.")
-            for i, dim in enumerate(axis):
+            for dim in axis:
                 if dim.need_masking():
-                    mask = source.get_sequence_mask_broadcast(axis=i)
+                    mask = source.get_sequence_mask_broadcast(dim)
                     source.raw_tensor = torch.where(mask, source.raw_tensor, mask_value)
         func = getattr(torch, mode)
         raw_dims = [source.get_axis_from_description(dim) for dim in axis]
