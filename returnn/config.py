@@ -38,6 +38,8 @@ class Config:
         from returnn.util.task_system import Pickler
 
         class _CustomPickler(Pickler):
+            dispatch = Pickler.dispatch.copy()
+
             def save_global(self, obj, name=None):
                 """save global"""
                 module_name = getattr(obj, "__module__", None)
@@ -45,16 +47,24 @@ class Config:
                     raise PicklingError("Can not pickle %r from RETURNN config" % obj)
                 super().save_global(obj, name=name)
 
+            # noinspection PyMethodParameters
+            def intellisave_dict(self_, obj):
+                """save dict"""
+                if obj is self.typed_dict:
+                    # Do not use the intelligent logic for our own dict.
+                    # We explicitly want to pickle it as-is.
+                    assert id(obj) not in self_.memo
+                    super().save_dict(obj)  # noqa
+                    return
+                super().intellisave_dict(obj)
+
+            dispatch[dict] = intellisave_dict
+
         buffer = io.BytesIO()
-        try:
-            self._is_pickling = True
-            pickler = _CustomPickler(buffer)
-            assert id(self) not in pickler.memo
-            memo_idx = len(pickler.memo)
-            pickler.memo[id(self)] = memo_idx, self
-            pickler.dump(self.typed_dict)
-        finally:
-            self._is_pickling = False
+        pickler = _CustomPickler(buffer)
+        memo_idx = len(pickler.memo)
+        pickler.memo[id(self)] = memo_idx, self
+        pickler.dump(self.typed_dict)
 
         return {
             "_pid": os.getpid(),

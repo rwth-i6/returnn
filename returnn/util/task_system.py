@@ -466,6 +466,20 @@ def getNormalDict(d):
     return r
 
 
+def assign_obj_attribs(obj, d: Dict[str, Any]):
+    """
+    :param obj:
+    :param d:
+    :return: obj
+
+    Note that obj.__dict__.update(d) does not always work,
+    e.g. when obj is a type (then obj.__dict__ is a readonly mappingproxy).
+    """
+    for k, v in d.items():
+        setattr(obj, k, v)
+    return obj
+
+
 def make_numpy_ndarray_fromstring(s, dtype, shape):
     return numpy.fromstring(s, dtype=dtype).reshape(shape)
 
@@ -725,9 +739,16 @@ class Pickler(_BasePickler):
 
     def _save_type_fallback(self, obj):
         self.save(type)
-        self.save((obj.__name__, obj.__bases__, getNormalDict(obj.__dict__)))
+        self.save((obj.__name__, obj.__bases__, {}))
         self.write(pickle.REDUCE)
         self.memoize(obj)
+        self.write(pickle.POP)  # we will put it back on the stack below
+
+        # Assign the attribs after it is already memoized
+        # to resolve recursive references.
+        self.save(assign_obj_attribs)
+        self.save((obj, getNormalDict(obj.__dict__)))
+        self.write(pickle.REDUCE)
 
     dispatch[NewStyleClass] = save_type
 

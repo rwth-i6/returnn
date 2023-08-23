@@ -234,11 +234,22 @@ def test_pickle_config():
 
                 def my_custom_func():
                     return 42
+
+                class CustomClass:
+                    x = 43
+
+                    def __init__(self):
+                        super().__init__()
+                        CustomClass.x = 44
+
+                    def get_value(self):
+                        return CustomClass.x
                 """
             )
         )
     )
     f = config.typed_dict["my_custom_func"]
+    obj = config.typed_dict["CustomClass"]()
 
     sio = io.BytesIO()
     # noinspection PyUnresolvedReferences
@@ -250,6 +261,9 @@ def test_pickle_config():
     f_ = config_.typed_dict["my_custom_func"]
     assert f is not f_  # it should really be a copy, via Config.__getstate__ logic
     assert f() == f_() == 42
+    obj_ = config_.typed_dict["CustomClass"]()
+    assert type(obj) is not type(obj_)
+    assert obj.get_value() == obj_.get_value() == 44
 
 
 def test_config_pickle_function():
