@@ -93,6 +93,13 @@ class MapDatasetWrapper(CachedDataset2):
         self.num_outputs = {key: _get_num_outputs_entry(key, opts) for key, opts in map_dataset.data_types.items()}
 
     @property
+    def map_dataset(self) -> MapDatasetBase:  # also important for Dataset.__reduce__
+        """
+        :return: the wrapped MapDataset
+        """
+        return self._dataset
+
+    @property
     def num_seqs(self):
         """
         :returns number of sequences in the current epoch
