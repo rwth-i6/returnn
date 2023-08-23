@@ -87,27 +87,29 @@ def test_HDFDataset():
 
 def test_MultiProcDataset_HDFDataset():
     from test_HDFDataset import generate_hdf_from_other
+    from test_MultiProcDataset import timeout
     from returnn.datasets.multi_proc import MultiProcDataset
 
     hdf_fn = generate_hdf_from_other({"class": "Task12AXDataset", "num_seqs": 23})
-    mp_dataset = MultiProcDataset(
-        dataset={"class": "HDFDataset", "files": [hdf_fn], "cache_byte_size": 0},
-        num_workers=1,
-        buffer_size=1,
-    )
-    mp_dataset.initialize()
+    with timeout(10):
+        mp_dataset = MultiProcDataset(
+            dataset={"class": "HDFDataset", "files": [hdf_fn], "cache_byte_size": 0},
+            num_workers=1,
+            buffer_size=1,
+        )
+        mp_dataset.initialize()
 
-    mp_manager = torch.multiprocessing.Manager()
-    loader = get_loader_from_returnn_dataset(mp_dataset, mp_manager)
-    c = 0
-    n = 3
-    for batch in loader:
-        print(batch)
-        c += 1
-        if c >= n:
-            break
+        mp_manager = torch.multiprocessing.Manager()
+        loader = get_loader_from_returnn_dataset(mp_dataset, mp_manager)
+        c = 0
+        n = 3
+        for batch in loader:
+            print(batch)
+            c += 1
+            if c >= n:
+                break
 
-    assert c == n
+        assert c == n
 
 
 if __name__ == "__main__":
