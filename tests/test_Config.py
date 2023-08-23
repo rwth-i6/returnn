@@ -221,6 +221,37 @@ tf_version_tuple = returnn.TFUtil.tf_version_tuple()
     assert config.typed_dict["returnn"].TFUtil is tf_util
 
 
+def test_pickle_config():
+    import pickle
+    import io
+
+    config = Config()
+    config.load_file(
+        StringIO(
+            textwrap.dedent(
+                """\
+                #!returnn.py
+
+                def my_custom_func():
+                    return 42
+                """
+            )
+        )
+    )
+    f = config.typed_dict["my_custom_func"]
+
+    sio = io.BytesIO()
+    # noinspection PyUnresolvedReferences
+    p = pickle._Pickler(sio)  # better for debugging
+    with global_config_ctx(config):
+        p.dump(config)
+
+    config_ = pickle.loads(sio.getvalue())
+    f_ = config_.typed_dict["my_custom_func"]
+    assert f is not f_  # it should really be a copy, via Config.__getstate__ logic
+    assert f() == f_() == 42
+
+
 def test_config_pickle_function():
     # Having some function inside the config, there are cases when we need to pickle it,
     # e.g. when it is the post_process function of a dataset,

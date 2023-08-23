@@ -32,6 +32,55 @@ class Config:
         if items is not None:
             self.typed_dict.update(items)
 
+    def __getstate__(self):
+        import io
+        from pickle import PicklingError
+        from returnn.util.task_system import Pickler
+
+        class _CustomPickler(Pickler):
+            def save_global(self, obj, name=None):
+                """save global"""
+                module_name = getattr(obj, "__module__", None)
+                if module_name == _PyModuleName:
+                    raise PicklingError("Can not pickle %r from RETURNN config" % obj)
+                super().save_global(obj, name=name)
+
+        buffer = io.BytesIO()
+        try:
+            self._is_pickling = True
+            pickler = _CustomPickler(buffer)
+            assert id(self) not in pickler.memo
+            memo_idx = len(pickler.memo)
+            pickler.memo[id(self)] = memo_idx, self
+            pickler.dump(self.typed_dict)
+        finally:
+            self._is_pickling = False
+
+        return {
+            "_pid": os.getpid(),
+            "_self_memo_idx": memo_idx,
+            "_typed_dict_pickled": buffer.getvalue(),
+            "_is_global": self is get_global_config(raise_exception=False),
+        }
+
+    def __setstate__(self, state):
+        import io
+
+        # Use pure-Python unpickling to be able to extend the memo.
+        # noinspection PyUnresolvedReferences,PyProtectedMember
+        from pickle import _Unpickler
+
+        self.__init__()
+
+        buffer = io.BytesIO(state["_typed_dict_pickled"])
+        unpickler = _Unpickler(buffer)
+        unpickler.memo[state["_self_memo_idx"]] = self
+        self.typed_dict = unpickler.load()
+
+        if state["_is_global"] and os.getpid() != state["_pid"]:
+            set_global_config(self)
+            _global_config_as_py_module_proxy_setup()
+
     def load_file(self, f):
         """
         Reads the configuration parameters from a file and adds them to the inner set of parameters.
@@ -74,10 +123,9 @@ class Config:
                 # (they would lose the local context otherwise).
                 user_ns = self.typed_dict
                 # Always overwrite:
-                user_ns.update({"config": self, "__file__": filename, "__name__": "__returnn_config__"})
+                user_ns.update({"config": self, "__file__": filename, "__name__": _PyModuleName})
                 custom_exec(content, filename, user_ns, user_ns)
-                if "__returnn_config__" not in sys.modules:
-                    sys.modules["__returnn_config__"] = _GlobalConfigAsPyModuleProxy("__returnn_config__")
+                _global_config_as_py_module_proxy_setup()
             return
         if content.startswith("{"):  # assume JSON
             from returnn.util.basic import load_json
@@ -682,6 +730,15 @@ def tf_should_use_gpu(config):
             return False
     else:
         raise ValueError("Currently unsupported TF device %r specified" % (cfg_dev,))
+
+
+_PyModuleName = "__returnn_config__"
+
+
+def _global_config_as_py_module_proxy_setup():
+    if _PyModuleName in sys.modules:
+        return
+    sys.modules[_PyModuleName] = _GlobalConfigAsPyModuleProxy(_PyModuleName)
 
 
 class _GlobalConfigAsPyModuleProxy(_types.ModuleType):
