@@ -51,6 +51,7 @@ class MultiProcDataset(CachedDataset2):
         self._worker_procs = None  # type: Optional[List[mp.Process]]
 
     def initialize(self):
+        """init"""
         self._lazy_init()
         super().initialize()
 
