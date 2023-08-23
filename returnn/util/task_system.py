@@ -4,6 +4,7 @@ most of them quite low level.
 """
 
 from __future__ import annotations
+from typing import Any, Dict, Tuple
 from threading import Lock
 import sys
 
@@ -623,6 +624,7 @@ class Pickler(_BasePickler):
         _BasePickler.__init__(self, *args, **kwargs)
 
     dispatch = _BasePickler.dispatch.copy()
+    memo: Dict[int, Tuple[int, Any]]
 
     def save_func(self, obj):
         try:
