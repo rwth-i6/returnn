@@ -118,22 +118,32 @@ class MapDatasetWrapper(CachedDataset2):
         """
         super(MapDatasetWrapper, self).init_seq_order(epoch=epoch, seq_list=seq_list, seq_order=seq_order)
 
-        if seq_list is not None or seq_order is not None:
-            raise NotImplementedError
-
-        try:
-            self._seq_order = self._dataset.get_seq_order(epoch=epoch)
-        except OptionalNotImplementedError:
+        if seq_list is not None:
+            assert seq_order is None
+            tag_to_idx = {
+                self._dataset.get_seq_tag(corpus_seq_idx): corpus_seq_idx
+                for corpus_seq_idx in range(len(self._dataset))
+            }
+            seq_order = [tag_to_idx[tag] for tag in seq_list]
+        if seq_order is not None:
+            self._seq_order = seq_order
+        else:
             try:
-                self._seq_order = self.get_seq_order_for_epoch(
-                    epoch=epoch, num_seqs=len(self._dataset), get_seq_len=self._dataset.get_seq_len
-                )
+                self._seq_order = self._dataset.get_seq_order(epoch=epoch)
             except OptionalNotImplementedError:
-                # only support seq_ordering that need no length here
-                assert self.seq_ordering in ["default", "reverse", "random"]
-                self._seq_order = self.get_seq_order_for_epoch(
-                    epoch=epoch, num_seqs=len(self._dataset), get_seq_len=None
-                )
+                try:
+                    self._seq_order = self.get_seq_order_for_epoch(
+                        epoch=epoch, num_seqs=len(self._dataset), get_seq_len=self._dataset.get_seq_len
+                    )
+                except OptionalNotImplementedError:
+                    # only support seq_ordering that need no length here
+                    assert self.seq_ordering in ["default", "reverse", "random"], (
+                        f"{self}: dataset {self._dataset}.get_seq_len is not implemented,"
+                        f" seq_ordering {self.seq_ordering!r} is not supported"
+                    )
+                    self._seq_order = self.get_seq_order_for_epoch(
+                        epoch=epoch, num_seqs=len(self._dataset), get_seq_len=None
+                    )
 
         return True
 
