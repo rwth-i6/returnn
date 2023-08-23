@@ -84,7 +84,7 @@ class MapDatasetWrapper(CachedDataset2):
         super(MapDatasetWrapper, self).__init__(**kwargs)
 
         if callable(map_dataset):
-            map_dataset = map_dataset(**kwargs)
+            map_dataset = map_dataset()
         assert isinstance(map_dataset, MapDatasetBase)
 
         self._dataset = map_dataset
