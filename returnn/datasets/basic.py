@@ -209,8 +209,12 @@ class Dataset(object):
         """
         assert issubclass(cls, Dataset)
         ds = cls(**kwargs)
+        assert isinstance(ds, Dataset)
         for attr, value in state.items():
             setattr(ds, attr, value)
+        # We don't really know whether the original dataset was initialized.
+        # So just to be sure, just initialize the copy in any case now.
+        ds.initialize()
         return ds
 
     def __reduce__(self):
