@@ -179,6 +179,37 @@ def test_MultiProcDataset_exception_at_item():
             raise Exception("Expected exception")
 
 
+class _MyCustomDummyMapDataset(MapDatasetBase):
+    def __init__(self):
+        super().__init__(data_types={"data": {"shape": (None, 3)}})
+
+    def __len__(self):
+        return 2
+
+    def __getitem__(self, item):
+        return {"data": numpy.zeros((item * 2 + 5, 3))}
+
+
+def test_MultiProcDataset_pickle():
+    import pickle
+
+    with timeout():
+        mp_dataset = MultiProcDataset(
+            dataset={"class": "MapDatasetWrapper", "map_dataset": _MyCustomDummyMapDataset},
+            num_workers=1,
+            buffer_size=1,
+        )
+        mp_dataset.initialize()
+        mp_dataset_seqs = dummy_iter_dataset(mp_dataset)
+        mp_dataset_serialized = pickle.dumps(mp_dataset)
+
+    with timeout():
+        mp_dataset_ = pickle.loads(mp_dataset_serialized)
+        mp_dataset_seqs_ = dummy_iter_dataset(mp_dataset_)
+
+    compare_dataset_seqs(mp_dataset_seqs, mp_dataset_seqs_)
+
+
 if __name__ == "__main__":
     better_exchook.install()
     if len(sys.argv) <= 1:
