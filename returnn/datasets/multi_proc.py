@@ -51,7 +51,10 @@ class MultiProcDataset(CachedDataset2):
         self._worker_procs = None  # type: Optional[List[mp.Process]]
 
     def initialize(self):
-        """init"""
+        self._lazy_init()
+        super().initialize()
+
+    def _lazy_init(self):
         if not self._worker_procs:
             # We send the global config to the subprocesses,
             # because some datasets might use custom functions inside the config,
@@ -126,8 +129,6 @@ class MultiProcDataset(CachedDataset2):
             assert msg == "total_num_seqs"
             msg, self.labels = self._seq_order_proc_parent_conn.recv()
             assert msg == "labels"
-
-        super().initialize()
 
     def __del__(self):
         if self._seq_order_proc:
@@ -274,8 +275,8 @@ class MultiProcDataset(CachedDataset2):
         :returns whether the order changed (True is always safe to return)
         """
         super().init_seq_order(epoch=epoch, seq_list=seq_list, seq_order=seq_order)
-
         if epoch is not None or seq_list is not None or seq_order is not None:
+            self._lazy_init()
             self._seq_order_proc_parent_conn.send(
                 ("init_seq_order", {"epoch": epoch, "seq_list": seq_list, "seq_order": seq_order})
             )
