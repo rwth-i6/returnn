@@ -296,6 +296,42 @@ def test_config_pickle_function():
         assert f_() == 42
 
 
+def _config_pickle_proc_main(config, f):
+    assert isinstance(config, Config)
+    assert get_global_config() is config
+    assert callable(f)
+    f()
+
+
+def test_config_pickle_function_multi_proc():
+    # Same as test_config_pickle_function but via multiprocessing,
+    # so across process boundaries.
+    import multiprocessing
+
+    _mp = multiprocessing.get_context("spawn")
+
+    config = Config()
+    config.load_file(
+        StringIO(
+            textwrap.dedent(
+                """\
+                #!returnn.py
+
+                def my_custom_func():
+                    import sys
+                    sys.exit(42)
+                """
+            )
+        )
+    )
+    with global_config_ctx(config):
+        f = config.typed_dict["my_custom_func"]
+        proc = _mp.Process(target=_config_pickle_proc_main, args=(config, f))
+        proc.start()
+        proc.join()
+        assert proc.exitcode == 42
+
+
 if __name__ == "__main__":
     better_exchook.install()
     if len(sys.argv) <= 1:

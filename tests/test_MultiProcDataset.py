@@ -82,6 +82,47 @@ def test_MultiProcDataset_meta():
         compare_dataset_seqs(meta_dataset_seqs, mp_dataset_seqs)
 
 
+def test_MultiProcDataset_via_config():
+    # https://github.com/rwth-i6/returnn/issues/1384
+    from io import StringIO
+    import textwrap
+    from returnn.config import Config, global_config_ctx
+
+    config = Config()
+    config.load_file(
+        StringIO(
+            textwrap.dedent(
+                """\
+                #!returnn.py
+
+                import numpy
+                from returnn.datasets.map import MapDatasetBase
+
+                class MyCustomMapDatasetInConfig(MapDatasetBase):
+                    def __init__(self):
+                        super().__init__(data_types={"data": {"shape": (None, 3)}})
+
+                    def __len__(self):
+                        return 2
+
+                    def __getitem__(self, item):
+                        return {"data": numpy.zeros((5, 3))}
+                """
+            )
+        )
+    )
+
+    with timeout(), global_config_ctx(config):
+        mp_dataset = MultiProcDataset(
+            dataset={"class": "MapDatasetWrapper", "map_dataset": config.typed_dict["MyCustomMapDatasetInConfig"]},
+            num_workers=1,
+            buffer_size=1,
+        )
+        mp_dataset.initialize()
+        items = dummy_iter_dataset(mp_dataset)
+        assert len(items) == 2
+
+
 class _MyCustomMapDatasetException(Exception):
     pass
 

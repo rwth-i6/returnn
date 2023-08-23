@@ -6,6 +6,7 @@ from __future__ import annotations
 from typing import Optional, Any, Dict, List
 from .basic import init_dataset, DatasetSeq
 from .cached2 import CachedDataset2
+from returnn.config import Config, get_global_config, set_global_config
 import multiprocessing as mp
 
 # noinspection PyProtectedMember
@@ -52,6 +53,13 @@ class MultiProcDataset(CachedDataset2):
     def initialize(self):
         """init"""
         if not self._worker_procs:
+            # We send the global config to the subprocesses,
+            # because some datasets might use custom functions inside the config,
+            # and pickling them would fail otherwise.
+            # https://github.com/rwth-i6/returnn/issues/1384
+            # Pickling the config works, as the config has special pickling support.
+            global_config = get_global_config(raise_exception=False)
+
             # Seq order proc directly sends the seq order to each worker.
             seq_order_to_worker = []  # type: List[mpConnection]
             worker_from_seq_order = []  # type: List[mpConnection]
@@ -71,7 +79,12 @@ class MultiProcDataset(CachedDataset2):
             seq_order_proc = _mp.Process(
                 name=f"{self.name} seq order proc",
                 target=self._seq_order_proc_loop,
-                args=(self.dataset, seq_order_proc_child_conn, seq_order_to_worker),
+                # We deliberately put global_config first, because pickling of dataset might require
+                # that the global config is already loaded, which will have the side effect
+                # that it is registered as global config, and the Python module will be registered,
+                # so references to it will work.
+                args=(global_config, self.dataset, seq_order_proc_child_conn, seq_order_to_worker),
+                daemon=True,
             )
             seq_order_proc.start()
             # Make sure the child connection is closed here.
@@ -86,11 +99,18 @@ class MultiProcDataset(CachedDataset2):
                 worker_proc = _mp.Process(
                     name=f"{self.name} worker proc {i + 1}/{self.num_workers}",
                     target=self._worker_proc_loop,
-                    args=(self.dataset, self.buffer_size, worker_child_conns[i], worker_from_seq_order[i]),
+                    args=(
+                        global_config,  # see above
+                        self.dataset,
+                        self.buffer_size,
+                        worker_child_conns[i],
+                        worker_from_seq_order[i],
+                    ),
+                    daemon=True,
                 )
                 worker_proc.start()
                 worker_procs.append(worker_proc)
-                worker_child_conns[i].close()
+                worker_child_conns[i].close()  # see above
 
             self._seq_order_proc_parent_conn = seq_order_proc_parent_conn  # type: mpConnection
             self._seq_order_proc = seq_order_proc
@@ -120,7 +140,11 @@ class MultiProcDataset(CachedDataset2):
                 worker_proc.join()
 
     @staticmethod
-    def _seq_order_proc_loop(dataset_dict: Dict[str, Any], parent: mpConnection, workers: List[mpConnection]):
+    def _seq_order_proc_loop(
+        global_config: Optional[Config], dataset_dict: Dict[str, Any], parent: mpConnection, workers: List[mpConnection]
+    ):
+        if global_config:
+            set_global_config(global_config)
         num_workers = len(workers)
         dataset = init_dataset(dataset_dict)
         try:
@@ -150,8 +174,14 @@ class MultiProcDataset(CachedDataset2):
 
     @staticmethod
     def _worker_proc_loop(
-        dataset_dict: Dict[str, Any], buffer_size: int, parent: mpConnection, seq_order: mpConnection
+        global_config: Optional[Config],
+        dataset_dict: Dict[str, Any],
+        buffer_size: int,
+        parent: mpConnection,
+        seq_order: mpConnection,
     ):
+        if global_config:
+            set_global_config(global_config)
         dataset = init_dataset(dataset_dict)
 
         got_init_seq_order = False
