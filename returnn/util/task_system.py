@@ -7,7 +7,6 @@ from __future__ import annotations
 from typing import Any, Dict, Tuple
 from threading import Lock
 import sys
-
 import os
 import io
 import pickle
@@ -16,13 +15,6 @@ import struct
 import marshal
 from importlib import import_module
 import numpy
-
-try:
-    from _multiprocessing import Connection
-except ImportError:
-    from multiprocessing.connection import Connection
-
-PY3 = sys.version_info[0] >= 3
 
 
 _abs_mod_file = os.path.abspath(__file__)
@@ -391,82 +383,29 @@ def funcCall(attrChainArgs, args=()):
 
 
 Unpickler = pickle.Unpickler
-if PY3:
 
-    def get_func_closure(f):
-        return f.__closure__
 
-    # (code, globals[, name[, argdefs[, closure]]])
-    def get_func_tuple(f):
-        return (
-            f.__code__,
-            f.__globals__,
-            f.__name__,
-            f.__defaults__,
-            f.__closure__,
-        )
+def get_func_closure(f):
+    return f.__closure__
 
-else:
 
-    def get_func_closure(f):
-        return f.func_closure
-
-    def get_func_tuple(f):
-        return (
-            f.func_code,
-            f.func_globals,
-            f.func_name,
-            f.func_defaults,
-            f.func_closure,
-        )
+# (code, globals[, name[, argdefs[, closure]]])
+def get_func_tuple(f):
+    return (
+        f.__code__,
+        f.__globals__,
+        f.__name__,
+        f.__defaults__,
+        f.__closure__,
+    )
 
 
 _closure = (lambda x: lambda: x)(0)
-# noinspection PyUnresolvedReferences
 _cell = get_func_closure(_closure)[0]
 CellType = type(_cell)
 ModuleType = type(sys)
-# noinspection PyUnresolvedReferences
-DictType = dict if PY3 else types.DictionaryType
-
-if PY3:
-
-    class BufferType:
-        "Dummy"
-
-    def make_buffer(*args):
-        assert False
-
-else:
-    # noinspection PyUnresolvedReferences
-    make_buffer = buffer
-    # noinspection PyUnresolvedReferences
-    BufferType = types.BufferType
-
-    def bytes(x, *args):
-        return str(x)
-
-
-if PY3:
-    _old_style_class = None
-
-    class OldStyleClass:
-        "Dummy"
-
-    class _new_style_class:
-        pass
-
-    NewStyleClass = type
-else:
-
-    class _old_style_class:
-        pass
-
-    class _new_style_class(object):
-        pass
-
-    OldStyleClass = type(_old_style_class)  # == types.ClassType (classobj)
-    NewStyleClass = type(_new_style_class)  # (type)
+DictType = dict
+NewStyleClass = type
 
 
 def makeFuncCell(value):
@@ -649,10 +588,7 @@ class Pickler(_BasePickler):
             pass
         assert type(obj) is types.MethodType
         self.save(types.MethodType)
-        if PY3:
-            self.save((obj.__func__, obj.__self__))
-        else:
-            self.save((obj.im_func, obj.im_self, obj.im_class))
+        self.save((obj.__func__, obj.__self__))
         self.write(pickle.REDUCE)
         self.memoize(obj)
 
@@ -702,13 +638,6 @@ class Pickler(_BasePickler):
         raise pickle.PicklingError("cannot pickle module %r" % obj)
 
     dispatch[ModuleType] = save_module
-
-    def save_buffer(self, obj):
-        self.save(buffer)
-        self.save((str(obj),))
-        self.write(pickle.REDUCE)
-
-    dispatch[BufferType] = save_buffer
 
     def save_string(self, obj, pack=struct.pack):
         # Difference to base: We just always use BINSTRING (simpler)
@@ -801,27 +730,6 @@ class Pickler(_BasePickler):
         self.memoize(obj)
 
     dispatch[NewStyleClass] = save_type
-
-    # This is about old-style classes.
-    def save_class(self, cls):
-        try:
-            # First try with a global reference. This works normally. This is the default original pickle behavior.
-            self.save_global(cls)
-            return
-        except pickle.PicklingError:
-            pass
-        # It didn't worked. But we can still serialize it.
-        # Note that this could potentially confuse the code if the class is reference-able in some other way
-        # - then we will end up with two versions of the same class.
-        self._save_class_fallback(cls)
-
-    def _save_class_fallback(self, cls):
-        self.save(types.ClassType)
-        self.save((cls.__name__, cls.__bases__, cls.__dict__))
-        self.write(pickle.REDUCE)
-        self.memoize(cls)
-
-    dispatch[OldStyleClass] = save_class
 
     # avoid pickling instances of ourself. this mostly doesn't make sense and leads to trouble.
     # however, also doesn't break. it mostly makes sense to just ignore.
