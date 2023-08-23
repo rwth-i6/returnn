@@ -792,6 +792,9 @@ class Pickler(_BasePickler):
                     self.memoize(obj)
                     return
         # Generic serialization of new-style classes.
+        self._save_type_fallback(obj)
+
+    def _save_type_fallback(self, obj):
         self.save(type)
         self.save((obj.__name__, obj.__bases__, getNormalDict(obj.__dict__)))
         self.write(pickle.REDUCE)
@@ -810,11 +813,13 @@ class Pickler(_BasePickler):
         # It didn't worked. But we can still serialize it.
         # Note that this could potentially confuse the code if the class is reference-able in some other way
         # - then we will end up with two versions of the same class.
+        self._save_class_fallback(cls)
+
+    def _save_class_fallback(self, cls):
         self.save(types.ClassType)
         self.save((cls.__name__, cls.__bases__, cls.__dict__))
         self.write(pickle.REDUCE)
         self.memoize(cls)
-        return
 
     dispatch[OldStyleClass] = save_class
 
