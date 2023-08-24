@@ -26,11 +26,19 @@ class MultiProcDataset(CachedDataset2):
     This means, one epoch (or subepoch) is exactly as in the original dataset.
     """
 
-    def __init__(self, dataset: Dict[str, Any], num_workers: int, buffer_size: int, **kwargs):
+    def __init__(
+        self,
+        dataset: Dict[str, Any],
+        num_workers: int,
+        buffer_size: int,
+        _meta_info_cache: Optional[Dict[str, Any]] = None,
+        **kwargs,
+    ):
         """
         :param dataset: the dataset to use
         :param num_workers: number of workers to use
         :param buffer_size: buffer size for each worker, amount of seqs to prefetch
+        :param _meta_info_cache: for internal use
         """
         super().__init__(**kwargs)
         assert num_workers > 0 and buffer_size > 0
@@ -50,10 +58,31 @@ class MultiProcDataset(CachedDataset2):
         self._seq_order_proc = None  # type: Optional[mp.Process]
         self._worker_procs = None  # type: Optional[List[mp.Process]]
 
+        if _meta_info_cache:
+            # This allows to skip the lazy init in self.initialize().
+            # This can be used when pickling/deepcopying an instance of this dataset,
+            # see Dataset.__reduce__.
+            self.num_inputs = _meta_info_cache["num_inputs"]
+            self.num_outputs = _meta_info_cache["num_outputs"]
+            self._total_num_seqs = _meta_info_cache["total_num_seqs"]
+            self.labels = _meta_info_cache["labels"]
+
     def initialize(self):
         """init"""
-        self._lazy_init()
+        if not self.num_outputs:
+            self._lazy_init()
         super().initialize()
+
+    @property
+    def _meta_info_cache(self):
+        if not self.num_outputs:
+            return None
+        return {
+            "num_inputs": self.num_inputs,
+            "num_outputs": self.num_outputs,
+            "total_num_seqs": self._total_num_seqs,
+            "labels": self.labels,
+        }
 
     def _lazy_init(self):
         if not self._worker_procs:
