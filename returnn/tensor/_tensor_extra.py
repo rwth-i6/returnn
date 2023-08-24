@@ -2010,10 +2010,11 @@ class _TensorMixin(_TensorMixinBase):
         :return: if we have a feature dim, return its dim tag. if we are sparse, return the sparse_dim. otherwise None
         :rtype: Dim|None
         """
-        if self._feature_dim_axis is not None:
-            return self._dims[self._feature_dim_axis]
         if self.sparse_dim:
             return self.sparse_dim
+        feature_dim_axis = self.feature_dim_axis
+        if feature_dim_axis is not None:
+            return self._dims[feature_dim_axis]
         return None
 
     @property
