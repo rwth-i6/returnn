@@ -281,27 +281,20 @@ class _TensorMixin(_TensorMixinBase):
         :param bool ignore_placeholder:
         :param bool assume_complete:
         """
-        for axis_name, axis in self.get_special_axes_dict().items():
+        special_axes_dict = self.get_special_axes_dict()
+        for axis_name, axis in special_axes_dict.items():
             assert axis is None or 0 <= axis < self.batch_ndim, "%s: axis %s (%i) invalid" % (self, axis_name, axis)
         if self.batch_dim_axis is not None:
-            for axis_name, axis in self.get_special_axes_dict().items():
+            for axis_name, axis in special_axes_dict.items():
                 assert axis != self.batch_dim_axis, "%s: axis %s (%i) must be different from batch_dim_axis (%i)" % (
                     self,
                     axis_name,
                     axis,
                     self.batch_dim_axis,
                 )
-        if self.sparse:
+        if self.sparse_dim is not None:
             assert self.feature_dim_axis is None, "%s: If sparse, there cannot be a feature dim axis." % self
-        else:
-            if self.feature_dim_axis is None:  # e.g. scalars, or [B]
-                assert self.dim is None, "%s: not sparse but no feature-dim-axis, so dim should be None" % self
-        if self.feature_dim_axis is not None:
-            assert (
-                self.dim == self.batch_shape[self.feature_dim_axis]
-            ), "%s: inconsistent dim. feature axis or unspecified: %r." % (self, self.feature_dim_axis_or_unspecified)
-        for axis, tag in enumerate(self.dim_tags):
-            assert self.batch_shape[axis] == tag.dimension
+        for axis, tag in enumerate(self._dims):
             if tag.is_batch_dim():
                 assert axis == self.batch_dim_axis, "%s: invalid %s" % (self, tag)
                 continue  # further checks will assume not batch
@@ -322,9 +315,9 @@ class _TensorMixin(_TensorMixinBase):
             raw_shape = backend.get_known_shape_raw(self._raw_tensor)
             assert len(raw_shape) == self.batch_ndim, f"Mismatching shape ndim: Raw tensor {raw_shape} vs Tensor {self}"
             for i in range(self.batch_ndim):
-                if self.batch_shape[i] is None:
+                if self._dims[i].dimension is None:
                     continue  # we allow anything in the placeholder
-                if raw_shape[i] != self.batch_shape[i]:
+                if raw_shape[i] != self._dims[i].dimension:
                     raise Exception(
                         f"Mismatching shape: Raw tensor {raw_shape} vs Tensor {self};\n"
                         + backend.format_graph_output(self._raw_tensor, max_depth=3)
@@ -335,7 +328,7 @@ class _TensorMixin(_TensorMixinBase):
                 f"raw tensor dtype {backend.get_dtype_name_raw(self._raw_tensor)}"
             )
         if assume_complete:
-            for tag in self.dim_tags:
+            for tag in self._dims:
                 if tag.is_batch_dim():
                     continue
                 if tag.is_dynamic():
@@ -2012,13 +2005,13 @@ class _TensorMixin(_TensorMixinBase):
         assert dim == self.dim
 
     @property
-    def feature_dim_or_sparse_dim(self):
+    def feature_dim_or_sparse_dim(self: Tensor):
         """
         :return: if we have a feature dim, return its dim tag. if we are sparse, return the sparse_dim. otherwise None
         :rtype: Dim|None
         """
-        if self.have_feature_axis():
-            return self.dim_tags[self.feature_dim_axis]
+        if self._feature_dim_axis is not None:
+            return self._dims[self._feature_dim_axis]
         if self.sparse_dim:
             return self.sparse_dim
         return None
@@ -2029,7 +2022,7 @@ class _TensorMixin(_TensorMixinBase):
         :rtype: bool
         :return: whether the values represent class indices. see ``sparse_dim``
         """
-        return bool(self.sparse_dim)
+        return self.sparse_dim is not None
 
     @sparse.setter
     def sparse(self, sparse):
