@@ -393,4 +393,4 @@ class EngineBase:
         error_dict = self.learning_rate_control.get_epoch_error_dict(self.epoch)
         if not error_dict:
             return False
-        return any([k.startswith("%s_score" % name) for k in error_dict.keys()])
+        return any([k.startswith("%s_score" % name) or k.startswith("%s_loss" % name) for k in error_dict.keys()])
