@@ -212,6 +212,7 @@ class Engine(EngineBase):
             f"Starting training at epoch {self._start_epoch}, global train step {self.global_train_step}", file=log.v3
         )
         self.epoch = self._start_epoch - 1
+        self._check_epoch_missing_eval()
         while self.epoch + 1 <= self._final_epoch:
             self.epoch += 1
             self._epoch_mp_shared.value = self.epoch
@@ -338,7 +339,7 @@ class Engine(EngineBase):
         if self.config.bool_or_other("cleanup_old_models", None):
             self.cleanup_old_models()
 
-    def eval_model(self):
+    def eval_model(self, *, skip_already_evaluated: bool = False):
         """
         Runs model on all eval datasets and calculates the loss.
         """
@@ -349,6 +350,8 @@ class Engine(EngineBase):
         error_keys = None
 
         for dataset_name, dataset in self.eval_datasets.items():
+            if skip_already_evaluated and self._is_dataset_evaluated(name=dataset_name):
+                continue
             print(f"Evaluating dataset {dataset_name!r}", file=log.v3)
 
             data_loader = self._eval_dataloaders[dataset_name]
@@ -407,7 +410,7 @@ class Engine(EngineBase):
                 )
             ]
 
-        print(" ".join(eval_dump_str), file=log.v1)
+        print(" ".join(eval_dump_str) if eval_dump_str else "(No evaluations.)", file=log.v1)
 
     def _create_data_loader(self, dataset: Dataset) -> DataLoader2:
         """
@@ -766,6 +769,21 @@ class Engine(EngineBase):
             os.remove(filename + "opt.pt")
         assert count_bytes > 0
         return count_bytes
+
+    def _check_epoch_missing_eval(self):
+        """
+        Checks if there are outstanding tasks (eval_model) for the epoch,
+        and executes them.
+        """
+        if not self.epoch:
+            return
+        if self.learning_rate_control.filename:
+            for name, dataset in self.eval_datasets.items():
+                if not self._is_dataset_evaluated(name=name):
+                    # This can happen when we have a previous model but did not test it yet.
+                    print(f"Last epoch model not yet evaluated on {name}. Doing that now.", file=log.v3)
+                    self.eval_model(skip_already_evaluated=True)
+                    break
 
 
 def _to_raw(n: Union[int, float, Tensor]):

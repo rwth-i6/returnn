@@ -1878,19 +1878,6 @@ class Engine(EngineBase):
         self.updater.set_learning_rate(eval_learning_rate, session=self.tf_session)
         return True
 
-    def _is_dataset_evaluated(self, name):
-        """
-        Check via self.learning_rate_control.
-
-        :param str name:
-        :rtype: bool
-        """
-        assert self.learning_rate_control.filename  # otherwise we would not have stored it
-        error_dict = self.learning_rate_control.get_epoch_error_dict(self.epoch)
-        if not error_dict:
-            return False
-        return any([k.startswith("%s_score" % name) for k in error_dict.keys()])
-
     def eval_model(
         self,
         output_file=None,
@@ -2802,7 +2789,7 @@ class Engine(EngineBase):
         source_seq_lists = [source_voc.get_seq(s) for s in sources]
         results_raw = self.search_single_seq(sources=source_seq_lists, output_layer_name=output_layer_name)
         results = []
-        for (score, raw) in results_raw:
+        for score, raw in results_raw:
             txt = target_voc.get_seq_labels(raw)
             results += [(score, txt)]
         return results

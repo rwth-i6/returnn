@@ -381,3 +381,16 @@ class EngineBase:
         for epoch in remove_epochs:
             count_bytes += self.delete_model(existing_models[epoch])
         print("Deleted %s." % human_bytes_size(count_bytes), file=log.v2)
+
+    def _is_dataset_evaluated(self, name: str) -> bool:
+        """
+        Check via self.learning_rate_control.
+
+        :param name: e.g. "dev"
+        :return: whether there is an entry for the score in the learning rate file
+        """
+        assert self.learning_rate_control.filename  # otherwise we would not have stored it
+        error_dict = self.learning_rate_control.get_epoch_error_dict(self.epoch)
+        if not error_dict:
+            return False
+        return any([k.startswith("%s_score" % name) for k in error_dict.keys()])
