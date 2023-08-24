@@ -1161,6 +1161,9 @@ class TranslationDataset(CachedDataset2):
         self.file_postfix = file_postfix
         self.source_only = source_only
         self.search_without_reference = search_without_reference
+        self._source_postfix = source_postfix
+        self._target_postfix = target_postfix
+        self._seq_list_file = seq_list_file
         self.seq_list = [int(n) for n in open(seq_list_file).read().splitlines()] if seq_list_file else None
         self._add_postfix = {self.source_file_prefix: source_postfix, self.target_file_prefix: target_postfix}
         self._use_cache_manager = use_cache_manager
