@@ -133,11 +133,17 @@ class MultiProcDataset(CachedDataset2):
 
     def __del__(self):
         if self._seq_order_proc:
-            self._seq_order_proc_parent_conn.send(("exit", {}))
+            try:
+                self._seq_order_proc_parent_conn.send(("exit", {}))
+            except BrokenPipeError:
+                pass
             self._seq_order_proc.join()
         if self._worker_procs:
             for worker_parent_conn in self._worker_parent_conns:
-                worker_parent_conn.send(("exit", {}))
+                try:
+                    worker_parent_conn.send(("exit", {}))
+                except BrokenPipeError:
+                    pass
             for worker_proc in self._worker_procs:
                 worker_proc.join()
 
