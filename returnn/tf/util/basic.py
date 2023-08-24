@@ -2975,6 +2975,8 @@ class CudaEnv(object):
             "-ccbin",
             get_tf_gcc_path(),
             "-I",
+            "%s/targets/x86_64-linux/include" % self.cuda_path,
+            "-I",
             "%s/include" % self.cuda_path,
             "-L",
             "%s/%s" % (self.cuda_path, self._get_lib_dir_name(self.cuda_path)),
