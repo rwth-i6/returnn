@@ -277,9 +277,15 @@ class OggZipDataset(CachedDataset2):
         :returns whether the order changed (True is always safe to return)
         """
         super(OggZipDataset, self).init_seq_order(epoch=epoch, seq_list=seq_list, seq_order=seq_order)
+
+        if epoch is None and seq_list is None and seq_order is None:
+            # This is called via initialize() with epoch=None, just to init some other things.
+            # We are not expected to have prepared any real epoch here.
+            # We do an early exit here to defer the lazy init.
+            self._num_seqs = 0
+            return True
+
         self._lazy_init()
-        if not epoch:
-            epoch = 1
         random_seed = self._get_random_seed_for_epoch(epoch=epoch)
         self._audio_random.seed(random_seed)
         if self.targets:
