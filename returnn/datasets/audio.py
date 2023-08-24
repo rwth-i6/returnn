@@ -3,7 +3,7 @@ Datasets dealing with audio
 """
 
 from __future__ import annotations
-from typing import Optional
+from typing import Optional, Any, List, Dict
 import numpy
 import typing
 
@@ -79,6 +79,7 @@ class OggZipDataset(CachedDataset2):
         self._separate_txt_files = {}  # name -> filename
         self._path = path
         self._use_cache_manager = use_cache_manager
+        self._zip_files: Optional[List[zipfile.ZipFile]] = None  # lazily loaded
         if (
             isinstance(path, str)
             and os.path.splitext(path)[1] != ".zip"
@@ -89,6 +90,7 @@ class OggZipDataset(CachedDataset2):
             self.paths = [os.path.dirname(path)]
             self._names = [os.path.basename(path)]
             self._zip_files = None
+            self._use_zip_files = False
             assert not use_cache_manager, "cache manager only for zip file"
         else:
             if not isinstance(path, (tuple, list)):
@@ -108,11 +110,9 @@ class OggZipDataset(CachedDataset2):
                 assert ext == ".zip"
                 self.paths.append(path_)
                 self._names.append(name)
-            self._zip_files = [zipfile.ZipFile(path) for path in self.paths]
-        self.segments = None  # type: typing.Optional[typing.Set[str]]
+            self._use_zip_files = True
+        self.segments: Optional[typing.Set[str]] = None  # lazily loaded
         self._segment_file = segment_file
-        if segment_file:
-            self._read_segment_list(segment_file)
         self.zip_audio_files_have_name_as_prefix = zip_audio_files_have_name_as_prefix
         kwargs.setdefault("name", self._names[0])
         super(OggZipDataset, self).__init__(**kwargs)
@@ -152,10 +152,8 @@ class OggZipDataset(CachedDataset2):
             self.num_outputs["data"] = [self.num_inputs, 2]
         else:
             self.num_outputs["data"] = [0, 2]
-        self._data = self._collect_data()
+        self._data: Optional[List[Dict[str, Any]]] = None  # lazily loaded
         self._fixed_random_subset = fixed_random_subset
-        if fixed_random_subset:
-            self._filter_fixed_random_subset(fixed_random_subset)
         if epoch_wise_filter is None:
             self.epoch_wise_filter = None  # type: Optional[EpochWiseFilter]
         elif isinstance(epoch_wise_filter, dict):
@@ -216,20 +214,41 @@ class OggZipDataset(CachedDataset2):
             data[:] = [entry for entry in data if self._get_tag_from_info_dict(entry) in self.segments]
         return data
 
-    def _collect_data(self):
+    def _lazy_init(self):
         """
         :return: entries
         :rtype: list[dict[str]]
         """
+        if self._data is not None:
+            return
+
+        if self._segment_file:
+            self._read_segment_list(self._segment_file)
+
+        if self._use_zip_files:
+            import zipfile
+
+            self._zip_files = [zipfile.ZipFile(path) for path in self.paths]
+
         data = []
-        if self._zip_files:
+        if self._use_zip_files:
             for zip_index in range(len(self._zip_files)):
                 zip_data = self._collect_data_part(zip_index)
                 data += zip_data
         else:
             # collect data from a txt file
             data = self._collect_data_part(0)
-        return data
+
+        fixed_random_subset = self._fixed_random_subset
+        if fixed_random_subset:
+            if 0 < fixed_random_subset < 1:
+                fixed_random_subset = int(len(data) * fixed_random_subset)
+            assert isinstance(fixed_random_subset, int) and fixed_random_subset > 0
+            rnd = numpy.random.RandomState(42)
+            rnd.shuffle(data)
+            data = data[:fixed_random_subset]
+
+        self._data = data
 
     def _read_segment_list(self, segment_file):
         """
@@ -246,19 +265,6 @@ class OggZipDataset(CachedDataset2):
             segment_file_handle = open(segment_file)
             self.segments = set(segment_file_handle.read().splitlines())
 
-    def _filter_fixed_random_subset(self, fixed_random_subset):
-        """
-        :param int fixed_random_subset:
-        """
-        if 0 < fixed_random_subset < 1:
-            fixed_random_subset = int(len(self._data) * fixed_random_subset)
-        assert isinstance(fixed_random_subset, int) and fixed_random_subset > 0
-        rnd = numpy.random.RandomState(42)
-        seqs = self._data
-        rnd.shuffle(seqs)
-        seqs = seqs[:fixed_random_subset]
-        self._data = seqs
-
     def init_seq_order(self, epoch=None, seq_list=None, seq_order=None):
         """
         If random_shuffle_epoch1, for epoch 1 with "random" ordering, we leave the given order as is.
@@ -271,6 +277,7 @@ class OggZipDataset(CachedDataset2):
         :returns whether the order changed (True is always safe to return)
         """
         super(OggZipDataset, self).init_seq_order(epoch=epoch, seq_list=seq_list, seq_order=seq_order)
+        self._lazy_init()
         if not epoch:
             epoch = 1
         random_seed = self._get_random_seed_for_epoch(epoch=epoch)
@@ -364,12 +371,14 @@ class OggZipDataset(CachedDataset2):
         """
         :rtype: list[str]
         """
+        self._lazy_init()
         return [self._get_tag_from_info_dict(seq) for seq in self._data]
 
     def get_total_num_seqs(self):
         """
         :rtype: int
         """
+        self._lazy_init()
         return len(self._data)
 
     def get_data_shape(self, key):
@@ -435,6 +444,7 @@ class OggZipDataset(CachedDataset2):
         :param corpus_seq_idx:
         :return: seq
         """
+        self._lazy_init()
         seq_tag = self._get_tag_from_info_dict(self._data[corpus_seq_idx])
         if self.feature_extractor:
             with self._open_audio_file(corpus_seq_idx) as audio_file:
