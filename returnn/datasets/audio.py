@@ -164,7 +164,6 @@ class OggZipDataset(CachedDataset2):
             assert isinstance(epoch_wise_filter, EpochWiseFilter)
             self.epoch_wise_filter = epoch_wise_filter
         self._seq_order = None  # type: typing.Optional[typing.Sequence[int]]
-        self.init_seq_order()
 
     def _read(self, filename, zip_index):
         """
