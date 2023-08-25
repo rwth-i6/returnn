@@ -8198,7 +8198,7 @@ def test_SliceNdLayer_ReinterpretDataLayer():
 def test_WindowLayer_output_placeholder():
     with make_scope() as session:
         net = TFNetwork(extern_data=ExternData())
-        src = InternalLayer(name="src", network=net, output=Data(name="src", dim=20, sparse=True))
+        src = InternalLayer(name="src", network=net, output=Data(name="src", dim=20, sparse=True))  # [B,T]
         src.output.placeholder = tf.constant([[1, 2, 3, 4, 5], [6, 7, 8, 9, 10], [11, 12, 13, 14, 15]], dtype=tf.int32)
         src.output.size_placeholder = {0: tf.constant([5, 3, 1], dtype=tf.int32)}
         layer = WindowLayer(
@@ -8212,11 +8212,13 @@ def test_WindowLayer_output_placeholder():
                 name="window", network=net, axis="T", window_size=3, padding="valid", sources=[src]
             ),
         )
+        print("layer:", layer)
         out, seq_lens = session.run([layer.output.placeholder, layer.output.size_placeholder[0]])
         print(out)
         print(seq_lens)
         assert isinstance(out, numpy.ndarray)
         assert isinstance(seq_lens, numpy.ndarray)
+        out = out.transpose([2, 0, 1])  # [T', W, B] -> [B, T', W]
         assert_equal(
             out.tolist(),
             [
