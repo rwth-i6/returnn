@@ -558,12 +558,18 @@ class RecLayer(_ConcatInputLayer):
             else:
                 out = out.copy_add_dim_by_tag(dim_tag=out_dim, unbroadcast=True, axis=-1)
                 out.feature_dim_axis = NotSpecified
+                assert out.feature_dim_axis == out.batch_ndim - 1
             if axis != single_step_dim and not out.have_dim_tag(axis):
                 out = out.copy_add_dim_by_tag(axis, unbroadcast=True)
             if out.have_dim_tag(axis):
                 out.time_dim_axis = out.get_axis_from_description(axis)
             if out.have_time_axis() and axis == out.get_time_dim_tag():
-                out = out.copy_as_time_batch_major()
+                # We want time first, feature last, and keep the other dims in the same order.
+                out = out.copy_transpose(
+                    [out.time_dim_axis]
+                    + [i for i in range(out.batch_ndim) if i not in {out.time_dim_axis, out.feature_dim_axis}]
+                    + [out.feature_dim_axis]
+                )
             elif out.have_batch_axis():
                 # We expect to be inside another RecLayer, and should do a single step (like RnnCellLayer).
                 out = out.copy_as_batch_major()  # The output is then [B,F]
@@ -809,7 +815,7 @@ class RecLayer(_ConcatInputLayer):
         if not self.time_dim_tag and added_time_dim:
             out_data = out_data.copy_squeeze_axes(axes=[0])
         # The output format should match now.
-        # If this is not the case, we should fix get_out_data_from_opts accordingly
+        # If this is not the case, we should fix RecLayer.get_out_data_from_opts accordingly
         # and avoid unnecessary further transformations here, esp any transposes.
         assert out_data.dim_tags == self.output.dim_tags
 

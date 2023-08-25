@@ -6494,6 +6494,49 @@ def test_reclayer_batch_feature_input():
         session.run(output_layer.output.placeholder, feed_dict=feed_dict)
 
 
+def test_reclayer_time_win_batch_feat_4d_input():
+    """
+    Test if the RecLayer is capable of handling [T,W,B,T] input,
+    operating on T axis, so [W,B] are both batch dims, and should stay in this order.
+    """
+    from returnn.tensor import Dim, batch_dim
+
+    time_dim = Dim(None, name="time")
+    win_dim = Dim(5, name="win")
+    feat_dim = Dim(3, name="in")
+    out_dim = Dim(2, name="out")
+    with make_scope() as session:
+        config = Config()
+        config.update(
+            {
+                "debug_print_layer_output_template": True,
+                "debug_print_layer_output_shape": True,
+                "extern_data": {
+                    "data": {"dims": (time_dim, win_dim, batch_dim, feat_dim), "dtype": "float32"},
+                },
+                "network": {
+                    "output": {
+                        "class": "rec",
+                        "from": "data",
+                        "in_dim": feat_dim,
+                        "axis": time_dim,
+                        "out_dim": out_dim,
+                        "unit": "lstm",
+                    },
+                },
+            }
+        )
+        network = TFNetwork(config=config, train_flag=True)
+        network.construct_from_dict(config.typed_dict["network"])
+        session.run(tf_compat.v1.global_variables_initializer())
+        output = network.get_default_output_layer(must_exist=True).output
+        assert output.dims == (time_dim, win_dim, batch_dim, out_dim)
+        from test_TFNetworkLayer import make_feed_dict
+
+        feed_dict = make_feed_dict(network.extern_data)
+        session.run(output.placeholder, feed_dict=feed_dict)
+
+
 def test_reclayer_opt_output_consistent_format():
     from returnn.tf.util.data import batch_dim, Dim
 
