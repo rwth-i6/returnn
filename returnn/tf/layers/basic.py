@@ -3724,15 +3724,21 @@ class WindowLayer(_ConcatInputLayer):
     Adds a window dimension.
     By default, uses the time axis and goes over it with a sliding window.
     The new axis for the window is created right after the time axis.
-    Will always return as batch major mode.
+    In PyTorch, this is called ``unfold``.
+    We sometimes call this "chunking".
+    There is also the similar :class:`TimeChunkingLayer`.
+
     E.g. if the input is (batch, time, dim), the output is (batch, time, window_size, dim).
     If you want to merge the (window_size, dim) together to (window_size * dim,),
     you can use the MergeDimsLayer, e.g. {"class": "merge_dims", "axes": "except_time"}.
+
     Use stride==window_size and window_right=window_size - 1 in combination with a
     MergeDimsLayer to achieve feature stacking with right-hand zero padding.
 
-    This is not to take out a window from the time-dimension.
+    This is not to take out a single window from the time-dimension.
     See :class:`SliceLayer` or :class:`SliceNdLayer`.
+
+    The inverse layer is :class:`FoldLayer`.
     """
 
     layer_class = "window"
@@ -3891,6 +3897,185 @@ class WindowLayer(_ConcatInputLayer):
             shape.insert(1, window_size)
             return {"state": tf.zeros(shape, dtype=data.dtype)}
         return {}
+
+
+class FoldLayer(LayerBase):
+    """
+    The inverse of :class:`WindowLayer`.
+    We sometimes call this "unchunking".
+    The :class:`TimeUnChunkingLayer` is similar.
+
+    Input (in_spatial_dim, window_dim, other_dims...)
+    -> output (out_spatial_dim, other_dims...).
+
+    The window_dim is folded into the out_spatial_dim.
+    This is also similar as the PyTorch fold operation (with mode="sum").
+    """
+
+    layer_class = "fold"
+    recurrent = True  # order matters
+
+    def __init__(
+        self,
+        mode: str,
+        in_spatial_dim: Union[Dim, str],
+        window_dim: Union[Dim, str],
+        out_spatial_dim: Optional[Dim] = None,
+        padding: str = "same",
+        window_left: Optional[int] = None,
+        window_right: Optional[int] = None,
+        stride: int = 1,
+        **kwargs,
+    ):
+        """
+        :param mode: "sum" or "mean" (average), for overlapping frames
+        :param in_spatial_dim:
+        :param window_dim:
+        :param out_spatial_dim:
+        :param padding:
+        :param window_left:
+        :param window_right:
+        :param stride:
+        """
+        import returnn.frontend as rf
+
+        super().__init__(**kwargs)
+        source = self.sources[0].output.copy()
+        in_spatial_dim_axis = source.get_axis_from_description(in_spatial_dim, allow_int=False)
+        window_dim_axis = source.get_axis_from_description(window_dim, allow_int=False)
+        source = source.copy_transpose(
+            [in_spatial_dim_axis, window_dim_axis]
+            + [i for i in range(source.batch_ndim) if i not in (in_spatial_dim_axis, window_dim_axis)]
+        )  # (in_spatial_dim,window,other_dims...)
+        out_spatial_dim  # noqa  # unused here, handled in get_out_data_from_opts
+        out_spatial_dim = self.output.dims[0]  # here we directly take it from the already created one
+        out_spatial_dim.complete_dyn_size()
+
+        ones = Data("mask", dims=[in_spatial_dim, window_dim], dtype="bool", sparse=False)
+        ones.raw_tensor = tf.ones([in_spatial_dim.get_dim_value(), window_dim.get_dim_value()], dtype="bool")
+        if in_spatial_dim.need_masking():
+            mask_ = in_spatial_dim.get_mask(dim_order=source.dims)
+            source.raw_tensor = tf.where(
+                mask_.copy_compatible_to(source, check_sparse=False, check_dtype=False).placeholder,
+                source.placeholder,
+                tf.zeros_like(source.placeholder),
+            )
+            ones = rf.combine_bc(ones, "logical_and", mask_)
+        if window_dim.need_masking():
+            mask_ = window_dim.get_mask(dim_order=source.dims)
+            source.raw_tensor = tf.where(
+                mask_.copy_compatible_to(source, check_sparse=False, check_dtype=False).placeholder,
+                source.placeholder,
+                tf.zeros_like(source.placeholder),
+            )
+            ones = rf.combine_bc(ones, "logical_and", mask_)
+
+        # See similar code in :func:`windowed_nd` for the reverse, which uses tf.gather.
+        start_times = tf.range(in_spatial_dim.get_dim_value()) * stride  # (in_spatial_dim,)
+        win_range = tf.range(window_dim.get_dim_value())  # (window,)
+        indices = start_times[:, None] + win_range[None, :]  # (in_spatial_dim,window)
+        indices = tf.reshape(indices, [-1, 1])  # (in_spatial_dim*window,1)
+        source_flat = tf.reshape(
+            source.placeholder,  # (in_spatial_dim,window,other_dims...)
+            [in_spatial_dim.get_dim_value() * window_dim.get_dim_value()]
+            + [dim.get_dim_value() for dim in source.dim_tags[2:]],
+        )  # (in_spatial_dim*window,other_dims...)
+        # The maximum index we can get in indices, and one more.
+        out_padded_dim_value = in_spatial_dim.get_dim_value() * stride + window_dim.get_dim_value() - stride
+        out = tf.scatter_nd(
+            indices,
+            source_flat,
+            [out_padded_dim_value] + [dim.get_dim_value() for dim in source.dim_tags[2:]],
+        )  # (out_spatial_dim,other_dims...)
+
+        if mode == "mean":
+            ones = ones.copy_compatible_to(source, check_sparse=False, check_dtype=False)
+            ones_rem_shape = [dim.get_dim_value() for dim in ones.dims[2:]]
+            ones_flat = tf.reshape(
+                ones.placeholder,  # (in_spatial_dim,window,other_dims...)
+                [in_spatial_dim.get_dim_value() * window_dim.get_dim_value()] + ones_rem_shape,
+            )  # (in_spatial_dim*window,other_dims'...)
+            ones_ = tf.scatter_nd(
+                indices,
+                tf.cast(ones_flat, out.dtype),
+                [out_padded_dim_value] + ones_rem_shape,
+            )  # (out_spatial_dim,other_dims...)
+            out = out / tf.maximum(ones_, 1.0)
+        elif mode == "sum":
+            pass  # already have that
+        else:
+            raise ValueError(f"{self}: unsupported mode {mode!r}")
+
+        # Handle padding. Note that we basically do the inverse of the logic of windowed_nd.
+        if padding.lower() == "valid":
+            pass  # nothing to do
+        elif padding.lower() == "same":
+            if window_left is None and window_right is None:
+                window_left = ((window_dim - 1) // 2).get_dim_value()
+            elif window_left is None:
+                window_left = ((window_dim - 1) - window_right).get_dim_value()
+            # Only strip away left padding. The right padding will be handled by the out spatial dim tag slicing below.
+            out = out[window_left:]
+        else:
+            raise ValueError(f"{self}: invalid padding {padding!r}")
+        # Slice in any case because the user might have specified out_spatial_dim
+        out = out[: out_spatial_dim.get_dim_value()]
+
+        self.output.placeholder = out
+
+    @classmethod
+    def get_out_data_from_opts(
+        cls,
+        name: str,
+        sources: List[LayerBase],
+        in_spatial_dim: Union[Dim, str],
+        window_dim: Union[Dim, str],
+        out_spatial_dim: Optional[Dim] = None,
+        padding: str = "same",
+        window_left: Optional[int] = None,
+        window_right: Optional[int] = None,
+        stride: int = 1,
+        **kwargs,
+    ) -> Data:
+        """out data"""
+        assert len(sources) == 1, f"{cls.__name__} {name!r}: requires single source, got {sources}"
+        source = sources[0].output
+        in_spatial_dim_axis = source.get_axis_from_description(in_spatial_dim, allow_int=False)
+        in_spatial_dim = source.dim_tags[in_spatial_dim_axis]
+        in_spatial_is_time_dim = in_spatial_dim_axis == source.time_dim_axis
+        window_dim_axis = source.get_axis_from_description(window_dim, allow_int=False)
+        assert in_spatial_dim_axis != window_dim_axis
+        out = source.copy_template(name="%s_output" % name)
+        for rem_axis in sorted((in_spatial_dim_axis, window_dim_axis), reverse=True):
+            out = out.copy_template_excluding_axis(rem_axis)
+        if (
+            not out_spatial_dim
+            or not out_spatial_dim.is_dim_known()
+            or (out_spatial_dim.dyn_size_ext and out_spatial_dim.dyn_size_ext.raw_tensor is None)
+        ):
+            # We are basically reverting ConvLayer.calc_out_dim.
+            out_spatial_dim_: Dim = in_spatial_dim * stride
+            if padding.lower() == "same":
+                pass  # nothing to do
+            elif padding.lower() == "valid":
+                if window_left is None and window_right is None:
+                    window_left = (window_dim - 1) // 2
+                if window_right is None:
+                    window_right = (window_dim - 1) - window_left
+                elif window_left is None:
+                    window_left = (window_dim - 1) - window_right
+                out_spatial_dim_ = window_left + out_spatial_dim_ + window_right
+            else:
+                raise ValueError(f"{cls.__name__} {name!r}: invalid padding {padding!r}")
+            if out_spatial_dim:
+                out_spatial_dim_.declare_same_as(out_spatial_dim)
+            else:
+                out_spatial_dim = out_spatial_dim_
+            out_spatial_dim_.complete_dyn_size(template_only=True)
+        out = out.copy_add_dim_by_tag(axis=0, dim_tag=out_spatial_dim, unbroadcast=True)
+        if in_spatial_is_time_dim:
+            out.time_dim_axis = 0
+        return out
 
 
 class CumsumLayer(_ConcatInputLayer):

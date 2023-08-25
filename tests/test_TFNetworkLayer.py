@@ -8230,6 +8230,51 @@ def test_WindowLayer_output_placeholder():
         assert_equal(seq_lens.tolist(), [3, 1, 0])
 
 
+def test_FoldLayer_unchunk():
+    from returnn.tensor import Tensor, Dim, batch_dim
+
+    in_spatial_dim = Dim(Tensor("in_spatial", [batch_dim], dtype="int32"))
+    out_spatial_dim = Dim(None, name="out_spatial")
+    window_dim = Dim(3, name="win")
+
+    with make_scope() as session:
+        net = TFNetwork(extern_data=ExternData())
+        net.extern_data.set_batch_info(BatchInfo.make_global_batch_info(tf.constant(3)))
+        src = InternalLayer(
+            name="src",
+            network=net,
+            output=Data(name="src", dims=[batch_dim, in_spatial_dim, window_dim], dtype="float32"),
+        )
+        src.output.dims[1].dyn_size_ext.raw_tensor = tf.constant([3, 2, 1])
+        src.output.raw_tensor = tf.constant(
+            [
+                [[1, 2, 3], [2, 3, 4], [3, 4, 5]],
+                [[6, 7, 8], [7, 8, 9], [8, 9, 10]],
+                [[11, 12, 13], [12, 13, 14], [13, 14, 15]],
+            ],
+            dtype=tf.float32,
+        )
+        opts = dict(
+            name="fold",
+            network=net,
+            sources=[src],
+            in_spatial_dim=in_spatial_dim,
+            window_dim=window_dim,
+            out_spatial_dim=out_spatial_dim,
+            padding="valid",
+            mode="mean",
+        )
+        layer = FoldLayer(**opts, output=FoldLayer.get_out_data_from_opts(**opts))
+        print(layer)
+        assert layer.output.dims == (out_spatial_dim, batch_dim)
+        output = layer.output.copy_transpose((batch_dim, out_spatial_dim))
+        out, seq_lens = session.run([output.raw_tensor, output.dims[1].dyn_size_ext.raw_tensor])
+        print(out)
+        print(seq_lens)
+        assert_equal(out.tolist(), [[1, 2, 3, 4, 5], [6, 7, 8, 9, 0], [11, 12, 13, 0, 0]])
+        assert_equal(seq_lens.tolist(), [5, 4, 3])
+
+
 def test_conv_window_merge_dims():
     n_in = 1
     n_out = 13
