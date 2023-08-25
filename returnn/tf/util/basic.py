@@ -4137,7 +4137,26 @@ def windowed_nd(
 ):
     """
     Constructs a new "window" axis which is a moving input over the time-axis.
-    If you want to take out a window, i.e. a slice, see :func:`slice_nd`.
+    If you want to take out a single window, i.e. a slice, see :func:`slice_nd`.
+
+    The windowing logic behaves just as in convolution or pooling.
+
+    There are multiple implementations:
+
+    - By tiling + padding and then reshaping, we can get what we want.
+      This is the "clever" implementation which is efficient but difficult to understand.
+      To really understand it, it's best to visualize it.
+      This is the default implementation.
+      It is only efficient with no striding (stride=1),
+      so we only use it for that case.
+    - We can do with :func:`tf.gather` by calculating the exact indices in the input tensor
+      for all windows.
+      This is quite straight-forward and still reasonably efficient.
+      We use this for striding.
+    - :func:`tf.image.extract_patches` is quite similar in behavior.
+    - We also have native implementations for chunk and unchunk,
+      which are also similar in behavior.
+    - PyTorch unfold is also similar in behavior.
 
     :param tf.Tensor source: N-D tensor of shape (..., n_time, ...)
     :param int|tf.Tensor window_size: window size
