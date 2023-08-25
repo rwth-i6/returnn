@@ -281,24 +281,27 @@ class _TensorMixin(_TensorMixinBase):
         :param bool ignore_placeholder:
         :param bool assume_complete:
         """
-        special_axes_dict = self.get_special_axes_dict()
+        special_axes_dict = {"time_dim_axis": self.time_dim_axis, "feature_dim_axis": self.feature_dim_axis}
+        batch_dim_axis = self.batch_dim_axis
+        batch_ndim = self.batch_ndim
         for axis_name, axis in special_axes_dict.items():
-            assert axis is None or 0 <= axis < self.batch_ndim, "%s: axis %s (%i) invalid" % (self, axis_name, axis)
-        if self.batch_dim_axis is not None:
+            assert axis is None or 0 <= axis < batch_ndim, "%s: axis %s (%i) invalid" % (self, axis_name, axis)
+        if batch_dim_axis is not None:
             for axis_name, axis in special_axes_dict.items():
-                assert axis != self.batch_dim_axis, "%s: axis %s (%i) must be different from batch_dim_axis (%i)" % (
+                assert axis != batch_dim_axis, "%s: axis %s (%i) must be different from batch_dim_axis (%i)" % (
                     self,
                     axis_name,
                     axis,
-                    self.batch_dim_axis,
+                    batch_dim_axis,
                 )
         if self.sparse_dim is not None:
-            assert self.feature_dim_axis is None, "%s: If sparse, there cannot be a feature dim axis." % self
+            assert special_axes_dict["feature_dim_axis"] is None, (
+                "%s: If sparse, there cannot be a feature dim axis." % self
+            )
         for axis, tag in enumerate(self._dims):
             if tag.is_batch_dim():
-                assert axis == self.batch_dim_axis, "%s: invalid %s" % (self, tag)
+                assert axis == batch_dim_axis, "%s: invalid %s" % (self, tag)
                 continue  # further checks will assume not batch
-            assert axis != self.batch_dim_axis, "%s: invalid %s" % (self, tag)
             # Note: tag.kind (feature or spatial) is independent from self.feature_dim_axis.
             if tag.batch and self.batch:
                 assert tag.batch == self.batch or self.batch.is_broadcast()
@@ -313,8 +316,8 @@ class _TensorMixin(_TensorMixinBase):
             # We assume that the placeholder has already a known shape, and error otherwise.
             backend = self._raw_backend
             raw_shape = backend.get_known_shape_raw(self._raw_tensor)
-            assert len(raw_shape) == self.batch_ndim, f"Mismatching shape ndim: Raw tensor {raw_shape} vs Tensor {self}"
-            for i in range(self.batch_ndim):
+            assert len(raw_shape) == batch_ndim, f"Mismatching shape ndim: Raw tensor {raw_shape} vs Tensor {self}"
+            for i in range(batch_ndim):
                 if self._dims[i].dimension is None:
                     continue  # we allow anything in the placeholder
                 if raw_shape[i] != self._dims[i].dimension:
