@@ -4194,19 +4194,16 @@ def windowed_nd(
             raise Exception("invalid padding %r" % padding)
 
         if stride > 1:
-            # Use a straightforward implementation using tf.while_loop.
-            ta = tf.TensorArray(
-                dtype=source.dtype, size=0, dynamic_size=True, element_shape=[window_size] + source.shape.as_list()[1:]
-            )
+            n_out_time = -(-n_out_time // stride)  # ceildiv
+            start_times = tf.range(0, n_padded_time - window_size + 1, stride)  # (n_out_time,)
+            win_range = tf.range(window_size)  # (window,)
+            indices = start_times[:, None] + win_range[None, :]  # (n_out_time,window)
+            indices = tf.reshape(indices, [-1])  # (n_out_time*window,)
+            final = tf.gather(source, indices)  # (n_out_time*window,...)
+            final = tf.reshape(
+                final, tf.concat([(n_out_time, window_size), source_shape[1:]], axis=0)
+            )  # (n_out_time,window,...)
 
-            def _body(t, i, ta_):
-                return t + stride, i + 1, ta_.write(i, source[t : t + window_size])
-
-            def _cond(t, *_args):
-                return tf.less_equal(t + window_size, n_padded_time)
-
-            _, _, ta = tf.while_loop(_cond, _body, [0, 0, ta])
-            final = ta.stack()  # (n_out_time//stride,window,...)
             if new_window_axis != 1:
                 final = move_axis(final, 1, new_window_axis)
 
