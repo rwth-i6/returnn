@@ -3040,6 +3040,9 @@ class OpCodeCompiler(NativeCodeCompiler):
         tf_include = tf.sysconfig.get_include()  # e.g. "...python2.7/site-packages/tensorflow/include"
         tf_include_nsync = tf_include + "/external/nsync/public"  # https://github.com/tensorflow/tensorflow/issues/2412
         include_paths = list(include_paths) + [tf_include, tf_include_nsync]
+        if self._with_cuda():
+            # Some newer TF versions have this, and e.g. the TF Docker has a stripped down CUDA env.
+            self._nvcc_opts += ["-I", tf_include + "/third_party/gpus/cuda/include"]
         c_macro_defines = {} if c_macro_defines is None else c_macro_defines.copy()
         # https://github.com/rwth-i6/returnn/issues/87
         # https://github.com/tensorflow/tensorflow/issues/17316
