@@ -3789,7 +3789,7 @@ class WindowLayer(_ConcatInputLayer):
 
         else:
             axis = data.get_axis_from_description(axis)
-            new_dim_axis = axis + 1  # new axis will be added right after
+            data = data.copy_move_axis(axis, 0)  # move to front, more efficient, see windowed_nd
 
             from returnn.tf.util.basic import windowed_nd
 
@@ -3799,8 +3799,8 @@ class WindowLayer(_ConcatInputLayer):
                 window_left=window_left,
                 window_right=window_right,
                 padding=padding,
-                time_axis=axis,
-                new_window_axis=new_dim_axis,
+                time_axis=0,
+                new_window_axis=1,
                 stride=stride,
             )
         self.output.placeholder.set_shape(tf.TensorShape(self.output.batch_shape))
@@ -3845,15 +3845,16 @@ class WindowLayer(_ConcatInputLayer):
             new_dim_axis = 1  # after batch
         else:
             axis = data.get_axis_from_description(axis)
-            in_spatial_dim = data.dim_tags[axis]
+            data = data.copy_move_axis(axis, 0)  # move to front, more efficient, see windowed_nd
+            in_spatial_dim = data.dim_tags[0]
             out_spatial_dim_ = ConvLayer.calc_out_dim(
                 in_dim=in_spatial_dim, filter_size=window_size, stride=stride, dilation_rate=1, padding=padding
             )
             assert isinstance(out_spatial_dim_, Dim)
             if out_spatial_dim:
                 out_spatial_dim_.declare_same_as(out_spatial_dim)
-            data = data.copy_template_replace_dim_tag(axis=axis, new_dim_tag=out_spatial_dim_)
-            new_dim_axis = axis + 1  # add new axis right after
+            data = data.copy_template_replace_dim_tag(axis=0, new_dim_tag=out_spatial_dim_)
+            new_dim_axis = 1  # add new axis right after
         window_dim_ = Dim(
             kind=Dim.Types.Spatial, description="%s:window" % name, dimension=window_size, auto_generated=True
         )
