@@ -2281,7 +2281,7 @@ class Chunking(NativeOpGenBase):
         },
         {"name": "oindex_buffer", "ndim": 2, "shape": (None, None), "want_inplace": 1, "gradient": "disconnected"},
         {
-            "name": "chunk_params",
+            "name": "chunk_params",  # chunk_size, chunk_step
             "ndim": 1,
             "shape": (2,),
             "need_contiguous": True,
