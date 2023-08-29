@@ -677,6 +677,8 @@ class Engine(EngineBase):
         batch_dim = _get_batch_dim_from_extern_data(self.extern_data)
 
         def _get_tensor_wo_batch_numpy(x: Tensor) -> Tensor:
+            if batch_dim not in x.dims:
+                raise Exception(f"Expected {batch_dim} in {x}.")
             if x.dims.index(batch_dim) != 0:
                 x = x.copy_move_axis(x.dims.index(batch_dim), 0)
 
