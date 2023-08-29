@@ -260,7 +260,7 @@ jobs:
           - 1.13.1
         action:
           - TEST=demos RETURNN_DISABLE_TF=1
-          - TEST=PTDataset
+          - TEST=torch_dataset
           - TEST=torch_engine
           - TEST=torch_frontend
           - TEST=torch_internal_frontend
