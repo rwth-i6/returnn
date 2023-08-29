@@ -23,7 +23,8 @@ _init_run_ctx = None  # type: Optional[RunCtx]
 
 def reset_run_ctx():
     """
-    If we get out of a train step or forward step.
+    Call this after a train_step or forward_step function has been called,
+    when you write your own training or forward loop.
     """
     global _run_ctx
     _run_ctx = None
@@ -31,7 +32,8 @@ def reset_run_ctx():
 
 def init_train_step_run_ctx(*, train_flag: Union[bool, Tensor], step: Union[int, Tensor]):
     """
-    Call this at the beginning of a new train step.
+    Call this before the train_step function is called,
+    when you write your own training loop.
     """
     global _run_ctx
     _run_ctx = RunCtx(stage="train_step", train_flag=train_flag, step=step)
@@ -39,7 +41,8 @@ def init_train_step_run_ctx(*, train_flag: Union[bool, Tensor], step: Union[int,
 
 def init_forward_step_run_ctx(*, expected_outputs: Optional[TensorDict] = None, step: Union[int, Tensor]):
     """
-    Call this at the beginning of a new forward step.
+    Call this before the forward_step function is called,
+    when you write your own forward loop.
     """
     global _run_ctx
     _run_ctx = RunCtx(stage="forward_step", expected_outputs=expected_outputs, step=step)
