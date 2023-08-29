@@ -91,6 +91,33 @@ def test_torch_engine_forward():
         assert callback.init_called and callback.finish_called
 
 
+def test_torch_engine_forward_pure_torch_no_model_out():
+    # https://github.com/rwth-i6/returnn/issues/1385
+    # Automatically assume that we have batch-dim first in mark_as_output with raw tensor.
+    def _get_model(**_kwargs):
+        return torch.nn.Module()
+
+    def _forward_step(*, extern_data: TensorDict, **_kwargs):
+        rf.get_run_ctx().mark_as_default_output(extern_data["data"].raw_tensor)
+
+    config = Config(
+        dict(
+            task="forward",
+            extern_data={"data": {"dim": 9}},
+            batch_size=500,
+            get_model=_get_model,
+            forward_step=_forward_step,
+        )
+    )
+    dataset = init_dataset({"class": "Task12AXDataset", "num_seqs": 100, "name": "dev", "fixed_random_seed": 1})
+    callback = ForwardCallbackIface()
+
+    with global_config_ctx(config):
+        engine = Engine(config=config)
+        engine.init_network_from_config()
+        engine.forward_with_callback(callback=callback, dataset=dataset)
+
+
 def test_torch_forward_raw_strings():
     # In OggZipDataset, but maybe also other datasets,
     # in combination with forward task, we get all kind of different string formats:

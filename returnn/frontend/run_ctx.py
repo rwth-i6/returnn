@@ -9,7 +9,7 @@ or forwarding loop.
 from __future__ import annotations
 from typing import Optional, Union, Any, Sequence, Dict
 from dataclasses import dataclass
-from returnn.tensor import Tensor, Dim, TensorDict
+from returnn.tensor import Tensor, Dim, TensorDict, batch_dim
 import returnn.frontend as rf
 from . import _backend
 
@@ -173,10 +173,7 @@ class RunCtx:
         assert self.stage == "train_step"
         if not isinstance(loss, Tensor):
             assert isinstance(loss, _backend.global_backend.RawTensorType)
-            if dims is None:
-                loss = rf.convert_to_tensor(loss)
-            else:
-                loss = _output_tensor_from_raw(loss, name=name, dims=dims)
+            loss = _output_tensor_from_raw(loss, name=name, dims=dims)
         if not rf.is_float_dtype(loss.dtype):
             loss = rf.cast(loss, rf.get_default_float_dtype())
         assert name not in self.losses
@@ -221,6 +218,17 @@ class RunCtx:
             ), f"mark_as_output: {name!r} dims mismatch from expected output, given {dims}, expected {expected_output}"
 
         if not isinstance(tensor, Tensor):
+            assert isinstance(tensor, _backend.global_backend.RawTensorType)
+            ndim = _backend.global_backend.get_ndim_raw(tensor)
+            if dims is None:
+                if ndim > 0:
+                    # Similar logic as in rf.convert_to_tensor, however, we assume that batch_dim is the first dim.
+                    dims = [batch_dim] + [
+                        _backend.global_backend.get_new_dim_raw(tensor, d, name=(name or "const") + f"_dim{d}")
+                        for d in range(1, ndim)
+                    ]
+                else:
+                    dims = ()
             tensor = _output_tensor_from_raw(tensor, dims=dims, name=name)
             # In case it was not specified, just accept whatever order we got.
             dims = tensor.dims
@@ -414,16 +422,10 @@ def _default_dim_order(tensor: Tensor) -> Sequence[Dim]:
     return dims
 
 
-def _output_tensor_from_raw(raw_tensor, *, dims: Sequence[Dim], name: str) -> Tensor:
+def _output_tensor_from_raw(raw_tensor, *, dims: Optional[Sequence[Dim]], name: str) -> Tensor:
+    # This is called when the user passed some raw tensor directly to mark_as_output.
     assert isinstance(raw_tensor, _backend.global_backend.RawTensorType)
     tensor = rf.convert_to_tensor(raw_tensor, dims=dims)
-    # This is called when the user passed some raw tensor directly to mark_as_output.
-    # So e.g. in case of pure PyTorch code.
-    # In this case, it is common that the user does not explicitly specify the dyn sizes of the dim tags.
-    # We accept this, but for ONNX export and maybe other cases,
-    # we automatically fill in the dyn sizes from the raw tensor.
-    # In case the dim tag has scalar size, this is non-ambiguous,
-    # however, otherwise, it is ambiguous, so we print a warning that we always use the highest dim size.
     for axis, dim in enumerate(tensor.dims):
         if dim.dyn_size_ext and dim.dyn_size_ext.raw_tensor is None:
             # Only non-scalar dyn sizes matter.
