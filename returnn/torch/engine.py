@@ -435,6 +435,7 @@ class Engine(EngineBase):
                 wrapped_dataset, chunking, min_chunk_size=min_chunk_size
             )
 
+        assert self.config.typed_value("batch_size") is not None, "batch_size not defined in config"
         batch_size = self.config.typed_value("batch_size", 1)
         max_seqs = self.config.int("max_seqs", -1)
         batches_dataset = data_pipeline.BatchingIterDataPipe(wrapped_dataset, batch_size=batch_size, max_seqs=max_seqs)

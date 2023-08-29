@@ -3,9 +3,12 @@ Tests for PyTorch engine.
 """
 
 import _setup_test_env  # noqa
+import sys
+import unittest
 import numpy
 import torch
 
+from returnn.util import better_exchook
 from returnn.config import Config, global_config_ctx
 from returnn.tensor import TensorDict, Tensor
 from returnn.torch.engine import Engine
@@ -14,7 +17,32 @@ from returnn.forward_iface import ForwardCallbackIface
 from returnn.datasets import init_dataset
 
 
-def test_torch_engine():
+def test_torch_engine_forward_simple():
+    def _get_model(**_kwargs):
+        return torch.nn.Module()
+
+    def _forward_step(*, extern_data: TensorDict, **_kwargs):
+        rf.get_run_ctx().mark_as_default_output(extern_data["data"])
+
+    config = Config(
+        dict(
+            task="forward",
+            extern_data={"data": {"dim": 9}},
+            batch_size=500,
+            get_model=_get_model,
+            forward_step=_forward_step,
+        )
+    )
+    dataset = init_dataset({"class": "Task12AXDataset", "num_seqs": 100, "name": "dev", "fixed_random_seed": 1})
+    callback = ForwardCallbackIface()
+
+    with global_config_ctx(config):
+        engine = Engine(config=config)
+        engine.init_network_from_config()
+        engine.forward_with_callback(callback=callback, dataset=dataset)
+
+
+def test_torch_engine_forward():
     def _get_model(**_kwargs):
         return torch.nn.Module()
 
@@ -44,7 +72,13 @@ def test_torch_engine():
             self.finish_called = True
 
     config = Config(
-        dict(task="forward", extern_data={"data": {"dim": 9}}, get_model=_get_model, forward_step=_forward_step)
+        dict(
+            task="forward",
+            extern_data={"data": {"dim": 9}},
+            batch_size=500,
+            get_model=_get_model,
+            forward_step=_forward_step,
+        )
     )
     dataset = init_dataset({"class": "Task12AXDataset", "num_seqs": 100, "name": "dev", "fixed_random_seed": 1})
     callback = _ForwardCallback()
@@ -82,6 +116,7 @@ def test_torch_forward_raw_strings():
                 "orth": {"shape": (None,), "dim": 256, "sparse": True},
                 "raw": {"shape": (), "dtype": "string"},
             },
+            batch_size=500,
             get_model=_get_model,
             forward_step=_forward_step,
         )
@@ -152,7 +187,13 @@ def test_forward_beam_seq_lens():
             max_sizes.add(max_size)
 
     config = Config(
-        dict(task="forward", extern_data={"data": {"dim": 9}}, get_model=_get_model, forward_step=_forward_step)
+        dict(
+            task="forward",
+            batch_size=500,
+            extern_data={"data": {"dim": 9}},
+            get_model=_get_model,
+            forward_step=_forward_step,
+        )
     )
     dataset = init_dataset({"class": "Task12AXDataset", "num_seqs": 100, "name": "dev", "fixed_random_seed": 1})
     callback = _ForwardCallback()
@@ -168,14 +209,14 @@ def test_min_seq_len():
 
     from returnn.datasets.generating import DummyDataset
 
-    config = Config({"min_seq_length": 2})
+    config = Config({"min_seq_length": 2, "batch_size": 3})
     dataset = DummyDataset(input_dim=1, output_dim=4, num_seqs=1, seq_len=1)
     engine = Engine(config=config)
     data_loader = engine._create_data_loader(dataset)
     for _ in data_loader:
         assert False, "Should not contain sequences"
 
-    config = Config()
+    config = Config(dict(batch_size=3))
     dataset = DummyDataset(input_dim=1, output_dim=4, num_seqs=1, seq_len=3)
     engine = Engine(config=config)
     data_loader = engine._create_data_loader(dataset)
@@ -188,17 +229,40 @@ def test_max_seq_len():
 
     from returnn.datasets.generating import DummyDataset
 
-    config = Config({"max_seq_length": 4})
+    config = Config({"max_seq_length": 4, "batch_size": 3})
     dataset = DummyDataset(input_dim=1, output_dim=4, num_seqs=1, seq_len=5)
     engine = Engine(config=config)
     data_loader = engine._create_data_loader(dataset)
     for _ in data_loader:
         assert False, "Should not contain sequences"
 
-    config = Config()
+    config = Config(dict(batch_size=3))
     dataset = DummyDataset(input_dim=1, output_dim=4, num_seqs=1, seq_len=3)
     engine = Engine(config=config)
     data_loader = engine._create_data_loader(dataset)
     for _ in data_loader:
         return
     assert False, "Should have contained sequences"
+
+
+if __name__ == "__main__":
+    better_exchook.install()
+    if len(sys.argv) <= 1:
+        for k, v in sorted(globals().items()):
+            if k.startswith("test_"):
+                print("-" * 40)
+                print("Executing: %s" % k)
+                try:
+                    v()
+                except unittest.SkipTest as exc:
+                    print("SkipTest:", exc)
+                print("-" * 40)
+        print("Finished all tests.")
+    else:
+        assert len(sys.argv) >= 2
+        for arg in sys.argv[1:]:
+            print("Executing: %s" % arg)
+            if arg in globals():
+                globals()[arg]()  # assume function and execute
+            else:
+                eval(arg)  # assume Python code and execute
