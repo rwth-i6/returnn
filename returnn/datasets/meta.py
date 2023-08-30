@@ -386,6 +386,12 @@ class MetaDataset(CachedDataset2):
             or self.expected_load_seq_start > 0
         )
         super(MetaDataset, self).init_seq_order(epoch=epoch, seq_list=seq_list, seq_order=seq_order)
+        if epoch is None:
+            # This is called via initialize() with epoch=None, just to init some other things.
+            self.epoch = None  # make sure we properly reinit
+            # We are not expected to have prepared any real epoch here.
+            self._num_seqs = 0
+            return True
 
         if not need_reinit:
             self._num_seqs = len(self.seq_list_ordered[self.default_dataset_key])
