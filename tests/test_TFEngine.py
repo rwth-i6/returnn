@@ -1158,7 +1158,9 @@ def test_engine_forward_shape_deps():
 
     engine = Engine(config=config)
     engine.init_network_from_config()
-    engine.forward_single(dataset=init_dataset(config.typed_dict["eval"]), seq_idx=0)
+    eval_ds = init_dataset(config.typed_dict["eval"])
+    eval_ds.init_seq_order(epoch=1)
+    engine.forward_single(dataset=eval_ds, seq_idx=0)
 
 
 def test_engine_forward_EvalLayer_tf_function():
