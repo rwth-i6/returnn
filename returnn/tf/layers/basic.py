@@ -4,7 +4,7 @@ Many canonical basic layers.
 
 from __future__ import annotations
 
-from typing import Optional, Union, Sequence, List, Dict
+from typing import Optional, Union, Sequence, List, Tuple, Dict
 import typing
 import tensorflow as tf
 import contextlib
@@ -5881,7 +5881,7 @@ class ReinterpretDataLayer(_ConcatInputLayer):
         :param dict[str,Dim|str|None] set_axes:
           This can be used to overwrite the special axes like time_dim_axis or feature_dim_axis.
           For that, use keys "B","T" or "F", and a value via :func:`Data.get_axis_from_description`.
-        :param dict[str|Dim,Dim]|None set_dim_tags: axis -> new dim tag. assigns new dim tags.
+        :param dict[str|Dim,Dim]|Sequence[Tuple[Dim,Dim]]|None set_dim_tags: axis -> new dim tag. assigns new dim tags.
           If the passed dim tag is yet undefined, this will not use same_dim_tags_as (declare_same_as)
           but create a new dim tag.
           This option is useful for generalized self attention (https://github.com/rwth-i6/returnn/issues/391).
@@ -5901,7 +5901,8 @@ class ReinterpretDataLayer(_ConcatInputLayer):
         if enforce_time_major:
             input_data = input_data.copy_as_time_major()
         if set_dim_tags:
-            for axis, new_tag in set_dim_tags.items():
+            set_dim_tags = dict(set_dim_tags)
+            for axis, new_tag in list(set_dim_tags.items()):
                 axis_int = input_data.get_axis_from_description(axis, allow_int=False)
                 old_tag = input_data.dim_tags[axis_int]
                 assert new_tag.dimension == old_tag.dimension
@@ -5986,7 +5987,7 @@ class ReinterpretDataLayer(_ConcatInputLayer):
         :param LayerBase|None size_base: similar as size_target
         :param LayerBase|None batch_dim_base:
         :param dict[str,Dim|str|None] set_axes:
-        :param dict[str|Dim,Dim]|None set_dim_tags:
+        :param dict[str|Dim,Dim]|Sequence[Tuple[Dim,Dim]]|None set_dim_tags:
         :param bool enforce_batch_major:
         :param bool enforce_time_major:
         :param bool|None set_sparse: if bool, set sparse value to this
@@ -6037,7 +6038,8 @@ class ReinterpretDataLayer(_ConcatInputLayer):
                 for (i, j) in zip(sorted(out.size_placeholder), sorted(size_base.output.size_placeholder))
             }
         if set_dim_tags:
-            for axis, new_tag in set_dim_tags.items():
+            set_dim_tags = dict(set_dim_tags)
+            for axis, new_tag in list(set_dim_tags.items()):
                 axis_int = out.get_axis_from_description(axis)
                 old_tag = out.dim_tags[axis_int]
                 if old_tag.is_dim_known() and not new_tag.is_dim_known():
