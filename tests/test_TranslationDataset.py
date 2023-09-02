@@ -78,7 +78,8 @@ def test_translation_dataset():
 
     for postfix in ["", " </S>"]:  # test with and without postfix
 
-        # Replace one word by <UNK>. This way it will not appear in the vocabulary (and <UNK> is added to the vocabulary).
+        # Replace one word by <UNK>.
+        # This way it will not appear in the vocabulary (and <UNK> is added to the vocabulary).
         # We will test below whether this word is assigned the unknown id by checking whether the reconstruction also
         # contains <UNK>. Note, that the input file is already written and contains the original word.
         dummy_target_text_with_unk = dummy_target_text.replace("TranslationDatasets", "<UNK>")
@@ -103,7 +104,7 @@ def test_translation_dataset():
             target_postfix=postfix,
             unknown_label={"classes": "<UNK>"},
         )
-        translation_dataset.init_seq_order()
+        translation_dataset.init_seq_order(epoch=1)
         translation_dataset.load_seqs(0, 10)
 
         num_seqs = len(dummy_source_text.splitlines())
@@ -184,7 +185,7 @@ def test_translation_factors_dataset():
             target_postfix=postfix,
         )
 
-        translation_dataset.init_seq_order()
+        translation_dataset.init_seq_order(epoch=1)
         translation_dataset.load_seqs(0, 10)
 
         num_seqs = len(dummy_target_text_factored_format.splitlines())
