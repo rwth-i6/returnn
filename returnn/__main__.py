@@ -469,6 +469,7 @@ def execute_main_task():
                 assert data, "set forward_data"
             else:
                 data = init_dataset(config.opt_typed_value("forward_data"))
+            data.init_seq_order(epoch=engine.epoch or 1)
             forward_callback = config.typed_value("forward_callback")
             assert forward_callback, "no forward_callback specified"
             if callable(forward_callback):
@@ -482,6 +483,7 @@ def execute_main_task():
             if config.has("epoch"):
                 config.set("load_epoch", config.int("epoch", 0))
             engine.init_network_from_config(config)
+            eval_data.init_seq_order(epoch=engine.epoch or 1)
             output_file = config.value("output_file", "dump-fwd-epoch-%i.hdf" % engine.epoch)
             forward_batch_size = config.int("forward_batch_size", 0)
             if not forward_batch_size:
