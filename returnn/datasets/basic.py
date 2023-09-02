@@ -198,6 +198,7 @@ class Dataset(object):
         )
 
     _getnewargs_exclude_attrs = set()  # type: typing.Set[str]
+    _getnewargs_remap = {}  # type: typing.Dict[str,str]
 
     @staticmethod
     def _create_from_reduce(cls, kwargs, state) -> Dataset:
@@ -223,7 +224,9 @@ class Dataset(object):
                 for arg in inspect.getargs(cls.__init__.__code__).args[1:]:
                     if arg in self._getnewargs_exclude_attrs:
                         continue
-                    if hasattr(self, "_" + arg):
+                    if arg in self._getnewargs_remap:
+                        kwargs[arg] = getattr(self, self._getnewargs_remap[arg])
+                    elif hasattr(self, "_" + arg):
                         kwargs[arg] = getattr(self, "_" + arg)
                     else:
                         kwargs[arg] = getattr(self, arg)

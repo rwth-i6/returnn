@@ -26,6 +26,7 @@ class GeneratingDataset(Dataset):
 
     _input_classes = None
     _output_classes = None
+    _getnewargs_remap = dict(num_seqs="_total_num_seqs", **Dataset._getnewargs_remap)
 
     def __init__(self, input_dim, output_dim, num_seqs=float("inf"), **kwargs):
         """
