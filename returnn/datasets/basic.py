@@ -447,12 +447,16 @@ class Dataset(object):
         This is mostly a static method, except that is depends on the configured type of ordering,
         such as 'default' (= as-is), 'sorted' or 'random'. 'sorted' also uses the sequence length.
 
-        :param int epoch: for 'random', this determines the random seed
+        :param int|None epoch: for 'random', this determines the random seed
         :param int num_seqs:
         :param ((int) -> int)|None get_seq_len: function (originalSeqIdx: int) -> int
         :return: the order for the given epoch. such that seq_idx -> underlying idx
         :rtype: typing.Sequence[int]
         """
+        if epoch is None:
+            # This might be called in the beginning. Skip this and wait until we init the real relevant epoch.
+            # We are not expected to have prepared any real epoch here.
+            return []
         partition_epoch = self.partition_epoch or 1
         repeat_epoch = self.repeat_epoch or 1
         assert num_seqs > 0

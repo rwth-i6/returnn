@@ -726,7 +726,6 @@ class NextGenHDFDataset(CachedDataset2):
         elif seq_list is not None:
             self.seq_order = [self.seq_name_to_idx[s] for s in seq_list]
         else:
-            epoch = epoch or 1
             self.seq_order = self.get_seq_order_for_epoch(epoch, len(self.all_seq_names), self._get_seq_length)
 
     def supports_seq_order_sorting(self) -> bool:

@@ -1664,10 +1664,10 @@ class TimitDataset(CachedDataset2):
         """
         assert seq_list is None and seq_order is None
         super(TimitDataset, self).init_seq_order(epoch=epoch, seq_list=seq_list, seq_order=seq_order)
-        self._num_seqs = len(self._seq_tags)
         self._seq_order = self.get_seq_order_for_epoch(
-            epoch=epoch, num_seqs=self._num_seqs, get_seq_len=lambda i: len(self._audio_data[self._seq_tags[i]][0])
+            epoch=epoch, num_seqs=len(self._seq_tags), get_seq_len=lambda i: len(self._audio_data[self._seq_tags[i]][0])
         )
+        self._num_seqs = len(self._seq_order)
         self._random.seed(self._get_random_seed_for_epoch(epoch=epoch))
         return True
 
@@ -2081,8 +2081,6 @@ class LibriSpeechCorpus(CachedDataset2):
         import returnn.util.basic
 
         super(LibriSpeechCorpus, self).init_seq_order(epoch=epoch, seq_list=seq_list, seq_order=seq_order)
-        if not epoch:
-            epoch = 1
         random_seed = self._get_random_seed_for_epoch(epoch=epoch)
         self._audio_random.seed(random_seed)
         if self.targets:
@@ -2107,7 +2105,7 @@ class LibriSpeechCorpus(CachedDataset2):
             num_seqs = len(self._reference_seq_order)
             self._seq_order = self.get_seq_order_for_epoch(epoch=epoch, num_seqs=num_seqs, get_seq_len=get_seq_len)
         self._num_seqs = len(self._seq_order)
-        if self.epoch_wise_filter:
+        if self.epoch_wise_filter and epoch is not None:
             # Note: A more generic variant of this code is :class:`MetaDataset.EpochWiseFilter`.
             from .meta import EpochWiseFilter
 
@@ -2356,10 +2354,8 @@ class Enwik8Corpus(CachedDataset2):
         :rtype: bool
         """
         super(Enwik8Corpus, self).init_seq_order(epoch=epoch, seq_list=seq_list, seq_order=seq_order)
-        if not epoch:
-            epoch = 1
         epoch_part = None
-        if self.partition_epoch:
+        if self.partition_epoch and epoch is not None:
             epoch_part = (epoch - 1) % self.partition_epoch
             epoch = ((epoch - 1) // self.partition_epoch) + 1
         self._random.seed(self._get_random_seed_for_epoch(epoch=epoch))
@@ -2380,7 +2376,7 @@ class Enwik8Corpus(CachedDataset2):
             seq_index = seq_index.transpose()
             seq_index = seq_index.flatten()
             self._seq_order = seq_index
-            if self.partition_epoch:
+            if self.partition_epoch and epoch is not None:
                 assert self._num_seqs >= self.partition_epoch
                 partition_epoch_num_seqs = [self._num_seqs // self.partition_epoch] * self.partition_epoch
                 i = 0
