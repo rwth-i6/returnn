@@ -455,6 +455,12 @@ class MetaDataset(CachedDataset2):
         """
         return self.seq_list_original[self.default_dataset_key]
 
+    def get_total_num_seqs(self) -> int:
+        """
+        :return: total number of seqs, without partition epoch
+        """
+        return self.num_total_seqs
+
     def finish_epoch(self):
         """
         This would get called at the end of the epoch.

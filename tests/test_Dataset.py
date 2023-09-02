@@ -483,9 +483,8 @@ def test_get_seq_order():
 
 
 @contextlib.contextmanager
-def create_ogg_zip_txt_only_dataset(*, text: str = "hello world", seq_tag: str = "sequence0.wav"):
+def create_ogg_zip_txt_only_dataset_opts(*, text: str = "hello world", seq_tag: str = "sequence0.wav"):
     import zipfile
-    from returnn.datasets.audio import OggZipDataset
 
     with tempfile.NamedTemporaryFile(suffix=".zip") as tmp_zip_file, tempfile.NamedTemporaryFile(
         suffix=".txt"
@@ -500,12 +499,21 @@ def create_ogg_zip_txt_only_dataset(*, text: str = "hello world", seq_tag: str =
         tmp_vocab_file.write(repr(vocab).encode("utf8"))
         tmp_vocab_file.flush()
 
-        dataset = OggZipDataset(
-            path=tmp_zip_file.name,
-            audio=None,
-            targets={"class": "CharacterTargets", "vocab_file": tmp_vocab_file.name, "seq_postfix": [0]},
-        )
-        dataset.initialize()
+        yield {
+            "class": "OggZipDataset",
+            "path": tmp_zip_file.name,
+            "audio": None,
+            "targets": {"class": "CharacterTargets", "vocab_file": tmp_vocab_file.name, "seq_postfix": [0]},
+        }
+
+
+@contextlib.contextmanager
+def create_ogg_zip_txt_only_dataset(*, text: str = "hello world", seq_tag: str = "sequence0.wav"):
+    from returnn.datasets.audio import OggZipDataset
+
+    with create_ogg_zip_txt_only_dataset_opts(text=text, seq_tag=seq_tag) as opts:
+        dataset = init_dataset(opts)
+        assert isinstance(dataset, OggZipDataset)
         yield dataset
 
 
@@ -516,6 +524,7 @@ def test_OggZipDataset():
 
     with create_ogg_zip_txt_only_dataset(text=_demo_txt) as dataset:
         assert isinstance(dataset, OggZipDataset)
+        assert dataset.have_seqs()
         dataset.init_seq_order(epoch=1)
         dataset.load_seqs(0, 1)
         raw = dataset.get_data(0, "raw")
@@ -533,6 +542,26 @@ def test_OggZipDataset():
         assert isinstance(classes, numpy.ndarray) and classes.dtype == numpy.int32 and classes.ndim == 1
         classes_ = "".join([dataset.targets.id_to_label(c) for c in classes])
         assert classes_ == _demo_txt + "."
+
+
+def test_MetaDataset():
+    _demo_txt = "some utterance text"
+
+    with create_ogg_zip_txt_only_dataset_opts(text=_demo_txt) as sub_ds_opts:
+        meta_ds_opts = {
+            "class": "MetaDataset",
+            "datasets": {"sub": sub_ds_opts},
+            "data_map": {"classes": ("sub", "classes")},
+            "seq_order_control_dataset": "sub",
+        }
+        dataset = init_dataset(meta_ds_opts)
+        assert dataset.have_seqs()
+        dataset.init_seq_order(epoch=1)
+        dataset.load_seqs(0, 1)
+        classes = dataset.get_data(0, "classes")
+        print("classes:", classes)
+        assert isinstance(classes, numpy.ndarray) and classes.dtype == numpy.int32 and classes.ndim == 1
+        assert len(classes) == len(_demo_txt) + 1
 
 
 def test_MapDatasetWrapper():
