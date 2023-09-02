@@ -282,8 +282,6 @@ class LmDataset(CachedDataset2):
             )
             self.error_on_invalid_seq = True
         super(LmDataset, self).init_seq_order(epoch=epoch, seq_list=seq_list, seq_order=seq_order)
-        if not epoch:
-            epoch = 1
 
         if seq_order is not None:
             self.seq_order = seq_order
@@ -298,7 +296,7 @@ class LmDataset(CachedDataset2):
         self.num_skipped = 0
         self.num_unknown = 0
         if self.seq_gen:
-            self.seq_gen.random_seed(epoch)
+            self.seq_gen.random_seed(self._get_random_seed_for_epoch(epoch))
         return True
 
     def supports_seq_order_sorting(self) -> bool:
@@ -1458,8 +1456,6 @@ class TranslationDataset(CachedDataset2):
         :returns whether the order changed (True is always safe to return)
         """
         super(TranslationDataset, self).init_seq_order(epoch=epoch, seq_list=seq_list, seq_order=seq_order)
-        if not epoch:
-            epoch = 1
 
         if seq_list is None and self.seq_list:
             seq_list = self.seq_list

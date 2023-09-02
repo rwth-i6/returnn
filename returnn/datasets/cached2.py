@@ -52,8 +52,6 @@ class CachedDataset2(Dataset):
         Call this when you reset the seq list.
         """
         super(CachedDataset2, self).init_seq_order(epoch=epoch, seq_list=seq_list, seq_order=seq_order)
-        if not epoch:
-            epoch = 1
         self.expected_load_seq_start = 0
         self.reached_final_seq = False
         self.added_data = []
