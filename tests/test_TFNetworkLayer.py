@@ -8213,12 +8213,12 @@ def test_WindowLayer_output_placeholder():
             ),
         )
         print("layer:", layer)
-        out, seq_lens = session.run([layer.output.placeholder, layer.output.size_placeholder[0]])
+        out, seq_lens = session.run([layer.output.placeholder, layer.output.get_sequence_lengths()])
         print(out)
         print(seq_lens)
         assert isinstance(out, numpy.ndarray)
         assert isinstance(seq_lens, numpy.ndarray)
-        out = out.transpose([2, 0, 1])  # [T', W, B] -> [B, T', W]
+        out = out.transpose([2, 1, 0])  # [W, T', B] -> [B, T', W]
         assert_equal(
             out.tolist(),
             [
