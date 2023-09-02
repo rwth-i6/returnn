@@ -34,6 +34,7 @@ def test_torch_engine_forward_simple():
         )
     )
     dataset = init_dataset({"class": "Task12AXDataset", "num_seqs": 100, "name": "dev", "fixed_random_seed": 1})
+    dataset.init_seq_order(epoch=1)
     callback = ForwardCallbackIface()
 
     with global_config_ctx(config):
@@ -81,6 +82,7 @@ def test_torch_engine_forward():
         )
     )
     dataset = init_dataset({"class": "Task12AXDataset", "num_seqs": 100, "name": "dev", "fixed_random_seed": 1})
+    dataset.init_seq_order(epoch=1)
     callback = _ForwardCallback()
 
     with global_config_ctx(config):
@@ -110,6 +112,7 @@ def test_torch_engine_forward_pure_torch_no_model_out():
         )
     )
     dataset = init_dataset({"class": "Task12AXDataset", "num_seqs": 100, "name": "dev", "fixed_random_seed": 1})
+    dataset.init_seq_order(epoch=1)
     callback = ForwardCallbackIface()
 
     with global_config_ctx(config):
@@ -169,6 +172,7 @@ def test_torch_forward_raw_strings():
             assert classes_ == _demo_txt + "."
 
     with global_config_ctx(config), create_ogg_zip_txt_only_dataset(text=_demo_txt, seq_tag=_demo_seq_tag) as dataset:
+        dataset.init_seq_order(epoch=1)
         engine = Engine(config=config)
         engine.init_network_from_config()
         engine.forward_with_callback(callback=_ForwardCallback(), dataset=dataset)
@@ -226,6 +230,7 @@ def test_forward_beam_seq_lens():
     callback = _ForwardCallback()
 
     with global_config_ctx(config):
+        dataset.init_seq_order(epoch=1)
         engine = Engine(config=config)
         engine.init_network_from_config()
         engine.forward_with_callback(callback=callback, dataset=dataset)
@@ -238,6 +243,8 @@ def test_min_seq_len():
 
     config = Config({"min_seq_length": 2, "batch_size": 3})
     dataset = DummyDataset(input_dim=1, output_dim=4, num_seqs=1, seq_len=1)
+    dataset.initialize()
+    dataset.init_seq_order(epoch=1)
     engine = Engine(config=config)
     data_loader = engine._create_data_loader(dataset)
     for _ in data_loader:
@@ -245,6 +252,8 @@ def test_min_seq_len():
 
     config = Config(dict(batch_size=3))
     dataset = DummyDataset(input_dim=1, output_dim=4, num_seqs=1, seq_len=3)
+    dataset.initialize()
+    dataset.init_seq_order(epoch=1)
     engine = Engine(config=config)
     data_loader = engine._create_data_loader(dataset)
     for _ in data_loader:
@@ -258,6 +267,8 @@ def test_max_seq_len():
 
     config = Config({"max_seq_length": 4, "batch_size": 3})
     dataset = DummyDataset(input_dim=1, output_dim=4, num_seqs=1, seq_len=5)
+    dataset.initialize()
+    dataset.init_seq_order(epoch=1)
     engine = Engine(config=config)
     data_loader = engine._create_data_loader(dataset)
     for _ in data_loader:
@@ -265,6 +276,8 @@ def test_max_seq_len():
 
     config = Config(dict(batch_size=3))
     dataset = DummyDataset(input_dim=1, output_dim=4, num_seqs=1, seq_len=3)
+    dataset.initialize()
+    dataset.init_seq_order(epoch=1)
     engine = Engine(config=config)
     data_loader = engine._create_data_loader(dataset)
     for _ in data_loader:
