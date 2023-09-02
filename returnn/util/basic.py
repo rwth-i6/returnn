@@ -192,12 +192,14 @@ class BackendEngine:
 
 class BehaviorVersion:
     """
-    Stores the global behavior_version
+    Stores the global behavior_version.
 
-    The version will be set after the config is defined at __main__.init_config() or Engine.__init__()
+    The version will be set after the config is defined at __main__.init_config() or Engine.__init__().
+
+    See :ref:`behavior_version`.
     """
 
-    _latest_behavior_version = 17
+    _latest_behavior_version = 18
     _behavior_version = None  # type: typing.Optional[int]
     _min_behavior_version = 0  # type: int
 

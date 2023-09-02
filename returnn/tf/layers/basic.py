@@ -3754,6 +3754,7 @@ class WindowLayer(_ConcatInputLayer):
         out_spatial_dim=None,
         padding="same",
         stride=1,
+        _use_opt_dim_order=None,
         **kwargs,
     ):
         """
@@ -3765,7 +3766,7 @@ class WindowLayer(_ConcatInputLayer):
         :param Dim|None out_spatial_dim:
         :param str padding: "same" or "valid"
         :param int stride: return only each Nth window
-        :param kwargs:
+        :param bool|None _use_opt_dim_order:
         """
         out_spatial_dim  # noqa  # via get_out_data_from_opts
         super(WindowLayer, self).__init__(**kwargs)
@@ -3774,6 +3775,10 @@ class WindowLayer(_ConcatInputLayer):
             window_size = window_dim.dimension
         data = self.input_data.copy_as_batch_major()
         from returnn.tf.util.basic import is_axis_from_description_recurrent
+        from returnn.util.basic import BehaviorVersion
+
+        if _use_opt_dim_order is None:
+            _use_opt_dim_order = BehaviorVersion.get() >= 18
 
         if is_axis_from_description_recurrent(axis=axis, network=self.network, data=data):
             # Inside RecLayer.
@@ -3795,18 +3800,20 @@ class WindowLayer(_ConcatInputLayer):
 
         else:
             axis = data.get_axis_from_description(axis)
-            data = data.copy_move_axis(axis, 0)  # move to front, more efficient, see windowed_nd
+            new_dim_axis = axis + 1  # add new axis right after
+            if _use_opt_dim_order:
+                data = data.copy_move_axis(axis, 0)  # move to front, more efficient, see windowed_nd
+                axis = 0
+                new_dim_axis = 0 if stride == 1 else 1  # see windowed_nd
 
-            from returnn.tf.util.basic import windowed_nd
-
-            self.output.placeholder = windowed_nd(
+            self.output.placeholder = tf_util.windowed_nd(
                 data.placeholder,
                 window_size=window_size,
                 window_left=window_left,
                 window_right=window_right,
                 padding=padding,
-                time_axis=0,
-                new_window_axis=1,
+                time_axis=axis,
+                new_window_axis=new_dim_axis,
                 stride=stride,
             )
         self.output.placeholder.set_shape(tf.TensorShape(self.output.batch_shape))
@@ -3823,6 +3830,7 @@ class WindowLayer(_ConcatInputLayer):
         out_spatial_dim=None,
         padding="same",
         stride=1,
+        _use_opt_dim_order=None,
         **kwargs,
     ):
         """
@@ -3835,6 +3843,7 @@ class WindowLayer(_ConcatInputLayer):
         :param Dim|None out_spatial_dim:
         :param str padding:
         :param int stride:
+        :param bool|None _use_opt_dim_order:
         :rtype: Data
         """
         if not window_size:
@@ -3844,6 +3853,10 @@ class WindowLayer(_ConcatInputLayer):
         data = data.copy_template(name="%s_output" % name)
         data = data.copy_as_batch_major()
         from returnn.tf.util.basic import is_axis_from_description_recurrent
+        from returnn.util.basic import BehaviorVersion
+
+        if _use_opt_dim_order is None:
+            _use_opt_dim_order = BehaviorVersion.get() >= 18
 
         if is_axis_from_description_recurrent(axis=axis, network=network, data=data):
             # Inside RecLayer.
@@ -3851,16 +3864,19 @@ class WindowLayer(_ConcatInputLayer):
             new_dim_axis = 1  # after batch
         else:
             axis = data.get_axis_from_description(axis)
-            data = data.copy_move_axis(axis, 0)  # move to front, more efficient, see windowed_nd
-            in_spatial_dim = data.dim_tags[0]
+            new_dim_axis = axis + 1  # add new axis right after
+            if _use_opt_dim_order:
+                data = data.copy_move_axis(axis, 0)  # move to front, more efficient, see windowed_nd
+                axis = 0
+                new_dim_axis = 0 if stride == 1 else 1  # see windowed_nd
+            in_spatial_dim = data.dim_tags[axis]
             out_spatial_dim_ = ConvLayer.calc_out_dim(
                 in_dim=in_spatial_dim, filter_size=window_size, stride=stride, dilation_rate=1, padding=padding
             )
             assert isinstance(out_spatial_dim_, Dim)
             if out_spatial_dim:
                 out_spatial_dim_.declare_same_as(out_spatial_dim)
-            data = data.copy_template_replace_dim_tag(axis=0, new_dim_tag=out_spatial_dim_)
-            new_dim_axis = 1  # add new axis right after
+            data = data.copy_template_replace_dim_tag(axis=axis, new_dim_tag=out_spatial_dim_)
         window_dim_ = Dim(
             kind=Dim.Types.Spatial, description="%s:window" % name, dimension=window_size, auto_generated=True
         )

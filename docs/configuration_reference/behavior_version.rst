@@ -22,10 +22,20 @@ and not listing legacy/deprecated parameters.
 Version History
 ---------------
 
+Behavior version 18 (2023-09-02)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+TF ``WindowLayer`` returns an optimized dimension order by default.
+This is the dimension order which is used anyway internally.
+The old behavior was to reshuffle the dim order to the original input order.
+There should not be any reason to use the old behavior
+(please report it if you think otherwise),
+so the flag to control this is considered internal (``_use_opt_dim_order``).
+
 Behavior version 17 (2023-04-19)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-``ZoneoutLSTMCell`` used the wrong output,
+TF ``ZoneoutLSTMCell`` used the wrong output,
 which was different from ``h``
 (it was actually the original output without zoneout),
 so it was not as specified in the Zoneout paper,
@@ -51,6 +61,8 @@ Behavior version 16 (2022-11-11)
 for different user-generated tags,
 or also when comparing user-generated to auto-generated tags.
 This should rarely have an effect for you.
+
+For TF layers:
 It might break when you mix ``n_out`` and then later also have a different
 own dim tag for the same dim.
 In that case, they will not match because the tag is different.
@@ -75,7 +87,7 @@ See issue `#1205 <https://github.com/rwth-i6/returnn/issues/1205>`__.
 Behavior version 14 (2022-10-19)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-The dim matching in :class:`DotLayer` is now more strict
+The dim matching in TF :class:`DotLayer` is now more strict
 for the case that ``var1`` and ``var2`` are not provided,
 to figure out the common dims.
 
@@ -88,7 +100,7 @@ See issue `#1154 <https://github.com/rwth-i6/returnn/issues/1154>`__.
 Behavior version 13 (2022-10-13)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-This enables some extra checks in the :class:`RecLayer` which break some old configs,
+This enables some extra checks in the TF :class:`RecLayer` which break some old configs,
 where the old configs where actually broken,
 but those broken parts did not play a role for the training
 and thus it did not matter.
@@ -106,7 +118,7 @@ See issue `#1140 <https://github.com/rwth-i6/returnn/issues/1140>`__.
 Behavior version 12 (2022-01-06)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-The batch norm default settings have been changed.
+The TF batch norm default settings have been changed.
 The old settings did not make much sense
 and almost always lead to unwanted behavior.
 
@@ -123,7 +135,7 @@ See issue `#522 <https://github.com/rwth-i6/returnn/issues/522>`__.
 Behavior version 11 (2021-12-16)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Broadcasting dims no longer match in :class:`CombineLayer` and others.
+Broadcasting dims no longer match in TF :class:`CombineLayer` and others.
 This was never needed, instead broadcasting happens in RETURNN automatically to non-existing dims.
 To fix this, do not add any broadcasting dims.
 
@@ -132,14 +144,14 @@ See issue `#666 <https://github.com/rwth-i6/returnn/issues/666>`__.
 Behavior version 10 (2021-12-07)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-:class:`ConvLayer` use ``with_bias=True`` by default.
+TF :class:`ConvLayer` use ``with_bias=True`` by default.
 
 See issue `#787 <https://github.com/rwth-i6/returnn/issues/787>`__.
 
 Behavior version 9 (2021-12-03)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-:class:`ConvLayer`, :class:`PoolLayer` use ``auto_use_channel_first=True`` by default.
+TF :class:`ConvLayer`, :class:`PoolLayer` use ``auto_use_channel_first=True`` by default.
 
 In principle, nothing should ever change due to this
 when a config is correct in that nothing depends on the order of axes.
@@ -152,7 +164,7 @@ this should be safe.
 Behavior version 8 (2021-11-30)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-:class:`ConvLayer`, :class:`PoolLayer` and :class:`TransposedConvLayer`
+TF :class:`ConvLayer`, :class:`PoolLayer` and :class:`TransposedConvLayer`
 require ``in_spatial_dims`` to be specified
 when the input has more than one spatial dimension
 (which implies that you perform 2D or 3D convolution or pooling).
@@ -161,7 +173,7 @@ This is required to make the order of the spatial axes well defined
 because the input axes could have been reordered in any way before.
 See issue `#594 <https://github.com/rwth-i6/returnn/issues/594>`__.
 
-Usually, you would use :class:`DimensionTag` to specify ``in_spatial_dims``.
+Usually, you would use :class:`Dim` to specify ``in_spatial_dims``.
 However, to make the transition easier for this specific new behavior,
 you can also use a string description for a dimension.
 So example usages look like:
@@ -178,6 +190,7 @@ So example usages look like:
 Behavior version 7 (2021-11-29)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
+For TF layers:
 Do not allow to specify ``axes`` or ``axis`` arguments in a way that depends on the order of the axes.
 E.g. things like ``axis="spatial:1"`` would not be allowed.
 
@@ -189,7 +202,7 @@ or ``"dim:<static-dim>"``.
 Behavior version 6 (2021-11-27)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-:class:`MergeDimsLayer` uses ``keep_order=True`` and does not allow ``keep_order=False``.
+TF :class:`MergeDimsLayer` uses ``keep_order=True`` and does not allow ``keep_order=False``.
 There never should be a reason to use ``keep_order=False`` anyway.
 If you have that, just remove it.
 If that causes any problems, there is probably some other issue in your config.
@@ -199,6 +212,7 @@ See issue `#654 <https://github.com/rwth-i6/returnn/issues/654>`__.
 Behavior version 5 (2021-11-26)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
+For TF layers:
 Any ``axis`` or ``axes`` argument in layers does not allow int values anymore.
 Instead, use either a str like ``"F"`` or ``"stag:..."``
 or use a :class:`DimensionTag` instance.
@@ -208,6 +222,7 @@ See issue `#773 <https://github.com/rwth-i6/returnn/issues/773>`__.
 Behavior version 4 (2021-11-23)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
+For TF layers:
 Broadcasting in all inputs simultaneously in layers and other ops
 is not allowed anymore by default.
 In all inputs simultaneously means that there is no input which has all common dimensions.
@@ -221,7 +236,7 @@ and issue `#691 <https://github.com/rwth-i6/returnn/issues/691>`__.
 Behavior version 3 (2021-11-08)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-``DotLayer``: disallow ``int`` axes descriptions, remove and change defaults.
+TF ``DotLayer``: disallow ``int`` axes descriptions, remove and change defaults.
 
 Change ``-1`` to e.g. ``"static:-1"`` or ``"F"``.
 Change ``-2`` to e.g. ``"dynamic:0"`` or ``"T"`` or ``"stag:..."`` or ``dim_tag``.
@@ -239,6 +254,7 @@ See issue `#512 <https://github.com/rwth-i6/returnn/issues/514>`__.
 Behavior version 1 (2021-05-28)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
+For TF layers:
 Disallow not specifying ``"from"`` in layer definition dictionaries,
 thus making use of the hidden default ``"data"`` as layer input.
 
