@@ -152,6 +152,8 @@ class CachedDataset(Dataset):
     def _init_alloc_intervals(self):
         if self.cache_byte_size_limit_at_start == 0:
             return
+        if self.epoch is None:
+            return
         assert self.num_seqs > 0
         assert self.num_inputs > 0
         assert self.window > 0
@@ -182,6 +184,8 @@ class CachedDataset(Dataset):
         if not self.alloc_intervals:
             return
         if not self.nbytes:
+            return
+        if not self.epoch:
             return
 
         num_cached = 0
