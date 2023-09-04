@@ -1781,25 +1781,6 @@ class GatherLayer(_ConcatInputLayer):
             out_type["dim"] = NotSpecified
 
         output_data = Data(**out_type)
-
-        # Take size_placeholder from input_data if they exist there, otherwise from position_data
-        size_placeholder = {}
-        for input_axis, size in input_data.size_placeholder.items():
-            input_axis = input_data.get_batch_axis(input_axis)
-            if input_axis == old_gather_axis:
-                continue
-            output_axis = output_data.get_batch_axis_excluding_batch(
-                cls._translate_input_axis(input_axis, old_gather_axis, common_axes_input, input_axes, position_axes)
-            )
-            size_placeholder[output_axis] = size
-        for position_axis, size in position_data.size_placeholder.items():
-            position_axis = position_data.get_batch_axis(position_axis)
-            output_axis = output_data.get_batch_axis_excluding_batch(
-                cls._translate_position_axis(position_axis, old_gather_axis, common_axes_position, position_axes)
-            )
-            size_placeholder.setdefault(output_axis, size)
-        output_data.size_placeholder = size_placeholder
-
         return output_data
 
     @classmethod
