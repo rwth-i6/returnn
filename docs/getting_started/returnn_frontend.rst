@@ -21,6 +21,21 @@ Code:
 
     ...
 
-Related work:
 
-https://github.com/unifyai/ivy
+Related work
+------------
+
+`Ivy <https://github.com/unifyai/ivy>`__
+is both an ML transpiler and a framework,
+currently supporting JAX, TensorFlow, PyTorch, and Numpy.
+
+`Keras Core <https://keras.io/keras_core/>`__:
+Keras for TensorFlow, JAX and PyTorch.
+Also can wrap pure PyTorch modules directly in ``keras.Model``
+(`example <https://twitter.com/fchollet/status/1697381832164290754>`__).
+
+
+History
+-------
+
+https://github.com/rwth-i6/returnn/issues/1120

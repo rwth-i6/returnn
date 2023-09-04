@@ -1,7 +1,8 @@
 """
-This package provides the frontend API.
+This package provides the frontend API,
+referred to as RETURNN frontend, or RF for short.
 The frontend API supports multiple backends.
-https://github.com/rwth-i6/returnn/issues/1120
+See :ref:`returnn_frontend` for documentation.
 
 The convention for the user is to do::
 
