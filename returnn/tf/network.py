@@ -1641,10 +1641,11 @@ class TFNetwork(object):
                 "Loss flattened layer %s/%r output: %r" % (opts["network"].name, opts["name"], opts["output"]),
                 file=log.v3,
             )
-            layer__ = layer_cls(**opts)
-            assert isinstance(layer__, LayerBase)
-            layer__.post_init(opts)
-            layer__.output.sanity_check()
+            with self.layer_creation_scope(layer_class=layer_cls, **opts):
+                layer__ = layer_cls(**opts)
+                assert isinstance(layer__, LayerBase)
+                layer__.post_init(opts)
+                layer__.output.sanity_check()
             return layer__
 
         def _layer_deps(layer_):
@@ -1683,7 +1684,7 @@ class TFNetwork(object):
                 return False
             if layer_.recurrent:
                 return False
-            if layer_.have_params:  # in principle, this is ok, just not implemented yet to correctly share params
+            if layer_.have_params:  # in principle, this is ok, just not well-tested
                 return False
             if isinstance(layer_, (SourceLayer, InternalLayer)):
                 return False
