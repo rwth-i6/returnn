@@ -1234,7 +1234,13 @@ class _DimMixin:
             if other_kind == DimTypes.Feature or not other_kind:
                 other_kind = DimTypes.Spatial
         if self.dimension != other.dimension:
-            if broadcast_matches and (self.dimension == 1 or other.dimension == 1):
+            if broadcast_matches and (
+                # Only auto-generated dim tags are allowed to be treated as broadcastable.
+                # This was another suggestion from here: https://github.com/rwth-i6/returnn/issues/666
+                # It was not implemented like this because the auto_generated flag was only introduced later.
+                (self.dimension == 1 and self.auto_generated)
+                or (other.dimension == 1 and other.auto_generated)
+            ):
                 pass  # pass on
             else:
                 return False

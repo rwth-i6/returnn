@@ -977,7 +977,13 @@ class _TensorMixin(_TensorMixinBase):
                 if dim_tag and dim_tag.dimension == 1 and dim_tag.batch == batch_info:
                     pass  # keep it
                 else:
-                    dim_tag = Dim(kind=Dim.Types.Batch, description="batch-broadcast", dimension=1, batch=batch_info)
+                    dim_tag = Dim(
+                        kind=Dim.Types.Batch,
+                        description="batch-broadcast",
+                        dimension=1,
+                        batch=batch_info,
+                        auto_generated=True,
+                    )
                 return self.copy_add_batch_dim(batch_dim_axis=axis, batch=batch_info, dim_tag=dim_tag)
 
         data_opts = self.get_kwargs()
