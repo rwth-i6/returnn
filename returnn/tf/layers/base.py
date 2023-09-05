@@ -1197,7 +1197,7 @@ class LayerBase(object):
         This handles multiple things:
 
          * the param sharing logic, to reuse existing variables from elsewhere
-         * variational noise
+         * variational noise and param weight dropout
          * Note: :func:`default_control_flow_ctx` is not needed for tf.get_variable.
            But it might be needed for other code which uses custom inits and tf.Variable,
            e.g. tf.random.Generator.
@@ -1243,9 +1243,22 @@ class LayerBase(object):
             :rtype: tf.Variable|tf.Tensor
             """
             if kwargs_custom_getter:
-                param = kwargs_custom_getter(getter, **getter_kwargs)
-            else:
-                param = getter(**getter_kwargs)
+
+                def getter(*, _getter=getter, **kwargs_):
+                    """getter"""
+                    return kwargs_custom_getter(getter=_getter, **kwargs_)
+
+                getter.__qualname__ += f"(kwargs_custom_getter={kwargs_custom_getter})"
+
+            if base_var_scope.custom_getter:
+
+                def getter(*, _getter=getter, **kwargs_):
+                    """getter"""
+                    return base_var_scope.custom_getter(getter=_getter, **kwargs_)
+
+                getter.__qualname__ += f"(base_var_scope.custom_getter={base_var_scope.custom_getter})"
+
+            param = getter(**getter_kwargs)
 
             # Only apply this if we get a variable. Otherwise, maybe variational noise was already applied
             # (by some parent var scope), and we don't want to apply it twice.
@@ -1285,31 +1298,27 @@ class LayerBase(object):
             return param
 
         @contextlib.contextmanager
-        def inner():
-            """
-            Var creation scope + variable scope.
-            """
-            if self.reuse_params:
-                var_scope = self.reuse_params.get_variable_scope(base_layer=self)
+        def _optional_param_device():
+            if self.param_device:
+                device_name = self.param_device
+                if ":" not in device_name:
+                    device_name = "%s:*" % device_name
+                if "/" not in device_name:
+                    device_name = "/device:%s" % device_name
+                with tf.device(device_name):
+                    yield
             else:
-                var_scope = tf_compat.v1.get_variable_scope()
+                yield
+
+        with _optional_param_device():
+            if self.reuse_params:
+                base_var_scope = self.reuse_params.get_variable_scope(base_layer=self)
+            else:
+                base_var_scope = tf_compat.v1.get_variable_scope()
             if need_custom_getter:
                 kwargs["custom_getter"] = layer_custom_getter
-            with reuse_name_scope(var_scope, **kwargs) as scope_:
+            with reuse_name_scope(base_var_scope, **kwargs) as scope_:
                 yield scope_
-
-        if self.param_device:
-            device_name = self.param_device
-            if ":" not in device_name:
-                device_name = "%s:*" % device_name
-            if "/" not in device_name:
-                device_name = "/device:%s" % device_name
-            with tf.device(device_name):
-                with inner() as scope:
-                    yield scope
-        else:
-            with inner() as scope:
-                yield scope
 
     def add_param(
         self,
