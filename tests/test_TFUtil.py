@@ -6,11 +6,11 @@ import _setup_test_env  # noqa
 import tensorflow as tf
 from returnn.tf.util.basic import *
 from returnn.tf.util.data import SpatialDim, FeatureDim
-from returnn.tf.network import ExternData
 import returnn.tf.compat as tf_compat
 from nose.tools import assert_equal, assert_not_equal, assert_is_instance, assert_is, assert_in, assert_true
 from numpy.testing.utils import assert_almost_equal, assert_allclose
 from pprint import pprint
+import contextlib
 import unittest
 import numpy.testing
 from returnn.util import better_exchook
@@ -760,6 +760,35 @@ def test_Data_get_common_data_broadcast_multiple_dim_tags():
     b = Data("b", dim_tags=[feat_dim])
     out = Data.get_common_data([a, b], allow_broadcast_all_sources=True)
     assert out.dim_tags == (batch_dim, time_dim, input_dim, feat_dim)
+
+
+@contextlib.contextmanager
+def set_behavior_version(version: int):
+    """
+    This is a context manager which sets the behavior version to the given value.
+    """
+    from returnn.util.basic import BehaviorVersion
+
+    # noinspection PyProtectedMember
+    old = BehaviorVersion._behavior_version
+    try:
+        BehaviorVersion._behavior_version = version
+        yield
+    finally:
+        BehaviorVersion._behavior_version = old
+
+
+def test_Data_get_common_data_no_broadcast_for_explicit():
+    from returnn.tf.util.data import batch_dim
+
+    time_dim = SpatialDim("time")
+    input_dim = FeatureDim("input", 3)
+    feat_dim = FeatureDim("feat", 1)
+    a = Data("a", dim_tags=[batch_dim, time_dim, input_dim])
+    b = Data("b", dim_tags=[feat_dim])
+    with set_behavior_version(0):
+        out = Data.get_common_data([a, b], allow_broadcast_all_sources=True)
+        assert out.dim_tags == (batch_dim, time_dim, input_dim, feat_dim)
 
 
 def test_Data_get_common_data_extra2_static_spatial():
