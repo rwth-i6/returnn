@@ -240,6 +240,7 @@ class LayerBase(object):
             assert sources[0].output.have_dim_tag(
                 in_dim, unique=True
             ), "%s: in_dim %s not found or unique in input %s" % (self, in_dim, sources[0])
+        self.have_params = False
         self.params = {}  # type: typing.Dict[str,tf.Variable]
         self.saveable_param_replace = (
             {}
@@ -1329,6 +1330,7 @@ class LayerBase(object):
         :return: param
         :rtype tf.Variable
         """
+        self.have_params = True
         _param = param
         if isinstance(param, tf.Tensor):
             # This can happen with a custom_getter in tf.compat.v1.get_variable(), e.g. via self.reuse_params.

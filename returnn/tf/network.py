@@ -1683,7 +1683,7 @@ class TFNetwork(object):
                 return False
             if layer_.recurrent:
                 return False
-            if layer_.params:  # in principle, this is ok, just not implemented yet to correctly share params
+            if layer_.have_params:  # in principle, this is ok, just not implemented yet to correctly share params
                 return False
             if isinstance(layer_, (SourceLayer, InternalLayer)):
                 return False
