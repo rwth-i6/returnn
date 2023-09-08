@@ -236,9 +236,6 @@ class FileArchive:
             # We don't have a unique mapping, so we cannot use this.
             self._short_seg_names.clear()
 
-    def __del__(self):
-        self.f.close()
-
     def file_list(self):
         """
         :rtype: list[str]
@@ -960,9 +957,6 @@ class MixtureSet:
             for i in range(num_densities):
                 self.write_u32(self.mixtures[n][0][i])
                 self.write_f64(self.mixtures[n][1][i])
-
-    def __del__(self):
-        self.f.close()
 
     def get_mean_by_idx(self, idx):
         """
