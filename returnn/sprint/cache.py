@@ -7,7 +7,7 @@ This module is about reading (maybe later also writing) the Sprint archive forma
 """
 
 from __future__ import annotations
-
+from typing import List
 import sys
 import os
 import typing
@@ -323,9 +323,9 @@ class FileArchive:
           where string is a str,
           time is list of time-stamp tuples (start-time,end-time) in millisecs,
             data is a list of features, each a numpy vector,
-          align is a list of (time, allophone, state), time is an int from 0 to len of align,
+          align is a list of (time, allophone, state, weight), time is an int from 0 to len of align,
             allophone is some int, state is e.g. in [0,1,2].
-        :rtype: str|(list[numpy.ndarray],list[numpy.ndarray])|list[(int,int,int)]
+        :rtype: str|(list[numpy.ndarray],list[numpy.ndarray])|list[(int,int,int,float)]
         """
 
         if typ == "str":
@@ -431,9 +431,9 @@ class FileArchive:
           where string is a str,
           time is list of time-stamp tuples (start-time,end-time) in millisecs,
             data is a list of features, each a numpy vector,
-          align is a list of (time, allophone, state), time is an int from 0 to len of align,
+          align is a list of (time, allophone, state, weight), time is an int from 0 to len of align,
             allophone is some int, state is e.g. in [0,1,2].
-        :rtype: str|(list[numpy.ndarray],list[numpy.ndarray])|list[(int,int,int)]
+        :rtype: str|(list[numpy.ndarray],list[numpy.ndarray])|list[(int,int,int,float)]
         """
 
         if filename not in self.ft:
@@ -495,6 +495,12 @@ class FileArchive:
             if line.startswith("#"):
                 continue
             self.allophones.append(line)
+
+    def get_allophones_list(self) -> List[str]:
+        """
+        :return: list of allophones
+        """
+        return self.allophones
 
     def add_feature_cache(self, filename, features, times):
         """
@@ -637,9 +643,9 @@ class FileArchiveBundle:
           where string is a str,
           time is list of time-stamp tuples (start-time,end-time) in millisecs,
             data is a list of features, each a numpy vector,
-          align is a list of (time, allophone, state), time is an int from 0 to len of align,
+          align is a list of (time, allophone, state, weight), time is an int from 0 to len of align,
             allophone is some int, state is e.g. in [0,1,2].
-        :rtype: str|(list[numpy.ndarray],list[numpy.ndarray])|list[(int,int,int)]
+        :rtype: str|(list[numpy.ndarray],list[numpy.ndarray])|list[(int,int,int,float)]
 
         Uses FileArchive.read().
         """
@@ -654,6 +660,13 @@ class FileArchiveBundle:
         """
         for a in self.archives.values():
             a.set_allophones(filename)
+
+    def get_allophones_list(self) -> List[str]:
+        """
+        :return: list of allophones
+        """
+        a = next(iter(self.archives.values()))
+        return a.get_allophones_list()
 
 
 def open_file_archive(archive_filename, must_exists=True, encoding="ascii"):
@@ -1051,8 +1064,17 @@ def main():
                 a.set_allophones(args.allophone_file)
 
             f = a.read(args.file, "align")
-            for row in f:
-                print(" ".join("%.6f " % x for x in row))
+            for time, index, state, weight in f:
+                # Keep similar format as Sprint archiver.
+                items = [
+                    f"time={time}",
+                    f"allophone={a.get_allophones_list()[index]}",
+                    f"index={index}",
+                    f"state={state}",
+                ]
+                if weight != 1:
+                    items.append(f"weight={weight}")
+                print("\t".join(items))
 
         elif args.type == "feat":
             t, f = a.read(args.file, "feat")
