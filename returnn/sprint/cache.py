@@ -584,8 +584,13 @@ class FileArchiveBundle:
         :param str filename: bundle
         :param str encoding:
         """
+        file_dir = os.path.dirname(filename) or "."
         for line in open(filename).read().splitlines():
-            self.add_archive(filename=line, encoding=encoding)
+            if line.startswith("/"):
+                archive_file = line
+            else:
+                archive_file = f"{file_dir}/{line}"
+            self.add_archive(filename=archive_file, encoding=encoding)
 
     def add_archive(self, filename, encoding="ascii"):
         """
