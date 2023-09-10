@@ -4676,6 +4676,7 @@ def test_same_spatial_dim_after_rec_layers_with_pool():
 
 def test_rec_layer_search_select_src():
     from returnn.tf.layers.rec import _SubnetworkRecCell
+    from test_TFNetworkLayer import make_feed_dict
 
     n_src_dim = 5
     n_tgt_dim = 7
@@ -4823,59 +4824,67 @@ def test_rec_layer_search_select_src():
         }
 
     print("Constructing search network.")
-    tf_compat.v1.reset_default_graph()
-    extern_data = ExternData(
-        {
-            "data": {"dim": n_src_dim, "sparse": True},
-            "classes": {"dim": n_tgt_dim, "sparse": True, "available_for_inference": False},
-        }
-    )
-    search_net = TFNetwork(extern_data=extern_data, search_flag=True, train_flag=False, eval_flag=True, config=config)
-    search_net.construct_from_dict(get_net_dict())
-    search_out_layer = search_net.layers["output"]
-    assert isinstance(search_out_layer, RecLayer)
-    assert isinstance(search_out_layer.cell, _SubnetworkRecCell)
-    assert not search_out_layer.cell.input_layers_moved_out
-    assert not search_out_layer.cell.output_layers_moved_out
-    print("Layers in the loop:")
-    loop_net = search_out_layer.cell.net
-    for name, layer in sorted(loop_net.layers.items()):
-        print("  %r: %s" % (name, layer))
-        print("    search choices:", layer.get_search_choices())
-        print("    sources:")
-        for src in layer.sources:
-            print("      %s" % src)
-        print("    other deps:")
-        for dep in layer.get_dep_layers():
-            if dep in layer.sources:
-                continue
-            print("      %s" % dep)
-    loop_out_layer = loop_net.layers["output"]
-    assert isinstance(loop_out_layer, ChoiceLayer)
-    assert isinstance(loop_out_layer.search_choices, SearchChoices)
-    all_src_choices = loop_out_layer.search_choices.get_src_choices_seq()
-    assert len(all_src_choices) == 2
-    cur_out_choice, prev_out_choice = all_src_choices
-    assert isinstance(cur_out_choice, SearchChoices)
-    assert isinstance(prev_out_choice, SearchChoices)
-    assert cur_out_choice == loop_out_layer.search_choices
-    prev_loop_out_layer = loop_net.layers["prev:output"]
-    assert prev_out_choice == prev_loop_out_layer.search_choices
-    assert RecLayer.is_prev_step_layer(prev_out_choice.owner)
-    assert_equal(loop_net.layers["end"].get_search_choices(), cur_out_choice)
-    assert_equal(loop_net.layers["target_embed"].get_search_choices(), cur_out_choice)
-    assert_equal(loop_net.layers["prev:target_embed"].get_search_choices(), prev_out_choice)
-    assert_equal(loop_net.layers["accum_att_weights"].get_search_choices(), prev_out_choice)
-    assert_equal(loop_net.layers["prev:accum_att_weights"].get_search_choices(), prev_out_choice)  # will be transformed
-    assert_equal(loop_net.layers["weight_feedback"].get_search_choices(), prev_out_choice)
-    loop_net.debug_search_choices(loop_net.layers["s"])
-    assert_equal(loop_net.layers["s"].get_search_choices(), cur_out_choice)
-    assert_equal(loop_net.layers["prev:s"].get_search_choices(), prev_out_choice)
-    assert_equal(loop_net.layers["prev_s_state"].get_search_choices(), prev_out_choice)
-    assert_equal(loop_net.layers["energy_in"].get_search_choices(), prev_out_choice)
-    assert_equal(loop_net.layers["att_weights"].get_search_choices(), prev_out_choice)
-    assert_equal(loop_net.layers["att"].get_search_choices(), prev_out_choice)
-    assert_equal(loop_net.layers["output_prob"].get_search_choices(), prev_out_choice)
+    with make_scope() as session:
+        extern_data = ExternData(
+            {
+                "data": {"dim": n_src_dim, "sparse": True},
+                "classes": {"dim": n_tgt_dim, "sparse": True, "available_for_inference": False},
+            }
+        )
+        search_net = TFNetwork(
+            extern_data=extern_data, search_flag=True, train_flag=False, eval_flag=True, config=config
+        )
+        search_net.construct_from_dict(get_net_dict())
+        search_out_layer = search_net.layers["output"]
+        assert isinstance(search_out_layer, RecLayer)
+        assert isinstance(search_out_layer.cell, _SubnetworkRecCell)
+        assert not search_out_layer.cell.input_layers_moved_out
+        assert not search_out_layer.cell.output_layers_moved_out
+        print("Layers in the loop:")
+        loop_net = search_out_layer.cell.net
+        for name, layer in sorted(loop_net.layers.items()):
+            print("  %r: %s" % (name, layer))
+            print("    search choices:", layer.get_search_choices())
+            print("    sources:")
+            for src in layer.sources:
+                print("      %s" % src)
+            print("    other deps:")
+            for dep in layer.get_dep_layers():
+                if dep in layer.sources:
+                    continue
+                print("      %s" % dep)
+        loop_out_layer = loop_net.layers["output"]
+        assert isinstance(loop_out_layer, ChoiceLayer)
+        assert isinstance(loop_out_layer.search_choices, SearchChoices)
+        all_src_choices = loop_out_layer.search_choices.get_src_choices_seq()
+        assert len(all_src_choices) == 2
+        cur_out_choice, prev_out_choice = all_src_choices
+        assert isinstance(cur_out_choice, SearchChoices)
+        assert isinstance(prev_out_choice, SearchChoices)
+        assert cur_out_choice == loop_out_layer.search_choices
+        prev_loop_out_layer = loop_net.layers["prev:output"]
+        assert prev_out_choice == prev_loop_out_layer.search_choices
+        assert RecLayer.is_prev_step_layer(prev_out_choice.owner)
+        assert_equal(loop_net.layers["end"].get_search_choices(), cur_out_choice)
+        assert_equal(loop_net.layers["target_embed"].get_search_choices(), cur_out_choice)
+        assert_equal(loop_net.layers["prev:target_embed"].get_search_choices(), prev_out_choice)
+        assert_equal(loop_net.layers["accum_att_weights"].get_search_choices(), prev_out_choice)
+        assert_equal(
+            loop_net.layers["prev:accum_att_weights"].get_search_choices(), prev_out_choice
+        )  # will be transformed
+        assert_equal(loop_net.layers["weight_feedback"].get_search_choices(), prev_out_choice)
+        loop_net.debug_search_choices(loop_net.layers["s"])
+        assert_equal(loop_net.layers["s"].get_search_choices(), cur_out_choice)
+        assert_equal(loop_net.layers["prev:s"].get_search_choices(), prev_out_choice)
+        assert_equal(loop_net.layers["prev_s_state"].get_search_choices(), prev_out_choice)
+        assert_equal(loop_net.layers["energy_in"].get_search_choices(), prev_out_choice)
+        assert_equal(loop_net.layers["att_weights"].get_search_choices(), prev_out_choice)
+        assert_equal(loop_net.layers["att"].get_search_choices(), prev_out_choice)
+        assert_equal(loop_net.layers["output_prob"].get_search_choices(), prev_out_choice)
+
+        out = search_net.get_layer("decision").output
+        search_net.initialize_params(session)
+        session.run((out.placeholder, out.get_sequence_lengths()), feed_dict=make_feed_dict(extern_data))
 
 
 def test_RnnCellLayer_with_time():
