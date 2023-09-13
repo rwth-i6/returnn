@@ -8360,6 +8360,7 @@ class PositionalEncodingLayer(_ConcatInputLayer):
             name=name, network=network, sources=sources, **kwargs
         )
 
+    # noinspection PyMethodOverriding
     @classmethod
     def get_rec_initial_extra_outputs(cls, batch_dim, rec_layer, network, **kwargs):
         """
@@ -8370,6 +8371,7 @@ class PositionalEncodingLayer(_ConcatInputLayer):
         """
         return {"position": tf.constant(-1, shape=(), dtype=tf.int32)}
 
+    # noinspection PyMethodOverriding
     @classmethod
     def get_rec_initial_extra_outputs_shape_invariants(cls, rec_layer, network, **kwargs):
         """
