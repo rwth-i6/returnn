@@ -8315,9 +8315,7 @@ class PositionalEncodingLayer(_ConcatInputLayer):
                 self.rec_vars_outputs["position"] = position
             if offset_data:
                 position += offset_data.placeholder  # (batch,)
-            signal = get_positional_encoding(
-                num_channels=self.output.dim, position=position
-            )  # (batch,n_out)
+            signal = get_positional_encoding(num_channels=self.output.dim, position=position)  # (batch,n_out)
 
         if add_to_input:
             signal += source.placeholder
