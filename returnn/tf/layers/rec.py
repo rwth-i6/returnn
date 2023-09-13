@@ -8309,10 +8309,11 @@ class PositionalEncodingLayer(_ConcatInputLayer):
                 signal = get_positional_encoding(num_channels=self.output.dim, position=position)
         else:  # single step
             if constant > -1:
-                position = tf.convert_to_tensor([constant])
+                position = tf.convert_to_tensor([constant])  # (1,)
             else:
                 position = self._rec_previous_layer.rec_vars_outputs["position"] + 1
                 self.rec_vars_outputs["position"] = position
+                position = tf.expand_dims(position, axis=0)  # (1,)
             if offset_data:
                 position += offset_data.placeholder  # (batch,)
             signal = get_positional_encoding(
@@ -8337,7 +8338,7 @@ class PositionalEncodingLayer(_ConcatInputLayer):
         """
         if d.get("from", None) is None:
             if network.is_inside_rec_layer():
-                d["from"] = []
+                d["from"] = [":i"]
             else:
                 d["from"] = ["data"]
         super(PositionalEncodingLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
