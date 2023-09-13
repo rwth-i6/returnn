@@ -8311,7 +8311,8 @@ class PositionalEncodingLayer(_ConcatInputLayer):
             if constant > -1:
                 position = tf.convert_to_tensor([constant])
             else:
-                position = tf.convert_to_tensor([self.network.get_rec_step_index()])
+                position = self._rec_previous_layer.rec_vars_outputs["position"] + 1
+                self.rec_vars_outputs["position"] = position
             if offset_data:
                 position += offset_data.placeholder  # (batch,)
             signal = get_positional_encoding(
@@ -8336,7 +8337,7 @@ class PositionalEncodingLayer(_ConcatInputLayer):
         """
         if d.get("from", None) is None:
             if network.is_inside_rec_layer():
-                d["from"] = [":i"]
+                d["from"] = []
             else:
                 d["from"] = ["data"]
         super(PositionalEncodingLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
@@ -8358,6 +8359,26 @@ class PositionalEncodingLayer(_ConcatInputLayer):
         return super(PositionalEncodingLayer, cls).get_out_data_from_opts(
             name=name, network=network, sources=sources, **kwargs
         )
+
+    @classmethod
+    def get_rec_initial_extra_outputs(cls, batch_dim, rec_layer, network, **kwargs):
+        """
+        :param tf.Tensor batch_dim: for this layer, might be with beam
+        :param returnn.tf.layers.rec.RecLayer|LayerBase|None rec_layer: for the scope
+        :param returnn.tf.network.TFNetwork network:
+        :rtype: dict[str,tf.Tensor]
+        """
+        return {"position": tf.constant(-1, shape=(), dtype=tf.int32)}
+
+    @classmethod
+    def get_rec_initial_extra_outputs_shape_invariants(cls, rec_layer, network, **kwargs):
+        """
+        :param returnn.tf.layers.rec.RecLayer|LayerBase|None rec_layer: for the scope
+        :param returnn.tf.network.TFNetwork network:
+        :return: optional shapes for the tensors by get_rec_initial_extra_outputs
+        :rtype: dict[str,tf.TensorShape]
+        """
+        return {"position": tf.TensorShape(())}
 
 
 class KenLmStateLayer(_ConcatInputLayer):
