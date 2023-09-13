@@ -8309,7 +8309,7 @@ class PositionalEncodingLayer(_ConcatInputLayer):
                 signal = get_positional_encoding(num_channels=self.output.dim, position=position)
         else:  # single step
             if constant > -1:
-                position = tf.convert_to_tensor([constant])  # [1]
+                position = tf.fill(value=constant, dims=[self.get_batch_dim()])  # [B]
             else:
                 position = self._rec_previous_layer.rec_vars_outputs["position"] + 1  # [B]
                 self.rec_vars_outputs["position"] = position
@@ -8317,15 +8317,10 @@ class PositionalEncodingLayer(_ConcatInputLayer):
                 position += offset_data.placeholder  # (batch,)
             signal = get_positional_encoding(
                 num_channels=self.output.dim, position=position
-            )  # (1,n_out) or (batch,n_out)
+            )  # (batch,n_out)
 
         if add_to_input:
             signal += source.placeholder
-        else:
-            # tile to batch dimension explicitly, as batch_dim=1 will not be automatically unbroadcasted
-            tiles = [1] * self.output.batch_ndim
-            tiles[self.output.batch_dim_axis] = self.get_batch_dim()
-            signal = tf.tile(signal, tiles)
         self.output.placeholder = signal
 
     @classmethod
