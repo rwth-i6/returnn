@@ -8309,11 +8309,10 @@ class PositionalEncodingLayer(_ConcatInputLayer):
                 signal = get_positional_encoding(num_channels=self.output.dim, position=position)
         else:  # single step
             if constant > -1:
-                position = tf.convert_to_tensor([constant])  # (1,)
+                position = tf.convert_to_tensor([constant])  # [1]
             else:
-                position = self._rec_previous_layer.rec_vars_outputs["position"] + 1
+                position = self._rec_previous_layer.rec_vars_outputs["position"] + 1  # [B]
                 self.rec_vars_outputs["position"] = position
-                position = tf.expand_dims(position, axis=0)  # (1,)
             if offset_data:
                 position += offset_data.placeholder  # (batch,)
             signal = get_positional_encoding(
@@ -8370,7 +8369,7 @@ class PositionalEncodingLayer(_ConcatInputLayer):
         :param returnn.tf.network.TFNetwork network:
         :rtype: dict[str,tf.Tensor]
         """
-        return {"position": tf.constant(-1, shape=(), dtype=tf.int32)}
+        return {"position": tf.fill(value=-1, dims=[batch_dim])}
 
     # noinspection PyMethodOverriding
     @classmethod
@@ -8381,7 +8380,7 @@ class PositionalEncodingLayer(_ConcatInputLayer):
         :return: optional shapes for the tensors by get_rec_initial_extra_outputs
         :rtype: dict[str,tf.TensorShape]
         """
-        return {"position": tf.TensorShape(())}
+        return {"position": tf.TensorShape([None])}
 
 
 class KenLmStateLayer(_ConcatInputLayer):
