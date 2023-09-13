@@ -4887,6 +4887,155 @@ def test_rec_layer_search_select_src():
         session.run((out.placeholder, out.get_sequence_lengths()), feed_dict=make_feed_dict(extern_data))
 
 
+def test_rec_layer_search_cheating():
+    from returnn.tf.layers.rec import _SubnetworkRecCell
+    from test_TFNetworkLayer import make_feed_dict
+
+    n_src_dim = 5
+    n_tgt_dim = 7
+    beam_size = 12
+    config = Config()
+
+    def get_net_dict():
+        return {
+            "source_embed": {
+                "class": "linear",
+                "activation": None,
+                "with_bias": False,
+                "n_out": 6,
+                "from": "data:data",
+            },
+            "encoder": {"class": "copy", "from": "source_embed"},
+            "enc_ctx": {"class": "linear", "activation": None, "with_bias": True, "from": ["encoder"], "n_out": 10},
+            "fertility": {
+                "class": "linear",
+                "activation": "sigmoid",
+                "with_bias": False,
+                "from": ["encoder"],
+                "n_out": 1,
+            },
+            "output": {
+                "class": "rec",
+                "from": [],
+                "unit": {
+                    "output": {
+                        "class": "choice",
+                        "target": "classes",
+                        "beam_size": beam_size,
+                        "from": ["output_prob"],
+                        "initial_output": 0,
+                        "cheating": "exclusive",
+                    },
+                    "end": {"class": "compare", "from": ["output"], "value": 0},
+                    "target_embed": {
+                        "class": "linear",
+                        "activation": None,
+                        "with_bias": False,
+                        "from": ["output"],
+                        "n_out": 6,
+                        "initial_output": "apply(0)",
+                    },
+                    "weight_feedback": {
+                        "class": "linear",
+                        "activation": None,
+                        "with_bias": False,
+                        "from": ["prev:accum_att_weights"],
+                        "n_out": 10,
+                    },
+                    "prev_s_transformed": {
+                        "class": "linear",
+                        "activation": None,
+                        "with_bias": False,
+                        "from": "prev:s",
+                        "n_out": 10,
+                    },
+                    "energy_in": {
+                        "class": "combine",
+                        "kind": "add",
+                        "from": ["base:enc_ctx", "weight_feedback", "prev_s_transformed"],
+                        "n_out": 10,
+                    },
+                    "energy_tanh": {"class": "activation", "activation": "tanh", "from": ["energy_in"]},
+                    "energy": {
+                        "class": "linear",
+                        "activation": None,
+                        "with_bias": False,
+                        "from": ["energy_tanh"],
+                        "n_out": 1,
+                    },
+                    "att_weights": {"class": "softmax_over_spatial", "from": ["energy"]},  # (B, enc-T, 1)
+                    "accum_att_weights": {
+                        "class": "eval",
+                        "from": ["prev:accum_att_weights", "att_weights", "base:fertility"],
+                        "eval": "source(0) + 0.5 * source(1) * source(2)",
+                        "out_type": {"dim": 1, "shape": (None, 1)},
+                    },
+                    "att": {
+                        "class": "generic_attention",
+                        "weights": "att_weights",
+                        "base": "base:encoder",
+                        "auto_squeeze": True,
+                    },
+                    "s": {
+                        "class": "rec",
+                        "unit": "lstm",
+                        "from": ["target_embed", "att"],
+                        "n_out": 10,
+                    },
+                    "readout_in": {
+                        "class": "linear",
+                        "from": ["prev:s", "prev:target_embed", "att"],
+                        "activation": None,
+                        "n_out": 10,
+                    },
+                    "readout": {"class": "reduce_out", "mode": "max", "num_pieces": 2, "from": ["readout_in"]},
+                    "output_prob": {"class": "softmax", "from": ["readout"], "target": "classes", "loss": "ce"},
+                },
+                "target": "classes",
+                "max_seq_len": 20,
+            },
+            "decision": {"class": "decide", "from": ["output"], "loss": "edit_distance", "target": "classes"},
+        }
+
+    print("Constructing search network.")
+    with make_scope() as session:
+        extern_data = ExternData(
+            {
+                "data": {"dim": n_src_dim, "sparse": True},
+                "classes": {"dim": n_tgt_dim, "sparse": True, "available_for_inference": False},
+            }
+        )
+        search_net = TFNetwork(
+            extern_data=extern_data, search_flag=True, train_flag=False, eval_flag=True, config=config
+        )
+        search_net.construct_from_dict(get_net_dict())
+        search_out_layer = search_net.layers["output"]
+        assert isinstance(search_out_layer, RecLayer)
+        assert isinstance(search_out_layer.cell, _SubnetworkRecCell)
+        assert not search_out_layer.cell.input_layers_moved_out
+        assert not search_out_layer.cell.output_layers_moved_out
+        print("Layers in the loop:")
+        loop_net = search_out_layer.cell.net
+        for name in ["output"]:
+            layer = loop_net.layers[name]
+            print("  %r: %s" % (name, layer))
+            print("    sources:")
+            for src in layer.sources:
+                print("      %s" % src)
+            print("    other deps:")
+            for dep in layer.get_dep_layers():
+                if dep in layer.sources:
+                    continue
+                print("      %s" % dep)
+            print("    kwargs:")
+            for k, v in (layer.kwargs or {}).items():
+                print("      %s: %s" % (k, v))
+
+        out = search_net.get_layer("decision").output
+        search_net.initialize_params(session)
+        session.run((out.placeholder, out.get_sequence_lengths()), feed_dict=make_feed_dict(extern_data))
+
+
 def test_RnnCellLayer_with_time():
     from returnn.datasets.generating import DummyDataset
     from returnn.tf.layers.basic import InternalLayer, SourceLayer, ReduceLayer
