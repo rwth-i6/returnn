@@ -7304,6 +7304,19 @@ def test_reclayer_optimize_out_cumsum_unrelated_axis():
     )
 
 
+def test_reclayer_optimize_out_pos_enc_layer():
+    feat_dim = FeatureDim("feat", dimension=11)
+    check_reclayer_optimize_out(
+        feat_dim=feat_dim,
+        subnet_layer_dict={
+            "class": "positional_encoding",
+            "out_dim": feat_dim,
+            "from": "data:source",
+            "add_to_input": True,
+        },
+    )
+
+
 def test_reclayer_optimize_out_rel_pos_enc_layer():
     # https://github.com/rwth-i6/returnn/issues/1253
     time_dim = SpatialDim("time")
