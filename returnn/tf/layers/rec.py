@@ -8283,19 +8283,16 @@ class PositionalEncodingLayer(_ConcatInputLayer):
                 axis = "T"
             else:
                 axis = single_step_dim
+        use_constant = constant > -1
         if axis != single_step_dim:
             src_axis_int = source.get_axis_from_description(axis, allow_int=False)
             out_axis_int = self.output.get_axis_from_description(axis, allow_int=False)
-            if constant > -1:
+            if use_constant:
                 position = constant * tf.ones([1] * output_templ_wo_feat.batch_ndim, tf.int32)
                 if offset_data:
                     position += offset_data.placeholder  # (batch, len)
                 # signal has shape (1, len) or (batch, len) or (1, 1) or more ones
                 signal = get_positional_encoding(num_channels=self.output.dim, position=position)
-                if not add_to_input and not offset_data:  # Need to tile the time dimension
-                    tiles = [1] * self.output.batch_ndim
-                    tiles[out_axis_int] = tf_util.get_shape_dim(source.placeholder, src_axis_int)
-                    signal = tf.tile(signal, tiles)
             else:
                 length = tf_util.get_shape_dim(source.placeholder, src_axis_int)
                 position = tf.range(length)  # (len,)
@@ -8308,7 +8305,8 @@ class PositionalEncodingLayer(_ConcatInputLayer):
                 # signal has shape (1,len,n_out) or (batch,len,n_out)
                 signal = get_positional_encoding(num_channels=self.output.dim, position=position)
         else:  # single step
-            if constant > -1:
+            out_axis_int = None
+            if use_constant:
                 position = tf.fill(value=constant, dims=[self.get_batch_dim()])  # [B]
             else:
                 position = self._rec_previous_layer.rec_vars_outputs["position"] + 1  # [B]
@@ -8319,6 +8317,20 @@ class PositionalEncodingLayer(_ConcatInputLayer):
 
         if add_to_input:
             signal += source.placeholder
+            # No need for tiling because the source should have exactly all relevant dims.
+        else:
+            # Check whether we need to tile.
+            tiles = [1] * self.output.batch_ndim
+            for axis_, dim in enumerate(self.output.dims[:-1]):
+                if offset and dim in offset.output.dims:
+                    continue  # already unbroadcasted above via offset
+                if axis != single_step_dim and not use_constant and out_axis_int == axis_:
+                    continue  # already handled above via time axis
+                if axis == single_step_dim and dim.is_batch_dim():
+                    continue  # already handled above, state has batch dim
+                tiles[axis_] = self.get_batch_dim() if dim.is_batch_dim() else dim.get_dim_value()
+            if any([(not isinstance(t, int) or t > 1) for t in tiles]):
+                signal = tf.tile(signal, tiles)
         self.output.placeholder = signal
 
     @classmethod
