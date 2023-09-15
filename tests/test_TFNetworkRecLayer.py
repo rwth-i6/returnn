@@ -4953,6 +4953,43 @@ def test_rec_layer_search_cheating():
 
     Adding this hack in beam_search fixes the issue:
         cheating_gold_targets = tf.reshape(cheating_gold_targets, [batch_dim, -1])[:, 0]
+
+    The bug is only triggered with search_flag=False
+    (but search is anyway activated because search=True in the layer).
+    This somehow triggeres a different path to get the targets
+    (why?).
+    So actually maybe two things to fix:
+    - Why this different path to get the targets? We should avoid this if possible.
+      It is in _target_layers in the case of the bug.
+    - The actual bug: In this different path to get the targets, they are expanded to the beam,
+      although we don't want that.
+      It uses this in _get_target_value, _static_get_target_value:
+            return SelectSearchSourcesLayer.select_if_needed(
+                _target_layers[target], search_choices=search_choices
+            ).output
+      The target layer is already transformed before via
+       _create_layer_layer_desc, translate_to_common_search_beam.
+      Then it just leaves it as it is.
+
+    To solve it:
+
+    One option:
+      _get_target_value search_choices seems only be set by _get_cheating_targets_and_src_beam_idxs,
+      nowhere else.
+      Remove this logic.
+      Then it will always contain the beam.
+      Then we can just remove it and it should be good.
+      It's a bit inefficient (first expanded, then removed) but the logic is much simpler,
+      and this feature is anyway only rarely used.
+
+    Another option, with only minimal code changes:
+        In SelectSearchSourcesLayer.select_if_needed, handle search_choices is None properly.
+        If possible, resolve an incoming SelectSearchSourcesLayer (this is our case),
+        or otherwise throw an error. (We should not get this case otherwise I think...)
+
+    Unfortunately I think we cannot solve the other issue (different path to get the targets) easily.
+    This is in LayerBase.transform_config_dict, the logic to get the targets,
+    and it depends both on search_flag and also eval_flag.
     """
     from returnn.tf.layers.rec import _SubnetworkRecCell
     from test_TFNetworkLayer import make_feed_dict
