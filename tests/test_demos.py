@@ -6,6 +6,7 @@ import re
 import os
 import sys
 from glob import glob
+import shutil
 import unittest
 from nose.tools import assert_less, assert_in
 from returnn.util import better_exchook
@@ -91,23 +92,28 @@ def run_and_parse_last_fer(*args, **kwargs):
     return parse_last_fer(out)
 
 
-def run_config_get_fer(config_filename, env_update=None, *, log_verbosity=5, print_stdout=False):
-    cleanup_tmp_models(config_filename)
+def run_config_get_fer(
+    config_filename, *args, env_update=None, log_verbosity=5, print_stdout=False, pre_cleanup=True, post_cleanup=True
+):
+    if pre_cleanup:
+        cleanup_tmp_models(config_filename)
     fer = run_and_parse_last_fer(
         py,
         "rnn.py",
         config_filename,
         "++log_verbosity",
         str(log_verbosity),
+        *args,
         env_update=env_update,
         print_stdout=print_stdout,
     )
     print("FER:", fer)
-    cleanup_tmp_models(config_filename)
+    if post_cleanup:
+        cleanup_tmp_models(config_filename)
     return fer
 
 
-def cleanup_tmp_models(config_filename):
+def get_model_filename(config_filename: str) -> str:
     assert os.path.exists(config_filename)
     from returnn.config import Config
 
@@ -117,6 +123,11 @@ def cleanup_tmp_models(config_filename):
     assert model_filename
     # Remove existing models
     assert model_filename.startswith("/tmp/")
+    return model_filename
+
+
+def cleanup_tmp_models(config_filename: str):
+    model_filename = get_model_filename(config_filename)
     for f in glob(model_filename + ".*"):
         os.remove(f)
 
@@ -138,6 +149,60 @@ def test_demo_tf_task12ax_no_test_env():
     fer = run_config_get_fer("demos/demo-tf-native-lstm2.12ax.config", env_update={"RETURNN_TEST": ""})
     # see test_demo_tf_task12ax above
     assert_less(fer, 0.015)
+
+
+@unittest.skipIf(not tf, "no TF")
+def test_demo_tf_task12ax_eval():
+    # The test is specifically for task="eval". We had the problem that the dataset init was broken for this case.
+    # Task=eval requires a model though, so first train one epoch.
+    cfg_filename = "demos/demo-tf-native-lstm.12ax.config"
+    train_dataset_repr = """{"class": "Task12AXDataset", "num_seqs": 10}"""
+    dev_dataset_repr = """{"class": "Task12AXDataset", "num_seqs": 10}"""
+    fer1 = run_config_get_fer(
+        cfg_filename,
+        "++num_epochs",
+        "2",
+        "++train",
+        train_dataset_repr,
+        "++dev",
+        dev_dataset_repr,
+        print_stdout=True,
+        post_cleanup=False,
+    )
+    fer2 = run_config_get_fer(
+        cfg_filename,
+        "++task",
+        "eval",
+        "++load_epoch",
+        "2",
+        "++train",
+        "None",
+        "++dev",
+        dev_dataset_repr,
+        print_stdout=True,
+        pre_cleanup=False,
+        post_cleanup=False,
+    )
+    assert fer1 == fer2
+    model_filename = get_model_filename(cfg_filename)
+    ep2_files = glob(model_filename + ".002.*")
+    assert ep2_files, f"No model files found for epoch 2, {model_filename}"
+    for fn in ep2_files:
+        shutil.copy(fn, fn.replace(".002.", ".003."))
+    fer3 = run_config_get_fer(
+        cfg_filename,
+        "++task",
+        "eval",
+        "++load_epoch",
+        "3",
+        "++train",
+        "None",
+        "++dev",
+        dev_dataset_repr,
+        print_stdout=True,
+        pre_cleanup=False,
+    )
+    assert fer3 != fer2  # because random seed, we intentionally did not use fixed_random_seed
 
 
 @unittest.skipIf(not torch, "no PyTorch")
