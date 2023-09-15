@@ -1821,7 +1821,10 @@ class Engine(EngineBase):
             hms(trainer.elapsed),
             file=log.v1,
         )
-        self.eval_model()
+        self.eval_model(
+            # init_seq_order was already called before
+            init_seq_order=False
+        )
 
         if should_call_graph_reset_callbacks:
             # Early call of reset callbacks, which might trigger some HDF dump or other things.
@@ -1886,6 +1889,7 @@ class Engine(EngineBase):
         output_per_seq_format=None,
         output_per_seq_file_format="txt",
         skip_already_evaluated=False,
+        init_seq_order=True,
         lr_control_update_scores=True,
     ):
         """
@@ -1899,6 +1903,7 @@ class Engine(EngineBase):
           which properties of `loss_name` should be written to `output_per_seq_file`.
           allowed_outputs = {"seq_tag", "seq_len", "score", "error", "pos_score", "pos_error"}.
         :param bool skip_already_evaluated:
+        :param bool init_seq_order:
         :param str output_per_seq_file_format: "txt" or "py"
         :param bool lr_control_update_scores: update and save scores in learning rate control
         :return: nothing
@@ -2012,12 +2017,17 @@ class Engine(EngineBase):
                 dataset.seq_ordering = (
                     "default"  # enforce order as-is, so that the order in the written file corresponds
                 )
-            dataset.init_seq_order(epoch=self.epoch)
 
         for dataset_name, dataset in self.get_eval_datasets().items():
             if skip_already_evaluated and self._is_dataset_evaluated(name=dataset_name):
                 continue
-            if dataset_name not in self.dataset_batches or not dataset.batch_set_generator_cache_whole_epoch():
+            if init_seq_order:
+                dataset.init_seq_order(epoch=self.epoch)
+            if (
+                init_seq_order
+                or dataset_name not in self.dataset_batches
+                or not dataset.batch_set_generator_cache_whole_epoch()
+            ):
                 self.dataset_batches[dataset_name] = dataset.generate_batches(
                     recurrent_net=self.network.recurrent,
                     batch_size=self.batch_size,
