@@ -4676,6 +4676,7 @@ def test_same_spatial_dim_after_rec_layers_with_pool():
 
 def test_rec_layer_search_select_src():
     from returnn.tf.layers.rec import _SubnetworkRecCell
+    from test_TFNetworkLayer import make_feed_dict
 
     n_src_dim = 5
     n_tgt_dim = 7
@@ -4823,59 +4824,325 @@ def test_rec_layer_search_select_src():
         }
 
     print("Constructing search network.")
-    tf_compat.v1.reset_default_graph()
-    extern_data = ExternData(
-        {
-            "data": {"dim": n_src_dim, "sparse": True},
-            "classes": {"dim": n_tgt_dim, "sparse": True, "available_for_inference": False},
+    with make_scope() as session:
+        extern_data = ExternData(
+            {
+                "data": {"dim": n_src_dim, "sparse": True},
+                "classes": {"dim": n_tgt_dim, "sparse": True, "available_for_inference": False},
+            }
+        )
+        search_net = TFNetwork(
+            extern_data=extern_data, search_flag=True, train_flag=False, eval_flag=True, config=config
+        )
+        search_net.construct_from_dict(get_net_dict())
+        search_out_layer = search_net.layers["output"]
+        assert isinstance(search_out_layer, RecLayer)
+        assert isinstance(search_out_layer.cell, _SubnetworkRecCell)
+        assert not search_out_layer.cell.input_layers_moved_out
+        assert not search_out_layer.cell.output_layers_moved_out
+        print("Layers in the loop:")
+        loop_net = search_out_layer.cell.net
+        for name, layer in sorted(loop_net.layers.items()):
+            print("  %r: %s" % (name, layer))
+            print("    search choices:", layer.get_search_choices())
+            print("    sources:")
+            for src in layer.sources:
+                print("      %s" % src)
+            print("    other deps:")
+            for dep in layer.get_dep_layers():
+                if dep in layer.sources:
+                    continue
+                print("      %s" % dep)
+        loop_out_layer = loop_net.layers["output"]
+        assert isinstance(loop_out_layer, ChoiceLayer)
+        assert isinstance(loop_out_layer.search_choices, SearchChoices)
+        all_src_choices = loop_out_layer.search_choices.get_src_choices_seq()
+        assert len(all_src_choices) == 2
+        cur_out_choice, prev_out_choice = all_src_choices
+        assert isinstance(cur_out_choice, SearchChoices)
+        assert isinstance(prev_out_choice, SearchChoices)
+        assert cur_out_choice == loop_out_layer.search_choices
+        prev_loop_out_layer = loop_net.layers["prev:output"]
+        assert prev_out_choice == prev_loop_out_layer.search_choices
+        assert RecLayer.is_prev_step_layer(prev_out_choice.owner)
+        assert_equal(loop_net.layers["end"].get_search_choices(), cur_out_choice)
+        assert_equal(loop_net.layers["target_embed"].get_search_choices(), cur_out_choice)
+        assert_equal(loop_net.layers["prev:target_embed"].get_search_choices(), prev_out_choice)
+        assert_equal(loop_net.layers["accum_att_weights"].get_search_choices(), prev_out_choice)
+        assert_equal(
+            loop_net.layers["prev:accum_att_weights"].get_search_choices(), prev_out_choice
+        )  # will be transformed
+        assert_equal(loop_net.layers["weight_feedback"].get_search_choices(), prev_out_choice)
+        loop_net.debug_search_choices(loop_net.layers["s"])
+        assert_equal(loop_net.layers["s"].get_search_choices(), cur_out_choice)
+        assert_equal(loop_net.layers["prev:s"].get_search_choices(), prev_out_choice)
+        assert_equal(loop_net.layers["prev_s_state"].get_search_choices(), prev_out_choice)
+        assert_equal(loop_net.layers["energy_in"].get_search_choices(), prev_out_choice)
+        assert_equal(loop_net.layers["att_weights"].get_search_choices(), prev_out_choice)
+        assert_equal(loop_net.layers["att"].get_search_choices(), prev_out_choice)
+        assert_equal(loop_net.layers["output_prob"].get_search_choices(), prev_out_choice)
+
+        out = search_net.get_layer("decision").output
+        search_net.initialize_params(session)
+        session.run((out.placeholder, out.get_sequence_lengths()), feed_dict=make_feed_dict(extern_data))
+
+
+def test_rec_layer_search_cheating():
+    """
+    /u/zeineldeen/debugging/align/log.txt:
+
+    layer /'output': [T|'time:var:extern_data:chunk_bpe_labels'[B&Beam{'output/output'}(12)],B&Beam{'output/output'}(12)] int32 sparse_dim=Dim{F'chunk_bpe_labels:sparse-dim'(1057)}
+    ...
+    layer /output(rec-subnet)/'output_prob': [B&Beam{'output/prev:output'}(12),F|F'bpe_labels:sparse-dim'(1057)] float32
+    layer /output(rec-subnet)/'output_prob_filter_eoc': [B&Beam{'output/prev:output'}(12),F|F'bpe_labels:sparse-dim'(1057)] float32
+    layer /output(rec-subnet)/'data:chunk_bpe_labels': [B] int32 sparse_dim=Dim{F'chunk_bpe_labels:sparse-dim'(1057)}
+    layer /output(rec-subnet)/'output': [B&Beam{'output/output'}(12)] int32 sparse_dim=Dim{F'chunk_bpe_labels:sparse-dim'(1057)}
+    <ChoiceLayer output/'output' out_type=Tensor{[B&Beam{'output/output'}(12)], dtype='int32', sparse_dim=Dim{F'chunk_bpe_labels:sparse-dim'(1057)}, ctx=loop('time:var:extern_data:chunk_bpe_labels'[B])}>:
+        cheating 'exclusive', i.e. we add the ground truth to the beam
+
+    TensorFlow exception: Graph execution error:
+
+    Detected at node 'output/rec/output/where_bc/SelectV2' defined at (most recent call last):
+    ...
+        File "/u/zeineldeen/debugging/align/returnn/returnn/tf/network.py", line 1299, in _create_layer
+          layer = layer_class(**layer_desc)
+        File "/u/zeineldeen/debugging/align/returnn/returnn/tf/layers/rec.py", line 6258, in __init__
+          src_beams, labels, scores = beam_search(
+        File "/u/zeineldeen/debugging/align/returnn/returnn/tf/util/basic.py", line 6328, in beam_search
+          scores = where_bc(mask, float("-inf"), scores)
+        File "/u/zeineldeen/debugging/align/returnn/returnn/tf/util/basic.py", line 3922, in where_bc
+          return tf_compat.v2.where(condition=condition, x=x, y=y)
+    Node: 'output/rec/output/where_bc/SelectV2'
+    Detected at node 'output/rec/output/where_bc/SelectV2' defined at (most recent call last):
+    Node: 'output/rec/output/where_bc/SelectV2'
+    2 root error(s) found.
+      (0) INVALID_ARGUMENT: required broadcastable shapes
+             [[{{node output/rec/output/where_bc/SelectV2}}]]
+             [[output/rec/prev__new_chunk_idx_select_src_beams_0_output_1_output/Greater/_687]]
+      (1) INVALID_ARGUMENT: required broadcastable shapes
+             [[{{node output/rec/output/where_bc/SelectV2}}]]
+    0 successful operations.
+    0 derived errors ignored.
+
+    Exception InvalidArgumentError() in step 0. (pid 1712893)
+    Failing op: <tf.Operation 'output/rec/output/where_bc/SelectV2' type=SelectV2>
+
+    FetchHelper(0): <tf.Tensor 'output/rec/output/where_bc/expand_multiple_dims/expand_axis_-1_2_1:0' shape=(1, 1, 1) dtype=float32> = shape (1, 1, 1), dtype float32, min/max -inf/-inf, mean/stddev -inf/nan
+    FetchHelper(0): <tf.Tensor 'output/rec/output/add_3:0' shape=<unknown> dtype=float32> = shape (3, 1, 1057), dtype float32, min/max -46.0517/-19.119946, mean/stddev -46.0327/0.6836292
+    FetchHelper(0): <tf.Tensor 'output/rec/output/LogicalAnd_1_1:0' shape=(?, ?, 1057) dtype=bool> = shape (36, 1, 1057), dtype bool, min/max False/True
+
+    Op inputs:
+    <tf.Tensor 'output/rec/output/LogicalAnd_1:0' shape=(?, ?, 1057) dtype=bool>: shape (36, 1, 1057), dtype bool, min/max False/True
+    <tf.Tensor 'output/rec/output/where_bc/expand_multiple_dims/expand_axis_-1_2:0' shape=(1, 1, 1) dtype=float32>: shape (1, 1, 1), dtype float32, min/max -inf/-inf, mean/stddev -inf/nan
+    <tf.Tensor 'output/rec/output/add:0' shape=(?, ?, 1057) dtype=float32>: shape (3, 1, 1057), dtype float32, min/max -46.0517/-19.119946, mean/stddev -46.0327/0.6836292
+
+    Step meta information:
+    {'seq_idx': [0, 1, 2],
+     'seq_tag': ['TED-LIUM-realease2/WadeDavis_2003/9',
+                 'TED-LIUM-realease2/WadeDavis_2003/38',
+                 'TED-LIUM-realease2/WadeDavis_2003/35']}
+
+    Crash is in beam_search function, in this line:
+        scores = where_bc(mask, float("-inf"), scores)
+    Shapes:
+    [cheating_src_beam_idx_bc:][1 1]
+    [cheating_gold_targets_initial:][36]
+    [cheating_gold_targets:][36]
+    [scores:][3 1 1057]
+    [mask:][36 1 1057]
+
+    Adding this hack in beam_search fixes the issue:
+        cheating_gold_targets = tf.reshape(cheating_gold_targets, [batch_dim, -1])[:, 0]
+
+    The bug is only triggered with search_flag=False
+    (but search is anyway activated because search=True in the layer).
+    This somehow triggeres a different path to get the targets
+    (why?).
+    So actually maybe two things to fix:
+    - Why this different path to get the targets? We should avoid this if possible.
+      It is in _target_layers in the case of the bug.
+    - The actual bug: In this different path to get the targets, they are expanded to the beam,
+      although we don't want that.
+      It uses this in _get_target_value, _static_get_target_value:
+            return SelectSearchSourcesLayer.select_if_needed(
+                _target_layers[target], search_choices=search_choices
+            ).output
+      The target layer is already transformed before via
+       _create_layer_layer_desc, translate_to_common_search_beam.
+      Then it just leaves it as it is.
+
+    To solve it:
+
+    One option:
+      _get_target_value search_choices seems only be set by _get_cheating_targets_and_src_beam_idxs,
+      nowhere else.
+      Remove this logic.
+      Then it will always contain the beam.
+      Then we can just remove it and it should be good.
+      It's a bit inefficient (first expanded, then removed) but the logic is much simpler,
+      and this feature is anyway only rarely used.
+
+    Another option, with only minimal code changes:
+        In SelectSearchSourcesLayer.select_if_needed, handle search_choices is None properly.
+        If possible, resolve an incoming SelectSearchSourcesLayer (this is our case),
+        or otherwise throw an error. (We should not get this case otherwise I think...)
+
+    Unfortunately I think we cannot solve the other issue (different path to get the targets) easily.
+    This is in LayerBase.transform_config_dict, the logic to get the targets,
+    and it depends both on search_flag and also eval_flag.
+    """
+    from returnn.tf.layers.rec import _SubnetworkRecCell
+    from test_TFNetworkLayer import make_feed_dict
+
+    n_src_dim = 5
+    n_tgt_dim = 7
+    beam_size = 12
+    config = Config()
+
+    def get_net_dict():
+        return {
+            "source_embed": {
+                "class": "linear",
+                "activation": None,
+                "with_bias": False,
+                "n_out": 6,
+                "from": "data:data",
+            },
+            "encoder": {"class": "copy", "from": "source_embed"},
+            "enc_ctx": {"class": "linear", "activation": None, "with_bias": True, "from": ["encoder"], "n_out": 10},
+            "fertility": {
+                "class": "linear",
+                "activation": "sigmoid",
+                "with_bias": False,
+                "from": ["encoder"],
+                "n_out": 1,
+            },
+            "output": {
+                "class": "rec",
+                "from": [],
+                "include_eos": True,
+                "max_seq_len": "max_len_from('base:encoder') * 20",
+                "target": "classes",
+                "unit": {
+                    "output": {
+                        "class": "choice",
+                        "target": "classes",
+                        "beam_size": beam_size,
+                        "from": ["output_prob"],
+                        "initial_output": 0,
+                        "search": True,
+                        "cheating": "exclusive",
+                    },
+                    "end": {"class": "compare", "from": ["output"], "value": 0},
+                    "target_embed": {
+                        "class": "linear",
+                        "activation": None,
+                        "with_bias": False,
+                        "from": ["output"],
+                        "n_out": 6,
+                        "initial_output": "apply(0)",
+                    },
+                    "weight_feedback": {
+                        "class": "linear",
+                        "activation": None,
+                        "with_bias": False,
+                        "from": ["prev:accum_att_weights"],
+                        "n_out": 10,
+                    },
+                    "prev_s_transformed": {
+                        "class": "linear",
+                        "activation": None,
+                        "with_bias": False,
+                        "from": "prev:s",
+                        "n_out": 10,
+                    },
+                    "energy_in": {
+                        "class": "combine",
+                        "kind": "add",
+                        "from": ["base:enc_ctx", "weight_feedback", "prev_s_transformed"],
+                        "n_out": 10,
+                    },
+                    "energy_tanh": {"class": "activation", "activation": "tanh", "from": ["energy_in"]},
+                    "energy": {
+                        "class": "linear",
+                        "activation": None,
+                        "with_bias": False,
+                        "from": ["energy_tanh"],
+                        "n_out": 1,
+                    },
+                    "att_weights": {"class": "softmax_over_spatial", "from": ["energy"]},  # (B, enc-T, 1)
+                    "accum_att_weights": {
+                        "class": "eval",
+                        "from": ["prev:accum_att_weights", "att_weights", "base:fertility"],
+                        "eval": "source(0) + 0.5 * source(1) * source(2)",
+                        "out_type": {"dim": 1, "shape": (None, 1)},
+                    },
+                    "att": {
+                        "class": "generic_attention",
+                        "weights": "att_weights",
+                        "base": "base:encoder",
+                        "auto_squeeze": True,
+                    },
+                    "s": {
+                        "class": "rec",
+                        "unit": "lstm",
+                        "from": ["target_embed", "att"],
+                        "n_out": 10,
+                    },
+                    "readout_in": {
+                        "class": "linear",
+                        "from": ["prev:s", "prev:target_embed", "att"],
+                        "activation": None,
+                        "n_out": 10,
+                    },
+                    "readout": {"class": "reduce_out", "mode": "max", "num_pieces": 2, "from": ["readout_in"]},
+                    "output_prob": {
+                        "class": "softmax",
+                        "from": ["readout"],
+                        "target": "layer:base:data:orig_classes",
+                        "loss": "ce",
+                    },
+                },
+            },
+            "decision": {"class": "decide", "from": ["output"], "loss": "edit_distance", "target": "classes"},
         }
-    )
-    search_net = TFNetwork(extern_data=extern_data, search_flag=True, train_flag=False, eval_flag=True, config=config)
-    search_net.construct_from_dict(get_net_dict())
-    search_out_layer = search_net.layers["output"]
-    assert isinstance(search_out_layer, RecLayer)
-    assert isinstance(search_out_layer.cell, _SubnetworkRecCell)
-    assert not search_out_layer.cell.input_layers_moved_out
-    assert not search_out_layer.cell.output_layers_moved_out
-    print("Layers in the loop:")
-    loop_net = search_out_layer.cell.net
-    for name, layer in sorted(loop_net.layers.items()):
-        print("  %r: %s" % (name, layer))
-        print("    search choices:", layer.get_search_choices())
-        print("    sources:")
-        for src in layer.sources:
-            print("      %s" % src)
-        print("    other deps:")
-        for dep in layer.get_dep_layers():
-            if dep in layer.sources:
-                continue
-            print("      %s" % dep)
-    loop_out_layer = loop_net.layers["output"]
-    assert isinstance(loop_out_layer, ChoiceLayer)
-    assert isinstance(loop_out_layer.search_choices, SearchChoices)
-    all_src_choices = loop_out_layer.search_choices.get_src_choices_seq()
-    assert len(all_src_choices) == 2
-    cur_out_choice, prev_out_choice = all_src_choices
-    assert isinstance(cur_out_choice, SearchChoices)
-    assert isinstance(prev_out_choice, SearchChoices)
-    assert cur_out_choice == loop_out_layer.search_choices
-    prev_loop_out_layer = loop_net.layers["prev:output"]
-    assert prev_out_choice == prev_loop_out_layer.search_choices
-    assert RecLayer.is_prev_step_layer(prev_out_choice.owner)
-    assert_equal(loop_net.layers["end"].get_search_choices(), cur_out_choice)
-    assert_equal(loop_net.layers["target_embed"].get_search_choices(), cur_out_choice)
-    assert_equal(loop_net.layers["prev:target_embed"].get_search_choices(), prev_out_choice)
-    assert_equal(loop_net.layers["accum_att_weights"].get_search_choices(), prev_out_choice)
-    assert_equal(loop_net.layers["prev:accum_att_weights"].get_search_choices(), prev_out_choice)  # will be transformed
-    assert_equal(loop_net.layers["weight_feedback"].get_search_choices(), prev_out_choice)
-    loop_net.debug_search_choices(loop_net.layers["s"])
-    assert_equal(loop_net.layers["s"].get_search_choices(), cur_out_choice)
-    assert_equal(loop_net.layers["prev:s"].get_search_choices(), prev_out_choice)
-    assert_equal(loop_net.layers["prev_s_state"].get_search_choices(), prev_out_choice)
-    assert_equal(loop_net.layers["energy_in"].get_search_choices(), prev_out_choice)
-    assert_equal(loop_net.layers["att_weights"].get_search_choices(), prev_out_choice)
-    assert_equal(loop_net.layers["att"].get_search_choices(), prev_out_choice)
-    assert_equal(loop_net.layers["output_prob"].get_search_choices(), prev_out_choice)
+
+    print("Constructing search network.")
+    with make_scope() as session:
+        extern_data = ExternData(
+            {
+                "data": {"dim": n_src_dim, "sparse": True},
+                "classes": {"dim": n_tgt_dim, "sparse": True, "available_for_inference": False},
+                "orig_classes": {"dim": n_tgt_dim, "sparse": True, "available_for_inference": False},
+            }
+        )
+        search_net = TFNetwork(extern_data=extern_data, train_flag=False, eval_flag=True, config=config)
+        search_net.construct_from_dict(get_net_dict())
+        search_out_layer = search_net.layers["output"]
+        assert isinstance(search_out_layer, RecLayer)
+        assert isinstance(search_out_layer.cell, _SubnetworkRecCell)
+        assert not search_out_layer.cell.input_layers_moved_out
+        assert not search_out_layer.cell.output_layers_moved_out
+        print("Layers in the loop:")
+        loop_net = search_out_layer.cell.net
+        for name in ["output"]:
+            layer = loop_net.layers[name]
+            print("  %r: %s" % (name, layer))
+            print("    sources:")
+            for src in layer.sources:
+                print("      %s" % src)
+            print("    other deps:")
+            for dep in layer.get_dep_layers():
+                if dep in layer.sources:
+                    continue
+                print("      %s" % dep)
+            print("    kwargs:")
+            for k, v in (layer.kwargs or {}).items():
+                print("      %s: %s" % (k, v))
+
+        out = search_net.get_layer("decision").output
+        search_net.initialize_params(session)
+        session.run((out.placeholder, out.get_sequence_lengths()), feed_dict=make_feed_dict(extern_data))
 
 
 def test_RnnCellLayer_with_time():

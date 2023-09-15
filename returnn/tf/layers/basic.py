@@ -644,21 +644,29 @@ class SelectSearchSourcesLayer(InternalLayer):
         :rtype: LayerBase
         """
         assert isinstance(layer, LayerBase)
-        if not search_choices:
-            return layer
         if layer.network.is_extra_internal_template_construction():
             assert layer.output.placeholder is None  # we expect a template
             return layer
+        if not search_choices and isinstance(layer, SelectSearchSourcesLayer):
+            layer = layer.sources[0]
         layer_search_choices = layer.get_search_choices()
         if layer_search_choices and layer_search_choices.keep_raw:
             return layer
         if layer_search_choices == search_choices:
-            assert layer.output.beam == search_choices.get_beam_info(), "%r != %r. %s" % (
-                layer.output.beam,
-                search_choices.get_beam_info(),
-                layer.network.debug_search_choices(layer) or "debug search dumped",
-            )
+            if search_choices:
+                assert layer.output.beam == search_choices.get_beam_info(), "%r != %r. %s" % (
+                    layer.output.beam,
+                    search_choices.get_beam_info(),
+                    layer.network.debug_search_choices(layer) or "debug search dumped",
+                )
+            else:
+                assert not layer.output.beam, "%r should be None. %s" % (
+                    layer.output.beam,
+                    layer.network.debug_search_choices(layer) or "debug search dumped",
+                )
             return layer
+        if not search_choices:
+            raise Exception(f"Layer {layer} required without search choices.")
         if layer.output.batch_dim_axis is None:  # e.g. VariableLayer, ConstantLayer, or so
             return layer
         layer = SelectSearchSourcesLayer(sources=[layer], search_choices_layer=search_choices.owner)
