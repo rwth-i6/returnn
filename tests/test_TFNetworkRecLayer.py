@@ -4888,6 +4888,72 @@ def test_rec_layer_search_select_src():
 
 
 def test_rec_layer_search_cheating():
+    """
+    /u/zeineldeen/debugging/align/log.txt:
+
+    layer /'output': [T|'time:var:extern_data:chunk_bpe_labels'[B&Beam{'output/output'}(12)],B&Beam{'output/output'}(12)] int32 sparse_dim=Dim{F'chunk_bpe_labels:sparse-dim'(1057)}
+    ...
+    layer /output(rec-subnet)/'output_prob': [B&Beam{'output/prev:output'}(12),F|F'bpe_labels:sparse-dim'(1057)] float32
+    layer /output(rec-subnet)/'output_prob_filter_eoc': [B&Beam{'output/prev:output'}(12),F|F'bpe_labels:sparse-dim'(1057)] float32
+    layer /output(rec-subnet)/'data:chunk_bpe_labels': [B] int32 sparse_dim=Dim{F'chunk_bpe_labels:sparse-dim'(1057)}
+    layer /output(rec-subnet)/'output': [B&Beam{'output/output'}(12)] int32 sparse_dim=Dim{F'chunk_bpe_labels:sparse-dim'(1057)}
+    <ChoiceLayer output/'output' out_type=Tensor{[B&Beam{'output/output'}(12)], dtype='int32', sparse_dim=Dim{F'chunk_bpe_labels:sparse-dim'(1057)}, ctx=loop('time:var:extern_data:chunk_bpe_labels'[B])}>:
+        cheating 'exclusive', i.e. we add the ground truth to the beam
+
+    TensorFlow exception: Graph execution error:
+
+    Detected at node 'output/rec/output/where_bc/SelectV2' defined at (most recent call last):
+    ...
+        File "/u/zeineldeen/debugging/align/returnn/returnn/tf/network.py", line 1299, in _create_layer
+          layer = layer_class(**layer_desc)
+        File "/u/zeineldeen/debugging/align/returnn/returnn/tf/layers/rec.py", line 6258, in __init__
+          src_beams, labels, scores = beam_search(
+        File "/u/zeineldeen/debugging/align/returnn/returnn/tf/util/basic.py", line 6328, in beam_search
+          scores = where_bc(mask, float("-inf"), scores)
+        File "/u/zeineldeen/debugging/align/returnn/returnn/tf/util/basic.py", line 3922, in where_bc
+          return tf_compat.v2.where(condition=condition, x=x, y=y)
+    Node: 'output/rec/output/where_bc/SelectV2'
+    Detected at node 'output/rec/output/where_bc/SelectV2' defined at (most recent call last):
+    Node: 'output/rec/output/where_bc/SelectV2'
+    2 root error(s) found.
+      (0) INVALID_ARGUMENT: required broadcastable shapes
+             [[{{node output/rec/output/where_bc/SelectV2}}]]
+             [[output/rec/prev__new_chunk_idx_select_src_beams_0_output_1_output/Greater/_687]]
+      (1) INVALID_ARGUMENT: required broadcastable shapes
+             [[{{node output/rec/output/where_bc/SelectV2}}]]
+    0 successful operations.
+    0 derived errors ignored.
+
+    Exception InvalidArgumentError() in step 0. (pid 1712893)
+    Failing op: <tf.Operation 'output/rec/output/where_bc/SelectV2' type=SelectV2>
+
+    FetchHelper(0): <tf.Tensor 'output/rec/output/where_bc/expand_multiple_dims/expand_axis_-1_2_1:0' shape=(1, 1, 1) dtype=float32> = shape (1, 1, 1), dtype float32, min/max -inf/-inf, mean/stddev -inf/nan
+    FetchHelper(0): <tf.Tensor 'output/rec/output/add_3:0' shape=<unknown> dtype=float32> = shape (3, 1, 1057), dtype float32, min/max -46.0517/-19.119946, mean/stddev -46.0327/0.6836292
+    FetchHelper(0): <tf.Tensor 'output/rec/output/LogicalAnd_1_1:0' shape=(?, ?, 1057) dtype=bool> = shape (36, 1, 1057), dtype bool, min/max False/True
+
+    Op inputs:
+    <tf.Tensor 'output/rec/output/LogicalAnd_1:0' shape=(?, ?, 1057) dtype=bool>: shape (36, 1, 1057), dtype bool, min/max False/True
+    <tf.Tensor 'output/rec/output/where_bc/expand_multiple_dims/expand_axis_-1_2:0' shape=(1, 1, 1) dtype=float32>: shape (1, 1, 1), dtype float32, min/max -inf/-inf, mean/stddev -inf/nan
+    <tf.Tensor 'output/rec/output/add:0' shape=(?, ?, 1057) dtype=float32>: shape (3, 1, 1057), dtype float32, min/max -46.0517/-19.119946, mean/stddev -46.0327/0.6836292
+
+    Step meta information:
+    {'seq_idx': [0, 1, 2],
+     'seq_tag': ['TED-LIUM-realease2/WadeDavis_2003/9',
+                 'TED-LIUM-realease2/WadeDavis_2003/38',
+                 'TED-LIUM-realease2/WadeDavis_2003/35']}
+
+    Crash is in beam_search function, in this line:
+        scores = where_bc(mask, float("-inf"), scores)
+    Shapes:
+    [cheating_src_beam_idx_bc:][1 1]
+    [cheating_gold_targets_initial:][36]
+    [cheating_gold_targets:][36]
+    [scores:][3 1 1057]
+    [mask:][36 1 1057]
+
+    Adding this hack in beam_search fixes the issue:
+        cheating_gold_targets = tf.reshape(cheating_gold_targets, [batch_dim, -1])[:, 0]
+    """
     from returnn.tf.layers.rec import _SubnetworkRecCell
     from test_TFNetworkLayer import make_feed_dict
 
@@ -4917,6 +4983,9 @@ def test_rec_layer_search_cheating():
             "output": {
                 "class": "rec",
                 "from": [],
+                "include_eos": True,
+                "max_seq_len": "max_len_from('base:encoder') * 20",
+                "target": "classes",
                 "unit": {
                     "output": {
                         "class": "choice",
@@ -4924,6 +4993,7 @@ def test_rec_layer_search_cheating():
                         "beam_size": beam_size,
                         "from": ["output_prob"],
                         "initial_output": 0,
+                        "search": True,
                         "cheating": "exclusive",
                     },
                     "end": {"class": "compare", "from": ["output"], "value": 0},
@@ -4989,10 +5059,13 @@ def test_rec_layer_search_cheating():
                         "n_out": 10,
                     },
                     "readout": {"class": "reduce_out", "mode": "max", "num_pieces": 2, "from": ["readout_in"]},
-                    "output_prob": {"class": "softmax", "from": ["readout"], "target": "classes", "loss": "ce"},
+                    "output_prob": {
+                        "class": "softmax",
+                        "from": ["readout"],
+                        "target": "layer:base:data:orig_classes",
+                        "loss": "ce",
+                    },
                 },
-                "target": "classes",
-                "max_seq_len": 20,
             },
             "decision": {"class": "decide", "from": ["output"], "loss": "edit_distance", "target": "classes"},
         }
@@ -5003,11 +5076,10 @@ def test_rec_layer_search_cheating():
             {
                 "data": {"dim": n_src_dim, "sparse": True},
                 "classes": {"dim": n_tgt_dim, "sparse": True, "available_for_inference": False},
+                "orig_classes": {"dim": n_tgt_dim, "sparse": True, "available_for_inference": False},
             }
         )
-        search_net = TFNetwork(
-            extern_data=extern_data, search_flag=True, train_flag=False, eval_flag=True, config=config
-        )
+        search_net = TFNetwork(extern_data=extern_data, train_flag=False, eval_flag=True, config=config)
         search_net.construct_from_dict(get_net_dict())
         search_out_layer = search_net.layers["output"]
         assert isinstance(search_out_layer, RecLayer)
