@@ -332,8 +332,11 @@ class Engine(EngineBase):
             print(f"Total train loss:", _format_score(dict(accumulated_losses_dict)), file=log.v3)
 
             if self.epoch % self._save_model_epoch_interval == 0 or self.epoch == self._final_epoch:
-                self._save_model()
-                self._save_optimizer()
+                if self.model_filename:
+                    self._save_model()
+                    self._save_optimizer()
+                else:
+                    print("Not saving model, `model` not specified.", file=log.v3)
 
             self.eval_model()
         if self.config.bool_or_other("cleanup_old_models", None):
