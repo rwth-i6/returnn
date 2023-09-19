@@ -1246,12 +1246,6 @@ class _DimMixin:
                 return False
         if self_kind != other_kind:
             return False
-        if self_kind == other_kind == DimTypes.Batch:
-            # Note: This might be incorrect in some cases,
-            # e.g. for beam search when we have the beam hidden in the batch dim,
-            # or when we used MergeDimsLayer on the batch axis, or so.
-            # We might need to extend the logic here later.
-            return True
         if BehaviorVersion.get() >= 16:
             # Either self or other is some dim tag explicitly created by the user,
             # and they are not the same, so we never treat them as equal.
@@ -1262,6 +1256,12 @@ class _DimMixin:
                     pass  # exception, allow broadcast logic
                 else:
                     return False
+        if self_kind == other_kind == DimTypes.Batch:
+            # Note: This might be incorrect in some cases,
+            # e.g. for beam search when we have the beam hidden in the batch dim,
+            # or when we used MergeDimsLayer on the batch axis, or so.
+            # We might need to extend the logic here later.
+            return True
         if self_kind == other_kind == DimTypes.Feature:
             if allow_same_feature_dim:
                 return True
