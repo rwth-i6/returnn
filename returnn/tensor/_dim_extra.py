@@ -1336,19 +1336,23 @@ class _DimMixin:
         """
         # This must match the behavior in __eq__, which is is_equal with default options.
         # I.e. different hash implies not equal (but same hash not necessarily equal).
-        if self.special:
-            return hash(id(self))
-        if self.is_batch_dim():
-            return hash(())
-        with util.guard_infinite_recursion(_d.Dim.__hash__, self):
-            base = self.get_same_base()
-            if base is not self:
-                return hash(base)
-            if self.derived_from_op:
-                return hash(self.derived_from_op)
-            if self.auto_generated:
-                return hash((base.kind, base.dimension, base.description))
-            return hash(id(base))
+        # Inline self = self.get_same_base().
+        self_extra = self._extra
+        # noinspection PyProtectedMember
+        while self_extra and self_extra.same_as:
+            # noinspection PyMethodFirstArgAssignment
+            self = self_extra.same_as
+            self_extra = self._extra
+        if self_extra:
+            if self_extra.special:
+                return hash(id(self))
+            if self_extra.kind == DimTypes.Batch:
+                return hash(())
+            if self_extra.derived_from_op:
+                return hash(self_extra.derived_from_op)
+            if self_extra.auto_generated:
+                return hash((self_extra.kind, self.size, self.name))
+        return hash(id(self))
 
     def __lt__(self: Dim, other: Dim):
         """
@@ -2068,7 +2072,8 @@ class Op:
         return self.kind, tuple(self.inputs), frozenset(self.attribs.items()) if self.attribs else None
 
     def __hash__(self):
-        return hash(self._value())
+        with util.guard_infinite_recursion(Op.__hash__, self):
+            return hash(self._value())
 
     def __eq__(self, other):
         if isinstance(other, Op):
