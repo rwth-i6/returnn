@@ -303,6 +303,10 @@ class BehaviorVersion:
             cls._behavior_version = None
             cls._min_behavior_version = 0
         # Also reset things we did in _handle_new_min_version.
+        # noinspection PyProtectedMember
+        from returnn.tensor._dim_extra import _DimMixin
+
+        _DimMixin._SimpleEquality = False
 
     @classmethod
     def _handle_new_min_version(cls):
@@ -311,7 +315,11 @@ class BehaviorVersion:
         The version can only increase, unless :func:`_reset` is called.
         """
         if cls.get() >= 16:
-            pass  # e.g. enable simple Dim equality check here...
+            # e.g. enable simple Dim equality check here...
+            # noinspection PyProtectedMember
+            from returnn.tensor._dim_extra import _DimMixin
+
+            _DimMixin._SimpleEquality = True
 
 
 def get_model_filename_postfix():

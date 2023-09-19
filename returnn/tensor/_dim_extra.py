@@ -1170,6 +1170,9 @@ class _DimMixin:
         if tf and y.placeholder is not None:
             self.set_tag_on_size_tensor(y.placeholder)
 
+    # Set by more recent behavior versions.
+    _SimpleEquality = False
+
     def is_equal(
         self,
         other,
@@ -1204,8 +1207,6 @@ class _DimMixin:
         :param bool derived_matches:
         :rtype: bool
         """
-        from returnn.util import BehaviorVersion
-
         if self is other:  # first some fast path check
             return True
         if self.special or other.special:
@@ -1250,7 +1251,7 @@ class _DimMixin:
             # or when we used MergeDimsLayer on the batch axis, or so.
             # We might need to extend the logic here later.
             return True
-        if BehaviorVersion.get() >= 16:
+        if self._SimpleEquality:
             # Either self or other is some dim tag explicitly created by the user,
             # and they are not the same, so we never treat them as equal.
             if not self.auto_generated or not other.auto_generated:
@@ -1281,25 +1282,36 @@ class _DimMixin:
             return True
         return False
 
-    def __eq__(self, other):
+    def __eq__(self: Dim, other: Dim) -> bool:
         """
-        :param Dim other:
-        :rtype: bool
+        :param other:
         :return: :func:`is_equal` with default options
         """
         if self is other:  # fast path
             return True
+        if self._SimpleEquality and not self._extra:  # fast path
+            return False
         if not isinstance(other, _d.Dim):
             return False
+        if self._SimpleEquality:  # fast path
+            # noinspection PyProtectedMember
+            if not other._extra:
+                return False
+            if self.is_batch_dim() and other.is_batch_dim():
+                return True
+            self_base = self.get_same_base() if self._extra is not None else self
+            # noinspection PyProtectedMember
+            other_base = other.get_same_base() if other._extra is not None else other
+            if self_base.derived_from_op and other_base.derived_from_op:
+                if self_base.derived_from_op == other_base.derived_from_op:
+                    return True
+            return self_base is other_base
         return self.is_equal(other)
 
-    def __ne__(self: Dim, other: Dim):
+    def __ne__(self: Dim, other: Dim) -> bool:
         """
-        :param Dim other:
-        :rtype: bool
+        :param other:
         """
-        if self is other:  # fast path
-            return False
         return not (self == other)
 
     def __hash__(self):
