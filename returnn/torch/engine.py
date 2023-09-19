@@ -927,6 +927,8 @@ def _get_gpu_device() -> Optional[str]:
 
 
 def _get_device_from_config(config: Config) -> str:
+    if os.environ.get("PT_DEVICE"):
+        return os.environ["PT_DEVICE"]
     device = config.value("device", None)
     if not device:
         device = _get_gpu_device()
