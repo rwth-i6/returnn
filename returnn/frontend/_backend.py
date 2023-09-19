@@ -163,12 +163,7 @@ class Backend(Generic[T]):
         This is only supported in graph-based frameworks,
         and just performs a check in eager frameworks.
         """
-        # Default implementation for eager-based frameworks.
-        backend = get_backend_by_raw_tensor_type(type(raw_tensor))
-        existing_shape = backend.get_known_shape_raw(raw_tensor)
-        assert all(dim is not None for dim in existing_shape)
-        assert len(shape) == len(existing_shape)
-        assert all(dim is None or dim == existing_shape[i] for i, dim in enumerate(shape))
+        # Nothing for eager-based frameworks.
 
     @staticmethod
     def get_new_dim_raw(raw_tensor: T, axis: int, *, name: str) -> Dim:

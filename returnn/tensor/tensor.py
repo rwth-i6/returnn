@@ -165,8 +165,28 @@ class Tensor(_TensorMixin, _TensorOpOverloadsMixin, Generic[RawTensorType]):
         """
         :param value:
         """
+        if value is not None:
+            # Small part from sanity _heck.
+            # noinspection PyProtectedMember,PyShadowingNames
+            import returnn.frontend._backend as _backend_api
+
+            backend = _backend_api.get_backend_by_raw_tensor_type(type(value))
+            raw_shape = backend.get_known_shape_raw(value)
+            assert len(raw_shape) == len(self._dims), f"Mismatching shape ndim: Raw tensor {raw_shape} vs Tensor {self}"
+            for i, dim in enumerate(self._dims):
+                if dim.dimension is None:
+                    continue  # we allow anything in the placeholder
+                if raw_shape[i] != dim.dimension:
+                    raise Exception(
+                        f"Mismatching shape: Raw tensor {raw_shape} vs Tensor {self};\n"
+                        + backend.format_graph_output(value, max_depth=3)
+                    )
+            if not backend.executing_eagerly():
+                backend.set_known_shape_raw(value, self.batch_shape)
+            assert backend.get_dtype_name_raw(value) == self.dtype, (
+                f"{self} dtype {self.dtype} does not match " f"raw tensor dtype {backend.get_dtype_name_raw(value)}"
+            )
         self._raw_tensor = value
-        self.sanity_check(assume_complete=False)
 
     @property
     def feature_dim(self) -> Optional[Dim]:
