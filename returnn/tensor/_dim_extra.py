@@ -1289,6 +1289,8 @@ class _DimMixin:
         :rtype: bool
         :return: :func:`is_equal` with default options
         """
+        if self is other:  # fast path
+            return True
         if not isinstance(other, _d.Dim):
             return False
         return self.is_equal(other)
@@ -1298,6 +1300,8 @@ class _DimMixin:
         :param Dim other:
         :rtype: bool
         """
+        if self is other:  # fast path
+            return False
         return not (self == other)
 
     def __hash__(self):

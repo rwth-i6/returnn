@@ -2257,7 +2257,7 @@ class _TensorMixin(_TensorMixinBase):
         :return: list of axes, counted with batch-dim
         :rtype: list[int]
         """
-        if axes is None or axes == "":
+        if axes is None or (isinstance(axes, str) and axes == ""):
             return []
         if isinstance(axes, Dim):
             # Once we have not guaranteed unique dim tags, multiple axes could match.
@@ -2400,6 +2400,25 @@ class _TensorMixin(_TensorMixinBase):
         :return: axis, counted with batch-dim
         :rtype: int
         """
+        if isinstance(axis, Dim):  # fast path
+            res_idx: Optional[int] = None
+            res_tag: Optional[Dim] = None
+            for i, tag in enumerate(self._dims):
+                tag: Dim
+                if tag is axis or tag == axis:
+                    if res_tag is None or res_tag.match_priority < tag.match_priority:
+                        res_idx = i
+                        res_tag = tag
+                        continue
+                    if res_tag.match_priority > tag.match_priority:
+                        continue
+                    raise Exception(
+                        f"{self}: get_axis_from_description({axis}) not unique."
+                        f" use match_priority to resolve ambiguity"
+                    )
+            if res_idx is None:
+                raise Exception(f"{self}: get_axis_from_description({axis}) not found")
+            return res_idx
         axes = self.get_axes_from_description(axis, allow_int=allow_int)
         assert axes, "%s: %r axis not found" % (self, axis)
         assert len(axes) == 1, "%r: %r is not a unique axis but %r" % (self, axis, axes)
