@@ -4943,11 +4943,10 @@ class SplitDimsLayer(_ConcatInputLayer):
             assert len([d for d in resolved_dims if d.is_batch_dim()]) == 1
             from returnn.tf.util.data import BatchInfo
 
-            out_batch = data.batch
             remaining = set(resolved_dims)
             for beam_virtual_dim in reversed(data.batch.virtual_dims):
                 if isinstance(beam_virtual_dim, BatchInfo.FixedDim):
-                    if beam_virtual_dim.dim_tag in remaining:
+                    if beam_virtual_dim.dim_tag in remaining and not beam_virtual_dim.dim_tag.is_batch_dim():
                         out_batch = out_batch.copy_remove_dim(beam_virtual_dim)
                         remaining.remove(beam_virtual_dim.dim_tag)
             if remaining:
