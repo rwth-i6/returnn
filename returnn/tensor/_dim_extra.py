@@ -1170,6 +1170,9 @@ class _DimMixin:
         if tf and y.placeholder is not None:
             self.set_tag_on_size_tensor(y.placeholder)
 
+    # Set by more recent behavior versions.
+    _SimpleEquality = False
+
     def is_equal(
         self,
         other,
@@ -1204,8 +1207,6 @@ class _DimMixin:
         :param bool derived_matches:
         :rtype: bool
         """
-        from returnn.util import BehaviorVersion
-
         if self is other:  # first some fast path check
             return True
         if self.special or other.special:
@@ -1250,7 +1251,7 @@ class _DimMixin:
             # or when we used MergeDimsLayer on the batch axis, or so.
             # We might need to extend the logic here later.
             return True
-        if BehaviorVersion.get() >= 16:
+        if self._SimpleEquality:
             # Either self or other is some dim tag explicitly created by the user,
             # and they are not the same, so we never treat them as equal.
             if not self.auto_generated or not other.auto_generated:
@@ -1281,25 +1282,45 @@ class _DimMixin:
             return True
         return False
 
-    def __eq__(self, other):
+    def __eq__(self: Dim, other: Dim) -> bool:
         """
-        :param Dim other:
-        :rtype: bool
+        :param other:
         :return: :func:`is_equal` with default options
         """
         if self is other:  # fast path
             return True
         if not isinstance(other, _d.Dim):
             return False
+        if self._SimpleEquality:  # fast path
+            # See is_equal for the logic. This here should exactly replicate it.
+            # Inline self_base = self.get_same_base().
+            self_base = self
+            # noinspection PyProtectedMember
+            while self_base._extra and self_base._extra.same_as:
+                # noinspection PyProtectedMember
+                self_base = self_base._extra.same_as
+            # Inline other_base = other.get_same_base().
+            other_base = other
+            # noinspection PyProtectedMember
+            while other_base._extra and other_base._extra.same_as:
+                # noinspection PyProtectedMember
+                other_base = other_base._extra.same_as
+            if self_base is other_base:
+                return True
+            if self.is_batch_dim() and other.is_batch_dim():
+                return True
+            if self_base.derived_from_op and other_base.derived_from_op:
+                if self_base.derived_from_op == other_base.derived_from_op:
+                    return True
+            if self.auto_generated and other.auto_generated and self.description == other.description:
+                return True
+            return self_base is other_base
         return self.is_equal(other)
 
-    def __ne__(self: Dim, other: Dim):
+    def __ne__(self: Dim, other: Dim) -> bool:
         """
-        :param Dim other:
-        :rtype: bool
+        :param other:
         """
-        if self is other:  # fast path
-            return False
         return not (self == other)
 
     def __hash__(self):
