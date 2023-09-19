@@ -121,7 +121,7 @@ def get_model(**_kwargs):
         enc_conformer_layer_opts=dict(
             conv_norm_opts=dict(use_mask=True),
             self_att_opts=dict(
-                # Shawn et al 2018 style, old RETURNN way.
+                # Shawn et al. 2018 style, old RETURNN way.
                 with_bias=False,
                 with_linear_pos=False,
                 with_pos_bias=False,
@@ -139,6 +139,7 @@ def get_model(**_kwargs):
 class Model(rf.Module):
     """Model definition"""
 
+    # noinspection PyShadowingNames
     def __init__(
         self,
         in_dim: Dim,
@@ -310,6 +311,7 @@ class Model(rf.Module):
         return logits
 
 
+# noinspection PyShadowingNames
 def train_step(*, model: Model, extern_data: TensorDict, **_kwargs):
     """Function is run within RETURNN."""
     data = extern_data[extern_data_inputs_name]
@@ -360,6 +362,7 @@ def train_step(*, model: Model, extern_data: TensorDict, **_kwargs):
     frame_error.mark_as_loss(name="fer", as_error=True)
 
 
+# noinspection PyShadowingNames
 def forward_step(*, model: Model, extern_data: TensorDict, **_kwargs) -> Tuple[Tensor, Tensor, Dim, Dim]:
     """
     Function is run within RETURNN.
