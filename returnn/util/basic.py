@@ -154,7 +154,6 @@ class BackendEngine:
         from returnn.frontend import _backend
 
         if engine == cls.TensorFlow:
-            BehaviorVersion.set_min_behavior_version(16)
             _backend.select_backend_tf()
         elif engine == cls.TensorFlowNetDict:
             # Note that we assume that the user wants the RETURNN layers frontend (TF-based)
@@ -163,7 +162,6 @@ class BackendEngine:
             # we would need a new config option.
             _backend.select_backend_returnn_layers_tf()
         elif engine == cls.Torch:
-            BehaviorVersion.set_min_behavior_version(16)
             _backend.select_backend_torch()
         cls.selected_engine = engine
 
@@ -320,6 +318,7 @@ class BehaviorVersion:
     def _handle_new_min_version(cls):
         """
         Callback, called when we know about a new min or exact behavior version.
+        The version can only increase, unless :func:`_reset` is called.
         """
         if cls.get() >= 16:
             pass  # e.g. enable simple Dim equality check here...

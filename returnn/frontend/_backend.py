@@ -8,6 +8,7 @@ import contextlib
 import numpy
 import returnn.frontend as rf
 from returnn.tensor import Tensor, Dim
+from returnn.util.basic import BehaviorVersion
 from .types import RawTensorTypes
 
 T = TypeVar("T")  # tf.Tensor, torch.Tensor or so
@@ -1200,6 +1201,7 @@ def select_backend_tf():
 
     backend = get_backend_by_raw_tensor_type(tf.Tensor)  # side-effect: register it
     global_backend.__class__ = backend
+    BehaviorVersion.set_min_behavior_version(16)
 
 
 def select_backend_returnn_layers_tf():
@@ -1220,6 +1222,7 @@ def select_backend_torch():
 
     backend = get_backend_by_raw_tensor_type(torch.Tensor)  # side-effect: register it
     global_backend.__class__ = backend
+    BehaviorVersion.set_min_behavior_version(16)
 
 
 def get_backend_by_tensor(tensor: Tensor, *, fallback: Optional[T2] = None) -> Union[Type[Backend[T]], T2]:
