@@ -230,7 +230,7 @@ class BehaviorVersion:
         """
         if cls._behavior_version is not None:
             return cls._behavior_version
-        return cls.get_default()
+        return cls._min_behavior_version
 
     @classmethod
     def get_if_set(cls):
@@ -238,16 +238,6 @@ class BehaviorVersion:
         :rtype: int|None
         """
         return cls._behavior_version
-
-    @classmethod
-    def get_default(cls):
-        """
-        :return: default behavior_version. usually 0 but might be different in test environment
-        :rtype: int
-        """
-        if os.environ.get("RETURNN_TEST") and to_bool(os.environ.get("RETURNN_TEST")):
-            return cls._latest_behavior_version
-        return cls._min_behavior_version
 
     @classmethod
     def set_min_behavior_version(cls, min_behavior_version: int):

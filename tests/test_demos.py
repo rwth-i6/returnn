@@ -145,13 +145,6 @@ def test_demo_tf_task12ax():
 
 
 @unittest.skipIf(not tf, "no TF")
-def test_demo_tf_task12ax_no_test_env():
-    fer = run_config_get_fer("demos/demo-tf-native-lstm2.12ax.config", env_update={"RETURNN_TEST": ""})
-    # see test_demo_tf_task12ax above
-    assert_less(fer, 0.015)
-
-
-@unittest.skipIf(not tf, "no TF")
 def test_demo_tf_task12ax_eval():
     # The test is specifically for task="eval". We had the problem that the dataset init was broken for this case.
     # Task=eval requires a model though, so first train one epoch.
