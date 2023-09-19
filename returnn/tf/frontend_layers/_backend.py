@@ -158,11 +158,6 @@ class ReturnnLayersBackend(Backend[Layer]):
         return raw_tensor.tensor.batch_shape
 
     @staticmethod
-    def set_known_shape_raw(raw_tensor: Layer, shape: Tuple[Optional[int]]) -> None:
-        """set known shape"""
-        pass  # ignore
-
-    @staticmethod
     def fill_raw(shape: Union[Sequence[Union[int, Layer]], Layer], value: Union[Any, Layer]) -> Layer:
         """fill raw"""
         raise Exception("fill_raw not supported in layers backend because dim tags would be unknown")
