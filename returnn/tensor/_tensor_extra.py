@@ -878,6 +878,8 @@ class _TensorMixin(_TensorMixinBase):
             assert dim_tag.batch == batch
             if batch:
                 assert dim_tag.dimension == batch.static_dim or dim_tag.dimension is None
+        elif batch:
+            dim_tag = batch.batch_dim_tag
         else:
             dim_tag = Dim(
                 kind=Dim.Types.Batch, description="batch", dimension=batch.static_dim if batch else None, batch=batch
