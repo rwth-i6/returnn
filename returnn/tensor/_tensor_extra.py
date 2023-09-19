@@ -842,6 +842,11 @@ class _TensorMixin(_TensorMixinBase):
         :param Dim|None dim_tag:
         :return: copy of myself with added batch-dim
         """
+        if self.have_batch_axis():
+            raise Exception(
+                f"{self} copy_add_batch_dim: already has batch-dim at axis {self.batch_dim_axis},"
+                f" cannot add tag {dim_tag!r}"
+            )
         assert self.batch_dim_axis is None
         if batch_dim_axis < 0:
             assert batch_dim_axis + self.batch_ndim + 1 >= 0
