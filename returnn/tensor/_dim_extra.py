@@ -1293,28 +1293,34 @@ class _DimMixin:
             return False
         if self._SimpleEquality:  # fast path
             # See is_equal for the logic. This here should exactly replicate it.
-            # Inline self_base = self.get_same_base().
-            self_base = self
+            # Inline self = self.get_same_base().
             # noinspection PyProtectedMember
-            while self_base._extra and self_base._extra.same_as:
-                # noinspection PyProtectedMember
-                self_base = self_base._extra.same_as
-            # Inline other_base = other.get_same_base().
-            other_base = other
+            while self._extra and self._extra.same_as:
+                # noinspection PyProtectedMember,PyMethodFirstArgAssignment
+                self = self._extra.same_as
+            # Inline other = other.get_same_base().
             # noinspection PyProtectedMember
-            while other_base._extra and other_base._extra.same_as:
+            while other._extra and other._extra.same_as:
                 # noinspection PyProtectedMember
-                other_base = other_base._extra.same_as
-            if self_base is other_base:
+                other = other._extra.same_as
+            if self is other:
                 return True
-            if self.is_batch_dim() and other.is_batch_dim():
-                return True
-            if self_base.derived_from_op and other_base.derived_from_op:
-                if self_base.derived_from_op == other_base.derived_from_op:
+            # noinspection PyProtectedMember
+            if self._extra and other._extra:
+                self_extra = self._extra
+                # noinspection PyProtectedMember
+                other_extra = other._extra
+                if self_extra.kind == other_extra.kind == DimTypes.Batch:
                     return True
-            if self.auto_generated and other.auto_generated and self.description == other.description:
-                return True
-            return self_base is other_base
+                # noinspection PyProtectedMember
+                if self_extra.derived_from_op and other_extra.derived_from_op:
+                    # noinspection PyProtectedMember
+                    if self_extra.derived_from_op == other_extra.derived_from_op:
+                        return True
+                # noinspection PyProtectedMember
+                if self_extra.auto_generated and other_extra.auto_generated and self.description == other.description:
+                    return True
+            return False
         return self.is_equal(other)
 
     def __ne__(self: Dim, other: Dim) -> bool:
