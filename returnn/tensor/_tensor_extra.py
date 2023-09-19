@@ -3115,6 +3115,12 @@ class _TensorMixin(_TensorMixinBase):
         all_dim_tags, tags_dict = Dim.get_all_dimension_tags(sources, is_equal_opts=is_equal_opts)
         # Check for missing tags, and add those.
         for dim_tag in all_dim_tags:
+            if dim_tag.is_batch_dim():
+                if common.have_batch_axis():
+                    continue
+                axis = common.get_default_new_axis_for_dim_tag(dim_tag)
+                common = common.copy_add_dim_by_tag(dim_tag, unbroadcast=True, axis=axis)
+                continue
             common_tag = Dim.get_existing_tag_from_collection(dim_tag, common.dim_tags, is_equal_opts=is_equal_opts)
             if common_tag:
                 # Already have this tag. However, maybe we have a better one.
