@@ -1190,7 +1190,7 @@ class Backend(Generic[T]):
 # Use object.__new__ because we disallow creating instances of Frontend.
 global_backend = object.__new__(Backend)
 
-_dispatch_table = {}  # type: Dict[Type, Type[Backend]]
+_backend_tensor_type_dispatch_table = {}  # type: Dict[Type, Type[Backend]]
 
 
 def select_backend_tf():
@@ -1240,8 +1240,8 @@ def get_backend_by_raw_tensor_type(tensor_type: Type[T]) -> Union[Type[Backend[T
     """
     :param tensor_type:
     """
-    if tensor_type in _dispatch_table:  # fast path
-        return _dispatch_table[tensor_type]
+    if tensor_type in _backend_tensor_type_dispatch_table:  # fast path
+        return _backend_tensor_type_dispatch_table[tensor_type]
 
     if not isinstance(tensor_type, type):
         raise TypeError(f"Expected type, got {tensor_type!r} of type {type(tensor_type)}")
@@ -1250,10 +1250,10 @@ def get_backend_by_raw_tensor_type(tensor_type: Type[T]) -> Union[Type[Backend[T
     # We don't register all possible subclasses in the dispatch table.
     # Check through the MRO.
     for base_type in tensor_type.__mro__:
-        if base_type in _dispatch_table:
+        if base_type in _backend_tensor_type_dispatch_table:
             # Also register it for faster future lookups.
-            register_backend_by_tensor_type(tensor_type, _dispatch_table[base_type])
-            return _dispatch_table[base_type]
+            register_backend_by_tensor_type(tensor_type, _backend_tensor_type_dispatch_table[base_type])
+            return _backend_tensor_type_dispatch_table[base_type]
 
     # It would be registered if there was any select_engine or select_backend_* call.
     # However, some code might not have done that, so for the common cases,
@@ -1297,7 +1297,7 @@ def register_backend_by_tensor_type(tensor_type: Type[T], backend: Type[Backend[
     :param tensor_type:
     :param backend:
     """
-    _dispatch_table[tensor_type] = backend
+    _backend_tensor_type_dispatch_table[tensor_type] = backend
 
 
 def _get_tensor_types_tf():
