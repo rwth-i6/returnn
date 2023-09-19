@@ -6,8 +6,9 @@ See :ref:`data` for some higher-level description.
 
 from __future__ import annotations
 
-import os
+from typing import Optional, Union, Dict, List, Tuple
 import typing
+import os
 import tensorflow as tf
 
 from returnn.util.basic import NotSpecified
@@ -116,10 +117,10 @@ class BatchInfo:
         Represents a dim with fixed size.
         """
 
-        def __init__(self, size, dim_tag=None):
+        def __init__(self, size: Union[tf.Tensor, int], dim_tag: Optional[Dim] = None):
             """
-            :param tf.Tensor|int size:
-            :param Dim|None dim_tag:
+            :param size:
+            :param dim_tag:
             """
             self.size = size
             self.dim_tag = dim_tag
@@ -136,6 +137,11 @@ class BatchInfo:
         """
         Represents the global batch dim by the network (minibatch construction from the dataset).
         """
+
+        def __init__(self, size: Union[tf.Tensor, int], dim_tag: Optional[Dim] = None):
+            if not dim_tag:
+                dim_tag = batch_dim  # use global batch dim tag
+            super().__init__(size=size, dim_tag=dim_tag)
 
         def short_repr(self):
             """
@@ -236,18 +242,23 @@ class BatchInfo:
                 virtual_dims.insert(new_dim_index, new_dim)
         self.virtual_dims = virtual_dims  # type: typing.List[BatchInfo.VirtualDimBase]
         self._dim = None  # type: typing.Optional[typing.Union[tf.Tensor,int]]
+        self.batch_dim_tag: Optional[Dim] = None
+        if not base and isinstance(new_dim, BatchInfo.GlobalBatchDim):
+            self.batch_dim_tag = new_dim.dim_tag
+        else:
+            self.batch_dim_tag = Dim(
+                kind=Dim.Types.Batch, description="batch:%s" % self.short_repr(), batch=self, dimension=self.static_dim
+            )
         # These self._global_... attributes are meant
         # to be accessed only via the global (root) object (via get_global_base).
         # They store global information.
         # We don't use class attributes because this should not be global per process but only per network.
-        self._global_beam_dims_by_beam_name = {}  # type: typing.Dict[str,BatchInfo.BeamDim]
-        self._global_padded_dims_by_dim_tag = {}  # type: typing.Dict[Dim,BatchInfo.PaddedDim]
-        self._packed_dims_by_dim_tag = {}  # type: typing.Dict[Dim,BatchInfo.PackedDim]
-        self.descendants = []  # type: typing.List[BatchInfo]
-        self._descendants_by_beam_name = {}  # type: typing.Dict[str,BatchInfo]
-        self._global_descendants_by_virtual_dims = (
-            {}
-        )  # type: typing.Dict[typing.Tuple[BatchInfo.VirtualDimBase,...],BatchInfo]  # noqa
+        self._global_beam_dims_by_beam_name = {}  # type: Dict[str,BatchInfo.BeamDim]
+        self._global_padded_dims_by_dim_tag = {}  # type: Dict[Dim,BatchInfo.PaddedDim]
+        self._packed_dims_by_dim_tag = {}  # type: Dict[Dim,BatchInfo.PackedDim]
+        self.descendants = []  # type: List[BatchInfo]
+        self._descendants_by_beam_name = {}  # type: Dict[str,BatchInfo]
+        self._global_descendants_by_virtual_dims = {}  # type: Dict[Tuple[BatchInfo.VirtualDimBase,...],BatchInfo]
         if base:
             base.descendants.append(self)
             if isinstance(new_dim, BatchInfo.BeamDim):
