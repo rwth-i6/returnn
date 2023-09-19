@@ -1289,27 +1289,26 @@ class _DimMixin:
         """
         if self is other:  # fast path
             return True
-        if self._SimpleEquality and not self._extra:  # fast path
-            return False
         if not isinstance(other, _d.Dim):
             return False
         if self._SimpleEquality:  # fast path
             # See is_equal for the logic. This here should exactly replicate it.
-            # Inline get_same_base().
+            # Inline self_base = self.get_same_base().
             self_base = self
             # noinspection PyProtectedMember
             while self_base._extra and self_base._extra.same_as:
                 # noinspection PyProtectedMember
                 self_base = self_base._extra.same_as
-            if self_base is other:
-                return True
+            # Inline other_base = other.get_same_base().
+            other_base = other
             # noinspection PyProtectedMember
-            if not other._extra:
-                return False
+            while other_base._extra and other_base._extra.same_as:
+                # noinspection PyProtectedMember
+                other_base = other_base._extra.same_as
+            if self_base is other_base:
+                return True
             if self.is_batch_dim() and other.is_batch_dim():
                 return True
-            # noinspection PyProtectedMember
-            other_base = other.get_same_base() if other._extra is not None else other
             if self_base.derived_from_op and other_base.derived_from_op:
                 if self_base.derived_from_op == other_base.derived_from_op:
                     return True
