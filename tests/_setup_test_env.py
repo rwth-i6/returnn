@@ -36,13 +36,14 @@ def setup():
     # (https://github.com/tensorflow/tensorflow/issues/24496).
     # os.environ["TF_FORCE_GPU_ALLOW_GROWTH"] = "true"
 
-    os.environ.setdefault("RETURNN_TEST", "1")
-
     import _setup_returnn_env  # noqa
 
     import returnn.util.basic as util
 
     util.init_thread_join_hack()
+
+    # noinspection PyProtectedMember
+    util.BehaviorVersion.set_min_behavior_version(util.BehaviorVersion._latest_behavior_version)
 
     from returnn.util import better_exchook
 
