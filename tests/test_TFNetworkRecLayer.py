@@ -8838,14 +8838,15 @@ def test_reclayer_time_sync_target_diff():
     print("Constructing train network (old behavior).")
     with make_scope() as session:
         net = TFNetwork(train_flag=True, config=config)
-        orig_behavior_version = BehaviorVersion._behavior_version
+        behavior_version_orig_state = BehaviorVersion._get_state()
         try:
-            BehaviorVersion._behavior_version = 0
+            BehaviorVersion._reset()
+            BehaviorVersion.set(0)
             # The net dict requires an older behavior version. This is important for the test.
             # We want to make sure such old config still works.
             net.construct_from_dict(config.typed_value("network"))
         finally:
-            BehaviorVersion._behavior_version = orig_behavior_version
+            BehaviorVersion._reset(behavior_version_orig_state)
         # Check whether we triggered the dim tag bug.
         assert src_time_dim != tgt_time_dim
         net.initialize_params(session)

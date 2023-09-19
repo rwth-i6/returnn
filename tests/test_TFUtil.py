@@ -770,12 +770,15 @@ def set_behavior_version(version: int):
     from returnn.util.basic import BehaviorVersion
 
     # noinspection PyProtectedMember
-    old = BehaviorVersion._behavior_version
+    old = BehaviorVersion._get_state()
     try:
-        BehaviorVersion._behavior_version = version
+        # noinspection PyProtectedMember
+        BehaviorVersion._reset()
+        BehaviorVersion.set(version)
         yield
     finally:
-        BehaviorVersion._behavior_version = old
+        # noinspection PyProtectedMember
+        BehaviorVersion._reset(old)
 
 
 def test_Data_get_common_data_no_broadcast_for_explicit():

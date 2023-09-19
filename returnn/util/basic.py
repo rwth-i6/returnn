@@ -5,7 +5,7 @@ Various generic utilities, which are shared across different backend engines.
 """
 
 from __future__ import annotations
-from typing import Generic, TypeVar, Iterable, Tuple, Dict
+from typing import Optional, Generic, TypeVar, Iterable, Tuple, Dict
 
 import subprocess
 from subprocess import CalledProcessError
@@ -154,6 +154,7 @@ class BackendEngine:
         from returnn.frontend import _backend
 
         if engine == cls.TensorFlow:
+            BehaviorVersion.set_min_behavior_version(16)
             _backend.select_backend_tf()
         elif engine == cls.TensorFlowNetDict:
             # Note that we assume that the user wants the RETURNN layers frontend (TF-based)
@@ -162,6 +163,7 @@ class BackendEngine:
             # we would need a new config option.
             _backend.select_backend_returnn_layers_tf()
         elif engine == cls.Torch:
+            BehaviorVersion.set_min_behavior_version(16)
             _backend.select_backend_torch()
         cls.selected_engine = engine
 
@@ -210,10 +212,8 @@ class BehaviorVersion:
         """
         if version == cls._behavior_version:
             return
-        assert not cls.is_set(), "behavior_version already set to %s, cannot reset to %i" % (
-            cls._behavior_version,
-            version,
-        )
+        if cls._behavior_version is not None:
+            raise Exception(f"behavior_version already set to {cls._behavior_version}, cannot reset to {version}")
         assert version >= cls._min_behavior_version
         if version > cls._latest_behavior_version:
             from returnn import __long_version__
@@ -223,6 +223,7 @@ class BehaviorVersion:
                 "Your RETURNN version is too old (%s)." % (version, cls._latest_behavior_version, __long_version__)
             )
         cls._behavior_version = version
+        cls._handle_new_min_version()
 
     @classmethod
     def get(cls):
@@ -232,6 +233,13 @@ class BehaviorVersion:
         if cls._behavior_version is not None:
             return cls._behavior_version
         return cls.get_default()
+
+    @classmethod
+    def get_if_set(cls):
+        """
+        :rtype: int|None
+        """
+        return cls._behavior_version
 
     @classmethod
     def get_default(cls):
@@ -254,8 +262,13 @@ class BehaviorVersion:
         """
         assert cls._min_behavior_version <= min_behavior_version <= cls._latest_behavior_version
         if cls._behavior_version is not None:
-            assert cls._behavior_version >= min_behavior_version
+            if cls._behavior_version < min_behavior_version:
+                raise Exception(
+                    f"set_min_behavior_version({min_behavior_version}) not allowed"
+                    f" with explicit behavior_version {cls._behavior_version}"
+                )
         cls._min_behavior_version = min_behavior_version
+        cls._handle_new_min_version()
 
     @classmethod
     def is_set(cls):
@@ -284,6 +297,32 @@ class BehaviorVersion:
                 )
             else:
                 log.print_deprecation_warning(message, behavior_version=version)
+
+    @classmethod
+    def _get_state(cls):
+        return cls._behavior_version, cls._min_behavior_version
+
+    @classmethod
+    def _reset(cls, state: Optional[Tuple[int, int]] = None):
+        """
+        Reset behavior version. This is only intended for internal use (e.g. testing).
+
+        :param state: via :func:`_get_state`, or None to reset to initial state
+        """
+        if state:
+            cls._behavior_version, cls._min_behavior_version = state
+        else:
+            cls._behavior_version = None
+            cls._min_behavior_version = 0
+        # Also reset things we did in _handle_new_min_version.
+
+    @classmethod
+    def _handle_new_min_version(cls):
+        """
+        Callback, called when we know about a new min or exact behavior version.
+        """
+        if cls.get() >= 16:
+            pass  # e.g. enable simple Dim equality check here...
 
 
 def get_model_filename_postfix():
