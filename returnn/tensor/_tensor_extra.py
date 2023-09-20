@@ -626,7 +626,7 @@ class _TensorMixin(_TensorMixinBase):
         :return: copy of myself, using self.get_kwargs(), and with placeholder and size_placeholder
         """
         data = _t.Tensor(**self.get_kwargs())
-        data.placeholder = self.placeholder
+        data._raw_tensor = self._raw_tensor
         if name:
             data.name = name
         return data
