@@ -1920,7 +1920,7 @@ class _TensorMixin(_TensorMixinBase):
         :rtype: int|None|NotSpecified
         """
         if self.version >= 2:
-            return None
+            return NotSpecified
         if not self._extra:
             return NotSpecified
         return self._extra.time_dim_axis
