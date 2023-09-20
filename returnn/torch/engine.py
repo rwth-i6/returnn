@@ -3,12 +3,11 @@ Main engine for PyTorch
 """
 
 from __future__ import annotations
-from typing import Optional, Any, Union, Callable, Dict, List
+from typing import Optional, Any, Union, Callable, Dict
 from contextlib import nullcontext
 
 import gc
 import os
-import numpy
 import torch
 import time
 from torch.distributed import init_process_group
@@ -33,6 +32,7 @@ from returnn.forward_iface import ForwardCallbackIface
 from .updater import Updater
 from .data import pipeline as data_pipeline
 from .data import returnn_dataset_wrapper
+from .data import extern_data as extern_data_util
 from .frontend.bridge import rf_module_to_pt_module
 
 
@@ -79,7 +79,7 @@ class Engine(EngineBase):
         self._autocast_dtype = None  # type: Optional[str]
         self._grad_scaler = None  # type: Optional[amp.GradScaler]
 
-        self._device = _get_device_from_config(config)
+        self._device = get_device_from_config_opt(config.value("device", None))
         print("Using device:", self._device, file=log.v2)
 
         self._use_torch_distributed = False
@@ -125,14 +125,9 @@ class Engine(EngineBase):
         assert config is self.config or not config
         super().init_network_from_config(config=config)
 
-        extern_data = TensorDict()
         extern_data_dict = self.config.typed_value("extern_data")
         assert extern_data_dict, "extern_data is not specified in config"
-        extern_data.update(extern_data_dict, auto_convert=True)
-        if "seq_tag" not in extern_data.data:
-            batch_dim = _get_batch_dim_from_extern_data(extern_data)
-            extern_data.data["seq_tag"] = Tensor(name="seq_tag", dtype="string", dims=[batch_dim])
-        self.extern_data = extern_data
+        self.extern_data = extern_data_util.extern_data_template_from_config_opts(extern_data_dict)
 
         self._load_model()
 
@@ -265,7 +260,7 @@ class Engine(EngineBase):
             if step_idx % self._accum_grad_multiple_step == 0:
                 self._updater.get_optimizer().zero_grad()
 
-            extern_data = _raw_dict_to_extern_data(
+            extern_data = extern_data_util.raw_dict_to_extern_data(
                 extern_data_raw, extern_data_template=self.extern_data, device=self._device
             )
             self._run_step(extern_data, train_flag=True, train_func=True)
@@ -365,7 +360,7 @@ class Engine(EngineBase):
 
             with torch.no_grad():
                 for extern_data_raw in data_loader:
-                    extern_data = _raw_dict_to_extern_data(
+                    extern_data = extern_data_util.raw_dict_to_extern_data(
                         extern_data_raw, extern_data_template=self.extern_data, device=self._device
                     )
 
@@ -677,7 +672,7 @@ class Engine(EngineBase):
         )
 
         data_loader = self._create_data_loader(dataset)
-        batch_dim = _get_batch_dim_from_extern_data(self.extern_data)
+        batch_dim = extern_data_util.get_batch_dim_from_extern_data(self.extern_data)
 
         def _get_tensor_wo_batch_numpy(x: Tensor) -> Tensor:
             if batch_dim not in x.dims:
@@ -727,7 +722,7 @@ class Engine(EngineBase):
             step_idx = 0
             for extern_data_raw in data_loader:
                 step_begin_time = time.time()
-                extern_data = _raw_dict_to_extern_data(
+                extern_data = extern_data_util.raw_dict_to_extern_data(
                     extern_data_raw, extern_data_template=self.extern_data, device=self._device
                 )
                 self._run_step(extern_data, train_func=False)
@@ -800,94 +795,6 @@ def _to_raw(n: Union[int, float, Tensor]):
     raise TypeError(f"Unexpected {n} of type {type(n)}")
 
 
-def _raw_dict_to_extern_data(
-    extern_data_raw: Dict[str, Union[torch.Tensor, numpy.ndarray]],
-    *,
-    extern_data_template: TensorDict,
-    device: Union[str, torch.device],
-) -> TensorDict:
-    """
-    :param extern_data_raw: This comes out of the DataLoader.
-    :param extern_data_template: Specified via `extern_data` in the config.
-    :param device: E.g. the GPU.
-    :return: tensor dict, like extern_data_template, but with raw tensors set to Torch tensors, on the right device.
-    """
-    assert isinstance(extern_data_raw, dict) and extern_data_raw
-    batch_dim = _get_batch_dim_from_extern_data(extern_data_template)
-    for dim in _get_dyn_dims_from_extern_data(extern_data_template):
-        dim.reset_eager()  # they will be reset below
-    if batch_dim.size is None and batch_dim.dyn_size_ext is None:
-        batch_dim.dyn_size_ext = Tensor(batch_dim.name or "batch", dims=[], dtype="int32")
-    extern_data = TensorDict()
-    for k, data in extern_data_template.data.items():
-        data = data.copy_template()
-        raw_tensor = extern_data_raw[k]
-        assert len(raw_tensor.shape) == data.batch_ndim, f"ndim mismatch for {k}: {raw_tensor.shape} vs {data}"
-        for i, dim in enumerate(data.dims):
-            if dim.dimension is not None:
-                assert (
-                    dim.dimension == raw_tensor.shape[i]
-                ), f"shape mismatch for {k}: {raw_tensor.shape} vs {data.batch_shape}"
-        if isinstance(raw_tensor, torch.Tensor):
-            data.dtype = str(raw_tensor.dtype).split(".")[-1]  # just overwrite for now...
-            data.raw_tensor = raw_tensor.to(device)
-        elif isinstance(raw_tensor, numpy.ndarray):
-            data.raw_tensor = raw_tensor  # leave it as it is
-        else:
-            raise TypeError(f"Unexpected type {type(raw_tensor)} for {k} in extern_data_raw.")
-
-        if batch_dim.dyn_size_ext and batch_dim.dyn_size_ext.raw_tensor is None:
-            batch_dim.dyn_size_ext.raw_tensor = torch.tensor(extern_data_raw[k].shape[0], dtype=torch.int32)
-
-        # This has certain assumptions on the dataset, the data pipeline and collate_batch.
-        # Namely, we expect that we get the batch dim in the first dim (see collate_batch).
-        # We also expect that the sequence lengths are in the second dim, if it is dynamic.
-        if (
-            len(data.dims) >= 2
-            and data.dims[1].size is None
-            and (not data.dims[1].dyn_size_ext or data.dims[1].dyn_size_ext.raw_tensor is None)
-        ):
-            assert k + ":seq_len" in extern_data_raw, (
-                f"extern_data {data}, dyn spatial dim, missing {k}:seq_len in raw dict, "
-                f"check dataset or collate_batch"
-            )
-            size = extern_data_raw[k + ":seq_len"]
-            # Sequence lengths have to be on CPU for the later call to rnn.pack_padded_sequence
-            assert size.device.type == "cpu"
-            size_dtype = str(size.dtype).split(".")[-1]
-            if data.dims[1].dyn_size_ext is None:
-                data.dims[1].dyn_size_ext = Tensor(data.dims[1].name or "time", dims=[batch_dim], dtype=size_dtype)
-            data.dims[1].dyn_size_ext.dtype = size_dtype
-            data.dims[1].dyn_size_ext.raw_tensor = size
-
-        extern_data.data[k] = data
-
-    return extern_data
-
-
-def _get_batch_dim_from_extern_data(extern_data: TensorDict) -> Dim:
-    """
-    We expect that the batch dim is the first dim in any of the tensors.
-    See collate_batch.
-
-    We allow that the batch dim is not necessarily the global batch_dim object.
-    We also allow that this is not even marked as batch dim (is_batch_dim() can be False).
-    """
-    batch_dim = next(iter(extern_data.data.values())).dims[0]
-    return batch_dim
-
-
-def _get_dyn_dims_from_extern_data(extern_data: TensorDict) -> List[Dim]:
-    visited = set()
-    res = []
-    for k, v in extern_data.data.items():
-        for dim in v.dims:
-            if dim not in visited and dim.size is None:
-                visited.add(dim)
-                res.append(dim)
-    return res
-
-
 def _print_process(report_prefix: str, step: int, eval_info: Optional[Dict[str, Any]] = None):
     """
     Similar but simplified from TF engine _print_process.
@@ -926,10 +833,13 @@ def _get_gpu_device() -> Optional[str]:
     return None
 
 
-def _get_device_from_config(config: Config) -> str:
+def get_device_from_config_opt(device: Optional[str]) -> str:
+    """
+    :param device: as in config
+    :return: resolved device
+    """
     if os.environ.get("PT_DEVICE"):
         return os.environ["PT_DEVICE"]
-    device = config.value("device", None)
     if not device:
         device = _get_gpu_device()
         if device:
