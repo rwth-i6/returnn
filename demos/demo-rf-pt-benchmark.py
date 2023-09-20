@@ -18,6 +18,7 @@ import tree
 import numpy
 import argparse
 import tempfile
+import time
 
 if __name__ == "__main__":
     import _setup_returnn_env  # noqa
@@ -488,11 +489,13 @@ def main():
     """main"""
     # pass ++num_epochs 1 ++device cpu or so...
     arg_parser = argparse.ArgumentParser()
-    arg_parser.add_argument("--bench-action", choices=("run", "multi-run"), default="run")
+    arg_parser.add_argument("--bench-action", choices=("run", "multi-run", "profile"), default="run")
     args, remaining_args = arg_parser.parse_known_args()
 
     if args.bench_action == "run":
         __main__.main(sys.argv[:1] + [_my_file] + remaining_args)
+    elif args.bench_action == "profile":
+        _custom_loop(remaining_args)
     elif args.bench_action == "multi-run":
         with tempfile.TemporaryDirectory(prefix="returnn-tmp-checkout-") as returnn_tmp_dir:
             _subproc_check_call("git", "clone", "--shared", _returnn_root_dir, returnn_tmp_dir)
@@ -504,6 +507,97 @@ def main():
                 _subproc_check_call_filter_returnn_out(sys.executable, "rnn.py", _my_file, *remaining_args)
     else:
         raise ValueError(f"invalid --bench-action {args.bench_action!r}")
+
+
+def _custom_loop(argv):
+    from returnn.log import log
+    from returnn.util.basic import hms
+    from returnn.datasets import init_dataset
+    from returnn.torch.data import pipeline as data_pipeline
+    from returnn.torch.data import returnn_dataset_wrapper
+    from returnn.torch.data import extern_data as extern_data_util
+    from returnn.torch.engine import get_device_from_config_opt
+    from returnn.torch.frontend.bridge import rf_module_to_pt_module
+
+    import torch
+    from torchdata.dataloader2 import DataLoader2
+    import torch.utils.data.datapipes as dp
+
+    arg_parser = argparse.ArgumentParser()
+    arg_parser.add_argument("--device", default=None)
+    arg_parser.add_argument("--tb-dir", default="tb-log")
+    args = arg_parser.parse_args(argv)
+
+    rf.select_backend_torch()
+
+    extern_data_template = extern_data_util.extern_data_template_from_config_opts(extern_data)
+
+    device = get_device_from_config_opt(args.device)
+    print("Using device:", device, file=log.v2)
+
+    model = get_model()
+    pt_model = rf_module_to_pt_module(model)
+    pt_model.to(device)
+    pt_model.train()
+
+    optimizer = torch.optim.Adam(pt_model.parameters(), lr=config["learning_rate"])
+
+    dataset = init_dataset(train)
+    wrapped_dataset = returnn_dataset_wrapper.ReturnnDatasetIterDataPipe(dataset)
+    batch_size = config["batch_size"]
+    max_seqs = config["max_seqs"]
+    batches_dataset = data_pipeline.BatchingIterDataPipe(wrapped_dataset, batch_size=batch_size, max_seqs=max_seqs)
+    batches_dataset = dp.iter.Collator(batches_dataset, collate_fn=data_pipeline.collate_batch)
+    data_loader = DataLoader2(batches_dataset)
+    data_iter = iter(data_loader)
+
+    with torch.profiler.profile(
+        schedule=torch.profiler.schedule(wait=1, warmup=4, active=3, repeat=1),
+        on_trace_ready=torch.profiler.tensorboard_trace_handler(args.tb_dir),
+        record_shapes=True,
+        profile_memory=True,
+        with_stack=True,
+    ) as prof:
+
+        step_idx = 0
+        epoch_start_time = time.time()
+        elapsed_computation_time = 0
+
+        while True:
+            with torch.no_grad():
+                extern_data_raw = next(data_iter, None)
+            if extern_data_raw is None:
+                break
+
+            step_begin_time = time.time()
+
+            optimizer.zero_grad()
+
+            extern_data_ = extern_data_util.raw_dict_to_extern_data(
+                extern_data_raw, extern_data_template=extern_data_template, device=device
+            )
+            rf.init_train_step_run_ctx(train_flag=True, step=step_idx)
+            train_step(model=model, extern_data=extern_data_)
+
+            train_ctx = rf.get_run_ctx()
+            total_loss = train_ctx.total_loss()
+            total_loss.raw_tensor.backward()
+
+            optimizer.step()
+
+            print("step %i, loss %f" % (step_idx, total_loss.raw_tensor.detach().cpu()), file=log.v3)
+
+            elapsed_computation_time += time.time() - step_begin_time
+            step_idx += 1
+            prof.step()
+
+        elapsed = time.time() - epoch_start_time
+        elapsed_computation_percentage = elapsed_computation_time / elapsed
+        print(
+            "Trained %i steps, %s elapsed (%.1f%% computing time)"
+            % (step_idx, hms(elapsed), (elapsed_computation_percentage * 100.0)),
+            file=log.v3,
+        )
 
 
 def _subproc_check_call(*args):
