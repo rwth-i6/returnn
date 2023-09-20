@@ -461,7 +461,7 @@ class _TensorMixin(_TensorMixinBase):
             # Sparse is False by default.
             # And the dim is inferred from the feature dim, or otherwise does not make sense.
             keys += ["sparse_dim"]
-        if self.version == 1:
+        if self.version == 1:  # version 2 is default, and there is only v1 or v2
             keys += ["version"]
         if self._extra:
             if self.batch is not None:
