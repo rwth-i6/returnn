@@ -453,7 +453,7 @@ class _TensorMixin(_TensorMixinBase):
         """
         keys = ["name", "dims", "dtype"]
         if include_special_axes:
-            if self.time_dim_axis_or_unspecified is not NotSpecified:
+            if self.version <= 1 and self.time_dim_axis_or_unspecified is not NotSpecified:
                 keys += ["time_dim_axis"]
             if self.feature_dim_axis_or_unspecified is not NotSpecified:
                 keys += ["feature_dim_axis"]
