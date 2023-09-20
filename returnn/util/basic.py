@@ -129,7 +129,6 @@ class BackendEngine:
         :param int|None default_fallback_engine: if engine is None and not defined in config, use this
         :param returnn.config.Config config:
         """
-        assert cls.selected_engine is None, "already set"
         if engine is None:
             if config is None:
                 from returnn.config import get_global_config
