@@ -1341,18 +1341,16 @@ class _TensorMixin(_TensorMixinBase):
             backend = self._raw_backend
             data_opts["raw_tensor"] = backend.squeeze_raw(self._raw_tensor, axes)
         data_opts["dims"] = [tag for (i, tag) in enumerate(self._dims) if i not in axes]
-        if self._extra:
-            if self.time_dim_axis is not None and self.time_dim_axis_or_unspecified is not NotSpecified:
-                if self.time_dim_axis not in axes:
-                    data_opts["time_dim_axis"] = self.time_dim_axis - len(
-                        [axis for axis in axes if axis < self.time_dim_axis]
-                    )
-            if not self.sparse:
-                if self.feature_dim_axis is not None and self.feature_dim_axis_or_unspecified is not NotSpecified:
-                    if self.feature_dim_axis not in axes:
-                        data_opts["feature_dim_axis"] = self.feature_dim_axis - len(
-                            [axis for axis in axes if axis < self.feature_dim_axis]
-                        )
+        if self.time_dim_axis is not None and self.time_dim_axis_or_unspecified is not NotSpecified:
+            if self.time_dim_axis not in axes:
+                data_opts["time_dim_axis"] = self.time_dim_axis - len(
+                    [axis for axis in axes if axis < self.time_dim_axis]
+                )
+        if self.feature_dim_axis is not None and self.feature_dim_axis_or_unspecified is not NotSpecified:
+            if self.feature_dim_axis not in axes:
+                data_opts["feature_dim_axis"] = self.feature_dim_axis - len(
+                    [axis for axis in axes if axis < self.feature_dim_axis]
+                )
         return _t.Tensor(**data_opts)
 
     def copy_template(self, name=None, dtype=None) -> _t.Tensor:
