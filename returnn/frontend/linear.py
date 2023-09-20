@@ -31,7 +31,7 @@ class Linear(rf.Module):
     def __call__(self, source: Tensor) -> Tensor:
         if not isinstance(source, Tensor):
             raise TypeError(f"{self}: source must be a Tensor but got {type(source)}")
-        if self.in_dim not in source.dims_set:
+        if self.in_dim not in source.dims:
             raise ValueError(f"{self}: input {source} does not have in_dim {self.in_dim}")
         out = rf.matmul(source, self.weight, reduce=self.in_dim)
         out.feature_dim = self.out_dim

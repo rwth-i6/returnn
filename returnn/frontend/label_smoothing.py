@@ -25,7 +25,7 @@ def label_smoothing(prob: Tensor, smoothing: Union[Tensor, float], *, axis: Opti
         assert prob.sparse_dim == axis
         return rf.smooth_one_hot(prob, label_prob=1.0 - smoothing)
     else:
-        assert axis in prob.dims_set
+        assert axis in prob.dims
         # Make it consistent to the sparse case.
         # Value of 1.0 should result in (1 - smoothing).
         # Value of 0.0 should result in smoothing / (dim - 1).

@@ -189,7 +189,7 @@ def conv(
 ) -> Tuple[Tensor, Sequence[Dim]]:
     """convolution"""
     for in_spatial_dim in in_spatial_dims:
-        if in_spatial_dim not in source.dims_set:
+        if in_spatial_dim not in source.dims:
             raise ValueError(f"conv: source {source} does not have spatial dim {in_spatial_dim}")
     # noinspection PyProtectedMember
     out, out_spatial_dims = source._raw_backend.conv(

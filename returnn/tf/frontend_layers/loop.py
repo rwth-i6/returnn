@@ -171,7 +171,7 @@ class Loop:
         or locally here (not recommended).
         """
         assert self._has_given_axis, "%s: unstack() requires a given axis" % self
-        assert self.axis in source.dims_set
+        assert self.axis in source.dims
         res = _rec_unstack(source, axis=self.axis, name=name)
         self.unstacked_refs.append(res)
         return res

@@ -54,7 +54,7 @@ class LSTM(rf.Module):
         """
         if not state.h or not state.c:
             raise ValueError(f"{self}: state {state} needs attributes ``h`` (hidden) and ``c`` (cell).")
-        if self.in_dim not in source.dims_set:
+        if self.in_dim not in source.dims:
             raise ValueError(f"{self}: input {source} does not have in_dim {self.in_dim}")
 
         # noinspection PyProtectedMember
@@ -177,7 +177,7 @@ class ZoneoutLSTM(LSTM):
         """
         if not state.h or not state.c:
             raise ValueError(f"{self}: state {state} needs attributes ``h`` (hidden) and ``c`` (cell).")
-        if self.in_dim not in source.dims_set:
+        if self.in_dim not in source.dims:
             raise ValueError(f"{self}: input {source} does not have in_dim {self.in_dim}")
 
         x = rf.dot(source, self.ff_weight, reduce=self.in_dim)
