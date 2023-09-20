@@ -10,10 +10,14 @@ on some dummy data.
 
 from __future__ import annotations
 
+import subprocess
 from typing import Optional, Any, Tuple, Dict, Sequence, List
+import os
 import sys
 import tree
 import numpy
+import argparse
+import tempfile
 
 if __name__ == "__main__":
     import _setup_returnn_env  # noqa
@@ -22,7 +26,11 @@ from returnn.tensor import Tensor, TensorDict, Dim, single_step_dim, batch_dim
 import returnn.frontend as rf
 from returnn.frontend.tensor_array import TensorArray
 from returnn.frontend.encoder.conformer import ConformerEncoder, ConformerConvSubsample
+from returnn import __main__
 
+_my_file = os.path.abspath(__file__)
+_my_dir = os.path.dirname(_my_file)
+_returnn_root_dir = os.path.dirname(_my_dir)
 
 config = dict(
     task="train",
@@ -462,10 +470,78 @@ def forward_step(*, model: Model, extern_data: TensorDict, **_kwargs) -> Tuple[T
     return seq_targets, seq_log_prob, out_spatial_dim, beam_dim
 
 
-if __name__ == "__main__":
-    from returnn.__main__ import main
+# See: https://github.com/rwth-i6/returnn/issues/1402
+_interesting_commits = [
+    "a776227",  # -- some baseline before those first optimizations
+    "f09222e",
+    "fa9818c",
+    "01d0653",
+    "dc14a2c",
+    "361e238",
+    "49b69ed",
+    "07078b9",
+    "2e104f5",
+]
 
-    main(sys.argv[:1] + sys.argv)
+
+def main():
+    """main"""
+    # pass ++num_epochs 1 ++device cpu or so...
+    arg_parser = argparse.ArgumentParser()
+    arg_parser.add_argument("--bench-action", choices=("run", "multi-run"), default="run")
+    args, remaining_args = arg_parser.parse_known_args()
+
+    if args.bench_action == "run":
+        __main__.main(sys.argv[:1] + [_my_file] + remaining_args)
+    elif args.bench_action == "multi-run":
+        with tempfile.TemporaryDirectory(prefix="returnn-tmp-checkout-") as returnn_tmp_dir:
+            _subproc_check_call("git", "clone", "--shared", _returnn_root_dir, returnn_tmp_dir)
+            os.chdir(returnn_tmp_dir)
+            _subproc_check_call("git", "config", "--local", "advice.detachedHead", "false")
+            os.environ["PYTHONUNBUFFERED"] = "1"
+            for commit in _interesting_commits:
+                _subproc_check_call("git", "checkout", commit)
+                _subproc_check_call_filter_returnn_out(sys.executable, "rnn.py", _my_file, *remaining_args)
+    else:
+        raise ValueError(f"invalid --bench-action {args.bench_action!r}")
+
+
+def _subproc_check_call(*args):
+    print("$", *args)
+    subprocess.check_call(args)
+
+
+def _subproc_check_call_filter_returnn_out(*args):
+    print("$", *args)
+    line_count = 0
+    need_newline = False
+    with subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT) as p:
+        while True:
+            line = p.stdout.readline()
+            if not line:
+                break
+            if line_count < 5:
+                sys.stdout.buffer.write(line)
+            # "Trained %i steps, %s elapsed (%.1f%% computing time)"
+            # "elapsed: ..."
+            elif b"elapsed" in line:
+                if need_newline:
+                    sys.stdout.buffer.write(b"\n")
+                sys.stdout.buffer.write(line)
+            else:
+                sys.stdout.buffer.write(b".")
+                need_newline = True
+            sys.stdout.buffer.flush()
+            line_count += 1
+    if need_newline:
+        sys.stdout.buffer.write(b"\n")
+        sys.stdout.buffer.flush()
+    if p.returncode != 0:
+        raise subprocess.CalledProcessError(p.returncode, args)
+
+
+if __name__ == "__main__":
+    main()
 
 else:
     globals().update(config)
