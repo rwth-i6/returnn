@@ -869,7 +869,9 @@ class TorchBackend(Backend[torch.Tensor]):
         """where"""
         true_ = rf.convert_to_tensor(true_, _backend=TorchBackend)
         false_ = rf.convert_to_tensor(false_, _backend=TorchBackend)
-        out = Tensor.get_common_data([true_, false_, cond], allow_broadcast_all_sources=allow_broadcast_all_sources)
+        out = Tensor.get_common_data(
+            [true_, false_, cond], allow_broadcast_all_sources=allow_broadcast_all_sources, name="where"
+        )
         out.dtype = true_.dtype
         out.sparse_dim = true_.sparse_dim
         cond_bc = cond.copy_compatible_to(out, check_dtype=False, check_sparse=False)
