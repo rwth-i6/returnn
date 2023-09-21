@@ -19,6 +19,7 @@ import numpy
 import argparse
 import tempfile
 import time
+import multiprocessing
 
 if __name__ == "__main__":
     import _setup_returnn_env  # noqa
@@ -492,6 +493,9 @@ def main():
     arg_parser.add_argument("--bench-action", choices=("run", "multi-run", "profile"), default="run")
     args, remaining_args = arg_parser.parse_known_args()
 
+    # https://youtrack.jetbrains.com/issue/PY-63226/PyCharm-debugger-hangs-when-process-is-forking
+    multiprocessing.set_start_method("spawn")
+
     if args.bench_action == "run":
         __main__.main(sys.argv[:1] + [_my_file] + remaining_args)
     elif args.bench_action == "profile":
@@ -561,7 +565,6 @@ def _custom_loop(argv):
         # https://github.com/pytorch/pytorch/issues/100253
         experimental_config=torch._C._profiler._ExperimentalConfig(verbose=True),
     ) as prof:
-
         step_idx = 0
         epoch_start_time = time.time()
         elapsed_computation_time = 0
