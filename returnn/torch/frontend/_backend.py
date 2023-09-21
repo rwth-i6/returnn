@@ -867,8 +867,8 @@ class TorchBackend(Backend[torch.Tensor]):
         allow_broadcast_all_sources: bool = False,
     ) -> Tensor:
         """where"""
-        true_ = rf.convert_to_tensor(true_, _backend=TorchBackend)
-        false_ = rf.convert_to_tensor(false_, _backend=TorchBackend)
+        true_ = rf.convert_to_tensor(true_, _backend=TorchBackend, device=cond.device)
+        false_ = rf.convert_to_tensor(false_, _backend=TorchBackend, device=cond.device)
         out = Tensor.get_common_data(
             [true_, false_, cond], allow_broadcast_all_sources=allow_broadcast_all_sources, name="where"
         )
