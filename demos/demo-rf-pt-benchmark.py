@@ -551,12 +551,15 @@ def _custom_loop(argv):
     data_loader = DataLoader2(batches_dataset)
     data_iter = iter(data_loader)
 
+    # noinspection PyUnresolvedReferences,PyProtectedMember
     with torch.profiler.profile(
-        schedule=torch.profiler.schedule(wait=1, warmup=4, active=3, repeat=1),
+        schedule=torch.profiler.schedule(wait=1, warmup=4, active=3, repeat=2),
         on_trace_ready=torch.profiler.tensorboard_trace_handler(args.tb_dir),
         record_shapes=True,
         profile_memory=True,
         with_stack=True,
+        # https://github.com/pytorch/pytorch/issues/100253
+        experimental_config=torch._C._profiler._ExperimentalConfig(verbose=True),
     ) as prof:
 
         step_idx = 0
@@ -577,7 +580,8 @@ def _custom_loop(argv):
                 extern_data_raw, extern_data_template=extern_data_template, device=device
             )
             rf.init_train_step_run_ctx(train_flag=True, step=step_idx)
-            train_step(model=model, extern_data=extern_data_)
+            with rf.set_default_device_ctx(device):
+                train_step(model=model, extern_data=extern_data_)
 
             train_ctx = rf.get_run_ctx()
             total_loss = train_ctx.total_loss()
