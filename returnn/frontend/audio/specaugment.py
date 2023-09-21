@@ -31,9 +31,10 @@ def specaugment(
     if not max_consecutive_feature_dims:
         max_consecutive_feature_dims = feature_dim.dimension // 5
     if global_train_step_dependent:
-        step = rf.get_run_ctx().step
-        step1 = rf.where(step >= 1000, 1, 0)
-        step2 = rf.where(step >= 2000, 1, 0)
+        with rf.set_default_device_ctx("cpu"):
+            step = rf.get_run_ctx().step
+            step1 = rf.where(step >= 1000, 1, 0)
+            step2 = rf.where(step >= 2000, 1, 0)
     else:
         step1 = step2 = 1
 
@@ -97,7 +98,8 @@ def random_mask(
     if isinstance(min_num, int) and isinstance(max_num, int) and min_num == max_num:
         num = min_num
     else:
-        num = rf.random_uniform(batch_dims, minval=min_num, maxval=max_num + 1, dtype="int32")
+        with rf.set_default_device_ctx("cpu"):
+            num = rf.random_uniform(batch_dims, minval=min_num, maxval=max_num + 1, dtype="int32")
     _, indices, k_dim = rf.top_k(
         rf.random_uniform(batch_dims + [mask_axis], minval=0.0, maxval=1.0),
         axis=mask_axis,
@@ -127,10 +129,12 @@ def random_mask(
             y = rf.where(rf.less(i_, num), y, x_)
             return i_ + 1, y
 
+        with rf.set_default_device_ctx("cpu"):
+            init_i = rf.constant(0, dims=())
         _, x = rf.while_loop(
             cond=lambda s: s[0] < rf.reduce_max(num, axis=num.dims),
             body=_body,
-            initial=(rf.constant(0, dims=()), x),
+            initial=(init_i, x),
         )
     return x
 
