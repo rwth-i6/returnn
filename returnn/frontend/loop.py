@@ -71,6 +71,7 @@ def while_loop(
 def _get_bool_value_eager(v: Union[Tensor, bool]) -> bool:
     if isinstance(v, Tensor):
         assert v.dims == () and v.dtype == "bool"
+        assert v.device in (None, "cpu"), f"while_loop: cond should be on CPU, got {v} on device {v.device}"
         return bool(v.raw_tensor)
     elif isinstance(v, bool):
         return v
