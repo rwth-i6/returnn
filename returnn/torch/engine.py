@@ -386,6 +386,8 @@ class Engine(EngineBase):
                     losses_dict = NumbersDict(
                         {
                             name: float(loss.get_summed_loss().raw_tensor.detach().cpu().numpy())
+                            if self._device != "meta"
+                            else float("nan")
                             for name, loss in train_ctx.losses.items()
                         }
                     )
