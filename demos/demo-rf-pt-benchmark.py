@@ -537,11 +537,12 @@ def _custom_loop(argv):
     extern_data_template = extern_data_util.extern_data_template_from_config_opts(extern_data)
 
     device_with_reason = get_device_from_config_opt(args.device)
-    print("Using device:", device_with_reason.result, f"({device_with_reason.reason})", file=log.v2)
+    device = device_with_reason.result
+    print("Using device:", device, f"({device_with_reason.reason})", file=log.v2)
 
     model = get_model()
     pt_model = rf_module_to_pt_module(model)
-    pt_model.to(device_with_reason.result)
+    pt_model.to(device)
     pt_model.train()
 
     optimizer = torch.optim.Adam(pt_model.parameters(), lr=config["learning_rate"])
