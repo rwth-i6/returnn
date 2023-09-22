@@ -317,14 +317,14 @@ class Engine(EngineBase):
             file=log.v3,
         )
 
-        if (not self._use_torch_distributed) or (self._use_torch_distributed and torch.distributed.get_rank() == 0):
-            accumulated_losses_dict = accumulated_losses_dict / accumulated_inv_norm_factors_dict
-            self.learning_rate_control.set_epoch_error(
-                self.epoch, {f"train_loss_{k}": v for k, v in accumulated_losses_dict.items()}
-            )
+        accumulated_losses_dict = accumulated_losses_dict / accumulated_inv_norm_factors_dict
+        self.learning_rate_control.set_epoch_error(
+            self.epoch, {f"train_loss_{k}": v for k, v in accumulated_losses_dict.items()}
+        )
+        if self._do_save():
             self.learning_rate_control.save()
 
-            print(f"Total train loss:", _format_score(dict(accumulated_losses_dict)), file=log.v3)
+        print(f"Total train loss:", _format_score(dict(accumulated_losses_dict)), file=log.v3)
 
             if self.epoch % self._save_model_epoch_interval == 0 or self.epoch == self._final_epoch:
                 if self.model_filename:
@@ -333,6 +333,7 @@ class Engine(EngineBase):
                 else:
                     print("Not saving model, `model` not specified.", file=log.v3)
 
+        if not self._use_torch_distributed or torch.distributed.get_rank() == 0:
             self.eval_model()
         if self.config.bool_or_other("cleanup_old_models", None):
             self.cleanup_old_models()
@@ -396,7 +397,8 @@ class Engine(EngineBase):
             self.learning_rate_control.set_epoch_error(
                 self.epoch, {f"{dataset_name}_loss_{k}": v for k, v in accumulated_losses_dict.items()}
             )
-            self.learning_rate_control.save()
+            if self._do_save():
+                self.learning_rate_control.save()
 
             # Same format as the TF engine.
             eval_dump_str += [
@@ -607,6 +609,8 @@ class Engine(EngineBase):
         """
         Saves the state of self._model to file.
         """
+        if not self._do_save():
+            return
         filename = self.get_epoch_model_filename() + util.get_model_filename_postfix()
         directory = os.path.dirname(filename)
         if not os.path.exists(directory):
@@ -632,6 +636,8 @@ class Engine(EngineBase):
         Saves the optimizer state to a file.
         This function is a wrapper to Updater.save_optimizer().
         """
+        if not self._do_save():
+            return
         filename = self.get_epoch_model_filename() + ".opt" + util.get_model_filename_postfix()
         directory = os.path.dirname(filename)
         if directory and not os.path.exists(directory):
