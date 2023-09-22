@@ -10,6 +10,9 @@ from .native_code_compiler import NativeCodeCompiler
 
 
 class PyExtModCompiler(NativeCodeCompiler):
+    """
+    Python extension module compiler
+    """
 
     CacheDirName = "returnn_py_ext_mod_cache"
 
