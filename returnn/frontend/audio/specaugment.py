@@ -126,7 +126,7 @@ def random_mask(
                 max_amount=max_dims,
                 mask_value=mask_value,
             )
-            y = rf.where(rf.less(i_, num), y, x_)
+            y = rf.where(rf.copy_to_device(rf.less(i_, num), y.device), y, x_)
             return i_ + 1, y
 
         with rf.set_default_device_ctx("cpu"):
