@@ -97,9 +97,11 @@ def random_mask(
             batch_dims.remove(a)
     if isinstance(min_num, int) and isinstance(max_num, int) and min_num == max_num:
         num = min_num
+        max_num = num
     else:
         with rf.set_default_device_ctx("cpu"):
             num = rf.random_uniform(batch_dims, minval=min_num, maxval=max_num + 1, dtype="int32")
+            max_num = rf.reduce_max(num, axis=num.dims)
     _, indices, k_dim = rf.top_k(
         rf.random_uniform(batch_dims + [mask_axis], minval=0.0, maxval=1.0),
         axis=mask_axis,
@@ -132,7 +134,7 @@ def random_mask(
         with rf.set_default_device_ctx("cpu"):
             init_i = rf.constant(0, dims=())
         _, x = rf.while_loop(
-            cond=lambda s: s[0] < rf.reduce_max(num, axis=num.dims),
+            cond=lambda s: s[0] < max_num,
             body=_body,
             initial=(init_i, x),
         )
