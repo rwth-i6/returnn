@@ -50,8 +50,8 @@ class PyExtModCompiler(NativeCodeCompiler):
         self._maybe_compile()
         mod_name = self.base_name
 
-        spec = spec_from_loader(mod_name, ExtensionFileLoader(mod_name, self._so_filename))
+        spec = spec_from_loader(mod_name, ExtensionFileLoader(mod_name, self._so_filename))  # noqa
         mod = module_from_spec(spec)
-        spec.loader.exec_module(mod)
+        spec.loader.exec_module(mod)  # noqa
         self._py_mod = mod
         return mod
