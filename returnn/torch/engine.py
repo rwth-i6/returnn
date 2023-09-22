@@ -270,6 +270,8 @@ class Engine(EngineBase):
             losses_dict = NumbersDict(
                 {
                     name: float(loss.get_summed_loss().raw_tensor.detach().cpu().numpy())
+                    if self._device != "meta"
+                    else float("nan")
                     for name, loss in train_ctx.losses.items()
                 }
             )
@@ -326,17 +328,24 @@ class Engine(EngineBase):
 
         print(f"Total train loss:", _format_score(dict(accumulated_losses_dict)), file=log.v3)
 
-            if self.epoch % self._save_model_epoch_interval == 0 or self.epoch == self._final_epoch:
-                if self.model_filename:
-                    self._save_model()
-                    self._save_optimizer()
-                else:
-                    print("Not saving model, `model` not specified.", file=log.v3)
+        if self.epoch % self._save_model_epoch_interval == 0 or self.epoch == self._final_epoch:
+            if self.model_filename:
+                self._save_model()
+                self._save_optimizer()
+            else:
+                print("Not saving model, `model` not specified.", file=log.v3)
 
         if not self._use_torch_distributed or torch.distributed.get_rank() == 0:
             self.eval_model()
         if self.config.bool_or_other("cleanup_old_models", None):
             self.cleanup_old_models()
+
+    def _do_save(self):
+        if self._device == "meta":
+            return False
+        if not super()._do_save():
+            return False
+        return True
 
     def eval_model(self, *, skip_already_evaluated: bool = False):
         """
