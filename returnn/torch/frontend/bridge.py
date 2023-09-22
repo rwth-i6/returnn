@@ -87,3 +87,15 @@ class _RFModuleAsPTModule(torch.nn.Module):
     def forward(self, *args, **kwargs):
         """forward"""
         return self._rf_module(*args, **kwargs)
+
+    def _apply(self, fn):
+        super()._apply(fn)
+
+        # This could get called via `rf_module.to(device)`,
+        # and there are cases where the Parameter.data was not updated inplace
+        # but instead a new Parameter was created.
+        # Update the corresponding RF Parameter.
+        for name, rf_param in self._rf_module.named_parameters(recurse=False):
+            pt_param = getattr(self, name)
+            assert isinstance(pt_param, torch.nn.Parameter)
+            rf_param.raw_tensor = pt_param
