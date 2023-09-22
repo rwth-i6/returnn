@@ -196,7 +196,7 @@ def scan(
             _cond,
             _body,
             (
-                rf.constant(0, dtype=rf.get_default_array_index_dtype(), dims=()),  # i
+                rf.constant(0, dtype=rf.get_default_array_index_dtype(), dims=(), device="cpu"),  # i
                 initial,  # state
                 tree.map_structure(lambda y: TensorArray(y) if y is not None else None, ys),
             ),

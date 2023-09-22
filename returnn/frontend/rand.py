@@ -133,6 +133,7 @@ def random(
     dims: Sequence[Dim],
     *,
     dtype: Optional[str] = None,
+    device: Optional[str] = None,
     sparse_dim: Optional[Dim] = None,
     feature_dim: Optional[Dim] = None,
     distribution: str,
@@ -168,8 +169,9 @@ def random(
       You can just pass ``static=False``.
       Alternatively you could also pass the output of a :class:`RandomStateInitLayer` as ``state``.
 
-    :param Sequence[Dim] dims:
-    :param str dtype:
+    :param dims:
+    :param dtype:
+    :param device:
     :param sparse_dim:
     :param feature_dim:
     :param str distribution: "uniform", "normal" or "truncated_normal"
@@ -207,6 +209,7 @@ def random(
     return _global_backend.random(
         dims=dims,
         dtype=dtype,
+        device=device,
         sparse_dim=sparse_dim,
         feature_dim=feature_dim,
         distribution=distribution,
@@ -228,6 +231,7 @@ def random_uniform(
     dims: Sequence[Dim],
     *,
     dtype: Optional[str] = None,
+    device: Optional[str] = None,
     sparse_dim: Optional[Dim] = None,
     feature_dim: Optional[Dim] = None,
     minval: Union[int, float, Tensor] = 0.0,
@@ -245,6 +249,7 @@ def random_uniform(
     return random(
         dims=dims,
         dtype=dtype,
+        device=device,
         sparse_dim=sparse_dim,
         feature_dim=feature_dim,
         distribution="uniform",
@@ -263,6 +268,7 @@ def random_normal(
     dims: Sequence[Dim],
     *,
     dtype: Optional[str] = None,
+    device: Optional[str] = None,
     sparse_dim: Optional[Dim] = None,
     feature_dim: Optional[Dim] = None,
     mean: Optional[Union[int, float, Tensor]] = 0.0,
@@ -280,6 +286,7 @@ def random_normal(
     return random(
         dims=dims,
         dtype=dtype,
+        device=device,
         sparse_dim=sparse_dim,
         feature_dim=feature_dim,
         distribution="normal",
@@ -298,6 +305,7 @@ def random_truncated_normal(
     dims: Sequence[Dim],
     *,
     dtype: Optional[str] = None,
+    device: Optional[str] = None,
     sparse_dim: Optional[Dim] = None,
     feature_dim: Optional[Dim] = None,
     mean: Optional[Union[int, float, Tensor]] = 0.0,
@@ -317,6 +325,7 @@ def random_truncated_normal(
     return random(
         dims=dims,
         dtype=dtype,
+        device=device,
         sparse_dim=sparse_dim,
         feature_dim=feature_dim,
         distribution="truncated_normal",

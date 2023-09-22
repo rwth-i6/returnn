@@ -741,6 +741,7 @@ class Backend(Generic[T]):
         fill_value: Union[RawTensorTypes, Tensor],
         *,
         dtype: str,
+        device: Optional[str] = None,
         sparse_dim: Optional[Dim] = None,
         feature_dim: Optional[Dim] = None,
     ) -> Tensor:
@@ -750,6 +751,7 @@ class Backend(Generic[T]):
         :param dims:
         :param fill_value:
         :param dtype:
+        :param device:
         :param sparse_dim:
         :param feature_dim:
         :return: tensor
@@ -955,6 +957,7 @@ class Backend(Generic[T]):
         *,
         dims: Sequence[Dim],
         dtype: str,
+        device: Optional[str] = None,
         sparse_dim: Optional[Dim] = None,
         feature_dim: Optional[Dim] = None,
         distribution: str,

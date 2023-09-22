@@ -538,6 +538,7 @@ class ReturnnLayersBackend(Backend[Layer]):
         fill_value: Union[RawTensorTypes, Tensor],
         *,
         dtype: str,
+        device: Optional[str] = None,
         sparse_dim: Optional[Dim] = None,
         feature_dim: Optional[Dim] = None,
     ) -> Tensor:
@@ -770,6 +771,7 @@ class ReturnnLayersBackend(Backend[Layer]):
         *,
         dims: Sequence[Dim],
         dtype: str,
+        device: Optional[str] = None,
         sparse_dim: Optional[Dim] = None,
         feature_dim: Optional[Dim] = None,
         distribution: str,

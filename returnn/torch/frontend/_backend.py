@@ -722,6 +722,7 @@ class TorchBackend(Backend[torch.Tensor]):
         fill_value: Union[RawTensorTypes, Tensor],
         *,
         dtype: str,
+        device: Optional[str] = None,
         sparse_dim: Optional[Dim] = None,
         feature_dim: Optional[Dim] = None,
     ) -> Tensor:
@@ -734,7 +735,7 @@ class TorchBackend(Backend[torch.Tensor]):
             # https://github.com/rwth-i6/returnn/issues/1333#issuecomment-1607236783
             shape = [dim.long() if isinstance(dim, torch.Tensor) else dim for dim in shape]
         raw_tensor = torch.full(
-            shape, fill_value, dtype=TorchBackend.as_dtype_raw(dtype), device=rf.get_default_device()
+            shape, fill_value, dtype=TorchBackend.as_dtype_raw(dtype), device=device or rf.get_default_device()
         )
         return Tensor(
             "full", dims=dims, sparse_dim=sparse_dim, feature_dim=feature_dim, dtype=dtype, raw_tensor=raw_tensor
@@ -1150,6 +1151,7 @@ class TorchBackend(Backend[torch.Tensor]):
         *,
         dims: Sequence[Dim],
         dtype: str,
+        device: Optional[str] = None,
         sparse_dim: Optional[Dim] = None,
         feature_dim: Optional[Dim] = None,
         distribution: str,
@@ -1174,7 +1176,7 @@ class TorchBackend(Backend[torch.Tensor]):
             out = Tensor(
                 name=f"random_{distribution}", dims=dims, dtype=dtype, sparse_dim=sparse_dim, feature_dim=feature_dim
             )
-            out.raw_tensor = torch.empty(shape, dtype=dtype_, device=rf.get_default_device())
+            out.raw_tensor = torch.empty(shape, dtype=dtype_, device=device or rf.get_default_device())
         assert explicit_state is None  # not implemented otherwise
         generator = None  # using the global default from PT
         assert isinstance(static, bool)

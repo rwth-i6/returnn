@@ -19,6 +19,7 @@ def full(
     dims: Sequence[Dim],
     fill_value: Union[RawTensorTypes, Tensor],
     dtype: Optional[str] = None,
+    device: Optional[str] = None,
     sparse_dim: Optional[Dim] = None,
     feature_dim: Optional[Dim] = None,
 ) -> Tensor:
@@ -32,6 +33,7 @@ def full(
     :param dims: shape
     :param fill_value: scalar to fill the tensor
     :param dtype:
+    :param device:
     :param sparse_dim:
     :param feature_dim:
     """
@@ -55,7 +57,9 @@ def full(
         assert (
             fill_value.dims == ()
         ), f"full/fill/constant: expect scalar fill_value, got tensor with shape {fill_value.dims}."
-    return global_backend.full(dims, fill_value, dtype=dtype, sparse_dim=sparse_dim, feature_dim=feature_dim)
+    return global_backend.full(
+        dims, fill_value, dtype=dtype, device=device, sparse_dim=sparse_dim, feature_dim=feature_dim
+    )
 
 
 fill = full  # alias for TF users
@@ -66,17 +70,21 @@ def constant(
     *,
     dims: Sequence[Dim],
     dtype: Optional[str] = None,
+    device: Optional[str] = None,
     sparse_dim: Optional[Dim] = None,
     feature_dim: Optional[Dim] = None,
 ) -> Tensor:
     """alias to :func:`full`, mapping `value` to `fill_value`. also see :func:`convert_to_tensor`"""
-    return full(dims=dims, fill_value=fill_value, dtype=dtype, sparse_dim=sparse_dim, feature_dim=feature_dim)
+    return full(
+        dims=dims, fill_value=fill_value, dtype=dtype, device=device, sparse_dim=sparse_dim, feature_dim=feature_dim
+    )
 
 
 def zeros(
     dims: Sequence[Dim],
     *,
     dtype: Optional[str] = None,
+    device: Optional[str] = None,
     sparse_dim: Optional[Dim] = None,
     feature_dim: Optional[Dim] = None,
 ) -> Tensor:
@@ -87,6 +95,7 @@ def zeros(
         dims=dims,
         fill_value=0,
         dtype=dtype or rf.get_default_float_dtype(),
+        device=device,
         sparse_dim=sparse_dim,
         feature_dim=feature_dim,
     )
@@ -96,6 +105,7 @@ def ones(
     dims: Sequence[Dim],
     *,
     dtype: Optional[str] = None,
+    device: Optional[str] = None,
     sparse_dim: Optional[Dim] = None,
     feature_dim: Optional[Dim] = None,
 ) -> Tensor:
@@ -106,6 +116,7 @@ def ones(
         dims=dims,
         fill_value=1,
         dtype=dtype or rf.get_default_float_dtype(),
+        device=device,
         sparse_dim=sparse_dim,
         feature_dim=feature_dim,
     )
@@ -113,9 +124,21 @@ def ones(
 
 def zeros_like(other: Tensor) -> Tensor:
     """zeros like other"""
-    return zeros(dims=other.dims, dtype=other.dtype, sparse_dim=other.sparse_dim, feature_dim=other.feature_dim)
+    return zeros(
+        dims=other.dims,
+        dtype=other.dtype,
+        device=other.device,
+        sparse_dim=other.sparse_dim,
+        feature_dim=other.feature_dim,
+    )
 
 
 def ones_like(other: Tensor) -> Tensor:
     """ones like other"""
-    return ones(dims=other.dims, dtype=other.dtype, sparse_dim=other.sparse_dim, feature_dim=other.feature_dim)
+    return ones(
+        dims=other.dims,
+        dtype=other.dtype,
+        device=other.device,
+        sparse_dim=other.sparse_dim,
+        feature_dim=other.feature_dim,
+    )
