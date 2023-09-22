@@ -27,6 +27,7 @@ from returnn.datasets.basic import init_dataset, Dataset
 from returnn.util import basic as util
 from returnn.util import NumbersDict
 from returnn.util.basic import hms, NotSpecified
+from returnn.util.result_with_reason import ResultWithReason
 from returnn.forward_iface import ForwardCallbackIface
 
 from .updater import Updater
@@ -79,8 +80,9 @@ class Engine(EngineBase):
         self._autocast_dtype = None  # type: Optional[str]
         self._grad_scaler = None  # type: Optional[amp.GradScaler]
 
-        self._device = get_device_from_config_opt(config.value("device", None))
-        print("Using device:", self._device, file=log.v2)
+        dev_ = get_device_from_config_opt(config.value("device", None))
+        self._device = dev_.result
+        print("Using device:", self._device, f"({dev_.reason or '?'})", file=log.v2)
 
         self._use_torch_distributed = False
         self._torch_distributed_class = None  # type: Optional[Callable]
@@ -848,20 +850,22 @@ def _get_gpu_device() -> Optional[str]:
     return None
 
 
-def get_device_from_config_opt(device: Optional[str]) -> str:
+def get_device_from_config_opt(device: Optional[str]) -> ResultWithReason[str]:
     """
     :param device: as in config
     :return: resolved device
     """
     if os.environ.get("PT_DEVICE"):
-        return os.environ["PT_DEVICE"]
+        return ResultWithReason(os.environ["PT_DEVICE"], "PT_DEVICE env var")
     if not device:
         device = _get_gpu_device()
         if device:
-            return device
-        return "cpu"
+            return ResultWithReason(device, "GPU automatically selected")
+        return ResultWithReason("cpu", "no GPU found")
+    reason = "config"
     if device == "gpu":
         device = _get_gpu_device()
         if not device:
             raise Exception("No GPU device found, but config requested 'gpu' device.")
-    return device
+        reason = "'gpu' in config"
+    return ResultWithReason(device, reason)
