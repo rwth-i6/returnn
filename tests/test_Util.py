@@ -1,20 +1,22 @@
 # -*- coding: utf8 -*-
 
-import sys
-import os
-
-my_dir = os.path.dirname(os.path.realpath(__file__))
 import _setup_test_env  # noqa
 from nose.tools import assert_equal, assert_not_equal, assert_raises, assert_true, assert_is
 from numpy.testing.utils import assert_almost_equal
 from returnn.util.basic import *
+import sys
+import os
 import numpy as np
 import numpy
 import unittest
+import textwrap
 
 from returnn.util import better_exchook
+from returnn.util.py_ext_mod_compiler import PyExtModCompiler
 
 better_exchook.replace_traceback_format_tb()
+
+my_dir = os.path.dirname(os.path.realpath(__file__))
 
 
 def test_cmd_true():
@@ -168,12 +170,14 @@ def test_NativeCodeCompiler():
     native = NativeCodeCompiler(
         base_name="test_NativeCodeCompiler",
         code_version=1,
-        code="""
-    static int magic = 13;
+        code=textwrap.dedent(
+            """\
+            static int magic = 13;
 
-    extern "C" void set_magic(int i) { magic = i; }
-    extern "C" int get_magic() { return magic; }
-    """,
+            extern "C" void set_magic(int i) { magic = i; }
+            extern "C" int get_magic() { return magic; }
+            """
+        ),
     )
     import ctypes
 
@@ -186,6 +190,57 @@ def test_NativeCodeCompiler():
     assert_equal(lib.get_magic(), 13)
     lib.set_magic(42)
     assert_equal(lib.get_magic(), 42)
+
+
+def test_PyExtModCompiler():
+    mod_name = "TestPyExtModCompiler"
+    native = PyExtModCompiler(
+        base_name=mod_name,
+        verbose=True,
+        code_version=1,
+        code=textwrap.dedent(
+            f"""\
+            #include <Python.h>
+
+            static PyObject *
+            func(PyObject *self, PyObject *args)
+            {{
+                int x;
+                if (!PyArg_ParseTuple(args, "i", &x))
+                    return NULL;
+                return PyLong_FromLong(x + 42);
+            }}
+
+            static PyMethodDef _Methods[] = {{
+                {{"func",  func, METH_VARARGS, "Func."}},
+                {{NULL, NULL, 0, NULL}}        /* Sentinel */
+            }};
+
+            static struct PyModuleDef _Module = {{
+                PyModuleDef_HEAD_INIT,
+                "{mod_name}",   /* name of module */
+                NULL,     /* module documentation, may be NULL */
+                -1,       /* size of per-interpreter state of the module,
+                             or -1 if the module keeps state in global variables. */
+                _Methods
+            }};
+
+            PyMODINIT_FUNC
+            PyInit_{mod_name}(void)
+            {{
+                return PyModule_Create(&_Module);
+            }}
+            """
+        ),
+    )
+    lib_filename = native.get_lib_filename()
+    print("lib_filename:", lib_filename)
+    mod = native.load_py_module()
+
+    assert_equal(mod.func(0), 42)
+    assert_equal(mod.func(1), 43)
+    assert_equal(mod.func(2), 44)
+    assert_equal(mod.func(-2), 40)
 
 
 def test_Stats():
