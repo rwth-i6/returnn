@@ -1286,7 +1286,13 @@ class TorchBackend(Backend[torch.Tensor]):
         # This clone() with contiguous_format seems to fix the problem.
         # https://github.com/pytorch/pytorch/issues/99638
         in_raw = in_raw.clone(memory_format=torch.contiguous_format)
-        out_raw = torch.masked_select(in_raw, mask.raw_tensor)
+        if mask.device == "meta":
+            # This is not supported, but also, we would anyway not know the out shape.
+            # However, instead of erroring, just assume some dummy mask.
+            # https://github.com/pytorch/pytorch/issues/109871
+            out_raw = in_raw.flatten()
+        else:
+            out_raw = torch.masked_select(in_raw, mask.raw_tensor)
         remaining_shape = [d.get_dim_value() for d in remaining_dims]
         remaining_num_elements = numpy.prod(remaining_shape) if remaining_shape else 1
         assert out_raw.numel() % remaining_num_elements == 0
