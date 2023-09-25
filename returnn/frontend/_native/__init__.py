@@ -44,10 +44,18 @@ def get_module():
     return _module
 
 
+_is_set_up = False
+
+
 def setup():
     """
     Setup the native code.
     """
+    global _is_set_up
+    if _is_set_up:
+        return
+    _is_set_up = True  # only try once
+
     try:
         mod = get_module()
     except Exception as exc:
