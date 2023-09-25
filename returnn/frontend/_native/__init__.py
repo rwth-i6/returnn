@@ -42,3 +42,22 @@ def get_module():
     )
     _module = compiler.load_py_module()
     return _module
+
+
+def setup():
+    """
+    Setup the native code.
+    """
+    try:
+        mod = get_module()
+    except Exception as exc:
+        if os.environ.get("RETURNN_TEST") == "1":
+            raise
+        print("RETURNN frontend _native backend: Error while getting module:")
+        print(exc)
+        print("This is optional (although very recommended), so we continue without it.")
+        return
+
+    from returnn.tensor import Tensor
+
+    Tensor._raw_backend = property(mod.get_backend_for_tensor)  # noqa

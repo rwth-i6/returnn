@@ -13,6 +13,9 @@ from returnn.tensor import Tensor, Dim
 import returnn.frontend as rf
 
 
+rf.select_backend_torch()
+
+
 # Tensor.__eq__ is disabled as per the following error in some TF tests:
 # AssertionError: unhashable type: 'Tensor'.
 # See CI https://github.com/rwth-i6/returnn/actions/runs/4406240591

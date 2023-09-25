@@ -1222,6 +1222,10 @@ def select_backend_torch():
     global_backend.__class__ = backend
     BehaviorVersion.set_min_behavior_version(16)
 
+    from returnn.frontend import _native
+
+    _native.setup()
+
 
 def get_backend_by_tensor(tensor: Tensor, *, fallback: Optional[T2] = None) -> Union[Type[Backend[T]], T2]:
     """

@@ -13,6 +13,9 @@ from returnn.tensor import Tensor, Dim
 import returnn.frontend as rf
 
 
+rf.select_backend_torch()
+
+
 def test_dot_scalar_multiplication():
     a_raw = torch.tensor(2.0)
     b_raw = torch.tensor(3.0)
