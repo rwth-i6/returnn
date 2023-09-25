@@ -14,13 +14,20 @@ PyObject* getBackendForRawTensor(PyObject* module, PyObject* obj) {
     return getBackendForRawTensorType(module, Py_TYPE(obj));
 }
 
-PyObject* getBackendForRawTensorType(PyObject* module, PyObject* obj) {
+/*borrowed*/ PyObject* getBackendForRawTensorType(PyObject* module, PyObject* obj) {
     PyModuleState* modState = (PyModuleState*) PyModule_GetState(m);
+
+    // fast path 1 -- try some predefined types (faster than dict lookup)
+    if(modState->isTorchTensorType(obj))
+        return modState->torchBackend();
+
+    // fast path 2 -- try dispatch table
     PyObject* dispatchTable = modState->backendTensorTypeDispatchTable(); // borrowed
     PyObject* backend = PyDict_GetItem(dispatchTable, obj); // borrowed
     if(backend)
         return backend;
 
+    // generic fallback
     PyObject* mod = PyImport_ImportModule("returnn.frontend._backend");
     if(!mod)
         return NULL;

@@ -1,4 +1,5 @@
 #include <Python.h>
+#include <string.h>
 
 // https://docs.python.org/3/c-api/structures.html#c.PyMethodDef
 static PyMethodDef _pyModuleMethods[] = {
@@ -54,3 +55,39 @@ static struct PyModuleDef _pyModuleDef = {
     _pyModuleClear,
     _pyModuleFree
 };
+
+bool PyModuleState::_torchTensorTypeMaybeInit(PyObject* obj) {
+    {
+        PyObject* modName = PyObject_GetAttrString(obj, "__module__");
+        if(!modName) {
+            PyErr_Clear();
+            return false;
+        }
+
+        const char* modNameStr = PyUnicode_AsUTF8(modName);
+        if(!modNameStr) {
+            Py_DECREF(modName);
+            PyErr_Clear();
+            return false;
+        }
+
+        if(memcmp(modNameStr, "torch") != 0 || (modNameStr[5] != '\0' && modNameStr[5] != '.')) {
+            Py_DECREF(modName);
+            return false;
+        }
+        Py_DECREF(modName);
+    }
+
+    PyObject* mod = PyImport_ImportModule("torch");
+    if(!mod) {
+        PyErr_Clear();
+        return false;
+    }
+    _torchTensorType = PyObject_GetAttrString(mod, "Tensor");
+    Py_DECREF(mod);
+    if(!_torchTensorType) {
+        PyErr_Clear();
+        return false;
+    }
+    return true;
+}
