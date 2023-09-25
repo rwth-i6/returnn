@@ -3,6 +3,8 @@
 
 #include <Python.h>
 
+// exported Python functions {
+
 PyObject* pyCompare(PyObject *self, PyObject *const *args, Py_ssize_t nargs);
 PyObject* pyCombine(PyObject *self, PyObject *const *args, Py_ssize_t nargs);
 
@@ -64,5 +66,7 @@ PyObject* pyTorchTensorRFloorDiv(PyObject *self, PyObject *const *args, Py_ssize
 PyObject* pyTorchTensorMod(PyObject *self, PyObject *const *args, Py_ssize_t nargs);
 PyObject* pyTorchTensorRMod(PyObject *self, PyObject *const *args, Py_ssize_t nargs);
 PyObject* pyTorchTensorPow(PyObject *self, PyObject *const *args, Py_ssize_t nargs);
+
+// }
 
 #endif

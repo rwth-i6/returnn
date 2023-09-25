@@ -91,6 +91,24 @@ public:
         return _torchBackend;
     }
 
+    int pyTraverse(visitproc visit, void *arg) {
+        Py_VISIT(_backendTensorTypeDispatchTable);
+        for(int i = 0; i < NumBackendsWithCachedOps * NumTOps; ++i)
+            Py_VISIT(_cachedOps[i]);
+        Py_VISIT(_torchTensorType);
+        Py_VISIT(_torchBackend);
+        return 0;
+    }
+
+    int pyClear() {
+        Py_CLEAR(_backendTensorTypeDispatchTable);
+        for(int i = 0; i < NumBackendsWithCachedOps * NumTOps; ++i)
+            Py_CLEAR(_cachedOps[i]);
+        Py_CLEAR(_torchTensorType);
+        Py_CLEAR(_torchBackend);
+        return 0;
+    }
+
 private:
     PyObject* _backendTensorTypeDispatchTable;
     PyObject* _cachedOps[NumBackendsWithCachedOps * NumTOps];

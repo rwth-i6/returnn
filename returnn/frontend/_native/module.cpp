@@ -1,9 +1,16 @@
+
 #include <Python.h>
 #include <string.h>
+#include "module.hpp"
+#include "backend.hpp"
+#include "tensor_ops.hpp"
 
 // https://docs.python.org/3/c-api/structures.html#c.PyMethodDef
 static PyMethodDef _pyModuleMethods[] = {
-    {METH_FASTCALL},
+    {"get_backend_for_tensor", (PyCFunction) pyGetBackendForTensor, METH_FASTCALL,
+        "get RETURNN frontend backend for RETURNN Tensor. like Tensor.raw_tensor"},
+    {"is_raw_torch_tensor_type", (PyCFunction) pyIsRawTorchTensorType, METH_FASTCALL,
+        "isinstance(raw_tensor, torch.Tensor)"},
     // ...
     {NULL, NULL, 0, NULL}        /* Sentinel */
 };
@@ -15,7 +22,7 @@ static int _pyModuleExec(PyObject *m) {
 }
 
 static PyModuleDef_Slot _pyModuleSlots[] = {
-    {Py_mod_exec, _pyModuleExec},
+    {Py_mod_exec, (void*) _pyModuleExec},
 #ifdef Py_MOD_PER_INTERPRETER_GIL_SUPPORTED
     {Py_mod_multiple_interpreters, Py_MOD_PER_INTERPRETER_GIL_SUPPORTED},
 #endif
@@ -24,14 +31,16 @@ static PyModuleDef_Slot _pyModuleSlots[] = {
 
 static int _pyModuleTraverse(PyObject *m, visitproc visit, void *arg) {
     PyModuleState* modState = (PyModuleState*) PyModule_GetState(m);
-    Py_VISIT(modState->torchTensorType);
-    return 0;
+    if(!modState)
+        return -1;
+    return modState->pyTraverse(visit, arg);
 }
 
 static int _pyModuleClear(PyObject *m) {
     PyModuleState* modState = (PyModuleState*) PyModule_GetState(m);
-    Py_CLEAR(modState->torchTensorType);
-    return 0;
+    if(!modState)
+        return -1;
+    return modState->pyClear();
 }
 
 static void _pyModuleFree(PyObject* m) {
@@ -48,13 +57,17 @@ static struct PyModuleDef _pyModuleDef = {
     PyModuleDef_HEAD_INIT,
     "_returnn_frontend_native",
     "RETURNN frontend internal native module",
-    sizeof(ModuleState), // is null-initialised
+    sizeof(PyModuleState), // is null-initialised
     _pyModuleMethods,
     _pyModuleSlots,
     _pyModuleTraverse,
     _pyModuleClear,
-    _pyModuleFree
+    (freefunc) _pyModuleFree
 };
+
+PyMODINIT_FUNC PyInit__returnn_frontend_native(void) {
+    return PyModuleDef_Init(&_pyModuleDef);
+}
 
 bool PyModuleState::_torchTensorTypeMaybeInit(PyObject* obj) {
     {
@@ -71,7 +84,7 @@ bool PyModuleState::_torchTensorTypeMaybeInit(PyObject* obj) {
             return false;
         }
 
-        if(memcmp(modNameStr, "torch") != 0 || (modNameStr[5] != '\0' && modNameStr[5] != '.')) {
+        if(memcmp(modNameStr, "torch", 5) != 0 || (modNameStr[5] != '\0' && modNameStr[5] != '.')) {
             Py_DECREF(modName);
             return false;
         }

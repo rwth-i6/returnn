@@ -1,6 +1,7 @@
 """
 tests for returnn.torch.frontend
 """
+import numpy
 
 import _setup_test_env  # noqa
 
@@ -438,3 +439,34 @@ def test_combine_min():
 
     assert result.raw_tensor.tolist() == [1.0, 2.0, 2.0]
     assert result_alt1.raw_tensor.tolist() == [1.0, 2.0, 2.0]
+
+
+def test_native_is_raw_torch_tensor_type():
+    from returnn.frontend import _native
+
+    mod = _native.get_module()
+
+    # TODO check sys.settrace, no Python code is executed
+    assert mod.is_raw_torch_tensor_type(type(torch.zeros(2, 3))) is True
+    assert mod.is_raw_torch_tensor_type(type(torch.nn.Parameter(torch.zeros(2, 3)))) is True
+    assert mod.is_raw_torch_tensor_type(type(numpy.zeros((2, 3)))) is False
+    assert mod.is_raw_torch_tensor_type(type(43)) is False
+    assert mod.is_raw_torch_tensor_type(43) is False  # current behavior - might also raise exception instead
+
+
+def test_native_torch_raw_backend():
+    tensor = Tensor(name="a", raw_tensor=torch.tensor([1.0, 2.0, 3.0]), dims=[Dim(3)], dtype="float32")
+    backend1 = tensor._raw_backend
+
+    import returnn.frontend._backend as _backend_api
+
+    backend2 = _backend_api.get_backend_by_raw_tensor_type(type(tensor.raw_tensor))
+
+    from returnn.frontend import _native
+
+    mod = _native.get_module()
+
+    # TODO check sys.settrace, no Python code is executed
+    backend3 = mod.get_backend_for_tensor(tensor)
+
+    assert backend1 is backend2 is backend3
