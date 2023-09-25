@@ -1,10 +1,11 @@
 """
 tests for returnn.torch.frontend
 """
-import numpy
 
 import _setup_test_env  # noqa
 
+import numpy
+import sys
 import torch
 import pytest
 
@@ -442,16 +443,32 @@ def test_combine_min():
 
 
 def test_native_is_raw_torch_tensor_type():
+    raw_tensor = torch.zeros(2, 3)
+    raw_parameter = torch.nn.Parameter(torch.zeros(2, 3))
+    numpy_tensor = numpy.zeros((2, 3))
+
     from returnn.frontend import _native
 
     mod = _native.get_module()
+    # Check that there is no Python code executed via sys.settrace.
+    trace_num_calls = 0
 
-    # TODO check sys.settrace, no Python code is executed
-    assert mod.is_raw_torch_tensor_type(type(torch.zeros(2, 3))) is True
-    assert mod.is_raw_torch_tensor_type(type(torch.nn.Parameter(torch.zeros(2, 3)))) is True
-    assert mod.is_raw_torch_tensor_type(type(numpy.zeros((2, 3)))) is False
-    assert mod.is_raw_torch_tensor_type(type(43)) is False
-    assert mod.is_raw_torch_tensor_type(43) is False  # current behavior - might also raise exception instead
+    def tracefunc(frame, event, arg):
+        print("*** trace:", frame, event, arg)
+        nonlocal trace_num_calls
+        trace_num_calls += 1
+
+    old_tracefunc = sys.gettrace()
+    try:
+        sys.settrace(tracefunc)
+        assert mod.is_raw_torch_tensor_type(type(raw_tensor)) is True
+        assert mod.is_raw_torch_tensor_type(type(raw_parameter)) is True
+        assert mod.is_raw_torch_tensor_type(type(numpy_tensor)) is False
+        assert mod.is_raw_torch_tensor_type(type(43)) is False
+        assert mod.is_raw_torch_tensor_type(43) is False  # current behavior - might also raise exception instead
+    finally:
+        sys.settrace(old_tracefunc)
+    assert trace_num_calls == 0
 
 
 def test_native_torch_raw_backend():
@@ -465,8 +482,20 @@ def test_native_torch_raw_backend():
     from returnn.frontend import _native
 
     mod = _native.get_module()
+    # Check that there is no Python code executed via sys.settrace.
+    trace_num_calls = 0
 
-    # TODO check sys.settrace, no Python code is executed
-    backend3 = mod.get_backend_for_tensor(tensor)
+    def tracefunc(frame, event, arg):
+        print("*** trace:", frame, event, arg)
+        nonlocal trace_num_calls
+        trace_num_calls += 1
+
+    old_tracefunc = sys.gettrace()
+    try:
+        sys.settrace(tracefunc)
+        backend3 = mod.get_backend_for_tensor(tensor)
+    finally:
+        sys.settrace(old_tracefunc)
 
     assert backend1 is backend2 is backend3
+    assert trace_num_calls == 0
