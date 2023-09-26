@@ -55,6 +55,53 @@ int PyModuleState::pyInitModuleExec() {
         Py_DECREF(mod);
     }
 
+    {
+        PyObject* mod = PyImport_ImportModule("returnn.frontend");
+        if(!mod)
+            return -1;
+        PyObject* rawTensorTypesUnion = PyObject_GetAttrString(mod, "RawTensorTypes");
+        if(!rawTensorTypesUnion) {
+            Py_DECREF(mod);
+            return -1;
+        }
+        PyObject* rawTensorTypesTuple = PyObject_GetAttrString(rawTensorTypesUnion, "__args__");
+        if(!rawTensorTypesTuple) {
+            Py_DECREF(mod);
+            Py_DECREF(rawTensorTypesUnion);
+            return -1;
+        }
+        if(!PyTuple_Check(rawTensorTypesTuple)) {
+            Py_DECREF(mod);
+            Py_DECREF(rawTensorTypesUnion);
+            Py_DECREF(rawTensorTypesTuple);
+            PyErr_Format(PyExc_TypeError, "RETURNN frontend _native: RawTensorTypes is not a tuple");
+            return -1;
+        }
+        _rawTensorTypesLen = PyTuple_GET_SIZE(rawTensorTypesTuple);
+        if(_rawTensorTypesLen < 0 || (size_t)_rawTensorTypesLen > sizeof(_rawTensorTypes) / sizeof(_rawTensorTypes[0])) {
+            _rawTensorTypesLen = 0;
+            Py_DECREF(mod);
+            Py_DECREF(rawTensorTypesUnion);
+            Py_DECREF(rawTensorTypesTuple);
+            PyErr_Format(PyExc_RuntimeError, "RETURNN frontend _native: too many RawTensorTypes (%i)", _rawTensorTypesLen);
+            return -1;
+        }
+        for(int i = 0; i < _rawTensorTypesLen; ++i) {
+            PyObject* obj = PyTuple_GET_ITEM(rawTensorTypesTuple, i);
+            if(!obj) {
+                PyErr_Format(PyExc_RuntimeError, "RETURNN frontend _native: RawTensorTypes tuple item %zd is NULL", i);
+                Py_DECREF(mod);
+                Py_DECREF(rawTensorTypesUnion);
+                Py_DECREF(rawTensorTypesTuple);
+                return -1;
+            }
+            _rawTensorTypes[i] = obj;
+        }
+        Py_DECREF(mod);
+        Py_DECREF(rawTensorTypesUnion);
+        Py_DECREF(rawTensorTypesTuple);
+    }
+
     return 0;
 }
 
@@ -203,6 +250,7 @@ error:
 const char* rawOpName(RawOp op) {
     static const char* names[NumTOps] = {NULL};
     if(!names[0]) {
+        names[TOp_ConvertToTensor] = "tensor";
         names[TOp_Permute] = "permute";
         names[TOp_Reshape] = "reshape";
         names[TOp_Eq] = "equal";

@@ -2,6 +2,7 @@
 #include <Python.h>
 #include <map>
 #include <string>
+#include <algorithm>
 #include "tensor_ops.hpp"
 #include "module.hpp"
 
@@ -12,7 +13,9 @@ static PyObject* compareOrCombine(
     bool allowBroadcastAllSources,
     PyObject* dimOrder
 ) {
-
+    // TODO ...
+    PyErr_Format(PyExc_NotImplementedError, "compareOrCombine: not implemented yet");
+    return NULL;
 }
 
 static PyObject* compareOrCombineViaCached(
@@ -110,7 +113,9 @@ PyObject* pyTensorCompare(PyObject *self, PyObject *args, PyObject *kwargs) {
 }
 
 PyObject* pyTensorCombine(PyObject *self, PyObject *args, PyObject *kwargs) {
-
+    // TODO ...
+    PyErr_Format(PyExc_NotImplementedError, "tensor_combine: not implemented yet");
+    return NULL;
 }
 
 template<RawOp op, bool isCompare>
@@ -184,10 +189,63 @@ PyObject* pyTensorEq(PyObject *self, PyObject *const *args, Py_ssize_t nargs) {
     if(!modState)
         return NULL;
 
-    // TODO ...
+    PyObject* a = args[0];
+    PyObject* b = args[1];
 
-    // default case
-    return _tensorCompareOrCombine<TOp_Eq, true>(modState, args[0], args[1]);
+    if(PyObject_IsInstance(a, modState->tensorType())) {}
+    else if(PyObject_IsInstance(b, modState->tensorType())) {
+        std::swap(a, b);
+    }
+    else {
+        PyErr_Format(PyExc_TypeError, "tensor_eq: expected at least one Tensor, got %R and %R", a, b);
+        return NULL;
+    }
+    // a is Tensor here, b could be anything
+
+    {
+        PyObject* rawTensor = PyObject_GetAttrString(a, "_raw_tensor");
+        if(!rawTensor)
+            return NULL;
+        if(rawTensor == Py_None) {
+            // The other op overloads would actually raise some exception in this case.
+            // However, here just return False.
+            Py_DECREF(rawTensor);
+            Py_INCREF(Py_False);
+            return Py_False;
+        }
+        Py_DECREF(rawTensor);
+    }
+
+    bool isValidType = false;
+    if(PyObject_IsInstance(b, modState->tensorType())) {
+        isValidType = true;
+    }
+    else {
+        for(int i = 0; i < modState->rawTensorTypesLen(); ++i) {
+            if(PyObject_IsInstance(b, modState->rawTensorType(i))) {
+                isValidType = true;
+                break;
+            }
+        }
+        if(!isValidType) {
+            PyObject* backend = getBackendForTensor(modState, a);
+            if(!backend)
+                return NULL;
+            PyObject* backendRawTensorType = PyObject_GetAttrString(backend, "RawTensorType");
+            if(!backendRawTensorType)
+                return NULL;
+            if(PyObject_IsInstance(b, backendRawTensorType))
+                isValidType = true;
+            Py_DECREF(backendRawTensorType);
+        }
+    }
+
+    if(isValidType)
+        // default case
+        return _tensorCompareOrCombine<TOp_Eq, true>(modState, a, b);
+
+    Py_INCREF(Py_False);
+    return Py_False;
 }
 
 #define DefinePyTensorCompare(op) \

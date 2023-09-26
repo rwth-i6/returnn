@@ -14,6 +14,9 @@ from ._tensor_mixin_base import _TensorMixinBase
 
 class _TensorOpOverloadsMixin(_TensorMixinBase):
 
+    # Note that all those ops have native implementations as well,
+    # so keep the logic in sync.
+
     # --- comparisons
 
     def __eq__(self: Tensor, other: Union[_rf_types.RawTensorTypes, Tensor]) -> Union[Tensor, bool]:

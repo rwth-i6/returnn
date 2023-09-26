@@ -5,6 +5,7 @@
 
 // raw ops
 enum RawOp {
+    TOp_ConvertToTensor,
     TOp_Permute,
     TOp_Reshape,
 
@@ -99,6 +100,10 @@ public:
     }
 
     int pyTraverse(visitproc visit, void *arg) {
+        for(int i = 0; i < _rawTensorTypesLen; ++i)
+            Py_VISIT(_rawTensorTypes[i]);
+        Py_VISIT(_tensorType);
+        Py_VISIT(_globalBackend);
         Py_VISIT(_backendTensorTypeDispatchTable);
         for(int i = 0; i < NumBackendsWithCachedOps * NumTOps; ++i)
             Py_VISIT(_cachedOps[i]);
@@ -108,6 +113,10 @@ public:
     }
 
     int pyClear() {
+        for(int i = 0; i < _rawTensorTypesLen; ++i)
+            Py_CLEAR(_rawTensorTypes[i]);
+        Py_CLEAR(_tensorType);
+        Py_CLEAR(_globalBackend);
         Py_CLEAR(_backendTensorTypeDispatchTable);
         for(int i = 0; i < NumBackendsWithCachedOps * NumTOps; ++i)
             Py_CLEAR(_cachedOps[i]);
@@ -118,16 +127,20 @@ public:
 
     int pyInitModuleExec();
 
-    inline PyObject* tensorType() { return _tensorType; }
-    inline PyObject* globalBackend() { return _globalBackend; }
+    inline PyObject* tensorType() const { return _tensorType; }
+    inline PyObject* globalBackend() const { return _globalBackend; }
     inline PyObject* cachedOp(RawOp op, BackendWithCachedOps backend) {
         if(!_cachedOps[backend * NumTOps + op])
             if(!_cachedOpInit(backend))
                 return NULL;
         return _cachedOps[backend * NumTOps + op];
     }
+    inline int rawTensorTypesLen() const { return _rawTensorTypesLen; }
+    inline PyObject* rawTensorType(int i) const { return _rawTensorTypes[i]; }
 
 private:
+    int _rawTensorTypesLen;
+    PyObject* _rawTensorTypes[10];
     PyObject* _tensorType;
     PyObject* _globalBackend;
     PyObject* _backendTensorTypeDispatchTable;
