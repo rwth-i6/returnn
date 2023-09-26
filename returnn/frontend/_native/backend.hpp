@@ -3,6 +3,8 @@
 
 #include <Python.h>
 
+class PyModuleState;
+
 // exported Python functions {
 
 PyObject* pyGetBackendForTensor(PyObject *self, PyObject *const *args, Py_ssize_t nargs);
@@ -11,8 +13,10 @@ PyObject* pyIsRawTorchTensorType(PyObject *self, PyObject *const *args, Py_ssize
 // }
 
 // return borrowed references. but for NULL, an exception is raised
-PyObject* getBackendForTensor(PyObject* module, PyObject* obj);
-PyObject* getBackendForRawTensor(PyObject* module, PyObject* obj);
-PyObject* getBackendForRawTensorType(PyObject* module, PyObject* obj);
+PyObject* getBackendForTensor(PyModuleState* modState, PyObject* obj);
+PyObject* getBackendForRawTensor(PyModuleState* modState, PyObject* obj);
+PyObject* getBackendForRawTensorType(PyModuleState* modState, PyObject* obj);
+
+bool isTorchBackendForTensor(PyModuleState* modState, PyObject* obj);
 
 #endif

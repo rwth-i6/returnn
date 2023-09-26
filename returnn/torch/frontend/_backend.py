@@ -19,6 +19,8 @@ import returnn.frontend as rf
 # noinspection PyProtectedMember
 from returnn.frontend import _random_journal
 
+from . import raw_ops
+
 _TT = Tensor[torch.Tensor]
 
 
@@ -617,6 +619,7 @@ class TorchBackend(Backend[torch.Tensor]):
             else:
                 raise ValueError(f"Parameter {param} assign: Unsupported op: {op}")
 
+    # keep in sync with native implementation
     @staticmethod
     def compare_raw(a: torch.Tensor, kind: str, b: torch.Tensor) -> torch.Tensor:
         """
@@ -631,6 +634,7 @@ class TorchBackend(Backend[torch.Tensor]):
         op = getattr(torch, kind)  # e.g. torch.equal
         return op(a, b)
 
+    # keep in sync with native implementation
     @staticmethod
     def combine_raw(a: torch.Tensor, kind: str, b: torch.Tensor) -> torch.Tensor:
         """
@@ -642,7 +646,7 @@ class TorchBackend(Backend[torch.Tensor]):
         """
         assert a.dim() == b.dim() or a.dim() == 0 or b.dim() == 0
         if kind == "squared_difference":
-            return (a - b) ** 2
+            return raw_ops.squared_difference(a, b)
         kind = {
             "truediv": "true_divide",
             "floordiv": "floor_divide",

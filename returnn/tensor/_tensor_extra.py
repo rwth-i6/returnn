@@ -227,6 +227,7 @@ class _TensorMixin(_TensorMixinBase):
         self._adapt_batch_consistent_dim_tags()  # TODO where to move this? not needed in general...
         self.sanity_check(assume_complete=False)  # TODO still needed?
 
+    # potentially replaced by native code
     @property
     def _raw_backend(self) -> Optional[Type[Backend]]:
         """

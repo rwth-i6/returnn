@@ -4,7 +4,7 @@
 #include <Python.h>
 
 // raw ops
-enum {
+enum RawOp {
     TOp_Permute,
     TOp_Reshape,
 
@@ -23,17 +23,24 @@ enum {
     TOp_Mod,
     TOp_Pow,
 
+    TOp_Maximum,
+    TOp_Minimum,
+    TOp_SquaredDifference,
+
     TOp_Neg,
     TOp_Abs,
 
     TOp_And,
     TOp_Or,
+    TOp_Not,
 
     NumTOps,
 };
 
+const char* rawOpName(RawOp op);
+
 // all backends where we want to cache the ops, to support very efficient inlined code
-enum {
+enum BackendWithCachedOps {
     BWCO_Torch,
 
     NumBackendsWithCachedOps,
@@ -109,13 +116,28 @@ public:
         return 0;
     }
 
+    int pyInitModuleExec();
+
+    inline PyObject* tensorType() { return _tensorType; }
+    inline PyObject* globalBackend() { return _globalBackend; }
+    inline PyObject* cachedOp(RawOp op, BackendWithCachedOps backend) {
+        if(!_cachedOps[backend * NumTOps + op])
+            if(!_cachedOpInit(backend))
+                return NULL;
+        return _cachedOps[backend * NumTOps + op];
+    }
+
 private:
+    PyObject* _tensorType;
+    PyObject* _globalBackend;
     PyObject* _backendTensorTypeDispatchTable;
     PyObject* _cachedOps[NumBackendsWithCachedOps * NumTOps];
     PyObject* _torchTensorType;
     PyObject* _torchBackend;
 
     bool _torchTensorTypeMaybeInit(PyObject* obj);
+    bool _cachedOpInit(BackendWithCachedOps backend);
+    bool _cachedOpInitTorch();
 };
 
 #endif

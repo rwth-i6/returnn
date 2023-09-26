@@ -5,8 +5,8 @@
 
 // exported Python functions {
 
-PyObject* pyCompare(PyObject *self, PyObject *const *args, Py_ssize_t nargs);
-PyObject* pyCombine(PyObject *self, PyObject *const *args, Py_ssize_t nargs);
+PyObject* pyCompare(PyObject *self, PyObject *args, PyObject *kwargs);
+PyObject* pyCombine(PyObject *self, PyObject *args, PyObject *kwargs);
 
 PyObject* pyTensorEq(PyObject *self, PyObject *const *args, Py_ssize_t nargs);
 PyObject* pyTensorNe(PyObject *self, PyObject *const *args, Py_ssize_t nargs);

@@ -11,13 +11,44 @@ static PyMethodDef _pyModuleMethods[] = {
         "get RETURNN frontend backend for RETURNN Tensor. like Tensor.raw_tensor"},
     {"is_raw_torch_tensor_type", (PyCFunction) pyIsRawTorchTensorType, METH_FASTCALL,
         "isinstance(raw_tensor, torch.Tensor)"},
+    {"tensor_compare", (PyCFunction) pyCompare, METH_VARARGS | METH_KEYWORDS, "rf.compare"},
+    {"tensor_combine", (PyCFunction) pyCombine, METH_VARARGS | METH_KEYWORDS, "rf.combine"},
     // ...
     {NULL, NULL, 0, NULL}        /* Sentinel */
 };
 
 static int _pyModuleExec(PyObject *m) {
-    // not sure if we really need this, or if we rather lazily init everything...
-    (void)m;
+    PyModuleState* modState = (PyModuleState*) PyModule_GetState(m);
+    if(!modState)
+        return -1;
+    return modState->pyInitModuleExec();
+}
+
+int PyModuleState::pyInitModuleExec() {
+    {
+        PyObject* mod = PyImport_ImportModule("returnn.tensor");
+        if(!mod)
+            return -1;
+        _tensorType = PyObject_GetAttrString(mod, "Tensor");
+        if(!_tensorType) {
+            Py_DECREF(mod);
+            return -1;
+        }
+        Py_DECREF(mod);
+    }
+
+    {
+        PyObject* mod = PyImport_ImportModule("returnn.frontend._backend");
+        if(!mod)
+            return -1;
+        _globalBackend = PyObject_GetAttrString(mod, "global_backend");
+        if(!_globalBackend) {
+            Py_DECREF(mod);
+            return -1;
+        }
+        Py_DECREF(mod);
+    }
+
     return 0;
 }
 
@@ -103,4 +134,94 @@ bool PyModuleState::_torchTensorTypeMaybeInit(PyObject* obj) {
         return false;
     }
     return true;
+}
+
+bool PyModuleState::_cachedOpInit(BackendWithCachedOps backend) {
+    if(backend == BWCO_Torch)
+        return _cachedOpInitTorch();
+    PyErr_Format(PyExc_RuntimeError, "RETURNN frontend _native: invalid backend '%d'", backend);
+    return false;
+}
+
+bool PyModuleState::_cachedOpInitTorch() {
+    PyObject** ops = _cachedOps + BWCO_Torch * NumTOps;
+    PyObject* mod = PyImport_ImportModule("torch");
+    if(!mod)
+        return false;
+    PyObject* modAlternatives = PyImport_ImportModule("returnn.torch.frontend.raw_ops");
+    if(!modAlternatives) {
+        Py_DECREF(mod);
+        return false;
+    }
+
+    // init all RawOp's
+
+    #define AddOp(op, name) ops[op] = PyObject_GetAttrString(mod, name); if(!ops[op]) goto error;
+    #define AddOpAlt(op, name) ops[op] = PyObject_GetAttrString(modAlternatives, name); if(!ops[op]) goto error;
+
+    AddOp(TOp_Permute, "permute");
+    AddOp(TOp_Reshape, "reshape");
+    AddOp(TOp_Eq, "eq");
+    AddOp(TOp_Ne, "not_equal");
+    AddOp(TOp_Lt, "less");
+    AddOp(TOp_Le, "less_equal");
+    AddOp(TOp_Gt, "greater");
+    AddOp(TOp_Ge, "greater_equal");
+    AddOp(TOp_Add, "add");
+    AddOp(TOp_Sub, "sub");
+    AddOp(TOp_Mul, "mul");
+    AddOp(TOp_TrueDiv, "true_divide");
+    AddOp(TOp_FloorDiv, "floor_divide");
+    AddOp(TOp_Mod, "remainder");
+    AddOp(TOp_Pow, "pow");
+    AddOpAlt(TOp_SquaredDifference, "squared_difference");
+    AddOp(TOp_Neg, "neg");
+    AddOp(TOp_Abs, "abs");
+    AddOp(TOp_And, "logical_and");
+    AddOp(TOp_Or, "logical_or");
+    AddOp(TOp_Not, "logical_not");
+
+    #undef AddOp
+    #undef AddOpAlt
+
+    Py_DECREF(mod);
+    Py_DECREF(modAlternatives);
+    return true;
+
+error:
+    Py_DECREF(mod);
+    Py_DECREF(modAlternatives);
+    return false;
+}
+
+const char* rawOpName(RawOp op) {
+    static const char* names[NumTOps] = {NULL};
+    if(!names[0]) {
+        names[TOp_Permute] = "permute";
+        names[TOp_Reshape] = "reshape";
+        names[TOp_Eq] = "equal";
+        names[TOp_Ne] = "not_equal";
+        names[TOp_Lt] = "less";
+        names[TOp_Le] = "less_equal";
+        names[TOp_Gt] = "greater";
+        names[TOp_Ge] = "greater_equal";
+        names[TOp_Add] = "add";
+        names[TOp_Sub] = "sub";
+        names[TOp_Mul] = "mul";
+        names[TOp_TrueDiv] = "truedivide";
+        names[TOp_FloorDiv] = "floordivide";
+        names[TOp_Mod] = "mod";
+        names[TOp_Pow] = "pow";
+        names[TOp_SquaredDifference] = "squared_difference";
+        names[TOp_Neg] = "neg";
+        names[TOp_Abs] = "abs";
+        names[TOp_And] = "logical_and";
+        names[TOp_Or] = "logical_or";
+        names[TOp_Not] = "logical_not";
+    }
+    if(!names[op]) {
+        PyErr_Format(PyExc_RuntimeError, "RETURNN frontend _native: invalid RawOp '%d'", op);
+        return NULL;
+    }
+    return names[op];
 }
