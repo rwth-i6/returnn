@@ -11,9 +11,15 @@ static PyMethodDef _pyModuleMethods[] = {
         "get RETURNN frontend backend for RETURNN Tensor. like Tensor.raw_tensor"},
     {"is_raw_torch_tensor_type", (PyCFunction) pyIsRawTorchTensorType, METH_FASTCALL,
         "isinstance(raw_tensor, torch.Tensor)"},
-    {"tensor_compare", (PyCFunction) pyCompare, METH_VARARGS | METH_KEYWORDS, "rf.compare"},
-    {"tensor_combine", (PyCFunction) pyCombine, METH_VARARGS | METH_KEYWORDS, "rf.combine"},
-    // ...
+    {"tensor_compare", (PyCFunction) pyTensorCompare, METH_VARARGS | METH_KEYWORDS, "rf.compare"},
+    {"tensor_combine", (PyCFunction) pyTensorCombine, METH_VARARGS | METH_KEYWORDS, "rf.combine"},
+    {"tensor_eq", (PyCFunction) pyTensorEq, METH_FASTCALL, "Tensor.__eq__"},
+    {"tensor_ne", (PyCFunction) pyTensorNe, METH_FASTCALL, "Tensor.__ne__"},
+    {"tensor_lt", (PyCFunction) pyTensorLt, METH_FASTCALL, "Tensor.__lt__"},
+    {"tensor_le", (PyCFunction) pyTensorLe, METH_FASTCALL, "Tensor.__le__"},
+    {"tensor_gt", (PyCFunction) pyTensorGt, METH_FASTCALL, "Tensor.__gt__"},
+    {"tensor_ge", (PyCFunction) pyTensorGe, METH_FASTCALL, "Tensor.__ge__"},
+    // TODO ...
     {NULL, NULL, 0, NULL}        /* Sentinel */
 };
 
