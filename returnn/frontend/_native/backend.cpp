@@ -1,3 +1,4 @@
+#include <string.h>
 #include "backend.hpp"
 #include "module.hpp"
 #include "py_utils.hpp"
@@ -23,6 +24,35 @@ PyObject* pyIsRawTorchTensorType(PyObject *self, PyObject *const *args, Py_ssize
     if(!modState) return NULL;
     bool res = modState->isTorchTensorType(args[0]);
     return PyBool_FromLong(res);
+}
+
+// like TorchBackend.get_dtype_name_raw()
+PyObject* pyRawTorchTensorGetDType(PyObject *self, PyObject *const *args, Py_ssize_t nargs) {
+    if(nargs != 1) {
+        PyErr_SetString(PyExc_TypeError, "raw_torch_tensor_get_dtype() takes exactly 1 argument: raw_tensor");
+        return NULL;
+    }
+    PyObjectScopedRef dtypeObj = PyObject_GetAttrString(args[0], "dtype");
+    if(!dtypeObj) return NULL;
+    PyObjectScopedRef dtypeStr = PyObject_Str(dtypeObj); // e.g. "torch.float32"
+    if(!dtypeStr) return NULL;
+    if(!PyUnicode_Check(dtypeStr)) {
+        PyErr_Format(
+            PyExc_TypeError,
+            "raw_torch_tensor_get_dtype: dtype.__str__() did not return a string, from dtype '%R'", dtypeObj.get());
+        return NULL;
+    }
+    const char* dtypeStrC = PyUnicode_AsUTF8(dtypeStr);
+    if(memcmp(dtypeStrC, "torch.", 6) != 0) {
+        PyErr_Format(
+            PyExc_TypeError,
+            "raw_torch_tensor_get_dtype: "
+            "dtype.__str__() did not return a string starting with 'torch.', from dtype '%R', str '%s'",
+            dtypeObj.get(), dtypeStrC);
+        return NULL;
+    }
+    dtypeStrC += 6;
+    return PyUnicode_FromString(dtypeStrC);
 }
 
 PyObject* getBackendForTensor(PyModuleState* modState, PyObject* obj) {

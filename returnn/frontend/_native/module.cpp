@@ -12,6 +12,7 @@ static PyMethodDef _pyModuleMethods[] = {
         "get RETURNN frontend backend for RETURNN Tensor. like Tensor.raw_tensor"},
     {"is_raw_torch_tensor_type", (PyCFunction) pyIsRawTorchTensorType, METH_FASTCALL,
         "isinstance(raw_tensor, torch.Tensor)"},
+    {"raw_torch_tensor_get_dtype", (PyCFunction) pyRawTorchTensorGetDType, METH_FASTCALL, "TorchBackend.get_dtype_name_raw"},
     {"tensor_compare", (PyCFunction) pyTensorCompare, METH_VARARGS | METH_KEYWORDS, "rf.compare"},
     {"tensor_combine", (PyCFunction) pyTensorCombine, METH_VARARGS | METH_KEYWORDS, "rf.combine"},
     {"tensor_eq", (PyCFunction) pyTensorEq, METH_FASTCALL, "Tensor.__eq__"},
@@ -27,10 +28,12 @@ static PyMethodDef _pyModuleMethods[] = {
 static int _pyModuleExec(PyObject *m) {
     PyModuleState* modState = (PyModuleState*) PyModule_GetState(m);
     if(!modState) return -1;
-    return modState->pyInitModuleExec();
+    return modState->pyInitModuleExec(m);
 }
 
-int PyModuleState::pyInitModuleExec() {
+int PyModuleState::pyInitModuleExec(PyObject* module) {
+    _module = module;
+
     {
         PyObjectScopedRef mod = PyImport_ImportModule("returnn.tensor");
         if(!mod) return -1;
@@ -184,12 +187,17 @@ bool PyModuleState::_cachedOpInitTorch() {
     AddOp(TOp_ConvertToTensor, "tensor");
     AddOp(TOp_Permute, "permute");
     AddOp(TOp_Reshape, "reshape");
+
     {
         PyObjectScopedRef shapeAttr = PyObject_GetAttrString(_torchTensorType, "shape");
         if(!shapeAttr) return false;
         ops[TOp_GetShape] = PyObject_GetAttrString(shapeAttr, "__get__");
         if(!ops[TOp_GetShape]) return false;
     }
+
+    ops[TOp_GetDType] = PyObject_GetAttrString(_module, "raw_torch_tensor_get_dtype");
+    if(!ops[TOp_GetDType]) return false;
+
     AddOp(TOp_Eq, "eq");
     AddOp(TOp_Ne, "not_equal");
     AddOp(TOp_Lt, "less");

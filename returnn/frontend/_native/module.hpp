@@ -9,6 +9,7 @@ enum RawOp {
     TOp_Permute,
     TOp_Reshape,
     TOp_GetShape,
+    TOp_GetDType,
 
     TOp_Eq,
     TOp_Ne,
@@ -126,7 +127,7 @@ public:
         return 0;
     }
 
-    int pyInitModuleExec();
+    int pyInitModuleExec(PyObject* module);
 
     inline PyObject* tensorType() const { return _tensorType; }
     inline PyObject* globalBackend() const { return _globalBackend; }
@@ -143,6 +144,7 @@ public:
     inline PyObject* rawTensorType(int i) const { return _rawTensorTypes[i]; }
 
 private:
+    PyObject* _module; // weak
     int _rawTensorTypesLen;
     PyObject* _rawTensorTypes[10];
     PyObject* _tensorType;
