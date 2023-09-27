@@ -8,6 +8,7 @@ enum RawOp {
     TOp_ConvertToTensor,
     TOp_Permute,
     TOp_Reshape,
+    TOp_GetShape,
 
     TOp_Eq,
     TOp_Ne,
@@ -149,6 +150,7 @@ private:
     PyObject* _torchBackend;
 
     bool _torchTensorTypeMaybeInit(PyObject* obj);
+    bool _torchTensorInit();
     bool _cachedOpInit(BackendWithCachedOps backend);
     bool _cachedOpInitTorch();
 };

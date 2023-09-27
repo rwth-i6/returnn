@@ -8,7 +8,9 @@ import numpy
 import sys
 import torch
 import pytest
+import unittest
 
+from returnn.util import better_exchook
 from returnn.tensor import Tensor, Dim
 import returnn.frontend as rf
 
@@ -452,7 +454,7 @@ def test_native_is_raw_torch_tensor_type():
 
     from returnn.frontend import _native
 
-    mod = _native.get_module()
+    mod = _native.get_module(verbose=True)
     # Check that there is no Python code executed via sys.settrace.
     trace_num_calls = 0
 
@@ -484,7 +486,7 @@ def test_native_torch_raw_backend():
 
     from returnn.frontend import _native
 
-    mod = _native.get_module()
+    mod = _native.get_module(verbose=True)
     # Check that there is no Python code executed via sys.settrace.
     trace_num_calls = 0
 
@@ -502,3 +504,56 @@ def test_native_torch_raw_backend():
 
     assert backend1 is backend2 is backend3
     assert trace_num_calls == 0
+
+
+def test_native_torch_tensor_eq():
+    batch_dim = Dim(2, name="batch_dim")
+    feature_dim = Dim(3, name="feature_dim")
+    tensor_bf = Tensor("tensor", dims=[batch_dim, feature_dim], dtype="float32", raw_tensor=torch.zeros(2, 3))
+    tensor_f = Tensor(
+        "tensor", dims=[feature_dim], dtype="float32", raw_tensor=torch.arange(-1, 2, dtype=torch.float32)
+    )
+
+    from returnn.frontend import _native
+
+    mod = _native.get_module(verbose=True)
+    # Check that there is no Python code executed via sys.settrace.
+    trace_num_calls = 0
+
+    def tracefunc(frame, event, arg):
+        print("*** trace:", frame, event, arg)
+        nonlocal trace_num_calls
+        trace_num_calls += 1
+
+    old_tracefunc = sys.gettrace()
+    try:
+        sys.settrace(tracefunc)
+        mod.tensor_eq(tensor_bf, tensor_bf)
+        mod.tensor_eq(tensor_bf, tensor_f)
+        mod.tensor_eq(tensor_bf, 0.0)
+    finally:
+        sys.settrace(old_tracefunc)
+    assert trace_num_calls == 0
+
+
+if __name__ == "__main__":
+    better_exchook.install()
+    if len(sys.argv) <= 1:
+        for k, v in sorted(globals().items()):
+            if k.startswith("test_"):
+                print("-" * 40)
+                print("Executing: %s" % k)
+                try:
+                    v()
+                except unittest.SkipTest as exc:
+                    print("SkipTest:", exc)
+                print("-" * 40)
+        print("Finished all tests.")
+    else:
+        assert len(sys.argv) >= 2
+        for arg in sys.argv[1:]:
+            print("Executing: %s" % arg)
+            if arg in globals():
+                globals()[arg]()  # assume function and execute
+            else:
+                eval(arg)  # assume Python code and execute

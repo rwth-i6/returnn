@@ -3,7 +3,15 @@
 
 #include <Python.h>
 
+class PyModuleState;
+
+// generic
+
+PyObject* tensorCopyTemplate(PyModuleState* modState, PyObject* tensor);
+
 // exported Python functions {
+
+PyObject* pyTensorCopyTemplate(PyObject *self, PyObject *args, PyObject *kwargs);
 
 PyObject* pyTensorCompare(PyObject *self, PyObject *args, PyObject *kwargs);
 PyObject* pyTensorCombine(PyObject *self, PyObject *args, PyObject *kwargs);

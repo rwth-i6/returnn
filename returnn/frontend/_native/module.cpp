@@ -4,6 +4,7 @@
 #include "module.hpp"
 #include "backend.hpp"
 #include "tensor_ops.hpp"
+#include "py_utils.hpp"
 
 // https://docs.python.org/3/c-api/structures.html#c.PyMethodDef
 static PyMethodDef _pyModuleMethods[] = {
@@ -25,81 +26,51 @@ static PyMethodDef _pyModuleMethods[] = {
 
 static int _pyModuleExec(PyObject *m) {
     PyModuleState* modState = (PyModuleState*) PyModule_GetState(m);
-    if(!modState)
-        return -1;
+    if(!modState) return -1;
     return modState->pyInitModuleExec();
 }
 
 int PyModuleState::pyInitModuleExec() {
     {
-        PyObject* mod = PyImport_ImportModule("returnn.tensor");
-        if(!mod)
-            return -1;
+        PyObjectScopedRef mod = PyImport_ImportModule("returnn.tensor");
+        if(!mod) return -1;
         _tensorType = PyObject_GetAttrString(mod, "Tensor");
-        if(!_tensorType) {
-            Py_DECREF(mod);
-            return -1;
-        }
-        Py_DECREF(mod);
+        if(!_tensorType) return -1;
     }
 
     {
-        PyObject* mod = PyImport_ImportModule("returnn.frontend._backend");
-        if(!mod)
-            return -1;
+        PyObjectScopedRef mod = PyImport_ImportModule("returnn.frontend._backend");
+        if(!mod) return -1;
         _globalBackend = PyObject_GetAttrString(mod, "global_backend");
-        if(!_globalBackend) {
-            Py_DECREF(mod);
-            return -1;
-        }
-        Py_DECREF(mod);
+        if(!_globalBackend) return -1;
     }
 
     {
-        PyObject* mod = PyImport_ImportModule("returnn.frontend");
-        if(!mod)
-            return -1;
-        PyObject* rawTensorTypesUnion = PyObject_GetAttrString(mod, "RawTensorTypes");
-        if(!rawTensorTypesUnion) {
-            Py_DECREF(mod);
-            return -1;
-        }
-        PyObject* rawTensorTypesTuple = PyObject_GetAttrString(rawTensorTypesUnion, "__args__");
-        if(!rawTensorTypesTuple) {
-            Py_DECREF(mod);
-            Py_DECREF(rawTensorTypesUnion);
-            return -1;
-        }
+        PyObjectScopedRef mod = PyImport_ImportModule("returnn.frontend");
+        if(!mod) return -1;
+        PyObjectScopedRef rawTensorTypesUnion = PyObject_GetAttrString(mod, "RawTensorTypes");
+        if(!rawTensorTypesUnion) return -1;
+        PyObjectScopedRef rawTensorTypesTuple = PyObject_GetAttrString(rawTensorTypesUnion, "__args__");
+        if(!rawTensorTypesTuple) return -1;
         if(!PyTuple_Check(rawTensorTypesTuple)) {
-            Py_DECREF(mod);
-            Py_DECREF(rawTensorTypesUnion);
-            Py_DECREF(rawTensorTypesTuple);
             PyErr_Format(PyExc_TypeError, "RETURNN frontend _native: RawTensorTypes is not a tuple");
             return -1;
         }
-        _rawTensorTypesLen = PyTuple_GET_SIZE(rawTensorTypesTuple);
+        _rawTensorTypesLen = PyTuple_GET_SIZE(rawTensorTypesTuple.get());
         if(_rawTensorTypesLen < 0 || (size_t)_rawTensorTypesLen > sizeof(_rawTensorTypes) / sizeof(_rawTensorTypes[0])) {
             _rawTensorTypesLen = 0;
-            Py_DECREF(mod);
-            Py_DECREF(rawTensorTypesUnion);
-            Py_DECREF(rawTensorTypesTuple);
             PyErr_Format(PyExc_RuntimeError, "RETURNN frontend _native: too many RawTensorTypes (%i)", _rawTensorTypesLen);
             return -1;
         }
         for(int i = 0; i < _rawTensorTypesLen; ++i) {
-            PyObject* obj = PyTuple_GET_ITEM(rawTensorTypesTuple, i);
+            PyObject* obj = PyTuple_GET_ITEM(rawTensorTypesTuple.get(), i);
             if(!obj) {
                 PyErr_Format(PyExc_RuntimeError, "RETURNN frontend _native: RawTensorTypes tuple item %zd is NULL", i);
-                Py_DECREF(mod);
-                Py_DECREF(rawTensorTypesUnion);
-                Py_DECREF(rawTensorTypesTuple);
                 return -1;
             }
+            Py_INCREF(obj);
             _rawTensorTypes[i] = obj;
         }
-        Py_DECREF(mod);
-        Py_DECREF(rawTensorTypesUnion);
-        Py_DECREF(rawTensorTypesTuple);
     }
 
     return 0;
@@ -115,15 +86,13 @@ static PyModuleDef_Slot _pyModuleSlots[] = {
 
 static int _pyModuleTraverse(PyObject *m, visitproc visit, void *arg) {
     PyModuleState* modState = (PyModuleState*) PyModule_GetState(m);
-    if(!modState)
-        return -1;
+    if(!modState) return -1;
     return modState->pyTraverse(visit, arg);
 }
 
 static int _pyModuleClear(PyObject *m) {
     PyModuleState* modState = (PyModuleState*) PyModule_GetState(m);
-    if(!modState)
-        return -1;
+    if(!modState) return -1;
     return modState->pyClear();
 }
 
@@ -155,7 +124,7 @@ PyMODINIT_FUNC PyInit__returnn_frontend_native(void) {
 
 bool PyModuleState::_torchTensorTypeMaybeInit(PyObject* obj) {
     {
-        PyObject* modName = PyObject_GetAttrString(obj, "__module__");
+        PyObjectScopedRef modName = PyObject_GetAttrString(obj, "__module__");
         if(!modName) {
             PyErr_Clear();
             return false;
@@ -163,29 +132,27 @@ bool PyModuleState::_torchTensorTypeMaybeInit(PyObject* obj) {
 
         const char* modNameStr = PyUnicode_AsUTF8(modName);
         if(!modNameStr) {
-            Py_DECREF(modName);
             PyErr_Clear();
             return false;
         }
 
-        if(memcmp(modNameStr, "torch", 5) != 0 || (modNameStr[5] != '\0' && modNameStr[5] != '.')) {
-            Py_DECREF(modName);
+        if(memcmp(modNameStr, "torch", 5) != 0 || (modNameStr[5] != '\0' && modNameStr[5] != '.'))
             return false;
-        }
-        Py_DECREF(modName);
     }
 
-    PyObject* mod = PyImport_ImportModule("torch");
-    if(!mod) {
+    if(!_torchTensorInit()) {
         PyErr_Clear();
         return false;
     }
+    return true;
+}
+
+bool PyModuleState::_torchTensorInit() {
+    PyObjectScopedRef mod = PyImport_ImportModule("torch");
+    if(!mod) return false;
     _torchTensorType = PyObject_GetAttrString(mod, "Tensor");
-    Py_DECREF(mod);
-    if(!_torchTensorType) {
-        PyErr_Clear();
+    if(!_torchTensorType)
         return false;
-    }
     return true;
 }
 
@@ -198,22 +165,30 @@ bool PyModuleState::_cachedOpInit(BackendWithCachedOps backend) {
 
 bool PyModuleState::_cachedOpInitTorch() {
     PyObject** ops = _cachedOps + BWCO_Torch * NumTOps;
-    PyObject* mod = PyImport_ImportModule("torch");
-    if(!mod)
-        return false;
-    PyObject* modAlternatives = PyImport_ImportModule("returnn.torch.frontend.raw_ops");
-    if(!modAlternatives) {
-        Py_DECREF(mod);
-        return false;
+    PyObjectScopedRef mod = PyImport_ImportModule("torch");
+    if(!mod) return false;
+
+    if(!_torchTensorType) {
+        _torchTensorType = PyObject_GetAttrString(mod, "Tensor");
+        if(!_torchTensorType) return false;
     }
+
+    PyObjectScopedRef modAlternatives = PyImport_ImportModule("returnn.torch.frontend.raw_ops");
+    if(!modAlternatives) return false;
 
     // init all RawOp's
 
-    #define AddOp(op, name) ops[op] = PyObject_GetAttrString(mod, name); if(!ops[op]) goto error;
-    #define AddOpAlt(op, name) ops[op] = PyObject_GetAttrString(modAlternatives, name); if(!ops[op]) goto error;
+    #define AddOp(op, name) ops[op] = PyObject_GetAttrString(mod, name); if(!ops[op]) return false;
+    #define AddOpAlt(op, name) ops[op] = PyObject_GetAttrString(modAlternatives, name); if(!ops[op]) return false;
 
     AddOp(TOp_Permute, "permute");
     AddOp(TOp_Reshape, "reshape");
+    {
+        PyObjectScopedRef shapeAttr = PyObject_GetAttrString(_torchTensorType, "shape");
+        if(!shapeAttr) return false;
+        ops[TOp_GetShape] = PyObject_GetAttrString(shapeAttr, "__get__");
+        if(!ops[TOp_GetShape]) return false;
+    }
     AddOp(TOp_Eq, "eq");
     AddOp(TOp_Ne, "not_equal");
     AddOp(TOp_Lt, "less");
@@ -240,11 +215,6 @@ bool PyModuleState::_cachedOpInitTorch() {
     Py_DECREF(mod);
     Py_DECREF(modAlternatives);
     return true;
-
-error:
-    Py_DECREF(mod);
-    Py_DECREF(modAlternatives);
-    return false;
 }
 
 const char* rawOpName(RawOp op) {

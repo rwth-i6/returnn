@@ -1,5 +1,6 @@
 #include "backend.hpp"
 #include "module.hpp"
+#include "py_utils.hpp"
 
 PyObject* pyGetBackendForTensor(PyObject *self, PyObject *const *args, Py_ssize_t nargs) {
     if(nargs != 1) {
@@ -7,8 +8,7 @@ PyObject* pyGetBackendForTensor(PyObject *self, PyObject *const *args, Py_ssize_
         return NULL;
     }
     PyModuleState* modState = (PyModuleState*) PyModule_GetState(self);
-    if(!modState)
-        return NULL;
+    if(!modState) return NULL;
     PyObject* res = getBackendForTensor(modState, args[0]);
     Py_XINCREF(res);
     return res;
@@ -20,19 +20,15 @@ PyObject* pyIsRawTorchTensorType(PyObject *self, PyObject *const *args, Py_ssize
         return NULL;
     }
     PyModuleState* modState = (PyModuleState*) PyModule_GetState(self);
-    if(!modState)
-        return NULL;
+    if(!modState) return NULL;
     bool res = modState->isTorchTensorType(args[0]);
     return PyBool_FromLong(res);
 }
 
 PyObject* getBackendForTensor(PyModuleState* modState, PyObject* obj) {
-    PyObject* raw_tensor = PyObject_GetAttrString(obj, "_raw_tensor");
-    if(!raw_tensor)
-        return NULL;
-    PyObject* backend = getBackendForRawTensor(modState, raw_tensor);
-    Py_DECREF(raw_tensor);
-    return backend;
+    PyObjectScopedRef raw_tensor = PyObject_GetAttrString(obj, "_raw_tensor");
+    if(!raw_tensor) return NULL;
+    return getBackendForRawTensor(modState, raw_tensor);
 }
 
 PyObject* getBackendForRawTensor(PyModuleState* modState, PyObject* obj) {
@@ -47,32 +43,25 @@ PyObject* getBackendForRawTensor(PyModuleState* modState, PyObject* obj) {
     // fast path 2 -- try dispatch table
     PyObject* dispatchTable = modState->backendTensorTypeDispatchTable(); // borrowed
     PyObject* backend = PyDict_GetItem(dispatchTable, obj); // borrowed
-    if(backend)
-        return backend;
+    if(backend) return backend;
 
     // generic fallback
-    PyObject* mod = PyImport_ImportModule("returnn.frontend._backend");
-    if(!mod)
-        return NULL;
-    PyObject* methodName = PyUnicode_InternFromString("get_backend_by_raw_tensor_type");
-    if(!methodName) {
-        Py_DECREF(mod);
-        return NULL;
-    }
+    PyObjectScopedRef mod = PyImport_ImportModule("returnn.frontend._backend");
+    if(!mod) return NULL;
+    PyObjectScopedRef methodName = PyUnicode_InternFromString("get_backend_by_raw_tensor_type");
+    if(!methodName) return NULL;
+
     backend = PyObject_CallMethodObjArgs(mod, methodName, obj, NULL);
-    Py_DECREF(methodName);
     Py_XDECREF(backend); // make it borrowed; it will be referenced elsewhere
     return backend;
 }
 
 bool isTorchBackendForTensor(PyModuleState* modState, PyObject* obj) {
-    PyObject* raw_tensor = PyObject_GetAttrString(obj, "_raw_tensor");
+    PyObjectScopedRef raw_tensor = PyObject_GetAttrString(obj, "_raw_tensor");
     if(!raw_tensor) {
         PyErr_Clear();
         return false;
     }
 
-    bool res = modState->isTorchTensorType((PyObject*) Py_TYPE(raw_tensor));
-    Py_DECREF(raw_tensor);
-    return res;
+    return modState->isTorchTensorType((PyObject*) Py_TYPE(raw_tensor));
 }

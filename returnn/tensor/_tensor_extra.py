@@ -621,6 +621,7 @@ class _TensorMixin(_TensorMixinBase):
         dims: Tuple[Dim, ...]
         self._dims = dims
 
+    # Note that this has a native implementation.
     def copy(self, name: Optional[str] = None) -> _t.Tensor:
         """
         :param name: if given, will overwrite this name
@@ -1354,6 +1355,7 @@ class _TensorMixin(_TensorMixinBase):
                 )
         return _t.Tensor(**data_opts)
 
+    # Note that this has a native implementation.
     def copy_template(self, name=None, dtype=None) -> _t.Tensor:
         """
         :param str|None name:

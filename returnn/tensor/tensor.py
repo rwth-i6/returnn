@@ -55,6 +55,7 @@ class Tensor(_TensorMixin, _TensorOpOverloadsMixin, Generic[RawTensorType]):
     version: int
     _extra: Optional[_TensorExtra]
 
+    # This is potentially replaced by native implementation.
     def __init__(
         self,
         name: str,
@@ -153,6 +154,7 @@ class Tensor(_TensorMixin, _TensorOpOverloadsMixin, Generic[RawTensorType]):
         """
         return set(self._dims)
 
+    # This is potentially replaced by native implementation.
     @property
     def raw_tensor(self) -> Optional[RawTensorType]:
         """
@@ -160,6 +162,7 @@ class Tensor(_TensorMixin, _TensorOpOverloadsMixin, Generic[RawTensorType]):
         """
         return self._raw_tensor
 
+    # This is potentially replaced by native implementation.
     @raw_tensor.setter
     def raw_tensor(self, value: Optional[RawTensorType]):
         """
