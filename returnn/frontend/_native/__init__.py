@@ -5,9 +5,9 @@ Native code as Python extension module for the RETURNN frontend, including tenso
 from __future__ import annotations
 
 import os
+import hashlib
 from glob import glob
 from returnn.util.py_ext_mod_compiler import PyExtModCompiler
-import returnn
 
 _module = None
 _my_dir = os.path.dirname(os.path.abspath(__file__))
@@ -21,17 +21,13 @@ def get_module(*, verbose: bool = False):
     if _module and not verbose:
         return _module
 
-    # Put code all together in one big blob.
-    # (Similar logic as in ken_lm.get_tf_mod.)
-    files = sorted(glob(_my_dir + "/*.cpp"))
+    # Single source, which includes all cpp files, and also includes the hash of all hpp/cpp files.
     src_code = ""
-    for fn in files:
-        f_code = open(fn).read()
-        src_code += "\n// ------------ %s : BEGIN { ------------\n" % os.path.basename(fn)
-        # https://gcc.gnu.org/onlinedocs/cpp/Line-Control.html#Line-Control
-        src_code += '#line 1 "%s"\n' % os.path.relpath(fn, returnn.__root_dir__)
-        src_code += f_code
-        src_code += "\n// ------------ %s : END } --------------\n\n" % os.path.basename(fn)
+    for fn in sorted(glob(_my_dir + "/*.hpp")):
+        src_code += f"// {os.path.basename(fn)} code hash md5: {_code_hash_md5(fn)}\n"
+    for fn in sorted(glob(_my_dir + "/*.cpp")):
+        src_code += f"// {os.path.basename(fn)} code hash md5: {_code_hash_md5(fn)}\n"
+        src_code += f'#include "{os.path.basename(fn)}"\n'
 
     compiler = PyExtModCompiler(
         base_name="_returnn_frontend_native",
@@ -43,6 +39,13 @@ def get_module(*, verbose: bool = False):
     )
     _module = compiler.load_py_module()
     return _module
+
+
+def _code_hash_md5(filename: str) -> str:
+    f_code = open(filename).read()
+    h = hashlib.md5()
+    h.update(f_code.encode("utf8"))
+    return h.hexdigest()
 
 
 _is_set_up = False
