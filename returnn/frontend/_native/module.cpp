@@ -181,6 +181,7 @@ bool PyModuleState::_cachedOpInitTorch() {
     #define AddOp(op, name) ops[op] = PyObject_GetAttrString(mod, name); if(!ops[op]) return false;
     #define AddOpAlt(op, name) ops[op] = PyObject_GetAttrString(modAlternatives, name); if(!ops[op]) return false;
 
+    AddOp(TOp_ConvertToTensor, "tensor");
     AddOp(TOp_Permute, "permute");
     AddOp(TOp_Reshape, "reshape");
     {
@@ -212,8 +213,6 @@ bool PyModuleState::_cachedOpInitTorch() {
     #undef AddOp
     #undef AddOpAlt
 
-    Py_DECREF(mod);
-    Py_DECREF(modAlternatives);
     return true;
 }
 

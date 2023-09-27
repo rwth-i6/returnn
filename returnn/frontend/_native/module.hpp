@@ -134,7 +134,10 @@ public:
         if(!_cachedOps[backend * NumTOps + op])
             if(!_cachedOpInit(backend))
                 return NULL;
-        return _cachedOps[backend * NumTOps + op];
+        PyObject* func = _cachedOps[backend * NumTOps + op];
+        if(!func)
+            PyErr_Format(PyExc_RuntimeError, "RETURNN frontend _native: invalid backend %d, op %d, '%s'", backend, op, rawOpName(op));
+        return func;
     }
     inline int rawTensorTypesLen() const { return _rawTensorTypesLen; }
     inline PyObject* rawTensorType(int i) const { return _rawTensorTypes[i]; }
