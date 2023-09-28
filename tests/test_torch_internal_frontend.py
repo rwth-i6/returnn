@@ -9,6 +9,7 @@ import sys
 import torch
 import pytest
 import unittest
+import typing
 
 from returnn.util import better_exchook
 from returnn.tensor import Tensor, Dim
@@ -522,6 +523,9 @@ def test_native_torch_tensor_eq():
 
     def tracefunc(frame, event, arg):
         print("*** trace:", frame, event, arg)
+        if frame.f_globals is vars(typing):
+            print("   (ignore typing module)")
+            return
         nonlocal trace_num_calls
         trace_num_calls += 1
 
