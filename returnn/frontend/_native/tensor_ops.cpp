@@ -762,12 +762,12 @@ static PyObject* _tensorUnaryFunc(PyModuleState* modState, PyObject* tensor) {
         PyObjectScopedRef actFunc = PyObject_GetAttrString(backend, "activation");
         if(!actFunc) return NULL;
         PyObjectScopedRef opName = PyUnicode_FromString(rawOpName(op));
-        return PyObject_CallFunctionObjArgs(actFunc.get(), rawTensor.get(), opName.get(), NULL);
+        return PyObject_CallFunctionObjArgs(actFunc.get(), tensor, opName.get(), NULL);
     }
     else {
         PyObjectScopedRef func = PyObject_GetAttrString(backend, rawOpName(op));
         if(!func) return NULL;
-        return PyObject_CallFunctionObjArgs(func, rawTensor.get(), NULL);
+        return PyObject_CallFunctionObjArgs(func, tensor, NULL);
     }
 }
 

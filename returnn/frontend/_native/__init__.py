@@ -37,7 +37,9 @@ def get_module(*, verbose: bool = False):
         is_cpp=True,
         verbose=verbose,
     )
-    _module = compiler.load_py_module()
+    module = compiler.load_py_module()
+    if not _module:
+        _module = module
     return _module
 
 

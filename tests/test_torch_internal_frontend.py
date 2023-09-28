@@ -554,6 +554,48 @@ def test_native_torch_tensor_eq():
     assert trace_num_calls == 0
 
 
+def test_native_torch_tensor_eq_op():
+    batch_dim = Dim(2, name="batch_dim")
+    feature_dim = Dim(3, name="feature_dim")
+    tensor_bf = Tensor("tensor", dims=[batch_dim, feature_dim], dtype="float32", raw_tensor=torch.zeros(2, 3))
+    tensor_f = Tensor(
+        "tensor", dims=[feature_dim], dtype="float32", raw_tensor=torch.arange(-1, 2, dtype=torch.float32)
+    )
+
+    from returnn.frontend import _native
+
+    mod = _native.get_module(verbose=True)
+
+    assert Tensor.__eq__ is mod.tensor_eq
+
+    # Check that there is no Python code executed via sys.settrace.
+    trace_num_calls = 0
+
+    def tracefunc(frame, event, arg):
+        print("*** trace:", frame, event, arg)
+        if frame.f_globals is vars(typing):
+            print("   (ignore typing module)")
+            return
+        if frame.f_code is Tensor.__init__.__code__:
+            print("   (ignoring Tensor.__init__ for now, remains to be implemented...)")  # TODO
+            return
+        nonlocal trace_num_calls
+        trace_num_calls += 1
+
+    old_tracefunc = sys.gettrace()
+    try:
+        sys.settrace(tracefunc)
+        res = tensor_bf == tensor_f
+    finally:
+        sys.settrace(old_tracefunc)
+
+    assert isinstance(res, Tensor) and isinstance(res.raw_tensor, torch.Tensor)
+    assert res.dims == (batch_dim, feature_dim)
+    assert res.raw_tensor.detach().numpy().tolist() == [[False, True, False], [False, True, False]]
+
+    assert trace_num_calls == 0
+
+
 def test_native_torch_tensor_neg():
     batch_dim = Dim(2, name="batch_dim")
     feature_dim = Dim(3, name="feature_dim")
