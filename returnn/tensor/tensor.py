@@ -154,7 +154,7 @@ class Tensor(_TensorMixin, _TensorOpOverloadsMixin, Generic[RawTensorType]):
         """
         return set(self._dims)
 
-    # This is potentially replaced by native implementation.
+    # This is potentially replaced by native implementation (Tensor._raw_tensor.__get__)
     @property
     def raw_tensor(self) -> Optional[RawTensorType]:
         """
@@ -162,7 +162,7 @@ class Tensor(_TensorMixin, _TensorOpOverloadsMixin, Generic[RawTensorType]):
         """
         return self._raw_tensor
 
-    # This is potentially replaced by native implementation.
+    # This is potentially replaced by native implementation (_native pyTensorRawTensorSetter).
     @raw_tensor.setter
     def raw_tensor(self, value: Optional[RawTensorType]):
         """
@@ -178,7 +178,7 @@ class Tensor(_TensorMixin, _TensorOpOverloadsMixin, Generic[RawTensorType]):
             assert len(raw_shape) == len(self._dims), f"Mismatching shape ndim: Raw tensor {raw_shape} vs Tensor {self}"
             for i, dim in enumerate(self._dims):
                 if dim.dimension is None:
-                    continue  # we allow anything in the placeholder
+                    continue  # we allow anything in the raw_tensor dim
                 if raw_shape[i] != dim.dimension:
                     raise Exception(
                         f"Mismatching shape: Raw tensor {raw_shape} vs Tensor {self};\n"

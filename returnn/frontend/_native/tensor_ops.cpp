@@ -6,6 +6,7 @@
 #include <algorithm>
 #include "tensor_ops.hpp"
 #include "module.hpp"
+#include "backend.hpp"
 #include "py_utils.hpp"
 
 // copy of Tensor.copy_template()
@@ -146,6 +147,150 @@ PyObject* pyTensorCopyTemplate(PyObject *self, PyObject *args, PyObject *kwargs)
         return NULL;
 
     return tensorCopyTemplate(modState, tensor, name, dtype);
+}
+
+static bool _isMatchingDType(PyObject* dtype, PyObject* rawDtype) {
+    if(!PyUnicode_Check(dtype)) {
+        PyErr_Format(
+            PyExc_TypeError,
+            "tensor_raw_tensor_setter: tensor.dtype did not return a string, from dtype '%R'", dtype);
+        return false;
+    }
+    if(!PyUnicode_Check(rawDtype)) {
+        PyErr_Format(
+            PyExc_TypeError,
+            "tensor_raw_tensor_setter: raw_tensor.dtype did not return a string, from dtype '%R'", rawDtype);
+        return false;
+    }
+    if(PyUnicode_Compare(dtype, rawDtype) != 0) {
+        PyErr_Format(
+            PyExc_ValueError,
+            "tensor_raw_tensor_setter: tensor.dtype != raw_tensor.dtype, from tensor dtype '%R' and raw_tensor dtype '%R'",
+            dtype, rawDtype);
+        return false;
+    }
+    return true;
+}
+
+static bool _isMatchingDimTagsAndRawShape(PyObject* dimTags, PyObject* rawShape, const char* funcName) {
+    if(!PyTuple_Check(dimTags)) {
+        PyErr_Format(PyExc_TypeError, "%s: expected tensor.dims to be tuple, got %R", funcName, dimTags);
+        return false;
+    }
+    if(!PyTuple_Check(rawShape)) {
+        PyErr_Format(PyExc_TypeError, "%s: expected raw_tensor.shape to be tuple, got %R", funcName, rawShape);
+        return false;
+    }
+
+    int ndim = PyTuple_GET_SIZE(dimTags);
+    if(ndim < 0 || ndim != PyTuple_GET_SIZE(rawShape)) {
+        PyErr_Format(
+            PyExc_ValueError,
+            "%s: tensor ndim != raw_tensor ndim, from tensor dims '%R' and raw_tensor shape '%R'",
+            funcName, dimTags, rawShape);
+        return false;
+    }
+    for(int i = 0; i < ndim; ++i) {
+        PyObject* dimTag = PyTuple_GET_ITEM(dimTags, i);
+        PyObject* rawDim = PyTuple_GET_ITEM(rawShape, i);
+        PyObjectScopedRef dim = PyObject_GetAttrString(dimTag, "size");
+        if(!dim) return false;
+        if(dim == Py_None) continue; // we allow anything in the raw_tensor dim
+        long dimInt = PyLong_AsLong(dim);
+        if(dimInt < 0) {
+            if(!PyErr_Occurred())
+                PyErr_Format(
+                    PyExc_ValueError,
+                    "%s: tensor dim is negative, from tensor dims '%R' and raw_tensor shape '%R'",
+                    funcName, dimTags, rawShape);
+            return false;
+        }
+        long rawDimInt = PyLong_AsLong(rawDim);
+        if(rawDimInt < 0) {
+            if(!PyErr_Occurred())
+                PyErr_Format(
+                    PyExc_ValueError,
+                    "%s: raw_tensor dim is negative, from tensor dims '%R' and raw_tensor shape '%R'",
+                    funcName, dimTags, rawShape);
+            return false;
+        }
+        if(dimInt != rawDimInt) {
+            PyErr_Format(
+                PyExc_ValueError,
+                "%s: tensor dim != raw_tensor dim, from tensor dims '%R' and raw_tensor shape '%R'",
+                funcName, dimTags, rawShape);
+            return false;
+        }
+    }
+    return true;
+}
+
+PyObject* pyTensorRawTensorSetter(PyObject *self, PyObject *const *args, Py_ssize_t nargs) {
+    if(nargs != 2) {
+        PyErr_SetString(PyExc_TypeError, "tensor_raw_tensor_setter() takes exactly 2 arguments: tensor, raw_tensor");
+        return NULL;
+    }
+    PyObject* tensor = args[0];
+    PyObject* raw_tensor = args[1];
+
+    PyModuleState* modState = (PyModuleState*) PyModule_GetState(self);
+    if(!modState) return NULL;
+
+    // Do sanity check for dims and dtype.
+    bool haveBackendWithCachedOps = false;
+    BackendWithCachedOps backendId;
+    if(modState->isTorchTensorType((PyObject*) Py_TYPE(raw_tensor))) {
+        haveBackendWithCachedOps = true;
+        backendId = BWCO_Torch;
+    }
+
+    if(haveBackendWithCachedOps) {
+        {
+            PyObject* getDTypeOp = modState->cachedOp(TOp_GetDType, backendId);
+            if(!getDTypeOp) return NULL;
+            PyObjectScopedRef dtype = PyObject_GetAttrString(tensor, "dtype");
+            if(!dtype) return NULL;
+            PyObjectScopedRef rawDtype = PyObject_CallFunctionObjArgs(getDTypeOp, raw_tensor, NULL);
+            if(!rawDtype) return NULL;
+            if(!_isMatchingDType(dtype, rawDtype))
+                return NULL;
+        }
+        {
+            PyObject* getShapeOp = modState->cachedOp(TOp_GetShape, backendId);
+            if(!getShapeOp) return NULL;
+            PyObjectScopedRef dims = PyObject_GetAttrString(tensor, "_dims");
+            if(!dims) return NULL;
+            PyObjectScopedRef rawShape = PyObject_CallFunctionObjArgs(getShapeOp, raw_tensor, NULL);
+            if(!rawShape) return NULL;
+            if(!_isMatchingDimTagsAndRawShape(dims, rawShape, "tensor_raw_tensor_setter"))
+                return NULL;
+        }
+    }
+    else if(raw_tensor == Py_None) {}  // nothing to check
+    else {
+        PyObject* backend = getBackendForRawTensor(modState, tensor);
+        if(!backend) return NULL;
+        {
+            PyObjectScopedRef dtype = PyObject_GetAttrString(tensor, "dtype");
+            if(!dtype) return NULL;
+            PyObjectScopedRef rawDtype = PyObject_CallMethod(backend, "get_dtype_name_raw", "O", raw_tensor);
+            if(!rawDtype) return NULL;
+            if(!_isMatchingDType(dtype, rawDtype))
+                return NULL;
+        }
+        {
+            PyObjectScopedRef dims = PyObject_GetAttrString(tensor, "_dims");
+            if(!dims) return NULL;
+            PyObjectScopedRef rawShape = PyObject_CallMethod(backend, "get_known_shape_raw", "O", raw_tensor);
+            if(!rawShape) return NULL;
+            if(!_isMatchingDimTagsAndRawShape(dims, rawShape, "tensor_raw_tensor_setter"))
+                return NULL;
+        }
+    }
+
+    if(PyObject_SetAttrString(tensor, "_raw_tensor", raw_tensor) < 0)
+        return NULL;
+    Py_RETURN_NONE;
 }
 
 static PyObject* compareOrCombine(

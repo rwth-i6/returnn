@@ -79,4 +79,5 @@ def setup():
 
     from returnn.tensor import Tensor
 
+    Tensor.raw_tensor = property(Tensor._raw_tensor.__get__, mod.tensor_raw_tensor_setter)  # noqa
     Tensor._raw_backend = property(mod.get_backend_for_tensor)  # noqa

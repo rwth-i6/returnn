@@ -13,6 +13,8 @@ static PyMethodDef _pyModuleMethods[] = {
     {"is_raw_torch_tensor_type", (PyCFunction) pyIsRawTorchTensorType, METH_FASTCALL,
         "isinstance(raw_tensor, torch.Tensor)"},
     {"raw_torch_tensor_get_dtype", (PyCFunction) pyRawTorchTensorGetDType, METH_FASTCALL, "TorchBackend.get_dtype_name_raw"},
+    {"tensor_raw_tensor_setter", (PyCFunction) pyTensorRawTensorSetter, METH_FASTCALL, "Tensor.raw_tensor.setter"},
+    {"tensor_copy_template", (PyCFunction) pyTensorCopyTemplate, METH_VARARGS | METH_KEYWORDS, "Tensor.copy_template"},
     {"tensor_compare", (PyCFunction) pyTensorCompare, METH_VARARGS | METH_KEYWORDS, "rf.compare"},
     {"tensor_combine", (PyCFunction) pyTensorCombine, METH_VARARGS | METH_KEYWORDS, "rf.combine"},
     {"tensor_eq", (PyCFunction) pyTensorEq, METH_FASTCALL, "Tensor.__eq__"},
