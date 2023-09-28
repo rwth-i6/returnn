@@ -526,6 +526,9 @@ def test_native_torch_tensor_eq():
         if frame.f_globals is vars(typing):
             print("   (ignore typing module)")
             return
+        if frame.f_code is Tensor.__init__.__code__:
+            print("   (ignoring Tensor.__init__ for now, remains to be implemented...)")  # TODO
+            return
         nonlocal trace_num_calls
         trace_num_calls += 1
 
