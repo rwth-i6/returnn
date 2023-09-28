@@ -152,6 +152,7 @@ class _DimMixin:
         """
         return self.name
 
+    # This is potentially replaced by native implementation (Dim.size.__get__).
     @property
     def dimension(self) -> Optional[int]:
         """

@@ -49,7 +49,11 @@ PyObject* pyTensorROr(PyObject *self, PyObject *const *args, Py_ssize_t nargs);
 // math unary ops
 
 PyObject* pyTensorNeg(PyObject *self, PyObject *const *args, Py_ssize_t nargs);
+PyObject* pyTensorNot(PyObject *self, PyObject *const *args, Py_ssize_t nargs);
 PyObject* pyTensorAbs(PyObject *self, PyObject *const *args, Py_ssize_t nargs);
+PyObject* pyTensorCeil(PyObject *self, PyObject *const *args, Py_ssize_t nargs);
+PyObject* pyTensorFloor(PyObject *self, PyObject *const *args, Py_ssize_t nargs);
+
 
 // }
 

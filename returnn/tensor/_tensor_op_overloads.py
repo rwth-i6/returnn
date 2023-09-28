@@ -50,7 +50,7 @@ class _TensorOpOverloadsMixin(_TensorMixinBase):
     def __ge__(self: Tensor, other: Union[_rf_types.RawTensorTypes, Tensor]) -> Tensor:
         return _rf().compare(self, ">=", other)
 
-    # --- math binary and unary ops
+    # --- math binary ops
 
     def __add__(self: Tensor, other: Union[_rf_types.RawTensorTypes, Tensor]) -> Tensor:
         return _rf().combine(self, "+", other)
@@ -94,22 +94,6 @@ class _TensorOpOverloadsMixin(_TensorMixinBase):
     def __rpow__(self: Tensor, other: Union[_rf_types.RawTensorTypes, Tensor]) -> Tensor:
         return _rf().combine(other, "**", self)
 
-    def __neg__(self: Tensor):  # -x
-        return _rf().neg(self)
-
-    def __invert__(self):  # ~x
-        if True:  # avoid warning: abstract base class...
-            raise NotImplementedError  # TODO
-
-    def __abs__(self: Tensor):
-        return _rf().abs(self)
-
-    def __ceil__(self: Tensor):
-        return _rf().ceil(self)
-
-    def __floor__(self: Tensor):
-        return _rf().floor(self)
-
     def __and__(self: Tensor, other: Union[_rf_types.RawTensorTypes, Tensor]) -> Tensor:
         return _rf().combine(self, "logical_and", other)
 
@@ -121,6 +105,23 @@ class _TensorOpOverloadsMixin(_TensorMixinBase):
 
     def __ror__(self: Tensor, other: Union[_rf_types.RawTensorTypes, Tensor]) -> Tensor:
         return _rf().combine(other, "logical_or", self)
+
+    # --- math unary ops
+
+    def __neg__(self: Tensor):  # -x
+        return _rf().neg(self)
+
+    def __invert__(self: Tensor):  # ~x, but for bool, treat is as logical_not, and otherwise not supported
+        return _rf().logical_not(self)
+
+    def __abs__(self: Tensor):
+        return _rf().abs(self)
+
+    def __ceil__(self: Tensor):
+        return _rf().ceil(self)
+
+    def __floor__(self: Tensor):
+        return _rf().floor(self)
 
 
 def _rf():

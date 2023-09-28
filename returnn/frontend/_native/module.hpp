@@ -11,12 +11,16 @@ enum RawOp {
     TOp_GetShape,
     TOp_GetDType,
 
+    // binary compare
+
     TOp_Eq,
     TOp_Ne,
     TOp_Lt,
     TOp_Le,
     TOp_Gt,
     TOp_Ge,
+
+    // binary combine
 
     TOp_Add,
     TOp_Sub,
@@ -30,12 +34,16 @@ enum RawOp {
     TOp_Minimum,
     TOp_SquaredDifference,
 
-    TOp_Neg,
-    TOp_Abs,
-
     TOp_And,
     TOp_Or,
+
+    // unary
+
+    TOp_Neg,
     TOp_Not,
+    TOp_Abs,
+    TOp_Ceil,
+    TOp_Floor,
 
     NumTOps,
 };
@@ -117,7 +125,7 @@ public:
     int pyClear() {
         _module = NULL;
         _rawTensorTypesLen = 0;
-        for(int i = 0; i < sizeof(_rawTensorTypes)/sizeof(_rawTensorTypes[0]); ++i)
+        for(unsigned int i = 0; i < sizeof(_rawTensorTypes)/sizeof(_rawTensorTypes[0]); ++i)
             Py_CLEAR(_rawTensorTypes[i]);
         Py_CLEAR(_tensorType);
         Py_CLEAR(_globalBackend);

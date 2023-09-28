@@ -15,15 +15,43 @@ static PyMethodDef _pyModuleMethods[] = {
     {"raw_torch_tensor_get_dtype", (PyCFunction) pyRawTorchTensorGetDType, METH_FASTCALL, "TorchBackend.get_dtype_name_raw"},
     {"tensor_raw_tensor_setter", (PyCFunction) pyTensorRawTensorSetter, METH_FASTCALL, "Tensor.raw_tensor.setter"},
     {"tensor_copy_template", (PyCFunction) pyTensorCopyTemplate, METH_VARARGS | METH_KEYWORDS, "Tensor.copy_template"},
+
     {"tensor_compare", (PyCFunction) pyTensorCompare, METH_VARARGS | METH_KEYWORDS, "rf.compare"},
     {"tensor_combine", (PyCFunction) pyTensorCombine, METH_VARARGS | METH_KEYWORDS, "rf.combine"},
+
     {"tensor_eq", (PyCFunction) pyTensorEq, METH_FASTCALL, "Tensor.__eq__"},
     {"tensor_ne", (PyCFunction) pyTensorNe, METH_FASTCALL, "Tensor.__ne__"},
     {"tensor_lt", (PyCFunction) pyTensorLt, METH_FASTCALL, "Tensor.__lt__"},
     {"tensor_le", (PyCFunction) pyTensorLe, METH_FASTCALL, "Tensor.__le__"},
     {"tensor_gt", (PyCFunction) pyTensorGt, METH_FASTCALL, "Tensor.__gt__"},
     {"tensor_ge", (PyCFunction) pyTensorGe, METH_FASTCALL, "Tensor.__ge__"},
-    // TODO ...
+
+    {"tensor_add", (PyCFunction) pyTensorAdd, METH_FASTCALL, "Tensor.__add__"},
+    {"tensor_radd", (PyCFunction) pyTensorRAdd, METH_FASTCALL, "Tensor.__radd__"},
+    {"tensor_sub", (PyCFunction) pyTensorSub, METH_FASTCALL, "Tensor.__sub__"},
+    {"tensor_rsub", (PyCFunction) pyTensorRSub, METH_FASTCALL, "Tensor.__rsub__"},
+    {"tensor_mul", (PyCFunction) pyTensorMul, METH_FASTCALL, "Tensor.__mul__"},
+    {"tensor_rmul", (PyCFunction) pyTensorRMul, METH_FASTCALL, "Tensor.__rmul__"},
+    {"tensor_truediv", (PyCFunction) pyTensorTrueDiv, METH_FASTCALL, "Tensor.__truediv__"},
+    {"tensor_rtruediv", (PyCFunction) pyTensorRTrueDiv, METH_FASTCALL, "Tensor.__rtruediv__"},
+    {"tensor_floordiv", (PyCFunction) pyTensorFloorDiv, METH_FASTCALL, "Tensor.__floordiv__"},
+    {"tensor_rfloordiv", (PyCFunction) pyTensorRFloorDiv, METH_FASTCALL, "Tensor.__rfloordiv__"},
+    {"tensor_mod", (PyCFunction) pyTensorMod, METH_FASTCALL, "Tensor.__mod__"},
+    {"tensor_rmod", (PyCFunction) pyTensorRMod, METH_FASTCALL, "Tensor.__rmod__"},
+    {"tensor_pow", (PyCFunction) pyTensorPow, METH_FASTCALL, "Tensor.__pow__"},
+    {"tensor_rpow", (PyCFunction) pyTensorRPow, METH_FASTCALL, "Tensor.__rpow__"},
+
+    {"tensor_and", (PyCFunction) pyTensorAnd, METH_FASTCALL, "Tensor.__and__"},
+    {"tensor_rand", (PyCFunction) pyTensorRAnd, METH_FASTCALL, "Tensor.__rand__"},
+    {"tensor_or", (PyCFunction) pyTensorOr, METH_FASTCALL, "Tensor.__or__"},
+    {"tensor_ror", (PyCFunction) pyTensorROr, METH_FASTCALL, "Tensor.__ror__"},
+
+    {"tensor_neg", (PyCFunction) pyTensorNeg, METH_FASTCALL, "Tensor.__neg__"},
+    {"tensor_invert", (PyCFunction) pyTensorNot, METH_FASTCALL, "Tensor.__invert__"},
+    {"tensor_abs", (PyCFunction) pyTensorAbs, METH_FASTCALL, "Tensor.__abs__"},
+    {"tensor_ceil", (PyCFunction) pyTensorCeil, METH_FASTCALL, "Tensor.__ceil__"},
+    {"tensor_floor", (PyCFunction) pyTensorFloor, METH_FASTCALL, "Tensor.__floor__"},
+
     {NULL, NULL, 0, NULL}        /* Sentinel */
 };
 
@@ -214,11 +242,13 @@ bool PyModuleState::_cachedOpInitTorch() {
     AddOp(TOp_Mod, "remainder");
     AddOp(TOp_Pow, "pow");
     AddOpAlt(TOp_SquaredDifference, "squared_difference");
-    AddOp(TOp_Neg, "neg");
-    AddOp(TOp_Abs, "abs");
     AddOp(TOp_And, "logical_and");
     AddOp(TOp_Or, "logical_or");
+    AddOp(TOp_Neg, "neg");
     AddOp(TOp_Not, "logical_not");
+    AddOp(TOp_Abs, "abs");
+    AddOp(TOp_Ceil, "ceil");
+    AddOp(TOp_Floor, "floor");
 
     #undef AddOp
     #undef AddOpAlt
@@ -232,6 +262,8 @@ const char* rawOpName(RawOp op) {
         names[TOp_ConvertToTensor] = "tensor";
         names[TOp_Permute] = "permute";
         names[TOp_Reshape] = "reshape";
+        names[TOp_GetShape] = "get_shape";
+        names[TOp_GetDType] = "get_dtype";
         names[TOp_Eq] = "equal";
         names[TOp_Ne] = "not_equal";
         names[TOp_Lt] = "less";
@@ -241,16 +273,21 @@ const char* rawOpName(RawOp op) {
         names[TOp_Add] = "add";
         names[TOp_Sub] = "sub";
         names[TOp_Mul] = "mul";
-        names[TOp_TrueDiv] = "truedivide";
-        names[TOp_FloorDiv] = "floordivide";
+        names[TOp_TrueDiv] = "truediv";
+        names[TOp_FloorDiv] = "floordiv";
         names[TOp_Mod] = "mod";
         names[TOp_Pow] = "pow";
         names[TOp_SquaredDifference] = "squared_difference";
-        names[TOp_Neg] = "neg";
-        names[TOp_Abs] = "abs";
         names[TOp_And] = "logical_and";
         names[TOp_Or] = "logical_or";
+        // The names for the unary funcs matter:
+        // This will be used for the fallback implementation
+        // either to call backend.<name> or backend.activation(<name>).
+        names[TOp_Neg] = "neg";
         names[TOp_Not] = "logical_not";
+        names[TOp_Abs] = "abs";
+        names[TOp_Ceil] = "ceil";
+        names[TOp_Floor] = "floor";
     }
     if(!names[op]) {
         PyErr_Format(PyExc_RuntimeError, "RETURNN frontend _native: invalid RawOp '%d'", op);

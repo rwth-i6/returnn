@@ -81,3 +81,14 @@ def setup():
 
     Tensor.raw_tensor = property(Tensor._raw_tensor.__get__, mod.tensor_raw_tensor_setter)  # noqa
     Tensor._raw_backend = property(mod.get_backend_for_tensor)  # noqa
+
+    # noinspection PyProtectedMember
+    from returnn.tensor.tensor import _TensorOpOverloadsMixin
+
+    for name, cur_func in _TensorOpOverloadsMixin.__dict__.items():
+        if not callable(cur_func):
+            continue
+        assert name.startswith("__") and name.endswith("__")
+        native_func = getattr(mod, "tensor_" + name[2:-2])
+        assert callable(native_func)
+        setattr(_TensorOpOverloadsMixin, name, native_func)

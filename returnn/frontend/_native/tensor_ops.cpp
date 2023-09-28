@@ -149,24 +149,24 @@ PyObject* pyTensorCopyTemplate(PyObject *self, PyObject *args, PyObject *kwargs)
     return tensorCopyTemplate(modState, tensor, name, dtype);
 }
 
-static bool _isMatchingDType(PyObject* dtype, PyObject* rawDtype) {
+static bool _isMatchingDType(PyObject* dtype, PyObject* rawDtype, const char* funcName) {
     if(!PyUnicode_Check(dtype)) {
         PyErr_Format(
             PyExc_TypeError,
-            "tensor_raw_tensor_setter: tensor.dtype did not return a string, from dtype '%R'", dtype);
+            "%s: tensor.dtype did not return a string, from dtype '%R'", funcName, dtype);
         return false;
     }
     if(!PyUnicode_Check(rawDtype)) {
         PyErr_Format(
             PyExc_TypeError,
-            "tensor_raw_tensor_setter: raw_tensor.dtype did not return a string, from dtype '%R'", rawDtype);
+            "%s: raw_tensor.dtype did not return a string, from dtype '%R'", funcName, rawDtype);
         return false;
     }
     if(PyUnicode_Compare(dtype, rawDtype) != 0) {
         PyErr_Format(
             PyExc_ValueError,
-            "tensor_raw_tensor_setter: tensor.dtype != raw_tensor.dtype, from tensor dtype '%R' and raw_tensor dtype '%R'",
-            dtype, rawDtype);
+            "%s: tensor.dtype != raw_tensor.dtype, from tensor dtype '%R' and raw_tensor dtype '%R'",
+            funcName, dtype, rawDtype);
         return false;
     }
     return true;
@@ -225,6 +225,32 @@ static bool _isMatchingDimTagsAndRawShape(PyObject* dimTags, PyObject* rawShape,
     return true;
 }
 
+static bool _checkTensorRawTensorAssignForBackendWithCachedOps(
+    PyModuleState* modState, BackendWithCachedOps backendId, const char* funcName, PyObject* tensor, PyObject* rawTensor
+) {
+    {
+        PyObject* getDTypeOp = modState->cachedOp(TOp_GetDType, backendId);
+        if(!getDTypeOp) return false;
+        PyObjectScopedRef dtype = PyObject_GetAttrString(tensor, "dtype");
+        if(!dtype) return false;
+        PyObjectScopedRef rawDtype = PyObject_CallFunctionObjArgs(getDTypeOp, rawTensor, NULL);
+        if(!rawDtype) return false;
+        if(!_isMatchingDType(dtype, rawDtype, funcName))
+            return false;
+    }
+    {
+        PyObject* getShapeOp = modState->cachedOp(TOp_GetShape, backendId);
+        if(!getShapeOp) return false;
+        PyObjectScopedRef dims = PyObject_GetAttrString(tensor, "_dims");
+        if(!dims) return false;
+        PyObjectScopedRef rawShape = PyObject_CallFunctionObjArgs(getShapeOp, rawTensor, NULL);
+        if(!rawShape) return false;
+        if(!_isMatchingDimTagsAndRawShape(dims, rawShape, funcName))
+            return false;
+    }
+    return true;
+}
+
 PyObject* pyTensorRawTensorSetter(PyObject *self, PyObject *const *args, Py_ssize_t nargs) {
     if(nargs != 2) {
         PyErr_SetString(PyExc_TypeError, "tensor_raw_tensor_setter() takes exactly 2 arguments: tensor, raw_tensor");
@@ -245,26 +271,8 @@ PyObject* pyTensorRawTensorSetter(PyObject *self, PyObject *const *args, Py_ssiz
     }
 
     if(haveBackendWithCachedOps) {
-        {
-            PyObject* getDTypeOp = modState->cachedOp(TOp_GetDType, backendId);
-            if(!getDTypeOp) return NULL;
-            PyObjectScopedRef dtype = PyObject_GetAttrString(tensor, "dtype");
-            if(!dtype) return NULL;
-            PyObjectScopedRef rawDtype = PyObject_CallFunctionObjArgs(getDTypeOp, raw_tensor, NULL);
-            if(!rawDtype) return NULL;
-            if(!_isMatchingDType(dtype, rawDtype))
-                return NULL;
-        }
-        {
-            PyObject* getShapeOp = modState->cachedOp(TOp_GetShape, backendId);
-            if(!getShapeOp) return NULL;
-            PyObjectScopedRef dims = PyObject_GetAttrString(tensor, "_dims");
-            if(!dims) return NULL;
-            PyObjectScopedRef rawShape = PyObject_CallFunctionObjArgs(getShapeOp, raw_tensor, NULL);
-            if(!rawShape) return NULL;
-            if(!_isMatchingDimTagsAndRawShape(dims, rawShape, "tensor_raw_tensor_setter"))
-                return NULL;
-        }
+        if(!_checkTensorRawTensorAssignForBackendWithCachedOps(modState, backendId, "tensor_raw_tensor_setter", tensor, raw_tensor))
+            return NULL;
     }
     else if(raw_tensor == Py_None) {}  // nothing to check
     else {
@@ -275,7 +283,7 @@ PyObject* pyTensorRawTensorSetter(PyObject *self, PyObject *const *args, Py_ssiz
             if(!dtype) return NULL;
             PyObjectScopedRef rawDtype = PyObject_CallMethod(backend, "get_dtype_name_raw", "O", raw_tensor);
             if(!rawDtype) return NULL;
-            if(!_isMatchingDType(dtype, rawDtype))
+            if(!_isMatchingDType(dtype, rawDtype, "tensor_raw_tensor_setter"))
                 return NULL;
         }
         {
@@ -724,3 +732,66 @@ DefinePyTensorCombine(Mod)
 DefinePyTensorCombineR(Mod)
 DefinePyTensorCombine(Pow)
 DefinePyTensorCombineR(Pow)
+DefinePyTensorCombine(And)
+DefinePyTensorCombineR(And)
+DefinePyTensorCombine(Or)
+DefinePyTensorCombineR(Or)
+
+template<RawOp op, bool genericUseActFunc>
+static PyObject* _tensorUnaryFunc(PyModuleState* modState, PyObject* tensor) {
+    PyObjectScopedRef rawTensor = PyObject_GetAttrString(tensor, "_raw_tensor");
+    if(!rawTensor) return NULL;
+
+    // fast path -- check predefined backends where we have cached ops
+    if(modState->isTorchTensorType((PyObject*) Py_TYPE(rawTensor))) {
+        PyObject* func = modState->cachedOp(op, BWCO_Torch);
+        if(!func) return NULL;
+        PyObjectScopedRef res = tensorCopyTemplateSimple(modState, tensor, rawOpName(op), NULL);
+        if(!res) return NULL;
+        PyObjectScopedRef resRawTensor = PyObject_CallFunctionObjArgs(func, rawTensor.get(), NULL);
+        if(!resRawTensor) return NULL;
+        if(!_checkTensorRawTensorAssignForBackendWithCachedOps(modState, BWCO_Torch, rawOpName(op), res, resRawTensor))
+            return NULL;
+        if(PyObject_SetAttrString(res, "_raw_tensor", resRawTensor) < 0) return NULL;
+        return res.release();
+    }
+
+    // generic fallback
+    PyObject* backend = getBackendForRawTensor(modState, rawTensor);
+    if(genericUseActFunc) {
+        PyObjectScopedRef actFunc = PyObject_GetAttrString(backend, "activation");
+        if(!actFunc) return NULL;
+        PyObjectScopedRef opName = PyUnicode_FromString(rawOpName(op));
+        return PyObject_CallFunctionObjArgs(actFunc.get(), rawTensor.get(), opName.get(), NULL);
+    }
+    else {
+        PyObjectScopedRef func = PyObject_GetAttrString(backend, rawOpName(op));
+        if(!func) return NULL;
+        return PyObject_CallFunctionObjArgs(func, rawTensor.get(), NULL);
+    }
+}
+
+template<RawOp op, bool genericUseActFunc>
+static PyObject* _pyTensorUnaryFunc(PyObject *self, PyObject *const *args, Py_ssize_t nargs) {
+    if(nargs != 1) {
+        PyErr_Format(PyExc_TypeError, "tensor_%s: expected 1 arg, got %i", rawOpName(op), nargs);
+        return NULL;
+    }
+
+    PyModuleState* modState = (PyModuleState*) PyModule_GetState(self);
+    if(!modState)
+        return NULL;
+    return _tensorUnaryFunc<op, genericUseActFunc>(modState, args[0]);
+}
+
+#define DefinePyTensorUnaryFunc(op, genericUseActFunc) \
+    PyObject* pyTensor##op(PyObject *self, PyObject *const *args, Py_ssize_t nargs) { \
+        return _pyTensorUnaryFunc<TOp_##op, genericUseActFunc>(self, args, nargs); \
+    }
+
+DefinePyTensorUnaryFunc(Neg, true)
+DefinePyTensorUnaryFunc(Not, true)
+DefinePyTensorUnaryFunc(Abs, true)
+DefinePyTensorUnaryFunc(Ceil, true)
+DefinePyTensorUnaryFunc(Floor, true)
+
