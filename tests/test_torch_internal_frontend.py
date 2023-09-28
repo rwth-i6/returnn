@@ -535,11 +535,22 @@ def test_native_torch_tensor_eq():
     old_tracefunc = sys.gettrace()
     try:
         sys.settrace(tracefunc)
-        mod.tensor_eq(tensor_bf, tensor_bf)
-        mod.tensor_eq(tensor_bf, tensor_f)
-        mod.tensor_eq(tensor_bf, 0.0)
+        res1 = mod.tensor_eq(tensor_bf, tensor_bf)
+        res2 = mod.tensor_eq(tensor_bf, tensor_f)
+        res3 = mod.tensor_eq(tensor_bf, 0.0)
     finally:
         sys.settrace(old_tracefunc)
+
+    assert isinstance(res1, Tensor) and isinstance(res1.raw_tensor, torch.Tensor)
+    assert res1.dims == (batch_dim, feature_dim)
+    assert res1.raw_tensor.detach().numpy().tolist() == [[True, True, True], [True, True, True]]
+    assert isinstance(res2, Tensor) and isinstance(res2.raw_tensor, torch.Tensor)
+    assert res2.dims == (batch_dim, feature_dim)
+    assert res2.raw_tensor.detach().numpy().tolist() == [[False, True, False], [False, True, False]]
+    assert isinstance(res3, Tensor) and isinstance(res3.raw_tensor, torch.Tensor)
+    assert res3.dims == (batch_dim, feature_dim)
+    assert res3.raw_tensor.detach().numpy().tolist() == [[True, True, True], [True, True, True]]
+
     assert trace_num_calls == 0
 
 
