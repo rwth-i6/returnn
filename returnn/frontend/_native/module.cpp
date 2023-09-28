@@ -115,6 +115,7 @@ int PyModuleState::pyInitModuleExec(PyObject* module) {
                 if(!instMethod) return -1; \
                 if(PyModule_AddObject(module, "_tensor_" #name "_instancemethod", instMethod) < 0) \
                     return -1; \
+                instMethod.release(); \
             }
 
         AddInstanceMethod(eq);
