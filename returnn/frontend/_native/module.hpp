@@ -115,7 +115,9 @@ public:
     }
 
     int pyClear() {
-        for(int i = 0; i < _rawTensorTypesLen; ++i)
+        _module = NULL;
+        _rawTensorTypesLen = 0;
+        for(int i = 0; i < sizeof(_rawTensorTypes)/sizeof(_rawTensorTypes[0]); ++i)
             Py_CLEAR(_rawTensorTypes[i]);
         Py_CLEAR(_tensorType);
         Py_CLEAR(_globalBackend);
