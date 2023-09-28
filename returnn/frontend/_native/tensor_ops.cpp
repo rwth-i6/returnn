@@ -268,7 +268,7 @@ PyObject* pyTensorRawTensorSetter(PyObject *self, PyObject *const *args, Py_ssiz
     }
     else if(raw_tensor == Py_None) {}  // nothing to check
     else {
-        PyObject* backend = getBackendForRawTensor(modState, tensor);
+        PyObject* backend = getBackendForRawTensor(modState, raw_tensor);
         if(!backend) return NULL;
         {
             PyObjectScopedRef dtype = PyObject_GetAttrString(tensor, "dtype");
