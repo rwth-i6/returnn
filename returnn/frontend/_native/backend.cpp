@@ -39,7 +39,7 @@ PyObject* pyRawTorchTensorGetDType(PyObject *self, PyObject *const *args, Py_ssi
     if(!PyUnicode_Check(dtypeStr)) {
         PyErr_Format(
             PyExc_TypeError,
-            "raw_torch_tensor_get_dtype: dtype.__str__() did not return a string, from dtype '%R'", dtypeObj.get());
+            "raw_torch_tensor_get_dtype: dtype.__str__() did not return a string, from dtype %R", dtypeObj.get());
         return NULL;
     }
     const char* dtypeStrC = PyUnicode_AsUTF8(dtypeStr);
@@ -47,7 +47,7 @@ PyObject* pyRawTorchTensorGetDType(PyObject *self, PyObject *const *args, Py_ssi
         PyErr_Format(
             PyExc_TypeError,
             "raw_torch_tensor_get_dtype: "
-            "dtype.__str__() did not return a string starting with 'torch.', from dtype '%R', str '%s'",
+            "dtype.__str__() did not return a string starting with 'torch.', from dtype %R, str '%s'",
             dtypeObj.get(), dtypeStrC);
         return NULL;
     }

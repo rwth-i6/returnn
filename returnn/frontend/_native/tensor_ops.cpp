@@ -153,19 +153,19 @@ static bool _isMatchingDType(PyObject* dtype, PyObject* rawDtype, const char* fu
     if(!PyUnicode_Check(dtype)) {
         PyErr_Format(
             PyExc_TypeError,
-            "%s: tensor.dtype did not return a string, from dtype '%R'", funcName, dtype);
+            "%s: tensor.dtype did not return a string, from dtype %R", funcName, dtype);
         return false;
     }
     if(!PyUnicode_Check(rawDtype)) {
         PyErr_Format(
             PyExc_TypeError,
-            "%s: raw_tensor.dtype did not return a string, from dtype '%R'", funcName, rawDtype);
+            "%s: raw_tensor.dtype did not return a string, from dtype %R", funcName, rawDtype);
         return false;
     }
     if(PyUnicode_Compare(dtype, rawDtype) != 0) {
         PyErr_Format(
             PyExc_ValueError,
-            "%s: tensor.dtype != raw_tensor.dtype, from tensor dtype '%R' and raw_tensor dtype '%R'",
+            "%s: tensor.dtype != raw_tensor.dtype, from tensor dtype %R and raw_tensor dtype %R",
             funcName, dtype, rawDtype);
         return false;
     }
@@ -186,7 +186,7 @@ static bool _isMatchingDimTagsAndRawShape(PyObject* dimTags, PyObject* rawShape,
     if(ndim < 0 || ndim != PyTuple_GET_SIZE(rawShape)) {
         PyErr_Format(
             PyExc_ValueError,
-            "%s: tensor ndim != raw_tensor ndim, from tensor dims '%R' and raw_tensor shape '%R'",
+            "%s: tensor ndim != raw_tensor ndim, from tensor dims %R and raw_tensor shape %R",
             funcName, dimTags, rawShape);
         return false;
     }
@@ -201,7 +201,7 @@ static bool _isMatchingDimTagsAndRawShape(PyObject* dimTags, PyObject* rawShape,
             if(!PyErr_Occurred())
                 PyErr_Format(
                     PyExc_ValueError,
-                    "%s: tensor dim is negative, from tensor dims '%R' and raw_tensor shape '%R'",
+                    "%s: tensor dim is negative, from tensor dims %R and raw_tensor shape %R",
                     funcName, dimTags, rawShape);
             return false;
         }
@@ -210,14 +210,14 @@ static bool _isMatchingDimTagsAndRawShape(PyObject* dimTags, PyObject* rawShape,
             if(!PyErr_Occurred())
                 PyErr_Format(
                     PyExc_ValueError,
-                    "%s: raw_tensor dim is negative, from tensor dims '%R' and raw_tensor shape '%R'",
+                    "%s: raw_tensor dim is negative, from tensor dims %R and raw_tensor shape %R",
                     funcName, dimTags, rawShape);
             return false;
         }
         if(dimInt != rawDimInt) {
             PyErr_Format(
                 PyExc_ValueError,
-                "%s: tensor dim != raw_tensor dim, from tensor dims '%R' and raw_tensor shape '%R'",
+                "%s: tensor dim != raw_tensor dim, from tensor dims %R and raw_tensor shape %R",
                 funcName, dimTags, rawShape);
             return false;
         }
