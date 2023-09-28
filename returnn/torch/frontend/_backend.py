@@ -783,7 +783,7 @@ class TorchBackend(Backend[torch.Tensor]):
                 assert dim.dyn_size_ext.dims_set.issubset(
                     indices.dims_set
                 ), f"gather with clip_to_valid: indices ({indices}) dims must be a superset of {dim} dyn-size"
-                size = dim.dyn_size_ext.copy_compatible_to(indices)
+                size = dim.dyn_size_ext.copy_compatible_to(indices, check_sparse=False)
                 indices.raw_tensor = torch.clamp(indices.raw_tensor, torch.tensor(0), size.raw_tensor - 1)
             else:
                 indices.raw_tensor = torch.clamp(indices.raw_tensor, 0, source.raw_tensor.shape[axis_int] - 1)

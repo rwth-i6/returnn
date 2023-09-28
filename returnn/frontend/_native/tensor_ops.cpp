@@ -24,7 +24,7 @@ PyObject* tensorCopyTemplate(
     return NULL;
 }
 
-// just copies name, dims, dtype, feature_dim. not sparse_dim, or other things.
+// just copies name, dims, dtype, feature_dim, sparse_dim. no or other things.
 // this is like what bin_op_out_template is doing.
 PyObject* tensorCopyTemplateSimple(
     PyModuleState* modState,
@@ -40,13 +40,19 @@ PyObject* tensorCopyTemplateSimple(
     if(!dims) return NULL;
     PyObjectScopedRef feature_dim_axis = PyObject_GetAttrString(tensor, "_feature_dim_axis");
     if(!feature_dim_axis) return NULL;
+    PyObjectScopedRef sparse_dim = PyObject_GetAttrString(tensor, "sparse_dim");
+    if(!sparse_dim) return NULL;
 
     PyObjectScopedRef res = PyObject_CallFunctionObjArgs(
         modState->tensorType(), name.get(), dims.get(), dtype.get(), NULL);
     if(!res) return NULL;
 
-    if(PyObject_SetAttrString(res, "_feature_dim_axis", feature_dim_axis) < 0)
-        return NULL;
+    if(feature_dim_axis != Py_None)
+        if(PyObject_SetAttrString(res, "_feature_dim_axis", feature_dim_axis) < 0)
+            return NULL;
+    if(sparse_dim != Py_None)
+        if(PyObject_SetAttrString(res, "sparse_dim", sparse_dim) < 0)
+            return NULL;
     return res.release();
 }
 
