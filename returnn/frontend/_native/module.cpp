@@ -106,6 +106,53 @@ int PyModuleState::pyInitModuleExec(PyObject* module) {
         }
     }
 
+    {
+        #define AddInstanceMethod(name) \
+            { \
+                PyObjectScopedRef func = PyObject_GetAttrString(_module, "tensor_" #name); \
+                if(!func) return -1; \
+                PyObjectScopedRef instMethod = PyInstanceMethod_New(func); \
+                if(!instMethod) return -1; \
+                if(PyModule_AddObject(module, "_tensor_" #name "_instancemethod", instMethod) < 0) \
+                    return -1; \
+            }
+
+        AddInstanceMethod(eq);
+        AddInstanceMethod(ne);
+        AddInstanceMethod(lt);
+        AddInstanceMethod(le);
+        AddInstanceMethod(gt);
+        AddInstanceMethod(ge);
+
+        AddInstanceMethod(add);
+        AddInstanceMethod(radd);
+        AddInstanceMethod(sub);
+        AddInstanceMethod(rsub);
+        AddInstanceMethod(mul);
+        AddInstanceMethod(rmul);
+        AddInstanceMethod(truediv);
+        AddInstanceMethod(rtruediv);
+        AddInstanceMethod(floordiv);
+        AddInstanceMethod(rfloordiv);
+        AddInstanceMethod(mod);
+        AddInstanceMethod(rmod);
+        AddInstanceMethod(pow);
+        AddInstanceMethod(rpow);
+
+        AddInstanceMethod(and);
+        AddInstanceMethod(rand);
+        AddInstanceMethod(or);
+        AddInstanceMethod(ror);
+
+        AddInstanceMethod(neg);
+        AddInstanceMethod(invert);
+        AddInstanceMethod(abs);
+        AddInstanceMethod(ceil);
+        AddInstanceMethod(floor);
+
+        #undef AddInstanceMethod
+    }
+
     return 0;
 }
 
