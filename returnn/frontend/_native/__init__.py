@@ -60,6 +60,13 @@ def setup():
         return
     _is_set_up = True  # only try once
 
+    from returnn.tensor import Tensor, Dim
+
+    # First we can use some existing native variants, which do not require our own native code.
+    # The raw_tensor getter is replaced here, the raw_tensor setter is replaced below.
+    Tensor.raw_tensor = property(Tensor._raw_tensor.__get__, Tensor.raw_tensor.__set__)  # noqa
+    Dim.dimension = property(Dim.size.__get__)  # noqa
+
     try:
         mod = get_module()
     except Exception as exc:
