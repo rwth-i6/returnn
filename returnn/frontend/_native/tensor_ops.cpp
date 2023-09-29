@@ -79,11 +79,11 @@ static bool _isSameTupleFast(PyObject* a, PyObject* b) {
 // no error check here for aTuple; false does not mean they are different, it just checks for `is`
 static bool _isSameTupleAndSeqFast(PyObject* aTuple, PyObject* bSeq) {
     if(PyTuple_Check(bSeq))
-        return _isSameTupleFast(aTuple, bSeq);
+        return _isSameTupleFast(aTuple, bSeq);    
     int size = PyTuple_GET_SIZE(aTuple);
     if(size < 0)
         return false;
-    int bSize = PyObject_Length(bSeq);
+    int bSize = PySequence_Size(bSeq);
     if(bSize < 0) {
         PyErr_Clear();
         return false;
@@ -92,12 +92,7 @@ static bool _isSameTupleAndSeqFast(PyObject* aTuple, PyObject* bSeq) {
         return false;
     for(int i = 0; i < size; ++i) {
         PyObject* a_ = PyTuple_GET_ITEM(aTuple, i);
-        PyObjectScopedRef iInt = PyLong_FromLong(i);
-        if(!iInt) {
-            PyErr_Clear();
-            return false;
-        }
-        PyObjectScopedRef b_ = PyObject_GetItem(bSeq, iInt);
+        PyObjectScopedRef b_ = PySequence_GetItem(bSeq, i);
         if(!b_) {
             PyErr_Clear();
             return false;
@@ -183,9 +178,16 @@ static bool _isTupleSubsetList(PyObject* subsetTuple, PyObject* supersetList, bo
         for(; i < subSize; ++i) {
             if(subsetTaken[i]) continue;
             PyObject* a_ = PyTuple_GET_ITEM(subsetTuple, i);
-            int eq = PyObject_RichCompareBool(a_, b_, Py_EQ);
-            if(eq < 0) { error = true; return false; }
-            if(eq) break;
+            if(a_ == b_) break;
+        }
+        if(i == subSize) {  // not found, try again using rich compare
+            for(; i < subSize; ++i) {
+                if(subsetTaken[i]) continue;
+                PyObject* a_ = PyTuple_GET_ITEM(subsetTuple, i);
+                int eq = PyObject_RichCompareBool(a_, b_, Py_EQ);
+                if(eq < 0) { error = true; return false; }
+                if(eq) break;
+            }
         }
         if(i < subSize)
             subsetTaken[i] = true;
@@ -472,6 +474,12 @@ static PyObject* compareOrCombine(
         if(b_is_tensor < 0)
             return NULL;
         if((a_is_tensor && !b_is_tensor) || (!a_is_tensor && b_is_tensor)) {
+            if(dimOrder != Py_None) {
+                PyErr_Format(
+                    PyExc_TypeError,
+                    "compareOrCombine: dimOrder is not supported for scalar and Tensor, got %R and %R", a, b);
+                return NULL;
+            }
             // assume the non-Tensor obj is is scalar
             PyObjectScopedRef res = tensorCopyTemplateSimple(modState, a_is_tensor ? a : b, rawOpName, resultIsBool ? "bool" : NULL);
             if(!res) return NULL;
@@ -507,6 +515,31 @@ static PyObject* compareOrCombine(
         // both are Tensor
     }
 
+    if(!resultIsBool) {
+        PyObjectScopedRef aDtype = PyObject_GetAttrString(a, "dtype");
+        if(!aDtype) return NULL;
+        if(!PyUnicode_Check(aDtype)) {
+            PyErr_Format(
+                PyExc_TypeError,
+                "compareOrCombine: a.dtype did not return a string, from dtype %R", aDtype.get());
+            return NULL;
+        }
+        PyObjectScopedRef bDtype = PyObject_GetAttrString(b, "dtype");
+        if(!bDtype) return NULL;
+        if(!PyUnicode_Check(bDtype)) {
+            PyErr_Format(
+                PyExc_TypeError,
+                "compareOrCombine: b.dtype did not return a string, from dtype %R", bDtype.get());
+            return NULL;
+        }
+        if(PyUnicode_Compare(aDtype, bDtype) != 0) {
+            PyErr_Format(
+                PyExc_ValueError,
+                "compareOrCombine: a.dtype != b.dtype, from a.dtype %R and b.dtype %R", aDtype.get(), bDtype.get());
+            return NULL;
+        }
+    }
+
     PyObjectScopedRef aDims = PyObject_GetAttrString(a, "_dims");
     if(!aDims) return NULL;
     if(!PyTuple_Check(aDims)) {
@@ -528,6 +561,13 @@ static PyObject* compareOrCombine(
     // fast path: just use `is` checks for dims.
     // allowBroadcastAllSources=false makes it easier..., we know one dims should be the superset.
     // dimOrder makes it more difficult, does not need to be a superset. but by default, we don't have that.
+
+    if(dimOrder != Py_None) {
+        if(!PySequence_Check(dimOrder)) {
+            PyErr_Format(PyExc_TypeError, "compareOrCombine: expected dim_order to be sequence, got %R", dimOrder);
+            return NULL;
+        }
+    }
 
     // first very fast path check, check exact identity of dims
     if(_isSameTupleFast(aDims, bDims) && (dimOrder == Py_None || _isSameTupleAndSeqFast(aDims, dimOrder))) {
@@ -633,6 +673,7 @@ static PyObject* compareOrCombine(
         // follow the bin_op_out_template code
 
         // collect all dims
+        bool haveDuplicateDims = false;
         int aDimsSize = PyTuple_GET_SIZE(aDims.get());
         int bDimsSize = PyTuple_GET_SIZE(bDims.get());
         PyObjectScopedRef allDims = PyList_New(0);
@@ -661,11 +702,15 @@ static PyObject* compareOrCombine(
                 if(PyList_Append(allDims, dim) < 0) return NULL;
                 continue;
             }
+            haveDuplicateDims = true;
             for(int j = 0; j < std::max(aDimsSize, bDimsCount); ++j) {
                 PyObject* dim_ = PyTuple_GET_ITEM(
                     aDimsCount >= bDimsCount ? aDims.get() : bDims.get(), j);
-                int eq = PyObject_RichCompareBool(dim_, dim, Py_EQ);
-                if(eq < 0) return NULL;
+                if(dim_ != dim) {
+                    int eq = PyObject_RichCompareBool(dim_, dim, Py_EQ);
+                    if(eq < 0) return NULL;
+                    if(!eq) continue;
+                }
                 if(PyList_Append(allDims, dim_) < 0) return NULL;
             }
         }
@@ -688,26 +733,64 @@ static PyObject* compareOrCombine(
 
         // maybe reorder according to dimOrder
         if(dimOrder != Py_None) {
-            /*
-            if dim_order:
-                all_dims.sort(key=lambda d: dim_order.index(d) if d in dim_order else len(dim_order))
-            */
-            
+            PyObject** first = &PyList_GET_ITEM(allDims.get(), 0);
+            PyObject** last = first + PyList_GET_SIZE(allDims.get());
+            struct Cmp {
+                PyObject* dimOrder;
+                int dimOrderLen;
+                bool hadError;
+                Cmp(PyObject* dimOrder_)
+                : dimOrder(dimOrder_), dimOrderLen(0), hadError(false)
+                {
+                    dimOrderLen = PySequence_Size(dimOrder_);
+                    if(dimOrderLen < 0) hadError = true;
+                }
+                int getIndex(PyObject* a) {
+                    if(hadError) return 0;
+                    for(int i = 0; i < dimOrderLen; ++i) {
+                        PyObjectScopedRef d = PySequence_GetItem(dimOrder, i);
+                        if(!d) { hadError = true; return 0; }
+                        if(d == a) return i;
+                        int eq = PyObject_RichCompareBool(a, d, Py_EQ);
+                        if(eq < 0) { hadError = true; return 0; }
+                        else if(eq == 0) return i;
+                    }
+                    return dimOrderLen;
+                }
+                bool operator()(PyObject* a, PyObject* b) {
+                    return getIndex(a) < getIndex(b);
+                }
+            } cmp(dimOrder);
+            std::stable_sort(first, last, cmp);
+            if(cmp.hadError) return NULL;
         }
 
-        /*
-            if res_dtype is None:
-                res_dtype = src_dtype
+        PyObjectScopedRef name = PyUnicode_FromString(rawOpName);
+        if(!name) return NULL;
+        PyObjectScopedRef dtype = resultIsBool ? PyUnicode_InternFromString("bool") : PyObject_GetAttrString(a, "dtype");
+        if(!dtype) return NULL;
+        PyObjectScopedRef res = PyObject_CallFunctionObjArgs(
+            modState->tensorType(), name.get(), allDims.get(), dtype.get(), NULL);
+        if(!res) return NULL;
 
-            // TODO check dtype consistency
+        // TODO now permute, reshape, and call rawOp
+
+        // TODO set feature dim, sparse dim (if consistent in a and b or only in one of them)
+
+        /*
+        if(feature_dim != Py_None)
+            if(PyObject_SetAttrString(res, "feature_dim", feature_dim) < 0)
+                return NULL;
+        if(sparse_dim != Py_None)
+            if(PyObject_SetAttrString(res, "sparse_dim", sparse_dim) < 0)
+                return NULL;
         */
 
-       // TODO now permute, reshape, and call rawOp
-    }
+        PyErr_Format(PyExc_NotImplementedError, "compareOrCombine: not implemented yet");
+        return NULL;
 
-    // TODO now most generic case, also handling allowBroadcastAllSources
-    PyErr_Format(PyExc_NotImplementedError, "compareOrCombine: not implemented yet");
-    return NULL;
+        return res.release();
+    }
 }
 
 static PyObject* compareOrCombineViaCached(
