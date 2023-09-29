@@ -14,6 +14,8 @@ static PyMethodDef _pyModuleMethods[] = {
         "isinstance(raw_tensor, torch.Tensor)"},
     {"raw_torch_tensor_get_dtype", (PyCFunction) pyRawTorchTensorGetDType, METH_FASTCALL, "TorchBackend.get_dtype_name_raw"},
     {"tensor_raw_tensor_setter", (PyCFunction) pyTensorRawTensorSetter, METH_FASTCALL, "Tensor.raw_tensor.setter"},
+    {"convert_to_raw_torch_tensor_like", (PyCFunction) pyConvertToRawTorchTensorLike, METH_FASTCALL,
+        "torch.tensor(value, dtype=..., device=...)"},
     {"tensor_copy_template", (PyCFunction) pyTensorCopyTemplate, METH_VARARGS | METH_KEYWORDS, "Tensor.copy_template"},
 
     {"tensor_compare", (PyCFunction) pyTensorCompare, METH_VARARGS | METH_KEYWORDS, "rf.compare"},
@@ -263,6 +265,10 @@ bool PyModuleState::_cachedOpInitTorch() {
     #define AddOpAlt(op, name) ops[op] = PyObject_GetAttrString(modAlternatives, name); if(!ops[op]) return false;
 
     AddOp(TOp_ConvertToTensor, "tensor");
+
+    ops[TOp_ConvertToTensorLike] = PyObject_GetAttrString(_module, "convert_to_raw_torch_tensor_like");
+    if(!ops[TOp_ConvertToTensorLike]) return false;
+
     AddOp(TOp_Permute, "permute");
     AddOp(TOp_Reshape, "reshape");
 
@@ -307,7 +313,8 @@ bool PyModuleState::_cachedOpInitTorch() {
 const char* rawOpName(RawOp op) {
     static const char* names[NumTOps] = {NULL};
     if(!names[0]) {
-        names[TOp_ConvertToTensor] = "tensor";
+        names[TOp_ConvertToTensor] = "convert_to_tensor";
+        names[TOp_ConvertToTensorLike] = "convert_to_tensor_like";
         names[TOp_Permute] = "permute";
         names[TOp_Reshape] = "reshape";
         names[TOp_GetShape] = "get_shape";

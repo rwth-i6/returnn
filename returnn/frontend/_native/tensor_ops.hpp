@@ -13,6 +13,7 @@ PyObject* tensorCopyTemplate(PyModuleState* modState, PyObject* tensor);
 
 PyObject* pyTensorCopyTemplate(PyObject *self, PyObject *args, PyObject *kwargs);
 PyObject* pyTensorRawTensorSetter(PyObject *self, PyObject *const *args, Py_ssize_t nargs);
+PyObject* pyConvertToRawTorchTensorLike(PyObject *self, PyObject *const *args, Py_ssize_t nargs);
 
 PyObject* pyTensorCompare(PyObject *self, PyObject *args, PyObject *kwargs);
 PyObject* pyTensorCombine(PyObject *self, PyObject *args, PyObject *kwargs);

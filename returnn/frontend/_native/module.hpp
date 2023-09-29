@@ -6,6 +6,7 @@
 // raw ops
 enum RawOp {
     TOp_ConvertToTensor,
+    TOp_ConvertToTensorLike,
     TOp_Permute,
     TOp_Reshape,
     TOp_GetShape,

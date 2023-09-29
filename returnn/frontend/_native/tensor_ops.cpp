@@ -4,6 +4,7 @@
 #include <string>
 #include <vector>
 #include <algorithm>
+#include <assert.h>
 #include "tensor_ops.hpp"
 #include "module.hpp"
 #include "backend.hpp"
@@ -301,16 +302,43 @@ PyObject* pyTensorRawTensorSetter(PyObject *self, PyObject *const *args, Py_ssiz
     Py_RETURN_NONE;
 }
 
+PyObject* pyConvertToRawTorchTensorLike(PyObject *self, PyObject *const *args, Py_ssize_t nargs) {
+    if(nargs != 2) {
+        PyErr_SetString(PyExc_TypeError, "convert_to_raw_torch_tensor_like() takes exactly 2 args: value, other_tensor");
+        return NULL;
+    }
+    PyObject* value = args[0];
+    PyObject* other_tensor = args[1];
+
+    PyModuleState* modState = (PyModuleState*) PyModule_GetState(self);
+    if(!modState) return NULL;
+
+    PyObject* convertOp = modState->cachedOp(TOp_ConvertToTensor, BWCO_Torch);
+    if(!convertOp) return NULL;
+
+    PyObjectScopedRef args_ = PyTuple_Pack(1, value);
+    PyObjectScopedRef dtype = PyObject_GetAttrString(other_tensor, "dtype");
+    if(!dtype) return NULL;
+    PyObjectScopedRef device = PyObject_GetAttrString(other_tensor, "device");
+    if(!device) return NULL;
+    PyObjectScopedRef kwargs = PyDict_New();
+    if(!kwargs) return NULL;
+    if(PyDict_SetItemString(kwargs, "dtype", dtype) < 0) return NULL;
+    if(PyDict_SetItemString(kwargs, "device", device) < 0) return NULL;
+    return PyObject_Call(convertOp, args_, kwargs);
+}
+
 static PyObject* compareOrCombine(
     PyObject* a, PyObject* b,
     bool resultIsBool,
     PyModuleState* modState,
     const char* rawOpName,
-    PyObject* rawOp, PyObject* permuteOp, PyObject* reshapeOp, PyObject* getShapeOp, PyObject* convertToTensorOp,
+    PyObject* rawOp, PyObject* permuteOp, PyObject* reshapeOp, PyObject* getShapeOp, PyObject* convertToTensorLikeOp,
+    bool needConvertToTensor,
     bool allowBroadcastAllSources,
     PyObject* dimOrder
 ) {
-    if(!rawOp || !permuteOp || !reshapeOp || !getShapeOp || !convertToTensorOp) return NULL;
+    if(!rawOp || !permuteOp || !reshapeOp || !getShapeOp || !convertToTensorLikeOp) return NULL;
 
     {
         int a_is_tensor = PyObject_IsInstance(a, modState->tensorType());
@@ -323,17 +351,27 @@ static PyObject* compareOrCombine(
             // assume the non-Tensor obj is is scalar
             PyObjectScopedRef res = tensorCopyTemplateSimple(modState, a_is_tensor ? a : b, rawOpName, resultIsBool ? "bool" : NULL);
             if(!res) return NULL;
-            PyObjectScopedRef aRawTensor =
-                a_is_tensor ?
-                PyObject_GetAttrString(a, "_raw_tensor") :
-                PyObject_CallFunctionObjArgs(convertToTensorOp, a, NULL);
-            if(!aRawTensor) return NULL;
-            PyObjectScopedRef bRawTensor =
-                b_is_tensor ?
-                PyObject_GetAttrString(b, "_raw_tensor") :
-                PyObject_CallFunctionObjArgs(convertToTensorOp, b, NULL);
-            if(!bRawTensor) return NULL;
-            PyObjectScopedRef resRawTensor = PyObject_CallFunctionObjArgs(rawOp, aRawTensor.get(), bRawTensor.get(), NULL);
+            PyObjectScopedRef aRawTensor, bRawTensor;
+            if(a_is_tensor) {
+                assert(a_is_tensor && !b_is_tensor);
+                aRawTensor = PyObject_GetAttrString(a, "_raw_tensor");
+                if(!aRawTensor) return NULL;
+                if(needConvertToTensor) {
+                    bRawTensor = PyObject_CallFunctionObjArgs(convertToTensorLikeOp, b, aRawTensor.get(), NULL);
+                    if(!bRawTensor) return NULL;
+                }
+            }
+            else {
+                assert(!a_is_tensor && b_is_tensor);
+                bRawTensor = PyObject_GetAttrString(b, "_raw_tensor");
+                if(!bRawTensor) return NULL;
+                if(needConvertToTensor) {
+                    aRawTensor = PyObject_CallFunctionObjArgs(convertToTensorLikeOp, a, bRawTensor.get(), NULL);
+                    if(!aRawTensor) return NULL;
+                }
+            }
+            PyObjectScopedRef resRawTensor = PyObject_CallFunctionObjArgs(
+                rawOp, aRawTensor ? aRawTensor.get() : a, bRawTensor.get() ? bRawTensor.get() : b, NULL);
             if(!resRawTensor) return NULL;
             if(PyObject_SetAttrString(res, "raw_tensor", resRawTensor) < 0) return NULL;
             return res.release();
@@ -481,6 +519,21 @@ static PyObject* compareOrCombineViaCached(
     bool allowBroadcastAllSources,
     PyObject* dimOrder
 ) {
+    bool needConvertToTensor = true;
+    if(backendId == BWCO_Torch) {
+        switch(rawOp) {
+        case TOp_Add:
+        case TOp_Sub:
+        case TOp_Mul:
+        case TOp_TrueDiv:
+        case TOp_FloorDiv:
+        case TOp_Mod:
+        case TOp_Pow:
+            needConvertToTensor = false;
+        default:
+            break;
+        }
+    }
     return compareOrCombine(
         a, b,
         resultIsBool,
@@ -490,7 +543,8 @@ static PyObject* compareOrCombineViaCached(
         modState->cachedOp(TOp_Permute, backendId),
         modState->cachedOp(TOp_Reshape, backendId),
         modState->cachedOp(TOp_GetShape, backendId),
-        modState->cachedOp(TOp_ConvertToTensor, backendId),
+        modState->cachedOp(TOp_ConvertToTensorLike, backendId),
+        needConvertToTensor,
         allowBroadcastAllSources,
         dimOrder);
 }

@@ -632,6 +632,53 @@ def test_native_torch_tensor_neg():
     assert trace_num_calls == 0
 
 
+def test_native_torch_tensor_sub():
+    batch_dim = Dim(2, name="batch_dim")
+    feature_dim = Dim(3, name="feature_dim")
+    tensor_bf = Tensor("tensor", dims=[batch_dim, feature_dim], dtype="float32", raw_tensor=torch.ones(2, 3))
+    tensor_f = Tensor(
+        "tensor", dims=[feature_dim], dtype="float32", raw_tensor=torch.arange(-1, 2, dtype=torch.float32)
+    )
+
+    from returnn.frontend import _native
+
+    mod = _native.get_module(verbose=True)
+    # Check that there is no Python code executed via sys.settrace.
+    trace_num_calls = 0
+
+    def tracefunc(frame, event, arg):
+        print("*** trace:", frame, event, arg)
+        if frame.f_globals is vars(typing):
+            print("   (ignore typing module)")
+            return
+        if frame.f_code is Tensor.__init__.__code__:
+            print("   (ignoring Tensor.__init__ for now, remains to be implemented...)")  # TODO
+            return
+        nonlocal trace_num_calls
+        trace_num_calls += 1
+
+    old_tracefunc = sys.gettrace()
+    try:
+        sys.settrace(tracefunc)
+        res1 = mod.tensor_sub(tensor_bf, tensor_bf)
+        res2 = mod.tensor_sub(tensor_bf, tensor_f)
+        res3 = mod.tensor_sub(tensor_bf, 3.0)
+    finally:
+        sys.settrace(old_tracefunc)
+
+    assert isinstance(res1, Tensor) and isinstance(res1.raw_tensor, torch.Tensor)
+    assert res1.dims == (batch_dim, feature_dim)
+    assert res1.raw_tensor.detach().numpy().tolist() == [[0.0, 0.0, 0.0], [0.0, 0.0, 0.0]]
+    assert isinstance(res2, Tensor) and isinstance(res2.raw_tensor, torch.Tensor)
+    assert res2.dims == (batch_dim, feature_dim)
+    assert res2.raw_tensor.detach().numpy().tolist() == [[2.0, 1.0, 0.0], [2.0, 1.0, 0.0]]
+    assert isinstance(res3, Tensor) and isinstance(res3.raw_tensor, torch.Tensor)
+    assert res3.dims == (batch_dim, feature_dim)
+    assert res3.raw_tensor.detach().numpy().tolist() == [[-2.0, -2.0, -2.0], [-2.0, -2.0, -2.0]]
+
+    assert trace_num_calls == 0
+
+
 if __name__ == "__main__":
     better_exchook.install()
     if len(sys.argv) <= 1:
