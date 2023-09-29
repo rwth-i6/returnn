@@ -134,6 +134,39 @@ static bool _isTupleSubsetFast(PyObject* subset, PyObject* superset, std::vector
     return true;
 }
 
+// no error check here; false does not mean they are different, it just checks for `is`.
+// when it returns with false, outPermutation is undefined.
+static bool _isTupleSubsetReorderFast(PyObject* subset, PyObject* superset, std::vector<int>& outPermutation) {
+    int superSize = PyTuple_GET_SIZE(superset);
+    if(superSize < 0) return false;
+    int subSize = PyTuple_GET_SIZE(subset);
+    if(subSize < 0) return false;
+    if(subSize > superSize)
+        return false;
+    outPermutation.resize(superSize);
+    std::vector<bool> subsetTaken(subSize, false);
+    for(int j = 0; j < superSize; ++j) {
+        PyObject* b_ = PyTuple_GET_ITEM(superset, j);
+        int i = 0;
+        for(; i < subSize; ++i) {
+            if(subsetTaken[i]) continue;
+            PyObject* a_ = PyTuple_GET_ITEM(subset, i);
+            if(a_ == b_) break;
+        }
+        if(i < subSize) {
+            subsetTaken[i] = true;
+            outPermutation[j] = i;
+        }
+        else
+            outPermutation[j] = -1;
+    }
+    for(int i = 0; i < subSize; ++i) {
+        if(!subsetTaken[i])
+            return false;
+    }
+    return true;
+}
+
 PyObject* pyTensorCopyTemplate(PyObject *self, PyObject *args, PyObject *kwargs) {
     static const char *kwlist[] = { "tensor", "name", "dtype", NULL };
     PyObject* tensor;
@@ -328,6 +361,67 @@ PyObject* pyConvertToRawTorchTensorLike(PyObject *self, PyObject *const *args, P
     return PyObject_Call(convertOp, args_, kwargs);
 }
 
+template<bool bIsSubset, bool permutedDims>
+static PyObject* _compareOrCombine_subsetDims(
+    PyModuleState* modState,
+    const char* rawOpName, bool resultIsBool,
+    PyObject* permuteOp, PyObject* reshapeOp, PyObject* rawOp,
+    PyObject* a, PyObject* b,
+    PyObject* aRawTensor, PyObject* bRawTensor,
+    PyObject* aRawShape, PyObject* bRawShape,
+    PyObject* aDims, PyObject* bDims,
+    const std::vector<int>& outPermutation
+) {
+    // The tensor with the subset dims will be adapted to the other tensor.
+    PyObject* rawTensor_ = bIsSubset ? bRawTensor : aRawTensor;
+    PyObjectScopedRef rawTensorExt; // just for holding the ref and decrefing it later
+
+    // Maybe permute the tensor with subset dims, to match the order of the other tensor.
+    if(permutedDims) {
+        PyObjectScopedRef permuteArg = PyTuple_New(PyTuple_GET_SIZE(bIsSubset ? bDims : aDims));
+        if(!permuteArg) return NULL;
+        int j = 0;
+        for(int i = 0; i < (int) outPermutation.size(); ++i) {
+            if(outPermutation[i] < 0) continue;
+            PyTuple_SET_ITEM(permuteArg.get(), j, PyLong_FromLong(outPermutation[i]));
+            ++j;
+        }
+        assert(j == PyTuple_GET_SIZE(permuteArg.get()));
+        rawTensor_ = PyObject_CallFunctionObjArgs(permuteOp, rawTensor_, permuteArg.get(), NULL);
+        if(!rawTensor_) return NULL;
+        rawTensorExt = rawTensor_;
+    }
+
+    // Reshape the tensor with subset dims, to add broadcast dims, to match the dims of the other tensor.
+    {
+        PyObjectScopedRef rawShapeExt = PyTuple_New(outPermutation.size());
+        if(!rawShapeExt) return NULL;
+        for(int i = 0; i < (int) outPermutation.size(); ++i) {
+            PyObject* d;
+            if(outPermutation[i] >= 0) {
+                d = PyTuple_GET_ITEM(bIsSubset ? aRawShape : bRawShape, i);
+                Py_XINCREF(d);
+            }
+            else
+                d = PyLong_FromLong(1);
+            if(!d) return NULL;
+            PyTuple_SET_ITEM(rawShapeExt.get(), i, d);
+        }
+        rawTensor_ = PyObject_CallFunctionObjArgs(reshapeOp, rawTensor_, rawShapeExt.get(), NULL);
+        if(!rawTensor_) return NULL;
+        rawTensorExt = rawTensor_;
+    }
+
+    // Now create the result.
+    PyObjectScopedRef res = tensorCopyTemplateSimple(modState, bIsSubset ? a : b, rawOpName, resultIsBool ? "bool" : NULL);
+    if(!res) return NULL;
+    PyObjectScopedRef resRawTensor = PyObject_CallFunctionObjArgs(
+        rawOp, bIsSubset ? aRawTensor : rawTensor_, bIsSubset ? rawTensor_ : bRawTensor, NULL);
+    if(!resRawTensor) return NULL;
+    if(PyObject_SetAttrString(res, "raw_tensor", resRawTensor) < 0) return NULL;
+    return res.release();
+}
+
 static PyObject* compareOrCombine(
     PyObject* a, PyObject* b,
     bool resultIsBool,
@@ -442,32 +536,18 @@ static PyObject* compareOrCombine(
         return NULL;
     }
 
-    // check if bDims is a subset of aDims, in the same order
+    // check if bDims is a subset of aDims, in the same order (fast dim identity check only)
     {
         std::vector<int> outPermutation;
-        if(_isTupleSubsetFast(bDims, aDims, outPermutation) && (dimOrder == Py_None || _isSameTupleAndSeqFast(aDims, dimOrder))) {
-            PyObjectScopedRef bRawShapeExt = PyTuple_New(outPermutation.size());
-            if(!bRawShapeExt) return NULL;
-            for(int i = 0; i < (int) outPermutation.size(); ++i) {
-                PyObject* d;
-                if(outPermutation[i] >= 0) {
-                    d = PyTuple_GET_ITEM(aRawShape.get(), i);
-                    Py_XINCREF(d);
-                }
-                else
-                    d = PyLong_FromLong(1);
-                if(!d) return NULL;
-                PyTuple_SET_ITEM(bRawShapeExt.get(), i, d);
-            }
-            PyObjectScopedRef bRawTensorExt = PyObject_CallFunctionObjArgs(reshapeOp, bRawTensor.get(), bRawShapeExt.get(), NULL);
-            if(!bRawTensorExt) return NULL;
-            PyObjectScopedRef res = tensorCopyTemplateSimple(modState, a, rawOpName, resultIsBool ? "bool": NULL);
-            if(!res) return NULL;
-            PyObjectScopedRef resRawTensor = PyObject_CallFunctionObjArgs(rawOp, aRawTensor.get(), bRawTensorExt.get(), NULL);
-            if(!resRawTensor) return NULL;
-            if(PyObject_SetAttrString(res, "raw_tensor", resRawTensor) < 0) return NULL;
-            return res.release();
-        }
+        if(_isTupleSubsetFast(bDims, aDims, outPermutation) && (dimOrder == Py_None || _isSameTupleAndSeqFast(aDims, dimOrder)))
+            return _compareOrCombine_subsetDims<true, false>(
+                modState, rawOpName, resultIsBool,
+                permuteOp, reshapeOp, rawOp,
+                a, b,
+                aRawTensor, bRawTensor,
+                aRawShape, NULL,
+                aDims, bDims,
+                outPermutation);
     }
 
     PyObjectScopedRef bRawShape = PyObject_CallFunctionObjArgs(getShapeOp, bRawTensor.get(), NULL);
@@ -477,35 +557,49 @@ static PyObject* compareOrCombine(
         return NULL;
     }
 
-    // check if aDims is a subset of bDims, in the same order
+    // check if aDims is a subset of bDims, in the same order (fast dim identity check only)
     {
         std::vector<int> outPermutation;
-        if(_isTupleSubsetFast(aDims, bDims, outPermutation) && (dimOrder == Py_None || _isSameTupleAndSeqFast(bDims, dimOrder))) {
-            PyObjectScopedRef aRawShapeExt = PyTuple_New(outPermutation.size());
-            if(!aRawShapeExt) return NULL;
-            for(int i = 0; i < (int) outPermutation.size(); ++i) {
-                PyObject* d;
-                if(outPermutation[i] >= 0) {
-                    d = PyTuple_GET_ITEM(bRawShape.get(), i);
-                    Py_XINCREF(d);
-                }
-                else
-                    d = PyLong_FromLong(1);
-                if(!d) return NULL;
-                PyTuple_SET_ITEM(aRawShapeExt.get(), i, d);
-            }
-            PyObjectScopedRef aRawTensorExt = PyObject_CallFunctionObjArgs(reshapeOp, aRawTensor.get(), aRawShapeExt.get(), NULL);
-            if(!aRawTensorExt) return NULL;
-            PyObjectScopedRef res = tensorCopyTemplateSimple(modState, b, rawOpName, resultIsBool ? "bool": NULL);
-            if(!res) return NULL;
-            PyObjectScopedRef resRawTensor = PyObject_CallFunctionObjArgs(rawOp, aRawTensorExt.get(), bRawTensor.get(), NULL);
-            if(!resRawTensor) return NULL;
-            if(PyObject_SetAttrString(res, "raw_tensor", resRawTensor) < 0) return NULL;
-            return res.release();
-        }
+        if(_isTupleSubsetFast(aDims, bDims, outPermutation) && (dimOrder == Py_None || _isSameTupleAndSeqFast(bDims, dimOrder)))
+            return _compareOrCombine_subsetDims<false, false>(
+                modState, rawOpName, resultIsBool,
+                permuteOp, reshapeOp, rawOp,
+                a, b,
+                aRawTensor, bRawTensor,
+                aRawShape, bRawShape,
+                aDims, bDims,
+                outPermutation);
     }
 
-    // TODO ...
+    // check if bDims is a subset of aDims, maybe reordered (fast dim identity check only)
+    {
+        std::vector<int> outPermutation;
+        if(_isTupleSubsetReorderFast(bDims, aDims, outPermutation) && (dimOrder == Py_None || _isSameTupleAndSeqFast(aDims, dimOrder)))
+            return _compareOrCombine_subsetDims<true, true>(
+                modState, rawOpName, resultIsBool,
+                permuteOp, reshapeOp, rawOp,
+                a, b,
+                aRawTensor, bRawTensor,
+                aRawShape, bRawShape,
+                aDims, bDims,
+                outPermutation);
+    }
+
+    // check if aDims is a subset of bDims, maybe reordered (fast dim identity check only)
+    {
+        std::vector<int> outPermutation;
+        if(_isTupleSubsetReorderFast(aDims, bDims, outPermutation) && (dimOrder == Py_None || _isSameTupleAndSeqFast(bDims, dimOrder)))
+            return _compareOrCombine_subsetDims<false, true>(
+                modState, rawOpName, resultIsBool,
+                permuteOp, reshapeOp, rawOp,
+                a, b,
+                aRawTensor, bRawTensor,
+                aRawShape, bRawShape,
+                aDims, bDims,
+                outPermutation);
+    }
+
+    // TODO now most generic case, also handling allowBroadcastAllSources
     PyErr_Format(PyExc_NotImplementedError, "compareOrCombine: not implemented yet");
     return NULL;
 }
