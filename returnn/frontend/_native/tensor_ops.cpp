@@ -167,6 +167,36 @@ static bool _isTupleSubsetReorderFast(PyObject* subset, PyObject* superset, std:
     return true;
 }
 
+// no error check here; false does not mean they are different, it just checks for `is`.
+// when it returns with false, outPermutation is undefined.
+static bool _isTupleSubsetList(PyObject* subsetTuple, PyObject* supersetList, bool& error) {
+    int superSize = PyList_GET_SIZE(supersetList);
+    if(superSize < 0) { error = true; return false; }
+    int subSize = PyTuple_GET_SIZE(subsetTuple);
+    if(subSize < 0) { error = true; return false; }
+    if(subSize > superSize)
+        return false;
+    std::vector<bool> subsetTaken(subSize, false);
+    for(int j = 0; j < superSize; ++j) {
+        PyObject* b_ = PyList_GET_ITEM(supersetList, j);
+        int i = 0;
+        for(; i < subSize; ++i) {
+            if(subsetTaken[i]) continue;
+            PyObject* a_ = PyTuple_GET_ITEM(subsetTuple, i);
+            int eq = PyObject_RichCompareBool(a_, b_, Py_EQ);
+            if(eq < 0) { error = true; return false; }
+            if(eq) break;
+        }
+        if(i < subSize)
+            subsetTaken[i] = true;
+    }
+    for(int i = 0; i < subSize; ++i) {
+        if(!subsetTaken[i])
+            return false;
+    }
+    return true;
+}
+
 PyObject* pyTensorCopyTemplate(PyObject *self, PyObject *args, PyObject *kwargs) {
     static const char *kwlist[] = { "tensor", "name", "dtype", NULL };
     PyObject* tensor;
@@ -597,6 +627,82 @@ static PyObject* compareOrCombine(
                 aRawShape, bRawShape,
                 aDims, bDims,
                 outPermutation);
+    }
+
+    {
+        // follow the bin_op_out_template code
+
+        // collect all dims
+        int aDimsSize = PyTuple_GET_SIZE(aDims.get());
+        int bDimsSize = PyTuple_GET_SIZE(bDims.get());
+        PyObjectScopedRef allDims = PyList_New(0);
+        if(!allDims) return NULL;
+        for(int i = 0; i < aDimsSize + bDimsSize; ++i) {
+            PyObject* dim =
+                i < aDimsSize ?
+                PyTuple_GET_ITEM(aDims.get(), i) :
+                PyTuple_GET_ITEM(bDims.get(), i - aDimsSize);
+            {
+                int contains = PySequence_Contains(allDims, dim);
+                if(contains < 0) return NULL;
+                if(contains) continue;
+            }
+            // Not simply `all_dims.append(dim)`,
+            // because a dim might occur multiple times in a.dims or b.dims
+            // (with different match_priority),
+            // e.g. in the case of square matrices.
+            // Still it is the common case that they are unique,
+            // and this allows for a faster path.
+            int aDimsCount = PySequence_Count(aDims, dim);
+            if(aDimsCount < 0) return NULL;
+            int bDimsCount = PySequence_Count(bDims, dim);
+            if(bDimsCount < 0) return NULL;
+            if(aDimsCount <= 1 && bDimsCount <= 1) {
+                if(PyList_Append(allDims, dim) < 0) return NULL;
+                continue;
+            }
+            for(int j = 0; j < std::max(aDimsSize, bDimsCount); ++j) {
+                PyObject* dim_ = PyTuple_GET_ITEM(
+                    aDimsCount >= bDimsCount ? aDims.get() : bDims.get(), j);
+                int eq = PyObject_RichCompareBool(dim_, dim, Py_EQ);
+                if(eq < 0) return NULL;
+                if(PyList_Append(allDims, dim_) < 0) return NULL;
+            }
+        }
+
+        // check if all dims are in a and b, or whether we need allowBroadcastAllSources
+        bool error = false;
+        bool aDimsIsSubset = _isTupleSubsetList(aDims, allDims, error);
+        if(error) return NULL;
+        bool bDimsIsSubset = _isTupleSubsetList(bDims, allDims, error);
+        if(error) return NULL;
+        if(!aDimsIsSubset && !bDimsIsSubset) {
+            if(!allowBroadcastAllSources) {
+                PyErr_Format(
+                    PyExc_ValueError,
+                    "compareOrCombine: sources %R %R not allowed with allow_broadcast_all_sources=False",
+                    a, b);
+                return NULL;
+            }
+        }
+
+        // maybe reorder according to dimOrder
+        if(dimOrder != Py_None) {
+            /*
+            if dim_order:
+                all_dims.sort(key=lambda d: dim_order.index(d) if d in dim_order else len(dim_order))
+            */
+            
+        }
+
+        /*
+            if res_dtype is None:
+                res_dtype = src_dtype
+
+            // TODO check dtype consistency
+        */
+
+       // TODO now permute, reshape, and call rawOp
     }
 
     // TODO now most generic case, also handling allowBroadcastAllSources

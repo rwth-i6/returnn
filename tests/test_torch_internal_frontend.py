@@ -645,6 +645,8 @@ def test_native_torch_tensor_sub_permute_more_dims():
 
 # TODO test case for Dim with declare_same_as (so fast paths would not apply, fallback to generic)
 
+# TODO test case with duplicated dims with match_priority
+
 
 if __name__ == "__main__":
     better_exchook.install()
