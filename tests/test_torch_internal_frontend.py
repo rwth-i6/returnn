@@ -679,6 +679,62 @@ def test_native_torch_tensor_sub():
     assert trace_num_calls == 0
 
 
+def test_native_torch_tensor_sub_permute_more_dims():
+    # Make sure at least 3 dims need to be permuted,
+    # such that the inverse permutation would be wrong.
+    batch_dim = Dim(2, name="batch_dim")
+    time_dim = Dim(3, name="time_dim")
+    feature_dim = Dim(5, name="feature_dim")
+    tensor_bft = Tensor(
+        "tensor",
+        dims=[batch_dim, feature_dim, time_dim],
+        dtype="int32",
+        raw_tensor=torch.arange(1, 1 + 2 * 3 * 5, dtype=torch.int32).reshape(2, 5, 3),
+    )
+    tensor_tbf = tensor_bft.copy_transpose([time_dim, batch_dim, feature_dim])  # permute [2,0,1]
+    assert tensor_tbf.dims == (time_dim, batch_dim, feature_dim)
+    # Inverse permute TBF -> BFT would be [1,2,0].
+
+    from returnn.frontend import _native
+
+    mod = _native.get_module(verbose=True)
+    # Check that there is no Python code executed via sys.settrace.
+    trace_num_calls = 0
+
+    def tracefunc(frame, event, arg):
+        print("*** trace:", frame, event, arg)
+        if frame.f_globals is vars(typing):
+            print("   (ignore typing module)")
+            return
+        if frame.f_code is Tensor.__init__.__code__:
+            print("   (ignoring Tensor.__init__ for now, remains to be implemented...)")  # TODO
+            return
+        nonlocal trace_num_calls
+        trace_num_calls += 1
+
+    old_tracefunc = sys.gettrace()
+    try:
+        sys.settrace(tracefunc)
+        res1 = mod.tensor_sub(tensor_bft, tensor_tbf)
+    finally:
+        sys.settrace(old_tracefunc)
+
+    assert isinstance(res1, Tensor) and isinstance(res1.raw_tensor, torch.Tensor)
+    assert res1.dims == (batch_dim, feature_dim, time_dim)
+    assert all(0 == v for v in res1.raw_tensor.detach().numpy().flatten().tolist())
+
+    assert trace_num_calls == 0
+
+
+# TODO test case for reshape more dims
+
+# TODO test case for reshape + permute, make sure permute inverse would be wrong (2 permute dims not enough)
+
+# TODO test case for generic with allow_broadcast_all_sources=True
+
+# TODO test case for Dim with declare_same_as (so fast paths would not apply, fallback to generic)
+
+
 if __name__ == "__main__":
     better_exchook.install()
     if len(sys.argv) <= 1:
