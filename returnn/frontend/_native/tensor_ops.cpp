@@ -454,6 +454,152 @@ static PyObject* _compareOrCombine_subsetDims(
     return res.release();
 }
 
+static PyObject* _permuteAndExtend(
+    const char* rawOpName,
+    PyObject* permuteOp, PyObject* reshapeOp,
+    PyObject* tensor, PyObject* dims, PyObject* rawTensor, PyObject* rawShape,
+    PyObject* outDimsList, std::vector<long> outShape
+) {
+    int tensorNdim = PyTuple_GET_SIZE(dims);
+    // First find the mapping.
+    std::vector<int> outPermutation;
+    {
+        int count = 0;
+        std::vector<bool> taken(tensorNdim, false);
+        for(size_t i = 0; i < outShape.size(); ++i) {
+            PyObject* dim = PyList_GET_ITEM(outDimsList, i);
+            std::vector<int> candidates;
+            for(int j = 0; j < tensorNdim; ++j) {
+                if(taken[j]) continue;
+                PyObject* dim_ = PyTuple_GET_ITEM(dims, j);
+                int eq = PyObject_RichCompareBool(dim, dim_, Py_EQ);
+                if(eq < 0) return NULL;
+                if(eq) candidates.push_back(j);
+            }
+            if(candidates.size() == 0)
+                outPermutation.push_back(-1);
+            else if(candidates.size() == 1) {
+                outPermutation.push_back(candidates[0]);
+                taken[candidates[0]] = true;
+                ++count;
+            }
+            else if(candidates.size() > 1) {
+                size_t maxMatchPriorityIdx;
+                long maxMatchPriority;
+                int countSameMatchPriority = 0;
+                for(size_t j = 0; j < candidates.size(); ++j) {
+                    PyObject* dim_ = PyTuple_GET_ITEM(dims, candidates[j]);
+                    PyObject* matchPriority = PyObject_GetAttrString(dim_, "match_priority");
+                    if(!matchPriority) return NULL;
+                    if(!PyLong_Check(matchPriority)) {
+                        PyErr_Format(
+                            PyExc_TypeError,
+                            "%s: dim %R did not return an int for match_priority, from tensor dims %R",
+                            rawOpName, dim_, dims);
+                        return NULL;
+                    }
+                    long matchPriority_ = PyLong_AsLong(matchPriority);
+                    if(matchPriority_ < 0 && PyErr_Occurred()) return NULL;
+                    if(j > 0 && matchPriority_ == maxMatchPriority)
+                        ++countSameMatchPriority;
+                    if(j == 0 || matchPriority_ > maxMatchPriority) {
+                        maxMatchPriority = matchPriority_;
+                        countSameMatchPriority = 1;
+                        maxMatchPriorityIdx = j;
+                    }
+                }
+                assert(countSameMatchPriority >= 1);
+                if(countSameMatchPriority > 1) {
+                    PyErr_Format(
+                        PyExc_ValueError,
+                        "%s: dim %R is ambiguous, from tensor dims %R and raw_tensor shape %R",
+                        rawOpName, dim, dims, rawShape);
+                    return NULL;
+                }
+                outPermutation.push_back(candidates[maxMatchPriorityIdx]);
+                taken[candidates[maxMatchPriorityIdx]] = true;
+                ++count;
+            }            
+        }
+        if(count != tensorNdim) {
+            PyErr_Format(
+                PyExc_ValueError,
+                "%s: not all dims are matched, from tensor dims %R and raw_tensor shape %R",
+                rawOpName, dims, rawShape);
+            return NULL;
+        }
+        assert(outPermutation.size() == outShape.size());
+    }
+
+    PyObject* rawTensor_ = rawTensor;
+    PyObjectScopedRef rawTensorExt; // just for holding the ref and decrefing it later
+
+    // Maybe permute the tensor
+    {
+        PyObjectScopedRef permuteArg = PyTuple_New(PyTuple_GET_SIZE(rawShape));
+        if(!permuteArg) return NULL;
+        int j = 0;
+        for(int i = 0; i < (int) outPermutation.size(); ++i) {
+            if(outPermutation[i] < 0) continue;
+            PyTuple_SET_ITEM(permuteArg.get(), j, PyLong_FromLong(outPermutation[i]));
+            ++j;
+        }
+        assert(j == PyTuple_GET_SIZE(permuteArg.get()));
+        rawTensor_ = PyObject_CallFunctionObjArgs(permuteOp, rawTensor_, permuteArg.get(), NULL);
+        if(!rawTensor_) return NULL;
+        rawTensorExt = rawTensor_;
+    }
+
+    // Maybe reshape the tensor
+    {
+        PyObjectScopedRef rawShapeExt = PyTuple_New(outPermutation.size());
+        if(!rawShapeExt) return NULL;
+        for(int i = 0; i < (int) outPermutation.size(); ++i) {
+            PyObject* d = PyLong_FromLong((outPermutation[i] >= 0) ? outShape[i] : 1);
+            if(!d) return NULL;
+            PyTuple_SET_ITEM(rawShapeExt.get(), i, d);
+        }
+        rawTensor_ = PyObject_CallFunctionObjArgs(reshapeOp, rawTensor_, rawShapeExt.get(), NULL);
+        if(!rawTensor_) return NULL;
+        rawTensorExt = rawTensor_;
+    }
+
+    rawTensorExt.release();
+    return rawTensor_;
+}
+
+static PyObject* _consistentFeatureDim(PyObject* a, PyObject* b) {
+    PyObjectScopedRef aFeatureDim = PyObject_GetAttrString(a, "feature_dim");
+    if(!aFeatureDim) return NULL;
+    PyObjectScopedRef bFeatureDim = PyObject_GetAttrString(b, "feature_dim");
+    if(!bFeatureDim) return NULL;
+    if(bFeatureDim == Py_None)
+        return aFeatureDim.release();
+    if(aFeatureDim == Py_None)
+        return bFeatureDim.release();
+    int eq = PyObject_RichCompareBool(aFeatureDim, bFeatureDim, Py_EQ);
+    if(eq < 0) return NULL;
+    if(eq)
+        return aFeatureDim.release();
+    Py_RETURN_NONE;
+}
+
+static PyObject* _consistentSparseDim(PyObject* a, PyObject* b) {
+    PyObjectScopedRef aSparseDim = PyObject_GetAttrString(a, "sparse_dim");
+    if(!aSparseDim) return NULL;
+    PyObjectScopedRef bSparseDim = PyObject_GetAttrString(b, "sparse_dim");
+    if(!bSparseDim) return NULL;
+    if(bSparseDim == Py_None)
+        return aSparseDim.release();
+    if(aSparseDim == Py_None)
+        return bSparseDim.release();
+    int eq = PyObject_RichCompareBool(aSparseDim, bSparseDim, Py_EQ);
+    if(eq < 0) return NULL;
+    if(eq)
+        return aSparseDim.release();
+    Py_RETURN_NONE;
+}
+
 static PyObject* compareOrCombine(
     PyObject* a, PyObject* b,
     bool resultIsBool,
@@ -675,8 +821,23 @@ static PyObject* compareOrCombine(
         // collect all dims
         bool haveDuplicateDims = false;
         int aDimsSize = PyTuple_GET_SIZE(aDims.get());
+        if(aDimsSize != PyTuple_GET_SIZE(aRawShape.get())) {
+            PyErr_Format(
+                PyExc_ValueError,
+                "compareOrCombine: a.dims and a.raw_tensor.shape have different size, from a.dims %R and a.raw_tensor.shape %R",
+                aDims.get(), aRawShape.get());
+            return NULL;
+        }
         int bDimsSize = PyTuple_GET_SIZE(bDims.get());
+        if(bDimsSize != PyTuple_GET_SIZE(bRawShape.get())) {
+            PyErr_Format(
+                PyExc_ValueError,
+                "compareOrCombine: b.dims and b.raw_tensor.shape have different size, from b.dims %R and b.raw_tensor.shape %R",
+                bDims.get(), bRawShape.get());
+            return NULL;
+        }
         PyObjectScopedRef allDims = PyList_New(0);
+        std::vector<long> outShape;
         if(!allDims) return NULL;
         for(int i = 0; i < aDimsSize + bDimsSize; ++i) {
             PyObject* dim =
@@ -687,6 +848,18 @@ static PyObject* compareOrCombine(
                 int contains = PySequence_Contains(allDims, dim);
                 if(contains < 0) return NULL;
                 if(contains) continue;
+            }
+            long dimValue =
+                i < aDimsSize ?
+                PyLong_AsLong(PyTuple_GET_ITEM(aRawShape.get(), i)) :
+                PyLong_AsLong(PyTuple_GET_ITEM(bRawShape.get(), i - aDimsSize));
+            if(dimValue < 0) {
+                if(!PyErr_Occurred())
+                    PyErr_Format(
+                        PyExc_ValueError,
+                        "compareOrCombine: a.raw_tensor.shape or b.raw_tensor.shape has negative dim, from a.raw_tensor.shape %R and b.raw_tensor.shape %R",
+                        aRawShape.get(), bRawShape.get());
+                return NULL;
             }
             // Not simply `all_dims.append(dim)`,
             // because a dim might occur multiple times in a.dims or b.dims
@@ -700,10 +873,12 @@ static PyObject* compareOrCombine(
             if(bDimsCount < 0) return NULL;
             if(aDimsCount <= 1 && bDimsCount <= 1) {
                 if(PyList_Append(allDims, dim) < 0) return NULL;
+                outShape.push_back(dimValue);
                 continue;
             }
             haveDuplicateDims = true;
-            for(int j = 0; j < std::max(aDimsSize, bDimsCount); ++j) {
+            int c = 0;
+            for(int j = 0; j < (aDimsCount >= bDimsCount ? aDimsSize : bDimsCount); ++j) {
                 PyObject* dim_ = PyTuple_GET_ITEM(
                     aDimsCount >= bDimsCount ? aDims.get() : bDims.get(), j);
                 if(dim_ != dim) {
@@ -712,8 +887,18 @@ static PyObject* compareOrCombine(
                     if(!eq) continue;
                 }
                 if(PyList_Append(allDims, dim_) < 0) return NULL;
+                outShape.push_back(dimValue);
+                ++c;
+            }
+            if(c != std::max(aDimsCount, bDimsCount)) {
+                PyErr_Format(
+                    PyExc_SystemError,
+                    "compareOrCombine: non-deterministic dim count, dim %R, from a.dims %R and b.dims %R",
+                    dim, aDims.get(), bDims.get());
+                return NULL;
             }
         }
+        assert(outShape.size() == (size_t) PyList_GET_SIZE(allDims.get()));
 
         // check if all dims are in a and b, or whether we need allowBroadcastAllSources
         bool error = false;
@@ -733,8 +918,9 @@ static PyObject* compareOrCombine(
 
         // maybe reorder according to dimOrder
         if(dimOrder != Py_None) {
-            PyObject** first = &PyList_GET_ITEM(allDims.get(), 0);
-            PyObject** last = first + PyList_GET_SIZE(allDims.get());
+            std::vector<std::pair<PyObject*, long>> outDimWithValue;
+            for(size_t i = 0; i < outShape.size(); ++i)
+                outDimWithValue.push_back(std::make_pair(PyList_GET_ITEM(allDims.get(), i), outShape[i]));
             struct Cmp {
                 PyObject* dimOrder;
                 int dimOrderLen;
@@ -757,37 +943,65 @@ static PyObject* compareOrCombine(
                     }
                     return dimOrderLen;
                 }
+                bool operator()(std::pair<PyObject*, long> a, std::pair<PyObject*, long> b) {
+                    return (*this)(a.first, b.first);
+                }
                 bool operator()(PyObject* a, PyObject* b) {
+                    if(a == b) return false;
                     return getIndex(a) < getIndex(b);
                 }
-            } cmp(dimOrder);
-            std::stable_sort(first, last, cmp);
+            } cmp(dimOrder);            
+            std::stable_sort(outDimWithValue.begin(), outDimWithValue.end(), cmp);
             if(cmp.hadError) return NULL;
+            for(size_t i = 0; i < outShape.size(); ++i) {
+                PyList_SET_ITEM(allDims.get(), i, outDimWithValue[i].first);
+                outShape[i] = outDimWithValue[i].second;
+            }
         }
 
-        PyObjectScopedRef name = PyUnicode_FromString(rawOpName);
-        if(!name) return NULL;
-        PyObjectScopedRef dtype = resultIsBool ? PyUnicode_InternFromString("bool") : PyObject_GetAttrString(a, "dtype");
-        if(!dtype) return NULL;
-        PyObjectScopedRef res = PyObject_CallFunctionObjArgs(
-            modState->tensorType(), name.get(), allDims.get(), dtype.get(), NULL);
-        if(!res) return NULL;
+        PyObjectScopedRef res;
+        {
+            PyObjectScopedRef name = PyUnicode_FromString(rawOpName);
+            if(!name) return NULL;
+            PyObjectScopedRef dtype = resultIsBool ? PyUnicode_InternFromString("bool") : PyObject_GetAttrString(a, "dtype");
+            if(!dtype) return NULL;
+            res = PyObject_CallFunctionObjArgs(
+                modState->tensorType(), name.get(), allDims.get(), dtype.get(), NULL);
+            if(!res) return NULL;
+        }
 
-        // TODO now permute, reshape, and call rawOp
+        {
+            PyObjectScopedRef aRawTensorExt = _permuteAndExtend(
+                rawOpName, permuteOp, reshapeOp,
+                a, aDims, aRawTensor, aRawShape,
+                allDims, outShape);
+            if(!aRawTensorExt) return NULL;
+            PyObjectScopedRef bRawTensorExt = _permuteAndExtend(
+                rawOpName, permuteOp, reshapeOp,
+                b, bDims, bRawTensor, bRawShape,
+                allDims, outShape);
+            if(!bRawTensorExt) return NULL;
+            PyObjectScopedRef resRawTensor = PyObject_CallFunctionObjArgs(
+                rawOp, aRawTensorExt.get(), bRawTensorExt.get(), NULL);
+            if(!resRawTensor) return NULL;
+            if(PyObject_SetAttrString(res, "raw_tensor", resRawTensor) < 0) return NULL;
+        }
 
-        // TODO set feature dim, sparse dim (if consistent in a and b or only in one of them)
+        {
+            PyObjectScopedRef featureDim = _consistentFeatureDim(a, b);
+            if(!featureDim) return NULL;
+            if(featureDim != Py_None)
+                if(PyObject_SetAttrString(res, "feature_dim", featureDim) < 0)
+                    return NULL;
+        }
 
-        /*
-        if(feature_dim != Py_None)
-            if(PyObject_SetAttrString(res, "feature_dim", feature_dim) < 0)
-                return NULL;
-        if(sparse_dim != Py_None)
-            if(PyObject_SetAttrString(res, "sparse_dim", sparse_dim) < 0)
-                return NULL;
-        */
-
-        PyErr_Format(PyExc_NotImplementedError, "compareOrCombine: not implemented yet");
-        return NULL;
+        {
+            PyObjectScopedRef sparseDim = _consistentSparseDim(a, b);
+            if(!sparseDim) return NULL;
+            if(sparseDim != Py_None)
+                if(PyObject_SetAttrString(res, "sparse_dim", sparseDim) < 0)
+                    return NULL;
+        }
 
         return res.release();
     }
