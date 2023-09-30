@@ -10,20 +10,128 @@
 #include "backend.hpp"
 #include "py_utils.hpp"
 
+// copy of Tensor.copy()
+PyObject* tensorCopy(
+    PyModuleState* modState,
+    PyObject* tensor,
+    const char* name)
+{
+    PyObjectScopedRef rawTensor = PyObject_GetAttrString(tensor, "_raw_tensor");
+    if(rawTensor == Py_None)
+        return tensorCopyTemplate(modState, tensor, name, NULL);
+    PyObjectScopedRef res = tensorCopyTemplate(modState, tensor, name, NULL);
+    if(!res) return NULL;
+    if(PyObject_SetAttrString(res, "_raw_tensor", rawTensor) < 0) return NULL;
+    return res.release();
+}
+
 // copy of Tensor.copy_template()
 PyObject* tensorCopyTemplate(
     PyModuleState* modState,
     PyObject* tensor,
-    const char* name = NULL,
-    const char* dtype = NULL)
+    const char* name,
+    const char* dtype)
 {
     PyObjectScopedRef version = PyObject_GetAttrString(tensor, "version");
-    if(!version)
+    if(!version) return NULL;
+    if(!PyLong_Check(version)) {
+        PyErr_Format(
+            PyExc_TypeError,
+            "tensorCopyTemplate: tensor.version did not return an int, from version %R", version.get());
         return NULL;
+    }
+    long versionInt = PyLong_AsLong(version);
+    if(versionInt != 1 && versionInt != 2) {
+        if(!PyErr_Occurred())
+            PyErr_Format(
+                PyExc_ValueError,
+                "tensorCopyTemplate: tensor.version is invalid, from version %R", version.get());
+        return NULL;
+    }
+    PyObjectScopedRef extra = PyObject_GetAttrString(tensor, "_extra");
+    if(!extra) return NULL;
+    if(versionInt == 2 && extra == Py_None)
+        return tensorCopyTemplateSimple(modState, tensor, name, dtype);
 
-    // TODO ...
-    PyErr_Format(PyExc_NotImplementedError, "tensorCopyTemplate: not implemented yet");
-    return NULL;
+    // follows Tensor.get_kwargs()
+
+    PyObjectScopedRef emptyArgs = PyTuple_New(0);
+    if(!emptyArgs) return NULL;
+    PyObjectScopedRef kwargs = PyDict_New();
+    if(!kwargs) return NULL;
+
+    {
+        PyObjectScopedRef name_ = name ? PyUnicode_FromString(name) : PyObject_GetAttrString(tensor, "name");
+        if(!name_) return NULL;
+        if(PyDict_SetItemString(kwargs, "name", name_) < 0) return NULL;
+    }
+    {
+        PyObjectScopedRef dtype_ = dtype ? PyUnicode_FromString(dtype) : PyObject_GetAttrString(tensor, "dtype");
+        if(!dtype_) return NULL;
+        if(PyDict_SetItemString(kwargs, "dtype", dtype_) < 0) return NULL;
+    }
+    {
+        PyObjectScopedRef dims = PyObject_GetAttrString(tensor, "_dims");
+        if(!dims) return NULL;
+        if(PyDict_SetItemString(kwargs, "dims", dims) < 0) return NULL;
+    }
+    if(versionInt == 1 && extra != Py_None) {
+        PyObjectScopedRef time_dim_axis = PyObject_GetAttrString(extra, "time_dim_axis");
+        if(!time_dim_axis) return NULL;
+        if(time_dim_axis != modState->notSpecified()) {
+            if(PyDict_SetItemString(kwargs, "time_dim_axis", time_dim_axis) < 0) return NULL;
+        }
+    }
+    {
+        PyObjectScopedRef feature_dim_axis = PyObject_GetAttrString(tensor, "_feature_dim_axis");
+        if(!feature_dim_axis) return NULL;
+        if(feature_dim_axis != modState->notSpecified()) {
+            if(PyDict_SetItemString(kwargs, "feature_dim_axis", feature_dim_axis) < 0) return NULL;
+        }
+    }
+    {
+        PyObjectScopedRef sparse_dim = PyObject_GetAttrString(tensor, "sparse_dim");
+        if(!sparse_dim) return NULL;
+        if(sparse_dim != Py_None) {
+            if(PyDict_SetItemString(kwargs, "sparse_dim", sparse_dim) < 0) return NULL;
+        }
+    }
+    if(versionInt == 1) {
+        if(PyDict_SetItemString(kwargs, "version", version) < 0) return NULL;
+    }
+    if(extra != Py_None) {
+        PyObjectScopedRef batch = PyObject_GetAttrString(extra, "batch");
+        if(!batch) return NULL;
+        if(batch != Py_None) {
+            if(PyDict_SetItemString(kwargs, "batch", batch) < 0) return NULL;
+        }
+        {
+            PyObjectScopedRef beam = PyObject_GetAttrString(extra, "beam");
+            if(!beam) return NULL;
+            if(beam == Py_None && batch != Py_None) {
+                beam = PyObject_GetAttrString(batch, "beam");
+            }
+            if(beam != Py_None) {
+                if(PyDict_SetItemString(kwargs, "beam", beam) < 0) return NULL;
+            }
+        }
+        {
+            PyObjectScopedRef control_flow_ctx = PyObject_GetAttrString(extra, "control_flow_ctx");
+            if(!control_flow_ctx) return NULL;
+            if(control_flow_ctx != Py_None) {
+                if(PyDict_SetItemString(kwargs, "control_flow_ctx", control_flow_ctx) < 0) return NULL;
+            }
+        }
+        {
+            PyObjectScopedRef available_for_inference = PyObject_GetAttrString(extra, "available_for_inference");
+            if(!available_for_inference) return NULL;
+            if(available_for_inference != Py_None) {
+                if(PyDict_SetItemString(kwargs, "available_for_inference", available_for_inference) < 0) return NULL;
+            }
+        }
+    }
+
+    return PyObject_Call(modState->tensorType(), emptyArgs, kwargs);
 }
 
 // just copies name, dims, dtype, feature_dim, sparse_dim. no or other things.
@@ -31,8 +139,8 @@ PyObject* tensorCopyTemplate(
 PyObject* tensorCopyTemplateSimple(
     PyModuleState* modState,
     PyObject* tensor,
-    const char* name_ = NULL,
-    const char* dtype_ = NULL)
+    const char* name_,
+    const char* dtype_)
 {
     PyObjectScopedRef name = name_ ? PyUnicode_FromString(name_) : PyObject_GetAttrString(tensor, "name");
     if(!name) return NULL;
@@ -79,7 +187,7 @@ static bool _isSameTupleFast(PyObject* a, PyObject* b) {
 // no error check here for aTuple; false does not mean they are different, it just checks for `is`
 static bool _isSameTupleAndSeqFast(PyObject* aTuple, PyObject* bSeq) {
     if(PyTuple_Check(bSeq))
-        return _isSameTupleFast(aTuple, bSeq);    
+        return _isSameTupleFast(aTuple, bSeq);
     int size = PyTuple_GET_SIZE(aTuple);
     if(size < 0)
         return false;
@@ -199,12 +307,27 @@ static bool _isTupleSubsetList(PyObject* subsetTuple, PyObject* supersetList, bo
     return true;
 }
 
+PyObject* pyTensorCopy(PyObject *self, PyObject *args, PyObject *kwargs) {
+    static const char *kwlist[] = { "tensor", "name", NULL };
+    PyObject* tensor;
+    const char* name = NULL;
+    if(!PyArg_ParseTupleAndKeywords(args, kwargs, "O|$z:tensor_copy",
+            (char**) kwlist, &tensor, &name))
+        return NULL;
+
+    PyModuleState* modState = (PyModuleState*) PyModule_GetState(self);
+    if(!modState)
+        return NULL;
+
+    return tensorCopy(modState, tensor, name);
+}
+
 PyObject* pyTensorCopyTemplate(PyObject *self, PyObject *args, PyObject *kwargs) {
     static const char *kwlist[] = { "tensor", "name", "dtype", NULL };
     PyObject* tensor;
     const char* name = NULL;
     const char* dtype = NULL;
-    if(!PyArg_ParseTupleAndKeywords(args, kwargs, "O|$ss:tensor_copy_template",
+    if(!PyArg_ParseTupleAndKeywords(args, kwargs, "O|$zz:tensor_copy_template",
             (char**) kwlist, &tensor, &name, &dtype))
         return NULL;
 
@@ -519,7 +642,7 @@ static PyObject* _permuteAndExtend(
                 outPermutation.push_back(candidates[maxMatchPriorityIdx]);
                 taken[candidates[maxMatchPriorityIdx]] = true;
                 ++count;
-            }            
+            }
         }
         if(count != tensorNdim) {
             PyErr_Format(
@@ -950,7 +1073,7 @@ static PyObject* compareOrCombine(
                     if(a == b) return false;
                     return getIndex(a) < getIndex(b);
                 }
-            } cmp(dimOrder);            
+            } cmp(dimOrder);
             std::stable_sort(outDimWithValue.begin(), outDimWithValue.end(), cmp);
             if(cmp.hadError) return NULL;
             for(size_t i = 0; i < outShape.size(); ++i) {
@@ -1357,7 +1480,7 @@ static PyObject* _tensorUnaryFunc(PyModuleState* modState, PyObject* tensor) {
         if(op == TOp_Abs) {
             /*
             In case of abs() on a complex tensor, the result is a float tensor.
-            In principle, the logic should be like::            
+            In principle, the logic should be like::
                 if in_dtype.startswith("complex"):
                     num_bits = int(out.dtype[len("complex") :])
                     out_dtype = f"float{num_bits // 2}"

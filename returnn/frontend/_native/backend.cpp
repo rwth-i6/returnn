@@ -62,6 +62,8 @@ PyObject* getBackendForTensor(PyModuleState* modState, PyObject* obj) {
 }
 
 PyObject* getBackendForRawTensor(PyModuleState* modState, PyObject* obj) {
+    if(obj == Py_None)
+        Py_RETURN_NONE;
     return getBackendForRawTensorType(modState, (PyObject*) Py_TYPE(obj));
 }
 

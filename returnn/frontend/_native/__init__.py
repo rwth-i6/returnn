@@ -83,7 +83,7 @@ def setup():
     Tensor._raw_backend = property(mod.get_backend_for_tensor)  # noqa
 
     # noinspection PyProtectedMember
-    from returnn.tensor.tensor import _TensorOpOverloadsMixin
+    from returnn.tensor.tensor import _TensorOpOverloadsMixin, _TensorMixin
 
     for name, cur_func in _TensorOpOverloadsMixin.__dict__.items():
         if not callable(cur_func):
@@ -92,6 +92,14 @@ def setup():
         native_func = getattr(mod, "_tensor_" + name[2:-2] + "_instancemethod")
         assert callable(native_func)
         setattr(_TensorOpOverloadsMixin, name, native_func)
+
+    for rf_name, native_name in {
+        "copy": "tensor_copy",
+        "copy_template": "tensor_copy_template",
+    }.items():
+        assert hasattr(_TensorMixin, rf_name)
+        native_func = getattr(mod, "_" + native_name + "_instancemethod")
+        setattr(_TensorMixin, rf_name, native_func)
 
     import returnn.frontend as rf
     from returnn.frontend import math_ as rf_math

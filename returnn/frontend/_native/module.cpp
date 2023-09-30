@@ -16,6 +16,7 @@ static PyMethodDef _pyModuleMethods[] = {
     {"tensor_raw_tensor_setter", (PyCFunction) pyTensorRawTensorSetter, METH_FASTCALL, "Tensor.raw_tensor.setter"},
     {"convert_to_raw_torch_tensor_like", (PyCFunction) pyConvertToRawTorchTensorLike, METH_FASTCALL,
         "torch.tensor(value, dtype=..., device=...)"},
+    {"tensor_copy", (PyCFunction) pyTensorCopy, METH_VARARGS | METH_KEYWORDS, "Tensor.copy"},
     {"tensor_copy_template", (PyCFunction) pyTensorCopyTemplate, METH_VARARGS | METH_KEYWORDS, "Tensor.copy_template"},
 
     {"tensor_compare", (PyCFunction) pyTensorCompare, METH_VARARGS | METH_KEYWORDS, "rf.compare"},
@@ -65,6 +66,13 @@ static int _pyModuleExec(PyObject *m) {
 
 int PyModuleState::pyInitModuleExec(PyObject* module) {
     _module = module;
+
+    {
+        PyObjectScopedRef mod = PyImport_ImportModule("returnn.util.basic");
+        if(!mod) return -1;
+        _notSpecified = PyObject_GetAttrString(mod, "NotSpecified");
+        if(!_notSpecified) return -1;
+    }
 
     {
         PyObjectScopedRef mod = PyImport_ImportModule("returnn.tensor");
@@ -119,6 +127,9 @@ int PyModuleState::pyInitModuleExec(PyObject* module) {
                     return -1; \
                 instMethod.release(); \
             }
+
+        AddInstanceMethod(copy);
+        AddInstanceMethod(copy_template);
 
         AddInstanceMethod(eq);
         AddInstanceMethod(ne);

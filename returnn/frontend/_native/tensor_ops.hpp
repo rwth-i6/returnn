@@ -7,10 +7,13 @@ class PyModuleState;
 
 // generic
 
-PyObject* tensorCopyTemplate(PyModuleState* modState, PyObject* tensor);
+PyObject* tensorCopy(PyModuleState* modState, PyObject* tensor, const char* name = NULL);
+PyObject* tensorCopyTemplate(PyModuleState* modState, PyObject* tensor, const char* name = NULL, const char* dtype = NULL);
+PyObject* tensorCopyTemplateSimple(PyModuleState* modState, PyObject* tensor, const char* name_ = NULL, const char* dtype_ = NULL);
 
 // exported Python functions {
 
+PyObject* pyTensorCopy(PyObject *self, PyObject *args, PyObject *kwargs);
 PyObject* pyTensorCopyTemplate(PyObject *self, PyObject *args, PyObject *kwargs);
 PyObject* pyTensorRawTensorSetter(PyObject *self, PyObject *const *args, Py_ssize_t nargs);
 PyObject* pyConvertToRawTorchTensorLike(PyObject *self, PyObject *const *args, Py_ssize_t nargs);

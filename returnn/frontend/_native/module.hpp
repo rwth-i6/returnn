@@ -111,6 +111,7 @@ public:
     }
 
     int pyTraverse(visitproc visit, void *arg) {
+        Py_VISIT(_notSpecified);
         for(int i = 0; i < _rawTensorTypesLen; ++i)
             Py_VISIT(_rawTensorTypes[i]);
         Py_VISIT(_tensorType);
@@ -124,7 +125,7 @@ public:
     }
 
     int pyClear() {
-        _module = NULL;
+        Py_CLEAR(_notSpecified);
         _rawTensorTypesLen = 0;
         for(unsigned int i = 0; i < sizeof(_rawTensorTypes)/sizeof(_rawTensorTypes[0]); ++i)
             Py_CLEAR(_rawTensorTypes[i]);
@@ -135,11 +136,13 @@ public:
             Py_CLEAR(_cachedOps[i]);
         Py_CLEAR(_torchTensorType);
         Py_CLEAR(_torchBackend);
+        _module = NULL;
         return 0;
     }
 
     int pyInitModuleExec(PyObject* module);
 
+    inline PyObject* notSpecified() const { return _notSpecified; }
     inline PyObject* tensorType() const { return _tensorType; }
     inline PyObject* globalBackend() const { return _globalBackend; }
     inline PyObject* cachedOp(RawOp op, BackendWithCachedOps backend) {
@@ -156,6 +159,7 @@ public:
 
 private:
     PyObject* _module; // weak
+    PyObject* _notSpecified;
     int _rawTensorTypesLen;
     PyObject* _rawTensorTypes[10];
     PyObject* _tensorType;
