@@ -123,7 +123,7 @@ def random_mask(
             y = mask(
                 x_,
                 mask_axis=mask_axis,
-                pos=rf.gather(indices, axis=k_dim, indices=i_),
+                pos=rf.gather(indices, axis=k_dim, indices=rf.copy_to_device(i_, indices.device)),
                 max_amount=max_dims,
                 mask_value=mask_value,
             )
