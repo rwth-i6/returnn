@@ -1350,10 +1350,32 @@ static PyObject* _tensorUnaryFunc(PyModuleState* modState, PyObject* tensor) {
     if(modState->isTorchTensorType((PyObject*) Py_TYPE(rawTensor))) {
         PyObject* func = modState->cachedOp(op, BWCO_Torch);
         if(!func) return NULL;
-        PyObjectScopedRef res = tensorCopyTemplateSimple(modState, tensor, rawOpName(op), NULL);
-        if(!res) return NULL;
         PyObjectScopedRef resRawTensor = PyObject_CallFunctionObjArgs(func, rawTensor.get(), NULL);
         if(!resRawTensor) return NULL;
+        PyObjectScopedRef dtype;
+        const char* dtypeStr = NULL;
+        if(op == TOp_Abs) {
+            /*
+            In case of abs() on a complex tensor, the result is a float tensor.
+            In principle, the logic should be like::            
+                if in_dtype.startswith("complex"):
+                    num_bits = int(out.dtype[len("complex") :])
+                    out_dtype = f"float{num_bits // 2}"
+            For simplicity, we just take over whatever dtype the result has.
+            */
+            PyObject* getDtypeOp = modState->cachedOp(TOp_GetDType, BWCO_Torch);
+            if(!getDtypeOp) return NULL;
+            dtype = PyObject_CallFunctionObjArgs(getDtypeOp, resRawTensor.get(), NULL);
+            if(!dtype) return NULL;
+            if(!PyUnicode_Check(dtype)) {
+                PyErr_Format(PyExc_TypeError, "tensor_abs: expected dtype to be str, got %R", dtype.get());
+                return NULL;
+            }
+            dtypeStr = PyUnicode_AsUTF8(dtype);
+            if(!dtypeStr) return NULL;
+        }
+        PyObjectScopedRef res = tensorCopyTemplateSimple(modState, tensor, rawOpName(op), dtypeStr);
+        if(!res) return NULL;
         if(!_checkTensorRawTensorAssignForBackendWithCachedOps(modState, BWCO_Torch, rawOpName(op), res, resRawTensor))
             return NULL;
         if(PyObject_SetAttrString(res, "_raw_tensor", resRawTensor) < 0) return NULL;
