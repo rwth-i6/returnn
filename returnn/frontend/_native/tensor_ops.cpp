@@ -1068,65 +1068,65 @@ static PyObject* _pyTensorCompareOrCombine(PyObject *self, PyObject *args, PyObj
         backendId = BWCO_Torch;
     }
 
+    // compare funcs: "equal"|"==", "less"|"<", "less_equal"|"<=", "greater"|">", "greater_equal"|">=", "not_equal"|"!="
+    static std::map<std::string, RawOp> kindToCompareFunc;
+    if(kindToCompareFunc.empty()) {
+        kindToCompareFunc["=="] = TOp_Eq;
+        kindToCompareFunc["eq"] = TOp_Eq;
+        kindToCompareFunc["equal"] = TOp_Eq;
+        kindToCompareFunc["!="] = TOp_Ne;
+        kindToCompareFunc["<>"] = TOp_Ne;
+        kindToCompareFunc["ne"] = TOp_Ne;
+        kindToCompareFunc["not_equal"] = TOp_Ne;
+        kindToCompareFunc["<"] = TOp_Lt;
+        kindToCompareFunc["lt"] = TOp_Lt;
+        kindToCompareFunc["less"] = TOp_Lt;
+        kindToCompareFunc["<="] = TOp_Le;
+        kindToCompareFunc["le"] = TOp_Le;
+        kindToCompareFunc["less_equal"] = TOp_Le;
+        kindToCompareFunc[">"] = TOp_Gt;
+        kindToCompareFunc["gt"] = TOp_Gt;
+        kindToCompareFunc["greater"] = TOp_Gt;
+        kindToCompareFunc[">="] = TOp_Ge;
+        kindToCompareFunc["ge"] = TOp_Ge;
+        kindToCompareFunc["greater_equal"] = TOp_Ge;
+    }
+
+    // combine funcs: "add"|"+", "sub"|"-", "mul"|"*", "truediv"|"/", "floordiv"|"//", "mod"|"%", "pow"|"**",
+    //   "max"|"maximum", "min"|"minimum", "logical_and", "logical_or", "squared_difference"
+    static std::map<std::string, RawOp> kindToCombineFunc;
+    if(kindToCombineFunc.empty()) {
+        kindToCombineFunc["+"] = TOp_Add;
+        kindToCombineFunc["add"] = TOp_Add;
+        kindToCombineFunc["-"] = TOp_Sub;
+        kindToCombineFunc["sub"] = TOp_Sub;
+        kindToCombineFunc["*"] = TOp_Mul;
+        kindToCombineFunc["mul"] = TOp_Mul;
+        kindToCombineFunc["/"] = TOp_TrueDiv;
+        kindToCombineFunc["truediv"] = TOp_TrueDiv;
+        kindToCombineFunc["//"] = TOp_FloorDiv;
+        kindToCombineFunc["floordiv"] = TOp_FloorDiv;
+        kindToCombineFunc["%"] = TOp_Mod;
+        kindToCombineFunc["mod"] = TOp_Mod;
+        kindToCombineFunc["**"] = TOp_Pow;
+        kindToCombineFunc["pow"] = TOp_Pow;
+        kindToCombineFunc["maximum"] = TOp_Maximum;
+        kindToCombineFunc["max"] = TOp_Maximum;
+        kindToCombineFunc["minimum"] = TOp_Minimum;
+        kindToCombineFunc["min"] = TOp_Minimum;
+        kindToCombineFunc["logical_and"] = TOp_And;
+        kindToCombineFunc["logical_or"] = TOp_Or;
+        kindToCombineFunc["squared_difference"] = TOp_SquaredDifference;
+    }
+
+    auto it = isCompare ? kindToCompareFunc.find(kind) : kindToCombineFunc.find(kind);
+    if(it == (isCompare ? kindToCompareFunc.end() : kindToCombineFunc.end())) {
+        PyErr_Format(PyExc_ValueError, "tensor_%s: invalid kind '%s'", isCompare ? "compare" : "combine", kind);
+        return NULL;
+    }
+    RawOp rawOp = it->second;
+
     if(haveBackendWithCachedOps) {
-        // compare funcs: "equal"|"==", "less"|"<", "less_equal"|"<=", "greater"|">", "greater_equal"|">=", "not_equal"|"!="
-        static std::map<std::string, RawOp> kindToCompareFunc;
-        if(kindToCompareFunc.empty()) {
-            kindToCompareFunc["=="] = TOp_Eq;
-            kindToCompareFunc["eq"] = TOp_Eq;
-            kindToCompareFunc["equal"] = TOp_Eq;
-            kindToCompareFunc["!="] = TOp_Ne;
-            kindToCompareFunc["<>"] = TOp_Ne;
-            kindToCompareFunc["ne"] = TOp_Ne;
-            kindToCompareFunc["not_equal"] = TOp_Ne;
-            kindToCompareFunc["<"] = TOp_Lt;
-            kindToCompareFunc["lt"] = TOp_Lt;
-            kindToCompareFunc["less"] = TOp_Lt;
-            kindToCompareFunc["<="] = TOp_Le;
-            kindToCompareFunc["le"] = TOp_Le;
-            kindToCompareFunc["less_equal"] = TOp_Le;
-            kindToCompareFunc[">"] = TOp_Gt;
-            kindToCompareFunc["gt"] = TOp_Gt;
-            kindToCompareFunc["greater"] = TOp_Gt;
-            kindToCompareFunc[">="] = TOp_Ge;
-            kindToCompareFunc["ge"] = TOp_Ge;
-            kindToCompareFunc["greater_equal"] = TOp_Ge;
-        }
-
-        // combine funcs: "add"|"+", "sub"|"-", "mul"|"*", "truediv"|"/", "floordiv"|"//", "mod"|"%", "pow"|"**",
-        //   "max"|"maximum", "min"|"minimum", "logical_and", "logical_or", "squared_difference"
-        static std::map<std::string, RawOp> kindToCombineFunc;
-        if(kindToCombineFunc.empty()) {
-            kindToCombineFunc["+"] = TOp_Add;
-            kindToCombineFunc["add"] = TOp_Add;
-            kindToCombineFunc["-"] = TOp_Sub;
-            kindToCombineFunc["sub"] = TOp_Sub;
-            kindToCombineFunc["*"] = TOp_Mul;
-            kindToCombineFunc["mul"] = TOp_Mul;
-            kindToCombineFunc["/"] = TOp_TrueDiv;
-            kindToCombineFunc["truediv"] = TOp_TrueDiv;
-            kindToCombineFunc["//"] = TOp_FloorDiv;
-            kindToCombineFunc["floordiv"] = TOp_FloorDiv;
-            kindToCombineFunc["%"] = TOp_Mod;
-            kindToCombineFunc["mod"] = TOp_Mod;
-            kindToCombineFunc["**"] = TOp_Pow;
-            kindToCombineFunc["pow"] = TOp_Pow;
-            kindToCombineFunc["maximum"] = TOp_Maximum;
-            kindToCombineFunc["max"] = TOp_Maximum;
-            kindToCombineFunc["minimum"] = TOp_Minimum;
-            kindToCombineFunc["min"] = TOp_Minimum;
-            kindToCombineFunc["logical_and"] = TOp_And;
-            kindToCombineFunc["logical_or"] = TOp_Or;
-            kindToCombineFunc["squared_difference"] = TOp_SquaredDifference;
-        }
-
-        auto it = isCompare ? kindToCompareFunc.find(kind) : kindToCombineFunc.find(kind);
-        if(it == (isCompare ? kindToCompareFunc.end() : kindToCombineFunc.end())) {
-            PyErr_Format(PyExc_ValueError, "tensor_%s: invalid kind '%s'", isCompare ? "compare" : "combine", kind);
-            return NULL;
-        }
-        RawOp rawOp = it->second;
-
         return compareOrCombineViaCached(
             a, b,
             isCompare,
@@ -1134,6 +1134,7 @@ static PyObject* _pyTensorCompareOrCombine(PyObject *self, PyObject *args, PyObj
             (bool) allow_broadcast_all_sources, dim_order);
     }
 
+    const char* rawOpName_ = rawOpName(rawOp);
     PyObject* backend;
     if(PyObject_IsInstance(a, modState->tensorType()))
         backend = getBackendForTensor(modState, a);
@@ -1145,7 +1146,27 @@ static PyObject* _pyTensorCompareOrCombine(PyObject *self, PyObject *args, PyObj
 
     PyObjectScopedRef func = PyObject_GetAttrString(backend, isCompare ? "compare" : "combine");
     if(!func) return NULL;
-    return PyObject_Call(func, args, kwargs);
+    if(!allow_broadcast_all_sources && dim_order == Py_None)
+        return PyObject_CallFunction(func, "OsO", a, rawOpName_, b);
+    // need kwargs
+    PyObjectScopedRef args_ = PyTuple_New(3);
+    if(!args_) return NULL;
+    Py_INCREF(a);
+    PyTuple_SET_ITEM(args_.get(), 0, a);
+    {
+        PyObjectScopedRef kind_ = PyUnicode_FromString(rawOpName_);
+        if(!kind) return NULL;
+        PyTuple_SET_ITEM(args_.get(), 1, kind_.release());
+    }
+    Py_INCREF(b);
+    PyTuple_SET_ITEM(args_.get(), 2, b);
+    PyObjectScopedRef kwargs_ = PyDict_New();
+    if(!kwargs_) return NULL;
+    if(allow_broadcast_all_sources)
+        PyDict_SetItemString(kwargs_.get(), "allow_broadcast_all_sources", Py_True);
+    if(dim_order != Py_None)
+        PyDict_SetItemString(kwargs_.get(), "dim_order", dim_order);
+    return PyObject_Call(func, args_, kwargs_);
 }
 
 PyObject* pyTensorCompare(PyObject *self, PyObject *args, PyObject *kwargs) {
