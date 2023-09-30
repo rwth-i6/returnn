@@ -79,8 +79,6 @@ def setup():
         print("This is optional (although very recommended), so we continue without it.")
         return
 
-    from returnn.tensor import Tensor
-
     Tensor.raw_tensor = property(Tensor._raw_tensor.__get__, mod.tensor_raw_tensor_setter)  # noqa
     Tensor._raw_backend = property(mod.get_backend_for_tensor)  # noqa
 
@@ -94,3 +92,36 @@ def setup():
         native_func = getattr(mod, "_tensor_" + name[2:-2] + "_instancemethod")
         assert callable(native_func)
         setattr(_TensorOpOverloadsMixin, name, native_func)
+
+    import returnn.frontend as rf
+    from returnn.frontend import math_ as rf_math
+
+    for rf_name, native_name in {
+        "compare": "tensor_compare",
+        "combine": "tensor_combine",
+        "equal": "tensor_eq",
+        "not_equal": "tensor_ne",
+        "less": "tensor_lt",
+        "less_equal": "tensor_le",
+        "greater": "tensor_gt",
+        "greater_equal": "tensor_ge",
+        "add": "tensor_add",
+        "sub": "tensor_sub",
+        "mul": "tensor_mul",
+        "true_divide": "tensor_truediv",
+        "floor_divide": "tensor_floordiv",
+        "neg": "tensor_neg",
+        "mod": "tensor_mod",
+        "pow": "tensor_pow",
+        "logical_and": "tensor_and",
+        "logical_or": "tensor_or",
+        "logical_not": "tensor_invert",
+        "abs": "tensor_abs",
+        "ceil": "tensor_ceil",
+        "floor": "tensor_floor",
+    }.items():
+        assert hasattr(rf, rf_name)
+        assert hasattr(rf_math, rf_name)
+        native_func = getattr(mod, native_name)
+        setattr(rf, rf_name, native_func)
+        setattr(rf_math, rf_name, native_func)

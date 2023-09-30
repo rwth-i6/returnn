@@ -295,6 +295,8 @@ bool PyModuleState::_cachedOpInitTorch() {
     AddOp(TOp_FloorDiv, "floor_divide");
     AddOp(TOp_Mod, "remainder");
     AddOp(TOp_Pow, "pow");
+    AddOp(TOp_Maximum, "maximum");
+    AddOp(TOp_Minimum, "minimum");
     AddOpAlt(TOp_SquaredDifference, "squared_difference");
     AddOp(TOp_And, "logical_and");
     AddOp(TOp_Or, "logical_or");
@@ -332,6 +334,8 @@ const char* rawOpName(RawOp op) {
         names[TOp_FloorDiv] = "floordiv";
         names[TOp_Mod] = "mod";
         names[TOp_Pow] = "pow";
+        names[TOp_Maximum] = "maximum";
+        names[TOp_Minimum] = "minimum";
         names[TOp_SquaredDifference] = "squared_difference";
         names[TOp_And] = "logical_and";
         names[TOp_Or] = "logical_or";
