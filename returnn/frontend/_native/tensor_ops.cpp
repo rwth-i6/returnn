@@ -311,7 +311,7 @@ PyObject* pyTensorCopy(PyObject *self, PyObject *args, PyObject *kwargs) {
     static const char *kwlist[] = { "tensor", "name", NULL };
     PyObject* tensor;
     const char* name = NULL;
-    if(!PyArg_ParseTupleAndKeywords(args, kwargs, "O|$z:tensor_copy",
+    if(!PyArg_ParseTupleAndKeywords(args, kwargs, "O|z:tensor_copy",
             (char**) kwlist, &tensor, &name))
         return NULL;
 

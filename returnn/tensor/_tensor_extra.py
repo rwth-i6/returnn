@@ -1358,7 +1358,7 @@ class _TensorMixin(_TensorMixinBase):
         return _t.Tensor(**data_opts)
 
     # Note that this has a native implementation (_native tensor_copy_template).
-    def copy_template(self, *, name=None, dtype=None) -> _t.Tensor:
+    def copy_template(self, name=None, *, dtype=None) -> _t.Tensor:
         """
         :param str|None name:
         :param str|None dtype:
