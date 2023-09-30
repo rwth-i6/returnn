@@ -327,7 +327,7 @@ PyObject* pyTensorCopyTemplate(PyObject *self, PyObject *args, PyObject *kwargs)
     PyObject* tensor;
     const char* name = NULL;
     const char* dtype = NULL;
-    if(!PyArg_ParseTupleAndKeywords(args, kwargs, "O|$zz:tensor_copy_template",
+    if(!PyArg_ParseTupleAndKeywords(args, kwargs, "O|z$z:tensor_copy_template",
             (char**) kwlist, &tensor, &name, &dtype))
         return NULL;
 

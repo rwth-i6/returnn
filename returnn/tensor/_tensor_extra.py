@@ -624,7 +624,7 @@ class _TensorMixin(_TensorMixinBase):
         self._dims = dims
 
     # Note that this has a native implementation (_native tensor_copy).
-    def copy(self, *, name: Optional[str] = None) -> _t.Tensor:
+    def copy(self, name: Optional[str] = None) -> _t.Tensor:
         """
         :param name: if given, will overwrite this name
         :return: copy of myself, using self.get_kwargs(), and with placeholder and size_placeholder
