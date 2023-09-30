@@ -446,7 +446,7 @@ class _TensorMixin(_TensorMixinBase):
         """
         return [i for (i, dim) in enumerate(self.shape) if dim is None]
 
-    def get_kwargs(self, include_special_axes=True):
+    def get_kwargs(self, *, include_special_axes=True):
         """
         :param bool include_special_axes: whether to include time and feature special axis marker
         :return: relevant attrib items for copying
