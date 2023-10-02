@@ -227,6 +227,7 @@ class _TensorMixin(_TensorMixinBase):
         self._adapt_batch_consistent_dim_tags()  # TODO where to move this? not needed in general...
         self.sanity_check(assume_complete=False)  # TODO still needed?
 
+    # potentially replaced by native code
     @property
     def _raw_backend(self) -> Optional[Type[Backend]]:
         """
@@ -445,7 +446,9 @@ class _TensorMixin(_TensorMixinBase):
         """
         return [i for (i, dim) in enumerate(self.shape) if dim is None]
 
-    def get_kwargs(self, include_special_axes=True):
+    # Note that the logic here is replicated for a native copy() and copy_template(),
+    # so keep any changes in sync.
+    def get_kwargs(self, *, include_special_axes=True):
         """
         :param bool include_special_axes: whether to include time and feature special axis marker
         :return: relevant attrib items for copying
@@ -620,6 +623,7 @@ class _TensorMixin(_TensorMixinBase):
         dims: Tuple[Dim, ...]
         self._dims = dims
 
+    # Note that this has a native implementation (_native tensor_copy).
     def copy(self, name: Optional[str] = None) -> _t.Tensor:
         """
         :param name: if given, will overwrite this name
@@ -1353,7 +1357,8 @@ class _TensorMixin(_TensorMixinBase):
                 )
         return _t.Tensor(**data_opts)
 
-    def copy_template(self, name=None, dtype=None) -> _t.Tensor:
+    # Note that this has a native implementation (_native tensor_copy_template).
+    def copy_template(self, name=None, *, dtype=None) -> _t.Tensor:
         """
         :param str|None name:
         :param str|None dtype:

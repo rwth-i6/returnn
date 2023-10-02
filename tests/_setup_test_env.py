@@ -20,6 +20,8 @@ def setup():
     import os
     import sys
 
+    os.environ["RETURNN_TEST"] = "1"
+
     # Enable all logging, up to debug level.
     logging.basicConfig(level=logging.DEBUG, format="%(message)s")
 

@@ -29,8 +29,9 @@ class PyExtModCompiler(NativeCodeCompiler):
     _relevant_info_keys = NativeCodeCompiler._relevant_info_keys + ("py_version",)
 
     def _extra_common_opts(self):
+        base_flags = super()._extra_common_opts()
         py_compile_flags = self._py_compile_vars["CFLAGS"].split() if self._py_compile_vars["CFLAGS"] else []
-        return py_compile_flags
+        return base_flags + py_compile_flags
 
     def _make_info_dict(self):
         d = super()._make_info_dict()

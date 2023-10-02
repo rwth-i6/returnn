@@ -128,6 +128,7 @@ def bin_op_out_template(
         res_dtype = src_dtype
     out = Tensor(name, dims=all_dims, dtype=res_dtype)
     out.feature_dim = res_feature_dim(a, b)
+    out.sparse_dim = res_sparse_dim(a, b)
     if not allow_scalar or a.dims:
         a = a.copy_compatible_to(out, check_dtype=False, check_sparse=False)
     if not allow_scalar or b.dims:
@@ -147,4 +148,19 @@ def res_feature_dim(a: Tensor, b: Tensor) -> Optional[Dim]:
         return b.feature_dim
     if a.feature_dim and b.feature_dim and a.feature_dim == b.feature_dim:
         return a.feature_dim
+    return None
+
+
+def res_sparse_dim(a: Tensor, b: Tensor) -> Optional[Dim]:
+    """
+    :param a:
+    :param b:
+    :return: sparse dim if consistent or None
+    """
+    if a.sparse_dim and not b.sparse_dim:
+        return a.sparse_dim
+    if b.sparse_dim and not a.sparse_dim:
+        return b.sparse_dim
+    if a.sparse_dim and b.sparse_dim and a.sparse_dim == b.sparse_dim:
+        return a.sparse_dim
     return None

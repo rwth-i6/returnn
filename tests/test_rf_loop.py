@@ -185,6 +185,7 @@ def test_scan_changing_dim():
                 # Effectively, this is what you would get with top_k on the logits.
                 beam_dim = Dim(3, name="beam")
                 r = rf.range_over_dim(beam_dim, dtype=x_.dtype)
+                r.sparse_dim = None
                 y_ = rf.combine_bc(y_, "mul", r)
                 y_ = rf.reduce_mean(y_, axis=beam_in_dim)
                 return y_, {"state": y_, "beam_dim": beam_dim}
