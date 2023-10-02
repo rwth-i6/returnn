@@ -3270,7 +3270,7 @@ class _TensorMixin(_TensorMixinBase):
             :param taken_self_axes: axes that should not be used again
             :return: the axis of ``self`` that matches ``other_axis``, counted with batch dim
             """
-            other_axis_dim_tag = other.get_dim_tag(other_axis)
+            other_axis_dim_tag = other.dims[other_axis]
             is_equal_opts_ = None
             matching = None
             # First, try without any is_equal_opts. This is the most restrictive case.
@@ -3311,9 +3311,16 @@ class _TensorMixin(_TensorMixinBase):
             if len(matching) == 1:
                 return matching[0]
             # If there are multiple matches (e.g. because two axes have the same feature dim), leave their order intact.
-            # We do this by always choosing the first unused match which is the smallest axes
+            # We do this by always choosing the first unused match which is the smallest axes.
             # However, take match_priority into account, and prefer the highest match_priority.
-            return max(matching, key=lambda ax: self.dims[ax].match_priority)
+            # And if there is a dim identity, prefer that even more.
+            max_match_priority = max(dim.match_priority for dim in self.dims)
+            return max(
+                matching,
+                key=lambda ax: (max_match_priority + 1)
+                if (self.dims[ax] is other_axis_dim_tag)
+                else self.dims[ax].match_priority,
+            )
 
         other_to_self_mapping = {}
         for axis in other_axes:
