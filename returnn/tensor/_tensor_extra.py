@@ -1234,6 +1234,114 @@ class _TensorMixin(_TensorMixinBase):
         v.sanity_check()
         return v
 
+    def get_out_permutation_to_dims(self, dims: Sequence[Dim]) -> List[int]:
+        """
+        :param dims: superset of our dims
+        :return: out_permutation list of len dims, where -1 means no match, and otherwise the axis in self.
+            Thus, sorted(p for p in out_permutation if p >= 0) == range(len(self._dims)).
+        """
+        out_permutation: List[int] = []
+        count = 0
+        taken = [False] * len(self._dims)
+        for dim in dims:
+            candidates: List[int] = []  # axis in self
+            for j in range(len(self._dims)):
+                if taken[j]:
+                    continue
+                if dim == self._dims[j]:
+                    candidates.append(j)
+
+            if not candidates:
+                out_permutation.append(-1)
+            elif len(candidates) == 1:
+                out_permutation.append(candidates[0])
+                taken[candidates[0]] = True
+                count += 1
+            else:
+                max_match_priority_idx = None
+                max_match_priority = None
+                count_same_match_priority = 0
+                for j in range(len(candidates)):
+                    dim = self._dims[candidates[j]]
+                    match_priority = dim.match_priority
+                    if j > 0 and match_priority == max_match_priority:
+                        count_same_match_priority += 1
+                    if j == 0 or match_priority > max_match_priority:
+                        max_match_priority = match_priority
+                        count_same_match_priority = 1
+                        max_match_priority_idx = j
+                assert count_same_match_priority >= 1
+                if count_same_match_priority > 1:
+                    raise ValueError(
+                        f"{self}: dim {dim} is ambiguous, from tensor dims {self._dims} and raw_tensor shape {dims}"
+                    )
+                out_permutation.append(candidates[max_match_priority_idx])
+                taken[candidates[max_match_priority_idx]] = True
+                count += 1
+
+        assert count == len(self._dims)
+        assert len(out_permutation) == len(dims)
+        return out_permutation
+
+    def copy_compatible_to_dims(self: _t.Tensor, dims: Sequence[Dim]) -> _t.Tensor:
+        """
+        Simpler variant of :func:`copy_compatible_to` which just takes a list of dims,
+        and uses simple Dim equality.
+
+        :param dims:
+        :return: self with dims permuted and broadcast dims added
+        """
+        out_permutation = self.get_out_permutation_to_dims(dims)
+        if out_permutation == list(range(len(self._dims))):
+            return self.copy()
+        raw_tensor = self._raw_tensor
+        if raw_tensor is not None:
+            backend = self._raw_backend
+            raw_shape = backend.get_shape_raw(raw_tensor)
+            raw_tensor = backend.transpose_raw(raw_tensor, [p for p in out_permutation if p >= 0])
+            raw_tensor = backend.reshape_raw(raw_tensor, [raw_shape[p] if p >= 0 else 1 for p in out_permutation])
+        out_dims = [
+            self._dims[p]
+            if p >= 0
+            else Dim(
+                kind=dims[i].kind,
+                description="%s_bc_dim1" % (dims[i].description or "unnamed"),
+                dimension=1,
+                auto_generated=True,
+            )
+            for i, p in enumerate(out_permutation)
+        ]
+        return _t.Tensor(
+            self.name,
+            out_dims,
+            self.dtype,
+            raw_tensor=raw_tensor,
+            version=self.version,
+            batch=self.batch,
+            beam=self.beam,
+            feature_dim=self.feature_dim,
+            sparse_dim=self.sparse_dim,
+        )
+
+    def copy_compatible_to_dims_raw(self: _t.Tensor, dims: Sequence[Dim]) -> _t.RawTensorType:
+        """
+        Simpler variant of :func:`copy_compatible_to` which just takes a list of dims,
+        and uses simple Dim equality.
+
+        :param dims:
+        :return: raw tensor from self with dims permuted and broadcast dims added
+        """
+        out_permutation = self.get_out_permutation_to_dims(dims)
+        raw_tensor = self._raw_tensor
+        if out_permutation == list(range(len(self._dims))):
+            return raw_tensor
+        assert raw_tensor is not None, f"{self} copy_compatible_to_dims_raw: no raw tensor"
+        backend = self._raw_backend
+        raw_shape = backend.get_shape_raw(raw_tensor)
+        raw_tensor = backend.transpose_raw(raw_tensor, [p for p in out_permutation if p >= 0])
+        raw_tensor = backend.reshape_raw(raw_tensor, [raw_shape[p] if p >= 0 else 1 for p in out_permutation])
+        return raw_tensor
+
     def copy_time_flattened(self) -> _t.Tensor:
         """
         :return: copy of myself where the time-axis is flattened away into the batch-dim-axis.
