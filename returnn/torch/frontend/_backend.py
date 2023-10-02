@@ -1046,9 +1046,7 @@ class TorchBackend(Backend[torch.Tensor]):
                             for dim_ in num_el_reduce_dims:
                                 total_num_el *= dim_.get_dim_value_tensor()
                         correction_factor_ = rf.cast(total_num_el, source.dtype) / rf.cast(actual_num_el, source.dtype)
-                        correction_factor__ = correction_factor_.copy_compatible_to(
-                            Tensor("template", res_dims, source.dtype)
-                        ).raw_tensor
+                        correction_factor__ = correction_factor_.copy_compatible_to_dims_raw(res_dims)
                         if correction_factor is None:
                             correction_factor = correction_factor__
                         else:
