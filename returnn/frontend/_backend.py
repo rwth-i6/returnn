@@ -771,7 +771,7 @@ class Backend(Generic[T]):
         """compare, default implementation using compare_raw"""
         from . import _utils
 
-        out, a, b = _utils.bin_op_out_template(
+        out, a_raw, b_raw = _utils.bin_op_out_template(
             cls,
             a,
             b,
@@ -780,7 +780,7 @@ class Backend(Generic[T]):
             allow_broadcast_all_sources=allow_broadcast_all_sources,
             dim_order=dim_order,
         )
-        out.raw_tensor = cls.compare_raw(a.raw_tensor, kind, b.raw_tensor)
+        out.raw_tensor = cls.compare_raw(a_raw, kind, b_raw)
         return out
 
     @classmethod
@@ -796,7 +796,7 @@ class Backend(Generic[T]):
         """combine, default implementation using combine_raw"""
         from . import _utils
 
-        out, a, b = _utils.bin_op_out_template(
+        out, a_raw, b_raw = _utils.bin_op_out_template(
             cls,
             a,
             b,
@@ -805,7 +805,7 @@ class Backend(Generic[T]):
             allow_broadcast_all_sources=allow_broadcast_all_sources,
             dim_order=dim_order,
         )
-        out.raw_tensor = cls.combine_raw(a.raw_tensor, kind, b.raw_tensor)
+        out.raw_tensor = cls.combine_raw(a_raw, kind, b_raw)
         return out
 
     @staticmethod
