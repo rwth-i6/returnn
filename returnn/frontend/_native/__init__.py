@@ -64,10 +64,19 @@ def setup():
 
     from returnn.tensor import Tensor, Dim
 
+    # noinspection PyProtectedMember
+    from returnn.tensor.tensor import _TensorOpOverloadsMixin, _TensorMixin
+
+    # noinspection PyProtectedMember
+    from returnn.tensor.dim import _DimMixin
+
     # First we can use some existing native variants, which do not require our own native code.
     # The raw_tensor getter is replaced here, the raw_tensor setter is replaced below.
     Tensor.raw_tensor = property(Tensor._raw_tensor.__get__, Tensor.raw_tensor.__set__)  # noqa
-    Dim.dimension = property(Dim.size.__get__)  # noqa
+    _TensorMixin.placeholder = Tensor.raw_tensor
+    Tensor.dims = property(Tensor._dims.__get__)  # noqa
+    _TensorMixin.dim_tags = Tensor.dims  # noqa
+    _DimMixin.dimension = property(Dim.size.__get__)  # noqa
 
     try:
         mod = get_module()
@@ -80,10 +89,8 @@ def setup():
         return
 
     Tensor.raw_tensor = property(Tensor._raw_tensor.__get__, mod.tensor_raw_tensor_setter)  # noqa
-    Tensor._raw_backend = property(mod.get_backend_for_tensor)  # noqa
-
-    # noinspection PyProtectedMember
-    from returnn.tensor.tensor import _TensorOpOverloadsMixin, _TensorMixin
+    _TensorMixin.placeholder = Tensor.raw_tensor
+    _TensorMixin._raw_backend = property(mod.get_backend_for_tensor)  # noqa
 
     for name, cur_func in _TensorOpOverloadsMixin.__dict__.items():
         if not callable(cur_func):
