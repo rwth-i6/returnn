@@ -1150,8 +1150,8 @@ class _DimMixin:
                 continue
             if x.dim_tags != y.dim_tags:
                 common = _t.Tensor.get_common_data([x, y], allow_broadcast_all_sources=True)
-                x_ = x.copy_compatible_to(common) if x.dim_tags else x
-                y_ = y.copy_compatible_to(common) if y.dim_tags else y
+                x_ = x.copy_compatible_to_dims(common.dims) if x.dims else x
+                y_ = y.copy_compatible_to_dims(common.dims) if y.dims else y
                 y = common
             else:
                 x_, y_ = x, y
