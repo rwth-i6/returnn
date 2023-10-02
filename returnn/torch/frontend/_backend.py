@@ -1808,9 +1808,7 @@ class TorchBackend(Backend[torch.Tensor]):
         out_tensor = tensor_template.copy_add_dim_by_tag(axis, unbroadcast=True, axis=0)
         if not tensor_array:
             return rf.zeros_like(out_tensor)
-        tensor_array_raw = [
-            tensor.copy_compatible_to(tensor_template, add_dims=False).raw_tensor for tensor in tensor_array
-        ]
+        tensor_array_raw = [tensor.copy_transpose(tensor_template.dims).raw_tensor for tensor in tensor_array]
         out_tensor_raw = torch.stack(tensor_array_raw, dim=0)
         out_tensor.raw_tensor = out_tensor_raw
         return out_tensor
