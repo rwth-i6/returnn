@@ -95,6 +95,13 @@ class NumpyBackend(Backend[numpy.ndarray]):
         return raw_tensor.transpose(tuple(perm))
 
     @staticmethod
+    def reshape_raw(
+        raw_tensor: numpy.ndarray, shape: Union[Sequence[Union[int, numpy.ndarray]], numpy.ndarray]
+    ) -> numpy.ndarray:
+        """reshape raw"""
+        return numpy.reshape(raw_tensor, shape)
+
+    @staticmethod
     def compare_raw(a: numpy.ndarray, kind: str, b: numpy.ndarray) -> numpy.ndarray:
         """
         :param a:
