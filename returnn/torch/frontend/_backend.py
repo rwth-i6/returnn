@@ -889,10 +889,10 @@ class TorchBackend(Backend[torch.Tensor]):
         )
         out.dtype = true_.dtype
         out.sparse_dim = true_.sparse_dim
-        cond_bc = cond.copy_compatible_to(out, check_dtype=False, check_sparse=False)
-        true_bc = true_.copy_compatible_to(out, check_dtype=False, check_sparse=False)
-        false_bc = false_.copy_compatible_to(out, check_dtype=False, check_sparse=False)
-        out.raw_tensor = torch.where(cond_bc.raw_tensor, true_bc.raw_tensor, false_bc.raw_tensor)
+        cond_bc_raw = cond.copy_compatible_to_dims_raw(out.dims)
+        true_bc_raw = true_.copy_compatible_to_dims_raw(out.dims)
+        false_bc_raw = false_.copy_compatible_to_dims_raw(out.dims)
+        out.raw_tensor = torch.where(cond_bc_raw, true_bc_raw, false_bc_raw)
         return out
 
     @staticmethod
