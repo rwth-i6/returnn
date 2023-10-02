@@ -2898,11 +2898,7 @@ class _TensorMixin(_TensorMixinBase):
                 seq_mask = backend.reshape_raw(seq_mask, shape)
                 assert seq_mask.get_shape().ndims == self.batch_ndim
             else:  # size is something unusual, not just [B], but e.g. [B,S] or so
-                seq_mask = (
-                    self.get_sequence_mask_tensor(axis)
-                    .copy_compatible_to(self, check_dtype=False, check_sparse=False)
-                    .raw_tensor
-                )
+                seq_mask = self.get_sequence_mask_tensor(axis).copy_compatible_to_dims_raw(self.dims)
         return seq_mask
 
     def get_sequence_mask_tensor(self: Tensor, axis: int) -> Tensor:
