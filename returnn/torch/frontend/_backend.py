@@ -374,35 +374,47 @@ class TorchBackend(Backend[torch.Tensor]):
     ) -> Tensor:
         """concat"""
         axis = sources[0][0].get_axis_from_description(sources[0][1])
-        dims = list(sources[0][0].dims)
-        dims.remove(sources[0][1])
+        other_dims = list(sources[0][0].dims)
+        other_dims.remove(sources[0][1])
+        need_broadcast = False
         if allow_broadcast:
             for source, dim in sources[1:]:
                 assert dim in source.dims
                 for dim_ in source.dims:
                     if dim_ == dim:
                         continue
-                    if dim_ not in dims:
-                        dims.append(dim_)
-        sources_ = []
-        for source, dim in sources:
-            # Maybe extend dims, and also transpose in the right dim order.
-            templ = Tensor(
-                source.name, dims=dims[:axis] + [dim] + dims[axis:], dtype=source.dtype, sparse_dim=source.sparse_dim
-            )
-            if not allow_broadcast:
-                assert set(templ.dims) == set(source.dims)
-            source_ = source.copy_compatible_to(templ, add_dims=allow_broadcast, unbroadcast=True)
-            sources_.append(source_)
+                    if dim_ not in other_dims:
+                        other_dims.append(dim_)
+                        need_broadcast = True
+        sources_raw = []
+        if allow_broadcast and need_broadcast:
+            for source, dim in sources:
+                # Maybe extend dims, and also transpose in the right dim order.
+                templ = Tensor(
+                    source.name,
+                    dims=other_dims[:axis] + [dim] + other_dims[axis:],
+                    dtype=source.dtype,
+                    sparse_dim=source.sparse_dim,
+                )
+                source_ = source.copy_compatible_to(templ, unbroadcast=True)
+                sources_raw.append(source_.raw_tensor)
+        else:  # not allow_broadcast
+            for source, dim in sources:
+                templ_dims = other_dims[:axis] + [dim] + other_dims[axis:]
+                assert set(templ_dims) == set(
+                    source.dims
+                ), f"concat {source} {dim} not allowed with allow_broadcast=False"
+                source_ = source.copy_transpose(templ_dims)
+                sources_raw.append(source_.raw_tensor)
         out = Tensor(
             "concat",
-            dims=dims[:axis] + [out_dim] + dims[axis:],
+            dims=other_dims[:axis] + [out_dim] + other_dims[axis:],
             dtype=sources[0][0].dtype,
             sparse_dim=sources[0][0].sparse_dim,
         )
         if sources[0][0].feature_dim and sources[0][0].feature_dim != sources[0][1]:
             out.feature_dim = sources[0][0].feature_dim
-        out.raw_tensor = torch.cat([s.raw_tensor for s in sources_], dim=axis)
+        out.raw_tensor = torch.cat([s for s in sources_raw], dim=axis)
         return out
 
     @staticmethod
