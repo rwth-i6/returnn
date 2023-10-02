@@ -426,3 +426,105 @@ def test_pack_padded():
 
         prev_loss_value = loss_value
         prev_bias_grad = bias_grad
+
+
+def test_Data_copy_compatible_to_match_priority():
+    feat_dim = Dim(2, name="feature")
+    in_dim = feat_dim.copy(match_priority=1)
+    assert in_dim == feat_dim and in_dim.match_priority > feat_dim.match_priority and in_dim is not feat_dim
+
+    raw_np = numpy.arange(0, 2 * 2, dtype=numpy.float32).reshape((2, 2))
+    raw = torch.tensor(raw_np)
+    x = Tensor("x", [in_dim, feat_dim], "float32", raw_tensor=raw)
+
+    # (in,out) -> (in,out) (noop)
+    x_ = x.copy_compatible_to(Tensor("y", [in_dim, feat_dim], "float32"))
+    assert len(x_.dims) == 2 and x_.dims[0] is in_dim and x_.dims[1] is feat_dim
+    x_np = x_.raw_tensor.detach().numpy()
+    numpy.testing.assert_equal(x_np, raw_np)
+
+    # (in,out) -> (out,in)
+    x_ = x.copy_compatible_to(Tensor("y", [feat_dim, in_dim], "float32"))
+    assert len(x_.dims) == 2 and x_.dims[0] is feat_dim and x_.dims[1] is in_dim
+    x_np = x_.raw_tensor.detach().numpy()
+    numpy.testing.assert_equal(x_np, raw_np.transpose([1, 0]))
+
+    # (out,in) -> (out,in) (noop)
+    x_ = x_.copy_compatible_to(Tensor("y", [feat_dim, in_dim], "float32"))
+    assert len(x_.dims) == 2 and x_.dims[0] is feat_dim and x_.dims[1] is in_dim
+    x_np = x_.raw_tensor.detach().numpy()
+    numpy.testing.assert_equal(x_np, raw_np.transpose([1, 0]))
+
+    # (out,in) -> (in,out)
+    x_ = x_.copy_compatible_to(Tensor("y", [in_dim, feat_dim], "float32"))
+    assert len(x_.dims) == 2 and x_.dims[0] is in_dim and x_.dims[1] is feat_dim
+    x_np = x_.raw_tensor.detach().numpy()
+    numpy.testing.assert_equal(x_np, raw_np)
+
+
+def test_Data_copy_compatible_to_dims_match_priority():
+    feat_dim = Dim(2, name="feature")
+    in_dim = feat_dim.copy(match_priority=1)
+    assert in_dim == feat_dim and in_dim.match_priority > feat_dim.match_priority and in_dim is not feat_dim
+
+    raw_np = numpy.arange(0, 2 * 2, dtype=numpy.float32).reshape((2, 2))
+    raw = torch.tensor(raw_np)
+    x = Tensor("x", [in_dim, feat_dim], "float32", raw_tensor=raw)
+
+    # (in,out) -> (in,out) (noop)
+    x_ = x.copy_compatible_to_dims([in_dim, feat_dim])
+    assert len(x_.dims) == 2 and x_.dims[0] is in_dim and x_.dims[1] is feat_dim
+    x_np = x_.raw_tensor.detach().numpy()
+    numpy.testing.assert_equal(x_np, raw_np)
+
+    # (in,out) -> (out,in)
+    x_ = x.copy_compatible_to_dims([feat_dim, in_dim])
+    assert len(x_.dims) == 2 and x_.dims[0] is feat_dim and x_.dims[1] is in_dim
+    x_np = x_.raw_tensor.detach().numpy()
+    numpy.testing.assert_equal(x_np, raw_np.transpose([1, 0]))
+
+    # (out,in) -> (out,in) (noop)
+    x_ = x_.copy_compatible_to_dims([feat_dim, in_dim])
+    assert len(x_.dims) == 2 and x_.dims[0] is feat_dim and x_.dims[1] is in_dim
+    x_np = x_.raw_tensor.detach().numpy()
+    numpy.testing.assert_equal(x_np, raw_np.transpose([1, 0]))
+
+    # (out,in) -> (in,out)
+    x_ = x_.copy_compatible_to_dims([in_dim, feat_dim])
+    assert len(x_.dims) == 2 and x_.dims[0] is in_dim and x_.dims[1] is feat_dim
+    x_np = x_.raw_tensor.detach().numpy()
+    numpy.testing.assert_equal(x_np, raw_np)
+
+
+def test_Data_copy_tranpose_match_priority():
+    feat_dim = Dim(2, name="feature")
+    in_dim = feat_dim.copy(match_priority=1)
+    assert in_dim == feat_dim and in_dim.match_priority > feat_dim.match_priority and in_dim is not feat_dim
+
+    raw_np = numpy.arange(0, 2 * 2, dtype=numpy.float32).reshape((2, 2))
+    raw = torch.tensor(raw_np)
+    x = Tensor("x", [in_dim, feat_dim], "float32", raw_tensor=raw)
+
+    # (in,out) -> (in,out) (noop)
+    x_ = x.copy_transpose([in_dim, feat_dim])
+    assert len(x_.dims) == 2 and x_.dims[0] is in_dim and x_.dims[1] is feat_dim
+    x_np = x_.raw_tensor.detach().numpy()
+    numpy.testing.assert_equal(x_np, raw_np)
+
+    # (in,out) -> (out,in)
+    x_ = x.copy_transpose([feat_dim, in_dim])
+    assert len(x_.dims) == 2 and x_.dims[0] is feat_dim and x_.dims[1] is in_dim
+    x_np = x_.raw_tensor.detach().numpy()
+    numpy.testing.assert_equal(x_np, raw_np.transpose([1, 0]))
+
+    # (out,in) -> (out,in) (noop)
+    x_ = x_.copy_transpose([feat_dim, in_dim])
+    assert len(x_.dims) == 2 and x_.dims[0] is feat_dim and x_.dims[1] is in_dim
+    x_np = x_.raw_tensor.detach().numpy()
+    numpy.testing.assert_equal(x_np, raw_np.transpose([1, 0]))
+
+    # (out,in) -> (in,out)
+    x_ = x_.copy_transpose([in_dim, feat_dim])
+    assert len(x_.dims) == 2 and x_.dims[0] is in_dim and x_.dims[1] is feat_dim
+    x_np = x_.raw_tensor.detach().numpy()
+    numpy.testing.assert_equal(x_np, raw_np)
