@@ -735,6 +735,108 @@ def test_Data_copy_compatible_to_bias_to_batch_time_spatial_feature():
     assert b_.batch_shape == (1, 1, 1, 14)
 
 
+def test_Data_copy_compatible_to_match_priority():
+    feat_dim = FeatureDim("feature", 2)
+    in_dim = feat_dim.copy(match_priority=1)
+    assert in_dim == feat_dim and in_dim.match_priority > feat_dim.match_priority and in_dim is not feat_dim
+    with tf.Graph().as_default() as graph, tf_compat.v1.Session(graph=graph) as session:
+        raw_np = numpy.arange(0, 2 * 2, dtype=numpy.float32).reshape((2, 2))
+        raw = tf.constant(raw_np)
+        x = Tensor("x", [in_dim, feat_dim], "float32", raw_tensor=raw)
+
+        # (in,out) -> (in,out) (noop)
+        x_ = x.copy_compatible_to(Tensor("y", [in_dim, feat_dim], "float32"))
+        assert len(x_.dims) == 2 and x_.dims[0] is in_dim and x_.dims[1] is feat_dim
+        x_np = session.run(x_.raw_tensor)
+        numpy.testing.assert_equal(x_np, raw_np)
+
+        # (in,out) -> (out,in)
+        x_ = x.copy_compatible_to(Tensor("y", [feat_dim, in_dim], "float32"))
+        assert len(x_.dims) == 2 and x_.dims[0] is feat_dim and x_.dims[1] is in_dim
+        x_np = session.run(x_.raw_tensor)
+        numpy.testing.assert_equal(x_np, raw_np.transpose([1, 0]))
+
+        # (out,in) -> (out,in) (noop)
+        x_ = x_.copy_compatible_to(Tensor("y", [feat_dim, in_dim], "float32"))
+        assert len(x_.dims) == 2 and x_.dims[0] is feat_dim and x_.dims[1] is in_dim
+        x_np = session.run(x_.raw_tensor)
+        numpy.testing.assert_equal(x_np, raw_np.transpose([1, 0]))
+
+        # (out,in) -> (in,out)
+        x_ = x_.copy_compatible_to(Tensor("y", [in_dim, feat_dim], "float32"))
+        assert len(x_.dims) == 2 and x_.dims[0] is in_dim and x_.dims[1] is feat_dim
+        x_np = session.run(x_.raw_tensor)
+        numpy.testing.assert_equal(x_np, raw_np)
+
+
+def test_Data_copy_compatible_to_dims_match_priority():
+    feat_dim = FeatureDim("feature", 2)
+    in_dim = feat_dim.copy(match_priority=1)
+    assert in_dim == feat_dim and in_dim.match_priority > feat_dim.match_priority and in_dim is not feat_dim
+    with tf.Graph().as_default() as graph, tf_compat.v1.Session(graph=graph) as session:
+        raw_np = numpy.arange(0, 2 * 2, dtype=numpy.float32).reshape((2, 2))
+        raw = tf.constant(raw_np)
+        x = Tensor("x", [in_dim, feat_dim], "float32", raw_tensor=raw)
+
+        # (in,out) -> (in,out) (noop)
+        x_ = x.copy_compatible_to_dims([in_dim, feat_dim])
+        assert len(x_.dims) == 2 and x_.dims[0] is in_dim and x_.dims[1] is feat_dim
+        x_np = session.run(x_.raw_tensor)
+        numpy.testing.assert_equal(x_np, raw_np)
+
+        # (in,out) -> (out,in)
+        x_ = x.copy_compatible_to_dims([feat_dim, in_dim])
+        assert len(x_.dims) == 2 and x_.dims[0] is feat_dim and x_.dims[1] is in_dim
+        x_np = session.run(x_.raw_tensor)
+        numpy.testing.assert_equal(x_np, raw_np.transpose([1, 0]))
+
+        # (out,in) -> (out,in) (noop)
+        x_ = x_.copy_compatible_to_dims([feat_dim, in_dim])
+        assert len(x_.dims) == 2 and x_.dims[0] is feat_dim and x_.dims[1] is in_dim
+        x_np = session.run(x_.raw_tensor)
+        numpy.testing.assert_equal(x_np, raw_np.transpose([1, 0]))
+
+        # (out,in) -> (in,out)
+        x_ = x_.copy_compatible_to_dims([in_dim, feat_dim])
+        assert len(x_.dims) == 2 and x_.dims[0] is in_dim and x_.dims[1] is feat_dim
+        x_np = session.run(x_.raw_tensor)
+        numpy.testing.assert_equal(x_np, raw_np)
+
+
+def test_Data_copy_tranpose_match_priority():
+    feat_dim = FeatureDim("feature", 2)
+    in_dim = feat_dim.copy(match_priority=1)
+    assert in_dim == feat_dim and in_dim.match_priority > feat_dim.match_priority and in_dim is not feat_dim
+    with tf.Graph().as_default() as graph, tf_compat.v1.Session(graph=graph) as session:
+        raw_np = numpy.arange(0, 2 * 2, dtype=numpy.float32).reshape((2, 2))
+        raw = tf.constant(raw_np)
+        x = Tensor("x", [in_dim, feat_dim], "float32", raw_tensor=raw)
+
+        # (in,out) -> (in,out) (noop)
+        x_ = x.copy_transpose([in_dim, feat_dim])
+        assert len(x_.dims) == 2 and x_.dims[0] is in_dim and x_.dims[1] is feat_dim
+        x_np = session.run(x_.raw_tensor)
+        numpy.testing.assert_equal(x_np, raw_np)
+
+        # (in,out) -> (out,in)
+        x_ = x.copy_transpose([feat_dim, in_dim])
+        assert len(x_.dims) == 2 and x_.dims[0] is feat_dim and x_.dims[1] is in_dim
+        x_np = session.run(x_.raw_tensor)
+        numpy.testing.assert_equal(x_np, raw_np.transpose([1, 0]))
+
+        # (out,in) -> (out,in) (noop)
+        x_ = x_.copy_transpose([feat_dim, in_dim])
+        assert len(x_.dims) == 2 and x_.dims[0] is feat_dim and x_.dims[1] is in_dim
+        x_np = session.run(x_.raw_tensor)
+        numpy.testing.assert_equal(x_np, raw_np.transpose([1, 0]))
+
+        # (out,in) -> (in,out)
+        x_ = x_.copy_transpose([in_dim, feat_dim])
+        assert len(x_.dims) == 2 and x_.dims[0] is in_dim and x_.dims[1] is feat_dim
+        x_np = session.run(x_.raw_tensor)
+        numpy.testing.assert_equal(x_np, raw_np)
+
+
 def test_Data_get_common_data_extra_static_spatial():
     d1 = Data(name="t", shape=(None, 32, 128), dtype="float32", auto_create_placeholders=True)
     d2 = Data(name="r", shape=(None, 32, 128), dtype="float32", auto_create_placeholders=True)
