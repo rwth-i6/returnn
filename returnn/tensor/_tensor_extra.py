@@ -685,7 +685,7 @@ class _TensorMixin(_TensorMixinBase):
         """
         assert len(perm) == self.batch_ndim, f"{self}: invalid perm {perm!r} length"
         perm_ = perm
-        if len(set(self.dims)) == len(self.dims) or all(isinstance(a, int) for a in perm):  # all dims are unique?
+        if all(isinstance(a, int) for a in perm) or len(set(self.dims)) == len(self.dims):  # all dims are unique?
             perm = [self.get_axis_from_description(a, allow_int=allow_int) for a in perm]
         else:
             # We can have cases where dim tags are not unique.
