@@ -460,10 +460,8 @@ class TorchBackend(Backend[torch.Tensor]):
             new_dim_tag=out_spatial_dim,
             name=f"{source.name}/cum_concat_step",
         )
-        source_ = source.copy_compatible_to(prev_accum)
-        out.raw_tensor = torch.cat(
-            (prev_accum.raw_tensor, source_.raw_tensor), dim=prev_accum.get_axis_from_description(axis)
-        )
+        source_raw = source.copy_compatible_to_dims_raw(prev_accum.dims)
+        out.raw_tensor = torch.cat((prev_accum.raw_tensor, source_raw), dim=prev_accum.get_axis_from_description(axis))
         return out
 
     @staticmethod
