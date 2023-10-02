@@ -1290,9 +1290,9 @@ class TorchBackend(Backend[torch.Tensor]):
         assert set(mask.dims) == set(dims)
         assert set(mask.dims).issubset(set(tensor.dims))
         remaining_dims = [d for d in tensor.dims if d not in mask.dims]
-        tensor_templ = tensor.copy_template_new_dim_tags(tuple(dims) + tuple(remaining_dims))
-        tensor = tensor.copy_compatible_to(tensor_templ, add_dims=False)
-        mask = mask.copy_compatible_to(tensor_templ, check_dtype=False, check_sparse=False)
+        tensor_templ_dims = tuple(dims) + tuple(remaining_dims)
+        tensor = tensor.copy_transpose(tensor_templ_dims)
+        mask_raw = mask.copy_compatible_to_dims_raw(tensor_templ_dims)
         in_raw = tensor.raw_tensor
         # We have a very strange problem with the gradient of masked_select,
         # when used together with some specific other operations before that,
@@ -1300,13 +1300,13 @@ class TorchBackend(Backend[torch.Tensor]):
         # This clone() with contiguous_format seems to fix the problem.
         # https://github.com/pytorch/pytorch/issues/99638
         in_raw = in_raw.clone(memory_format=torch.contiguous_format)
-        if mask.device == "meta":
+        if mask_raw.device.type == "meta":
             # This is not supported, but also, we would anyway not know the out shape.
             # However, instead of erroring, just assume some dummy mask.
             # https://github.com/pytorch/pytorch/issues/109871
             out_raw = in_raw.flatten()
         else:
-            out_raw = torch.masked_select(in_raw, mask.raw_tensor)
+            out_raw = torch.masked_select(in_raw, mask_raw)
         remaining_shape = [d.get_dim_value() for d in remaining_dims]
         remaining_num_elements = numpy.prod(remaining_shape) if remaining_shape else 1
         assert out_raw.numel() % remaining_num_elements == 0
