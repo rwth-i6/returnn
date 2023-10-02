@@ -1234,6 +1234,7 @@ class _TensorMixin(_TensorMixinBase):
         v.sanity_check()
         return v
 
+    # This func matches _native _permuteAndExtend logic.
     def get_out_permutation_to_dims(self, dims: Sequence[Dim]) -> List[int]:
         """
         :param dims: superset of our dims
@@ -1248,6 +1249,9 @@ class _TensorMixin(_TensorMixinBase):
             for j in range(len(self._dims)):
                 if taken[j]:
                     continue
+                if dim is self._dims[j]:
+                    candidates = [j]  # prefer that one
+                    break
                 if dim == self._dims[j]:
                     candidates.append(j)
 
