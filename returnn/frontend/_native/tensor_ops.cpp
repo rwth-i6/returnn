@@ -585,6 +585,7 @@ static PyObject* _permuteAndExtend(
 ) {
     int tensorNdim = PyTuple_GET_SIZE(dims);
     // First find the mapping.
+    // The logic matches Tensor.get_out_permutation_to_dims.
     std::vector<int> outPermutation;
     {
         int count = 0;
@@ -595,6 +596,11 @@ static PyObject* _permuteAndExtend(
             for(int j = 0; j < tensorNdim; ++j) {
                 if(taken[j]) continue;
                 PyObject* dim_ = PyTuple_GET_ITEM(dims, j);
+                if(dim_ == dim) {  // prefer that one over all others
+                    candidates.clear();
+                    candidates.push_back(j);
+                    break;
+                }
                 int eq = PyObject_RichCompareBool(dim, dim_, Py_EQ);
                 if(eq < 0) return NULL;
                 if(eq) candidates.push_back(j);
