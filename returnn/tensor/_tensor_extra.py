@@ -719,8 +719,6 @@ class _TensorMixin(_TensorMixinBase):
             return self.copy(), perm
 
         data_opts = self.get_kwargs(include_special_axes=False)
-        if self._raw_tensor is not None:
-            data_opts["raw_tensor"] = self._raw_backend.transpose_raw(self._raw_tensor, perm)
         data_opts["dims"] = tuple(self.dim_tags[perm[i]] for i in range(self.batch_ndim))
         data = _t.Tensor(**data_opts)
         inv_perm = {j: i for (i, j) in enumerate(perm)}
