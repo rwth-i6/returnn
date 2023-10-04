@@ -170,6 +170,6 @@ def setup_torch():
 
     TorchBackend.executing_eagerly = True.__bool__
     TorchBackend.get_dtype_name_raw = mod.raw_torch_tensor_get_dtype
-    TorchBackend.get_ndim_raw = torch.Tensor.dim
-    TorchBackend.expand_dims_raw = torch.unsqueeze
-    TorchBackend.reshape_raw = torch.reshape
+    TorchBackend.get_ndim_raw = staticmethod(torch.Tensor.dim)
+    TorchBackend.expand_dims_raw = staticmethod(torch.unsqueeze)
+    TorchBackend.reshape_raw = staticmethod(torch.reshape)

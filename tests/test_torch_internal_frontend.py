@@ -497,6 +497,22 @@ def test_native_is_raw_torch_tensor_type():
         assert mod.is_raw_torch_tensor_type(43) is False  # current behavior - might also raise exception instead
 
 
+def test_torch_native_setup():
+    tensor = Tensor(name="x", raw_tensor=torch.tensor([1.0, 2.0, 3.0]), dims=[Dim(3)], dtype="float32")
+
+    from returnn.frontend._backend import global_backend
+    from returnn.torch.frontend import TorchBackend
+
+    assert isinstance(global_backend, TorchBackend)
+
+    assert global_backend.executing_eagerly()
+    assert TorchBackend.executing_eagerly()
+    assert global_backend.get_dtype_name_raw(tensor.raw_tensor) == "float32"
+    assert TorchBackend.get_dtype_name_raw(tensor.raw_tensor) == "float32"
+    assert global_backend.get_ndim_raw(tensor.raw_tensor) == 1
+    assert TorchBackend.get_ndim_raw(tensor.raw_tensor) == 1
+
+
 def test_native_torch_raw_backend():
     tensor = Tensor(name="a", raw_tensor=torch.tensor([1.0, 2.0, 3.0]), dims=[Dim(3)], dtype="float32")
     backend1 = tensor._raw_backend
