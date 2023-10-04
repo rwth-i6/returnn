@@ -515,6 +515,18 @@ def test_native_torch_raw_backend():
     assert backend1 is backend2 is backend3
 
 
+def test_native_torch_raw_backend_raw_dtype():
+    raw = torch.tensor([1.0, 2.0, 3.0], dtype=torch.float32)
+
+    from returnn.frontend import _native
+
+    mod = _native.get_module()
+
+    with _CheckNoPythonCalls():
+        dtype = mod.raw_torch_tensor_get_dtype(raw)
+    assert isinstance(dtype, str) and dtype == "float32"
+
+
 def test_native_torch_tensor_eq():
     batch_dim = Dim(2, name="batch_dim")
     feature_dim = Dim(3, name="feature_dim")
