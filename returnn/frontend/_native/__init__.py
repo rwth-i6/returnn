@@ -140,3 +140,36 @@ def setup():
         native_func = getattr(mod, native_name)
         setattr(rf, rf_name, native_func)
         setattr(rf_math, rf_name, native_func)
+
+
+_is_set_up_torch = False
+
+
+def setup_torch():
+    """
+    Like :func:`setup`, but specifically for the PyTorch backend.
+    This assumes that we can `import torch`, unlike :func:`setup`.
+    """
+    global _is_set_up_torch
+    if _is_set_up_torch:
+        return
+    _is_set_up_torch = True  # only try once
+
+    import torch
+
+    # noinspection PyBroadException
+    try:
+        mod = get_module()
+    except Exception:
+        if os.environ.get("RETURNN_TEST") == "1":
+            raise
+        # No message here, we expect that setup() was already called and printed the message.
+        return
+
+    from returnn.torch.frontend import TorchBackend
+
+    TorchBackend.executing_eagerly = True.__bool__
+    TorchBackend.get_dtype_name_raw = mod.raw_torch_tensor_get_dtype
+    TorchBackend.get_ndim_raw = torch.Tensor.dim
+    TorchBackend.expand_dims_raw = torch.unsqueeze
+    TorchBackend.reshape_raw = torch.reshape

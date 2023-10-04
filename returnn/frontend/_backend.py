@@ -1225,6 +1225,7 @@ def select_backend_torch():
     from returnn.frontend import _native
 
     _native.setup()
+    _native.setup_torch()
 
 
 def get_backend_by_tensor(tensor: Tensor, *, fallback: Optional[T2] = None) -> Union[Type[Backend[T]], T2]:
