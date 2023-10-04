@@ -487,7 +487,7 @@ def test_native_is_raw_torch_tensor_type():
 
     from returnn.frontend import _native
 
-    mod = _native.get_module(verbose=True)
+    mod = _native.get_module()
 
     with _CheckNoPythonCalls():
         assert mod.is_raw_torch_tensor_type(type(raw_tensor)) is True
@@ -525,7 +525,7 @@ def test_native_torch_tensor_eq():
 
     from returnn.frontend import _native
 
-    mod = _native.get_module(verbose=True)
+    mod = _native.get_module()
     with _CheckNoPythonCalls():
         res1 = mod.tensor_eq(tensor_bf, tensor_bf)
         res2 = mod.tensor_eq(tensor_bf, tensor_f)
@@ -552,7 +552,7 @@ def test_native_torch_tensor_eq_op():
 
     from returnn.frontend import _native
 
-    mod = _native.get_module(verbose=True)
+    mod = _native.get_module()
 
     assert Tensor.__eq__ is mod.tensor_eq
 
@@ -571,7 +571,7 @@ def test_native_torch_tensor_neg():
 
     from returnn.frontend import _native
 
-    mod = _native.get_module(verbose=True)
+    mod = _native.get_module()
 
     with _CheckNoPythonCalls():
         res = mod.tensor_neg(tensor)
@@ -591,7 +591,7 @@ def test_native_torch_tensor_sub():
 
     from returnn.frontend import _native
 
-    mod = _native.get_module(verbose=True)
+    mod = _native.get_module()
 
     with _CheckNoPythonCalls():
         res1 = mod.tensor_sub(tensor_bf, tensor_bf)
@@ -627,7 +627,7 @@ def test_native_torch_tensor_sub_permute_more_dims():
 
     from returnn.frontend import _native
 
-    mod = _native.get_module(verbose=True)
+    mod = _native.get_module()
 
     with _CheckNoPythonCalls():
         res1 = mod.tensor_sub(tensor_bft, tensor_tbf)
