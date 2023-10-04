@@ -66,35 +66,6 @@ def setup():
     # No propagate, use stdout directly.
     log.initialize(verbosity=[5], propagate=False)
 
-    # PyTorch is optional.
-    if "RETURNN_DISABLE_TORCH" in os.environ and int(os.environ["RETURNN_DISABLE_TORCH"]) == 1:
-        pass
-    else:
-        # Import order of TF and PyTorch can have an influence...
-        # I have a case where only this order works: torch, tensorflow
-        try:
-            # noinspection PyUnresolvedReferences,PyPackageRequirements
-            import torch
-        except ImportError:
-            pass
-
-    # TF is optional.
-    if "RETURNN_DISABLE_TF" in os.environ and int(os.environ["RETURNN_DISABLE_TF"]) == 1:
-        tf = None
-    else:
-        # Note that importing TF still has a small side effect:
-        # BackendEngine._get_default_engine() will return TF by default, if TF is already loaded.
-        # For most tests, this does not matter.
-        try:
-            import tensorflow as tf
-        except ImportError:
-            tf = None
-
-    if tf:
-        import returnn.tf.util.basic as tf_util
-
-        tf_util.debug_register_better_repr()
-
     import returnn.util.debug as debug
 
     debug.install_lib_sig_segfault()
