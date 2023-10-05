@@ -17,6 +17,8 @@ PyObject* pyTensorCopy(PyObject *self, PyObject *args, PyObject *kwargs);
 PyObject* pyTensorCopyTemplate(PyObject *self, PyObject *args, PyObject *kwargs);
 PyObject* pyTensorRawTensorSetter(PyObject *self, PyObject *const *args, Py_ssize_t nargs);
 PyObject* pyTensorGetOutPermutationsToDims(PyObject *self, PyObject *const *args, Py_ssize_t nargs);
+PyObject* pyTensorCopyCompatibleToDims(PyObject *self, PyObject *const *args, Py_ssize_t nargs);
+PyObject* pyTensorCopyCompatibleToDimsRaw(PyObject *self, PyObject *const *args, Py_ssize_t nargs);
 
 PyObject* pyConvertToRawTorchTensorLike(PyObject *self, PyObject *const *args, Py_ssize_t nargs);
 

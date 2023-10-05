@@ -1235,6 +1235,7 @@ class _TensorMixin(_TensorMixinBase):
         return v
 
     # This func matches _native _permuteAndExtend logic.
+    # This func has a native implementation (_native tensor_get_out_permutation_to_dims).
     def get_out_permutation_to_dims(self, dims: Sequence[Dim]) -> List[int]:
         """
         :param dims: superset of our dims
@@ -1287,6 +1288,7 @@ class _TensorMixin(_TensorMixinBase):
         assert len(out_permutation) == len(dims)
         return out_permutation
 
+    # This function has a native implementation (_native tensor_copy_compatible_to_dims).
     def copy_compatible_to_dims(self: _t.Tensor, dims: Sequence[Dim]) -> _t.Tensor:
         """
         Simpler variant of :func:`copy_compatible_to` which just takes a list of dims,
@@ -1315,18 +1317,15 @@ class _TensorMixin(_TensorMixinBase):
             )
             for i, p in enumerate(out_permutation)
         ]
-        return _t.Tensor(
-            self.name,
-            out_dims,
-            self.dtype,
-            raw_tensor=raw_tensor,
-            version=self.version,
-            batch=self.batch,
-            beam=self.beam,
-            feature_dim=self.feature_dim,
-            sparse_dim=self.sparse_dim,
-        )
+        kwargs = self.get_kwargs()
+        for special_axis_name in self.SpecialAxesNames:
+            if special_axis_name in kwargs and kwargs[special_axis_name] is not None:
+                kwargs[special_axis_name] = out_permutation.index(kwargs[special_axis_name])
+        kwargs["dims"] = out_dims
+        kwargs["raw_tensor"] = raw_tensor
+        return _t.Tensor(**kwargs)
 
+    # This function has a native implementation (_native tensor_copy_compatible_to_dims_raw).
     def copy_compatible_to_dims_raw(self: _t.Tensor, dims: Sequence[Dim]) -> _t.RawTensorType:
         """
         Simpler variant of :func:`copy_compatible_to` which just takes a list of dims,
@@ -1335,11 +1334,11 @@ class _TensorMixin(_TensorMixinBase):
         :param dims:
         :return: raw tensor from self with dims permuted and broadcast dims added
         """
-        out_permutation = self.get_out_permutation_to_dims(dims)
         raw_tensor = self._raw_tensor
+        assert raw_tensor is not None, f"{self} copy_compatible_to_dims_raw: no raw tensor"
+        out_permutation = self.get_out_permutation_to_dims(dims)
         if out_permutation == list(range(len(self._dims))):
             return raw_tensor
-        assert raw_tensor is not None, f"{self} copy_compatible_to_dims_raw: no raw tensor"
         backend = self._raw_backend
         raw_shape = backend.get_shape_raw(raw_tensor)
         raw_tensor = backend.transpose_raw(raw_tensor, [p for p in out_permutation if p >= 0])

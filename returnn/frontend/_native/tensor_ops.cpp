@@ -25,6 +25,40 @@ PyObject* tensorCopy(
     return res.release();
 }
 
+// all but time_dim_axis (or other special axes, or any axes)
+static bool _copyTensorExtraToKwargs(PyObject* extra, PyObject* kwargs) {
+    PyObjectScopedRef batch = PyObject_GetAttrString(extra, "batch");
+    if(!batch) return false;
+    if(batch != Py_None) {
+        if(PyDict_SetItemString(kwargs, "batch", batch) < 0) return false;
+    }
+    {
+        PyObjectScopedRef beam = PyObject_GetAttrString(extra, "beam");
+        if(!beam) return false;
+        if(beam == Py_None && batch != Py_None) {
+            beam = PyObject_GetAttrString(batch, "beam");
+        }
+        if(beam != Py_None) {
+            if(PyDict_SetItemString(kwargs, "beam", beam) < 0) return false;
+        }
+    }
+    {
+        PyObjectScopedRef control_flow_ctx = PyObject_GetAttrString(extra, "control_flow_ctx");
+        if(!control_flow_ctx) return false;
+        if(control_flow_ctx != Py_None) {
+            if(PyDict_SetItemString(kwargs, "control_flow_ctx", control_flow_ctx) < 0) return false;
+        }
+    }
+    {
+        PyObjectScopedRef available_for_inference = PyObject_GetAttrString(extra, "available_for_inference");
+        if(!available_for_inference) return false;
+        if(available_for_inference != Py_None) {
+            if(PyDict_SetItemString(kwargs, "available_for_inference", available_for_inference) < 0) return false;
+        }
+    }
+    return true;
+}
+
 // copy of Tensor.copy_template()
 PyObject* tensorCopyTemplate(
     PyModuleState* modState,
@@ -100,35 +134,8 @@ PyObject* tensorCopyTemplate(
         if(PyDict_SetItemString(kwargs, "version", version) < 0) return NULL;
     }
     if(extra != Py_None) {
-        PyObjectScopedRef batch = PyObject_GetAttrString(extra, "batch");
-        if(!batch) return NULL;
-        if(batch != Py_None) {
-            if(PyDict_SetItemString(kwargs, "batch", batch) < 0) return NULL;
-        }
-        {
-            PyObjectScopedRef beam = PyObject_GetAttrString(extra, "beam");
-            if(!beam) return NULL;
-            if(beam == Py_None && batch != Py_None) {
-                beam = PyObject_GetAttrString(batch, "beam");
-            }
-            if(beam != Py_None) {
-                if(PyDict_SetItemString(kwargs, "beam", beam) < 0) return NULL;
-            }
-        }
-        {
-            PyObjectScopedRef control_flow_ctx = PyObject_GetAttrString(extra, "control_flow_ctx");
-            if(!control_flow_ctx) return NULL;
-            if(control_flow_ctx != Py_None) {
-                if(PyDict_SetItemString(kwargs, "control_flow_ctx", control_flow_ctx) < 0) return NULL;
-            }
-        }
-        {
-            PyObjectScopedRef available_for_inference = PyObject_GetAttrString(extra, "available_for_inference");
-            if(!available_for_inference) return NULL;
-            if(available_for_inference != Py_None) {
-                if(PyDict_SetItemString(kwargs, "available_for_inference", available_for_inference) < 0) return NULL;
-            }
-        }
+        if(!_copyTensorExtraToKwargs(extra, kwargs))
+            return NULL;
     }
 
     return PyObject_Call(modState->tensorType(), emptyArgs, kwargs);
@@ -626,14 +633,15 @@ static bool _getPermutationSupersetToSubset(const char* funcName, ASeqT subset, 
     return true;
 }
 
+template<typename OutDimSeqT>
 static PyObject* _permuteAndExtend(
     const char* rawOpName,
     PyObject* permuteOp, PyObject* reshapeOp,
     PyObject* tensor, PyTupleOrListStaticRef<true> dims, PyObject* rawTensor, PyObject* rawShape,
-    PyTupleOrListStaticRef<false> outDims, std::vector<long> outShape
+    OutDimSeqT outDims,
+    std::vector<int>& outPermutation
 ) {
     // First find the mapping.
-    std::vector<int> outPermutation;
     if(!_getPermutationSupersetToSubset(rawOpName, dims, outDims, outPermutation))
         return NULL;
 
@@ -641,8 +649,15 @@ static PyObject* _permuteAndExtend(
     PyObjectScopedRef rawTensorExt; // just for holding the ref and decrefing it later
 
     // Maybe permute the tensor
-    {
-        PyObjectScopedRef permuteArg = PyTuple_New(PyTuple_GET_SIZE(rawShape));
+    bool needPermute = false;
+    for(int i = 0; i < (int) outPermutation.size(); ++i) {
+        if(i > 0 && outPermutation[i] != outPermutation[i - 1] + 1) {
+            needPermute = true;
+            break;
+        }
+    }
+    if(needPermute) {
+        PyObjectScopedRef permuteArg = PyTuple_New(dims.size());
         if(!permuteArg) return NULL;
         int j = 0;
         for(int i = 0; i < (int) outPermutation.size(); ++i) {
@@ -651,17 +666,24 @@ static PyObject* _permuteAndExtend(
             ++j;
         }
         assert(j == PyTuple_GET_SIZE(permuteArg.get()));
+        assert(j == dims.size());
         rawTensor_ = PyObject_CallFunctionObjArgs(permuteOp, rawTensor_, permuteArg.get(), NULL);
         if(!rawTensor_) return NULL;
         rawTensorExt = rawTensor_;
     }
 
     // Maybe reshape the tensor
-    {
+    if(outDims.size() > dims.size()) {
         PyObjectScopedRef rawShapeExt = PyTuple_New(outPermutation.size());
         if(!rawShapeExt) return NULL;
         for(int i = 0; i < (int) outPermutation.size(); ++i) {
-            PyObject* d = PyLong_FromLong((outPermutation[i] >= 0) ? outShape[i] : 1);
+            PyObject* d;
+            if(outPermutation[i] >= 0) {
+                d = PyTuple_GET_ITEM(rawShape, outPermutation[i]);
+                Py_XINCREF(d);                
+            }
+            else
+                d = PyLong_FromLong(1);
             if(!d) return NULL;
             PyTuple_SET_ITEM(rawShapeExt.get(), i, d);
         }
@@ -741,6 +763,274 @@ PyObject* pyTensorGetOutPermutationsToDims(PyObject *self, PyObject *const *args
     if(_getPermutationSupersetToSubset("tensor_get_out_permutations_to_dims", selfDimsSeq, otherDimsSeq, outPermutation))
         return _cppLongVectorToPyList(outPermutation);
     return NULL;
+}
+
+template<bool rawMode>
+static PyObject* tensorCopyCompatibleToDims(const char* funcName, PyModuleState* modState, PyObject* tensor, PyObject* outDims) {
+    PyTupleOrListRef outDimsSeq(outDims);
+    if(!outDimsSeq.isValid()) {
+        PyErr_Format(PyExc_TypeError, "%s: expected dims to be tuple or list, got %R", funcName, outDims);
+        return NULL;
+    }
+
+    PyObjectScopedRef dims = PyObject_GetAttrString(tensor, "_dims");
+    if(!dims) return NULL;
+    PyTupleOrListStaticRef<true> dimsSeq(dims);
+
+    PyObjectScopedRef rawTensor = PyObject_GetAttrString(tensor, "_raw_tensor");
+    if(!rawTensor) return NULL;
+    
+    // follow Tensor.copy_compatible_to_dims logic
+
+    std::vector<int> outPermutation;
+    PyObjectScopedRef outRawTensor;
+    if(rawTensor == Py_None) {
+        if(rawMode) {
+            PyErr_Format(PyExc_ValueError, "%s: tensor does not have a raw_tensor", funcName);
+            return NULL;
+        }
+        if(!_getPermutationSupersetToSubset(funcName, dimsSeq, outDimsSeq, outPermutation))
+            return NULL;
+    }
+    else if(modState->isTorchTensorType((PyObject*) Py_TYPE(rawTensor))) {
+        PyObjectScopedRef rawShape = PyObject_GetAttrString(rawTensor, "shape");
+        if(!rawShape) return NULL;
+        PyObject* permuteOp = modState->cachedOp(TOp_Permute, BWCO_Torch);
+        if(!permuteOp) return NULL;
+        PyObject* reshapeOp = modState->cachedOp(TOp_Reshape, BWCO_Torch);
+        if(!reshapeOp) return NULL;
+        outRawTensor = _permuteAndExtend(funcName, permuteOp, reshapeOp, tensor, dimsSeq, rawTensor, rawShape, outDimsSeq, outPermutation);
+        if(!outRawTensor) return NULL;
+    }
+    else {  // generic backend fallback
+        PyObject* backend = getBackendForRawTensor(modState, rawTensor);
+        PyObjectScopedRef permuteOp = PyObject_GetAttrString(backend, "transpose_raw");
+        if(!permuteOp) return NULL;
+        PyObjectScopedRef reshapeOp = PyObject_GetAttrString(backend, "reshape_raw");
+        if(!reshapeOp) return NULL;
+        PyObjectScopedRef rawShape = PyObject_CallMethod(backend, "get_shape_tuple_raw", "O", rawTensor.get());
+        if(!rawShape) return NULL;
+        if(!PyTuple_Check(rawShape)) {
+            PyErr_Format(PyExc_TypeError, "%s: expected raw_tensor.shape to be tuple, got %R", funcName, rawShape.get());
+            return NULL;
+        }
+        outRawTensor = _permuteAndExtend(funcName, permuteOp, reshapeOp, tensor, dimsSeq, rawTensor, rawShape, outDimsSeq, outPermutation);
+        if(!outRawTensor) return NULL;
+    }
+
+    if(rawMode)
+        return outRawTensor.release();
+
+    assert(outPermutation.size() == outDimsSeq.size());
+    PyObjectScopedRef outDims_ = PyTuple_New(outPermutation.size());
+    if(!outDims_) return NULL;
+    for(int i = 0; (size_t) i < outPermutation.size(); ++i) {
+        PyObject* d;
+        if(outPermutation[i] >= 0) {
+            d = outDimsSeq.getItem(i);
+            if(!d) return NULL;
+            Py_INCREF(d);
+        }
+        else {
+            // create dummy broadcast dim
+            PyObject* dim = outDimsSeq.getItem(i);
+            PyObjectScopedRef kind = PyObject_GetAttrString(dim, "kind");
+            if(!kind) return NULL;
+            PyObjectScopedRef description = PyObject_GetAttrString(dim, "description");
+            if(!description) return NULL;
+            if(description == Py_None) description = PyUnicode_InternFromString("unnamed_bc_dim1");
+            else description = PyUnicode_FromFormat("%S_bc_dim1", description.get());
+            if(!description) return NULL;
+            PyObjectScopedRef dimValue = PyLong_FromLong(1);
+            if(!dimValue) return NULL;
+            PyObjectScopedRef args = PyTuple_New(0);
+            if(!args) return NULL;
+            PyObjectScopedRef kwargs = PyDict_New();
+            if(!kwargs) return NULL;
+            if(PyDict_SetItemString(kwargs, "kind", kind) < 0) return NULL;
+            if(PyDict_SetItemString(kwargs, "description", description) < 0) return NULL;
+            if(PyDict_SetItemString(kwargs, "dimension", dimValue) < 0) return NULL;
+            if(PyDict_SetItemString(kwargs, "auto_generated", Py_True) < 0) return NULL;
+            d = PyObject_Call(modState->dimType(), args, kwargs);
+            if(!d) return NULL;
+        }
+        PyTuple_SET_ITEM(outDims_.get(), i, d);
+    }
+
+    PyObjectScopedRef name = PyObject_GetAttrString(tensor, "name");
+    if(!name) return NULL;
+    PyObjectScopedRef dtype = PyObject_GetAttrString(tensor, "dtype");
+    if(!dtype) return NULL;
+    PyObjectScopedRef feature_dim_axis = PyObject_GetAttrString(tensor, "_feature_dim_axis");
+    if(!feature_dim_axis) return NULL;
+    if(feature_dim_axis == Py_None) {}
+    else if(feature_dim_axis == modState->notSpecified()) {}
+    else {
+        if(!PyLong_Check(feature_dim_axis)) {
+            PyErr_Format(
+                PyExc_TypeError,
+                "%s: tensor._feature_dim_axis did not return an int, from tensor dims %R",
+                funcName, dimsSeq.get());
+            return NULL;
+        }
+        long feature_dim_axisInt = PyLong_AsLong(feature_dim_axis);
+        if(feature_dim_axisInt < 0) {
+            if(!PyErr_Occurred())
+                PyErr_Format(
+                    PyExc_ValueError,
+                    "%s: tensor._feature_dim_axis is negative, from tensor dims %R",
+                    funcName, dimsSeq.get());
+            return NULL;
+        }
+        if(feature_dim_axisInt >= (long) dimsSeq.size()) {
+            PyErr_Format(
+                PyExc_ValueError,
+                "%s: tensor._feature_dim_axis is out of range, from tensor dims %R",
+                funcName, dimsSeq.get());
+            return NULL;
+        }
+        feature_dim_axis.release();
+        for(int i = 0; i < (int) outPermutation.size(); ++i) {
+            if(outPermutation[i] == feature_dim_axisInt) {
+                feature_dim_axis = PyLong_FromLong(i);
+                if(!feature_dim_axis) return NULL;
+                break;
+            }
+        }
+        if(!feature_dim_axis) {
+            PyErr_Format(
+                PyExc_SystemError,
+                "%s: tensor._feature_dim_axis is not in out_dims, from tensor dims %R",
+                funcName, dimsSeq.get());
+            return NULL;
+        }
+    }
+    PyObjectScopedRef sparse_dim = PyObject_GetAttrString(tensor, "sparse_dim");
+    if(!sparse_dim) return NULL;
+
+    PyObjectScopedRef version = PyObject_GetAttrString(tensor, "version");
+    if(!version) return NULL;
+    if(!PyLong_Check(version)) {
+        PyErr_Format(
+            PyExc_TypeError,
+            "tensorCopyTemplate: tensor.version did not return an int, from version %R", version.get());
+        return NULL;
+    }
+    long versionInt = PyLong_AsLong(version);
+    if(versionInt != 1 && versionInt != 2) {
+        if(!PyErr_Occurred())
+            PyErr_Format(
+                PyExc_ValueError,
+                "tensorCopyTemplate: tensor.version is invalid, from version %R", version.get());
+        return NULL;
+    }
+    PyObjectScopedRef extra = PyObject_GetAttrString(tensor, "_extra");
+    if(!extra) return NULL;
+
+    PyObjectScopedRef outTensor;
+    if(versionInt == 2 && extra == Py_None) {
+        outTensor = PyObject_CallFunctionObjArgs(
+            modState->tensorType(), name.get(), outDims_.get(), dtype.get(), NULL);
+        if(!outTensor) return NULL;
+    }
+    else {
+        PyObjectScopedRef args = PyTuple_New(0);
+        if(!args) return NULL;
+        PyObjectScopedRef kwargs = PyDict_New();
+        if(!kwargs) return NULL;
+        if(PyDict_SetItemString(kwargs, "name", name) < 0) return NULL;
+        if(PyDict_SetItemString(kwargs, "dims", outDims_) < 0) return NULL;
+        if(PyDict_SetItemString(kwargs, "dtype", dtype) < 0) return NULL;
+        if(PyDict_SetItemString(kwargs, "version", version) < 0) return NULL;
+
+        if(extra != Py_None) {
+            if(versionInt == 1) {
+                PyObjectScopedRef time_dim_axis = PyObject_GetAttrString(tensor, "_time_dim_axis");
+                if(!time_dim_axis) return NULL;
+                if(time_dim_axis != Py_None && time_dim_axis != modState->notSpecified()) {
+                    if(!PyLong_Check(time_dim_axis)) {
+                        PyErr_Format(
+                            PyExc_TypeError,
+                            "%s: tensor._time_dim_axis did not return an int, from tensor %R",
+                            funcName, tensor);
+                        return NULL;
+                    }
+                    long time_dim_axisInt = PyLong_AsLong(time_dim_axis);
+                    if(time_dim_axisInt < 0) {
+                        if(!PyErr_Occurred())
+                            PyErr_Format(
+                                PyExc_ValueError,
+                                "%s: tensor._time_dim_axis is negative, from tensor %R",
+                                funcName, tensor);
+                        return NULL;
+                    }
+                    if(time_dim_axisInt >= (long) dimsSeq.size()) {
+                        PyErr_Format(
+                            PyExc_ValueError,
+                            "%s: tensor._time_dim_axis is out of range, from tensor %R",
+                            funcName, tensor);
+                        return NULL;
+                    }
+                    time_dim_axis.release();
+                    for(int i = 0; i < (int) outPermutation.size(); ++i) {
+                        if(outPermutation[i] == time_dim_axisInt) {
+                            time_dim_axis = PyLong_FromLong(i);
+                            if(!time_dim_axis) return NULL;
+                            break;
+                        }
+                    }
+                    if(!time_dim_axis) {
+                        PyErr_Format(
+                            PyExc_SystemError,
+                            "%s: tensor._time_dim_axis is not in out_dims, from tensor %R",
+                            funcName, tensor);
+                        return NULL;
+                    }
+                }
+                if(PyDict_SetItemString(kwargs, "time_dim_axis", time_dim_axis) < 0) return NULL;
+            }
+
+            if(!_copyTensorExtraToKwargs(extra, kwargs)) return NULL;
+        }
+
+        outTensor = PyObject_Call(modState->tensorType(), args, kwargs);
+        if(!outTensor) return NULL;
+    }
+
+    if(PyObject_SetAttrString(outTensor, "raw_tensor", outRawTensor) < 0)
+        return NULL;
+
+    if(feature_dim_axis != ((versionInt == 2) ? Py_None : modState->notSpecified()))
+        if(PyObject_SetAttrString(outTensor, "_feature_dim_axis", feature_dim_axis) < 0)
+            return NULL;
+    if(sparse_dim != Py_None)
+        if(PyObject_SetAttrString(outTensor, "sparse_dim", sparse_dim) < 0)
+            return NULL;
+    return outTensor.release();
+}
+
+PyObject* pyTensorCopyCompatibleToDims(PyObject *self, PyObject *const *args, Py_ssize_t nargs) {
+    if(nargs != 2) {
+        PyErr_SetString(PyExc_TypeError, "tensor_copy_compatible_to_dims() takes exactly 2 args: tensor, dims");
+        return NULL;
+    }
+
+    PyModuleState* modState = (PyModuleState*) PyModule_GetState(self);
+    if(!modState) return NULL;
+
+    return tensorCopyCompatibleToDims<false>("tensor_copy_compatible_to_dims", modState, args[0], args[1]);
+}
+
+PyObject* pyTensorCopyCompatibleToDimsRaw(PyObject *self, PyObject *const *args, Py_ssize_t nargs) {
+    if(nargs != 2) {
+        PyErr_SetString(PyExc_TypeError, "tensor_copy_compatible_to_dims() takes exactly 2 args: tensor, dims");
+        return NULL;
+    }
+
+    PyModuleState* modState = (PyModuleState*) PyModule_GetState(self);
+    if(!modState) return NULL;
+
+    return tensorCopyCompatibleToDims<true>("tensor_copy_compatible_to_dims_raw", modState, args[0], args[1]);
 }
 
 static PyObject* compareOrCombine(
@@ -980,7 +1270,6 @@ static PyObject* compareOrCombine(
             return NULL;
         }
         PyObjectScopedRef allDims = PyList_New(0);
-        std::vector<long> outShape;
         if(!allDims) return NULL;
         for(int i = 0; i < aDimsSeq.size() + bDimsSeq.size(); ++i) {
             PyObject* dim =
@@ -1016,7 +1305,6 @@ static PyObject* compareOrCombine(
             if(bDimsCount < 0) return NULL;
             if(aDimsCount <= 1 && bDimsCount <= 1) {
                 if(PyList_Append(allDims, dim) < 0) return NULL;
-                outShape.push_back(dimValue);
                 continue;
             }
             int c = 0;
@@ -1029,7 +1317,6 @@ static PyObject* compareOrCombine(
                     if(!eq) continue;
                 }
                 if(PyList_Append(allDims, dim_) < 0) return NULL;
-                outShape.push_back(dimValue);
                 ++c;
             }
             if(c != std::max(aDimsCount, bDimsCount)) {
@@ -1041,7 +1328,6 @@ static PyObject* compareOrCombine(
             }
         }
         PyTupleOrListStaticRef<false> allDimsSeq(allDims);
-        assert(outShape.size() == (size_t) allDimsSeq.size());
 
         // check if all dims are in a and b, or whether we need allowBroadcastAllSources
         bool error = false;
@@ -1061,9 +1347,9 @@ static PyObject* compareOrCombine(
 
         // maybe reorder according to dimOrder
         if(dimOrder != Py_None) {
-            std::vector<std::pair<PyObject*, long>> outDimWithValue;
-            for(size_t i = 0; i < outShape.size(); ++i)
-                outDimWithValue.push_back(std::make_pair(allDimsSeq.getItem(i), outShape[i]));
+            std::vector<PyObject*> outDims;
+            for(int i = 0; i < allDimsSeq.size(); ++i)
+                outDims.push_back(allDimsSeq.getItem(i));
             struct Cmp {
                 PyTupleOrListRef dimOrderSeq;
                 bool hadError;
@@ -1081,20 +1367,15 @@ static PyObject* compareOrCombine(
                     }
                     return dimOrderSeq.size();
                 }
-                bool operator()(std::pair<PyObject*, long> a, std::pair<PyObject*, long> b) {
-                    return (*this)(a.first, b.first);
-                }
                 bool operator()(PyObject* a, PyObject* b) {
                     if(a == b) return false;
                     return getIndex(a) < getIndex(b);
                 }
             } cmp(dimOrderSeq);
-            std::stable_sort(outDimWithValue.begin(), outDimWithValue.end(), cmp);
+            std::stable_sort(outDims.begin(), outDims.end(), cmp);
             if(cmp.hadError) return NULL;
-            for(size_t i = 0; i < outShape.size(); ++i) {
-                PyList_SET_ITEM(allDims.get(), i, outDimWithValue[i].first);
-                outShape[i] = outDimWithValue[i].second;
-            }
+            for(size_t i = 0; i < outDims.size(); ++i)
+                PyList_SET_ITEM(allDims.get(), i, outDims[i]);
         }
 
         PyObjectScopedRef res;
@@ -1109,15 +1390,17 @@ static PyObject* compareOrCombine(
         }
 
         {
+            std::vector<int> outPermutation;
             PyObjectScopedRef aRawTensorExt = _permuteAndExtend(
                 rawOpName, permuteOp, reshapeOp,
                 a, aDimsSeq, aRawTensor, aRawShape,
-                allDimsSeq, outShape);
+                allDimsSeq, outPermutation);
             if(!aRawTensorExt) return NULL;
+            outPermutation.clear();
             PyObjectScopedRef bRawTensorExt = _permuteAndExtend(
                 rawOpName, permuteOp, reshapeOp,
                 b, bDimsSeq, bRawTensor, bRawShape,
-                allDimsSeq, outShape);
+                allDimsSeq, outPermutation);
             if(!bRawTensorExt) return NULL;
             PyObjectScopedRef resRawTensor = PyObject_CallFunctionObjArgs(
                 rawOp, aRawTensorExt.get(), bRawTensorExt.get(), NULL);

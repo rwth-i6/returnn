@@ -106,6 +106,8 @@ def setup():
         "copy": "tensor_copy",
         "copy_template": "tensor_copy_template",
         "get_out_permutation_to_dims": "tensor_get_out_permutation_to_dims",
+        "copy_compatible_to_dims": "tensor_copy_compatible_to_dims",
+        "copy_compatible_to_dims_raw": "tensor_copy_compatible_to_dims_raw",
     }.items():
         assert hasattr(_TensorMixin, rf_name)
         native_func = getattr(mod, "_" + native_name + "_instancemethod")
