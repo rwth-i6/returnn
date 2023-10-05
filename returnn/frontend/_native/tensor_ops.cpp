@@ -270,9 +270,7 @@ static bool _isTupleSubsetReorderFast(PyObject* subset, PyObject* superset, std:
     return true;
 }
 
-// no error check here; false does not mean they are different, it just checks for `is`.
-// when it returns with false, outPermutation is undefined.
-static bool _isTupleSubsetList(PyObject* subsetTuple, PyObject* supersetList, bool& error) {
+static bool _isTupleSubsetReorderList(PyObject* subsetTuple, PyObject* supersetList, bool& error) {
     int superSize = PyList_GET_SIZE(supersetList);
     if(superSize < 0) { error = true; return false; }
     int subSize = PyTuple_GET_SIZE(subsetTuple);
@@ -577,6 +575,10 @@ static PyObject* _compareOrCombine_subsetDims(
     return res.release();
 }
 
+static bool _getOutPermutation(std::vector<int>& outPermutation) {
+    
+}
+
 static PyObject* _permuteAndExtend(
     const char* rawOpName,
     PyObject* permuteOp, PyObject* reshapeOp,
@@ -727,6 +729,44 @@ static PyObject* _consistentSparseDim(PyObject* a, PyObject* b) {
     if(eq)
         return aSparseDim.release();
     Py_RETURN_NONE;
+}
+
+template<typename IntT>
+static PyObject* _cppLongVectorToPyList(const std::vector<IntT>& vector) {
+    PyObjectScopedRef res = PyList_New(vector.size());
+    if(!res) return NULL;
+    for(size_t i = 0; i < vector.size(); ++i) {
+        PyObject* v = PyLong_FromLong(vector[i]);
+        if(!v) return NULL;
+        PyList_SET_ITEM(res.get(), i, v);
+    }
+    return res.release();
+}
+
+PyObject* pyTensorGetOutPermutationsToDims(PyObject *self, PyObject *const *args, Py_ssize_t nargs) {
+    if(nargs != 2) {
+        PyErr_SetString(PyExc_TypeError, "tensor_get_out_permutations_to_dims() takes exactly 2 args: tensor, dims");
+        return NULL;
+    }
+    
+    PyObjectScopedRef selfDims = PyObject_GetAttrString(args[0], "_dims");
+    if(!selfDims) return NULL;
+    PyObject* otherDims = args[1];
+
+    {
+        std::vector<int> outPermutation;
+        if(_isTupleSubsetFast(selfDims, otherDims, outPermutation))
+            return _cppLongVectorToPyList(outPermutation);
+    }
+
+    {
+        std::vector<int> outPermutation;
+        if(_isTupleSubsetReorderFast(selfDims, otherDims, outPermutation))
+            return _cppLongVectorToPyList(outPermutation);
+    }
+
+    {
+    }
 }
 
 static PyObject* compareOrCombine(
@@ -1031,9 +1071,9 @@ static PyObject* compareOrCombine(
 
         // check if all dims are in a and b, or whether we need allowBroadcastAllSources
         bool error = false;
-        bool aDimsIsSubset = _isTupleSubsetList(aDims, allDims, error);
+        bool aDimsIsSubset = _isTupleSubsetReorderList(aDims, allDims, error);
         if(error) return NULL;
-        bool bDimsIsSubset = _isTupleSubsetList(bDims, allDims, error);
+        bool bDimsIsSubset = _isTupleSubsetReorderList(bDims, allDims, error);
         if(error) return NULL;
         if(!aDimsIsSubset && !bDimsIsSubset) {
             if(!allowBroadcastAllSources) {
