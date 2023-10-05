@@ -27,4 +27,62 @@ private:
     PyObject* _obj;
 };
 
+/*
+Sequence interface contract:
+
+- Holds borrowed reference to PyObject*.
+- Copy object itself is supposed to be fast, small object.
+
+Methods:
+
+size() - returns the size of the sequence, fast op, cached
+getItem(i) - returns the i-th item, fast op, no bound checks
+get() - return PyObject* of the sequence
+*/
+
+template<bool isTuple /*false means list*/>
+class PyTupleOrListStaticRef {
+    PyObject* _obj;
+    int _size;
+
+public:
+    PyTupleOrListStaticRef(PyObject* obj) : _obj(obj) {
+        if(isTuple) _size = PyTuple_GET_SIZE(obj);
+        else _size = PyList_GET_SIZE(obj);
+    }
+
+    int size() const { return _size; }
+    PyObject* getItem(int i) const {
+        if(isTuple) return PyTuple_GET_ITEM(_obj, i);
+        else return PyList_GET_ITEM(_obj, i);
+    }
+    PyObject* get() const { return _obj; }
+};
+
+class PyTupleOrListRef {
+    PyObject* _obj;
+    enum { TupleType, ListType, UnknownType } _type;
+    int _size;
+
+public:
+    PyTupleOrListRef(PyObject* obj) : _obj(obj) {
+        if(!obj || obj == Py_None) _type = UnknownType;
+        else if(PyTuple_Check(obj)) _type = TupleType;
+        else if(PyList_Check(obj)) _type = ListType;
+        else _type = UnknownType;
+        if(_type == TupleType) _size = PyTuple_GET_SIZE(obj);
+        else if(_type == ListType) _size = PyList_GET_SIZE(obj);
+        else _size = -1;
+    }
+
+    bool isValid() const { return _type != UnknownType; }
+    int size() const { return _size; }
+    PyObject* getItem(int i) const {
+        if(_type == TupleType) return PyTuple_GET_ITEM(_obj, i);
+        else if(_type == ListType) return PyList_GET_ITEM(_obj, i);
+        else return NULL;
+    }
+    PyObject* get() const { return _obj; }
+};
+
 #endif

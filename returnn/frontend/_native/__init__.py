@@ -92,7 +92,8 @@ def setup():
     _TensorMixin.placeholder = Tensor.raw_tensor
     _TensorMixin._raw_backend = property(mod.get_backend_for_tensor)  # noqa
 
-    for name, cur_func in _TensorOpOverloadsMixin.__dict__.items():
+    # Functions in _TensorOpOverloadsMixin are replaced with native variants.
+    for name, cur_func in _TensorOpOverloadsMixin.__dict__.items():  # just all of them
         if not callable(cur_func):
             continue
         assert name.startswith("__") and name.endswith("__")
@@ -100,9 +101,11 @@ def setup():
         assert callable(native_func)
         setattr(_TensorOpOverloadsMixin, name, native_func)
 
+    # Functions in _TensorMixin are replaced with native variants.
     for rf_name, native_name in {
         "copy": "tensor_copy",
         "copy_template": "tensor_copy_template",
+        "get_out_permutation_to_dims": "tensor_get_out_permutation_to_dims",
     }.items():
         assert hasattr(_TensorMixin, rf_name)
         native_func = getattr(mod, "_" + native_name + "_instancemethod")
@@ -111,6 +114,7 @@ def setup():
     import returnn.frontend as rf
     from returnn.frontend import math_ as rf_math
 
+    # Functions in rf and rf.math_ are replaced with native variants.
     for rf_name, native_name in {
         "compare": "tensor_compare",
         "combine": "tensor_combine",

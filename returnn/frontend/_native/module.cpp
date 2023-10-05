@@ -133,6 +133,7 @@ int PyModuleState::pyInitModuleExec(PyObject* module) {
 
         AddInstanceMethod(copy);
         AddInstanceMethod(copy_template);
+        AddInstanceMethod(get_out_permutation_to_dims);
 
         AddInstanceMethod(eq);
         AddInstanceMethod(ne);

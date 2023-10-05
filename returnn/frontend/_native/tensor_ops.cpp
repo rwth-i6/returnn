@@ -167,44 +167,15 @@ PyObject* tensorCopyTemplateSimple(
 }
 
 // no error check here; false does not mean they are different, it just checks for `is`
-static bool _isSameTupleFast(PyObject* a, PyObject* b) {
-    if(a == b)
+template<typename ASeqT, typename BSeqT>
+static bool _isSameSeqFast(ASeqT a, BSeqT b) {
+    if(a.get() == b.get())
         return true;
-    int size = PyTuple_GET_SIZE(a);
-    if(size < 0)
+    if(a.size() != b.size())
         return false;
-    if(size != PyTuple_GET_SIZE(b))
-        return false;
-    for(int i = 0; i < size; ++i) {
-        PyObject* a_ = PyTuple_GET_ITEM(a, i);
-        PyObject* b_ = PyTuple_GET_ITEM(b, i);
-        if(a_ != b_)
-            return false;
-    }
-    return true;
-}
-
-// no error check here for aTuple; false does not mean they are different, it just checks for `is`
-static bool _isSameTupleAndSeqFast(PyObject* aTuple, PyObject* bSeq) {
-    if(PyTuple_Check(bSeq))
-        return _isSameTupleFast(aTuple, bSeq);
-    int size = PyTuple_GET_SIZE(aTuple);
-    if(size < 0)
-        return false;
-    int bSize = PySequence_Size(bSeq);
-    if(bSize < 0) {
-        PyErr_Clear();
-        return false;
-    }
-    if(size != bSize)
-        return false;
-    for(int i = 0; i < size; ++i) {
-        PyObject* a_ = PyTuple_GET_ITEM(aTuple, i);
-        PyObjectScopedRef b_ = PySequence_GetItem(bSeq, i);
-        if(!b_) {
-            PyErr_Clear();
-            return false;
-        }
+    for(int i = 0; i < a.size(); ++i) {
+        PyObject* a_ = a.getItem(i);
+        PyObject* b_ = b.getItem(i);
         if(a_ != b_)
             return false;
     }
@@ -213,57 +184,51 @@ static bool _isSameTupleAndSeqFast(PyObject* aTuple, PyObject* bSeq) {
 
 // no error check here; false does not mean they are different, it just checks for `is`.
 // when it returns with false, outPermutation is undefined.
-static bool _isTupleSubsetFast(PyObject* subset, PyObject* superset, std::vector<int>& outPermutation) {
-    int superSize = PyTuple_GET_SIZE(superset);
-    if(superSize < 0) return false;
-    int subSize = PyTuple_GET_SIZE(subset);
-    if(subSize < 0) return false;
-    if(subSize > superSize)
+template<typename ASeqT, typename BSeqT>
+static bool _isSeqSubsetFast(ASeqT subset, BSeqT superset, std::vector<int>& outPermutation) {
+    if(subset.size() > superset.size())
         return false;
     int j = 0;
-    for(int i = 0; i < subSize; ++i) {
-        PyObject* a_ = PyTuple_GET_ITEM(subset, i);
+    for(int i = 0; i < subset.size(); ++i) {
+        PyObject* a_ = subset.getItem(i);
         while(true) {
-            if(j >= superSize)
+            if(j >= superset.size())
                 return false;
-            PyObject* b_ = PyTuple_GET_ITEM(superset, j);
+            PyObject* b_ = superset.getItem(j);
             if(a_ == b_) break;
             ++j; outPermutation.push_back(-1);
         }
         ++j; outPermutation.push_back(i);
     }
-    for(; j < superSize; ++j)
+    for(; j < superset.size(); ++j)
         outPermutation.push_back(-1);
     return true;
 }
 
 // no error check here; false does not mean they are different, it just checks for `is`.
 // when it returns with false, outPermutation is undefined.
-static bool _isTupleSubsetReorderFast(PyObject* subset, PyObject* superset, std::vector<int>& outPermutation) {
-    int superSize = PyTuple_GET_SIZE(superset);
-    if(superSize < 0) return false;
-    int subSize = PyTuple_GET_SIZE(subset);
-    if(subSize < 0) return false;
-    if(subSize > superSize)
+template<typename ASeqT, typename BSeqT>
+static bool _isSeqSubsetReorderFast(ASeqT subset, BSeqT superset, std::vector<int>& outPermutation) {
+    if(subset.size() > superset.size())
         return false;
-    outPermutation.resize(superSize);
-    std::vector<bool> subsetTaken(subSize, false);
-    for(int j = 0; j < superSize; ++j) {
-        PyObject* b_ = PyTuple_GET_ITEM(superset, j);
+    outPermutation.resize(superset.size());
+    std::vector<bool> subsetTaken(subset.size(), false);
+    for(int j = 0; j < superset.size(); ++j) {
+        PyObject* b_ = superset.getItem(j);
         int i = 0;
-        for(; i < subSize; ++i) {
+        for(; i < subset.size(); ++i) {
             if(subsetTaken[i]) continue;
-            PyObject* a_ = PyTuple_GET_ITEM(subset, i);
+            PyObject* a_ = subset.getItem(i);
             if(a_ == b_) break;
         }
-        if(i < subSize) {
+        if(i < subset.size()) {
             subsetTaken[i] = true;
             outPermutation[j] = i;
         }
         else
             outPermutation[j] = -1;
     }
-    for(int i = 0; i < subSize; ++i) {
+    for(int i = 0; i < subset.size(); ++i) {
         if(!subsetTaken[i])
             return false;
     }
@@ -575,92 +540,102 @@ static PyObject* _compareOrCombine_subsetDims(
     return res.release();
 }
 
-static bool _getOutPermutation(std::vector<int>& outPermutation) {
+// when it returns with false, some exception should be raised
+template<typename ASeqT, typename BSeqT>
+static bool _getPermutationSupersetToSubset(const char* funcName, ASeqT subset, BSeqT superset, std::vector<int>& outPermutation) {
+    if(_isSeqSubsetFast(subset, superset, outPermutation))
+        return true;
+    outPermutation.clear();
     
+    if(_isSeqSubsetReorderFast(subset, superset, outPermutation))
+        return true;
+    outPermutation.clear();
+
+    // Generic fallback, using `==` instead of just `is`.
+    // The logic matches Tensor.get_out_permutation_to_dims.
+    int count = 0;
+    std::vector<bool> taken(subset.size(), false);
+    for(int i = 0; i < superset.size(); ++i) {
+        PyObject* dim = superset.getItem(i);
+        std::vector<int> candidates;
+        for(int j = 0; j < subset.size(); ++j) {
+            if(taken[j]) continue;
+            PyObject* dim_ = subset.getItem(j);
+            if(dim_ == dim) {  // prefer that one over all others
+                candidates.clear();
+                candidates.push_back(j);
+                break;
+            }
+            int eq = PyObject_RichCompareBool(dim, dim_, Py_EQ);
+            if(eq < 0) return false;
+            if(eq) candidates.push_back(j);
+        }
+        if(candidates.size() == 0)
+            outPermutation.push_back(-1);
+        else if(candidates.size() == 1) {
+            outPermutation.push_back(candidates[0]);
+            taken[candidates[0]] = true;
+            ++count;
+        }
+        else if(candidates.size() > 1) {
+            size_t maxMatchPriorityIdx;
+            long maxMatchPriority;
+            int countSameMatchPriority = 0;
+            for(size_t j = 0; j < candidates.size(); ++j) {
+                PyObject* dim_ = subset.getItem(candidates[j]);
+                PyObject* matchPriority = PyObject_GetAttrString(dim_, "match_priority");
+                if(!matchPriority) return false;
+                if(!PyLong_Check(matchPriority)) {
+                    PyErr_Format(
+                        PyExc_TypeError,
+                        "%s: dim %R did not return an int for match_priority, from tensor dims %R",
+                        funcName, dim_, subset.get());
+                    return false;
+                }
+                long matchPriority_ = PyLong_AsLong(matchPriority);
+                if(matchPriority_ < 0 && PyErr_Occurred()) return false;
+                if(j > 0 && matchPriority_ == maxMatchPriority)
+                    ++countSameMatchPriority;
+                if(j == 0 || matchPriority_ > maxMatchPriority) {
+                    maxMatchPriority = matchPriority_;
+                    countSameMatchPriority = 1;
+                    maxMatchPriorityIdx = j;
+                }
+            }
+            assert(countSameMatchPriority >= 1);
+            if(countSameMatchPriority > 1) {
+                PyErr_Format(
+                    PyExc_ValueError,
+                    "%s: dim %R is ambiguous, from tensor dims %R and all dims %R",
+                    funcName, dim, subset.get(), superset.get());
+                return false;
+            }
+            outPermutation.push_back(candidates[maxMatchPriorityIdx]);
+            taken[candidates[maxMatchPriorityIdx]] = true;
+            ++count;
+        }
+    }
+    if(count != subset.size()) {
+        PyErr_Format(
+            PyExc_ValueError,
+            "%s: not all dims are matched, from tensor dims %R and all dims %R",
+            funcName, subset.get(), superset.get());
+        return false;
+    }
+    assert(outPermutation.size() == superset.size());
+    return true;
 }
 
 static PyObject* _permuteAndExtend(
     const char* rawOpName,
     PyObject* permuteOp, PyObject* reshapeOp,
-    PyObject* tensor, PyObject* dims, PyObject* rawTensor, PyObject* rawShape,
-    PyObject* outDimsList, std::vector<long> outShape
+    PyObject* tensor, PyTupleOrListStaticRef<true> dims, PyObject* rawTensor, PyObject* rawShape,
+    PyTupleOrListStaticRef<false> outDims, std::vector<long> outShape
 ) {
-    int tensorNdim = PyTuple_GET_SIZE(dims);
     // First find the mapping.
-    // The logic matches Tensor.get_out_permutation_to_dims.
     std::vector<int> outPermutation;
-    {
-        int count = 0;
-        std::vector<bool> taken(tensorNdim, false);
-        for(size_t i = 0; i < outShape.size(); ++i) {
-            PyObject* dim = PyList_GET_ITEM(outDimsList, i);
-            std::vector<int> candidates;
-            for(int j = 0; j < tensorNdim; ++j) {
-                if(taken[j]) continue;
-                PyObject* dim_ = PyTuple_GET_ITEM(dims, j);
-                if(dim_ == dim) {  // prefer that one over all others
-                    candidates.clear();
-                    candidates.push_back(j);
-                    break;
-                }
-                int eq = PyObject_RichCompareBool(dim, dim_, Py_EQ);
-                if(eq < 0) return NULL;
-                if(eq) candidates.push_back(j);
-            }
-            if(candidates.size() == 0)
-                outPermutation.push_back(-1);
-            else if(candidates.size() == 1) {
-                outPermutation.push_back(candidates[0]);
-                taken[candidates[0]] = true;
-                ++count;
-            }
-            else if(candidates.size() > 1) {
-                size_t maxMatchPriorityIdx;
-                long maxMatchPriority;
-                int countSameMatchPriority = 0;
-                for(size_t j = 0; j < candidates.size(); ++j) {
-                    PyObject* dim_ = PyTuple_GET_ITEM(dims, candidates[j]);
-                    PyObject* matchPriority = PyObject_GetAttrString(dim_, "match_priority");
-                    if(!matchPriority) return NULL;
-                    if(!PyLong_Check(matchPriority)) {
-                        PyErr_Format(
-                            PyExc_TypeError,
-                            "%s: dim %R did not return an int for match_priority, from tensor dims %R",
-                            rawOpName, dim_, dims);
-                        return NULL;
-                    }
-                    long matchPriority_ = PyLong_AsLong(matchPriority);
-                    if(matchPriority_ < 0 && PyErr_Occurred()) return NULL;
-                    if(j > 0 && matchPriority_ == maxMatchPriority)
-                        ++countSameMatchPriority;
-                    if(j == 0 || matchPriority_ > maxMatchPriority) {
-                        maxMatchPriority = matchPriority_;
-                        countSameMatchPriority = 1;
-                        maxMatchPriorityIdx = j;
-                    }
-                }
-                assert(countSameMatchPriority >= 1);
-                if(countSameMatchPriority > 1) {
-                    PyErr_Format(
-                        PyExc_ValueError,
-                        "%s: dim %R is ambiguous, from tensor dims %R and raw_tensor shape %R",
-                        rawOpName, dim, dims, rawShape);
-                    return NULL;
-                }
-                outPermutation.push_back(candidates[maxMatchPriorityIdx]);
-                taken[candidates[maxMatchPriorityIdx]] = true;
-                ++count;
-            }
-        }
-        if(count != tensorNdim) {
-            PyErr_Format(
-                PyExc_ValueError,
-                "%s: not all dims are matched, from tensor dims %R and raw_tensor shape %R",
-                rawOpName, dims, rawShape);
-            return NULL;
-        }
-        assert(outPermutation.size() == outShape.size());
-    }
+    if(!_getPermutationSupersetToSubset(rawOpName, dims, outDims, outPermutation))
+        return NULL;
 
     PyObject* rawTensor_ = rawTensor;
     PyObjectScopedRef rawTensorExt; // just for holding the ref and decrefing it later
@@ -751,22 +726,21 @@ PyObject* pyTensorGetOutPermutationsToDims(PyObject *self, PyObject *const *args
     
     PyObjectScopedRef selfDims = PyObject_GetAttrString(args[0], "_dims");
     if(!selfDims) return NULL;
-    PyObject* otherDims = args[1];
-
-    {
-        std::vector<int> outPermutation;
-        if(_isTupleSubsetFast(selfDims, otherDims, outPermutation))
-            return _cppLongVectorToPyList(outPermutation);
+    if(!PyTuple_Check(selfDims)) {
+        PyErr_Format(PyExc_TypeError, "tensor_get_out_permutations_to_dims: expected tensor.dims to be tuple, got %R", selfDims.get());
+        return NULL;
+    }
+    PyTupleOrListStaticRef<true> selfDimsSeq(selfDims);
+    PyTupleOrListRef otherDimsSeq(args[1]);
+    if(!otherDimsSeq.isValid()) {
+        PyErr_Format(PyExc_TypeError, "tensor_get_out_permutations_to_dims: expected dims to be tuple or list, got %R", args[1]);
+        return NULL;
     }
 
-    {
-        std::vector<int> outPermutation;
-        if(_isTupleSubsetReorderFast(selfDims, otherDims, outPermutation))
-            return _cppLongVectorToPyList(outPermutation);
-    }
-
-    {
-    }
+    std::vector<int> outPermutation;
+    if(_getPermutationSupersetToSubset("tensor_get_out_permutations_to_dims", selfDimsSeq, otherDimsSeq, outPermutation))
+        return _cppLongVectorToPyList(outPermutation);
+    return NULL;
 }
 
 static PyObject* compareOrCombine(
@@ -856,17 +830,19 @@ static PyObject* compareOrCombine(
     }
 
     PyObjectScopedRef aDims = PyObject_GetAttrString(a, "_dims");
-    if(!aDims) return NULL;
+    if(!aDims) return NULL;    
     if(!PyTuple_Check(aDims)) {
         PyErr_Format(PyExc_TypeError, "compareOrCombine: expected a.dims to be tuple, got %R", aDims.get());
         return NULL;
     }
+    PyTupleOrListStaticRef<true> aDimsSeq(aDims);
     PyObjectScopedRef bDims = PyObject_GetAttrString(b, "_dims");
     if(!bDims) return NULL;
     if(!PyTuple_Check(bDims)) {
         PyErr_Format(PyExc_TypeError, "compareOrCombine: expected b.dims to be tuple, got %R", bDims.get());
         return NULL;
     }
+    PyTupleOrListStaticRef<true> bDimsSeq(bDims);
 
     PyObjectScopedRef aRawTensor = PyObject_GetAttrString(a, "_raw_tensor");
     if(!aRawTensor) return NULL;
@@ -877,15 +853,16 @@ static PyObject* compareOrCombine(
     // allowBroadcastAllSources=false makes it easier..., we know one dims should be the superset.
     // dimOrder makes it more difficult, does not need to be a superset. but by default, we don't have that.
 
+    PyTupleOrListRef dimOrderSeq(dimOrder);
     if(dimOrder != Py_None) {
-        if(!PySequence_Check(dimOrder)) {
+        if(dimOrderSeq.isValid()) {
             PyErr_Format(PyExc_TypeError, "compareOrCombine: expected dim_order to be sequence, got %R", dimOrder);
             return NULL;
         }
     }
 
     // first very fast path check, check exact identity of dims
-    if(_isSameTupleFast(aDims, bDims) && (dimOrder == Py_None || _isSameTupleAndSeqFast(aDims, dimOrder))) {
+    if(_isSameSeqFast(aDimsSeq, bDimsSeq) && (dimOrder == Py_None || _isSameSeqFast(aDimsSeq, dimOrderSeq))) {
         PyObjectScopedRef res = tensorCopyTemplateSimple(modState, a, rawOpName, resultIsBool ? "bool" : NULL);
         if(!res) return NULL;
         PyObjectScopedRef resRawTensor = PyObject_CallFunctionObjArgs(rawOp, aRawTensor.get(), bRawTensor.get(), NULL);
@@ -895,7 +872,7 @@ static PyObject* compareOrCombine(
     }
 
     // check b is scalar
-    if(PyTuple_GET_SIZE(bDims.get()) == 0 && (dimOrder == Py_None || _isSameTupleAndSeqFast(aDims, dimOrder))) {
+    if(bDimsSeq.size() == 0 && (dimOrder == Py_None || _isSameSeqFast(aDimsSeq, dimOrderSeq))) {
         PyObjectScopedRef res = tensorCopyTemplateSimple(modState, a, rawOpName, resultIsBool ? "bool" : NULL);
         if(!res) return NULL;
         PyObjectScopedRef resRawTensor = PyObject_CallFunctionObjArgs(rawOp, aRawTensor.get(), bRawTensor.get(), NULL);
@@ -905,7 +882,7 @@ static PyObject* compareOrCombine(
     }
 
     // check a is scalar
-    if(PyTuple_GET_SIZE(aDims.get()) == 0 && (dimOrder == Py_None || _isSameTupleAndSeqFast(bDims, dimOrder))) {
+    if(aDimsSeq.size() == 0 && (dimOrder == Py_None || _isSameSeqFast(bDimsSeq, dimOrderSeq))) {
         PyObjectScopedRef res = tensorCopyTemplateSimple(modState, b, rawOpName, resultIsBool ? "bool" : NULL);
         if(!res) return NULL;
         PyObjectScopedRef resRawTensor = PyObject_CallFunctionObjArgs(rawOp, aRawTensor.get(), bRawTensor.get(), NULL);
@@ -924,7 +901,7 @@ static PyObject* compareOrCombine(
     // check if bDims is a subset of aDims, in the same order (fast dim identity check only)
     {
         std::vector<int> outPermutation;
-        if(_isTupleSubsetFast(bDims, aDims, outPermutation) && (dimOrder == Py_None || _isSameTupleAndSeqFast(aDims, dimOrder)))
+        if(_isSeqSubsetFast(bDimsSeq, aDimsSeq, outPermutation) && (dimOrder == Py_None || _isSameSeqFast(aDimsSeq, dimOrderSeq)))
             return _compareOrCombine_subsetDims<true, false>(
                 modState, rawOpName, resultIsBool,
                 permuteOp, reshapeOp, rawOp,
@@ -945,7 +922,7 @@ static PyObject* compareOrCombine(
     // check if aDims is a subset of bDims, in the same order (fast dim identity check only)
     {
         std::vector<int> outPermutation;
-        if(_isTupleSubsetFast(aDims, bDims, outPermutation) && (dimOrder == Py_None || _isSameTupleAndSeqFast(bDims, dimOrder)))
+        if(_isSeqSubsetFast(aDimsSeq, bDimsSeq, outPermutation) && (dimOrder == Py_None || _isSameSeqFast(bDimsSeq, dimOrderSeq)))
             return _compareOrCombine_subsetDims<false, false>(
                 modState, rawOpName, resultIsBool,
                 permuteOp, reshapeOp, rawOp,
@@ -959,7 +936,7 @@ static PyObject* compareOrCombine(
     // check if bDims is a subset of aDims, maybe reordered (fast dim identity check only)
     {
         std::vector<int> outPermutation;
-        if(_isTupleSubsetReorderFast(bDims, aDims, outPermutation) && (dimOrder == Py_None || _isSameTupleAndSeqFast(aDims, dimOrder)))
+        if(_isSeqSubsetReorderFast(bDimsSeq, aDimsSeq, outPermutation) && (dimOrder == Py_None || _isSameSeqFast(aDimsSeq, dimOrderSeq)))
             return _compareOrCombine_subsetDims<true, true>(
                 modState, rawOpName, resultIsBool,
                 permuteOp, reshapeOp, rawOp,
@@ -973,7 +950,7 @@ static PyObject* compareOrCombine(
     // check if aDims is a subset of bDims, maybe reordered (fast dim identity check only)
     {
         std::vector<int> outPermutation;
-        if(_isTupleSubsetReorderFast(aDims, bDims, outPermutation) && (dimOrder == Py_None || _isSameTupleAndSeqFast(bDims, dimOrder)))
+        if(_isSeqSubsetReorderFast(aDimsSeq, bDimsSeq, outPermutation) && (dimOrder == Py_None || _isSameSeqFast(bDimsSeq, dimOrderSeq)))
             return _compareOrCombine_subsetDims<false, true>(
                 modState, rawOpName, resultIsBool,
                 permuteOp, reshapeOp, rawOp,
@@ -988,17 +965,14 @@ static PyObject* compareOrCombine(
         // follow the bin_op_out_template code
 
         // collect all dims
-        bool haveDuplicateDims = false;
-        int aDimsSize = PyTuple_GET_SIZE(aDims.get());
-        if(aDimsSize != PyTuple_GET_SIZE(aRawShape.get())) {
+        if(aDimsSeq.size() != PyTuple_GET_SIZE(aRawShape.get())) {
             PyErr_Format(
                 PyExc_ValueError,
                 "compareOrCombine: a.dims and a.raw_tensor.shape have different size, from a.dims %R and a.raw_tensor.shape %R",
                 aDims.get(), aRawShape.get());
             return NULL;
         }
-        int bDimsSize = PyTuple_GET_SIZE(bDims.get());
-        if(bDimsSize != PyTuple_GET_SIZE(bRawShape.get())) {
+        if(bDimsSeq.size() != PyTuple_GET_SIZE(bRawShape.get())) {
             PyErr_Format(
                 PyExc_ValueError,
                 "compareOrCombine: b.dims and b.raw_tensor.shape have different size, from b.dims %R and b.raw_tensor.shape %R",
@@ -1008,20 +982,20 @@ static PyObject* compareOrCombine(
         PyObjectScopedRef allDims = PyList_New(0);
         std::vector<long> outShape;
         if(!allDims) return NULL;
-        for(int i = 0; i < aDimsSize + bDimsSize; ++i) {
+        for(int i = 0; i < aDimsSeq.size() + bDimsSeq.size(); ++i) {
             PyObject* dim =
-                i < aDimsSize ?
+                i < aDimsSeq.size() ?
                 PyTuple_GET_ITEM(aDims.get(), i) :
-                PyTuple_GET_ITEM(bDims.get(), i - aDimsSize);
+                PyTuple_GET_ITEM(bDims.get(), i - aDimsSeq.size());
             {
                 int contains = PySequence_Contains(allDims, dim);
                 if(contains < 0) return NULL;
                 if(contains) continue;
             }
             long dimValue =
-                i < aDimsSize ?
+                i < aDimsSeq.size() ?
                 PyLong_AsLong(PyTuple_GET_ITEM(aRawShape.get(), i)) :
-                PyLong_AsLong(PyTuple_GET_ITEM(bRawShape.get(), i - aDimsSize));
+                PyLong_AsLong(PyTuple_GET_ITEM(bRawShape.get(), i - aDimsSeq.size()));
             if(dimValue < 0) {
                 if(!PyErr_Occurred())
                     PyErr_Format(
@@ -1045,9 +1019,8 @@ static PyObject* compareOrCombine(
                 outShape.push_back(dimValue);
                 continue;
             }
-            haveDuplicateDims = true;
             int c = 0;
-            for(int j = 0; j < (aDimsCount >= bDimsCount ? aDimsSize : bDimsCount); ++j) {
+            for(int j = 0; j < (aDimsCount >= bDimsCount ? aDimsSeq.size() : bDimsCount); ++j) {
                 PyObject* dim_ = PyTuple_GET_ITEM(
                     aDimsCount >= bDimsCount ? aDims.get() : bDims.get(), j);
                 if(dim_ != dim) {
@@ -1067,7 +1040,8 @@ static PyObject* compareOrCombine(
                 return NULL;
             }
         }
-        assert(outShape.size() == (size_t) PyList_GET_SIZE(allDims.get()));
+        PyTupleOrListStaticRef<false> allDimsSeq(allDims);
+        assert(outShape.size() == (size_t) allDimsSeq.size());
 
         // check if all dims are in a and b, or whether we need allowBroadcastAllSources
         bool error = false;
@@ -1089,28 +1063,23 @@ static PyObject* compareOrCombine(
         if(dimOrder != Py_None) {
             std::vector<std::pair<PyObject*, long>> outDimWithValue;
             for(size_t i = 0; i < outShape.size(); ++i)
-                outDimWithValue.push_back(std::make_pair(PyList_GET_ITEM(allDims.get(), i), outShape[i]));
+                outDimWithValue.push_back(std::make_pair(allDimsSeq.getItem(i), outShape[i]));
             struct Cmp {
-                PyObject* dimOrder;
-                int dimOrderLen;
+                PyTupleOrListRef dimOrderSeq;
                 bool hadError;
-                Cmp(PyObject* dimOrder_)
-                : dimOrder(dimOrder_), dimOrderLen(0), hadError(false)
-                {
-                    dimOrderLen = PySequence_Size(dimOrder_);
-                    if(dimOrderLen < 0) hadError = true;
-                }
+                Cmp(PyTupleOrListRef dimOrderSeq_)
+                : dimOrderSeq(dimOrderSeq_), hadError(false)
+                {}
                 int getIndex(PyObject* a) {
                     if(hadError) return 0;
-                    for(int i = 0; i < dimOrderLen; ++i) {
-                        PyObjectScopedRef d = PySequence_GetItem(dimOrder, i);
-                        if(!d) { hadError = true; return 0; }
+                    for(int i = 0; i < dimOrderSeq.size(); ++i) {
+                        PyObject* d = dimOrderSeq.getItem(i);
                         if(d == a) return i;
                         int eq = PyObject_RichCompareBool(a, d, Py_EQ);
                         if(eq < 0) { hadError = true; return 0; }
                         else if(eq == 0) return i;
                     }
-                    return dimOrderLen;
+                    return dimOrderSeq.size();
                 }
                 bool operator()(std::pair<PyObject*, long> a, std::pair<PyObject*, long> b) {
                     return (*this)(a.first, b.first);
@@ -1119,7 +1088,7 @@ static PyObject* compareOrCombine(
                     if(a == b) return false;
                     return getIndex(a) < getIndex(b);
                 }
-            } cmp(dimOrder);
+            } cmp(dimOrderSeq);
             std::stable_sort(outDimWithValue.begin(), outDimWithValue.end(), cmp);
             if(cmp.hadError) return NULL;
             for(size_t i = 0; i < outShape.size(); ++i) {
@@ -1142,13 +1111,13 @@ static PyObject* compareOrCombine(
         {
             PyObjectScopedRef aRawTensorExt = _permuteAndExtend(
                 rawOpName, permuteOp, reshapeOp,
-                a, aDims, aRawTensor, aRawShape,
-                allDims, outShape);
+                a, aDimsSeq, aRawTensor, aRawShape,
+                allDimsSeq, outShape);
             if(!aRawTensorExt) return NULL;
             PyObjectScopedRef bRawTensorExt = _permuteAndExtend(
                 rawOpName, permuteOp, reshapeOp,
-                b, bDims, bRawTensor, bRawShape,
-                allDims, outShape);
+                b, bDimsSeq, bRawTensor, bRawShape,
+                allDimsSeq, outShape);
             if(!bRawTensorExt) return NULL;
             PyObjectScopedRef resRawTensor = PyObject_CallFunctionObjArgs(
                 rawOp, aRawTensorExt.get(), bRawTensorExt.get(), NULL);

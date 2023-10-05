@@ -497,6 +497,35 @@ def test_native_is_raw_torch_tensor_type():
         assert mod.is_raw_torch_tensor_type(43) is False  # current behavior - might also raise exception instead
 
 
+def test_native_get_out_permutation_to_dims():
+    batch_dim = Dim(2, name="batch_dim")
+    time_dim = Dim(3, name="time_dim")
+    feature_dim = Dim(5, name="feature_dim")
+    tensor_f = Tensor(name="x", dims=[feature_dim], dtype="float32")
+    tensor_bf = Tensor(name="x", dims=[batch_dim, feature_dim], dtype="float32")
+    tensor_bft = Tensor(name="x", dims=[batch_dim, feature_dim, time_dim], dtype="float32")
+
+    with _CheckNoPythonCalls():
+        assert tensor_f.get_out_permutation_to_dims([feature_dim]) == [0]
+        assert tensor_f.get_out_permutation_to_dims([batch_dim, feature_dim, time_dim]) == [-1, 0, -1]
+        assert tensor_f.get_out_permutation_to_dims([feature_dim, time_dim]) == [0, -1]
+        assert tensor_f.get_out_permutation_to_dims([time_dim, feature_dim]) == [-1, 0]
+        assert tensor_f.get_out_permutation_to_dims([batch_dim, time_dim, feature_dim]) == [-1, -1, 0]
+        assert tensor_bf.get_out_permutation_to_dims([batch_dim, feature_dim]) == [0, 1]
+        assert tensor_bf.get_out_permutation_to_dims([feature_dim, batch_dim]) == [1, 0]
+        assert tensor_bf.get_out_permutation_to_dims([batch_dim, feature_dim, time_dim]) == [0, 1, -1]
+        assert tensor_bf.get_out_permutation_to_dims([feature_dim, time_dim, batch_dim]) == [1, -1, 0]
+        assert tensor_bft.get_out_permutation_to_dims([batch_dim, feature_dim, time_dim]) == [0, 1, 2]
+        assert tensor_bft.get_out_permutation_to_dims([feature_dim, batch_dim, time_dim]) == [1, 0, 2]
+
+    try:
+        tensor_f.get_out_permutation_to_dims([batch_dim])
+    except ValueError as exc:
+        print("Got expected exc", exc)
+    else:
+        assert False, "should have failed"
+
+
 def test_torch_native_setup():
     tensor = Tensor(name="x", raw_tensor=torch.tensor([1.0, 2.0, 3.0]), dims=[Dim(3)], dtype="float32")
 
