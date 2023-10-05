@@ -508,7 +508,9 @@ static PyObject* _compareOrCombine_subsetDims(
         int j = 0;
         for(int i = 0; i < (int) outPermutation.size(); ++i) {
             if(outPermutation[i] < 0) continue;
-            PyTuple_SET_ITEM(permuteArg.get(), j, PyLong_FromLong(outPermutation[i]));
+            PyObject* intObj = PyLong_FromLong(outPermutation[i]);
+            if(!intObj) return NULL;
+            PyTuple_SET_ITEM(permuteArg.get(), j, intObj);
             ++j;
         }
         assert(j == PyTuple_GET_SIZE(permuteArg.get()));
@@ -662,7 +664,10 @@ static PyObject* _permuteAndExtend(
         int j = 0;
         for(int i = 0; i < (int) outPermutation.size(); ++i) {
             if(outPermutation[i] < 0) continue;
-            PyTuple_SET_ITEM(permuteArg.get(), j, PyLong_FromLong(outPermutation[i]));
+            PyObject* intObj = PyLong_FromLong(outPermutation[i]);
+            if(!intObj) return NULL;
+            assert(j < dim.size());
+            PyTuple_SET_ITEM(permuteArg.get(), j, intObj);
             ++j;
         }
         assert(j == PyTuple_GET_SIZE(permuteArg.get()));
@@ -775,6 +780,10 @@ static PyObject* tensorCopyCompatibleToDims(const char* funcName, PyModuleState*
 
     PyObjectScopedRef dims = PyObject_GetAttrString(tensor, "_dims");
     if(!dims) return NULL;
+    if(!PyTuple_Check(dims)) {
+        PyErr_Format(PyExc_TypeError, "%s: expected tensor.dims to be tuple, got %R", funcName, dims.get());
+        return NULL;
+    }
     PyTupleOrListStaticRef<true> dimsSeq(dims);
 
     PyObjectScopedRef rawTensor = PyObject_GetAttrString(tensor, "_raw_tensor");
@@ -818,8 +827,10 @@ static PyObject* tensorCopyCompatibleToDims(const char* funcName, PyModuleState*
         if(!outRawTensor) return NULL;
     }
 
-    if(rawMode)
+    if(rawMode) {
+        assert(outRawTensor);
         return outRawTensor.release();
+    }
 
     assert(outPermutation.size() == outDimsSeq.size());
     PyObjectScopedRef outDims_ = PyTuple_New(outPermutation.size());
@@ -889,7 +900,7 @@ static PyObject* tensorCopyCompatibleToDims(const char* funcName, PyModuleState*
                 funcName, dimsSeq.get());
             return NULL;
         }
-        feature_dim_axis.release();
+        feature_dim_axis = NULL;
         for(int i = 0; i < (int) outPermutation.size(); ++i) {
             if(outPermutation[i] == feature_dim_axisInt) {
                 feature_dim_axis = PyLong_FromLong(i);
@@ -997,8 +1008,9 @@ static PyObject* tensorCopyCompatibleToDims(const char* funcName, PyModuleState*
         if(!outTensor) return NULL;
     }
 
-    if(PyObject_SetAttrString(outTensor, "raw_tensor", outRawTensor) < 0)
-        return NULL;
+    if(outRawTensor)
+        if(PyObject_SetAttrString(outTensor, "raw_tensor", outRawTensor) < 0)
+            return NULL;
 
     if(feature_dim_axis != ((versionInt == 2) ? Py_None : modState->notSpecified()))
         if(PyObject_SetAttrString(outTensor, "_feature_dim_axis", feature_dim_axis) < 0)
