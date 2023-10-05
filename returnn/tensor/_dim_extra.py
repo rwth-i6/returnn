@@ -1772,7 +1772,7 @@ class _DimMixin:
         import returnn.frontend as rf
 
         assert self.size is not None
-        return rf.convert_to_tensor(self.size, name="%s:size" % self.description)
+        return rf.convert_to_tensor(self.size, name="%s:size" % self.description, device="cpu")
 
     def get_dim_value(self) -> Union[int, _t.RawTensorType]:
         """
