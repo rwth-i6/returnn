@@ -546,7 +546,7 @@ static bool _getPermutationSupersetToSubset(const char* funcName, ASeqT subset, 
     if(_isSeqSubsetFast(subset, superset, outPermutation))
         return true;
     outPermutation.clear();
-    
+
     if(_isSeqSubsetReorderFast(subset, superset, outPermutation))
         return true;
     outPermutation.clear();
@@ -723,7 +723,7 @@ PyObject* pyTensorGetOutPermutationsToDims(PyObject *self, PyObject *const *args
         PyErr_SetString(PyExc_TypeError, "tensor_get_out_permutations_to_dims() takes exactly 2 args: tensor, dims");
         return NULL;
     }
-    
+
     PyObjectScopedRef selfDims = PyObject_GetAttrString(args[0], "_dims");
     if(!selfDims) return NULL;
     if(!PyTuple_Check(selfDims)) {
@@ -830,7 +830,7 @@ static PyObject* compareOrCombine(
     }
 
     PyObjectScopedRef aDims = PyObject_GetAttrString(a, "_dims");
-    if(!aDims) return NULL;    
+    if(!aDims) return NULL;
     if(!PyTuple_Check(aDims)) {
         PyErr_Format(PyExc_TypeError, "compareOrCombine: expected a.dims to be tuple, got %R", aDims.get());
         return NULL;
