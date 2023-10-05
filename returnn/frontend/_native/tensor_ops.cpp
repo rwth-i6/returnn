@@ -855,7 +855,7 @@ static PyObject* compareOrCombine(
 
     PyTupleOrListRef dimOrderSeq(dimOrder);
     if(dimOrder != Py_None) {
-        if(dimOrderSeq.isValid()) {
+        if(!dimOrderSeq.isValid()) {
             PyErr_Format(PyExc_TypeError, "compareOrCombine: expected dim_order to be sequence, got %R", dimOrder);
             return NULL;
         }
