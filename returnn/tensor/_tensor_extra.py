@@ -1305,7 +1305,7 @@ class _TensorMixin(_TensorMixinBase):
             raw_tensor = backend.transpose_raw(raw_tensor, [p for p in out_permutation if p >= 0])
             raw_tensor = backend.reshape_raw(raw_tensor, [raw_shape[p] if p >= 0 else 1 for p in out_permutation])
         out_dims = [
-            self._dims[p]
+            dims[i]
             if p >= 0
             else Dim(
                 kind=dims[i].kind,
