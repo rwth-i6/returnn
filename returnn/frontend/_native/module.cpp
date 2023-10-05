@@ -16,8 +16,11 @@ static PyMethodDef _pyModuleMethods[] = {
     {"tensor_raw_tensor_setter", (PyCFunction) pyTensorRawTensorSetter, METH_FASTCALL, "Tensor.raw_tensor.setter"},
     {"convert_to_raw_torch_tensor_like", (PyCFunction) pyConvertToRawTorchTensorLike, METH_FASTCALL,
         "torch.tensor(value, dtype=..., device=...)"},
+
     {"tensor_copy", (PyCFunction) pyTensorCopy, METH_VARARGS | METH_KEYWORDS, "Tensor.copy"},
     {"tensor_copy_template", (PyCFunction) pyTensorCopyTemplate, METH_VARARGS | METH_KEYWORDS, "Tensor.copy_template"},
+    {"tensor_get_out_permutation_to_dims", (PyCFunction) pyTensorGetOutPermutationsToDims, METH_FASTCALL,
+        "Tensor.get_out_permutation_to_dims"},
 
     {"tensor_compare", (PyCFunction) pyTensorCompare, METH_VARARGS | METH_KEYWORDS, "rf.compare"},
     {"tensor_combine", (PyCFunction) pyTensorCombine, METH_VARARGS | METH_KEYWORDS, "rf.combine"},
@@ -130,6 +133,7 @@ int PyModuleState::pyInitModuleExec(PyObject* module) {
 
         AddInstanceMethod(copy);
         AddInstanceMethod(copy_template);
+        AddInstanceMethod(get_out_permutation_to_dims);
 
         AddInstanceMethod(eq);
         AddInstanceMethod(ne);
