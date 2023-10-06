@@ -961,7 +961,7 @@ static PyObject* tensorCopyCompatibleToDims(const char* funcName, PyModuleState*
 
         if(extra != Py_None) {
             if(versionInt == 1) {
-                PyObjectScopedRef time_dim_axis = PyObject_GetAttrString(tensor, "_time_dim_axis");
+                PyObjectScopedRef time_dim_axis = PyObject_GetAttrString(extra, "_time_dim_axis");
                 if(!time_dim_axis) return NULL;
                 if(time_dim_axis != Py_None && time_dim_axis != modState->notSpecified()) {
                     if(!PyLong_Check(time_dim_axis)) {
