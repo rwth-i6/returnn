@@ -30,7 +30,6 @@ def get_module(*, verbose: bool = False):
         src_code += f"// {os.path.basename(fn)} code hash md5: {_code_hash_md5(fn)}\n"
         src_code += f'#include "{os.path.basename(fn)}"\n'
 
-    c_macro_defines = {}
     if os.environ.get("RETURNN_TEST") == "1":
         src_code = (
             textwrap.dedent(
@@ -44,7 +43,6 @@ def get_module(*, verbose: bool = False):
             )
             + src_code
         )
-
         verbose = True
 
     compiler = PyExtModCompiler(
@@ -52,7 +50,6 @@ def get_module(*, verbose: bool = False):
         code_version=1,
         code=src_code,
         include_paths=(_my_dir,),
-        c_macro_defines=c_macro_defines,
         is_cpp=True,
         verbose=verbose,
     )
