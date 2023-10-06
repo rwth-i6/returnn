@@ -1108,8 +1108,7 @@ class ReturnnLayersBackend(Backend[Layer]):
         # So we need to reorder the params (ifco->cifo) and transpose them.
         # See also CustomCheckpointLoader and convert_cudnn_canonical_to_lstm_block.
         # TODO: ideally, we would create a new NativeLstm variant which just uses the same order.
-        rec_weight = rec_weight.copy_transpose((out_dim, 4 * out_dim))
-        ff_weight = ff_weight.copy_transpose((in_dim, 4 * out_dim))
+        # Need new dim because after the split, we would get (out_dim,out_dim) which is ambiguous...
         out_dim_ = out_dim.copy(same_as_self=False, description="(out-dim)")
         rec_weight_ = rf.split(rec_weight, axis=4 * out_dim, out_dims=[out_dim_] * 4)
         ff_weight_ = rf.split(ff_weight, axis=4 * out_dim, out_dims=[out_dim_] * 4)
@@ -1124,11 +1123,9 @@ class ReturnnLayersBackend(Backend[Layer]):
             (ff_weight_[2], out_dim_), (ff_weight_[0], out_dim_), (ff_weight_[1], out_dim_), (ff_weight_[3], out_dim_)
         )
         bias, _ = rf.concat((bias_[2], out_dim_), (bias_[0], out_dim_), (bias_[1], out_dim_), (bias_[3], out_dim_))
-        rec_weight = Tensor(
-            "rec_weight", [out_dim, 4 * out_dim], dtype=rec_weight.dtype, raw_tensor=rec_weight.raw_tensor
-        )
-        ff_weight = Tensor("ff_weight", [in_dim, 4 * out_dim], dtype=ff_weight.dtype, raw_tensor=ff_weight.raw_tensor)
-        bias = Tensor("bias", [4 * out_dim], dtype=bias.dtype, raw_tensor=bias.raw_tensor)
+        rec_weight, _ = rf.replace_dim(rec_weight, in_dim=4 * out_dim_, out_dim=4 * out_dim)
+        ff_weight, _ = rf.replace_dim(ff_weight, in_dim=4 * out_dim_, out_dim=4 * out_dim)
+        bias, _ = rf.replace_dim(bias, in_dim=4 * out_dim_, out_dim=4 * out_dim)
 
         output = rfl.make_layer(
             {
