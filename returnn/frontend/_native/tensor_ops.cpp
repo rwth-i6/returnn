@@ -961,13 +961,13 @@ static PyObject* tensorCopyCompatibleToDims(const char* funcName, PyModuleState*
 
         if(extra != Py_None) {
             if(versionInt == 1) {
-                PyObjectScopedRef time_dim_axis = PyObject_GetAttrString(extra, "_time_dim_axis");
+                PyObjectScopedRef time_dim_axis = PyObject_GetAttrString(extra, "time_dim_axis");
                 if(!time_dim_axis) return NULL;
                 if(time_dim_axis != Py_None && time_dim_axis != modState->notSpecified()) {
                     if(!PyLong_Check(time_dim_axis)) {
                         PyErr_Format(
                             PyExc_TypeError,
-                            "%s: tensor._time_dim_axis did not return an int, from tensor %R",
+                            "%s: tensor.time_dim_axis did not return an int, from tensor %R",
                             funcName, tensor);
                         return NULL;
                     }
@@ -976,14 +976,14 @@ static PyObject* tensorCopyCompatibleToDims(const char* funcName, PyModuleState*
                         if(!PyErr_Occurred())
                             PyErr_Format(
                                 PyExc_ValueError,
-                                "%s: tensor._time_dim_axis is negative, from tensor %R",
+                                "%s: tensor.time_dim_axis is negative, from tensor %R",
                                 funcName, tensor);
                         return NULL;
                     }
                     if(time_dim_axisInt >= (long) dimsSeq.size()) {
                         PyErr_Format(
                             PyExc_ValueError,
-                            "%s: tensor._time_dim_axis is out of range, from tensor %R",
+                            "%s: tensor.time_dim_axis is out of range, from tensor %R",
                             funcName, tensor);
                         return NULL;
                     }
@@ -998,7 +998,7 @@ static PyObject* tensorCopyCompatibleToDims(const char* funcName, PyModuleState*
                     if(!time_dim_axis) {
                         PyErr_Format(
                             PyExc_SystemError,
-                            "%s: tensor._time_dim_axis is not in out_dims, from tensor %R",
+                            "%s: tensor.time_dim_axis is not in out_dims, from tensor %R",
                             funcName, tensor);
                         return NULL;
                     }
