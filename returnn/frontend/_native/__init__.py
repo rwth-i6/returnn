@@ -7,6 +7,7 @@ from __future__ import annotations
 import os
 import hashlib
 from glob import glob
+import textwrap
 from returnn.util.py_ext_mod_compiler import PyExtModCompiler
 
 _module = None
@@ -31,7 +32,19 @@ def get_module(*, verbose: bool = False):
 
     c_macro_defines = {}
     if os.environ.get("RETURNN_TEST") == "1":
-        c_macro_defines["DEBUG"] = "1"
+        src_code = (
+            textwrap.dedent(
+                """\
+                #define DEBUG 1
+                #ifdef NDEBUG
+                #undef NDEBUG
+                #endif
+
+                """
+            )
+            + src_code
+        )
+
         verbose = True
 
     compiler = PyExtModCompiler(
