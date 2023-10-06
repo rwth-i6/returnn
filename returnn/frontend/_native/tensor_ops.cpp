@@ -685,7 +685,7 @@ static PyObject* _permuteAndExtend(
             PyObject* d;
             if(outPermutation[i] >= 0) {
                 d = PyTuple_GET_ITEM(rawShape, outPermutation[i]);
-                Py_XINCREF(d);                
+                Py_XINCREF(d);
             }
             else
                 d = PyLong_FromLong(1);
@@ -697,7 +697,8 @@ static PyObject* _permuteAndExtend(
         rawTensorExt = rawTensor_;
     }
 
-    rawTensorExt.release();
+    if(rawTensorExt) rawTensorExt.release();
+    else Py_INCREF(rawTensor_); // we still have it borrowed
     return rawTensor_;
 }
 
@@ -788,7 +789,7 @@ static PyObject* tensorCopyCompatibleToDims(const char* funcName, PyModuleState*
 
     PyObjectScopedRef rawTensor = PyObject_GetAttrString(tensor, "_raw_tensor");
     if(!rawTensor) return NULL;
-    
+
     // follow Tensor.copy_compatible_to_dims logic
 
     std::vector<int> outPermutation;
