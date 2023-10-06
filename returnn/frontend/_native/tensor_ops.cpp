@@ -1039,7 +1039,7 @@ PyObject* pyTensorCopyCompatibleToDims(PyObject *self, PyObject *const *args, Py
 
 PyObject* pyTensorCopyCompatibleToDimsRaw(PyObject *self, PyObject *const *args, Py_ssize_t nargs) {
     if(nargs != 2) {
-        PyErr_SetString(PyExc_TypeError, "tensor_copy_compatible_to_dims() takes exactly 2 args: tensor, dims");
+        PyErr_SetString(PyExc_TypeError, "tensor_copy_compatible_to_dims_raw() takes exactly 2 args: tensor, dims");
         return NULL;
     }
 
