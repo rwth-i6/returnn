@@ -180,8 +180,12 @@ class ReturnnLayersBackend(Backend[Layer]):
     @staticmethod
     def transpose(tensor: Tensor, perm: Sequence[Union[Dim, int]], *, allow_int: bool = False) -> Tensor:
         """transpose"""
-        assert all(isinstance(d, Dim) for d in perm)  # axis as int not supported
-        return rfl.make_layer({"class": "transpose", "from": tensor, "perm": perm}, name="transpose")
+        raise Exception("TF-layers backend: order of dims is irrelevant")
+
+    @staticmethod
+    def make_output_tensor(tensor: Tensor, dims: Sequence[Dim], *, name: str) -> Tensor:
+        """only func where we have explicitly defined dim order in the output"""
+        return rfl.make_layer({"class": "transpose", "from": tensor, "perm": dims}, name=name)
 
     @staticmethod
     def copy(tensor: Tensor) -> Tensor:

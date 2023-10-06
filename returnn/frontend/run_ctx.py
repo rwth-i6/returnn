@@ -237,8 +237,8 @@ class RunCtx:
             # We try some reasonable defaults, specifically: BTF or BF.
             dims = _default_dim_order(tensor)
         assert set(dims) == set(tensor.dims), f"mark_as_output: tensor {tensor} does not have the dims {dims}"
-        tensor = tensor.copy_transpose(dims, allow_int=False)
-        tensor = tensor.copy(name=name)
+        # noinspection PyProtectedMember
+        tensor = tensor._raw_backend.make_output_tensor(tensor, dims, name=name)
         assert name not in self.outputs.data
         self.outputs.data[name] = tensor
 
