@@ -278,12 +278,10 @@ bool PyModuleState::_cachedOpInitTorch() {
 
     #define AddOp(op, name) ops[op] = PyObject_GetAttrString(mod, name); if(!ops[op]) return false;
     #define AddOpAlt(op, name) ops[op] = PyObject_GetAttrString(modAlternatives, name); if(!ops[op]) return false;
+    #define AddOpNative(op, name) ops[op] = PyObject_GetAttrString(_module, name); if(!ops[op]) return false;
 
     AddOp(TOp_ConvertToTensor, "tensor");
-
-    ops[TOp_ConvertToTensorLike] = PyObject_GetAttrString(_module, "convert_to_raw_torch_tensor_like");
-    if(!ops[TOp_ConvertToTensorLike]) return false;
-
+    AddOpNative(TOp_ConvertToTensorLike, "convert_to_raw_torch_tensor_like");
     AddOp(TOp_Permute, "permute");
     AddOp(TOp_Reshape, "reshape");
 
@@ -294,9 +292,7 @@ bool PyModuleState::_cachedOpInitTorch() {
         if(!ops[TOp_GetShape]) return false;
     }
 
-    ops[TOp_GetDType] = PyObject_GetAttrString(_module, "raw_torch_tensor_get_dtype");
-    if(!ops[TOp_GetDType]) return false;
-
+    AddOpNative(TOp_GetDType, "raw_torch_tensor_get_dtype");
     AddOp(TOp_Eq, "eq");
     AddOp(TOp_Ne, "not_equal");
     AddOp(TOp_Lt, "less");
@@ -323,6 +319,7 @@ bool PyModuleState::_cachedOpInitTorch() {
 
     #undef AddOp
     #undef AddOpAlt
+    #undef AddOpNative
 
     return true;
 }

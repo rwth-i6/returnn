@@ -1099,7 +1099,7 @@ class _DimMixin:
             elif kind in ("floordiv", "truediv"):  # truediv assumes there is no remainder
                 return rf.combine_bc(a, "floordiv", b)
             elif kind == "ceildiv":
-                return rf.combine_bc(a, "ceildiv", b)
+                return -rf.combine_bc(-a, "floordiv", b)
             else:
                 raise ValueError("unknown op kind %r" % op.kind)
 
