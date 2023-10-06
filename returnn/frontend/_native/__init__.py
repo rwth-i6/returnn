@@ -7,6 +7,7 @@ from __future__ import annotations
 import os
 import hashlib
 from glob import glob
+import textwrap
 from returnn.util.py_ext_mod_compiler import PyExtModCompiler
 
 _module = None
@@ -28,6 +29,21 @@ def get_module(*, verbose: bool = False):
     for fn in sorted(glob(_my_dir + "/*.cpp")):
         src_code += f"// {os.path.basename(fn)} code hash md5: {_code_hash_md5(fn)}\n"
         src_code += f'#include "{os.path.basename(fn)}"\n'
+
+    if os.environ.get("RETURNN_TEST") == "1":
+        src_code = (
+            textwrap.dedent(
+                """\
+                #define DEBUG 1
+                #ifdef NDEBUG
+                #undef NDEBUG
+                #endif
+
+                """
+            )
+            + src_code
+        )
+        verbose = True
 
     compiler = PyExtModCompiler(
         base_name="_returnn_frontend_native",
@@ -106,6 +122,8 @@ def setup():
         "copy": "tensor_copy",
         "copy_template": "tensor_copy_template",
         "get_out_permutation_to_dims": "tensor_get_out_permutation_to_dims",
+        "copy_compatible_to_dims": "tensor_copy_compatible_to_dims",
+        "copy_compatible_to_dims_raw": "tensor_copy_compatible_to_dims_raw",
     }.items():
         assert hasattr(_TensorMixin, rf_name)
         native_func = getattr(mod, "_" + native_name + "_instancemethod")

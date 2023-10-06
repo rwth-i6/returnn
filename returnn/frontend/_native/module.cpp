@@ -21,6 +21,8 @@ static PyMethodDef _pyModuleMethods[] = {
     {"tensor_copy_template", (PyCFunction) pyTensorCopyTemplate, METH_VARARGS | METH_KEYWORDS, "Tensor.copy_template"},
     {"tensor_get_out_permutation_to_dims", (PyCFunction) pyTensorGetOutPermutationsToDims, METH_FASTCALL,
         "Tensor.get_out_permutation_to_dims"},
+    {"tensor_copy_compatible_to_dims", (PyCFunction) pyTensorCopyCompatibleToDims, METH_FASTCALL, "Tensor.copy_compatible_to_dims"},
+    {"tensor_copy_compatible_to_dims_raw", (PyCFunction) pyTensorCopyCompatibleToDimsRaw, METH_FASTCALL, "Tensor.copy_compatible_to_dims_raw"},
 
     {"tensor_compare", (PyCFunction) pyTensorCompare, METH_VARARGS | METH_KEYWORDS, "rf.compare"},
     {"tensor_combine", (PyCFunction) pyTensorCombine, METH_VARARGS | METH_KEYWORDS, "rf.combine"},
@@ -82,6 +84,8 @@ int PyModuleState::pyInitModuleExec(PyObject* module) {
         if(!mod) return -1;
         _tensorType = PyObject_GetAttrString(mod, "Tensor");
         if(!_tensorType) return -1;
+        _dimType = PyObject_GetAttrString(mod, "Dim");
+        if(!_dimType) return -1;
     }
 
     {
@@ -134,6 +138,8 @@ int PyModuleState::pyInitModuleExec(PyObject* module) {
         AddInstanceMethod(copy);
         AddInstanceMethod(copy_template);
         AddInstanceMethod(get_out_permutation_to_dims);
+        AddInstanceMethod(copy_compatible_to_dims);
+        AddInstanceMethod(copy_compatible_to_dims_raw);
 
         AddInstanceMethod(eq);
         AddInstanceMethod(ne);

@@ -47,12 +47,23 @@ class PyTupleOrListStaticRef {
 
 public:
     PyTupleOrListStaticRef(PyObject* obj) : _obj(obj) {
+#ifdef DEBUG
+        assert(obj);
+        if(isTuple) assert(PyTuple_Check(obj));
+        else assert(PyList_Check(obj));
+#endif
         if(isTuple) _size = PyTuple_GET_SIZE(obj);
         else _size = PyList_GET_SIZE(obj);
+#ifdef DEBUG
+        assert(_size >= 0);
+#endif
     }
 
     int size() const { return _size; }
     PyObject* getItem(int i) const {
+#ifdef DEBUG
+        assert(i >= 0 && i < _size);
+#endif
         if(isTuple) return PyTuple_GET_ITEM(_obj, i);
         else return PyList_GET_ITEM(_obj, i);
     }
@@ -73,11 +84,18 @@ public:
         if(_type == TupleType) _size = PyTuple_GET_SIZE(obj);
         else if(_type == ListType) _size = PyList_GET_SIZE(obj);
         else _size = -1;
+#ifdef DEBUG
+        if(_type != UnknownType)
+            assert(_size >= 0);
+#endif
     }
 
     bool isValid() const { return _type != UnknownType; }
     int size() const { return _size; }
     PyObject* getItem(int i) const {
+#ifdef DEBUG
+        assert(i >= 0 && i < _size);
+#endif
         if(_type == TupleType) return PyTuple_GET_ITEM(_obj, i);
         else if(_type == ListType) return PyList_GET_ITEM(_obj, i);
         else return NULL;

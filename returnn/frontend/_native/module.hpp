@@ -115,6 +115,7 @@ public:
         for(int i = 0; i < _rawTensorTypesLen; ++i)
             Py_VISIT(_rawTensorTypes[i]);
         Py_VISIT(_tensorType);
+        Py_VISIT(_dimType);
         Py_VISIT(_globalBackend);
         Py_VISIT(_backendTensorTypeDispatchTable);
         for(int i = 0; i < NumBackendsWithCachedOps * NumTOps; ++i)
@@ -130,6 +131,7 @@ public:
         for(unsigned int i = 0; i < sizeof(_rawTensorTypes)/sizeof(_rawTensorTypes[0]); ++i)
             Py_CLEAR(_rawTensorTypes[i]);
         Py_CLEAR(_tensorType);
+        Py_CLEAR(_dimType);
         Py_CLEAR(_globalBackend);
         Py_CLEAR(_backendTensorTypeDispatchTable);
         for(int i = 0; i < NumBackendsWithCachedOps * NumTOps; ++i)
@@ -144,6 +146,7 @@ public:
 
     inline PyObject* notSpecified() const { return _notSpecified; }
     inline PyObject* tensorType() const { return _tensorType; }
+    inline PyObject* dimType() const { return _dimType; }
     inline PyObject* globalBackend() const { return _globalBackend; }
     inline PyObject* cachedOp(RawOp op, BackendWithCachedOps backend) {
         if(!_cachedOps[backend * NumTOps + op])
@@ -163,6 +166,7 @@ private:
     int _rawTensorTypesLen;
     PyObject* _rawTensorTypes[10];
     PyObject* _tensorType;
+    PyObject* _dimType;
     PyObject* _globalBackend;
     PyObject* _backendTensorTypeDispatchTable;
     PyObject* _cachedOps[NumBackendsWithCachedOps * NumTOps];

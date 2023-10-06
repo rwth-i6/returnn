@@ -162,7 +162,7 @@ class Tensor(_TensorMixin, _TensorOpOverloadsMixin, Generic[RawTensorType]):
         """
         return self._raw_tensor
 
-    # This is potentially replaced by native implementation (_native pyTensorRawTensorSetter).
+    # This is potentially replaced by native implementation (_native tensor_raw_tensor_setter).
     @raw_tensor.setter
     def raw_tensor(self, value: Optional[RawTensorType]):
         """
