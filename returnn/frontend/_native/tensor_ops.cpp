@@ -631,7 +631,7 @@ static bool _getPermutationSupersetToSubset(const char* funcName, ASeqT subset, 
             funcName, subset.get(), superset.get());
         return false;
     }
-    assert(outPermutation.size() == superset.size());
+    assert((int) outPermutation.size() == superset.size());
     return true;
 }
 
@@ -666,7 +666,7 @@ static PyObject* _permuteAndExtend(
             if(outPermutation[i] < 0) continue;
             PyObject* intObj = PyLong_FromLong(outPermutation[i]);
             if(!intObj) return NULL;
-            assert(j < dim.size());
+            assert(j < dims.size());
             PyTuple_SET_ITEM(permuteArg.get(), j, intObj);
             ++j;
         }
@@ -836,7 +836,7 @@ static PyObject* tensorCopyCompatibleToDims(const char* funcName, PyModuleState*
         return outRawTensor.release();
     }
 
-    assert(outPermutation.size() == outDimsSeq.size());
+    assert((int) outPermutation.size() == outDimsSeq.size());
     PyObjectScopedRef outDims_ = PyTuple_New(outPermutation.size());
     if(!outDims_) return NULL;
     for(int i = 0; (size_t) i < outPermutation.size(); ++i) {
