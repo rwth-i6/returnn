@@ -676,13 +676,13 @@ class _TensorMixin(_TensorMixinBase):
         if allow_int and isinstance(perm[0], int):
             assert all(isinstance(a, int) for a in perm), f"{self}: invalid perm {perm!r} types"
             assert set(perm) == set(range(len(perm))), f"{self}: invalid perm {perm!r}"
-            out_dims = [self._dims[i] for i in perm]
             kwargs = self.get_kwargs()
+            kwargs["dims"] = [self._dims[i] for i in perm]
             for special_axis_name in self.SpecialAxesNames:
                 if special_axis_name in kwargs and kwargs[special_axis_name] is not None:
                     kwargs[special_axis_name] = perm.index(kwargs[special_axis_name])
-            kwargs["dims"] = out_dims
-            kwargs["raw_tensor"] = self._raw_backend.transpose_raw(self._raw_tensor, perm) if self._raw_tensor else None
+            if self._raw_tensor is not None:
+                kwargs["raw_tensor"] = self._raw_backend.transpose_raw(self._raw_tensor, perm)
             return _t.Tensor(**kwargs)
         else:
             assert all(isinstance(a, Dim) for a in perm), f"{self}: invalid perm {perm!r} types"
