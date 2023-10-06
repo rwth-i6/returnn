@@ -676,14 +676,7 @@ class _TensorMixin(_TensorMixinBase):
         if allow_int and isinstance(perm[0], int):
             assert all(isinstance(a, int) for a in perm), f"{self}: invalid perm {perm!r} types"
             assert set(perm) == set(range(len(perm))), f"{self}: invalid perm {perm!r}"
-            kwargs = self.get_kwargs()
-            kwargs["dims"] = [self._dims[i] for i in perm]
-            for special_axis_name in self.SpecialAxesNames:
-                if special_axis_name in kwargs and kwargs[special_axis_name] is not None:
-                    kwargs[special_axis_name] = perm.index(kwargs[special_axis_name])
-            if self._raw_tensor is not None:
-                kwargs["raw_tensor"] = self._raw_backend.transpose_raw(self._raw_tensor, perm)
-            return _t.Tensor(**kwargs)
+            return self._copy_compatible_to_dims_with_perm([self._dims[i] for i in perm], perm)
         else:
             assert all(isinstance(a, Dim) for a in perm), f"{self}: invalid perm {perm!r} types"
             return self.copy_compatible_to_dims(perm)
@@ -1259,6 +1252,9 @@ class _TensorMixin(_TensorMixinBase):
         out_permutation = self.get_out_permutation_to_dims(dims)
         if out_permutation == list(range(len(self._dims))):
             return self.copy()
+        return self._copy_compatible_to_dims_with_perm(dims, out_permutation)
+
+    def _copy_compatible_to_dims_with_perm(self, dims: Sequence[Dim], out_permutation: Sequence[int]):
         raw_tensor = self._raw_tensor
         if raw_tensor is not None:
             backend = self._raw_backend
@@ -1276,13 +1272,28 @@ class _TensorMixin(_TensorMixinBase):
             )
             for i, p in enumerate(out_permutation)
         ]
-        kwargs = self.get_kwargs()
-        for special_axis_name in self.SpecialAxesNames:
-            if special_axis_name in kwargs and kwargs[special_axis_name] is not None:
-                kwargs[special_axis_name] = out_permutation.index(kwargs[special_axis_name])
+        kwargs = self.get_kwargs(include_special_axes=False)
         kwargs["dims"] = out_dims
         kwargs["raw_tensor"] = raw_tensor
-        return _t.Tensor(**kwargs)
+        res = _t.Tensor(**kwargs)
+        if self.version <= 1:
+            if self.time_dim_axis is None:
+                if res.time_dim_axis is not None:
+                    res.time_dim_axis = None
+            else:
+                axis = out_permutation.index(self.time_dim_axis)
+                assert axis >= 0
+                if res.time_dim_axis != axis:
+                    res.time_dim_axis = axis
+        if self.feature_dim_axis is None:
+            if res.feature_dim_axis is not None:
+                res.feature_dim_axis = None
+        else:
+            axis = out_permutation.index(self.feature_dim_axis)
+            assert axis >= 0
+            if res.feature_dim_axis != axis:
+                res.feature_dim_axis = axis
+        return res
 
     # This function has a native implementation (_native tensor_copy_compatible_to_dims_raw).
     def copy_compatible_to_dims_raw(self: _t.Tensor, dims: Sequence[Dim]) -> _t.RawTensorType:

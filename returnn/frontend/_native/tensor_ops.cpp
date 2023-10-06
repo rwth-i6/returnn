@@ -755,6 +755,58 @@ PyObject* pyTensorGetOutPermutationsToDims(PyObject *self, PyObject *const *args
     return NULL;
 }
 
+// >=0 means actual set, -1 means None, -2 is error
+static long _getAxis(const char* funcName, PyObject* tensor, const char* axisName) {
+    PyObjectScopedRef axis = PyObject_GetAttrString(tensor, axisName);
+    if(!axis) return -2;
+    if(axis == Py_None) return -1;
+    if(!PyLong_Check(axis)) {
+        PyErr_Format(PyExc_TypeError, "%s: expected tensor.%s to be int or None, got %R", funcName, axisName, axis.get());
+        return -1;
+    }
+    long axis_ = PyLong_AsLong(axis);
+    if(axis_ < 0) {
+        PyErr_Format(PyExc_ValueError, "%s: expected tensor.%s to be >= 0, got %R", funcName, axisName, axis.get());
+        return -1;
+    }
+    return axis_;
+}
+
+static bool _setNewAxisConsistentFromPerm(
+    const char* funcName, PyObject* tensor, PyObject* outTensor, bool checkExisting, const std::vector<int>& perm, const char* axisName
+) {
+    long axisInt = _getAxis(funcName, tensor, axisName);
+    if(axisInt < -1) return false;
+    long outAxisInt = checkExisting ? _getAxis(funcName, outTensor, axisName) : -1;
+    if(outAxisInt < -1) return false;
+    if(outAxisInt != -1) {
+        outAxisInt = -2;
+        for(long j = 0; j < (long) perm.size(); ++j) {
+            if(perm[j] == axisInt) {
+                outAxisInt = j;
+                break;
+            }
+        }
+        if(outAxisInt < 0) {
+            PyErr_Format(PyExc_ValueError, "%s: tensor.%s %ld is not in perm", funcName, axisName, axisInt);
+            return false;
+        }
+    }
+    if(axisInt != outAxisInt) {
+        if(outAxisInt == -1) {
+            if(PyObject_SetAttrString(outTensor, axisName, Py_None) < 0)
+                return false;
+        }
+        else {
+            PyObjectScopedRef outAxis = PyLong_FromLong(outAxisInt);
+            if(!outAxis) return false;
+            if(PyObject_SetAttrString(outTensor, axisName, outAxis) < 0)
+                return false;
+        }
+    }
+    return true;
+}
+
 template<bool rawMode>
 static PyObject* tensorCopyCompatibleToDims(const char* funcName, PyModuleState* modState, PyObject* tensor, PyObject* outDims) {
     PyTupleOrListRef outDimsSeq(outDims);
@@ -853,53 +905,6 @@ static PyObject* tensorCopyCompatibleToDims(const char* funcName, PyModuleState*
     if(!name) return NULL;
     PyObjectScopedRef dtype = PyObject_GetAttrString(tensor, "dtype");
     if(!dtype) return NULL;
-    PyObjectScopedRef feature_dim_axis = PyObject_GetAttrString(tensor, "_feature_dim_axis");
-    if(!feature_dim_axis) return NULL;
-    if(feature_dim_axis == Py_None) {}
-    else if(feature_dim_axis == modState->notSpecified()) {}
-    else {
-        if(!PyLong_Check(feature_dim_axis)) {
-            PyErr_Format(
-                PyExc_TypeError,
-                "%s: tensor._feature_dim_axis did not return an int, from tensor dims %R",
-                funcName, dimsSeq.get());
-            return NULL;
-        }
-        long feature_dim_axisInt = PyLong_AsLong(feature_dim_axis);
-        if(feature_dim_axisInt < 0) {
-            if(!PyErr_Occurred())
-                PyErr_Format(
-                    PyExc_ValueError,
-                    "%s: tensor._feature_dim_axis is negative, from tensor dims %R",
-                    funcName, dimsSeq.get());
-            return NULL;
-        }
-        if(feature_dim_axisInt >= (long) dimsSeq.size()) {
-            PyErr_Format(
-                PyExc_ValueError,
-                "%s: tensor._feature_dim_axis is out of range, from tensor dims %R",
-                funcName, dimsSeq.get());
-            return NULL;
-        }
-        feature_dim_axis = NULL;
-        for(int i = 0; i < (int) outPermutation.size(); ++i) {
-            if(outPermutation[i] == feature_dim_axisInt) {
-                feature_dim_axis = PyLong_FromLong(i);
-                if(!feature_dim_axis) return NULL;
-                break;
-            }
-        }
-        if(!feature_dim_axis) {
-            PyErr_Format(
-                PyExc_SystemError,
-                "%s: tensor._feature_dim_axis is not in out_dims, from tensor dims %R",
-                funcName, dimsSeq.get());
-            return NULL;
-        }
-    }
-    PyObjectScopedRef sparse_dim = PyObject_GetAttrString(tensor, "sparse_dim");
-    if(!sparse_dim) return NULL;
-
     PyObjectScopedRef version = PyObject_GetAttrString(tensor, "version");
     if(!version) return NULL;
     if(!PyLong_Check(version)) {
@@ -934,57 +939,8 @@ static PyObject* tensorCopyCompatibleToDims(const char* funcName, PyModuleState*
         if(PyDict_SetItemString(kwargs, "dims", outDims_) < 0) return NULL;
         if(PyDict_SetItemString(kwargs, "dtype", dtype) < 0) return NULL;
         if(PyDict_SetItemString(kwargs, "version", version) < 0) return NULL;
-
-        if(extra != Py_None) {
-            if(versionInt == 1) {
-                PyObjectScopedRef time_dim_axis = PyObject_GetAttrString(extra, "time_dim_axis");
-                if(!time_dim_axis) return NULL;
-                if(time_dim_axis != Py_None && time_dim_axis != modState->notSpecified()) {
-                    if(!PyLong_Check(time_dim_axis)) {
-                        PyErr_Format(
-                            PyExc_TypeError,
-                            "%s: tensor.time_dim_axis did not return an int, from tensor %R",
-                            funcName, tensor);
-                        return NULL;
-                    }
-                    long time_dim_axisInt = PyLong_AsLong(time_dim_axis);
-                    if(time_dim_axisInt < 0) {
-                        if(!PyErr_Occurred())
-                            PyErr_Format(
-                                PyExc_ValueError,
-                                "%s: tensor.time_dim_axis is negative, from tensor %R",
-                                funcName, tensor);
-                        return NULL;
-                    }
-                    if(time_dim_axisInt >= (long) dimsSeq.size()) {
-                        PyErr_Format(
-                            PyExc_ValueError,
-                            "%s: tensor.time_dim_axis is out of range, from tensor %R",
-                            funcName, tensor);
-                        return NULL;
-                    }
-                    time_dim_axis.release();
-                    for(int i = 0; i < (int) outPermutation.size(); ++i) {
-                        if(outPermutation[i] == time_dim_axisInt) {
-                            time_dim_axis = PyLong_FromLong(i);
-                            if(!time_dim_axis) return NULL;
-                            break;
-                        }
-                    }
-                    if(!time_dim_axis) {
-                        PyErr_Format(
-                            PyExc_SystemError,
-                            "%s: tensor.time_dim_axis is not in out_dims, from tensor %R",
-                            funcName, tensor);
-                        return NULL;
-                    }
-                }
-                if(PyDict_SetItemString(kwargs, "time_dim_axis", time_dim_axis) < 0) return NULL;
-            }
-
+        if(extra != Py_None)
             if(!_copyTensorExtraToKwargs(extra, kwargs)) return NULL;
-        }
-
         outTensor = PyObject_Call(modState->tensorType(), args, kwargs);
         if(!outTensor) return NULL;
     }
@@ -993,12 +949,25 @@ static PyObject* tensorCopyCompatibleToDims(const char* funcName, PyModuleState*
         if(PyObject_SetAttrString(outTensor, "raw_tensor", outRawTensor) < 0)
             return NULL;
 
-    if(feature_dim_axis != ((versionInt == 2) ? Py_None : modState->notSpecified()))
-        if(PyObject_SetAttrString(outTensor, "_feature_dim_axis", feature_dim_axis) < 0)
-            return NULL;
-    if(sparse_dim != Py_None)
-        if(PyObject_SetAttrString(outTensor, "sparse_dim", sparse_dim) < 0)
-            return NULL;
+    if(versionInt == 1) {
+        // Directly acess tensor because the default fallback logic for *_axis might be used,
+        // and we want to check for that.
+        if(!_setNewAxisConsistentFromPerm(funcName, tensor, outTensor, true, outPermutation, "time_dim_axis")) return NULL;
+        if(!_setNewAxisConsistentFromPerm(funcName, tensor, outTensor, true, outPermutation, "feature_dim_axis")) return NULL;
+    }
+    else {
+        // We can directly access _feature_dim_axis, which is either None or an int.
+        if(!_setNewAxisConsistentFromPerm(funcName, tensor, outTensor, false, outPermutation, "_feature_dim_axis")) return NULL;
+    }
+
+    {
+        PyObjectScopedRef sparse_dim = PyObject_GetAttrString(tensor, "sparse_dim");
+        if(!sparse_dim) return NULL;
+        if(sparse_dim != Py_None)
+            if(PyObject_SetAttrString(outTensor, "sparse_dim", sparse_dim) < 0)
+                return NULL;
+    }
+
     return outTensor.release();
 }
 
