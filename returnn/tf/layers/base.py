@@ -2576,9 +2576,7 @@ class ReuseParams:
                 return self.reuse_layer.params[param_name]
         if self.layer_output:
             if self.shape is not None:
-                out = self.layer_output.output.copy_compatible_to(
-                    Data(name=name, dim_tags=self.shape, dtype=dtype.name)
-                )
+                out = self.layer_output.output.copy_compatible_to_dims(self.shape)
                 return out.placeholder
             assert tuple(shape) == self.layer_output.output.batch_shape
             return self.layer_output.output.placeholder
