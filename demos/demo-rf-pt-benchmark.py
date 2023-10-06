@@ -493,8 +493,12 @@ def main():
     arg_parser.add_argument("--bench-action", choices=("run", "multi-run", "profile"), default="run")
     args, remaining_args = arg_parser.parse_known_args()
 
-    # https://youtrack.jetbrains.com/issue/PY-63226/PyCharm-debugger-hangs-when-process-is-forking
-    multiprocessing.set_start_method("spawn")
+    try:
+        # https://youtrack.jetbrains.com/issue/PY-63226/PyCharm-debugger-hangs-when-process-is-forking
+        multiprocessing.set_start_method("spawn")
+    except Exception as exc:
+        print("multiprocessing.set_start_method 'spawn' exception:", exc)
+        print("Ignoring this...")
 
     if args.bench_action == "run":
         __main__.main(sys.argv[:1] + [_my_file] + remaining_args)
