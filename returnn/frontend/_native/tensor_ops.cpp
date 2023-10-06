@@ -777,32 +777,38 @@ static bool _setNewAxisConsistentFromPerm(
 ) {
     long axisInt = _getAxis(funcName, tensor, axisName);
     if(axisInt < -1) return false;
-    long outAxisInt = checkExisting ? _getAxis(funcName, outTensor, axisName) : -1;
-    if(outAxisInt < -1) return false;
-    if(outAxisInt != -1) {
-        outAxisInt = -2;
+    long wantedOutAxisInt = -1;
+    if(axisInt >= 0) {
         for(long j = 0; j < (long) perm.size(); ++j) {
             if(perm[j] == axisInt) {
-                outAxisInt = j;
+                wantedOutAxisInt = j;
                 break;
             }
         }
-        if(outAxisInt < 0) {
+        if(wantedOutAxisInt < 0) {
             PyErr_Format(PyExc_ValueError, "%s: tensor.%s %ld is not in perm", funcName, axisName, axisInt);
             return false;
         }
     }
-    if(axisInt != outAxisInt) {
-        if(outAxisInt == -1) {
-            if(PyObject_SetAttrString(outTensor, axisName, Py_None) < 0)
-                return false;
-        }
-        else {
-            PyObjectScopedRef outAxis = PyLong_FromLong(outAxisInt);
-            if(!outAxis) return false;
-            if(PyObject_SetAttrString(outTensor, axisName, outAxis) < 0)
-                return false;
-        }
+    if(checkExisting) {
+        long outAxisInt = _getAxis(funcName, outTensor, axisName);
+        if(outAxisInt < -1) return false;
+        if(wantedOutAxisInt == outAxisInt)
+            return true;
+    }
+    else {
+        if(wantedOutAxisInt < 0)
+            return true; // we assume the new axis is by default None
+    }
+    if(wantedOutAxisInt < 0) {
+        if(PyObject_SetAttrString(outTensor, axisName, Py_None) < 0)
+            return false;
+    }
+    else {
+        PyObjectScopedRef wantedOutAxis = PyLong_FromLong(wantedOutAxisInt);
+        if(!wantedOutAxis) return false;
+        if(PyObject_SetAttrString(outTensor, axisName, wantedOutAxis) < 0)
+            return false;
     }
     return true;
 }
