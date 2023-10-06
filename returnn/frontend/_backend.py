@@ -270,6 +270,19 @@ class Backend(Generic[T]):
         return out
 
     @staticmethod
+    def make_output_tensor(tensor: Tensor, dims: Sequence[Dim], *, name: str) -> Tensor:
+        """
+        :param tensor:
+        :param dims:
+        :param name:
+        :return: tensor with dims order like in dims
+        """
+        # noinspection PyProtectedMember
+        tensor = tensor._raw_backend.transpose(tensor, dims, allow_int=False)
+        tensor = tensor.copy(name=name)
+        return tensor
+
+    @staticmethod
     def expand_dims_raw(raw_tensor: T, axis: int) -> T:
         """
         :param raw_tensor:
