@@ -256,20 +256,6 @@ class Backend(Generic[T]):
         raise NotImplementedError
 
     @staticmethod
-    def transpose(tensor: Tensor, perm: Sequence[Union[Dim, int]], *, allow_int: bool = False) -> Tensor:
-        """
-        :param tensor: tensor
-        :param perm: permutation
-        :param allow_int: allow int as axis in perm
-        :return: transposed tensor
-        """
-        # Default implementation using transpose_raw.
-        out, perm_ = tensor.copy_template_transpose(perm, allow_int=allow_int)
-        backend = get_backend_by_tensor(tensor)
-        out.raw_tensor = backend.transpose_raw(tensor.raw_tensor, perm_)
-        return out
-
-    @staticmethod
     def make_output_tensor(tensor: Tensor, dims: Sequence[Dim], *, name: str) -> Tensor:
         """
         :param tensor:
@@ -277,8 +263,8 @@ class Backend(Generic[T]):
         :param name:
         :return: tensor with dims order like in dims
         """
-        # noinspection PyProtectedMember
-        tensor = tensor._raw_backend.transpose(tensor, dims, allow_int=False)
+        assert len(dims) == len(tensor.dims)
+        tensor = tensor.copy_compatible_to_dims(dims)
         tensor = tensor.copy(name=name)
         return tensor
 
