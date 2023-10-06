@@ -804,6 +804,10 @@ static PyObject* tensorCopyCompatibleToDims(const char* funcName, PyModuleState*
     else if(modState->isTorchTensorType((PyObject*) Py_TYPE(rawTensor))) {
         PyObjectScopedRef rawShape = PyObject_GetAttrString(rawTensor, "shape");
         if(!rawShape) return NULL;
+        if(!PyTuple_Check(rawShape)) {
+            PyErr_Format(PyExc_TypeError, "%s: expected raw_tensor.shape to be tuple, got %R", funcName, rawShape.get());
+            return NULL;
+        }
         PyObject* permuteOp = modState->cachedOp(TOp_Permute, BWCO_Torch);
         if(!permuteOp) return NULL;
         PyObject* reshapeOp = modState->cachedOp(TOp_Reshape, BWCO_Torch);
@@ -813,16 +817,16 @@ static PyObject* tensorCopyCompatibleToDims(const char* funcName, PyModuleState*
     }
     else {  // generic backend fallback
         PyObject* backend = getBackendForRawTensor(modState, rawTensor);
-        PyObjectScopedRef permuteOp = PyObject_GetAttrString(backend, "transpose_raw");
-        if(!permuteOp) return NULL;
-        PyObjectScopedRef reshapeOp = PyObject_GetAttrString(backend, "reshape_raw");
-        if(!reshapeOp) return NULL;
         PyObjectScopedRef rawShape = PyObject_CallMethod(backend, "get_shape_tuple_raw", "O", rawTensor.get());
         if(!rawShape) return NULL;
         if(!PyTuple_Check(rawShape)) {
             PyErr_Format(PyExc_TypeError, "%s: expected raw_tensor.shape to be tuple, got %R", funcName, rawShape.get());
             return NULL;
         }
+        PyObjectScopedRef permuteOp = PyObject_GetAttrString(backend, "transpose_raw");
+        if(!permuteOp) return NULL;
+        PyObjectScopedRef reshapeOp = PyObject_GetAttrString(backend, "reshape_raw");
+        if(!reshapeOp) return NULL;
         outRawTensor = _permuteAndExtend(funcName, permuteOp, reshapeOp, tensor, dimsSeq, rawTensor, rawShape, outDimsSeq, outPermutation);
         if(!outRawTensor) return NULL;
     }
