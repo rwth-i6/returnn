@@ -178,11 +178,6 @@ class ReturnnLayersBackend(Backend[Layer]):
         raise Exception("reshape_raw not supported in layers backend because dim tags would be unknown")
 
     @staticmethod
-    def transpose(tensor: Tensor, perm: Sequence[Union[Dim, int]], *, allow_int: bool = False) -> Tensor:
-        """transpose"""
-        raise Exception("TF-layers backend: order of dims is irrelevant")
-
-    @staticmethod
     def make_output_tensor(tensor: Tensor, dims: Sequence[Dim], *, name: str) -> Tensor:
         """only func where we have explicitly defined dim order in the output"""
         return rfl.make_layer({"class": "transpose", "from": tensor, "perm": dims}, name=name)
