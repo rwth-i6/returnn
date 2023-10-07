@@ -1258,7 +1258,7 @@ class _TensorMixin(_TensorMixinBase):
         raw_tensor = self._raw_tensor
         if raw_tensor is not None:
             backend = self._raw_backend
-            raw_shape = backend.get_shape_raw(raw_tensor)
+            raw_shape = backend.get_shape_tuple_raw(raw_tensor)
             raw_tensor = backend.transpose_raw(raw_tensor, [p for p in out_permutation if p >= 0])
             raw_tensor = backend.reshape_raw(raw_tensor, [raw_shape[p] if p >= 0 else 1 for p in out_permutation])
         out_dims = [
@@ -1310,7 +1310,7 @@ class _TensorMixin(_TensorMixinBase):
         if out_permutation == list(range(len(self._dims))):
             return raw_tensor
         backend = self._raw_backend
-        raw_shape = backend.get_shape_raw(raw_tensor)
+        raw_shape = backend.get_shape_tuple_raw(raw_tensor)
         raw_tensor = backend.transpose_raw(raw_tensor, [p for p in out_permutation if p >= 0])
         raw_tensor = backend.reshape_raw(raw_tensor, [raw_shape[p] if p >= 0 else 1 for p in out_permutation])
         return raw_tensor
