@@ -51,6 +51,7 @@ class Dim(_DimMixin):
     capacity: Optional[int]  # shape[axis] in the raw tensor (might need power-of-two or static shape), None if dynamic
     size: Optional[int]  # shape[axis] in the represented tensor if static, None if dynamic, then dyn_size_ext
     dyn_size_ext: Optional[_t.Tensor]
+    _dyn_size_max_value: Optional[_t.Tensor]  # scalar
     _extra: Optional[_DimExtra]
 
     def __init__(
@@ -84,6 +85,7 @@ class Dim(_DimMixin):
         if not name and not description and self.dyn_size_ext:
             name = self.dyn_size_ext.name
         self.name = name or description
+        self._dyn_size_max_value = None
         self._extra = None
 
         if kwargs:
