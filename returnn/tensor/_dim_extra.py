@@ -385,12 +385,14 @@ class _DimMixin:
         """
         :rtype: bool
         """
-        if (
-            self.dyn_size_ext and not self.dyn_size_ext.is_valid_in_current_graph()
+        if (self.dyn_size_ext and not self.dyn_size_ext.is_valid_in_current_graph()) or (
+            self._dyn_size_max_value and not self._dyn_size_max_value.is_valid_in_current_graph()
         ):  # maybe from an earlier run which reuses the dim tag
             # Reset and cleanup.
-            self.dyn_size_ext = self.dyn_size_ext.copy_template()
-            self.dyn_size_ext.batch = None
+            if self.dyn_size_ext:
+                self.dyn_size_ext = self.dyn_size_ext.copy_template()
+                self.dyn_size_ext.batch = None
+            self._dyn_size_max_value = None
             same_base = self.get_same_base()
             # noinspection PyProtectedMember
             if same_base._extra:
@@ -433,6 +435,14 @@ class _DimMixin:
                 if self.dyn_size_ext and self.dyn_size_ext.placeholder is not None:
                     if not same.dyn_size_ext or same.dyn_size_ext.placeholder is None:
                         same.dyn_size_ext = self.dyn_size_ext
+                # noinspection PyProtectedMember
+                if self._dyn_size_max_value is None and same._dyn_size_max_value is not None:
+                    # noinspection PyProtectedMember
+                    self._dyn_size_max_value = same._dyn_size_max_value
+                # noinspection PyProtectedMember
+                if same._dyn_size_max_value is None and self._dyn_size_max_value is not None:
+                    # noinspection PyProtectedMember
+                    same._dyn_size_max_value = self._dyn_size_max_value
 
     def get_for_batch_ctx(
         self: Dim, batch: BatchInfo, ctx: Optional[ControlFlowContext], *, allow_none: bool = False
@@ -655,7 +665,7 @@ class _DimMixin:
         :param BatchInfo|None batch:
         :param ControlFlowContext|None ctx:
         :param bool template_only:
-        :rtype: Data|None
+        :rtype: _t.Tensor|None
         """
         assert self.can_be_used_as_dim()
         if not batch and self.batch:
