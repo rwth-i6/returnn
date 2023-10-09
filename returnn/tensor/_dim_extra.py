@@ -1030,6 +1030,7 @@ class _DimMixin:
 
         import numpy
         import returnn.frontend as rf
+        import contextlib
 
         tf = tf_util = tensor_util = None
         if backend and backend.is_tensorflow:
@@ -1046,6 +1047,7 @@ class _DimMixin:
             kind = kind[: -len("_right")]  # order does not matter here
         if kind.endswith("_left"):
             kind = kind[: -len("_left")]
+        y_name = self.description + ":seq-length"
 
         def _is_negative(x__):
             if isinstance(x__, numpy.ndarray):
@@ -1060,47 +1062,72 @@ class _DimMixin:
                 return _is_negative(x__)
             return False
 
+        if tf:
+            _ctx_for_inputs = tf_util.same_control_flow_ctx
+
+        else:
+
+            @contextlib.contextmanager
+            def _ctx_for_inputs(_arg):
+                yield
+
         def _bin_op_tf(a, b):
             if template_only:
                 return None
             if a is None or b is None:
                 return None
             assert isinstance(a, tf.Tensor) and isinstance(b, (int, tf.Tensor))
-            with tf_util.same_control_flow_ctx([a, b]):
-                if kind == "add":
-                    use_relu = _is_negative(a) or _is_negative(b)  # for dynamic tensors, assume all positive
-                    if use_relu:
-                        return tf.convert_to_tensor(tf_util.simplify_non_negative_seq_length(a + b))
-                    return a + b
-                elif kind == "sub":
-                    return tf.convert_to_tensor(tf_util.simplify_non_negative_seq_length(a - b))
-                elif kind == "mul":
-                    return a * b
-                elif kind in ("floordiv", "truediv"):  # truediv assumes there is no remainder
-                    return a // b
-                elif kind == "ceildiv":
-                    return -(-a // b)
-                else:
-                    raise ValueError("unknown op kind %r" % op.kind)
+            if kind == "add":
+                use_relu = _is_negative(a) or _is_negative(b)  # for dynamic tensors, assume all positive
+                if use_relu:
+                    return tf.convert_to_tensor(tf_util.simplify_non_negative_seq_length(a + b))
+                return a + b
+            elif kind == "sub":
+                return tf.convert_to_tensor(tf_util.simplify_non_negative_seq_length(a - b))
+            elif kind == "mul":
+                return a * b
+            elif kind in ("floordiv", "truediv"):  # truediv assumes there is no remainder
+                return a // b
+            elif kind == "ceildiv":
+                return -(-a // b)
+            else:
+                raise ValueError("unknown op kind %r" % op.kind)
 
         def _bin_op(a, b):
+            if a is None:
+                if isinstance(b, int):
+                    if not template_only and backend and not tf:
+                        return backend.convert_to_tensor(
+                            x_dim.dimension, dims=[], dtype=size_dtype, name=y_name, device="cpu"
+                        )
+                    else:
+                        y__ = _t.Tensor(name=y_name, dims=(), dtype=size_dtype)
+                        if not template_only and tf:
+                            with tf.control_dependencies(None):  # this will reset the context
+                                y__.raw_tensor = tf.constant(x_dim.dimension)
+                    return y__
+                elif isinstance(b, _t.Tensor):
+                    return b.copy(name=y_name)
+                else:
+                    raise TypeError(f"complete_dyn_size: _bin_op: unexpected type {type(b)}")
+            if b is None:
+                return None
+            assert isinstance(a, _t.Tensor)
             if template_only or not backend:
-                if isinstance(a, _t.Tensor) and isinstance(b, _t.Tensor):
-                    return _t.Tensor.get_common_data([a, b], allow_broadcast_all_sources=True)
-                if isinstance(a, _t.Tensor):
-                    return a
                 if isinstance(b, _t.Tensor):
-                    return b
-                raise Exception(f"Dim complete_dyn_size: bin_op: expect to get one Tensor, got {a} and {b}")
+                    return _t.Tensor.get_common_data([a, b], allow_broadcast_all_sources=True)
+                return a
             if tf:
-                assert isinstance(a, _t.Tensor)
                 if isinstance(b, _t.Tensor):
                     res = _t.Tensor.get_common_data([a, b], allow_broadcast_all_sources=True)
-                    a = a.copy_compatible_to_dims(res.dims) if a.dims else a
-                    b = b.copy_compatible_to_dims(res.dims) if b.dims else b
+                    with _ctx_for_inputs(a):
+                        a = a.copy_compatible_to_dims(res.dims) if a.dims else a
+                    with _ctx_for_inputs(b):
+                        b = b.copy_compatible_to_dims(res.dims) if b.dims else b
                 else:
                     res = a.copy_template()
-                res.raw_tensor = _bin_op_tf(a.raw_tensor, b.raw_tensor if isinstance(b, _t.Tensor) else b)
+                with _ctx_for_inputs([a, b]):
+                    res.raw_tensor = _bin_op_tf(a.raw_tensor, b.raw_tensor if isinstance(b, _t.Tensor) else b)
                 return res
             if kind == "add":
                 return _relu(rf.combine_bc(a, "add", b))
@@ -1123,46 +1150,21 @@ class _DimMixin:
             else:
                 raise TypeError(f"complete_dyn_size: _relu: unexpected type {type(a)}")
 
-        y_name = self.description + ":seq-length"
         y: Optional[_t.Tensor] = None  # resulting dyn size
         y_max_value: Optional[_t.Tensor] = None  # resulting dyn size max value
         inputs = list(op.inputs)
         assert inputs
-        while inputs:
-            x_dim: Dim = inputs.pop(0)
-            if not x_dim.is_dynamic():  # static
-                assert x_dim.dimension is not None
-                if y is None:
-                    if not template_only and backend and not tf:
-                        y = backend.convert_to_tensor(
-                            x_dim.dimension, dims=[], dtype=size_dtype, name=y_name, device="cpu"
-                        )
-                    else:
-                        y = _t.Tensor(
-                            name=y_name,
-                            dim_tags=[],
-                            dtype=size_dtype,
-                        )
-                        if not template_only and tf:
-                            with tf.control_dependencies(None):  # this will reset the context
-                                y.raw_tensor = tf.constant(x_dim.dimension)
-                    y_max_value = y.copy()
-                    continue
-                y = _bin_op(y, x_dim.dimension)
-                y_max_value = _bin_op(y_max_value, x_dim.dimension)
-                continue
+        for x_dim in inputs:
+            x_dim: Dim
             if self.batch:
                 x_dim = x_dim.get_for_batch_ctx(self.batch, self.control_flow_ctx)
             x_dim.complete_dyn_size(template_only=template_only)
-            if not x_dim.dyn_size_ext:
+            if not x_dim.dyn_size_ext and not x_dim.dimension:
                 return
-            if y is None:
-                y = x_dim.dyn_size_ext.copy(name=y_name)
-                y_max_value = x_dim.get_dim_value_tensor()
-                continue
-            y = _bin_op(y, x_dim.dyn_size_ext)
-            y_max_value = _bin_op(y_max_value, x_dim.get_dim_value_tensor())
-        assert y and y_max_value, f"op {op}?"
+            y = _bin_op(y, x_dim.dimension or x_dim.dyn_size_ext)
+            if not template_only:
+                y_max_value = _bin_op(y_max_value, x_dim.get_dim_value_tensor(allow_none=True))
+        assert y, f"op {op}?"
         if self.dyn_size_ext:
             assert self.dyn_size_ext.dim_tags == y.dim_tags
         if y.batch:
@@ -1171,7 +1173,9 @@ class _DimMixin:
             else:
                 self.batch = y.batch
         self.dyn_size_ext = y
-        self._dyn_size_max_value = y_max_value
+        if not template_only and y_max_value:
+            assert y_max_value
+            self._dyn_size_max_value = y_max_value
         if tf and y.placeholder is not None:
             self.set_tag_on_size_tensor(y.placeholder)
 
@@ -1793,12 +1797,13 @@ class _DimMixin:
         assert isinstance(res, int)
         return res
 
-    def get_dim_value_tensor(self) -> Union[int, _t.Tensor]:
+    def get_dim_value_tensor(self, *, allow_none: bool = False) -> Optional[Union[int, _t.Tensor]]:
         """
         Infers the dim this axis should have if unbroadcasted.
         If `self.src_data` has a placeholder, will use the shape from there.
         Otherwise, uses `self.dimension` (if static) or `self.dyn_size` (if dynamic).
 
+        :param allow_none:
         :return: max(size or dyn_size)
         """
         import returnn.frontend as rf
@@ -1850,6 +1855,8 @@ class _DimMixin:
                 res = self.dyn_size_ext
             self._dyn_size_max_value = res
             return res
+        if allow_none:
+            return None
         raise Exception("%s: need placeholder, self.dimension or self.dyn_size for dim value" % self)
 
     def axis_split_info(self):
