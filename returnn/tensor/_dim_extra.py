@@ -4,7 +4,7 @@ or just rarely used attribs, such that we can save memory for the common case.
 """
 
 from __future__ import annotations
-from typing import TYPE_CHECKING, Optional, Union, Tuple, Sequence, Dict, List
+from typing import TYPE_CHECKING, Optional, Union, Tuple, Sequence, Dict, List, Callable
 
 from returnn.util.basic import Entity
 from returnn.util import basic as util
@@ -360,7 +360,7 @@ class _DimMixin:
         """
         self.reset_raw()
 
-    def reset_raw(self):
+    def reset_raw(self: Dim):
         """
         Reset all raw tensors.
         """
@@ -371,7 +371,7 @@ class _DimMixin:
             self._extra.cache_dyn_size_ext_dev.clear()
             self._extra.cache_seq_mask.clear()
 
-    def reset_batch_and_raw(self):
+    def reset_batch_and_raw(self: Dim):
         """
         Reset batch and raw tensors.
         """
@@ -379,6 +379,23 @@ class _DimMixin:
         self.reset_raw()
         if self.dyn_size_ext:
             self.dyn_size_ext.reset()
+
+    def transform_tensors(self: Dim, func: Callable[[_t.Tensor], None]):
+        """
+        Transforms all tensors inplace, e.g. Numpy to PyTorch or so.
+        Resets all caches.
+
+        :param func: operates inplace
+        """
+        dyn_size_ext = self.dyn_size_ext.copy() if self.dyn_size_ext else None
+        dyn_size_ext_max = self._dyn_size_max_value if self._dyn_size_max_value else None
+        self.reset_raw()
+        if dyn_size_ext:
+            func(dyn_size_ext)
+        if dyn_size_ext_max:
+            func(dyn_size_ext_max)
+        self.dyn_size_ext = dyn_size_ext
+        self._dyn_size_max_value = dyn_size_ext_max
 
     def _can_use_in_ctx(self, ctx):
         """
