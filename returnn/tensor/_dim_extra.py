@@ -358,12 +358,27 @@ class _DimMixin:
         This resets everything related.
         This can also include caches.
         """
+        self.reset_raw()
+
+    def reset_raw(self):
+        """
+        Reset all raw tensors.
+        """
         self._dyn_size_max_value = None
         if self.dyn_size_ext:
             self.dyn_size_ext.raw_tensor = None
         if self._extra:
             self._extra.cache_dyn_size_ext_dev.clear()
             self._extra.cache_seq_mask.clear()
+
+    def reset_batch_and_raw(self):
+        """
+        Reset batch and raw tensors.
+        """
+        self.reset_batch_ctx()
+        self.reset_raw()
+        if self.dyn_size_ext:
+            self.dyn_size_ext.reset()
 
     def _can_use_in_ctx(self, ctx):
         """
@@ -396,17 +411,7 @@ class _DimMixin:
             self._dyn_size_max_value and not self._dyn_size_max_value.is_valid_in_current_graph()
         ):  # maybe from an earlier run which reuses the dim tag
             # Reset and cleanup.
-            if self.dyn_size_ext:
-                self.dyn_size_ext = self.dyn_size_ext.copy_template()
-                self.dyn_size_ext.batch = None
-            self._dyn_size_max_value = None
-            same_base = self.get_same_base()
-            # noinspection PyProtectedMember
-            if same_base._extra:
-                # noinspection PyProtectedMember
-                same_base._extra.same_for_batch_ctx.pop((self.batch, self.control_flow_ctx), None)
-            self.batch = None  # it is invalid in the new graph
-            self.control_flow_ctx = None  # also invalid
+            self.reset_batch_ctx()
             return False
         return True
 
@@ -649,6 +654,7 @@ class _DimMixin:
         if self.dyn_size_ext and self.dyn_size_ext.batch:
             self.dyn_size_ext = self.dyn_size_ext.copy_template()
             self.dyn_size_ext.batch = None
+        self._dyn_size_max_value = None
 
     def set_dyn_size_ext_for_batch_ctx(self, batch, ctx, dyn_size_ext):
         """

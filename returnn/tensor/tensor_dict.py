@@ -65,13 +65,7 @@ class TensorDict:
                     dims_set.add(dim)
                     dims.append(dim)
         for dim in dims:
-            dim.batch = None
-            if dim.dyn_size_ext:
-                dim.dyn_size_ext.reset()
-            # noinspection PyProtectedMember
-            if dim._dyn_size_max_value:
-                dim._dyn_size_max_value = None
-            dim.reset_eager()
+            dim.reset_batch_and_raw()
 
     def copy_template(self) -> TensorDict:
         """copy template"""
@@ -147,7 +141,7 @@ class TensorDict:
                 if duplicate_dims_are_excluded and dim in visited_dims:
                     continue
                 key_ = f"{key}:size{i}"
-                dim._dyn_size_max_value = None
+                dim.reset_raw()
                 if dim.is_batch_dim() and not dim.dyn_size_ext:
                     dim.dyn_size_ext = Tensor("batch", [], dtype="int32")
                 if dim.dyn_size_ext:
