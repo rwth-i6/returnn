@@ -121,6 +121,8 @@ class _DimExtra:
         d = vars(self).copy()
         d["batch"] = None
         d["same_for_batch_ctx"] = {}
+        d["cache_dyn_size_ext_dev"] = {}
+        d["cache_seq_mask"] = {}
         d["kind"] = self.kind.name if self.kind else None
         return d
 
@@ -317,7 +319,12 @@ class _DimMixin:
             return "batch_dim"
         if self == _d.single_step_dim:
             return "single_step_dim"
-        return super().__reduce_ex__(protocol)
+        func, args, (vs, slots), *more_args = super().__reduce_ex__(protocol)
+        assert not vs
+        assert isinstance(slots, dict) and "_dyn_size_max_value" in slots
+        slots["_dyn_size_max_value"] = None
+        # noinspection PyRedundantParentheses
+        return (func, args, (vs, slots), *more_args)
 
     def copy(self, same_as_self=True, description=None, kind=None, match_priority=None):
         """

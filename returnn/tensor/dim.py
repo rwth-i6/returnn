@@ -45,7 +45,7 @@ class Dim(_DimMixin):
 
     Types = DimTypes  # old alias
 
-    __slots__ = ("name", "capacity", "size", "dyn_size_ext", "_extra")
+    __slots__ = ("name", "capacity", "size", "dyn_size_ext", "_dyn_size_max_value", "_extra")
 
     name: Optional[str]
     capacity: Optional[int]  # shape[axis] in the raw tensor (might need power-of-two or static shape), None if dynamic
