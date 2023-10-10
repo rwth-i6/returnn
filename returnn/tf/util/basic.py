@@ -5893,7 +5893,7 @@ def has_current_control_flow_context():
 
 def _get_control_flows(v, yield_none):
     """
-    :param tf.Tensor|tf.Variable|tf.Operation|int|float|None|list[tf.Tensor|tf.Variable|tf.Operation|int|float] v:
+    :param Tensor|tf.Tensor|tf.Variable|tf.Operation|int|float|None|Sequence[Tensor|tf.Tensor|tf.Variable|tf.Operation|int|float] v:  # noqa
     :param bool yield_none: the default context is None. specifies whether we should return that
     :return: yields control flow contexts
     :rtype: typing.Iterator[tensorflow.python.ops.control_flow_ops.ControlFlowContext|None]
@@ -5912,6 +5912,8 @@ def _get_control_flows(v, yield_none):
         if yield_none:
             yield None
         return
+    if isinstance(v, Tensor):
+        v = v.raw_tensor
     if isinstance(v, (tf.Tensor, tf.Variable)):
         v = v.op
     assert isinstance(v, tf.Operation), "unexpected type %r" % type(v)
@@ -5930,7 +5932,7 @@ def _get_control_flows(v, yield_none):
 
 def _get_control_flow_graphs(v):
     """
-    :param tf.Tensor|tf.Variable|tf.Operation|int|float|None|list[tf.Tensor|tf.Variable|tf.Operation|int|float] v:
+    :param Tensor|tf.Tensor|tf.Variable|tf.Operation|int|float|None|Sequence[Tensor|tf.Tensor|tf.Variable|tf.Operation|int|float] v:  # noqa
     :return: yields control flow contexts
     :rtype: typing.Iterator[tensorflow.python.ops.control_flow_v2_func_graphs.ControlFlowFuncGraph]
     """
@@ -5947,6 +5949,8 @@ def _get_control_flow_graphs(v):
         return
     if isinstance(v, (int, float, numpy.integer, type(None))):
         return
+    if isinstance(v, Tensor):
+        v = v.raw_tensor
     if isinstance(v, (tf.Tensor, tf.Variable)):
         v = v.op
     assert isinstance(v, tf.Operation), "unexpected type %r" % type(v)
@@ -5979,7 +5983,7 @@ def same_control_flow_ctx(x):
 
     See also :func:`default_control_flow_ctx`.
 
-    :param tf.Tensor|tf.Operation|int|float|None|list[tf.Tensor|tf.Operation|int|float] x:
+    :param Tensor|tf.Tensor|tf.Operation|int|float|None|Sequence[Tensor|tf.Tensor|tf.Operation|int|float] x:
     :return: yields context (via tf.control_dependencies)
     """
     if tf_compat.executing_eagerly():
