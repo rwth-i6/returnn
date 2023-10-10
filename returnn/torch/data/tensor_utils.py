@@ -26,8 +26,7 @@ def tensor_numpy_to_torch_(x: Tensor[numpy.ndarray]):
         assert isinstance(x.raw_tensor, numpy.ndarray)
         x.raw_tensor = torch.from_numpy(x.raw_tensor)
     for dim in x.dims:
-        if dim.dyn_size_ext:
-            tensor_numpy_to_torch_(dim.dyn_size_ext)
+        dim.transform_tensors(tensor_numpy_to_torch_)
 
 
 def tensor_dict_torch_to_numpy_(x: TensorDict):
@@ -48,5 +47,4 @@ def tensor_torch_to_numpy_(x: Tensor[torch.Tensor]):
         assert isinstance(x.raw_tensor, torch.Tensor)
         x.raw_tensor = x.raw_tensor.detach().cpu().numpy()
     for dim in x.dims:
-        if dim.dyn_size_ext:
-            tensor_torch_to_numpy_(dim.dyn_size_ext)
+        dim.transform_tensors(tensor_torch_to_numpy_)
