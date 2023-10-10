@@ -1838,7 +1838,7 @@ class _DimMixin:
             return self._dyn_size_max_value
         if (
             self._extra
-            and self._extra.src_data is not None
+            and self._extra.src_data
             and self._extra.src_axis is not None
             and self._extra.src_data.placeholder is not None
         ):
