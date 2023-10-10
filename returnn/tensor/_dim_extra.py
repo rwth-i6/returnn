@@ -1879,9 +1879,7 @@ class _DimMixin:
             if isinstance(res, int):
                 return res
             if res is not None:
-                res = _t.Tensor("batch", dims=(), dtype=rf.get_default_array_index_dtype(), raw_tensor=res)
-                self._dyn_size_max_value = res
-                return res
+                return _t.Tensor("batch", dims=(), dtype=rf.get_default_array_index_dtype(), raw_tensor=res)
         raise Exception("%s: need placeholder, self.dimension or self.dyn_size for dim value" % self)
 
     def axis_split_info(self):
