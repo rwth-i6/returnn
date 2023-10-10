@@ -2173,7 +2173,7 @@ class _TensorMixin(_TensorMixinBase):
             return self.batch_shape[axis]
         assert self._raw_tensor is not None
         backend = self._raw_backend
-        return backend.get_shape_raw(self._raw_tensor)[axis]
+        return backend.get_shape_tuple_raw(self._raw_tensor)[axis]
 
     def get_placeholder_as_time_major(self):
         """

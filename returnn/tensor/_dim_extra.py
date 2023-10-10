@@ -403,7 +403,7 @@ class _DimMixin:
                 return False
         return True
 
-    def _validate_in_current_graph(self):
+    def _validate_in_current_graph(self: Dim):
         """
         :rtype: bool
         """
@@ -1821,7 +1821,7 @@ class _DimMixin:
         assert isinstance(res, int)
         return res
 
-    def get_dim_value_tensor(self) -> Union[int, _t.Tensor]:
+    def get_dim_value_tensor(self: Dim) -> Union[int, _t.Tensor]:
         """
         Infers the dim this axis should have if unbroadcasted.
         If `self.src_data` has a placeholder, will use the shape from there.
