@@ -28,6 +28,10 @@ def tensor_numpy_to_torch_(x: Tensor[numpy.ndarray]):
     for dim in x.dims:
         if dim.dyn_size_ext:
             tensor_numpy_to_torch_(dim.dyn_size_ext)
+        # noinspection PyProtectedMember
+        if dim._dyn_size_max_value:
+            # noinspection PyProtectedMember
+            tensor_numpy_to_torch_(dim._dyn_size_max_value)
 
 
 def tensor_dict_torch_to_numpy_(x: TensorDict):
@@ -50,3 +54,7 @@ def tensor_torch_to_numpy_(x: Tensor[torch.Tensor]):
     for dim in x.dims:
         if dim.dyn_size_ext:
             tensor_torch_to_numpy_(dim.dyn_size_ext)
+        # noinspection PyProtectedMember
+        if dim._dyn_size_max_value:
+            # noinspection PyProtectedMember
+            tensor_torch_to_numpy_(dim._dyn_size_max_value)

@@ -78,6 +78,7 @@ def _register_dim_deps_when_novel(dim: Dim, deps: List[Tensor]):
         # and then set the dyn_size_ext.raw_tensor to that layer.
         # Then using dyn_size_ext directly is possible also in the TF net dict backend.
         assert dim.dyn_size_ext.raw_tensor is None
+        dim._dyn_size_max_value = None
         rfl.make_layer(
             {"class": "length", "from": deps, "axis": dim, "dtype": dim.dyn_size_ext.dtype},
             name=dim.dyn_size_ext.name,
