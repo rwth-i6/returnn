@@ -309,7 +309,7 @@ def register_extern_data(data: Tensor[rfl.Layer]):
             # Undefined dynamic dim tag. Set default data template.
             orig_tag.dyn_size_ext = tag.dyn_size_ext = Tensor(
                 name=f"{tag.name or (data.name + f'[{i}]')}_default_dyn_size_ext",
-                dim_tags=[batch_dim],
+                dims=[batch_dim],
                 dtype=data.size_dtype,
                 batch=data.batch,
             )
@@ -317,7 +317,7 @@ def register_extern_data(data: Tensor[rfl.Layer]):
             # Undefined batch dim tag. Set default data template.
             batch_dim.dyn_size_ext = orig_tag.dyn_size_ext = tag.dyn_size_ext = Tensor(
                 name=f"batch_dim_default_dyn_size_ext",
-                dim_tags=[],
+                dims=[],
                 dtype=data.size_dtype,
                 batch=data.batch,
             )

@@ -111,6 +111,7 @@ def get_net_dict(
             # Reset it now. The TF engine should redefine it again.
             if elem.dyn_size_ext:
                 elem.dyn_size_ext.raw_tensor = None
+            elem._dyn_size_max_value = None
         return elem
 
     # Do some cleanup.

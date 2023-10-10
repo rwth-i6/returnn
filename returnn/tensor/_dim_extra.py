@@ -1830,18 +1830,6 @@ class _DimMixin:
         if self._dyn_size_max_value is not None:  # fast path, precomputed
             assert self._dyn_size_max_value.raw_tensor is not None
             return self._dyn_size_max_value
-        if self.is_batch_dim():
-            res = None
-            if self._extra and self._extra.src_data:
-                res = self._extra.src_data.get_batch_dim()
-            elif self.batch:
-                res = self.batch.dim
-            if isinstance(res, int):
-                return res
-            if res is not None:
-                res = _t.Tensor("batch", dims=(), dtype=rf.get_default_array_index_dtype(), raw_tensor=res)
-                self._dyn_size_max_value = res
-                return res
         if (
             self._extra
             and self._extra.src_data is not None
@@ -1876,6 +1864,18 @@ class _DimMixin:
             assert res.raw_tensor is not None
             self._dyn_size_max_value = res
             return res
+        if self.is_batch_dim():
+            res = None
+            if self._extra and self._extra.src_data:
+                res = self._extra.src_data.get_batch_dim()
+            elif self.batch:
+                res = self.batch.dim
+            if isinstance(res, int):
+                return res
+            if res is not None:
+                res = _t.Tensor("batch", dims=(), dtype=rf.get_default_array_index_dtype(), raw_tensor=res)
+                self._dyn_size_max_value = res
+                return res
         raise Exception("%s: need placeholder, self.dimension or self.dyn_size for dim value" % self)
 
     def axis_split_info(self):
