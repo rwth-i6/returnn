@@ -1291,7 +1291,7 @@ static PyObject* compareOrCombine(
                         if(d == a) return i;
                         int eq = PyObject_RichCompareBool(a, d, Py_EQ);
                         if(eq < 0) { hadError = true; return 0; }
-                        else if(eq == 0) return i;
+                        if(eq) return i;
                     }
                     return dimOrderSeq.size();
                 }
