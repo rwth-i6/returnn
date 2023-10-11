@@ -20,6 +20,7 @@ from .state import *
 # Now the rest, in alphabetical order.
 from .array_ import *
 from .attention import *
+from .backend import *
 from .cond import *
 from .const import *
 from .container import *
@@ -49,6 +50,3 @@ from .types import *
 # Modules not in the main namespace but in sub namespaces.
 from . import audio
 from . import init
-
-# And some functions from the internal backend API.
-from ._backend import select_backend_torch, select_backend_returnn_layers_tf
