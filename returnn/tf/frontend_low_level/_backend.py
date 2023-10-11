@@ -346,7 +346,9 @@ class TFBackend(Backend[tf.Tensor]):
                             data + ["-> invalid shape[%i] or max(dyn_size[%i])" % (i, i)],
                         )
                     ]
-                    checks += [dyn_size_ext.get_runtime_sanity_check_op()]
+                    dyn_size_ext_sanity_checks_op = dyn_size_ext.get_runtime_sanity_check_op()
+                    assert dyn_size_ext_sanity_checks_op is not None, f"{dyn_size_ext} {dyn_size_ext.raw_tensor}?"
+                    checks += [dyn_size_ext_sanity_checks_op]
             return tf.group(*checks)
 
     @staticmethod
