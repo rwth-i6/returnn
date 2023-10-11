@@ -155,21 +155,25 @@ PyObject* tensorCopyTemplateSimple(
     if(!dtype) return NULL;
     PyObjectScopedRef dims = PyObject_GetAttrString(tensor, "_dims");
     if(!dims) return NULL;
-    PyObjectScopedRef feature_dim_axis = PyObject_GetAttrString(tensor, "_feature_dim_axis");
-    if(!feature_dim_axis) return NULL;
-    PyObjectScopedRef sparse_dim = PyObject_GetAttrString(tensor, "sparse_dim");
-    if(!sparse_dim) return NULL;
 
     PyObjectScopedRef res = PyObject_CallFunctionObjArgs(
         modState->tensorType(), name.get(), dims.get(), dtype.get(), NULL);
     if(!res) return NULL;
 
-    if(feature_dim_axis != Py_None)
-        if(PyObject_SetAttrString(res, "_feature_dim_axis", feature_dim_axis) < 0)
-            return NULL;
-    if(sparse_dim != Py_None)
-        if(PyObject_SetAttrString(res, "sparse_dim", sparse_dim) < 0)
-            return NULL;
+    {
+        PyObjectScopedRef feature_dim_axis = PyObject_GetAttrString(tensor, "_feature_dim_axis");
+        if(!feature_dim_axis) return NULL;
+        if(feature_dim_axis != Py_None)
+            if(PyObject_SetAttrString(res, "_feature_dim_axis", feature_dim_axis) < 0)
+                return NULL;
+    }
+    if(!dtype_) {
+        PyObjectScopedRef sparse_dim = PyObject_GetAttrString(tensor, "sparse_dim");
+        if(!sparse_dim) return NULL;
+        if(sparse_dim != Py_None)
+            if(PyObject_SetAttrString(res, "sparse_dim", sparse_dim) < 0)
+                return NULL;
+    }
     return res.release();
 }
 
@@ -1340,7 +1344,7 @@ static PyObject* compareOrCombine(
                     return NULL;
         }
 
-        {
+        if(!resultIsBool) {
             PyObjectScopedRef sparseDim = _consistentSparseDim(a, b);
             if(!sparseDim) return NULL;
             if(sparseDim != Py_None)
