@@ -805,8 +805,11 @@ class _DimMixin:
             device = rf.get_default_device()
 
         self._make_extra()
+        dim_order_default = self.dyn_size_ext.dims + (self,)
         if dim_order is not None:
-            dim_order = tuple(dim_order)
+            dim_order = tuple(d for d in dim_order if d in dim_order_default)  # filter
+        else:
+            dim_order = dim_order_default
         cache_key = (device, dim_order)
         if cache_key in self._extra.cache_seq_mask:
             return self._extra.cache_seq_mask[cache_key]
