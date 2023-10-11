@@ -363,7 +363,7 @@ class _DimMixin:
         """
         self.reset_raw()
 
-    def reset_raw(self: Dim):
+    def reset_raw(self: Dim, *, only_self: bool = False):
         """
         Reset all raw tensors.
         """
@@ -382,6 +382,9 @@ class _DimMixin:
             if dim_extra:
                 dim_extra.cache_dyn_size_ext_dev.clear()
                 dim_extra.cache_seq_mask.clear()
+            if only_self:
+                return
+            if dim_extra:
                 # Any dims via dim math could also contain raw tensors,
                 # so iterate through them.
                 queue += dim_extra.cache_dim_math.values()
@@ -389,6 +392,8 @@ class _DimMixin:
                     queue.append(dim_extra.same_as)
                 if dim_extra.copy_same_as:
                     queue.append(dim_extra.copy_same_as)
+                if dim_extra.derived_from_op:
+                    queue += dim_extra.derived_from_op.inputs
 
     def reset_batch_and_raw(self: Dim):
         """
@@ -408,7 +413,7 @@ class _DimMixin:
         """
         dyn_size_ext = self.dyn_size_ext.copy() if self.dyn_size_ext else None
         dyn_size_ext_max = self._dyn_size_max_value if self._dyn_size_max_value else None
-        self.reset_raw()
+        self.reset_raw(only_self=True)
         if dyn_size_ext:
             func(dyn_size_ext)
         if dyn_size_ext_max:
