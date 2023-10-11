@@ -51,6 +51,7 @@ def is_int(x: Union[T, Tensor[T], int, float]) -> bool:
     return dtype.startswith("int") or dtype.startswith("uint")
 
 
+# There is a native implementation of this (_native tensorCopyTemplateSimple, compareAndCombine).
 def bin_op_out_template(
     backend: Type[Backend],
     a: Union[Tensor[T], int, float, numpy.number],
@@ -124,11 +125,10 @@ def bin_op_out_template(
             raise TypeError(f"invalid type for allow_broadcast_all_sources: {type(allow_broadcast_all_sources)}")
     if dim_order:
         all_dims.sort(key=lambda d: dim_order.index(d) if d in dim_order else len(dim_order))
-    if res_dtype is None:
-        res_dtype = src_dtype
-    out = Tensor(name, dims=all_dims, dtype=res_dtype)
+    out = Tensor(name, dims=all_dims, dtype=res_dtype or src_dtype)
     out.feature_dim = res_feature_dim(a, b)
-    out.sparse_dim = res_sparse_dim(a, b)
+    if not res_dtype:
+        out.sparse_dim = res_sparse_dim(a, b)
     if not allow_scalar or a.dims:
         a_raw = a.copy_compatible_to_dims_raw(all_dims)
     else:
