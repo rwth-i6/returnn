@@ -2010,7 +2010,7 @@ class _DimMixin:
         :return: other + self
         :rtype: Dim
         """
-        cache_key = ("radd", other)
+        cache_key = ("add_left", other)
         cache = self._make_extra().cache_dim_math
         if cache_key in cache:
             return cache[cache_key]
@@ -2049,7 +2049,7 @@ class _DimMixin:
         :return: (-other) + self
         :rtype: Dim
         """
-        cache_key = ("rsub", other)
+        cache_key = ("sub_left", other)
         cache = self._make_extra().cache_dim_math
         if cache_key in cache:
             return cache[cache_key]
@@ -2079,7 +2079,7 @@ class _DimMixin:
         :param Dim|int other:
         :rtype: Dim
         """
-        cache_key = ("rmul", other)
+        cache_key = ("mul_left", other)
         cache = self._make_extra().cache_dim_math
         if cache_key in cache:
             return cache[cache_key]
@@ -2116,7 +2116,7 @@ class _DimMixin:
         :param Dim|int other:
         :rtype: Dim
         """
-        cache_key = ("rtruediv", other)
+        cache_key = ("truediv_left", other)
         cache = self._make_extra().cache_dim_math
         if cache_key in cache:
             return cache[cache_key]
@@ -2146,7 +2146,7 @@ class _DimMixin:
         :param Dim|int other:
         :rtype: Dim
         """
-        cache_key = ("rceildiv", other)
+        cache_key = ("ceildiv_left", other)
         cache = self._make_extra().cache_dim_math
         if cache_key in cache:
             return cache[cache_key]
