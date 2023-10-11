@@ -86,6 +86,7 @@ class _DimExtra:
         self.kind = kind
         self.vocab = vocab
         self.same_as = None  # type: Optional[_d.Dim]
+        self.copy_same_as = None  # type: Optional[_d.Dim]
         self.derived_from_tag = derived_from_tag
         self.derived_from_op = derived_from_op
         if derived_from_op and not derived_from_op.output:
@@ -115,8 +116,8 @@ class _DimExtra:
         # They each have same_as = self. The same_base should have the base (global) batch info.
         self.same_for_batch_ctx = {}  # type: Dict[Tuple[BatchInfo,Optional[ControlFlowContext]],_d.Dim]
         self.cache_dyn_size_ext_dev = {}  # type: Dict[str,_t.Tensor]  # device -> dyn_size_ext
-        self.cache_seq_mask = {}  # type: Dict[str,_t.Tensor]  # device -> seq_mask
-        self.cache_dim_math: Dict[Tuple[str, Optional[Union[Dim, int]]], Dim] = {}  # op (add,sub,...), operand -> Dim
+        self.cache_seq_mask: Dict[Tuple[str, Optional[Tuple[Dim, ...]]], _t.Tensor] = {}  # (dev,dim_order) -> seq_mask
+        self.cache_dim_math: Dict[Tuple[str, Union[Dim, int]], Dim] = {}  # op (add,sub,...), operand -> Dim
 
     def __getstate__(self):
         d = vars(self).copy()
@@ -801,8 +802,19 @@ class _DimMixin:
         if not device:
             device = rf.get_default_device()
 
-        if self._extra and device in self._extra.cache_seq_mask:
-            return self._extra.cache_seq_mask[device]
+        self._make_extra()
+        if dim_order is not None:
+            dim_order = tuple(dim_order)
+        cache_key = (device, dim_order)
+        if cache_key in self._extra.cache_seq_mask:
+            return self._extra.cache_seq_mask[cache_key]
+
+        if self._extra.copy_same_as:
+            if dim_order:
+                dim_order = tuple(self._extra.copy_same_as if d == self else d for d in dim_order)
+            mask = self._extra.copy_same_as.get_mask(dim_order=dim_order, device=device)
+            mask, _ = rf.replace_dim(mask, in_dim=self._extra.copy_same_as, out_dim=self)
+            return mask
 
         size_ext = self._get_dyn_size_ext_for_device(device)
 
@@ -826,7 +838,7 @@ class _DimMixin:
         with rf.set_default_device_ctx(device):
             idx_range = backend.range_over_dim(self)
         seq_mask = rf.compare(idx_range, "<", size_ext, allow_broadcast_all_sources=True, dim_order=dim_order)
-        self._make_extra().cache_seq_mask[device] = seq_mask
+        self._extra.cache_seq_mask[cache_key] = seq_mask
         return seq_mask
 
     def is_batch_dim(self):
@@ -1708,7 +1720,7 @@ class _DimMixin:
             other._extra.same_for_batch_ctx.clear()  # we only want to have it once
 
     # noinspection PyProtectedMember
-    def derive_from(self: _d.Dim, base: _d.Dim, set_derived_from_flag: bool = True):
+    def derive_from(self: _d.Dim, base: _d.Dim, *, set_derived_from_flag: bool = True):
         """
         :param base: dim
         :param set_derived_from_flag:
@@ -1742,6 +1754,7 @@ class _DimMixin:
         self.capacity = other.capacity
         self.dyn_size_ext = other.dyn_size_ext
         self.derive_from(other)
+        self._make_extra().copy_same_as = other
 
     @classmethod
     def get_existing_tag_from_collection(cls, other, tags, is_equal_opts=None):
