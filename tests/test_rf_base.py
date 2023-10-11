@@ -208,6 +208,39 @@ def test_dim_value():
     run_model(extern_data, lambda *, epoch, step: _Net(), _forward_step)
 
 
+def test_dim_mask():
+    time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
+    in_dim = Dim(7, name="in")
+    extern_data = TensorDict(
+        {
+            "data": Tensor("data", [batch_dim, time_dim, in_dim], dtype="float32"),
+        }
+    )
+
+    class _Net(rf.Module):
+        def __call__(self, x: Tensor) -> Tensor:
+            mask1 = time_dim.get_mask()
+            mask1.verify_out_shape({batch_dim, time_dim})
+            mask2 = time_dim.get_mask()
+            assert mask1 is mask2  # cache
+            time_dim_copy = Dim(None, name="time_copy")
+            time_dim_copy.copy_from(time_dim)
+            assert time_dim_copy != time_dim
+            mask3 = time_dim_copy.get_mask()
+            mask3.verify_out_shape({batch_dim, time_dim_copy})
+            assert mask1 is not mask3  # other dims
+            if rf.is_backend_raw_tensor_dim_tag_independent():
+                assert mask1.raw_tensor is mask3.raw_tensor  # cache even across copy
+            return mask1
+
+    # noinspection PyShadowingNames
+    def _forward_step(*, model: _Net, extern_data: TensorDict):
+        out = model(extern_data["data"])
+        out.mark_as_default_output(shape=(batch_dim, time_dim))
+
+    run_model(extern_data, lambda *, epoch, step: _Net(), _forward_step)
+
+
 def test_param_assign():
     time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
     in_dim = Dim(7, name="in")
