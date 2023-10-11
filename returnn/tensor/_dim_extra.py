@@ -373,6 +373,8 @@ class _DimMixin:
         if self._extra:
             self._extra.cache_dyn_size_ext_dev.clear()
             self._extra.cache_seq_mask.clear()
+            # Any dims via dim math could also contain raw tensors, so just clean that as well.
+            self._extra.cache_dim_math.clear()
 
     def reset_batch_and_raw(self: Dim):
         """
