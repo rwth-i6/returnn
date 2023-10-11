@@ -367,14 +367,28 @@ class _DimMixin:
         """
         Reset all raw tensors.
         """
-        self._dyn_size_max_value = None
-        if self.dyn_size_ext:
-            self.dyn_size_ext.raw_tensor = None
-        if self._extra:
-            self._extra.cache_dyn_size_ext_dev.clear()
-            self._extra.cache_seq_mask.clear()
-            # Any dims via dim math could also contain raw tensors, so just clean that as well.
-            self._extra.cache_dim_math.clear()
+        visited = set()  # ids
+        queue = [self]
+        while queue:
+            dim: Dim = queue.pop()
+            if id(dim) in visited:
+                continue
+            visited.add(id(dim))
+            dim._dyn_size_max_value = None
+            if dim.dyn_size_ext:
+                dim.dyn_size_ext.raw_tensor = None
+            # noinspection PyProtectedMember
+            dim_extra = dim._extra
+            if dim_extra:
+                dim_extra.cache_dyn_size_ext_dev.clear()
+                dim_extra.cache_seq_mask.clear()
+                # Any dims via dim math could also contain raw tensors,
+                # so iterate through them.
+                queue += dim_extra.cache_dim_math.values()
+                if dim_extra.same_as:
+                    queue.append(dim_extra.same_as)
+                if dim_extra.copy_same_as:
+                    queue.append(dim_extra.copy_same_as)
 
     def reset_batch_and_raw(self: Dim):
         """
@@ -673,7 +687,6 @@ class _DimMixin:
             self._extra.same_for_batch_ctx.pop((self.batch, self.control_flow_ctx), None)
             self._extra.cache_seq_mask.clear()
             self._extra.cache_dyn_size_ext_dev.clear()
-            self._extra.cache_dim_math.clear()
         self.batch = None
         self.control_flow_ctx = None
         if self.dyn_size_ext and self.dyn_size_ext.batch:
