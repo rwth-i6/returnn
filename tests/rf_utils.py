@@ -230,7 +230,7 @@ def _pad_mask_zeros(x: Union[TensorDict, Tensor, Dim]):
                 print(f"Warning: cannot apply mask {mask} for dim {d} on tensor {x}.")
                 continue
             mask_raw = mask.copy_compatible_to_dims_raw(x.dims)
-            x.raw_tensor = numpy.where(mask_raw, x.raw_tensor, 0)
+            x.raw_tensor = numpy.where(mask_raw, x.raw_tensor, numpy.zeros((), dtype=x.raw_tensor.dtype))
 
 
 def _check_dim(d_pt: Dim, d_tf: Dim):
