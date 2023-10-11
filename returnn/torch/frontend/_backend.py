@@ -958,26 +958,34 @@ class TorchBackend(Backend[torch.Tensor]):
 
         reduce_axes_total_dimension = prod(reduce_axes_shape)
 
-        a_raw = torch.permute(a_raw, a_common_axes + a_unique_axes + a_reduce_axes)
-        b_raw = torch.permute(b_raw, b_common_axes + b_reduce_axes + b_unique_axes)
+        # First check whether we can use torch.nn.functional.linear.
+        if len(b_common_axes) == 0 and len(b_reduce_axes) == 1 and len(b_unique_axes) == 1:
+            a_raw = torch.permute(a_raw, a_unique_axes + a_reduce_axes)
+            b_raw = torch.permute(b_raw, b_unique_axes + b_reduce_axes)
 
-        if common_axes_total_dimension == 1:  # standard matrix multiplication
-            a_raw = torch.reshape(a_raw, (a_unique_axes_total_dimension, reduce_axes_total_dimension))
-            b_raw = torch.reshape(b_raw, (reduce_axes_total_dimension, b_unique_axes_total_dimension))
+            raw_result = torch.nn.functional.linear(a_raw, b_raw)
 
-            raw_result = torch.mm(a_raw, b_raw)
+        else:
+            a_raw = torch.permute(a_raw, a_common_axes + a_unique_axes + a_reduce_axes)
+            b_raw = torch.permute(b_raw, b_common_axes + b_reduce_axes + b_unique_axes)
 
-        else:  # batched matrix multiplication
-            a_raw = torch.reshape(
-                a_raw, (common_axes_total_dimension, a_unique_axes_total_dimension, reduce_axes_total_dimension)
-            )
-            b_raw = torch.reshape(
-                b_raw, (common_axes_total_dimension, reduce_axes_total_dimension, b_unique_axes_total_dimension)
-            )
+            if common_axes_total_dimension == 1:  # standard matrix multiplication
+                a_raw = torch.reshape(a_raw, (a_unique_axes_total_dimension, reduce_axes_total_dimension))
+                b_raw = torch.reshape(b_raw, (reduce_axes_total_dimension, b_unique_axes_total_dimension))
 
-            raw_result = torch.bmm(a_raw, b_raw)
+                raw_result = torch.mm(a_raw, b_raw)
 
-        raw_result = torch.reshape(raw_result, common_axes_shape + a_unique_axes_shape + b_unique_axes_shape)
+            else:  # batched matrix multiplication
+                a_raw = torch.reshape(
+                    a_raw, (common_axes_total_dimension, a_unique_axes_total_dimension, reduce_axes_total_dimension)
+                )
+                b_raw = torch.reshape(
+                    b_raw, (common_axes_total_dimension, reduce_axes_total_dimension, b_unique_axes_total_dimension)
+                )
+
+                raw_result = torch.bmm(a_raw, b_raw)
+
+            raw_result = torch.reshape(raw_result, common_axes_shape + a_unique_axes_shape + b_unique_axes_shape)
 
         a_unique_dims = [a_dims[i] for i in a_unique_axes]
         b_unique_dims = [b_dims[i] for i in b_unique_axes]
