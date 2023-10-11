@@ -37,6 +37,7 @@ class ReturnnLayersBackend(Backend[Layer]):
 
     RawTensorType = Layer
     is_tensorflow = True
+    is_backend_raw_tensor_dim_tag_independent = False
 
     @staticmethod
     def executing_eagerly() -> bool:

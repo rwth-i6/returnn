@@ -27,6 +27,7 @@ class Backend(Generic[T]):
     # class attribs set by derived classes
     RawTensorType: Type[T]
     is_tensorflow: bool = False  # whether this framework uses TensorFlow
+    is_backend_raw_tensor_dim_tag_independent: bool = True  # whether raw tensors of backend are independent of Dim
 
     def __init__(self):
         raise Exception("do not instantiate this class")
