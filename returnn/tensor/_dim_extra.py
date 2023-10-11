@@ -116,6 +116,7 @@ class _DimExtra:
         self.same_for_batch_ctx = {}  # type: Dict[Tuple[BatchInfo,Optional[ControlFlowContext]],_d.Dim]
         self.cache_dyn_size_ext_dev = {}  # type: Dict[str,_t.Tensor]  # device -> dyn_size_ext
         self.cache_seq_mask = {}  # type: Dict[str,_t.Tensor]  # device -> seq_mask
+        self.cache_dim_math: Dict[Tuple[str, Optional[Union[Dim, int]]], Dim] = {}  # op (add,sub,...), operand -> Dim
 
     def __getstate__(self):
         d = vars(self).copy()
@@ -123,6 +124,7 @@ class _DimExtra:
         d["same_for_batch_ctx"] = {}
         d["cache_dyn_size_ext_dev"] = {}
         d["cache_seq_mask"] = {}
+        d["cache_dim_math"] = {}
         d["kind"] = self.kind.name if self.kind else None
         return d
 
@@ -1971,9 +1973,15 @@ class _DimMixin:
         :return: self + other. note that this is not commutative, i.e. different from other + self.
         :rtype: Dim
         """
+        cache_key = ("add", other)
+        cache = self._make_extra().cache_dim_math
+        if cache_key in cache:
+            return cache[cache_key]
         term = _OpLinearTerm.from_dim(self)
         term.extend_add_sub_(other, kind="add", right=True)
-        return term.as_dim()
+        dim = term.as_dim()
+        cache[cache_key] = dim
+        return dim
 
     def __radd__(self: Dim, other):
         """
@@ -1981,9 +1989,15 @@ class _DimMixin:
         :return: other + self
         :rtype: Dim
         """
+        cache_key = ("radd", other)
+        cache = self._make_extra().cache_dim_math
+        if cache_key in cache:
+            return cache[cache_key]
         term = _OpLinearTerm.from_dim(self)
         term.extend_add_sub_(other, kind="add", right=False)
-        return term.as_dim()
+        dim = term.as_dim()
+        cache[cache_key] = dim
+        return dim
 
     def __sub__(self, other):
         """
@@ -1998,9 +2012,15 @@ class _DimMixin:
         :return: self - other
         :rtype: Dim
         """
+        cache_key = ("sub", other)
+        cache = self._make_extra().cache_dim_math
+        if cache_key in cache:
+            return cache[cache_key]
         term = _OpLinearTerm.from_dim(self)
         term.extend_add_sub_(other, kind="sub", right=True)
-        return term.as_dim()
+        dim = term.as_dim()
+        cache[cache_key] = dim
+        return dim
 
     def sub_left(self: Dim, other):
         """
@@ -2008,36 +2028,60 @@ class _DimMixin:
         :return: (-other) + self
         :rtype: Dim
         """
+        cache_key = ("rsub", other)
+        cache = self._make_extra().cache_dim_math
+        if cache_key in cache:
+            return cache[cache_key]
         term = _OpLinearTerm.from_dim(self)
         term.extend_add_sub_(other, kind="sub", right=False)
-        return term.as_dim()
+        dim = term.as_dim()
+        cache[cache_key] = dim
+        return dim
 
     def __mul__(self: Dim, other):
         """
         :param Dim|int other:
         :rtype: Dim
         """
+        cache_key = ("mul", other)
+        cache = self._make_extra().cache_dim_math
+        if cache_key in cache:
+            return cache[cache_key]
         term = _OpLinearTerm.from_dim(self)
         term.extend_mul_div_(other, kind="mul", right=True)
-        return term.as_dim()
+        dim = term.as_dim()
+        cache[cache_key] = dim
+        return dim
 
     def __rmul__(self: Dim, other):
         """
         :param Dim|int other:
         :rtype: Dim
         """
+        cache_key = ("rmul", other)
+        cache = self._make_extra().cache_dim_math
+        if cache_key in cache:
+            return cache[cache_key]
         term = _OpLinearTerm.from_dim(self)
         term.extend_mul_div_(other, kind="mul", right=False)
-        return term.as_dim()
+        dim = term.as_dim()
+        cache[cache_key] = dim
+        return dim
 
     def __floordiv__(self: Dim, other):
         """
         :param Dim|int other:
         :rtype: Dim
         """
+        cache_key = ("floordiv", other)
+        cache = self._make_extra().cache_dim_math
+        if cache_key in cache:
+            return cache[cache_key]
         term = _OpLinearTerm.from_dim(self)
         term.extend_mul_div_(other, kind="floordiv", right=True)
-        return term.as_dim()
+        dim = term.as_dim()
+        cache[cache_key] = dim
+        return dim
 
     def __truediv__(self, other):
         """
@@ -2051,36 +2095,60 @@ class _DimMixin:
         :param Dim|int other:
         :rtype: Dim
         """
+        cache_key = ("rtruediv", other)
+        cache = self._make_extra().cache_dim_math
+        if cache_key in cache:
+            return cache[cache_key]
         term = _OpLinearTerm.from_dim(self)
         term.extend_mul_div_(other, kind="truediv", right=False)
-        return term.as_dim()
+        dim = term.as_dim()
+        cache[cache_key] = dim
+        return dim
 
     def div_right(self: Dim, other):
         """
         :param Dim|int other:
         :rtype: Dim
         """
+        cache_key = ("truediv", other)
+        cache = self._make_extra().cache_dim_math
+        if cache_key in cache:
+            return cache[cache_key]
         term = _OpLinearTerm.from_dim(self)
         term.extend_mul_div_(other, kind="truediv", right=True)
-        return term.as_dim()
+        dim = term.as_dim()
+        cache[cache_key] = dim
+        return dim
 
     def ceildiv_left(self: Dim, other):
         """
         :param Dim|int other:
         :rtype: Dim
         """
+        cache_key = ("rceildiv", other)
+        cache = self._make_extra().cache_dim_math
+        if cache_key in cache:
+            return cache[cache_key]
         term = _OpLinearTerm.from_dim(self)
         term.extend_mul_div_(other, kind="ceildiv", right=False)
-        return term.as_dim()
+        dim = term.as_dim()
+        cache[cache_key] = dim
+        return dim
 
     def ceildiv_right(self: Dim, other):
         """
         :param Dim|int other:
         :rtype: Dim
         """
+        cache_key = ("ceildiv", other)
+        cache = self._make_extra().cache_dim_math
+        if cache_key in cache:
+            return cache[cache_key]
         term = _OpLinearTerm.from_dim(self)
         term.extend_mul_div_(other, kind="ceildiv", right=True)
-        return term.as_dim()
+        dim = term.as_dim()
+        cache[cache_key] = dim
+        return dim
 
     def __neg__(self):
         """
