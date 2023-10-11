@@ -668,6 +668,9 @@ class _DimMixin:
         """
         if self._extra:
             self._extra.same_for_batch_ctx.pop((self.batch, self.control_flow_ctx), None)
+            self._extra.cache_seq_mask.clear()
+            self._extra.cache_dyn_size_ext_dev.clear()
+            self._extra.cache_dim_math.clear()
         self.batch = None
         self.control_flow_ctx = None
         if self.dyn_size_ext and self.dyn_size_ext.batch:
