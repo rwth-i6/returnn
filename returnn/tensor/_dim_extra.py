@@ -116,6 +116,7 @@ class _DimExtra:
         self.same_for_batch_ctx = {}  # type: Dict[Tuple[BatchInfo,Optional[ControlFlowContext]],_d.Dim]
         self.cache_dyn_size_ext_dev = {}  # type: Dict[str,_t.Tensor]  # device -> dyn_size_ext
         self.cache_seq_mask = {}  # type: Dict[str,_t.Tensor]  # device -> seq_mask
+        self.cache_dim_math: Dict[Tuple[str, Optional[Union[Dim, int]]], Dim] = {}  # op (add,sub,...), operand -> Dim
 
     def __getstate__(self):
         d = vars(self).copy()
@@ -123,6 +124,7 @@ class _DimExtra:
         d["same_for_batch_ctx"] = {}
         d["cache_dyn_size_ext_dev"] = {}
         d["cache_seq_mask"] = {}
+        d["cache_dim_math"] = {}
         d["kind"] = self.kind.name if self.kind else None
         return d
 
@@ -666,6 +668,9 @@ class _DimMixin:
         """
         if self._extra:
             self._extra.same_for_batch_ctx.pop((self.batch, self.control_flow_ctx), None)
+            self._extra.cache_seq_mask.clear()
+            self._extra.cache_dyn_size_ext_dev.clear()
+            self._extra.cache_dim_math.clear()
         self.batch = None
         self.control_flow_ctx = None
         if self.dyn_size_ext and self.dyn_size_ext.batch:
@@ -1971,9 +1976,15 @@ class _DimMixin:
         :return: self + other. note that this is not commutative, i.e. different from other + self.
         :rtype: Dim
         """
+        cache_key = ("add", other)
+        cache = self._make_extra().cache_dim_math
+        if cache_key in cache:
+            return cache[cache_key]
         term = _OpLinearTerm.from_dim(self)
         term.extend_add_sub_(other, kind="add", right=True)
-        return term.as_dim()
+        dim = term.as_dim()
+        cache[cache_key] = dim
+        return dim
 
     def __radd__(self: Dim, other):
         """
@@ -1981,9 +1992,15 @@ class _DimMixin:
         :return: other + self
         :rtype: Dim
         """
+        cache_key = ("radd", other)
+        cache = self._make_extra().cache_dim_math
+        if cache_key in cache:
+            return cache[cache_key]
         term = _OpLinearTerm.from_dim(self)
         term.extend_add_sub_(other, kind="add", right=False)
-        return term.as_dim()
+        dim = term.as_dim()
+        cache[cache_key] = dim
+        return dim
 
     def __sub__(self, other):
         """
@@ -1998,9 +2015,15 @@ class _DimMixin:
         :return: self - other
         :rtype: Dim
         """
+        cache_key = ("sub", other)
+        cache = self._make_extra().cache_dim_math
+        if cache_key in cache:
+            return cache[cache_key]
         term = _OpLinearTerm.from_dim(self)
         term.extend_add_sub_(other, kind="sub", right=True)
-        return term.as_dim()
+        dim = term.as_dim()
+        cache[cache_key] = dim
+        return dim
 
     def sub_left(self: Dim, other):
         """
@@ -2008,36 +2031,60 @@ class _DimMixin:
         :return: (-other) + self
         :rtype: Dim
         """
+        cache_key = ("rsub", other)
+        cache = self._make_extra().cache_dim_math
+        if cache_key in cache:
+            return cache[cache_key]
         term = _OpLinearTerm.from_dim(self)
         term.extend_add_sub_(other, kind="sub", right=False)
-        return term.as_dim()
+        dim = term.as_dim()
+        cache[cache_key] = dim
+        return dim
 
     def __mul__(self: Dim, other):
         """
         :param Dim|int other:
         :rtype: Dim
         """
+        cache_key = ("mul", other)
+        cache = self._make_extra().cache_dim_math
+        if cache_key in cache:
+            return cache[cache_key]
         term = _OpLinearTerm.from_dim(self)
         term.extend_mul_div_(other, kind="mul", right=True)
-        return term.as_dim()
+        dim = term.as_dim()
+        cache[cache_key] = dim
+        return dim
 
     def __rmul__(self: Dim, other):
         """
         :param Dim|int other:
         :rtype: Dim
         """
+        cache_key = ("rmul", other)
+        cache = self._make_extra().cache_dim_math
+        if cache_key in cache:
+            return cache[cache_key]
         term = _OpLinearTerm.from_dim(self)
         term.extend_mul_div_(other, kind="mul", right=False)
-        return term.as_dim()
+        dim = term.as_dim()
+        cache[cache_key] = dim
+        return dim
 
     def __floordiv__(self: Dim, other):
         """
         :param Dim|int other:
         :rtype: Dim
         """
+        cache_key = ("floordiv", other)
+        cache = self._make_extra().cache_dim_math
+        if cache_key in cache:
+            return cache[cache_key]
         term = _OpLinearTerm.from_dim(self)
         term.extend_mul_div_(other, kind="floordiv", right=True)
-        return term.as_dim()
+        dim = term.as_dim()
+        cache[cache_key] = dim
+        return dim
 
     def __truediv__(self, other):
         """
@@ -2051,36 +2098,60 @@ class _DimMixin:
         :param Dim|int other:
         :rtype: Dim
         """
+        cache_key = ("rtruediv", other)
+        cache = self._make_extra().cache_dim_math
+        if cache_key in cache:
+            return cache[cache_key]
         term = _OpLinearTerm.from_dim(self)
         term.extend_mul_div_(other, kind="truediv", right=False)
-        return term.as_dim()
+        dim = term.as_dim()
+        cache[cache_key] = dim
+        return dim
 
     def div_right(self: Dim, other):
         """
         :param Dim|int other:
         :rtype: Dim
         """
+        cache_key = ("truediv", other)
+        cache = self._make_extra().cache_dim_math
+        if cache_key in cache:
+            return cache[cache_key]
         term = _OpLinearTerm.from_dim(self)
         term.extend_mul_div_(other, kind="truediv", right=True)
-        return term.as_dim()
+        dim = term.as_dim()
+        cache[cache_key] = dim
+        return dim
 
     def ceildiv_left(self: Dim, other):
         """
         :param Dim|int other:
         :rtype: Dim
         """
+        cache_key = ("rceildiv", other)
+        cache = self._make_extra().cache_dim_math
+        if cache_key in cache:
+            return cache[cache_key]
         term = _OpLinearTerm.from_dim(self)
         term.extend_mul_div_(other, kind="ceildiv", right=False)
-        return term.as_dim()
+        dim = term.as_dim()
+        cache[cache_key] = dim
+        return dim
 
     def ceildiv_right(self: Dim, other):
         """
         :param Dim|int other:
         :rtype: Dim
         """
+        cache_key = ("ceildiv", other)
+        cache = self._make_extra().cache_dim_math
+        if cache_key in cache:
+            return cache[cache_key]
         term = _OpLinearTerm.from_dim(self)
         term.extend_mul_div_(other, kind="ceildiv", right=True)
-        return term.as_dim()
+        dim = term.as_dim()
+        cache[cache_key] = dim
+        return dim
 
     def __neg__(self):
         """
@@ -2170,7 +2241,7 @@ class _OpMultTerm:
     """
 
     @classmethod
-    def from_dim(cls, dim: _d.Dim) -> _OpMultTerm:
+    def from_dim(cls, dim: Dim) -> _OpMultTerm:
         """
         :param dim:
         :return: op mult term
@@ -2183,27 +2254,19 @@ class _OpMultTerm:
         return cls([dim])
 
     @classmethod
-    def from_dim_factors(cls, dims):
-        """
-        :param list[Dim] dims:
-        :rtype: Dim._OpMultTerm
-        """
+    def from_dim_factors(cls, dims: List[Dim]) -> _OpMultTerm:
+        """from dim factors"""
         res = cls.one()
         for d in dims:
             res.extend_mul_div_(d, kind="mul", right=True)
         return res
 
     @classmethod
-    def one(cls):
-        """
-        :rtype: Dim._OpMultTerm
-        """
+    def one(cls) -> _OpMultTerm:
+        """1"""
         return cls([])
 
-    def __init__(self, terms):
-        """
-        :param list[Dim] terms:
-        """
+    def __init__(self, terms: List[Dim]):
         self.terms = terms
 
     def __hash__(self):
@@ -2211,7 +2274,7 @@ class _OpMultTerm:
 
     def __eq__(self, other):
         """
-        :param Dim|Dim._OpMultTerm other:
+        :param _OpMultTerm other:
         """
         if isinstance(other, _OpMultTerm):
             return self.terms == other.terms
@@ -2224,10 +2287,8 @@ class _OpMultTerm:
         return "Dim._OpMultTerm(%r)" % (self.terms,)
 
     @property
-    def dimension(self):
-        """
-        :rtype: int|None
-        """
+    def dimension(self) -> Optional[int]:
+        """static dim or None"""
         dim = 1
         for part in self.terms:
             if part.dimension is None:
@@ -2235,37 +2296,27 @@ class _OpMultTerm:
             dim *= part.dimension
         return dim
 
-    def base_term(self):
-        """
-        :rtype: Dim
-        """
+    def base_term(self) -> Dim:
+        """base term (Dim)"""
         assert self.terms
         return self.terms[-1]
 
-    def is_one(self):
-        """
-        :rtype: bool
-        """
+    def is_one(self) -> bool:
+        """is 1"""
         return not self.terms
 
-    def is_constant_static_dim(self):
-        """
-        :rtype: bool
-        """
+    def is_constant_static_dim(self) -> bool:
+        """is constant static dim"""
         if not self.terms:
             return True
         return all(term.is_constant_static_dim() for term in self.terms)
 
-    def copy(self):
-        """
-        :rtype: Dim._OpMultTerm
-        """
+    def copy(self) -> _OpMultTerm:
+        """copy"""
         return _OpMultTerm(list(self.terms))
 
-    def negative(self):
-        """
-        :rtype: Dim._OpMultTerm
-        """
+    def negative(self) -> _OpMultTerm:
+        """negative"""
         if self.terms and self.terms[0].is_constant_static_dim() and self.terms[0].dimension == -1:
             return _OpMultTerm(self.terms[1:])
         res = self.copy()
@@ -2487,7 +2538,7 @@ class _OpMultTerm:
         """
         :rtype: Dim|None
         """
-        # Also see Dim._OpLinearTerm.representative_tag().
+        # Also see _OpLinearTerm.representative_tag().
         # First find any dynamic.
         for term_ in self.terms:
             if term_.is_dynamic():
@@ -2508,26 +2559,18 @@ class _OpLinearTerm:
     """
 
     @classmethod
-    def from_dim(cls, dim):
-        """
-        :param Dim dim:
-        :rtype: Dim._OpLinearTerm
-        """
+    def from_dim(cls, dim: Dim) -> _OpLinearTerm:
+        """from dim"""
         res = cls.zero()
         res.extend_add_sub_(dim, kind="add", right=True)
         return res
 
     @classmethod
-    def zero(cls):
-        """
-        :rtype: Dim._OpLinearTerm
-        """
+    def zero(cls) -> _OpLinearTerm:
+        """0"""
         return _OpLinearTerm([])
 
-    def __init__(self, terms):
-        """
-        :param list[Dim._OpMultTerm] terms:
-        """
+    def __init__(self, terms: List[_OpMultTerm]):
         self.terms = terms
 
     def __hash__(self):
@@ -2541,10 +2584,8 @@ class _OpLinearTerm:
     def __ne__(self, other):
         return not self.__eq__(other)
 
-    def as_dim(self):
-        """
-        :rtype: Dim
-        """
+    def as_dim(self) -> Dim:
+        """as dim"""
         if self.is_zero():
             return _make_constant_static_dim(0)
         if len(self.terms) == 1:
