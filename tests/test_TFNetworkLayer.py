@@ -8498,7 +8498,7 @@ def test_ConvLayer_static_time_get_out_data_from_opts_out_spatial_dims():
         conv_out = ConvLayer.get_out_data_from_opts(**layer_desc)
         print("conv out:", conv_out)
         print("conv dim:", conv_dim, "time dim:", time_dim)
-        assert conv_dim == ((-1) + time_dim + (-2)).ceildiv_right(3)
+        assert conv_dim == time_dim.sub_left(1).sub_right(2).ceildiv_right(3)
         assert conv_dim.get_same_base().derived_from_op
         assert not conv_dim.is_dynamic()
         with tf_compat.v1.variable_scope("conv"):
