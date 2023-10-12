@@ -320,15 +320,17 @@ class ExternData(TensorDict):
         )
         return tags
 
-    def set_batch_info(self, batch_info):
+    def set_batch_info(self, batch_info, *, init_batch_info: bool = True):
         """
         :param returnn.tf.util.data.BatchInfo batch_info:
+        :param init_batch_info: calls :func:`init_batch_info`, which might further initialize/modify the batch info
         """
         from returnn.tf.util.data import BatchInfo
 
         assert isinstance(batch_info, BatchInfo)
         self._batch_info = batch_info
-        self.init_batch_info()
+        if init_batch_info:
+            self.init_batch_info()
 
     def get_batch_info(self, allow_none=False):
         """
