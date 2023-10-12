@@ -1612,6 +1612,12 @@ class _DimMixin:
                 if dim_.dyn_size_ext:
                     dim_.dyn_size_ext.placeholder = None
         other_same_base._merge_same_for_batch_ctx_dict(self)
+        # noinspection PyProtectedMember
+        if self_same_as._extra:
+            # noinspection PyProtectedMember
+            for k, v in self_same_as._extra.cache_dim_math.items():
+                # noinspection PyProtectedMember
+                other_same_base._extra.cache_dim_math.setdefault(k, v)
         other._maybe_update()
         self.same_as = other_same_base
         self._maybe_update()
