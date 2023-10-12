@@ -10,7 +10,7 @@ We also might have model_outputs in the user config.
 
 from __future__ import annotations
 from typing import Optional, Union, Any, Type, Dict, Sequence
-from .tensor import Tensor
+from .tensor import Tensor, Dim
 
 
 _TensorT = Union[Tensor, Dict[str, Any]]
@@ -138,6 +138,7 @@ class TensorDict:
             assert key in raw_tensor_dict
             value.raw_tensor = raw_tensor_dict[key]
             for i, dim in enumerate(value.dims):
+                dim: Dim
                 if duplicate_dims_are_excluded and dim in visited_dims:
                     continue
                 key_ = f"{key}:size{i}"
