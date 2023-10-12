@@ -1609,8 +1609,7 @@ class _DimMixin:
         if other_same_base.derived_from_op:
             # Cleanup everything, esp potential already computed sizes, as these might be invalid.
             for dim_ in [self_same_as, self] + (list(self._extra.same_for_batch_ctx.values()) if self._extra else []):
-                if dim_.dyn_size_ext:
-                    dim_.dyn_size_ext.placeholder = None
+                dim_.reset_raw()
         other_same_base._merge_same_for_batch_ctx_dict(self)
         other._maybe_update()
         self.same_as = other_same_base
