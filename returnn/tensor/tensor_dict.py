@@ -10,7 +10,8 @@ We also might have model_outputs in the user config.
 
 from __future__ import annotations
 from typing import Optional, Union, Any, Type, Dict, Sequence
-from .tensor import Tensor, Dim
+from .tensor import Tensor
+from .dim import Dim
 
 
 _TensorT = Union[Tensor, Dict[str, Any]]
