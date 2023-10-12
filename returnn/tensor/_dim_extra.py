@@ -374,9 +374,10 @@ class _DimMixin:
             if id(dim) in visited:
                 continue
             visited.add(id(dim))
+            dim.reset_batch_ctx()
             dim._dyn_size_max_value = None
             if dim.dyn_size_ext:
-                dim.dyn_size_ext.raw_tensor = None
+                dim.dyn_size_ext.reset()
             # noinspection PyProtectedMember
             dim_extra = dim._extra
             if dim_extra:
@@ -392,6 +393,7 @@ class _DimMixin:
                     queue.append(dim_extra.same_as)
                 if dim_extra.copy_same_as:
                     queue.append(dim_extra.copy_same_as)
+                queue += dim_extra.same_for_batch_ctx.values()
                 if include_parents and dim_extra.derived_from_op:
                     queue.extend(dim_extra.derived_from_op.inputs)
 
@@ -399,10 +401,7 @@ class _DimMixin:
         """
         Reset batch and raw tensors.
         """
-        self.reset_batch_ctx()
         self.reset_raw(include_parents=True)
-        if self.dyn_size_ext:
-            self.dyn_size_ext.reset()
 
     def transform_tensors(self: Dim, func: Callable[[_t.Tensor], None]):
         """
