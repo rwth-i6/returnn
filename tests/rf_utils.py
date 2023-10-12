@@ -3,7 +3,7 @@ RETURNN frontend (returnn.frontend) utils
 """
 
 from __future__ import annotations
-from typing import Optional, Union, Dict
+from typing import Optional, Union, Any, Dict, Tuple
 import contextlib
 import re
 import numpy
@@ -248,3 +248,31 @@ def _check_dim(d_pt: Dim, d_tf: Dim):
         # This will be done later for all the raw output.
         # The reason is that the different backends (TF, PT, etc)
         # might share the same dim tag but then reset them.
+
+
+def _walk_dims(start: Dim, *, func=print):
+    visited = set()  # ids
+    queue = [((), start)]
+    while queue:
+        path, dim = queue.pop(0)
+        path: Tuple[Any, ...]
+        dim: Dim
+        if id(dim) in visited:
+            continue
+        visited.add(id(dim))
+        func(path, dim)
+        # noinspection PyProtectedMember
+        dim_extra = dim._extra
+        if dim_extra:
+            if dim_extra.cache_dim_math:
+                for k, v in dim_extra.cache_dim_math.items():
+                    k: Any
+                    queue.append((path + ("_extra.cache_dim_math", k), v))
+            if dim_extra.same_as:
+                queue.append((path + ("_extra.same_as",), dim_extra.same_as))
+            if dim_extra.derived_from_op:
+                for i, v in enumerate(dim_extra.derived_from_op.inputs):
+                    queue.append((path + ("_extra.derived_from_op.inputs", i), v))
+            for k, v in dim_extra.same_for_batch_ctx.items():
+                k: Any
+                queue.append((path + ("_extra.same_for_batch_ctx", k), v))
