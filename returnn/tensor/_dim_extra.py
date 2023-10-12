@@ -90,7 +90,7 @@ class _DimExtra:
         self.derived_from_tag = derived_from_tag
         self.derived_from_op = derived_from_op
         if derived_from_op and not derived_from_op.output:
-            derived_from_op.output = self
+            derived_from_op.output = dim
         self.match_priority = match_priority
         if src_data:
             assert isinstance(src_data, _t.Tensor) and isinstance(src_axis, int)
