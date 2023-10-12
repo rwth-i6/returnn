@@ -1319,7 +1319,11 @@ class TorchBackend(Backend[torch.Tensor]):
         flattened_num_elements = out_raw.numel() // remaining_num_elements
         out_raw = torch.reshape(out_raw, [flattened_num_elements] + remaining_shape)
         if not out_dim:
-            out_dim = TorchBackend.get_new_dim_raw(out_raw, 0, name="masked_select")
+            out_dim = Dim(None, name="masked_select")
+        if not out_dim.dyn_size_ext:
+            out_dim.dyn_size_ext = Tensor("masked_select_size", dims=(), dtype="int64")
+        if out_dim.dyn_size_ext.raw_tensor is None:
+            out_dim.dyn_size_ext.raw_tensor = torch.tensor(flattened_num_elements, dtype=torch.int64)
         out = Tensor(
             "masked_select",
             dims=(out_dim,) + tuple(remaining_dims),
