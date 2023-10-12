@@ -235,14 +235,16 @@ def _pad_mask_zeros(x: Union[TensorDict, Tensor, Dim]):
 
 def _check_dim(d_pt: Dim, d_tf: Dim):
     assert isinstance(d_pt, Dim) and isinstance(d_tf, Dim)
+    assert d_pt.size == d_tf.size
     assert _dim_is_scalar_size(d_pt) == _dim_is_scalar_size(d_tf)
-    if _dim_is_scalar_size(d_pt):
-        assert _dim_scalar_size(d_pt) == _dim_scalar_size(d_tf)
-    else:
+    if not _dim_is_scalar_size(d_pt):
         assert d_pt.dyn_size_ext and d_tf.dyn_size_ext
         # There might be cases where the dims are maybe not equal
         # (same reasoning as above, or also different order),
         # although this would be quite exotic.
         # Let's just assume for now that this does not happen.
         assert d_pt.dyn_size_ext.dims == d_tf.dyn_size_ext.dims
-        assert (d_pt.dyn_size_ext.raw_tensor == d_tf.dyn_size_ext.raw_tensor).all()
+        # Do not compare the raw tensor directly here.
+        # This will be done later for all the raw output.
+        # The reason is that the different backends (TF, PT, etc)
+        # might share the same dim tag but then reset them.
