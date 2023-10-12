@@ -109,7 +109,7 @@ def get_net_dict(
             # Dim dyn_size_ext might be Tensor[rfl.Layer],
             # but now the TF engine actually wants to have Tensor[tf.Tensor].
             # Reset it now. The TF engine should redefine it again.
-            elem.reset_raw()
+            elem.reset_batch_and_raw()
         return elem
 
     # Do some cleanup.
