@@ -2022,8 +2022,10 @@ class _DimMixin:
         """
         cache_key = ("add", other)
         cache = self.get_same_base()._make_extra().cache_dim_math
-        if cache_key in cache:
-            return cache[cache_key]
+        cache_entry = cache.get(cache_key, None)
+        if cache_entry:
+            cache_entry.complete_dyn_size()
+            return cache_entry
         term = _OpLinearTerm.from_dim(self)
         term.extend_add_sub_(other, kind="add", right=True)
         dim = term.as_dim()
@@ -2038,8 +2040,10 @@ class _DimMixin:
         """
         cache_key = ("add_left", other)
         cache = self.get_same_base()._make_extra().cache_dim_math
-        if cache_key in cache:
-            return cache[cache_key]
+        cache_entry = cache.get(cache_key, None)
+        if cache_entry:
+            cache_entry.complete_dyn_size()
+            return cache_entry
         term = _OpLinearTerm.from_dim(self)
         term.extend_add_sub_(other, kind="add", right=False)
         dim = term.as_dim()
@@ -2061,8 +2065,10 @@ class _DimMixin:
         """
         cache_key = ("sub", other)
         cache = self.get_same_base()._make_extra().cache_dim_math
-        if cache_key in cache:
-            return cache[cache_key]
+        cache_entry = cache.get(cache_key, None)
+        if cache_entry:
+            cache_entry.complete_dyn_size()
+            return cache_entry
         term = _OpLinearTerm.from_dim(self)
         term.extend_add_sub_(other, kind="sub", right=True)
         dim = term.as_dim()
@@ -2077,8 +2083,10 @@ class _DimMixin:
         """
         cache_key = ("sub_left", other)
         cache = self.get_same_base()._make_extra().cache_dim_math
-        if cache_key in cache:
-            return cache[cache_key]
+        cache_entry = cache.get(cache_key, None)
+        if cache_entry:
+            cache_entry.complete_dyn_size()
+            return cache_entry
         term = _OpLinearTerm.from_dim(self)
         term.extend_add_sub_(other, kind="sub", right=False)
         dim = term.as_dim()
@@ -2092,8 +2100,10 @@ class _DimMixin:
         """
         cache_key = ("mul", other)
         cache = self.get_same_base()._make_extra().cache_dim_math
-        if cache_key in cache:
-            return cache[cache_key]
+        cache_entry = cache.get(cache_key, None)
+        if cache_entry:
+            cache_entry.complete_dyn_size()
+            return cache_entry
         term = _OpLinearTerm.from_dim(self)
         term.extend_mul_div_(other, kind="mul", right=True)
         dim = term.as_dim()
@@ -2107,8 +2117,10 @@ class _DimMixin:
         """
         cache_key = ("mul_left", other)
         cache = self.get_same_base()._make_extra().cache_dim_math
-        if cache_key in cache:
-            return cache[cache_key]
+        cache_entry = cache.get(cache_key, None)
+        if cache_entry:
+            cache_entry.complete_dyn_size()
+            return cache_entry
         term = _OpLinearTerm.from_dim(self)
         term.extend_mul_div_(other, kind="mul", right=False)
         dim = term.as_dim()
@@ -2122,8 +2134,10 @@ class _DimMixin:
         """
         cache_key = ("floordiv", other)
         cache = self.get_same_base()._make_extra().cache_dim_math
-        if cache_key in cache:
-            return cache[cache_key]
+        cache_entry = cache.get(cache_key, None)
+        if cache_entry:
+            cache_entry.complete_dyn_size()
+            return cache_entry
         term = _OpLinearTerm.from_dim(self)
         term.extend_mul_div_(other, kind="floordiv", right=True)
         dim = term.as_dim()
@@ -2144,8 +2158,10 @@ class _DimMixin:
         """
         cache_key = ("truediv_left", other)
         cache = self.get_same_base()._make_extra().cache_dim_math
-        if cache_key in cache:
-            return cache[cache_key]
+        cache_entry = cache.get(cache_key, None)
+        if cache_entry:
+            cache_entry.complete_dyn_size()
+            return cache_entry
         term = _OpLinearTerm.from_dim(self)
         term.extend_mul_div_(other, kind="truediv", right=False)
         dim = term.as_dim()
@@ -2159,8 +2175,10 @@ class _DimMixin:
         """
         cache_key = ("truediv", other)
         cache = self.get_same_base()._make_extra().cache_dim_math
-        if cache_key in cache:
-            return cache[cache_key]
+        cache_entry = cache.get(cache_key, None)
+        if cache_entry:
+            cache_entry.complete_dyn_size()
+            return cache_entry
         term = _OpLinearTerm.from_dim(self)
         term.extend_mul_div_(other, kind="truediv", right=True)
         dim = term.as_dim()
@@ -2174,8 +2192,10 @@ class _DimMixin:
         """
         cache_key = ("ceildiv_left", other)
         cache = self.get_same_base()._make_extra().cache_dim_math
-        if cache_key in cache:
-            return cache[cache_key]
+        cache_entry = cache.get(cache_key, None)
+        if cache_entry:
+            cache_entry.complete_dyn_size()
+            return cache_entry
         term = _OpLinearTerm.from_dim(self)
         term.extend_mul_div_(other, kind="ceildiv", right=False)
         dim = term.as_dim()
@@ -2189,8 +2209,10 @@ class _DimMixin:
         """
         cache_key = ("ceildiv", other)
         cache = self.get_same_base()._make_extra().cache_dim_math
-        if cache_key in cache:
-            return cache[cache_key]
+        cache_entry = cache.get(cache_key, None)
+        if cache_entry:
+            cache_entry.complete_dyn_size()
+            return cache_entry
         term = _OpLinearTerm.from_dim(self)
         term.extend_mul_div_(other, kind="ceildiv", right=True)
         dim = term.as_dim()
