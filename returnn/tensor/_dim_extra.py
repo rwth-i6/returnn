@@ -363,7 +363,7 @@ class _DimMixin:
         """
         self.reset_raw()
 
-    def reset_raw(self: Dim, *, only_self: bool = False):
+    def reset_raw(self: Dim, *, only_self: bool = False, include_parents: bool = False):
         """
         Reset all raw tensors.
         """
@@ -392,15 +392,15 @@ class _DimMixin:
                     queue.append(dim_extra.same_as)
                 if dim_extra.copy_same_as:
                     queue.append(dim_extra.copy_same_as)
-                if dim_extra.derived_from_op:
-                    queue += dim_extra.derived_from_op.inputs
+                if include_parents and dim_extra.derived_from_op:
+                    queue.extend(dim_extra.derived_from_op.inputs)
 
     def reset_batch_and_raw(self: Dim):
         """
         Reset batch and raw tensors.
         """
         self.reset_batch_ctx()
-        self.reset_raw()
+        self.reset_raw(include_parents=True)
         if self.dyn_size_ext:
             self.dyn_size_ext.reset()
 
