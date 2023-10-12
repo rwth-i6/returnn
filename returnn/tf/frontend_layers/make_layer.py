@@ -168,7 +168,7 @@ def _tensor_from_layer_dict(layer_dict: rfl.LayerDictRaw, *, layer: rfl.Layer) -
         inside_rec_time_dim=loop.loop_spatial_dim if loop else None,
         control_flow_ctx=rfl.Layer.inner_control_flow(),
     )
-    net.extern_data.set_batch_info(_init_global_batch())
+    net.extern_data.set_batch_info(_init_global_batch(), init_batch_info=False)
 
     ref_to_layer_name = {}  # type: Dict[rfl.Layer, str]
 
