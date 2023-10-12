@@ -1995,7 +1995,7 @@ class _DimMixin:
         :rtype: Dim
         """
         cache_key = ("add", other)
-        cache = self._make_extra().cache_dim_math
+        cache = self.get_same_base()._make_extra().cache_dim_math
         if cache_key in cache:
             return cache[cache_key]
         term = _OpLinearTerm.from_dim(self)
@@ -2011,7 +2011,7 @@ class _DimMixin:
         :rtype: Dim
         """
         cache_key = ("add_left", other)
-        cache = self._make_extra().cache_dim_math
+        cache = self.get_same_base()._make_extra().cache_dim_math
         if cache_key in cache:
             return cache[cache_key]
         term = _OpLinearTerm.from_dim(self)
@@ -2034,7 +2034,7 @@ class _DimMixin:
         :rtype: Dim
         """
         cache_key = ("sub", other)
-        cache = self._make_extra().cache_dim_math
+        cache = self.get_same_base()._make_extra().cache_dim_math
         if cache_key in cache:
             return cache[cache_key]
         term = _OpLinearTerm.from_dim(self)
@@ -2050,7 +2050,7 @@ class _DimMixin:
         :rtype: Dim
         """
         cache_key = ("sub_left", other)
-        cache = self._make_extra().cache_dim_math
+        cache = self.get_same_base()._make_extra().cache_dim_math
         if cache_key in cache:
             return cache[cache_key]
         term = _OpLinearTerm.from_dim(self)
@@ -2065,7 +2065,7 @@ class _DimMixin:
         :rtype: Dim
         """
         cache_key = ("mul", other)
-        cache = self._make_extra().cache_dim_math
+        cache = self.get_same_base()._make_extra().cache_dim_math
         if cache_key in cache:
             return cache[cache_key]
         term = _OpLinearTerm.from_dim(self)
@@ -2080,7 +2080,7 @@ class _DimMixin:
         :rtype: Dim
         """
         cache_key = ("mul_left", other)
-        cache = self._make_extra().cache_dim_math
+        cache = self.get_same_base()._make_extra().cache_dim_math
         if cache_key in cache:
             return cache[cache_key]
         term = _OpLinearTerm.from_dim(self)
@@ -2095,7 +2095,7 @@ class _DimMixin:
         :rtype: Dim
         """
         cache_key = ("floordiv", other)
-        cache = self._make_extra().cache_dim_math
+        cache = self.get_same_base()._make_extra().cache_dim_math
         if cache_key in cache:
             return cache[cache_key]
         term = _OpLinearTerm.from_dim(self)
@@ -2117,7 +2117,7 @@ class _DimMixin:
         :rtype: Dim
         """
         cache_key = ("truediv_left", other)
-        cache = self._make_extra().cache_dim_math
+        cache = self.get_same_base()._make_extra().cache_dim_math
         if cache_key in cache:
             return cache[cache_key]
         term = _OpLinearTerm.from_dim(self)
@@ -2132,7 +2132,7 @@ class _DimMixin:
         :rtype: Dim
         """
         cache_key = ("truediv", other)
-        cache = self._make_extra().cache_dim_math
+        cache = self.get_same_base()._make_extra().cache_dim_math
         if cache_key in cache:
             return cache[cache_key]
         term = _OpLinearTerm.from_dim(self)
@@ -2147,7 +2147,7 @@ class _DimMixin:
         :rtype: Dim
         """
         cache_key = ("ceildiv_left", other)
-        cache = self._make_extra().cache_dim_math
+        cache = self.get_same_base()._make_extra().cache_dim_math
         if cache_key in cache:
             return cache[cache_key]
         term = _OpLinearTerm.from_dim(self)
@@ -2162,7 +2162,7 @@ class _DimMixin:
         :rtype: Dim
         """
         cache_key = ("ceildiv", other)
-        cache = self._make_extra().cache_dim_math
+        cache = self.get_same_base()._make_extra().cache_dim_math
         if cache_key in cache:
             return cache[cache_key]
         term = _OpLinearTerm.from_dim(self)
