@@ -11,6 +11,7 @@ from returnn.util.basic import NotSpecified, RefIdEq
 from returnn.tensor import Tensor, Dim, ControlFlowContext, batch_dim, single_step_dim
 from returnn.tensor.marked_dim import MarkedDim as _MarkedDim
 from returnn.tf.util.data import BatchInfo
+from returnn.tf.util import basic as tf_util
 from returnn.tf.layers.base import LayerBase
 from .. import frontend_layers as rfl
 from . import _utils
@@ -166,6 +167,8 @@ class Layer:
         self.name = name  # early assign such that debug repr works later
         if not name:
             if suggested_name:
+                suggested_name = suggested_name.replace("/", "_")
+                suggested_name = tf_util.get_valid_scope_name_from_str(suggested_name)
                 name = self._get_unique_name(suggested_name)
             elif self.parent:
                 name = self._get_unique_name()
