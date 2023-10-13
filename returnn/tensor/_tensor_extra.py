@@ -2717,24 +2717,28 @@ class _TensorMixin(_TensorMixinBase):
         sizes_tag = Dim.get_tag_from_size_tensor(sizes)
         if sizes_tag:
             assert sizes_tag.is_same_size_tensor(sizes)
-        tag = self.dim_tags[axis]
+        tag = self._dims[axis]
         assert tag.is_dynamic()
         if tag.is_same_size_tensor(sizes):
-            return  # nothing to do
-        if tag.dyn_size is None:
+            pass  # nothing to do
+        elif tag.dyn_size is None:
             if sizes_tag:  # special rule for older code: overtake previous existing
                 assert sizes_tag.is_same_size_tensor(sizes)
-                self._dims = self._dims[:axis] + (sizes_tag,) + self._dims[axis + 1 :]
+                tag = sizes_tag
             else:
                 # Assign now. This should also set the dim tag on sizes.
-                new_tag = tag.set_tag_on_size_tensor(sizes, batch=self.batch)
-                if new_tag is not tag:
-                    self._dims = self._dims[:axis] + (new_tag,) + self._dims[axis + 1 :]
+                tag = tag.set_tag_on_size_tensor(sizes, batch=self.batch)
         else:
             # Reset to some new size.
             # Use new dim tag, or previous existing attached to size.
             assert sizes_tag, "%s: assign dyn sizes %s without defined dim tag" % (self, sizes)
-            self._dims = self._dims[:axis] + (sizes_tag,) + self._dims[axis + 1 :]
+            tag = sizes_tag
+        if self.batch:
+            tag = tag.get_for_batch_ctx(batch=self.batch, ctx=self.control_flow_ctx)
+        if tag is not self._dims[axis]:
+            self._dims = self._dims[:axis] + (tag,) + self._dims[axis + 1 :]
+        if tag.dyn_size is None:
+            tag.dyn_size = sizes
 
     def get_dynamic_axes(self):
         """
