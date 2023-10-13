@@ -749,9 +749,11 @@ class _DimMixin:
                 self.batch = other.batch
                 self.control_flow_ctx = other.control_flow_ctx
             self.dyn_size_ext = other.dyn_size_ext
+            assert self.dyn_size_ext.placeholder is dyn_size
             return
         self._init_default_dyn_size_ext(dyn_size)
         self.set_tag_on_size_tensor(dyn_size)
+        assert self.dyn_size_ext.placeholder is dyn_size
 
     def _init_default_dyn_size_ext(self, dyn_size):
         """
