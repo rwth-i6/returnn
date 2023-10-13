@@ -1637,6 +1637,8 @@ class _DimMixin:
             for k, v in self_same_as._extra.cache_dim_math.items():
                 # noinspection PyProtectedMember
                 other_same_base._extra.cache_dim_math.setdefault(k, v)
+            # noinspection PyProtectedMember
+            self_same_as._extra.cache_dim_math.clear()
         other._maybe_update()
         self.same_as = other_same_base
         self._maybe_update()
