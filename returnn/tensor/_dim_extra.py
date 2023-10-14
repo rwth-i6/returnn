@@ -1309,9 +1309,6 @@ class _DimMixin:
         other_base = other.get_same_derived_base(same_dim=True) if derived_matches else other.get_same_base()
         if self_base is other_base:
             return True
-        if self_base.derived_from_op and other_base.derived_from_op:
-            if self_base.derived_from_op == other_base.derived_from_op:
-                return True
         self_kind = self.kind
         other_kind = other.kind
         if self_kind == other_kind == DimTypes.Feature and ignore_feature_dim:
@@ -1405,11 +1402,6 @@ class _DimMixin:
                 if self_extra.kind == other_extra.kind == DimTypes.Batch:
                     return True
                 # noinspection PyProtectedMember
-                if self_extra.derived_from_op and other_extra.derived_from_op:
-                    # noinspection PyProtectedMember
-                    if self_extra.derived_from_op == other_extra.derived_from_op:
-                        return True
-                # noinspection PyProtectedMember
                 if self_extra.auto_generated and other_extra.auto_generated and self.description == other.description:
                     return True
             return False
@@ -1440,8 +1432,6 @@ class _DimMixin:
                 return hash(id(self))
             if self_extra.kind == DimTypes.Batch:
                 return hash(())
-            if self_extra.derived_from_op:
-                return hash(self_extra.derived_from_op)
             if self_extra.auto_generated:
                 return hash((self_extra.kind, self.size, self.name))
         return hash(id(self))
