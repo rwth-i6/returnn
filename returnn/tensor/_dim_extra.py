@@ -5,6 +5,7 @@ or just rarely used attribs, such that we can save memory for the common case.
 
 from __future__ import annotations
 from typing import TYPE_CHECKING, Optional, Union, Tuple, Sequence, Dict, List, Callable
+import operator
 
 from returnn.util.basic import Entity
 from returnn.util import basic as util
@@ -2232,6 +2233,18 @@ class _DimMixin:
         """
         return self.derived_from_op and self.derived_from_op.kind == "constant"
 
+    def _cache_dim_math_get(
+        self: Dim, op_kind: str, operand: Union[Dim, int]
+    ) -> Tuple[Dict[Tuple[str, Union[Dim, int]], Dim], Tuple[str, Union[Dim, int]], Optional[Dim]]:
+        same_base = self.get_same_base()
+        # noinspection PyProtectedMember
+        extra = same_base._make_extra()
+        if isinstance(operand, _d.Dim) and operand.is_constant_static_dim():
+            operand = operand.dimension
+        cache = extra.cache_dim_math
+        cache_key = (op_kind, operand)
+        return cache, cache_key, cache.get(cache_key, None)
+
 
 def _make_constant_static_dim(value, kind=None):
     """
@@ -2246,6 +2259,32 @@ def _make_constant_static_dim(value, kind=None):
         derived_from_op=Op(kind="constant", inputs=[], attribs={"value": value}),
         auto_generated=True,
     )
+
+
+def _math_get_dim_via_bin_op(a: Dim, b: Dim, op_kind: str) -> Dim:
+    assert op_kind in {"add", "mul"}
+    op_kind_ = op_kind
+    a_, b_ = a, b
+    if a.is_constant_static_dim() and not b.is_constant_static_dim():
+        op_kind_ = op_kind + "_left"
+        a_, b_ = b, a
+    # noinspection PyProtectedMember
+    cache, cache_key, res = a_._cache_dim_math_get(op_kind_, b_)
+    if res:
+        return res
+    if a.dimension is not None and b.dimension is not None:
+        dim_value = getattr(operator, op_kind)(a.dimension, b.dimension)
+    else:
+        dim_value = None
+    res = _d.Dim(
+        kind=_get_merged_dim_kind((a, b)),
+        description=_get_description(a) + {"add": "+", "mul": "*"}[op_kind] + _get_description(b),
+        dimension=dim_value,
+        derived_from_op=Op(kind=op_kind, inputs=[a, b]),
+        derived_from_tag=_representative_tag((a, b)),
+    )
+    cache[cache_key] = res
+    return res
 
 
 class Op:
@@ -2561,6 +2600,10 @@ class _OpMultTerm:
                     kind = "floordiv"  # for nicer description, and does not matter
             else:
                 raise ValueError("invalid kind %r" % (kind,))
+        # noinspection PyProtectedMember
+        cache, cache_key, res = numerator._cache_dim_math_get(kind + ("" if right else "_left"), denominator)
+        if res:
+            return res
         if kind == "floordiv" and right:
             description = "%s//%s" % (_get_description(numerator), _get_description(denominator))
         elif kind == "ceildiv" and right:
@@ -2576,13 +2619,15 @@ class _OpMultTerm:
         if a is not None and b is not None and a % b == 0:
             op_kind = "truediv"  # makes some other checks simpler
         op_kind += "_" + ("right" if right else "left")
-        return _d.Dim(
+        res = _d.Dim(
             description=description,
             kind=numerator.kind,
             dimension=dim_value,
             derived_from_op=Op(kind=op_kind, inputs=[numerator, denominator]),
             derived_from_tag=numerator,
         )
+        cache[cache_key] = res
+        return res
 
     def as_dim(self):
         """
@@ -2592,37 +2637,16 @@ class _OpMultTerm:
             return _make_constant_static_dim(1)
         if len(self.terms) == 1:
             return self.terms[0]
-        dim_kind = _get_merged_dim_kind(self.terms)
-        return _d.Dim(
-            kind=dim_kind,
-            description="*".join(map(_get_description, self.terms)),
-            dimension=self.dimension,
-            derived_from_op=Op(kind="mul", inputs=list(self.terms)),
-            derived_from_tag=self.representative_tag(),
-        )
-
-    def representative_tag(self):
-        """
-        :rtype: Dim|None
-        """
-        # Also see _OpLinearTerm.representative_tag().
-        # First find any dynamic.
-        for term_ in self.terms:
-            if term_.is_dynamic():
-                return term_
-        # Now find non-unspecified.
-        for term_ in self.terms:
-            if term_.kind != DimTypes.Unspecified:
-                return term_
-        # Now find any.
-        for term_ in self.terms:
-            return term_
-        return None
+        res = self.terms[0]
+        for operand in self.terms[1:]:
+            res = _math_get_dim_via_bin_op(res, operand, "mul")
+        return res
 
 
 class _OpLinearTerm:
     """
-    represents sth like a * b + c
+    Linear combination of :class:`_OpMultTerm`.
+    Represents sth like a * b + c of :class:`Dim`.
     """
 
     @classmethod
@@ -2657,26 +2681,10 @@ class _OpLinearTerm:
             return _make_constant_static_dim(0)
         if len(self.terms) == 1:
             return self.terms[0].as_dim()
-        add_parts = []
-        desc_parts = []
-        dim = 0
-        for term in self.terms:
-            s = term.as_dim()
-            add_parts.append(s)
-            desc_parts.append(_get_description(s))
-            if dim is not None and s.dimension is not None:
-                dim += s.dimension
-            else:
-                dim = None
-        if len(add_parts) == 1:
-            return add_parts[0]
-        return _d.Dim(
-            kind=_get_merged_dim_kind(add_parts),
-            description="+".join(desc_parts),
-            dimension=dim,
-            derived_from_op=Op(kind="add", inputs=add_parts),
-            derived_from_tag=self.representative_tag(),
-        )
+        res = self.terms[0].as_dim()
+        for operand in self.terms[1:]:
+            res = _math_get_dim_via_bin_op(res, operand.as_dim(), "add")
+        return res
 
     def __repr__(self):
         return "Dim._OpLinearTerm(%r)" % (self.terms,)
@@ -2719,6 +2727,10 @@ class _OpLinearTerm:
                 # Merge terms
                 a = _OpMultTerm.from_dim_factors(most_recent_term.terms[:-1]).as_dim()
                 b = _OpMultTerm.from_dim_factors(term.terms[:-1]).as_dim()
+                if a.is_constant_static_dim() and not b.is_constant_static_dim():
+                    a = a.dimension
+                elif b.is_constant_static_dim() and not a.is_constant_static_dim():
+                    b = b.dimension
                 res = _OpMultTerm.from_dim((a + b) if right else (b + a))
                 res.extend_mul_div_(term.terms[-1], kind="mul", right=True)
                 self.terms[-1 if right else 0] = res
@@ -2770,21 +2782,8 @@ class _OpLinearTerm:
         """
         :rtype: Dim|None
         """
-        # First find any dynamic.
-        for term in self.terms:
-            for term_ in term.terms:
-                if term_.is_dynamic():
-                    return term_
-        # Now find non-unspecified.
-        for term in self.terms:
-            for term_ in term.terms:
-                if term_.kind != DimTypes.Unspecified:
-                    return term_
-        # Now find any.
-        for term in self.terms:
-            for term_ in term.terms:
-                return term_
-        return None
+        terms = [_representative_tag(term.terms) for term in self.terms]
+        return _representative_tag([term for term in terms if term])
 
 
 def _get_merged_dim_kind(dim_tags):
@@ -2799,6 +2798,22 @@ def _get_merged_dim_kind(dim_tags):
         return DimTypes.Feature
     else:
         return DimTypes.Spatial
+
+
+def _representative_tag(terms: Sequence[Dim]) -> Optional[Dim]:
+    # Also see _OpLinearTerm.representative_tag().
+    # First find any dynamic.
+    for term_ in terms:
+        if term_.is_dynamic():
+            return term_
+    # Now find non-unspecified.
+    for term_ in terms:
+        if term_.kind != DimTypes.Unspecified:
+            return term_
+    # Now find any.
+    for term_ in terms:
+        return term_
+    return None
 
 
 def dim_cmp_value(obj):
