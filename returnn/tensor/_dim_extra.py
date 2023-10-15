@@ -1301,7 +1301,7 @@ class _DimMixin:
         """
         if self is other:  # first some fast path check
             return True
-        if not isinstance(other, Dim):
+        if not isinstance(other, _d.Dim):
             return False
         if self.special or other.special:
             return False  # only true if same instance, check above
