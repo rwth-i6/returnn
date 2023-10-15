@@ -294,7 +294,7 @@ class BehaviorVersion:
         return cls._behavior_version, cls._min_behavior_version
 
     reset_callbacks: List[Callable[[], None]] = []
-    handle_new_min_version_callbacks: List[Callable[[int], None]] = []
+    handle_new_min_version_callbacks: List[Callable[[], None]] = []
 
     @classmethod
     def _reset(cls, state: Optional[Tuple[int, int]] = None):
@@ -321,7 +321,7 @@ class BehaviorVersion:
         """
         # e.g. enable simple Dim equality check here...
         for cb in cls.handle_new_min_version_callbacks:
-            cb(cls.get())
+            cb()
 
 
 def get_model_filename_postfix():
