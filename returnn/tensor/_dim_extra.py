@@ -2825,3 +2825,23 @@ def dim_cmp_value(obj):
     if isinstance(obj, _m.MarkedDim):
         return obj.__class__.__name__, obj.tag
     return obj
+
+
+def _behavior_version_reset_callback():
+    # Reset things we did in _handle_new_min_version.
+    _DimMixin._SimpleEquality = False
+
+
+def _behavior_version_handle_new_min_version_callback(min_version: int):
+    if min_version >= 16:
+        _DimMixin._SimpleEquality = True
+
+
+def _setup():
+    from returnn.util.basic import BehaviorVersion
+
+    BehaviorVersion.reset_callbacks.append(_behavior_version_reset_callback)
+    BehaviorVersion.handle_new_min_version_callbacks.append(_behavior_version_handle_new_min_version_callback)
+
+
+_setup()

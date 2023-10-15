@@ -5,7 +5,7 @@ Various generic utilities, which are shared across different backend engines.
 """
 
 from __future__ import annotations
-from typing import Optional, Generic, TypeVar, Iterable, Tuple, Dict
+from typing import Optional, Generic, TypeVar, Iterable, Tuple, Dict, List, Callable
 
 import subprocess
 from subprocess import CalledProcessError
@@ -293,6 +293,9 @@ class BehaviorVersion:
     def _get_state(cls):
         return cls._behavior_version, cls._min_behavior_version
 
+    reset_callbacks: List[Callable[[], None]] = []
+    handle_new_min_version_callbacks: List[Callable[[int], None]] = []
+
     @classmethod
     def _reset(cls, state: Optional[Tuple[int, int]] = None):
         """
@@ -305,11 +308,10 @@ class BehaviorVersion:
         else:
             cls._behavior_version = None
             cls._min_behavior_version = 0
-        # Also reset things we did in _handle_new_min_version.
-        # noinspection PyProtectedMember
-        from returnn.tensor._dim_extra import _DimMixin
 
-        _DimMixin._SimpleEquality = False
+        # Reset things we did in _handle_new_min_version.
+        for cb in cls.reset_callbacks:
+            cb()
 
     @classmethod
     def _handle_new_min_version(cls):
@@ -317,12 +319,9 @@ class BehaviorVersion:
         Callback, called when we know about a new min or exact behavior version.
         The version can only increase, unless :func:`_reset` is called.
         """
-        if cls.get() >= 16:
-            # e.g. enable simple Dim equality check here...
-            # noinspection PyProtectedMember
-            from returnn.tensor._dim_extra import _DimMixin
-
-            _DimMixin._SimpleEquality = True
+        # e.g. enable simple Dim equality check here...
+        for cb in cls.handle_new_min_version_callbacks:
+            cb(cls.get())
 
 
 def get_model_filename_postfix():
