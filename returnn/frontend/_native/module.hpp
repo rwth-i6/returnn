@@ -112,7 +112,7 @@ public:
 
     int pyTraverse(visitproc visit, void *arg) {
         Py_VISIT(_notSpecified);
-        for(int i = 0; i < _rawTensorTypesLen; ++i)
+        for(int i = 0; i < sizeof(_rawTensorTypes)/sizeof(_rawTensorTypes[0]); ++i)
             Py_VISIT(_rawTensorTypes[i]);
         Py_VISIT(_tensorType);
         Py_VISIT(_dimType);
@@ -122,13 +122,18 @@ public:
             Py_VISIT(_cachedOps[i]);
         Py_VISIT(_torchTensorType);
         Py_VISIT(_torchBackend);
+        for(int i = 0; i < sizeof(_torchTensorDTypes)/sizeof(_torchTensorDTypes[0]); ++i) {
+            Py_VISIT(_torchTensorDTypes[i].dtype);
+            Py_VISIT(_torchTensorDTypes[i].name);
+        }
+        Py_VISIT(_torchTensorNameToDTypeDict);
         return 0;
     }
 
     int pyClear() {
         Py_CLEAR(_notSpecified);
         _rawTensorTypesLen = 0;
-        for(unsigned int i = 0; i < sizeof(_rawTensorTypes)/sizeof(_rawTensorTypes[0]); ++i)
+        for(int i = 0; i < sizeof(_rawTensorTypes)/sizeof(_rawTensorTypes[0]); ++i)
             Py_CLEAR(_rawTensorTypes[i]);
         Py_CLEAR(_tensorType);
         Py_CLEAR(_dimType);
@@ -138,17 +143,22 @@ public:
             Py_CLEAR(_cachedOps[i]);
         Py_CLEAR(_torchTensorType);
         Py_CLEAR(_torchBackend);
+        for(int i = 0; i < sizeof(_torchTensorDTypes)/sizeof(_torchTensorDTypes[0]); ++i) {
+            Py_CLEAR(_torchTensorDTypes[i].dtype);
+            Py_CLEAR(_torchTensorDTypes[i].name);
+        }
+        Py_CLEAR(_torchTensorNameToDTypeDict);
         _module = NULL;
         return 0;
     }
 
     int pyInitModuleExec(PyObject* module);
 
-    inline PyObject* notSpecified() const { return _notSpecified; }
-    inline PyObject* tensorType() const { return _tensorType; }
-    inline PyObject* dimType() const { return _dimType; }
-    inline PyObject* globalBackend() const { return _globalBackend; }
-    inline PyObject* cachedOp(RawOp op, BackendWithCachedOps backend) {
+    inline /*borrowed*/ PyObject* notSpecified() const { return _notSpecified; }
+    inline /*borrowed*/ PyObject* tensorType() const { return _tensorType; }
+    inline /*borrowed*/ PyObject* dimType() const { return _dimType; }
+    inline /*borrowed*/ PyObject* globalBackend() const { return _globalBackend; }
+    inline /*borrowed*/ PyObject* cachedOp(RawOp op, BackendWithCachedOps backend) {
         if(!_cachedOps[backend * NumTOps + op])
             if(!_cachedOpInit(backend))
                 return NULL;
@@ -158,13 +168,31 @@ public:
         return func;
     }
     inline int rawTensorTypesLen() const { return _rawTensorTypesLen; }
-    inline PyObject* rawTensorType(int i) const { return _rawTensorTypes[i]; }
+    inline /*borrowed*/ PyObject* rawTensorType(int i) const { return _rawTensorTypes[i]; }
+    inline /*borrowed*/ PyObject* torchTensorDTypeName(PyObject* dtype, bool& error) {
+        if(!_torchTensorDTypes[0].dtype) {
+            if(!_torchTensorDTypesInit()) {
+                error = true;
+                return NULL;
+            }
+        }
+        for(int i = 0; i < sizeof(_torchTensorDTypes)/sizeof(_torchTensorDTypes[0]); ++i) {
+            if(_torchTensorDTypes[i].dtype == dtype)
+                return _torchTensorDTypes[i].name;
+        }
+        return NULL;
+    }
+    inline /*borrowed*/ PyObject* torchTensorNameToDTypeDict() {
+        if(!_torchTensorNameToDTypeDict)
+            _torchTensorNameToDTypeDict = PyDict_New();
+        return _torchTensorNameToDTypeDict;
+    }
 
 private:
     PyObject* _module; // weak
     PyObject* _notSpecified;
     int _rawTensorTypesLen;
-    PyObject* _rawTensorTypes[10];
+    PyObject* _rawTensorTypes[10]; // copy of rf.RawTensorTypes: numpy.ndarray and co; size is just arbitrary upper limit
     PyObject* _tensorType;
     PyObject* _dimType;
     PyObject* _globalBackend;
@@ -172,11 +200,14 @@ private:
     PyObject* _cachedOps[NumBackendsWithCachedOps * NumTOps];
     PyObject* _torchTensorType;
     PyObject* _torchBackend;
+    struct { PyObject* dtype; PyObject* name; } _torchTensorDTypes[5]; // size is just arbitrary; check _torchTensorDTypesInit
+    PyObject* _torchTensorNameToDTypeDict;
 
     bool _torchTensorTypeMaybeInit(PyObject* obj);
     bool _torchTensorInit();
     bool _cachedOpInit(BackendWithCachedOps backend);
     bool _cachedOpInitTorch();
+    bool _torchTensorDTypesInit();
 };
 
 #endif

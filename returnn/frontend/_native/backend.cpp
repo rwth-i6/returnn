@@ -32,27 +32,58 @@ PyObject* pyRawTorchTensorGetDType(PyObject *self, PyObject *const *args, Py_ssi
         PyErr_SetString(PyExc_TypeError, "raw_torch_tensor_get_dtype() takes exactly 1 argument: raw_tensor");
         return NULL;
     }
+
+    PyModuleState* modState = (PyModuleState*) PyModule_GetState(self);
+    if(!modState) return NULL;
+
     PyObjectScopedRef dtypeObj = PyObject_GetAttrString(args[0], "dtype");
     if(!dtypeObj) return NULL;
-    PyObjectScopedRef dtypeStr = PyObject_Str(dtypeObj); // e.g. "torch.float32"
-    if(!dtypeStr) return NULL;
-    if(!PyUnicode_Check(dtypeStr)) {
-        PyErr_Format(
-            PyExc_TypeError,
-            "raw_torch_tensor_get_dtype: dtype.__str__() did not return a string, from dtype %R", dtypeObj.get());
-        return NULL;
+
+    {
+        // very fast path - check some predefined types (faster than dict lookup, small number only)
+        bool error = false;
+        PyObject* name = modState->torchTensorDTypeName(dtypeObj, error);
+        if(!name && error) return NULL;
+        if(name) {
+            Py_INCREF(name);
+            return name;
+        }
     }
-    const char* dtypeStrC = PyUnicode_AsUTF8(dtypeStr);
-    if(memcmp(dtypeStrC, "torch.", 6) != 0) {
-        PyErr_Format(
-            PyExc_TypeError,
-            "raw_torch_tensor_get_dtype: "
-            "dtype.__str__() did not return a string starting with 'torch.', from dtype %R, str '%s'",
-            dtypeObj.get(), dtypeStrC);
-        return NULL;
+
+    PyObject* dispatchTable = modState->torchTensorNameToDTypeDict();
+    if(!dispatchTable) return NULL;
+    {
+        PyObject* name = PyDict_GetItem(dispatchTable, dtypeObj);
+        if(name) {
+            Py_INCREF(name);
+            return name;
+        }
     }
-    dtypeStrC += 6;
-    return PyUnicode_FromString(dtypeStrC);
+
+    {
+        PyObjectScopedRef dtypeStr = PyObject_Str(dtypeObj); // e.g. "torch.float32"
+        if(!dtypeStr) return NULL;
+        if(!PyUnicode_Check(dtypeStr)) {
+            PyErr_Format(
+                PyExc_TypeError,
+                "raw_torch_tensor_get_dtype: dtype.__str__() did not return a string, from dtype %R", dtypeObj.get());
+            return NULL;
+        }
+        const char* dtypeStrC = PyUnicode_AsUTF8(dtypeStr);
+        if(memcmp(dtypeStrC, "torch.", 6) != 0) {
+            PyErr_Format(
+                PyExc_TypeError,
+                "raw_torch_tensor_get_dtype: "
+                "dtype.__str__() did not return a string starting with 'torch.', from dtype %R, str '%s'",
+                dtypeObj.get(), dtypeStrC);
+            return NULL;
+        }
+        dtypeStrC += 6;
+        dtypeStr = PyUnicode_InternFromString(dtypeStrC);
+        if(!dtypeStr) return NULL;
+        if(PyDict_SetItem(dispatchTable, dtypeObj, dtypeStr) < 0) return NULL;
+        return dtypeStr.release();
+    }
 }
 
 PyObject* getBackendForTensor(PyModuleState* modState, PyObject* obj) {

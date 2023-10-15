@@ -372,3 +372,26 @@ const char* rawOpName(RawOp op) {
     }
     return names[op];
 }
+
+bool PyModuleState::_torchTensorDTypesInit() {
+    PyObjectScopedRef mod = PyImport_ImportModule("torch");
+    if(!mod) return false;
+
+    int i = 0;
+    #define AddDType(dtype_) \
+        assert(i < sizeof(_torchTensorDTypes)/sizeof(_torchTensorDTypes[0])); \
+        _torchTensorDTypes[i].dtype = PyObject_GetAttrString(mod, #dtype_); \
+        if(!_torchTensorDTypes[i].dtype) return false; \
+        _torchTensorDTypes[i].name = PyUnicode_InternFromString(#dtype_); \
+        if(!_torchTensorDTypes[i].name) return false; \
+        ++i;
+
+    AddDType(float32);
+    AddDType(int32);
+    AddDType(int64);
+    AddDType(float16);
+    AddDType(bool);
+
+    #undef AddDType
+    return true;
+}
