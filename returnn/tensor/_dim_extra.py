@@ -1266,8 +1266,9 @@ class _DimMixin:
     _SimpleEquality = False
 
     def is_equal(
-        self,
-        other,
+        self: Dim,
+        other: Dim,
+        *,
         ignore_feature_dim=False,
         allow_same_feature_dim=False,
         allow_same_spatial_dim=None,
@@ -1276,7 +1277,7 @@ class _DimMixin:
         unknown_spatial_matches=False,
         undefined_matches=False,
         derived_matches=False,
-    ):
+    ) -> bool:
         """
         Compares self to other for equality.
 
@@ -1297,10 +1298,11 @@ class _DimMixin:
         :param bool unknown_spatial_matches:
         :param bool undefined_matches:
         :param bool derived_matches:
-        :rtype: bool
         """
         if self is other:  # first some fast path check
             return True
+        if not isinstance(other, Dim):
+            return False
         if self.special or other.special:
             return False  # only true if same instance, check above
         if allow_same_spatial_dim is None:
@@ -1381,37 +1383,56 @@ class _DimMixin:
         if not isinstance(other, _d.Dim):
             return False
         if self._SimpleEquality:  # fast path
-            # See is_equal for the logic. This here should exactly replicate it.
-            # Inline self = self.get_same_base().
+            return self._eq_simple(other)
+        return self.is_equal(other)
+
+    def _eq_simple(self: Dim, other: Dim) -> bool:
+        if self is other:  # fast path
+            return True
+        if not isinstance(other, _d.Dim):
+            return False
+        # See is_equal for the logic. This here should exactly replicate it.
+        # Inline self = self.get_same_base().
+        # noinspection PyProtectedMember
+        while self._extra and self._extra.same_as:
+            # noinspection PyProtectedMember,PyMethodFirstArgAssignment
+            self = self._extra.same_as
+        # Inline other = other.get_same_base().
+        # noinspection PyProtectedMember
+        while other._extra and other._extra.same_as:
             # noinspection PyProtectedMember
-            while self._extra and self._extra.same_as:
-                # noinspection PyProtectedMember,PyMethodFirstArgAssignment
-                self = self._extra.same_as
-            # Inline other = other.get_same_base().
+            other = other._extra.same_as
+        if self is other:
+            return True
+        # noinspection PyProtectedMember
+        if self._extra and other._extra:
+            self_extra = self._extra
             # noinspection PyProtectedMember
-            while other._extra and other._extra.same_as:
-                # noinspection PyProtectedMember
-                other = other._extra.same_as
-            if self is other:
+            other_extra = other._extra
+            if self_extra.kind == other_extra.kind == DimTypes.Batch:
                 return True
             # noinspection PyProtectedMember
-            if self._extra and other._extra:
-                self_extra = self._extra
-                # noinspection PyProtectedMember
-                other_extra = other._extra
-                if self_extra.kind == other_extra.kind == DimTypes.Batch:
-                    return True
-                # noinspection PyProtectedMember
-                if self_extra.auto_generated and other_extra.auto_generated and self.description == other.description:
-                    return True
-            return False
-        return self.is_equal(other)
+            if self_extra.auto_generated and other_extra.auto_generated and self.description == other.description:
+                return True
+        return False
 
     def __ne__(self: Dim, other: Dim) -> bool:
         """
         :param other:
         """
-        return not (self == other)
+        if self is other:  # fast path
+            return False
+        if not isinstance(other, _d.Dim):
+            return True
+        if self._SimpleEquality:  # fast path
+            return not self._eq_simple(other)
+        return not self.is_equal(other)
+
+    def _ne_simple(self: Dim, other: Dim) -> bool:
+        return not self._eq_simple(other)
+
+    def _ne_generic(self: Dim, other: Dim) -> bool:
+        return not self.is_equal(other)
 
     def __hash__(self):
         """
@@ -2830,11 +2851,19 @@ def dim_cmp_value(obj):
 def _behavior_version_reset_callback():
     # Reset things we did in _handle_new_min_version.
     _DimMixin._SimpleEquality = False
+    # noinspection PyProtectedMember
+    _DimMixin.__eq__ = _DimMixin.is_equal
+    # noinspection PyProtectedMember
+    _DimMixin.__ne__ = _DimMixin._ne_generic
 
 
 def _behavior_version_handle_new_min_version_callback():
     if util.BehaviorVersion.get() >= 16:
         _DimMixin._SimpleEquality = True
+        # noinspection PyProtectedMember
+        _DimMixin.__eq__ = _DimMixin._eq_simple
+        # noinspection PyProtectedMember
+        _DimMixin.__ne__ = _DimMixin._ne_simple
 
 
 def _setup():
