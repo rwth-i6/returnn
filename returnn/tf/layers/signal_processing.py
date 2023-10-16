@@ -765,7 +765,7 @@ class StftLayer(_ConcatInputLayer):
         in_spatial_dims=None,
         out_spatial_dims=None,
         out_dim=None,
-        use_time_mask=None,
+        use_time_mask=False,
         **kwargs,
     ):
         """
@@ -876,7 +876,7 @@ class IstftLayer(_ConcatInputLayer):
         in_spatial_dims=None,
         out_spatial_dims=None,
         out_dim=None,
-        use_time_mask=None,
+        use_time_mask=False,
         **kwargs,
     ):
         """

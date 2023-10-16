@@ -6114,7 +6114,7 @@ class ConvLayer(_ConcatInputLayer):
         filter=None,
         filter_perm=None,
         bias=None,
-        use_time_mask=None,
+        use_time_mask=False,
         **kwargs,
     ):
         """
@@ -6127,8 +6127,9 @@ class ConvLayer(_ConcatInputLayer):
             For static axes, "same_static" padding is the same as "same" padding,
             i.e. filter_size - 1 - (T + strides - 1) % strides.
             For dynamic axes, "same_static" calculates the total padding size as
-            filter_size - 1, i.e. it is independent of the length T of the axis and the striding. To avoid skipping
-            any frames on the right, we set left_padding = (filter_size - strides) // 2.
+            filter_size - 1, i.e. it is independent of the length T of the axis and the striding.
+            For dynamic axes, to avoid skipping any frames on the right,
+            we set left_padding = (filter_size - strides) // 2.
         :param int|Sequence[int] strides: strides for the spatial dims,
             i.e. length of this tuple should be the same as filter_size, or a single int.
         :param int|Sequence[int] dilation_rate: dilation for the spatial dims
@@ -6454,7 +6455,7 @@ class ConvLayer(_ConcatInputLayer):
         input_expand_dims=0,
         input_split_feature_dim=None,
         input_add_feature_dim=False,
-        use_time_mask=None,
+        use_time_mask=False,
     ):
         """
         :param Data input_data:
@@ -6574,20 +6575,20 @@ class ConvLayer(_ConcatInputLayer):
     @classmethod
     def get_input_placeholder_with_same_static_padding(
         cls,
-        input_data,
-        num_batch_dims,
-        filter_size,
-        strides,
-        out_batch_feature_major,
-    ):
+        input_data: Data,
+        num_batch_dims: int,
+        filter_size: Sequence[int],
+        strides: Sequence[int],
+        out_batch_feature_major: bool,
+    )- > tf.Tensor:
         """
         Returns the placeholder of input_data with same_static padding applied to it.
+
         :param input_data:
         :param num_batch_dims:
         :param filter_size:
         :param strides:
         :param out_batch_feature_major:
-        :return:
         """
         paddings = [[0, 0] for _ in range(input_data.batch_ndim)]
         for axis, dim in enumerate(input_data.dims):
@@ -6870,7 +6871,7 @@ class PoolLayer(_ConcatInputLayer):
         out_dim=None,
         out_spatial_dims=None,
         use_channel_first=NotSpecified,
-        use_time_mask=None,
+        use_time_mask=False,
         **kwargs,
     ):
         """
@@ -7133,7 +7134,7 @@ class TransposedConvLayer(_ConcatInputLayer):
         filter=None,
         filter_perm=None,
         bias=None,
-        use_time_mask=None,
+        use_time_mask=False,
         **kwargs,
     ):
         """
