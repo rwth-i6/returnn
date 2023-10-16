@@ -6,8 +6,6 @@ from __future__ import annotations
 
 from typing import Optional, Union, Sequence, List, Tuple, Dict
 import typing
-
-import numpy
 import tensorflow as tf
 import contextlib
 import returnn.tf.compat as tf_compat
