@@ -6882,8 +6882,9 @@ class PoolLayer(_ConcatInputLayer):
             For static axes, "same_static" padding is the same as "same" padding,
             i.e. filter_size - 1 - (T + strides - 1) % strides.
             For dynamic axes, "same_static" calculates the total padding size as
-            filter_size - 1, i.e. it is independent of the length T of the axis and the striding. To avoid skipping
-            any frames on the right, we set left_padding = (filter_size - strides) // 2.
+            filter_size - 1, i.e. it is independent of the length T of the axis and the striding.
+            For dynamic axes, to avoid skipping any frames on the right,
+            we set left_padding = (filter_size - strides) // 2.
         :param tuple[int]|int dilation_rate:
         :param tuple[int]|int|None strides: in contrast to tf.nn.pool, the default (if it is None)
             will be set to pool_size
