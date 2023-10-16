@@ -765,6 +765,7 @@ class StftLayer(_ConcatInputLayer):
         in_spatial_dims=None,
         out_spatial_dims=None,
         out_dim=None,
+        use_time_mask=False,
         **kwargs,
     ):
         """
@@ -774,6 +775,7 @@ class StftLayer(_ConcatInputLayer):
         :param list[Dim|str]|None in_spatial_dims:
         :param list[Dim]|None out_spatial_dims:
         :param Dim|None out_dim:
+        :param bool use_time_mask:
         """
         fft_size = fft_size or frame_size
         assert "n_out" not in kwargs
@@ -790,7 +792,11 @@ class StftLayer(_ConcatInputLayer):
         assert self.input_data.have_time_axis()
         in_dim = self.input_data.feature_dim_or_sparse_dim
         input_data, num_batch_dims = ConvLayer.transform_input(
-            self.input_data, network=self.network, in_dim=in_dim, in_spatial_dims=in_spatial_dims
+            self.input_data,
+            network=self.network,
+            in_dim=in_dim,
+            in_spatial_dims=in_spatial_dims,
+            use_time_mask=use_time_mask,
         )
         x = input_data.placeholder
         if input_data.have_feature_axis():
@@ -870,6 +876,7 @@ class IstftLayer(_ConcatInputLayer):
         in_spatial_dims=None,
         out_spatial_dims=None,
         out_dim=None,
+        use_time_mask=False,
         **kwargs,
     ):
         """
@@ -879,6 +886,7 @@ class IstftLayer(_ConcatInputLayer):
         :param list[Dim|str]|None in_spatial_dims:
         :param list[Dim]|None out_spatial_dims:
         :param Dim|None out_dim:
+        :param bool use_time_mask:
         """
         fft_size = fft_size or frame_size
         assert "n_out" not in kwargs
@@ -891,7 +899,11 @@ class IstftLayer(_ConcatInputLayer):
         in_dim = self.input_data.feature_dim_or_sparse_dim
         assert in_dim.dimension == fft_size // 2 + 1
         input_data, num_batch_dims = ConvLayer.transform_input(
-            self.input_data, network=self.network, in_dim=in_dim, in_spatial_dims=in_spatial_dims
+            self.input_data,
+            network=self.network,
+            in_dim=in_dim,
+            in_spatial_dims=in_spatial_dims,
+            use_time_mask=use_time_mask,
         )
         # shape should be (B, ..., T, F)
         input_data = input_data.copy_with_feature_dim_axis(-1)
