@@ -6580,7 +6580,7 @@ class ConvLayer(_ConcatInputLayer):
         filter_size: Sequence[int],
         strides: Sequence[int],
         out_batch_feature_major: bool,
-    )- > tf.Tensor:
+    ) -> tf.Tensor:
         """
         Returns the placeholder of input_data with same_static padding applied to it.
 
