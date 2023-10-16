@@ -4,8 +4,7 @@ import _setup_test_env  # noqa
 import sys
 import unittest
 import torch
-import torch.utils.data.datapipes as dp
-from torchdata.dataloader2 import DataLoader2
+from torch.utils.data import DataLoader
 
 from returnn.datasets.basic import Dataset
 from returnn.datasets.generating import Task12AXDataset
@@ -14,7 +13,7 @@ from returnn.torch.data import returnn_dataset_wrapper
 from returnn.util import better_exchook
 
 
-def get_loader_from_returnn_dataset(dataset: Dataset, mp_manager: torch.multiprocessing.Manager) -> DataLoader2:
+def get_loader_from_returnn_dataset(dataset: Dataset, mp_manager: torch.multiprocessing.Manager) -> DataLoader:
     # Follow mostly similar logic as in the PT engine.
 
     epoch_mp_shared = mp_manager.Value("i", 0)
@@ -28,7 +27,6 @@ def get_loader_from_returnn_dataset(dataset: Dataset, mp_manager: torch.multipro
     batch_size = 5
     max_seqs = 2
     batches_dataset = data_pipeline.BatchingIterDataPipe(wrapped_dataset, batch_size=batch_size, max_seqs=max_seqs)
-    batches_dataset = dp.iter.Collator(batches_dataset, collate_fn=data_pipeline.collate_batch)
 
     # Test different ways to deepcopy/serialize the dataset.
     # This is what DataLoader2 also would do, although DataLoader2 also uses dill as a fallback,
@@ -44,7 +42,7 @@ def get_loader_from_returnn_dataset(dataset: Dataset, mp_manager: torch.multipro
 
     pickle.loads(pickle.dumps(batches_dataset))
 
-    loader = DataLoader2(batches_dataset)
+    loader = DataLoader(batches_dataset, batch_size=None, collate_fn=data_pipeline.collate_batch)
     return loader
 
 

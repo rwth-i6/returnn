@@ -528,8 +528,7 @@ def _custom_loop(argv):
     from returnn.torch.frontend.bridge import rf_module_to_pt_module
 
     import torch
-    from torchdata.dataloader2 import DataLoader2
-    import torch.utils.data.datapipes as dp
+    from torch.utils.data import DataLoader
 
     arg_parser = argparse.ArgumentParser()
     arg_parser.add_argument("--device", default=None)
@@ -556,8 +555,7 @@ def _custom_loop(argv):
     batch_size = config["batch_size"]
     max_seqs = config["max_seqs"]
     batches_dataset = data_pipeline.BatchingIterDataPipe(wrapped_dataset, batch_size=batch_size, max_seqs=max_seqs)
-    batches_dataset = dp.iter.Collator(batches_dataset, collate_fn=data_pipeline.collate_batch)
-    data_loader = DataLoader2(batches_dataset)
+    data_loader = DataLoader(batches_dataset, batch_size=None, collate_fn=data_pipeline.collate_batch)
     data_iter = iter(data_loader)
 
     # noinspection PyUnresolvedReferences,PyProtectedMember

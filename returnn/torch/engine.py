@@ -12,10 +12,9 @@ import torch
 import time
 from torch.distributed import init_process_group
 from torch.nn.parallel import DistributedDataParallel
-import torch.utils.data.datapipes as dp
+from torch.utils.data import DataLoader
 from torch import autocast
 from torch.cuda import amp
-from torchdata.dataloader2 import DataLoader2
 from random import random
 
 from returnn.config import Config
@@ -54,8 +53,8 @@ class Engine(EngineBase):
         self.train_dataset = None  # type: Optional[Dataset]
         self.eval_datasets = {}
         self.extern_data = None  # type: Optional[TensorDict]
-        self._train_dataloader = None  # type: Optional[DataLoader2]
-        self._eval_dataloaders = {}  # type: Dict[str, DataLoader2]
+        self._train_dataloader = None  # type: Optional[DataLoader]
+        self._eval_dataloaders = {}  # type: Dict[str, DataLoader]
 
         self._start_epoch = None  # type: Optional[int]
         self._final_epoch = None  # type: Optional[int]
@@ -425,7 +424,7 @@ class Engine(EngineBase):
 
         print(" ".join(eval_dump_str) if eval_dump_str else "(No evaluations.)", file=log.v1)
 
-    def _create_data_loader(self, dataset: Dataset) -> DataLoader2:
+    def _create_data_loader(self, dataset: Dataset) -> DataLoader:
         """
         :param dataset: RETURNN dataset
         :return: PyTorch data loader created from given RETURNN dataset
@@ -452,17 +451,8 @@ class Engine(EngineBase):
         batch_size = self.config.typed_value("batch_size", 1)
         max_seqs = self.config.int("max_seqs", -1)
         batches_dataset = data_pipeline.BatchingIterDataPipe(wrapped_dataset, batch_size=batch_size, max_seqs=max_seqs)
-        batches_dataset = dp.iter.Collator(batches_dataset, collate_fn=data_pipeline.collate_batch)
 
-        try:
-            return DataLoader2(batches_dataset)
-        except TypeError as exc:
-            try:
-                # noinspection PyPackageRequirements
-                import dill
-            except ImportError:
-                raise ModuleNotFoundError("Possible type error in DataLoader2 due to missing module 'dill'") from exc
-            raise
+        return DataLoader(batches_dataset, batch_size=None, collate_fn=data_pipeline.collate_batch)
 
     def _run_step(self, extern_data: TensorDict, *, train_flag: bool = False, train_func: bool):
         """
