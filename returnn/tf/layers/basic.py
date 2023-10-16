@@ -6,6 +6,8 @@ from __future__ import annotations
 
 from typing import Optional, Union, Sequence, List, Tuple, Dict
 import typing
+
+import numpy
 import tensorflow as tf
 import contextlib
 import returnn.tf.compat as tf_compat
@@ -6114,6 +6116,7 @@ class ConvLayer(_ConcatInputLayer):
         filter=None,
         filter_perm=None,
         bias=None,
+        use_time_mask=None,
         **kwargs,
     ):
         """
@@ -6121,7 +6124,13 @@ class ConvLayer(_ConcatInputLayer):
             for 1D/2D/3D conv.
             The input data ndim must match, or you can add dimensions via input_expand_dims or input_add_feature_dim.
             It will automatically swap the batch-dim to the first axis of the input data.
-        :param str padding: "same" or "valid"
+        :param str padding: "same", "valid" or "same_static".
+            "same_static" is calculated differently depending on whether an axis is static or dynamic.
+            For static axes, "same_static" padding is the same as "same" padding,
+            i.e. filter_size - 1 - (T + strides - 1) % strides.
+            For dynamic axes, "same_static" calculates the total padding size as
+            filter_size - 1, i.e. it is independent of the length T of the axis and the striding. To avoid skipping
+            any frames on the right, we set left_padding = (filter_size - strides) // 2.
         :param int|Sequence[int] strides: strides for the spatial dims,
             i.e. length of this tuple should be the same as filter_size, or a single int.
         :param int|Sequence[int] dilation_rate: dilation for the spatial dims
@@ -6144,11 +6153,12 @@ class ConvLayer(_ConcatInputLayer):
         :param LayerBase|None filter: if given, will not create an own parameter, but use this as the filter
         :param dict[str,str]|None filter_perm: transposes the filter (input filter as layer)
         :param LayerBase|None bias: if given, will not create an own parameter, but use this as the bias
+        :param bool use_time_mask:
         """
         from returnn.util import BehaviorVersion
 
         padding = padding.upper()
-        assert padding in ["SAME", "VALID"], "no other padding supported at the moment"
+        assert padding in ["SAME", "VALID", "SAME_STATIC"], "no other padding supported at the moment"
         assert "out_type" not in kwargs, "don't set out_type explicitly for this layer"
         assert len(filter_size) in (1, 2, 3), "only 1D conv, 2D conv or 3D conv supported"
         super(ConvLayer, self).__init__(in_dim=in_dim, out_dim=out_dim, **kwargs)
@@ -6175,6 +6185,7 @@ class ConvLayer(_ConcatInputLayer):
             input_expand_dims=input_expand_dims,
             input_split_feature_dim=input_split_feature_dim,
             input_add_feature_dim=input_add_feature_dim,
+            use_time_mask=use_time_mask,
         )
         if self.output.feature_dim_axis == num_batch_dims:
             out_batch_feature_major = True
@@ -6273,7 +6284,19 @@ class ConvLayer(_ConcatInputLayer):
         data_format = None
         if out_batch_feature_major:
             data_format = {1: "NCW", 2: "NCHW", 3: "NCDHW"}[len(filter_size)]
-        x = input_data.placeholder
+
+        if padding == "SAME_STATIC":
+            x = self.get_input_placeholder_with_same_static_padding(
+                input_data=input_data,
+                num_batch_dims=num_batch_dims,
+                filter_size=[size.dimension for size in filter_size],
+                strides=strides,
+                out_batch_feature_major=out_batch_feature_major,
+            )
+            padding = "VALID"  # input is now already "same" padded, therefore use "valid" padding from here
+        else:
+            x = input_data.placeholder
+
         extended_batch_shape = None
         if num_batch_dims > 1:
             x_shape = tf.shape(x)
@@ -6433,6 +6456,7 @@ class ConvLayer(_ConcatInputLayer):
         input_expand_dims=0,
         input_split_feature_dim=None,
         input_add_feature_dim=False,
+        use_time_mask=None,
     ):
         """
         :param Data input_data:
@@ -6445,6 +6469,7 @@ class ConvLayer(_ConcatInputLayer):
           will be divided by input_split_feature_dim, thus it must be a multiple of that value.
         :param bool input_add_feature_dim: will add a dim at the end and use input-feature-dim == 1,
           and use the original input feature-dim as a spatial dim.
+        :param bool use_time_mask:
         :return: (transformed input, num batch dims). all batch dims are at the front
         :rtype: (Data, int)
         """
@@ -6533,7 +6558,62 @@ class ConvLayer(_ConcatInputLayer):
                 if i >= num_batch_dims and i != input_data.feature_dim_axis
             ]
             cls._check_defined_in_spatial_dims(len(in_spatial_dims) <= 1)
+
+        if use_time_mask:
+            input_data = input_data.copy()
+            x = input_data.placeholder
+            for dim in in_spatial_dims:
+                if not dim.need_masking():
+                    continue
+                axis = input_data.get_axis_from_description(dim)
+                mask = input_data.get_sequence_mask_broadcast(axis=axis)
+                x = tf_util.where_bc(mask, x, 0.)
+
+            input_data.placeholder = x
+
         return input_data, num_batch_dims
+
+    @classmethod
+    def get_input_placeholder_with_same_static_padding(
+        cls,
+        input_data,
+        num_batch_dims,
+        filter_size,
+        strides,
+        out_batch_feature_major,
+    ):
+        paddings = [[0, 0] for _ in range(input_data.batch_ndim)]
+        for axis, dim in enumerate(input_data.dims):
+            if axis < num_batch_dims:
+                continue
+            if axis == num_batch_dims and out_batch_feature_major:
+                # input_data has dimensions [batch] + [channels] + [spatial] * len(filter_size)
+                continue
+            if axis >= num_batch_dims + len(filter_size) and not out_batch_feature_major:
+                # input_data has dimensions [batch] + [spatial] * len(filter_size) + [channels]
+                break
+            filter_size_for_axis = filter_size[axis - num_batch_dims - out_batch_feature_major]
+            stride_size_for_axis = strides[axis - num_batch_dims - out_batch_feature_major]
+            if dim.is_dynamic():
+                # use static same padding
+                padding_size_for_axis = filter_size_for_axis - 1
+            else:  # dim is static
+                # use standard same padding
+                padding_size_for_axis = filter_size_for_axis - 1 - (
+                    dim.dimension + stride_size_for_axis - 1) % stride_size_for_axis
+
+            if dim.is_dynamic():
+                # Smallest possible padding_size_for_axis is filter_size_for_axis - stride_size_for_axis,
+                # thus use this for left_padding, to avoid that we ignore any frames at the end.
+                left_padding = (filter_size_for_axis - stride_size_for_axis) // 2
+                assert left_padding >= 0  # Not implemented yet
+            else:
+                # left padding is either the same as right padding or one less
+                left_padding = padding_size_for_axis // 2
+            right_padding = padding_size_for_axis - left_padding
+            paddings[axis] = [left_padding, right_padding]
+        x = tf.pad(input_data.placeholder, paddings)
+        return x
 
     @classmethod
     def calc_out_dim(cls, in_dim, filter_size, stride, padding, dilation_rate=1):
@@ -6639,6 +6719,8 @@ class ConvLayer(_ConcatInputLayer):
         # Be relaxed about incorrect input data. Throw errors later. This can also work during template construction.
         if not input_data.have_batch_axis():
             input_data = input_data.copy_add_batch_dim(batch_dim_axis=0)
+        if padding == "SAME_STATIC":
+            padding = "SAME"  # "same_static" padding leads to the same output dimensions as "same" padding
         input_data, num_batch_dims = cls.transform_input(
             input_data,
             network=network,
@@ -6780,12 +6862,19 @@ class PoolLayer(_ConcatInputLayer):
         out_dim=None,
         out_spatial_dims=None,
         use_channel_first=NotSpecified,
+        use_time_mask=None,
         **kwargs,
     ):
         """
         :param str mode: "max" or "avg"
         :param tuple[int] pool_size: shape of the window of each reduce
-        :param str padding: "valid" or "same"
+        :param str padding: "same", "valid" or "same_static".
+            "same_static" is calculated differently depending on whether an axis is static or dynamic.
+            For static axes, "same_static" padding is the same as "same" padding,
+            i.e. filter_size - 1 - (T + strides - 1) % strides.
+            For dynamic axes, "same_static" calculates the total padding size as
+            filter_size - 1, i.e. it is independent of the length T of the axis and the striding. To avoid skipping
+            any frames on the right, we set left_padding = (filter_size - strides) // 2.
         :param tuple[int]|int dilation_rate:
         :param tuple[int]|int|None strides: in contrast to tf.nn.pool, the default (if it is None)
             will be set to pool_size
@@ -6794,13 +6883,14 @@ class PoolLayer(_ConcatInputLayer):
         :param Dim|None out_dim:
         :param list[Dim]|None out_spatial_dims:
         :param bool|NotSpecified use_channel_first: if set, will transform input to NCHW format
+        :param bool use_time_mask:
         """
         assert "n_out" not in kwargs
         assert "out_type" not in kwargs
         mode = mode.upper()
         assert mode in ["MAX", "AVG"]
         padding = padding.upper()
-        assert padding in ["VALID", "SAME"]
+        assert padding in ["VALID", "SAME", "SAME_STATIC"]
         if isinstance(dilation_rate, int):
             dilation_rate = [dilation_rate] * len(pool_size)
         assert len(dilation_rate) == len(pool_size)
@@ -6825,7 +6915,11 @@ class PoolLayer(_ConcatInputLayer):
             assert self.input_data.have_feature_axis()
             out_dim = in_dim = self.input_data.feature_dim_or_sparse_dim
         input_data, num_batch_dims = ConvLayer.transform_input(
-            self.input_data, network=self.network, in_dim=in_dim, in_spatial_dims=in_spatial_dims
+            self.input_data,
+            network=self.network,
+            in_dim=in_dim,
+            in_spatial_dims=in_spatial_dims,
+            use_time_mask=use_time_mask,
         )
         # We want to prepare the input data such that the batch-dim(s) is the very first,
         # the feature-dim is the very last ("NHWC" format) or right after batch-dim ("NCHW"),
@@ -6854,7 +6948,19 @@ class PoolLayer(_ConcatInputLayer):
         data_format = None
         if out_batch_feature_major:
             data_format = {1: "NCW", 2: "NCHW", 3: "NCDHW"}[len(pool_size)]
-        x = input_data.placeholder
+
+        if padding == "SAME_STATIC":
+            x = ConvLayer.get_input_placeholder_with_same_static_padding(
+                input_data=input_data,
+                num_batch_dims=num_batch_dims,
+                filter_size=pool_size,
+                strides=strides,
+                out_batch_feature_major=out_batch_feature_major,
+            )
+            padding = "VALID"  # input is now already "same" padded, therefore use "valid" padding from here
+        else:
+            x = input_data.placeholder
+
         extended_batch_shape = None
         if num_batch_dims > 1:
             x_shape = tf.shape(x)
@@ -7019,6 +7125,7 @@ class TransposedConvLayer(_ConcatInputLayer):
         filter=None,
         filter_perm=None,
         bias=None,
+        use_time_mask=None,
         **kwargs,
     ):
         """
@@ -7038,6 +7145,7 @@ class TransposedConvLayer(_ConcatInputLayer):
         :param LayerBase|None filter: if given, will not create an own parameter, but use this as the filter
         :param dict[str,str]|None filter_perm: transposes the filter (input filter as layer)
         :param LayerBase|None bias: if given, will not create an own parameter, but use this as the bias
+        :param bool use_time_mask:
         """
         from returnn.tf.util.basic import get_initializer, get_activation_function, get_shape
 
@@ -7049,7 +7157,11 @@ class TransposedConvLayer(_ConcatInputLayer):
             self.input_data.have_feature_axis()
         ), "this should be our single input feature dim now. otherwise use input_add_feature_dim"
         input_data, num_batch_dims = ConvLayer.transform_input(
-            self.input_data, network=self.network, in_dim=in_dim, in_spatial_dims=in_spatial_dims
+            self.input_data,
+            network=self.network,
+            in_dim=in_dim,
+            in_spatial_dims=in_spatial_dims,
+            use_time_mask=use_time_mask,
         )
         input_data = input_data.copy_with_feature_last()
         spatial_axes = list(range(num_batch_dims, input_data.batch_ndim - 1))
