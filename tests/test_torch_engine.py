@@ -285,6 +285,51 @@ def test_max_seq_len():
     assert False, "Should have contained sequences"
 
 
+def test_data_loader_oggzip():
+    from test_Dataset import create_ogg_zip_txt_only_dataset_mult_seqs
+
+    ds_num_seqs = 23
+    ds_max_seq_len = 11
+    max_seqs = 3
+    config = Config({"max_seqs": max_seqs, "batch_size": max_seqs * ds_max_seq_len})
+    with create_ogg_zip_txt_only_dataset_mult_seqs(num_seqs=ds_num_seqs, max_seq_len=ds_max_seq_len) as dataset:
+        dataset.init_seq_order(epoch=1)
+        engine = Engine(config=config)
+        data_loader = engine._create_data_loader(dataset)
+        num_batches = 0
+        num_seqs = 0
+        last_batch_num_seqs = None
+        for batch in data_loader:
+            assert isinstance(batch, dict)
+            data: torch.Tensor = batch["classes"]
+            assert isinstance(data, torch.Tensor)
+            num_batches += 1
+            num_seqs += data.shape[0]
+            if last_batch_num_seqs is not None:
+                assert last_batch_num_seqs == max_seqs
+            last_batch_num_seqs = data.shape[0]
+        assert 1 <= last_batch_num_seqs <= max_seqs
+        assert num_batches == -(-num_seqs // max_seqs) and num_seqs == ds_num_seqs
+
+    ds_num_seqs = 5
+    ds_max_seq_len = 5
+    max_seqs = 2
+    config = Config({"max_seqs": max_seqs, "batch_size": max_seqs * ds_max_seq_len})
+    batches = []
+    with create_ogg_zip_txt_only_dataset_mult_seqs(num_seqs=ds_num_seqs, max_seq_len=ds_max_seq_len) as dataset:
+        dataset.init_seq_order(epoch=1)
+        engine = Engine(config=config)
+        data_loader = engine._create_data_loader(dataset)
+        for batch in data_loader:
+            assert isinstance(batch, dict)
+            data: torch.Tensor = batch["classes"]
+            batches.append(data.numpy().tolist())
+    print(batches)
+    # The following depends on the random data generation in create_ogg_zip_txt_only_dataset_mult_seqs,
+    # but we fixed the seed and the random number generator, so this should stay the same, unless we change the code.
+    assert batches == [[[12, 8, 9, 11], [16, 0, 0, 0]], [[6, 25, 18, 20, 5], [28, 10, 28, 14, 0]], [[17, 23]]]
+
+
 if __name__ == "__main__":
     better_exchook.install()
     if len(sys.argv) <= 1:

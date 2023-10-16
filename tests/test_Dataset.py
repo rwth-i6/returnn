@@ -484,6 +484,7 @@ def test_get_seq_order():
 
 @contextlib.contextmanager
 def create_ogg_zip_txt_only_dataset_opts(*, text: str = "hello world", seq_tag: str = "sequence0.wav"):
+    """create OggZipDataset"""
     import zipfile
 
     with tempfile.NamedTemporaryFile(suffix=".zip") as tmp_zip_file, tempfile.NamedTemporaryFile(
@@ -508,10 +509,49 @@ def create_ogg_zip_txt_only_dataset_opts(*, text: str = "hello world", seq_tag: 
 
 
 @contextlib.contextmanager
-def create_ogg_zip_txt_only_dataset(*, text: str = "hello world", seq_tag: str = "sequence0.wav"):
+def create_ogg_zip_txt_only_dataset(*, text: str = "hello world", seq_tag: str = "sequence0.wav", num_seqs: int = 1):
+    """create OggZipDataset"""
     from returnn.datasets.audio import OggZipDataset
 
     with create_ogg_zip_txt_only_dataset_opts(text=text, seq_tag=seq_tag) as opts:
+        dataset = init_dataset(opts)
+        assert isinstance(dataset, OggZipDataset)
+        yield dataset
+
+
+@contextlib.contextmanager
+def create_ogg_zip_txt_only_dataset_mult_seqs(*, seed: int = 1, num_seqs: int = 100, max_seq_len: int = 100):
+    """create OggZipDataset"""
+    import zipfile
+    from returnn.datasets.audio import OggZipDataset
+
+    rnd = numpy.random.RandomState(seed)
+
+    with tempfile.NamedTemporaryFile(suffix=".zip") as tmp_zip_file, tempfile.NamedTemporaryFile(
+        suffix=".txt"
+    ) as tmp_vocab_file:
+        vocab = {"@": 2, " ": 1, ".": 0}
+        vocab.update({chr(i): i - ord("a") + 3 for i in range(ord("a"), ord("z") + 1)})
+        tmp_vocab_file.write(repr(vocab).encode("utf8"))
+        tmp_vocab_file.flush()
+
+        seqs = []
+        for i in range(num_seqs):
+            text = "".join(rnd.choice(list(vocab.keys())) for _ in range(rnd.randint(1, max_seq_len + 1)))
+            seqs.append({"text": text, "duration": rnd.uniform(1.0, 5.0), "file": f"seq{i}.wav"})
+
+        with zipfile.ZipFile(tmp_zip_file.name, "w") as zip_file:
+            zip_file.writestr(
+                os.path.basename(tmp_zip_file.name)[:-4] + ".txt",
+                repr(seqs),
+            )
+
+        opts = {
+            "class": "OggZipDataset",
+            "path": tmp_zip_file.name,
+            "audio": None,
+            "targets": {"class": "CharacterTargets", "vocab_file": tmp_vocab_file.name, "seq_postfix": []},
+        }
         dataset = init_dataset(opts)
         assert isinstance(dataset, OggZipDataset)
         yield dataset
