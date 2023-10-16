@@ -6567,7 +6567,7 @@ class ConvLayer(_ConcatInputLayer):
                     continue
                 axis = input_data.get_axis_from_description(dim)
                 mask = input_data.get_sequence_mask_broadcast(axis=axis)
-                x = tf_util.where_bc(mask, x, 0.)
+                x = tf_util.where_bc(mask, x, 0.0)
 
             input_data.placeholder = x
 
@@ -6582,6 +6582,15 @@ class ConvLayer(_ConcatInputLayer):
         strides,
         out_batch_feature_major,
     ):
+        """
+        Returns the placeholder of input_data with same_static padding applied to it.
+        :param input_data:
+        :param num_batch_dims:
+        :param filter_size:
+        :param strides:
+        :param out_batch_feature_major:
+        :return:
+        """
         paddings = [[0, 0] for _ in range(input_data.batch_ndim)]
         for axis, dim in enumerate(input_data.dims):
             if axis < num_batch_dims:
@@ -6599,8 +6608,9 @@ class ConvLayer(_ConcatInputLayer):
                 padding_size_for_axis = filter_size_for_axis - 1
             else:  # dim is static
                 # use standard same padding
-                padding_size_for_axis = filter_size_for_axis - 1 - (
-                    dim.dimension + stride_size_for_axis - 1) % stride_size_for_axis
+                padding_size_for_axis = (
+                    filter_size_for_axis - 1 - (dim.dimension + stride_size_for_axis - 1) % stride_size_for_axis
+                )
 
             if dim.is_dynamic():
                 # Smallest possible padding_size_for_axis is filter_size_for_axis - stride_size_for_axis,
