@@ -960,8 +960,10 @@ class _DimMixin:
             return False
         if self.capacity is not None:
             return True
-        if not self.dyn_size_ext:
-            return True  # unknown
+        if not self.dyn_size_ext:  # unknown, so we can only guess
+            if self.is_batch_dim():
+                return False
+            return True
         return self.dyn_size_ext.batch_ndim > 0
 
     def can_be_used_as_dim(self):
