@@ -7551,7 +7551,7 @@ def compute_sampled_logits(
 
         all_ids = tf.concat([labels_flat, sampled], 0)
 
-        all_w = tf.nn.embedding_lookup(weights, all_ids, partition_strategy=partition_strategy)
+        all_w = tf_compat.v1.nn.embedding_lookup(weights, all_ids, partition_strategy=partition_strategy)
         if all_w.dtype != inputs.dtype:
             all_w = tf.cast(all_w, inputs.dtype)
 
@@ -7560,7 +7560,7 @@ def compute_sampled_logits(
         sampled_w = tf.slice(all_w, [tf.shape(labels_flat)[0], 0], [-1, -1])
         sampled_logits = tf.matmul(inputs, sampled_w, transpose_b=True)
 
-        all_b = tf.nn.embedding_lookup(biases, all_ids, partition_strategy=partition_strategy)
+        all_b = tf_compat.v1.nn.embedding_lookup(biases, all_ids, partition_strategy=partition_strategy)
         if all_b.dtype != inputs.dtype:
             all_b = tf.cast(all_b, inputs.dtype)
         true_b = tf.slice(all_b, [0], tf.shape(labels_flat))
