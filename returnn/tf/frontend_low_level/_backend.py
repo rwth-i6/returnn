@@ -500,7 +500,7 @@ class TFBackend(Backend[tf.Tensor]):
                                 i, d = [
                                     (i, d) for i, d in enumerate(size_actual.dim_tags) if d not in out_data.dim_tags
                                 ][0]
-                                assert not d.is_dynamic()  # not implemented
+                                assert not d.need_masking()  # not implemented
                                 size_all *= d.get_dim_value()
                                 s = tf.reduce_sum(size_actual.placeholder, axis=i)
                                 size_actual = size_actual.copy_template_excluding_axis(i)

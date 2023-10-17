@@ -326,7 +326,7 @@ def copy_compatible_reduce(source, target, reduce_type):
         return source.copy_compatible_to(target, check_sparse=False, check_dtype=False)
     # extra_dims now contains dims only in source but not in target
     for d in extra_dims:
-        assert not d.is_dynamic(), "%r, %r, cannot reduce dynamic dim %r (just not implemented here...)" % (
+        assert not d.need_masking(), "%r, %r, cannot reduce dynamic dim %r (just not implemented here...)" % (
             source,
             target,
             d,

@@ -381,7 +381,7 @@ def pack_padded(
     """
     assert not enforce_sorted  # not implemented yet...
     assert len(dims) > 0
-    dyn_dims = [d for d in dims if d.is_dynamic()]
+    dyn_dims = [d for d in dims if d.need_masking()]
     assert len(dyn_dims) == 1  # not implemented otherwise yet...
     mask = source.get_sequence_mask_tensor(source.get_axis_from_description(dyn_dims[0]))
     return rf.masked_select(source, mask=mask, dims=dims, out_dim=out_dim)

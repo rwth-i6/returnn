@@ -2388,7 +2388,7 @@ class LengthLayer(LayerBase):
                 sparse=sparse,
                 dim=None if sparse else NotSpecified,
             )
-        if not dim.is_dynamic():  # static
+        if dim.is_static():
             return Data(
                 name="%s_static_dim" % name,
                 dim_tags=(),
@@ -2455,7 +2455,7 @@ class SoftmaxOverSpatialLayer(_ConcatInputLayer):
         energy_data = self.input_data
         assert energy_data.dtype.startswith("float")
         axis = self._get_axis_to_reduce(input_data=energy_data, axis=axis, exception_prefix=self)
-        if not energy_data.dim_tags[axis].is_dynamic():
+        if energy_data.dim_tags[axis].is_static():
             self.recurrent = False
         # tf.nn.softmax operates on the last axis.
         energy_data = energy_data.copy_move_axis(axis, -1)
@@ -2463,7 +2463,7 @@ class SoftmaxOverSpatialLayer(_ConcatInputLayer):
         axis = energy_data.batch_ndim - 1
         # if the time-axis is static, we can skip the masking
         if use_time_mask is None:
-            use_time_mask = energy_data.is_axis_dynamic(axis)
+            use_time_mask = energy_data.dims[axis].need_masking()
         if start or window_start is not None or window_size is not None:
             assert use_time_mask
         if use_time_mask:
@@ -4725,9 +4725,9 @@ class SplitDimsLayer(_ConcatInputLayer):
         if isinstance(axis, int):
             data = data.copy_as_batch_major()
         axis = data.get_axis_from_description(axis)
-        old_dim = data.dim_tags[axis]
+        old_dim: Dim = data.dim_tags[axis]
         if pad_to_multiples is None:
-            pad_to_multiples = data.is_axis_dynamic(axis)
+            pad_to_multiples = old_dim.is_dynamic()
 
         from returnn.tf.util.basic import get_shape
 
@@ -4761,7 +4761,7 @@ class SplitDimsLayer(_ConcatInputLayer):
         rem_const_size = None
         if len(new_pos_dims) == len(dims) - 1:
             rem_const_size = util.prod(new_pos_dims)
-        assert not data.is_axis_dynamic(axis) or pad_to_multiples or rem_const_size == 1
+        assert old_dim.is_static() or pad_to_multiples or rem_const_size == 1
         if pad_to_multiples and (not isinstance(rem_const_size, int) or rem_const_size != 1):
             indices = [i for i, d in enumerate(dims) if isinstance(d, int) and d == -1]
             assert len(indices) == 1, "%s: exactly one -1 dim in %r expected" % (self, dims)
@@ -4866,10 +4866,10 @@ class SplitDimsLayer(_ConcatInputLayer):
         if isinstance(axis, int):
             data = data.copy_as_batch_major()
         axis = data.get_axis_from_description(axis)
+        axis_dim_tag: Dim = data.dim_tags[axis]
         if pad_to_multiples is None:
-            pad_to_multiples = data.is_axis_dynamic(axis)
+            pad_to_multiples = axis_dim_tag.is_dynamic()
 
-        axis_dim_tag = data.dim_tags[axis]
         rem_dim_indices = [
             i
             for i, d in enumerate(dims)
@@ -5145,7 +5145,7 @@ class FlattenBatchLayer(_ConcatInputLayer):
         x = self.input_data
         axis = x.get_axis_from_description(axis, allow_int=False)
         assert axis != x.batch_dim_axis
-        if x.is_axis_dynamic(axis):
+        if x.dims[axis].need_masking():
             if batch_major:
                 self.output.placeholder = tf_util.flatten_with_seq_len_mask(
                     x.placeholder,
@@ -7611,7 +7611,7 @@ class ReduceLayer(_ConcatInputLayer):
                             # We need to remove this.
                             # https://github.com/rwth-i6/returnn/issues/1242
                             i, d = [(i, d) for i, d in enumerate(size_actual.dim_tags) if d not in out_data.dim_tags][0]
-                            assert not d.is_dynamic()  # not implemented
+                            assert not d.need_masking()  # not implemented
                             size_all *= d.get_dim_value()
                             s = tf.reduce_sum(size_actual.placeholder, axis=i)
                             size_actual = size_actual.copy_template_excluding_axis(i)
@@ -10429,7 +10429,7 @@ class SearchSortedLayer(LayerBase):
         transposed_sorted_data = sorted_data.copy_transpose(perm=sorted_batch_axes + [sorted_axis])  # [B,T]
         transposed_values_data = values_data.copy_transpose(perm=values_batch_axes + values_non_batch_axes)  # [B,F]
         x = transposed_sorted_data.placeholder  # [B,T]
-        if transposed_sorted_data.is_axis_dynamic(axis=-1):
+        if transposed_sorted_data.dims[-1].need_masking():
             from returnn.tf.util.basic import where_bc, sequence_mask
 
             seq_mask = transposed_sorted_data.get_sequence_mask_broadcast(axis=-1)
@@ -13254,7 +13254,7 @@ class ViaLayerLoss(Loss):
                 error_signal = (
                     self.output.placeholder - self.align_layer.output.copy_compatible_to(self.output).placeholder
                 )
-            if self.output.is_time_axis_dynamic():
+            if self.output.get_time_dim_tag().need_masking():
                 seq_mask_bc = self.output.get_sequence_mask_broadcast()
                 error_signal = where_bc(seq_mask_bc, error_signal, 0.0)
             if self.loss_wrt_to_act_in:

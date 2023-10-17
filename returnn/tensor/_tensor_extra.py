@@ -3131,7 +3131,7 @@ class _TensorMixin(_TensorMixinBase):
         :return: all dim tags with dynamic size
         :rtype: list[Dim]
         """
-        return [dim_tag for dim_tag in self._dims if dim_tag.is_dynamic()]
+        return [dim_tag for dim_tag in self._dims if dim_tag.is_dynamic_seq_length()]
 
     def get_size_dim_tag(self, number):
         """
