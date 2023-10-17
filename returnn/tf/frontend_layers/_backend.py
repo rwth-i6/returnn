@@ -446,6 +446,40 @@ class ReturnnLayersBackend(Backend[Layer]):
             return -rf.matmul(targets, log_probs, reduce=axis)
 
     @staticmethod
+    def ctc_loss(
+        *,
+        logits: Tensor,
+        targets: Tensor,
+        input_spatial_dim: Dim,
+        targets_spatial_dim: Dim,
+        blank_index: int,
+        max_approx: bool = False,
+    ) -> Tensor:
+        """CTC"""
+        assert targets.sparse_dim and targets.sparse_dim == logits.feature_dim
+        logits = rfl.make_layer(
+            {
+                "class": "reinterpret_data",
+                "from": logits,
+                "set_axes": {"T": input_spatial_dim, "F": targets.sparse_dim},
+            },
+            name="logits",
+        )
+        targets = rfl.make_layer(
+            {"class": "reinterpret_data", "from": targets, "set_axes": {"T": targets_spatial_dim}}, name="targets"
+        )
+        return rfl.make_layer(
+            {
+                "class": "ctc_loss",
+                "logits": logits,
+                "targets": targets,
+                "blank_index": blank_index,
+                "max_approx": max_approx,
+            },
+            name="ctc_loss",
+        )
+
+    @staticmethod
     def create_parameter_raw(tensor: rf.Parameter) -> Layer:
         """create parameter"""
         return rfl.make_layer(

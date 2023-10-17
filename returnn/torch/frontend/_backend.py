@@ -573,6 +573,56 @@ class TorchBackend(Backend[torch.Tensor]):
         return cross_entropy
 
     @staticmethod
+    def ctc_loss(
+        *,
+        logits: Tensor,
+        targets: Tensor,
+        input_spatial_dim: Dim,
+        targets_spatial_dim: Dim,
+        blank_index: int,
+        max_approx: bool = False,
+    ) -> Tensor:
+        """CTC"""
+        if max_approx:
+            raise NotImplementedError("ctc_loss: max_approx not implemented for PyTorch")
+        assert targets.sparse_dim and targets.sparse_dim == logits.feature_dim
+        # PyTorch expects the logits to be of shape (T, B, C) where T is the input spatial dim.
+        batch_dims = logits.remaining_dims((input_spatial_dim, logits.feature_dim))
+        logits = logits.copy_transpose([input_spatial_dim] + batch_dims + [logits.feature_dim])
+        logits_raw: torch.Tensor = logits.raw_tensor
+        input_lengths = input_spatial_dim.dyn_size_ext.copy_transpose(batch_dims).raw_tensor
+        logits_raw_shape = logits_raw.shape  # [T, B..., C]
+        if len(batch_dims) != 1:
+            logits_raw = torch.reshape(logits_raw, logits_raw.shape[:1] + (-1,) + logits_raw.shape[-1:])  # [T, B', C]
+            input_lengths = torch.reshape(input_lengths, (-1,))  # [B']
+        log_probs = torch.nn.functional.log_softmax(logits_raw, dim=-1)
+        # PyTorch expects the targets to be of shape (B, S) where S is the targets spatial dim.
+        targets = targets.copy_transpose(batch_dims + [targets_spatial_dim])
+        targets_raw = targets.raw_tensor  # [B..., S]
+        targets_lengths = targets_spatial_dim.dyn_size_ext.copy_transpose(batch_dims).raw_tensor
+        if len(batch_dims) != 1:
+            targets_raw = torch.reshape(targets_raw, (-1, targets_raw.shape[-1]))  # [B', S]
+            targets_lengths = torch.reshape(targets_lengths, (-1,))  # [B']
+        loss_raw = torch.nn.functional.ctc_loss(
+            log_probs=log_probs,
+            targets=targets_raw,
+            input_lengths=input_lengths,
+            target_lengths=targets_lengths,
+            blank=blank_index,
+            zero_infinity=True,
+            reduction="none",
+        )
+        if len(batch_dims) != 1:
+            loss_raw = torch.reshape(loss_raw, logits_raw_shape[1:-1])
+        loss = Tensor(
+            name="ctc_loss",
+            dims=batch_dims,
+            raw_tensor=loss_raw,
+            dtype=logits.dtype,
+        )
+        return loss
+
+    @staticmethod
     def create_parameter_raw(tensor: rf.Parameter) -> torch.nn.Parameter:
         """
         :return: parameter

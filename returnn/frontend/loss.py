@@ -7,6 +7,9 @@ from returnn.tensor import Tensor, Dim
 import returnn.frontend as rf
 
 
+__all__ = ["cross_entropy", "ctc_loss"]
+
+
 def cross_entropy(
     *,
     estimated: Tensor,
@@ -49,3 +52,39 @@ def cross_entropy(
     if target.sparse_dim:
         return -rf.gather(log_prob, indices=target, axis=axis)
     return -rf.matmul(target, log_prob, reduce=axis)
+
+
+def ctc_loss(
+    *,
+    logits: Tensor,
+    targets: Tensor,
+    input_spatial_dim: Dim,
+    targets_spatial_dim: Dim,
+    blank_index: int,
+    max_approx: bool = False,
+) -> Tensor:
+    """
+    Calculates the CTC loss.
+
+    Internally, this uses :func:`returnn.tf.native_op.ctc_loss`
+    which is equivalent to tf.nn.ctc_loss but more efficient.
+
+    Output is of shape [B].
+
+    :param logits: (before softmax). shape [B...,input_spatial,C]
+    :param targets: sparse. shape [B...,targets_spatial] -> C
+    :param input_spatial_dim: spatial dim of input logits
+    :param targets_spatial_dim: spatial dim of targets
+    :param blank_index: vocab index of the blank symbol
+    :param max_approx: if True, use max instead of sum over alignments (max approx, Viterbi)
+    :return: loss shape [B...]
+    """
+    # noinspection PyProtectedMember
+    return logits._raw_backend.ctc_loss(
+        logits=logits,
+        targets=targets,
+        input_spatial_dim=input_spatial_dim,
+        targets_spatial_dim=targets_spatial_dim,
+        blank_index=blank_index,
+        max_approx=max_approx,
+    )

@@ -587,6 +587,21 @@ class Backend(Generic[T]):
         raise NotImplementedError
 
     @staticmethod
+    def ctc_loss(
+        *,
+        logits: Tensor,
+        targets: Tensor,
+        input_spatial_dim: Dim,
+        targets_spatial_dim: Dim,
+        blank_index: int,
+        max_approx: bool = False,
+    ) -> Tensor:
+        """
+        Calculates the CTC loss.
+        """
+        raise NotImplementedError
+
+    @staticmethod
     def have_sequence_mask_raw() -> bool:
         """
         :return: whether we have a sequence_mask_raw implementation
