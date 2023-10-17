@@ -37,6 +37,7 @@ _returnn_root_dir = os.path.dirname(_my_dir)
 config = dict(
     task="train",
     backend="torch",
+    torch_dataloader_opts=dict(num_workers=1),
     # batching="laplace:.1000",  -- dummy dataset does not support this
     batch_size=15_000,
     max_seqs=200,
