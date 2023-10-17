@@ -6016,6 +6016,11 @@ class ReinterpretDataLayer(_ConcatInputLayer):
                     assert enforce_batch_major or enforce_time_major, "%r: explicit set_axes %r" % (name, set_axes)
                 if i is not None:
                     i = out.get_axis_from_description(i)
+                if s == "time_dim_axis" and out.version >= 2:
+                    # time_dim_axis is not allowed with version >= 2, so make a version 1 copy of the tensor
+                    out_opts = out.get_kwargs()
+                    out_opts.pop("version", None)
+                    out = Data(raw_tensor=out.raw_tensor, version=1, **out_opts)
                 setattr(out, s, i)
         if out.size_placeholder and size_base:  # size_placeholder might be None, e.g. via DataNotAvailableLayer
             assert size_base.output.size_placeholder
