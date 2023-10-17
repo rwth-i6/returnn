@@ -940,7 +940,7 @@ class _DimMixin:
         """
         :return: static
         """
-        return not self.is_dynamic()
+        return self.dimension is not None
 
     def need_masking(self):
         """
