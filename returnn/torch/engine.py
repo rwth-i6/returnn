@@ -452,7 +452,24 @@ class Engine(EngineBase):
         max_seqs = self.config.int("max_seqs", -1)
         batches_dataset = data_pipeline.BatchingIterDataPipe(wrapped_dataset, batch_size=batch_size, max_seqs=max_seqs)
 
-        return DataLoader(batches_dataset, batch_size=None, collate_fn=data_pipeline.collate_batch)
+        loader_opts = self.config.typed_value("torch_dataloader_opts") or {}
+        assert isinstance(loader_opts, dict), f"config torch_dataloader_opts, expected dict, got {type(loader_opts)}"
+        if loader_opts.get("num_workers"):
+            loader_opts.setdefault("persistent_workers", True)
+
+        return DataLoader(
+            batches_dataset,
+            collate_fn=data_pipeline.collate_batch,
+            # Batching is already done by BatchingIterDataPipe.
+            batch_size=None,
+            # Explicitly not use the following opts, which are not supported and/or do not make sense
+            # for an iterable-style dataset.
+            shuffle=None,
+            sampler=None,
+            batch_sampler=None,
+            # User-defined
+            **loader_opts,
+        )
 
     def _run_step(self, extern_data: TensorDict, *, train_flag: bool = False, train_func: bool):
         """
