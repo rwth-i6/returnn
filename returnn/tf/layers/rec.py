@@ -1878,15 +1878,17 @@ class _SubnetworkRecCell(object):
                             # Now we do the same logic more explicitly, to directly take over dim tags,
                             # and not work with size_placeholder.
                             earlier_dyn_dims = [
-                                (i, d) for i, d in enumerate(earlier_layer_output.dims) if d.is_dynamic()
+                                (i, d) for i, d in enumerate(earlier_layer_output.dims) if d.is_dynamic_seq_length()
                             ]
-                            new_dyn_dims = [(i, d) for i, d in enumerate(layer_.output.dims) if d.is_dynamic()]
+                            new_dyn_dims = [
+                                (i, d) for i, d in enumerate(layer_.output.dims) if d.is_dynamic_seq_length()
+                            ]
                             if len(earlier_dyn_dims) == len(new_dyn_dims):
                                 out_dims = list(layer_.output.dims)
                                 for (new_axis, new_dim), (old_axis, old_dim) in zip(new_dyn_dims, earlier_dyn_dims):
                                     new_dim: Dim
                                     old_dim: Dim
-                                    assert old_dim.is_dynamic() and new_dim.is_dynamic()
+                                    assert old_dim.is_dynamic_seq_length() and new_dim.is_dynamic_seq_length()
                                     if new_dim.dyn_size_ext and new_dim.dyn_size_ext.raw_tensor is not None:
                                         continue
                                     if not old_dim.dyn_size_ext:

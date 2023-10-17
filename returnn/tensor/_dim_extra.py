@@ -521,7 +521,7 @@ class _DimMixin:
             if self.batch == batch:
                 return self
             return batch.batch_dim_tag
-        if not self.is_dynamic():
+        if self.is_static():
             # If static dim, no effect.
             assert not self.batch
             return self
@@ -896,7 +896,7 @@ class _DimMixin:
         """
         if self.is_batch_dim():
             return True
-        if not self.is_dynamic() and self.dimension is not None:
+        if not self.dyn_size_ext and self.dimension is not None:
             return True
         if self.dyn_size_ext:
             return True
@@ -915,8 +915,8 @@ class _DimMixin:
 
         if self.is_batch_dim():
             return True
-        if not self.is_dynamic():
-            return self.dimension is not None
+        if self.is_static():
+            return True
         dim = self.get_for_batch_ctx(batch=batch, ctx=ctx, allow_none=True)
         if dim:
             return bool(dim.dyn_size_ext)
@@ -930,17 +930,25 @@ class _DimMixin:
                 return True
         return False
 
+    def is_dynamic_seq_length(self) -> bool:
+        """
+        :return: whether the dim is not static. usually means that it has seq lengths
+        """
+        return self.dimension is None and (
+            (self.dyn_size_ext and self.dyn_size_ext.dims) or (not self.dyn_size_ext and not self.is_batch_dim())
+        )
+
     def is_dynamic(self) -> bool:
         """
         :return: whether the dim is not static. usually means that it has seq lengths
         """
-        return self.dimension is None and not self.is_batch_dim()
+        return self.dimension is None
 
     def is_static(self) -> bool:
         """
         :return: static
         """
-        return not self.is_dynamic()
+        return self.dimension is not None
 
     def need_masking(self):
         """
@@ -952,8 +960,10 @@ class _DimMixin:
             return False
         if self.capacity is not None:
             return True
-        if not self.dyn_size_ext:
-            return True  # unknown
+        if not self.dyn_size_ext:  # unknown, so we can only guess
+            if self.is_batch_dim():
+                return False
+            return True
         return self.dyn_size_ext.batch_ndim > 0
 
     def can_be_used_as_dim(self):
@@ -1078,7 +1088,7 @@ class _DimMixin:
         :param bool template_only:
         :param _backend:
         """
-        if not self.is_dynamic():
+        if self.is_static():
             return
         self._validate_in_current_graph()
         if self.dyn_size_ext and (self.dyn_size_ext.placeholder is not None or template_only):
@@ -1719,7 +1729,7 @@ class _DimMixin:
                 other_same_base._make_extra().derived_from_op = self.derived_from_op
             elif other_same_base.derived_from_op and not self.derived_from_op:
                 self._make_extra().derived_from_op = other_same_base.derived_from_op
-        if self._extra and not other_same_base.is_dynamic():
+        if self._extra and other_same_base.is_static():
             # Those might be set via get_batch_for_ctx for an undefined dim,
             # which now becomes static due to `other`.
             self._extra.batch = None
@@ -2815,7 +2825,7 @@ def _representative_tag(terms: Sequence[Dim]) -> Optional[Dim]:
     # Also see _OpLinearTerm.representative_tag().
     # First find any dynamic.
     for term_ in terms:
-        if term_.is_dynamic():
+        if term_.is_dynamic_seq_length():
             return term_
     # Now find non-unspecified.
     for term_ in terms:

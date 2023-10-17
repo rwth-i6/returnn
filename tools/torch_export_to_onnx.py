@@ -241,15 +241,13 @@ def main():
 
     dynamic_axes = {}
     for k, v in list(extern_data.data.items()) + list(model_outputs.data.items()):
-        dynamic_axes[k] = {i: dim.name for i, dim in enumerate(v.dims) if dim.is_dynamic() or dim.is_batch_dim()}
+        dynamic_axes[k] = {i: dim.name for i, dim in enumerate(v.dims) if dim.is_dynamic()}
         for i, dim in enumerate(v.dims):
             if dim.dyn_size_ext and dim.dyn_size_ext.dims == ():
                 continue
             if dim.dyn_size_ext:
                 dynamic_axes[f"{k}:size{i}"] = {
-                    j: dim_.name
-                    for j, dim_ in enumerate(dim.dyn_size_ext.dims)
-                    if dim_.is_dynamic() or dim_.is_batch_dim()
+                    j: dim_.name for j, dim_ in enumerate(dim.dyn_size_ext.dims) if dim_.is_dynamic()
                 }
 
     print("*** Input names:", list(extern_data_raw.keys()))

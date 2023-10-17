@@ -405,7 +405,7 @@ def _default_dim_order(tensor: Tensor) -> Sequence[Dim]:
     if tensor.have_time_axis():
         rem_dims.remove(tensor.get_time_dim_tag())
         dims.append(tensor.get_time_dim_tag())
-    dyn_dims = [d for d in rem_dims if d.is_dynamic()]
+    dyn_dims = [d for d in rem_dims if d.is_dynamic_seq_length()]
     if len(dyn_dims) > 1:
         raise Exception(
             f"Cannot infer order of dims automatically for output {tensor}. Please specify `dims` explicitly."

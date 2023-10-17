@@ -1094,7 +1094,7 @@ class _NetDictBuilderCtx:
                     )
             dim_tags = list(data_template.dim_tags)
             for dim in dim_tags:
-                if dim.is_batch_dim() or not dim.is_dynamic():
+                if dim.is_batch_dim() or dim.is_static():
                     continue
                 # We need dyn_size_ext to know the implicit dims, to correctly set out_shape.
                 # If dyn_size_ext is not set yet, try to complete it.
