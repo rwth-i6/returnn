@@ -456,14 +456,9 @@ class ReturnnLayersBackend(Backend[Layer]):
         max_approx: bool = False,
     ) -> Tensor:
         """CTC"""
-        assert targets.sparse_dim and targets.sparse_dim == logits.feature_dim
+        assert targets.sparse_dim and targets.sparse_dim.dimension <= logits.feature_dim.dimension
         logits = rfl.make_layer(
-            {
-                "class": "reinterpret_data",
-                "from": logits,
-                "set_axes": {"T": input_spatial_dim, "F": targets.sparse_dim},
-            },
-            name="logits",
+            {"class": "reinterpret_data", "from": logits, "set_axes": {"T": input_spatial_dim}}, name="logits"
         )
         targets = rfl.make_layer(
             {"class": "reinterpret_data", "from": targets, "set_axes": {"T": targets_spatial_dim}}, name="targets"

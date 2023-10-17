@@ -585,7 +585,7 @@ class TorchBackend(Backend[torch.Tensor]):
         """CTC"""
         if max_approx:
             raise NotImplementedError("ctc_loss: max_approx not implemented for PyTorch")
-        assert targets.sparse_dim and targets.sparse_dim == logits.feature_dim
+        assert targets.sparse_dim and targets.sparse_dim.dimension <= logits.feature_dim.dimension
         # PyTorch expects the logits to be of shape (T, B, C) where T is the input spatial dim.
         batch_dims = logits.remaining_dims((input_spatial_dim, logits.feature_dim))
         logits = logits.copy_transpose([input_spatial_dim] + batch_dims + [logits.feature_dim])

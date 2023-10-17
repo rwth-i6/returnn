@@ -169,6 +169,7 @@ def test_linear_ctc():
     in_dim = Dim(7, name="in")
     hidden_dim = Dim(13, name="hidden")
     out_dim = Dim(11, name="classes")
+    out_wb_dim = out_dim + 1
     extern_data = TensorDict(
         {
             "data": Tensor("data", [batch_dim, time_dim, in_dim], dtype="float32"),
@@ -180,7 +181,7 @@ def test_linear_ctc():
         def __init__(self):
             super().__init__()
             self.layer1 = rf.Linear(in_dim, hidden_dim)
-            self.layer2 = rf.Linear(hidden_dim, out_dim)
+            self.layer2 = rf.Linear(hidden_dim, out_wb_dim)
 
         def __call__(self, x: Tensor) -> Tensor:
             x = rf.relu(self.layer1(x))
@@ -196,11 +197,17 @@ def test_linear_ctc():
             targets=targets,
             input_spatial_dim=time_dim,
             targets_spatial_dim=target_time_dim,
-            blank_index=0,
+            blank_index=out_wb_dim.dimension - 1,
         )
         loss.mark_as_default_output()
 
-    run_model(extern_data, lambda *, epoch, step: _Net(), _forward_step)
+    run_model(
+        extern_data,
+        lambda *, epoch, step: _Net(),
+        _forward_step,
+        dyn_dim_min_sizes={time_dim: 4, target_time_dim: 2},
+        dyn_dim_max_sizes={time_dim: 11, target_time_dim: 5},
+    )
 
 
 def test_dropout():
