@@ -528,11 +528,11 @@ class Backend(Generic[T]):
         :return: tensor with elementwise activation applied
         """
         out = tensor.copy_template(name=func)
-        if func == "abs" and out.dtype.startswith("complex"):
-            num_bits = int(out.dtype[len("complex") :])
-            out.dtype = f"float{num_bits // 2}"
         # noinspection PyProtectedMember
-        out.raw_tensor = tensor._raw_backend.activation_raw(tensor.raw_tensor, func)
+        out_raw = tensor._raw_backend.activation_raw(tensor.raw_tensor, func)
+        # noinspection PyProtectedMember
+        out.dtype = tensor._raw_backend.get_dtype_name_raw(out_raw)
+        out.raw_tensor = out_raw
         return out
 
     @staticmethod
