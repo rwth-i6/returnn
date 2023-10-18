@@ -378,7 +378,7 @@ def log(a: Tensor) -> Tensor:
 def safe_log(a: Tensor, *, eps: Optional[float] = None) -> Tensor:
     """safe_log"""
     if eps is None:
-        eps = numpy.nextafter(numpy.array(0, dtype=a.dtype), numpy.array(1, dtype=a.dtype))
+        eps = {"float16": 6e-08, "bfloat16": 9.1835e-41, "float32": 1.4013e-45, "float64": 4.9407e-324}[a.dtype]
     # noinspection PyProtectedMember
     return a._raw_backend.safe_log(a, eps=eps)
 
