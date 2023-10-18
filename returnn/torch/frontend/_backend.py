@@ -494,7 +494,9 @@ class TorchBackend(Backend[torch.Tensor]):
             mask = tensor.get_sequence_mask_broadcast(axis=axis)
             inf_value = get_global_inf_value()
             tensor.raw_tensor = torch.where(mask, tensor.raw_tensor, -inf_value)
-        out.raw_tensor = torch.softmax(tensor.raw_tensor, dim=tensor.dims.index(axis))
+        out_raw = torch.softmax(tensor.raw_tensor, dim=tensor.dims.index(axis))
+        out.dtype = TorchBackend.get_dtype_name_raw(out_raw)
+        out.raw_tensor = out_raw
         return out
 
     @staticmethod
@@ -511,7 +513,9 @@ class TorchBackend(Backend[torch.Tensor]):
             mask = tensor.get_sequence_mask_broadcast(axis=axis)
             inf_value = get_global_inf_value()
             tensor.raw_tensor = torch.where(mask, tensor.raw_tensor, -inf_value)
-        out.raw_tensor = torch.log_softmax(tensor.raw_tensor, dim=tensor.dims.index(axis))
+        out_raw = torch.log_softmax(tensor.raw_tensor, dim=tensor.dims.index(axis))
+        out.dtype = TorchBackend.get_dtype_name_raw(out_raw)
+        out.raw_tensor = out_raw
         return out
 
     @staticmethod
@@ -955,7 +959,6 @@ class TorchBackend(Backend[torch.Tensor]):
 
         if use_mask and any(dim.dyn_size_ext for dim in reduce):
             raise NotImplementedError("masking in matmul reduce not yet implemented")
-        assert a.dtype == b.dtype, f"matmul: dtypes do not match: {a} vs {b}"
 
         a_dims = a.dims
         b_dims = b.dims
@@ -1041,7 +1044,9 @@ class TorchBackend(Backend[torch.Tensor]):
         b_unique_dims = [b_dims[i] for i in b_unique_axes]
         result_dims = common_dims + a_unique_dims + b_unique_dims
 
-        result_tensor = Tensor(name="dot", dims=result_dims, raw_tensor=raw_result, dtype=a.dtype)
+        result_tensor = Tensor(
+            name="dot", dims=result_dims, raw_tensor=raw_result, dtype=TorchBackend.get_dtype_name_raw(raw_result)
+        )
 
         return result_tensor
 
@@ -1561,7 +1566,9 @@ class TorchBackend(Backend[torch.Tensor]):
             )
         else:
             raise ValueError(f"invalid number of filter dims {filter_size}, expected 1, 2, or 3")
-        out = Tensor("conv", dims=batch_dims + [out_dim] + list(out_spatial_dims), dtype=source.dtype)
+        out = Tensor(
+            "conv", dims=batch_dims + [out_dim] + list(out_spatial_dims), dtype=TorchBackend.get_dtype_name_raw(out_raw)
+        )
         if len(batch_dims) == 1:
             out.raw_tensor = out_raw
         else:

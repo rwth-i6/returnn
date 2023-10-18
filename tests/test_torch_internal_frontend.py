@@ -265,24 +265,6 @@ def test_combine_mul_float_tensors():
     assert result.dtype == result_alt1.dtype == result_alt2.dtype == "float32"
 
 
-def test_combine_truediv_int_tensors():
-    a_raw = torch.tensor([2, 2, 2])
-    b_raw = torch.tensor([1, 2, 3])
-
-    feature_dim = Dim(3)
-
-    a = Tensor(name="a", raw_tensor=a_raw, dims=[feature_dim], dtype="int64")
-    b = Tensor(name="b", raw_tensor=b_raw, dims=[feature_dim], dtype="int64")
-
-    # Until type promotion logic is implemented, we don't allow this.
-    with pytest.raises(ValueError):
-        a / b
-    with pytest.raises(ValueError):
-        rf.combine(a, "/", b)
-    with pytest.raises(ValueError):
-        rf.combine(a, "truediv", b)
-
-
 def test_combine_truediv_float_tensors():
     a_raw = torch.tensor([2.0, 2.0, 2.0])
     b_raw = torch.tensor([1.0, 2.0, 3.0])

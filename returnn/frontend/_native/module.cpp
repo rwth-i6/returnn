@@ -377,7 +377,7 @@ bool PyModuleState::_torchTensorDTypesInit() {
     PyObjectScopedRef mod = PyImport_ImportModule("torch");
     if(!mod) return false;
 
-    int i = 0;
+    unsigned int i = 0;
     #define AddDType(dtype_) \
         assert(i < sizeof(_torchTensorDTypes)/sizeof(_torchTensorDTypes[0])); \
         _torchTensorDTypes[i].dtype = PyObject_GetAttrString(mod, #dtype_); \

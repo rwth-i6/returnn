@@ -58,7 +58,7 @@ def bin_op_out_template(
     b: Union[Tensor[T], int, float, numpy.number],
     *,
     name: str,
-    res_dtype: Optional[str],
+    copy_sparse_dim: bool = True,
     allow_broadcast_all_sources: Optional[bool] = None,
     dim_order: Optional[Sequence[Dim]] = None,
     allow_scalar: bool = True,
@@ -70,7 +70,7 @@ def bin_op_out_template(
     :param a:
     :param b:
     :param name: for returned Tensor. no other functionality
-    :param res_dtype: if not given, infer from a and b
+    :param copy_sparse_dim:
     :param allow_broadcast_all_sources: if True, it is allowed that neither a nor b has all dims of the result.
         Not needed when out_dims is specified explicitly.
     :param dim_order: defines the order of the resulting dims. if None, it is automatically inferred from a and b.
@@ -93,10 +93,6 @@ def bin_op_out_template(
     # sanity checks
     # noinspection PyProtectedMember
     assert a._raw_backend == b._raw_backend, "Cannot combine tensors from two different frontends, e.g. TF and PT"
-    if res_dtype is None:
-        assert (
-            a.dtype == b.dtype
-        ), f"For now only operations with Tensors of the same dtypes are supported, got {a} and {b}"
     all_dims = []
     for dim in a.dims + b.dims:
         if dim in all_dims:
@@ -125,9 +121,9 @@ def bin_op_out_template(
             raise TypeError(f"invalid type for allow_broadcast_all_sources: {type(allow_broadcast_all_sources)}")
     if dim_order:
         all_dims.sort(key=lambda d: dim_order.index(d) if d in dim_order else len(dim_order))
-    out = Tensor(name, dims=all_dims, dtype=res_dtype or src_dtype)
+    out = Tensor(name, dims=all_dims, dtype=src_dtype)
     out.feature_dim = res_feature_dim(a, b)
-    if not res_dtype:
+    if copy_sparse_dim:
         out.sparse_dim = res_sparse_dim(a, b)
     if not allow_scalar or a.dims:
         a_raw = a.copy_compatible_to_dims_raw(all_dims)

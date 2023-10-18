@@ -284,7 +284,7 @@ class Engine(EngineBase):
                 step_idx % self._accum_grad_multiple_step
             ) != (self._accum_grad_multiple_step - 1) else nullcontext():
                 if self._grad_scaler is not None:
-                    self._grad_scaler.scale(total_loss).backward()
+                    self._grad_scaler.scale(total_loss.raw_tensor).backward()
                 else:
                     total_loss.raw_tensor.backward()
 

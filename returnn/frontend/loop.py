@@ -236,10 +236,6 @@ def _check_matching_loop_var_templates(loop_var_templates: S, loop_vars: S):
                 f"loop var {path} template {template} does not match var {x}, "
                 f"different dims (no matter the order) {template.dims} vs {x.dims}"
             )
-            assert template.dtype == x.dtype, (
-                f"loop var {path} template {template} does not match var {x}, "
-                f"different dtype {template.dtype} vs {x.dtype}"
-            )
             assert template.sparse_dim == x.sparse_dim, (
                 f"loop var {path} template {template} does not match var {x}, "
                 f"different sparse_dim {template.sparse_dim} vs {x.sparse_dim}"

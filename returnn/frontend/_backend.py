@@ -791,11 +791,13 @@ class Backend(Generic[T]):
             a,
             b,
             name=kind,
-            res_dtype="bool",
+            copy_sparse_dim=False,
             allow_broadcast_all_sources=allow_broadcast_all_sources,
             dim_order=dim_order,
         )
-        out.raw_tensor = cls.compare_raw(a_raw, kind, b_raw)
+        out_raw = cls.compare_raw(a_raw, kind, b_raw)
+        out.dtype = cls.get_dtype_name_raw(out_raw)
+        out.raw_tensor = out_raw
         return out
 
     @classmethod
@@ -816,11 +818,12 @@ class Backend(Generic[T]):
             a,
             b,
             name=kind,
-            res_dtype=None,
             allow_broadcast_all_sources=allow_broadcast_all_sources,
             dim_order=dim_order,
         )
-        out.raw_tensor = cls.combine_raw(a_raw, kind, b_raw)
+        out_raw = cls.combine_raw(a_raw, kind, b_raw)
+        out.dtype = cls.get_dtype_name_raw(out_raw)
+        out.raw_tensor = out_raw
         return out
 
     @staticmethod

@@ -94,10 +94,6 @@ class TensorArray:
             f"TensorArray push_back: template {self.tensor_template} does not match tensor {tensor},"
             f" dims different, {self.tensor_template.dims} vs {tensor.dims}"
         )
-        assert tensor.dtype == self.tensor_template.dtype, (
-            f"TensorArray push_back: template {self.tensor_template} does not match tensor {tensor},"
-            f" dtype different, {self.tensor_template.dtype} vs {tensor.dtype}"
-        )
         assert tensor.sparse_dim == self.tensor_template.sparse_dim, (
             f"TensorArray push_back: template {self.tensor_template} does not match tensor {tensor},"
             f" sparse_dim different, {self.tensor_template.sparse_dim} vs {tensor.sparse_dim}"

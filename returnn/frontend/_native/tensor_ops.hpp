@@ -8,8 +8,9 @@ class PyModuleState;
 // generic
 
 PyObject* tensorCopy(PyModuleState* modState, PyObject* tensor, const char* name = NULL);
-PyObject* tensorCopyTemplate(PyModuleState* modState, PyObject* tensor, const char* name = NULL, const char* dtype = NULL);
-PyObject* tensorCopyTemplateSimple(PyModuleState* modState, PyObject* tensor, const char* name_ = NULL, const char* dtype_ = NULL);
+PyObject* tensorCopyTemplate(PyModuleState* modState, PyObject* tensor, const char* name = NULL, PyObject* dtype = NULL);
+PyObject* tensorCopyTemplateSimple(
+    PyModuleState* modState, PyObject* tensor, const char* name_ = NULL, PyObject* dtype = NULL, bool copySparseDim = true);
 
 // exported Python functions {
 

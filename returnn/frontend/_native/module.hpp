@@ -112,17 +112,17 @@ public:
 
     int pyTraverse(visitproc visit, void *arg) {
         Py_VISIT(_notSpecified);
-        for(int i = 0; i < sizeof(_rawTensorTypes)/sizeof(_rawTensorTypes[0]); ++i)
+        for(unsigned int i = 0; i < sizeof(_rawTensorTypes)/sizeof(_rawTensorTypes[0]); ++i)
             Py_VISIT(_rawTensorTypes[i]);
         Py_VISIT(_tensorType);
         Py_VISIT(_dimType);
         Py_VISIT(_globalBackend);
         Py_VISIT(_backendTensorTypeDispatchTable);
-        for(int i = 0; i < NumBackendsWithCachedOps * NumTOps; ++i)
+        for(unsigned int i = 0; i < NumBackendsWithCachedOps * NumTOps; ++i)
             Py_VISIT(_cachedOps[i]);
         Py_VISIT(_torchTensorType);
         Py_VISIT(_torchBackend);
-        for(int i = 0; i < sizeof(_torchTensorDTypes)/sizeof(_torchTensorDTypes[0]); ++i) {
+        for(unsigned int i = 0; i < sizeof(_torchTensorDTypes)/sizeof(_torchTensorDTypes[0]); ++i) {
             Py_VISIT(_torchTensorDTypes[i].dtype);
             Py_VISIT(_torchTensorDTypes[i].name);
         }
@@ -133,17 +133,17 @@ public:
     int pyClear() {
         Py_CLEAR(_notSpecified);
         _rawTensorTypesLen = 0;
-        for(int i = 0; i < sizeof(_rawTensorTypes)/sizeof(_rawTensorTypes[0]); ++i)
+        for(unsigned int i = 0; i < sizeof(_rawTensorTypes)/sizeof(_rawTensorTypes[0]); ++i)
             Py_CLEAR(_rawTensorTypes[i]);
         Py_CLEAR(_tensorType);
         Py_CLEAR(_dimType);
         Py_CLEAR(_globalBackend);
         Py_CLEAR(_backendTensorTypeDispatchTable);
-        for(int i = 0; i < NumBackendsWithCachedOps * NumTOps; ++i)
+        for(unsigned int i = 0; i < NumBackendsWithCachedOps * NumTOps; ++i)
             Py_CLEAR(_cachedOps[i]);
         Py_CLEAR(_torchTensorType);
         Py_CLEAR(_torchBackend);
-        for(int i = 0; i < sizeof(_torchTensorDTypes)/sizeof(_torchTensorDTypes[0]); ++i) {
+        for(unsigned int i = 0; i < sizeof(_torchTensorDTypes)/sizeof(_torchTensorDTypes[0]); ++i) {
             Py_CLEAR(_torchTensorDTypes[i].dtype);
             Py_CLEAR(_torchTensorDTypes[i].name);
         }
@@ -176,7 +176,7 @@ public:
                 return NULL;
             }
         }
-        for(int i = 0; i < sizeof(_torchTensorDTypes)/sizeof(_torchTensorDTypes[0]); ++i) {
+        for(unsigned int i = 0; i < sizeof(_torchTensorDTypes)/sizeof(_torchTensorDTypes[0]); ++i) {
             if(_torchTensorDTypes[i].dtype == dtype)
                 return _torchTensorDTypes[i].name;
         }

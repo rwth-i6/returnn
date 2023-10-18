@@ -18,8 +18,8 @@ PyObject* tensorCopy(
 {
     PyObjectScopedRef rawTensor = PyObject_GetAttrString(tensor, "_raw_tensor");
     if(rawTensor == Py_None)
-        return tensorCopyTemplate(modState, tensor, name, NULL);
-    PyObjectScopedRef res = tensorCopyTemplate(modState, tensor, name, NULL);
+        return tensorCopyTemplate(modState, tensor, name);
+    PyObjectScopedRef res = tensorCopyTemplate(modState, tensor, name);
     if(!res) return NULL;
     if(PyObject_SetAttrString(res, "_raw_tensor", rawTensor) < 0) return NULL;
     return res.release();
@@ -64,7 +64,7 @@ PyObject* tensorCopyTemplate(
     PyModuleState* modState,
     PyObject* tensor,
     const char* name,
-    const char* dtype)
+    PyObject* dtype)
 {
     PyObjectScopedRef version = PyObject_GetAttrString(tensor, "version");
     if(!version) return NULL;
@@ -99,8 +99,10 @@ PyObject* tensorCopyTemplate(
         if(!name_) return NULL;
         if(PyDict_SetItemString(kwargs, "name", name_) < 0) return NULL;
     }
-    {
-        PyObjectScopedRef dtype_ = dtype ? PyUnicode_FromString(dtype) : PyObject_GetAttrString(tensor, "dtype");
+    if(dtype && dtype != Py_None) {
+        if(PyDict_SetItemString(kwargs, "dtype", dtype) < 0) return NULL;
+    } else {
+        PyObjectScopedRef dtype_ = PyObject_GetAttrString(tensor, "dtype");
         if(!dtype_) return NULL;
         if(PyDict_SetItemString(kwargs, "dtype", dtype_) < 0) return NULL;
     }
@@ -147,17 +149,22 @@ PyObject* tensorCopyTemplateSimple(
     PyModuleState* modState,
     PyObject* tensor,
     const char* name_,
-    const char* dtype_)
+    PyObject* dtype,
+    bool copySparseDim)
 {
     PyObjectScopedRef name = name_ ? PyUnicode_FromString(name_) : PyObject_GetAttrString(tensor, "name");
     if(!name) return NULL;
-    PyObjectScopedRef dtype = dtype_ ? PyUnicode_FromString(dtype_) : PyObject_GetAttrString(tensor, "dtype");
-    if(!dtype) return NULL;
+    PyObjectScopedRef dtype_;
+    if(!dtype) {
+        dtype_ = PyObject_GetAttrString(tensor, "dtype");
+        if(!dtype_) return NULL;
+        dtype = dtype_.get();
+    }
     PyObjectScopedRef dims = PyObject_GetAttrString(tensor, "_dims");
     if(!dims) return NULL;
 
     PyObjectScopedRef res = PyObject_CallFunctionObjArgs(
-        modState->tensorType(), name.get(), dims.get(), dtype.get(), NULL);
+        modState->tensorType(), name.get(), dims.get(), dtype, NULL);
     if(!res) return NULL;
 
     {
@@ -167,7 +174,7 @@ PyObject* tensorCopyTemplateSimple(
             if(PyObject_SetAttrString(res, "_feature_dim_axis", feature_dim_axis) < 0)
                 return NULL;
     }
-    if(!dtype_) {
+    if(copySparseDim) {
         PyObjectScopedRef sparse_dim = PyObject_GetAttrString(tensor, "sparse_dim");
         if(!sparse_dim) return NULL;
         if(sparse_dim != Py_None)
@@ -300,8 +307,8 @@ PyObject* pyTensorCopyTemplate(PyObject *self, PyObject *args, PyObject *kwargs)
     static const char *kwlist[] = { "tensor", "name", "dtype", NULL };
     PyObject* tensor;
     const char* name = NULL;
-    const char* dtype = NULL;
-    if(!PyArg_ParseTupleAndKeywords(args, kwargs, "O|z$z:tensor_copy_template",
+    PyObject* dtype = NULL;
+    if(!PyArg_ParseTupleAndKeywords(args, kwargs, "O|z$O:tensor_copy_template",
             (char**) kwlist, &tensor, &name, &dtype))
         return NULL;
 
@@ -389,9 +396,9 @@ static bool _isMatchingDimTagsAndRawShape(PyObject* dimTags, PyObject* rawShape,
 }
 
 static bool _checkTensorRawTensorAssignForBackendWithCachedOps(
-    PyModuleState* modState, BackendWithCachedOps backendId, const char* funcName, PyObject* tensor, PyObject* rawTensor
+    PyModuleState* modState, BackendWithCachedOps backendId, const char* funcName, PyObject* tensor, PyObject* rawTensor, bool checkDtype = true
 ) {
-    {
+    if(checkDtype) {
         PyObject* getDTypeOp = modState->cachedOp(TOp_GetDType, backendId);
         if(!getDTypeOp) return false;
         PyObjectScopedRef dtype = PyObject_GetAttrString(tensor, "dtype");
@@ -528,8 +535,8 @@ static bool _getPermutationSupersetToSubset(const char* funcName, ASeqT subset, 
             ++count;
         }
         else if(candidates.size() > 1) {
-            size_t maxMatchPriorityIdx;
-            long maxMatchPriority;
+            size_t maxMatchPriorityIdx = 0;
+            long maxMatchPriority = -1;
             int countSameMatchPriority = 0;
             for(size_t j = 0; j < candidates.size(); ++j) {
                 PyObject* dim_ = subset.getItem(candidates[j]);
@@ -667,7 +674,7 @@ template<bool bIsSubset>
 static PyObject* _compareOrCombine_subsetDims(
     PyModuleState* modState,
     const char* rawOpName, bool resultIsBool,
-    PyObject* permuteOp, PyObject* reshapeOp, PyObject* getShapeOp, PyObject* rawOp,
+    PyObject* permuteOp, PyObject* reshapeOp, PyObject* getShapeOp, PyObject* getDtypeOp, PyObject* rawOp,
     PyObject* a, PyObject* b,
     PyObject* aRawTensor, PyObject* bRawTensor,
     PyTupleOrListStaticRef<true> aDims, PyTupleOrListStaticRef<true> bDims,
@@ -681,12 +688,14 @@ static PyObject* _compareOrCombine_subsetDims(
         rawTensorExt = _permuteAndExtend(rawOpName, permuteOp, reshapeOp, getShapeOp, a, aDims, aRawTensor, bDims, outPermutation);
 
     // Now create the result.
-    PyObjectScopedRef res = tensorCopyTemplateSimple(modState, bIsSubset ? a : b, rawOpName, resultIsBool ? "bool" : NULL);
-    if(!res) return NULL;
     PyObjectScopedRef resRawTensor = PyObject_CallFunctionObjArgs(
         rawOp, bIsSubset ? aRawTensor : rawTensorExt.get(), bIsSubset ? rawTensorExt.get() : bRawTensor, NULL);
     if(!resRawTensor) return NULL;
-    if(PyObject_SetAttrString(res, "raw_tensor", resRawTensor) < 0) return NULL;
+    PyObjectScopedRef dtype = PyObject_CallFunctionObjArgs(getDtypeOp, resRawTensor.get(), NULL);
+    if(!dtype) return NULL;
+    PyObjectScopedRef res = tensorCopyTemplateSimple(modState, bIsSubset ? a : b, rawOpName, dtype, !resultIsBool);
+    if(!res) return NULL;
+    if(PyObject_SetAttrString(res, "_raw_tensor", resRawTensor) < 0) return NULL;
     return res.release();
 }
 
@@ -956,7 +965,7 @@ static PyObject* tensorCopyCompatibleToDims(const char* funcName, PyModuleState*
     }
 
     if(outRawTensor)
-        if(PyObject_SetAttrString(outTensor, "raw_tensor", outRawTensor) < 0)
+        if(PyObject_SetAttrString(outTensor, "_raw_tensor", outRawTensor) < 0)
             return NULL;
 
     if(versionInt == 1) {
@@ -1010,12 +1019,12 @@ static PyObject* compareOrCombine(
     bool resultIsBool,
     PyModuleState* modState,
     const char* rawOpName,
-    PyObject* rawOp, PyObject* permuteOp, PyObject* reshapeOp, PyObject* getShapeOp, PyObject* convertToTensorLikeOp,
+    PyObject* rawOp, PyObject* permuteOp, PyObject* reshapeOp, PyObject* getShapeOp, PyObject* getDtypeOp, PyObject* convertToTensorLikeOp,
     bool needConvertToTensor,
     bool allowBroadcastAllSources,
     PyObject* dimOrder
 ) {
-    if(!rawOp || !permuteOp || !reshapeOp || !getShapeOp || !convertToTensorLikeOp) return NULL;
+    if(!rawOp || !permuteOp || !reshapeOp || !getShapeOp || !getDtypeOp || !convertToTensorLikeOp) return NULL;
 
     {
         int a_is_tensor = PyObject_IsInstance(a, modState->tensorType());
@@ -1032,8 +1041,6 @@ static PyObject* compareOrCombine(
                 return NULL;
             }
             // assume the non-Tensor obj is is scalar
-            PyObjectScopedRef res = tensorCopyTemplateSimple(modState, a_is_tensor ? a : b, rawOpName, resultIsBool ? "bool" : NULL);
-            if(!res) return NULL;
             PyObjectScopedRef aRawTensor, bRawTensor;
             if(a_is_tensor) {
                 assert(a_is_tensor && !b_is_tensor);
@@ -1056,7 +1063,11 @@ static PyObject* compareOrCombine(
             PyObjectScopedRef resRawTensor = PyObject_CallFunctionObjArgs(
                 rawOp, aRawTensor ? aRawTensor.get() : a, bRawTensor.get() ? bRawTensor.get() : b, NULL);
             if(!resRawTensor) return NULL;
-            if(PyObject_SetAttrString(res, "raw_tensor", resRawTensor) < 0) return NULL;
+            PyObjectScopedRef dtype = PyObject_CallFunctionObjArgs(getDtypeOp, resRawTensor.get(), NULL);
+            if(!dtype) return NULL;
+            PyObjectScopedRef res = tensorCopyTemplateSimple(modState, a_is_tensor ? a : b, rawOpName, dtype, !resultIsBool);
+            if(!res) return NULL;
+            if(PyObject_SetAttrString(res, "_raw_tensor", resRawTensor) < 0) return NULL;
             return res.release();
         }
         if(!a_is_tensor && !b_is_tensor) {
@@ -1064,31 +1075,6 @@ static PyObject* compareOrCombine(
             return NULL;
         }
         // both are Tensor
-    }
-
-    if(!resultIsBool) {
-        PyObjectScopedRef aDtype = PyObject_GetAttrString(a, "dtype");
-        if(!aDtype) return NULL;
-        if(!PyUnicode_Check(aDtype)) {
-            PyErr_Format(
-                PyExc_TypeError,
-                "compareOrCombine: a.dtype did not return a string, from dtype %R", aDtype.get());
-            return NULL;
-        }
-        PyObjectScopedRef bDtype = PyObject_GetAttrString(b, "dtype");
-        if(!bDtype) return NULL;
-        if(!PyUnicode_Check(bDtype)) {
-            PyErr_Format(
-                PyExc_TypeError,
-                "compareOrCombine: b.dtype did not return a string, from dtype %R", bDtype.get());
-            return NULL;
-        }
-        if(PyUnicode_Compare(aDtype, bDtype) != 0) {
-            PyErr_Format(
-                PyExc_ValueError,
-                "compareOrCombine: a.dtype != b.dtype, from a.dtype %R and b.dtype %R", aDtype.get(), bDtype.get());
-            return NULL;
-        }
     }
 
     PyObjectScopedRef aDims = PyObject_GetAttrString(a, "_dims");
@@ -1125,31 +1111,37 @@ static PyObject* compareOrCombine(
 
     // first very fast path check, check exact identity of dims
     if(_isSameSeqFast(aDimsSeq, bDimsSeq) && (dimOrder == Py_None || _isSameSeqFast(aDimsSeq, dimOrderSeq))) {
-        PyObjectScopedRef res = tensorCopyTemplateSimple(modState, a, rawOpName, resultIsBool ? "bool" : NULL);
-        if(!res) return NULL;
         PyObjectScopedRef resRawTensor = PyObject_CallFunctionObjArgs(rawOp, aRawTensor.get(), bRawTensor.get(), NULL);
         if(!resRawTensor) return NULL;
-        if(PyObject_SetAttrString(res, "raw_tensor", resRawTensor) < 0) return NULL;
+        PyObjectScopedRef dtype = PyObject_CallFunctionObjArgs(getDtypeOp, resRawTensor.get(), NULL);
+        if(!dtype) return NULL;
+        PyObjectScopedRef res = tensorCopyTemplateSimple(modState, a, rawOpName, dtype, !resultIsBool);
+        if(!res) return NULL;
+        if(PyObject_SetAttrString(res, "_raw_tensor", resRawTensor) < 0) return NULL;
         return res.release();
     }
 
     // check b is scalar
     if(bDimsSeq.size() == 0 && (dimOrder == Py_None || _isSameSeqFast(aDimsSeq, dimOrderSeq))) {
-        PyObjectScopedRef res = tensorCopyTemplateSimple(modState, a, rawOpName, resultIsBool ? "bool" : NULL);
-        if(!res) return NULL;
         PyObjectScopedRef resRawTensor = PyObject_CallFunctionObjArgs(rawOp, aRawTensor.get(), bRawTensor.get(), NULL);
         if(!resRawTensor) return NULL;
-        if(PyObject_SetAttrString(res, "raw_tensor", resRawTensor) < 0) return NULL;
+        PyObjectScopedRef dtype = PyObject_CallFunctionObjArgs(getDtypeOp, resRawTensor.get(), NULL);
+        if(!dtype) return NULL;
+        PyObjectScopedRef res = tensorCopyTemplateSimple(modState, a, rawOpName, dtype, !resultIsBool);
+        if(!res) return NULL;
+        if(PyObject_SetAttrString(res, "_raw_tensor", resRawTensor) < 0) return NULL;
         return res.release();
     }
 
     // check a is scalar
     if(aDimsSeq.size() == 0 && (dimOrder == Py_None || _isSameSeqFast(bDimsSeq, dimOrderSeq))) {
-        PyObjectScopedRef res = tensorCopyTemplateSimple(modState, b, rawOpName, resultIsBool ? "bool" : NULL);
-        if(!res) return NULL;
         PyObjectScopedRef resRawTensor = PyObject_CallFunctionObjArgs(rawOp, aRawTensor.get(), bRawTensor.get(), NULL);
         if(!resRawTensor) return NULL;
-        if(PyObject_SetAttrString(res, "raw_tensor", resRawTensor) < 0) return NULL;
+        PyObjectScopedRef dtype = PyObject_CallFunctionObjArgs(getDtypeOp, resRawTensor.get(), NULL);
+        if(!dtype) return NULL;
+        PyObjectScopedRef res = tensorCopyTemplateSimple(modState, b, rawOpName, dtype, !resultIsBool);
+        if(!res) return NULL;
+        if(PyObject_SetAttrString(res, "_raw_tensor", resRawTensor) < 0) return NULL;
         return res.release();
     }
 
@@ -1159,7 +1151,7 @@ static PyObject* compareOrCombine(
         if(_isSeqSubsetFast(bDimsSeq, aDimsSeq, outPermutation) && (dimOrder == Py_None || _isSameSeqFast(aDimsSeq, dimOrderSeq)))
             return _compareOrCombine_subsetDims<true>(
                 modState, rawOpName, resultIsBool,
-                permuteOp, reshapeOp, getShapeOp, rawOp,
+                permuteOp, reshapeOp, getShapeOp, getDtypeOp, rawOp,
                 a, b,
                 aRawTensor, bRawTensor,
                 aDimsSeq, bDimsSeq,
@@ -1172,7 +1164,7 @@ static PyObject* compareOrCombine(
         if(_isSeqSubsetFast(aDimsSeq, bDimsSeq, outPermutation) && (dimOrder == Py_None || _isSameSeqFast(bDimsSeq, dimOrderSeq)))
             return _compareOrCombine_subsetDims<false>(
                 modState, rawOpName, resultIsBool,
-                permuteOp, reshapeOp, getShapeOp, rawOp,
+                permuteOp, reshapeOp, getShapeOp, getDtypeOp, rawOp,
                 a, b,
                 aRawTensor, bRawTensor,
                 aDimsSeq, bDimsSeq,
@@ -1185,7 +1177,7 @@ static PyObject* compareOrCombine(
         if(_isSeqSubsetReorderFast(bDimsSeq, aDimsSeq, outPermutation) && (dimOrder == Py_None || _isSameSeqFast(aDimsSeq, dimOrderSeq)))
             return _compareOrCombine_subsetDims<true>(
                 modState, rawOpName, resultIsBool,
-                permuteOp, reshapeOp, getShapeOp, rawOp,
+                permuteOp, reshapeOp, getShapeOp, getDtypeOp, rawOp,
                 a, b,
                 aRawTensor, bRawTensor,
                 aDimsSeq, bDimsSeq,
@@ -1198,7 +1190,7 @@ static PyObject* compareOrCombine(
         if(_isSeqSubsetReorderFast(aDimsSeq, bDimsSeq, outPermutation) && (dimOrder == Py_None || _isSameSeqFast(bDimsSeq, dimOrderSeq)))
             return _compareOrCombine_subsetDims<false>(
                 modState, rawOpName, resultIsBool,
-                permuteOp, reshapeOp, getShapeOp, rawOp,
+                permuteOp, reshapeOp, getShapeOp, getDtypeOp, rawOp,
                 a, b,
                 aRawTensor, bRawTensor,
                 aDimsSeq, bDimsSeq,
@@ -1306,17 +1298,7 @@ static PyObject* compareOrCombine(
                 PyList_SET_ITEM(allDims.get(), i, outDims[i]);
         }
 
-        PyObjectScopedRef res;
-        {
-            PyObjectScopedRef name = PyUnicode_FromString(rawOpName);
-            if(!name) return NULL;
-            PyObjectScopedRef dtype = resultIsBool ? PyUnicode_InternFromString("bool") : PyObject_GetAttrString(a, "dtype");
-            if(!dtype) return NULL;
-            res = PyObject_CallFunctionObjArgs(
-                modState->tensorType(), name.get(), allDims.get(), dtype.get(), NULL);
-            if(!res) return NULL;
-        }
-
+        PyObjectScopedRef resRawTensor;
         {
             std::vector<int> outPermutation;
             PyObjectScopedRef aRawTensorExt = _permuteAndExtend(
@@ -1330,10 +1312,21 @@ static PyObject* compareOrCombine(
                 b, bDimsSeq, bRawTensor,
                 allDimsSeq, outPermutation);
             if(!bRawTensorExt) return NULL;
-            PyObjectScopedRef resRawTensor = PyObject_CallFunctionObjArgs(
+            resRawTensor = PyObject_CallFunctionObjArgs(
                 rawOp, aRawTensorExt.get(), bRawTensorExt.get(), NULL);
             if(!resRawTensor) return NULL;
-            if(PyObject_SetAttrString(res, "raw_tensor", resRawTensor) < 0) return NULL;
+        }
+
+        PyObjectScopedRef res;
+        {
+            PyObjectScopedRef name = PyUnicode_FromString(rawOpName);
+            if(!name) return NULL;
+            PyObjectScopedRef dtype = PyObject_CallFunctionObjArgs(getDtypeOp, resRawTensor.get(), NULL);
+            if(!dtype) return NULL;
+            res = PyObject_CallFunctionObjArgs(
+                modState->tensorType(), name.get(), allDims.get(), dtype.get(), NULL);
+            if(!res) return NULL;
+            if(PyObject_SetAttrString(res, "_raw_tensor", resRawTensor) < 0) return NULL;
         }
 
         {
@@ -1389,6 +1382,7 @@ static PyObject* compareOrCombineViaCached(
         modState->cachedOp(TOp_Permute, backendId),
         modState->cachedOp(TOp_Reshape, backendId),
         modState->cachedOp(TOp_GetShape, backendId),
+        modState->cachedOp(TOp_GetDType, backendId),
         modState->cachedOp(TOp_ConvertToTensorLike, backendId),
         needConvertToTensor,
         allowBroadcastAllSources,
@@ -1701,31 +1695,14 @@ static PyObject* _tensorUnaryFunc(PyModuleState* modState, PyObject* tensor) {
         if(!func) return NULL;
         PyObjectScopedRef resRawTensor = PyObject_CallFunctionObjArgs(func, rawTensor.get(), NULL);
         if(!resRawTensor) return NULL;
-        PyObjectScopedRef dtype;
-        const char* dtypeStr = NULL;
-        if(op == TOp_Abs) {
-            /*
-            In case of abs() on a complex tensor, the result is a float tensor.
-            In principle, the logic should be like::
-                if in_dtype.startswith("complex"):
-                    num_bits = int(out.dtype[len("complex") :])
-                    out_dtype = f"float{num_bits // 2}"
-            For simplicity, we just take over whatever dtype the result has.
-            */
-            PyObject* getDtypeOp = modState->cachedOp(TOp_GetDType, BWCO_Torch);
-            if(!getDtypeOp) return NULL;
-            dtype = PyObject_CallFunctionObjArgs(getDtypeOp, resRawTensor.get(), NULL);
-            if(!dtype) return NULL;
-            if(!PyUnicode_Check(dtype)) {
-                PyErr_Format(PyExc_TypeError, "tensor_abs: expected dtype to be str, got %R", dtype.get());
-                return NULL;
-            }
-            dtypeStr = PyUnicode_AsUTF8(dtype);
-            if(!dtypeStr) return NULL;
-        }
-        PyObjectScopedRef res = tensorCopyTemplateSimple(modState, tensor, rawOpName(op), dtypeStr);
+        PyObject* getDtypeOp = modState->cachedOp(TOp_GetDType, BWCO_Torch);
+        if(!getDtypeOp) return NULL;
+        // Just overtake the result dtype. In case of abs(), it might change, but maybe also in other cases.
+        PyObjectScopedRef dtype = PyObject_CallFunctionObjArgs(getDtypeOp, resRawTensor.get(), NULL);
+        if(!dtype) return NULL;
+        PyObjectScopedRef res = tensorCopyTemplateSimple(modState, tensor, rawOpName(op), dtype);
         if(!res) return NULL;
-        if(!_checkTensorRawTensorAssignForBackendWithCachedOps(modState, BWCO_Torch, rawOpName(op), res, resRawTensor))
+        if(!_checkTensorRawTensorAssignForBackendWithCachedOps(modState, BWCO_Torch, rawOpName(op), res, resRawTensor, false))
             return NULL;
         if(PyObject_SetAttrString(res, "_raw_tensor", resRawTensor) < 0) return NULL;
         return res.release();
