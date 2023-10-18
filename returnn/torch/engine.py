@@ -508,6 +508,7 @@ class Engine(EngineBase):
         epoch, model_epoch_filename = self.get_epoch_model(self.config)
         step = None
 
+        filename = None
         checkpoint_state = None
         if model_epoch_filename:
             filename = model_epoch_filename + util.get_model_filename_postfix()
@@ -560,7 +561,24 @@ class Engine(EngineBase):
         print(f"net params #: {num_params}", file=log.v2)
 
         if checkpoint_state is not None:
-            self._pt_model.load_state_dict(checkpoint_state["model"])
+            missing_keys, unexpected_keys = self._pt_model.load_state_dict(checkpoint_state["model"], strict=False)
+            if missing_keys:
+                raise Exception(
+                    "\n".join(
+                        [
+                            f"While loading model {filename}:",
+                            "Unexpected key(s) in state_dict: " + ", ".join(map(repr, unexpected_keys)),
+                            "Missing key(s) in state_dict: " + ", ".join(map(repr, missing_keys)),
+                            "Any missing key is an error.",
+                        ]
+                    )
+                )
+            if unexpected_keys:
+                print(
+                    f"Note: While loading {filename}, unexpected key(s) in state_dict: "
+                    + ", ".join(map(repr, unexpected_keys)),
+                    file=log.v4,
+                )
         preload_from_files = self.config.typed_value("preload_from_files", {})
         if preload_from_files:
             # see `preload_from_files` in tf engine and `returnn.tf.network.CustomCheckpointLoader`
