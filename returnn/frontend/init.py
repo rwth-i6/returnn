@@ -181,11 +181,11 @@ def _compute_fans(dims: Sequence[Dim]):
         fan_in = dims[0]
         fan_out = dims[1]
     else:
-        # Assuming convolution kernels (2D, 3D, or more).
-        # kernel shape: (..., input_depth, depth)
+        # Assuming convolution kernels (1D, 2D, 3D, or more).
+        # kernel shape: (out_dim, in_dim, ...)
         receptive_field_size = 1
-        for dim in dims[:-2]:
+        for dim in dims[2:]:
             receptive_field_size *= dim
-        fan_in = dims[-2] * receptive_field_size
-        fan_out = dims[-1] * receptive_field_size
+        fan_in = dims[1] * receptive_field_size
+        fan_out = dims[0] * receptive_field_size
     return fan_in, fan_out
