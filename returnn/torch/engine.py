@@ -95,7 +95,7 @@ class Engine(EngineBase):
             self._torch_distributed_class = torch_distributed.get("class", None)
             self._torch_distributed_options = torch_distributed.get("options", None)
 
-        amp_options = self.config.typed_value("torch_amp")
+        amp_options = self.config.opt_typed_value("torch_amp")
         grad_scaler_opts = self.config.typed_value("grad_scaler", NotSpecified)
         if amp_options is not None:
             self._use_autocast = True
