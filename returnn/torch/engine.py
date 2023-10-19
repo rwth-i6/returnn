@@ -848,10 +848,10 @@ def _print_process(report_prefix: str, step: int, eval_info: Optional[Dict[str, 
     :param eval_info:
     :return: nothing, will be printed to log
     """
-    if log.verbose[5]:
+    if log.verbose[5]:  # report every minibatch
         info = [report_prefix, "step %i" % step]
         if eval_info:  # Such as score.
-            info += ["%s %s" % item for item in sorted(eval_info.items())]
+            info += ["%s %s" % (k, _format_value(v)) for k, v in sorted(eval_info.items())]
         print(", ".join(filter(None, info)), file=log.v5)
 
 
@@ -866,7 +866,16 @@ def _format_score(score: Dict[str, float]) -> str:
         return "None"
     if len(score) == 1:
         return str(list(score.values())[0])
-    return " ".join(["%s %s" % (key.split(":", 2)[-1], str(score[key])) for key in sorted(score.keys())])
+    return " ".join(["%s %s" % (key.split(":", 2)[-1], _format_value(score[key])) for key in sorted(score.keys())])
+
+
+def _format_value(v: Any) -> str:
+    if isinstance(v, float):
+        if abs(v) > 1.0e3 or abs(v) < 1.0e-3:
+            return f"{v:.3e}"
+        else:
+            return f"{v:.3f}"
+    return str(v)
 
 
 def _get_gpu_device() -> Optional[str]:
