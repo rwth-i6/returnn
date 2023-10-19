@@ -355,8 +355,6 @@ class Loss:
             return self.loss
         if self._summed_loss_cached is not None:
             return self._summed_loss_cached
-        if self._mean_loss_cached is not None:
-            return self._mean_loss_cached / self.get_inv_norm_factor()
         self._summed_loss_cached = rf.reduce_sum(self.loss, axis=self.loss.dims)
         return self._summed_loss_cached
 

@@ -345,3 +345,38 @@ def test_loss_normalized():
         )
 
     run_model_torch_train(extern_data, lambda *, epoch, step: rf.Module(), _train_step)
+
+
+def test_loss_normalization():
+    time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
+    in_dim = Dim(7, name="in")
+    extern_data = TensorDict(
+        {
+            "data": Tensor("data", [batch_dim, time_dim, in_dim], dtype="float32"),
+        }
+    )
+
+    use_normalized = False
+    use_custom_inv_norm_factor = False
+
+    # noinspection PyShadowingNames
+    def _train_step(*, model: rf.Module, extern_data: TensorDict):
+        model  # unused  # noqa
+        x = extern_data["data"]
+
+        loss = rf.reduce_sum(x, axis=in_dim)  # [B,T]
+        loss.mark_as_loss(
+            "loss",
+            custom_inv_norm_factor=time_dim.get_size_tensor() if use_custom_inv_norm_factor else None,
+            use_normalized_loss=use_normalized,
+        )
+
+    res1 = run_model_torch_train(extern_data, lambda *, epoch, step: rf.Module(), _train_step)
+    res2 = run_model_torch_train(extern_data, lambda *, epoch, step: rf.Module(), _train_step)
+    assert res1 == res2  # check deterministic
+    use_normalized = True
+    res3 = run_model_torch_train(extern_data, lambda *, epoch, step: rf.Module(), _train_step)
+    assert res3["loss:summed"] == res2["loss:summed"] and res3["loss:inv_norm_factor"] == res2["loss:inv_norm_factor"]
+    use_custom_inv_norm_factor = True
+    res4 = run_model_torch_train(extern_data, lambda *, epoch, step: rf.Module(), _train_step)
+    assert res4["loss:summed"] == res2["loss:summed"] and res4["loss:inv_norm_factor"] == res2["loss:inv_norm_factor"]

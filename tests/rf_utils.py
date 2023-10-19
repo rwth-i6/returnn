@@ -122,7 +122,7 @@ def run_model_torch_train(
     *,
     dyn_dim_max_sizes: Optional[Dict[Dim, int]] = None,
     dyn_dim_min_sizes: Optional[Dict[Dim, int]] = None,
-) -> float:
+) -> Dict[str, float]:
     """run"""
     rf.select_backend_torch()
     rf.set_random_seed(42)
@@ -146,20 +146,24 @@ def run_model_torch_train(
     assert isinstance(total_loss, Tensor) and not total_loss.dims and total_loss.raw_tensor.dtype.is_floating_point
     total_loss_v = total_loss.raw_tensor.detach().numpy().item()
     print("total loss (for backprop):", total_loss_v)
+    res = {"total_loss": total_loss}
 
     total_loss.raw_tensor.backward()  # test backprop
 
     for k, loss in rf.get_run_ctx().losses.items():
         loss_v = loss.get_summed_loss().raw_tensor.detach().cpu().numpy().item()
+        res[f"{k}:summed"] = loss_v
         print(f"loss (summed) {k!r}: {loss_v}")
         loss_v = loss.get_mean_loss().raw_tensor.detach().cpu().numpy().item()
         print(f"loss (mean) {k!r}: {loss_v}")
+        res[f"{k}:mean"] = loss_v
         inv_norm_factor = loss.get_inv_norm_factor()
         if isinstance(inv_norm_factor, Tensor):
             inv_norm_factor = inv_norm_factor.raw_tensor.detach().sum().cpu().numpy().item()
         print(f"inv_norm_factor {k!r}: {inv_norm_factor}")
+        res[f"{k}:inv_norm_factor"] = inv_norm_factor
 
-    return total_loss_v
+    return res
 
 
 def _run_model_net_dict_tf(
