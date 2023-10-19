@@ -3326,7 +3326,7 @@ class _TensorMixin(_TensorMixinBase):
     ) -> None:
         """
         Mark this as a loss.
-        Please refer to :func:`RunCtx.frontend.mark_as_loss` for more details.
+        Please refer to :func:`RunCtx.mark_as_loss` for more details.
 
         :param name:
         :param scale:

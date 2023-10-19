@@ -140,35 +140,39 @@ class RunCtx:
         This currently uses :class:`AsIsLoss` in RETURNN
         but this is an implementation detail and might change.
 
-        :param loss: it should not be reduced - this will be done later, and this is important to properly
-            do accumulation taking different seq lengths into account.
-            A :class:`Tensor` is usually expected, but a raw tensor is also possible.
+        :param loss: E.g. shape [B,T] or [B]. A :class:`Tensor` is usually expected, but a raw tensor is also possible.
+            You should not reduce the axes where RETURNN should collect epoch-wise statistics,
+            such that RETURNN can properly accumulate it over batches.
+            You should reduce_sum over axes where you do not want to have normalization.
+            E.g. if you calculate framewise CE getting shape [B,T], and you want it to be sequence-level CE,
+            calculate reduce_sum(loss, axis=T) to get [B] and pass only those sequence-level CE losses here.
         :param name: name of the loss. this name is used for reporting by RETURNN, and also for LR scheduling.
         :param dims: in case `loss` is not a :class:`Tensor`, but a raw tensor
         :param scale: scale the loss by this factor for the training optimizer
-          (but not for any reporting). setting to 0.0 has the effect that this loss is not used by the optimizer.
+            (but not for any reporting). setting to 0.0 has the effect that this loss is not used by the optimizer.
         :param as_error: if True, this loss is reported as an error instead of a loss,
-          and not used by the training optimizer.
-          This is by convention sth like the frame-error or edit-distance, and usually not differentiable anyway.
-        :param bool use_flatten_frames: If True, will use :func:`returnn.tf.util.basic.flatten_with_seq_len_mask`,
-          i.e. a "packed" sequence with the padded frames removed, and accumulates over that.
-          This can be more efficient, also because it will further optimize incoming computations
-          and e.g. skip softmax computations right before on the padded frames.
-          This can also avoid issues with inf/nan in some cases.
-          If False, it will mask the loss to 0 in the padded frames and accumulate over that.
-          Typically, setting this to True (default) is both more efficient and better.
-        :param bool use_normalized_loss: the loss used in optimization will be normalized.
-          E.g. if the overall normalization is sum(loss)/sum(num_frames), this is also what the optimizer will use,
-          otherwise the optimizer will just use sum(loss).
+            and not used by the training optimizer.
+            This is by convention sth like the frame-error or edit-distance, and usually not differentiable anyway.
+        :param use_normalized_loss: the loss used in optimization will be normalized via reduce_mean
+            instead of reduce_sum.
+            E.g. if the overall normalization is sum(loss)/sum(num_frames), this is also what the optimizer will use,
+            otherwise the optimizer will just use sum(loss).
+        :param use_flatten_frames: If True, will use :func:`returnn.tf.util.basic.flatten_with_seq_len_mask`,
+            i.e. a "packed" sequence with the padded frames removed, and accumulates over that.
+            This can be more efficient, also because it will further optimize incoming computations
+            and e.g. skip softmax computations right before on the padded frames.
+            This can also avoid issues with inf/nan in some cases.
+            If False, it will mask the loss to 0 in the padded frames and accumulate over that.
+            Typically, setting this to True (default) is both more efficient and better.
         :param custom_inv_norm_factor:
-          The standard inv norm factor is sum(target_seq_len) if the target has a time-axis,
-          or sum(output_seq_len) if there is no target and the output has a time-axis,
-          or 1 otherwise. (See :func:`Loss.init` for details.)
-          This is used for proper normalization of accumulated loss/error per epoch
-          and also proper normalization per batch for reporting,
-          no matter if use_normalized_loss is True or False.
-          If you want to change this norm factor, you can set this.
-          Basically, for all reporting, it uses sum(loss) / sum(custom_inv_norm_factor).
+            The standard inv norm factor is sum(target_seq_len) if the target has a time-axis,
+            or sum(output_seq_len) if there is no target and the output has a time-axis,
+            or 1 otherwise. (See :func:`Loss.init` for details.)
+            This is used for proper normalization of accumulated loss/error per epoch
+            and also proper normalization per batch for reporting,
+            no matter if use_normalized_loss is True or False.
+            If you want to change this norm factor, you can set this.
+            Basically, for all reporting, it uses sum(loss) / sum(custom_inv_norm_factor).
         """
         assert self.stage == "train_step"
         if not isinstance(loss, Tensor):
