@@ -7,7 +7,7 @@ from typing import Tuple
 import _setup_test_env  # noqa
 import returnn.frontend as rf
 from returnn.tensor import Tensor, Dim, TensorDict, batch_dim
-from rf_utils import run_model
+from rf_utils import run_model, run_model_torch_train
 
 
 # Keep test_linear_direct and test_linear first here to have some very canonical examples.
@@ -320,3 +320,28 @@ def test_param_assign():
 
     out = run_model(extern_data, lambda *, epoch, step: _Net(), _forward_step)
     assert out["a"].raw_tensor == 2 and out["b"].raw_tensor == 5 and out["c"].raw_tensor == 7
+
+
+def test_loss_normalized():
+    time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
+    in_dim = Dim(7, name="in")
+    extern_data = TensorDict(
+        {
+            "data": Tensor("data", [batch_dim, time_dim, in_dim], dtype="float32"),
+        }
+    )
+
+    # noinspection PyShadowingNames
+    def _train_step(*, model: rf.Module, extern_data: TensorDict):
+        model  # unused  # noqa
+        x = extern_data["data"]
+
+        loss = rf.reduce_sum(x, axis=in_dim)  # [B,T]
+        loss.mark_as_loss("loss", use_normalized_loss=True)
+
+        loss_custom_norm = rf.reduce_sum(loss, axis=time_dim)  # [B]
+        loss_custom_norm.mark_as_loss(
+            "loss_custom_norm", custom_inv_norm_factor=time_dim.get_size_tensor(), use_normalized_loss=True
+        )
+
+    run_model_torch_train(extern_data, lambda *, epoch, step: rf.Module(), _train_step)

@@ -50,7 +50,7 @@ def run_model(
 
     print("** run with PyTorch backend")
     with rft.TorchBackend.random_journal_record() as random_journal:
-        out_pt = run_model_torch(extern_data, get_model, forward_step)
+        out_pt = _run_model_torch(extern_data, get_model, forward_step)
         _pad_mask_zeros(out_pt)
         # get the values now because dims might get overwritten
         out_pt_raw = out_pt.as_raw_tensor_dict(include_const_sizes=True)
@@ -60,7 +60,7 @@ def run_model(
 
     print("** run with TensorFlow-net-dict backend")
     with rfl.ReturnnLayersBackend.random_journal_replay(random_journal):
-        out_tf = run_model_net_dict_tf(extern_data, get_model, forward_step)
+        out_tf = _run_model_net_dict_tf(extern_data, get_model, forward_step)
         _pad_mask_zeros(out_tf)
         out_tf_raw = out_tf.as_raw_tensor_dict(include_const_sizes=True)
 
@@ -93,7 +93,7 @@ def run_model(
     return out_pt
 
 
-def run_model_torch(extern_data: TensorDict, get_model: rf.GetModelFunc, forward_step: rf.StepFunc) -> TensorDict:
+def _run_model_torch(extern_data: TensorDict, get_model: rf.GetModelFunc, forward_step: rf.StepFunc) -> TensorDict:
     """run"""
     extern_data_raw = extern_data.as_raw_tensor_dict(expected_value_type=numpy.ndarray)
     rf.select_backend_torch()
@@ -115,7 +115,56 @@ def run_model_torch(extern_data: TensorDict, get_model: rf.GetModelFunc, forward
     return outputs
 
 
-def run_model_net_dict_tf(extern_data: TensorDict, get_model: rf.GetModelFunc, forward_step: rf.StepFunc) -> TensorDict:
+def run_model_torch_train(
+    extern_data: TensorDict,
+    get_model: rf.GetModelFunc,
+    train_step: rf.StepFunc,
+    *,
+    dyn_dim_max_sizes: Optional[Dict[Dim, int]] = None,
+    dyn_dim_min_sizes: Optional[Dict[Dim, int]] = None,
+) -> float:
+    """run"""
+    rf.select_backend_torch()
+    rf.set_random_seed(42)
+
+    extern_data.reset_content()
+    tensor_dict_fill_random_numpy_(
+        extern_data, dyn_dim_max_sizes=dyn_dim_max_sizes, dyn_dim_min_sizes=dyn_dim_min_sizes
+    )
+    tensor_dict_numpy_to_torch_(extern_data)
+
+    # We want to be able to calculate gradients for testing,
+    # so we need to set requires_grad=True.
+    for v in extern_data.data.values():
+        v: Tensor
+        v.raw_tensor.requires_grad = True
+
+    model = get_model(epoch=1, step=0)
+    rf.init_train_step_run_ctx(train_flag=True, step=0)
+    train_step(model=model, extern_data=extern_data)
+    total_loss = rf.get_run_ctx().total_loss()
+    assert isinstance(total_loss, Tensor) and not total_loss.dims and total_loss.raw_tensor.dtype.is_floating_point
+    total_loss_v = total_loss.raw_tensor.detach().numpy().item()
+    print("total loss (for backprop):", total_loss_v)
+
+    total_loss.raw_tensor.backward()  # test backprop
+
+    for k, loss in rf.get_run_ctx().losses.items():
+        loss_v = loss.get_summed_loss().raw_tensor.detach().cpu().numpy().item()
+        print(f"loss (summed) {k!r}: {loss_v}")
+        loss_v = loss.get_mean_loss().raw_tensor.detach().cpu().numpy().item()
+        print(f"loss (mean) {k!r}: {loss_v}")
+        inv_norm_factor = loss.get_inv_norm_factor()
+        if isinstance(inv_norm_factor, Tensor):
+            inv_norm_factor = inv_norm_factor.raw_tensor.detach().sum().cpu().numpy().item()
+        print(f"inv_norm_factor {k!r}: {inv_norm_factor}")
+
+    return total_loss_v
+
+
+def _run_model_net_dict_tf(
+    extern_data: TensorDict, get_model: rf.GetModelFunc, forward_step: rf.StepFunc
+) -> TensorDict:
     """run"""
     extern_data_raw = extern_data.as_raw_tensor_dict(expected_value_type=numpy.ndarray)
     extern_data.reset_content()

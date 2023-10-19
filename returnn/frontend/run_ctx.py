@@ -368,7 +368,11 @@ class Loss:
             return self._mean_loss_cached
         if self.custom_inv_norm_factor:
             loss = self.get_summed_loss()
-            loss /= rf.cast(self.custom_inv_norm_factor, dtype=loss.dtype)
+            inv_norm = rf.reduce_sum(self.custom_inv_norm_factor, axis=self.custom_inv_norm_factor.dims)
+            inv_norm = rf.cast(inv_norm, loss.dtype)
+            inv_norm = rf.reciprocal(inv_norm)
+            inv_norm = rf.copy_to_device(inv_norm, loss.device)
+            loss *= inv_norm
             return loss
         if not self.loss.dims:
             return self.loss
@@ -380,6 +384,8 @@ class Loss:
         :return: inverse norm factor (scalar)
         """
         if self.custom_inv_norm_factor:
+            if self.custom_inv_norm_factor.dims:
+                return rf.reduce_sum(self.custom_inv_norm_factor, axis=self.custom_inv_norm_factor.dims)
             return self.custom_inv_norm_factor
         return self.loss.num_elements()
 
