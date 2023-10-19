@@ -518,6 +518,7 @@ class Backend(Generic[T]):
         "silu",
         "logical_not",
         "neg",
+        "reciprocal",
     }
 
     @staticmethod

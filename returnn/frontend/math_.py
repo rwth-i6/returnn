@@ -28,6 +28,7 @@ __all__ = [
     "floor_divide",
     "ceil_divide",
     "neg",
+    "reciprocal",
     "mod",
     "pow",
     "squared_difference",
@@ -278,6 +279,12 @@ def neg(a: Tensor) -> Tensor:
     """neg"""
     # noinspection PyProtectedMember
     return a._raw_backend.activation(a, "neg")
+
+
+def reciprocal(a: Tensor) -> Tensor:
+    """reciprocal / inverse, i.e. 1/a"""
+    # noinspection PyProtectedMember
+    return a._raw_backend.activation(a, "reciprocal")
 
 
 def mod(a: Tensor, b: Tensor) -> Tensor:
