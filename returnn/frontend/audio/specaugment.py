@@ -3,7 +3,7 @@ SpecAugment, https://arxiv.org/abs/1904.08779
 """
 
 from __future__ import annotations
-from typing import Optional, Union, Collection
+from typing import Optional, Union, Collection, Tuple
 from returnn.tensor import Tensor, Dim
 import returnn.frontend as rf
 
@@ -21,6 +21,7 @@ def specaugment(
     max_consecutive_spatial_dims: int = 20,
     max_consecutive_feature_dims: Optional[int] = None,
     num_spatial_mask_factor: int = 100,
+    steps: Tuple[int, int, int] = (0, 1000, 2000),
 ) -> Tensor:
     """
     SpecAugment, https://arxiv.org/abs/1904.08779
@@ -33,10 +34,11 @@ def specaugment(
     if global_train_step_dependent:
         with rf.set_default_device_ctx("cpu"):
             step = rf.get_run_ctx().step
-            step1 = rf.where(step >= 1000, 1, 0)
-            step2 = rf.where(step >= 2000, 1, 0)
+            step0 = rf.where(step >= steps[0], 1, 0)
+            step1 = rf.where(step >= steps[1], 1, 0)
+            step2 = rf.where(step >= steps[2], 1, 0)
     else:
-        step1 = step2 = 1
+        step0 = step1 = step2 = 1
 
     def _mask_branch():
         x_masked = x
@@ -48,7 +50,7 @@ def specaugment(
             broadcast_axis=feature_dim,
             min_num=rf.minimum(step1 + step2, spatial_len),
             max_num=rf.minimum(
-                rf.maximum(spatial_len // num_spatial_mask_factor, 2) * (1 + step1 + step2 * 2), spatial_len
+                rf.maximum(spatial_len // num_spatial_mask_factor, 2) * (step0 + step1 + step2 * 2), spatial_len
             ),
             max_dims=max_consecutive_spatial_dims,
         )
@@ -58,7 +60,7 @@ def specaugment(
             mask_axis=feature_dim,
             broadcast_axis=spatial_dim,
             min_num=step1 + step2,
-            max_num=2 + step1 + step2 * 2,
+            max_num=step0 * 2 + step1 + step2 * 2,
             max_dims=max_consecutive_feature_dims,
         )
         return x_masked
