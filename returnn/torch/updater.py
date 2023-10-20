@@ -106,9 +106,10 @@ class Updater(object):
                 ), "please specify **kwargs in dynamic_learning_rate for future compatibility"
             else:
                 raise NotImplementedError("not implemented for not callable dynamic_learning_rate")
-        self._update_effective_learning_rate()
 
         self.optimizer = None  # type: typing.Optional[torch.optim.Optimizer]
+
+        self._update_effective_learning_rate()
 
     def set_learning_rate(self, value):
         """
