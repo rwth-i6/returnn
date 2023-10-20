@@ -133,8 +133,9 @@ class Updater(object):
             self._effective_learning_rate = self.learning_rate_function(
                 global_train_step=self._current_train_step, learning_rate=self.learning_rate
             )
-        for param_group in self.optimizer.param_groups:
-            param_group["lr"] = self._effective_learning_rate
+        if self.optimizer:
+            for param_group in self.optimizer.param_groups:
+                param_group["lr"] = self._effective_learning_rate
 
     def set_current_train_step(self, global_train_step):
         """
