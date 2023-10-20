@@ -231,7 +231,16 @@ class Engine(EngineBase):
         """
         train one (sub)epoch
         """
-        print("start", self.get_epoch_str(), "with learning rate", self.learning_rate, "...", file=log.v4)
+        print(
+            "start",
+            self.get_epoch_str(),
+            "global train step",
+            self.global_train_step,
+            "with effective learning rate",
+            self._updater.get_effective_learning_rate(),
+            "...",
+            file=log.v3,
+        )
 
         accumulated_losses_dict = NumbersDict()
         accumulated_inv_norm_factors_dict = NumbersDict()

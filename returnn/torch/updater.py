@@ -89,8 +89,10 @@ class Updater(object):
         """
         self.config = config
         self.learning_rate = initial_learning_rate
+        self._effective_learning_rate = self.learning_rate
         self.network = network
         self._device = device
+        self._current_train_step = 0
 
         self.learning_rate_function = self.config.typed_value("dynamic_learning_rate", None)
         if self.learning_rate_function is not None:
@@ -104,6 +106,7 @@ class Updater(object):
                 ), "please specify **kwargs in dynamic_learning_rate for future compatibility"
             else:
                 raise NotImplementedError("not implemented for not callable dynamic_learning_rate")
+        self._update_effective_learning_rate()
 
         self.optimizer = None  # type: typing.Optional[torch.optim.Optimizer]
 
@@ -116,15 +119,29 @@ class Updater(object):
         for param_group in self.optimizer.param_groups:
             param_group["lr"] = value
         self.learning_rate = value
+        self._update_effective_learning_rate()
+
+    def get_effective_learning_rate(self) -> float:
+        """
+        :return: get the actual learning rate
+        """
+        return self._effective_learning_rate
+
+    def _update_effective_learning_rate(self):
+        self._effective_learning_rate = self.learning_rate
+        if self.learning_rate_function is not None:
+            self._effective_learning_rate = self.learning_rate_function(
+                global_train_step=self._current_train_step, learning_rate=self.learning_rate
+            )
+        for param_group in self.optimizer.param_groups:
+            param_group["lr"] = self._effective_learning_rate
 
     def set_current_train_step(self, global_train_step):
         """
         Obtains an updated learning rate for the current training step inside a (sub)epoch.
         """
-        if self.learning_rate_function is not None:
-            lr = self.learning_rate_function(global_train_step=global_train_step, learning_rate=self.learning_rate)
-            for param_group in self.optimizer.param_groups:
-                param_group["lr"] = lr
+        self._current_train_step = global_train_step
+        self._update_effective_learning_rate()
 
     def create_optimizer(self):
         """
