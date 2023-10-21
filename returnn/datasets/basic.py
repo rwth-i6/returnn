@@ -956,7 +956,9 @@ class Dataset(object):
             return total_num_seqs > 0
         except NotImplementedError:
             pass
-        return self.is_less_than_num_seqs(0)
+        if self.epoch is not None:
+            return self.is_less_than_num_seqs(0)
+        raise NotImplementedError(f"{self} have_seqs() is not implemented (and neither get_total_num_seqs())")
 
     def len_info(self):
         """
