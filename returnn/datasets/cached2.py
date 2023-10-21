@@ -98,6 +98,8 @@ class CachedDataset2(Dataset):
         """
         if self._num_seqs is not None:
             return self._num_seqs
+        if self.epoch is None:
+            return 0
         raise NotImplementedError
 
     def _load_seqs(self, start, end):
@@ -128,6 +130,8 @@ class CachedDataset2(Dataset):
         """
         if n < self.expected_load_seq_start:
             return True
+        if self.epoch is None:
+            return False
         # noinspection PyBroadException
         try:
             return super(CachedDataset2, self).is_less_than_num_seqs(n)

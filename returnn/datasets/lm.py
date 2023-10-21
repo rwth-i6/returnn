@@ -303,6 +303,10 @@ class LmDataset(CachedDataset2):
         """supports sorting"""
         return True
 
+    def get_total_num_seqs(self) -> int:
+        """total num seqs"""
+        return len(self.orths)
+
     def _reduce_log_skipped_seqs(self):
         if isinstance(self.log_skipped_seqs, bool):
             return
