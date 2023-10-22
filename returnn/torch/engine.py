@@ -34,6 +34,7 @@ from .data import pipeline as data_pipeline
 from .data import returnn_dataset_wrapper
 from .data import extern_data as extern_data_util
 from .frontend.bridge import rf_module_to_pt_module
+from .functional import diagnose_gpu
 
 
 class Engine(EngineBase):
@@ -911,6 +912,7 @@ def get_device_from_config_opt(device: Optional[str]) -> ResultWithReason[str]:
     if device == "gpu":
         device = _get_gpu_device()
         if not device:
-            raise Exception("No GPU device found, but config requested 'gpu' device.")
+            reasons = diagnose_gpu.diagnose_no_gpu()
+            raise Exception("No GPU device found, but config requested 'gpu' device.\n" + "\n".join(reasons))
         reason = "'gpu' in config"
     return ResultWithReason(device, reason)
