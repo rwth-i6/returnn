@@ -83,6 +83,7 @@ class ReturnnLayersBackend(Backend[Layer]):
         initial: S,
     ) -> S:
         """while loop"""
+
         # Have to put some arbitrary max_seq_len limit, otherwise the RecLayer will complain.
         # Note that we could put the `loop.end(..., include_eos=False)` at the beginning of the loop.
         # However, then all layers run one more iteration than you might expect,
