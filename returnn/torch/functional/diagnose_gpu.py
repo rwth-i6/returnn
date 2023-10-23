@@ -23,6 +23,7 @@ def diagnose_no_gpu() -> List[str]:
 
     res = []
     print("CUDA_VISIBLE_DEVICES:", os.environ.get("CUDA_VISIBLE_DEVICES", None))
+    print("LD_LIBRARY_PATH:", os.environ.get("LD_LIBRARY_PATH", None))
 
     try:
         torch.cuda.init()
