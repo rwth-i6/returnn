@@ -228,6 +228,7 @@ class Engine(EngineBase):
 
         # Update learning rate
         self._updater.set_learning_rate(self.learning_rate)
+        self._updater.set_current_train_step(self.global_train_step)
 
     def train_epoch(self):
         """
@@ -303,9 +304,6 @@ class Engine(EngineBase):
                 else:
                     total_loss.raw_tensor.backward()
 
-            # update the optimizer per step
-            self._updater.set_current_train_step(self.global_train_step)
-
             # only update the weights when every gradient accumulation loop ends
             if (step_idx % self._accum_grad_multiple_step) == (self._accum_grad_multiple_step - 1):
                 if self._grad_scaler is not None:
@@ -326,6 +324,7 @@ class Engine(EngineBase):
 
             step_idx += 1
             self.global_train_step += 1
+            self._updater.set_current_train_step(self.global_train_step)
 
         elapsed = time.time() - epoch_start_time
         elapsed_computation_percentage = elapsed_computation_time / elapsed

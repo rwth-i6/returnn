@@ -117,8 +117,6 @@ class Updater(object):
 
         :param float value: New learning rate.
         """
-        for param_group in self.optimizer.param_groups:
-            param_group["lr"] = value
         self.learning_rate = value
         self._update_effective_learning_rate()
 
