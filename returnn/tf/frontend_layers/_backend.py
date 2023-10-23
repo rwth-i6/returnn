@@ -702,7 +702,7 @@ class ReturnnLayersBackend(Backend[Layer]):
         return rfl.make_layer({"class": "dot", "from": [a, b], "reduce": reduce, **args}, name="matmul")
 
     @staticmethod
-    def range_over_dim(dim: Dim, *, dtype: Optional[str] = None) -> Tensor:
+    def range_over_dim(dim: Dim, *, dtype: Optional[str] = None, device: Optional[str] = None) -> Tensor:
         """range over dim"""
         if not dtype and dim.dyn_size_ext:
             dtype = dim.dyn_size_ext.dtype

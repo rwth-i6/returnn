@@ -398,10 +398,11 @@ class TFBackend(Backend[tf.Tensor]):
         return Tensor(name or "const", raw_tensor=value, dims=dims, dtype=dtype, sparse_dim=sparse_dim)
 
     @staticmethod
-    def range_over_dim(dim: Dim, *, dtype: Optional[str] = None) -> _TT:
+    def range_over_dim(dim: Dim, *, dtype: Optional[str] = None, device: Optional[str] = None) -> _TT:
         """
         :param dim:
         :param dtype:
+        :param device:
         :return: range over dim
         """
         if not dtype and dim.dyn_size_ext:

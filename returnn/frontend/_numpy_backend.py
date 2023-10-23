@@ -127,7 +127,7 @@ class NumpyBackend(Backend[numpy.ndarray]):
         return op(a, b)
 
     @staticmethod
-    def range_over_dim(dim: Dim, *, dtype: Optional[str] = None) -> Tensor[numpy.ndarray]:
+    def range_over_dim(dim: Dim, *, dtype: Optional[str] = None, device: Optional[str] = None) -> Tensor[numpy.ndarray]:
         """
         :param dim:
         :param dtype:

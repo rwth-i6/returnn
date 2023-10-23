@@ -14,17 +14,18 @@ T = TypeVar("T")
 __all__ = ["range_over_dim", "replace_dim", "dim_match_priority_when_needed", "num_elements_of_shape"]
 
 
-def range_over_dim(dim: Dim, *, dtype: Optional[str] = None) -> Tensor[T]:
+def range_over_dim(dim: Dim, *, dtype: Optional[str] = None, device: Optional[str] = None) -> Tensor[T]:
     """
     :param dim:
     :param dtype:
+    :param device,
     :return: tensor with shape [dim]
     """
     if dim.dyn_size_ext:
         backend = get_backend_by_tensor(dim.dyn_size_ext, fallback=global_backend)
     else:
         backend = global_backend
-    return backend.range_over_dim(dim, dtype=dtype)
+    return backend.range_over_dim(dim, dtype=dtype, device=device)
 
 
 def replace_dim(source: Tensor, *, in_dim: Dim, out_dim: Optional[Dim] = None) -> Tuple[Tensor, Dim]:

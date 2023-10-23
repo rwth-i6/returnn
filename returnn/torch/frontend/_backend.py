@@ -1051,10 +1051,11 @@ class TorchBackend(Backend[torch.Tensor]):
         return result_tensor
 
     @staticmethod
-    def range_over_dim(dim: Dim, *, dtype: Optional[str] = None) -> Tensor[torch.Tensor]:
+    def range_over_dim(dim: Dim, *, dtype: Optional[str] = None, device: Optional[str] = None) -> Tensor[torch.Tensor]:
         """
         :param dim:
         :param dtype:
+        :param device:
         :return: tensor with shape [dim]
         """
         if not dtype and dim.dyn_size_ext:
@@ -1068,7 +1069,7 @@ class TorchBackend(Backend[torch.Tensor]):
             dtype=dtype,
         )
         out.raw_tensor = torch.arange(
-            dim.get_dim_value(), dtype=TorchBackend.as_dtype_raw(out.dtype), device=rf.get_default_device()
+            dim.get_dim_value(), dtype=TorchBackend.as_dtype_raw(out.dtype), device=device or rf.get_default_device()
         )
         return out
 
