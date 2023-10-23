@@ -969,7 +969,7 @@ class Dataset(object):
         return ", ".join(
             [
                 self.__class__.__name__,
-                "sequences: %s" % try_run(lambda: self.num_seqs, default="unknown"),
+                "sequences: %s" % try_run(self.get_total_num_seqs, default="unknown"),
                 "frames: %s" % try_run(self.get_num_timesteps, default="unknown"),
             ]
         )
