@@ -27,6 +27,7 @@ from returnn.util import basic as util
 from returnn.util import NumbersDict
 from returnn.util.basic import hms, NotSpecified
 from returnn.util.result_with_reason import ResultWithReason
+from returnn.util.debug import debug_shell
 from returnn.forward_iface import ForwardCallbackIface
 
 from .updater import Updater
@@ -252,6 +253,10 @@ class Engine(EngineBase):
         elapsed_computation_time = 0
 
         self._pt_model.train()
+
+        if self.config.bool("debug_shell_before_train_loop", False):
+            print("debug_shell_before_train_loop", file=log.v1)
+            debug_shell(user_ns=locals(), user_global_ns=globals(), exit_afterwards=False)
 
         while True:
             with torch.no_grad():
