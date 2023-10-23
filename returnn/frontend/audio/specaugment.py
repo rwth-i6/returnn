@@ -104,7 +104,7 @@ def random_mask(
         num = rf.random_uniform(batch_dims, minval=min_num, maxval=max_num + 1, dtype="int32", device="cpu")
         max_num = rf.reduce_max(num, axis=num.dims)
     _, indices, k_dim = rf.top_k(
-        rf.random_uniform(batch_dims + [mask_axis], minval=0.0, maxval=1.0),
+        rf.random_uniform(batch_dims + [mask_axis], minval=0.0, maxval=1.0, device=x.device),
         axis=mask_axis,
         k=num if isinstance(num, int) else rf.reduce_max(num, axis=num.dims),
     )
@@ -158,9 +158,9 @@ def mask(
     dim = mask_axis.get_size_tensor()
     dim = rf.copy_to_device(dim, pos.device)
     pos = rf.cast(pos, dtype=dim.dtype)
-    amount = rf.random_uniform(pos.dims, minval=1, maxval=max_amount + 1, dtype=pos.dtype)
+    amount = rf.random_uniform(pos.dims, minval=1, maxval=max_amount + 1, dtype=pos.dtype, device=pos.device)
     pos2 = rf.minimum(pos + amount, dim)
-    idxs = rf.range_over_dim(mask_axis, dtype=pos.dtype)  # (dim,)
+    idxs = rf.range_over_dim(mask_axis, dtype=pos.dtype, device=pos.device)  # (dim,)
     cond = rf.compare_bc(idxs, ">=", pos) & rf.compare_bc(idxs, "<", pos2)  # (batch,dim)
     x = rf.where(cond, mask_value, x)
     return x
