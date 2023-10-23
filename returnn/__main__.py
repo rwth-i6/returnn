@@ -35,7 +35,7 @@ from returnn.util.basic import BackendEngine, BehaviorVersion
 
 # These imports are not directly used here, but make them available, as other code imports them from here.
 # noinspection PyUnresolvedReferences
-from returnn.util.debug import init_ipython_kernel, init_better_exchook, init_faulthandler
+from returnn.util.debug import init_ipython_kernel, init_better_exchook, init_faulthandler, debug_shell
 
 # noinspection PyUnresolvedReferences
 from returnn.util.basic import init_thread_join_hack, describe_returnn_version
@@ -552,6 +552,8 @@ def execute_main_task():
     elif task == "initialize_model":
         engine.init_train_from_config(config, train_data, dev_data, eval_data)
         engine.save_model(config.value("model", "dummy"))
+    elif task == "debug_shell":
+        debug_shell(locals(), globals())
     else:
         raise Exception("unknown task: %r" % (task,))
 
