@@ -7,7 +7,7 @@ from typing import Dict
 import time
 from collections import defaultdict
 from threading import Thread
-import psutil
+import psutil  # noqa
 
 
 def watch_memory():
