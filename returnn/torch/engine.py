@@ -6,6 +6,7 @@ from __future__ import annotations
 from typing import Optional, Any, Union, Callable, Dict
 from contextlib import nullcontext
 
+import sys
 import gc
 import os
 import torch
@@ -470,6 +471,7 @@ class Engine(EngineBase):
         assert isinstance(loader_opts, dict), f"config torch_dataloader_opts, expected dict, got {type(loader_opts)}"
         if loader_opts.get("num_workers"):
             loader_opts.setdefault("persistent_workers", True)
+            loader_opts.setdefault("worker_init_fn", _data_loader_worker_init_func)
 
         return DataLoader(
             batches_dataset,
@@ -920,3 +922,9 @@ def get_device_from_config_opt(device: Optional[str]) -> ResultWithReason[str]:
             raise Exception("No GPU device found, but config requested 'gpu' device.\n" + "\n".join(reasons))
         reason = "'gpu' in config"
     return ResultWithReason(device, reason)
+
+
+def _data_loader_worker_init_func(worker_id: int):
+    if sys.platform == "linux":
+        with open("/proc/self/comm", "w") as f:
+            f.write(f"TDL worker {worker_id}")
