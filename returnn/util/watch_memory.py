@@ -11,6 +11,9 @@ import psutil
 
 
 def watch_memory():
+    """
+    Start thread which watches memory usage over time of the current process and all its children over time.
+    """
     global _watch_memory_thread
     if _watch_memory_thread:
         return
@@ -81,14 +84,14 @@ def _format_mem_info(info: Dict[str, int]) -> str:
 def _format_mem_size(c: int) -> str:
     if c < 1024:
         return "%iB" % c
-    S = "KMG"
+    units = "KMG"
     i = 0
-    while i < len(S) - 1:
+    while i < len(units) - 1:
         if c < 0.8 * 1024 ** (i + 2):
             break
         i += 1
     f = float(c) / (1024 ** (i + 1))
-    return "%.1f%sB" % (f, S[i])
+    return "%.1f%sB" % (f, units[i])
 
 
 def get_mem_info(proc: psutil.Process) -> Dict[str, int]:
