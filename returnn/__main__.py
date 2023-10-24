@@ -372,6 +372,10 @@ def init(config_filename=None, command_line_options=(), config_updates=None, ext
         print(extra_greeting, file=log.v1)
     returnn_greeting(config_filename=config_filename, command_line_options=command_line_options)
     debug_util.init_faulthandler()
+    if config.bool("watch_memory", False):
+        from returnn.util.watch_memory import watch_memory
+
+        watch_memory()
     init_backend_engine()
     if config.bool("ipython", False):
         debug_util.init_ipython_kernel()
