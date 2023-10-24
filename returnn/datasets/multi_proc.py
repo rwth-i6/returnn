@@ -4,6 +4,7 @@ Multi-processing dataset
 
 from __future__ import annotations
 from typing import Optional, Any, Dict, List
+import sys
 from .basic import init_dataset, DatasetSeq
 from .cached2 import CachedDataset2
 from returnn.config import Config, get_global_config, set_global_config
@@ -180,6 +181,9 @@ class MultiProcDataset(CachedDataset2):
     def _seq_order_proc_loop(
         global_config: Optional[Config], dataset_dict: Dict[str, Any], parent: mpConnection, workers: List[mpConnection]
     ):
+        if sys.platform == "linux":
+            with open("/proc/self/comm", "w") as f:
+                f.write(f"MPD seq order")
         if global_config:
             set_global_config(global_config)
         num_workers = len(workers)
@@ -217,6 +221,9 @@ class MultiProcDataset(CachedDataset2):
         parent: mpConnection,
         seq_order: mpConnection,
     ):
+        if sys.platform == "linux":
+            with open("/proc/self/comm", "w") as f:
+                f.write(f"MPD worker")
         if global_config:
             set_global_config(global_config)
         dataset = init_dataset(dataset_dict)
