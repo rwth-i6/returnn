@@ -74,7 +74,11 @@ def _watch_memory_thread_main():
 
 
 def _format_proc(proc: psutil.Process) -> str:
-    return "%s(%s)" % (proc.name(), proc.pid)
+    try:
+        proc_name = proc.name()
+    except psutil.NoSuchProcess:  # race condition
+        proc_name = "(exited)"
+    return "%s(%s)" % (proc_name, proc.pid)
 
 
 def _format_mem_info(info: Dict[str, int]) -> str:
