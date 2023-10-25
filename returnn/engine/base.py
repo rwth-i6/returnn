@@ -76,7 +76,7 @@ class EngineBase:
         # Automatically search the filesystem for existing models.
         file_list = {}
         for epoch in range(1, cls.config_get_final_epoch(config) + 1):
-            for is_pretrain in [False, True]:
+            for is_pretrain in [False, True] if util.BackendEngine.is_tensorflow_selected() else [False]:
                 fn = cls.epoch_model_filename(model_filename, epoch, is_pretrain=is_pretrain)
                 if os.path.exists(fn):
                     file_list[epoch] = fn
@@ -87,6 +87,10 @@ class EngineBase:
                         break
                 elif util.BackendEngine.is_torch_selected():
                     if os.path.exists(fn + ".pt"):
+                        if config.value("task", "train") == "train":
+                            # In case of training, we only want to consider the model if the optimizer state exists.
+                            if not os.path.exists(fn + ".opt.pt"):
+                                continue
                         file_list[epoch] = fn
                         break
         return file_list
