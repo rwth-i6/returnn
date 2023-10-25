@@ -548,36 +548,7 @@ class Engine(EngineBase):
             step = 0
             epoch = self._start_epoch or 1
 
-        # See :mod:`rf.rand` docstring for an explanation of this logic.
-        random_seed = self.config.int("random_seed", 42)
-        random_seed = (epoch * 193939 + step * 19937 + random_seed * 27644437 + 479001599) % (2**31)
-        rf.set_random_seed(random_seed)
-
-        get_model_func = self.config.typed_value("get_model")
-        assert get_model_func, "get_model not defined in config"
-        sentinel_kw = {"__fwd_compatible_random_arg_%i" % int(random() * 100): None}
-        # Note on the `epoch` and `step` args:
-        # In case we are loading a model:
-        #   This is the epoch and step of the model we are loading.
-        # In case we are initializing a model:
-        #   Epoch starts at 1, step starts at 0.
-        # The step is the global train step, i.e. the number of train steps we have done so far over all epochs,
-        # so it does not reset to 0 at each epoch.
-        # In a checkpoint, we stored the epoch of the most recent epoch we just finished.
-        # We stored the global train step after we already incremented it (that's why you have step -= 1 above).
-        # The checkpoint is always stored when we just have finished the epoch.
-        model = get_model_func(epoch=epoch, step=step, **sentinel_kw)
-        self._orig_model = model
-        if isinstance(model, rf.Module):
-            self._pt_model = rf_module_to_pt_module(model)
-        elif isinstance(model, torch.nn.Module):
-            self._pt_model = model
-        else:
-            raise TypeError(f"get_model returned {model} of type {type(model)}, expected rf.Module or torch.nn.Module")
-        assert isinstance(self._pt_model, torch.nn.Module)
-        print("Model:", self._pt_model, file=log.v4)
-        num_params = sum([parameter.numel() for parameter in self._pt_model.parameters()])
-        print(f"net params #: {num_params}", file=log.v2)
+        self._create_model(epoch=epoch, step=step)
 
         if checkpoint_state is not None:
             missing_keys, unexpected_keys = self._pt_model.load_state_dict(checkpoint_state["model"], strict=False)
@@ -661,6 +632,46 @@ class Engine(EngineBase):
             step += 1
         self.epoch = epoch  # in training, this will be reset to start_epoch
         self.global_train_step = step
+
+    def _create_model(self, *, epoch: int, step: int):
+        """
+        Set up self._pt_model and self._orig_model
+        by calling get_model from the config.
+
+        Note on the `epoch` and `step` args:
+        In case we are loading a model:
+          This is the epoch and step of the model we are loading.
+        In case we are initializing a model:
+          Epoch starts at 1, step starts at 0.
+        The step is the global train step, i.e. the number of train steps we have done so far over all epochs,
+        so it does not reset to 0 at each epoch.
+        In a checkpoint, we stored the epoch of the most recent epoch we just finished.
+        We stored the global train step after we already incremented it (that's why you have step -= 1 above).
+        The checkpoint is always stored when we just have finished the epoch.
+
+        :param epoch:
+        :param step:
+        """
+        # See :mod:`rf.rand` docstring for an explanation of this logic.
+        random_seed = self.config.int("random_seed", 42)
+        random_seed = (epoch * 193939 + step * 19937 + random_seed * 27644437 + 479001599) % (2**31)
+        rf.set_random_seed(random_seed)
+
+        get_model_func = self.config.typed_value("get_model")
+        assert get_model_func, "get_model not defined in config"
+        sentinel_kw = {"__fwd_compatible_random_arg_%i" % int(random() * 100): None}
+        model = get_model_func(epoch=epoch, step=step, **sentinel_kw)
+        self._orig_model = model
+        if isinstance(model, rf.Module):
+            self._pt_model = rf_module_to_pt_module(model)
+        elif isinstance(model, torch.nn.Module):
+            self._pt_model = model
+        else:
+            raise TypeError(f"get_model returned {model} of type {type(model)}, expected rf.Module or torch.nn.Module")
+        assert isinstance(self._pt_model, torch.nn.Module)
+        print("Model:", self._pt_model, file=log.v4)
+        num_params = sum([parameter.numel() for parameter in self._pt_model.parameters()])
+        print(f"net params #: {num_params}", file=log.v2)
 
     def _save_model(self):
         """
