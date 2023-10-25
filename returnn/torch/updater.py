@@ -182,7 +182,7 @@ class Updater(object):
         tmp_filename = filename + ".tmp_write"
         if os.path.exists(tmp_filename):
             os.unlink(tmp_filename)
-        torch.save(self.optimizer.state_dict(), filename)
+        torch.save(self.optimizer.state_dict(), tmp_filename)
         os.rename(tmp_filename, filename)
 
     def get_optimizer(self):
