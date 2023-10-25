@@ -164,13 +164,23 @@ class MultiProcDataset(CachedDataset2):
 
     def __del__(self):
         if self._seq_order_proc:
-            try_run(self._seq_order_proc_parent_conn.send, ("exit", {}))
-            try_run(self._seq_order_proc.join)
+            # noinspection PyBroadException
+            try:
+                self._seq_order_proc_parent_conn.send(("exit", {}))
+                self._seq_order_proc.join()
+            except Exception:
+                pass
         if self._worker_procs:
+            got_exception = False
             for worker_parent_conn in self._worker_parent_conns:
-                try_run(worker_parent_conn.send, ("exit", {}))
-            for worker_proc in self._worker_procs:
-                try_run(worker_proc.join)
+                # noinspection PyBroadException
+                try:
+                    worker_parent_conn.send(("exit", {}))
+                except Exception:
+                    got_exception = True
+            if not got_exception:
+                for worker_proc in self._worker_procs:
+                    try_run(worker_proc.join)
 
     @staticmethod
     def _seq_order_proc_loop(
