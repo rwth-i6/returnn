@@ -557,13 +557,14 @@ class Engine(EngineBase):
         assert get_model_func, "get_model not defined in config"
         sentinel_kw = {"__fwd_compatible_random_arg_%i" % int(random() * 100): None}
         # Note on the `epoch` and `step` args:
-        # This is the current epoch and step, i.e. the epoch and step we are about to run.
-        # This is not the epoch and step of the model we are loading.
-        # Epoch starts at 1, step starts at 0.
-        # It is the global train step, i.e. the number of train steps we have done so far over all epochs,
+        # In case we are loading a model:
+        #   This is the epoch and step of the model we are loading.
+        # In case we are initializing a model:
+        #   Epoch starts at 1, step starts at 0.
+        # The step is the global train step, i.e. the number of train steps we have done so far over all epochs,
         # so it does not reset to 0 at each epoch.
         # In a checkpoint, we stored the epoch of the most recent epoch we just finished.
-        # We stored the global train step after we already incremented it.
+        # We stored the global train step after we already incremented it (that's why you have step -= 1 above).
         # The checkpoint is always stored when we just have finished the epoch.
         model = get_model_func(epoch=epoch, step=step, **sentinel_kw)
         self._orig_model = model
