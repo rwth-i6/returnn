@@ -8,6 +8,7 @@ import sys
 from .basic import init_dataset, DatasetSeq
 from .cached2 import CachedDataset2
 from returnn.config import Config, get_global_config, set_global_config
+from returnn.util.basic import try_run
 import multiprocessing as mp
 
 # noinspection PyProtectedMember
@@ -163,19 +164,13 @@ class MultiProcDataset(CachedDataset2):
 
     def __del__(self):
         if self._seq_order_proc:
-            try:
-                self._seq_order_proc_parent_conn.send(("exit", {}))
-            except BrokenPipeError:
-                pass
-            self._seq_order_proc.join()
+            try_run(self._seq_order_proc_parent_conn.send, ("exit", {}))
+            try_run(self._seq_order_proc.join)
         if self._worker_procs:
             for worker_parent_conn in self._worker_parent_conns:
-                try:
-                    worker_parent_conn.send(("exit", {}))
-                except BrokenPipeError:
-                    pass
+                try_run(worker_parent_conn.send, ("exit", {}))
             for worker_proc in self._worker_procs:
-                worker_proc.join()
+                try_run(worker_proc.join)
 
     @staticmethod
     def _seq_order_proc_loop(
