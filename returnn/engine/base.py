@@ -77,7 +77,7 @@ class EngineBase:
         file_list = {}
         for epoch in range(1, cls.config_get_final_epoch(config) + 1):
             for is_pretrain in [False, True]:
-                fn = cls.epoch_model_filename(model_filename, epoch, is_pretrain)
+                fn = cls.epoch_model_filename(model_filename, epoch, is_pretrain=is_pretrain)
                 if os.path.exists(fn):
                     file_list[epoch] = fn
                     break
@@ -197,12 +197,11 @@ class EngineBase:
         return start_epoch
 
     @classmethod
-    def epoch_model_filename(cls, model_filename, epoch, is_pretrain):
+    def epoch_model_filename(cls, model_filename: str, epoch: int, *, is_pretrain: bool = False) -> str:
         """
-        :type model_filename: str
-        :type epoch: int
-        :type is_pretrain: bool
-        :rtype: str
+        :param model_filename:
+        :param epoch:
+        :param is_pretrain:
         """
         if sys.platform == "win32" and model_filename.startswith("/tmp/"):
             import tempfile
@@ -218,7 +217,7 @@ class EngineBase:
         """
         if not epoch:
             epoch = self.epoch
-        return self.epoch_model_filename(self.model_filename, epoch, self.is_pretrain_epoch(epoch=epoch))
+        return self.epoch_model_filename(self.model_filename, epoch, is_pretrain=self.is_pretrain_epoch(epoch=epoch))
 
     def get_epoch_str(self):
         """

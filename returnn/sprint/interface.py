@@ -740,7 +740,10 @@ def _init_base(configfile=None, target_mode=None, epoch=None, sprint_opts=None):
 
     if target_mode and target_mode == "forward" and epoch:
         model_filename = config.value("model", "")
-        fns = [EngineBase.epoch_model_filename(model_filename, epoch, is_pretrain) for is_pretrain in [False, True]]
+        fns = [
+            EngineBase.epoch_model_filename(model_filename, epoch, is_pretrain=is_pretrain)
+            for is_pretrain in [False, True]
+        ]
         fn_postfix = ""
         if BackendEngine.is_tensorflow_selected():
             fn_postfix += ".meta"

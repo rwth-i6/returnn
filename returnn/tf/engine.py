@@ -1730,7 +1730,9 @@ class Engine(EngineBase):
         print("start", self.get_epoch_str(), "with learning rate", self.learning_rate, "...", file=log.v4)
 
         if self.epoch == 1 and self.save_epoch1_initial_model:
-            epoch0_model_filename = self.epoch_model_filename(self.model_filename, 0, self.is_pretrain_epoch())
+            epoch0_model_filename = self.epoch_model_filename(
+                self.model_filename, 0, is_pretrain=self.is_pretrain_epoch()
+            )
             print("save initial epoch1 model", epoch0_model_filename, file=log.v4)
             self.save_model(epoch0_model_filename)
 
