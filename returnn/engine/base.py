@@ -49,6 +49,8 @@ class EngineBase:
 
         :param config:
         """
+        if not config:
+            config = self.config
         self.learning_rate_control = load_learning_rate_control_from_config(config)
         self.learning_rate = self.learning_rate_control.default_learning_rate
 

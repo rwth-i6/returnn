@@ -149,6 +149,7 @@ class Engine(EngineBase):
         :param eval_data:
         """
         assert config is self.config or not config
+        config = self.config
         super().init_train_from_config(config=config)
 
         if self._use_torch_distributed:
@@ -202,6 +203,7 @@ class Engine(EngineBase):
         Main training loop.
         """
         assert self._pt_model is not None, "Model not initialized, call init_train_from_config()."
+        assert self.train_dataset is not None, "Train dataset missing, call init_train_from_config() with train_data."
 
         if self._start_epoch > self._final_epoch:
             print(f"Already trained until final epoch {self._final_epoch}, nothing to do.", file=log.v3)
