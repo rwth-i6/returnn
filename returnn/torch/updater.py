@@ -5,6 +5,7 @@ and model param update logic in general.
 
 from __future__ import annotations
 
+import os
 import gc
 import torch
 import typing
@@ -171,8 +172,18 @@ class Updater(object):
 
         :param str filename: File in which to save the optimizer state.
         """
+        directory = os.path.dirname(filename)
+        if directory and not os.path.exists(directory):
+            os.makedirs(directory, exist_ok=True)
+
         print("Save optimizer under %s" % filename, file=log.v4)
+        # First write to a temp-file, to be sure that writing happens without errors,
+        # and only afterward rename to the target file.
+        tmp_filename = filename + ".tmp_write"
+        if os.path.exists(tmp_filename):
+            os.unlink(tmp_filename)
         torch.save(self.optimizer.state_dict(), filename)
+        os.rename(tmp_filename, filename)
 
     def get_optimizer(self):
         """

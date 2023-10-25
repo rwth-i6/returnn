@@ -671,9 +671,15 @@ class Engine(EngineBase):
             os.makedirs(directory, exist_ok=True)
 
         print("Save model under %s" % (filename,), file=log.v4)
+        # First write to a temp-file, to be sure that writing happens without errors,
+        # and only afterward rename to the target file.
+        tmp_filename = filename + ".tmp_write"
+        if os.path.exists(tmp_filename):
+            os.unlink(tmp_filename)
         torch.save(
-            {"model": self._pt_model.state_dict(), "epoch": self.epoch, "step": self.global_train_step}, filename
+            {"model": self._pt_model.state_dict(), "epoch": self.epoch, "step": self.global_train_step}, tmp_filename
         )
+        os.rename(tmp_filename, filename)
 
     def _load_optimizer(self):
         """
@@ -693,10 +699,6 @@ class Engine(EngineBase):
         if not self._do_save():
             return
         filename = self.get_epoch_model_filename() + ".opt" + util.get_model_filename_postfix()
-        directory = os.path.dirname(filename)
-        if directory and not os.path.exists(directory):
-            os.makedirs(directory, exist_ok=True)
-
         self._updater.save_optimizer(filename)
 
         # keep only the last two optimizer states (two in case one file gets corrupted)
