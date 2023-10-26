@@ -6,6 +6,8 @@ Code partly taken from here:
 https://github.com/albertz/literal-python-to-pickle
 """
 
+from __future__ import annotations
+from typing import Optional
 import pickle
 import ctypes
 import os
@@ -25,6 +27,9 @@ def literal_eval(s):
     return pickle.loads(raw_pickle)
 
 
+_lib: Optional[ctypes.CDLL] = None
+
+
 def py_to_pickle(s):
     """
     :param str|bytes s:
@@ -40,18 +45,20 @@ def py_to_pickle(s):
     out_len = in_len + 1000  # should always be enough (some buffer len + len of literal Python code)
     out_ = ctypes.create_string_buffer(out_len)
 
-    lib = ctypes.CDLL(_get_native_lib_filename())
-    lib.py_to_pickle.argtypes = (ctypes.c_char_p, ctypes.c_size_t, ctypes.c_char_p, ctypes.c_size_t)
-    lib.py_to_pickle.restype = ctypes.c_int
+    global _lib
+    if not _lib:
+        _lib = ctypes.CDLL(_get_native_lib_filename())
+        _lib.py_to_pickle.argtypes = (ctypes.c_char_p, ctypes.c_size_t, ctypes.c_char_p, ctypes.c_size_t)
+        _lib.py_to_pickle.restype = ctypes.c_int
 
-    res = lib.py_to_pickle(in_, in_len, out_, out_len)
+    res = _lib.py_to_pickle(in_, in_len, out_, out_len)
     assert res == 0, "there was some error"
     return out_.raw
 
 
 _my_dir = os.path.dirname(os.path.abspath(__file__))
 _native_cpp_filename = _my_dir + "/py-to-pickle.cpp"
-_native_lib_filename = None
+_native_lib_filename: Optional[str] = None
 
 
 def _get_native_lib_filename():
