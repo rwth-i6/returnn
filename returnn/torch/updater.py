@@ -9,7 +9,7 @@ import os
 import gc
 import torch
 import typing
-from typing import Any, Set, Dict
+from typing import Any, Set, Dict, Optional
 
 from returnn.log import log
 from returnn.util.basic import RefIdEq
@@ -110,6 +110,8 @@ class Updater(object):
 
         self.optimizer = None  # type: typing.Optional[torch.optim.Optimizer]
 
+        self._grad_clip_global_norm = self.config.float("gradient_clip_global_norm", 0.0)
+
         self._update_effective_learning_rate()
 
     def set_learning_rate(self, value):
@@ -143,6 +145,18 @@ class Updater(object):
         """
         self._current_train_step = global_train_step
         self._update_effective_learning_rate()
+
+    def update_params(self, *, grad_scaler: Optional[torch.cuda.amp.GradScaler] = None):
+        """
+        Perform one step, i.e. update the parameters using the optimizer given the current calculated gradients.
+        """
+        if self._grad_clip_global_norm:
+            torch.nn.utils.clip_grad_norm_(self.network.parameters(), self._grad_clip_global_norm)
+        if grad_scaler is not None:
+            grad_scaler.step(self.optimizer)
+            grad_scaler.update()
+        else:
+            self.optimizer.step()
 
     def create_optimizer(self):
         """
