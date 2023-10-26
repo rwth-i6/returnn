@@ -112,6 +112,29 @@ class Updater(object):
 
         self._grad_clip_global_norm = self.config.float("gradient_clip_global_norm", 0.0)
 
+        # Check other options we have in TF updater, which we might support here later as well,
+        # but currently do not support.
+        for opt_name in [
+            "gradient_noise",
+            "gradient_clip",
+            "gradient_clip_norm",
+            "gradient_clip_avg_norm",
+            "global_norm_tag",
+            "gradient_clip_global_norm_tag",
+            "grad_norm_to_clip_to_zero",
+            "maximize_grad_norm",
+            "debug_grad_summaries",
+            "gradient_nan_inf_filter",
+        ]:
+            if self.config.float(opt_name, 0.0):
+                raise NotImplementedError(f"PyTorch updater: option {opt_name} not supported currently")
+        # Check for potential user mistakes.
+        if self.config.float("grad_clip", 0.0):
+            raise ValueError(
+                "You set grad_clip in the config,"
+                " but the option is called gradient_clip_global_norm (or other options)."
+            )
+
         self._update_effective_learning_rate()
 
     def set_learning_rate(self, value):
