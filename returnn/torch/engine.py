@@ -944,3 +944,26 @@ def _data_loader_worker_init_func(worker_id: int):
     if sys.platform == "linux":
         with open("/proc/self/comm", "w") as f:
             f.write(f"TDL worker {worker_id}")
+
+
+class StepCallbackReturn:
+    """
+    Return value of the step callback.
+    """
+
+    def __init__(
+        self,
+        *,
+        updated_model: Union[rf.Module, torch.nn.Module] = None,
+        config_updates: Optional[Dict[str, Any]] = None,
+    ):
+        """
+        :param updated_model: Set this in case the model was updated.
+            It can be the same instance as before or a new instance.
+            You should set this when you modify the model in any way,
+            such that the engine can recreate any wrapper objects
+            (e.g. the DDP wrapped module, or the RF wrapped module).
+        :param config_updates: Can include learning_rate, batch_size, etc.
+        """
+        self.updated_model = updated_model
+        self.config_updates = config_updates
