@@ -78,7 +78,11 @@ def _format_proc(proc: psutil.Process) -> str:
     try:
         proc_name = proc.name()
     except psutil.NoSuchProcess:  # race condition
-        proc_name = "(exited)"
+        proc_name = getattr(proc, "_name", None)
+        if not proc_name:
+            proc_name = "<unknown-dead>"
+    if not proc_name:
+        proc_name = "<noname>"
     return "%s(%s)" % (proc_name, proc.pid)
 
 
