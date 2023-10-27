@@ -22,8 +22,8 @@ def main():
     arg_parser = argparse.ArgumentParser()
     arg_parser.add_argument("--config")
     arg_parser.add_argument("--cwd", help="will change to this dir")
-    arg_parser.add_argument("--model", help="model filenames")
-    arg_parser.add_argument("--scores", help="learning_rate_control file, e.g. newbob.data")
+    arg_parser.add_argument("--model", help="model filenames (default: take from config)")
+    arg_parser.add_argument("--scores", help="learning_rate_control file, e.g. newbob.data (default: take from config)")
     arg_parser.add_argument("--dry_run", action="store_true")
     args = arg_parser.parse_args()
     return_code = 0
@@ -33,7 +33,7 @@ def main():
         init(
             extra_greeting="Delete old models.",
             config_filename=args.config or None,
-            config_updates={"use_tensorflow": True, "need_data": False, "device": "cpu"},
+            config_updates={"need_data": False, "device": "cpu"},
         )
         from returnn.__main__ import engine, config
 
