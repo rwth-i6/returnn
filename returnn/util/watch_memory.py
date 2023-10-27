@@ -48,6 +48,7 @@ def _watch_memory_thread_main():
                 if old_mem_info:
                     print(prefix, f"proc {_format_proc(p)} exited, old:", _format_mem_info(old_mem_info))
                     mem_per_pid.pop(p.pid, None)
+                    procs.remove(p)
                     change = True
                 continue
             proc_prefix = "main" if p == cur_proc else "sub"
