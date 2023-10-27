@@ -66,9 +66,12 @@ class EngineBase:
         return num_epochs
 
     @classmethod
-    def get_existing_models(cls, config):
+    def get_existing_models(cls, config: Config, *, for_training: Optional[bool] = None):
         """
-        :param returnn.config.Config config:
+        :param config:
+        :param for_training: if True, will only return models which are suitable for resuming training.
+            E.g. in case of PyTorch, it means that the optimizer state should be present.
+            By default, will be True if the task is "train".
         :return: dict epoch -> model filename
         :rtype: dict[int,str]
         """
@@ -77,6 +80,8 @@ class EngineBase:
             return {}
         # Automatically search the filesystem for existing models.
         file_list = {}
+        if for_training is None:
+            for_training = config.value("task", "train") == "train"
         for epoch in range(1, cls.config_get_final_epoch(config) + 1):
             for is_pretrain in [False, True] if util.BackendEngine.is_tensorflow_selected() else [False]:
                 fn = cls.epoch_model_filename(model_filename, epoch, is_pretrain=is_pretrain)
@@ -89,7 +94,7 @@ class EngineBase:
                         break
                 elif util.BackendEngine.is_torch_selected():
                     if os.path.exists(fn + ".pt"):
-                        if config.value("task", "train") == "train":
+                        if for_training:
                             # In case of training, we only want to consider the model if the optimizer state exists.
                             if not os.path.exists(fn + ".opt.pt"):
                                 continue
@@ -285,7 +290,7 @@ class EngineBase:
         from itertools import count
 
         opts = CollectionReadCheckCovered(self.config.get_of_type("cleanup_old_models", dict, {}))
-        existing_models = self.get_existing_models(config=self.config)
+        existing_models = self.get_existing_models(config=self.config, for_training=False)
         if self.learning_rate_control is not None:
             lr_control = self.learning_rate_control
         else:
