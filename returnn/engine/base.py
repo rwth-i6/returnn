@@ -287,6 +287,7 @@ class EngineBase:
         if not self._do_save():
             return
         from returnn.util.basic import CollectionReadCheckCovered, human_bytes_size, confirm
+        from returnn.util.math import next_power_of_two
         from itertools import count
 
         opts = CollectionReadCheckCovered(self.config.get_of_type("cleanup_old_models", dict, {}))
@@ -324,7 +325,7 @@ class EngineBase:
             keep_every = 40
             keep_doubles_of = 10
         else:
-            keep_every = 80
+            keep_every = 80 * next_power_of_two(1 + epochs[-1] // 240)
             keep_doubles_of = 20
         for i in count(1):
             n = keep_every * i
