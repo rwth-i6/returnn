@@ -16,7 +16,7 @@ https://github.com/tadeephuy/GradientReversal/blob/5d9857d63/gradient_reversal/f
 
 
 from __future__ import annotations
-from typing import Optional
+from typing import Optional, Union
 import torch
 
 
@@ -45,7 +45,11 @@ def scaled_gradient(x: torch.Tensor, scale: float) -> torch.Tensor:
 class _ScaledGradientExt(torch.autograd.Function):
     @staticmethod
     def forward(
-        ctx, x: torch.Tensor, scale: float = 1.0, shift: float = 0.0, scale_shift_by_sum_over_axis: Optional[int] = None
+        ctx,
+        x: torch.Tensor,
+        scale: Union[float, torch.Tensor] = 1.0,
+        shift: Optional[Union[float, torch.Tensor]] = None,
+        scale_shift_by_sum_over_axis: Optional[int] = None,
     ):
         ctx.scale = scale
         ctx.shift = shift
@@ -57,7 +61,7 @@ class _ScaledGradientExt(torch.autograd.Function):
         grad_out = grad
         if isinstance(ctx.scale, torch.Tensor) or ctx.scale != 1:
             grad_out = grad_out * ctx.scale
-        if isinstance(ctx.shift, torch.Tensor) or ctx.shift != 0:
+        if ctx.shift is not None and (isinstance(ctx.shift, torch.Tensor) or ctx.shift != 0):
             if ctx.scale_shift_by_sum_over_axis is not None:
                 m = torch.sum(torch.abs(grad), dim=ctx.scale_shift_by_sum_over_axis, keepdim=True)
                 grad_out = grad_out + ctx.shift * m
@@ -67,7 +71,11 @@ class _ScaledGradientExt(torch.autograd.Function):
 
 
 def scaled_gradient_ext(
-    x: torch.Tensor, *, scale: float = 1.0, shift: float = 0.0, scale_shift_by_sum_over_axis: Optional[int] = None
+    x: torch.Tensor,
+    *,
+    scale: Union[float, torch.Tensor] = 1.0,
+    shift: Optional[Union[float, torch.Tensor]] = None,
+    scale_shift_by_sum_over_axis: Optional[int] = None,
 ):
     """
     :param x:

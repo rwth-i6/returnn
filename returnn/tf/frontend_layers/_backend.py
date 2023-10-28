@@ -217,7 +217,11 @@ class ReturnnLayersBackend(Backend[Layer]):
 
     @staticmethod
     def scaled_gradient_ext(
-        x: Tensor, *, scale: float = 1.0, shift: float = 0.0, scale_shift_by_sum_over_axis: Optional[Dim] = None
+        x: Tensor,
+        *,
+        scale: Union[float, Tensor] = 1.0,
+        shift: Optional[Union[float, Tensor]] = None,
+        scale_shift_by_sum_over_axis: Optional[Dim] = None,
     ):
         """scaled gradient ext"""
         return rfl.make_layer(
