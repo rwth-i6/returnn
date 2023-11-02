@@ -27,9 +27,11 @@ def main():
         type=parse_numpy_printoption,
         help="Argument for numpy.set_printoptions(), in the form 'k=v'.",
     )
+    arg_parser.add_argument("--map_location")
+    arg_parser.add_argument("--mmap", action="store_true")
     args = arg_parser.parse_args()
 
-    state = torch.load(args.checkpoint)
+    state = torch.load(args.checkpoint, map_location=args.map_location, mmap=args.mmap)
     if args.key:
         assert isinstance(state, dict)
         if args.key not in state and "model" in state:
@@ -48,7 +50,7 @@ def print_object(obj: Any, *, print_all_tensors: bool = False, stats_only: bool 
             if isinstance(v, numpy.ndarray):
                 v = torch.tensor(v)
             if isinstance(v, torch.Tensor):
-                if v.numel() <= 1:
+                if v.numel() <= 1 and v.device.type != "meta":
                     print(f"{prefix}{k}: {v.dtype} {_format_shape(v.shape)} {_r(v)}")
                 else:
                     print(f"{prefix}{k}: {v.dtype} {_format_shape(v.shape)}")
