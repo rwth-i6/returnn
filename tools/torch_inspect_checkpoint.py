@@ -47,24 +47,35 @@ def print_object(obj: Any, *, print_all_tensors: bool = False, stats_only: bool 
     """print object"""
     if isinstance(obj, (dict, list, tuple)):
         for k, v in obj.items() if isinstance(obj, dict) else enumerate(obj):
-            if isinstance(v, numpy.ndarray):
-                v = torch.tensor(v)
-            if isinstance(v, torch.Tensor):
-                if v.numel() <= 1 and v.device.type != "meta":
-                    print(f"{prefix}{k}: {v.dtype} {_format_shape(v.shape)} {_r(v)}")
-                else:
-                    print(f"{prefix}{k}: {v.dtype} {_format_shape(v.shape)}")
-                    if print_all_tensors:
-                        print_tensor(v, with_type_and_shape=False, stats_only=stats_only, prefix=prefix + "  ")
-            elif isinstance(v, (dict, list, tuple)):
-                print(f"{prefix}{k}: ({type(v).__name__})")
-                print_object(v, print_all_tensors=print_all_tensors, stats_only=stats_only, prefix=prefix + "  ")
-            else:
-                print(f"{prefix}{k}: ({type(v).__name__}) {v}")
+            _print_key_value(k, v, print_all_tensors=print_all_tensors, stats_only=stats_only, prefix=prefix)
     elif isinstance(obj, (numpy.ndarray, torch.Tensor)):
         print_tensor(obj, stats_only=stats_only, prefix=prefix)
     else:
         print(f"{prefix}({type(obj)}) {obj}")
+
+
+def _print_key_value(
+    k: Any,
+    v: Union[numpy.ndarray, torch.Tensor],
+    *,
+    print_all_tensors: bool = False,
+    stats_only: bool = False,
+    prefix: str = "",
+):
+    if isinstance(v, numpy.ndarray):
+        v = torch.tensor(v)
+    if isinstance(v, torch.Tensor):
+        if v.numel() <= 1 and v.device.type != "meta":
+            print(f"{prefix}{k}: {v.dtype} {_format_shape(v.shape)} {_r(v)}")
+        else:
+            print(f"{prefix}{k}: {v.dtype} {_format_shape(v.shape)}")
+            if print_all_tensors:
+                print_tensor(v, with_type_and_shape=False, stats_only=stats_only, prefix=prefix + "  ")
+    elif isinstance(v, (dict, list, tuple)):
+        print(f"{prefix}{k}: ({type(v).__name__})")
+        print_object(v, print_all_tensors=print_all_tensors, stats_only=stats_only, prefix=prefix + "  ")
+    else:
+        print(f"{prefix}{k}: ({type(v).__name__}) {v}")
 
 
 def print_tensor(
