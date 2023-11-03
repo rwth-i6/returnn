@@ -99,10 +99,13 @@ def print_tensor(
             # See :func:`variable_scalar_summaries_dict`.
             mean = torch.mean(v)
             print(f"{prefix}mean, stddev: {_r(mean)}, {_r(torch.sqrt(torch.mean(torch.square(v - mean))))}")
-            print(f"{prefix}l2, rms: {_r(torch.norm(v, 2))}, {_r(torch.sqrt(torch.mean(torch.square(v))))}")
-        print(f"{prefix}min, max: {_r(torch.min(v))}, {_r(torch.max(v))}")
         v_, _ = v.flatten().sort()
-        print(f"{prefix}p05, p50, p95: {', '.join(_r(v_[int(n * q)]) for q in (0.05, 0.5, 0.95))}")
+        print(
+            f"{prefix}min, p05, p50, p95, max:"
+            f" {_r(v_[0])},"
+            f" {', '.join(_r(v_[int(n * q)]) for q in (0.05, 0.5, 0.95))},"
+            f" {_r(v_[-1])}"
+        )
 
 
 def _format_shape(shape: Tuple[int, ...]) -> str:
