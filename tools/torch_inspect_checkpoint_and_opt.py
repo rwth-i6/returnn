@@ -11,7 +11,7 @@ import argparse
 import numpy
 
 import _setup_returnn_env  # noqa
-from torch_inspect_checkpoint import parse_numpy_printoption, print_object, _print_key_value
+from torch_inspect_checkpoint import parse_numpy_printoption, print_object, _print_key_value  # noqa
 from returnn.config import Config, set_global_config
 from returnn.log import log
 from returnn.torch.engine import Engine
