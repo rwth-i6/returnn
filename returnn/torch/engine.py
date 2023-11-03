@@ -50,6 +50,8 @@ class Engine(EngineBase):
         """
         super(Engine, self).__init__(config=config)
         rf.select_backend_torch()
+        if util.BackendEngine.selected_engine is None:
+            util.BackendEngine.select_engine(default_fallback_engine=util.BackendEngine.Torch, config=self.config)
         self.model_filename = self.config.value("model", None)
         self._mp_manager = torch.multiprocessing.Manager()
         self._epoch_mp_shared = self._mp_manager.Value("i", 0)
