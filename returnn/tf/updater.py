@@ -222,6 +222,8 @@ class Updater(object):
             assert any(
                 [arg.kind == inspect.Parameter.VAR_KEYWORD for arg in signature.parameters.values()]
             ), "please specify **kwargs in dynamic_learning_rate for future compatibility"
+            if "epoch" in signature.parameters:
+                raise NotImplementedError("TF updater: dynamic_learning_rate with epoch not supported currently")
             lr = learning_rate_function(
                 network=self.network, global_train_step=self.global_train_step, learning_rate=lr
             )

@@ -105,6 +105,8 @@ class Updater(object):
                 assert any(
                     [arg.kind == inspect.Parameter.VAR_KEYWORD for arg in signature.parameters.values()]
                 ), "please specify **kwargs in dynamic_learning_rate for future compatibility"
+                if "network" in signature.parameters:
+                    raise ValueError("Torch updater: dynamic_learning_rate network is TF specific")
             else:
                 raise NotImplementedError("not implemented for not callable dynamic_learning_rate")
 
