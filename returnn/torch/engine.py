@@ -671,6 +671,12 @@ class Engine(EngineBase):
         num_params = sum([parameter.numel() for parameter in self._pt_model.parameters()])
         print(f"net params #: {num_params}", file=log.v2)
 
+    def get_pt_model(self) -> Optional[torch.nn.Module]:
+        """
+        :return: PyTorch Module. in case this is using RF, it will return the wrapped module
+        """
+        return self._pt_model
+
     def _save_model(self):
         """
         Saves the state of self._model to file.
@@ -692,6 +698,14 @@ class Engine(EngineBase):
             {"model": self._pt_model.state_dict(), "epoch": self.epoch, "step": self.global_train_step}, tmp_filename
         )
         os.rename(tmp_filename, filename)
+
+    def get_pt_optimizer(self) -> Optional[torch.optim.Optimizer]:
+        """
+        :return: PyTorch optimizer
+        """
+        if not self._updater:
+            return None
+        return self._updater.get_optimizer()
 
     def _load_optimizer(self):
         """
