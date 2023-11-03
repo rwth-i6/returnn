@@ -94,6 +94,7 @@ class Updater(object):
         self.network = network
         self._device = device
         self._current_train_step = 0
+        self._current_epoch = 0
 
         self.learning_rate_function = self.config.typed_value("dynamic_learning_rate", None)
         if self.learning_rate_function is not None:
@@ -158,17 +159,18 @@ class Updater(object):
         self._effective_learning_rate = self.learning_rate
         if self.learning_rate_function is not None:
             self._effective_learning_rate = self.learning_rate_function(
-                global_train_step=self._current_train_step, learning_rate=self.learning_rate
+                global_train_step=self._current_train_step, epoch=self._current_epoch, learning_rate=self.learning_rate
             )
         if self.optimizer:
             for param_group in self.optimizer.param_groups:
                 param_group["lr"] = self._effective_learning_rate
 
-    def set_current_train_step(self, global_train_step):
+    def set_current_train_step(self, *, global_train_step: int, epoch: int):
         """
         Obtains an updated learning rate for the current training step inside a (sub)epoch.
         """
         self._current_train_step = global_train_step
+        self._current_epoch = epoch
         self._update_effective_learning_rate()
 
     def update_params(self, *, grad_scaler: Optional[torch.cuda.amp.GradScaler] = None):

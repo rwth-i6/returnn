@@ -233,7 +233,7 @@ class Engine(EngineBase):
 
         # Update learning rate
         self._updater.set_learning_rate(self.learning_rate)
-        self._updater.set_current_train_step(self.global_train_step)
+        self._updater.set_current_train_step(global_train_step=self.global_train_step, epoch=self.epoch)
 
     def train_epoch(self):
         """
@@ -325,7 +325,7 @@ class Engine(EngineBase):
 
             step_idx += 1
             self.global_train_step += 1
-            self._updater.set_current_train_step(self.global_train_step)
+            self._updater.set_current_train_step(global_train_step=self.global_train_step, epoch=self.epoch)
 
         elapsed = time.time() - epoch_start_time
         elapsed_computation_percentage = elapsed_computation_time / elapsed
