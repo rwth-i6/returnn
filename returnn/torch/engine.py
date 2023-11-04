@@ -18,6 +18,7 @@ from torch import autocast
 from torch.cuda import amp
 from random import random
 
+import returnn
 from returnn.config import Config
 from returnn.log import log
 from returnn.engine.base import EngineBase
@@ -695,7 +696,14 @@ class Engine(EngineBase):
         if os.path.exists(tmp_filename):
             os.unlink(tmp_filename)
         torch.save(
-            {"model": self._pt_model.state_dict(), "epoch": self.epoch, "step": self.global_train_step}, tmp_filename
+            {
+                "model": self._pt_model.state_dict(),
+                "epoch": self.epoch,
+                "step": self.global_train_step,
+                "effective_learning_rate": self._updater.get_effective_learning_rate() if self._updater else None,
+                "returnn_version": returnn.__version__,
+            },
+            tmp_filename,
         )
         os.rename(tmp_filename, filename)
 
