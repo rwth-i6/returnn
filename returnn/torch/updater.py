@@ -11,6 +11,7 @@ import torch
 import typing
 from typing import Any, Set, Dict, Optional
 
+import returnn
 from returnn.log import log
 from returnn.util.basic import RefIdEq
 
@@ -111,6 +112,7 @@ class Updater(object):
             else:
                 raise NotImplementedError("not implemented for not callable dynamic_learning_rate")
 
+        self._optimizer_opts = None
         self.optimizer = None  # type: typing.Optional[torch.optim.Optimizer]
 
         self._grad_clip_global_norm = self.config.float("gradient_clip_global_norm", 0.0)
@@ -192,6 +194,7 @@ class Updater(object):
         optimizer_opts = self.config.typed_value("optimizer", None)
         if optimizer_opts is None:
             raise ValueError("config field 'optimizer' needs to be set explicitely for the Torch backend")
+        self._optimizer_opts = optimizer_opts
         self.optimizer = self._create_optimizer(optimizer_opts)
 
     def load_optimizer(self, filename):
@@ -202,7 +205,11 @@ class Updater(object):
         """
         print("Load optimizer %s" % filename, file=log.v4)
         optimizer_state = torch.load(filename, map_location=self._device)
-        self.optimizer.load_state_dict(optimizer_state)
+        assert isinstance(optimizer_state, dict), f"optimizer_state is not a dict but {type(optimizer_state)}"
+        if "optimizer" not in optimizer_state and "param_groups" in optimizer_state and "state" in optimizer_state:
+            # Old format, convert to new format.
+            optimizer_state = {"optimizer": optimizer_state}
+        self.optimizer.load_state_dict(optimizer_state["optimizer"])
         # https://github.com/rwth-i6/returnn/issues/1345
         del optimizer_state
         gc.collect()
@@ -217,13 +224,37 @@ class Updater(object):
         if directory and not os.path.exists(directory):
             os.makedirs(directory, exist_ok=True)
 
+        # We use optimizer.state_dict() below.
+        # That will only save param order indices
+        # but not the name of the parameters.
+        # We also save a mapping of parameter indices to names.
+        param_id_to_name = {}  # id -> name
+        for name, p in self.network.named_parameters():
+            param_id_to_name[id(p)] = name
+        param_names = []  # param_idx -> name
+        for group in self.optimizer.param_groups:
+            for p in group["params"]:
+                param_names.append(param_id_to_name[id(p)])
+
         print("Save optimizer under %s" % filename, file=log.v4)
         # First write to a temp-file, to be sure that writing happens without errors,
         # and only afterward rename to the target file.
         tmp_filename = filename + ".tmp_write"
         if os.path.exists(tmp_filename):
             os.unlink(tmp_filename)
-        torch.save(self.optimizer.state_dict(), tmp_filename)
+        torch.save(
+            {
+                "optimizer": self.optimizer.state_dict(),
+                "optimizer_class_name": self.optimizer.__class__.__name__,
+                "optimizer_opts": self._optimizer_opts,
+                "param_names": param_names,
+                "epoch": self._current_epoch,
+                "step": self._current_train_step,
+                "effective_learning_rate": self.get_effective_learning_rate(),
+                "returnn_version": returnn.__version__,
+            },
+            tmp_filename,
+        )
         os.rename(tmp_filename, filename)
 
     def get_optimizer(self):

@@ -6,6 +6,7 @@ from __future__ import annotations
 import _setup_test_env  # noqa
 import sys
 import unittest
+import tempfile
 import numpy
 import torch
 
@@ -13,6 +14,7 @@ from returnn.util import better_exchook
 from returnn.config import Config, global_config_ctx
 from returnn.tensor import TensorDict, Tensor
 from returnn.torch.engine import Engine
+from returnn.torch.updater import Updater
 import returnn.frontend as rf
 from returnn.forward_iface import ForwardCallbackIface
 from returnn.datasets import init_dataset
@@ -380,6 +382,20 @@ def test_data_loader_oggzip():
     # The following depends on the random data generation in create_ogg_zip_txt_only_dataset_mult_seqs,
     # but we fixed the seed and the random number generator, so this should stay the same, unless we change the code.
     assert batches == [[[12, 8, 9, 11], [16, 0, 0, 0]], [[6, 25, 18, 20, 5], [28, 10, 28, 14, 0]], [[17, 23]]]
+
+
+def test_load_optimizer_old_format():
+    config = Config(dict(optimizer={"class": "adamw", "weight_decay": 1e-3}))
+    model = torch.nn.Linear(7, 5)
+    updater = Updater(config=config, network=model, device=torch.device("cpu"))
+    updater.create_optimizer()
+
+    with tempfile.TemporaryDirectory(prefix="returnn_test_load_optimizer_old_format") as tmp_dir:
+        torch.save(updater.optimizer.state_dict(), tmp_dir + "/model.opt.old_format.pt")
+        updater.load_optimizer(tmp_dir + "/model.opt.old_format.pt")
+
+        updater.save_optimizer(tmp_dir + "/model.opt.new_format.pt")
+        updater.load_optimizer(tmp_dir + "/model.opt.new_format.pt")
 
 
 if __name__ == "__main__":
