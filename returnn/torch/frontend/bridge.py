@@ -6,6 +6,7 @@ https://github.com/rwth-i6/returnn/issues/1287
 """
 
 from __future__ import annotations
+from typing import Optional
 import torch
 import returnn.frontend as rf
 from returnn.tensor import Dim
@@ -20,6 +21,17 @@ def pt_module_to_rf_module(pt_module: torch.nn.Module) -> rf.Module:
     if isinstance(pt_module, _RFModuleAsPTModule):
         return pt_module.rf_module
     return _PTModuleAsRFModule(pt_module=pt_module)
+
+
+def pt_module_to_wrapped_rf_module(pt_module: torch.nn.Module) -> Optional[rf.Module]:
+    """
+    :param pt_module: torch module
+    :return: RF module if the torch module is a wrapped RF module, or None otherwise
+    """
+    assert isinstance(pt_module, torch.nn.Module)
+    if isinstance(pt_module, _RFModuleAsPTModule):
+        return pt_module.rf_module
+    return None
 
 
 def rf_module_to_pt_module(rf_module: rf.Module) -> torch.nn.Module:

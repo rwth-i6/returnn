@@ -5,15 +5,17 @@ and model param update logic in general.
 
 from __future__ import annotations
 
+from typing import Optional, Union, Any, Type, Sequence, Set, Dict, List, Tuple
 import os
 import gc
 import torch
 import typing
-from typing import Any, Set, Dict, Optional
 
 import returnn
 from returnn.log import log
 from returnn.util.basic import RefIdEq
+import returnn.frontend as rf
+from returnn.torch.frontend.bridge import pt_module_to_wrapped_rf_module
 
 _OptimizerClassesDictInitialized = False
 _OptimizerClassesDict = {}
@@ -36,12 +38,11 @@ def _init_optimizer_classes_dict():
         _OptimizerClassesDict[name.lower()] = cls
 
 
-def get_optimizer_class(class_name):
+def get_optimizer_class(class_name) -> Type[torch.optim.Optimizer]:
     """
     :param str|()->torch.optim.Optimizer|type[torch.optim.Optimizer] class_name:
         Optimizer data, e.g. "adam", torch.optim.Adam...
     :return: Optimizer class
-    :rtype: type[torch.optim.Optimizer]
     """
     _init_optimizer_classes_dict()
     if isinstance(class_name, type):
@@ -299,9 +300,9 @@ class Updater(object):
         # If the user specified it as epsilon, parse it as eps for the optimizer
         if "eps" in optim_class_init_kwargs and "epsilon" in opt_kwargs:
             opt_kwargs["eps"] = opt_kwargs.pop("epsilon")
-        if "learning_rate" in optimizer_opts:
+        if "learning_rate" in opt_kwargs:
             raise ValueError("'learning_rate' should be set outside of the 'optimizer' dict.")
-        lr = lr * optimizer_opts.get("learning_rate_multiplier", 1.0)
+        lr = lr * opt_kwargs.pop("learning_rate_multiplier", 1.0)
         opt_kwargs["lr"] = lr
 
         param_groups = self._get_optimizer_param_groups(optim_class, opt_kwargs)
@@ -321,7 +322,9 @@ class Updater(object):
 
         return optimizer
 
-    def _get_optimizer_param_groups(self, optim_class, optimizer_opts):
+    def _get_optimizer_param_groups(
+        self, optim_class: Type[torch.optim.Optimizer], optimizer_opts: Dict[str, Any]
+    ) -> List[Dict[str, Any]]:
         """
         The weight_decay parameter from AdamW affects the weights of layers such as LayerNorm and Embedding.
         This function creates a blacklist of network modules and splits the optimizer groups in two:
@@ -334,14 +337,34 @@ class Updater(object):
         This code is based on https://github.com/karpathy/minGPT (MIT license):
         https://github.com/karpathy/minGPT/blob/3ed14b2cec0dfdad3f4b2831f2b4a86d11aef150/mingpt/model.py#L136.
 
-        :param type[torch.optim.Optimizer] optim_class: Optimizer class.
-        :param dict[str] optimizer_opts: Optimizer configuration specified by the user.
+        Three variants how this can be configured by the user in the optimizer options dict:
+
+        - ``param_groups_custom``: callable which returns a list of param groups.
+          This is the most flexible option, and could also go beyond just weight decay logic,
+          or having more than two param groups (weight decay disabled/enabled).
+        - ``weight_decay_custom_include_check``: callable which returns True/False for each param,
+          to either include it in the weight decay group or not,
+          or None to use the default logic.
+        - ``weight_decay_modules_blacklist``: list of modules types which should not get weight decay.
+          Those can be RF modules or pure PyTorch modules.
+          The types can be specified as string (e.g. ``"torch.nn.LayerNorm"``) or as the type itself.
+
+        :param optim_class: Optimizer class.
+        :param optimizer_opts: Optimizer configuration specified by the user. Might be modified inplace here.
         :return: List of configurations for the different sets of parameters.
-        :rtype: List[Dict[str]]
         """
+        custom_param_groups = optimizer_opts.pop("param_groups_custom", None)
+        if custom_param_groups is not None:
+            assert callable(custom_param_groups), f"invalid param_groups_custom {custom_param_groups!r}"
+            rf_model = pt_module_to_wrapped_rf_module(self.network)
+            custom_param_groups = custom_param_groups(
+                model=self.network, rf_model=rf_model, optimizer_class=optim_class, optimizer_opts=optimizer_opts
+            )
+            return custom_param_groups
+
         network_params = self.network.parameters()
 
-        # By default insert the weight_decay constraints in the optimizer, as this is default PyTorch behavior.
+        # By default, insert the weight_decay constraints in the optimizer, as this is default PyTorch behavior.
         # If the user doesn't accept this, throw an error message.
         assert self.config.bool("decouple_constraints", True), (
             "L2/weight_decay constraints are decoupled in PyTorch, but "
@@ -366,13 +389,21 @@ class Updater(object):
         # Parameters without weight decay: biases + LayerNorm/Embedding layers.
         wd_params = set()
         no_wd_params = set()
-        blacklist_wd_modules = (torch.nn.LayerNorm, torch.nn.Embedding)
+        blacklist_wd_modules = optimizer_opts.pop("weight_decay_modules_blacklist", None)
+        if blacklist_wd_modules is None:
+            blacklist_wd_modules = (torch.nn.LayerNorm, torch.nn.Embedding)
+        else:
+            blacklist_wd_modules = _wrap_user_blacklist_wd_modules(blacklist_wd_modules)
+        custom_include_check = optimizer_opts.pop("weight_decay_custom_include_check", None)
+        if custom_include_check:
+            assert callable(custom_include_check), f"invalid weight_decay_custom_include_check {custom_include_check!r}"
         # Tracker of visited parameters to only add each parameter once, in case two modules share common parameters.
         # We need the wrapper class RefIdEq because Parameters are compared by value and not by reference.
         visited_params: Set[RefIdEq[torch.nn.Parameter]] = set()
         for module_name, module in self.network.named_modules():
             module_name: str
             module: torch.nn.Module
+            rf_module = pt_module_to_wrapped_rf_module(module)
             for param_name, param in module.named_parameters(recurse=False):
                 param_name: str
                 param: torch.nn.Parameter
@@ -380,9 +411,22 @@ class Updater(object):
                     continue
                 visited_params.add(RefIdEq(param))
                 full_param_name = "%s.%s" % (module_name, param_name) if module_name else param_name
-                if param_name.endswith("bias"):
-                    no_wd_params.add(full_param_name)
-                elif param_name.endswith("weight") and isinstance(module, blacklist_wd_modules):
+                custom_include = None
+                if custom_include_check:
+                    custom_include = custom_include_check(
+                        module=module, rf_module=rf_module, full_param_name=param_name, param=param
+                    )
+                if custom_include is not None:
+                    assert isinstance(custom_include, bool), "weight_decay_custom_include_check did not return bool"
+                    if custom_include:
+                        wd_params.add(full_param_name)
+                    else:
+                        no_wd_params.add(full_param_name)
+                elif (
+                    param_name.endswith("bias")
+                    or isinstance(module, blacklist_wd_modules)
+                    or isinstance(rf_module, blacklist_wd_modules)
+                ):
                     no_wd_params.add(full_param_name)
                 else:
                     wd_params.add(full_param_name)
@@ -394,3 +438,17 @@ class Updater(object):
         ]
 
         return optim_groups
+
+
+def _wrap_user_blacklist_wd_modules(
+    mods: Sequence[Union[str, Type[rf.Module], Type[torch.nn.Module]]]
+) -> Tuple[type, ...]:
+    assert isinstance(mods, (list, tuple)), f"invalid blacklist_weight_decay_modules {mods!r}"
+    res = []
+    for mod in mods:
+        if isinstance(mod, str):
+            assert mod.startswith("torch.") or mod.startswith("rf."), f"invalid blacklist_weight_decay_modules {mods!r}"
+            mod = eval(mod)
+        assert issubclass(mod, (rf.Module, torch.nn.Module)), f"invalid blacklist_weight_decay_modules {mods!r}"
+        res.append(mod)
+    return tuple(res)
