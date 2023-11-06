@@ -27,11 +27,11 @@ def main():
         type=parse_numpy_printoption,
         help="Argument for numpy.set_printoptions(), in the form 'k=v'.",
     )
-    arg_parser.add_argument("--map_location")
+    arg_parser.add_argument("--device", default="cpu")
     arg_parser.add_argument("--mmap", action="store_true")
     args = arg_parser.parse_args()
 
-    state = torch.load(args.checkpoint, map_location=args.map_location, mmap=args.mmap)
+    state = torch.load(args.checkpoint, map_location=args.device, mmap=args.mmap)
     if args.key:
         assert isinstance(state, dict)
         if args.key not in state and "model" in state:
