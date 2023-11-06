@@ -251,7 +251,7 @@ class Updater(object):
                 "epoch": self._current_epoch,
                 "step": self._current_train_step,
                 "effective_learning_rate": self.get_effective_learning_rate(),
-                "returnn_version": returnn.__version__,
+                "returnn_version": returnn.__long_version__,
             },
             tmp_filename,
         )

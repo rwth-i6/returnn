@@ -701,7 +701,7 @@ class Engine(EngineBase):
                 "epoch": self.epoch,
                 "step": self.global_train_step,
                 "effective_learning_rate": self._updater.get_effective_learning_rate() if self._updater else None,
-                "returnn_version": returnn.__version__,
+                "returnn_version": returnn.__long_version__,
             },
             tmp_filename,
         )
