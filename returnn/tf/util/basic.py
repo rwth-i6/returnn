@@ -7830,8 +7830,4 @@ def onnx_compat_floor_div(a: tf.Tensor, b: tf.Tensor) -> tf.Tensor:
     """
     # https://github.com/onnx/tensorflow-onnx/issues/2174
     abs_a, abs_b = tf.abs(a), tf.abs(b)
-    return tf.where(
-        a * b >= 0,
-        a // b,
-        -abs_a // abs_b - tf.cast(abs_a % abs_b != 0, dtype=a.dtype)
-    )
+    return tf.where(a * b >= 0, a // b, -abs_a // abs_b - tf.cast(abs_a % abs_b != 0, dtype=a.dtype))
