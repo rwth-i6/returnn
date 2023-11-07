@@ -7820,3 +7820,14 @@ def is_axis_from_description_recurrent(axis, network, data):
             if axis == single_step_dim:
                 return True
     return False
+
+
+def onnx_compat_floor_div(a: tf.Tensor, b: tf.Tensor) -> tf.Tensor:
+    """
+    :param a:
+    :param b:
+    :return: for onnx export compatible floor_divide
+    """
+    # https://github.com/onnx/tensorflow-onnx/issues/2174
+    abs_a, abs_b = tf.abs(a), tf.abs(b)
+    return tf.where(a * b >= 0, a // b, -abs_a // abs_b - tf.cast(abs_a % abs_b != 0, dtype=a.dtype))

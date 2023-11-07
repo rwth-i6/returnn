@@ -3627,6 +3627,18 @@ def get_global_inf_value() -> float:
     return config.float("inf_value", _default_global_inf_value)
 
 
+def is_onnx_export_global() -> bool:
+    """
+    :return: False by default. If 'onnx_export' is set in the config, that value is used.
+    """
+    from returnn.config import get_global_config
+
+    config = get_global_config(raise_exception=False)
+    if not config:
+        return False
+    return config.bool("onnx_export", False)
+
+
 # See :func:`maybe_restart_returnn_with_atfork_patch` below for why you might want to use this.
 _c_code_patch_atfork = """
 #define _GNU_SOURCE

@@ -8,7 +8,7 @@ import contextlib
 import tensorflow as tf
 
 import returnn.tf.compat as tf_compat
-from returnn.util.basic import NotSpecified
+from returnn.util.basic import NotSpecified, is_onnx_export_global
 from returnn.tensor import Tensor, Dim
 from returnn.tf.util import basic as tf_util
 
@@ -132,14 +132,17 @@ class TFBackend(Backend[tf.Tensor]):
         :return: a `kind` b
         """
         assert a.shape.ndims == b.shape.ndims or a.shape.ndims == 0 or b.shape.ndims == 0
-        kind = {
-            "sub": "subtract",
-            "mul": "multiply",
-        }.get(kind, kind)
-        op = getattr(tf, kind, None)  # e.g. tf.add
-        # In tf v2, some ops like floordiv or mod exist in the tf.math namespace instead
-        if op is None:
-            op = getattr(tf.math, kind)
+        if kind == "floordiv" and is_onnx_export_global():
+            op = tf_util.onnx_compat_floor_div
+        else:
+            kind = {
+                "sub": "subtract",
+                "mul": "multiply",
+            }.get(kind, kind)
+            op = getattr(tf, kind, None)  # e.g. tf.add
+            # In tf v2, some ops like floordiv or mod exist in the tf.math namespace instead
+            if op is None:
+                op = getattr(tf.math, kind)
         with tf_util.same_control_flow_ctx([a, b]):
             return op(a, b)
 
