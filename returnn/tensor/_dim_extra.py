@@ -1182,6 +1182,8 @@ class _DimMixin:
             elif kind == "mul":
                 return a * b
             elif kind in ("floordiv", "truediv"):  # truediv assumes there is no remainder
+                if util.is_onnx_export_global():
+                    return tf_util.onnx_compat_floor_div(a, b)
                 return a // b
             elif kind == "ceildiv":
                 if util.is_onnx_export_global():
