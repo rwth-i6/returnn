@@ -3868,11 +3868,15 @@ class Stats:
             )
         else:
             print("  %i seqs" % (self.num_seqs,), file=stream)
-        print("  Mean: %s" % (self.format_str(self.get_mean()),), file=stream)
-        print("  Std dev: %s" % (self.format_str(self.get_std_dev()),), file=stream)
-        print("  Min/max: %s / %s" % (self.format_str(self.min), self.format_str(self.max)), file=stream)
-        # print("Std dev (naive): %s" % numpy.sqrt(self.mean_sq - self.mean * self.mean), file=stream)
+        if self.num_seqs > 0:
+            print("  Mean: %s" % (self.format_str(self.get_mean()),), file=stream)
+            print("  Std dev: %s" % (self.format_str(self.get_std_dev()),), file=stream)
+            print("  Min/max: %s / %s" % (self.format_str(self.min), self.format_str(self.max)), file=stream)
+            # print("Std dev (naive): %s" % numpy.sqrt(self.mean_sq - self.mean * self.mean), file=stream)
+        else:
+            print("  (No data)", file=stream)
         if output_file_prefix:
+            assert self.num_seqs > 0, "cannot dump stats without any data"
             print("  Write mean/std-dev to %s.(mean|std_dev).txt." % (output_file_prefix,), file=stream)
             numpy.savetxt("%s.mean.txt" % output_file_prefix, self.get_mean())
             numpy.savetxt("%s.std_dev.txt" % output_file_prefix, self.get_std_dev())
