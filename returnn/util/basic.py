@@ -22,6 +22,7 @@ import numpy as np
 import re
 import time
 import contextlib
+import struct
 
 try:
     import thread
@@ -2624,11 +2625,10 @@ def read_pickled_object(p: typing.BinaryIO, *, encoding=None) -> Any:
     :param encoding: if given, passed to Unpickler
     """
     from returnn.util.task_system import Unpickler
-    import struct
 
     size_raw = read_bytes_to_new_buffer(p, 4)
     (size,) = struct.unpack("<i", size_raw)
-    assert size > 0, "%s: We expect to get some non-empty package. Invalid Python mod in Sprint?" % (self,)
+    assert size > 0, "read_pickled_object: We expect to get some non-empty package."
     stream = read_bytes_to_new_buffer(p, size)
     unpickler_kwargs = {}
     if encoding:
@@ -2640,8 +2640,10 @@ def write_pickled_object(p: typing.BinaryIO, obj: Any):
     """
     Writes pickled object to stream p.
     """
-    stream = io.BytesIO()
-    Pickler(stream).dump(data)
+    from returnn.util.task_system import Pickler
+
+    stream = BytesIO()
+    Pickler(stream).dump(obj)
     raw_data = stream.getvalue()
     assert len(raw_data) > 0
     p.write(struct.pack("<i", len(raw_data)))
