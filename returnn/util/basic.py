@@ -2626,7 +2626,7 @@ def read_pickled_object(p: typing.BinaryIO, *, encoding=None) -> Any:
     """
     from returnn.util.task_system import Unpickler
 
-    size_raw = read_bytes_to_new_buffer(p, 4)
+    size_raw = read_bytes_to_new_buffer(p, 4).getvalue()
     (size,) = struct.unpack("<i", size_raw)
     assert size > 0, "read_pickled_object: We expect to get some non-empty package."
     stream = read_bytes_to_new_buffer(p, size)
