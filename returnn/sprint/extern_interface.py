@@ -11,8 +11,8 @@ import os
 import typing
 from returnn.util import better_exchook
 import returnn.util.task_system as task_system
-from returnn.util.task_system import Pickler
-from returnn.util.basic import to_bool, unicode, BytesIO
+from returnn.util.basic import to_bool, unicode
+import returnn.util.basic as util
 
 # Start Sprint PythonSegmentOrder interface. {
 # We use the PythonSegmentOrder just to get an estimate (upper limit) about the number of sequences.
@@ -347,15 +347,7 @@ class ExternSprintDatasetSource:
         :param object args:
         """
         assert data_type is not None
-        import struct
-
-        stream = BytesIO()
-        Pickler(stream).dump((data_type, args))
-        raw_data = stream.getvalue()
-        assert len(raw_data) > 0
-        self.pipe_c2p.write(struct.pack("<i", len(raw_data)))
-        self.pipe_c2p.write(raw_data)
-        self.pipe_c2p.flush()
+        util.write_pickled_object(self.pipe_c2p, (data_type, args))
 
     def add_new_data(self, segment_name, features, targets):
         """

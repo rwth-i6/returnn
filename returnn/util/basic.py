@@ -5,7 +5,7 @@ Various generic utilities, which are shared across different backend engines.
 """
 
 from __future__ import annotations
-from typing import Optional, Generic, TypeVar, Iterable, Tuple, Dict, List, Callable
+from typing import Optional, Any, Generic, TypeVar, Iterable, Tuple, Dict, List, Callable
 
 import subprocess
 from subprocess import CalledProcessError
@@ -2595,6 +2595,58 @@ def deepcopy(x, stop_types=None):
     s = pickle_dumps(x)
     c = pickle_loads(s)
     return c
+
+
+def read_bytes_to_new_buffer(p: typing.BinaryIO, size: int) -> BytesIO:
+    """
+    Read bytes from stream s into a BytesIO buffer.
+    Raises EOFError if not enough bytes are available.
+    Then read it via :func:`read_pickled_object`.
+    """
+    stream = BytesIO()
+    read_size = 0
+    while read_size < size:
+        data_raw = p.read(size - read_size)
+        if len(data_raw) == 0:
+            raise EOFError("expected to read %i bytes but got EOF after %i bytes" % (size, read_size))
+        read_size += len(data_raw)
+        stream.write(data_raw)
+    stream.seek(0)
+    return stream
+
+
+def read_pickled_object(p: typing.BinaryIO, *, encoding=None) -> Any:
+    """
+    Read pickled object from stream p,
+    after it was written via :func:`read_bytes_to_new_buffer`.
+
+    :param p:
+    :param encoding: if given, passed to Unpickler
+    """
+    from returnn.util.task_system import Unpickler
+    import struct
+
+    size_raw = read_bytes_to_new_buffer(p, 4)
+    (size,) = struct.unpack("<i", size_raw)
+    assert size > 0, "%s: We expect to get some non-empty package. Invalid Python mod in Sprint?" % (self,)
+    stream = read_bytes_to_new_buffer(p, size)
+    unpickler_kwargs = {}
+    if encoding:
+        unpickler_kwargs["encoding"] = encoding
+    return Unpickler(stream, **unpickler_kwargs).load()
+
+
+def write_pickled_object(p: typing.BinaryIO, obj: Any):
+    """
+    Writes pickled object to stream p.
+    """
+    stream = io.BytesIO()
+    Pickler(stream).dump(data)
+    raw_data = stream.getvalue()
+    assert len(raw_data) > 0
+    p.write(struct.pack("<i", len(raw_data)))
+    p.write(raw_data)
+    p.flush()
 
 
 def load_txt_vector(filename):

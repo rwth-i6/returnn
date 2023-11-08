@@ -15,15 +15,14 @@ from __future__ import annotations
 import os
 import numpy
 import typing
-import io
-import struct
 from threading import Condition
 
 import returnn.__main__ as rnn
 import returnn.util.task_system as task_system
 import returnn.util.debug as debug
-from returnn.util.task_system import Pickler, Unpickler, numpy_set_unused
+from returnn.util.task_system import numpy_set_unused
 from returnn.util.basic import to_bool, long
+import returnn.util.basic as util
 
 InitTypes = set()
 Verbose = False  # disables all per-segment log messages
@@ -434,31 +433,10 @@ class PythonControl:
         return loss, error_signal
 
     def _send(self, data):
-        stream = io.BytesIO()
-        Pickler(stream).dump(data)
-        raw_data = stream.getvalue()
-        assert len(raw_data) > 0
-        self.pipe_c2p.write(struct.pack("<i", len(raw_data)))
-        self.pipe_c2p.write(raw_data)
-        self.pipe_c2p.flush()
+        util.write_pickled_object(self.pipe_c2p, data)
 
     def _read(self):
-        p = self.pipe_p2c
-        size_raw = p.read(4)
-        if len(size_raw) < 4:
-            raise EOFError
-        (size,) = struct.unpack("<i", size_raw)
-        assert size > 0, "%s: We expect to get some non-empty package. Invalid Python mod in Sprint?" % (self,)
-        stream = io.BytesIO()
-        read_size = 0
-        while read_size < size:
-            data_raw = p.read(size - read_size)
-            if len(data_raw) == 0:
-                raise EOFError("%s: expected to read %i bytes but got EOF after %i bytes" % (self, size, read_size))
-            read_size += len(data_raw)
-            stream.write(data_raw)
-        stream.seek(0)
-        return Unpickler(stream).load()
+        return util.read_pickled_object(self.pipe_p2c)
 
     def close(self):
         """

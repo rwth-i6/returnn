@@ -14,12 +14,11 @@ import os
 import atexit
 import signal
 import typing
-import struct
-import io
 from threading import RLock, Thread
 import returnn.util.task_system as task_system
-from returnn.util.task_system import Pickler, Unpickler, numpy_set_unused
+from returnn.util.task_system import numpy_set_unused
 from returnn.util.basic import eval_shell_str, make_hashable, close_all_fds_except
+import returnn.util.basic as util
 from returnn.log import log
 
 
@@ -219,32 +218,12 @@ class SprintSubprocessInstance:
     def _send(self, v):
         assert os.getpid() == self.parent_pid
         p = self.pipe_p2c[1]  # see _start_child
-        stream = io.BytesIO()
-        Pickler(stream).dump(v)
-        raw_data = stream.getvalue()
-        assert len(raw_data) > 0
-        p.write(struct.pack("<i", len(raw_data)))
-        p.write(raw_data)
-        p.flush()
+        util.write_pickled_object(p, v)
 
     def _read(self):
         assert os.getpid() == self.parent_pid
         p = self.pipe_c2p[0]  # see _start_child
-        size_raw = p.read(4)
-        if len(size_raw) < 4:
-            raise EOFError
-        (size,) = struct.unpack("<i", size_raw)
-        assert size > 0, "%s: We expect to get some non-empty package. Invalid Python mod in Sprint?" % (self,)
-        stream = io.BytesIO()
-        read_size = 0
-        while read_size < size:
-            data_raw = p.read(size - read_size)
-            if len(data_raw) == 0:
-                raise EOFError("%s: expected to read %i bytes but got EOF after %i bytes" % (self, size, read_size))
-            read_size += len(data_raw)
-            stream.write(data_raw)
-        stream.seek(0)
-        return Unpickler(stream).load()
+        return util.read_pickled_object(p)
 
     def _poll(self):
         assert os.getpid() == self.parent_pid
