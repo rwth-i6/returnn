@@ -24,7 +24,9 @@ class ModuleList(rf.Module, Generic[__ModT]):
     def __init__(self, *modules: Union[__ModT, Iterable[__ModT], Dict[str, __ModT], ModuleList]):
         super().__init__()
         if len(modules) == 1 and isinstance(modules[0], dict):
-            for key, module in modules[0].items():
+            for i, (key, module) in enumerate(modules[0].items()):
+                if _is_int_str(key):
+                    key = str(i)
                 setattr(self, key, _convert_to_module(module))
         elif len(modules) == 1 and isinstance(modules[0], ModuleList):
             for key, module in modules[0]._get_modules().items():
@@ -64,17 +66,43 @@ class ModuleList(rf.Module, Generic[__ModT]):
         """module items"""
         return self._get_modules().items()
 
-    def __getitem__(self, idx) -> Union[ModuleList[__ModT], __ModT]:
-        from builtins import slice
-
+    def __getitem__(self, idx: Union[slice, int]) -> Union[ModuleList[__ModT], __ModT]:
         if isinstance(idx, slice):
             return self.__class__(dict(list(self._get_modules().items())[idx]))
         else:
             return list(self._get_modules().values())[idx]
 
-    def __setitem__(self, idx: int, module: __ModT) -> None:
+    def __setitem__(self, idx: Union[slice, int], module: Union[__ModT, Iterable[__ModT]]) -> None:
         key = list(self._get_modules().keys())[idx]
-        return setattr(self, key, _convert_to_module(module))
+        if isinstance(idx, slice):
+            assert not idx.step or idx.step == 1  # not supported
+            mod_items = list(self._get_modules().items())
+            if idx.stop is not None:
+                remaining = mod_items[idx.stop :]
+            else:
+                remaining = []
+            # Delete also remaining, and then re-add them later, such that indices are correct.
+            for k, _ in mod_items[idx.start :]:
+                delattr(self, k)
+            i = idx.start
+            for mod_ in module:
+                assert not hasattr(self, str(i))
+                setattr(self, str(i), _convert_to_module(mod_))
+                i += 1
+            for k, v in remaining:
+                if _is_int_str(k):
+                    k = str(i)
+                assert not hasattr(self, k)
+                setattr(self, k, v)
+                i += 1
+        else:
+            setattr(self, key, _convert_to_module(module))
+
+    def __delitem__(self, key: Union[slice, int]):
+        if isinstance(key, slice):
+            self[key] = []
+        else:
+            self[key : key + 1] = []
 
     __call__ = rf.Module.__call__  # stays abstract
 
@@ -175,3 +203,11 @@ class ParameterList(rf.Module):
         return setattr(self, key, rf.Parameter)
 
     __call__ = rf.Module.__call__  # stays abstract
+
+
+def _is_int_str(s: str) -> bool:
+    try:
+        int(s)
+        return True
+    except ValueError:
+        return False
