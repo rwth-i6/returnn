@@ -159,4 +159,10 @@ Contains code from CPython:
  - Copyright 2001..2021 Python Software Foundation
  - py-to-pickle.cpp
 
+Contains code from PyTorch:
+ - https://github.com/pytorch/pytorch/
+ - BSD 3-Clause License
+ - Copyright 2016..2023 various developers
+ - Various code snippets
+
 Various code snippets from StackOverflow, which are under Creative Commons / Public Domain.
