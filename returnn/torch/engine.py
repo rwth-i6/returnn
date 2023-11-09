@@ -236,6 +236,13 @@ class Engine(EngineBase):
         self._updater.set_learning_rate(self.learning_rate)
         self._updater.set_current_train_step(global_train_step=self.global_train_step, epoch=self.epoch)
 
+        self.learning_rate_control.epoch_data[self.epoch].meta.update(
+            {
+                "global_train_step": self.global_train_step,
+                "effective_learning_rate": self._updater.get_effective_learning_rate(),
+            }
+        )
+
     def train_epoch(self):
         """
         train one (sub)epoch
@@ -334,6 +341,13 @@ class Engine(EngineBase):
             "Trained %i steps, %s elapsed (%.1f%% computing time)"
             % (step_idx, hms(elapsed), (elapsed_computation_percentage * 100.0)),
             file=log.v3,
+        )
+
+        self.learning_rate_control.epoch_data[self.epoch].meta.update(
+            {
+                "epoch_num_train_steps": step_idx,
+                "epoch_train_time_secs": round(elapsed),
+            }
         )
 
         accumulated_losses_dict = accumulated_losses_dict / accumulated_inv_norm_factors_dict
