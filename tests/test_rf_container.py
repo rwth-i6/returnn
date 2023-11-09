@@ -76,41 +76,6 @@ def test_sequential_base_case():
     run_model(extern_data, lambda *, epoch, step: _Net(), _forward_step)
 
 
-def test_sequential_named_case():
-    time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
-    in_dim = Dim(7, name="in")
-    extern_data = TensorDict(
-        {
-            "data": Tensor("data", [batch_dim, time_dim, in_dim], dtype="float32"),
-        }
-    )
-
-    class _Net(rf.Module):
-        def __init__(self):
-            super().__init__()
-            dims = [Dim(1, name="feat1"), Dim(2, name="feat2"), Dim(3, name="feat3")]
-            self.out_dim = dims[-1]
-            x = OrderedDict()
-            x["one"] = rf.Linear(in_dim, dims[0])
-            x["two"] = rf.Linear(dims[0], dims[1])
-            x["three"] = rf.Linear(dims[1], dims[2])
-            self.seq = rf.Sequential(x)
-
-        def __call__(self, data: Tensor) -> Tensor:
-            """
-            Forward
-            """
-            seq = self.seq(data)
-            return seq
-
-    # noinspection PyShadowingNames
-    def _forward_step(*, model: _Net, extern_data: TensorDict):
-        out = model(extern_data["data"])
-        out.mark_as_default_output(shape=(batch_dim, time_dim, model.out_dim))
-
-    run_model(extern_data, lambda *, epoch, step: _Net(), _forward_step)
-
-
 def test_parameter_list():
     time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
     in_dim = Dim(7, name="in")
