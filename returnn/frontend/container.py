@@ -147,7 +147,7 @@ def _convert_to_module(obj: _ModT) -> rf.Module:
     elif callable(obj):
         return rf.Functional(obj)
     else:
-        raise TypeError(f"did not expect {obj!r}")
+        raise TypeError(f"Expected rf.Module or callable, did not expect {obj!r} ({type(obj)})")
 
 
 def _is_iterable(obj) -> bool:
