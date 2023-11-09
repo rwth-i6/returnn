@@ -1701,7 +1701,7 @@ class Engine(EngineBase):
         opts = self.config.get_of_type("use_last_best_model", dict, default={}).copy()
         if self.epoch % opts.pop("modulo", 1) != 0:
             # Normally we would filter those out. One maybe sensible exception is if the last score was really bad.
-            if (self.learning_rate_control.get_epoch_error_value(self.epoch - 1) or 0) <= opts.get(
+            if (self.learning_rate_control.get_epoch_error_value(self.epoch - 1, must_exist=False) or 0) <= opts.get(
                 "filter_score", float("inf")
             ):
                 return

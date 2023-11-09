@@ -5,8 +5,10 @@ The base class is :class:`LearningRateControl`.
 
 from __future__ import annotations
 
-import os
+from typing import Optional, Any, Dict
 import typing
+import os
+import returnn.util.basic as util
 from returnn.util.basic import better_repr, simple_obj_repr, ObjAsDict, unicode
 from returnn.log import log
 import numpy
@@ -26,24 +28,53 @@ class LearningRateControl(object):
         such as the individual scores (cv or train; cross-entropy or frame-error or whatever).
         """
 
-        # Need to keep the non-PEP8 name for compatibility, because we store the repr of the object.
-        # noinspection PyPep8Naming
-        def __init__(self, learningRate, error=None):
+        def __init__(
+            self,
+            *,
+            learning_rate: float = None,
+            error: Optional[Dict[str, float]] = None,
+            meta: Optional[Dict[str, Any]] = None,
+            **kwargs,
+        ):
             """
-            :type learningRate: float
-            :type error: dict[str,float] | None
+            :param learning_rate:
+            :param error: scores (loss values) and errors (frame error rates, etc)
+            :param meta: any other extra information (e.g. effective learning rate)
+
+            Note that this is serialized as EpochData(learningRate=..., error=...),
+            and we keep that for compatibility,
+            so that is why we have special handling for kwargs.
             """
-            self.learning_rate = learningRate
+            if learning_rate is None:
+                learning_rate = kwargs.pop("learningRate", None)
+            if not isinstance(learning_rate, float):
+                raise TypeError(f"EpochData: unexpected learning_rate type: {type(learning_rate)}")
+            if kwargs:
+                raise TypeError(f"EpochData: unexpected kwargs: {kwargs}")
+            self.learning_rate = learning_rate
             if isinstance(error, float):  # Old format.
                 error = {"old_format_score": error}
-            if error is None:
+            elif error is None:
                 error = {}
+            if not isinstance(error, dict):
+                raise TypeError(f"EpochData: unexpected error type: {type(error)}")
+            if meta is None:
+                meta = {k[len(":meta:") :]: v for (k, v) in error.items() if k.startswith(":meta:")}
+                error = {k: v for (k, v) in error.items() if not k.startswith(":meta:")}
+            if not isinstance(meta, dict):
+                raise TypeError(f"EpochData: unexpected meta type: {type(meta)}")
+            if any(k for k in error if k.startswith(":meta:")):
+                raise ValueError(f"EpochData: unexpected error keys: {error}")
             self.error = error
+            self.meta = meta
 
         def __repr__(self):
             # This is being used for serialization, and we want some forward/backward compatibility,
             # so we should try to keep this consistent.
-            return "EpochData(learningRate=%s, error=%s)" % (better_repr(self.learning_rate), better_repr(self.error))
+            return "EpochData(learningRate=%s, error=%s)" % (
+                better_repr(self.learning_rate),
+                better_repr(util.dict_joined(self.error, {f":meta:{k}": v for (k, v) in self.meta.items()})),
+            )
 
     @classmethod
     def load_initial_kwargs_from_config(cls, config):
@@ -263,7 +294,7 @@ class LearningRateControl(object):
             if not self.epoch_data[epoch].learning_rate:
                 self.epoch_data[epoch].learning_rate = learning_rate
         else:
-            self.epoch_data[epoch] = self.EpochData(learning_rate)
+            self.epoch_data[epoch] = self.EpochData(learning_rate=learning_rate)
 
     def get_last_epoch(self, epoch):
         """
@@ -829,7 +860,7 @@ def demo():
         if epoch in control.epoch_data:
             control.epoch_data[epoch].learning_rate = learning_rate
         else:
-            control.epoch_data[epoch] = control.EpochData(learningRate=learning_rate)
+            control.epoch_data[epoch] = control.EpochData(learning_rate=learning_rate)
     print("Finished, last stored epoch was %i." % max_epoch)
 
 

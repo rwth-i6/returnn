@@ -21,7 +21,7 @@ def test_save_load():
     control = LearningRateControl(default_learning_rate=1.0, filename=filename)
     assert 2 not in control.epoch_data
     control.epoch_data[2] = LearningRateControl.EpochData(
-        learningRate=0.0008,
+        learning_rate=0.0008,
         error={
             "dev_error_ctc": 0.22486433815293946,
             "dev_error_decision": 0.0,
