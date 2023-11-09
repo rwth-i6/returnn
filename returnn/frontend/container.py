@@ -84,7 +84,7 @@ class ModuleList(rf.Module, Generic[__ModT]):
             # Delete also remaining, and then re-add them later, such that indices are correct.
             for k, _ in mod_items[idx.start :]:
                 delattr(self, k)
-            i = idx.start
+            i = idx.start or 0
             for mod_ in module:
                 assert not hasattr(self, str(i))
                 setattr(self, str(i), _convert_to_module(mod_))
