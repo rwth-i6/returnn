@@ -154,9 +154,16 @@ class ParameterList(rf.Module):
     Parameter list, getting passed an Iterable of Parameters and creates a list of Parameters in that order
     """
 
-    def __init__(self, *parameters: Union[rf.Parameter, Iterable[rf.Parameter], ParameterList]):
+    def __init__(
+        self, *parameters: Union[rf.Parameter, Iterable[rf.Parameter], Dict[str, rf.Parameter], ParameterList]
+    ):
         super().__init__()
-        if len(parameters) == 1 and isinstance(parameters[0], ParameterList):
+        if len(parameters) == 1 and isinstance(parameters[0], dict):
+            for i, (key, parameter) in enumerate(parameters[0].items()):
+                if _is_int_str(key):
+                    key = str(i)
+                setattr(self, key, parameter)
+        elif len(parameters) == 1 and isinstance(parameters[0], ParameterList):
             for key, parameter in parameters[0]._get_parameters().items():
                 setattr(self, key, parameter)
         elif len(parameters) == 1 and _is_iterable(parameters[0]):
@@ -191,8 +198,6 @@ class ParameterList(rf.Module):
         return iter(self._get_parameters().values())
 
     def __getitem__(self, idx) -> Union[ParameterList, rf.Parameter]:
-        from builtins import slice
-
         if isinstance(idx, slice):
             return self.__class__(dict(list(self._get_parameters().items())[idx]))
         else:
