@@ -1754,6 +1754,13 @@ class Engine(EngineBase):
         train_batches = self.dataset_batches["train"]
 
         self.updater.set_learning_rate(self.learning_rate, session=self.tf_session)
+        self.learning_rate_control.epoch_data[self.epoch].meta.update(
+            {
+                "global_train_step": self.global_train_step,
+                "effective_learning_rate": self.tf_session.run(self.updater.learning_rate),
+            }
+        )
+
         trainer = Runner(
             engine=self,
             dataset_name="train",
@@ -1809,6 +1816,12 @@ class Engine(EngineBase):
             should_save_model_after_eval = False
         self.learning_rate_control.set_epoch_error(
             self.epoch, {"train_score": trainer.score, "train_error": trainer.error}
+        )
+        self.learning_rate_control.epoch_data[self.epoch].meta.update(
+            {
+                "epoch_num_train_steps": trainer.num_steps,
+                "epoch_train_time_secs": round(trainer.elapsed),
+            }
         )
         if self._do_save():
             self.learning_rate_control.save()
