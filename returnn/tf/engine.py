@@ -663,6 +663,15 @@ class Runner(object):
             step = 0
             self.engine.network.set_run_opts(epoch=self.engine.epoch, dataset_name=self.dataset_name)
             fetches_dict = self._get_fetches_dict()
+
+            if self._should_train:
+                self.engine.learning_rate_control.epoch_data[self.engine.epoch].meta.update(
+                    {
+                        "global_train_step": self.engine.global_train_step,
+                        "effective_learning_rate": sess.run(self.engine.updater.learning_rate),
+                    }
+                )
+
             # After get_fetches_dict, maybe some new uninitialized vars. Last check.
             self.engine.check_uninitialized_vars()
             # Also, add graph to summary here because the updater/optimizer might not have been created before.
@@ -1754,13 +1763,6 @@ class Engine(EngineBase):
         train_batches = self.dataset_batches["train"]
 
         self.updater.set_learning_rate(self.learning_rate, session=self.tf_session)
-        self.learning_rate_control.epoch_data[self.epoch].meta.update(
-            {
-                "global_train_step": self.global_train_step,
-                "effective_learning_rate": self.tf_session.run(self.updater.learning_rate),
-            }
-        )
-
         trainer = Runner(
             engine=self,
             dataset_name="train",
