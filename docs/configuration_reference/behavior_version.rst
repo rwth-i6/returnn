@@ -22,6 +22,18 @@ and not listing legacy/deprecated parameters.
 Version History
 ---------------
 
+Behavior version 19 (2023-11-13)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+RF ``SelfAttention`` (and derived classes)
+and RF ``dot_attention``:
+The attention dropout (via ``att_dropout`` option)
+broadcasted over all but the reduced-time dimension before,
+which is very likely not what you want.
+Now with behavior version 19, the attention dropout does not broadcast.
+You can also explicitly get the new behavior via the global config option
+``rf_att_dropout_broadcast = False``.
+
 Behavior version 18 (2023-09-02)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 

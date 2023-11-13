@@ -6,6 +6,7 @@ Attention
 from __future__ import annotations
 from typing import Tuple, Union, Optional, Sequence
 import weakref
+import logging
 from returnn.util.py_compat import Protocol
 from returnn.tensor import Tensor, Dim, single_step_dim
 import returnn.frontend as rf
@@ -41,7 +42,14 @@ class AttentionFunc(Protocol):
 
 
 def dot_attention(
-    query: Tensor, keys: Tensor, values: Tensor, *, key_dim: Dim, axis: Dim, att_dropout: float = 0.0
+    query: Tensor,
+    keys: Tensor,
+    values: Tensor,
+    *,
+    key_dim: Dim,
+    axis: Dim,
+    att_dropout: float = 0.0,
+    att_dropout_broadcast: Optional[bool] = None,
 ) -> Tensor:
     """
     Calculates attention over the given axis, for given key dim.
@@ -56,12 +64,16 @@ def dot_attention(
     :param key_dim: dim in keys and query, to be reduced to calculate the attention energies.
     :param axis: in keys and values, to apply attention on. softmax will be over this axis, and then it will be reduced
     :param att_dropout: dropout for attention weights
+    :param att_dropout_broadcast: whether to broadcast over all but ``axis``.
+        normally not wanted. disabled by default since behavior version 19.
     :return: like values but with axis removed, and maybe any additional axes from query
     """
     query *= key_dim.dimension**-0.5
     energy = rf.matmul(query, keys, reduce=key_dim)
     att_weights = rf.softmax(energy, axis=axis)
-    att_weights = rf.dropout(att_weights, att_dropout, axis=axis)
+    if att_dropout_broadcast is None:
+        att_dropout_broadcast = _att_dropout_broadcast_default()
+    att_weights = rf.dropout(att_weights, att_dropout, axis=axis if att_dropout_broadcast else att_weights.dims)
     # Masking not needed because softmax should already have masked,
     # so we have 0.0 att weights for padded frames.
     att = rf.matmul(att_weights, values, reduce=axis, use_mask=False)
@@ -89,6 +101,7 @@ class SelfAttentionBase(rf.Module):
         num_heads: Union[int, Dim],
         with_bias: bool = True,
         att_dropout: float = 0.1,
+        att_dropout_broadcast: Optional[bool] = None,
     ):
         """
         :param in_dim: input dim
@@ -101,6 +114,8 @@ class SelfAttentionBase(rf.Module):
           Was False in original Transformer, but many recent implementations use True by default.
           Also see: https://github.com/rwth-i6/returnn_common/issues/234.
         :param att_dropout: dropout for attention weights
+        :param att_dropout_broadcast: whether to broadcast over all but ``axis``.
+            normally not wanted. disabled by default since behavior version 19.
         """
         super().__init__()
         self.in_dim = in_dim
@@ -135,6 +150,9 @@ class SelfAttentionBase(rf.Module):
         else:
             self.proj = None
         self.att_dropout = att_dropout
+        if att_dropout_broadcast is None:
+            att_dropout_broadcast = _att_dropout_broadcast_default()
+        self.att_dropout_broadcast = att_dropout_broadcast
 
     def forward_qkv(self, source: Tensor) -> Tuple[Tensor, Tensor, Tensor]:
         """
@@ -151,7 +169,15 @@ class SelfAttentionBase(rf.Module):
 
     def attention(self, q: Tensor, k: Tensor, v: Tensor, *, kv_axis: Dim) -> Tensor:
         """apply attention"""
-        att = dot_attention(q, k, v, key_dim=self.key_dim_per_head, axis=kv_axis, att_dropout=self.att_dropout)
+        att = dot_attention(
+            q,
+            k,
+            v,
+            key_dim=self.key_dim_per_head,
+            axis=kv_axis,
+            att_dropout=self.att_dropout,
+            att_dropout_broadcast=self.att_dropout_broadcast,
+        )
         output, _ = rf.merge_dims(att, dims=(self.num_heads, self.value_dim_per_head), out_dim=self.value_dim_total)
         if self.proj:
             output = self.proj(output)
@@ -353,7 +379,9 @@ class RelPosSelfAttention(SelfAttentionBase):
         scores = matrix_ac + matrix_bd  # (batch, head, time1, time2)
         scores *= self.key_dim_per_head.dimension**-0.5
         att_weights = rf.softmax(scores, axis=hist_dim)
-        att_weights = rf.dropout(att_weights, self.att_dropout, axis=hist_dim)
+        att_weights = rf.dropout(
+            att_weights, self.att_dropout, axis=hist_dim if self.att_dropout_broadcast else att_weights.dims
+        )
         # Masking not needed because softmax should already have masked,
         # so we have 0.0 att weights for padded frames.
         att = rf.matmul(att_weights, v, reduce=hist_dim, use_mask=False)
@@ -497,3 +525,30 @@ def relative_positional_encoding(spatial_dim: Dim, feat_dim: Dim, *, dtype: str 
         emb.feature_dim = feat_dim
         cache[(spatial_dim, feat_dim)] = emb, out_spatial_dim
         return emb, out_spatial_dim
+
+
+_att_dropout_broadcast_shown_warning = False
+
+
+def _att_dropout_broadcast_default() -> bool:
+    from returnn.config import get_global_config
+    from returnn.util.basic import BehaviorVersion
+
+    config = get_global_config(raise_exception=False)
+    if config:
+        opt = config.bool("rf_att_dropout_broadcast", None)
+        if opt is not None:
+            return opt
+
+    if BehaviorVersion.get() <= 18:
+        global _att_dropout_broadcast_shown_warning
+        if not _att_dropout_broadcast_shown_warning:
+            _att_dropout_broadcast_shown_warning = True
+            logging.getLogger("returnn.frontend").warning(
+                "Attention dropout uses broadcasting. This is old behavior and likely not what you want."
+                " Set config option 'rf_att_dropout_broadcast' to False to disable this,"
+                " or switch to a new behavior version >= 19."
+                " (This warning is only printed once.)"
+            )
+        return True  # old default
+    return False
