@@ -125,7 +125,7 @@ def dropout_broadcast_default() -> bool:
     from returnn.config import get_global_config
 
     default = True  # see docstring for reasoning
-    config = get_global_config()
+    config = get_global_config(raise_exception=False)
     if not config:
         return default
 
