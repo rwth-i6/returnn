@@ -200,6 +200,7 @@ class Model(rf.Module):
         self.enc_key_per_head_dim = enc_key_total_dim.div_left(att_num_heads)
         self.att_num_heads = att_num_heads
         self.att_dropout = att_dropout
+        self.dropout_broadcast = rf.dropout_broadcast_default()
 
         # https://github.com/rwth-i6/returnn-experiments/blob/master/2020-rnn-transducer/configs/base2.conv2l.specaug4a.ctc.devtrain.config
 
@@ -317,7 +318,7 @@ class Model(rf.Module):
         """logits for the decoder"""
         readout_in = self.readout_in(rf.concat_features(s, input_embed, att))
         readout = rf.reduce_out(readout_in, mode="max", num_pieces=2, out_dim=self.output_prob.in_dim)
-        readout = rf.dropout(readout, drop_prob=0.3, axis=readout.feature_dim)
+        readout = rf.dropout(readout, drop_prob=0.3, axis=self.dropout_broadcast and readout.feature_dim)
         logits = self.output_prob(readout)
         return logits
 

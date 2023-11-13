@@ -136,6 +136,7 @@ class ZoneoutLSTM(LSTM):
         self.use_zoneout_output = use_zoneout_output
         self.forget_bias = forget_bias
         self.parts_order = parts_order.replace("c", "j").replace("g", "j")
+        self.dropout_broadcast = rf.dropout_broadcast_default()
         assert len(self.parts_order) == 4 and set(self.parts_order) == set("ijfo")
 
     def _inner_step(self, x: Tensor, *, state: LstmState) -> Tuple[Tensor, LstmState]:
@@ -154,8 +155,20 @@ class ZoneoutLSTM(LSTM):
         output = new_h
 
         # Now the ZoneoutLSTM part, which is optional (zoneout_factor_cell > 0 or zoneout_factor_output > 0).
-        c = _zoneout(prev=prev_c, cur=new_c, factor=self.zoneout_factor_cell, out_dim=self.out_dim)
-        h = _zoneout(prev=prev_h, cur=new_h, factor=self.zoneout_factor_output, out_dim=self.out_dim)
+        c = _zoneout(
+            prev=prev_c,
+            cur=new_c,
+            factor=self.zoneout_factor_cell,
+            out_dim=self.out_dim,
+            dropout_broadcast=self.dropout_broadcast,
+        )
+        h = _zoneout(
+            prev=prev_h,
+            cur=new_h,
+            factor=self.zoneout_factor_output,
+            out_dim=self.out_dim,
+            dropout_broadcast=self.dropout_broadcast,
+        )
         new_state = LstmState(c=c, h=h)
 
         if self.use_zoneout_output:  # really the default, sane and original behavior
@@ -198,11 +211,11 @@ class ZoneoutLSTM(LSTM):
         return output, new_state
 
 
-def _zoneout(*, prev: Tensor, cur: Tensor, factor: float, out_dim: Dim) -> Tensor:
+def _zoneout(*, prev: Tensor, cur: Tensor, factor: float, out_dim: Dim, dropout_broadcast: bool) -> Tensor:
     if factor == 0.0:
         return cur
     return rf.cond(
         rf.get_run_ctx().train_flag,
-        lambda: (1 - factor) * rf.dropout(cur - prev, drop_prob=factor, axis=out_dim) + prev,
+        lambda: (1 - factor) * rf.dropout(cur - prev, factor, axis=dropout_broadcast and out_dim) + prev,
         lambda: (1 - factor) * cur + factor * prev,
     )

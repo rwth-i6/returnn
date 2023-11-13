@@ -73,7 +73,7 @@ def dot_attention(
     att_weights = rf.softmax(energy, axis=axis)
     if att_dropout_broadcast is None:
         att_dropout_broadcast = _att_dropout_broadcast_default()
-    att_weights = rf.dropout(att_weights, att_dropout, axis=axis if att_dropout_broadcast else att_weights.dims)
+    att_weights = rf.dropout(att_weights, att_dropout, axis=att_dropout_broadcast and axis)
     # Masking not needed because softmax should already have masked,
     # so we have 0.0 att weights for padded frames.
     att = rf.matmul(att_weights, values, reduce=axis, use_mask=False)
@@ -351,7 +351,7 @@ class RelPosSelfAttention(SelfAttentionBase):
         else:
             pos_emb, pos_emb_spatial_dim = relative_positional_encoding(axis, self.pos_emb_feat_dim)
         if self.pos_emb_dropout:
-            pos_emb = rf.dropout(pos_emb, self.pos_emb_dropout, axis=pos_emb.dims)
+            pos_emb = rf.dropout(pos_emb, self.pos_emb_dropout)
         if self.linear_pos is not None:
             pos_emb = self.linear_pos(pos_emb)
         if self.separate_pos_emb_per_head:
@@ -379,9 +379,7 @@ class RelPosSelfAttention(SelfAttentionBase):
         scores = matrix_ac + matrix_bd  # (batch, head, time1, time2)
         scores *= self.key_dim_per_head.dimension**-0.5
         att_weights = rf.softmax(scores, axis=hist_dim)
-        att_weights = rf.dropout(
-            att_weights, self.att_dropout, axis=hist_dim if self.att_dropout_broadcast else att_weights.dims
-        )
+        att_weights = rf.dropout(att_weights, self.att_dropout, axis=self.att_dropout_broadcast and hist_dim)
         # Masking not needed because softmax should already have masked,
         # so we have 0.0 att weights for padded frames.
         att = rf.matmul(att_weights, v, reduce=hist_dim, use_mask=False)
@@ -539,6 +537,9 @@ def _att_dropout_broadcast_default() -> bool:
         opt = config.bool("rf_att_dropout_broadcast", None)
         if opt is not None:
             return opt
+        opts = config.bool("rf_dropout_broadcast", None)  # also see :func:`dropout_broadcast_default`
+        if opts is not None:
+            return opts
 
     if BehaviorVersion.get() <= 18:
         global _att_dropout_broadcast_shown_warning

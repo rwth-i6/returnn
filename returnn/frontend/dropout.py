@@ -8,14 +8,14 @@ from returnn.tensor import Tensor, Dim
 import returnn.frontend as rf
 
 
-__all__ = ["dropout"]
+__all__ = ["dropout", "dropout_broadcast_default"]
 
 
 def dropout(
     source: Tensor,
     drop_prob: Union[float, Tensor],
     *,
-    axis: Optional[Union[Dim, Sequence[Dim]]] = None,
+    axis: Optional[Union[Dim, Sequence[Dim], bool]] = None,
     on_forward: bool = False,
 ) -> Tensor:
     """
@@ -33,12 +33,15 @@ def dropout(
     :param axis: axis to apply dropout on. multiple axes can be specified.
         This defines the set of axes where the dropout mask is not broadcasted to.
         If None (default), it will not broadcast on any axis.
+        False is the same as None, and allows to write ``axis=use_dropout_broadcast and ...feature_dim``.
         (RETURNN also has the ``noise_shape`` option but the ``axis`` option provides the same functionality.)
     :param on_forward: apply dropout during inference and training (so just always). otherwise only during training.
     """
     keep_prob = 1.0 - drop_prob
-    if axis is None:
+    if axis is None or axis is False:
         noise_dims = source.dims
+    elif axis is True:
+        raise ValueError("dropout axis=True is not valid")
     elif isinstance(axis, Dim):
         noise_dims = (axis,)
     else:
@@ -94,3 +97,36 @@ def _dropout(
 
     ret = x * binary_tensor
     return ret
+
+
+def dropout_broadcast_default() -> bool:
+    """
+    Check the global RETURNN config
+    whether we should broadcast on non-related dropout dimensions.
+
+    Historically in RETURNN, when we did dropout in the feature dimension,
+    we broadcasted the dropout mask over the other dimensions (e.g. time and batch).
+
+    This function provides an easy global config controllable way to control this,
+    via the option ``rf_dropout_broadcast``.
+
+    The default for now:
+    keep same as historical RETURNN, unless we find that this is really not a good idea.
+    Then we might change the default via a new behavior version.
+
+    Also see the option ``rf_att_dropout_broadcast``,
+    which does the same for attention dropout.
+    Although the default for attention dropout broadcasting was already changed with behavior version 19.
+
+    :return: whether broadcasting should be used for dropout.
+        Note that this does not actually effect :func:`dropout`.
+        Any user of :func:`dropout` should check this explicitly.
+    """
+    from returnn.config import get_global_config
+
+    default = True  # see docstring for reasoning
+    config = get_global_config()
+    if not config:
+        return default
+
+    return config.bool("rf_dropout_broadcast", default)

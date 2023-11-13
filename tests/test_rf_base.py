@@ -221,7 +221,7 @@ def test_dropout():
 
     class _Net(rf.Module):
         def __call__(self, x: Tensor) -> Tensor:
-            return rf.dropout(x, 0.5, axis=in_dim, on_forward=True)
+            return rf.dropout(x, 0.5, axis=rf.dropout_broadcast_default() and in_dim, on_forward=True)
 
     # noinspection PyShadowingNames
     def _forward_step(*, model: _Net, extern_data: TensorDict):
