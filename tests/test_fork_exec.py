@@ -22,6 +22,7 @@ from pprint import pprint
 
 my_dir = os.path.dirname(os.path.abspath(__file__))
 
+# language=C++
 c_code_at_fork_demo = """
 #include <stdio.h>
 #include <pthread.h>

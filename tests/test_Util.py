@@ -523,6 +523,12 @@ def test_literal_py_to_pickle():
         check(s)
 
 
+def test_native_signal_handler():
+    from returnn.util.debug import install_native_signal_handler
+
+    install_native_signal_handler(reraise_exceptions=True)
+
+
 if __name__ == "__main__":
     better_exchook.install()
     if len(sys.argv) <= 1:

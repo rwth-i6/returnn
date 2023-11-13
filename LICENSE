@@ -153,6 +153,17 @@ Contains code from literal-python-to-pickle:
  - Copyright (c) 2021 Albert Zeyer
  - literal_py_to_pickle.py, py-to-pickle.cpp
 
+Contains code from albertz-native-signal-handler:
+ - Website: https://github.com/albertz/playground/blob/master/signal_handler.c
+ - MIT License (MIT)
+ - Copyright (c) 2023 Albert Zeyer
+
+Contains code from Ruby:
+ - https://www.ruby-lang.org/
+ - BSD 2-clause "Simplified" License
+ - Copyright 1995..2023 Yukihiro Matsumoto
+ - Various code snippets
+
 Contains code from CPython:
  - https://www.python.org/
  - Python Software Foundation License (PSF)

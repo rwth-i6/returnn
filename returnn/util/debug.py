@@ -207,23 +207,101 @@ def install_signal_handler_if_default(signum, exceptions_are_fatal=False):
     return False
 
 
-def install_native_signal_handler():
+_native_signal_handler_lib_filename = None
+
+
+def _get_native_signal_handler_lib_filename() -> str:
+    """
+    :return: path to our native_signal_handler lib. see :func:`install_native_signal_handler`
+    """
+    global _native_signal_handler_lib_filename
+    if _native_signal_handler_lib_filename:
+        return _native_signal_handler_lib_filename
+
+    from returnn.util.basic import NativeCodeCompiler
+    import textwrap
+
+    native = NativeCodeCompiler(
+        base_name="native_signal_handler",
+        code_version=1,
+        code=textwrap.dedent(
+            # Derived from https://github.com/albertz/playground/blob/master/signal_handler.c.
+            # language=C++
+            """\
+            #include <stdio.h>
+            #include <execinfo.h>
+            #include <signal.h>
+            #include <stdlib.h>
+            #include <unistd.h>
+
+
+            // https://github.com/ruby/ruby/blob/bbfd735b887/vm_core.h#L118
+            #if defined(NSIG_MAX)           /* POSIX issue 8 */
+            # undef NSIG
+            # define NSIG NSIG_MAX
+            #elif defined(_SIG_MAXSIG)      /* FreeBSD */
+            # undef NSIG
+            # define NSIG _SIG_MAXSIG
+            #elif defined(_SIGMAX)          /* QNX */
+            # define NSIG (_SIGMAX + 1)
+            #elif defined(NSIG)             /* 99% of everything else */
+            # /* take it */
+            #else                           /* Last resort */
+            # define NSIG (sizeof(sigset_t) * CHAR_BIT + 1)
+            #endif
+
+
+            sig_t old_signal_handler[NSIG];
+
+
+            void signal_handler(int sig) {
+              void *array[16 * 1024];
+              size_t size;
+
+              // get void*'s for all entries on the stack
+              size = backtrace(array, sizeof(array)/sizeof(array[0]));
+
+              // print out all the frames to stderr
+              fprintf(stderr, "Signal handler: signal %d:\\n", sig);
+              backtrace_symbols_fd(array, size, STDERR_FILENO);
+
+              // call previous handler
+              signal(sig, old_signal_handler[sig]);
+              raise(sig);
+            }
+
+            void install_signal_handler() {
+              old_signal_handler[SIGSEGV] = signal(SIGSEGV, signal_handler);
+              old_signal_handler[SIGBUS] = signal(SIGBUS, signal_handler);
+              old_signal_handler[SIGILL] = signal(SIGILL, signal_handler);
+              old_signal_handler[SIGABRT] = signal(SIGABRT, signal_handler);
+              old_signal_handler[SIGFPE] = signal(SIGFPE, signal_handler);
+            }
+            """
+        ),
+        is_cpp=False,
+    )
+    _native_signal_handler_lib_filename = native.get_lib_filename()
+    return _native_signal_handler_lib_filename
+
+
+def install_native_signal_handler(*, reraise_exceptions: bool = False):
     """
     Installs some own custom C signal handler.
     """
     try:
         import ctypes
 
-        # TODO: Move C code here, automatically compile it on-the-fly or so.
         # C code: https://github.com/albertz/playground/blob/master/signal_handler.c
-        # Maybe not needed because on Linux there is libSegFault.so anyway (installLibSigSegfault()).
-        lib = ctypes.CDLL("/u/zeyer/code/playground/signal_handler.so")
+        lib = ctypes.CDLL(_get_native_signal_handler_lib_filename())
         lib.install_signal_handler.return_type = None
         lib.install_signal_handler()
         print("Installed signal_handler.so.")
 
     except Exception as exc:
         print("installNativeSignalHandler exception: %s" % exc)
+        if reraise_exceptions:
+            raise
 
 
 def install_lib_sig_segfault():
@@ -257,8 +335,7 @@ def init_faulthandler(sigusr1_chain=False):
     """
     # Enable libSigSegfault first, so that we can have both,
     # because faulthandler will also call the original sig handler.
-    install_lib_sig_segfault()
-    # install_native_signal_handler()  -- maybe not needed because of libSegFault.so
+    install_native_signal_handler()
     if sys.platform != "win32":
         # In case that sigusr1_chain, we expect that there is already some handler
         # for SIGUSR1, and then this will not overwrite this handler.
