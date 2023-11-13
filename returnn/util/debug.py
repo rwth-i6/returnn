@@ -259,9 +259,8 @@ def init_faulthandler(sigusr1_chain=False):
 
     # Enable libSigSegfault first, so that we can have both,
     # because faulthandler will also call the original sig handler.
-    if os.environ.get("DEBUG_SIGNAL_HANDLER") and to_bool(os.environ.get("DEBUG_SIGNAL_HANDLER")):
-        install_lib_sig_segfault()
-        install_native_signal_handler()
+    install_lib_sig_segfault()
+    # install_native_signal_handler()  -- maybe not needed because of libSegFault.so
     if sys.platform != "win32":
         # In case that sigusr1_chain, we expect that there is already some handler
         # for SIGUSR1, and then this will not overwrite this handler.
