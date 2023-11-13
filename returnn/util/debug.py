@@ -255,8 +255,6 @@ def init_faulthandler(sigusr1_chain=False):
 
     :param bool sigusr1_chain: whether the default SIGUSR1 handler should also be called.
     """
-    from returnn.util.basic import to_bool
-
     # Enable libSigSegfault first, so that we can have both,
     # because faulthandler will also call the original sig handler.
     install_lib_sig_segfault()
