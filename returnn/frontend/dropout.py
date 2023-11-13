@@ -3,7 +3,7 @@ Dropout
 """
 
 from __future__ import annotations
-from typing import Union, Sequence
+from typing import Union, Optional, Sequence
 from returnn.tensor import Tensor, Dim
 import returnn.frontend as rf
 
@@ -15,7 +15,7 @@ def dropout(
     source: Tensor,
     drop_prob: Union[float, Tensor],
     *,
-    axis: Union[Dim, Sequence[Dim]],
+    axis: Optional[Union[Dim, Sequence[Dim]]] = None,
     on_forward: bool = False,
 ) -> Tensor:
     """
@@ -32,11 +32,14 @@ def dropout(
         The broadcasted axes are those not specified in ``axis``.
     :param axis: axis to apply dropout on. multiple axes can be specified.
         This defines the set of axes where the dropout mask is not broadcasted to.
+        If None (default), it will not broadcast on any axis.
         (RETURNN also has the ``noise_shape`` option but the ``axis`` option provides the same functionality.)
     :param on_forward: apply dropout during inference and training (so just always). otherwise only during training.
     """
     keep_prob = 1.0 - drop_prob
-    if isinstance(axis, Dim):
+    if axis is None:
+        noise_dims = source.dims
+    elif isinstance(axis, Dim):
         noise_dims = (axis,)
     else:
         noise_dims = axis
