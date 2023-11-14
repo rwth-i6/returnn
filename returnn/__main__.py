@@ -334,7 +334,10 @@ def init_backend_engine():
             import returnn.tf.distributed
 
             returnn.tf.distributed.init_distributed_tf(config)
+
     elif BackendEngine.is_torch_selected():
+        print("PyTorch:", util.describe_torch_version(), file=log.v3)
+
         if config.typed_value("torch_distributed") is not None:
             import socket
             import returnn.torch.distributed
@@ -346,9 +349,12 @@ def init_backend_engine():
                 file=log.v3,
             )
 
-        print("PyTorch:", util.describe_torch_version(), file=log.v3)
+        from returnn.torch.util import diagnose_gpu
+
+        diagnose_gpu.print_available_devices(file=log.v2)
+
     else:
-        raise NotImplementedError
+        raise NotImplementedError(f"Backend engine {BackendEngine.get_selected_engine()} not implemented")
 
 
 def init(config_filename=None, command_line_options=(), config_updates=None, extra_greeting=None):

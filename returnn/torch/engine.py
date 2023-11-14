@@ -101,6 +101,19 @@ class Engine(EngineBase):
             self._torch_distributed_class = torch_distributed.get("class", None)
             self._torch_distributed_options = torch_distributed.get("options", None)
 
+            import returnn.torch.distributed
+
+            torch_distributed = returnn.torch.distributed.get_ctx(config=config)
+            local_rank = torch_distributed.local_rank()
+            print(f"Start running torch distributed training on local rank {local_rank}.", file=log.v2)
+            assert self._device == "cuda", f"torch distributed: unexpected device {self._device!r}"
+            self._device = f"cuda:{local_rank}"
+
+        # Theano and TensorFlow print sth like: Using gpu device 2: GeForce GTX 980 (...)
+        # Print in a similar format so that some scripts which grep our stdout work just as before.
+        if self._device.startswith("cuda"):
+            diagnose_gpu.print_using_cuda_device_report(self._device, file=log.v2)
+
         amp_options = self.config.opt_typed_value("torch_amp")
         grad_scaler_opts = self.config.typed_value("grad_scaler", NotSpecified)
         if amp_options is not None:
@@ -154,14 +167,6 @@ class Engine(EngineBase):
         assert config is self.config or not config
         config = self.config
         super().init_train_from_config(config=config)
-
-        if self._use_torch_distributed:
-            import returnn.torch.distributed
-
-            torch_distributed = returnn.torch.distributed.get_ctx(config=config)
-            local_rank = torch_distributed.local_rank()
-            print(f"Start running torch distributed training on local rank {local_rank}.", file=log.v2)
-            self._device = f"cuda:{local_rank}"
 
         self.train_dataset = train_data
         self.eval_datasets.clear()

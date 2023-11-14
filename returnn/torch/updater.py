@@ -88,6 +88,7 @@ class Updater(object):
         """
         :param returnn.config.Config config: config defining the training conditions.
         :param torch.nn.Module network: PyTorch Module defining the network.
+        :param torch.device|str device:
         :param float initial_learning_rate:
         """
         self.config = config
