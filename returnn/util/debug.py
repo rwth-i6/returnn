@@ -296,7 +296,7 @@ def install_native_signal_handler(*, reraise_exceptions: bool = False):
         lib = ctypes.CDLL(_get_native_signal_handler_lib_filename())
         lib.install_signal_handler.return_type = None
         lib.install_signal_handler()
-        print("Installed signal_handler.so.")
+        print("Installed native_signal_handler.so.")
 
     except Exception as exc:
         print("installNativeSignalHandler exception: %s" % exc)
