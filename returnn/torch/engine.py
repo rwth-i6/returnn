@@ -37,7 +37,7 @@ from .data import pipeline as data_pipeline
 from .data import returnn_dataset_wrapper
 from .data import extern_data as extern_data_util
 from .frontend.bridge import rf_module_to_pt_module
-from .functional import diagnose_gpu
+from .util import diagnose_gpu
 
 
 class Engine(EngineBase):
