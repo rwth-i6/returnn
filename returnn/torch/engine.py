@@ -114,6 +114,8 @@ class Engine(EngineBase):
         if self._device.startswith("cuda"):
             diagnose_gpu.print_using_cuda_device_report(self._device, file=log.v2)
 
+        self._log_memory_usage = config.bool("torch_log_memory_usage", False)
+
         amp_options = self.config.opt_typed_value("torch_amp")
         grad_scaler_opts = self.config.typed_value("grad_scaler", NotSpecified)
         if amp_options is not None:
@@ -248,6 +250,25 @@ class Engine(EngineBase):
             }
         )
 
+    def _reset_dev_memory_stats(self):
+        dev = torch.device(self._device)
+        if dev.type == "cuda":
+            torch.cuda.reset_peak_memory_stats(dev)
+        self._maybe_report_dev_memory_stats()
+
+    def _maybe_report_dev_memory_stats(self):
+        if not self._log_memory_usage:
+            return
+        dev = torch.device(self._device)
+        if dev.type == "cuda":
+            stats = [
+                f"alloc cur {util.human_bytes_size(torch.cuda.memory_allocated(dev))}",
+                f"alloc peak {util.human_bytes_size(torch.cuda.max_memory_allocated(dev))}",
+                f"reserved cur {util.human_bytes_size(torch.cuda.memory_reserved(dev))}",
+                f"reserved peak {util.human_bytes_size(torch.cuda.max_memory_reserved(dev))}",
+            ]
+            print(f"Memory usage ({self._device}):", " ".join(stats), file=log.v1)
+
     def train_epoch(self):
         """
         train one (sub)epoch
@@ -272,6 +293,7 @@ class Engine(EngineBase):
         elapsed_computation_time = 0
 
         self._pt_model.train()
+        self._reset_dev_memory_stats()
 
         if self.config.bool("debug_shell_before_train_loop", False):
             print("debug_shell_before_train_loop", file=log.v1)
@@ -334,6 +356,7 @@ class Engine(EngineBase):
                 f"ep {self.epoch} train",
                 step=step_idx,
                 eval_info=dict(losses_dict / inv_norm_factors_dict),
+                log_memory_usage_device=self._device if self._log_memory_usage else None,
             )
 
             step_idx += 1
@@ -364,6 +387,8 @@ class Engine(EngineBase):
 
         print(f"Total train loss:", _format_score(dict(accumulated_losses_dict)), file=log.v3)
 
+        self._maybe_report_dev_memory_stats()
+
         if self.epoch % self._save_model_epoch_interval == 0 or self.epoch == self._final_epoch:
             if self.model_filename:
                 self._save_model()
@@ -388,6 +413,7 @@ class Engine(EngineBase):
         Runs model on all eval datasets and calculates the loss.
         """
         self._pt_model.eval()
+        self._reset_dev_memory_stats()
 
         eval_dump_str = []
         score_keys = None
@@ -435,6 +461,7 @@ class Engine(EngineBase):
                         f"ep {self.epoch} {dataset_name} eval",
                         step=step_idx,
                         eval_info=dict(losses_dict / inv_norm_factors_dict),
+                        log_memory_usage_device=self._device if self._log_memory_usage else None,
                     )
                     step_idx += 1
 
@@ -458,6 +485,8 @@ class Engine(EngineBase):
             ]
 
         print(" ".join(eval_dump_str) if eval_dump_str else "(No evaluations.)", file=log.v1)
+
+        self._maybe_report_dev_memory_stats()
 
     def _create_data_loader(self, dataset: Dataset) -> DataLoader:
         """
@@ -770,6 +799,7 @@ class Engine(EngineBase):
         elapsed_computation_time = 0.0
 
         self._pt_model.eval()
+        self._reset_dev_memory_stats()
 
         if dataset.supports_seq_order_sorting():
             # We can sort it. Sort it in reverse to make sure that we have enough memory right at the beginning.
@@ -853,7 +883,12 @@ class Engine(EngineBase):
                     callback.process_seq(seq_tag=seq_tag, outputs=model_outputs_per_batch)
 
                 elapsed_computation_time += time.time() - step_begin_time
-                _print_process(f"ep {self.epoch} {dataset.name} forward", step=step_idx, eval_info=None)
+                _print_process(
+                    f"ep {self.epoch} {dataset.name} forward",
+                    step=step_idx,
+                    eval_info=None,
+                    log_memory_usage_device=self._device if self._log_memory_usage else None,
+                )
                 step_idx += 1
 
             callback.finish()
@@ -865,6 +900,8 @@ class Engine(EngineBase):
             % (step_idx, hms(elapsed), (elapsed_computation_percentage * 100.0)),
             file=log.v3,
         )
+
+        self._maybe_report_dev_memory_stats()
 
     @staticmethod
     def delete_model(filename):
@@ -910,19 +947,31 @@ def _to_raw(n: Union[int, float, Tensor]):
     raise TypeError(f"Unexpected {n} of type {type(n)}")
 
 
-def _print_process(report_prefix: str, step: int, eval_info: Optional[Dict[str, Any]] = None):
+def _print_process(
+    report_prefix: str,
+    step: int,
+    eval_info: Optional[Dict[str, Any]] = None,
+    log_memory_usage_device: Optional[str] = None,
+):
     """
     Similar but simplified from TF engine _print_process.
 
     :param report_prefix:
     :param step:
     :param eval_info:
+    :param log_memory_usage_device: if given, will log memory usage (peak allocated memory)
     :return: nothing, will be printed to log
     """
     if log.verbose[5]:  # report every minibatch
         info = [report_prefix, "step %i" % step]
         if eval_info:  # Such as score.
             info += ["%s %s" % (k, _format_value(v)) for k, v in sorted(eval_info.items())]
+        if log_memory_usage_device:
+            dev = torch.device(log_memory_usage_device)
+            if dev.type == "cuda":
+                info += [
+                    f"mem_usage:{log_memory_usage_device} {util.human_bytes_size(torch.cuda.max_memory_allocated())}"
+                ]
         print(", ".join(filter(None, info)), file=log.v5)
 
 
