@@ -22,7 +22,7 @@ __all__ = ["RawTensorTypes", "ItemKeyType", "Tensor", "Dim", "get_raw_tensor_typ
 
 
 RawTensorTypes = Union[int, float, complex, numpy.number, numpy.ndarray, bool, str]
-ItemKeyType = Union[RawTensorTypes, Tensor, slice, Sequence[RawTensorTypes, Tensor, slice]]
+ItemKeyType = Union[RawTensorTypes, Tensor, slice, Sequence[Union[RawTensorTypes, Tensor, slice]]]
 
 
 class GetModelFunc(Protocol):
