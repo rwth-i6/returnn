@@ -3,7 +3,7 @@ Main engine for PyTorch
 """
 
 from __future__ import annotations
-from typing import Optional, Any, Union, Dict
+from typing import Optional, Any, Union, Callable, Dict
 from contextlib import nullcontext
 
 import sys
@@ -11,6 +11,7 @@ import gc
 import os
 import torch
 import time
+import torch.distributed
 from torch.nn.parallel import DistributedDataParallel
 from torch.utils.data import DataLoader
 from torch import autocast
