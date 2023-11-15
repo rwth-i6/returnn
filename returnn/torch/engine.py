@@ -11,7 +11,7 @@ import gc
 import os
 import torch
 import time
-from torch.distributed import init_process_group
+import torch.distributed
 from torch.nn.parallel import DistributedDataParallel
 from torch.utils.data import DataLoader
 from torch import autocast
@@ -396,8 +396,7 @@ class Engine(EngineBase):
             else:
                 print("Not saving model, `model` not specified.", file=log.v3)
 
-        if not self._use_torch_distributed or torch.distributed.get_rank() == 0:
-            self.eval_model()
+        self.eval_model()
         if self.config.bool_or_other("cleanup_old_models", None):
             self.cleanup_old_models()
 
@@ -422,9 +421,15 @@ class Engine(EngineBase):
         for dataset_name, dataset in self.eval_datasets.items():
             if skip_already_evaluated and self._is_dataset_evaluated(name=dataset_name):
                 continue
-            print(f"Evaluating dataset {dataset_name!r}", file=log.v3)
 
             data_loader = self._eval_dataloaders[dataset_name]
+
+            if self._use_torch_distributed and torch.distributed.get_rank() != 0:
+                # We need to make sure the data loader iterator was created for proper synchronization.
+                # However, now we only want to do evaluation on rank 0 for simplicity.
+                iter(data_loader)
+                continue
+            print(f"Evaluating dataset {dataset_name!r}", file=log.v3)
 
             accumulated_losses_dict = NumbersDict()
             accumulated_inv_norm_factors_dict = NumbersDict()
@@ -484,7 +489,8 @@ class Engine(EngineBase):
                 )
             ]
 
-        print(" ".join(eval_dump_str) if eval_dump_str else "(No evaluations.)", file=log.v1)
+        if not self._use_torch_distributed or torch.distributed.get_rank() == 0:
+            print(" ".join(eval_dump_str) if eval_dump_str else "(No evaluations.)", file=log.v1)
 
         self._maybe_report_dev_memory_stats()
 
