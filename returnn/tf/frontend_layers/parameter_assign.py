@@ -16,15 +16,21 @@ from .. import frontend_layers as rfl
 from . import _utils
 
 
-def parameter_assign(param: rf.Parameter[Layer], value: Tensor, op: str = "assign") -> None:
+def parameter_assign(
+    param: rf.Parameter, value: Tensor, *, op: str = "assign", key: Optional[rf.ItemKeyType] = None
+) -> None:
     """
     Parameter assign.
 
     :param param:
     :param value:
     :param op:
+    :param key:
     :return:
     """
+    if key is not None:
+        raise NotImplementedError("RF: parameter_assign with key not implemented yet or TF-layers backend")
+
     if param.raw_tensor.layer_dict["class"] == "variable":
         # This is the first assignment on the variable.
         # There might be some previous reads.

@@ -9,7 +9,7 @@ import numpy
 import returnn.frontend as rf
 from returnn.tensor import Tensor, Dim
 from returnn.util.basic import BehaviorVersion
-from .types import RawTensorTypes
+from .types import RawTensorTypes, ItemKeyType
 
 T = TypeVar("T")  # tf.Tensor, torch.Tensor or so
 T2 = TypeVar("T2")
@@ -699,11 +699,14 @@ class Backend(Generic[T]):
         raise NotImplementedError
 
     @staticmethod
-    def parameter_assign(param: rf.Parameter, value: Tensor, op: str = "assign") -> None:
+    def parameter_assign(
+        param: rf.Parameter, value: Tensor, *, op: str = "assign", key: Optional[ItemKeyType] = None
+    ) -> None:
         """
         :param param: parameter
         :param value: new value
         :param op: "assign" or "add"
+        :param key: optional key for slice assign, like var[key] = value or var[key] += value.
         """
         raise NotImplementedError
 

@@ -143,6 +143,18 @@ class Parameter(Tensor[T]):
             self, rf.convert_to_tensor(value, _backend=self._raw_backend, device=self.device), op="add"
         )
 
+    def __setitem__(self, key: rf.ItemKeyType, value: Union[Tensor, rf.RawTensorTypes]):
+        """
+        Basically var[slice] = value.
+        See :func:`assign`.
+        """
+        self._raw_backend.parameter_assign(
+            self,
+            key=key,
+            value=rf.convert_to_tensor(value, _backend=self._raw_backend, device=self.device),
+            op="assign",
+        )
+
     @property
     def weight_decay(self) -> float:
         """

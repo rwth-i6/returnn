@@ -3,7 +3,7 @@ Types
 """
 
 from __future__ import annotations
-from typing import Union, Type, TYPE_CHECKING
+from typing import Union, Type, TYPE_CHECKING, Sequence
 import numpy
 from returnn.tensor import Tensor, Dim, TensorDict
 import returnn.frontend as rf
@@ -18,10 +18,11 @@ except ImportError:
         Protocol = object
 
 
-__all__ = ["RawTensorTypes", "Tensor", "Dim", "get_raw_tensor_type", "GetModelFunc", "StepFunc"]
+__all__ = ["RawTensorTypes", "ItemKeyType", "Tensor", "Dim", "get_raw_tensor_type", "GetModelFunc", "StepFunc"]
 
 
 RawTensorTypes = Union[int, float, complex, numpy.number, numpy.ndarray, bool, str]
+ItemKeyType = Union[RawTensorTypes, Tensor, slice, Sequence[RawTensorTypes, Tensor, slice]]
 
 
 class GetModelFunc(Protocol):

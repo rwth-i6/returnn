@@ -674,16 +674,24 @@ class TorchBackend(Backend[torch.Tensor]):
         raw_param.requires_grad = trainable
 
     @staticmethod
-    def parameter_assign(param: rf.Parameter, value: Tensor, op: str = "assign") -> None:
+    def parameter_assign(
+        param: rf.Parameter, value: Tensor, *, op: str = "assign", key: Optional[rf.ItemKeyType] = None
+    ) -> None:
         """param assign"""
         value_raw = value.copy_compatible_to_dims_raw(param.dims)
         raw_param = param.raw_tensor
         assert isinstance(raw_param, torch.nn.Parameter)
         with torch.no_grad():
             if op == "assign":
-                raw_param.copy_(value_raw)
+                if key is None:
+                    raw_param.copy_(value_raw)
+                else:
+                    raw_param[key] = value_raw
             elif op == "add":
-                raw_param.add_(value_raw)
+                if key is None:
+                    raw_param.add_(value_raw)
+                else:
+                    raw_param[key] += value_raw
             else:
                 raise ValueError(f"Parameter {param} assign: Unsupported op: {op}")
 
