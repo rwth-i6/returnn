@@ -480,10 +480,16 @@ class ReturnnLayersBackend(Backend[Layer]):
         )
 
     @staticmethod
-    def create_parameter_raw(tensor: rf.Parameter) -> Layer:
+    def create_parameter_raw(tensor: rf.Parameter, *, device: Optional[str] = None) -> Layer:
         """create parameter"""
         return rfl.make_layer(
-            {"class": "variable", "shape": tensor.dims, "dtype": tensor.dtype, "param_name": "param"},
+            {
+                "class": "variable",
+                "shape": tensor.dims,
+                "dtype": tensor.dtype,
+                "param_name": "param",
+                "param_device": device,
+            },
             name=tensor.name,
             out=tensor,
         ).raw_tensor

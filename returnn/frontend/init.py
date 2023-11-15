@@ -15,7 +15,13 @@ class ParamInit:
     """API for param init"""
 
     def __call__(
-        self, dims: Sequence[Dim], dtype: str, sparse_dim: Optional[Dim] = None, out: Optional[Tensor] = None
+        self,
+        dims: Sequence[Dim],
+        dtype: str,
+        *,
+        sparse_dim: Optional[Dim] = None,
+        device: Optional[str] = None,
+        out: Optional[Tensor] = None,
     ) -> Union[Tensor, rf.RawTensorTypes]:
         raise NotImplementedError
 
@@ -64,8 +70,10 @@ class VarianceScaling(ParamInit):
     def __call__(
         self,
         dims: Sequence[Dim],
-        dtype: Optional[str] = None,
+        dtype: str,
+        *,
         sparse_dim: Optional[Dim] = None,
+        device: Optional[str] = None,
         out: Optional[Tensor] = None,
     ) -> Tensor:
         if dtype is None:
@@ -78,14 +86,16 @@ class VarianceScaling(ParamInit):
             scale /= max(1.0, fan_out)
         else:
             scale /= max(1.0, (fan_in + fan_out) / 2.0)
-        return self._random(dims=dims, dtype=dtype, scale=scale, sparse_dim=sparse_dim, out=out)
+        return self._random(dims=dims, dtype=dtype, scale=scale, sparse_dim=sparse_dim, device=device, out=out)
 
     def _random(
         self,
         dims: Sequence[Dim],
+        dtype: Optional[str] = None,
+        *,
         scale: float,
-        dtype=None,
         sparse_dim: Optional[Dim] = None,
+        device: Optional[str] = None,
         out: Optional[Tensor] = None,
     ) -> Tensor:
         if self.distribution in {"truncated_normal", "normal"}:
@@ -99,6 +109,7 @@ class VarianceScaling(ParamInit):
                 stddev=stddev,
                 dtype=dtype,
                 sparse_dim=sparse_dim,
+                device=device,
                 out=out,
             )
         elif self.distribution == "untruncated_normal":
@@ -111,6 +122,7 @@ class VarianceScaling(ParamInit):
                 stddev=stddev,
                 dtype=dtype,
                 sparse_dim=sparse_dim,
+                device=device,
                 out=out,
             )
         elif self.distribution == "uniform":
@@ -123,6 +135,7 @@ class VarianceScaling(ParamInit):
                 maxval=limit,
                 dtype=dtype,
                 sparse_dim=sparse_dim,
+                device=device,
                 out=out,
             )
         else:

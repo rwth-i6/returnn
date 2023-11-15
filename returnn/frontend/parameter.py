@@ -34,6 +34,7 @@ class Parameter(Tensor[T]):
         weight_decay: Optional[float] = 0.0,
         initial: Optional[rf.init.ParamInitType] = None,
         raw_tensor: Optional[T] = None,
+        device: Optional[str] = None,
     ):
         """
         :param dims:
@@ -48,6 +49,8 @@ class Parameter(Tensor[T]):
         :param non_critical_for_restore: if True, this parameter is not critical for restoring a model.
         :param weight_decay:
         :param initial:
+        :param raw_tensor:
+        :param device:
         """
         if not all(isinstance(dim, Dim) for dim in dims):
             raise TypeError(f"shape {dims} must be a sequence of Dim")
@@ -64,7 +67,7 @@ class Parameter(Tensor[T]):
         if raw_tensor is not None:
             self.raw_tensor = raw_tensor
         else:
-            self.raw_tensor = _global_backend.create_parameter_raw(self)
+            self.raw_tensor = _global_backend.create_parameter_raw(self, device=device)
         self._trainable = None  # type: Optional[bool]
         self._auxiliary = auxiliary
         self._non_critical_for_restore = non_critical_for_restore
@@ -112,7 +115,7 @@ class Parameter(Tensor[T]):
         self._initial = value
 
         if isinstance(value, rf.init.ParamInit):
-            value = value(dims=self.dims, dtype=self.dtype)
+            value = value(dims=self.dims, dtype=self.dtype, device=self.device)
         self._raw_backend.set_parameter_initial_value(self, value)
 
     def assign(self, value: Union[Tensor, rf.RawTensorTypes]):
@@ -126,7 +129,9 @@ class Parameter(Tensor[T]):
         There is no op or anything like that returned here which the user needs to take care of.
         So the user can think of it just as imperative eager-style code.
         """
-        self._raw_backend.parameter_assign(self, rf.convert_to_tensor(value, _backend=self._raw_backend), op="assign")
+        self._raw_backend.parameter_assign(
+            self, rf.convert_to_tensor(value, _backend=self._raw_backend, device=self.device), op="assign"
+        )
 
     def assign_add(self, value: Union[Tensor, rf.RawTensorTypes]):
         """
@@ -134,7 +139,9 @@ class Parameter(Tensor[T]):
         This will also update the raw tensor.
         See :func:`assign`.
         """
-        self._raw_backend.parameter_assign(self, rf.convert_to_tensor(value, _backend=self._raw_backend), op="add")
+        self._raw_backend.parameter_assign(
+            self, rf.convert_to_tensor(value, _backend=self._raw_backend, device=self.device), op="add"
+        )
 
     @property
     def weight_decay(self) -> float:

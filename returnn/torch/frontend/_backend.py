@@ -631,7 +631,7 @@ class TorchBackend(Backend[torch.Tensor]):
         return loss
 
     @staticmethod
-    def create_parameter_raw(tensor: rf.Parameter) -> torch.nn.Parameter:
+    def create_parameter_raw(tensor: rf.Parameter, *, device: Optional[str] = None) -> torch.nn.Parameter:
         """
         :return: parameter
         """
@@ -639,7 +639,7 @@ class TorchBackend(Backend[torch.Tensor]):
         data = torch.zeros(
             [d.dimension for d in tensor.dims],
             dtype=TorchBackend.as_dtype_raw(tensor.dtype),
-            device=rf.get_default_device(),
+            device=device or rf.get_default_device(),
         )
         if tensor.dtype.startswith("int"):
             requires_grad = False
