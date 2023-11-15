@@ -59,6 +59,15 @@ class _PTModuleAsRFModule(rf.Module):
             )
             setattr(self, name, rf_param)
 
+        for name, pt_param in pt_module.named_buffers(recurse=False):
+            rf_param = rf.Parameter(
+                raw_tensor=pt_param,
+                dims=[Dim(d) for d in pt_param.shape],
+                dtype=str(pt_param.dtype).split(".")[-1],
+                auxiliary=True,
+            )
+            setattr(self, name, rf_param)
+
         for name, rf_mod in pt_module.named_children():
             pt_mod = rf_module_to_pt_module(rf_mod)
             setattr(self, name, pt_mod)
@@ -82,7 +91,10 @@ class _RFModuleAsPTModule(torch.nn.Module):
         for name, rf_param in rf_module.named_parameters(recurse=False):
             pt_param = rf_param.raw_tensor
             assert isinstance(pt_param, torch.nn.Parameter)
-            self.register_parameter(name, pt_param)
+            if rf_param.auxiliary:
+                self.register_buffer(name, pt_param)
+            else:
+                self.register_parameter(name, pt_param)
 
         for name, rf_mod in rf_module.named_children():
             pt_mod = rf_module_to_pt_module(rf_mod)
