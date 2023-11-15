@@ -169,7 +169,7 @@ class Module:
         prefix: str = "",
     ) -> Iterator[Tuple[str, rf.Module]]:
         """
-        Get all children modules (excluding self)
+        Get all children modules (including self iff include_self=True (default)), optionally recursively.
         """
         if memo is None:
             memo = set()
@@ -198,13 +198,6 @@ class Module:
 
         With recurse=True (default), this iterates over all children modules
         and iterates through their parameters as well.
-
-        Note that some modules (e.g. :class:`rf.Linear`) can behave lazy,
-        i.e. they only create the parameters on the first call,
-        e.g. when the input dimension is unknown and thus the parameter shape is not defined
-        before the first call.
-        This means you need to first call the module once to get all the parameters.
-        https://github.com/rwth-i6/returnn_common/issues/149
         """
         memo: Set[RefIdEq[Tensor]] = set()  # RefIdEq because we cannot hash layer refs
         for prefix, module in self.named_modules() if recurse else [("", self)]:
