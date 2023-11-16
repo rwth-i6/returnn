@@ -91,7 +91,7 @@ class _PTModuleAsRFModule(rf.Module):
 
 
 class _RFModuleAsPTModule(torch.nn.Module):
-    def __init__(self, rf_module: rf.Module, *, aux_params_as_buffers: bool):
+    def __init__(self, rf_module: rf.Module, *, aux_params_as_buffers: bool = True):
         super().__init__()
         self._rf_module = rf_module
         self._aux_params_as_buffers = aux_params_as_buffers
