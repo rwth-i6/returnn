@@ -34,15 +34,17 @@ def pt_module_to_wrapped_rf_module(pt_module: torch.nn.Module) -> Optional[rf.Mo
     return None
 
 
-def rf_module_to_pt_module(rf_module: rf.Module, *, aux_params_as_buffers: bool = False) -> torch.nn.Module:
+def rf_module_to_pt_module(rf_module: rf.Module, *, aux_params_as_buffers: bool = True) -> torch.nn.Module:
     """
     :param rf_module: RF module
     :param aux_params_as_buffers: whether to map RF auxiliary parameters to PyTorch buffers,
         otherwise to normal parameters, i.e. they occur in model.named_parameters().
         Note that even when they are part of model.named_parameters(),
         aux params usually don't have a gradient, and then they are not updated by the optimizer.
-        Historically, this was False. For now, we keep that default
-        because optimizer state dicts are not compatible otherwise.
+        Historically, this was False.
+        Now, this is True by default, as this is more reasonable.
+        Note that the optimizer state dict will change if you change this,
+        however, we will automatically convert such optimizer state dict.
     :return: torch module
     """
     assert isinstance(rf_module, rf.Module)
