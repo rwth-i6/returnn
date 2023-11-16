@@ -211,10 +211,95 @@ class Updater(object):
         if "optimizer" not in optimizer_state and "param_groups" in optimizer_state and "state" in optimizer_state:
             # Old format, convert to new format.
             optimizer_state = {"optimizer": optimizer_state}
+        if optimizer_state.get("param_names") is not None:
+            if len(self.optimizer.param_groups) != len(optimizer_state["optimizer"]["param_groups"]):
+                raise ValueError(
+                    "loaded state dict has a different number of parameter groups: ckpt %i vs. self %i"
+                    % (len(optimizer_state["optimizer"]["param_groups"]), len(self.optimizer.param_groups))
+                )
+            # Check if we have the same parameters in the same order.
+            self_param_names, param_id_to_name = self._get_opt_param_names()
+            ckpt_param_names = optimizer_state["param_names"]
+            if self_param_names != ckpt_param_names:
+                self_param_names_dict = {name: i for i, name in enumerate(self_param_names)}
+                self_param_names_critical_set = set()
+                ckpt_param_names_dict = {name: i for i, name in enumerate(ckpt_param_names)}
+                map_ckpt_param_idx_to_self_param_idx = {}
+                self_params_not_in_ckpt = []
+                self_params_not_in_ckpt_critical = []
+                for param_name in self_param_names:
+                    param = self.network.get_parameter(param_name)
+                    if param.requires_grad:
+                        self_param_names_critical_set.add(param_name)
+                    if param_name not in ckpt_param_names_dict:
+                        self_params_not_in_ckpt.append(param_name)
+                        if param.requires_grad:
+                            self_params_not_in_ckpt_critical.append(param_name)
+                ckpt_params_not_in_self = []
+                for i, param_name in enumerate(ckpt_param_names):
+                    if param_name not in self_param_names_dict:
+                        ckpt_params_not_in_self.append(param_name)
+                    else:
+                        map_ckpt_param_idx_to_self_param_idx[i] = self_param_names_dict[param_name]
+                if self_params_not_in_ckpt_critical:
+                    raise ValueError(
+                        "load_optimizer: required params not in ckpt: %s" % ", ".join(self_params_not_in_ckpt_critical)
+                    )
+                if self_params_not_in_ckpt or ckpt_params_not_in_self:
+                    print(
+                        "load_optimizer: params not in ckpt: %s\n    ckpt params not existing: %s"
+                        % (
+                            ", ".join(self_params_not_in_ckpt) or "(None)",
+                            ", ".join(ckpt_params_not_in_self) or "(None)",
+                        ),
+                        file=log.v3,
+                    )
+                    if self_params_not_in_ckpt:
+                        print(
+                            "load_optimizer: All params not in ckpt have required_grad=False, thus not critical.",
+                            file=log.v3,
+                        )
+                else:
+                    print("load_optimizer: Params in different order.", file=log.v3)
+                print("load_optimizer: Will remap the state dict.", file=log.v3)
+                for ckpt_group, self_group in zip(
+                    optimizer_state["optimizer"]["param_groups"], self.optimizer.param_groups
+                ):
+                    # Check whether it is matching for the critical params.
+                    self_group_param_names = set(param_id_to_name[id(p)] for p in self_group["params"])
+                    ckpt_group_param_names = set(ckpt_param_names[p] for p in ckpt_group["params"])
+                    self_group_param_names.intersection_update(self_param_names_critical_set)
+                    ckpt_group_param_names.intersection_update(self_param_names_critical_set)
+                    if ckpt_group_param_names != self_group_param_names:
+                        raise ValueError(
+                            "load_optimizer: params in group not in ckpt: %s\n  ckpt params not existing: %s"
+                            % (
+                                ", ".join(ckpt_group_param_names - self_group_param_names) or "(None)",
+                                ", ".join(self_group_param_names - ckpt_group_param_names) or "(None)",
+                            )
+                        )
+                    ckpt_group["params"] = [
+                        self_param_names_dict[param_id_to_name[id(p)]] for p in self_group["params"]
+                    ]
+                optimizer_state["optimizer"]["state"] = {
+                    map_ckpt_param_idx_to_self_param_idx[i]: s
+                    for (i, s) in optimizer_state["optimizer"]["state"].items()
+                    if i in map_ckpt_param_idx_to_self_param_idx
+                }
         self.optimizer.load_state_dict(optimizer_state["optimizer"])
         # https://github.com/rwth-i6/returnn/issues/1345
         del optimizer_state
         gc.collect()
+
+    def _get_opt_param_names(self) -> Tuple[List[str], Dict[int, str]]:
+        param_id_to_name = {}  # id -> name
+        for name, p in self.network.named_parameters():
+            param_id_to_name[id(p)] = name
+        param_names = []  # param_idx -> name
+        for group in self.optimizer.param_groups:
+            for p in group["params"]:
+                param_names.append(param_id_to_name[id(p)])
+        return param_names, param_id_to_name
 
     def save_optimizer(self, filename):
         """
@@ -230,13 +315,7 @@ class Updater(object):
         # That will only save param order indices
         # but not the name of the parameters.
         # We also save a mapping of parameter indices to names.
-        param_id_to_name = {}  # id -> name
-        for name, p in self.network.named_parameters():
-            param_id_to_name[id(p)] = name
-        param_names = []  # param_idx -> name
-        for group in self.optimizer.param_groups:
-            for p in group["params"]:
-                param_names.append(param_id_to_name[id(p)])
+        param_names, _ = self._get_opt_param_names()
 
         print("Save optimizer under %s" % filename, file=log.v4)
         # First write to a temp-file, to be sure that writing happens without errors,

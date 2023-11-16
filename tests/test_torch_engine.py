@@ -398,6 +398,46 @@ def test_load_optimizer_old_format():
         updater.load_optimizer(tmp_dir + "/model.opt.new_format.pt")
 
 
+def test_optimizer_convert_aux_param():
+    # See rf_module_to_pt_module aux_params_as_buffers option.
+    # This causes a change in the optimizer state dict.
+    # But we should be able to convert it back, in both directions.
+
+    from returnn.torch.frontend.bridge import rf_module_to_pt_module
+
+    config = Config(dict(optimizer={"class": "adamw", "weight_decay": 1e-3}))
+    rf.select_backend_torch()
+
+    class _Model(rf.Module):
+        def __init__(self):
+            super().__init__()
+            self.batch_norm = rf.BatchNorm(in_dim=rf.Dim(3))
+            self.linear = rf.Linear(in_dim=rf.Dim(2), out_dim=rf.Dim(3))
+
+    rf_model = _Model()
+    pt_model_buf = rf_module_to_pt_module(rf_model, aux_params_as_buffers=True)
+    pt_model_param = rf_module_to_pt_module(rf_model, aux_params_as_buffers=False)
+    pt_model_buf_param_names = set(name for name, _ in pt_model_buf.named_parameters())
+    pt_model_param_param_names = set(name for name, _ in pt_model_param.named_parameters())
+    print("buf params:", pt_model_buf_param_names)
+    print("all params:", pt_model_param_param_names)
+    assert len(pt_model_buf_param_names) < len(pt_model_param_param_names)
+    assert pt_model_buf_param_names.issubset(pt_model_param_param_names)
+    updater_buf = Updater(config=config, network=pt_model_buf, device=torch.device("cpu"))
+    updater_buf.create_optimizer()
+    updater_param = Updater(config=config, network=pt_model_param, device=torch.device("cpu"))
+    updater_param.create_optimizer()
+
+    with tempfile.TemporaryDirectory(prefix="returnn_test_optimizer_convert_aux_param") as tmp_dir:
+        updater_buf.save_optimizer(tmp_dir + "/model_buf.opt.pt")
+        updater_param.save_optimizer(tmp_dir + "/model_param.opt.pt")
+        updater_buf.load_optimizer(tmp_dir + "/model_buf.opt.pt")
+        updater_param.load_optimizer(tmp_dir + "/model_param.opt.pt")
+        # Ok, now test whether we can convert them.
+        updater_buf.load_optimizer(tmp_dir + "/model_param.opt.pt")
+        updater_param.load_optimizer(tmp_dir + "/model_buf.opt.pt")
+
+
 if __name__ == "__main__":
     better_exchook.install()
     if len(sys.argv) <= 1:
