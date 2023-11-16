@@ -699,14 +699,32 @@ class Backend(Generic[T]):
         raise NotImplementedError
 
     @staticmethod
-    def parameter_assign(
-        param: rf.Parameter, value: Tensor, *, op: str = "assign", key: Optional[ItemKeyType] = None
-    ) -> None:
+    def parameter_assign(param: rf.Parameter, value: Tensor, *, op: str = "assign") -> None:
         """
         :param param: parameter
         :param value: new value
         :param op: "assign" or "add"
+        """
+        raise NotImplementedError
+
+    @staticmethod
+    def parameter_assign_key(
+        param: rf.Parameter,
+        key: ItemKeyType,
+        value: Tensor,
+        *,
+        op: str = "assign",
+        axis: Optional[Union[Dim, Sequence[Dim]]] = None,
+        key_dim: Union[None, Dim, Sequence[Union[None, Dim]]] = None,
+    ) -> None:
+        """
+        :param param: parameter
         :param key: optional key for slice assign, like var[key] = value or var[key] += value.
+        :param value: new value
+        :param op: "assign" or "add"
+        :param axis: if key is given, this axis is used.
+            if key are indices (without specified sparse_dim), axis must be specified.
+        :param key_dim: resulting dim after slicing with key
         """
         raise NotImplementedError
 

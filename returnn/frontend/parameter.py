@@ -143,14 +143,24 @@ class Parameter(Tensor[T]):
             self, rf.convert_to_tensor(value, _backend=self._raw_backend, device=self.device), op="add"
         )
 
-    def __setitem__(self, key: rf.ItemKeyType, value: Union[Tensor, rf.RawTensorTypes]):
+    def assign_key(
+        self,
+        axis: Union[Dim, Sequence[Dim]],
+        key: rf.ItemKeyType,
+        key_dim: Optional[Union[Dim, Sequence[Optional[Dim]]]],
+        value: Union[Tensor, rf.RawTensorTypes],
+    ):
         """
-        Basically var[slice] = value.
+        Basically var[key] = value, if axis is the first axis, or otherwise accordingly.
+        Note that the __setitem__ API is not supported because it depends on the order of axes,
+        but this here is the equivalent function.
         See :func:`assign`.
         """
-        self._raw_backend.parameter_assign(
+        self._raw_backend.parameter_assign_key(
             self,
+            axis=axis,
             key=key,
+            key_dim=key_dim,
             value=rf.convert_to_tensor(value, _backend=self._raw_backend, device=self.device),
             op="assign",
         )

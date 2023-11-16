@@ -19,6 +19,9 @@ import returnn.frontend as rf
 # noinspection PyProtectedMember
 from returnn.frontend import _random_journal
 
+# noinspection PyProtectedMember
+from returnn.frontend import _utils
+
 from . import raw_ops
 
 _TT = Tensor[torch.Tensor]
@@ -674,24 +677,39 @@ class TorchBackend(Backend[torch.Tensor]):
         raw_param.requires_grad = trainable
 
     @staticmethod
-    def parameter_assign(
-        param: rf.Parameter, value: Tensor, *, op: str = "assign", key: Optional[rf.ItemKeyType] = None
-    ) -> None:
+    def parameter_assign(param: rf.Parameter, value: Tensor, *, op: str = "assign") -> None:
         """param assign"""
-        value_raw = value.copy_compatible_to_dims_raw(param.dims)
         raw_param = param.raw_tensor
         assert isinstance(raw_param, torch.nn.Parameter)
+        value_raw = value.copy_compatible_to_dims_raw(param.dims)
         with torch.no_grad():
             if op == "assign":
-                if key is None:
-                    raw_param.copy_(value_raw)
-                else:
-                    raw_param[key] = value_raw
+                raw_param.copy_(value_raw)
             elif op == "add":
-                if key is None:
-                    raw_param.add_(value_raw)
-                else:
-                    raw_param[key] += value_raw
+                raw_param.add_(value_raw)
+            else:
+                raise ValueError(f"Parameter {param} assign: Unsupported op: {op}")
+
+    @staticmethod
+    def parameter_assign_key(
+        param: rf.Parameter,
+        key: rf.ItemKeyType,
+        value: Tensor,
+        *,
+        op: str = "assign",
+        axis: Optional[Union[Dim, Sequence[Dim]]] = None,
+        key_dim: Optional[Union[Dim, Sequence[Dim]]] = None,
+    ) -> None:
+        """param assign"""
+        raw_param = param.raw_tensor
+        assert isinstance(raw_param, torch.nn.Parameter)
+        key_raw, res_dims = _utils.strided_slice_raw_key(param, axis, key, key_dim)
+        value_raw = value.copy_compatible_to_dims_raw(res_dims)
+        with torch.no_grad():
+            if op == "assign":
+                raw_param[key_raw] = value_raw
+            elif op == "add":
+                raw_param[key_raw] += value_raw
             else:
                 raise ValueError(f"Parameter {param} assign: Unsupported op: {op}")
 

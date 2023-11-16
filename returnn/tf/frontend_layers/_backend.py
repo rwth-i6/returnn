@@ -542,13 +542,11 @@ class ReturnnLayersBackend(Backend[Layer]):
             param.raw_tensor.layer_dict["trainable"] = False
 
     @staticmethod
-    def parameter_assign(
-        param: rf.Parameter, value: Tensor, *, op: str = "assign", key: Optional[rf.ItemKeyType] = None
-    ) -> None:
+    def parameter_assign(param: rf.Parameter, value: Tensor, *, op: str = "assign") -> None:
         """param assign"""
         from .parameter_assign import parameter_assign
 
-        parameter_assign(param=param, value=value, op=op, key=key)
+        parameter_assign(param=param, value=value, op=op)
 
     @staticmethod
     def convert_to_tensor(
