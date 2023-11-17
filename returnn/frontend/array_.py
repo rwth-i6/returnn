@@ -367,11 +367,13 @@ def masked_select(
     return tensor._raw_backend.masked_select(tensor, mask=mask, dims=dims, out_dim=out_dim)
 
 
-def sequence_mask(dims: Sequence[Dim], *, device: Optional[str] = None) -> Tensor:
+def sequence_mask(dims: Union[Dim, Sequence[Dim]], *, device: Optional[str] = None) -> Tensor:
     """
     :param dims:
     :param device:
     """
+    if isinstance(dims, Dim):
+        dims = [dims]
     assert len(dims) > 0
     dyn_dims = [d for d in dims if d.need_masking()]
     assert len(dyn_dims) == 1  # not implemented otherwise yet...
