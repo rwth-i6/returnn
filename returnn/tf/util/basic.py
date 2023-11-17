@@ -181,14 +181,16 @@ def transform_param_axes_split_info_to_new_shape(axes_split_info, new_shape, deb
             while sum([d is None for d in new_parts]) > 1:
                 # More than one entry is ambiguous. Assume the next one stayed the same.
                 j = [d is None for d in new_parts].index(True)
-                new_parts[j] = parts[j]
+                current_assigned = sum([d for d in new_parts if d is not None])
+                remaining = new_dim - current_assigned
+                new_parts[j] = min(parts[j], remaining)
             j = [d is None for d in new_parts].index(True)
             new_parts[j] = new_dim - sum([d for d in new_parts if d is not None])
-            assert new_parts[j] > 0, debug_name
+            assert new_parts[j] >= 0, debug_name
         elif sum(new_parts) != new_dim:
             # another heuristic. assume that the first is wrong.
             new_parts[0] = new_dim - sum(new_parts[1:])
-            assert new_parts[0] > 0, debug_name
+            assert new_parts[0] >= 0, debug_name
         assert sum(new_parts) == new_dim, debug_name
         new_axes_split_info.append(new_parts)
     return new_axes_split_info
