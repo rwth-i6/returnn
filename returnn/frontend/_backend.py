@@ -1039,6 +1039,19 @@ class Backend(Generic[T]):
         raise NotImplementedError
 
     @staticmethod
+    def masked_scatter(source: Tensor, *, mask: Tensor, dims: Sequence[Dim], in_dim: Dim) -> Tensor:
+        """
+        The inverse of :func:`masked_select`.
+
+        :param source: [in_dim, F...]
+        :param mask: [dims...] -> bool (e.g. [B,T])
+        :param dims: the order of the dims defines the format. those dims should be exactly the dims of the mask.
+        :param in_dim: the dim of the source which should be scattered into the mask.
+        :return: [dims..., F...]
+        """
+        raise NotImplementedError
+
+    @staticmethod
     def batch_norm(
         source: Tensor,
         *,
