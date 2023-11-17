@@ -3564,6 +3564,10 @@ def test_transform_param_axes_split_info_to_new_shape():
         transform_param_axes_split_info_to_new_shape([[1000, 621, 1280], [1000]], (2645, 1000)),
         [[1000, 621, 1024], [1000]],
     )
+    assert_equal(
+        transform_param_axes_split_info_to_new_shape([[512, 128, 32], [544]], (512, 544)),
+        [[512, 0, 0], [544]],
+    )
 
 
 def test_get_op_attrib_keys():
