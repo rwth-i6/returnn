@@ -644,7 +644,7 @@ class TorchBackend(Backend[torch.Tensor]):
             dtype=TorchBackend.as_dtype_raw(tensor.dtype),
             device=device or rf.get_default_device(),
         )
-        if tensor.dtype.startswith("int"):
+        if tensor.dtype.startswith("int") or tensor.dtype == "bool":
             requires_grad = False
         else:
             requires_grad = True
