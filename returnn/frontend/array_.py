@@ -397,6 +397,7 @@ def pack_padded(
     """
     assert not enforce_sorted  # not implemented yet...
     mask = rf.sequence_mask(dims, device=source.device)
+    assert mask.dims_set == set(dims)
     return rf.masked_select(source, mask=mask, dims=dims, out_dim=out_dim)
 
 
