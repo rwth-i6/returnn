@@ -51,7 +51,7 @@ class Embedding(rf.Module):
         self.in_dim = in_dim
         self.out_dim = out_dim
         self.weight = rf.Parameter((rf.dim_match_priority_when_needed(self.in_dim, self.out_dim), self.out_dim))
-        self.weight.initial = rf.init.Glorot()
+        self.weight.initial = rf.init.Glorot()  # TODO this is non-standard, maybe suboptimal, check this...
 
     def __call__(self, source: Tensor) -> Tensor:
         if not isinstance(source, Tensor):
