@@ -1380,12 +1380,10 @@ class TorchBackend(Backend[torch.Tensor]):
         """
         assert mask.dtype == "bool"
         assert set(mask.dims) == set(dims)
-        assert set(mask.dims).issubset(set(tensor.dims))
         remaining_dims = [d for d in tensor.dims if d not in mask.dims]
         tensor_templ_dims = tuple(dims) + tuple(remaining_dims)
-        tensor = tensor.copy_transpose(tensor_templ_dims)
+        in_raw = tensor.copy_compatible_to_dims_raw(tensor_templ_dims)
         mask_raw = mask.copy_compatible_to_dims_raw(tensor_templ_dims)
-        in_raw = tensor.raw_tensor
         # We have a very strange problem with the gradient of masked_select,
         # when used together with some specific other operations before that,
         # like convolution.
