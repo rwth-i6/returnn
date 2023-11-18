@@ -11,7 +11,13 @@ from ._backend import get_backend_by_tensor, global_backend
 
 T = TypeVar("T")
 
-__all__ = ["range_over_dim", "replace_dim", "dim_match_priority_when_needed", "num_elements_of_shape"]
+__all__ = [
+    "range_over_dim",
+    "range_over_dims",
+    "replace_dim",
+    "dim_match_priority_when_needed",
+    "num_elements_of_shape",
+]
 
 
 def range_over_dim(dim: Dim, *, dtype: Optional[str] = None, device: Optional[str] = None) -> Tensor[T]:
@@ -26,6 +32,26 @@ def range_over_dim(dim: Dim, *, dtype: Optional[str] = None, device: Optional[st
     else:
         backend = global_backend
     return backend.range_over_dim(dim, dtype=dtype, device=device)
+
+
+def range_over_dims(dims: Sequence[Dim], *, dtype: Optional[str] = None, device: Optional[str] = None) -> Tensor[T]:
+    """
+    This is if you want to index into a merged dim.
+    Related: :func:`rf.merge_dims`.
+
+    :param dims:
+    :param dtype:
+    :param device:
+    :return: tensor with shape [dim_0, ..., dim_n] -> sparse_dim = merged_dim, where merged_dim = dim_0 * ... * dim_n
+    """
+    assert len(dims) >= 1
+    merged_dim = dims[0]
+    for dim in dims[1:]:
+        merged_dim *= dim
+    indices = rf.range_over_dim(merged_dim, dtype=dtype, device=device)
+    if len(dims) > 1:
+        indices = rf.split_dims(indices, axis=merged_dim, dims=dims)
+    return indices
 
 
 def replace_dim(source: Tensor, *, in_dim: Dim, out_dim: Optional[Dim] = None) -> Tuple[Tensor, Dim]:
