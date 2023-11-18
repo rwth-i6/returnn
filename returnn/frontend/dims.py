@@ -56,6 +56,8 @@ def range_over_dims(dims: Sequence[Dim], *, dtype: Optional[str] = None, device:
 
 def replace_dim(source: Tensor, *, in_dim: Dim, out_dim: Optional[Dim] = None) -> Tuple[Tensor, Dim]:
     """
+    Also see: :func:`rf.merge_dims`, :func:`rf.split_dims`.
+
     :param source:
     :param in_dim:
     :param out_dim:

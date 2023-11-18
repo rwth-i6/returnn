@@ -150,6 +150,8 @@ def merge_dims(
     E.g. input is (batch, width, height, dim) and dims=(width,height), then we get (batch, width*height, dim).
     Or input is (batch, time, height, dim) and axes=(height,dim), then we get (batch, time, height*dim).
 
+    :func:`rf.split_dims` is the reverse operation.
+
     :param source:
     :param dims:
     :param out_dim:
@@ -183,8 +185,7 @@ def split_dims(
     the given padding value.
     Use :class:`ReinterpretDataLayer` to receive back the original sequence lengths after merging.
 
-    Also see :class:`SplitBatchTimeLayer`.
-    Also see :class:`MergeDimsLayer` which can undo this operation.
+    Also see :func:`rf.merge_dims` which can undo this operation.
 
     :param source:
     :param axis: e.g. "F"
