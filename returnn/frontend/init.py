@@ -11,6 +11,9 @@ import math
 from .. import frontend as rf
 
 
+__all__ = ["ParamInit", "ParamInitType", "Normal", "VarianceScaling", "Glorot", "He", "HeNormal", "HeUniform"]
+
+
 class ParamInit:
     """API for param init"""
 
@@ -27,6 +30,40 @@ class ParamInit:
 
 
 ParamInitType = Union[Tensor, rf.RawTensorTypes, ParamInit]
+
+
+class Normal(ParamInit):
+    def __init__(self, stddev: float, *, truncated: bool = True, dtype: str = None):
+        self.stddev = stddev
+        self.truncated = truncated
+        if dtype is None:
+            dtype = rf.get_default_float_dtype()
+        self.dtype = dtype
+        if self.stddev <= 0.0:
+            raise ValueError(f"Argument `stddev` must be a positive float. Received: {self.stddev}")
+
+    def __call__(
+        self,
+        dims: Sequence[Dim],
+        dtype: str,
+        *,
+        sparse_dim: Optional[Dim] = None,
+        device: Optional[str] = None,
+        out: Optional[Tensor] = None,
+    ) -> Tensor:
+        if dtype is None:
+            dtype = self.dtype
+        return rf.random(
+            distribution="truncated_normal" if self.truncated else "normal",
+            static=True,
+            dims=dims,
+            mean=0.0,
+            stddev=self.stddev,
+            dtype=dtype,
+            sparse_dim=sparse_dim,
+            device=device,
+            out=out,
+        )
 
 
 class VarianceScaling(ParamInit):
