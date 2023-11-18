@@ -885,6 +885,28 @@ class Backend(Generic[T]):
         raise NotImplementedError
 
     @staticmethod
+    def scatter(
+        source: Tensor,
+        *,
+        indices: Tensor,
+        indices_dim: Union[Dim, Sequence[Dim]],
+        out_dim: Union[Dim, Sequence[Dim]],
+    ) -> Tensor:
+        """
+        Scatters into new zero-tensor.
+        If entries in indices are duplicated, the corresponding values in source will be added together
+        (scatter_add in PyTorch).
+        (TF segment_sum can be implemented via this.)
+
+        :param source: [batch_dims..., indices_dim(s)..., feature_dims...]
+        :param indices: [batch_dims..., indices_dim(s)...] -> out_dim
+        :param indices_dim:
+        :param out_dim:
+        :return: [batch_dims..., out_dim, feature_dims...]
+        """
+        raise NotImplementedError
+
+    @staticmethod
     def slice(
         source: Tensor,
         *,

@@ -925,6 +925,75 @@ class TorchBackend(Backend[torch.Tensor]):
         return out
 
     @staticmethod
+    def scatter(
+        source: Tensor,
+        *,
+        indices: Tensor,
+        indices_dim: Union[Dim, Sequence[Dim]],
+        out_dim: Union[Dim, Sequence[Dim]],
+    ) -> Tensor:
+        """
+        Scatters into new zero-tensor.
+        If entries in indices are duplicated, the corresponding values in source will be added together
+        (scatter_add in PyTorch).
+        (TF segment_sum can be implemented via this.)
+
+        :param source: [batch_dims..., indices_dim(s)..., feature_dims...]
+        :param indices: [batch_dims..., indices_dim(s)...] -> out_dim
+        :param indices_dim:
+        :param out_dim:
+        :return: [batch_dims..., out_dim, feature_dims...]
+        """
+        if isinstance(indices_dim, Dim):
+            indices_dim = [indices_dim]
+        else:
+            assert len(indices_dim) >= 1
+            indices_dim = list(indices_dim)
+        assert indices.dtype.startswith("int")
+        if isinstance(out_dim, Dim):
+            out_flat_dim = out_dim
+            out_dim = [out_dim]
+        elif len(out_dim) == 1:
+            out_flat_dim = out_dim[0]
+            out_dim = [out_flat_dim]
+        else:
+            assert len(out_dim) > 1
+            out_flat_dim = out_dim[0]
+            for dim in out_dim[1:]:
+                out_flat_dim = out_flat_dim * dim
+            out_dim = list(out_dim)
+        batch_dims = indices.remaining_dims(indices_dim)
+        feature_dims = source.remaining_dims(batch_dims + indices_dim)
+        if len(indices_dim) > 1:
+            indices, indices_flat_dim = rf.merge_dims(indices, dims=indices_dim)
+            source, _ = rf.merge_dims(source, dims=indices_dim, out_dim=indices_flat_dim)
+        else:
+            indices_flat_dim = indices_dim[0]
+        source = source.copy_transpose(batch_dims + [indices_flat_dim] + feature_dims)
+        indices = indices.copy_compatible_to(
+            # scatter_add_ does not support broadcasting, and expects indices and source to have the same number of dims
+            source,
+            unbroadcast=True,
+            add_dims=True,
+            check_sparse=False,
+            check_dtype=False,
+        )
+        out_dims = batch_dims + [out_flat_dim] + feature_dims
+        out_shape = [d.get_dim_value() for d in out_dims]
+        out_raw = torch.zeros(out_shape, dtype=source.raw_tensor.dtype, device=source.raw_tensor.device)
+        out_raw.scatter_add_(dim=len(batch_dims), index=indices.raw_tensor.to(torch.int64), src=source.raw_tensor)
+        res = Tensor(
+            "scatter",
+            dims=out_dims,
+            dtype=source.dtype,
+            sparse_dim=source.sparse_dim,
+            raw_tensor=out_raw,
+        )
+        if len(out_dim) > 1:
+            res = rf.split_dims(res, axis=out_flat_dim, dims=out_dim)
+        return res
+
+    @staticmethod
     def slice(
         source: Tensor,
         *,

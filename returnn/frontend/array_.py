@@ -32,6 +32,7 @@ __all__ = [
     "sequence_mask",
     "pack_padded",
     "gather",
+    "scatter",
     "slice",
     "shift_right",
     "reverse_sequence",
@@ -439,21 +440,53 @@ def gather(
     The ``indices`` argument can also be an ``int``.
     In this case, this simply gives ``source[indices]`` on the specified ``axis``.
 
-    :param source:
-    :param indices: indices used to select the slices of the source from.
+    :func:`scatter` is the inverse.
+
+    :param source: [batch_dims..., axis, feature_dims...]
+    :param indices: [batch_dims..., indices_dims...] indices used to select the slices of the source from.
         If another tensor, must be of type ``int32`` or ``int64``.
         Can also specify a constant ``int``.
+        Batch dims are automatically determined as the common dims of source and indices.
     :param axis: The axis into which we gather the indices into.
         If not given, indices must be a tensor and the sparse_dim will be used.
     :param clip_to_valid: if True, the indices will be clipped to the valid range of the input
         Also taking seq lengths into account.
-    :return: gathered values
+    :return: [batch_dims..., indices_dims..., feature_dims...] gathered values
     """
     if not axis:
         assert isinstance(indices, Tensor) and indices.sparse_dim
         axis = indices.sparse_dim
     # noinspection PyProtectedMember
     return source._raw_backend.gather(source, indices=indices, axis=axis, clip_to_valid=clip_to_valid)
+
+
+def scatter(
+    source: Tensor,
+    *,
+    indices: Tensor,
+    indices_dim: Union[Dim, Sequence[Dim]],
+    out_dim: Optional[Union[Dim, Sequence[Dim]]] = None,
+) -> Tensor:
+    """
+    Scatters into new zero-tensor.
+    If entries in indices are duplicated, the corresponding values in source will be added together
+    (scatter_add in PyTorch).
+    (TF segment_sum can be implemented via this.)
+
+    :param source: [batch_dims..., indices_dim(s)..., feature_dims...]
+    :param indices: [batch_dims..., indices_dim(s)...] -> out_dim
+    :param indices_dim:
+    :param out_dim: The indices target dim.
+        If not given, will be automatically determined as the sparse_dim from indices.
+        If multiple out dims, use indices into the merged out dims,
+        and then we use :func:`rf.split_dims` afterwards.
+    :return: [batch_dims..., out_dim(s)..., feature_dims...]
+    """
+    if not out_dim:
+        assert isinstance(indices, Tensor) and indices.sparse_dim
+        out_dim = indices.sparse_dim
+    # noinspection PyProtectedMember
+    return source._raw_backend.scatter(source, indices=indices, indices_dim=indices_dim, out_dim=out_dim)
 
 
 # noinspection PyShadowingBuiltins
