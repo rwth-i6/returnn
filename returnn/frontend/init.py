@@ -33,6 +33,13 @@ ParamInitType = Union[Tensor, rf.RawTensorTypes, ParamInit]
 
 
 class Normal(ParamInit):
+    """
+    Initialization by normal distribution (truncated by default),
+    independent of the dimensions (fan in/out).
+
+    See :class:`VarianceScaling` and derivatives for variants which depend on fan in/out.
+    """
+
     def __init__(self, stddev: float, *, truncated: bool = True, dtype: str = None):
         self.stddev = stddev
         self.truncated = truncated
