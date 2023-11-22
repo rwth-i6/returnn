@@ -2182,6 +2182,9 @@ class Engine(EngineBase):
             batch_slice = None
             if tf_horovod.get_ctx() and tf_horovod.get_ctx().is_dataset_distribution_shard():
                 batch_slice = tf_horovod.get_ctx().get_dataset_shard_batch_slice()
+            enforce_multiple = self.config.typed_value("seq_len_enforce_multiple", 1)
+            if not isinstance(enforce_multiple, NumbersDict):
+                enforce_multiple = NumbersDict(enforce_multiple)
             data_provider = FeedDictDataProvider(
                 extern_data=self.network.extern_data,
                 data_keys=self.network.get_used_data_keys(),
@@ -2189,6 +2192,7 @@ class Engine(EngineBase):
                 batches=batches,
                 batch_slice=batch_slice,
                 enforce_min_len1=self.config.is_true("enforce_min_len1", False),
+                enforce_multiple=enforce_multiple,
             )
             return data_provider
 

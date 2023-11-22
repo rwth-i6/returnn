@@ -1493,6 +1493,7 @@ def shapes_for_batches(
     dataset: Optional[Dataset] = None,
     extern_data: Optional[TensorDict],
     enforce_min_len1: bool = False,
+    enforce_multiple: NumbersDict = NumbersDict(1),
 ) -> Optional[Dict[str, List[int]]]:
     """
     :param batches:
@@ -1500,6 +1501,7 @@ def shapes_for_batches(
     :param dataset:
     :param extern_data: detailed data description
     :param enforce_min_len1:
+    :param enforce_multiple:
     """
     assert dataset or extern_data
     all_data_keys = set(data_keys)
@@ -1507,7 +1509,9 @@ def shapes_for_batches(
     # The final device.data.shape is in format (time,batch,feature) in case of Theano.
     shape = [NumbersDict(0), 0]  # time,batch
     for batch in batches:
-        shape = [NumbersDict.max([shape[0], batch.max_num_frames_per_slice]), shape[1] + batch.num_slices]
+        time = NumbersDict.max([shape[0], batch.max_num_frames_per_slice])
+        time += (enforce_multiple - (time % enforce_multiple)) % enforce_multiple
+        shape = [time, shape[1] + batch.num_slices]
     if shape[1] == 0:
         return None
     assert shape[0].max_value() > 0

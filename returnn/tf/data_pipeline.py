@@ -132,6 +132,7 @@ from returnn.tf.network import ExternData
 import returnn.tf.compat as tf_compat
 import returnn.tf.horovod as tf_horovod
 from returnn.log import log
+from returnn.util.basic import NumbersDict
 
 
 class DataProviderBase(object):
@@ -238,6 +239,7 @@ class FeedDictDataProvider(DataProviderBase):
         dataset: Dataset,
         batches: BatchSetGenerator,
         enforce_min_len1: bool = False,
+        enforce_multiple: NumbersDict = NumbersDict(1),
         capacity: int = 10,
         batch_slice: Optional[slice] = None,
         **kwargs,
@@ -246,6 +248,7 @@ class FeedDictDataProvider(DataProviderBase):
         :param dataset:
         :param batches:
         :param enforce_min_len1:
+        :param enforce_multiple:
         :param capacity:
         :param batch_slice: select a subset of the batches
         :param extern_data:
@@ -255,6 +258,7 @@ class FeedDictDataProvider(DataProviderBase):
         self.dataset = dataset
         self.batches = batches
         self.enforce_min_len1 = enforce_min_len1
+        self.enforce_multiple = enforce_multiple
         self.batch_slice = batch_slice
         self.state_change_cond = Condition()
         self.queue = None  # type: typing.Optional[Queue]
@@ -319,7 +323,8 @@ class FeedDictDataProvider(DataProviderBase):
         # This is also what we use here, i.e. batch_dim_first=True.
         # This must match the Data specification in TFNetwork.ExternData.init_from_config().
         shapes = shapes_for_batches(
-            [batch], data_keys=self.data_keys, extern_data=self.extern_data, enforce_min_len1=self.enforce_min_len1
+            [batch], data_keys=self.data_keys, extern_data=self.extern_data, enforce_min_len1=self.enforce_min_len1,
+            enforce_multiple=self.enforce_multiple,
         )
         data = {
             k: numpy.zeros(shape=shapes[k], dtype=self.extern_data.data[k].dtype)
