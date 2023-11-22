@@ -2084,6 +2084,9 @@ class NumbersDict:
     def __bool__(self):
         return any(self.values())
 
+    def __mod__(self, other):
+        return self.bin_op(self, other, op=lambda a, b: a % b, zero=np.inf)
+
     __nonzero__ = __bool__  # Python 2
 
     def elem_eq(self, other, result_with_default=True):
