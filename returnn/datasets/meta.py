@@ -23,6 +23,7 @@ The dataset classes MetaDataset and CombinedDataset which perform these tasks ar
 
 from __future__ import annotations
 
+from typing import List
 from returnn.datasets.basic import Dataset, DatasetSeq, init_dataset, convert_data_dims
 from .cached2 import CachedDataset2
 from returnn.util.basic import NumbersDict, load_json
@@ -532,6 +533,10 @@ class MetaDataset(CachedDataset2):
         :rtype: str
         """
         return self.seq_list_ordered[self.default_dataset_key][sorted_seq_idx]
+
+    def get_data_keys(self) -> List[str]:
+        """data keys"""
+        return sorted(self.data_keys)
 
     def get_target_list(self):
         """
