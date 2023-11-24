@@ -346,7 +346,7 @@ class Engine(EngineBase):
 
             # only update the weights when every gradient accumulation loop ends
             if (step_idx % self._accum_grad_multiple_step) == (self._accum_grad_multiple_step - 1):
-                self._updater.update_params(grad_scaler=self._grad_scaler)
+                self._updater.step(grad_scaler=self._grad_scaler)
 
             elapsed_computation_time += time.time() - step_begin_time
 

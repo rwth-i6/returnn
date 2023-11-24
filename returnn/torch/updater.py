@@ -177,7 +177,7 @@ class Updater(object):
         self._current_epoch = epoch
         self._update_effective_learning_rate()
 
-    def update_params(self, *, grad_scaler: Optional[torch.cuda.amp.GradScaler] = None):
+    def step(self, *, grad_scaler: Optional[torch.cuda.amp.GradScaler] = None):
         """
         Perform one step, i.e. update the parameters using the optimizer given the current calculated gradients.
         """
