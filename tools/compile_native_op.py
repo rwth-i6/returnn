@@ -57,10 +57,10 @@ def main(argv):
     """
     Main entry.
     """
-    from returnn.tf.util.basic import CudaEnv, NativeCodeCompiler
+    from returnn.tf.util.basic import CudaEnv, OpCodeCompiler
 
     CudaEnv.verbose_find_cuda = True
-    NativeCodeCompiler.CollectedCompilers = []
+    OpCodeCompiler.CollectedCompilers = []
 
     argparser = argparse.ArgumentParser(description="Compile some op")
     argparser.add_argument("--config", help="filename to config-file")
@@ -106,8 +106,8 @@ def main(argv):
     elif OpMaker.with_cuda is False:
         print("No CUDA.")
 
-    for compiler in NativeCodeCompiler.CollectedCompilers:
-        assert isinstance(compiler, NativeCodeCompiler)
+    for compiler in OpCodeCompiler.CollectedCompilers:
+        assert isinstance(compiler, OpCodeCompiler)
         print(compiler)
         # noinspection PyProtectedMember
         libs.append(compiler._so_filename)
