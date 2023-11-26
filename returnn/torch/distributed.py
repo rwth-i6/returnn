@@ -11,6 +11,7 @@ import socket
 from contextlib import contextmanager
 import torch
 from torch.distributed.algorithms.join import Join
+from torch.nn.parallel import DistributedDataParallel
 
 from returnn.config import Config
 import returnn.frontend as rf
@@ -124,7 +125,7 @@ def _find_tensors(obj):
 
 
 @contextmanager
-def ddp_train_forward_ctx(pt_model):
+def ddp_train_forward_ctx(pt_model: DistributedDataParallel):
     """
     the original (unwrapped) module is passed to the train step, therefore here we set up the right context
     as what DistributedDataParallel.forward does internally
