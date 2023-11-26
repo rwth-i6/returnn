@@ -182,16 +182,6 @@ class Log:
         logs = config.list("log", [])
         log_verbosity = config.int_list("log_verbosity", [])
         log_format = config.list("log_format", [])
-        if config.is_true("use_horovod"):
-            import returnn.tf.horovod
-
-            hvd = returnn.tf.horovod.get_ctx(config=config)
-            new_logs = []
-            for fn in logs:
-                fn_prefix, fn_ext = os.path.splitext(fn)
-                fn_ext = ".horovod-%i-%i%s" % (hvd.rank(), hvd.size(), fn_ext)
-                new_logs.append(fn_prefix + fn_ext)
-            logs = new_logs
 
         if config.typed_value("torch_distributed") is not None:
             import returnn.torch.distributed
@@ -201,6 +191,19 @@ class Log:
             for fn in logs:
                 fn_prefix, fn_ext = os.path.splitext(fn)
                 fn_ext = ".torch-distrib-%i-%i%s" % (torch_distributed.rank(), torch_distributed.size(), fn_ext)
+                new_logs.append(fn_prefix + fn_ext)
+            logs = new_logs
+
+        elif config.is_true("use_horovod"):
+            assert config.bool("use_tensorflow", False) or config.value("backend", "").startswith("tensorflow")
+
+            import returnn.tf.horovod
+
+            hvd = returnn.tf.horovod.get_ctx(config=config)
+            new_logs = []
+            for fn in logs:
+                fn_prefix, fn_ext = os.path.splitext(fn)
+                fn_ext = ".horovod-%i-%i%s" % (hvd.rank(), hvd.size(), fn_ext)
                 new_logs.append(fn_prefix + fn_ext)
             logs = new_logs
 
