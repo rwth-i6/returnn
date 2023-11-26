@@ -558,7 +558,7 @@ class Engine(EngineBase):
         from returnn.torch.distributed import ddp_train_forward_ctx
 
         with autocast(
-            device_type=self._device, dtype=self._autocast_dtype
+            device_type=self._device.split(":")[0], dtype=self._autocast_dtype
         ) if self._use_autocast else nullcontext(), ddp_train_forward_ctx(pt_model=self._ddp_pt_model) if isinstance(
             self._ddp_pt_model, DistributedDataParallel
         ) else nullcontext(), rf.set_default_device_ctx(
