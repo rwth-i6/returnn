@@ -48,6 +48,8 @@ class MultiProcDataset(CachedDataset2):
         for k, v in kwargs.items():
             if k not in dataset:
                 dataset[k] = v
+        if "random_seed_offset" not in dataset:
+            dataset["random_seed_offset"] = self.random_seed_offset
         self.dataset = dataset
         self.num_workers = num_workers
         self.buffer_size = buffer_size
