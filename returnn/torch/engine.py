@@ -1057,6 +1057,11 @@ class _WrappedModuleRunStep(torch.nn.Module):
         self.engine = engine
 
     def forward(self, *args, **kwargs):
+        """
+        Call run step function (train_step or forward_step).
+
+        :return: all produced raw tensors via the run context (:func:`rf.get_run_ctx`).
+        """
         # noinspection PyProtectedMember
         self.engine._run_step(*args, **kwargs, _inside_wrapped=True)
 

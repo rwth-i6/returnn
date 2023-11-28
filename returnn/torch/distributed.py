@@ -8,13 +8,9 @@ from typing import Optional
 import os
 import socket
 
-from contextlib import contextmanager
 import torch
-from torch.distributed.algorithms.join import Join
-from torch.nn.parallel import DistributedDataParallel
 
 from returnn.config import Config
-import returnn.frontend as rf
 
 
 class DistributedContext:
