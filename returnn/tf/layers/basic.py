@@ -6120,6 +6120,7 @@ class ConvLayer(_ConcatInputLayer):
         filter_perm=None,
         bias=None,
         use_time_mask=False,
+        pad_seq_len_to_power=None,
         **kwargs,
     ):
         """
@@ -6158,6 +6159,8 @@ class ConvLayer(_ConcatInputLayer):
         :param dict[str,str]|None filter_perm: transposes the filter (input filter as layer)
         :param LayerBase|None bias: if given, will not create an own parameter, but use this as the bias
         :param bool use_time_mask:
+        :param Optional[float] pad_seq_len_to_power: pad seq len to power of given number to reduce number of different
+            seq lens. See RETURNN #1450 and https://github.com/tensorflow/tensorflow/issues/62441.
         """
         from returnn.util import BehaviorVersion
 
@@ -6301,6 +6304,21 @@ class ConvLayer(_ConcatInputLayer):
         else:
             x = input_data.placeholder
 
+        if pad_seq_len_to_power is not None:
+            padding_for_power = []
+            for ax in range(input_data.batch_ndim):
+                if input_data.is_axis_dynamic(ax):
+                    seq_len = tf.cast(tf.shape(x)[input_data.time_dim_axis], tf.float32)
+                    pad_seq_len_to_power = float(pad_seq_len_to_power)
+                    padded_len = tf.math.ceil(
+                        pad_seq_len_to_power ** (tf.math.ceil(tf.math.log(seq_len) / tf.math.log(pad_seq_len_to_power))) -
+                        seq_len
+                    )
+                    padding_for_power.append((0, padded_len))
+                else:
+                    padding_for_power.append((0, 0))
+            x = tf.pad(x, padding_for_power)
+
         extended_batch_shape = None
         if num_batch_dims > 1:
             x_shape = tf.shape(x)
@@ -6361,6 +6379,11 @@ class ConvLayer(_ConcatInputLayer):
             )
         if num_batch_dims > 1:
             y = tf.reshape(y, tf.concat([extended_batch_shape, tf.shape(y)[1:]], axis=0))
+
+        if pad_seq_len_to_power is not None:
+            for ax in self.output.get_dynamic_axes():
+                y = tf.gather(y, tf.range(tf.reduce_max(self.output.get_dynamic_size(ax))), axis=ax)
+
         # y shape is [batch] + dynamic_dims + [n_out].
         if with_bias is NotSpecified:
             if bias or BehaviorVersion.get() >= 10:
