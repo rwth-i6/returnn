@@ -139,9 +139,13 @@ class TorchBackend(Backend[torch.Tensor]):
     @staticmethod
     def get_device(x: Tensor[torch.Tensor]) -> Optional[str]:
         """device"""
-        if x.raw_tensor is None:
+        raw_tensor: torch.Tensor = x.raw_tensor
+        if raw_tensor is None:
             return None
-        return x.raw_tensor.device.type
+        dev = raw_tensor.device
+        if dev.index is None:
+            return dev.type
+        return f"{dev.type}:{dev.index}"
 
     @staticmethod
     def copy_to_device(x: Tensor, device: Optional[str]) -> Tensor:
