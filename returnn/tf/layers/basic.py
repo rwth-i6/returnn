@@ -6160,7 +6160,8 @@ class ConvLayer(_ConcatInputLayer):
         :param LayerBase|None bias: if given, will not create an own parameter, but use this as the bias
         :param bool use_time_mask:
         :param Optional[float] pad_seq_len_to_power: pad seq len to power of given number to reduce number of different
-            seq lens. See RETURNN #1450 and https://github.com/tensorflow/tensorflow/issues/62441.
+            seq lens. See https://github.com/rwth-i6/returnn/issues/1450 and
+            https://github.com/tensorflow/tensorflow/issues/62441.
         """
         from returnn.util import BehaviorVersion
 
