@@ -6380,8 +6380,13 @@ class ConvLayer(_ConcatInputLayer):
             y = tf.reshape(y, tf.concat([extended_batch_shape, tf.shape(y)[1:]], axis=0))
 
         if pad_seq_len_to_power is not None:
-            for ax in self.output.get_dynamic_axes():
-                y = tf.gather(y, tf.range(tf.reduce_max(self.output.get_dynamic_size(ax))), axis=ax)
+            slice_size = []
+            for ax in range(self.output.batch_ndim):
+                if self.output.is_axis_dynamic(ax):
+                    slice_size.append(tf.reduce_max(self.output.get_dynamic_size(ax)))
+                else:
+                    slice_size.append(tf.shape(y)[ax])
+            y = tf.slice(y, begin=[0] * len(slice_size), size=slice_size)
 
         # y shape is [batch] + dynamic_dims + [n_out].
         if with_bias is NotSpecified:
