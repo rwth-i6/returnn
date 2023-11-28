@@ -979,7 +979,7 @@ def _print_process(
             dev = torch.device(log_memory_usage_device)
             if dev.type == "cuda":
                 info += [
-                    f"mem_usage:{log_memory_usage_device} {util.human_bytes_size(torch.cuda.max_memory_allocated())}"
+                    f"mem_usage:{log_memory_usage_device} {util.human_bytes_size(torch.cuda.max_memory_allocated(dev))}"
                 ]
         print(", ".join(filter(None, info)), file=log.v5)
 
