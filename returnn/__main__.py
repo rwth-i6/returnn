@@ -353,6 +353,15 @@ def init_backend_engine():
 
         diagnose_gpu.print_available_devices(file=log.v2)
 
+        if config.is_true("use_lovely_tensors"):
+            try:
+                # noinspection PyUnresolvedReferences,PyPackageRequirements
+                import lovely_tensors
+
+                lovely_tensors.monkey_patch()
+            except ImportError as exc:
+                print("Warning: could not import lovely_tensors:", exc, file=log.v3)
+
     else:
         raise NotImplementedError(f"Backend engine {BackendEngine.get_selected_engine()} not implemented")
 
