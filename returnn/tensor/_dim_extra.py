@@ -861,8 +861,7 @@ class _DimMixin:
         # Thus, mask size_ext itself, and set the padded values to 1.
         # This assumes that max_idx >= 1.
         size_ext = size_ext.copy_masked(max_idx)
-        with rf.set_default_device_ctx(device):
-            idx_range = backend.range_over_dim(self)
+        idx_range = backend.range_over_dim(self, device=device)
         seq_mask = rf.compare(idx_range, "<", size_ext, allow_broadcast_all_sources=True, dim_order=dim_order)
         self._extra.cache_seq_mask[cache_key] = seq_mask
         return seq_mask
