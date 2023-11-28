@@ -6308,13 +6308,12 @@ class ConvLayer(_ConcatInputLayer):
             padding_for_power = []
             for ax in range(input_data.batch_ndim):
                 if input_data.is_axis_dynamic(ax):
-                    seq_len = tf.cast(tf.shape(x)[input_data.time_dim_axis], tf.float32)
+                    seq_len = tf.cast(tf.shape(x)[ax], tf.float32)
                     pad_seq_len_to_power = float(pad_seq_len_to_power)
                     padded_len = tf.math.ceil(
-                        pad_seq_len_to_power ** (tf.math.ceil(tf.math.log(seq_len) / tf.math.log(pad_seq_len_to_power))) -
-                        seq_len
+                        pad_seq_len_to_power ** (tf.math.ceil(tf.math.log(seq_len) / tf.math.log(pad_seq_len_to_power)))
                     )
-                    padding_for_power.append((0, padded_len))
+                    padding_for_power.append((0, padded_len - seq_len))
                 else:
                     padding_for_power.append((0, 0))
             x = tf.pad(x, padding_for_power)
