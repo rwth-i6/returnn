@@ -196,7 +196,9 @@ class Engine(EngineBase):
 
             # wrap the model use torch distributed class
             self._ddp_pt_model = self._torch_distributed_class(
-                self._pt_model, device_ids=get_device_ids(), **self._torch_distributed_options
+                module=_WrappedModuleRunStep(module=self._pt_model, engine=self),
+                device_ids=get_device_ids(),
+                **self._torch_distributed_options,
             )
         self._updater = Updater(
             config=self.config, network=self._pt_model, device=self._device, initial_learning_rate=self.learning_rate
@@ -542,10 +544,17 @@ class Engine(EngineBase):
             **loader_opts,
         )
 
-    def _run_step(self, extern_data: TensorDict, *, train_flag: bool = False, train_func: bool):
+    def _run_step(
+        self, extern_data: TensorDict, *, train_flag: bool = False, train_func: bool, _inside_wrapped: bool = False
+    ):
         """
         :param extern_data: model inputs for the step
+        :return: Nothing, all outputs are written to the run context (:func:`rf.get_run_ctx`).
         """
+        if self._ddp_pt_model is not None and not _inside_wrapped:
+            self._ddp_pt_model(extern_data=extern_data, train_flag=train_flag, train_func=train_func)
+            return
+
         if train_func:
             assert self._train_step_func is not None
             rf.init_train_step_run_ctx(train_flag=train_flag, step=self.global_train_step)
@@ -555,15 +564,9 @@ class Engine(EngineBase):
                 expected_outputs=self._forward_step_expected_outputs, step=self.global_train_step
             )
 
-        from returnn.torch.distributed import ddp_train_forward_ctx
-
         with autocast(
             device_type=self._device.split(":")[0], dtype=self._autocast_dtype
-        ) if self._use_autocast else nullcontext(), ddp_train_forward_ctx(pt_model=self._ddp_pt_model) if isinstance(
-            self._ddp_pt_model, DistributedDataParallel
-        ) else nullcontext(), rf.set_default_device_ctx(
-            self._device
-        ):
+        ) if self._use_autocast else nullcontext(), rf.set_default_device_ctx(self._device):
             sentinel_kw = {"__fwd_compatible_random_arg_%i" % int(random() * 100): None}
             if train_func:
                 self._train_step_func(model=self._orig_model, extern_data=extern_data, **sentinel_kw)
@@ -1038,3 +1041,33 @@ def _data_loader_worker_init_func(worker_id: int):
     if sys.platform == "linux":
         with open("/proc/self/comm", "w") as f:
             f.write(f"TDL worker {worker_id}")
+
+
+class _WrappedModuleRunStep(torch.nn.Module):
+    """
+    Wraps any Torch module (pure or RF),
+    and the `forward` function calls the run step function (train_step or forward_step)
+    and returns all produced raw tensors via the run context (losses or outputs) (:func:`rf.get_run_ctx`).
+    This is useful to use the API of DistributedDataParallel and potentially other PyTorch modules.
+    """
+
+    def __init__(self, *, module: torch.nn.Module, engine: Engine):
+        super().__init__()
+        self.module = module
+        self.engine = engine
+
+    def forward(self, *args, **kwargs):
+        # noinspection PyProtectedMember
+        self.engine._run_step(*args, **kwargs, _inside_wrapped=True)
+
+        # Note that we don't directly use the returned raw values here,
+        # but the PyTorch API might,
+        # e.g. DistributedDataParallel checks it to collect all gradients.
+        # We will use rf.get_run_ctx() later again in the engine to access these values.
+        res = {}
+        ctx = rf.get_run_ctx()
+        for name, out in ctx.outputs.data.items():
+            res["output/" + name] = out.raw_tensor
+        for name, loss in ctx.losses.items():
+            res["loss/" + name] = loss.loss.raw_tensor
+        return res
