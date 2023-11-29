@@ -9,6 +9,24 @@ The worst situation is that training and inference works but the scores are just
 It's simpler if it does not even start because of some error.
 Here I will outline several useful options, and methods in general.
 
+Random config options which can be enabled without loosing performance:
+
+* ``log_verbosity = 5``: Increases log verbosity.
+  This will enable printing loss and other info per each individual batch.
+* ``log_batch_size = True``: Logs individual batch sizes (requires log verbosity 5).
+* ``tf_log_memory_usage``: TF: Log device (GPU) memory usage, per batch and also summary.
+* ``torch_log_memory_usage``: PT: Log device (GPU) memory usage, per batch and also summary.
+* ``use_lovely_tensors = True``:
+  PT: Apply the `lovely tensors <https://github.com/xl0/lovely-tensors>`__ monkey patch for ``torch.Tensor.__repr__``
+* ``watch_memory = True``: Enables background CPU memory usage (RSS, PSS, USS) logging per subprocess.
+* ``startup_callback``: Function callback, will run early at init,
+  can be used to setup potential other debugging utilities.
+
+Random config options which will cause slower training or require more memory:
+
+* ``debug_add_check_numerics_ops = True``: See below.
+* ``debug_add_check_numerics_on_output = True``: See below.
+
 
 Test case
 ---------
@@ -84,12 +102,14 @@ can be even more helpful.
 For that, it might be useful to have setup a small toy example
 which you can easily start on your local computer.
 
+Also see `Remote Development and Debugging <https://github.com/rwth-i6/returnn/wiki/Remote-Development-and-Debugging>`__.
 
-Shapes and :class:`Data`
-------------------------
+
+Shapes and :class:`Tensor`
+--------------------------
 
 There is ``debug_print_layer_output_template`` which can always be enabled,
-as it only prints additional information about the shape and :class:`Data`
+as it only prints additional information about the shape and :class:`Tensor`
 for every layer at startup time, so it does not add any cost at runtime.
 This is very helpful, as you can go through that information to double check
 whether the output shape/type of each layer is as expected.
@@ -175,6 +195,8 @@ In many other cases, this can be hard, though.
 Measure things. Whatever you think is in some way useful, or gives you a hint
 whether it is doing the correct thing or not.
 
+Also see `Analysing neural networks <https://github.com/rwth-i6/returnn/wiki/Analysing-neural-networks>`__.
+
 
 Python exception
 ----------------
@@ -201,7 +223,6 @@ Crash
 E.g. segmentation fault (segfault, SIGSEGV).
 
 RETURNN uses the :mod:`faulthandler` Python module
-to provide a stack trace of the Python calls.
-
-You can set the env var ``DEBUG_SIGNAL_HANDLER``,
-which will load libSegFault.so.
+to provide a stack trace of the Python calls
+and also installs a native signal handler
+to provide a native stack trace (including e.g. native PyTorch or TensorFlow code).
