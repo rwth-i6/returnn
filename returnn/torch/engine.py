@@ -108,12 +108,19 @@ class Engine(EngineBase):
             print(f"Start running torch distributed training on local rank {local_rank}.", file=log.v2)
             assert self._device == "cuda", f"torch distributed: unexpected device {self._device!r}"
             self._device = f"cuda:{local_rank}"
-            torch.cuda.set_device(local_rank)
 
-        # Theano and TensorFlow print sth like: Using gpu device 2: GeForce GTX 980 (...)
-        # Print in a similar format so that some scripts which grep our stdout work just as before.
-        if self._device.startswith("cuda"):
+        if self._device == "cuda" or self._device.startswith("cuda:"):
+            # Theano and TensorFlow print sth like: Using gpu device 2: GeForce GTX 980 (...)
+            # Print in a similar format so that some scripts which grep our stdout work just as before.
             diagnose_gpu.print_using_cuda_device_report(self._device, file=log.v2)
+
+            # There is potentially lots of code which would use the default CUDA device,
+            # even sometimes ignoring the input device.
+            # For example, DistributedDataParallel _verify_param_shape_across_processes does that
+            # (https://github.com/rwth-i6/returnn/issues/1469 https://github.com/pytorch/pytorch/issues/114765).
+            # The user code potentially also just uses "cuda" as device, which would use the default device.
+            # Thus, to be on the safe side, we set the default device to the one we want to use.
+            torch.cuda.set_device(self._device)
 
         self._log_memory_usage = config.bool("torch_log_memory_usage", False)
 
