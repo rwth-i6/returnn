@@ -1,8 +1,22 @@
 .. _multi_gpu:
 
-==================
-Multi GPU training
-==================
+See `our wiki for an overview of possible distributed training variants <https://github.com/rwth-i6/returnn/wiki/Distributed-training-experience>`__.
+
+
+===============================
+Multi GPU training with PyTorch
+===============================
+
+Main configuration option is ``torch_distributed``.
+
+Example: Just put ``torch_distributed = {}`` into the config. This will by default use PyTorch ``DistributedDataParallel``.
+
+See `our wiki on distributed PyTorch <https://github.com/rwth-i6/returnn/wiki/Distributed-PyTorch>`__.
+
+
+==================================
+Multi GPU training with TensorFlow
+==================================
 
 This is about multi GPU training with the TensorFlow backend.
 
@@ -23,7 +37,6 @@ Please refer to `our wiki for an overview of distributed TensorFlow <https://git
 
 Also see :mod:`returnn.tf.distributed`.
 
-See `our wiki for an overview of possible distributed training variants <https://github.com/rwth-i6/returnn/wiki/Distributed-training-experience>`__.
 
 ------------
 Installation
