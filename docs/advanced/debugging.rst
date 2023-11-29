@@ -9,23 +9,27 @@ The worst situation is that training and inference works but the scores are just
 It's simpler if it does not even start because of some error.
 Here I will outline several useful options, and methods in general.
 
-Random config options which can be enabled without loosing performance:
+Random config options which can always be enabled without loosing performance:
 
 * ``log_verbosity = 5``: Increases log verbosity.
   This will enable printing loss and other info per each individual batch.
 * ``log_batch_size = True``: Logs individual batch sizes (requires log verbosity 5).
-* ``tf_log_memory_usage``: TF: Log device (GPU) memory usage, per batch and also summary.
-* ``torch_log_memory_usage``: PT: Log device (GPU) memory usage, per batch and also summary.
+* ``tf_log_memory_usage = True``: TF: Log device (GPU) memory usage, per batch and also summary.
+* ``torch_log_memory_usage = True``: PT: Log device (GPU) memory usage, per batch and also summary.
 * ``use_lovely_tensors = True``:
   PT: Apply the `lovely tensors <https://github.com/xl0/lovely-tensors>`__ monkey patch for ``torch.Tensor.__repr__``
 * ``watch_memory = True``: Enables background CPU memory usage (RSS, PSS, USS) logging per subprocess.
-* ``startup_callback``: Function callback, will run early at init,
-  can be used to setup potential other debugging utilities.
 
 Random config options which will cause slower training or require more memory:
 
 * ``debug_add_check_numerics_ops = True``: See below.
 * ``debug_add_check_numerics_on_output = True``: See below.
+
+Random other config options:
+
+* ``startup_callback``: Function callback, will run early at init,
+  can be used to setup potential other debugging utilities.
+* ``debug_shell_in_runner = True``: TF: Get an interactive shell right before the session runs a step.
 
 
 Test case
