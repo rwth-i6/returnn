@@ -248,14 +248,14 @@ class Dataset(object):
         if config.typed_value("torch_distributed") is not None:
             import returnn.torch.distributed
 
-            return returnn.torch.distributed.get_ctx().rank() * 16127
+            return returnn.torch.distributed.get_ctx(config=config).rank() * 16127
         elif config.is_true("use_horovod"):
             assert config.bool("use_tensorflow", False) or config.value("backend", "").startswith("tensorflow")
 
             import returnn.tf.horovod
 
-            if returnn.tf.horovod.get_ctx().is_dataset_distribution_random_seed_offset():
-                return returnn.tf.horovod.get_ctx().rank() * 16127
+            if returnn.tf.horovod.get_ctx(config=config).is_dataset_distribution_random_seed_offset():
+                return returnn.tf.horovod.get_ctx(config=config).rank() * 16127
         return 0
 
     @staticmethod

@@ -3,10 +3,10 @@ torch.distributed utils
 """
 
 from __future__ import annotations
-import itertools
-from typing import Optional
+from typing import Optional, Any, Dict
 import os
 import socket
+import itertools
 
 import torch
 
@@ -18,7 +18,7 @@ class DistributedContext:
     This class setups some helper functions for torch distributed training
     """
 
-    def __init__(self, config: Config):
+    def __init__(self, options: Dict[str, Any]):
         import torch.distributed as dist
 
         # when no backend is specified, both gloo and nccl backends will be created
@@ -26,7 +26,7 @@ class DistributedContext:
         # the nccl backend will be used for collectives with CUDA tensors
         dist.init_process_group(backend=None)
 
-        self._config = config
+        self._opts = options
         self._local_rank = int(os.environ["LOCAL_RANK"])
         self._local_size = int(os.environ["LOCAL_WORLD_SIZE"])
         self._rank = dist.get_rank()
@@ -75,9 +75,10 @@ def get_ctx(config=None):
         if not config:
             return None
     _is_set_up = True
-    if config.typed_value("torch_distributed") is None:
+    opts = config.typed_value("torch_distributed")
+    if opts is None:
         return None
-    _ctx = DistributedContext(config=config)
+    _ctx = DistributedContext(opts)
     return _ctx
 
 
