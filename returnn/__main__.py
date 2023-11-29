@@ -394,6 +394,9 @@ def init(config_filename=None, command_line_options=(), config_updates=None, ext
     init_backend_engine()
     if config.bool("ipython", False):
         debug_util.init_ipython_kernel()
+    if config.typed_value("startup_callback"):
+        startup_callback = config.typed_value("startup_callback")
+        startup_callback(config=config)
     if need_data():
         init_data()
     print_task_properties()
