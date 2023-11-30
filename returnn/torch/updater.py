@@ -181,10 +181,10 @@ class Updater(object):
         """
         Perform one step, i.e. update the parameters using the optimizer given the current calculated gradients.
         """
-        if self._grad_clip_global_norm:
-            torch.nn.utils.clip_grad_norm_(self.network.parameters(), self._grad_clip_global_norm)
         if self._grad_noise:
             gradient_noise_(self.network.parameters(), self._grad_noise)
+        if self._grad_clip_global_norm:
+            torch.nn.utils.clip_grad_norm_(self.network.parameters(), self._grad_clip_global_norm)
 
         if grad_scaler is not None:
             grad_scaler.step(self.optimizer)
