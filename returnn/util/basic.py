@@ -3110,8 +3110,17 @@ class LockFile(object):
             # Try to create directory if it does not exist.
             try:
                 os.makedirs(self.directory)
-            except OSError:
-                pass  # Ignore any errors.
+            except OSError as exc:
+                # Possible errors:
+                # ENOENT (No such file or directory), e.g. if some parent directory was deleted.
+                # EEXIST (File exists), if the dir already exists.
+                if exc.errno not in [errno.ENOENT, errno.EEXIST]:
+                    # Other error, so reraise.
+                    # Common ones are e.g.:
+                    # ENOSPC (No space left on device)
+                    # EACCES (Permission denied)
+                    raise
+                # Ignore those errors.
             # Now try to create the lock.
             try:
                 self.fd = os.open(self.lockfile, os.O_CREAT | os.O_EXCL | os.O_RDWR)
