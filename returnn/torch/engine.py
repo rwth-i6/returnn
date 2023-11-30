@@ -114,6 +114,7 @@ class Engine(EngineBase):
             # Print in a similar format so that some scripts which grep our stdout work just as before.
             diagnose_gpu.print_using_cuda_device_report(self._device, file=log.v2)
 
+        if self._device.startswith("cuda:"):
             # There is potentially lots of code which would use the default CUDA device,
             # even sometimes ignoring the input device.
             # For example, DistributedDataParallel _verify_param_shape_across_processes does that
