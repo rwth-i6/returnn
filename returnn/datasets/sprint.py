@@ -1140,14 +1140,18 @@ class SprintCacheDataset(CachedDataset2):
             """
             res = self.sprint_cache.read(name, typ=self.type)
             if self.type == "align":
+                for (t, a, s, w) in res:
+                    assert w == 1, "soft alignment not supported"
                 label_seq = numpy.array(
-                    [self.allophone_labeling.get_label_idx(a, s) for (t, a, s) in res], dtype=self.dtype
+                    [self.allophone_labeling.get_label_idx(a, s) for (t, a, s, w) in res], dtype=self.dtype
                 )
                 assert label_seq.shape == (len(res),)
                 return label_seq
             elif self.type == "align_raw":
+                for (t, a, s, w) in res:
+                    assert w == 1, "soft alignment not supported"
                 label_seq = numpy.array(
-                    [self.allophone_labeling.state_tying_by_allo_state_idx[a] for (t, a, s) in res], dtype=self.dtype
+                    [self.allophone_labeling.state_tying_by_allo_state_idx[a] for (t, a, s, w) in res], dtype=self.dtype
                 )
                 assert label_seq.shape == (len(res),)
                 return label_seq
