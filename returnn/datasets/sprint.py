@@ -1212,7 +1212,7 @@ class SprintCacheDataset(CachedDataset2):
             """
             return data0.sprint_cache.ft[self.seq_list_original[s]].size
 
-        seq_index = self.get_seq_order_for_epoch(epoch, self.num_seqs, get_seq_len=get_seq_size)
+        seq_index = self.get_seq_order_for_epoch(epoch, num_seqs=len(self.seq_list_original), get_seq_len=get_seq_size)
         self.seq_list_ordered = [self.seq_list_original[s] for s in seq_index]
         self._num_seqs = len(self.seq_list_ordered)
         return True
