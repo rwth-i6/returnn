@@ -230,3 +230,11 @@ RETURNN uses the :mod:`faulthandler` Python module
 to provide a stack trace of the Python calls
 and also installs a native signal handler
 to provide a native stack trace (including e.g. native PyTorch or TensorFlow code).
+
+
+Other resources
+---------------
+
+* `Debugging in our wiki <https://github.com/rwth-i6/returnn/wiki/Debugging>`__
+* `Stas Bekman - ML debugging <https://github.com/stas00/ml-engineering/tree/master/debug>`__
+* `Stas Bekman - The Art of Debugging <https://github.com/stas00/the-art-of-debugging/>`__
