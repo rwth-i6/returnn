@@ -124,8 +124,10 @@ class _RFModuleAsPTModule(torch.nn.Module):
         """forward"""
         return self._rf_module(*args, **kwargs)
 
-    def _apply(self, fn, recurse=True):
-        super()._apply(fn, recurse=recurse)
+    def _apply(self, *args, **kwargs):
+        # Note: Use generic *args, **kwargs, as the signature slightly changed,
+        # `recurse` was added in PyTorch 2.0 or so.
+        super()._apply(*args, **kwargs)
 
         # This could get called via `rf_module.to(device)`,
         # and there are cases where the Parameter.data was not updated inplace
