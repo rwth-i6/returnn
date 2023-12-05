@@ -95,8 +95,9 @@ class _RFModuleAsPTModule(torch.nn.Module):
         super().__init__()
         self._rf_module = rf_module
         self._aux_params_as_buffers = aux_params_as_buffers
+        self._is_initializing = True
 
-        # recurse=False because param names cannot contain "."
+        # recurse=False because param names cannot contain ".", will add submodules below recursively.
         for name, rf_param in rf_module.named_parameters(recurse=False):
             pt_param = rf_param.raw_tensor
             assert isinstance(pt_param, torch.nn.Parameter)
@@ -108,6 +109,8 @@ class _RFModuleAsPTModule(torch.nn.Module):
         for name, rf_mod in rf_module.named_children():
             pt_mod = rf_module_to_pt_module(rf_mod, aux_params_as_buffers=aux_params_as_buffers)
             self.add_module(name, pt_mod)
+
+        self._is_initializing = False
 
     def _get_name(self):
         return self._rf_module.__class__.__name__ + "[RF→PT]"
@@ -139,4 +142,28 @@ class _RFModuleAsPTModule(torch.nn.Module):
                 assert isinstance(pt_param, torch.nn.Parameter), (
                     f"{self}.{name} is not a Parameter" f" but {type(pt_param).__name__}"
                 )
+            rf_param.raw_tensor = pt_param
+
+    def register_parameter(self, name: str, param: Optional[torch.nn.Parameter]) -> None:
+        """(re)register parameter"""
+        super().register_parameter(name, param)
+        if param is None or self._is_initializing:
+            return  # just ignore
+        rf_param = getattr(self._rf_module, name, None)
+        if not isinstance(rf_param, rf.Parameter):
+            return  # just ignore
+        assert isinstance(
+            param, torch.nn.Parameter
+        ), f"{self} register_parameter {name}: did not get a Parameter but {type(param).__name__}"
+        rf_param.raw_tensor = param
+
+    def register_buffer(self, name: str, tensor: Optional[torch.Tensor], persistent: bool = True) -> None:
+        """(re)register buffer"""
+        super().register_buffer(name, tensor, persistent=persistent)
+        if tensor is not None and persistent and self._aux_params_as_buffers and not self._is_initializing:
+            rf_param = getattr(self._rf_module, name, None)
+            if not isinstance(rf_param, rf.Parameter):
+                return  # just ignore
+            # See similar logic in torch.nn.Module._apply.
+            pt_param = torch.nn.Parameter(tensor, tensor.requires_grad)
             rf_param.raw_tensor = pt_param
