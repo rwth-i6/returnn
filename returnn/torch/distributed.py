@@ -13,6 +13,8 @@ from torch.nn.parallel import DistributedDataParallel
 
 from returnn.config import Config
 
+_logger = logging.getLogger("returnn.torch.distributed")
+
 
 class DistributedContext:
     """
@@ -33,20 +35,23 @@ class DistributedContext:
         self._rank = dist.get_rank()
         self._size = dist.get_world_size()
 
-        print(
+        _logger.info(
             "Torch distributed initialized. Hostname %s, pid %i, rank %i / size %i, local rank %s / local size %s."
             % (socket.gethostname(), os.getpid(), self._rank, self._size, self._local_rank, self._local_size)
         )
 
         self._reduce_type = self._opts.get("reduce_type", "grad")
-        assert self._reduce_type in ["grad", "param"], f"Invalid reduce_type {self._reduce_type!r}"
-
         self._param_sync_step: Optional[int] = self._opts.get("param_sync_step", None)
         if self._reduce_type == "param":
             assert isinstance(self._param_sync_step, int) and self._param_sync_step > 0, (
-                f"{self}: reduce_type param: param_sync_step must be a positive int,"
+                f"reduce_type param: param_sync_step must be a positive int,"
                 f" got {self._param_sync_step!r} ({type(self._param_sync_step).__name__})"
             )
+            _logger.info(f"reduce_type param: param_sync_step {self._param_sync_step}")
+        elif self._reduce_type == "grad":
+            _logger.info("reduce_type grad")
+        else:
+            raise ValueError(f"invalid reduce_type {self._reduce_type!r}")
 
     def local_rank(self) -> int:
         """local rank"""
@@ -79,9 +84,7 @@ class DistributedContext:
             return None
         cls = self._opts.get("class", DistributedDataParallel)
         if cls is not DistributedDataParallel:
-            logging.warning(
-                f"{self}: Using custom class {cls} instead of DistributedDataParallel, might be unsupported."
-            )
+            _logger.warning(f"Using custom class {cls} instead of DistributedDataParallel, might be unsupported.")
         kwargs = self._opts.get("options", {})
         return cls(
             module=module,

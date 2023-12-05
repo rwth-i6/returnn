@@ -347,9 +347,7 @@ class Engine(EngineBase):
                 self._updater.step(grad_scaler=self._grad_scaler)
 
             if self._torch_distributed_ctx:
-                self._torch_distributed_ctx.step_after_param_update(
-                    module=self._pt_model, epoch_update_step_idx=step_idx
-                )
+                self._torch_distributed_ctx.step_after_param_update(module=self._pt_model, epoch_step_idx=step_idx)
 
             elapsed_computation_time += time.time() - step_begin_time
 
