@@ -121,13 +121,14 @@ class _RFModuleAsPTModule(torch.nn.Module):
         """forward"""
         return self._rf_module(*args, **kwargs)
 
-    def _apply(self, fn):
-        super()._apply(fn)
+    def _apply(self, fn, recurse=True):
+        super()._apply(fn, recurse=recurse)
 
         # This could get called via `rf_module.to(device)`,
         # and there are cases where the Parameter.data was not updated inplace
         # but instead a new Parameter was created.
         # Update the corresponding RF Parameter.
+        # recurse=False because super()._apply() already recursively calls _apply().
         for name, rf_param in self._rf_module.named_parameters(recurse=False):
             pt_param = getattr(self, name)
             if rf_param.auxiliary and self._aux_params_as_buffers:
