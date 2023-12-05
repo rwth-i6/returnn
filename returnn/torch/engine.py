@@ -346,6 +346,11 @@ class Engine(EngineBase):
             if (step_idx % self._accum_grad_multiple_step) == (self._accum_grad_multiple_step - 1):
                 self._updater.step(grad_scaler=self._grad_scaler)
 
+            if self._torch_distributed_ctx:
+                self._torch_distributed_ctx.step_after_param_update(
+                    module=self._pt_model, epoch_update_step_idx=step_idx
+                )
+
             elapsed_computation_time += time.time() - step_begin_time
 
             accumulated_losses_dict += losses_dict

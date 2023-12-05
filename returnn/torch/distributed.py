@@ -38,6 +38,16 @@ class DistributedContext:
             % (socket.gethostname(), os.getpid(), self._rank, self._size, self._local_rank, self._local_size)
         )
 
+        self._reduce_type = self._opts.get("reduce_type", "grad")
+        assert self._reduce_type in ["grad", "param"], f"Invalid reduce_type {self._reduce_type!r}"
+
+        self._param_sync_step: Optional[int] = self._opts.get("param_sync_step", None)
+        if self._reduce_type == "param":
+            assert isinstance(self._param_sync_step, int) and self._param_sync_step > 0, (
+                f"{self}: reduce_type param: param_sync_step must be a positive int,"
+                f" got {self._param_sync_step!r} ({type(self._param_sync_step).__name__})"
+            )
+
     def local_rank(self) -> int:
         """local rank"""
         return self._local_rank
@@ -54,13 +64,19 @@ class DistributedContext:
         """global size"""
         return self._size
 
-    def maybe_make_distributed_module(self, module: torch.nn.Module) -> DistributedDataParallel:
+    def get_param_sync_step(self) -> Optional[int]:
+        """param sync step"""
+        return self._param_sync_step
+
+    def maybe_make_distributed_module(self, module: torch.nn.Module) -> Optional[DistributedDataParallel]:
         """
         Maybe make a wrapped distributed module.
 
         :param module: original module
         :return: potentially wrapped module
         """
+        if self._reduce_type == "param":
+            return None
         cls = self._opts.get("class", DistributedDataParallel)
         if cls is not DistributedDataParallel:
             logging.warning(
@@ -72,6 +88,11 @@ class DistributedContext:
             device_ids=[self.local_rank()],
             **kwargs,
         )
+
+    def step_after_param_update(self, *, module: torch.nn.Module, epoch_step_idx: int):
+        """one train step"""
+        if self._reduce_type == "param" and ((epoch_step_idx % self._param_sync_step) == (self._param_sync_step - 1)):
+            _sync_params_avg(module=module)
 
 
 _is_set_up = False
@@ -93,10 +114,33 @@ def get_ctx(config=None) -> Optional[DistributedContext]:
         config = get_global_config(raise_exception=False)
         if not config:
             return None
+
     _is_set_up = True
     opts = config.typed_value("torch_distributed")
     if opts is None:
         return None
+
     assert isinstance(opts, dict)
     _ctx = DistributedContext(opts)
+
+    if _ctx.get_param_sync_step():
+        # Just a sanity check.
+        # Note that we could also instead just count the actual param update steps.
+        # However, counting param update steps might be more variable in the future,
+        # and also this behavior would be different from our TF implementation,
+        # and in any case, it is probably more expected
+        # that the param_sync_step is about the step (mini batch), not param update.
+        accum_grad_multiple_step = config.int("accum_grad_multiple_step", 1)
+        assert _ctx.get_param_sync_step() % accum_grad_multiple_step == 0, (
+            f"{_ctx}: param_sync_step {_ctx.get_param_sync_step()}"
+            f" must be a multiple of accum_grad_multiple_step {accum_grad_multiple_step}"
+        )
+
     return _ctx
+
+
+def _sync_params_avg(*, module: torch.nn.Module):
+    import torch.distributed as dist
+
+    for param in module.parameters():
+        dist.all_reduce(param.data, op=dist.ReduceOp.AVG)
