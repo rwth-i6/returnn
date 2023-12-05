@@ -435,7 +435,7 @@ def need_data():
     if config.has("need_data") and not config.bool("need_data", True):
         return False
     task = config.value("task", "train")
-    if task in ["nop", "cleanup_old_models"]:
+    if task in ("nop", "nop_init_net_train", "cleanup_old_models"):
         return False
     return True
 
