@@ -6,9 +6,10 @@ from __future__ import annotations
 from typing import Optional, Any, Dict
 import os
 import socket
-import itertools
+import logging
 
 import torch
+from torch.nn.parallel import DistributedDataParallel
 
 from returnn.config import Config
 
@@ -53,17 +54,35 @@ class DistributedContext:
         """global size"""
         return self._size
 
+    def maybe_make_distributed_module(self, module: torch.nn.Module) -> DistributedDataParallel:
+        """
+        Maybe make a wrapped distributed module.
+
+        :param module: original module
+        :return: potentially wrapped module
+        """
+        cls = self._opts.get("class", DistributedDataParallel)
+        if cls is not DistributedDataParallel:
+            logging.warning(
+                f"{self}: Using custom class {cls} instead of DistributedDataParallel, might be unsupported."
+            )
+        kwargs = self._opts.get("options", {})
+        return cls(
+            module=module,
+            device_ids=[self.local_rank()],
+            **kwargs,
+        )
+
 
 _is_set_up = False
 _ctx = None  # type: Optional[DistributedContext]
 
 
-def get_ctx(config=None):
+def get_ctx(config=None) -> Optional[DistributedContext]:
     """
     :param Config|None config:
     :returns: the global context if Torch distributed is enabled, or None otherwise.
       If we did not setup the context yet, it will automatically create it.
-    :rtype: DistributedContext|None
     """
     global _is_set_up, _ctx
     if _is_set_up:

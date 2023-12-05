@@ -38,6 +38,7 @@ from .data import returnn_dataset_wrapper
 from .data import extern_data as extern_data_util
 from .frontend.bridge import rf_module_to_pt_module
 from .util import diagnose_gpu
+from .distributed import DistributedContext, get_ctx as dist_get_ctx
 
 
 class Engine(EngineBase):
@@ -89,23 +90,13 @@ class Engine(EngineBase):
         self._device = dev_.result
         print("Using device:", self._device, f"({dev_.reason or '?'})", file=log.v2)
 
-        self._use_torch_distributed = False
-        self._torch_distributed_class = None  # type: Optional[Union[DistributedDataParallel,Callable]]
-        self._torch_distributed_options = None  # type: Optional[dict]
-        self._ddp_pt_model = None  # type: Optional[torch.nn.Module]
+        self._torch_distributed_ctx = None  # type: Optional[DistributedContext]
+        self._ddp_pt_model = None  # type: Optional[DistributedDataParallel]
         self._accum_grad_multiple_step = config.int("accum_grad_multiple_step", 1)
 
-        torch_distributed = config.typed_value("torch_distributed")
-        if torch_distributed is not None:
-            assert isinstance(torch_distributed, dict)
-            self._use_torch_distributed = True
-            self._torch_distributed_class = torch_distributed.get("class", DistributedDataParallel)
-            self._torch_distributed_options = torch_distributed.get("options", {})
-
-            import returnn.torch.distributed
-
-            torch_distributed = returnn.torch.distributed.get_ctx(config=config)
-            local_rank = torch_distributed.local_rank()
+        if config.typed_value("torch_distributed") is not None:
+            self._torch_distributed_ctx = dist_get_ctx(config=config)
+            local_rank = self._torch_distributed_ctx.local_rank()
             print(f"Start running torch distributed training on local rank {local_rank}.", file=log.v2)
             assert self._device == "cuda", f"torch distributed: unexpected device {self._device!r}"
             self._device = f"cuda:{local_rank}"
@@ -201,16 +192,9 @@ class Engine(EngineBase):
 
         self._save_model_epoch_interval = config.int("save_interval", 1)
 
-        if self._use_torch_distributed:
-            from returnn.torch.distributed import get_ctx
-
-            ctx = get_ctx(config=config)
-
-            # wrap the model use torch distributed class
-            self._ddp_pt_model = self._torch_distributed_class(
-                module=_WrappedModuleRunStep(module=self._pt_model, engine=self),
-                device_ids=[ctx.local_rank()],
-                **self._torch_distributed_options,
+        if self._torch_distributed_ctx:
+            self._ddp_pt_model = self._torch_distributed_ctx.maybe_make_distributed_module(
+                module=_WrappedModuleRunStep(module=self._pt_model, engine=self)
             )
         self._updater = Updater(
             config=self.config, network=self._pt_model, device=self._device, initial_learning_rate=self.learning_rate
@@ -320,7 +304,7 @@ class Engine(EngineBase):
             step_begin_time = time.time()
 
             _has_data = torch.tensor([extern_data_raw is not None], dtype=torch.int8)
-            if self._use_torch_distributed:
+            if self._torch_distributed_ctx:
                 # use all reduce to check if all workers have data, if at least one worker does not have data,
                 # all workers finish this epoch
                 torch.distributed.all_reduce(_has_data, op=torch.distributed.ReduceOp.MIN)
@@ -350,7 +334,7 @@ class Engine(EngineBase):
                 {name: float(_to_raw(loss.get_inv_norm_factor())) for name, loss in train_ctx.losses.items()}
             )
 
-            with self._ddp_pt_model.no_sync() if self._use_torch_distributed and (
+            with self._ddp_pt_model.no_sync() if self._ddp_pt_model is not None and (
                 step_idx % self._accum_grad_multiple_step
             ) != (self._accum_grad_multiple_step - 1) else nullcontext():
                 if self._grad_scaler is not None:
@@ -438,7 +422,7 @@ class Engine(EngineBase):
 
             data_loader = self._eval_dataloaders[dataset_name]
 
-            if self._use_torch_distributed and torch.distributed.get_rank() != 0:
+            if self._torch_distributed_ctx and self._torch_distributed_ctx.rank() != 0:
                 # We need to make sure the data loader iterator was created for proper synchronization.
                 # However, now we only want to do evaluation on rank 0 for simplicity.
                 iter(data_loader)
@@ -503,7 +487,7 @@ class Engine(EngineBase):
                 )
             ]
 
-        if not self._use_torch_distributed or torch.distributed.get_rank() == 0:
+        if not self._torch_distributed_ctx or self._torch_distributed_ctx.rank() == 0:
             print(" ".join(eval_dump_str) if eval_dump_str else "(No evaluations.)", file=log.v1)
 
         self._maybe_report_dev_memory_stats()
