@@ -78,39 +78,6 @@ def get_ctx(config=None):
     opts = config.typed_value("torch_distributed")
     if opts is None:
         return None
+    assert isinstance(opts, dict)
     _ctx = DistributedContext(opts)
     return _ctx
-
-
-def get_device_ids():
-    """
-    It depends on the specific setup what to return here,
-    how CUDA_VISIBLE_DEVICES is set up, etc.
-    This is currently a reasonable assumption,
-    but we might extend the logic later,
-    or make it configurable.
-    """
-    return [get_local_rank()]
-
-
-def get_local_rank():
-    """
-    torch.distributed does not seem to provide a function for this.
-    Via mpirun (OpenMPI), this env variable would be set.
-    It should fail with an error otherwise.
-    """
-    return int(os.environ["LOCAL_RANK"])
-
-
-def _find_tensors(obj):
-    """
-    Recursively find all tensors contained in the specified object,
-    cf. torch.nn.parallel.distributed._find_tensors
-    """
-    if isinstance(obj, torch.Tensor):
-        return [obj]
-    if isinstance(obj, (list, tuple)):
-        return itertools.chain(*map(_find_tensors, obj))
-    if isinstance(obj, dict):
-        return itertools.chain(*map(_find_tensors, obj.values()))
-    return []

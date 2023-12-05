@@ -202,12 +202,14 @@ class Engine(EngineBase):
         self._save_model_epoch_interval = config.int("save_interval", 1)
 
         if self._use_torch_distributed:
-            from returnn.torch.distributed import get_device_ids
+            from returnn.torch.distributed import get_ctx
+
+            ctx = get_ctx(config=config)
 
             # wrap the model use torch distributed class
             self._ddp_pt_model = self._torch_distributed_class(
                 module=_WrappedModuleRunStep(module=self._pt_model, engine=self),
-                device_ids=get_device_ids(),
+                device_ids=[ctx.local_rank()],
                 **self._torch_distributed_options,
             )
         self._updater = Updater(
