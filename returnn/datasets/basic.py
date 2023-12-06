@@ -460,7 +460,7 @@ class Dataset(object):
         if epoch is None:
             # This might be called in the beginning. Skip this and wait until we init the real relevant epoch.
             # We are not expected to have prepared any real epoch here.
-            return []
+            return range(self._num_seqs)
         partition_epoch = self.partition_epoch or 1
         repeat_epoch = self.repeat_epoch or 1
         assert num_seqs > 0
