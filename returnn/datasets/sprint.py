@@ -5,6 +5,8 @@ Note that from the main RETURNN process, you probably want ExternSprintDataset i
 
 from __future__ import annotations
 
+from typing import List
+import typing
 import atexit
 import os
 import signal
@@ -17,7 +19,6 @@ except ImportError:
 from threading import Condition, RLock, current_thread, Thread
 import time
 import numpy
-import typing
 
 import returnn.util.task_system as task_system
 from returnn.datasets.basic import Dataset, DatasetSeq
@@ -1227,6 +1228,14 @@ class SprintCacheDataset(CachedDataset2):
         self.seq_list_ordered = [self.seq_list_original[s] for s in seq_index]
         self._num_seqs = len(self.seq_list_ordered)
         return True
+
+    def get_total_num_seqs(self) -> int:
+        """total num seqs"""
+        return len(self.seq_list_original)
+
+    def get_all_tags(self) -> List[str]:
+        """all seq names"""
+        return self.seq_list_original
 
     def supports_seq_order_sorting(self) -> bool:
         """supports sorting"""
