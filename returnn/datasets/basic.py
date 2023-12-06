@@ -767,14 +767,7 @@ class Dataset(object):
           Note that this is not possible with all datasets.
         :rtype: list[str]
         """
-        old_partition_epoch = self.partition_epoch
-        try:
-            all_tags = [None] * self.num_seqs  # type: typing.List[typing.Union[None,str]]
-            for seq_idx in range(self.num_seqs):
-                all_tags[seq_idx] = self.get_tag(seq_idx)
-            return all_tags
-        finally:
-            self.partition_epoch = old_partition_epoch
+        raise NotImplementedError(f"{self} get_all_tags not implemented")
 
     def get_total_num_seqs(self) -> int:
         """
@@ -782,10 +775,7 @@ class Dataset(object):
           Should be the same as len(self.get_all_tags()).
           Note that this is not possible with all datasets.
         """
-        if self.partition_epoch == 1:
-            # Note: self.num_seqs might not always be set, or even be correct...
-            return self.num_seqs
-        raise NotImplementedError("%s: get_total_num_seqs with partition epoch %i" % (self, self.partition_epoch))
+        raise NotImplementedError(f"{self} get_total_num_seqs not implemented")
 
     def have_corpus_seq_idx(self):
         """
