@@ -767,7 +767,7 @@ class Dataset(object):
           Note that this is not possible with all datasets.
         :rtype: list[str]
         """
-        raise NotImplementedError(f"{self} get_all_tags not implemented")
+        raise OptionalNotImplementedError(f"{self} get_all_tags not implemented")
 
     def get_total_num_seqs(self) -> int:
         """
@@ -775,7 +775,7 @@ class Dataset(object):
           Should be the same as len(self.get_all_tags()).
           Note that this is not possible with all datasets.
         """
-        raise NotImplementedError(f"{self} get_total_num_seqs not implemented")
+        raise OptionalNotImplementedError(f"{self} get_total_num_seqs not implemented")
 
     def have_corpus_seq_idx(self):
         """
@@ -791,7 +791,7 @@ class Dataset(object):
           only defined if self.have_corpus_seq_idx()
         :rtype: int
         """
-        if self.seq_ordering == "default":
+        if self.seq_ordering == "default" and self.partition_epoch == 1:
             return seq_idx
         assert self.have_corpus_seq_idx()
         raise NotImplemented
