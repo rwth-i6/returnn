@@ -14,7 +14,7 @@ try:
     import thread
 except ImportError:
     import _thread as thread
-from threading import Condition, RLock, currentThread, Thread
+from threading import Condition, RLock, current_thread, Thread
 import time
 import numpy
 import typing
@@ -275,7 +275,14 @@ class SprintDatasetBase(Dataset):
         if not self.suppress_load_seqs_print:
             print(
                 "%s %s: wait for seqs (%i,%i) (last added: %s) (current time: %s)"
-                % (self, currentThread().name, seq_start, seq_end, self._latest_added_seq(), time.strftime("%H:%M:%S")),
+                % (
+                    self,
+                    current_thread().name,
+                    seq_start,
+                    seq_end,
+                    self._latest_added_seq(),
+                    time.strftime("%H:%M:%S"),
+                ),
                 file=log.v5,
             )
         while not self._wait_for_seq_can_pass_check(seq_start=seq_start, seq_end=seq_end):
@@ -329,7 +336,7 @@ class SprintDatasetBase(Dataset):
         if start == end:
             return
         if not self.suppress_load_seqs_print:
-            print("%s load_seqs in %s:" % (self, currentThread().name), start, end, end=" ", file=log.v5)
+            print("%s load_seqs in %s:" % (self, current_thread().name), start, end, end=" ", file=log.v5)
         with self.lock:
             super(SprintDatasetBase, self).load_seqs(start, end)
             if not self.suppress_load_seqs_print:
