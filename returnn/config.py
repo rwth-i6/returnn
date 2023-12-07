@@ -646,10 +646,11 @@ def set_global_config(config):
     _global_config = config
 
 
-def get_global_config(raise_exception=True, auto_create=False):
+def get_global_config(*, raise_exception: bool = True, auto_create: bool = False, return_empty_if_none: bool = False):
     """
-    :param bool raise_exception: if no global config is found, raise an exception, otherwise return None
-    :param bool auto_create: if no global config is found, it creates one and returns it
+    :param raise_exception: if no global config is found, raise an exception, otherwise return None
+    :param auto_create: if no global config is found, it creates one, registers it as global, and returns it
+    :param return_empty_if_none: if no global config is found, it creates one (which is empty) and returns it
     :rtype: Config|None
     """
     config = _get_or_set_config_via_tf_default_graph()
@@ -673,6 +674,8 @@ def get_global_config(raise_exception=True, auto_create=False):
         config = Config()
         set_global_config(config)
         return config
+    if return_empty_if_none:
+        return Config()
     if raise_exception:
         raise Exception("No global config found.")
     return None
