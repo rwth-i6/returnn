@@ -556,11 +556,11 @@ class Engine(EngineBase):
 
         if train_func:
             assert self._train_step_func is not None
-            rf.init_train_step_run_ctx(train_flag=train_flag, step=self.global_train_step)
+            rf.init_train_step_run_ctx(train_flag=train_flag, step=self.global_train_step, epoch=self.epoch)
         else:
             assert self._forward_step_func is not None, "define forward_step in the config"
             rf.init_forward_step_run_ctx(
-                expected_outputs=self._forward_step_expected_outputs, step=self.global_train_step
+                expected_outputs=self._forward_step_expected_outputs, step=self.global_train_step, epoch=self.epoch
             )
 
         with autocast(

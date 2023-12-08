@@ -113,7 +113,7 @@ def _run_model_torch(extern_data: TensorDict, get_model: rf.GetModelFunc, forwar
     tensor_dict_numpy_to_torch_(extern_data)
 
     model = get_model(epoch=1, step=0)
-    rf.init_forward_step_run_ctx(step=0)
+    rf.init_forward_step_run_ctx(epoch=1, step=0)
     forward_step(model=model, extern_data=extern_data)
     outputs = rf.get_run_ctx().outputs
     assert outputs.data
@@ -148,7 +148,7 @@ def run_model_torch_train(
         v.raw_tensor.requires_grad = True
 
     model = get_model(epoch=1, step=0)
-    rf.init_train_step_run_ctx(train_flag=True, step=0)
+    rf.init_train_step_run_ctx(train_flag=True, step=0, epoch=1)
     train_step(model=model, extern_data=extern_data)
     total_loss = rf.get_run_ctx().total_loss()
     assert isinstance(total_loss, Tensor) and not total_loss.dims and total_loss.raw_tensor.dtype.is_floating_point

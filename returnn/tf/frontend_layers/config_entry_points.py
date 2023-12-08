@@ -7,10 +7,13 @@ https://github.com/rwth-i6/returnn/issues/1120
 
 from __future__ import annotations
 from typing import Any, Dict, Tuple
+import tensorflow as tf
 from tensorflow.python.util import nest
+import returnn.tf.compat as tf_compat
 from returnn.util.basic import BehaviorVersion
 from returnn.tensor import TensorDict, Tensor, Dim, batch_dim
 from returnn.config import get_global_config
+from returnn.tf.network import LayerBase
 import returnn.frontend as rf
 from .. import frontend_layers as rfl
 from . import _utils
@@ -48,10 +51,12 @@ def get_net_dict(
 
     task = config.value("task", None)
     step_tensor = rfl.make_layer({"class": "global_train_step"}, name="global_train_step")
+    epoch_tensor = rfl.make_layer({"class": "eval", "eval": _eval_func_get_epoch, "from": ()}, name="epoch")
     if task in {"train", "eval"}:
         rf.init_train_step_run_ctx(
             train_flag=rfl.make_layer({"class": "train_flag"}, name="train_flag"),
             step=step_tensor,
+            epoch=epoch_tensor,
         )
         train_step_func = get_global_config().typed_value("train_step")
         train_step_func(
@@ -59,7 +64,7 @@ def get_net_dict(
             extern_data=extern_data,
         )
     elif task in {"forward", "search"}:
-        rf.init_forward_step_run_ctx(step=step_tensor)
+        rf.init_forward_step_run_ctx(step=step_tensor, epoch=epoch_tensor)
         forward_step_func = get_global_config().typed_value("forward_step")
         forward_step_func(
             model=model,
@@ -119,3 +124,19 @@ def get_net_dict(
         for dim in data.dims:
             _cleanup_net_dict_value(dim)
     return net_dict, model
+
+
+def _eval_func_get_epoch(self: LayerBase, **_kwargs) -> tf.Tensor:
+    # Currently this is almost never used, so we don't introduce an own custom layer for this,
+    # nor any TF placeholder or TF variable, but just use this.
+    # A TF variable might be the next simplest solution, if we want to improve this later...
+    # See TFNetwork.set_run_opts().
+    run_opts = self.network.get_root_network().get_run_opts()
+
+    def _py_func_get_epoch() -> int:
+        return run_opts["epoch"]
+
+    (epoch,) = tf_compat.v1.py_func(_py_func_get_epoch, [], [tf.int32], stateful=True)
+    assert isinstance(epoch, tf.Tensor)
+    epoch.set_shape(())
+    return epoch

@@ -668,7 +668,7 @@ class TFNetwork(object):
         )  # type: typing.Dict[typing.Tuple[typing.Tuple[LayerBase,...],Dim,float,typing.Optional[typing.Tuple[typing.Optional[int],...]]],Data]  # nopep8
         self._merge_all_summaries = None  # type: typing.Optional[tf.Tensor]
         self._graph_reset_callbacks = []  # type: typing.List[typing.Callable]
-        self._run_opts = {}  # type: typing.Dict[str]
+        self._run_opts = {}  # type: typing.Dict[str, typing.Any]
         self._run_finished_callbacks = []  # type: typing.List[typing.Callable]
         self._map_search_beam_to_search_choices = (
             {}
@@ -3228,7 +3228,9 @@ class TFNetwork(object):
         :param str|None dataset_name:
         """
         root_net = self.get_root_network()
-        root_net._run_opts = dict(epoch=epoch, dataset_name=dataset_name)
+        # Keep the _run_opts instance alive, only update it,
+        # as some user code might keep refs to it.
+        root_net._run_opts.update(dict(epoch=epoch, dataset_name=dataset_name))
 
     def get_run_opts(self):
         """

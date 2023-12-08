@@ -30,22 +30,36 @@ def reset_run_ctx():
     _run_ctx = None
 
 
-def init_train_step_run_ctx(*, train_flag: Union[bool, Tensor], step: Union[int, Tensor]):
+def init_train_step_run_ctx(
+    *, train_flag: Union[bool, Tensor] = True, step: Union[int, Tensor] = 0, epoch: Union[int, Tensor] = 1
+):
     """
     Call this before the train_step function is called,
     when you write your own training loop.
+
+    Also see :func:`init_forward_step_run_ctx`.
+
+    :param train_flag: whether we intend to do actual training. you might want to use dropout only in this case.
+        (In case of PyTorch, we would also call module.train() first, which will also store this flag internally.)
+        If False, we would call the same train_step function, but we intend to do evaluation with the same loss.
+    :param step: you might want to schedule dropout or other things depending on the step
+    :param epoch: you might want to schedule dropout or other things depending on the epoch
     """
     global _run_ctx
-    _run_ctx = RunCtx(stage="train_step", train_flag=train_flag, step=step)
+    _run_ctx = RunCtx(stage="train_step", train_flag=train_flag, step=step, epoch=epoch)
 
 
-def init_forward_step_run_ctx(*, expected_outputs: Optional[TensorDict] = None, step: Union[int, Tensor]):
+def init_forward_step_run_ctx(
+    *, expected_outputs: Optional[TensorDict] = None, step: Union[int, Tensor] = 0, epoch: Union[int, Tensor] = 1
+):
     """
     Call this before the forward_step function is called,
     when you write your own forward loop.
+
+    Also see :func:`init_train_step_run_ctx`.
     """
     global _run_ctx
-    _run_ctx = RunCtx(stage="forward_step", expected_outputs=expected_outputs, step=step)
+    _run_ctx = RunCtx(stage="forward_step", expected_outputs=expected_outputs, step=step, epoch=epoch)
 
 
 def get_run_ctx() -> RunCtx:
@@ -76,6 +90,7 @@ class RunCtx:
         stage: str,
         train_flag: Union[bool, Tensor] = False,
         step: Union[int, Tensor] = 0,
+        epoch: Union[int, Tensor] = 1,
         expected_outputs: Optional[TensorDict] = None,
     ):
         """
@@ -87,6 +102,7 @@ class RunCtx:
         self._stage = stage
         self._train_flag = train_flag
         self._step = step
+        self._epoch = epoch
         self.losses = {}  # type: Dict[str, Loss]
         self.outputs = TensorDict()
         self.expected_outputs = expected_outputs
@@ -117,6 +133,13 @@ class RunCtx:
             In a graph-based backend, this can be dynamic.
         """
         return self._step
+
+    @property
+    def epoch(self) -> Union[int, Tensor]:
+        """
+        :return: epoch
+        """
+        return self._epoch
 
     def mark_as_loss(
         self,

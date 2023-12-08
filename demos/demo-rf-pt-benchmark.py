@@ -587,7 +587,7 @@ def _custom_loop(argv):
             extern_data_ = extern_data_util.raw_dict_to_extern_data(
                 extern_data_raw, extern_data_template=extern_data_template, device=device
             )
-            rf.init_train_step_run_ctx(train_flag=True, step=step_idx)
+            rf.init_train_step_run_ctx(train_flag=True, step=step_idx, epoch=1)
             with rf.set_default_device_ctx(device):
                 train_step(model=model, extern_data=extern_data_)
 

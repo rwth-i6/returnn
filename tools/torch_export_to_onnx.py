@@ -197,7 +197,7 @@ def main():
     epoch = loaded_checkpoint["epoch"]
     step = loaded_checkpoint["step"]
 
-    rf.init_forward_step_run_ctx(expected_outputs=model_outputs, step=step)
+    rf.init_forward_step_run_ctx(expected_outputs=model_outputs, step=step, epoch=epoch)
     rf.set_random_seed(42)
 
     get_model_func = config.typed_value("get_model")
