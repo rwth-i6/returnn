@@ -117,13 +117,13 @@ class Updater(object):
         self._optimizer_opts = None
         self.optimizer = None  # type: typing.Optional[torch.optim.Optimizer]
 
+        self._grad_clip = self.config.float("gradient_clip", 0.0)
         self._grad_clip_global_norm = self.config.float("gradient_clip_global_norm", 0.0)
         self._grad_noise = self.config.float("gradient_noise", 0.0)
 
         # Check other options we have in TF updater, which we might support here later as well,
         # but currently do not support.
         for opt_name in [
-            "gradient_clip",
             "gradient_clip_norm",
             "gradient_clip_avg_norm",
             "global_norm_tag",
@@ -183,6 +183,8 @@ class Updater(object):
         """
         if self._grad_noise:
             gradient_noise_(self.network.parameters(), self._grad_noise)
+        if self._grad_clip:
+            torch.nn.utils.clip_grad_value_(self.network.parameters(), self._grad_clip)
         if self._grad_clip_global_norm:
             torch.nn.utils.clip_grad_norm_(self.network.parameters(), self._grad_clip_global_norm)
 
