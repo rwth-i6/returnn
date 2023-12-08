@@ -51,7 +51,10 @@ def get_net_dict(
 
     task = config.value("task", None)
     step_tensor = rfl.make_layer({"class": "global_train_step"}, name="global_train_step")
-    epoch_tensor = rfl.make_layer({"class": "eval", "eval": _eval_func_get_epoch, "from": ()}, name="epoch")
+    epoch_tensor = rfl.make_layer(
+        {"class": "eval", "eval": _eval_func_get_epoch, "from": (), "out_type": {"dims": (), "dtype": "int32"}},
+        name="epoch",
+    )
     if task in {"train", "eval"}:
         rf.init_train_step_run_ctx(
             train_flag=rfl.make_layer({"class": "train_flag"}, name="train_flag"),
