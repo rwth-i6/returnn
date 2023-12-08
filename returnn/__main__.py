@@ -336,6 +336,10 @@ def init_backend_engine():
             returnn.tf.distributed.init_distributed_tf(config)
 
     elif BackendEngine.is_torch_selected():
+        if config.value("PYTORCH_CUDA_ALLOC_CONF", None):
+            # Set this very early.
+            os.environ["PYTORCH_CUDA_ALLOC_CONF"] = config.value("PYTORCH_CUDA_ALLOC_CONF", "")
+
         print("PyTorch:", util.describe_torch_version(), file=log.v3)
 
         if config.typed_value("torch_distributed") is not None:
