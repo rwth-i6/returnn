@@ -285,6 +285,13 @@ def init_backend_engine():
     This does not initialize the global ``engine`` object yet.
     See :func:`init_engine` for that.
     """
+    if config.value("PYTORCH_CUDA_ALLOC_CONF", None):
+        # Set this very early, before *any* `import torch`, thus also before select_engine.
+        # (It would not hurt if this is set for any non-PT engine.)
+        value = config.value("PYTORCH_CUDA_ALLOC_CONF", "")
+        print(f"Set PYTORCH_CUDA_ALLOC_CONF={value!r}.")
+        os.environ["PYTORCH_CUDA_ALLOC_CONF"] = value
+
     BackendEngine.select_engine(config=config)
     if BackendEngine.is_tensorflow_selected():
         print("TensorFlow:", util.describe_tensorflow_version(), file=log.v3)
@@ -336,10 +343,6 @@ def init_backend_engine():
             returnn.tf.distributed.init_distributed_tf(config)
 
     elif BackendEngine.is_torch_selected():
-        if config.value("PYTORCH_CUDA_ALLOC_CONF", None):
-            # Set this very early.
-            os.environ["PYTORCH_CUDA_ALLOC_CONF"] = config.value("PYTORCH_CUDA_ALLOC_CONF", "")
-
         print("PyTorch:", util.describe_torch_version(), file=log.v3)
 
         if config.typed_value("torch_distributed") is not None:
