@@ -1290,6 +1290,7 @@ class _DimMixin:
         unknown_spatial_matches=False,
         undefined_matches=False,
         derived_matches=False,
+        allow_old_behavior=False,
     ) -> bool:
         """
         Compares self to other for equality.
@@ -1311,6 +1312,7 @@ class _DimMixin:
         :param bool unknown_spatial_matches:
         :param bool undefined_matches:
         :param bool derived_matches:
+        :param bool allow_old_behavior: useful e.g. for find_matching_dim_map
         """
         if self is other:  # first some fast path check
             return True
@@ -1355,7 +1357,7 @@ class _DimMixin:
             # or when we used MergeDimsLayer on the batch axis, or so.
             # We might need to extend the logic here later.
             return True
-        if self._SimpleEquality:
+        if self._SimpleEquality and not allow_old_behavior:
             # Either self or other is some dim tag explicitly created by the user,
             # and they are not the same, so we never treat them as equal.
             if not self.auto_generated or not other.auto_generated:
