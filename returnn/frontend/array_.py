@@ -23,6 +23,7 @@ __all__ = [
     "split",
     "expand_dim",
     "squeeze",
+    "window",
     "concat",
     "concat_features",
     "pad",
@@ -259,6 +260,88 @@ def squeeze(source: Tensor, axis: Dim) -> Tensor:
     assert axis.dimension == 1, f"squeeze {source}: axis {axis} is not of extend 1"
     # noinspection PyProtectedMember
     return source._raw_backend.squeeze(source, axis=axis)
+
+
+def window(
+    source: Tensor,
+    *,
+    spatial_dim: Dim,
+    window_dim: Dim,
+    window_right: Optional[Union[Dim, int]] = None,
+    window_left: Optional[Union[Dim, int]] = None,
+    padding: str = "same",
+    pad_value: Optional[Union[int, float]] = None,
+    stride: int = 1,
+) -> Tuple[Tensor, Dim]:
+    """
+    Follows the same idea as RETURNN tf_util.windowed,
+    using clever padding and reshaping.
+
+    :param source:
+    :param spatial_dim:
+    :param window_dim:
+    :param window_left:
+    :param window_right:
+    :param padding: "same" or "valid"
+    :param pad_value:
+    :param stride:
+    :return: out, out_spatial_dim
+    """
+    assert window_dim.dimension is not None
+    if padding == "same":
+        out_spatial_dim = spatial_dim
+        if window_right is not None:
+            if isinstance(window_right, int):
+                window_right = Dim(window_right, name="window_right")
+            assert isinstance(window_right, Dim)
+        if window_left is not None:
+            if isinstance(window_left, int):
+                window_left = Dim(window_left, name="window_left")
+            assert isinstance(window_left, Dim)
+        if window_right is None:
+            if window_left is None:
+                window_right = window_dim // 2
+                window_left = window_dim.ceildiv_right(2) - 1
+            else:
+                window_right = window_dim - window_left - 1
+        if window_left is None:
+            window_left = window_dim - window_right - 1
+        source, (in_spatial_dim,) = rf.pad(
+            source,
+            axes=[spatial_dim],
+            padding=[(window_left, window_right)],
+            value=pad_value,
+        )
+        # shape[0] == n_time + window - 1
+    elif padding == "valid":
+        in_spatial_dim = spatial_dim
+        out_spatial_dim = spatial_dim - window_dim + 1
+    else:
+        raise ValueError(f"invalid padding {padding!r}")
+
+    if stride > 1:
+        start_times, out_spatial_dim = rf.range_over_dim_strided(out_spatial_dim, stride=stride)  # (n_out_time,)
+        win_range = rf.range_over_dim(window_dim)  # (window,)
+        indices = rf.combine_bc(start_times, "+", win_range)  # (n_out_time,window)
+        final = rf.gather(source, indices=indices, axis=in_spatial_dim)  # (n_out_time,window,...)
+        return final, out_spatial_dim
+
+    tiled_dimshuffle = rf.expand_dim(source, dim=window_dim)  # (window,n_time+window-1,...)
+    # We want to shift every dim*time block by one to the left.
+    # To do this, we interpret that we have one more time frame (i.e. n_time+window).
+    # We have to do some dimshuffling so that we get the right layout, then we can flatten,
+    # add some padding, and then dimshuffle it back.
+    # Then we can take out the first n_time frames.
+    tiled_flat, flat_dim = rf.merge_dims(tiled_dimshuffle, dims=(window_dim, in_spatial_dim))
+    rem = window_dim
+    tiled_flat_pad_right, (flat_dim_ext,) = rf.pad(tiled_flat, axes=[flat_dim], padding=[(0, rem)], value=pad_value)
+    # add time frame, (window,n_time+window,...)
+    out_time_ext = out_spatial_dim + window_dim
+    tiled_reshape_shift = rf.reshape(tiled_flat_pad_right, in_dims=[flat_dim_ext], out_dims=[window_dim, out_time_ext])
+    final, _ = rf.slice(tiled_reshape_shift, axis=out_time_ext, size=out_spatial_dim)  # (window,n_time,...)
+    if stride > 1:
+        final, out_spatial_dim = rf.slice(final, axis=out_spatial_dim, step=stride)
+    return final, out_spatial_dim
 
 
 def concat(
