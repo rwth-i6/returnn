@@ -14,7 +14,7 @@ T = TypeVar("T")
 __all__ = [
     "range_over_dim",
     "range_over_dim_strided",
-    "range_over_dims",
+    "range_over_merged_dims",
     "replace_dim",
     "dim_match_priority_when_needed",
     "num_elements_of_shape",
@@ -56,7 +56,9 @@ def range_over_dim_strided(
     return rf.range_over_dim(out_dim, dtype=dtype, device=device) * stride, out_dim
 
 
-def range_over_dims(dims: Sequence[Dim], *, dtype: Optional[str] = None, device: Optional[str] = None) -> Tensor[T]:
+def range_over_merged_dims(
+    dims: Sequence[Dim], *, dtype: Optional[str] = None, device: Optional[str] = None
+) -> Tensor[T]:
     """
     This is if you want to index into a merged dim.
     Related: :func:`rf.merge_dims`.
