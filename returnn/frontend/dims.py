@@ -13,6 +13,7 @@ T = TypeVar("T")
 
 __all__ = [
     "range_over_dim",
+    "range_over_dim_strided",
     "range_over_dims",
     "replace_dim",
     "dim_match_priority_when_needed",
@@ -32,6 +33,27 @@ def range_over_dim(dim: Dim, *, dtype: Optional[str] = None, device: Optional[st
     else:
         backend = global_backend
     return backend.range_over_dim(dim, dtype=dtype, device=device)
+
+
+def range_over_dim_strided(
+    dim: Dim,
+    *,
+    stride: Union[int, Tensor],
+    out_dim: Optional[Dim] = None,
+    dtype: Optional[str] = None,
+    device: Optional[str] = None,
+) -> Tuple[Tensor[T], Dim]:
+    """
+    :param dim:
+    :param stride:
+    :param out_dim:
+    :param dtype:
+    :param device,
+    :return: tensor with shape [dim], out_dim
+    """
+    if out_dim is None:
+        out_dim = dim.ceildiv_right(stride)
+    return rf.range_over_dim(out_dim, dtype=dtype, device=device) * stride, out_dim
 
 
 def range_over_dims(dims: Sequence[Dim], *, dtype: Optional[str] = None, device: Optional[str] = None) -> Tensor[T]:
