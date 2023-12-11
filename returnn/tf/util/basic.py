@@ -5909,12 +5909,12 @@ def _get_control_flows(v, yield_none):
             for t in _get_control_flows(elem, yield_none=yield_none):
                 yield t
         return
+    if isinstance(v, Tensor):
+        v = v.raw_tensor
     if isinstance(v, (int, float, numpy.integer, type(None))):
         if yield_none:
             yield None
         return
-    if isinstance(v, Tensor):
-        v = v.raw_tensor
     if isinstance(v, (tf.Tensor, tf.Variable)):
         v = v.op
     assert isinstance(v, tf.Operation), "unexpected type %r" % type(v)
@@ -5948,10 +5948,10 @@ def _get_control_flow_graphs(v):
             for t in _get_control_flow_graphs(elem):
                 yield t
         return
-    if isinstance(v, (int, float, numpy.integer, type(None))):
-        return
     if isinstance(v, Tensor):
         v = v.raw_tensor
+    if isinstance(v, (int, float, numpy.integer, type(None))):
+        return
     if isinstance(v, (tf.Tensor, tf.Variable)):
         v = v.op
     assert isinstance(v, tf.Operation), "unexpected type %r" % type(v)
