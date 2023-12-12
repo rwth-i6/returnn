@@ -1046,6 +1046,7 @@ class TorchBackend(Backend[torch.Tensor]):
         )
         out.dtype = true_.dtype
         out.sparse_dim = true_.sparse_dim
+        out.feature_dim = true_.feature_dim
         cond_bc_raw = cond.copy_compatible_to_dims_raw(out.dims)
         true_bc_raw = true_.copy_compatible_to_dims_raw(out.dims)
         false_bc_raw = false_.copy_compatible_to_dims_raw(out.dims)
