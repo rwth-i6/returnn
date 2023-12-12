@@ -1045,8 +1045,8 @@ class TorchBackend(Backend[torch.Tensor]):
             [true_, false_, cond], allow_broadcast_all_sources=allow_broadcast_all_sources, name="where"
         )
         out.dtype = true_.dtype
-        out.sparse_dim = true_.sparse_dim
-        out.feature_dim = true_.feature_dim
+        out.sparse_dim = true_.sparse_dim or false_.sparse_dim
+        out.feature_dim = true_.feature_dim or false_.feature_dim
         cond_bc_raw = cond.copy_compatible_to_dims_raw(out.dims)
         true_bc_raw = true_.copy_compatible_to_dims_raw(out.dims)
         false_bc_raw = false_.copy_compatible_to_dims_raw(out.dims)
