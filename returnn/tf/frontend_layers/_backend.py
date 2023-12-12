@@ -705,6 +705,27 @@ class ReturnnLayersBackend(Backend[Layer]):
         )
 
     @staticmethod
+    def clip_by_value(
+        x: Tensor,
+        clip_value_min: Union[Tensor, rf.RawTensorTypes],
+        clip_value_max: Union[Tensor, rf.RawTensorTypes],
+        *,
+        allow_broadcast_all_sources: bool = False,
+    ) -> Tensor:
+        """clip by value"""
+        clip_value_min = rf.convert_to_tensor(clip_value_min, _backend=ReturnnLayersBackend)
+        clip_value_max = rf.convert_to_tensor(clip_value_max, _backend=ReturnnLayersBackend)
+        return rfl.make_layer(
+            {
+                "class": "eval",
+                "eval": "tf.clip_by_value(source(0), source(1), source(2))",
+                "from": [x, clip_value_min, clip_value_max],
+                "allow_broadcast_all_sources": allow_broadcast_all_sources,
+            },
+            name="clip_by_value",
+        )
+
+    @staticmethod
     def matmul(a: Tensor, b: Tensor, *, reduce: Union[Dim, Sequence[Dim]], use_mask: bool = True) -> Tensor:
         """matmul"""
         args = {}

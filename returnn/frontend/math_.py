@@ -38,6 +38,7 @@ __all__ = [
     "opt_logical_or",
     "maximum",
     "minimum",
+    "clip_by_value",
     "identity",
     "exp",
     "expm1",
@@ -355,6 +356,20 @@ def minimum(a: Tensor, b: Union[Tensor, _RawTensorTypes], *other_tensors) -> Ten
     for t in other_tensors:
         res = combine(res, "minimum", t)
     return res
+
+
+def clip_by_value(
+    x: Tensor,
+    clip_value_min: Union[Tensor, _RawTensorTypes],
+    clip_value_max: Union[Tensor, _RawTensorTypes],
+    *,
+    allow_broadcast_all_sources: bool = False,
+) -> Tensor:
+    """clip by value"""
+    # noinspection PyProtectedMember
+    return x._raw_backend.clip_by_value(
+        x, clip_value_min, clip_value_max, allow_broadcast_all_sources=allow_broadcast_all_sources
+    )
 
 
 def identity(x: Tensor) -> Tensor:

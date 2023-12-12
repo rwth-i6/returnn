@@ -1054,6 +1054,31 @@ class TorchBackend(Backend[torch.Tensor]):
         return out
 
     @staticmethod
+    def clip_by_value(
+        x: Tensor,
+        clip_value_min: Union[Tensor, rf.RawTensorTypes],
+        clip_value_max: Union[Tensor, rf.RawTensorTypes],
+        *,
+        allow_broadcast_all_sources: bool = False,
+    ) -> Tensor:
+        """clip by value"""
+        clip_value_min = rf.convert_to_tensor(clip_value_min, _backend=TorchBackend, device=x.device)
+        clip_value_max = rf.convert_to_tensor(clip_value_max, _backend=TorchBackend, device=x.device)
+        out = Tensor.get_common_data(
+            [x, clip_value_min, clip_value_max],
+            allow_broadcast_all_sources=allow_broadcast_all_sources,
+            name="clip_by_value",
+        )
+        out.dtype = x.dtype
+        out.sparse_dim = x.sparse_dim
+        out.feature_dim = x.feature_dim
+        x_bc_raw = x.copy_compatible_to_dims_raw(out.dims)
+        min_bc_raw = clip_value_min.copy_compatible_to_dims_raw(out.dims)
+        max_bc_raw = clip_value_max.copy_compatible_to_dims_raw(out.dims)
+        out.raw_tensor = torch.clamp(x_bc_raw, min_bc_raw, max_bc_raw)
+        return out
+
+    @staticmethod
     def matmul(a: _TT, b: _TT, *, reduce: Union[Dim, Sequence[Dim]], use_mask: bool = True) -> _TT:
         """
         batched matmul of a and b, see base class doc string

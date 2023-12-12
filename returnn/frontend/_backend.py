@@ -932,6 +932,17 @@ class Backend(Generic[T]):
         raise NotImplementedError
 
     @staticmethod
+    def clip_by_value(
+        x: Tensor,
+        clip_value_min: Union[Tensor, rf.RawTensorTypes],
+        clip_value_max: Union[Tensor, rf.RawTensorTypes],
+        *,
+        allow_broadcast_all_sources: bool = False,
+    ) -> Tensor:
+        """clip by value"""
+        raise NotImplementedError
+
+    @staticmethod
     def matmul(a: Tensor[T], b: Tensor[T], *, reduce: Union[Dim, Sequence[Dim]], use_mask: bool = True) -> Tensor[T]:
         """
         This performs a batched matmul of two sources a and b
