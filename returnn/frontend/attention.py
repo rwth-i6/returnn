@@ -444,18 +444,6 @@ class LearnedRelativePositionalEncoding(rf.Module):
         out_spatial_dim = spatial_dim - 1 + spatial_dim
         mat_spatial_size = self.clipping + 1
 
-        def _better():
-            kv_pos_vec = rf.range_over_dim(key_value_spatial_dim_)  # [kv_len]
-            q_pos_vec = rf.range_over_dim(query_spatial_dim_) + query_offset  # [q_len]
-
-            distance_mat = rf.combine_bc(kv_pos_vec, "-", q_pos_vec)  # [q_len,kv_len]
-            distance_mat_clipped = rf.clip_by_value(distance_mat, -clipping, clipping)
-            # Shift values to be >= 0. Each integer still uniquely identifies a relative
-            # position difference.
-            position_info_indices = distance_mat_clipped + clipping  # [q_len,kv_len]
-
-            encoding = rf.gather(encoding_matrix, indices=position_info_indices)  # [q_len,kv_len,n_out]
-
         def _expand_emb():
             # spatial_dim > self.clipping, need to expand
             left = rf.gather(self.pos_emb, axis=self.clipped_spatial_dim, indices=0)
