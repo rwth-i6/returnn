@@ -527,7 +527,7 @@ def relative_positional_encoding(
 
         feat2_dim = feat_dim.div_left(2)
         div_term = rf.exp(rf.range_over_dim(feat2_dim, dtype=dtype) * -(2.0 * math.log(10000.0) / feat_dim.dimension))
-        arg_sin = rf.combine_bc(indices, "*", div_term)
+        arg_sin = rf.combine_bc(rf.cast(indices, dtype), "*", div_term)
         arg_cos = arg_sin + math.pi / 2.0
         arg, feat_dim_ = rf.concat((arg_sin, feat2_dim), (arg_cos, feat2_dim))
         arg, feat_dim_ = rf.replace_dim(arg, in_dim=feat_dim_, out_dim=feat_dim)
