@@ -471,7 +471,7 @@ class LearnedRelativePositionalEncoding(rf.Module):
 _relative_positional_encoding_cache = weakref.WeakKeyDictionary()  # run ctx -> (spatial_dim, feat_dim) -> enc
 
 
-def relative_positional_encoding(spatial_dim: Dim, feat_dim: Dim, *, dtype: str = None) -> Tuple[Tensor, Dim]:
+def relative_positional_encoding(spatial_dim: Dim, feat_dim: Dim, *, dtype: Optional[str] = None) -> Tuple[Tensor, Dim]:
     """
     Implements relative positional encoding, Transformer-XL style (https://arxiv.org/abs/1901.02860),
     as used for example by :class:`RelPosSelfAttention`.
@@ -494,25 +494,38 @@ def relative_positional_encoding(spatial_dim: Dim, feat_dim: Dim, *, dtype: str 
     if not dtype:
         dtype = rf.get_default_float_dtype()
     cache = _relative_positional_encoding_cache.setdefault(rf.get_run_ctx(), {})
-    if (spatial_dim, feat_dim) in cache:
-        return cache[(spatial_dim, feat_dim)]
+    cache_key = (spatial_dim, feat_dim, dtype)
+    if cache_key in cache:
+        return cache[cache_key]
     import math
 
     with rf.control_flow_ctx(None):
-        position_pos = rf.range_over_dim(spatial_dim, dtype=dtype)
-        position_neg = -spatial_dim.get_dim_value_tensor() + rf.range_over_dim(spatial_dim - 1) + 1
-        position_neg = rf.cast(position_neg, dtype=dtype)
-        position, out_spatial_dim = rf.concat((position_neg, spatial_dim - 1), (position_pos, spatial_dim))
+        # See also RelativePositionalEncodingLayer, LearnedRelativePositionalEncoding
+        query_offset = 0
+        query_spatial_dim = spatial_dim
+        key_value_spatial_dim = spatial_dim
+        query_spatial_dim_m1 = query_spatial_dim - 1
+
+        kv_pos_vec = rf.range_over_dim(key_value_spatial_dim)  # [kv_len]
+        q_pos_vec = rf.range_over_dim(query_spatial_dim_m1)  # [q_len-1]
+
+        # See LearnedRelativePositionalEncoding.
+        indices, out_spatial_dim = rf.concat(
+            (q_pos_vec - query_spatial_dim_m1.get_dim_value_tensor(), query_spatial_dim_m1),
+            (kv_pos_vec, key_value_spatial_dim),
+        )
+        indices = indices - query_offset
+
         feat2_dim = feat_dim.div_left(2)
         div_term = rf.exp(rf.range_over_dim(feat2_dim, dtype=dtype) * -(2.0 * math.log(10000.0) / feat_dim.dimension))
-        arg_sin = rf.combine_bc(position, "*", div_term)
+        arg_sin = rf.combine_bc(indices, "*", div_term)
         arg_cos = arg_sin + math.pi / 2.0
         arg, feat_dim_ = rf.concat((arg_sin, feat2_dim), (arg_cos, feat2_dim))
         arg, feat_dim_ = rf.replace_dim(arg, in_dim=feat_dim_, out_dim=feat_dim)
         emb = rf.sin(arg)
         emb.verify_out_shape({out_spatial_dim, feat_dim}, allow_missing_implicit_dims=True)
         emb.feature_dim = feat_dim
-        cache[(spatial_dim, feat_dim)] = emb, out_spatial_dim
+        cache[cache_key] = emb, out_spatial_dim
         return emb, out_spatial_dim
 
 
