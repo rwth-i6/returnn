@@ -421,7 +421,7 @@ class LearnedRelativePositionalEncoding(rf.Module):
     https://github.com/rwth-i6/returnn_common/wiki/Relative-positional-encoding
     """
 
-    def __init__(self, feat_dim: Dim, *, clipping: int = 16, dtype: str = "float32"):
+    def __init__(self, feat_dim: Dim, *, clipping: int = 16, dtype: Optional[str] = None):
         """
         :param feat_dim: feature dim, for the emb matrix and output
         :param clipping: max distance to consider. emb matrix shape is [2 * clipping + 1, feat_dim].
