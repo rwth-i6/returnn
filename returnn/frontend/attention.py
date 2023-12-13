@@ -347,9 +347,11 @@ class RelPosSelfAttention(SelfAttentionBase):
     def __call__(self, source: Tensor, *, axis: Dim, **_kwargs) -> Tensor:
         """forward"""
         if self.learned_pos_emb is not None:
-            pos_emb, pos_emb_spatial_dim = self.learned_pos_emb(axis)
+            pos_emb, pos_emb_spatial_dim = self.learned_pos_emb(query_spatial_dim=axis, key_value_spatial_dim=axis)
         else:
-            pos_emb, pos_emb_spatial_dim = relative_positional_encoding(axis, self.pos_emb_feat_dim)
+            pos_emb, pos_emb_spatial_dim = relative_positional_encoding(
+                query_spatial_dim=axis, key_value_spatial_dim=axis, feat_dim=self.pos_emb_feat_dim
+            )
         if self.pos_emb_dropout:
             pos_emb = rf.dropout(pos_emb, self.pos_emb_dropout)
         if self.linear_pos is not None:
@@ -434,7 +436,13 @@ class LearnedRelativePositionalEncoding(rf.Module):
         self.clipped_spatial_dim = Dim(2 * clipping + 1, name="learned-rel-pos")
         self.pos_emb = rf.Parameter((self.clipped_spatial_dim, self.feat_dim), dtype=dtype)
 
-    def __call__(self, spatial_dim: Dim) -> Tuple[Tensor, Dim]:
+    def __call__(
+        self,
+        *,
+        query_spatial_dim: Dim,
+        key_value_spatial_dim: Dim,
+        query_offset: int = 0,
+    ) -> Tuple[Tensor, Dim]:
         """
         same interface as :func:`relative_positional_encoding`
 
@@ -442,9 +450,6 @@ class LearnedRelativePositionalEncoding(rf.Module):
           In the center is the rel pos i-j=0. All to the right are for i-j>0, all to the left for i-j<0.
         """
         # See also RelativePositionalEncodingLayer
-        query_offset = 0
-        query_spatial_dim = spatial_dim
-        key_value_spatial_dim = spatial_dim
         query_spatial_dim_m1 = query_spatial_dim - 1
 
         kv_pos_vec = rf.range_over_dim(key_value_spatial_dim)  # [kv_len]
@@ -471,7 +476,14 @@ class LearnedRelativePositionalEncoding(rf.Module):
 _relative_positional_encoding_cache = weakref.WeakKeyDictionary()  # run ctx -> (spatial_dim, feat_dim) -> enc
 
 
-def relative_positional_encoding(spatial_dim: Dim, feat_dim: Dim, *, dtype: Optional[str] = None) -> Tuple[Tensor, Dim]:
+def relative_positional_encoding(
+    *,
+    query_spatial_dim: Dim,
+    key_value_spatial_dim: Dim,
+    feat_dim: Dim,
+    query_offset: int = 0,
+    dtype: Optional[str] = None,
+) -> Tuple[Tensor, Dim]:
     """
     Implements relative positional encoding, Transformer-XL style (https://arxiv.org/abs/1901.02860),
     as used for example by :class:`RelPosSelfAttention`.
@@ -494,16 +506,13 @@ def relative_positional_encoding(spatial_dim: Dim, feat_dim: Dim, *, dtype: Opti
     if not dtype:
         dtype = rf.get_default_float_dtype()
     cache = _relative_positional_encoding_cache.setdefault(rf.get_run_ctx(), {})
-    cache_key = (spatial_dim, feat_dim, dtype)
+    cache_key = (query_spatial_dim, key_value_spatial_dim, feat_dim, query_offset, dtype)
     if cache_key in cache:
         return cache[cache_key]
     import math
 
     with rf.control_flow_ctx(None):
         # See also RelativePositionalEncodingLayer, LearnedRelativePositionalEncoding
-        query_offset = 0
-        query_spatial_dim = spatial_dim
-        key_value_spatial_dim = spatial_dim
         query_spatial_dim_m1 = query_spatial_dim - 1
 
         kv_pos_vec = rf.range_over_dim(key_value_spatial_dim)  # [kv_len]

@@ -81,7 +81,9 @@ def test_relative_positional_encoding():
 
     class _Net(rf.Module):
         def __call__(self, x: Tensor, *, axis: Dim) -> Tuple[Tensor, Dim]:
-            x, dim = rf.relative_positional_encoding(axis, in_dim)
+            x, dim = rf.relative_positional_encoding(
+                key_value_spatial_dim=axis, query_spatial_dim=axis, feat_dim=in_dim
+            )
             return x, dim
 
     # noinspection PyShadowingNames
