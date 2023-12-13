@@ -441,40 +441,31 @@ class LearnedRelativePositionalEncoding(rf.Module):
         :return: tensor of shape [spatial_dim * 2 - 1, feat_dim], and the out spatial dim (spatial_dim * 2 - 1).
           In the center is the rel pos i-j=0. All to the right are for i-j>0, all to the left for i-j<0.
         """
-        out_spatial_dim = spatial_dim - 1 + spatial_dim
-        mat_spatial_size = self.clipping + 1
+        # See also RelativePositionalEncodingLayer
+        query_offset = 0
+        query_spatial_dim = spatial_dim
+        key_value_spatial_dim = spatial_dim
+        query_spatial_dim_m1 = query_spatial_dim - 1
 
-        def _expand_emb():
-            # spatial_dim > self.clipping, need to expand
-            left = rf.gather(self.pos_emb, axis=self.clipped_spatial_dim, indices=0)
-            right = rf.gather(
-                self.pos_emb, axis=self.clipped_spatial_dim, indices=self.clipped_spatial_dim.dimension - 1
-            )
-            remaining_dim = spatial_dim - mat_spatial_size
-            left = rf.expand_dim(left, dim=remaining_dim)
-            right = rf.expand_dim(right, dim=remaining_dim)
-            concat, out_spatial_dim_ = rf.concat(
-                (left, remaining_dim), (self.pos_emb, self.clipped_spatial_dim), (right, remaining_dim)
-            )
-            concat, out_spatial_dim_ = rf.replace_dim(concat, in_dim=out_spatial_dim_, out_dim=out_spatial_dim)
-            return concat
+        kv_pos_vec = rf.range_over_dim(key_value_spatial_dim)  # [kv_len]
+        q_pos_vec = rf.range_over_dim(query_spatial_dim_m1)  # [q_len-1]
 
-        def _cut_emb():
-            # spatial_dim <= self.clipping, can cut out
-            cut, _ = rf.slice(
-                self.pos_emb,
-                axis=self.clipped_spatial_dim,
-                start=mat_spatial_size - spatial_dim.get_dim_value_tensor(),
-                size=out_spatial_dim,
-            )
-            return cut
-
-        emb = rf.cond(
-            pred=spatial_dim.get_dim_value_tensor() > mat_spatial_size,
-            true_fn=_expand_emb,
-            false_fn=_cut_emb,
+        # We want to have all distances as in rf.combine_bc(kv_pos_vec, "-", q_pos_vec) with shape [q_len,kv_len].
+        # We want to store only non-duplicates.
+        # The min value is with kv_pos=0, q_pos=q_len-1: -(q_len-1)
+        # The max value is with kv_pos=kv_len-1, q_pos=0: k_len-1
+        indices, out_spatial_dim = rf.concat(
+            (q_pos_vec - query_spatial_dim_m1.get_dim_value_tensor(), query_spatial_dim_m1),
+            (kv_pos_vec, key_value_spatial_dim),
         )
-        return emb, out_spatial_dim
+        indices = indices - query_offset
+
+        indices = rf.clip_by_value(indices, -self.clipping, self.clipping)
+        # Shift values to be >= 0. Each integer still uniquely identifies a relative position difference.
+        indices = indices + self.clipping
+
+        encoding = rf.gather(self.pos_emb, indices=indices, axis=self.clipped_spatial_dim)  # [q_len,kv_len,n_out]
+        return encoding, out_spatial_dim
 
 
 _relative_positional_encoding_cache = weakref.WeakKeyDictionary()  # run ctx -> (spatial_dim, feat_dim) -> enc
