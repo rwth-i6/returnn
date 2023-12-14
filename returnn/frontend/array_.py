@@ -428,6 +428,8 @@ def cum_concat_step(
     """
     if not out_spatial_dim:
         out_spatial_dim = axis + 1
+    if not out_spatial_dim.is_dim_known():
+        out_spatial_dim.declare_same_as(axis + 1)
     # noinspection PyProtectedMember
     return (
         source._raw_backend.cum_concat_step(source, prev_accum=prev_accum, axis=axis, out_spatial_dim=out_spatial_dim),

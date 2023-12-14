@@ -70,6 +70,59 @@ def test_self_attention():
     run_model(extern_data, lambda *, epoch, step: _Net(), _forward_step)
 
 
+def test_causal_self_attention():
+    from returnn.tensor import single_step_dim
+
+    time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
+    in_dim = Dim(7, name="in")
+    extern_data = TensorDict(
+        {
+            "data": Tensor("data", [batch_dim, time_dim, in_dim], dtype="float32"),
+        }
+    )
+
+    class _Net(rf.Module):
+        def __init__(self):
+            super().__init__()
+            self.self_att = rf.CausalSelfAttention(
+                in_dim=in_dim,
+                proj_dim=Dim(5, name="out"),
+                key_dim_total=Dim(21, name="key-dim-total"),
+                value_dim_total=Dim(33, name="value-dim-total"),
+                num_heads=3,
+            )
+            self.out_dim = self.self_att.out_dim
+
+        def __call__(self, x: Tensor, *, axis: Dim) -> Tensor:
+            """forward"""
+
+            def _body(_x: Tensor, _state: rf.State) -> Tuple[Tensor, rf.State]:
+                _y, _state.self_att = self.self_att(_x, axis=single_step_dim, state=_state.self_att)
+                return _y, _state
+
+            y, _, _ = rf.scan(
+                spatial_dim=axis,
+                xs=x,
+                body=_body,
+                ys=Tensor("y", dims=[batch_dim, self.out_dim], dtype="float32"),
+                initial=rf.State(self_att=self.self_att.default_initial_state(batch_dims=[batch_dim])),
+            )
+            return y
+
+    # noinspection PyShadowingNames
+    def _forward_step(*, model: _Net, extern_data: TensorDict):
+        out = model(extern_data["data"], axis=time_dim)
+        out.mark_as_default_output(shape=(batch_dim, time_dim, model.out_dim))
+
+    run_model(
+        extern_data,
+        lambda *, epoch, step: _Net(),
+        _forward_step,
+        # TF needs TensorArray unstack, not implemented yet
+        test_tensorflow=False,
+    )
+
+
 def test_relative_positional_encoding():
     time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
     in_dim = Dim(8, name="in")
