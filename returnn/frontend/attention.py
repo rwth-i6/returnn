@@ -441,7 +441,7 @@ class LearnedRelativePositionalEncoding(rf.Module):
         *,
         query_spatial_dim: Dim,
         key_value_spatial_dim: Dim,
-        query_offset: int = 0,
+        query_offset: Union[int, Tensor] = 0,
     ) -> Tuple[Tensor, Dim]:
         """
         same interface as :func:`relative_positional_encoding`
@@ -469,8 +469,28 @@ class LearnedRelativePositionalEncoding(rf.Module):
         # Shift values to be >= 0. Each integer still uniquely identifies a relative position difference.
         indices = indices + self.clipping
 
-        encoding = rf.gather(self.pos_emb, indices=indices, axis=self.clipped_spatial_dim)  # [q_len,kv_len,n_out]
+        encoding = rf.gather(self.pos_emb, indices=indices, axis=self.clipped_spatial_dim)  # [out_spatial_dim,n_out]
         return encoding, out_spatial_dim
+
+    def full_matrix(
+        self,
+        *,
+        query_spatial_dim: Dim,
+        key_value_spatial_dim: Dim,
+        query_offset: Union[int, Tensor] = 0,
+    ) -> Tensor:
+        """
+        :return: as full matrix [query_spatial_dim,key_value_spatial_dim,feat_dim].
+            however, note that __call__ is usually to be preferred, as this gives a more efficient format.
+        """
+        # Very similar logic as in __call__.
+        kv_pos_vec = rf.range_over_dim(key_value_spatial_dim)  # [kv_len]
+        q_pos_vec = rf.range_over_dim(query_spatial_dim)  # [q_len]
+        indices = rf.combine_bc(kv_pos_vec, "-", q_pos_vec + query_offset)  # [q_len,kv_len]
+        indices = rf.clip_by_value(indices, -self.clipping, self.clipping)
+        indices = indices + self.clipping
+        encoding = rf.gather(self.pos_emb, indices=indices, axis=self.clipped_spatial_dim)  # [q_len,kv_len,n_out]
+        return encoding
 
 
 _relative_positional_encoding_cache = weakref.WeakKeyDictionary()  # run ctx -> (spatial_dim, feat_dim) -> enc
