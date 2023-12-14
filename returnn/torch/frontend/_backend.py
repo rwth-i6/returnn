@@ -882,7 +882,11 @@ class TorchBackend(Backend[torch.Tensor]):
                     indices.dims_set
                 ), f"gather with clip_to_valid: indices ({indices}) dims must be a superset of {dim} dyn-size"
                 size = dim.dyn_size_ext.copy_compatible_to(indices, check_sparse=False)
-                indices.raw_tensor = torch.clamp(indices.raw_tensor, torch.tensor(0), size.raw_tensor - 1)
+                indices.raw_tensor = torch.clamp(
+                    indices.raw_tensor,
+                    torch.tensor(0, device=indices.raw_tensor.device),
+                    (size.raw_tensor - 1).to(indices.raw_tensor.device),
+                )
             else:
                 indices.raw_tensor = torch.clamp(indices.raw_tensor, 0, source.raw_tensor.shape[axis_int] - 1)
         index_own_dims = [dim for dim in indices.dims if dim not in source.dims or dim == axis]
