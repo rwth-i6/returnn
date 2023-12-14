@@ -795,7 +795,11 @@ class _DimMixin:
             )
         self.dyn_size_ext.placeholder = dyn_size
 
-    def _get_dyn_size_ext_for_device(self: Dim, device: Optional[str]) -> _t.Tensor:
+    def get_dyn_size_ext_for_device(self: Dim, device: Optional[str]) -> _t.Tensor:
+        """
+        :return: dyn_size_ext on the device
+        """
+        assert self.dyn_size_ext
         if not device:
             return self.dyn_size_ext
 
@@ -842,7 +846,7 @@ class _DimMixin:
             mask, _ = rf.replace_dim(mask, in_dim=self._extra.copy_same_as, out_dim=self)
             return mask
 
-        size_ext = self._get_dyn_size_ext_for_device(device)
+        size_ext = self.get_dyn_size_ext_for_device(device)
 
         max_idx = rf.reduce(
             size_ext,
