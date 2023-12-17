@@ -2,6 +2,8 @@
 Some generic debugging utilities.
 """
 
+from __future__ import annotations
+from typing import Optional, Any, Dict
 import os
 import sys
 import signal
@@ -497,15 +499,19 @@ def init_cuda_not_in_main_proc_check():
     cuda.use.device_number = None
 
 
-def debug_shell(user_ns=None, user_global_ns=None, exit_afterwards=True):
+def debug_shell(
+    user_ns: Optional[Dict[str, Any]] = None,
+    user_global_ns: Optional[Dict[str, Any]] = None,
+    exit_afterwards: bool = True,
+):
     """
     Provides some interactive Python shell.
     Uses IPython if possible.
     Wraps to ``better_exchook.debug_shell``.
 
-    :param dict[str]|None user_ns:
-    :param dict[str]|None user_global_ns:
-    :param bool exit_afterwards: will do sys.exit(1) at the end
+    :param user_ns:
+    :param user_global_ns:
+    :param exit_afterwards: will do sys.exit(1) at the end
     """
     print("Debug shell:")
     from returnn.util.basic import ObjAsDict
