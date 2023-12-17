@@ -116,6 +116,7 @@ class Engine(EngineBase):
             torch.cuda.set_device(self._device)
 
         self._log_memory_usage = config.bool("torch_log_memory_usage", False)
+        self._reset_dev_memory_caches = config.bool("reset_dev_memory_caches", False)
 
         amp_options = self.config.opt_typed_value("torch_amp")
         grad_scaler_opts = self.config.typed_value("grad_scaler", NotSpecified)
@@ -248,6 +249,12 @@ class Engine(EngineBase):
             }
         )
 
+    def _maybe_reset_dev_memory_caches(self):
+        if not self._reset_dev_memory_caches:
+            return
+        gc.collect()
+        torch.cuda.empty_cache()
+
     def _reset_dev_memory_stats(self):
         dev = torch.device(self._device)
         if dev.type == "cuda":
@@ -291,6 +298,7 @@ class Engine(EngineBase):
         elapsed_computation_time = 0
 
         self._pt_model.train()
+        self._maybe_reset_dev_memory_caches()
         self._reset_dev_memory_stats()
 
         if self.config.bool("debug_shell_before_train_loop", False):
@@ -413,6 +421,7 @@ class Engine(EngineBase):
         Runs model on all eval datasets and calculates the loss.
         """
         self._pt_model.eval()
+        self._maybe_reset_dev_memory_caches()
         self._reset_dev_memory_stats()
 
         eval_dump_str = []
@@ -807,6 +816,7 @@ class Engine(EngineBase):
         elapsed_computation_time = 0.0
 
         self._pt_model.eval()
+        self._maybe_reset_dev_memory_caches()
         self._reset_dev_memory_stats()
 
         if dataset.supports_seq_order_sorting():
