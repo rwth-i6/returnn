@@ -13,7 +13,6 @@ import returnn.frontend as rf
 
 
 __all__ = [
-    "AttentionFunc",
     "dot_attention",
     "SelfAttentionBase",
     "SelfAttention",
@@ -23,22 +22,6 @@ __all__ = [
     "LearnedRelativePositionalEncoding",
     "relative_positional_encoding",
 ]
-
-
-class AttentionFunc(Protocol):
-    """Protocol defining a generic attention function"""
-
-    def __call__(
-        self,
-        query: Tensor,
-        keys: Tensor,
-        values: Tensor,
-        *,
-        key_dim: Dim,
-        axis: Dim,
-        att_dropout: float = 0.1,
-    ):
-        ...
 
 
 def dot_attention(
