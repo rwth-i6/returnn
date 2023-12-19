@@ -89,13 +89,13 @@ class SelfAttentionBase(rf.Module):
         """
         :param in_dim: input dim
         :param proj_dim: if given, will add a final linear projection to this dim.
-          otherwise no projection after the attention
+            otherwise no projection after the attention
         :param key_dim_total: total key dim. should be a multiple of num_heads
         :param value_dim_total: total value dim. should be a multiple of num_heads
         :param num_heads: number of heads
         :param with_bias: whether to add bias to qkv and proj linear projections.
-          Was False in original Transformer, but many recent implementations use True by default.
-          Also see: https://github.com/rwth-i6/returnn_common/issues/234.
+            Was False in original Transformer, but many recent implementations use True by default.
+            Also see: https://github.com/rwth-i6/returnn_common/issues/234.
         :param att_dropout: dropout for attention weights
         :param att_dropout_broadcast: whether to broadcast over all but ``axis``.
             normally not wanted. disabled by default since behavior version 19.
