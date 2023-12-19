@@ -197,9 +197,8 @@ class CausalSelfAttention(SelfAttentionBase):
         assert axis == single_step_dim  # not implemented otherwise currently...
         q, k, v = self.forward_qkv(source)
         assert state
-        hist_dim = Dim(None, name="kv-history")
         new_state = CausalSelfAttentionState()
-        k, _ = rf.cum_concat_step(k, prev_accum=state.k_accum, out_spatial_dim=hist_dim, axis=state.accum_axis)
+        k, hist_dim = rf.cum_concat_step(k, prev_accum=state.k_accum, axis=state.accum_axis)
         v, _ = rf.cum_concat_step(v, prev_accum=state.v_accum, out_spatial_dim=hist_dim, axis=state.accum_axis)
         new_state.k_accum = k
         new_state.v_accum = v
