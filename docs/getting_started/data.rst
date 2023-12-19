@@ -192,6 +192,8 @@ Related work
   semantically meaningful dimensions
 * `Tensor Shape Annotation Library (tsalib) for TF/PyTorch/NumPy (2018) <https://github.com/ofnote/tsalib>`__,
   named dimensions (e.g. ``'btd'``)
+* `Mesh TensorFlow (2018) <https://github.com/tensorflow/mesh/>`__,
+  named dimensions, ``einsum``
 * `NamedTensor for PyTorch (2019) <https://github.com/harvardnlp/NamedTensor>`__
 * `PyTorch official support for named tensors (2019) <https://pytorch.org/docs/stable/named_tensor.html>`__,
   e.g. ``torch.zeros(2, 3, names=('N', 'C'))``
