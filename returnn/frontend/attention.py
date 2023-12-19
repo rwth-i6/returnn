@@ -18,6 +18,7 @@ __all__ = [
     "CausalSelfAttention",
     "CausalSelfAttentionState",
     "RelPosSelfAttention",
+    "CrossAttention",
     "LearnedRelativePositionalEncoding",
     "relative_positional_encoding",
 ]
@@ -394,6 +395,133 @@ class RelPosSelfAttention(SelfAttentionBase):
         x_padded, _ = rf.slice(x_padded, axis=pos_emb_spatial_dim_, size=hist_dim)  # [B,H,T,T']
         x_padded.verify_out_shape(set(batch_dims) | {axis, hist_dim})
         return x_padded
+
+
+class CrossAttention(rf.Module):
+    """
+    Cross attention
+
+    It uses :func:`dot_attention` for multi-headed dot-attention.
+    """
+
+    def __init__(
+        self,
+        encoder_dim: Dim,
+        query_in_dim: Dim,
+        proj_dim: Optional[Dim],
+        *,
+        key_dim_total: Dim,
+        value_dim_total: Dim,
+        num_heads: Union[int, Dim],
+        with_bias: bool = True,
+        att_dropout: float = 0.1,
+        att_dropout_broadcast: Optional[bool] = None,
+    ):
+        """
+        :param encoder_dim: encoder output dim = input dim for key-value
+        :param query_in_dim: input dim for query
+        :param proj_dim: if given, will add a final linear projection to this dim.
+            otherwise no projection after the attention
+        :param key_dim_total: total key dim. should be a multiple of num_heads
+        :param value_dim_total: total value dim. should be a multiple of num_heads
+        :param num_heads: number of heads
+        :param with_bias: whether to add bias to qkv and proj linear projections.
+            Was False in original Transformer, but many recent implementations use True by default.
+            Also see: https://github.com/rwth-i6/returnn_common/issues/234.
+        :param att_dropout: dropout for attention weights
+        :param att_dropout_broadcast: whether to broadcast over all but ``axis``.
+            normally not wanted. disabled by default since behavior version 19.
+        """
+        super().__init__()
+        self.encoder_dim = encoder_dim
+        self.query_in_dim = query_in_dim
+        self.out_dim = proj_dim if proj_dim else value_dim_total
+        if isinstance(num_heads, int):
+            num_heads = Dim(num_heads, name="num_heads")
+        self.key_dim_total = key_dim_total
+        self.key_dim_per_head = key_dim_total.div_left(num_heads)
+        self.value_dim_total = value_dim_total
+        self.value_dim_per_head = value_dim_total.div_left(num_heads)
+        self.num_heads = num_heads
+        self.kv_dim_total = key_dim_total + value_dim_total
+        self.kv_dim_per_head = self.key_dim_per_head + self.value_dim_per_head
+        self.kv = rf.Linear(encoder_dim, self.kv_dim_total, with_bias=with_bias)
+        self.q = rf.Linear(query_in_dim, self.key_dim_total, with_bias=with_bias)
+        # In Fairseq MultiheadAttention, they use:
+        #   nn.init.xavier_uniform_(self.k_proj.weight, gain=1 / math.sqrt(2))  (same for q_proj, v_proj),
+        # where (Xavier Glorot) xavier_uniform_ means:
+        #   std = gain * math.sqrt(2.0 / float(fan_in + fan_out))
+        #   a = math.sqrt(3.0) * std  # Calculate uniform bounds from standard deviation
+        #   _no_grad_uniform_(tensor, -a, a)
+        # Out nn.init.VarianceScaling with mode="fan_avg", distribution="uniform":
+        #   scale = scale * 2.0 / float(fan_in + fan_out)
+        #   limit = math.sqrt(3.0 * scale)
+        #   nn.random(distribution="uniform", minval=-limit, maxval=limit, ...)
+        # Xavier Glorot: VarianceScaling with mode="fan_avg", distribution="uniform", scale=1.0.
+        self.kv.weight.initial = rf.init.Glorot(scale=3 / 4)
+        self.q.weight.initial = rf.init.Glorot(scale=1 / 2)
+        # The bias init is different, but not sure how important this is.
+        if proj_dim:
+            self.proj = rf.Linear(value_dim_total, proj_dim, with_bias=with_bias)
+        else:
+            self.proj = None
+        self.att_dropout = att_dropout
+        if att_dropout_broadcast is None:
+            att_dropout_broadcast = _att_dropout_broadcast_default()
+        self.att_dropout_broadcast = att_dropout_broadcast
+
+    def transform_encoder(self, encoder: Tensor, *, axis: Dim) -> rf.State:
+        """
+        Transformer encoder output. This is intended as an initial API suggestion.
+        """
+        k, v = self.forward_kv(encoder)
+        return rf.State(k=k, v=v, kv_axis=axis)
+
+    def forward_kv(self, source: Tensor) -> Tuple[Tensor, Tensor]:
+        """
+        This would be calculated once for the whole sequence (batch)
+        and then always reused for :func:`attention`.
+
+        :return: k,v
+        """
+        qkv = self.kv(source)
+        qkv = rf.split_dims(qkv, axis=self.kv_dim_total, dims=(self.num_heads, self.kv_dim_per_head))
+        k, v = rf.split(
+            qkv,
+            axis=self.kv_dim_per_head,
+            out_dims=(self.key_dim_per_head, self.value_dim_per_head),
+        )
+        return k, v
+
+    def forward_query(self, source: Tensor) -> Tensor:
+        """
+        This is calculated for every different query.
+
+        :return: q
+        """
+        q = self.q(source)
+        q = rf.split_dims(q, axis=self.key_dim_total, dims=(self.num_heads, self.key_dim_per_head))
+        return q
+
+    def __call__(self, q: Tensor, encoder: rf.State) -> Tensor:
+        q = self.forward_query(q)
+        return self.attention(q=q, **encoder)
+
+    def attention(self, q: Tensor, k: Tensor, v: Tensor, *, kv_axis: Dim) -> Tensor:
+        """apply attention"""
+        att = dot_attention(
+            q,
+            k,
+            v,
+            key_dim=self.key_dim_per_head,
+            axis=kv_axis,
+            att_dropout=self.att_dropout,
+            att_dropout_broadcast=self.att_dropout_broadcast,
+        )
+        output, _ = rf.merge_dims(att, dims=(self.num_heads, self.value_dim_per_head), out_dim=self.value_dim_total)
+        if self.proj:
+            output = self.proj(output)
+        return output
 
 
 class LearnedRelativePositionalEncoding(rf.Module):
