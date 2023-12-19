@@ -18,6 +18,7 @@ __all__ = [
     "CausalSelfAttention",
     "CausalSelfAttentionState",
     "RelPosSelfAttention",
+    "RelPosCausalSelfAttention",
     "CrossAttention",
     "LearnedRelativePositionalEncoding",
     "relative_positional_encoding",
@@ -288,7 +289,7 @@ class RelPosSelfAttention(SelfAttentionBase):
         pos_emb_dropout: float = 0.0,
         att_dropout: float = 0.1,
     ):
-        super(RelPosSelfAttention, self).__init__(
+        super().__init__(
             in_dim=in_dim,
             proj_dim=proj_dim,
             key_dim_total=key_dim_total,
@@ -358,7 +359,7 @@ class RelPosSelfAttention(SelfAttentionBase):
         # compute matrix b and matrix d
         # (batch, head, time1, 2*time1-1)
         matrix_bd = rf.matmul(q_with_bias_v, pos_emb, reduce=self.key_dim_per_head)
-        matrix_bd = self._rel_shift(matrix_bd, axis, pos_emb_spatial_dim, hist_dim)
+        matrix_bd = _rel_pos_enc_shift(matrix_bd, axis, pos_emb_spatial_dim, hist_dim)
 
         scores = matrix_ac + matrix_bd  # (batch, head, time1, time2)
         scores *= self.key_dim_per_head.dimension**-0.5
@@ -372,28 +373,154 @@ class RelPosSelfAttention(SelfAttentionBase):
             output = self.proj(output)
         return output
 
-    @classmethod
-    def _rel_shift(cls, x: Tensor, axis: Dim, pos_emb_spatial_dim: Dim, hist_dim: Dim) -> Tensor:
-        """
-        :param x: [B,H,T,T*2-1]
-        :param axis: T
-        :param pos_emb_spatial_dim: T*2-1
-        :param hist_dim: T' (equal to T but separate dim)
-        :return: [B,H,T,T']
-        """
-        batch_dims = x.remaining_dims((axis, pos_emb_spatial_dim))
-        x_padded, (pos_emb_spatial_dim_,) = rf.pad(
-            x, axes=[pos_emb_spatial_dim], padding=[(1, 0)], value=0.0
-        )  # [B,H,T,T*2]
 
-        # Reshape + slice trickery. You need to draw the 2D arrays on paper to understand this.
-        # Also see similar trickery in :func:`window`.
-        x_padded = rf.reshape(x_padded, (axis, pos_emb_spatial_dim_), (pos_emb_spatial_dim_, axis))  # [B,H,T*2,T]
-        x_padded, pos_emb_spatial_dim_ = rf.slice(x_padded, axis=pos_emb_spatial_dim_, start=1)  # [B,H,T*2-1,T]
-        x_padded = rf.reshape(x_padded, (pos_emb_spatial_dim_, axis), (axis, pos_emb_spatial_dim_))  # [B,H,T,T*2-1]
-        x_padded, _ = rf.slice(x_padded, axis=pos_emb_spatial_dim_, size=hist_dim)  # [B,H,T,T']
-        x_padded.verify_out_shape(set(batch_dims) | {axis, hist_dim})
-        return x_padded
+def _rel_pos_enc_shift(x: Tensor, axis: Dim, pos_emb_spatial_dim: Dim, hist_dim: Dim) -> Tensor:
+    """
+    :param x: [B,H,T,T*2-1]
+    :param axis: T
+    :param pos_emb_spatial_dim: T*2-1
+    :param hist_dim: T' (equal to T but separate dim)
+    :return: [B,H,T,T']
+    """
+    batch_dims = x.remaining_dims((axis, pos_emb_spatial_dim))
+    x_padded, (pos_emb_spatial_dim_,) = rf.pad(
+        x, axes=[pos_emb_spatial_dim], padding=[(1, 0)], value=0.0
+    )  # [B,H,T,T*2]
+
+    # Reshape + slice trickery. You need to draw the 2D arrays on paper to understand this.
+    # Also see similar trickery in :func:`window`.
+    x_padded = rf.reshape(x_padded, (axis, pos_emb_spatial_dim_), (pos_emb_spatial_dim_, axis))  # [B,H,T*2,T]
+    x_padded, pos_emb_spatial_dim_ = rf.slice(x_padded, axis=pos_emb_spatial_dim_, start=1)  # [B,H,T*2-1,T]
+    x_padded = rf.reshape(x_padded, (pos_emb_spatial_dim_, axis), (axis, pos_emb_spatial_dim_))  # [B,H,T,T*2-1]
+    x_padded, _ = rf.slice(x_padded, axis=pos_emb_spatial_dim_, size=hist_dim)  # [B,H,T,T']
+    x_padded.verify_out_shape(set(batch_dims) | {axis, hist_dim})
+    return x_padded
+
+
+class RelPosCausalSelfAttention(CausalSelfAttention):
+    """
+    Self-attention with relative positional encoding.
+    This covers both Shawn et al. self-att rel pos 2018 (https://arxiv.org/abs/1803.02155),
+    and Dai et al. Transformer-XL style 2019 (https://arxiv.org/abs/1901.02860).
+
+    It uses :func:`relative_positional_encoding` or :class:`LearnedRelativePositionalEncoding`.
+
+    Same defaults as :class:`RelPosSelfAttention`, which is mostly Transformer-XL style.
+
+    Further details:
+    https://github.com/rwth-i6/returnn_common/wiki/Relative-positional-encoding
+
+    Code references, partly adapted from there:
+    https://github.com/espnet/espnet/blob/4138010fb66ad27a43e8bee48a4932829a0847ae/espnet/nets/pytorch_backend/transformer/embedding.py#L260
+    https://github.com/kimiyoung/transformer-xl/blob/44781ed21dbaec88b280f74d9ae2877f52b492a5/tf/model.py#L4
+    """
+
+    def __init__(
+        self,
+        in_dim: Dim,
+        proj_dim: Optional[Dim],
+        *,
+        key_dim_total: Dim,
+        value_dim_total: Dim,
+        num_heads: Union[int, Dim],
+        with_bias: bool = True,
+        with_linear_pos: bool = True,
+        with_pos_bias: bool = True,
+        learnable_pos_emb: bool = False,
+        learnable_pos_emb_clipping: int = 16,
+        separate_pos_emb_per_head: bool = True,
+        pos_emb_dropout: float = 0.0,
+        att_dropout: float = 0.1,
+    ):
+        super().__init__(
+            in_dim=in_dim,
+            proj_dim=proj_dim,
+            key_dim_total=key_dim_total,
+            value_dim_total=value_dim_total,
+            num_heads=num_heads,
+            with_bias=with_bias,
+            att_dropout=att_dropout,
+        )
+        self.separate_pos_emb_per_head = separate_pos_emb_per_head
+        if with_linear_pos:
+            self.pos_emb_feat_dim = self.in_dim
+        elif separate_pos_emb_per_head:
+            self.pos_emb_feat_dim = self.key_dim_total
+        else:
+            self.pos_emb_feat_dim = self.key_dim_per_head
+        # linear transformation for positional encoding
+        self.linear_pos = None
+        if with_linear_pos:
+            self.linear_pos = rf.Linear(
+                self.in_dim, self.key_dim_total if separate_pos_emb_per_head else self.key_dim_per_head, with_bias=False
+            )
+        self.learned_pos_emb = None
+        if learnable_pos_emb:
+            self.learned_pos_emb = LearnedRelativePositionalEncoding(
+                self.pos_emb_feat_dim, clipping=learnable_pos_emb_clipping
+            )
+        # these two learnable bias are used in matrix c and matrix d
+        # as described in https://arxiv.org/abs/1901.02860 Section 3.3
+        self.pos_bias_u = None
+        self.pos_bias_v = None
+        if with_pos_bias:
+            self.pos_bias_u = rf.Parameter((self.num_heads, self.key_dim_per_head))
+            self.pos_bias_v = rf.Parameter((self.num_heads, self.key_dim_per_head))
+            self.pos_bias_u.initial = rf.init.Glorot()
+            self.pos_bias_v.initial = rf.init.Glorot()
+        self.pos_emb_dropout = pos_emb_dropout
+
+    def __call__(self, source: Tensor, *, axis: Dim, state: rf.State) -> Tuple[Tensor, rf.State]:
+        """forward"""
+        assert axis == single_step_dim  # not implemented otherwise currently...
+        q, k, v = self.forward_qkv(source)
+        assert state
+        new_state = CausalSelfAttentionState()
+        k, hist_dim = rf.cum_concat_step(k, prev_accum=state.k_accum, axis=state.accum_axis)
+        v, _ = rf.cum_concat_step(v, prev_accum=state.v_accum, out_spatial_dim=hist_dim, axis=state.accum_axis)
+        new_state.k_accum = k
+        new_state.v_accum = v
+        new_state.accum_axis = hist_dim
+
+        if self.learned_pos_emb is not None:
+            pos_emb, pos_emb_spatial_dim = self.learned_pos_emb(query_spatial_dim=axis, key_value_spatial_dim=hist_dim)
+        else:
+            pos_emb, pos_emb_spatial_dim = relative_positional_encoding(
+                query_spatial_dim=axis, key_value_spatial_dim=hist_dim, feat_dim=self.pos_emb_feat_dim
+            )
+        if self.pos_emb_dropout:
+            pos_emb = rf.dropout(pos_emb, self.pos_emb_dropout)
+        if self.linear_pos is not None:
+            pos_emb = self.linear_pos(pos_emb)
+        if self.separate_pos_emb_per_head:
+            pos_emb = rf.split_dims(pos_emb, axis=self.key_dim_total, dims=(self.num_heads, self.key_dim_per_head))
+        # pos_emb: (head, 2*time1-1, d_k)
+
+        q_with_bias_u = (q + self.pos_bias_u) if self.pos_bias_u is not None else q  # (batch, head, time1, d_k)
+        q_with_bias_v = (q + self.pos_bias_v) if self.pos_bias_v is not None else q  # (batch, head, time1, d_k)
+
+        # compute attention score
+        # first compute matrix a and matrix c
+        # as described in https://arxiv.org/abs/1901.02860 Section 3.3
+        # (batch, head, time1, time2)
+        matrix_ac = rf.matmul(q_with_bias_u, k, reduce=self.key_dim_per_head)
+
+        # compute matrix b and matrix d
+        # (batch, head, time1, 2*time1-1)
+        matrix_bd = rf.matmul(q_with_bias_v, pos_emb, reduce=self.key_dim_per_head)
+        matrix_bd = _rel_pos_enc_shift(matrix_bd, axis, pos_emb_spatial_dim, hist_dim)
+
+        scores = matrix_ac + matrix_bd  # (batch, head, time1, time2)
+        scores *= self.key_dim_per_head.dimension**-0.5
+        att_weights = rf.softmax(scores, axis=hist_dim)
+        att_weights = rf.dropout(att_weights, self.att_dropout, axis=self.att_dropout_broadcast and hist_dim)
+        # Masking not needed because softmax should already have masked,
+        # so we have 0.0 att weights for padded frames.
+        att = rf.matmul(att_weights, v, reduce=hist_dim, use_mask=False)
+        output, _ = rf.merge_dims(att, dims=(self.num_heads, self.value_dim_per_head), out_dim=self.value_dim_total)
+        if self.proj:
+            output = self.proj(output)
+        return output
 
 
 class CrossAttention(rf.Module):
