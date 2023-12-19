@@ -532,17 +532,19 @@ class LearnedRelativePositionalEncoding(rf.Module):
     https://github.com/rwth-i6/returnn_common/wiki/Relative-positional-encoding
     """
 
-    def __init__(self, feat_dim: Dim, *, clipping: int = 16, dtype: Optional[str] = None):
+    def __init__(self, feat_dim: Dim, *, clipping: int = 16, dtype: Optional[str] = None, causal: bool = False):
         """
         :param feat_dim: feature dim, for the emb matrix and output
-        :param clipping: max distance to consider. emb matrix shape is [2 * clipping + 1, feat_dim].
-          The first and last frame will be the clipping frames.
+        :param clipping: max distance to consider. emb matrix shape is [2 * clipping + 1, feat_dim] if not causal,
+            else [clipping + 1, feat].
+            The first and last frame will be the clipping frames.
         :param dtype: for the emb matrix and output
         """
         super(LearnedRelativePositionalEncoding, self).__init__()
         self.feat_dim = feat_dim
         self.clipping = clipping
-        self.clipped_spatial_dim = Dim(2 * clipping + 1, name="learned-rel-pos")
+        self.clipped_spatial_dim = Dim((1 if causal else 2) * clipping + 1, name="learned-rel-pos")
+        self.causal = causal
         self.pos_emb = rf.Parameter((self.clipped_spatial_dim, self.feat_dim), dtype=dtype)
 
     def __call__(
@@ -550,31 +552,16 @@ class LearnedRelativePositionalEncoding(rf.Module):
         *,
         query_spatial_dim: Dim,
         key_value_spatial_dim: Dim,
-        query_offset: Union[int, Tensor] = 0,
+        query_offset: Optional[Union[int, Tensor]] = None,
     ) -> Tuple[Tensor, Dim]:
         """
         same interface as :func:`relative_positional_encoding`
 
         :return: tensor of shape [spatial_dim * 2 - 1, feat_dim], and the out spatial dim (spatial_dim * 2 - 1).
-          In the center is the rel pos i-j=0. All to the right are for i-j>0, all to the left for i-j<0.
+            In the center is the rel pos i-j=0. All to the right are for i-j>0, all to the left for i-j<0.
         """
-        # See also RelativePositionalEncodingLayer
-        query_spatial_dim_m1 = query_spatial_dim - 1
-
-        kv_pos_vec = rf.range_over_dim(key_value_spatial_dim)  # [kv_len]
-        q_pos_vec = rf.range_over_dim(query_spatial_dim_m1)  # [q_len-1]
-
-        # We want to have all distances as in rf.combine_bc(kv_pos_vec, "-", q_pos_vec) with shape [q_len,kv_len].
-        # We want to store only non-duplicates.
-        # The min value is with kv_pos=0, q_pos=q_len-1: -(q_len-1)
-        # The max value is with kv_pos=kv_len-1, q_pos=0: k_len-1
-        indices, out_spatial_dim = rf.concat(
-            (q_pos_vec - query_spatial_dim_m1.get_dim_value_tensor(), query_spatial_dim_m1),
-            (kv_pos_vec, key_value_spatial_dim),
-        )
-        indices = indices - query_offset
-
-        indices = rf.clip_by_value(indices, -self.clipping, self.clipping)
+        indices, out_spatial_dim = _make_indices(query_spatial_dim, key_value_spatial_dim, query_offset)
+        indices = rf.clip_by_value(indices, -self.clipping, 0 if self.causal else self.clipping)
         # Shift values to be >= 0. Each integer still uniquely identifies a relative position difference.
         indices = indices + self.clipping
 
@@ -586,20 +573,60 @@ class LearnedRelativePositionalEncoding(rf.Module):
         *,
         query_spatial_dim: Dim,
         key_value_spatial_dim: Dim,
-        query_offset: Union[int, Tensor] = 0,
+        query_offset: Optional[Union[int, Tensor]] = None,
     ) -> Tensor:
         """
         :return: as full matrix [query_spatial_dim,key_value_spatial_dim,feat_dim].
             however, note that __call__ is usually to be preferred, as this gives a more efficient format.
         """
-        # Very similar logic as in __call__.
+        # Very similar logic as in __call__, _make_indices.
         kv_pos_vec = rf.range_over_dim(key_value_spatial_dim)  # [kv_len]
-        q_pos_vec = rf.range_over_dim(query_spatial_dim)  # [q_len]
-        indices = rf.combine_bc(kv_pos_vec, "-", q_pos_vec + query_offset)  # [q_len,kv_len]
-        indices = rf.clip_by_value(indices, -self.clipping, self.clipping)
+        if query_spatial_dim == single_step_dim:
+            assert query_offset is None  # not sure if any custom query offset makes sense?
+            # Assume the kv are the accumulated history, and query is cur frame of it,
+            # corresponding to the last frame of the kv.
+            query_offset = key_value_spatial_dim.get_size_tensor() - 1
+            indices = kv_pos_vec - query_offset  # [q_len,kv_len]
+        else:
+            q_pos_vec = rf.range_over_dim(query_spatial_dim)  # [q_len]
+            indices = rf.combine_bc(kv_pos_vec, "-", q_pos_vec + query_offset)  # [q_len,kv_len]
+        indices = rf.clip_by_value(indices, -self.clipping, 0 if self.causal else self.clipping)
         indices = indices + self.clipping
         encoding = rf.gather(self.pos_emb, indices=indices, axis=self.clipped_spatial_dim)  # [q_len,kv_len,n_out]
         return encoding
+
+
+def _make_indices(
+    query_spatial_dim: Dim,
+    key_value_spatial_dim: Dim,
+    query_offset: Optional[Union[int, Tensor]] = None,
+) -> Tuple[Tensor, Dim]:
+    kv_pos_vec = rf.range_over_dim(key_value_spatial_dim)  # [kv_len]
+
+    # See also RelativePositionalEncodingLayer
+    if query_spatial_dim == single_step_dim:
+        indices = kv_pos_vec
+        out_spatial_dim = key_value_spatial_dim
+        assert query_offset is None  # not sure if any custom query offset makes sense?
+        # Assume the kv are the accumulated history, and query is cur frame of it,
+        # corresponding to the last frame of the kv.
+        query_offset = key_value_spatial_dim.get_size_tensor() - 1
+    else:
+        query_spatial_dim_m1 = query_spatial_dim - 1
+        q_pos_vec = rf.range_over_dim(query_spatial_dim_m1)  # [q_len-1]
+
+        # We want to have all distances as in rf.combine_bc(kv_pos_vec, "-", q_pos_vec) with shape [q_len,kv_len].
+        # We want to store only non-duplicates.
+        # The min value is with kv_pos=0, q_pos=q_len-1: -(q_len-1)
+        # The max value is with kv_pos=kv_len-1, q_pos=0: k_len-1
+        indices, out_spatial_dim = rf.concat(
+            (q_pos_vec - query_spatial_dim_m1.get_dim_value_tensor(), query_spatial_dim_m1),
+            (kv_pos_vec, key_value_spatial_dim),
+        )
+    if query_offset is not None:
+        indices = indices - query_offset
+
+    return indices, out_spatial_dim
 
 
 _relative_positional_encoding_cache = weakref.WeakKeyDictionary()  # run ctx -> (spatial_dim, feat_dim) -> enc
@@ -642,17 +669,7 @@ def relative_positional_encoding(
 
     with rf.control_flow_ctx(None):
         # See also RelativePositionalEncodingLayer, LearnedRelativePositionalEncoding
-        query_spatial_dim_m1 = query_spatial_dim - 1
-
-        kv_pos_vec = rf.range_over_dim(key_value_spatial_dim)  # [kv_len]
-        q_pos_vec = rf.range_over_dim(query_spatial_dim_m1)  # [q_len-1]
-
-        # See LearnedRelativePositionalEncoding.
-        indices, out_spatial_dim = rf.concat(
-            (q_pos_vec - query_spatial_dim_m1.get_dim_value_tensor(), query_spatial_dim_m1),
-            (kv_pos_vec, key_value_spatial_dim),
-        )
-        indices = indices - query_offset
+        indices, out_spatial_dim = _make_indices(query_spatial_dim, key_value_spatial_dim, query_offset)
 
         feat2_dim = feat_dim.div_left(2)
         div_term = rf.exp(rf.range_over_dim(feat2_dim, dtype=dtype) * -(2.0 * math.log(10000.0) / feat_dim.dimension))
