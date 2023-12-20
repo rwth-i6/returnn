@@ -27,6 +27,7 @@ class TransformerDecoder(rf.Module):
 
     def __init__(
         self,
+        encoder_dim: Dim,
         vocab_dim: Dim,
         model_dim: Dim = Dim(512, name="transformer-dec-default-model-dim"),
         *,
@@ -41,6 +42,7 @@ class TransformerDecoder(rf.Module):
         share_embedding: bool = False,
     ):
         """
+        :param encoder_dim:
         :param vocab_dim:
         :param model_dim: the output feature dimension
         :param num_layers: the number of encoder layers
@@ -55,6 +57,7 @@ class TransformerDecoder(rf.Module):
         """
         super().__init__()
 
+        self.encoder_dim = encoder_dim
         self.vocab_dim = vocab_dim
         self.model_dim = model_dim
 
@@ -69,6 +72,7 @@ class TransformerDecoder(rf.Module):
 
         if not decoder_layer or isinstance(decoder_layer, type):
             decoder_layer_opts_ = dict(
+                encoder_dim=encoder_dim,
                 out_dim=model_dim,
                 ff_dim=ff_dim,
                 ff_activation=ff_activation,
@@ -117,13 +121,14 @@ class TransformerDecoder(rf.Module):
         collected_outputs: Optional[Dict[str, Tensor]] = None,
     ) -> Tuple[Tensor, rf.State]:
         """
-        forward, single step or whole sequence
+        forward, single step or whole sequence.
 
-        :param source:
+        :param source: labels
         :param spatial_dim: single_step_dim or spatial dim of source
         :param state: e.g. via :func:`default_initial_state`
         :param encoder: via :func:`transform_encoder`
         :param collected_outputs:
+        :return: logits, new state
         """
         new_state = rf.State()
 
