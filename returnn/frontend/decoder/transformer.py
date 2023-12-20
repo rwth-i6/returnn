@@ -260,7 +260,14 @@ class FeedForward(rf.Module):
         FF -> Activation -> Dropout -> FF
     """
 
-    def __init__(self, out_dim: Dim, *, ff_dim: Dim, dropout: float, activation: Callable[[Tensor], Tensor]):
+    def __init__(
+        self,
+        out_dim: Dim,
+        *,
+        ff_dim: Optional[Dim] = NotSpecified,
+        dropout: float,
+        activation: Callable[[Tensor], Tensor],
+    ):
         """
         :param out_dim: output feature dimension
         :param ff_dim: dimension of the feed-forward layers
@@ -268,6 +275,9 @@ class FeedForward(rf.Module):
         :param activation: activation function
         """
         super().__init__()
+
+        if ff_dim is NotSpecified:
+            ff_dim = out_dim * 4
 
         self.out_dim = out_dim
         self.dropout = dropout
