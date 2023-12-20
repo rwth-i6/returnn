@@ -805,7 +805,10 @@ def relative_positional_encoding(
         arg, feat_dim_ = rf.concat((arg_sin, feat2_dim), (arg_cos, feat2_dim))
         arg, feat_dim_ = rf.replace_dim(arg, in_dim=feat_dim_, out_dim=feat_dim)
         emb = rf.sin(arg)
-        emb.verify_out_shape({out_spatial_dim, feat_dim}, allow_missing_implicit_dims=True)
+        emb.verify_out_shape(
+            {out_spatial_dim, feat_dim} if out_spatial_dim != single_step_dim else {feat_dim},
+            allow_missing_implicit_dims=True,
+        )
         emb.feature_dim = feat_dim
         cache[cache_key] = emb, out_spatial_dim
         return emb, out_spatial_dim
