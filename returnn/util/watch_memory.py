@@ -5,6 +5,7 @@ Watch memory usage over time.
 from __future__ import annotations
 from typing import Dict
 import time
+from datetime import datetime
 from collections import defaultdict
 from threading import Thread
 import psutil  # noqa
@@ -25,8 +26,8 @@ _watch_memory_thread = None
 
 
 def _watch_memory_thread_main():
-    prefix = "MEMORY:"
     cur_proc = psutil.Process()
+    prefix = f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} pid:{cur_proc.pid}] MEMORY:"
     procs = []
     mem_per_pid = {}
 
