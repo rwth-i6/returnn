@@ -193,18 +193,11 @@ class CausalSelfAttention(SelfAttentionBase):
         source: Tensor,
         axis: Dim,
         *,
-        state: CausalSelfAttentionState,
+        state: Optional[CausalSelfAttentionState] = None,
     ) -> Tuple[Tensor, CausalSelfAttentionState]:
         """forward"""
-        assert axis == single_step_dim  # not implemented otherwise currently...
         q, k, v = self.forward_qkv(source)
-        assert state
-        new_state = CausalSelfAttentionState()
-        k, hist_dim = rf.cum_concat_step(k, prev_accum=state.k_accum, axis=state.accum_axis)
-        v, _ = rf.cum_concat_step(v, prev_accum=state.v_accum, out_spatial_dim=hist_dim, axis=state.accum_axis)
-        new_state.k_accum = k
-        new_state.v_accum = v
-        new_state.accum_axis = hist_dim
+        k, v, hist_dim, new_state = _causal_self_att_step(k, v, axis=axis, state=state, self=self)
         output = self.attention(q, k, v, kv_axis=hist_dim)
         return output, new_state
 
@@ -223,6 +216,34 @@ class CausalSelfAttention(SelfAttentionBase):
             v_accum=rf.zeros(list(batch_dims) + [expand_dim, self.num_heads, self.value_dim_per_head]),
             accum_axis=expand_dim,
         )
+
+
+def _causal_self_att_step(
+    k: Tensor,
+    v: Tensor,
+    *,
+    axis: Dim,
+    state: Optional[CausalSelfAttentionState],
+    self: rf.Module,
+) -> Tuple[Tensor, Tensor, Dim, CausalSelfAttentionState]:
+    if axis == single_step_dim:
+        assert state, f"{self}: need state for single step"
+        k, hist_dim = rf.cum_concat_step(k, prev_accum=state.k_accum, axis=state.accum_axis)
+        v, _ = rf.cum_concat_step(v, prev_accum=state.v_accum, out_spatial_dim=hist_dim, axis=state.accum_axis)
+    else:
+        if state:
+            raise NotImplementedError(  # need to concat ...
+                f"{self}: on sequence over {axis} with initial state {state} not implemented yet"
+            )
+        # See CumConcatLayer and https://github.com/rwth-i6/returnn/issues/391 for the idea.
+        hist_dim = Dim(rf.range_over_dim(axis, device="cpu") + 1, name=f"{axis.description}:kv")
+        k, _ = rf.replace_dim(k, in_dim=axis, out_dim=hist_dim)
+        v, _ = rf.replace_dim(v, in_dim=axis, out_dim=hist_dim)
+    new_state = CausalSelfAttentionState()
+    new_state.k_accum = k
+    new_state.v_accum = v
+    new_state.accum_axis = hist_dim
+    return k, v, hist_dim, new_state
 
 
 class CausalSelfAttentionState(rf.State):
@@ -476,17 +497,12 @@ class RelPosCausalSelfAttention(CausalSelfAttention):
             self.pos_bias_v.initial = rf.init.Glorot()
         self.pos_emb_dropout = pos_emb_dropout
 
-    def __call__(self, source: Tensor, *, axis: Dim, state: rf.State) -> Tuple[Tensor, rf.State]:
+    def __call__(
+        self, source: Tensor, *, axis: Dim, state: Optional[CausalSelfAttentionState] = None
+    ) -> Tuple[Tensor, CausalSelfAttentionState]:
         """forward"""
-        assert axis == single_step_dim  # not implemented otherwise currently...
         q, k, v = self.forward_qkv(source)
-        assert state
-        new_state = CausalSelfAttentionState()
-        k, hist_dim = rf.cum_concat_step(k, prev_accum=state.k_accum, axis=state.accum_axis)
-        v, _ = rf.cum_concat_step(v, prev_accum=state.v_accum, out_spatial_dim=hist_dim, axis=state.accum_axis)
-        new_state.k_accum = k
-        new_state.v_accum = v
-        new_state.accum_axis = hist_dim
+        k, v, hist_dim, new_state = _causal_self_att_step(k, v, axis=axis, state=state, self=self)
 
         if self.learned_pos_emb is not None:
             pos_emb, pos_emb_spatial_dim = self.learned_pos_emb(query_spatial_dim=axis, key_value_spatial_dim=hist_dim)
