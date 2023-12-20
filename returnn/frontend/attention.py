@@ -857,7 +857,7 @@ def sinusoidal_positional_encoding(
         else:
             indices = rf.range_over_dim(spatial_dim)  # [len]
             if offset is not None:
-                indices = indices - offset
+                indices = indices + offset
 
         feat2_dim = feat_dim.div_left(2)
         div_term = rf.exp(rf.range_over_dim(feat2_dim, dtype=dtype) * -(math.log(1e4) / (feat2_dim.dimension - 1)))
