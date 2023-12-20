@@ -37,6 +37,7 @@ def _watch_memory_main(pid: int):
 
     def _print(*args):
         print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} pid:{cur_proc.pid}] MEMORY:", *args)
+        sys.stdout.flush()
 
     cur_proc = psutil.Process(pid)
     procs = []
