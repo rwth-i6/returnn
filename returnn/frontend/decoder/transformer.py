@@ -101,7 +101,7 @@ class TransformerDecoder(rf.Module):
     def default_initial_state(self, *, batch_dims: Sequence[Dim]) -> rf.State:
         """default initial state"""
         state = rf.State({k: v.default_initial_state(batch_dims=batch_dims) for k, v in self.layers.items()})
-        state.pos = rf.zeros((), dtype="int32")
+        state.pos = rf.zeros((), dtype="int32", device="cpu")
         return state
 
     def transform_encoder(self, encoder: Tensor, *, axis: Dim) -> rf.State:
