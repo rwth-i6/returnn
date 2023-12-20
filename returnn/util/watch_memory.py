@@ -3,11 +3,13 @@ Watch memory usage over time.
 """
 
 from __future__ import annotations
+
+import os
 from typing import Dict
 import time
 from datetime import datetime
 from collections import defaultdict
-from threading import Thread
+import multiprocessing
 import psutil  # noqa
 
 
@@ -15,18 +17,20 @@ def watch_memory():
     """
     Start thread which watches memory usage over time of the current process and all its children over time.
     """
-    global _watch_memory_thread
-    if _watch_memory_thread:
+    global _watch_memory_proc
+    if _watch_memory_proc:
         return
-    _watch_memory_thread = Thread(target=_watch_memory_thread_main, name="watch_memory", daemon=True)
-    _watch_memory_thread.start()
+    _watch_memory_proc = multiprocessing.get_context("spawn").Process(
+        target=_watch_memory_main, args=(os.getpid()), name="watch_memory", daemon=True
+    )
+    _watch_memory_proc.start()
 
 
-_watch_memory_thread = None
+_watch_memory_proc = None
 
 
-def _watch_memory_thread_main():
-    cur_proc = psutil.Process()
+def _watch_memory_main(pid: int):
+    cur_proc = psutil.Process(pid)
     prefix = f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} pid:{cur_proc.pid}] MEMORY:"
     procs = []
     mem_per_pid = {}
