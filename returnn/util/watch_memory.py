@@ -5,6 +5,7 @@ Watch memory usage over time.
 from __future__ import annotations
 
 import os
+import sys
 from typing import Dict
 import time
 from datetime import datetime
@@ -30,6 +31,9 @@ _watch_memory_proc = None
 
 
 def _watch_memory_main(pid: int):
+    if sys.platform == "linux":
+        with open("/proc/self/comm", "w") as f:
+            f.write(f"watch memory")
     cur_proc = psutil.Process(pid)
     prefix = f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} pid:{cur_proc.pid}] MEMORY:"
     procs = []
