@@ -34,8 +34,11 @@ def _watch_memory_main(pid: int):
     if sys.platform == "linux":
         with open("/proc/self/comm", "w") as f:
             f.write(f"watch memory")
+
+    def _print(*args):
+        print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} pid:{cur_proc.pid}] MEMORY:", *args)
+
     cur_proc = psutil.Process(pid)
-    prefix = f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} pid:{cur_proc.pid}] MEMORY:"
     procs = []
     mem_per_pid = {}
 
@@ -44,7 +47,7 @@ def _watch_memory_main(pid: int):
         procs_ = [cur_proc] + cur_proc.children(recursive=True)
         for p in procs:
             if p not in procs_:
-                print(prefix, f"proc {_format_proc(p)} exited, old:", _format_mem_info(mem_per_pid[p.pid]))
+                _print(f"proc {_format_proc(p)} exited, old:", _format_mem_info(mem_per_pid[p.pid]))
                 mem_per_pid.pop(p.pid, None)
                 change = True
         procs = procs_
@@ -55,20 +58,20 @@ def _watch_memory_main(pid: int):
                 mem_info = get_mem_info(p)
             except psutil.NoSuchProcess:  # race condition, can happen
                 if old_mem_info:
-                    print(prefix, f"proc {_format_proc(p)} exited, old:", _format_mem_info(old_mem_info))
+                    _print(f"proc {_format_proc(p)} exited, old:", _format_mem_info(old_mem_info))
                     mem_per_pid.pop(p.pid, None)
                     change = True
                 procs.remove(p)
                 continue
             proc_prefix = "main" if p == cur_proc else "sub"
             if not old_mem_info:
-                print(prefix, f"{proc_prefix} proc {_format_proc(p)} initial:", _format_mem_info(mem_info))
+                _print(f"{proc_prefix} proc {_format_proc(p)} initial:", _format_mem_info(mem_info))
                 mem_per_pid[p.pid] = mem_info
                 change = True
             elif mem_info["rss"] > old_mem_info["rss"] and _format_mem_size(old_mem_info["rss"]) != _format_mem_size(
                 mem_info["rss"]
             ):
-                print(prefix, f"{proc_prefix} proc {_format_proc(p)} increased RSS:", _format_mem_info(mem_info))
+                _print(f"{proc_prefix} proc {_format_proc(p)} increased RSS:", _format_mem_info(mem_info))
                 # keep old info otherwise, such that the update check works
                 mem_per_pid[p.pid] = mem_info
                 change = True
@@ -78,7 +81,7 @@ def _watch_memory_main(pid: int):
             for mem_info in mem_per_pid.values():
                 for k in res.keys():
                     res[k] += mem_info[k]
-            print(prefix, f"total ({len(mem_per_pid)} procs):", _format_mem_info(res))
+            _print(f"total ({len(mem_per_pid)} procs):", _format_mem_info(res))
 
         time.sleep(5)
 
