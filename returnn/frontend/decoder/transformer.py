@@ -38,6 +38,7 @@ class TransformerDecoder(rf.Module):
         att_dropout: float = 0.1,
         decoder_layer: Optional[Union[TransformerDecoderLayer, rf.Module, type, Any]] = None,
         decoder_layer_opts: Optional[Dict[str, Any]] = None,
+        share_embedding: bool = False,
     ):
         """
         :param vocab_dim:
@@ -50,6 +51,7 @@ class TransformerDecoder(rf.Module):
         :param att_dropout: attention dropout value
         :param decoder_layer: an instance of :class:`TransformerDecoderLayer` or similar
         :param decoder_layer_opts: options for the encoder layer
+        :param share_embedding:
         """
         super().__init__()
 
@@ -88,6 +90,9 @@ class TransformerDecoder(rf.Module):
         self.final_layer_norm = rf.LayerNorm(model_dim)
 
         self.logits = rf.Linear(model_dim, vocab_dim, with_bias=False)
+
+        if share_embedding:
+            self.logits.weight = self.input_embedding.weight
 
     def default_initial_state(self, *, batch_dims: Sequence[Dim]) -> rf.State:
         """default initial state"""
