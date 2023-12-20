@@ -4,10 +4,11 @@ RETURNN frontend (returnn.frontend) tests
 
 from __future__ import annotations
 from typing import Tuple
+import numpy as np
 import _setup_test_env  # noqa
 import returnn.frontend as rf
 from returnn.tensor import Tensor, Dim, TensorDict, batch_dim
-from rf_utils import run_model
+from rf_utils import run_model, tf_scope
 
 
 def test_dot_attention():
@@ -178,3 +179,29 @@ def test_rel_pos_self_attention():
         out.mark_as_default_output(shape=(batch_dim, time_dim, model.out_dim))
 
     run_model(extern_data, lambda *, epoch, step: _Net(), _forward_step)
+
+
+def test_sinusoidal_positional_encoding():
+    time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
+    feat_dim = Dim(8, name="feat")
+    extern_data = TensorDict(
+        {
+            "data": Tensor("data", [batch_dim, time_dim, feat_dim], dtype="float32"),
+        }
+    )
+
+    def _forward_step(**_kwargs):
+        out = rf.sinusoidal_positional_encoding(spatial_dim=time_dim, feat_dim=feat_dim)
+        out.mark_as_default_output(shape=(time_dim, feat_dim))
+
+    res = run_model(extern_data, lambda *, epoch, step: rf.Module(), _forward_step)
+
+    from returnn.tf.util import basic as tf_util
+
+    with tf_scope() as session:
+        tf_ref = tf_util.get_positional_encoding(
+            num_channels=feat_dim.dimension, length=res.data["output"].raw_tensor.shape[0]
+        )
+        tf_ref_v = session.run(tf_ref)
+
+    np.testing.assert_almost_equal(res.data["output"].raw_tensor, tf_ref_v, decimal=5)

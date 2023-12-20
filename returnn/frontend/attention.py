@@ -22,6 +22,7 @@ __all__ = [
     "CrossAttention",
     "LearnedRelativePositionalEncoding",
     "relative_positional_encoding",
+    "sinusoidal_positional_encoding",
 ]
 
 
@@ -799,7 +800,7 @@ def relative_positional_encoding(
         indices, out_spatial_dim = _make_indices(query_spatial_dim, key_value_spatial_dim, query_offset)
 
         feat2_dim = feat_dim.div_left(2)
-        div_term = rf.exp(rf.range_over_dim(feat2_dim, dtype=dtype) * -(2.0 * math.log(10000.0) / feat_dim.dimension))
+        div_term = rf.exp(rf.range_over_dim(feat2_dim, dtype=dtype) * -(2.0 * math.log(1e4) / feat_dim.dimension))
         arg_sin = rf.combine_bc(rf.cast(indices, dtype), "*", div_term)
         arg_cos = arg_sin + math.pi / 2.0
         arg, feat_dim_ = rf.concat((arg_sin, feat2_dim), (arg_cos, feat2_dim))
@@ -812,6 +813,65 @@ def relative_positional_encoding(
         emb.feature_dim = feat_dim
         cache[cache_key] = emb, out_spatial_dim
         return emb, out_spatial_dim
+
+
+_positional_encoding_cache = weakref.WeakKeyDictionary()  # run ctx -> (spatial_dim, feat_dim) -> enc
+
+
+def sinusoidal_positional_encoding(
+    *,
+    spatial_dim: Dim,
+    feat_dim: Dim,
+    offset: Optional[Union[int, Tensor]] = None,
+    dtype: Optional[str] = None,
+) -> Tensor:
+    """
+    Implements absolute sinusoidal positional encoding.
+
+    Code adopted from :func:`relative_positional_encoding`
+    and our TF util :func:`get_positional_encoding`.
+
+    Note that this encoding is stored in a cache so that it is only calculated once.
+    and then reused.
+
+    Note that we could extend the implementation later to also buffer it
+    even across mini-batches, like the ESPnet implementation does,
+    e.g. by storing it in an auxiliary variable and increasing its size when needed.
+    But this is not done yet, to keep the code simple.
+
+    :return: tensor of shape [spatial_dim, feat_dim] if spatial_dim != single_step_dim else [feat_dim]
+    """
+    if not dtype:
+        dtype = rf.get_default_float_dtype()
+    cache = _positional_encoding_cache.setdefault(rf.get_run_ctx(), {})
+    cache_key = (spatial_dim, feat_dim, offset, dtype)
+    if cache_key in cache:
+        return cache[cache_key]
+    import math
+
+    with rf.control_flow_ctx(None):
+        # See also RelativePositionalEncodingLayer, LearnedRelativePositionalEncoding
+        if spatial_dim == single_step_dim:
+            assert offset is not None
+            indices = rf.convert_to_tensor(offset)  # scalar
+        else:
+            indices = rf.range_over_dim(spatial_dim)  # [len]
+            if offset is not None:
+                indices = indices - offset
+
+        feat2_dim = feat_dim.div_left(2)
+        div_term = rf.exp(rf.range_over_dim(feat2_dim, dtype=dtype) * -(math.log(1e4) / (feat2_dim.dimension - 1)))
+        arg_sin = rf.combine_bc(rf.cast(indices, dtype), "*", div_term)
+        arg_cos = arg_sin + math.pi / 2.0
+        arg, feat_dim_ = rf.concat((arg_sin, feat2_dim), (arg_cos, feat2_dim))
+        arg, feat_dim_ = rf.replace_dim(arg, in_dim=feat_dim_, out_dim=feat_dim)
+        emb = rf.sin(arg)
+        emb.verify_out_shape(
+            {spatial_dim, feat_dim} if spatial_dim != single_step_dim else {feat_dim}, allow_missing_implicit_dims=True
+        )
+        emb.feature_dim = feat_dim
+        cache[cache_key] = emb
+        return emb
 
 
 _att_dropout_broadcast_shown_warning = False
