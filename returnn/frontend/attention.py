@@ -374,6 +374,11 @@ class RelPosSelfAttention(SelfAttentionBase):
             output = self.proj(output)
         return output
 
+    # provide this func for compat with some existing code
+    @staticmethod
+    def _rel_shift(x: Tensor, axis: Dim, pos_emb_spatial_dim: Dim, hist_dim: Dim) -> Tensor:
+        return _rel_pos_enc_shift(x, axis, pos_emb_spatial_dim, hist_dim)
+
 
 def _rel_pos_enc_shift(x: Tensor, axis: Dim, pos_emb_spatial_dim: Dim, hist_dim: Dim) -> Tensor:
     """
