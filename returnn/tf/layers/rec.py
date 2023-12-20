@@ -11343,6 +11343,9 @@ class CumConcatLayer(_ConcatInputLayer):
     (unlike usually just [B]).
     This way following layers use different seq lengths of `new_dim` for different loop frames,
     just like if the `T` dim would actually exist.
+
+    See https://github.com/rwth-i6/returnn/issues/391 for the initial discussion
+    on how to generalize the :class:`SelfAttentionLayer` which lead to this design.
     """
 
     layer_class = "cum_concat"
