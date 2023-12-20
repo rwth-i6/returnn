@@ -231,7 +231,7 @@ def _causal_self_att_step(
         k, hist_dim = rf.cum_concat_step(k, prev_accum=state.k_accum, axis=state.accum_axis)
         v, _ = rf.cum_concat_step(v, prev_accum=state.v_accum, out_spatial_dim=hist_dim, axis=state.accum_axis)
     else:
-        if state:
+        if state and state.accum_axis.dimension != 0:
             raise NotImplementedError(  # need to concat ...
                 f"{self}: on sequence over {axis} with initial state {state} not implemented yet"
             )
