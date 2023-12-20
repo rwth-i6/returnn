@@ -21,7 +21,7 @@ def watch_memory():
     if _watch_memory_proc:
         return
     _watch_memory_proc = multiprocessing.get_context("spawn").Process(
-        target=_watch_memory_main, args=(os.getpid()), name="watch_memory", daemon=True
+        target=_watch_memory_main, args=(os.getpid(),), name="watch_memory", daemon=True
     )
     _watch_memory_proc.start()
 
