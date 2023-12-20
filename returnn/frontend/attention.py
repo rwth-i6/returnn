@@ -829,6 +829,7 @@ def sinusoidal_positional_encoding(
     feat_dim: Dim,
     offset: Optional[Union[int, Tensor]] = None,
     dtype: Optional[str] = None,
+    device: Optional[str] = None,
 ) -> Tensor:
     """
     Implements absolute sinusoidal positional encoding.
@@ -848,8 +849,10 @@ def sinusoidal_positional_encoding(
     """
     if not dtype:
         dtype = rf.get_default_float_dtype()
+    if not device:
+        device = rf.get_default_device()
     cache = _positional_encoding_cache.setdefault(rf.get_run_ctx(), {})
-    cache_key = (spatial_dim, feat_dim, offset, dtype)
+    cache_key = (spatial_dim, feat_dim, offset, dtype, device)
     if cache_key in cache:
         return cache[cache_key]
     import math
@@ -858,14 +861,17 @@ def sinusoidal_positional_encoding(
         # See also RelativePositionalEncodingLayer, LearnedRelativePositionalEncoding
         if spatial_dim == single_step_dim:
             assert offset is not None
-            indices = rf.convert_to_tensor(offset)  # scalar
+            indices = rf.convert_to_tensor(offset, device=device)  # scalar
         else:
-            indices = rf.range_over_dim(spatial_dim)  # [len]
+            indices = rf.range_over_dim(spatial_dim, device=device)  # [len]
             if offset is not None:
                 indices = indices + offset
+        indices = rf.copy_to_device(indices, device)
 
         feat2_dim = feat_dim.div_left(2)
-        div_term = rf.exp(rf.range_over_dim(feat2_dim, dtype=dtype) * -(math.log(1e4) / (feat2_dim.dimension - 1)))
+        div_term = rf.exp(
+            rf.range_over_dim(feat2_dim, dtype=dtype, device=device) * -(math.log(1e4) / (feat2_dim.dimension - 1))
+        )
         arg_sin = rf.combine_bc(rf.cast(indices, dtype), "*", div_term)
         arg_cos = arg_sin + math.pi / 2.0
         arg, feat_dim_ = rf.concat((arg_sin, feat2_dim), (arg_cos, feat2_dim))
