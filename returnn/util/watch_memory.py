@@ -36,7 +36,7 @@ def _watch_memory_main(pid: int):
             f.write(f"watch memory")
 
     def _print(*args):
-        print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} pid:{cur_proc.pid}] MEMORY:", *args)
+        print("MEMORY:", *args)
         sys.stdout.flush()
 
     cur_proc = psutil.Process(pid)
@@ -82,7 +82,11 @@ def _watch_memory_main(pid: int):
             for mem_info in mem_per_pid.values():
                 for k in res.keys():
                     res[k] += mem_info[k]
-            _print(f"total ({len(mem_per_pid)} procs):", _format_mem_info(res))
+            _print(
+                "total",
+                f"(main {cur_proc.pid}, {datetime.now().strftime('%Y-%m-%d, %H:%M:%S')}, {len(mem_per_pid)} procs):",
+                _format_mem_info(res),
+            )
 
         time.sleep(5)
 
