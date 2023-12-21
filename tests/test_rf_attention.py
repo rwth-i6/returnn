@@ -5,6 +5,7 @@ RETURNN frontend (returnn.frontend) tests
 from __future__ import annotations
 from typing import Tuple
 import numpy as np
+import numpy.testing
 import _setup_test_env  # noqa
 import returnn.frontend as rf
 from returnn.tensor import Tensor, Dim, TensorDict, batch_dim
@@ -205,3 +206,82 @@ def test_sinusoidal_positional_encoding():
         tf_ref_v = session.run(tf_ref)
 
     np.testing.assert_almost_equal(res.data["output"].raw_tensor, tf_ref_v, decimal=5)
+
+
+def test_CausalSelfAttention():
+    time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
+    feat_dim = Dim(8, name="feat")
+    key_dim = Dim(6, name="key")
+    value_dim = Dim(10, name="value")
+    extern_data = TensorDict(
+        {
+            "data": Tensor("data", [batch_dim, time_dim, feat_dim], dtype="float32"),
+        }
+    )
+
+    def _forward_step(*, model: rf.CausalSelfAttention, extern_data: TensorDict):
+        data = extern_data["data"]
+        data.mark_as_output("data", shape=[batch_dim, time_dim, feat_dim])
+        time_dim.dyn_size_ext.mark_as_output("seq_len", shape=[batch_dim])
+        out, _ = model(data, axis=time_dim)
+        out.mark_as_default_output(shape=(batch_dim, time_dim, value_dim))
+        model.qkv.weight.mark_as_output("qkv_weight", shape=[feat_dim, 2 * key_dim + value_dim])
+
+    res = run_model(
+        extern_data,
+        lambda *, epoch, step: rf.CausalSelfAttention(
+            in_dim=feat_dim,
+            proj_dim=None,
+            key_dim_total=key_dim,
+            value_dim_total=value_dim,
+            num_heads=2,
+            with_bias=False,
+        ),
+        _forward_step,
+        # Some problem with dimension tags currently in the TF-layers-dict backend...
+        # Anyway, we compare to the TF SelfAttentionLayer with attention_left_only=True below.
+        test_tensorflow=False,
+    )
+
+    extern_data.reset_content()
+
+    with tf_scope() as session:
+        from returnn.tf.network import TFNetwork, ExternData
+
+        net_dict = {
+            "self_att": {
+                "class": "self_attention",
+                "from": "data",
+                "num_heads": 2,
+                "total_key_dim": key_dim.dimension,
+                "attention_left_only": True,
+                "out_dim": value_dim,
+                "is_output_layer": True,
+            }
+        }
+        net = TFNetwork(
+            extern_data=ExternData(
+                {
+                    "data": {
+                        "dims": [batch_dim, time_dim, feat_dim],
+                        "time_dim_axis": 1,
+                        "feature_dim_axis": 2,
+                        "dtype": "float32",
+                        "version": 1,
+                    }
+                }
+            )
+        )
+        net.construct_from_dict(net_dict)
+        layer = net.get_default_output_layer()
+        layer.params["QKV"].load(res.data["qkv_weight"].raw_tensor, session=session)
+        out = layer.output.copy_transpose([batch_dim, time_dim, value_dim]).copy_masked(0.0)
+
+        out_tf_v = session.run(
+            out.raw_tensor,
+            feed_dict={
+                net.extern_data.data["data"].placeholder: res.data["data"].raw_tensor,
+                net.extern_data.data["data"].dims[1].dyn_size_ext.raw_tensor: res.data["seq_len"].raw_tensor,
+            },
+        )
+        numpy.testing.assert_almost_equal(res.data["output"].raw_tensor, out_tf_v, decimal=5)
