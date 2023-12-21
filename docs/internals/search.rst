@@ -1,9 +1,9 @@
-.. _search:
+.. _beam_search:
 
 
-######
-Search
-######
+######################
+TensorFlow Beam Search
+######################
 
 RETURNN can perform beam search on an arbitrary network architecture with an arbitrary number of outputs.
 Mostly due to this fact, there is no single place in the code where beam search happens.

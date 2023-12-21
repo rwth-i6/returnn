@@ -52,7 +52,7 @@ You might also want to perform search over the output labels in training,
 see :ref:`min_exp_risk_training`.
 
 For details on how beam search is implemented,
-see :ref:`search`.
+see :ref:`beam_search`.
 
 For details about how to use it for recognition or generation,
 see :ref:`generation_search`.

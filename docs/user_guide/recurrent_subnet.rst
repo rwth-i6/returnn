@@ -85,7 +85,7 @@ If the end-layer is not based on sparse data it is often required to use a
 To enable beam-search, a :class:`ChoiceLayer <returnn.tf.layers.rec.ChoiceLayer>` must be used.
 The choice layer will provide true labels as output during training.
 During search, it will extend the batch dimension by the ``beam_size`` and manage the sequences in the beam.
-For further information about the internals of beam-search, please have a look at :ref:`search`.
+For further information about the internals of beam-search, please have a look at :ref:`beam_search`.
 
 Additional Information
 ======================
