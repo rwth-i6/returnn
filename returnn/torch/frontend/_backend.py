@@ -1198,7 +1198,7 @@ class TorchBackend(Backend[torch.Tensor]):
         out = Tensor(
             "range",
             dims=[dim],
-            sparse_dim=dim,
+            sparse_dim=dim if dtype.startswith("int") or dtype.startswith("uint") else None,
             dtype=dtype,
         )
         out.raw_tensor = torch.arange(

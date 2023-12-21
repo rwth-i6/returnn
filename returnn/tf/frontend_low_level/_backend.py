@@ -444,7 +444,7 @@ class TFBackend(Backend[tf.Tensor]):
         out = Tensor(
             name=dim.description or "range_over_dim",
             dims=[dim],
-            sparse_dim=dim,
+            sparse_dim=dim if dtype.startswith("int") or dtype.startswith("uint") else None,
             dtype=dtype,
         )
         dim_value = dim.get_dim_value()

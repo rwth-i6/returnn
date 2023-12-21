@@ -741,7 +741,13 @@ class ReturnnLayersBackend(Backend[Layer]):
         if not dtype:
             dtype = rf.get_default_array_index_dtype()
         return rfl.make_layer(
-            {"class": "range_in_axis", "from": _dims.get_dim_deps(dim), "axis": dim, "dtype": dtype},
+            {
+                "class": "range_in_axis",
+                "from": _dims.get_dim_deps(dim),
+                "axis": dim,
+                "dtype": dtype,
+                "sparse": dtype.startswith("int") or dtype.startswith("uint"),
+            },
             name="range_over_dim",
         )
 

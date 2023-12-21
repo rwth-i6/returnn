@@ -141,7 +141,7 @@ class NumpyBackend(Backend[numpy.ndarray]):
         out = Tensor(
             "range",
             dims=[dim],
-            sparse_dim=dim,
+            sparse_dim=dim if dtype.startswith("int") or dtype.startswith("uint") else None,
             dtype=dtype,
         )
         out.raw_tensor = numpy.arange(dim.get_dim_value(), dtype=NumpyBackend.as_dtype_raw(out.dtype))

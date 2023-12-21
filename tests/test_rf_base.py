@@ -380,3 +380,20 @@ def test_loss_normalization():
     use_custom_inv_norm_factor = True
     res4 = run_model_torch_train(extern_data, lambda *, epoch, step: rf.Module(), _train_step)
     assert res4["loss:summed"] == res2["loss:summed"] and res4["loss:inv_norm_factor"] == res2["loss:inv_norm_factor"]
+
+
+def test_rf_range_over_dim():
+    time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
+    in_dim = Dim(7, name="in")
+    extern_data = TensorDict(
+        {
+            "data": Tensor("data", [batch_dim, time_dim, in_dim], dtype="float32"),
+        }
+    )
+
+    # noinspection PyShadowingNames
+    def _forward_step(*, model: rf.Module, extern_data: TensorDict):
+        rf.range_over_dim(time_dim).mark_as_output("range", shape=[time_dim])
+        rf.range_over_dim(time_dim, dtype="float32").mark_as_output("range_float", shape=[time_dim])
+
+    run_model(extern_data, lambda *, epoch, step: rf.Module(), _forward_step)
