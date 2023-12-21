@@ -324,3 +324,22 @@ def test_copy_masked():
         x.mark_as_default_output(shape=(batch_dim, time_dim, in_dim))
 
     run_model(extern_data, lambda *, epoch, step: rf.Module(), _forward_step)
+
+
+def test_cast_sparse():
+    time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
+    in_dim = Dim(7, name="in")
+    extern_data = TensorDict(
+        {
+            "data": Tensor("data", [batch_dim, time_dim, in_dim], dtype="float32"),
+        }
+    )
+
+    # noinspection PyShadowingNames,PyUnusedLocal
+    def _forward_step(*, model: rf.Conv1d, extern_data: TensorDict):
+        x = rf.reduce_argmax(extern_data["data"], axis=in_dim)
+        assert x.sparse_dim == in_dim
+        x.mark_as_output("argmax", shape=[batch_dim, time_dim])
+        rf.cast(x, "float32").mark_as_output("float", shape=[batch_dim, time_dim])
+
+    run_model(extern_data, lambda *, epoch, step: rf.Module(), _forward_step)

@@ -314,6 +314,13 @@ class Backend(Generic[T]):
         # Default implementation using cast_raw.
         res = tensor.copy_template()
         res.dtype = dtype
+        if res.sparse_dim:
+            if dtype.startswith("int") or dtype.startswith("uint"):
+                pass
+            elif dtype == "bool" and res.sparse_dim.dimension == 2:
+                pass
+            else:
+                res.sparse_dim = None
         # noinspection PyProtectedMember
         res.raw_tensor = tensor._raw_backend.cast_raw(tensor.raw_tensor, dtype)
         return res
