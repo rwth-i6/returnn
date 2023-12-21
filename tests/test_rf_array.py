@@ -304,3 +304,23 @@ def test_where_int():
         out.mark_as_default_output(shape=(batch_dim, time_dim, in_dim))
 
     run_model(extern_data, lambda *, epoch, step: rf.Module(), _forward_step)
+
+
+def test_copy_masked():
+    time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
+    in_dim = Dim(7, name="in")
+    extern_data = TensorDict(
+        {
+            "data": Tensor("data", [batch_dim, time_dim, in_dim], dtype="float32"),
+        }
+    )
+
+    # noinspection PyShadowingNames,PyUnusedLocal
+    def _forward_step(*, model: rf.Conv1d, extern_data: TensorDict):
+        x = extern_data["data"]
+        x = x.copy_masked(1)
+        # Do some pooling to make sure the copy_masked has an effect on the output.
+        x, _ = rf.pool1d(x, mode="avg", pool_size=3, strides=1, padding="same", in_spatial_dim=time_dim)
+        x.mark_as_default_output(shape=(batch_dim, time_dim, in_dim))
+
+    run_model(extern_data, lambda *, epoch, step: rf.Module(), _forward_step)
