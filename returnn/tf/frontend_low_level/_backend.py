@@ -147,6 +147,29 @@ class TFBackend(Backend[tf.Tensor]):
             return op(a, b)
 
     @staticmethod
+    def where(
+        cond: Tensor,
+        true_: Union[Tensor, rf.RawTensorTypes],
+        false_: Union[Tensor, rf.RawTensorTypes],
+        *,
+        allow_broadcast_all_sources: bool = False,
+    ) -> Tensor:
+        """where"""
+        true_ = rf.convert_to_tensor(true_, _backend=TFBackend, device=cond.device)
+        false_ = rf.convert_to_tensor(false_, _backend=TFBackend, device=cond.device)
+        out = Tensor.get_common_data(
+            [true_, false_, cond], allow_broadcast_all_sources=allow_broadcast_all_sources, name="where"
+        )
+        out.dtype = true_.dtype
+        out.sparse_dim = true_.sparse_dim or false_.sparse_dim
+        out.feature_dim = true_.feature_dim or false_.feature_dim
+        cond_bc_raw = cond.copy_compatible_to_dims_raw(out.dims)
+        true_bc_raw = true_.copy_compatible_to_dims_raw(out.dims)
+        false_bc_raw = false_.copy_compatible_to_dims_raw(out.dims)
+        out.raw_tensor = tf.where(cond_bc_raw, true_bc_raw, false_bc_raw)
+        return out
+
+    @staticmethod
     def reshape_raw(raw_tensor: tf.Tensor, shape: Union[Sequence[Union[int, tf.Tensor]], tf.Tensor]) -> tf.Tensor:
         """
         :param raw_tensor: raw tensor
