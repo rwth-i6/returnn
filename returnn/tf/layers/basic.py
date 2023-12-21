@@ -9821,7 +9821,7 @@ class SwitchLayer(LayerBase):
             if isinstance(source, LayerBase):
                 return source.output
             else:
-                return Data.from_tensor(tf.constant(source, name=const_name))
+                return Data.from_tensor(tf.constant(source, name=const_name, dtype=self.output.dtype))
 
         def get_source_allow_inf_in_output(source):
             """
@@ -9900,6 +9900,12 @@ class SwitchLayer(LayerBase):
         :param LayerBase|float|int|None false_from:
         :rtype: Data
         """
+        if isinstance(true_from, LayerBase):
+            dtype = true_from.output.dtype
+        elif isinstance(false_from, LayerBase):
+            dtype = false_from.output.dtype
+        else:
+            dtype = None
 
         def get_source_template(source, source_name):
             """
@@ -9909,7 +9915,7 @@ class SwitchLayer(LayerBase):
             """
             if isinstance(source, LayerBase):
                 return source.output.copy_template(source_name)
-            return Data.template_from_constant(source, name=source_name)
+            return Data.template_from_constant(source, name=source_name, dtype=dtype)
 
         if isinstance(condition, bool):
             return get_source_template(true_from if condition else false_from, source_name="%s_output" % name)
