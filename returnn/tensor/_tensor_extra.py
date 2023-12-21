@@ -2920,19 +2920,67 @@ class _TensorMixin(_TensorMixinBase):
 
         return rf.num_elements_of_shape(self.dims)
 
-    def copy_masked(self: Tensor, mask_value) -> Tensor:
+    def copy_masked(
+        self: Tensor,
+        mask_value: Union[Tensor, float, int, _t.RawTensorType],
+        *,
+        dims: Optional[Sequence[Union[Dim, int]]] = None,
+        allow_int: bool = NotSpecified,
+    ) -> Tensor:
         """
-        :param float|int|tf.Tensor|Tensor mask_value:
+        :param mask_value:
+        :param dims:
+        :param allow_int: in dims
         """
-        assert self.placeholder is not None
-        if not any(dim.need_masking() for dim in self.dims):
-            return self.copy()
-        assert self._raw_backend.is_tensorflow  # not implemented otherwise for now
-        from returnn.tf.util.basic import mask_dyn_seq_len_nd
+        assert self.raw_tensor is not None
+        if dims is None:
+            axes = range(self.batch_ndim)
+        else:
+            axes = [self.get_axis_from_description(dim, allow_int=allow_int) for dim in dims]
+            assert set(axes) == len(dims), f"{self} copy_masked, dims {dims} not unique, axes {axes}"
 
-        dyn_axes = [axis for axis, dim in enumerate(self.dim_tags) if not dim.is_batch_dim() and dim.dimension is None]
-        res = self.copy()
-        res.placeholder = mask_dyn_seq_len_nd(self, pad_value=mask_value, axes=dyn_axes)
+        # Code was originally in TF util mask_dyn_seq_len_nd, here rewritten with RETURNN frontend (RF).
+
+        # Filter out some axes which should not be used for masking.
+        axes_ = []
+        for axis in axes:
+            tag: Dim = self.dims[axis]
+            if not tag.need_masking():
+                continue
+            # It only makes sense to apply for this axis if the dyn size dims are all existing in x itself.
+            # E.g. if the dyn_size_ext shape is [B] but the shape of x is just [T] (without B),
+            # then we do not need masking.
+            if set(tag.dyn_size_ext.dim_tags).issubset(self.dim_tags):
+                axes_.append(axis)
+        axes = axes_
+
+        if not axes:
+            return self.copy()
+
+        use_padding_info = False
+        tf_util = None
+        if self._raw_backend.is_tensorflow:
+            import returnn.tf.util.basic as tf_util
+
+            use_padding_info = isinstance(mask_value, (int, float))
+            if use_padding_info:
+                d = tf_util.get_padding_info_dict_ref(self.raw_tensor)
+                existing_pad_values = [d.get(self.dim_tags[axis]) for axis in axes]
+                if set(existing_pad_values) == {mask_value}:
+                    return self.copy()  # nothing to do
+
+        import returnn.frontend as rf
+
+        mask = None
+        for axis in axes:
+            mask_ = self._dims[axis].get_mask(dim_order=self.dims, device=self.device)
+            mask = rf.logical_and(mask, mask_) if mask is not None else mask_
+        assert isinstance(mask, _t.Tensor)
+        res = rf.where(mask, self, mask_value)
+        if use_padding_info:
+            d = tf_util.get_padding_info_dict_ref(res.raw_tensor)
+            d.clear()
+            d.update({self.dim_tags[axis]: mask_value for axis in axes})
         return res
 
     def get_batch_dim(self) -> Union[_t.RawTensorType, int]:

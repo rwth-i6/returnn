@@ -263,53 +263,6 @@ def set_padding_info(x, dim, pad_value):
     d[dim] = pad_value
 
 
-def mask_dyn_seq_len_nd(x, pad_value, axes):
-    """
-    :param Tensor x:
-    :param float|int|tf.Tensor|Tensor pad_value:
-    :param list[int]|tuple[int] axes:
-    :return: masked x
-    :rtype: tf.Tensor
-    """
-    if isinstance(pad_value, Tensor):
-        assert pad_value.dims == ()
-        pad_value = pad_value.placeholder
-    # Filter out some axes which should not be used for masking.
-    axes_ = []
-    for axis in axes:
-        tag = x.dim_tags[axis]
-        assert tag.dyn_size_ext
-        # It only makes sense to apply for this axis if the dyn size dims are all existing in x itself.
-        # E.g. if the dyn_size_ext shape is [B] but the shape of x is just [T] (without B),
-        # then we do not need masking.
-        if set(tag.dyn_size_ext.dim_tags).issubset(x.dim_tags):
-            axes_.append(axis)
-    axes = axes_
-
-    x_ = x.placeholder
-    if not axes:
-        return x_
-
-    pad_value_is_const = isinstance(pad_value, (int, float))
-    if pad_value_is_const:
-        d = get_padding_info_dict_ref(x_)
-        existing_pad_values = [d.get(x.dim_tags[axis]) for axis in axes]
-        if set(existing_pad_values) == {pad_value}:
-            return x_  # nothing to do
-
-    mask = None
-    for axis in axes:
-        mask_ = x.get_sequence_mask_broadcast(axis=axis)
-        mask = tf.logical_and(mask, mask_) if mask is not None else mask_
-    assert isinstance(mask, tf.Tensor)
-    x_ = where_bc(mask, x_, tf.cast(tf.convert_to_tensor(pad_value, name="pad_value"), dtype=x_.dtype))
-    if pad_value_is_const:
-        d = get_padding_info_dict_ref(x_)
-        d.clear()
-        d.update({x.dim_tags[axis]: pad_value for axis in axes})
-    return x_
-
-
 def copy_compatible_reduce(source, target, reduce_type):
     """
     Extension of Data.copy_compatible_to which also reduces additional dims.

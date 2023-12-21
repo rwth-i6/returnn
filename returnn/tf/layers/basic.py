@@ -8532,7 +8532,7 @@ class DotLayer(LayerBase):
           See https://github.com/rwth-i6/returnn/issues/627 for details.
         """
         from returnn.util import BehaviorVersion
-        from returnn.tf.util.basic import prod, get_shape, get_padding_info_dict_ref, mask_dyn_seq_len_nd
+        from returnn.tf.util.basic import prod, get_shape, get_padding_info_dict_ref
 
         super(DotLayer, self).__init__(**kwargs)
         if reduce is not NotSpecified:
@@ -8627,10 +8627,8 @@ class DotLayer(LayerBase):
         # For matmul, all the first dims must match (batch dim etc), and for the remaining 2 dims,
         # we get (I, J) * (J, K) -> (I, K).
         # So we reshape such that we collapse all reduce-axes and var-axes into each a single axis.
-        a = a_out.placeholder
-        b = b_out.placeholder
-        a_shape = get_shape(a)
-        b_shape = get_shape(b)
+        a_shape = get_shape(a_out.placeholder)
+        b_shape = get_shape(b_out.placeholder)
         a_rem_dims = [a_shape[i] for i in a_rem_axes]
         b_rem_dims = [b_shape[i] for i in b_rem_axes]
         assert len(a_rem_axes) == len(b_rem_axes), "%s: remaining shared (batch) axes do not match. sources %r" % (
@@ -8663,7 +8661,7 @@ class DotLayer(LayerBase):
         if not use_mask:
             self._info_reduce_mask = "disabled"
         elif a_reduce_dyn_axes and b_reduce_dyn_axes:
-            a_pad, b_pad = get_padding_info_dict_ref(a), get_padding_info_dict_ref(b)
+            a_pad, b_pad = get_padding_info_dict_ref(a_out.raw_tensor), get_padding_info_dict_ref(b_out.raw_tensor)
             a_pad_values = [a_pad.get(a_out.dim_tags[i], None) for i in a_reduce_dyn_axes]
             b_pad_values = [b_pad.get(b_out.dim_tags[i], None) for i in b_reduce_dyn_axes]
             if set(a_pad_values) == {0}:
@@ -8682,16 +8680,18 @@ class DotLayer(LayerBase):
                 )
                 if not can_mask_b or len(a_shape) < len(b_shape):
                     assert can_mask_a
-                    a = mask_dyn_seq_len_nd(a_out, pad_value=0, axes=a_reduce_dyn_axes)
+                    a_out = a_out.copy_masked(0, dims=a_reduce_dyn_axes, allow_int=True)
                     self._info_reduce_mask = "mask-source-0"
                 else:
                     assert can_mask_b
-                    b = mask_dyn_seq_len_nd(b_out, pad_value=0, axes=b_reduce_dyn_axes)
+                    b_out = b_out.copy_masked(0, dims=b_reduce_dyn_axes, allow_int=True)
                     self._info_reduce_mask = "mask-source-1"
         else:
             self._info_reduce_mask = "none-dynamic"
         a_reduce_dim = prod(a_reduce_dims) if a_reduce_dims else None
         b_reduce_dim = prod(b_reduce_dims) if b_reduce_dims else None
+        a = a_out.placeholder
+        b = b_out.placeholder
         if debug:
             print("%s, red1=%r, red2=%r, var1=%r, var2=%r:" % (self, red1, red2, var1, var2), file=log.v3)
             print(" ", "a:", a_out, a, file=log.v3)
