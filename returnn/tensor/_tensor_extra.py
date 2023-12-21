@@ -2937,7 +2937,7 @@ class _TensorMixin(_TensorMixinBase):
             axes = range(self.batch_ndim)
         else:
             axes = [self.get_axis_from_description(dim, allow_int=allow_int) for dim in dims]
-            assert set(axes) == len(dims), f"{self} copy_masked, dims {dims} not unique, axes {axes}"
+            assert len(set(axes)) == len(dims), f"{self} copy_masked, dims {dims} not unique, axes {axes}"
 
         # Code was originally in TF util mask_dyn_seq_len_nd, here rewritten with RETURNN frontend (RF).
 
