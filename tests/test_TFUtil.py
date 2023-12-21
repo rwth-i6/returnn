@@ -1523,6 +1523,15 @@ def test_Data_auto_create_placeholders_same_dim_tags_as_existing():
         assert_equal(set(placeholder_ops), {data.placeholder.op, classes.placeholder.op, time_tag.dyn_size.op})
 
 
+def test_Data_copy_masked_0():
+    x = Tensor("b_out", shape=(None, 3), dtype="float32", auto_create_placeholders=True)
+    y = x.copy_masked(0)
+    rnd = numpy.random.RandomState(3)
+    session.run(
+        y.raw_tensor, feed_dict={x.raw_tensor: rnd.normal(size=(2, 5, 3)), x.dims[1].dyn_size_ext.raw_tensor: [5, 4]}
+    )
+
+
 def test_Dim_copy():
     # https://github.com/rwth-i6/returnn/issues/860
     import copy
