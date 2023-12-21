@@ -1776,35 +1776,18 @@ class TorchBackend(Backend[torch.Tensor]):
             ceil_mode = False
         else:
             raise ValueError(f"invalid padding {padding!r}")
-        if len(in_spatial_dims) == 1:
-            out_raw = torch.nn.functional.max_pool1d(
-                src_raw,
-                kernel_size=pool_size,
-                stride=strides,
-                dilation=dilation_rate or 1,
-                ceil_mode=ceil_mode,
-                padding=padding,
-            )
-        elif len(in_spatial_dims) == 2:
-            out_raw = torch.nn.functional.max_pool2d(
-                src_raw,
-                kernel_size=pool_size,
-                stride=strides,
-                dilation=dilation_rate or 1,
-                ceil_mode=ceil_mode,
-                padding=padding,
-            )
-        elif len(in_spatial_dims) == 3:
-            out_raw = torch.nn.functional.max_pool3d(
-                src_raw,
-                kernel_size=pool_size,
-                stride=strides,
-                dilation=dilation_rate or 1,
-                ceil_mode=ceil_mode,
-                padding=padding,
-            )
-        else:
-            raise ValueError(f"invalid number of filter dims {in_spatial_dims}, expected 1, 2, or 3")
+        func_name = f"{mode}_pool{len(in_spatial_dims)}d"
+        func = getattr(torch.nn.functional, func_name)  # e.g. torch.nn.functional.max_pool1d
+        kwargs = {}
+        if dilation_rate and any(
+            d != 1 for d in ([dilation_rate] if isinstance(dilation_rate, int) else dilation_rate)
+        ):
+            # Only optionally add it to kwargs. Might not be supported by all pool modes, e.g. avg_pool.
+            assert mode == "max", "dilation_rate only supported for max_pool"
+            kwargs["dilation"] = dilation_rate
+        if mode == "avg":
+            kwargs["count_include_pad"] = False
+        out_raw = func(src_raw, kernel_size=pool_size, stride=strides, ceil_mode=ceil_mode, padding=padding, **kwargs)
         out = Tensor("pool", dims=batch_dims + list(out_spatial_dims), dtype=source.dtype)
         out.raw_tensor = torch.reshape(out_raw, [d.get_dim_value() for d in out.dims])
         if source.feature_dim and source.feature_dim in out.dims:
