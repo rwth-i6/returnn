@@ -241,7 +241,7 @@ class TransformerDecoderLayer(rf.Module):
 
         # (multi-head) cross-attention (CA)
         x_ca_ln = self.cross_att_layer_norm(x_sa_out)
-        x_ca = self.cross_att(x_ca_ln, encoder)
+        x_ca = self.cross_att(x_ca_ln, encoder.cross_att)
         x_ca = rf.dropout(x_ca, self.dropout, axis=self.dropout_broadcast and self.out_dim)
         x_ca_out = x_ca + x_sa_out
 
