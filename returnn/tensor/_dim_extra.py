@@ -862,7 +862,7 @@ class _DimMixin:
         # A zero size can lead to problems in some cases, e.g. in SoftmaxOverSpatialLayer,
         # when everything is masked to -inf, it results in nan,
         # and this likely produces nan in backprop or elsewhere.
-        # Thus, mask size_ext itself, and set the padded values to 1.
+        # Thus, mask size_ext itself, and set the padded values to max_idx.
         # This assumes that max_idx >= 1.
         size_ext = size_ext.copy_masked(max_idx)
         idx_range = backend.range_over_dim(self, device=device)
