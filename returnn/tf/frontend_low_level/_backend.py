@@ -155,8 +155,14 @@ class TFBackend(Backend[tf.Tensor]):
         allow_broadcast_all_sources: bool = False,
     ) -> Tensor:
         """where"""
-        true_ = rf.convert_to_tensor(true_, _backend=TFBackend, device=cond.device)
-        false_ = rf.convert_to_tensor(false_, _backend=TFBackend, device=cond.device)
+        if isinstance(true_, Tensor):
+            dtype = true_.dtype
+        elif isinstance(false_, Tensor):
+            dtype = false_.dtype
+        else:
+            dtype = None
+        true_ = rf.convert_to_tensor(true_, _backend=TFBackend, device=cond.device, dtype=dtype)
+        false_ = rf.convert_to_tensor(false_, _backend=TFBackend, device=cond.device, dtype=dtype)
         out = Tensor.get_common_data(
             [true_, false_, cond], allow_broadcast_all_sources=allow_broadcast_all_sources, name="where"
         )
