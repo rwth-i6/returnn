@@ -1082,11 +1082,17 @@ class ReturnnLayersBackend(Backend[Layer]):
                 padding=padding,
             )
         other_dims = [d for d in source.dims if d not in in_spatial_dims and not d.is_batch_dim()]
-        assert other_dims  # currently not implemented otherwise, need in_dim...
+        dummy_in_dim = None
         if source.feature_dim and source.feature_dim in other_dims:
             in_dim = source.feature_dim
-        else:
+        elif other_dims:
             in_dim = other_dims[-1]
+        else:
+            # PoolLayer currently needs some in_dim.
+            dummy_in_dim = Dim(1, name="dummy_in")
+            in_dim = dummy_in_dim
+            source = rf.expand_dim(source, dim=dummy_in_dim)
+        assert source.have_batch_axis(), "PoolLayer without batch dim not implemented"
         args = {
             "mode": mode,
             "pool_size": pool_size,
@@ -1098,6 +1104,8 @@ class ReturnnLayersBackend(Backend[Layer]):
             "in_dim": in_dim,  # it does not really matter, but we need sth currently
         }
         layer = rfl.make_layer({"class": "pool", "from": source, **args}, name="pool")
+        if dummy_in_dim:
+            layer = rf.squeeze(layer, axis=dummy_in_dim)
         if source.feature_dim != in_dim:
             # We want that the feature-dim stays consistent. PoolLayer currently just sets it to the in_dim.
             layer = rfl.make_layer(
