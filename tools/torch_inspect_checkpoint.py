@@ -31,7 +31,10 @@ def main():
     arg_parser.add_argument("--mmap", action="store_true")
     args = arg_parser.parse_args()
 
-    state = torch.load(args.checkpoint, map_location=args.device, mmap=args.mmap)
+    kwargs = {}
+    if args.mmap:
+        kwargs["mmap"] = True
+    state = torch.load(args.checkpoint, map_location=args.device, **kwargs)
     if args.key:
         assert isinstance(state, dict)
         if args.key not in state and "model" in state:
