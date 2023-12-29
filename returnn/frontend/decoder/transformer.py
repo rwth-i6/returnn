@@ -40,6 +40,7 @@ class TransformerDecoder(rf.Module):
         decoder_layer: Optional[Union[TransformerDecoderLayer, rf.Module, type, Any]] = None,
         decoder_layer_opts: Optional[Dict[str, Any]] = None,
         share_embedding: bool = False,
+        sequential=rf.Sequential,
     ):
         """
         :param encoder_dim:
@@ -54,6 +55,7 @@ class TransformerDecoder(rf.Module):
         :param decoder_layer: an instance of :class:`TransformerDecoderLayer` or similar
         :param decoder_layer_opts: options for the encoder layer
         :param share_embedding:
+        :param sequential:
         """
         super().__init__()
 
@@ -89,7 +91,7 @@ class TransformerDecoder(rf.Module):
             else:
                 raise TypeError(f"unexpected decoder_layer {decoder_layer!r}")
 
-        self.layers = rf.Sequential(_copy.deepcopy(decoder_layer) for _ in range(num_layers))
+        self.layers = sequential(_copy.deepcopy(decoder_layer) for _ in range(num_layers))
 
         self.final_layer_norm = rf.LayerNorm(model_dim)
 

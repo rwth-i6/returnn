@@ -300,6 +300,7 @@ class ConformerEncoder(ISeqDownsamplingEncoder):
         att_dropout: float = 0.1,
         encoder_layer: Optional[Union[ConformerEncoderLayer, rf.Module, type, Any]] = None,
         encoder_layer_opts: Optional[Dict[str, Any]] = None,
+        sequential=rf.Sequential,
     ):
         """
         :param out_dim: the output feature dimension
@@ -316,6 +317,7 @@ class ConformerEncoder(ISeqDownsamplingEncoder):
         :param att_dropout: attention dropout value
         :param encoder_layer: an instance of :class:`ConformerEncoderLayer` or similar
         :param encoder_layer_opts: options for the encoder layer
+        :param sequential:
         """
         super().__init__()
 
@@ -351,7 +353,7 @@ class ConformerEncoder(ISeqDownsamplingEncoder):
             else:
                 raise TypeError(f"unexpected encoder_layer {encoder_layer!r}")
 
-        self.layers = rf.Sequential(_copy.deepcopy(encoder_layer) for _ in range(num_layers))
+        self.layers = sequential(_copy.deepcopy(encoder_layer) for _ in range(num_layers))
 
     def __call__(
         self,
