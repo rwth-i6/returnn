@@ -221,14 +221,39 @@ class Engine(EngineBase):
         print(
             f"Starting training at epoch {self._start_epoch}, global train step {self.global_train_step}", file=log.v3
         )
-        self.epoch = self._start_epoch - 1
+        start_epoch = self._start_epoch
+        self.epoch = start_epoch - 1
         self._check_epoch_missing_eval()
         while self.epoch + 1 <= self._final_epoch:
             self.epoch += 1
             self._epoch_mp_shared.value = self.epoch
 
-            self.init_train_epoch()
-            self.train_epoch()
+            epoch_start_global_train_step = self.global_train_step
+            epoch_num_tries = 0
+            while True:
+                epoch_num_tries += 1
+                if epoch_num_tries > 1:
+                    print(f"Retry of train epoch {self.epoch}, global train step {self.global_train_step}", file=log.v3)
+                self.init_train_epoch()
+                try:
+                    self.train_epoch()
+                except torch.cuda.OutOfMemoryError as exc:
+                    print("torch.cuda.OutOfMemoryError:", exc, file=log.v1)
+                    # Some heuristics when to retry.
+                    if (
+                        epoch_num_tries <= 3  # heuristic
+                        and self.epoch > start_epoch  # heuristic
+                        and self.global_train_step > epoch_start_global_train_step  # heuristic
+                        and self._save_model_epoch_interval == 1  # cannot load most recent epoch
+                        and not self._torch_distributed_ctx  # need to fix correct sync, all workers need to restart ep
+                    ):
+                        print("Retry after OOM", file=log.v3)
+                        self._maybe_reset_dev_memory_caches(force=True)
+                        self._reset_train_epoch()
+                        assert self.global_train_step == epoch_start_global_train_step
+                        continue
+                    raise
+                break
 
         print(f"Finished training at epoch {self.epoch}, global train step {self.global_train_step}", file=log.v3)
 
@@ -249,8 +274,14 @@ class Engine(EngineBase):
             }
         )
 
-    def _maybe_reset_dev_memory_caches(self):
-        if not self._reset_dev_memory_caches:
+    def _reset_train_epoch(self):
+        epoch = self.epoch
+        self._load_model()
+        self._load_optimizer()
+        assert epoch == self.epoch
+
+    def _maybe_reset_dev_memory_caches(self, *, force: bool = False):
+        if not force and not self._reset_dev_memory_caches:
             return
         gc.collect()
         torch.cuda.empty_cache()
