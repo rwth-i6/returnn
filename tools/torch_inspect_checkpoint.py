@@ -113,11 +113,14 @@ def print_tensor(
         print(v.detach().cpu().numpy())
     n = v.numel()
     if n > 1:
+        v_, _ = v.flatten().sort()
         if v.is_floating_point():
             # See :func:`variable_scalar_summaries_dict`.
             mean = torch.mean(v)
-            print(f"{prefix}mean, stddev: {_r(mean)}, {_r(torch.sqrt(torch.mean(torch.square(v - mean))))}")
-        v_, _ = v.flatten().sort()
+            print(
+                f"{prefix}mean, stddev, max abs:"
+                f" {_r(mean)}, {_r(torch.sqrt(torch.mean(torch.square(v - mean))))}, {_r(max(torch.abs(v_[[0, -1]])))}"
+            )
         print(
             f"{prefix}min, p05, p50, p95, max:"
             f" {_r(v_[0])},"
