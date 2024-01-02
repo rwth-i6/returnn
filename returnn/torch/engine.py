@@ -202,7 +202,7 @@ class Engine(EngineBase):
         )
         self._updater.create_optimizer()
         if self._start_epoch > 1:
-            self._load_optimizer()
+            self._load_optimizer(epoch=self._start_epoch - 1)
 
         self._train_step_func = self.config.typed_value("train_step")
         assert self._train_step_func, "train_step not defined"
@@ -277,8 +277,8 @@ class Engine(EngineBase):
     def _reset_train_epoch(self):
         epoch = self.epoch
         self._load_model()
-        self._load_optimizer()
         assert epoch == self.epoch
+        self._load_optimizer(epoch=epoch - 1)
 
     def _maybe_reset_dev_memory_caches(self, *, force: bool = False):
         if not force and not self._reset_dev_memory_caches:
@@ -813,14 +813,12 @@ class Engine(EngineBase):
             return None
         return self._updater.get_optimizer()
 
-    def _load_optimizer(self):
+    def _load_optimizer(self, *, epoch: int):
         """
         Loads a torch.optim.Optimizer from disk and uses it as the optimizer.
         This function is a wrapper to Updater.load_optimizer().
         """
-        filename = (
-            self.get_epoch_model_filename(epoch=self._start_epoch - 1) + ".opt" + util.get_model_filename_postfix()
-        )
+        filename = self.get_epoch_model_filename(epoch=epoch) + ".opt" + util.get_model_filename_postfix()
         self._updater.load_optimizer(filename)
 
     def _save_optimizer(self):
