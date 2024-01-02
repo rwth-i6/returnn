@@ -5,7 +5,7 @@ Inspect checkpoint
 """
 
 from __future__ import annotations
-from typing import Union, Any, Tuple
+from typing import Optional, Union, Any, Tuple, List, Dict
 import argparse
 import numpy
 import torch
@@ -37,6 +37,9 @@ def main():
         help="with --key, just like --stats_only, otherwise like --all_tensors --stats_only",
     )
     arg_parser.add_argument(
+        "--interesting_exclude", help="list of tensors to exclude, separated by comma, matching part of name"
+    )
+    arg_parser.add_argument(
         "--printoptions",
         nargs="*",
         type=parse_numpy_printoption,
@@ -58,16 +61,36 @@ def main():
         print(f"{args.key}:")
         print_object(obj, stats_only=args.stats_only or args.stats)
     else:
-        print_object(state, print_all_tensors=args.all_tensors or args.stats, stats_only=args.stats_only or args.stats)
+        ctx = PrintCtx(exclude=args.interesting_exclude.split(",") if args.interesting_exclude else [])
+        print_object(
+            state, print_all_tensors=args.all_tensors or args.stats, stats_only=args.stats_only or args.stats, ctx=ctx
+        )
+        ctx.report()
 
 
-def print_object(obj: Any, *, print_all_tensors: bool = False, stats_only: bool = False, prefix: str = ""):
+def print_object(
+    obj: Any,
+    *,
+    print_all_tensors: bool = False,
+    stats_only: bool = False,
+    prefix: str = "",
+    ctx: Optional[PrintCtx] = None,
+    ctx_name: Optional[str] = None,
+):
     """print object"""
     if isinstance(obj, (dict, list, tuple)):
         for k, v in obj.items() if isinstance(obj, dict) else enumerate(obj):
-            _print_key_value(k, v, print_all_tensors=print_all_tensors, stats_only=stats_only, prefix=prefix)
+            _print_key_value(
+                k,
+                v,
+                print_all_tensors=print_all_tensors,
+                stats_only=stats_only,
+                prefix=prefix,
+                ctx=ctx,
+                ctx_name=f"{ctx_name}.{k}" if ctx_name else f"{k}",
+            )
     elif isinstance(obj, (numpy.ndarray, torch.Tensor)):
-        print_tensor(obj, stats_only=stats_only, prefix=prefix)
+        print_tensor(obj, stats_only=stats_only, prefix=prefix, ctx=ctx, ctx_name=ctx_name)
     else:
         print(f"{prefix}({type(obj)}) {obj}")
 
@@ -79,6 +102,8 @@ def _print_key_value(
     print_all_tensors: bool = False,
     stats_only: bool = False,
     prefix: str = "",
+    ctx: PrintCtx,
+    ctx_name: str,
 ):
     if isinstance(v, numpy.ndarray):
         v = torch.tensor(v)
@@ -88,10 +113,24 @@ def _print_key_value(
         else:
             print(f"{prefix}{k}: {v.dtype} {_format_shape(v.shape)}")
             if print_all_tensors:
-                print_tensor(v, with_type_and_shape=False, stats_only=stats_only, prefix=prefix + "  ")
+                print_tensor(
+                    v,
+                    with_type_and_shape=False,
+                    stats_only=stats_only,
+                    prefix=prefix + "  ",
+                    ctx=ctx,
+                    ctx_name=ctx_name,
+                )
     elif isinstance(v, (dict, list, tuple)):
         print(f"{prefix}{k}: ({type(v).__name__})")
-        print_object(v, print_all_tensors=print_all_tensors, stats_only=stats_only, prefix=prefix + "  ")
+        print_object(
+            v,
+            print_all_tensors=print_all_tensors,
+            stats_only=stats_only,
+            prefix=prefix + "  ",
+            ctx=ctx,
+            ctx_name=ctx_name,
+        )
     else:
         print(f"{prefix}{k}: ({type(v).__name__}) {v}")
 
@@ -102,6 +141,8 @@ def print_tensor(
     prefix: str = "",
     with_type_and_shape: bool = True,
     stats_only: bool = False,
+    ctx: Optional[PrintCtx] = None,
+    ctx_name: Optional[str] = None,
 ):
     """print tensor"""
     if isinstance(v, numpy.ndarray):
@@ -117,10 +158,13 @@ def print_tensor(
         if v.is_floating_point():
             # See :func:`variable_scalar_summaries_dict`.
             mean = torch.mean(v)
+            max_abs = max(torch.abs(v_[[0, -1]]))
             print(
                 f"{prefix}mean, stddev, max abs:"
-                f" {_r(mean)}, {_r(torch.sqrt(torch.mean(torch.square(v - mean))))}, {_r(max(torch.abs(v_[[0, -1]])))}"
+                f" {_r(mean)}, {_r(torch.sqrt(torch.mean(torch.square(v - mean))))}, {_r(max_abs)}"
             )
+            if ctx and ctx_name:
+                ctx.visit_tensor(name=ctx_name, tensor=v, max_abs=max_abs)
         print(
             f"{prefix}min, p05, p50, p95, max:"
             f" {_r(v_[0])},"
@@ -135,6 +179,33 @@ def _format_shape(shape: Tuple[int, ...]) -> str:
 
 def _r(num: torch.Tensor) -> str:
     return numpy.array2string(num.detach().cpu().numpy())
+
+
+class PrintCtx:
+    """print ctx, maybe collect interesting global info"""
+
+    def __init__(self, *, exclude: List[str]):
+        self.interesting: Dict[str, Tuple[float, str, torch.Tensor]] = {}
+        self.exclude = exclude
+
+    def visit_tensor(self, *, name: str, tensor: torch.Tensor, max_abs: float):
+        """visit"""
+        for exclude_name in self.exclude:
+            if exclude_name in name:
+                return
+        if tensor.ndim > 0:  # ignore scalars for max_abs
+            key = "largest max abs"
+            if key not in self.interesting or self.interesting[key][0] < max_abs:
+                self.interesting[key] = (max_abs, name, tensor)
+
+    def report(self):
+        """report"""
+        if not self.interesting:
+            return
+        print("Collected interesting tensors:")
+        for k, (_, name, v) in self.interesting.items():
+            print(f"{k}: {name}: {v.dtype} {_format_shape(v.shape)}")
+            print_tensor(v, with_type_and_shape=False, stats_only=True, prefix="  ")
 
 
 def parse_numpy_printoption(kv_str):
