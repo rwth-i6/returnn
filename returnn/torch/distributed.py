@@ -146,8 +146,15 @@ def get_ctx(config=None) -> Optional[DistributedContext]:
 def _sync_params_avg(*, module: torch.nn.Module):
     import torch.distributed as dist
 
-    # Older PyTorch versions do not have ReduceOp.AVG.
-    reduce_op = getattr(dist.ReduceOp, "AVG", dist.ReduceOp.SUM)
+    if dist.get_backend() == "gloo":
+        # Gloo does not support AVG
+        reduce_op = dist.ReduceOp.SUM
+    else:
+        if hasattr(dist.ReduceOp, "AVG"):
+            reduce_op = dist.ReduceOp.AVG
+        else:
+            # Older PyTorch versions do not have ReduceOp.AVG.
+            reduce_op = dist.ReduceOp.SUM
 
     for param in module.parameters():
         dist.all_reduce(param.data, op=reduce_op)
