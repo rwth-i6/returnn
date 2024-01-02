@@ -388,7 +388,8 @@ class Engine(EngineBase):
             if self._torch_distributed_ctx:
                 self._torch_distributed_ctx.step_after_param_update(module=self._pt_model, epoch_step_idx=step_idx)
 
-            elapsed_computation_time += time.time() - step_begin_time
+            step_duration = time.time() - step_begin_time
+            elapsed_computation_time += step_duration
 
             accumulated_losses_dict += losses_dict
             accumulated_inv_norm_factors_dict += inv_norm_factors_dict
@@ -396,6 +397,7 @@ class Engine(EngineBase):
                 f"ep {self.epoch} train",
                 step=step_idx,
                 eval_info=dict(losses_dict / inv_norm_factors_dict),
+                step_duration=step_duration,
                 log_memory_usage_device=self._device if self._log_memory_usage else None,
             )
 
@@ -1000,6 +1002,7 @@ def _print_process(
     report_prefix: str,
     step: int,
     eval_info: Optional[Dict[str, Any]] = None,
+    step_duration: Optional[float] = None,
     log_memory_usage_device: Optional[str] = None,
 ):
     """
@@ -1008,6 +1011,7 @@ def _print_process(
     :param report_prefix:
     :param step:
     :param eval_info:
+    :param step_duration:
     :param log_memory_usage_device: if given, will log memory usage (peak allocated memory)
     :return: nothing, will be printed to log
     """
@@ -1021,6 +1025,8 @@ def _print_process(
                 info += [
                     f"mem_usage:{log_memory_usage_device} {util.human_bytes_size(torch.cuda.max_memory_allocated(dev))}"
                 ]
+        if step_duration is not None:
+            info += ["%.3f sec/step" % step_duration]
         print(", ".join(filter(None, info)), file=log.v5)
 
 
