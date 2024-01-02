@@ -177,8 +177,8 @@ def _format_shape(shape: Tuple[int, ...]) -> str:
     return "[%s]" % ",".join(map(str, shape))
 
 
-def _r(num: torch.Tensor) -> str:
-    return numpy.array2string(num.detach().cpu().numpy())
+def _r(num: Union[torch.Tensor, float]) -> str:
+    return numpy.array2string(num.detach().cpu().numpy() if isinstance(num, torch.Tensor) else num)
 
 
 class PrintCtx:
@@ -197,15 +197,18 @@ class PrintCtx:
             key = "largest max abs"
             if key not in self.interesting or self.interesting[key][0] < max_abs:
                 self.interesting[key] = (max_abs, name, tensor)
+            key = "smallest max abs"
+            if key not in self.interesting or self.interesting[key][0] > max_abs:
+                self.interesting[key] = (max_abs, name, tensor)
 
     def report(self):
         """report"""
         if not self.interesting:
             return
         print("Collected interesting tensors:")
-        for k, (_, name, v) in self.interesting.items():
-            print(f"{k}: {name}: {v.dtype} {_format_shape(v.shape)}")
-            print_tensor(v, with_type_and_shape=False, stats_only=True, prefix="  ")
+        for k, (v, name, tensor) in self.interesting.items():
+            print(f"{k} {_r(v)}: {name}: {tensor.dtype} {_format_shape(tensor.shape)}")
+            print_tensor(tensor, with_type_and_shape=False, stats_only=True, prefix="  ")
 
 
 def parse_numpy_printoption(kv_str):
