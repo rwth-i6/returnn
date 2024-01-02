@@ -24,12 +24,13 @@ class DistributedContext:
     def __init__(self, options: Dict[str, Any]):
         import torch.distributed as dist
 
+        self._opts = options
+
         # when no backend is specified, both gloo and nccl backends will be created
         # the gloo backend will be used for collectives with CPU tensors and
         # the nccl backend will be used for collectives with CUDA tensors
-        dist.init_process_group(backend=None)
+        dist.init_process_group(backend=self._opts.get("backend", None))
 
-        self._opts = options
         self._local_rank = int(os.environ["LOCAL_RANK"])
         self._local_size = int(os.environ["LOCAL_WORLD_SIZE"])
         self._rank = dist.get_rank()
