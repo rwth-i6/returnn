@@ -18,9 +18,19 @@ def main():
 
     arg_parser = argparse.ArgumentParser()
     arg_parser.add_argument("checkpoint")
-    arg_parser.add_argument("--key", type=str, default="", help="Name of the tensor or object to inspect")
+    arg_parser.add_argument(
+        "--key",
+        type=str,
+        default="",
+        help="Name of the tensor or object to inspect."
+        " If not given, list them all (but without values, unless --all_tensors).",
+    )
     arg_parser.add_argument("--all_tensors", action="store_true", help="If True, print the values of all the tensors.")
-    arg_parser.add_argument("--stats_only", action="store_true")
+    arg_parser.add_argument(
+        "--stats_only",
+        action="store_true",
+        help="with --all_tensors or --key, print only stats of tensor, not all values",
+    )
     arg_parser.add_argument(
         "--printoptions",
         nargs="*",
