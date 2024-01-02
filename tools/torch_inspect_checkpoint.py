@@ -32,6 +32,11 @@ def main():
         help="with --all_tensors or --key, print only stats of tensor, not all values",
     )
     arg_parser.add_argument(
+        "--stats",
+        action="store_true",
+        help="with --key, just like --stats_only, otherwise like --all_tensors --stats_only",
+    )
+    arg_parser.add_argument(
         "--printoptions",
         nargs="*",
         type=parse_numpy_printoption,
@@ -51,9 +56,9 @@ def main():
             state = state["model"]
         obj = state[args.key]
         print(f"{args.key}:")
-        print_object(obj, stats_only=args.stats_only)
+        print_object(obj, stats_only=args.stats_only or args.stats)
     else:
-        print_object(state, print_all_tensors=args.all_tensors, stats_only=args.stats_only)
+        print_object(state, print_all_tensors=args.all_tensors or args.stats, stats_only=args.stats_only or args.stats)
 
 
 def print_object(obj: Any, *, print_all_tensors: bool = False, stats_only: bool = False, prefix: str = ""):
