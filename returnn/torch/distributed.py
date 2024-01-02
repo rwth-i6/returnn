@@ -96,7 +96,7 @@ class DistributedContext:
     def step_after_param_update(self, *, module: torch.nn.Module, epoch_step_idx: int):
         """one train step"""
         if self._reduce_type == "param" and ((epoch_step_idx % self._param_sync_step) == (self._param_sync_step - 1)):
-            _sync_params_avg(module=module)
+            _sync_params_avg(module=module, sync_on_cpu=self._opts.get("sync_on_cpu", False))
 
 
 _is_set_up = False
@@ -143,7 +143,7 @@ def get_ctx(config=None) -> Optional[DistributedContext]:
     return _ctx
 
 
-def _sync_params_avg(*, module: torch.nn.Module):
+def _sync_params_avg(*, module: torch.nn.Module, sync_on_cpu: bool = False):
     import torch.distributed as dist
 
     if dist.get_backend() == "gloo":
@@ -156,7 +156,18 @@ def _sync_params_avg(*, module: torch.nn.Module):
             # Older PyTorch versions do not have ReduceOp.AVG.
             reduce_op = dist.ReduceOp.SUM
 
-    for param in module.parameters():
-        dist.all_reduce(param.data, op=reduce_op)
-        if reduce_op == dist.ReduceOp.SUM:
-            param.data /= dist.get_world_size()
+    old_dev = None
+    if sync_on_cpu:
+        old_dev = next(iter(module.parameters())).device
+        module.to(torch.device("cpu"))
+        reduce_op = dist.ReduceOp.SUM
+
+    try:
+        for param in module.parameters():
+            dist.all_reduce(param.data, op=reduce_op)
+            if reduce_op == dist.ReduceOp.SUM:
+                param.data /= dist.get_world_size()
+
+    finally:
+        if old_dev:
+            module.to(old_dev)
