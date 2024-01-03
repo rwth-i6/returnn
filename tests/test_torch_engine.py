@@ -438,6 +438,84 @@ def test_optimizer_convert_aux_param():
         updater_param.load_optimizer(tmp_dir + "/model_buf.opt.pt")
 
 
+class _DemoException(Exception):
+    pass
+
+
+class _TestTorchSubModelRaisingException(torch.nn.Module):
+    def __init__(self, in_features: int, out_features: int):
+        super().__init__()
+        self.lin = torch.nn.Linear(in_features, out_features)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        :param x: [B,T,D]
+        :return: [B,T,D']
+        """
+        x = self.lin(x)
+        if int("1") == 1:
+            raise _DemoException("uh")
+        return x
+
+
+def test_torch_engine_train_exception():
+    class _Model(torch.nn.Module):
+        def __init__(self, **_kwargs):
+            super(_Model, self).__init__()
+            self.sub = _TestTorchSubModelRaisingException(9, 2)
+
+        def forward(self, x: torch.Tensor) -> torch.Tensor:
+            """
+            :param x: [B,T,D]
+            :return: [B,T,D']
+            """
+            x = self.sub(x)
+            return torch.nn.functional.log_softmax(x, dim=-1)
+
+        @classmethod
+        def train_step(cls, *, model: _Model, extern_data: TensorDict, **_kwargs):
+            """train step"""
+            data: Tensor = extern_data["data"]
+            logits = model(data.raw_tensor)
+            logits_packed = torch.nn.utils.rnn.pack_padded_sequence(
+                logits, data.dims[1].dyn_size_ext.raw_tensor, batch_first=True, enforce_sorted=False
+            )
+            targets = extern_data["classes"]
+            targets_packed = torch.nn.utils.rnn.pack_padded_sequence(
+                targets.raw_tensor, data.dims[1].dyn_size_ext.raw_tensor, batch_first=True, enforce_sorted=False
+            )
+            loss = torch.nn.CrossEntropyLoss(reduction="none")(logits_packed.data, targets_packed.data.long())
+            rf.get_run_ctx().mark_as_loss(name="ce", loss=loss)
+            frame_error = torch.argmax(logits_packed.data, dim=-1).not_equal(targets_packed.data)
+            rf.get_run_ctx().mark_as_loss(name="fer", loss=frame_error, as_error=True)
+
+    config = Config(
+        dict(
+            task="train",
+            device="cpu",
+            extern_data={"data": {"dim": 9}, "classes": {"dim": 2, "sparse": True}},
+            get_model=_Model,
+            train_step=_Model.train_step,
+            batch_size=500,
+            optimizer={"class": "adam"},
+        )
+    )
+    dataset = init_dataset({"class": "Task12AXDataset", "num_seqs": 100, "name": "train"})
+    dataset.init_seq_order(epoch=1)
+
+    with global_config_ctx(config):
+        engine = Engine(config=config)
+        engine.init_train_from_config(train_data=dataset)
+        try:
+            engine.train()
+        except _DemoException as exc:
+            print("got demo exception:", exc)
+            exc_lines = str(exc).splitlines()
+            assert "Module call stack:" in exc_lines and "(_TestTorchSubModelRaisingException.forward) sub" in exc_lines
+        else:
+            raise Exception("did not get expected exception")
+
+
 if __name__ == "__main__":
     better_exchook.install()
     if len(sys.argv) <= 1:
