@@ -260,7 +260,7 @@ class Engine(EngineBase):
         """
         :return: True if we should retry, False if reraise
         """
-        from returnn.util.better_exchook import get_func_from_code_object
+        from returnn.util.better_exchook import get_func_from_code_object, iter_traceback
 
         print(f"{type(exc).__name__}: {exc}", file=log.v1)
 
@@ -269,22 +269,21 @@ class Engine(EngineBase):
         for name, mod in self._orig_model.named_modules():
             if id(mod) not in module_names_by_id:
                 module_names_by_id[id(mod)] = name or "(root)"
-        tb = exc.__traceback__
-        exc_ext = ["Module call stack:"]
-        while tb:
-            frame_self = tb.tb_frame.f_locals.get("self")
+        exc_ext = []
+        for frame in iter_traceback(exc.__traceback__):
+            frame_self = frame.f_locals.get("self")
             if isinstance(frame_self, (torch.nn.Module, rf.Module)):
-                func = get_func_from_code_object(tb.tb_frame.f_code, frame=tb.tb_frame)
+                func = get_func_from_code_object(frame.f_code, frame=frame)
                 if func and func.__name__ and func.__name__.startswith("_"):
-                    tb = tb.tb_next
                     continue
                 func_name = (func and func.__qualname__) or type(frame_self).__name__
                 exc_ext.append(f"({func_name}) {module_names_by_id.get(id(frame_self), '(unknown)')}")
-            tb = tb.tb_next
+        if not exc_ext:
+            exc_ext.append("(No module call frames.)")
         if len(exc.args) == 1 and isinstance(exc.args[0], str):
-            exc.args = ("\n".join([exc.args[0]] + exc_ext),)
+            exc.args = ("\n".join([exc.args[0], "", "Module call stack:"] + exc_ext),)
         else:
-            print("\n".join(exc_ext), file=log.v3)
+            print("Module call stack:\n", "\n".join(exc_ext), file=log.v3)
 
         if isinstance(exc, torch.cuda.OutOfMemoryError):
             # Some heuristics when to retry.
