@@ -377,6 +377,8 @@ class Engine(EngineBase):
             print("debug_shell_before_train_loop", file=log.v1)
             debug_shell(user_ns=locals(), user_global_ns=globals(), exit_afterwards=False)
 
+        zero_grad_next_step = True
+        cur_count_grad_accum = 0
         while True:
             with torch.no_grad():
                 extern_data_raw = next(data_iter, None)
@@ -392,8 +394,9 @@ class Engine(EngineBase):
                 break
 
             # clear the gradients when every gradient accumulation loop starts
-            if step_idx % self._accum_grad_multiple_step == 0:
+            if zero_grad_next_step:
                 self._updater.get_optimizer().zero_grad()
+                cur_count_grad_accum = 0
 
             extern_data = extern_data_util.raw_dict_to_extern_data(
                 extern_data_raw, extern_data_template=self.extern_data, device=self._device
@@ -414,17 +417,20 @@ class Engine(EngineBase):
                 {name: float(_to_raw(loss.get_inv_norm_factor())) for name, loss in train_ctx.losses.items()}
             )
 
-            with self._ddp_pt_model.no_sync() if self._ddp_pt_model is not None and (
-                step_idx % self._accum_grad_multiple_step
-            ) != (self._accum_grad_multiple_step - 1) else nullcontext():
+            cur_count_grad_accum += 1
+            perform_update_step = cur_count_grad_accum >= self._accum_grad_multiple_step
+            with self._ddp_pt_model.no_sync() if (
+                self._ddp_pt_model is not None and not perform_update_step
+            ) else nullcontext():
                 if self._grad_scaler is not None:
                     self._grad_scaler.scale(total_loss.raw_tensor).backward()
                 else:
                     total_loss.raw_tensor.backward()
 
             # only update the weights when every gradient accumulation loop ends
-            if (step_idx % self._accum_grad_multiple_step) == (self._accum_grad_multiple_step - 1):
+            if perform_update_step:
                 self._updater.step(grad_scaler=self._grad_scaler)
+            zero_grad_next_step = perform_update_step
 
             if self._torch_distributed_ctx:
                 self._torch_distributed_ctx.step_after_param_update(module=self._pt_model, epoch_step_idx=step_idx)
