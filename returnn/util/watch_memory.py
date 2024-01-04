@@ -57,7 +57,7 @@ def _watch_memory_main(pid: int):
             old_mem_info = mem_per_pid.get(p.pid, None)
             try:
                 mem_info = get_mem_info(p)
-            except psutil.NoSuchProcess:  # race condition, can happen
+            except psutil.Error:  # race condition, can happen, e.g. NoSuchProcess, or also AccessDenied
                 if old_mem_info:
                     _print(f"proc {_format_proc(p)} exited, old:", _format_mem_info(old_mem_info))
                     mem_per_pid.pop(p.pid, None)
