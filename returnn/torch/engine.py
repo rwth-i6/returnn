@@ -244,6 +244,9 @@ class Engine(EngineBase):
                         epoch_start_global_train_step=epoch_start_global_train_step,
                         start_epoch=start_epoch,
                     ):
+                        from traceback import clear_frames
+
+                        clear_frames(exc.__traceback__)  # make sure memory of locals can be freed
                         self._maybe_reset_dev_memory_caches(force=True)
                         self._reset_train_epoch()
                         assert self.epoch == epoch and self.global_train_step == epoch_start_global_train_step
