@@ -132,6 +132,16 @@ def get_ctx(config=None) -> Optional[DistributedContext]:
 def _sync_params_avg(*, module: torch.nn.Module, sync_on_cpu: bool = False):
     import torch.distributed as dist
 
+    if sync_on_cpu:
+        for param in module.parameters():
+            # Separately move each param to CPU (instead of the whole module), to safe CPU memory.
+            param_cpu = param.to(torch.device("cpu"))
+            # On CPU, we are likely using Gloo, and Gloo does not support AVG
+            dist.all_reduce(param_cpu.data, op=dist.ReduceOp.SUM)
+            param_cpu.data /= dist.get_world_size()
+            param.data = param_cpu.to(param.device)
+        return
+
     if dist.get_backend() == "gloo":
         # Gloo does not support AVG
         reduce_op = dist.ReduceOp.SUM
@@ -142,18 +152,7 @@ def _sync_params_avg(*, module: torch.nn.Module, sync_on_cpu: bool = False):
             # Older PyTorch versions do not have ReduceOp.AVG.
             reduce_op = dist.ReduceOp.SUM
 
-    old_dev = None
-    if sync_on_cpu:
-        old_dev = next(iter(module.parameters())).device
-        module.to(torch.device("cpu"))
-        reduce_op = dist.ReduceOp.SUM
-
-    try:
-        for param in module.parameters():
-            dist.all_reduce(param.data, op=reduce_op)
-            if reduce_op == dist.ReduceOp.SUM:
-                param.data /= dist.get_world_size()
-
-    finally:
-        if old_dev:
-            module.to(old_dev)
+    for param in module.parameters():
+        dist.all_reduce(param.data, op=reduce_op)
+        if reduce_op == dist.ReduceOp.SUM:
+            param.data /= dist.get_world_size()
