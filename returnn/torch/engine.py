@@ -273,7 +273,7 @@ class Engine(EngineBase):
             frame_self = frame.f_locals.get("self")
             if isinstance(frame_self, (torch.nn.Module, rf.Module)):
                 func = get_func_from_code_object(frame.f_code, frame=frame)
-                if func and func.__name__ and func.__name__.startswith("_"):
+                if func and func.__name__ and func.__name__.startswith("_") and not func.__name__.startswith("__"):
                     continue
                 func_name = (func and func.__qualname__) or type(frame_self).__name__
                 exc_ext.append(f"({func_name}) {module_names_by_id.get(id(frame_self), '(unknown)')}")
