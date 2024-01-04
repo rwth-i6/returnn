@@ -42,6 +42,8 @@ def create_tensor(array: numpy.ndarray) -> Union[torch.Tensor, numpy.ndarray]:
         return array  # keep as-is. e.g. seq_tag
     if array.dtype == numpy.uint32:
         array = numpy.asarray(array, dtype=numpy.int64)
+    elif array.dtype == numpy.uint16:
+        array = numpy.asarray(array, dtype=numpy.int32)
     return torch.tensor(array)
 
 
