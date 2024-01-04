@@ -92,7 +92,6 @@ class Engine(EngineBase):
 
         self._torch_distributed_ctx = None  # type: Optional[DistributedContext]
         self._ddp_pt_model = None  # type: Optional[DistributedDataParallel]
-        self._accum_grad_multiple_step = config.int("accum_grad_multiple_step", 1)
 
         if config.typed_value("torch_distributed") is not None:
             self._torch_distributed_ctx = dist_get_ctx(config=config)
@@ -377,6 +376,18 @@ class Engine(EngineBase):
             print("debug_shell_before_train_loop", file=log.v1)
             debug_shell(user_ns=locals(), user_global_ns=globals(), exit_afterwards=False)
 
+        accum_grad_multiple_step_dyn = None
+        if self.config.typed_dict.get("accum_grad_multiple_step") is not None:
+            v = self.config.typed_dict["accum_grad_multiple_step"]
+            if isinstance(v, int):
+                accum_grad_multiple_step = v
+            else:
+                assert callable(v), "accum_grad_multiple_step should be an int or callable"
+                accum_grad_multiple_step = 0
+                accum_grad_multiple_step_dyn = v
+        else:
+            accum_grad_multiple_step = self.config.int("accum_grad_multiple_step", 1)
+
         zero_grad_next_step = True
         cur_count_grad_accum = 0
         while True:
@@ -417,8 +428,12 @@ class Engine(EngineBase):
                 {name: float(_to_raw(loss.get_inv_norm_factor())) for name, loss in train_ctx.losses.items()}
             )
 
+            if accum_grad_multiple_step_dyn:
+                accum_grad_multiple_step = accum_grad_multiple_step_dyn(
+                    epoch=self.epoch, global_train_step=self.global_train_step
+                )
             cur_count_grad_accum += 1
-            perform_update_step = cur_count_grad_accum >= self._accum_grad_multiple_step
+            perform_update_step = cur_count_grad_accum >= accum_grad_multiple_step
             with self._ddp_pt_model.no_sync() if (
                 self._ddp_pt_model is not None and not perform_update_step
             ) else nullcontext():
