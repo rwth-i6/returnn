@@ -126,20 +126,6 @@ def get_ctx(config=None) -> Optional[DistributedContext]:
 
     assert isinstance(opts, dict)
     _ctx = DistributedContext(opts)
-
-    if _ctx.get_param_sync_step():
-        # Just a sanity check.
-        # Note that we could also instead just count the actual param update steps.
-        # However, counting param update steps might be more variable in the future,
-        # and also this behavior would be different from our TF implementation,
-        # and in any case, it is probably more expected
-        # that the param_sync_step is about the step (mini batch), not param update.
-        accum_grad_multiple_step = config.int("accum_grad_multiple_step", 1)
-        assert _ctx.get_param_sync_step() % accum_grad_multiple_step == 0, (
-            f"{_ctx}: param_sync_step {_ctx.get_param_sync_step()}"
-            f" must be a multiple of accum_grad_multiple_step {accum_grad_multiple_step}"
-        )
-
     return _ctx
 
 
