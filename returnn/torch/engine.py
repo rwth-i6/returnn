@@ -115,6 +115,7 @@ class Engine(EngineBase):
             torch.cuda.set_device(self._device)
 
         self._log_memory_usage = config.bool("torch_log_memory_usage", False)
+        self._log_batch_size = config.bool("log_batch_size", False)
         self._reset_dev_memory_caches = config.bool("reset_dev_memory_caches", False)
 
         amp_options = self.config.opt_typed_value("torch_amp")
@@ -463,6 +464,7 @@ class Engine(EngineBase):
                 step=step_idx,
                 eval_info=dict(losses_dict / inv_norm_factors_dict),
                 step_duration=step_duration,
+                batch_size_info=_get_batch_size_info(extern_data) if self._log_batch_size else None,
                 log_memory_usage_device=self._device if self._log_memory_usage else None,
             )
 
@@ -1065,6 +1067,7 @@ def _print_process(
     report_prefix: str,
     step: int,
     eval_info: Optional[Dict[str, Any]] = None,
+    batch_size_info: Optional[Dict[str, Any]] = None,
     step_duration: Optional[float] = None,
     log_memory_usage_device: Optional[str] = None,
 ):
@@ -1074,6 +1077,7 @@ def _print_process(
     :param report_prefix:
     :param step:
     :param eval_info:
+    :param batch_size_info:
     :param step_duration:
     :param log_memory_usage_device: if given, will log memory usage (peak allocated memory)
     :return: nothing, will be printed to log
@@ -1082,6 +1086,8 @@ def _print_process(
         info = [report_prefix, "step %i" % step]
         if eval_info:  # Such as score.
             info += ["%s %s" % (k, _format_value(v)) for k, v in eval_info.items()]
+        if batch_size_info:
+            info += ["%s %s" % (k, _format_value(v)) for k, v in batch_size_info.items()]
         if log_memory_usage_device:
             dev = torch.device(log_memory_usage_device)
             if dev.type == "cuda":
@@ -1122,6 +1128,18 @@ def _get_gpu_device() -> Optional[str]:
     if hasattr(torch.backends, "mps") and torch.backends.mps.is_available() and torch.backends.mps.is_built():
         return "mps"
     return None
+
+
+def _get_batch_size_info(extern_data: TensorDict) -> Dict[str, int]:
+    batch_dim = extern_data_util.get_batch_dim_from_extern_data(extern_data)
+    info = {"num_seqs": int(batch_dim.get_dim_value())}
+    covered_dims = {batch_dim}
+    for k, v in extern_data.data.items():
+        for dim in v.dims:
+            if dim.is_dynamic() and dim not in covered_dims:
+                covered_dims.add(dim)
+                info[f"max_size:{dim.name}"] = int(dim.get_dim_value())
+    return info
 
 
 def get_device_from_config_opt(device: Optional[str]) -> ResultWithReason[str]:
