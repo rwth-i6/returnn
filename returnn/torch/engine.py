@@ -115,7 +115,7 @@ class Engine(EngineBase):
             torch.cuda.set_device(self._device)
 
         self._log_memory_usage = config.bool("torch_log_memory_usage", False)
-        self._log_batch_size = config.bool("log_batch_size", False)
+        self._log_batch_size = config.bool("log_batch_size", False) and log.verbose[5]
         self._reset_dev_memory_caches = config.bool("reset_dev_memory_caches", False)
 
         amp_options = self.config.opt_typed_value("torch_amp")
