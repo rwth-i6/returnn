@@ -1918,9 +1918,24 @@ class NumbersDict:
     @property
     def keys_set(self):
         """
+        Also see :func:`keys_union` if you want to have a deterministic order.
+
         :rtype: set[str]
         """
         return set(self.dict.keys())
+
+    def keys_union(*number_dicts: NumbersDict) -> List[str]:
+        """
+        :return: union of keys over self and other. The order will be deterministic (unlike :func:`keys_set`)
+        """
+        seen = set()
+        res = []
+        for number_dict in number_dicts:
+            for key in number_dict.dict.keys():
+                if key not in seen:
+                    seen.add(key)
+                    res.append(key)
+        return res
 
     def __getitem__(self, key):
         if self.value is not None:
@@ -2032,7 +2047,7 @@ class NumbersDict:
         if result is None:
             result = NumbersDict()
         assert isinstance(result, NumbersDict)
-        for k in self.keys_set | other.keys_set:
+        for k in self.keys_union(other):
             result[k] = cls.bin_op_scalar_optional(self.get(k, None), other.get(k, None), zero=zero, op=op)
         result.value = cls.bin_op_scalar_optional(self.value, other.value, zero=zero, op=op)
         return result

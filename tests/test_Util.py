@@ -2,7 +2,7 @@
 
 import _setup_test_env  # noqa
 from nose.tools import assert_equal, assert_not_equal, assert_raises, assert_true, assert_is
-from numpy.testing.utils import assert_almost_equal
+from numpy.testing import assert_almost_equal
 from returnn.util.basic import *
 import sys
 import os
@@ -129,6 +129,14 @@ def test_NumbersDict_int_floordiv():
     assert_equal(list(sorted(b.dict.keys())), ["classes", "data"])
     assert_equal(b.dict["data"], 1)
     assert_equal(b.dict["classes"], 1)
+
+
+def test_NumbersDict_to_dict():
+    a = NumbersDict(numbers_dict={"data": 3, "classes": 2}, broadcast_value=1)
+    b = dict(a // 1)
+    print(b)
+    # We intentionally test whether the order is the same as before.
+    assert list(b.keys()) == ["data", "classes"]
 
 
 def test_collect_class_init_kwargs():
