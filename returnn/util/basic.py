@@ -1497,7 +1497,7 @@ def wrap_async_func(f):
 
 def try_run(func, args=(), catch_exc=Exception, default=None):
     """
-    :param ((X)->T) func:
+    :param (()->T)|((X)->T) func:
     :param tuple args:
     :param type[Exception] catch_exc:
     :param T2 default:

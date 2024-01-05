@@ -19,7 +19,7 @@ import os
 import numpy
 import functools
 import typing
-from typing import Optional, Union, Type, Dict, Sequence, List
+from typing import Optional, Any, Union, Type, Dict, Sequence, List, Callable
 
 from returnn.log import log
 from returnn.engine.batch import Batch, BatchSetGenerator
@@ -1347,12 +1347,15 @@ def get_dataset_class(name: Union[str, Type[Dataset]]) -> Optional[Type[Dataset]
     return _dataset_classes.get(name, None)
 
 
-def init_dataset(kwargs, extra_kwargs=None, default_kwargs=None):
+def init_dataset(
+    kwargs: Union[Dict[str, Any], str, Callable[[], Dict[str, Any]], Dataset],
+    extra_kwargs: Optional[Dict[str, Any]] = None,
+    default_kwargs: Optional[Dict[str, Any]] = None,
+) -> Dataset:
     """
-    :param dict[str]|str|(()->dict[str])|Dataset kwargs:
-    :param dict[str]|None extra_kwargs:
-    :param dict[str]|None default_kwargs:
-    :rtype: Dataset
+    :param kwargs:
+    :param extra_kwargs:
+    :param default_kwargs:
     """
     assert kwargs
     if isinstance(kwargs, Dataset):
