@@ -22,6 +22,15 @@ and not listing legacy/deprecated parameters.
 Version History
 ---------------
 
+Behavior version 20 (2024-01-05)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+RF ``TransformerDecoder`` defaults changed:
+
+* ``share_embedding``: False → True
+* ``input_embedding_scale``: 1.0 → sqrt(model_dim)
+* ``input_dropout``: 0.0 → dropout
+
 Behavior version 19 (2023-11-13)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 

@@ -14,8 +14,9 @@ References:
 from __future__ import annotations
 from typing import Optional, Any, Union, Tuple, Dict, Callable, Sequence
 import functools
+import logging
 import copy as _copy
-from returnn.util.basic import NotSpecified
+from returnn.util.basic import NotSpecified, BehaviorVersion
 import returnn.frontend as rf
 from returnn.tensor import Tensor, Dim, single_step_dim
 
@@ -39,7 +40,9 @@ class TransformerDecoder(rf.Module):
         att_dropout: float = 0.1,
         decoder_layer: Optional[Union[TransformerDecoderLayer, rf.Module, type, Any]] = None,
         decoder_layer_opts: Optional[Dict[str, Any]] = None,
-        share_embedding: bool = False,
+        share_embedding: bool = None,
+        input_embedding_scale: float = None,
+        input_dropout: float = None,
         sequential=rf.Sequential,
     ):
         """
@@ -55,6 +58,8 @@ class TransformerDecoder(rf.Module):
         :param decoder_layer: an instance of :class:`TransformerDecoderLayer` or similar
         :param decoder_layer_opts: options for the encoder layer
         :param share_embedding:
+        :param input_embedding_scale:
+        :param input_dropout:
         :param sequential:
         """
         super().__init__()
@@ -71,6 +76,32 @@ class TransformerDecoder(rf.Module):
         self.pos_enc = functools.partial(
             rf.sinusoidal_positional_encoding, feat_dim=model_dim, dtype=self.input_embedding.weight.dtype
         )
+        if share_embedding is None:
+            if BehaviorVersion.get() < 20:
+                logging.getLogger("returnn.frontend").warning(
+                    "TransformerDecoder share_embedding default is False"
+                    f" with your behavior version {BehaviorVersion.get()}."
+                    " Explicitly set share_embedding or switch to a new behavior version >= 20."
+                )
+            share_embedding = True if BehaviorVersion.get() >= 20 else False
+        if input_embedding_scale is None:
+            if BehaviorVersion.get() < 20:
+                logging.getLogger("returnn.frontend").warning(
+                    "TransformerDecoder input_embedding_scale default is suboptimal"
+                    f" with your behavior version {BehaviorVersion.get()}."
+                    " Explicitly set input_embedding_scale or switch to a new behavior version >= 20."
+                )
+            input_embedding_scale = model_dim.dimension**0.5 if BehaviorVersion.get() >= 20 else 1.0
+        self.input_embedding_scale = input_embedding_scale
+        if input_dropout is None:
+            if dropout > 0 and BehaviorVersion.get() < 20:
+                logging.getLogger("returnn.frontend").warning(
+                    "TransformerDecoder input_dropout default is suboptimal"
+                    f" with your behavior version {BehaviorVersion.get()}."
+                    " Explicitly set input_embedding_scale or switch to a new behavior version >= 20."
+                )
+            input_dropout = dropout if BehaviorVersion.get() >= 20 else 0.0
+        self.input_dropout = input_dropout
 
         if not decoder_layer or isinstance(decoder_layer, type):
             decoder_layer_opts_ = dict(
@@ -134,8 +165,9 @@ class TransformerDecoder(rf.Module):
         """
         new_state = rf.State()
 
-        decoded = self.input_embedding(source)
+        decoded = self.input_embedding(source) * self.input_embedding_scale
         decoded = decoded + self.pos_enc(spatial_dim=spatial_dim, offset=state.pos)
+        decoded = rf.dropout(decoded, self.input_dropout)
 
         new_state.pos = state.pos + (1 if spatial_dim == single_step_dim else spatial_dim.get_size_tensor())
 
@@ -258,7 +290,7 @@ class TransformerDecoderLayer(rf.Module):
 
 class FeedForward(rf.Module):
     """
-    Conformer position-wise feedforward neural network layer
+    Transformer position-wise feedforward neural network layer
         FF -> Activation -> Dropout -> FF
     """
 
