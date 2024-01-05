@@ -1081,7 +1081,7 @@ def _print_process(
     if log.verbose[5]:  # report every minibatch
         info = [report_prefix, "step %i" % step]
         if eval_info:  # Such as score.
-            info += ["%s %s" % (k, _format_value(v)) for k, v in sorted(eval_info.items())]
+            info += ["%s %s" % (k, _format_value(v)) for k, v in eval_info.items()]
         if log_memory_usage_device:
             dev = torch.device(log_memory_usage_device)
             if dev.type == "cuda":
