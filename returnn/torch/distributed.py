@@ -129,6 +129,7 @@ def get_ctx(config=None) -> Optional[DistributedContext]:
     return _ctx
 
 
+@torch.no_grad()
 def _sync_params_avg(*, module: torch.nn.Module, sync_on_cpu: bool = False):
     import torch.distributed as dist
 
