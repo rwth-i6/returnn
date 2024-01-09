@@ -225,55 +225,21 @@ class Engine(EngineBase):
         self.epoch = start_epoch - 1
         self._check_epoch_missing_eval()
 
-        # Training might have been restarted, see _handle_train_exception below. Count epoch num tries.
-        restart_arg_key = "++restart_after_train_exception"
-        restart_info = self.config.int_list(restart_arg_key[2:])
-        epoch_num_tries = 0
-        if restart_info and restart_info[0] == start_epoch:
-            _, epoch_num_tries = restart_info
-            print(
-                f"Retry {epoch_num_tries + 1} of train epoch {self.epoch}, global train step {self.global_train_step}",
-                file=log.v3,
-            )
-
         while self.epoch + 1 <= self._final_epoch:
             self.epoch += 1
             self._epoch_mp_shared.value = self.epoch
 
-            epoch_num_tries += 1
-            epoch_start_global_train_step = self.global_train_step
             self.init_train_epoch()
             try:
                 self.train_epoch()
             except Exception as exc:
-                if self._handle_train_exception(
-                    exc,
-                    epoch_num_tries=epoch_num_tries,
-                    epoch_start_global_train_step=epoch_start_global_train_step,
-                    start_epoch=start_epoch,
-                ):
-                    # Fully restart RETURNN. Otherwise it's not guaranteed that we can really free all memory.
-                    print(
-                        f"Restart RETURNN in train epoch {self.epoch}, global train step {self.global_train_step}.",
-                        file=log.v1,
-                    )
-                    # Store info in sys.argv such that we can count epoch num retries.
-                    i = sys.argv.index(restart_arg_key) if restart_arg_key in sys.argv else len(sys.argv)
-                    sys.argv[i : i + 2] = [restart_arg_key, f"{self.epoch},{epoch_num_tries}"]
-                    util.restart_returnn()
-                    raise Exception("should not get here")
+                self._handle_train_exception(exc)
                 raise
-            epoch_num_tries = 0
 
         print(f"Finished training at epoch {self.epoch}, global train step {self.global_train_step}", file=log.v3)
 
-    def _handle_train_exception(
-        self, exc: Exception, *, epoch_num_tries: int, epoch_start_global_train_step: int, start_epoch: int
-    ) -> bool:
-        """
-        :return: True if we should retry, False if reraise
-        """
-        from returnn.util.better_exchook import get_func_from_code_object, iter_traceback, better_exchook
+    def _handle_train_exception(self, exc: Exception):
+        from returnn.util.better_exchook import get_func_from_code_object, iter_traceback
 
         print(f"{type(exc).__name__}: {exc}", file=log.v1)
 
@@ -297,22 +263,6 @@ class Engine(EngineBase):
             exc.args = ("\n".join([exc.args[0], "", "Module call stack:"] + exc_ext),)
         else:
             print("Module call stack:\n", "\n".join(exc_ext), file=log.v3)
-
-        if isinstance(exc, torch.cuda.OutOfMemoryError):
-            # Some heuristics when to retry.
-            if (
-                epoch_num_tries <= 3  # heuristic
-                and self.epoch > start_epoch  # heuristic
-                and self.global_train_step > epoch_start_global_train_step  # heuristic
-                and self._save_model_epoch_interval == 1  # cannot load most recent epoch
-                and not self._torch_distributed_ctx  # need to fix correct sync, all workers need to restart ep
-            ):
-                if log.verbose[3]:
-                    print("Retry after OOM exception:", file=log.v3)
-                    better_exchook(type(exc), exc, exc.__traceback__, autodebugshell=False, file=log.v3)
-                    print("Retry after OOM now.", file=log.v3)
-                return True
-        return False
 
     def init_train_epoch(self):
         """
