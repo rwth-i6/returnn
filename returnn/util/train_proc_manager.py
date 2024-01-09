@@ -84,8 +84,9 @@ def main_proc_manager(*, config: Config):
         last_model_epoch = cur_model_epoch
         num_starts += 1
         start_time = time.time()
-        print(f"Run {sys.argv}, executable={sys.executable}")
-        proc = subprocess.Popen(sys.argv, executable=sys.executable)
+        args = [sys.executable] + sys.argv
+        print(f"Run {args}")
+        proc = subprocess.Popen(args)
         proc.wait()
         print("RETURNN runtime:", util.hms(time.time() - start_time))
         print("RETURNN return code:", proc.returncode)
