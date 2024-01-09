@@ -36,22 +36,35 @@ def main_proc_manager(*, config: Config):
     """
     os.environ["__RETURNN_PROC_MANAGED"] = "1"
 
-    print("RETURNN starting up, version %s, train proc manager" % util.describe_returnn_version())
+    print("RETURNN train proc manager starting up, version %s" % util.describe_returnn_version())
 
     # Setup BackendEngine. This is that other utility functions know the right model file extension.
     # _select_rf_backend to avoid importing Torch/TF/anything here.
     util.BackendEngine.select_engine(config=config, _select_rf_backend=False)
 
+    final_epoch = EngineBase.config_get_final_epoch(config)
+
     total_start_time = time.time()
     num_starts = 0
-    last_model_epoch = -1
+    last_model_epoch = None
+    return_code = None
     while True:
         models = EngineBase.get_existing_models(config, for_training=True)
         cur_model_epoch = max(models) if models else 0
-        print("Most recent trained model:", models.get(cur_model_epoch))
+        print("Most recent trained model epoch:", cur_model_epoch, "file:", models.get(cur_model_epoch))
+
+        if cur_model_epoch == final_epoch:
+            if return_code is None:
+                return_code = 0
+                print("Already finished, nothing to do")
+            elif return_code == 0:
+                print("Finished training")
+            else:
+                print("Finished training, but got some error?")
+            break
 
         if last_model_epoch is not None:
-            print("Most recent trained model before RETURNN run:", last_model_epoch)
+            print("Most recent trained model epoch before RETURNN run:", last_model_epoch)
             assert last_model_epoch <= cur_model_epoch
             print(f"-> trained successfully {cur_model_epoch - last_model_epoch} epoch(s)")
             if cur_model_epoch == last_model_epoch:
@@ -65,12 +78,13 @@ def main_proc_manager(*, config: Config):
         last_model_epoch = cur_model_epoch
         num_starts += 1
         start_time = time.time()
+        print(f"Run {sys.argv}, executable={sys.executable}")
         proc = subprocess.Popen(sys.argv, executable=sys.executable)
         proc.wait()
         print("RETURNN runtime:", util.hms(time.time() - start_time))
         print("RETURNN return code:", proc.returncode)
-        if proc.returncode == 0:
-            break
+        return_code = proc.returncode
 
     print("Total RETURNN num starts:", num_starts)
     print("Total RETURNN runtime:", util.hms(time.time() - total_start_time))
+    sys.exit(return_code if return_code is not None else -1)
