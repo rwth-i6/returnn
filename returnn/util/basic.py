@@ -126,11 +126,12 @@ class BackendEngine:
     selected_engine = None  # type: typing.Optional[int]  # One of the possible engines.
 
     @classmethod
-    def select_engine(cls, *, engine=None, default_fallback_engine=None, config=None):
+    def select_engine(cls, *, engine=None, default_fallback_engine=None, config=None, _select_rf_backend: bool = True):
         """
         :param int engine: see the global class attribs for possible values
         :param int|None default_fallback_engine: if engine is None and not defined in config, use this
         :param returnn.config.Config config:
+        :param _select_rf_backend: internal. avoids that Torch/TF/anything further gets imported at this point
         """
         if engine is None:
             if config is None:
@@ -152,19 +153,20 @@ class BackendEngine:
                 else:
                     raise Exception("No backend defined. Please set the config option 'backend'.")
 
-        # noinspection PyProtectedMember
-        from returnn.frontend import _backend
+        if _select_rf_backend:
+            # noinspection PyProtectedMember
+            from returnn.frontend import _backend
 
-        if engine == cls.TensorFlow:
-            _backend.select_backend_tf()
-        elif engine == cls.TensorFlowNetDict:
-            # Note that we assume that the user wants the RETURNN layers frontend (TF-based)
-            # and not the low-level TF frontend.
-            # If we want to expose the low-level TF frontend to the user directly at some point,
-            # we would need a new config option.
-            _backend.select_backend_returnn_layers_tf()
-        elif engine == cls.Torch:
-            _backend.select_backend_torch()
+            if engine == cls.TensorFlow:
+                _backend.select_backend_tf()
+            elif engine == cls.TensorFlowNetDict:
+                # Note that we assume that the user wants the RETURNN layers frontend (TF-based)
+                # and not the low-level TF frontend.
+                # If we want to expose the low-level TF frontend to the user directly at some point,
+                # we would need a new config option.
+                _backend.select_backend_returnn_layers_tf()
+            elif engine == cls.Torch:
+                _backend.select_backend_torch()
         cls.selected_engine = engine
 
     @classmethod

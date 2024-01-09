@@ -72,7 +72,7 @@ class EngineBase:
         :param for_training: if True, will only return models which are suitable for resuming training.
             E.g. in case of PyTorch, it means that the optimizer state should be present.
             By default, will be True if the task is "train".
-        :return: dict epoch -> model filename
+        :return: dict epoch -> model filename (without extension)
         :rtype: dict[int,str]
         """
         model_filename = config.value("model", "")

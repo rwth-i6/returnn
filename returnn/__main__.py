@@ -385,6 +385,10 @@ def init(config_filename=None, command_line_options=(), config_updates=None, ext
     init_config(
         config_filename=config_filename, command_line_options=command_line_options, extra_updates=config_updates
     )
+    if config.bool("use_train_proc_manager", False):
+        from returnn.util.train_proc_manager import maybe_start_train_proc_manager
+
+        maybe_start_train_proc_manager(config=config)
     if config.bool("patch_atfork", False):
         from returnn.util.basic import maybe_restart_returnn_with_atfork_patch
 
