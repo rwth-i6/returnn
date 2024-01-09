@@ -27,6 +27,12 @@ def maybe_start_train_proc_manager(*, config: Config):
     if config.value("start_epoch", "auto") != "auto":
         return
 
+    # Not supported currently in distributed mode.
+    if config.bool("use_horovod", False):
+        return
+    if config.typed_value("torch_distributed") is not None:
+        return
+
     main_proc_manager(config=config)
 
 
