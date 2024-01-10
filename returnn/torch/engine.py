@@ -469,7 +469,7 @@ class Engine(EngineBase):
         # Maybe sync train/dev/eval scores for the epoch.
         if self._torch_distributed_ctx:
             ls = [self.learning_rate_control.epoch_data[self.epoch]]
-            torch.distributed.broadcast_object_list(ls, src=0, device="cpu")
+            torch.distributed.broadcast_object_list(ls, src=0, device=torch.device("cpu"))
             assert isinstance(ls[0], dict)
             self.learning_rate_control.epoch_data[self.epoch] = ls[0]
 
