@@ -466,6 +466,13 @@ class Engine(EngineBase):
         if self.config.bool_or_other("cleanup_old_models", None):
             self.cleanup_old_models()
 
+        # Maybe sync train/dev/eval scores for the epoch.
+        if self._torch_distributed_ctx:
+            ls = [self.learning_rate_control.epoch_data[self.epoch]]
+            torch.distributed.broadcast_object_list(ls, src=0, device="cpu")
+            assert isinstance(ls[0], dict)
+            self.learning_rate_control.epoch_data[self.epoch] = ls[0]
+
     def _do_save(self):
         if self._device == "meta":
             return False
