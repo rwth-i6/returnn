@@ -4990,6 +4990,7 @@ def copy_op(
     Copies a tf.Operation.
 
     :param op:
+    :param graph: if given, overwrites op.graph, otherwise uses the same op.graph
     :param op_type: if given, overwrites op.type, otherwise uses the same op.type
     :param inputs: if given, overwrites op.inputs, otherwise uses the same op.inputs
     :param name:
