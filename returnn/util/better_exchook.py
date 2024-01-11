@@ -1167,7 +1167,7 @@ def format_tb(tb=None, limit=None, allLocals=None, allGlobals=None, withTitle=Fa
                 alt_fn = fallback_findfile(filename)
                 if alt_fn:
                     filename = alt_fn
-            name = get_func_str_from_code_object(co)
+            name = get_func_str_from_code_object(co, frame=f)
             file_descr = "".join(
                 [
                     "  ",
@@ -1477,7 +1477,7 @@ def get_current_frame():
 def get_func_str_from_code_object(co, frame=None):
     """
     :param types.CodeType co:
-    :param types.FrameType|None frame: if given, might provide a faster way to get the function name
+    :param types.FrameType|DummyFrame|None frame: if given, might provide a faster way to get the function name
     :return: co.co_name as fallback, but maybe sth better like the full func name if possible
     :rtype: str
     """
@@ -1492,7 +1492,7 @@ def get_func_str_from_code_object(co, frame=None):
 def get_func_from_code_object(co, frame=None):
     """
     :param types.CodeType co:
-    :param types.FrameType|None frame: if given, might provide a faster way to get the function name
+    :param types.FrameType|DummyFrame|None frame: if given, might provide a faster way to get the function name
     :return: function, such that ``func.__code__ is co``, or None
     :rtype: types.FunctionType
 
@@ -1650,6 +1650,7 @@ class DummyFrame:
         self.f_globals = f_globals or {}
         self.f_builtins = f_builtins or {}
         self.have_vars_available = f_locals is not None or f_globals is not None or f_builtins is not None
+        self.co_nlocals = len(self.f_locals) if self.f_locals is not self.f_globals else 0
 
     def clear(self):
         """clear"""
