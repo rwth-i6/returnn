@@ -13,7 +13,7 @@ from returnn.tf.layers.base import LayerBase, Loss
 import returnn.tf.compat as tf_compat
 from returnn.log import log
 from nose.tools import assert_equal, assert_is_instance, assert_is, assert_in
-from numpy.testing.utils import assert_almost_equal
+from numpy.testing import assert_almost_equal
 import unittest
 import numpy.testing
 import contextlib

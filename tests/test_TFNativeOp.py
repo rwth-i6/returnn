@@ -20,7 +20,7 @@ import unittest
 from nose.tools import assert_equal, assert_is_instance
 import numpy
 import numpy.testing
-from numpy.testing.utils import assert_almost_equal, assert_allclose
+from numpy.testing import assert_almost_equal, assert_allclose
 import os
 from pprint import pprint
 from returnn.util import better_exchook

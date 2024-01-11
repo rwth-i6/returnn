@@ -8,7 +8,7 @@ from returnn.tf.util.basic import *
 from returnn.tf.util.data import SpatialDim, FeatureDim
 import returnn.tf.compat as tf_compat
 from nose.tools import assert_equal, assert_not_equal, assert_is_instance, assert_is, assert_in, assert_true
-from numpy.testing.utils import assert_almost_equal, assert_allclose
+from numpy.testing import assert_almost_equal, assert_allclose
 from pprint import pprint
 import contextlib
 import unittest

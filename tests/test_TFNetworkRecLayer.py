@@ -7,7 +7,7 @@ import tensorflow as tf
 import sys
 import os
 from nose.tools import assert_equal, assert_not_equal, assert_is_instance
-from numpy.testing.utils import assert_almost_equal, assert_allclose
+from numpy.testing import assert_almost_equal, assert_allclose
 import unittest
 import numpy.testing
 from pprint import pprint
