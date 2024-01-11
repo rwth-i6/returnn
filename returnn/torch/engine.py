@@ -253,6 +253,8 @@ class Engine(EngineBase):
                 module_names_by_id[id(mod)] = name or "(root)"
         exc_ext = []
         for frame in iter_traceback(exc.__traceback__):
+            if frame.f_code.co_nlocals == 0:
+                continue
             frame_self = frame.f_locals.get("self")
             if isinstance(frame_self, (torch.nn.Module, rf.Module)):
                 func = get_func_from_code_object(frame.f_code, frame=frame)
