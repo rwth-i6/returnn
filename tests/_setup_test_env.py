@@ -68,17 +68,8 @@ def setup():
 
     import returnn.util.debug as debug
 
-    debug.install_lib_sig_segfault()
-
-    try:
-        # noinspection PyUnresolvedReferences
-        import faulthandler
-
-        # Enable after libSigSegfault, so that we have both,
-        # because faulthandler will also call the original sig handler.
-        faulthandler.enable()
-    except ImportError:
-        print("no faulthandler")
+    debug.install_native_signal_handler()
+    debug.init_faulthandler()
 
     _try_hook_into_tests()
 
