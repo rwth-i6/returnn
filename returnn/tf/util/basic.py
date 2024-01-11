@@ -4971,9 +4971,17 @@ def check_base_op_type_and_replace(x, op_type, new_op_type):
     return op.outputs[0]
 
 
+_copy_op_simple_math_unary_funcs = {
+    "LogSigmoid": tf_compat.v1.log_sigmoid,
+    "Sqrt": tf_compat.v1.sqrt,
+    "Rsqrt": tf_compat.v1.rsqrt,
+}
+
+
 def copy_op(
     op: tf.Operation,
     *,
+    graph: Optional[tf.Graph] = None,
     op_type: Optional[str] = None,
     inputs: Optional[Sequence[tf.Tensor]] = None,
     name: Optional[str] = None,
@@ -4988,18 +4996,21 @@ def copy_op(
     :return: copy of op but optionally change op.type == op_type or op.inputs == inputs
     """
     assert isinstance(op, tf.Operation)
-    g = op.graph
+    if graph is None:
+        graph = op.graph
     if op_type is None:
         op_type = op.type
     if inputs is None:
         inputs = list(op.inputs)
     # Use some aliases, for simplicity.
     # Maybe in the future we would also wrap some deprecated/outdated ops.
-    if op_type == "LogSigmoid":
-        assert len(inputs) == 1
-        return tf_compat.v1.log_sigmoid(inputs[0], name=name).op
+    if op_type in _copy_op_simple_math_unary_funcs:
+        func = _copy_op_simple_math_unary_funcs[op_type]
+        with graph.as_default():
+            assert len(inputs) == 1
+            return func(inputs[0], name=name).op
     # Fallback to the generic case.
-    new_op = g.create_op(
+    new_op = graph.create_op(
         op_type=op_type,
         name=name,
         op_def=op.op_def if op_type == op.type else None,  # Can only copy op_def if it is the same op_type.
