@@ -1224,7 +1224,18 @@ def format_tb(tb=None, limit=None, allLocals=None, allGlobals=None, withTitle=Fa
                                 output(color("       no locals", color.fg_colors[0]))
                 else:
                     output(color("    -- code not available --", color.fg_colors[0]))
-            f.f_locals.clear()  # https://github.com/python/cpython/issues/113939
+
+            # Just like :func:`traceback.clear_frames`, but has an additional fix
+            # (https://github.com/python/cpython/issues/113939).
+            try:
+                f.clear()
+            except RuntimeError:
+                pass
+            else:
+                # Using this code triggers that the ref actually goes out of scope, otherwise it does not!
+                # https://github.com/python/cpython/issues/113939
+                f.f_locals  # noqa
+
             if isframe(_tb):
                 _tb = _tb.f_back
             elif is_stack_summary(_tb):
@@ -1498,7 +1509,6 @@ def get_func_from_code_object(co, frame=None):
     if frame:
         func_name = frame.f_code.co_name
         frame_self = frame.f_locals.get("self")
-        frame.f_locals.clear()  # https://github.com/python/cpython/issues/113939
         if frame_self is not None:
             candidate = getattr(frame_self.__class__, func_name, None)
             if candidate and (getattr(candidate, _attr_name, None) is co or isinstance(co, DummyFrame)):
