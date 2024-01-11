@@ -3079,7 +3079,8 @@ class RandomLayer(LayerBase):
             # Check via test_RandomLayer_zero_shape, but using CUDA and GPU,
             # or check whether the TF issue is still open.
             # When fixed in TF, we can just return f() here.
-            assert tf_util.tf_version_tuple()[:2] <= (2, 11)
+            if tf_util.tf_version_tuple()[:2] > (2, 12):
+                print(f"{self}: Warning: TF version {tf.__version__} untested, using workaround", file=log.v3)
             if all(isinstance(d, int) and d > 0 for d in shape_):
                 return f()
             if any(isinstance(d, int) and d == 0 for d in shape_):
