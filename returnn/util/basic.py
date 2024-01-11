@@ -3516,7 +3516,7 @@ def try_get_caller_name(depth=1, fallback=None):
     if frame:
         from .better_exchook import get_func_str_from_code_object
 
-        return get_func_str_from_code_object(frame.f_code)
+        return get_func_str_from_code_object(frame.f_code, frame=frame)
     return fallback
 
 
