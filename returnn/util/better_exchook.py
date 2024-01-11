@@ -1506,7 +1506,7 @@ def get_func_from_code_object(co, frame=None):
 
     assert isinstance(co, (types.CodeType, DummyFrame))
     _attr_name = "__code__" if PY3 else "func_code"
-    if frame:
+    if frame and frame.f_code.co_nlocals > 0:
         func_name = frame.f_code.co_name
         frame_self = frame.f_locals.get("self")
         if frame_self is not None:
