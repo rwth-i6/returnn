@@ -476,7 +476,7 @@ class Engine(EngineBase):
         if self._torch_distributed_ctx:
             ls = [self.learning_rate_control.epoch_data[self.epoch]]
             torch.distributed.broadcast_object_list(ls, src=0, device=torch.device("cpu"))
-            assert isinstance(ls[0], dict)
+            assert isinstance(ls[0], self.learning_rate_control.EpochData)
             self.learning_rate_control.epoch_data[self.epoch] = ls[0]
 
     def _do_save(self):
