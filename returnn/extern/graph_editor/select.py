@@ -22,6 +22,7 @@ from six import iteritems
 from six import string_types
 
 from . import util
+import tensorflow as tf
 from tensorflow.python.framework import ops as tf_ops
 
 
@@ -400,7 +401,7 @@ def get_forward_walk_ops(
         seed_ops = [seed_ops]
     if not seed_ops:
         return []
-    if isinstance(seed_ops[0], tf_ops.Tensor):
+    if isinstance(seed_ops[0], tf.Tensor):
         ts = util.make_list_of_t(seed_ops, allow_graph=False)
         seed_ops = util.get_consuming_ops(ts)
     else:

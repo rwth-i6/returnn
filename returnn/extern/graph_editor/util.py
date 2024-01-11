@@ -20,6 +20,7 @@ from __future__ import annotations
 import re
 from six import iteritems
 import typing
+import tensorflow as tf
 from tensorflow.python.framework import ops as tf_ops
 from tensorflow.python.ops import array_ops as tf_array_ops
 
@@ -96,7 +97,7 @@ class ListView(object):
 # TODO(fkp): very generic code, it should be moved in a more generic place.
 def is_iterable(obj):
     """Return true if the object is iterable."""
-    if isinstance(obj, tf_ops.Tensor):
+    if isinstance(obj, tf.Tensor):
         return False
     try:
         _ = iter(obj)
@@ -200,7 +201,7 @@ def get_unique_graph(tops, check_types=None, none_if_empty=False):
     if not is_iterable(tops):
         raise TypeError("{} is not iterable".format(type(tops)))
     if check_types is None:
-        check_types = (tf_ops.Operation, tf_ops.Tensor)
+        check_types = (tf.Operation, tf.Tensor)
     elif not is_iterable(check_types):
         check_types = (check_types,)
     g = None
@@ -294,9 +295,9 @@ def make_list_of_t(ts, check_graph=True, allow_graph=True, ignore_ops=False):
         if not ts:
             return []
         if check_graph:
-            check_types = None if ignore_ops else tf_ops.Tensor
+            check_types = None if ignore_ops else tf.Tensor
             get_unique_graph(ts, check_types=check_types)
-        return [t for t in ts if isinstance(t, tf_ops.Tensor)]
+        return [t for t in ts if isinstance(t, tf.Tensor)]
 
 
 def get_generating_ops(ts):
@@ -426,7 +427,7 @@ def placeholder_name(t=None, scope=None, prefix=_DEFAULT_PLACEHOLDER_PREFIX):
     if scope is not None:
         scope = scope_finalize(scope)
     if t is not None:
-        if not isinstance(t, tf_ops.Tensor):
+        if not isinstance(t, tf.Tensor):
             raise TypeError("Expected a tf.Tenfor, got: {}".format(type(t)))
         op_dirname = scope_dirname(t.op.name)
         op_basename = scope_basename(t.op.name)
@@ -524,7 +525,7 @@ def find_corresponding_elem(target, dst_graph, dst_scope="", src_scope=""):
         dst_scope = scope_finalize(dst_scope)
         dst_name = dst_scope + dst_name
 
-    if isinstance(target, tf_ops.Tensor):
+    if isinstance(target, tf.Tensor):
         return dst_graph.get_tensor_by_name(dst_name)
     if isinstance(target, tf_ops.Operation):
         return dst_graph.get_operation_by_name(dst_name)

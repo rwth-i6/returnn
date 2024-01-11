@@ -26,6 +26,8 @@ from . import reroute
 from . import select
 from . import subgraph
 from . import util
+from returnn.tf.util.basic import copy_op
+import tensorflow as tf
 from tensorflow.python.framework import ops as tf_ops
 from tensorflow.python.platform import tf_logging as logging
 
@@ -126,18 +128,13 @@ def transform_op_if_inside_handler(info, op, keep_if_possible=True):
             return None
 
 
-def copy_op_handler(info, op, new_inputs, copy_shape=False, nodedef_fn=None):
+def copy_op_handler(info, op, new_inputs):
     """Copy a `tf.Operation`.
 
     Args:
       info: Transform._TmpInfo instance.
       op: the `tf.Operation` to be copied.
       new_inputs: The new inputs for this op.
-      copy_shape: also copy the shape of the tensor
-      nodedef_fn: If provided, a function that will be run on the NodeDef
-        and should return a mutated NodeDef before a new Operation is created.
-        This is useful as certain features cannot be set on the Operation and
-        must be modified in NodeDef.
 
     Returns:
       A `(op, op_outputs)` tuple containing the transformed op and its outputs.
@@ -147,35 +144,11 @@ def copy_op_handler(info, op, new_inputs, copy_shape=False, nodedef_fn=None):
     if isinstance(new_inputs, bool):
         raise TypeError("the `new_inputs` argument must be an iterable.")
 
-    # pylint: disable=protected-access
-
-    # Clone the node def:
-    node_def_ = deepcopy(op.node_def)
-
     # Transform name:
     name_ = info.new_name(op.name)
     name_ = info.graph_.unique_name(name_)
-    node_def_.name = name_
 
-    # Mutate NodeDef if requested:
-    if nodedef_fn is not None:
-        node_def_ = nodedef_fn(node_def_)
-
-    # Copy the other inputs needed for initialization
-    output_types_ = op._output_types[:]
-    input_types_ = op._input_types[:]
-
-    # Make a copy of the op_def too.
-    # Its unique to every _type_ of Operation.
-    op_def_ = deepcopy(op.op_def)
-
-    # Initialize a new Operation instance
-    op_ = tf_ops.Operation(node_def_, info.graph_, new_inputs, output_types_, [], input_types_, None, op_def_)
-
-    # copy the shape over
-    if copy_shape:
-        for t, t_ in zip(op.outputs, op_.outputs):
-            t_.set_shape(t.get_shape())
+    op_ = copy_op(op, inputs=new_inputs, graph=info.graph_, name=name_)
 
     # Original op cannot be finalised here yet. Because some ops require this
     # attribute to exist, we will create a dummy original_op first and then
@@ -209,7 +182,7 @@ class TransformerInfo(object):
         """Return the correct container depending on the type of `top`."""
         if isinstance(top, tf_ops.Operation):
             return self._transformed_ops
-        elif isinstance(top, tf_ops.Tensor):
+        elif isinstance(top, tf.Tensor):
             return self._transformed_ts
         else:
             raise TypeError("Expected a tf.Tensor or a tf.Operation, got a {}".format(type(top)))
@@ -712,7 +685,7 @@ def graph_replace(target_ts, replacement_ts, dst_scope="", src_scope="", reuse_d
     # Construct the forward control dependencies edges so that
     # the get_walks_intersection_ops can also traverse the
     # control dependencies.
-    graph = util.get_unique_graph(flatten_target_ts, check_types=(tf_ops.Tensor))
+    graph = util.get_unique_graph(flatten_target_ts, check_types=(tf.Tensor))
     control_ios = util.ControlOutputs(graph)
     ops = select.get_walks_intersection_ops(list(replacement_ts), flatten_target_ts, control_ios=control_ios)
     if not ops:
