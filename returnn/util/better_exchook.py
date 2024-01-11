@@ -1224,6 +1224,7 @@ def format_tb(tb=None, limit=None, allLocals=None, allGlobals=None, withTitle=Fa
                                 output(color("       no locals", color.fg_colors[0]))
                 else:
                     output(color("    -- code not available --", color.fg_colors[0]))
+            f.f_locals.clear()  # https://github.com/python/cpython/issues/113939
             if isframe(_tb):
                 _tb = _tb.f_back
             elif is_stack_summary(_tb):
@@ -1496,8 +1497,10 @@ def get_func_from_code_object(co, frame=None):
     _attr_name = "__code__" if PY3 else "func_code"
     if frame:
         func_name = frame.f_code.co_name
-        if "self" in frame.f_locals:
-            candidate = getattr(frame.f_locals["self"].__class__, func_name, None)
+        frame_self = frame.f_locals.get("self")
+        frame.f_locals.clear()  # https://github.com/python/cpython/issues/113939
+        if frame_self is not None:
+            candidate = getattr(frame_self.__class__, func_name, None)
             if candidate and (getattr(candidate, _attr_name, None) is co or isinstance(co, DummyFrame)):
                 return candidate
     try:

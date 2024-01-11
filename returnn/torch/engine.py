@@ -255,6 +255,7 @@ class Engine(EngineBase):
         exc_ext = []
         for frame in iter_traceback(exc.__traceback__):
             frame_self = frame.f_locals.get("self")
+            frame.f_locals.clear()  # https://github.com/python/cpython/issues/113939
             if isinstance(frame_self, (torch.nn.Module, rf.Module)):
                 func = get_func_from_code_object(frame.f_code, frame=frame)
                 if func and func.__name__ and func.__name__.startswith("_") and not func.__name__.startswith("__"):
