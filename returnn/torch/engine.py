@@ -9,8 +9,10 @@ from contextlib import nullcontext
 import sys
 import gc
 import os
-import torch
 import time
+import traceback
+
+import torch
 import torch.distributed
 from torch.nn.parallel import DistributedDataParallel
 from torch.utils.data import DataLoader
@@ -36,6 +38,7 @@ from .updater import Updater
 from .data import pipeline as data_pipeline
 from .data import returnn_dataset_wrapper
 from .data import extern_data as extern_data_util
+from .data.queued_data_iter import QueuedDataIter
 from .frontend.bridge import rf_module_to_pt_module
 from .util import diagnose_gpu
 from .distributed import DistributedContext, get_ctx as dist_get_ctx
@@ -117,6 +120,7 @@ class Engine(EngineBase):
         self._log_memory_usage = config.bool("torch_log_memory_usage", False)
         self._log_batch_size = config.bool("log_batch_size", False) and log.verbose[5]
         self._reset_dev_memory_caches = config.bool("reset_dev_memory_caches", False)
+        self._forward_auto_split_batch_on_oom = config.bool("forward_auto_split_batch_on_oom", False)
 
         amp_options = self.config.opt_typed_value("torch_amp")
         grad_scaler_opts = self.config.typed_value("grad_scaler", NotSpecified)
@@ -233,12 +237,12 @@ class Engine(EngineBase):
             try:
                 self.train_epoch()
             except Exception as exc:
-                self._handle_train_exception(exc)
+                self._handle_run_exception(exc)
                 raise
 
         print(f"Finished training at epoch {self.epoch}, global train step {self.global_train_step}", file=log.v3)
 
-    def _handle_train_exception(self, exc: Exception):
+    def _handle_run_exception(self, exc: Exception, *, always_direct_print: bool = False):
         from returnn.util.better_exchook import get_func_from_code_object, iter_traceback
 
         print(f"{type(exc).__name__}: {exc}", file=log.v1)
@@ -259,10 +263,12 @@ class Engine(EngineBase):
                 exc_ext.append(f"({func_name}) {module_names_by_id.get(id(frame_self), '(unknown)')}")
         if not exc_ext:
             exc_ext.append("(No module call frames.)")
-        if len(exc.args) == 1 and isinstance(exc.args[0], str):
+        if len(exc.args) == 1 and isinstance(exc.args[0], str) and not always_direct_print:
             exc.args = ("\n".join([exc.args[0], "", "Module call stack:"] + exc_ext),)
         else:
-            print("Module call stack:\n", "\n".join(exc_ext), file=log.v3)
+            print("Module call stack:", file=log.v3)
+            for msg in exc_ext:
+                print(msg, file=log.v3)
 
     def init_train_epoch(self):
         """
@@ -897,6 +903,9 @@ class Engine(EngineBase):
         )
 
         data_loader = self._create_data_loader(dataset)
+        if self._forward_auto_split_batch_on_oom:
+            data_loader = QueuedDataIter(data_loader)
+
         batch_dim = extern_data_util.get_batch_dim_from_extern_data(self.extern_data)
 
         def _get_tensor_wo_batch_numpy(x: Tensor) -> Tensor:
@@ -941,6 +950,7 @@ class Engine(EngineBase):
             new_dim.dyn_size_ext = _get_tensor_wo_batch_numpy(dim.dyn_size_ext)
             return new_dim
 
+        report_prefix = f"ep {self.epoch} {dataset.name} forward"
         with torch.no_grad():
             callback.init(model=self._orig_model)
 
@@ -950,7 +960,23 @@ class Engine(EngineBase):
                 extern_data = extern_data_util.raw_dict_to_extern_data(
                     extern_data_raw, extern_data_template=self.extern_data, device=self._device
                 )
-                self._run_step(extern_data, train_func=False)
+                try:
+                    self._run_step(extern_data, train_func=False)
+                except Exception as exc:
+                    if (
+                        isinstance(exc, torch.cuda.OutOfMemoryError)
+                        and self._forward_auto_split_batch_on_oom
+                        and extern_data_util.raw_dict_can_split_batch(extern_data_raw)
+                    ):
+                        self._handle_run_exception(exc, always_direct_print=True)
+                        traceback.clear_frames(exc.__traceback__)
+                        del exc, extern_data  # free refs
+                        print(f"{report_prefix}, split step {step_idx} batch and try again...", file=log.v3)
+                        data_loader.extend(extern_data_util.raw_dict_split_batch(extern_data_raw, splits=2))
+                        data_loader.setup_gc_trigger()
+                        continue
+                    self._handle_run_exception(exc)
+                    raise
                 ctx = rf.get_run_ctx()
                 ctx.check_outputs_complete()
 
@@ -964,7 +990,7 @@ class Engine(EngineBase):
 
                 elapsed_computation_time += time.time() - step_begin_time
                 _print_process(
-                    f"ep {self.epoch} {dataset.name} forward",
+                    report_prefix,
                     step=step_idx,
                     eval_info=None,
                     log_memory_usage_device=self._device if self._log_memory_usage else None,
