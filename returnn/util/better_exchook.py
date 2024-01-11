@@ -1651,6 +1651,10 @@ class DummyFrame:
         self.f_builtins = f_builtins or {}
         self.have_vars_available = f_locals is not None or f_globals is not None or f_builtins is not None
 
+    def clear(self):
+        """clear"""
+        self.f_locals = None
+
 
 # noinspection PyPep8Naming,PyUnusedLocal
 def _StackSummary_extract(frame_gen, limit=None, lookup_lines=True, capture_locals=False):
