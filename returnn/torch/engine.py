@@ -10,7 +10,6 @@ import sys
 import gc
 import os
 import time
-import traceback
 
 import torch
 import torch.distributed
