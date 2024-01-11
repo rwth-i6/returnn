@@ -182,7 +182,7 @@ def _try_hook_into_tests():
                 while frame_:
                     assert isinstance(frame_, types.FrameType)
                     # If pytest_cmdline_main is in the call stack trace, we are not yet in the lowest stack.
-                    if get_func_str_from_code_object(frame_.f_code) == "pytest_cmdline_main":
+                    if get_func_str_from_code_object(frame_.f_code, frame=frame_) == "pytest_cmdline_main":
                         # We assume there is yet another lower `finally` block in the call stack
                         # which calls to config._ensure_unconfigure.
                         # However, it would not call pytest_unconfigure again
