@@ -68,7 +68,6 @@ def setup():
 
     import returnn.util.debug as debug
 
-    debug.install_native_signal_handler()
     debug.init_faulthandler()
 
     _try_hook_into_tests()
