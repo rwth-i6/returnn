@@ -6,6 +6,7 @@ from __future__ import annotations
 from typing import Optional, Union, List, TextIO
 import os
 import sys
+import gc
 import subprocess
 import torch
 from returnn.util.better_exchook import better_exchook
@@ -108,3 +109,24 @@ def diagnose_no_gpu() -> List[str]:
         res.append(f"nvidia-smi failed")
 
     return res
+
+
+def garbage_collect():
+    """
+    Perform garbage collection, including any special logic for GPU.
+
+    Also see:
+    https://github.com/pytorch/pytorch/issues/18853
+    https://github.com/pytorch/pytorch/issues/27600
+    https://pytorch.org/docs/stable/notes/faq.html#my-out-of-memory-exception-handler-can-t-allocate-memory
+    https://github.com/Lightning-AI/pytorch-lightning/blob/7a4b0fc4331633cdf00b88776689e8a84ef96cb4/src/lightning/pytorch/utilities/memory.py#L83
+    """
+    gc.collect()
+    if torch.cuda.is_initialized():
+        torch.cuda.empty_cache()
+        torch.cuda.reset_peak_memory_stats()
+        stats = [
+            f"alloc {human_bytes_size(torch.cuda.memory_allocated())}",
+            f"reserved {human_bytes_size(torch.cuda.memory_reserved())}",
+        ]
+        print(f"CUDA memory usage after triggered GC:", " ".join(stats))

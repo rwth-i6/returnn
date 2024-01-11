@@ -969,11 +969,10 @@ class Engine(EngineBase):
                         and extern_data_util.raw_dict_can_split_batch(extern_data_raw)
                     ):
                         self._handle_run_exception(exc, always_direct_print=True)
-                        traceback.clear_frames(exc.__traceback__)
-                        del exc, extern_data  # free refs
+                        util.traceback_clear_frames(exc.__traceback__)
+                        diagnose_gpu.garbage_collect()
                         print(f"{report_prefix}, split step {step_idx} batch and try again...", file=log.v3)
                         data_loader.extend(extern_data_util.raw_dict_split_batch(extern_data_raw, splits=2))
-                        data_loader.setup_gc_trigger()
                         continue
                     self._handle_run_exception(exc)
                     raise

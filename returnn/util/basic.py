@@ -3520,6 +3520,27 @@ def try_get_caller_name(depth=1, fallback=None):
     return fallback
 
 
+def traceback_clear_frames(tb):
+    """
+    Clear traceback frame locals.
+
+    Just like :func:`traceback.clear_frames`, but has an additional fix
+    (https://github.com/python/cpython/issues/113939).
+
+    :param types.TracebackType tb:
+    """
+    while tb:
+        try:
+            tb.tb_frame.clear()
+        except RuntimeError:
+            pass
+        else:
+            # Using this code triggers that the ref actually goes out of scope, otherwise it does not!
+            # https://github.com/python/cpython/issues/113939
+            tb.tb_frame.f_locals  # noqa
+        tb = tb.tb_next
+
+
 class InfiniteRecursionDetected(Exception):
     """
     Raised when an infinite recursion is detected, by guard_infinite_recursion.
