@@ -2132,7 +2132,7 @@ class Engine(EngineBase):
             for name, dataset in self.get_eval_datasets().items():
                 if not self._is_dataset_evaluated(name=name):
                     # This can happen when we have a previous model but did not test it yet.
-                    print("Last epoch model not yet evaluated on dev. Doing that now.", file=log.v4)
+                    print(f"Last epoch model not yet evaluated on {name}. Doing that now.", file=log.v4)
                     self.eval_model(skip_already_evaluated=True)
                     break
 
