@@ -217,6 +217,8 @@ class Engine(EngineBase):
         assert self._pt_model is not None, "Model not initialized, call init_train_from_config()."
         assert self.train_dataset is not None, "Train dataset missing, call init_train_from_config() with train_data."
 
+        self._check_missing_eval()
+
         if self._start_epoch > self._final_epoch:
             print(f"Already trained until final epoch {self._final_epoch}, nothing to do.", file=log.v3)
             return
@@ -224,10 +226,7 @@ class Engine(EngineBase):
         print(
             f"Starting training at epoch {self._start_epoch}, global train step {self.global_train_step}", file=log.v3
         )
-        start_epoch = self._start_epoch
-        self.epoch = start_epoch - 1
-        self._check_epoch_missing_eval()
-
+        self.epoch = self._start_epoch - 1
         while self.epoch + 1 <= self._final_epoch:
             self.epoch += 1
             self._epoch_mp_shared.value = self.epoch
@@ -1029,20 +1028,32 @@ class Engine(EngineBase):
         assert count_bytes > 0
         return count_bytes
 
-    def _check_epoch_missing_eval(self):
+    def _check_missing_eval(self):
         """
         Checks if there are outstanding tasks (eval_model) for the epoch,
         and executes them.
         """
-        if not self.epoch:
+        if not self.learning_rate_control.filename:
             return
-        if self.learning_rate_control.filename:
-            for name, dataset in self.eval_datasets.items():
-                if not self._is_dataset_evaluated(name=name):
-                    # This can happen when we have a previous model but did not test it yet.
-                    print(f"Last epoch model not yet evaluated on {name}. Doing that now.", file=log.v3)
-                    self.eval_model(skip_already_evaluated=True)
-                    break
+        if self._start_epoch == 1:
+            return
+
+        # If the learning rate (scores) file is somehow corrupt,
+        # check that and stop, otherwise we would potentially corrupt the data even more.
+        for epoch in range(self.get_start_epoch_no_existing_model(self.config), self._start_epoch - 1):
+            for name in ["train"] + list(self.eval_datasets.keys()):
+                if not self._is_dataset_evaluated(name=name, epoch=epoch):
+                    raise Exception(f"Scores of epoch {epoch} for {name} are missing.")
+
+        self.epoch = self._start_epoch - 1
+        if not self._is_dataset_evaluated(name="train"):
+            raise Exception(f"Scores of last train epoch {self.epoch} are missing.")
+        for name in self.eval_datasets.keys():
+            if not self._is_dataset_evaluated(name=name):
+                # This can happen when we have a previous model but did not test it yet.
+                print(f"Last epoch model not yet evaluated on {name}. Doing that now.", file=log.v3)
+                self.eval_model(skip_already_evaluated=True)
+                break
 
 
 def _to_raw(n: Union[int, float, Tensor]):

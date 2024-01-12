@@ -103,9 +103,21 @@ class EngineBase:
         return file_list
 
     @classmethod
-    def get_epoch_model(cls, config):
+    def get_start_epoch_no_existing_model(cls, config: Config) -> int:
         """
-        :type config: returnn.config.Config
+        :return: start epoch if no model exists
+        """
+        start_epoch_mode = config.value("start_epoch", "auto")
+        if start_epoch_mode == "auto":
+            return 1
+        else:
+            start_epoch = int(start_epoch_mode)
+            assert start_epoch >= 1
+            return start_epoch
+
+    @classmethod
+    def get_epoch_model(cls, config: Config):
+        """
         :return: (epoch, model_filename). epoch is the epoch of the model filename.
         :rtype: (int|None, str|None)
         """
@@ -393,7 +405,7 @@ class EngineBase:
             count_bytes += self.delete_model(existing_models[epoch])
         print("Deleted %s." % human_bytes_size(count_bytes), file=log.v2)
 
-    def _is_dataset_evaluated(self, name: str) -> bool:
+    def _is_dataset_evaluated(self, name: str, *, epoch: Optional[int] = None) -> bool:
         """
         Check via self.learning_rate_control.
 
@@ -401,7 +413,9 @@ class EngineBase:
         :return: whether there is an entry for the score in the learning rate file
         """
         assert self.learning_rate_control.filename  # otherwise we would not have stored it
-        error_dict = self.learning_rate_control.get_epoch_error_dict(self.epoch)
+        if epoch is None:
+            epoch = self.epoch
+        error_dict = self.learning_rate_control.get_epoch_error_dict(epoch)
         if not error_dict:
             return False
         return any([k.startswith("%s_score" % name) or k.startswith("%s_loss" % name) for k in error_dict.keys()])
