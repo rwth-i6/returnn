@@ -318,7 +318,7 @@ def create_data_loader_from_batches(
         # TODO again check https://github.com/rwth-i6/returnn/issues/1495, and also specifically check
         #   that this works correct in the distributed case, i.e. sets random seed offset.
         # loader_opts.setdefault("multiprocessing_context", "spawn_non_daemonic")
-        if loader_opts["multiprocessing_context"] == "spawn_non_daemonic":
+        if loader_opts.get("multiprocessing_context") == "spawn_non_daemonic":
             from returnn.util.multi_proc_non_daemonic_spawn import NonDaemonicSpawnContext
 
             loader_opts["multiprocessing_context"] = NonDaemonicSpawnContext()
