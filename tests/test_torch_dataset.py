@@ -11,6 +11,7 @@ from returnn.datasets.generating import Task12AXDataset
 from returnn.torch.data import pipeline as data_pipeline
 from returnn.torch.data import returnn_dataset_wrapper
 from returnn.util import better_exchook
+from returnn.util.multi_proc_non_daemonic_spawn import NonDaemonicSpawnContext
 
 
 def get_loader_from_returnn_dataset(dataset: Dataset, mp_manager: torch.multiprocessing.Manager) -> DataLoader:
@@ -42,7 +43,15 @@ def get_loader_from_returnn_dataset(dataset: Dataset, mp_manager: torch.multipro
 
     pickle.loads(pickle.dumps(batches_dataset))
 
-    loader = DataLoader(batches_dataset, batch_size=None, collate_fn=data_pipeline.collate_batch)
+    mp_context = NonDaemonicSpawnContext()
+
+    loader = DataLoader(
+        batches_dataset,
+        batch_size=None,
+        collate_fn=data_pipeline.collate_batch,
+        num_workers=1,
+        multiprocessing_context=mp_context,
+    )
     return loader
 
 

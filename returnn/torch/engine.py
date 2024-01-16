@@ -30,6 +30,7 @@ from returnn.util import basic as util
 from returnn.util import NumbersDict
 from returnn.util.basic import hms, NotSpecified
 from returnn.util.result_with_reason import ResultWithReason
+from returnn.util.multi_proc_non_daemonic_spawn import NonDaemonicSpawnContext
 from returnn.util.debug import debug_shell
 from returnn.forward_iface import ForwardCallbackIface
 
@@ -605,10 +606,17 @@ class Engine(EngineBase):
         loader_opts = self.config.typed_value("torch_dataloader_opts") or {}
         assert isinstance(loader_opts, dict), f"config torch_dataloader_opts, expected dict, got {type(loader_opts)}"
         if loader_opts.get("num_workers"):
+            loader_opts = loader_opts.copy()
             loader_opts.setdefault("persistent_workers", True)
             loader_opts.setdefault("worker_init_fn", _data_loader_worker_init_func)
-            # TODO fix https://github.com/rwth-i6/returnn/issues/1495 to make spawn work?
-            # loader_opts.setdefault("multiprocessing_context", "spawn")
+            # We don't want to use the default fork start method
+            # (https://github.com/rwth-i6/returnn/issues/1494 and potentially lots of other issues with fork).
+            # We cannot use the standard spawn start method, as DataLoader would start daemonic processes,
+            # which is incompatible with some of our datasets
+            # (https://github.com/rwth-i6/returnn/issues/1495).
+            loader_opts.setdefault("multiprocessing_context", "spawn_non_daemonic")
+            if loader_opts["multiprocessing_context"] == "spawn_non_daemonic":
+                loader_opts["multiprocessing_context"] = NonDaemonicSpawnContext()
 
         return DataLoader(
             batches_dataset,
