@@ -96,8 +96,15 @@ class _AtExitCleanupProcess:
             return  # ignore
         if self.proc_pid is None:  # already cleaned
             return
-        # Send SIGINT, not SIGTERM or SIGKILL. See NonDaemonicSpawnProcess docstring.
-        os.kill(self.proc_pid, signal.SIGINT)
-        pid, exit_status = os.waitpid(self.proc_pid, 0)
-        assert pid == self.proc_pid
+        # The proc might have been killed by some other code. That's ok.
+        try:
+            # Send SIGINT, not SIGTERM or SIGKILL. See NonDaemonicSpawnProcess docstring.
+            os.kill(self.proc_pid, signal.SIGINT)
+        except ProcessLookupError:
+            pass
+        else:
+            try:
+                os.waitpid(self.proc_pid, 0)
+            except ChildProcessError:
+                pass
         self.proc_pid = None
