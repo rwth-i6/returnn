@@ -10,14 +10,16 @@ import torch
 from torch.utils.data import DataLoader
 
 from returnn.config import Config, get_global_config, global_config_ctx
-from returnn.datasets.basic import Dataset, DatasetSeq
+from returnn.datasets.basic import init_dataset, Dataset, DatasetSeq
 from returnn.datasets.generating import Task12AXDataset
 from returnn.torch.data import pipeline as data_pipeline
 from returnn.torch.data import returnn_dataset_wrapper
 from returnn.util import better_exchook
 
 
-def get_loader_from_returnn_dataset(dataset: Dataset, mp_manager: torch.multiprocessing.Manager) -> DataLoader:
+def get_loader_from_returnn_dataset(
+    dataset: Dataset, mp_manager: torch.multiprocessing.Manager, *, batch_size: int = 5, max_seqs: int = 2
+) -> DataLoader:
     # Follow mostly similar logic as in the PT engine.
 
     epoch_mp_shared = mp_manager.Value("i", 0)
@@ -28,8 +30,6 @@ def get_loader_from_returnn_dataset(dataset: Dataset, mp_manager: torch.multipro
 
     wrapped_dataset = returnn_dataset_wrapper.ReturnnDatasetIterDataPipe(dataset, reset_callback=reset_callback)
 
-    batch_size = 5
-    max_seqs = 2
     batches_dataset = data_pipeline.BatchingIterDataPipe(wrapped_dataset, batch_size=batch_size, max_seqs=max_seqs)
 
     # Test different ways to deepcopy/serialize the dataset.
@@ -107,6 +107,52 @@ def test_correct_global_config():
                 break
 
         assert c == n
+
+
+def test_func_in_global_config():
+    # Very similar to test_MultiProcDataset_via_config.
+    # https://github.com/rwth-i6/returnn/issues/1495
+    from io import StringIO
+    import textwrap
+
+    config = Config()
+    config.load_file(
+        StringIO(
+            textwrap.dedent(
+                """\
+                #!returnn.py
+
+                import numpy
+                from returnn.datasets.map import MapDatasetBase
+
+                class MyCustomMapDatasetInConfig(MapDatasetBase):
+                    def __init__(self):
+                        super().__init__(data_types={"data": {"shape": (None, 3)}})
+
+                    def __len__(self):
+                        return 10
+
+                    def __getitem__(self, item):
+                        return {"data": numpy.zeros((5, 3))}
+                """
+            )
+        )
+    )
+
+    with global_config_ctx(config):
+        dataset = init_dataset(
+            {"class": "MapDatasetWrapper", "map_dataset": config.typed_dict["MyCustomMapDatasetInConfig"]}
+        )
+
+        mp_manager = torch.multiprocessing.Manager()
+        loader = get_loader_from_returnn_dataset(dataset, mp_manager, batch_size=100, max_seqs=4)
+
+        c = 0
+        for batch in loader:
+            print(batch)
+            c += 1
+
+        assert c == 3
 
 
 def test_HDFDataset():

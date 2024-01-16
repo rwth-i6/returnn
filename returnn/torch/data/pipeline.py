@@ -321,7 +321,12 @@ def create_data_loader_from_batches(
         if loader_opts.get("multiprocessing_context") == "spawn_non_daemonic":
             from returnn.util.multi_proc_non_daemonic_spawn import NonDaemonicSpawnContext
 
-            loader_opts["multiprocessing_context"] = NonDaemonicSpawnContext()
+            loader_opts["multiprocessing_context"] = NonDaemonicSpawnContext(
+                # It's important that this init function is called even before the unpickling of the dataset,
+                # as that unpickling might depend on the right context, e.g. having a global RETURNN config.
+                # See _DataLoaderWorkerPreInitFunc below, https://github.com/rwth-i6/returnn/issues/1495.
+                process_pre_init_func=_DataLoaderWorkerPreInitFunc()
+            )
 
     return torch.utils.data.DataLoader(
         batches_dataset,
@@ -338,10 +343,8 @@ def create_data_loader_from_batches(
     )
 
 
-class _DataLoaderWorkerInitFunc:
-    def __init__(self, *, other_worker_init_fn: Optional[Callable] = None):
-        self.other_worker_init_fn = other_worker_init_fn
-
+class _DataLoaderWorkerPreInitFunc:
+    def __init__(self):
         # Get the RETURNN global config here. Allow this to be optional (for use outside of RETURNN).
         # We store it here such that pickling this worker init func will also pickle the config,
         # so that we can reset it as global config inside the worker.
@@ -352,15 +355,21 @@ class _DataLoaderWorkerInitFunc:
 
         self.global_config = get_global_config(raise_exception=False)
 
-    def __call__(self, worker_id: int):
-        if sys.platform == "linux":
-            with open("/proc/self/comm", "w") as f:
-                f.write(f"TDL worker {worker_id}")
-
+    def __call__(self):
         if self.global_config:
             from returnn.config import set_global_config
 
             set_global_config(self.global_config)
+
+
+class _DataLoaderWorkerInitFunc:
+    def __init__(self, *, other_worker_init_fn: Optional[Callable] = None):
+        self.other_worker_init_fn = other_worker_init_fn
+
+    def __call__(self, worker_id: int):
+        if sys.platform == "linux":
+            with open("/proc/self/comm", "w") as f:
+                f.write(f"TDL worker {worker_id}")
 
         if self.other_worker_init_fn:
             self.other_worker_init_fn(worker_id)

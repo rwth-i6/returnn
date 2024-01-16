@@ -17,7 +17,7 @@ References:
 """
 
 from __future__ import annotations
-from typing import Optional
+from typing import Optional, Any, Callable, Tuple
 import os
 import signal
 import atexit
@@ -40,6 +40,8 @@ class NonDaemonicSpawnProcess(SpawnProcess):
     """
 
     daemon = property(lambda self: False, lambda self, v: None)  # always False
+
+    pre_init_func: Optional[Callable[[], None]] = None
 
     _at_exit_cleanup_handler: Optional[_AtExitCleanupProcess] = None
 
@@ -76,6 +78,29 @@ class NonDaemonicSpawnProcess(SpawnProcess):
         atexit.unregister(self._at_exit_cleanup_handler)
         self._at_exit_cleanup_handler = None
 
+    def __reduce__(self):
+        res_tuple = super().__reduce__()
+        if not self.pre_init_func:
+            return res_tuple
+        reconstruct_func, reconstruct_args, *other = res_tuple
+        # Use our own reconstruct function to call the pre_init_func.
+        # This is unpickled and executed *before* the other state is unpickled.
+        # This is important: This allows to potentially prepare some global state,
+        # to make the following unpickling work.
+        # E.g. in case the remaining state depends on some dynamic module,
+        # which must be imported in a special way before (e.g. __returnn_config__),
+        # this is the way to do it.
+        # Note that internally, multiprocessing SpawnProcess does sth similar,
+        # see multiprocessing.spawn._main, spawn.prepare.
+        return self._reconstruct_with_pre_init_func, (reconstruct_func, reconstruct_args, self.pre_init_func), *other
+
+    @staticmethod
+    def _reconstruct_with_pre_init_func(
+        reconstruct_func: Callable, reconstruct_args: Tuple[Any, ...], pre_init_func: Callable[[], None]
+    ):
+        pre_init_func()
+        return reconstruct_func(*reconstruct_args)
+
 
 class NonDaemonicSpawnContext(BaseContext):
     """
@@ -83,7 +108,18 @@ class NonDaemonicSpawnContext(BaseContext):
     """
 
     _name = "spawn_non_daemonic"
-    Process = NonDaemonicSpawnProcess
+
+    def __init__(self, *, process_pre_init_func: Optional[Callable[[], None]] = None):
+        super().__init__()
+        self.process_pre_init_func = process_pre_init_func
+
+    # noinspection PyPep8Naming
+    def Process(self, *args, **kwargs):
+        """create a new process"""
+        proc = NonDaemonicSpawnProcess(*args, **kwargs)
+        if self.process_pre_init_func:
+            proc.pre_init_func = self.process_pre_init_func
+        return proc
 
 
 class _AtExitCleanupProcess:
