@@ -92,7 +92,7 @@ class NonDaemonicSpawnProcess(SpawnProcess):
         # this is the way to do it.
         # Note that internally, multiprocessing SpawnProcess does sth similar,
         # see multiprocessing.spawn._main, spawn.prepare.
-        return self._reconstruct_with_pre_init_func, (reconstruct_func, reconstruct_args, self.pre_init_func), *other
+        return (self._reconstruct_with_pre_init_func, (reconstruct_func, reconstruct_args, self.pre_init_func)) + other
 
     @staticmethod
     def _reconstruct_with_pre_init_func(
