@@ -614,7 +614,9 @@ class Engine(EngineBase):
             # We cannot use the standard spawn start method, as DataLoader would start daemonic processes,
             # which is incompatible with some of our datasets
             # (https://github.com/rwth-i6/returnn/issues/1495).
-            loader_opts.setdefault("multiprocessing_context", "spawn_non_daemonic")
+            # TODO again check https://github.com/rwth-i6/returnn/issues/1495, and also specifically check
+            #   that this works correct in the distributed case, i.e. sets random seed offset.
+            # loader_opts.setdefault("multiprocessing_context", "spawn_non_daemonic")
             if loader_opts["multiprocessing_context"] == "spawn_non_daemonic":
                 loader_opts["multiprocessing_context"] = NonDaemonicSpawnContext()
 
