@@ -19,7 +19,7 @@ other PyTorch datasets more directly, including also HuggingFace datasets.
 """
 
 from __future__ import annotations
-from typing import Optional, Any, Union, List, Dict
+from typing import Optional, Any, Union, List, Dict, Callable
 import sys
 from copy import deepcopy
 
@@ -309,7 +309,9 @@ def create_data_loader_from_batches(
     if loader_opts.get("num_workers"):
         loader_opts = loader_opts.copy()
         loader_opts.setdefault("persistent_workers", True)
-        loader_opts.setdefault("worker_init_fn", _data_loader_worker_init_func)
+        loader_opts["worker_init_fn"] = _DataLoaderWorkerInitFunc(
+            other_worker_init_fn=loader_opts.get("worker_init_fn")
+        )
         # We don't want to use the default fork start method
         # (https://github.com/rwth-i6/returnn/issues/1494 and potentially lots of other issues with fork).
         # We cannot use the standard spawn start method, as DataLoader would start daemonic processes,
@@ -338,7 +340,13 @@ def create_data_loader_from_batches(
     )
 
 
-def _data_loader_worker_init_func(worker_id: int):
-    if sys.platform == "linux":
-        with open("/proc/self/comm", "w") as f:
-            f.write(f"TDL worker {worker_id}")
+class _DataLoaderWorkerInitFunc:
+    def __init__(self, *, other_worker_init_fn: Optional[Callable] = None):
+        self.other_worker_init_fn = other_worker_init_fn
+
+    def __call__(self, worker_id: int):
+        if sys.platform == "linux":
+            with open("/proc/self/comm", "w") as f:
+                f.write(f"TDL worker {worker_id}")
+        if self.other_worker_init_fn:
+            self.other_worker_init_fn(worker_id)
