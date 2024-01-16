@@ -607,7 +607,8 @@ class Engine(EngineBase):
         if loader_opts.get("num_workers"):
             loader_opts.setdefault("persistent_workers", True)
             loader_opts.setdefault("worker_init_fn", _data_loader_worker_init_func)
-            loader_opts.setdefault("multiprocessing_context", "spawn")
+            # TODO fix https://github.com/rwth-i6/returnn/issues/1495 to make spawn work?
+            # loader_opts.setdefault("multiprocessing_context", "spawn")
 
         return DataLoader(
             batches_dataset,
