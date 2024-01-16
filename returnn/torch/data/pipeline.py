@@ -344,9 +344,25 @@ class _DataLoaderWorkerInitFunc:
     def __init__(self, *, other_worker_init_fn: Optional[Callable] = None):
         self.other_worker_init_fn = other_worker_init_fn
 
+        # Get the RETURNN global config here. Allow this to be optional (for use outside of RETURNN).
+        # We store it here such that pickling this worker init func will also pickle the config,
+        # so that we can reset it as global config inside the worker.
+        # Some RETURNN datasets might depend on the config.
+        # https://github.com/rwth-i6/returnn/issues/1495
+        # MultiProcDataset has a similar logic, see https://github.com/rwth-i6/returnn/issues/1384.
+        from returnn.config import get_global_config
+
+        self.global_config = get_global_config(raise_exception=False)
+
     def __call__(self, worker_id: int):
         if sys.platform == "linux":
             with open("/proc/self/comm", "w") as f:
                 f.write(f"TDL worker {worker_id}")
+
+        if self.global_config:
+            from returnn.config import set_global_config
+
+            set_global_config(self.global_config)
+
         if self.other_worker_init_fn:
             self.other_worker_init_fn(worker_id)

@@ -1,17 +1,20 @@
 from __future__ import annotations
 
+import os
+
 import _setup_test_env  # noqa
+from typing import Optional, Any, Dict
 import sys
 import unittest
 import torch
 from torch.utils.data import DataLoader
 
-from returnn.datasets.basic import Dataset
+from returnn.config import Config, get_global_config, global_config_ctx
+from returnn.datasets.basic import Dataset, DatasetSeq
 from returnn.datasets.generating import Task12AXDataset
 from returnn.torch.data import pipeline as data_pipeline
 from returnn.torch.data import returnn_dataset_wrapper
 from returnn.util import better_exchook
-from returnn.util.multi_proc_non_daemonic_spawn import NonDaemonicSpawnContext
 
 
 def get_loader_from_returnn_dataset(dataset: Dataset, mp_manager: torch.multiprocessing.Manager) -> DataLoader:
@@ -61,6 +64,49 @@ def test_pipeline_serialization():
             break
 
     assert c == n
+
+
+class _DummyDatasetWithChecks(Task12AXDataset):
+    def __init__(
+        self,
+        *,
+        parent_pid: int,
+        num_seqs: int = 1000,
+        check_in_global_config: Optional[Dict[str, Any]] = None,
+        **kwargs,
+    ):
+        super().__init__(num_seqs=num_seqs, **kwargs)
+        self.parent_pid = parent_pid
+        self.check_in_global_config = check_in_global_config
+
+    def generate_seq(self, seq_idx: int) -> DatasetSeq:
+        """generate seq"""
+        seq = super().generate_seq(seq_idx)
+        assert os.getpid() != self.parent_pid  # check we are in a subproc
+        if self.check_in_global_config:
+            config = get_global_config()
+            for k, v in self.check_in_global_config.items():
+                assert config.typed_dict[k] == v
+        return seq
+
+
+def test_correct_global_config():
+    config = Config({"test_value": 43})
+    with global_config_ctx(config):
+        dataset = _DummyDatasetWithChecks(parent_pid=os.getpid(), check_in_global_config={"test_value": 43})
+
+        mp_manager = torch.multiprocessing.Manager()
+        loader = get_loader_from_returnn_dataset(dataset, mp_manager)
+
+        c = 0
+        n = 3
+        for batch in loader:
+            print(batch)
+            c += 1
+            if c >= n:
+                break
+
+        assert c == n
 
 
 def test_HDFDataset():
