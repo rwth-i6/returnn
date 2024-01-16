@@ -43,16 +43,7 @@ def get_loader_from_returnn_dataset(dataset: Dataset, mp_manager: torch.multipro
 
     pickle.loads(pickle.dumps(batches_dataset))
 
-    mp_context = NonDaemonicSpawnContext()
-
-    loader = DataLoader(
-        batches_dataset,
-        batch_size=None,
-        collate_fn=data_pipeline.collate_batch,
-        num_workers=1,
-        multiprocessing_context=mp_context,
-    )
-    return loader
+    return data_pipeline.create_data_loader_from_batches(batches_dataset, {"num_workers": 1})
 
 
 def test_pipeline_serialization():

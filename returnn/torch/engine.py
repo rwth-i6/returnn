@@ -6,7 +6,6 @@ from __future__ import annotations
 from typing import Optional, Any, Union, Callable, Dict
 from contextlib import nullcontext
 
-import sys
 import gc
 import os
 import time
@@ -30,7 +29,6 @@ from returnn.util import basic as util
 from returnn.util import NumbersDict
 from returnn.util.basic import hms, NotSpecified
 from returnn.util.result_with_reason import ResultWithReason
-from returnn.util.multi_proc_non_daemonic_spawn import NonDaemonicSpawnContext
 from returnn.util.debug import debug_shell
 from returnn.forward_iface import ForwardCallbackIface
 
@@ -605,34 +603,7 @@ class Engine(EngineBase):
 
         loader_opts = self.config.typed_value("torch_dataloader_opts") or {}
         assert isinstance(loader_opts, dict), f"config torch_dataloader_opts, expected dict, got {type(loader_opts)}"
-        if loader_opts.get("num_workers"):
-            loader_opts = loader_opts.copy()
-            loader_opts.setdefault("persistent_workers", True)
-            loader_opts.setdefault("worker_init_fn", _data_loader_worker_init_func)
-            # We don't want to use the default fork start method
-            # (https://github.com/rwth-i6/returnn/issues/1494 and potentially lots of other issues with fork).
-            # We cannot use the standard spawn start method, as DataLoader would start daemonic processes,
-            # which is incompatible with some of our datasets
-            # (https://github.com/rwth-i6/returnn/issues/1495).
-            # TODO again check https://github.com/rwth-i6/returnn/issues/1495, and also specifically check
-            #   that this works correct in the distributed case, i.e. sets random seed offset.
-            # loader_opts.setdefault("multiprocessing_context", "spawn_non_daemonic")
-            if loader_opts["multiprocessing_context"] == "spawn_non_daemonic":
-                loader_opts["multiprocessing_context"] = NonDaemonicSpawnContext()
-
-        return DataLoader(
-            batches_dataset,
-            collate_fn=data_pipeline.collate_batch,
-            # Batching is already done by BatchingIterDataPipe.
-            batch_size=None,
-            # Explicitly not use the following opts, which are not supported and/or do not make sense
-            # for an iterable-style dataset.
-            shuffle=None,
-            sampler=None,
-            batch_sampler=None,
-            # User-defined
-            **loader_opts,
-        )
+        return data_pipeline.create_data_loader_from_batches(batches_dataset, loader_opts)
 
     def _run_step(
         self, extern_data: TensorDict, *, train_flag: bool = False, train_func: bool, _inside_wrapped: bool = False
@@ -1175,12 +1146,6 @@ def get_device_from_config_opt(device: Optional[str]) -> ResultWithReason[str]:
             raise Exception("No GPU device found, but config requested 'gpu' device.\n" + "\n".join(reasons))
         reason = "'gpu' in config"
     return ResultWithReason(device, reason)
-
-
-def _data_loader_worker_init_func(worker_id: int):
-    if sys.platform == "linux":
-        with open("/proc/self/comm", "w") as f:
-            f.write(f"TDL worker {worker_id}")
 
 
 class _WrappedModuleRunStep(torch.nn.Module):

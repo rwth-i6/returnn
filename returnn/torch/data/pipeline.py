@@ -19,7 +19,7 @@ other PyTorch datasets more directly, including also HuggingFace datasets.
 """
 
 from __future__ import annotations
-from typing import Union, List, Dict
+from typing import Optional, Any, Union, List, Dict
 import sys
 from copy import deepcopy
 
@@ -295,3 +295,50 @@ class LenFilterDataPipe(torch.utils.data.IterDataPipe):
 
     def __getitem__(self, index):
         raise Exception(f"{self.__class__.__name__}.__getitem__ not supported")
+
+
+def create_data_loader_from_batches(
+    batches_dataset: torch.utils.data.Dataset, loader_opts: Optional[Dict[str, Any]] = None
+) -> torch.utils.data.DataLoader:
+    """
+    Create DataLoader based on dataset over batches, e.g. via :class:`BatchingIterDataPipe`.
+    """
+    if loader_opts is None:
+        loader_opts: Dict[str, Any] = {}
+
+    if loader_opts.get("num_workers"):
+        loader_opts = loader_opts.copy()
+        loader_opts.setdefault("persistent_workers", True)
+        loader_opts.setdefault("worker_init_fn", _data_loader_worker_init_func)
+        # We don't want to use the default fork start method
+        # (https://github.com/rwth-i6/returnn/issues/1494 and potentially lots of other issues with fork).
+        # We cannot use the standard spawn start method, as DataLoader would start daemonic processes,
+        # which is incompatible with some of our datasets
+        # (https://github.com/rwth-i6/returnn/issues/1495).
+        # TODO again check https://github.com/rwth-i6/returnn/issues/1495, and also specifically check
+        #   that this works correct in the distributed case, i.e. sets random seed offset.
+        # loader_opts.setdefault("multiprocessing_context", "spawn_non_daemonic")
+        if loader_opts["multiprocessing_context"] == "spawn_non_daemonic":
+            from returnn.util.multi_proc_non_daemonic_spawn import NonDaemonicSpawnContext
+
+            loader_opts["multiprocessing_context"] = NonDaemonicSpawnContext()
+
+    return torch.utils.data.DataLoader(
+        batches_dataset,
+        collate_fn=collate_batch,
+        # Batching is already done by BatchingIterDataPipe.
+        batch_size=None,
+        # Explicitly not use the following opts, which are not supported and/or do not make sense
+        # for an iterable-style dataset.
+        shuffle=None,
+        sampler=None,
+        batch_sampler=None,
+        # User-defined
+        **loader_opts,
+    )
+
+
+def _data_loader_worker_init_func(worker_id: int):
+    if sys.platform == "linux":
+        with open("/proc/self/comm", "w") as f:
+            f.write(f"TDL worker {worker_id}")
