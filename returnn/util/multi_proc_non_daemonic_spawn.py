@@ -78,6 +78,10 @@ class NonDaemonicSpawnProcess(SpawnProcess):
 
 
 class NonDaemonicSpawnContext(BaseContext):
+    """
+    Spawn start methods, where all procs are non-daemonic.
+    """
+
     _name = "spawn_non_daemonic"
     Process = NonDaemonicSpawnProcess
 
