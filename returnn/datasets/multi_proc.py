@@ -129,7 +129,7 @@ class MultiProcDataset(CachedDataset2):
                 worker_proc = _mp.Process(
                     name=f"{self.name} worker proc {i + 1}/{self.num_workers}",
                     target=self._worker_proc_loop,
-                    args=(self.dataset, self.buffer_size, worker_child_conns[i], worker_from_seq_order[i]),
+                    args=(i, self.dataset, self.buffer_size, worker_child_conns[i], worker_from_seq_order[i]),
                     daemon=True,
                 )
                 worker_proc.start()
@@ -206,6 +206,7 @@ class MultiProcDataset(CachedDataset2):
 
     @staticmethod
     def _worker_proc_loop(
+        worker_index: int,
         dataset_dict: Dict[str, Any],
         buffer_size: int,
         parent: mpConnection,
@@ -213,7 +214,7 @@ class MultiProcDataset(CachedDataset2):
     ):
         if sys.platform == "linux":
             with open("/proc/self/comm", "w") as f:
-                f.write("MPD worker")
+                f.write(f"MPD worker {worker_index}")
 
         dataset = init_dataset(dataset_dict)
 
