@@ -34,7 +34,6 @@ class Config:
 
     def __getstate__(self):
         import io
-        from pickle import PicklingError
         from returnn.util.task_system import Pickler
 
         class _CustomPickler(Pickler):
