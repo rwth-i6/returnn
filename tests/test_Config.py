@@ -332,6 +332,91 @@ def test_config_pickle_function_multi_proc():
         assert proc.exitcode == 42
 
 
+def test_config_pickle_twice():
+    import pickle
+    import io
+
+    config = Config()
+    config.load_file(
+        StringIO(
+            textwrap.dedent(
+                """\
+                #!returnn.py
+
+                def my_custom_func():
+                    return 42
+                """
+            )
+        )
+    )
+
+    def _pickle(config_: Config) -> bytes:
+        sio = io.BytesIO()
+        # noinspection PyUnresolvedReferences
+        p = pickle._Pickler(sio)  # better for debugging
+        with global_config_ctx(config_):
+            p.dump(config_)
+        return sio.getvalue()
+
+    def _unpickle(data_: bytes) -> Config:
+        with global_config_ctx(None):  # guard orig global config setting
+            return pickle.loads(data_)
+
+    config = _unpickle(_pickle(config))
+    config = _unpickle(_pickle(config))
+
+    with global_config_ctx(config):
+        f = config.typed_dict["my_custom_func"]
+        f_ = pickle.loads(pickle.dumps(f))
+        assert f_ is f
+        assert f_() == 42
+
+
+def test_config_pickle_function_multi_proc_twice():
+    # Same as test_config_pickle_function but via multiprocessing,
+    # so across process boundaries.
+    import multiprocessing
+
+    _mp = multiprocessing.get_context("spawn")
+
+    config = Config()
+    config.load_file(
+        StringIO(
+            textwrap.dedent(
+                """\
+                #!returnn.py
+
+                def my_custom_func():
+                    import sys
+                    sys.exit(42)
+                """
+            )
+        )
+    )
+    with global_config_ctx(config):
+        f = config.typed_dict["my_custom_func"]
+        proc = _mp.Process(target=_config_pickle_twice_proc_main, args=(config, f))
+        proc.start()
+        proc.join()
+        assert proc.exitcode == 42
+
+
+def _config_pickle_twice_proc_main(config, f):
+    assert isinstance(config, Config)
+    assert get_global_config() is config
+    assert callable(f)
+
+    import multiprocessing
+
+    _mp = multiprocessing.get_context("spawn")
+    proc = _mp.Process(target=_config_pickle_proc_main, args=(config, f))
+    proc.start()
+    proc.join()
+    assert proc.exitcode == 42
+
+    f()
+
+
 if __name__ == "__main__":
     better_exchook.install()
     if len(sys.argv) <= 1:

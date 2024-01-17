@@ -38,27 +38,13 @@ class Config:
         from returnn.util.task_system import Pickler
 
         class _CustomPickler(Pickler):
-            dispatch = Pickler.dispatch.copy()
+            use_whichmodule = False
 
-            def save_global(self, obj, name=None):
-                """save global"""
-                module_name = getattr(obj, "__module__", None)
-                if module_name == _PyModuleName:
-                    raise PicklingError("Can not pickle %r from RETURNN config" % obj)
-                super().save_global(obj, name=name)
-
-            # noinspection PyMethodParameters
-            def intellisave_dict(self_, obj):
-                """save dict"""
-                if obj is self.typed_dict:
-                    # Do not use the intelligent logic for our own dict.
-                    # We explicitly want to pickle it as-is.
-                    assert id(obj) not in self_.memo
-                    super().save_dict(obj)  # noqa
-                    return
-                super().intellisave_dict(obj)
-
-            dispatch[dict] = intellisave_dict
+            # This will trigger potentially some fallback of task_system.Pickler,
+            # like _save_type_fallback.
+            # Also, do not use the intelligent logic for our own dict.
+            # We explicitly want to pickle it as-is.
+            module_name_black_list = {_PyModuleName}
 
         buffer = io.BytesIO()
         pickler = _CustomPickler(buffer)
@@ -617,11 +603,11 @@ class Config:
             return int(value), int(value)
 
 
-_global_config = None  # type: typing.Optional[Config]
+_global_config: Optional[Config] = None
 
 
 @contextlib.contextmanager
-def global_config_ctx(config: Config):
+def global_config_ctx(config: Optional[Config]):
     """
     sets the config as global config in this context,
     and recovers the original global config afterwards
@@ -635,13 +621,13 @@ def global_config_ctx(config: Config):
         _global_config = prev_global_config
 
 
-def set_global_config(config):
+def set_global_config(config: Optional[Config]):
     """
     Will define the global config, returned by :func:`get_global_config`
 
-    :param Config config:
+    :param config:
     """
-    _get_or_set_config_via_tf_default_graph(config)
+    _get_or_set_config_via_tf_default_graph(config, assign=True)
     global _global_config
     _global_config = config
 
@@ -681,12 +667,13 @@ def get_global_config(*, raise_exception: bool = True, auto_create: bool = False
     return None
 
 
-def _get_or_set_config_via_tf_default_graph(config=None):
+def _get_or_set_config_via_tf_default_graph(config: Optional[Config] = None, assign: bool = False):
     """
     This is done in a safe way, and might just be a no-op.
     When TF is not imported yet, it will just return.
 
-    :param Config|None config: if set, will set it
+    :param config: if set, will set it
+    :param assign: whether to set it (even if config=None)
     :rtype: Config|None
     """
     if "tensorflow" not in sys.modules:
@@ -698,7 +685,7 @@ def _get_or_set_config_via_tf_default_graph(config=None):
     # and is more complicated than what we need.
     # We just use a custom own attrib.
     attrib_name = "_RETURNN_config_in_graph"
-    if config:
+    if assign or config:
         setattr(graph, attrib_name, config)
     return getattr(graph, attrib_name, None)
 

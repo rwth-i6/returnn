@@ -4,7 +4,7 @@ most of them quite low level.
 """
 
 from __future__ import annotations
-from typing import Any, Dict, Tuple
+from typing import Any, Dict, Tuple, Set
 from threading import Lock
 import sys
 import os
@@ -592,6 +592,8 @@ class Pickler(_BasePickler):
         if id(obj) not in self.memo:  # Could be if we recursively landed here. See also pickle.save_tuple().
             self.memoize(obj)
 
+        self._extend_save_extra_attribs(obj)
+
     dispatch[types.FunctionType] = save_func
 
     def save_method(self, obj):
@@ -626,11 +628,13 @@ class Pickler(_BasePickler):
 
     dispatch[CellType] = save_cell
 
+    module_name_black_list: Set[str] = set()
+
     # We also search for module dicts and reference them.
     # This is for FunctionType.func_globals.
     def intellisave_dict(self, obj):
         modname = getModNameForModDict(obj)
-        if modname:
+        if modname and modname not in self.module_name_black_list:
             self.save(getModuleDict)
             self.save((modname, sys.path))
             self.write(pickle.REDUCE)
@@ -642,7 +646,7 @@ class Pickler(_BasePickler):
 
     def save_module(self, obj):
         modname = getModNameForModDict(obj.__dict__)
-        if modname:
+        if modname and modname not in self.module_name_black_list:
             self.save(import_module)
             self.save((modname,))
             self.write(pickle.REDUCE)
@@ -688,6 +692,8 @@ class Pickler(_BasePickler):
     dispatch[io.BufferedReader] = save_iobuffer_dummy
     dispatch[io.BufferedWriter] = save_iobuffer_dummy
 
+    use_whichmodule: bool = True
+
     # Overwrite to avoid the broken pickle.whichmodule() which might return "__main__".
     def save_global(self, obj, name=None):
         assert obj
@@ -699,10 +705,12 @@ class Pickler(_BasePickler):
         if module == "__main__" and globals().get(name, None) is obj:
             # Can happen if this is directly executed.
             module = __name__  # should be correct now
-        if module is None or module == "__main__":
+        if (module is None or module == "__main__") and self.use_whichmodule:
             module = pickle.whichmodule(obj, name)
         if module is None or module == "__main__":
             raise pickle.PicklingError("Can't pickle %r: module not found: %s" % (obj, module))
+        if module in self.module_name_black_list:
+            raise pickle.PicklingError("Can't pickle %r: module blacklisted: %s" % (obj, module))
 
         try:
             __import__(module)
@@ -742,12 +750,19 @@ class Pickler(_BasePickler):
         self.save((obj.__name__, obj.__bases__, {}))
         self.write(pickle.REDUCE)
         self.memoize(obj)
+        self._extend_save_extra_attribs(obj)
+
+    def _extend_save_extra_attribs(self, obj):
+        # Assumes the obj is already saved and at the top of the stack.
         self.write(pickle.POP)  # we will put it back on the stack below
 
         # Assign the attribs after it is already memoized
         # to resolve recursive references.
         self.save(assign_obj_attribs)
-        self.save((obj, getNormalDict(obj.__dict__)))
+        d = getNormalDict(obj.__dict__)
+        if obj.__module__:
+            d["__module__"] = obj.__module__
+        self.save((obj, d))
         self.write(pickle.REDUCE)
 
     dispatch[NewStyleClass] = save_type
