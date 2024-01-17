@@ -356,6 +356,12 @@ class _DataLoaderWorkerPreInitFunc:
         self.global_config = get_global_config(raise_exception=False)
 
     def __call__(self):
+        from returnn.util import better_exchook
+        from returnn import __old_mod_loader__
+
+        better_exchook.install()
+        __old_mod_loader__.disable_lazy_mod_loads()
+
         if self.global_config:
             from returnn.config import set_global_config
 
