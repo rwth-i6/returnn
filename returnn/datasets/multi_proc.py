@@ -7,14 +7,12 @@ from typing import Optional, Any, Dict, List
 import sys
 from .basic import init_dataset, DatasetSeq
 from .cached2 import CachedDataset2
-from returnn.config import Config, get_global_config, set_global_config
 from returnn.util.basic import try_run
 import multiprocessing as mp
+from returnn.util.multi_proc_non_daemonic_spawn import NonDaemonicSpawnContext
 
 # noinspection PyProtectedMember
 from multiprocessing.connection import Connection as mpConnection
-
-_mp = mp.get_context("spawn")
 
 
 class MultiProcDataset(CachedDataset2):
@@ -90,12 +88,7 @@ class MultiProcDataset(CachedDataset2):
 
     def _lazy_init(self):
         if not self._worker_procs:
-            # We send the global config to the subprocesses,
-            # because some datasets might use custom functions inside the config,
-            # and pickling them would fail otherwise.
-            # https://github.com/rwth-i6/returnn/issues/1384
-            # Pickling the config works, as the config has special pickling support.
-            global_config = get_global_config(raise_exception=False)
+            _mp = NonDaemonicSpawnContext(process_pre_init_func=_SetupProcPreInit())
 
             # Seq order proc directly sends the seq order to each worker.
             seq_order_to_worker = []  # type: List[mpConnection]
@@ -120,7 +113,7 @@ class MultiProcDataset(CachedDataset2):
                 # that the global config is already loaded, which will have the side effect
                 # that it is registered as global config, and the Python module will be registered,
                 # so references to it will work.
-                args=(global_config, self.dataset, seq_order_proc_child_conn, seq_order_to_worker),
+                args=(self.dataset, seq_order_proc_child_conn, seq_order_to_worker),
                 daemon=True,
             )
             seq_order_proc.start()
@@ -136,13 +129,7 @@ class MultiProcDataset(CachedDataset2):
                 worker_proc = _mp.Process(
                     name=f"{self.name} worker proc {i + 1}/{self.num_workers}",
                     target=self._worker_proc_loop,
-                    args=(
-                        global_config,  # see above
-                        self.dataset,
-                        self.buffer_size,
-                        worker_child_conns[i],
-                        worker_from_seq_order[i],
-                    ),
+                    args=(self.dataset, self.buffer_size, worker_child_conns[i], worker_from_seq_order[i]),
                     daemon=True,
                 )
                 worker_proc.start()
@@ -185,14 +172,11 @@ class MultiProcDataset(CachedDataset2):
                     try_run(worker_proc.join)
 
     @staticmethod
-    def _seq_order_proc_loop(
-        global_config: Optional[Config], dataset_dict: Dict[str, Any], parent: mpConnection, workers: List[mpConnection]
-    ):
+    def _seq_order_proc_loop(dataset_dict: Dict[str, Any], parent: mpConnection, workers: List[mpConnection]):
         if sys.platform == "linux":
             with open("/proc/self/comm", "w") as f:
-                f.write(f"MPD seq order")
-        if global_config:
-            set_global_config(global_config)
+                f.write("MPD seq order")
+
         num_workers = len(workers)
         dataset = init_dataset(dataset_dict)
         try:
@@ -222,7 +206,6 @@ class MultiProcDataset(CachedDataset2):
 
     @staticmethod
     def _worker_proc_loop(
-        global_config: Optional[Config],
         dataset_dict: Dict[str, Any],
         buffer_size: int,
         parent: mpConnection,
@@ -230,9 +213,8 @@ class MultiProcDataset(CachedDataset2):
     ):
         if sys.platform == "linux":
             with open("/proc/self/comm", "w") as f:
-                f.write(f"MPD worker")
-        if global_config:
-            set_global_config(global_config)
+                f.write("MPD worker")
+
         dataset = init_dataset(dataset_dict)
 
         got_init_seq_order = False
@@ -364,3 +346,28 @@ class MultiProcDataset(CachedDataset2):
         if self._total_num_seqs is not None:
             return self._total_num_seqs
         raise NotImplementedError
+
+
+class _SetupProcPreInit:
+    def __init__(self):
+        # Get the RETURNN global config here. Allow this to be optional (for use outside of RETURNN).
+        # We store it here such that pickling this worker init func will also pickle the config,
+        # so that we can reset it as global config inside the worker.
+        # Some RETURNN datasets might depend on the config.
+        # https://github.com/rwth-i6/returnn/issues/1384.
+        # Pickling the config works, as the config has special pickling support.
+        from returnn.config import get_global_config
+
+        self.global_config = get_global_config(raise_exception=False)
+
+    def __call__(self):
+        from returnn.util import better_exchook
+        from returnn import __old_mod_loader__
+
+        better_exchook.install()
+        __old_mod_loader__.disable_lazy_mod_loads()
+
+        if self.global_config:
+            from returnn.config import set_global_config
+
+            set_global_config(self.global_config)
