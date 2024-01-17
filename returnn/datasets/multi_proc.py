@@ -5,7 +5,7 @@ Multi-processing dataset
 from __future__ import annotations
 from typing import Optional, Any, Dict, List
 import sys
-from .basic import init_dataset, DatasetSeq
+from .basic import init_dataset, Dataset, DatasetSeq
 from .cached2 import CachedDataset2
 from returnn.util.basic import try_run
 import multiprocessing as mp
@@ -216,7 +216,7 @@ class MultiProcDataset(CachedDataset2):
             with open("/proc/self/comm", "w") as f:
                 f.write(f"MPD worker {worker_index}")
 
-        dataset = init_dataset(dataset_dict)
+        dataset: Optional[Dataset] = None
 
         got_init_seq_order = False
         cache = []  # type: List[DatasetSeq]
@@ -289,6 +289,8 @@ class MultiProcDataset(CachedDataset2):
                 elif msg == "init_seq_order":
                     msg_, seq_order_ = seq_order.recv()
                     assert msg_ == "seq_order_shard"
+                    if dataset is None:
+                        dataset = init_dataset(dataset_dict)
                     dataset.init_seq_order(seq_order=seq_order_, **kwargs)
                     got_init_seq_order = True
                     next_seq_idx = 0
