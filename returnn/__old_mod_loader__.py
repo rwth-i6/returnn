@@ -133,6 +133,8 @@ class _LazyLoader(types.ModuleType):
         if full_mod_name in _mod_cache:
             module = _mod_cache[full_mod_name]
         else:
+            if not _lazy_mod_loading_enabled:
+                raise AttributeError(f"module {old_mod_name} not loaded yet and lazy loading disabled")
             try:
                 module = importlib.import_module(full_mod_name)
             except Exception:
@@ -183,3 +185,20 @@ class _LazyLoader(types.ModuleType):
             return
         module = self._load()
         setattr(module, key, value)
+
+
+_lazy_mod_loading_enabled = True
+
+
+def disable_lazy_mod_loads():
+    """
+    Disable any future module loads.
+
+    E.g. :func:`pickle.whichmodule` or :func:`pickle.Pickler.dump` has some logic to iterate through all `sys.modules`,
+    and do a `getattr(mod, name)` to check whether some object is found there.
+    This triggers that all lazy loaders will actually load the modules,
+    which can cause all kinds of strange side effects.
+    """
+    global _lazy_mod_loading_enabled
+
+    _lazy_mod_loading_enabled = False
