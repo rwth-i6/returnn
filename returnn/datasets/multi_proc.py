@@ -90,10 +90,10 @@ class MultiProcDataset(CachedDataset2):
         if not self._worker_procs:
             _mp = NonDaemonicSpawnContext(process_pre_init_func=_SetupProcPreInit())
 
-            # Seq order proc directly sends the seq order to each worker.
+            # Seq order proc (first worker) directly sends the seq order to each (other) worker.
             seq_order_to_worker = []  # type: List[mpConnection]
             worker_from_seq_order = []  # type: List[mpConnection]
-            for i in range(self.num_workers):
+            for i in range(self.num_workers - 1):
                 reader, writer = _mp.Pipe(duplex=False)
                 seq_order_to_worker.append(writer)
                 worker_from_seq_order.append(reader)
@@ -105,39 +105,31 @@ class MultiProcDataset(CachedDataset2):
                 worker_parent_conns.append(parent_conn)
                 worker_child_conns.append(child_conn)
 
-            seq_order_proc_parent_conn, seq_order_proc_child_conn = _mp.Pipe()
-            seq_order_proc = _mp.Process(
-                name=f"{self.name} seq order proc",
-                target=self._seq_order_proc_loop,
-                # We deliberately put global_config first, because pickling of dataset might require
-                # that the global config is already loaded, which will have the side effect
-                # that it is registered as global config, and the Python module will be registered,
-                # so references to it will work.
-                args=(self.dataset, seq_order_proc_child_conn, seq_order_to_worker),
-                daemon=True,
-            )
-            seq_order_proc.start()
-            # Make sure the child connection is closed here.
-            # It stays open in the child, until the child dies.
-            # When that happens, now any consecutive read on the pipe
-            # should yield an exception -- which is what we want,
-            # otherwise it would just hang.
-            seq_order_proc_child_conn.close()
-
             worker_procs = []
             for i in range(self.num_workers):
                 worker_proc = _mp.Process(
                     name=f"{self.name} worker proc {i + 1}/{self.num_workers}",
                     target=self._worker_proc_loop,
-                    args=(i, self.dataset, self.buffer_size, worker_child_conns[i], worker_from_seq_order[i]),
+                    args=(
+                        i,
+                        self.dataset,
+                        self.buffer_size,
+                        worker_child_conns[i],
+                        worker_from_seq_order[i - 1] if i > 0 else None,
+                        seq_order_to_worker if i == 0 else None,
+                    ),
                     daemon=True,
                 )
                 worker_proc.start()
                 worker_procs.append(worker_proc)
-                worker_child_conns[i].close()  # see above
+                # Make sure the child connection is closed here.
+                # It stays open in the child, until the child dies.
+                # When that happens, now any consecutive read on the pipe
+                # should yield an exception -- which is what we want,
+                # otherwise it would just hang.
+                worker_child_conns[i].close()
 
-            self._seq_order_proc_parent_conn = seq_order_proc_parent_conn  # type: mpConnection
-            self._seq_order_proc = seq_order_proc
+            self._seq_order_proc_parent_conn = worker_parent_conns[0]  # type: mpConnection
             self._worker_parent_conns = worker_parent_conns
             self._worker_procs = worker_procs
 
@@ -172,45 +164,13 @@ class MultiProcDataset(CachedDataset2):
                     try_run(worker_proc.join)
 
     @staticmethod
-    def _seq_order_proc_loop(dataset_dict: Dict[str, Any], parent: mpConnection, workers: List[mpConnection]):
-        if sys.platform == "linux":
-            with open("/proc/self/comm", "w") as f:
-                f.write("MPD seq order")
-
-        num_workers = len(workers)
-        dataset = init_dataset(dataset_dict)
-        try:
-            while True:
-                msg, kwargs = parent.recv()
-                if msg == "exit":
-                    break
-                elif msg == "init":
-                    parent.send(("num_inputs", dataset.num_inputs))
-                    parent.send(("num_outputs", dataset.num_outputs))
-                    try:
-                        total_num_seqs = dataset.get_total_num_seqs()
-                    except NotImplementedError:
-                        total_num_seqs = None
-                    parent.send(("total_num_seqs", total_num_seqs))
-                    parent.send(("labels", dataset.labels))
-                elif msg == "init_seq_order":
-                    dataset.init_seq_order(**kwargs)
-                    seq_order = dataset.get_current_seq_order()
-                    for i, worker in enumerate(workers):
-                        worker.send(("seq_order_shard", seq_order[i::num_workers]))
-                    parent.send(("num_seqs", len(seq_order)))
-                else:
-                    raise Exception(f"unknown msg {msg!r}")
-        except KeyboardInterrupt:  # when parent dies
-            pass
-
-    @staticmethod
     def _worker_proc_loop(
         worker_index: int,
         dataset_dict: Dict[str, Any],
         buffer_size: int,
-        parent: mpConnection,
-        seq_order: mpConnection,
+        parent_conn: mpConnection,
+        seq_order_conn: Optional[mpConnection],
+        other_worker_conns: Optional[List[mpConnection]],
     ):
         if sys.platform == "linux":
             with open("/proc/self/comm", "w") as f:
@@ -274,10 +234,10 @@ class MultiProcDataset(CachedDataset2):
         try:
             while True:
                 if got_init_seq_order:
-                    while not parent.poll():
+                    while not parent_conn.poll():
                         if not _add_to_cache():
                             break
-                msg, kwargs = parent.recv()
+                msg, kwargs = parent_conn.recv()
                 if msg == "exit":
                     break
                 elif msg == "get_data_seq":
@@ -285,13 +245,39 @@ class MultiProcDataset(CachedDataset2):
                     while cache and cache[0].seq_idx < seq_idx:
                         cache.pop(0)
                     res = _get(seq_idx)
-                    parent.send(("data_seq", res))
-                elif msg == "init_seq_order":
-                    msg_, seq_order_ = seq_order.recv()
-                    assert msg_ == "seq_order_shard"
+                    parent_conn.send(("data_seq", res))
+                elif msg == "init":
+                    assert worker_index == 0
                     if dataset is None:
                         dataset = init_dataset(dataset_dict)
-                    dataset.init_seq_order(seq_order=seq_order_, **kwargs)
+                    parent_conn.send(("num_inputs", dataset.num_inputs))
+                    parent_conn.send(("num_outputs", dataset.num_outputs))
+                    try:
+                        total_num_seqs = dataset.get_total_num_seqs()
+                    except NotImplementedError:
+                        total_num_seqs = None
+                    parent_conn.send(("total_num_seqs", total_num_seqs))
+                    parent_conn.send(("labels", dataset.labels))
+                elif msg == "init_seq_order":
+                    if dataset is None:
+                        dataset = init_dataset(dataset_dict)
+                    if worker_index == 0:
+                        # We are responsible to get the seq order and distrib it to all the other workers.
+                        assert other_worker_conns is not None
+                        dataset.init_seq_order(**kwargs)
+                        seq_order = dataset.get_current_seq_order()
+                        for i, worker_conn in enumerate(other_worker_conns):
+                            worker_conn.send(("seq_order_shard", seq_order[i + 1 :: len(other_worker_conns) + 1]))
+                        parent_conn.send(("num_seqs", len(seq_order)))
+                        # Now reset seq order for ourself (as the role of a normal worker).
+                        kwargs["seq_order"] = seq_order[0 :: len(other_worker_conns) + 1]
+                        kwargs.pop("seq_list", None)
+                        dataset.init_seq_order(**kwargs)
+                    else:
+                        assert seq_order_conn is not None
+                        msg_, seq_order = seq_order_conn.recv()
+                        assert msg_ == "seq_order_shard"
+                        dataset.init_seq_order(seq_order=seq_order, **kwargs)
                     got_init_seq_order = True
                     next_seq_idx = 0
                     cache[:] = []
@@ -315,8 +301,8 @@ class MultiProcDataset(CachedDataset2):
             self._seq_order_proc_parent_conn.send(
                 ("init_seq_order", {"epoch": epoch, "seq_list": seq_list, "seq_order": seq_order})
             )
-            for i in range(self.num_workers):
-                self._worker_parent_conns[i].send(("init_seq_order", {"epoch": epoch}))
+            for worker_conn in self._worker_parent_conns[1:]:
+                worker_conn.send(("init_seq_order", {"epoch": epoch}))
             msg, num_seqs = self._seq_order_proc_parent_conn.recv()
             assert msg == "num_seqs"
             self._num_seqs = num_seqs
