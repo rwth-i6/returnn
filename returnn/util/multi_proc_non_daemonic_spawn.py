@@ -78,6 +78,8 @@ class NonDaemonicSpawnProcess(SpawnProcess):
             # just like our atexit handler would do.
             # However, our atexit handler will only run at some later point,
             # but then it is too late, as we would hang here now in the join().
+            # https://github.com/rwth-i6/returnn/issues/1497
+            # https://github.com/python/cpython/issues/114220
             try:
                 os.kill(self.ident, signal.SIGINT)
             except ProcessLookupError:
