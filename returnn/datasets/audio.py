@@ -89,7 +89,6 @@ class OggZipDataset(CachedDataset2):
             # Special case (mostly for debugging) to directly access the filesystem, not via zip-file.
             self.paths = [os.path.dirname(path)]
             self._names = [os.path.basename(path)]
-            self._zip_files = None
             self._use_zip_files = False
             assert not use_cache_manager, "cache manager only for zip file"
         else:
@@ -249,6 +248,17 @@ class OggZipDataset(CachedDataset2):
             data = data[:fixed_random_subset]
 
         self._data = data
+
+    def finish_epoch(self, *, free_resources: bool = False):
+        """finish epoch"""
+        super().finish_epoch()
+        self._seq_order = None
+        self._num_seqs = 0
+        if free_resources:
+            # Basically undo the _lazy_init, such that _lazy_init would init again next time.
+            self._data = None
+            self.segments = None
+            self._zip_files = None
 
     def _read_segment_list(self, segment_file):
         """
