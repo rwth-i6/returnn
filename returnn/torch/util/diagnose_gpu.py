@@ -79,7 +79,7 @@ def print_using_cuda_device_report(dev: Union[str, torch.device], *, file: Optio
         idx_s = idx
     print(f"Using gpu device {idx_s}:", torch.cuda.get_device_name(idx), file=file)
     free, total = torch.cuda.mem_get_info(idx)
-    print(f"Total GPU memory {human_bytes_size(total)}, free {human_bytes_size(free)}", file=file)
+    print(f"Total GPU {idx_s} memory {human_bytes_size(total)}, free {human_bytes_size(free)}", file=file)
 
 
 def diagnose_no_gpu() -> List[str]:
