@@ -604,13 +604,17 @@ class Engine(EngineBase):
         loader_opts = self.config.typed_value("torch_dataloader_opts") or {}
         assert isinstance(loader_opts, dict), f"config torch_dataloader_opts, expected dict, got {type(loader_opts)}"
 
+        data_loader = data_pipeline.create_data_loader_from_batches(batches_dataset, loader_opts)
+
         if loader_opts.get("num_workers"):
             # We are not using the dataset anymore here in the main proc,
             # so free all resources as much as we can.
             # https://github.com/rwth-i6/returnn/issues/1443
+            # Do this after creating the data loader - so in case it used the fork start method,
+            # it would still potentially have resources ready to use.
             dataset.finish_epoch(free_resources=True)
 
-        return data_pipeline.create_data_loader_from_batches(batches_dataset, loader_opts)
+        return data_loader
 
     def _run_step(
         self, extern_data: TensorDict, *, train_flag: bool = False, train_func: bool, _inside_wrapped: bool = False
