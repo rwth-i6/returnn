@@ -606,7 +606,7 @@ class Engine(EngineBase):
 
         data_loader = data_pipeline.create_data_loader_from_batches(batches_dataset, loader_opts)
 
-        if loader_opts.get("num_workers"):
+        if data_loader.num_workers > 0:  # uses multi processing
             # We are not using the dataset anymore here in the main proc,
             # so free all resources as much as we can.
             # https://github.com/rwth-i6/returnn/issues/1443
