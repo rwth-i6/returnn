@@ -24,6 +24,8 @@ import atexit
 
 # noinspection PyProtectedMember
 from multiprocessing.context import BaseContext, SpawnProcess
+
+# noinspection PyUnresolvedReferences
 from multiprocessing.util import is_exiting
 
 
