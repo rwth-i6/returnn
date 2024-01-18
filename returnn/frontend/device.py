@@ -9,7 +9,7 @@ from contextlib import contextmanager
 from returnn.tensor import Tensor
 
 
-__all__ = ["copy_to_device", "get_default_device", "set_default_device_ctx"]
+__all__ = ["copy_to_device", "get_default_device", "set_default_device", "set_default_device_ctx"]
 
 
 _default_device: Optional[str] = None
@@ -40,6 +40,14 @@ def get_default_device() -> Optional[str]:
     :return: default device, where to put new tensors (via random number generators, constant, range_over_dim, etc)
     """
     return _default_device
+
+
+def set_default_device(device: Optional[str]):
+    """
+    :param device: see :func:`get_default_device`
+    """
+    global _default_device
+    _default_device = device
 
 
 @contextmanager
