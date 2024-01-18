@@ -24,6 +24,7 @@ import atexit
 
 # noinspection PyProtectedMember
 from multiprocessing.context import BaseContext, SpawnProcess
+from multiprocessing.util import is_exiting
 
 
 class NonDaemonicSpawnProcess(SpawnProcess):
@@ -63,6 +64,22 @@ class NonDaemonicSpawnProcess(SpawnProcess):
 
     def join(self, timeout=None):
         """join"""
+        if is_exiting():
+            # Process._bootstrap (the subproc main logic) will do an early call to
+            # multiprocessing.util._exit_function, which terminates all daemon procs,
+            # and then joins all procs (daemon or non-daemon).
+            # As we are all non-daemonic here, it means it will call join()
+            # without having send SIGINT, SIGTERM, SIGKILL or anything to the proc
+            # -- so this will just hang.
+            # is_exiting() will be True exactly if this _exit_function was called.
+            # If the proc is still alive, send SIGINT now,
+            # just like our atexit handler would do.
+            # However, our atexit handler will only run at some later point,
+            # but then it is too late, as we would hang here now in the join().
+            try:
+                os.kill(self.ident, signal.SIGINT)
+            except ProcessLookupError:
+                pass
         super().join(timeout=timeout)
         self._close_cleanup()
 
