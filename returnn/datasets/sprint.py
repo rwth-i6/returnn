@@ -715,7 +715,7 @@ class ExternSprintDataset(SprintDatasetBase):
     def _partitionEpoch(self):
         return self.partition_epoch
 
-    def finish_epoch(self):
+    def finish_epoch(self, *, free_resources: bool = False):
         """
         Called at the end of the epoch.
         """
@@ -724,7 +724,7 @@ class ExternSprintDataset(SprintDatasetBase):
             super(ExternSprintDataset, self).init_seq_order(epoch=None, seq_list=None)
         # Exit child, before we overwrite anything, such as new epoch or seq_list.
         self._exit_child(wait_thread=True)
-        super(ExternSprintDataset, self).finish_epoch()
+        super(ExternSprintDataset, self).finish_epoch(free_resources=free_resources)
 
     def _exit_handler(self):
         """

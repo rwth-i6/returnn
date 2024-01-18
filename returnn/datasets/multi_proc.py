@@ -5,6 +5,7 @@ Multi-processing dataset
 from __future__ import annotations
 from typing import Optional, Any, Dict, List
 import sys
+import gc
 from .basic import init_dataset, Dataset, DatasetSeq
 from .cached2 import CachedDataset2
 from returnn.util.basic import try_run
@@ -274,6 +275,15 @@ class MultiProcDataset(CachedDataset2):
                     got_init_seq_order = True
                     next_seq_idx = 0
                     cache[:] = []
+                elif msg == "finish_epoch":
+                    got_init_seq_order = False
+                    next_seq_idx = 0
+                    cache[:] = []
+                    if dataset:
+                        dataset.finish_epoch(**kwargs)
+                    if kwargs["free_resources"]:
+                        dataset = None
+                        gc.collect()
                 else:
                     raise Exception(f"unknown msg {msg!r}")
         except KeyboardInterrupt:  # when parent dies
@@ -328,6 +338,12 @@ class MultiProcDataset(CachedDataset2):
         if self._total_num_seqs is not None:
             return self._total_num_seqs
         raise NotImplementedError
+
+    def finish_epoch(self, *, free_resources: bool = False):
+        """finish epoch"""
+        super().finish_epoch(free_resources=free_resources)
+        for worker_parent_conn in self._worker_parent_conns:
+            worker_parent_conn.send(("finish_epoch", {"free_resources": free_resources}))
 
 
 class _SetupProcPreInit:

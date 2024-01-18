@@ -603,6 +603,13 @@ class Engine(EngineBase):
 
         loader_opts = self.config.typed_value("torch_dataloader_opts") or {}
         assert isinstance(loader_opts, dict), f"config torch_dataloader_opts, expected dict, got {type(loader_opts)}"
+
+        if loader_opts.get("num_workers"):
+            # We are not using the dataset anymore here in the main proc,
+            # so free all resources as much as we can.
+            # https://github.com/rwth-i6/returnn/issues/1443
+            dataset.finish_epoch(free_resources=True)
+
         return data_pipeline.create_data_loader_from_batches(batches_dataset, loader_opts)
 
     def _run_step(

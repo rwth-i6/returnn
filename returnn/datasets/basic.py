@@ -640,7 +640,7 @@ class Dataset(object):
         self.rnd_seq_drop = Random(self._get_random_seed_for_epoch(epoch=epoch))
         return False
 
-    def finish_epoch(self):
+    def finish_epoch(self, *, free_resources: bool = False):
         """
         This would get called at the end of the epoch (currently optional only).
         After this, further calls to :func:`get_data` or :func:`load_seqs` are invalid,
