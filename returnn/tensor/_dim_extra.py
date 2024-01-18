@@ -2030,9 +2030,10 @@ class _DimMixin:
         if self.same_as:
             self.get_same_base().vocab = vocab
             return
-        extra = self._get_same_base_extra()
-        if extra:
-            extra.vocab = vocab
+        if vocab:
+            self.get_same_base()._make_extra().vocab = vocab
+        else:
+            self._get_same_base_extra().vocab = None
 
     # The kind of operations we have:
     # a + b: padding, concat
