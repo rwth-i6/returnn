@@ -144,13 +144,6 @@ class MultiProcDataset(CachedDataset2):
             assert msg == "labels"
 
     def __del__(self):
-        if self._seq_order_proc:
-            # noinspection PyBroadException
-            try:
-                self._seq_order_proc_parent_conn.send(("exit", {}))
-                self._seq_order_proc.join()
-            except Exception:
-                pass
         if self._worker_procs:
             got_exception = False
             for worker_parent_conn in self._worker_parent_conns:
