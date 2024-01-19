@@ -736,6 +736,17 @@ class Backend(Generic[T]):
         raise NotImplementedError
 
     @staticmethod
+    def parameter_move_to(param: rf.Parameter, *, device: Optional[str] = None, dtype: Optional[str] = None):
+        """
+        Updates `param` inplace, but `param.raw_tensor` might be a new instance.
+
+        :param param:
+        :param device:
+        :param dtype:
+        """
+        raise NotImplementedError
+
+    @staticmethod
     def runtime_sanity_checks(tensor: Tensor) -> Any:
         """
         Checks whether the tensor.raw_tensor is consistent with the tensor metadata.

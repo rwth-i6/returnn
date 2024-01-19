@@ -717,6 +717,17 @@ class TorchBackend(Backend[torch.Tensor]):
             else:
                 raise ValueError(f"Parameter {param} assign: Unsupported op: {op}")
 
+    @staticmethod
+    def parameter_move_to(param: rf.Parameter, *, device: Optional[str] = None, dtype: Optional[str] = None):
+        """to"""
+        pt_param: torch.nn.Parameter = param.raw_tensor
+        device = torch.device(device) if device else None
+        dtype = TorchBackend.as_dtype_raw(dtype) if dtype else None
+        pt_param = pt_param.to(device, dtype)
+        # See similar logic in torch.nn.Module._apply.
+        pt_param = torch.nn.Parameter(pt_param, pt_param.requires_grad)
+        param.raw_tensor = pt_param
+
     # keep in sync with native implementation
     @staticmethod
     def compare_raw(a: torch.Tensor, kind: str, b: torch.Tensor) -> torch.Tensor:

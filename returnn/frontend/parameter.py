@@ -165,6 +165,15 @@ class Parameter(Tensor[T]):
             op="assign",
         )
 
+    def to(self, *, device: Optional[str] = None, dtype: Optional[str] = None):
+        """
+        Move the parameter to the specified device, and/or the specified dtype.
+
+        Note: This is an inplace operation.
+        raw_tensor might point to a new raw tensor (or parameter) afterward.
+        """
+        self._raw_backend.parameter_move_to(self, device=device, dtype=dtype)
+
     @property
     def weight_decay(self) -> float:
         """

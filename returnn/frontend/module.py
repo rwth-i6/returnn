@@ -235,6 +235,18 @@ class Module:
         fn(self)
         return self
 
+    def to(self, *, device: Optional[str] = None, dtype: Optional[str] = None):
+        """
+        Move all parameters to the specified device and/or dtype.
+
+        This is an inplace operation.
+        Afterward, all parameters are on the new device/dtype.
+        See :func:`rf.Parameter.to`.
+        """
+        for param in self.parameters():
+            param: rf.Parameter
+            param.to(device=device, dtype=dtype)
+
 
 class Functional(Module):
     """
