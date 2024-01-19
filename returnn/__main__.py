@@ -22,11 +22,11 @@ __email__ = "doetsch@i6.informatik.rwth-aachen.de"
 import os
 import sys
 import time
-import typing
+from typing import TYPE_CHECKING, Optional, Union, Any, Sequence, Dict
 import numpy
 import returnn
 from returnn.log import log
-from returnn.config import Config
+from returnn.config import Config, get_global_config
 from returnn.datasets import Dataset, init_dataset, init_dataset_via_str
 from returnn.datasets.hdf import HDFDataset
 from returnn.util import debug as debug_util
@@ -40,24 +40,29 @@ from returnn.util.debug import init_ipython_kernel, init_better_exchook, init_fa
 # noinspection PyUnresolvedReferences
 from returnn.util.basic import init_thread_join_hack, describe_returnn_version
 
-if typing.TYPE_CHECKING:
+if TYPE_CHECKING:
     import returnn.tf.engine
     import returnn.torch.engine
 
-config = None  # type: typing.Optional[Config]
-engine = None  # type: typing.Optional[typing.Union[returnn.tf.engine.Engine, returnn.torch.engine.Engine]]
-train_data = None  # type: typing.Optional[Dataset]
-dev_data = None  # type: typing.Optional[Dataset]
-eval_data = None  # type: typing.Optional[Dataset]
+config = None  # type: Optional[Config]
+engine = None  # type: Optional[Union[returnn.tf.engine.Engine, returnn.torch.engine.Engine]]
+train_data = None  # type: Optional[Dataset]
+dev_data = None  # type: Optional[Dataset]
+eval_data = None  # type: Optional[Dataset]
 quit_returnn = False
 
 
-def init_config(config_filename=None, command_line_options=(), default_config=None, extra_updates=None):
+def init_config(
+    config_filename: Optional[str] = None,
+    command_line_options: Sequence[str] = (),
+    default_config: Optional[Dict[str, Any]] = None,
+    extra_updates: Optional[Dict[str, Any]] = None,
+):
     """
-    :param str|None config_filename:
-    :param list[str]|tuple[str] command_line_options: e.g. ``sys.argv[1:]``
-    :param dict[str]|None default_config:
-    :param dict[str]|None extra_updates:
+    :param config_filename:
+    :param command_line_options: e.g. ``sys.argv[1:]``
+    :param default_config:
+    :param extra_updates:
 
     Initializes the global config.
     There are multiple sources which are used to init the config:
@@ -277,14 +282,28 @@ def returnn_greeting(config_filename=None, command_line_options=None):
     print("Hostname:", socket.gethostname(), file=log.v4)
 
 
-def init_backend_engine():
+def init_backend_engine(*, config_opts: Optional[Dict[str, Any]] = None):
     """
     Selects the backend engine (TensorFlow, PyTorch, Theano, or whatever)
     and does corresponding initialization and preparation.
 
     This does not initialize the global ``engine`` object yet.
     See :func:`init_engine` for that.
+
+    This also initializes a new config, if it was not initialized yet,
+    and allows to update it via ``config_opts``.
+
+    :param config_opts: to update the global config
     """
+    global config
+    if config is None:
+        config = get_global_config(auto_create=True)
+    if config_opts:
+        config.update(config_opts)
+        if "behavior_version" in config_opts:
+            # We actually also do this in init_config, but it might have been updated here.
+            BehaviorVersion.set(config.int("behavior_version", None))
+
     if config.value("PYTORCH_CUDA_ALLOC_CONF", None):
         # Set this very early, before *any* `import torch`, thus also before select_engine.
         # (It would not hurt if this is set for any non-PT engine.)
