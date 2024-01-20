@@ -68,7 +68,7 @@ class NonDaemonicSpawnProcess(SpawnProcess):
 
     def join(self, timeout=None):
         """join"""
-        if is_exiting():
+        if is_exiting() and self.is_alive():
             # Process._bootstrap (the subproc main logic) will do an early call to
             # multiprocessing.util._exit_function, which terminates all daemon procs,
             # and then joins all procs (daemon or non-daemon).
