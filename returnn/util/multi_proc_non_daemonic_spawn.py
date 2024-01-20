@@ -17,6 +17,8 @@ References:
 """
 
 from __future__ import annotations
+
+import time
 from typing import Optional, Any, Callable, Tuple
 import os
 import signal
@@ -80,12 +82,21 @@ class NonDaemonicSpawnProcess(SpawnProcess):
             # but then it is too late, as we would hang here now in the join().
             # https://github.com/rwth-i6/returnn/issues/1497
             # https://github.com/python/cpython/issues/114220
-            try:
-                os.kill(self.ident, signal.SIGINT)
-            except ProcessLookupError:
-                pass
+            # First try SIGINT. See NonDaemonicSpawnProcess docstring.
+            # Then, if that fails, try the others.
+            signals = ["SIGINT"] * 3 + ["SIGTERM", "SIGKILL"]
+            for sig in signals:
+                try:
+                    print(f"Send signal {sig} to pid {self.ident}")
+                    os.kill(self.proc_pid, getattr(signal, sig))
+                except ProcessLookupError:
+                    break
+                super().join(timeout=5)
+                if not self.is_alive():
+                    break
         super().join(timeout=timeout)
-        self._close_cleanup()
+        if not self.is_alive():
+            self._close_cleanup()
 
     def close(self):
         """close"""
@@ -155,15 +166,31 @@ class _AtExitCleanupProcess:
             return  # ignore
         if self.proc_pid is None:  # already cleaned
             return
-        # The proc might have been killed by some other code. That's ok.
-        try:
-            # Send SIGINT, not SIGTERM or SIGKILL. See NonDaemonicSpawnProcess docstring.
-            os.kill(self.proc_pid, signal.SIGINT)
-        except ProcessLookupError:
-            pass
-        else:
+        # First try SIGINT. See NonDaemonicSpawnProcess docstring.
+        # Then, if that fails, try the others.
+        signals = ["SIGINT"] * 3 + ["SIGTERM", "SIGKILL"]
+        for sig in signals:
+            # The proc might have been killed by some other code. That's ok.
             try:
-                os.waitpid(self.proc_pid, 0)
-            except ChildProcessError:
-                pass
+                print(f"Send signal {sig} to pid {self.proc_pid}")
+                os.kill(self.proc_pid, getattr(signal, sig))
+            except ProcessLookupError:
+                break
+            if self._waitpid():
+                break
+            time.sleep(1)
+            if self._waitpid():
+                break
+            time.sleep(4)
+            if self._waitpid():
+                break
         self.proc_pid = None
+
+    def _waitpid(self) -> bool:
+        try:
+            pid, _ = os.waitpid(self.proc_pid, os.WNOHANG)
+            if pid == self.proc_pid:
+                return True
+        except ChildProcessError:
+            return True
+        return False
