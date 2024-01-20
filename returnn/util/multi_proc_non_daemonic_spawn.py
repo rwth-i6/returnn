@@ -88,7 +88,7 @@ class NonDaemonicSpawnProcess(SpawnProcess):
             for sig in signals:
                 try:
                     print(f"Send signal {sig} to pid {self.ident}")
-                    os.kill(self.proc_pid, getattr(signal, sig))
+                    os.kill(self.ident, getattr(signal, sig))
                 except ProcessLookupError:
                     break
                 super().join(timeout=5)
