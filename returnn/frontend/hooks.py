@@ -156,6 +156,7 @@ class RemovableHandle:
         RemovableHandle.next_id += 1
 
     def remove(self) -> None:
+        """remove hook"""
         method: MethodWithHooks = self.method_ref()
         hooks_dict = self.hooks_dict_ref()
         if hooks_dict is not None and self.id in hooks_dict:
