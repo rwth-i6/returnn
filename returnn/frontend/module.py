@@ -3,7 +3,7 @@ Base module class, :class:`Module`.
 """
 
 from __future__ import annotations
-from typing import Any, Optional, Sequence, List, Tuple, Union, Set, Iterator, Callable, TypeVar
+from typing import Any, Optional, Sequence, List, Tuple, Union, Set, Iterator, Callable, TypeVar, Dict
 from returnn.util.basic import OptionalNotImplementedError, RefIdEq
 from returnn.tensor import Tensor, Dim
 from .. import frontend as rf
@@ -246,6 +246,24 @@ class Module:
         for param in self.parameters():
             param: rf.Parameter
             param.to(device=device, dtype=dtype)
+
+    def register_forward_hook(
+        self,
+        hook: Callable[[T, Tuple[Any, ...], Dict[str, Any], Any], Optional[Any]],
+        *,
+        prepend: bool = False,
+    ) -> rf.hooks.RemovableHandle:
+        """
+        Register forward hook. Very similar to PyTorch. (Code even partly copied from PyTorch.)
+        This will be called after __call__, following this logic (where module=self):
+
+            result = module(*args, **kwargs)
+            result = hook(args, kwargs, result)
+
+        :param hook:
+        :param prepend: if there are multiple hooks, this will be registered in front of all, otherwise at the end
+        """
+        return rf.hooks.setup_post_hook_on_method(self, "__call__", hook=hook, prepend=prepend)
 
 
 class Functional(Module):

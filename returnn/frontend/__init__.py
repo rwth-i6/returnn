@@ -49,4 +49,5 @@ from .types import *
 
 # Modules not in the main namespace but in sub namespaces.
 from . import audio
+from . import hooks
 from . import init

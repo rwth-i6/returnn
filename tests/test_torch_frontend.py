@@ -533,6 +533,54 @@ def test_Data_copy_tranpose_match_priority():
     numpy.testing.assert_equal(x_np, raw_np)
 
 
+def test_forward_hook():
+    from returnn.frontend import hooks
+    from types import MethodType, FunctionType
+
+    call_count = 0
+    hook_call_count = 0
+
+    class _Module(rf.Module):
+        def __call__(self, x: Tensor) -> Tensor:
+            nonlocal call_count
+            call_count += 1
+            return x * 0.5
+
+    def _hook(module, args, kwargs, result):
+        nonlocal hook_call_count
+        assert isinstance(module, _Module) and module is mod
+        assert isinstance(args, tuple) and len(args) == 1 and isinstance(args[0], Tensor)
+        assert isinstance(kwargs, dict) and len(kwargs) == 0
+        assert isinstance(result, Tensor)
+        hook_call_count += 1
+        return result * 2.0
+
+    mod = _Module()
+    time_dim = Dim(None, name="time")
+    x = Tensor("x", [time_dim], "float32", raw_tensor=torch.range(0.0, 5.0))
+    mod(x)
+    assert call_count == 1 and hook_call_count == 0
+
+    handle = mod.register_forward_hook(_hook)
+    assert isinstance(handle, hooks.RemovableHandle)
+    assert isinstance(mod.__call__, hooks.MethodWithHooks)
+    assert isinstance(mod.__class__.__call__, hooks._CallWrapperClass)
+    mod(x)
+    assert call_count == 2 and hook_call_count == 1
+
+    mod.__call__(x)
+    assert call_count == 3 and hook_call_count == 2
+
+    handle.remove()
+    assert isinstance(mod.__call__, MethodType)
+    assert isinstance(mod.__class__.__call__, FunctionType)
+    mod(x)
+    assert call_count == 4 and hook_call_count == 2
+
+    mod.__call__(x)
+    assert call_count == 5 and hook_call_count == 2
+
+
 if __name__ == "__main__":
     better_exchook.install()
     if len(sys.argv) <= 1:
