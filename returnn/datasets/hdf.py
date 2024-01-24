@@ -438,7 +438,7 @@ class HDFDataset(CachedDataset):
         :param str key:
         :rtype: bool
         """
-        if self.get_data_dtype(key).startswith("int"):
+        if "int" in self.get_data_dtype(key):
             if key in self.num_outputs:
                 return self.num_outputs[key][1] <= 1
         return False
