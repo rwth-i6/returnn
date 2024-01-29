@@ -67,7 +67,7 @@ def merge_checkpoints(in_ckpts: Sequence[str], out_ckpt: str, extra_state: Optio
     out_state: Dict[str, Any] = {"model": out_model_state, "merged_epochs": [], "merged_steps": []}
     for in_ckpt in in_ckpts:
         print("read ckpt:", in_ckpt)
-        torch_version = torch.__version__.split(".")
+        torch_version = tuple(int(s) for s in str(torch.__version__).split(".")[:2])
         # mmap flag only introduced from 2.1.0 onwards
         if int(torch_version[0]) < 2 or int(torch_version[0]) == 2 and int(torch_version[1]) < 1:
             in_state = torch.load(in_ckpt, map_location=torch.device("cpu"))
