@@ -307,9 +307,18 @@ def init_backend_engine(*, config_opts: Optional[Dict[str, Any]] = None):
     if config.value("PYTORCH_CUDA_ALLOC_CONF", None):
         # Set this very early, before *any* `import torch`, thus also before select_engine.
         # (It would not hurt if this is set for any non-PT engine.)
-        value = config.value("PYTORCH_CUDA_ALLOC_CONF", "")
-        print(f"Set PYTORCH_CUDA_ALLOC_CONF={value!r}.")
-        os.environ["PYTORCH_CUDA_ALLOC_CONF"] = value
+        if config.typed_value("torch_distributed") is not None:
+            # torchrun (torch.distributed.run) will likely already have imported torch in the worker procs
+            # before our code runs here, so it is not safe to assign the env var now.
+            # Otherwise, you will likely get such an error:
+            #   RuntimeError: config[i] == get()->name() INTERNAL ASSERT FAILED
+            #   at "../c10/cuda/CUDACachingAllocator.cpp":1058, please report a bug to PyTorch.
+            #   Allocator backend parsed at runtime != allocator backend parsed at load time
+            print("Warning: PYTORCH_CUDA_ALLOC_CONF does not work with torch_distributed, not used", file=log.v3)
+        else:
+            value = config.value("PYTORCH_CUDA_ALLOC_CONF", "")
+            print(f"Set PYTORCH_CUDA_ALLOC_CONF={value!r}.")
+            os.environ["PYTORCH_CUDA_ALLOC_CONF"] = value
 
     BackendEngine.select_engine(config=config)
     if BackendEngine.is_tensorflow_selected():
