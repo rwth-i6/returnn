@@ -314,10 +314,10 @@ def init_backend_engine(*, config_opts: Optional[Dict[str, Any]] = None):
             #   RuntimeError: config[i] == get()->name() INTERNAL ASSERT FAILED
             #   at "../c10/cuda/CUDACachingAllocator.cpp":1058, please report a bug to PyTorch.
             #   Allocator backend parsed at runtime != allocator backend parsed at load time
-            print("Warning: PYTORCH_CUDA_ALLOC_CONF does not work with torch_distributed, not used", file=log.v3)
+            print("Warning: PYTORCH_CUDA_ALLOC_CONF does not work with torch_distributed, not used", file=log.v2)
         else:
             value = config.value("PYTORCH_CUDA_ALLOC_CONF", "")
-            print(f"Set PYTORCH_CUDA_ALLOC_CONF={value!r}.")
+            print(f"Set PYTORCH_CUDA_ALLOC_CONF={value!r}.", file=log.v3)
             os.environ["PYTORCH_CUDA_ALLOC_CONF"] = value
 
     BackendEngine.select_engine(config=config)
