@@ -304,7 +304,7 @@ def init_backend_engine(*, config_opts: Optional[Dict[str, Any]] = None):
             # We actually also do this in init_config, but it might have been updated here.
             BehaviorVersion.set(config.int("behavior_version", None))
 
-    if config.value("PYTORCH_CUDA_ALLOC_CONF", None):
+    if config.value("PYTORCH_CUDA_ALLOC_CONF", None) is not None:
         # Set this very early, before *any* `import torch`, thus also before select_engine.
         # (It would not hurt if this is set for any non-PT engine.)
         if config.typed_value("torch_distributed") is not None:
