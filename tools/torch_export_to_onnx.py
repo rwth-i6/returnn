@@ -43,7 +43,7 @@ from returnn.log import log
 from returnn.tensor import TensorDict
 
 # noinspection PyProtectedMember
-from returnn.torch.frontend.bridge import _RFModuleAsPTModule
+from returnn.torch.frontend.bridge import RFModuleAsPTModule
 import returnn.frontend as rf
 import returnn.util.basic as util
 from returnn.tensor.utils import tensor_dict_fill_random_numpy_
@@ -114,7 +114,7 @@ class ForwardModulePT(torch.nn.Module):
         return rf.get_run_ctx().outputs.as_raw_tensor_dict(include_scalar_dyn_sizes=False)
 
 
-class ForwardModuleRF(_RFModuleAsPTModule):
+class ForwardModuleRF(RFModuleAsPTModule):
     """
     Wrapper of a RETURNN frontend module that's meant to call forward_step from the config when called.
     """

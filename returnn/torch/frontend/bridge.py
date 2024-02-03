@@ -18,9 +18,9 @@ def pt_module_to_rf_module(pt_module: torch.nn.Module) -> rf.Module:
     :return: RF module
     """
     assert isinstance(pt_module, torch.nn.Module)
-    if isinstance(pt_module, _RFModuleAsPTModule):
+    if isinstance(pt_module, RFModuleAsPTModule):
         return pt_module.rf_module
-    return _PTModuleAsRFModule(pt_module=pt_module)
+    return PTModuleAsRFModule(pt_module=pt_module)
 
 
 def wrapped_pt_module_to_rf_module(pt_module: torch.nn.Module) -> Optional[rf.Module]:
@@ -29,7 +29,7 @@ def wrapped_pt_module_to_rf_module(pt_module: torch.nn.Module) -> Optional[rf.Mo
     :return: RF module if the torch module is a wrapped RF module, or None otherwise
     """
     assert isinstance(pt_module, torch.nn.Module)
-    if isinstance(pt_module, _RFModuleAsPTModule):
+    if isinstance(pt_module, RFModuleAsPTModule):
         return pt_module.rf_module
     return None
 
@@ -48,12 +48,18 @@ def rf_module_to_pt_module(rf_module: rf.Module, *, aux_params_as_buffers: bool 
     :return: torch module
     """
     assert isinstance(rf_module, rf.Module)
-    if isinstance(rf_module, _PTModuleAsRFModule):
+    if isinstance(rf_module, PTModuleAsRFModule):
         return rf_module.pt_module
-    return _RFModuleAsPTModule(rf_module=rf_module, aux_params_as_buffers=aux_params_as_buffers)
+    return RFModuleAsPTModule(rf_module=rf_module, aux_params_as_buffers=aux_params_as_buffers)
 
 
-class _PTModuleAsRFModule(rf.Module):
+class PTModuleAsRFModule(rf.Module):
+    """
+    Wrapped module.
+
+    It is recommended to use :func:`pt_module_to_rf_module` instead of using this directly.
+    """
+
     def __init__(self, pt_module: torch.nn.Module):
         super().__init__()
         self._pt_module = pt_module
@@ -90,7 +96,13 @@ class _PTModuleAsRFModule(rf.Module):
         return self._pt_module(*args, **kwargs)
 
 
-class _RFModuleAsPTModule(torch.nn.Module):
+class RFModuleAsPTModule(torch.nn.Module):
+    """
+    Wrapped module.
+
+    It is recommended to use :func:`rf_module_to_pt_module` instead of using this directly.
+    """
+
     def __init__(self, rf_module: rf.Module, *, aux_params_as_buffers: bool = True):
         super().__init__()
         self._rf_module = rf_module
