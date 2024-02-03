@@ -23,7 +23,7 @@ def pt_module_to_rf_module(pt_module: torch.nn.Module) -> rf.Module:
     return _PTModuleAsRFModule(pt_module=pt_module)
 
 
-def pt_module_to_wrapped_rf_module(pt_module: torch.nn.Module) -> Optional[rf.Module]:
+def wrapped_pt_module_to_rf_module(pt_module: torch.nn.Module) -> Optional[rf.Module]:
     """
     :param pt_module: torch module
     :return: RF module if the torch module is a wrapped RF module, or None otherwise

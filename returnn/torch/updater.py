@@ -15,7 +15,7 @@ import returnn
 from returnn.log import log
 from returnn.util.basic import RefIdEq
 import returnn.frontend as rf
-from returnn.torch.frontend.bridge import pt_module_to_wrapped_rf_module
+from returnn.torch.frontend.bridge import wrapped_pt_module_to_rf_module
 
 _OptimizerClassesDictInitialized = False
 _OptimizerClassesDict = {}
@@ -441,7 +441,7 @@ class Updater(object):
         custom_param_groups = optimizer_opts.pop("param_groups_custom", None)
         if custom_param_groups is not None:
             assert callable(custom_param_groups), f"invalid param_groups_custom {custom_param_groups!r}"
-            rf_model = pt_module_to_wrapped_rf_module(self.network)
+            rf_model = wrapped_pt_module_to_rf_module(self.network)
             custom_param_groups = custom_param_groups(
                 model=self.network, rf_model=rf_model, optimizer_class=optim_class, optimizer_opts=optimizer_opts
             )
@@ -488,7 +488,7 @@ class Updater(object):
         for module_name, module in self.network.named_modules():
             module_name: str
             module: torch.nn.Module
-            rf_module = pt_module_to_wrapped_rf_module(module)
+            rf_module = wrapped_pt_module_to_rf_module(module)
             for param_name, param in module.named_parameters(recurse=False):
                 param_name: str
                 param: torch.nn.Parameter
