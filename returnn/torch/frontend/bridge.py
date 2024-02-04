@@ -82,9 +82,9 @@ class PTModuleAsRFModule(rf.Module):
             )
             setattr(self, name, rf_param)
 
-        for name, rf_mod in pt_module.named_children():
-            pt_mod = rf_module_to_pt_module(rf_mod)
-            setattr(self, name, pt_mod)
+        for name, pt_mod in pt_module.named_children():
+            rf_mod = pt_module_to_rf_module(pt_mod)
+            setattr(self, name, rf_mod)
 
     @property
     def pt_module(self) -> rf.Module:
