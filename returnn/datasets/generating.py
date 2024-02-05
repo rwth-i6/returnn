@@ -58,9 +58,10 @@ class GeneratingDataset(Dataset):
 
     def init_seq_order(self, epoch=None, seq_list=None, seq_order=None):
         """
-        :type epoch: int|None
-        :param list[str]|None seq_list: predefined order via tags, doesn't make sense here
-        :param list[int]|None seq_order: predefined order via indices, doesn't make sense here
+        :param int|None epoch:
+        :param list[str]|None seq_list: predefined order via tags
+        :param list[int]|None seq_order: predefined order via indices
+
         This is called when we start a new epoch, or at initialization.
         """
         super(GeneratingDataset, self).init_seq_order(epoch=epoch)
@@ -68,7 +69,16 @@ class GeneratingDataset(Dataset):
             "predefined order doesn't make sense for %s" % self.__class__.__name__
         )
         self.random.seed(self._get_random_seed_for_epoch(epoch=epoch))
-        if self._total_num_seqs == float("inf"):
+        if seq_list is not None:
+            assert seq_order is None
+            seq_order = []
+            for tag in seq_list:
+                assert tag.startswith("seq-") and tag[len("seq-") :].isdigit()
+                seq_order.append(int(tag[len("seq-") :]))
+        if seq_order is not None:
+            self._seq_order = seq_order
+            self._num_seqs = len(self._seq_order)
+        elif self._total_num_seqs == float("inf"):
             assert self.seq_ordering == "default"
             self._seq_order = None
             self._num_seqs = self._total_num_seqs
@@ -144,7 +154,7 @@ class GeneratingDataset(Dataset):
 
     def _make_seq(self, seq_idx: int) -> DatasetSeq:
         seq = self.get_corpus_seq(self.get_corpus_seq_idx(seq_idx))
-        seq.seq_idx = seq_idx
+        seq.seq_idx = seq_idx  # we expect current seq order seq idx, not corpus seq idx
         return seq
 
     def have_get_corpus_seq(self) -> bool:
