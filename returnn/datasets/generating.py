@@ -987,9 +987,13 @@ class DummyGenericDataset(GeneratingDataset):
         elif not isinstance(seq_lens, dict):
             seq_lens = {k: seq_lens for k in data_template.data.keys()}
         seq_lens = dict(seq_lens)
-        for k in data_template.data:
+        for k, v in data_template.data.items():
             if k not in seq_lens:
-                seq_lens[k] = (5, 15)
+                if v.shape in {(None,), (None, 1)} and v.dtype.startswith("float"):
+                    # Assume raw audio data samples, take longer seq lens by default, assume 16khz.
+                    seq_lens[k] = (1_000, 8_000)
+                else:
+                    seq_lens[k] = (5, 15)
         self.seq_lens: Dict[str, Union[int, Tuple[int, int]]] = seq_lens
 
     def get_data_keys(self) -> List[str]:
