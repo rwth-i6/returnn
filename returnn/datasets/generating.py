@@ -4,13 +4,14 @@ Some datasets for artificially generated data.
 
 from __future__ import annotations
 
-from typing import Optional, Sequence
+from typing import Optional, Union, Any, Sequence, List, Tuple, Dict
 import numpy
 import sys
 import typing
 
 from returnn.util.basic import class_idx_seq_to_1_of_k, CollectionReadCheckCovered
 from returnn.log import log
+from returnn.tensor import Tensor, TensorDict
 
 from .util.feature_extraction import ExtractAudioFeatures
 from .util.vocabulary import *
@@ -952,6 +953,95 @@ class DummyDatasetMultipleDataKeys(DummyDataset):
             i1 = i2
 
         return DatasetSeq(seq_idx=seq_idx, features=features, targets=None)
+
+
+class DummyGenericDataset(GeneratingDataset):
+    """
+    Generate some random dummy data based on a tensor dict (like ``extern_data``).
+    """
+
+    def __init__(
+        self,
+        data_template: Union[TensorDict, Dict[str, Union[Tensor, Dict[str, Any]]]],
+        num_seqs: int,
+        *,
+        seq_lens: Optional[Union[int, Tuple[int, int], Dict[str, Union[int, Tuple[int, int]]]]] = None,
+        **kwargs,
+    ):
+        """
+        :param data_template: describes each tensor
+        :param num_seqs:
+        :param seq_lens: either fixed seq len, or take randint. per data key, or same for all data keys
+        """
+        data_template_ = TensorDict()
+        data_template_.update(data_template, auto_convert=True)
+        data_template = data_template_
+        # Map Tensor to old-style dims, currently required by the Dataset API.
+        old_style_dims = {k: (v.dim, v.ndim) for k, v in data_template.data.items()}
+        super().__init__(input_dim=None, output_dim=old_style_dims, num_seqs=num_seqs, **kwargs)
+        self.data_template = data_template
+        if seq_lens is None:
+            seq_lens = {}
+        elif not isinstance(seq_lens, dict):
+            seq_lens = {k: seq_lens for k in data_template.data.keys()}
+        seq_lens = dict(seq_lens)
+        for k in data_template.data:
+            if k not in seq_lens:
+                seq_lens[k] = (5, 15)
+        self.seq_lens: Dict[str, Union[int, Tuple[int, int]]] = seq_lens
+
+    def get_data_keys(self) -> List[str]:
+        """data keys"""
+        return list(self.data_template.data.keys())
+
+    def get_target_list(self) -> List[str]:
+        """target keys"""
+        res = []
+        if "classes" in self.data_template.data:
+            res.append("classes")
+        res.extend([k for k, v in self.data_template.data.items() if not v.available_for_inference and k != "classes"])
+        return res
+
+    def get_data_dtype(self, key: str) -> str:
+        """dtype"""
+        return self.data_template.data[key].dtype
+
+    def is_data_sparse(self, key: str) -> bool:
+        """sparse"""
+        return self.data_template.data[key].sparse
+
+    def get_data_shape(self, key: str) -> List[int]:
+        """
+        :returns get_data(*, key).shape[1:], i.e. num-frames excluded
+        """
+        return list(self.data_template.data[key].shape[1:])
+
+    def generate_seq(self, seq_idx: int) -> DatasetSeq:
+        """generate seq (assuming self.random is in a correct state)"""
+        return DatasetSeq(seq_idx=seq_idx, features={k: self._generate_data(k) for k in self.data_template.data.keys()})
+
+    def _generate_data(self, key: str) -> numpy.ndarray:
+        """generate for specific data key. assumes that self.random is in a correct state"""
+        templ: Tensor = self.data_template.data[key]
+        shape = list(templ.shape)
+        for axis, dim in enumerate(shape):
+            if dim is None:
+                seq_len_gen = self.seq_lens.get(key, (5, 15))
+                if isinstance(seq_len_gen, int):
+                    seq_len = seq_len_gen
+                elif isinstance(seq_len_gen, tuple):
+                    assert len(seq_len_gen) == 2  # min and max
+                    seq_len = self.random.randint(*seq_len_gen)
+                else:
+                    raise TypeError(f"{self} generate: data key {key!r} seq_len {seq_len_gen!r} invalid")
+                shape[axis] = seq_len
+        if templ.sparse_dim:
+            return self.random.randint(0, templ.sparse_dim.dimension, shape, dtype=templ.dtype)
+        if templ.dtype.startswith("float"):
+            return self.random.standard_normal(shape).astype(templ.dtype)
+        if templ.dtype.startswith("int") or templ.dtype.startswith("uint"):
+            return self.random.randint(0, 10, shape, dtype=templ.dtype)
+        raise NotImplementedError(f"{self} generate: data key {key!r} template {templ}")
 
 
 class StaticDataset(CachedDataset2):
