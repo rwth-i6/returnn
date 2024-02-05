@@ -1,5 +1,29 @@
 .. _profiling:
 
+==========================
+Profiling (Python generic)
+==========================
+
+You can use any Python profiler.
+
+Some resources:
+
+* `Albert Zeyer - debugging wiki <https://github.com/albertz/wiki/blob/master/profiling.md>`__
+
+
+===================
+Profiling (PyTorch)
+===================
+
+Please refer to the PyTorch documentation
+for PyTorch specific tools.
+
+Some resources:
+
+* `PyTorch Profiler <https://pytorch.org/tutorials/recipes/recipes/profiler.html>`__
+* `Understanding GPU Memory <https://pytorch.org/blog/understanding-gpu-memory-1/>`__
+
+
 ======================
 Profiling (TensorFlow)
 ======================

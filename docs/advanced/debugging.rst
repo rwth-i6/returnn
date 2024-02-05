@@ -129,6 +129,24 @@ as it will print the output shape at runtime for every single step.
 Runtime performance
 -------------------
 
+E.g. the model trains slower than expected.
+Or you just want to see if there are possibilities to make it faster.
+See :ref:`profiling`.
+
+
+Memory leaks
+------------
+
+Memory leaks means:
+Some memory is allocated, and it is never freed.
+As we execute the code over and over again, we allocate more and more memory.
+Sometimes the leak can be small, so that it is not noticeable for a while,
+and only after some hours or even days of training,
+it crashes with some ouf-of-memory (OOM) error
+(GPU/CUDA OOM or CPU OOM).
+
+It can be tricky to find the source of the leak.
+Many profiler tools try also to report memory usage.
 See :ref:`profiling`.
 
 
