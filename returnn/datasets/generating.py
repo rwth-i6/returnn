@@ -65,9 +65,6 @@ class GeneratingDataset(Dataset):
         This is called when we start a new epoch, or at initialization.
         """
         super(GeneratingDataset, self).init_seq_order(epoch=epoch)
-        assert seq_list is None and seq_order is None, (
-            "predefined order doesn't make sense for %s" % self.__class__.__name__
-        )
         self.random.seed(self._get_random_seed_for_epoch(epoch=epoch))
         if seq_list is not None:
             assert seq_order is None
