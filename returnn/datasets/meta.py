@@ -829,9 +829,8 @@ class ConcatDataset(CachedDataset2):
         dataset = self.datasets[dataset_idx]
         dataset_seq_idx = seq_idx + self.dataset_seq_idx_offsets[dataset_idx]
         seq_tag = dataset.get_tag(dataset_seq_idx)
-        features = dataset.get_input_data(dataset_seq_idx)
-        targets = {k: dataset.get_targets(k, dataset_seq_idx) for k in dataset.get_target_list()}
-        return DatasetSeq(seq_idx=seq_idx, seq_tag=seq_tag, features=features, targets=targets)
+        features = {k: dataset.get_data(dataset_seq_idx, k) for k in dataset.get_data_keys()}
+        return DatasetSeq(seq_idx=seq_idx, seq_tag=seq_tag, features=features)
 
     @property
     def num_seqs(self):
