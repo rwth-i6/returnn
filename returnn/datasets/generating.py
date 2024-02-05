@@ -11,7 +11,7 @@ import typing
 
 from returnn.util.basic import class_idx_seq_to_1_of_k, CollectionReadCheckCovered
 from returnn.log import log
-from returnn.tensor import Tensor, Dim, TensorDict, batch_dim
+from returnn.tensor import Tensor, Dim, TensorDict
 
 from .util.feature_extraction import ExtractAudioFeatures
 from .util.vocabulary import *
