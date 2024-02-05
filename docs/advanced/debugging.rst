@@ -54,8 +54,8 @@ if they look like what you expect (gradients w.r.t. activations).
 TensorFlow tools
 ----------------
 
-RETURNN uses TensorFlow.
-So you can use all the native TensorFlow debugging tools.
+When using the TensorFlow backend in RETURNN:
+You can use all the native TensorFlow debugging tools.
 Please refer to the TF documentation or other resources.
 
 Some functionality:
@@ -112,6 +112,8 @@ Also see `Remote Development and Debugging <https://github.com/rwth-i6/returnn/w
 
 Shapes and :class:`Tensor`
 --------------------------
+
+(TensorFlow specific.)
 
 There is ``debug_print_layer_output_template`` which can always be enabled,
 as it only prints additional information about the shape and :class:`Tensor`
