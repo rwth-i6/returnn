@@ -66,7 +66,7 @@ def dump_dataset(options):
                 dataset.load_seqs(seq_idx, seq_idx + 1)
                 if seq_idx % 10000 == 0:
                     if default_target:
-                        targets = dataset.get_targets(default_target, seq_idx)
+                        targets = dataset.get_data(seq_idx, default_target)
                         postfix = " (targets = %r...)" % (targets[:10],)
                     else:
                         postfix = ""
@@ -161,7 +161,7 @@ def dump_dataset(options):
             elif options.type == "plot":
                 plot(data)
             for target in dataset.get_target_list():
-                targets = dataset.get_targets(target, seq_idx)
+                targets = dataset.get_data(seq_idx, target)
                 if options.type == "numpy":
                     numpy.savetxt(
                         "%s%i.targets.%s%s" % (options.dump_prefix, seq_idx, target, options.dump_postfix),

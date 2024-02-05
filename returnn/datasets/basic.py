@@ -705,19 +705,28 @@ class Dataset(object):
         else:
             return self.get_targets(key, seq_idx)
 
-    def get_input_data(self, sorted_seq_idx):
+    def get_input_data(self, sorted_seq_idx: int) -> numpy.ndarray:
         """
-        :type sorted_seq_idx: int
-        :rtype: numpy.ndarray
+        DEPRECATED: Some older classes still use this deprecated API,
+        but any new dataset should just implement :func:`get_data`,
+        and users also should just use :func:`get_data`.
+
+        This default implementation assumes that there is a "data" data key,
+        which is not necessarily true in all cases.
+
+        :param sorted_seq_idx:
         :returns features: format 2d (time,feature) (float)
         """
-        raise NotImplementedError
+        return self.get_data(sorted_seq_idx, "data")
 
-    def get_targets(self, target, sorted_seq_idx):
+    def get_targets(self, target: str, sorted_seq_idx: int) -> numpy.ndarray:
         """
-        :param str target: data key
-        :type sorted_seq_idx: int
-        :rtype: numpy.ndarray
+        DEPRECATED: Some older classes still use this deprecated API,
+        but any new dataset should just implement :func:`get_data`,
+        and users also should just use :func:`get_data`.
+
+        :param target: data key
+        :param sorted_seq_idx:
         :returns targets: format 1d (time) (int: idx of output-feature)
         """
         # For new-style subclasses, which just provide get_data.

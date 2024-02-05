@@ -91,9 +91,9 @@ def main(argv):
             kwargs = {"features": features}
             if target_mode == "target-generic":
                 if "orth" in dataset.get_target_list():
-                    kwargs["orthography"] = dataset.get_targets("orth", seq_idx)
+                    kwargs["orthography"] = dataset.get_data(seq_idx, "orth")
                 if "classes" in dataset.get_target_list():
-                    kwargs["alignment"] = dataset.get_targets("classes", seq_idx)
+                    kwargs["alignment"] = dataset.get_data(seq_idx, "classes")
                 print("DummySprintExec seq_idx %i feedInputAndTarget(**%r)" % (seq_idx, kwargs))
                 sprint_api.feedInputAndTarget(**kwargs)
             else:

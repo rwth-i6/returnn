@@ -13,6 +13,7 @@ import _setup_returnn_env  # noqa
 import returnn.__main__ as rnn
 from returnn.log import log
 from returnn.config import Config
+from returnn.datasets import Dataset
 import argparse
 from returnn.util.basic import hms, human_size, parse_orthography, parse_orthography_into_symbols, unicode
 import gzip
@@ -34,10 +35,11 @@ def found_sub_seq(sub_seq, seq):
     return False
 
 
-def iter_dataset(dataset, options, callback):
+def iter_dataset(dataset: Dataset, options, callback):
     """
-    :type dataset: Dataset.Dataset
+    :param dataset:
     """
+    options  # unused  # noqa
     dataset.init_seq_order(epoch=1)
     assert "orth" in dataset.get_target_list()
 
@@ -46,7 +48,7 @@ def iter_dataset(dataset, options, callback):
         dataset.load_seqs(seq_idx, seq_idx)
 
         frame_len = dataset.get_seq_length(seq_idx)["data"]
-        orth = dataset.get_targets("orth", seq_idx)
+        orth = dataset.get_data(seq_idx, "orth")
         callback(frame_len=frame_len, orth=orth)
 
         seq_idx += 1

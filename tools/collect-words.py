@@ -14,15 +14,16 @@ from returnn.log import log
 from returnn.config import Config
 import argparse
 from returnn.util.basic import human_size, parse_orthography
+from returnn.datasets import Dataset
 from returnn.datasets.lm import Lexicon
 import gzip
 from xml.etree import ElementTree
 import time
 
 
-def iter_dataset(dataset, callback):
+def iter_dataset(dataset: Dataset, callback):
     """
-    :param Dataset.Dataset dataset:
+    :param dataset:
     :param (*)->None callback:
     """
     dataset.init_seq_order(epoch=1)
@@ -32,7 +33,7 @@ def iter_dataset(dataset, callback):
     while dataset.is_less_than_num_seqs(seq_idx):
         dataset.load_seqs(seq_idx, seq_idx)
 
-        orth = dataset.get_targets("orth", seq_idx)
+        orth = dataset.get_data(seq_idx, "orth")
         callback(orth=orth)
 
         seq_idx += 1

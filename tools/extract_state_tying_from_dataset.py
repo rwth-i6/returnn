@@ -16,7 +16,7 @@ from collections import defaultdict
 import typing
 
 import _setup_returnn_env  # noqa
-from returnn.datasets import init_dataset
+from returnn.datasets import init_dataset, Dataset
 from returnn.datasets.lm import Lexicon, AllophoneState
 from returnn.log import log
 from returnn.util.basic import uniq
@@ -71,16 +71,16 @@ def iter_bliss_orth(filename):
         yield get_segment_name(tree + [elem]), orth
 
 
-def iter_dataset_targets(dataset):
+def iter_dataset_targets(dataset: Dataset):
     """
-    :type dataset: Dataset.Dataset
+    :param dataset:
     """
     dataset.init_seq_order(epoch=1)
     seq_idx = 0
     while dataset.is_less_than_num_seqs(seq_idx):
         dataset.load_seqs(seq_idx, seq_idx + 1)
         segment_name = dataset.get_tag(seq_idx)
-        targets = dataset.get_targets("classes", seq_idx)
+        targets = dataset.get_data(seq_idx, "classes")
         assert targets.ndim == 1  # sparse
         targets = targets.astype("int32")
         yield segment_name, targets
