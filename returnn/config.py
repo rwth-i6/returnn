@@ -478,7 +478,7 @@ class Config:
 
         return to_bool(v)
 
-    def bool_or_other(self, key, default, index=0):
+    def bool_or_other(self, key, default=None, index=0):
         """
         :param str key:
         :param T default:

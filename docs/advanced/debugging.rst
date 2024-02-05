@@ -28,6 +28,7 @@ Random config options which will cause slower training or require more memory:
 Random other config options:
 
 * ``dry_run = True``: Do not save models or write any files.
+* ``use_dummy_datasets = True``: Use dummy datasets, which create random data on the fly.
 * ``startup_callback``: Function callback, will run early at init,
   can be used to setup potential other debugging utilities.
 * ``debug_shell_in_runner = True``: TF: Get an interactive shell right before the session runs a step.

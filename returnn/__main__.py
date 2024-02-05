@@ -219,6 +219,50 @@ def init_data():
     train_data, extra_train = load_data(config, train_cache_bytes, "train")
 
 
+def setup_dummy_datasets():
+    """setup config to use :class:`DummyGenericDataset` instead of the normal datasets"""
+    from binascii import crc32
+
+    extern_data = config.typed_value("extern_data")
+    assert extern_data, "must define extern_data to setup dummy datasets"
+    num_seqs = config.int("dummy_dataset_num_seqs", None)
+    if config.bool_or_other("train"):
+        train_num_seqs = config.int("train_dummy_dataset_num_seqs", num_seqs)
+        if not train_num_seqs:
+            train_num_seqs = 1000
+        if not num_seqs:
+            num_seqs = max(train_num_seqs // 20, 1)
+        config.set("train", {"class": "DummyGenericDataset", "data_template": extern_data, "num_seqs": train_num_seqs})
+    if not num_seqs:
+        num_seqs = 100
+    for key in ["dev", "eval", "forward_data", "search_data"]:
+        if config.bool_or_other(key):
+            config.set(
+                key,
+                {
+                    "class": "DummyGenericDataset",
+                    "data_template": extern_data,
+                    "num_seqs": num_seqs,
+                    "fixed_random_seed": crc32(key.encode("utf8")),
+                },
+            )
+    if config.bool_or_other("eval_datasets"):
+        eval_datasets = config.typed_value("eval_datasets")
+        assert isinstance(eval_datasets, dict)
+        config.set(
+            "eval_datasets",
+            {
+                key: {
+                    "class": "DummyGenericDataset",
+                    "data_template": extern_data,
+                    "num_seqs": num_seqs,
+                    "fixed_random_seed": crc32(key.encode("utf8")),
+                }
+                for key in eval_datasets.keys()
+            },
+        )
+
+
 def print_task_properties():
     """
     print information about used data
@@ -437,6 +481,8 @@ def init(config_filename=None, command_line_options=(), config_updates=None, ext
         startup_callback = config.typed_value("startup_callback")
         startup_callback(config=config)
     if need_data():
+        if config.bool("use_dummy_datasets", False):
+            setup_dummy_datasets()
         init_data()
     print_task_properties()
     init_engine()
