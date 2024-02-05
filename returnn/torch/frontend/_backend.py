@@ -1841,6 +1841,12 @@ class TorchBackend(Backend[torch.Tensor]):
             # we get the same output seq length in both cases.
             x_raw = torch.nn.functional.pad(x_raw, (0, (fft_length - frame_length)))
 
+        if frame_length > x_raw.shape[1]:
+            # Torch does not really support the empty case.
+            y = Tensor("stft", dims=batch_dims + [out_dim, out_spatial_dim], feature_dim=out_dim, dtype="complex64")
+            y.raw_tensor = torch.zeros([d.get_dim_value() for d in y.dims], dtype=torch.complex64)
+            return y
+
         if window_enforce_even:
             frame_length -= frame_length % 2
 

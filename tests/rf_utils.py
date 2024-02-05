@@ -90,7 +90,7 @@ def run_model(
         if v_pt.dtype.startswith("int"):
             assert v_tf.dtype.startswith("int")  # allow maybe different bit depth
         else:
-            assert v_pt.dtype == v_tf.dtype
+            assert v_pt.dtype == v_tf.dtype, f"PT dtype {v_pt.dtype} vs TF dtype {v_tf.dtype}"
         assert bool(v_pt.sparse_dim) == bool(v_tf.sparse_dim)
         if v_pt.sparse_dim:
             _check_dim(v_pt.sparse_dim, v_tf.sparse_dim)
