@@ -236,9 +236,11 @@ class TorchBackend(Backend[torch.Tensor]):
             out.raw_tensor,
             scale=scale.raw_tensor if isinstance(scale, Tensor) else scale,
             shift=shift.raw_tensor if isinstance(shift, Tensor) else shift,
-            scale_shift_by_sum_over_axis=x.get_axis_from_description(scale_shift_by_sum_over_axis, allow_int=False)
-            if scale_shift_by_sum_over_axis is not None
-            else None,
+            scale_shift_by_sum_over_axis=(
+                x.get_axis_from_description(scale_shift_by_sum_over_axis, allow_int=False)
+                if scale_shift_by_sum_over_axis is not None
+                else None
+            ),
         )
         return out
 
