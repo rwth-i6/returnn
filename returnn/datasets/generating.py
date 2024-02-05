@@ -11,7 +11,7 @@ import typing
 
 from returnn.util.basic import class_idx_seq_to_1_of_k, CollectionReadCheckCovered
 from returnn.log import log
-from returnn.tensor import Tensor, TensorDict
+from returnn.tensor import Tensor, Dim, TensorDict, batch_dim
 
 from .util.feature_extraction import ExtractAudioFeatures
 from .util.vocabulary import *
@@ -967,14 +967,16 @@ class DummyGenericDataset(GeneratingDataset):
         data_template: Union[TensorDict, Dict[str, Union[Tensor, Dict[str, Any]]]],
         num_seqs: int,
         *,
-        seq_lens: Optional[Union[int, Tuple[int, int], Dict[str, Union[int, Tuple[int, int]]]]] = None,
+        seq_lens: Union[None, int, Tuple[int, int], Dict[Union[str, Dim, None], Union[int, Tuple[int, int]]]] = None,
         **kwargs,
     ):
         """
         :param data_template: describes each tensor
         :param num_seqs:
-        :param seq_lens: either fixed seq len, or take randint. per data key, or same for all data keys
+        :param seq_lens: either fixed seq len, or take randint. per data key, or per dim, or same for all
         """
+        from returnn.tensor.utils import tensor_dict_dims_random_seq_len_min_max
+
         data_template_ = TensorDict()
         data_template_.update(data_template, auto_convert=True)
         data_template = data_template_
@@ -982,19 +984,8 @@ class DummyGenericDataset(GeneratingDataset):
         old_style_dims = {k: (v.dim, v.ndim) for k, v in data_template.data.items()}
         super().__init__(input_dim=None, output_dim=old_style_dims, num_seqs=num_seqs, **kwargs)
         self.data_template = data_template
-        if seq_lens is None:
-            seq_lens = {}
-        elif not isinstance(seq_lens, dict):
-            seq_lens = {k: seq_lens for k in data_template.data.keys()}
-        seq_lens = dict(seq_lens)
-        for k, v in data_template.data.items():
-            if k not in seq_lens:
-                if v.shape in {(None,), (None, 1)} and v.dtype.startswith("float"):
-                    # Assume raw audio data samples, take longer seq lens by default, assume 16khz.
-                    seq_lens[k] = (1_000, 8_000)
-                else:
-                    seq_lens[k] = (5, 15)
-        self.seq_lens: Dict[str, Union[int, Tuple[int, int]]] = seq_lens
+        self.seq_lens = seq_lens
+        self._dyn_dims, self._dyn_lens_min_max = tensor_dict_dims_random_seq_len_min_max(data_template, seq_lens)
 
     def get_data_keys(self) -> List[str]:
         """data keys"""
@@ -1028,19 +1019,13 @@ class DummyGenericDataset(GeneratingDataset):
 
     def _generate_data(self, key: str) -> numpy.ndarray:
         """generate for specific data key. assumes that self.random is in a correct state"""
+        from returnn.tensor.utils import get_random_seq_lens_for_dyn_dims
+
+        seq_lens = get_random_seq_lens_for_dyn_dims(self._dyn_dims, self._dyn_lens_min_max, rnd=self.random)
         templ: Tensor = self.data_template.data[key]
-        shape = list(templ.shape)
-        for axis, dim in enumerate(shape):
-            if dim is None:
-                seq_len_gen = self.seq_lens.get(key, (5, 15))
-                if isinstance(seq_len_gen, int):
-                    seq_len = seq_len_gen
-                elif isinstance(seq_len_gen, tuple):
-                    assert len(seq_len_gen) == 2  # min and max
-                    seq_len = self.random.randint(*seq_len_gen)
-                else:
-                    raise TypeError(f"{self} generate: data key {key!r} seq_len {seq_len_gen!r} invalid")
-                shape[axis] = seq_len
+        shape = [
+            seq_lens[dim][0] if dim.is_dynamic() else dim.dimension for dim in templ.dims if not dim.is_batch_dim()
+        ]
         if templ.sparse_dim:
             return self.random.randint(0, templ.sparse_dim.dimension, shape, dtype=templ.dtype)
         if templ.dtype.startswith("float"):
