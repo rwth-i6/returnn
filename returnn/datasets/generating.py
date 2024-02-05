@@ -960,6 +960,8 @@ class DummyGenericDataset(GeneratingDataset):
     Generate some random dummy data based on a tensor dict (like ``extern_data``).
     """
 
+    _getnewargs_exclude_attrs = Dataset._getnewargs_exclude_attrs.union(("input_dim", "output_dim"))
+
     def __init__(
         self,
         data_template: Union[TensorDict, Dict[str, Union[Tensor, Dict[str, Any]]]],
