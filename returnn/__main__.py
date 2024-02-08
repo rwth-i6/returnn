@@ -737,8 +737,8 @@ def main(argv=None):
         execute_main_task()
     except KeyboardInterrupt:
         return_code = 1
-        print("KeyboardInterrupt", file=getattr(log, "v3", sys.stderr))
-        if getattr(log, "verbose", [False] * 6)[5]:
+        print("KeyboardInterrupt", file=getattr(log, "v3", None) or sys.stderr)
+        if getattr(log, "verbose", None) and log.verbose[5]:
             sys.excepthook(*sys.exc_info())
     finalize(error_occurred=return_code != 0)
     if return_code:
