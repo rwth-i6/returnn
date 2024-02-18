@@ -130,6 +130,11 @@ def prepare_gradient_checkpointing():
                 """get_attr"""
                 return self.op.get_attr(name)
 
+            def _get_control_flow_context(self):
+                """get control flow ctx"""
+                # noinspection PyProtectedMember
+                return self.op._get_control_flow_context()
+
         _wrapped_op = _WrappedOp()
 
         # noinspection PyShadowingNames
