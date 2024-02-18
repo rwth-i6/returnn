@@ -26,15 +26,13 @@ def gradient_checkpoint_scope():
     If no gradients are being calculated, this also does not have any effect.
     """
     graph = tf_compat.v1.get_default_graph()
-    # noinspection PyProtectedMember
-    first_op_id = graph._last_id + 1  # inclusive
+    first_op_id = len(graph.get_operations())  # inclusive
     yield
-    # noinspection PyProtectedMember
-    last_op_id = graph._last_id + 1  # exclusive
+    ops = graph.get_operations()
+    last_op_id = len(ops)  # exclusive
     assert last_op_id > first_op_id
     for op_id in range(first_op_id, last_op_id):
-        # noinspection PyProtectedMember
-        op = graph._nodes_by_id[op_id]
+        op = ops[op_id]
         if getattr(op, "_RETURNN_gradient_checkpoint_exclude", False):
             continue
         op._RETURNN_gradient_checkpoint_first_op_id = first_op_id
@@ -48,15 +46,13 @@ def gradient_checkpoint_exclude_scope():
         for recomputation at backprop time.
     """
     graph = tf_compat.v1.get_default_graph()
-    # noinspection PyProtectedMember
-    first_op_id = graph._last_id + 1  # inclusive
+    first_op_id = len(graph.get_operations())  # inclusive
     yield
-    # noinspection PyProtectedMember
-    last_op_id = graph._last_id + 1  # exclusive
+    ops = graph.get_operations()
+    last_op_id = len(ops)  # exclusive
     assert last_op_id >= first_op_id
     for op_id in range(first_op_id, last_op_id):
-        # noinspection PyProtectedMember
-        op = graph._nodes_by_id[op_id]
+        op = ops[op_id]
         if getattr(op, "_RETURNN_gradient_checkpoint_first_op_id", None) is not None:
             # There was some inner gradient_checkpoint_scope() again...
             continue
