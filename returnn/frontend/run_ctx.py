@@ -214,7 +214,7 @@ class RunCtx:
             custom_inv_norm_factor=custom_inv_norm_factor,
         )
 
-    def mark_as_output(self, tensor: Union[Tensor, Any], name: str, *, dims: Optional[Sequence[int]] = None) -> None:
+    def mark_as_output(self, tensor: Union[Tensor, Any], name: str, *, dims: Optional[Sequence[Dim]] = None) -> None:
         """
         Mark this as an output.
         This has the effect that RETURNN will in any case construct the corresponding layer.
