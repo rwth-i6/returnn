@@ -459,7 +459,7 @@ class Config:
         Parses the value of the given key as boolean, returning default if not existent
         :type key: str
         :type default: T
-        :type index: bool
+        :type index: int
         :rtype: bool | T
         """
         if key in self.typed_dict:
