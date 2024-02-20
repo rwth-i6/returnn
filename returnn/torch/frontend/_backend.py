@@ -393,12 +393,13 @@ class TorchBackend(Backend[torch.Tensor]):
         if allow_broadcast:
             for source, dim in sources[1:]:
                 assert dim in source.dims
+                if set(source.dims) - {dim} != set(other_dims):
+                    need_broadcast = True
                 for dim_ in source.dims:
                     if dim_ == dim:
                         continue
                     if dim_ not in other_dims:
                         other_dims.append(dim_)
-                        need_broadcast = True
         sources_raw = []
         if allow_broadcast and need_broadcast:
             for source, dim in sources:
