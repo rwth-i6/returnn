@@ -5,7 +5,7 @@ Various generic utilities, which are shared across different backend engines.
 """
 
 from __future__ import annotations
-from typing import Optional, Any, Generic, TypeVar, Iterable, Tuple, Dict, List, Callable
+from typing import Optional, Union, Any, Generic, TypeVar, Iterable, Tuple, Dict, List, Callable
 
 import subprocess
 from subprocess import CalledProcessError
@@ -2328,12 +2328,12 @@ def help_on_type_error_wrong_args(cls, kwargs):
         print("Args mismatch? Missing are %r, unknowns are %r. Kwargs %r." % (mandatory_args, unknown_args, kwargs))
 
 
-def custom_exec(source, source_filename, user_ns, user_global_ns):
+def custom_exec(source: str, source_filename: str, user_ns: Dict[str, Any], user_global_ns: Dict[str, Any]):
     """
-    :param str source:
-    :param str source_filename:
-    :param dict[str] user_ns:
-    :param dict[str] user_global_ns:
+    :param source:
+    :param source_filename:
+    :param user_ns:
+    :param user_global_ns:
     :return: nothing
     """
     if not source.endswith("\n"):
@@ -2705,10 +2705,9 @@ class CollectionReadCheckCovered:
         return "%s(%r, truth_value=%r)" % (self.__class__.__name__, self.collection, self.truth_value)
 
     @classmethod
-    def from_bool_or_dict(cls, value):
+    def from_bool_or_dict(cls, value: Union[bool, Dict[str, Any]]) -> CollectionReadCheckCovered:
         """
-        :param bool|dict[str] value:
-        :rtype: CollectionReadCheckCovered
+        :param value:
         """
         if isinstance(value, bool):
             return cls(collection={}, truth_value=value)
@@ -2732,7 +2731,7 @@ class CollectionReadCheckCovered:
         except KeyError:
             return default
 
-    def __bool__(self):  # Python 3
+    def __bool__(self) -> bool:  # Python 3
         return self.truth_value
 
     __nonzero__ = __bool__  # Python 2
@@ -2752,13 +2751,12 @@ class CollectionReadCheckCovered:
         assert not remaining, "The keys %r were not read in the collection %r." % (remaining, self.collection)
 
 
-def which(program):
+def which(program: str) -> Optional[str]:
     """
     Finds `program` in some of the dirs of the PATH env var.
 
-    :param str program: e.g. "python"
+    :param program: e.g. "python"
     :return: full path, e.g. "/usr/bin/python", or None
-    :rtype: str|None
     """
 
     # noinspection PyShadowingNames

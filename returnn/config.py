@@ -7,10 +7,9 @@ from __future__ import annotations
 __author__ = "Patrick Doetsch"
 __credits__ = ["Patrick Doetsch", "Paul Voigtlaender"]
 
-from typing import Optional
+from typing import Optional, Any, Dict, List
 import contextlib
 import sys
-import typing
 import os
 import types as _types
 
@@ -21,13 +20,13 @@ class Config:
     We support some simple text-line-based config, JSON, and Python format.
     """
 
-    def __init__(self, items=None):
+    def __init__(self, items: Optional[Dict[str, Any]] = None):
         """
-        :param dict[str]|None items: optional initial typed_dict
+        :param items: optional initial typed_dict
         """
-        self.dict = {}  # type: typing.Dict[str, typing.List[str]]
-        self.typed_dict = {}  # :type: typing.Dict[str]  # could be loaded via JSON or so
-        self.network_topology_json = None  # type: typing.Optional[str]
+        self.dict: Dict[str, List[str]] = {}
+        self.typed_dict: Dict[str, Any] = {}  # could be loaded via JSON or so
+        self.network_topology_json: Optional[str] = None
         self.files = []
         if items is not None:
             self.typed_dict.update(items)
