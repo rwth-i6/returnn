@@ -1086,9 +1086,9 @@ class DictAsObj:
     See also :class:`ObjAsDict`.
     """
 
-    def __init__(self, dikt):
+    def __init__(self, dikt: Dict[str, Any]):
         """
-        :param dict[str] dikt:
+        :param dikt:
         """
         self.__dict__ = dikt
 
@@ -2690,10 +2690,10 @@ class CollectionReadCheckCovered:
     to check whether all the user-specified options are also used (maybe the user made a typo).
     """
 
-    def __init__(self, collection, truth_value=None):
+    def __init__(self, collection: Dict[str, Any], truth_value: Optional[bool] = None):
         """
-        :param dict[str] collection:
-        :param None|bool truth_value: note: check explicitly for self.truth_value, bool(self) is not the same!
+        :param collection:
+        :param truth_value: note: check explicitly for self.truth_value, bool(self) is not the same!
         """
         self.collection = collection
         if truth_value is None:
@@ -2760,6 +2760,7 @@ def which(program):
     :return: full path, e.g. "/usr/bin/python", or None
     :rtype: str|None
     """
+
     # noinspection PyShadowingNames
     def is_exe(path):
         """
@@ -4066,7 +4067,7 @@ def compute_bleu(reference_corpus, translation_corpus, max_order=4, use_bp=True)
     matches_by_order = [0] * max_order
     possible_matches_by_order = [0] * max_order
 
-    for (references, translations) in zip(reference_corpus, translation_corpus):
+    for references, translations in zip(reference_corpus, translation_corpus):
         reference_length += len(references)
         translation_length += len(translations)
         ref_ngram_counts = _get_ngrams(references, max_order)
