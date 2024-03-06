@@ -384,9 +384,11 @@ class Engine(EngineBase):
             total_loss = train_ctx.total_loss()
             losses_dict = NumbersDict(
                 {
-                    name: float(loss.get_summed_loss().raw_tensor.detach().cpu().numpy())
-                    if self._device != "meta"
-                    else float("nan")
+                    name: (
+                        float(loss.get_summed_loss().raw_tensor.detach().cpu().numpy())
+                        if self._device != "meta"
+                        else float("nan")
+                    )
                     for name, loss in train_ctx.losses.items()
                 }
             )
@@ -400,9 +402,11 @@ class Engine(EngineBase):
                 )
             cur_count_grad_accum += 1
             perform_update_step = cur_count_grad_accum >= accum_grad_multiple_step
-            with self._ddp_pt_model.no_sync() if (
-                self._ddp_pt_model is not None and not perform_update_step
-            ) else nullcontext():
+            with (
+                self._ddp_pt_model.no_sync()
+                if (self._ddp_pt_model is not None and not perform_update_step)
+                else nullcontext()
+            ):
                 if self._grad_scaler is not None:
                     self._grad_scaler.scale(total_loss.raw_tensor).backward()
                 else:
@@ -522,9 +526,11 @@ class Engine(EngineBase):
 
                     losses_dict = NumbersDict(
                         {
-                            name: float(loss.get_summed_loss().raw_tensor.detach().cpu().numpy())
-                            if self._device != "meta"
-                            else float("nan")
+                            name: (
+                                float(loss.get_summed_loss().raw_tensor.detach().cpu().numpy())
+                                if self._device != "meta"
+                                else float("nan")
+                            )
                             for name, loss in train_ctx.losses.items()
                         }
                     )
@@ -636,9 +642,11 @@ class Engine(EngineBase):
                 expected_outputs=self._forward_step_expected_outputs, step=self.global_train_step, epoch=self.epoch
             )
 
-        with autocast(
-            device_type=self._device.split(":")[0], dtype=self._autocast_dtype
-        ) if self._use_autocast else nullcontext(), rf.set_default_device_ctx(self._device):
+        with (
+            autocast(device_type=self._device.split(":")[0], dtype=self._autocast_dtype)
+            if self._use_autocast
+            else nullcontext()
+        ), rf.set_default_device_ctx(self._device):
             sentinel_kw = {"__fwd_compatible_random_arg_%i" % int(random() * 100): None}
             if train_func:
                 self._train_step_func(model=self._orig_model, extern_data=extern_data, **sentinel_kw)
