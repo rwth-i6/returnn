@@ -28,7 +28,7 @@ class TransformerDecoder(rf.Module):
 
     def __init__(
         self,
-        encoder_dim: Dim,
+        encoder_dim: Optional[Dim],
         vocab_dim: Dim,
         model_dim: Dim = Dim(512, name="transformer-dec-default-model-dim"),
         *,
@@ -46,7 +46,7 @@ class TransformerDecoder(rf.Module):
         sequential=rf.Sequential,
     ):
         """
-        :param encoder_dim:
+        :param encoder_dim: for cross-attention. None if no cross-attention.
         :param vocab_dim:
         :param model_dim: the output feature dimension
         :param num_layers: the number of encoder layers
@@ -192,7 +192,7 @@ class TransformerDecoderLayer(rf.Module):
 
     def __init__(
         self,
-        encoder_dim: Dim,
+        encoder_dim: Optional[Dim],
         out_dim: Dim = Dim(512, name="transformer-dec-default-out-dim"),
         *,
         ff_dim: Dim = NotSpecified,
@@ -204,7 +204,7 @@ class TransformerDecoderLayer(rf.Module):
         att_dropout: float = 0.1,
     ):
         """
-        :param encoder_dim:
+        :param encoder_dim: for cross-attention. None if no cross-attention.
         :param out_dim: the output feature dimension
         :param ff_dim: the dimension of feed-forward layers. 2048 originally, or 4 times out_dim
         :param ff_activation: activation function for feed-forward network
@@ -245,16 +245,19 @@ class TransformerDecoderLayer(rf.Module):
             self.self_att = self_att
         self.self_att_layer_norm = rf.LayerNorm(out_dim)
 
-        self.cross_att = rf.CrossAttention(
-            encoder_dim=self.encoder_dim,
-            query_in_dim=out_dim,
-            proj_dim=out_dim,
-            key_dim_total=out_dim,
-            value_dim_total=out_dim,
-            num_heads=num_heads,
-            att_dropout=att_dropout,
-        )
-        self.cross_att_layer_norm = rf.LayerNorm(out_dim)
+        self.cross_att = None
+        self.cross_att_layer_norm = None
+        if encoder_dim is not None:
+            self.cross_att = rf.CrossAttention(
+                encoder_dim=self.encoder_dim,
+                query_in_dim=out_dim,
+                proj_dim=out_dim,
+                key_dim_total=out_dim,
+                value_dim_total=out_dim,
+                num_heads=num_heads,
+                att_dropout=att_dropout,
+            )
+            self.cross_att_layer_norm = rf.LayerNorm(out_dim)
 
     def default_initial_state(self, *, batch_dims: Sequence[Dim]) -> rf.State:
         """default initial state"""
@@ -262,30 +265,32 @@ class TransformerDecoderLayer(rf.Module):
 
     def transform_encoder(self, encoder: Tensor, *, axis: Dim) -> rf.State:
         """Transform the encoder output."""
+        assert self.cross_att is not None
         return rf.State(cross_att=self.cross_att.transform_encoder(encoder, axis=axis))
 
-    def __call__(self, inp: Tensor, *, spatial_dim: Dim, state: rf.State, encoder: rf.State) -> Tuple[Tensor, rf.State]:
+    def __call__(self, x: Tensor, *, spatial_dim: Dim, state: rf.State, encoder: rf.State) -> Tuple[Tensor, rf.State]:
         """forward"""
         # (multi-head) self-attention (MHSA or simply SA)
         new_state = rf.State()
-        x_sa_ln = self.self_att_layer_norm(inp)
+        x_sa_ln = self.self_att_layer_norm(x)
         x_sa, new_state.self_att = self.self_att(x_sa_ln, axis=spatial_dim, state=state.self_att)
         x_sa = rf.dropout(x_sa, self.dropout, axis=self.dropout_broadcast and self.out_dim)
-        x_sa_out = x_sa + inp
+        x = x_sa + x
 
         # (multi-head) cross-attention (CA)
-        x_ca_ln = self.cross_att_layer_norm(x_sa_out)
-        x_ca = self.cross_att(x_ca_ln, encoder.cross_att)
-        x_ca = rf.dropout(x_ca, self.dropout, axis=self.dropout_broadcast and self.out_dim)
-        x_ca_out = x_ca + x_sa_out
+        if self.cross_att is not None:
+            x_ca_ln = self.cross_att_layer_norm(x)
+            x_ca = self.cross_att(x_ca_ln, encoder.cross_att)
+            x_ca = rf.dropout(x_ca, self.dropout, axis=self.dropout_broadcast and self.out_dim)
+            x = x_ca + x
 
         # feed-forward (FF)
-        x_ff_ln = self.ff_layer_norm(x_ca_out)
+        x_ff_ln = self.ff_layer_norm(x)
         x_ff = self.ff(x_ff_ln)
         x_ff = rf.dropout(x_ff, self.dropout, axis=self.dropout_broadcast and self.out_dim)
-        x_ff_out = x_ff + x_ca_out
+        x = x_ff + x
 
-        return x_ff_out, new_state
+        return x, new_state
 
 
 class FeedForward(rf.Module):
