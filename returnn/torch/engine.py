@@ -769,6 +769,17 @@ class Engine(EngineBase):
         self.epoch = epoch  # in training, this will be reset to start_epoch
         self.global_train_step = step
 
+        load_model_post_hooks = self.config.typed_value("load_model_post_hooks")
+        if load_model_post_hooks:
+            with (
+                autocast(device_type=self._device.split(":")[0], dtype=self._autocast_dtype)
+                if self._use_autocast
+                else nullcontext()
+            ), rf.set_default_device_ctx(self._device):
+                sentinel_kw = {"__fwd_compatible_random_arg_%i" % int(random() * 100): None}
+                for hook in load_model_post_hooks:
+                    hook(model=self._orig_model, **sentinel_kw)
+
     def _create_model(self, *, epoch: int, step: int):
         """
         Set up self._pt_model and self._orig_model
