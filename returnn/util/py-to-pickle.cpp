@@ -152,7 +152,7 @@ static void _write_size64(char *out, size_t value) {
  * Encode a code point using UTF-8
  * Code adopted for C++
  *
- * @author Ondřej Hruška <ondra@ondrovo.com>
+ * @author Ondrej Hruska <ondra@ondrovo.com>
  * @license MIT
  *
  * @param utf - code point 0-0x10FFFF
