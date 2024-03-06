@@ -527,6 +527,7 @@ class Backend(Generic[T]):
         "elu",
         "selu",
         "silu",
+        "gelu",
         "logical_not",
         "neg",
         "reciprocal",

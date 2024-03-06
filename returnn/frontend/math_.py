@@ -62,6 +62,7 @@ __all__ = [
     "selu",
     "silu",
     "swish",
+    "gelu",
     "softmax",
     "log_softmax",
     "gating",
@@ -519,6 +520,19 @@ def silu(a: Tensor) -> Tensor:
 
 
 swish = silu  # alias
+
+
+def gelu(a: Tensor) -> Tensor:
+    """
+    Compute the Gaussian Error Linear Unit (GELU) activation function.
+    Gaussian error linear unit (GELU) computes `x * P(X <= x)`, where `P(X) ~ N(0, 1)`.
+    Ref: [Gaussian Error Linear Units (GELUs)](https://arxiv.org/abs/1606.08415).
+    This here is without the tanh-approximation.
+
+    :param a:
+    """
+    # noinspection PyProtectedMember
+    return a._raw_backend.activation(a, "gelu")
 
 
 def softmax(a: Tensor, *, axis: Dim, use_mask: bool = True) -> Tensor:
