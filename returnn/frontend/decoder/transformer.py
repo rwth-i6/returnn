@@ -150,7 +150,7 @@ class TransformerDecoder(rf.Module):
         *,
         spatial_dim: Dim,
         state: rf.State,
-        encoder: rf.State,
+        encoder: Optional[rf.State] = None,
         collected_outputs: Optional[Dict[str, Tensor]] = None,
     ) -> Tuple[Tensor, rf.State]:
         """
@@ -174,7 +174,10 @@ class TransformerDecoder(rf.Module):
         for layer_name, layer in self.layers.items():
             layer: TransformerDecoderLayer  # or similar
             decoded, new_state[layer_name] = layer(
-                decoded, spatial_dim=spatial_dim, state=state[layer_name], encoder=encoder[layer_name]
+                decoded,
+                spatial_dim=spatial_dim,
+                state=state[layer_name],
+                encoder=encoder[layer_name] if encoder else None,
             )
             if collected_outputs is not None:
                 collected_outputs[layer_name] = decoded
@@ -268,7 +271,9 @@ class TransformerDecoderLayer(rf.Module):
         assert self.cross_att is not None
         return rf.State(cross_att=self.cross_att.transform_encoder(encoder, axis=axis))
 
-    def __call__(self, x: Tensor, *, spatial_dim: Dim, state: rf.State, encoder: rf.State) -> Tuple[Tensor, rf.State]:
+    def __call__(
+        self, x: Tensor, *, spatial_dim: Dim, state: rf.State, encoder: Optional[rf.State] = None
+    ) -> Tuple[Tensor, rf.State]:
         """forward"""
         # (multi-head) self-attention (MHSA or simply SA)
         new_state = rf.State()
