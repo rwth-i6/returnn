@@ -40,9 +40,11 @@ class TransformerDecoder(rf.Module):
         att_dropout: float = 0.1,
         decoder_layer: Optional[Union[TransformerDecoderLayer, rf.Module, type, Any]] = None,
         decoder_layer_opts: Optional[Dict[str, Any]] = None,
+        embed_dim: Optional[Dim] = None,
         share_embedding: bool = None,
         input_embedding_scale: float = None,
         input_dropout: float = None,
+        logits_with_bias: bool = False,
         sequential=rf.Sequential,
     ):
         """
@@ -57,9 +59,11 @@ class TransformerDecoder(rf.Module):
         :param att_dropout: attention dropout value
         :param decoder_layer: an instance of :class:`TransformerDecoderLayer` or similar
         :param decoder_layer_opts: options for the encoder layer
+        :param embed_dim: if given, will first have an embedding [vocab,embed] and then a linear [embed,model].
         :param share_embedding:
         :param input_embedding_scale:
         :param input_dropout:
+        :param logits_with_bias:
         :param sequential:
         """
         super().__init__()
@@ -67,14 +71,19 @@ class TransformerDecoder(rf.Module):
         self.encoder_dim = encoder_dim
         self.vocab_dim = vocab_dim
         self.model_dim = model_dim
+        self.embed_dim = embed_dim
 
         # We could make this optional or configurable if we ever need to.
         # Or maybe you would just have another separate implementation of this module then...
-        self.input_embedding = rf.Embedding(vocab_dim, model_dim)
+        self.input_embedding = rf.Embedding(vocab_dim, embed_dim or model_dim)
+
+        self.input_embedding_proj = None
+        if embed_dim:
+            self.input_embedding_proj = rf.Linear(embed_dim, model_dim, with_bias=False)
 
         # This could also be configurable...
         self.pos_enc = functools.partial(
-            rf.sinusoidal_positional_encoding, feat_dim=model_dim, dtype=self.input_embedding.weight.dtype
+            rf.sinusoidal_positional_encoding, feat_dim=embed_dim or model_dim, dtype=self.input_embedding.weight.dtype
         )
         if share_embedding is None:
             if BehaviorVersion.get() < 20:
@@ -126,9 +135,10 @@ class TransformerDecoder(rf.Module):
 
         self.final_layer_norm = rf.LayerNorm(model_dim)
 
-        self.logits = rf.Linear(model_dim, vocab_dim, with_bias=False)
+        self.logits = rf.Linear(model_dim, vocab_dim, with_bias=logits_with_bias)
 
         if share_embedding:
+            assert not embed_dim and not logits_with_bias, "not supported together with share_embedding"
             self.logits.weight = self.input_embedding.weight
 
     def default_initial_state(self, *, batch_dims: Sequence[Dim]) -> rf.State:
@@ -168,6 +178,8 @@ class TransformerDecoder(rf.Module):
         decoded = self.input_embedding(source) * self.input_embedding_scale
         decoded = decoded + self.pos_enc(spatial_dim=spatial_dim, offset=state.pos)
         decoded = rf.dropout(decoded, self.input_dropout)
+        if self.input_embedding_proj is not None:
+            decoded = self.input_embedding_proj(decoded)
 
         new_state.pos = state.pos + (1 if spatial_dim == single_step_dim else spatial_dim.get_size_tensor())
 
