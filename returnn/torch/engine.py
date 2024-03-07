@@ -686,25 +686,23 @@ class Engine(EngineBase):
 
         self._create_model(epoch=epoch, step=step)
 
+        loaded_state_keys = set()
+        missing_keys = set()
+        unexpected_keys = set()
         if checkpoint_state is not None:
-            missing_keys, unexpected_keys = self._pt_model.load_state_dict(checkpoint_state["model"], strict=False)
-            if missing_keys:
-                raise Exception(
-                    "\n".join(
-                        [
-                            f"While loading model {filename}:",
-                            "Unexpected key(s) in state_dict: " + ", ".join(map(repr, unexpected_keys)),
-                            "Missing key(s) in state_dict: " + ", ".join(map(repr, missing_keys)),
-                            "Any missing key is an error.",
-                        ]
-                    )
-                )
-            if unexpected_keys:
+            loaded_state_keys.update(checkpoint_state["model"].keys())
+            missing_keys_main_ckpt, unexpected_keys_main_ckpt = self._pt_model.load_state_dict(
+                checkpoint_state["model"], strict=False
+            )
+            missing_keys.update(missing_keys_main_ckpt)
+            unexpected_keys.update(unexpected_keys_main_ckpt)
+            if unexpected_keys_main_ckpt:
                 print(
                     f"Note: While loading {filename}, unexpected key(s) in state_dict: "
-                    + ", ".join(map(repr, unexpected_keys)),
+                    + ", ".join(map(repr, sorted(unexpected_keys_main_ckpt))),
                     file=log.v4,
                 )
+
         preload_from_files = self.config.typed_value("preload_from_files", {})
         if preload_from_files:
             # see `preload_from_files` in tf engine and `returnn.tf.network.CustomCheckpointLoader`
@@ -748,12 +746,47 @@ class Engine(EngineBase):
                         preload_model_state.pop(key)
                 for new_name, name_in_checkpoint in opts.get("var_name_mapping", {}).items():
                     preload_model_state[new_name] = preload_model_state.pop(name_in_checkpoint)
-                missing_keys, _ = self._pt_model.load_state_dict(preload_model_state, strict=False)
-                if missing_keys and not opts.get("ignore_missing", False):
+                missing_keys_preload, unexpected_keys_preload = self._pt_model.load_state_dict(
+                    preload_model_state, strict=False
+                )
+                loaded_state_keys.update(preload_model_state.keys())
+                missing_keys.difference_update(preload_model_state.keys())
+                del preload_model_state
+                gc.collect()
+
+                if opts.get("prefix", ""):
                     prefix_keys = [key for key in self._pt_model.state_dict() if key.startswith(opts.get("prefix", ""))]
-                    missing_prefix_keys = set(prefix_keys).intersection(set(missing_keys))
-                    assert not missing_prefix_keys, f"Missing keys and ignore_missing=False: {missing_prefix_keys}"
-                print(f"Missing keys: {missing_keys}", file=log.v4)
+                else:
+                    prefix_keys = self._pt_model.state_dict().keys()
+                missing_keys_preload = (
+                    set(prefix_keys).intersection(set(missing_keys_preload)).difference(loaded_state_keys)
+                )
+                unexpected_keys_preload = (
+                    set(prefix_keys).intersection(set(unexpected_keys_preload)).difference(loaded_state_keys)
+                )
+                if missing_keys_preload and not opts.get("ignore_missing", False):
+                    missing_keys.update(missing_keys_preload)
+                if missing_keys_preload:
+                    print(f"Missing keys: {missing_keys_preload}", file=log.v4)
+                if unexpected_keys_preload:
+                    print(
+                        f"Note: While loading preload_from_files {opts['filename']}, unexpected key(s) in state_dict: "
+                        + ", ".join(map(repr, sorted(unexpected_keys_preload))),
+                        file=log.v4,
+                    )
+                    unexpected_keys.update(unexpected_keys_preload)
+
+        if missing_keys:
+            raise Exception(
+                "\n".join(
+                    [
+                        f"While loading model {filename}, preload_from_files {bool(preload_from_files)}:",
+                        "Unexpected key(s) in state_dict: " + ", ".join(map(repr, sorted(unexpected_keys))),
+                        "Missing key(s) in state_dict: " + ", ".join(map(repr, sorted(missing_keys))),
+                        "Any missing key is an error.",
+                    ]
+                )
+            )
 
         # https://github.com/rwth-i6/returnn/issues/1345
         del checkpoint_state
