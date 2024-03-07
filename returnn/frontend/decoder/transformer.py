@@ -98,7 +98,7 @@ class TransformerDecoder(rf.Module):
                 logging.getLogger("returnn.frontend").warning(
                     "TransformerDecoder input_dropout default is suboptimal"
                     f" with your behavior version {BehaviorVersion.get()}."
-                    " Explicitly set input_embedding_scale or switch to a new behavior version >= 20."
+                    " Explicitly set input_dropout or switch to a new behavior version >= 20."
                 )
             input_dropout = dropout if BehaviorVersion.get() >= 20 else 0.0
         self.input_dropout = input_dropout
