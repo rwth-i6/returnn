@@ -3,7 +3,7 @@ Datasets dealing with audio
 """
 
 from __future__ import annotations
-from typing import Optional, Any, List, Dict
+from typing import Optional, Any, List, Tuple, Dict
 import numpy
 import typing
 
@@ -181,18 +181,15 @@ class OggZipDataset(CachedDataset2):
             return self._zip_files[zip_index].read(filename)
         return open("%s/%s" % (self.paths[0], filename), "rb").read()
 
-    def _collect_data_part(self, zip_index):
+    def _collect_data_part(self, zip_index) -> Tuple[List[Dict[str, Any]], Optional[Dict[str, Any]]]:
         """
         collect all the entries of a single zip-file or txt file
         :param int zip_index: index of the zip-file in self._zip_files, unused when loading without zip
-        :return: data entries
-        :rtype: list[dict[str]]
+        :return: data entries, example_entry
         """
         from returnn.util.literal_py_to_pickle import literal_eval
 
-        data = literal_eval(
-            self._read("%s.txt" % self._names[zip_index], zip_index)
-        )  # type: typing.List[typing.Dict[str]]
+        data: List[Dict[str, Any]] = literal_eval(self._read("%s.txt" % self._names[zip_index], zip_index))
         assert data and isinstance(data, list)
         first_entry = data[0]
         assert isinstance(first_entry, dict)
@@ -209,9 +206,12 @@ class OggZipDataset(CachedDataset2):
         # add index to data list
         for entry in data:
             entry["_zip_file_index"] = zip_index
+        example_entry = None
+        if data:
+            example_entry = data[0]  # before filtering
         if self.segments:
             data[:] = [entry for entry in data if self._get_tag_from_info_dict(entry) in self.segments]
-        return data
+        return data, example_entry
 
     def _lazy_init(self):
         """
@@ -230,13 +230,19 @@ class OggZipDataset(CachedDataset2):
             self._zip_files = [zipfile.ZipFile(path) for path in self.paths]
 
         data = []
+        example_entry = None
         if self._use_zip_files:
             for zip_index in range(len(self._zip_files)):
-                zip_data = self._collect_data_part(zip_index)
+                zip_data, example_entry = self._collect_data_part(zip_index)
                 data += zip_data
         else:
             # collect data from a txt file
-            data = self._collect_data_part(0)
+            data, example_entry = self._collect_data_part(0)
+
+        assert len(data) > 0, (
+            f"{self}: no data found? files {self._zip_files or self._path},"
+            f" filter {self.segments}, example {example_entry}"
+        )
 
         fixed_random_subset = self._fixed_random_subset
         if fixed_random_subset:
@@ -357,18 +363,16 @@ class OggZipDataset(CachedDataset2):
         """
         return True
 
-    def get_corpus_seq_idx(self, seq_idx):
+    def get_corpus_seq_idx(self, seq_idx: int) -> int:
         """
-        :param int seq_idx:
-        :rtype: int
+        :param seq_idx:
         """
         return self._get_ref_seq_idx(seq_idx)
 
     @staticmethod
-    def _get_tag_from_info_dict(info):
+    def _get_tag_from_info_dict(info: Dict[str, Any]) -> str:
         """
-        :param dict[str] info:
-        :rtype: str
+        :param info:
         """
         return info.get("seq_name", info.get("file", ""))
 
