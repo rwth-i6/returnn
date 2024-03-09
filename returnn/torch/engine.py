@@ -666,6 +666,8 @@ class Engine(EngineBase):
         checkpoint_state = None
         if model_epoch_filename:
             filename = model_epoch_filename + util.get_model_filename_postfix()
+            if not os.path.exists(filename) and os.path.exists(model_epoch_filename):
+                filename = model_epoch_filename
             print("Load model %s" % (filename,), file=log.v4)
             checkpoint_state = torch.load(filename, map_location=self._device)
             if epoch is None:
