@@ -671,8 +671,8 @@ class Engine(EngineBase):
             print("Load model %s" % (filename,), file=log.v4)
             checkpoint_state = torch.load(filename, map_location=self._device)
             if epoch is None:
-                epoch = checkpoint_state["epoch"]
-            step = checkpoint_state["step"]
+                epoch = checkpoint_state.get("epoch", self._start_epoch or 1)
+            step = checkpoint_state.get("step", 1)
             print(f"  epoch {epoch}, global train step {step}", file=log.v4)
             # The checkpoint was saved when the step was already increased (but not the epoch yet).
             # Restore the last step.
@@ -692,9 +692,10 @@ class Engine(EngineBase):
         missing_keys = set()
         unexpected_keys = set()
         if checkpoint_state is not None:
-            loaded_state_keys.update(checkpoint_state["model"].keys())
+            model_state = checkpoint_state.get("model", checkpoint_state)
+            loaded_state_keys.update(model_state.keys())
             missing_keys_main_ckpt, unexpected_keys_main_ckpt = self._pt_model.load_state_dict(
-                checkpoint_state["model"], strict=False
+                model_state, strict=False
             )
             missing_keys.update(missing_keys_main_ckpt)
             unexpected_keys.update(unexpected_keys_main_ckpt)
@@ -704,6 +705,10 @@ class Engine(EngineBase):
                     + ", ".join(map(repr, sorted(unexpected_keys_main_ckpt))),
                     file=log.v4,
                 )
+            del model_state
+        # https://github.com/rwth-i6/returnn/issues/1345
+        del checkpoint_state
+        gc.collect()
 
         preload_from_files = self.config.typed_value("preload_from_files", {})
         if preload_from_files:
@@ -790,9 +795,6 @@ class Engine(EngineBase):
                 )
             )
 
-        # https://github.com/rwth-i6/returnn/issues/1345
-        del checkpoint_state
-        gc.collect()
         self._pt_model.to(self._device)
 
         if model_epoch_filename and is_training:
