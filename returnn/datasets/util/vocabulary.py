@@ -19,7 +19,6 @@ import typing
 import numpy
 
 from returnn.log import log
-from returnn.util.basic import PY3
 
 
 class Vocabulary(object):
@@ -135,14 +134,14 @@ class Vocabulary(object):
             if filename[-4:] == ".pkl":
                 d = pickle.load(open(filename, "rb"))
             else:
-                d = eval(open(filename, "r").read())
-                if not PY3:
-                    # Any utf8 string will not be a unicode string automatically, so enforce this.
-                    assert isinstance(d, dict)
-                    from returnn.util.basic import py2_utf8_str_to_unicode
-
-                    d = {py2_utf8_str_to_unicode(s): i for (s, i) in d.items()}
-            assert isinstance(d, dict)
+                file_content = open(filename, "r").read()
+                if file_content.startswith("{"):
+                    d = eval(file_content)
+                else:
+                    # Do line-based parsing.
+                    lines = file_content.splitlines()
+                    d = {line: i for (i, line) in enumerate(lines)}
+            assert isinstance(d, dict), f"{self}: expected dict, got {type(d).__name__} in {filename}"
             labels = {idx: label for (label, idx) in sorted(d.items())}
             min_label, max_label, num_labels = min(labels), max(labels), len(labels)
             assert 0 == min_label
