@@ -216,6 +216,8 @@ class Vocabulary(object):
         if isinstance(label, str):
             return self.label_to_id(label, default=default)
         if isinstance(label, int):
+            if label == -1 and allow_none:
+                return None
             if self.is_id_valid(label):
                 return label
             if default is KeyError:
