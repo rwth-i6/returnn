@@ -2022,6 +2022,7 @@ class LibriSpeechCorpus(CachedDataset2):
         fixed_random_subset=None,
         epoch_wise_filter=None,
         name=None,
+        seq_tag_format: str = "%(subdir)s-%(speaker)i-%(chapter)i-%(seq)04i",
         **kwargs,
     ):
         """
@@ -2041,6 +2042,11 @@ class LibriSpeechCorpus(CachedDataset2):
             i.e. not dependent on the epoch. It will use an internally hardcoded fixed random seed,
             i.e. it's deterministic.
         :param dict|None epoch_wise_filter: see init_seq_order
+        :param name:
+        :param seq_tag_format:
+            The default "%(subdir)s-%(speaker)i-%(chapter)i-%(seq)04i" gives e.g. "dev-other-116-288045-0000".
+            Note, via the Bliss corpus and also OggZipDataset, we have "dev-other/116-288045-0000/116-288045-0000",
+            so you might want to use "%(subdir)s/%(speaker)i-%(chapter)i-%(seq)04i/%(speaker)i-%(chapter)i-%(seq)04i".
         """
         if not name:
             name = "prefix:" + prefix
@@ -2054,6 +2060,7 @@ class LibriSpeechCorpus(CachedDataset2):
         self.prefix = prefix
         self.use_zip = use_zip
         self.use_ogg = use_ogg
+        self._seq_tag_format = seq_tag_format
         self._zip_files = None
         if use_zip:
             zip_fn_pattern = "%s/%s*.zip" % (self.path, self.prefix)
@@ -2308,7 +2315,7 @@ class LibriSpeechCorpus(CachedDataset2):
         :rtype: str
         """
         subdir, speaker_id, chapter_id, seq_id = self._reference_seq_order[ref_seq_idx]
-        return "%(sd)s-%(sp)i-%(ch)i-%(i)04i" % {"sd": subdir, "sp": speaker_id, "ch": chapter_id, "i": seq_id}
+        return self._seq_tag_format % {"subdir": subdir, "speaker": speaker_id, "chapter": chapter_id, "seq": seq_id}
 
     def get_tag(self, seq_idx):
         """
