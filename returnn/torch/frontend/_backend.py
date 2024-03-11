@@ -34,6 +34,7 @@ class TorchBackend(Backend[torch.Tensor]):
     PyTorch backend
     """
 
+    name = "torch"
     RawTensorType = torch.Tensor
 
     @staticmethod

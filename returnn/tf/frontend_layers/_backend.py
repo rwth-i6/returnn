@@ -35,6 +35,7 @@ class ReturnnLayersBackend(Backend[Layer]):
     RETURNN layers backend (using TF), where raw_tensor represents a RETURNN layer
     """
 
+    name = "returnn_layers_tf"
     RawTensorType = Layer
     is_tensorflow = True
     is_backend_raw_tensor_dim_tag_independent = False
@@ -1241,7 +1242,9 @@ def _random_replay_eval(*, self, source, idx: int, **_kwargs):
         out.set_shape(self.output.batch_shape)
         return out
 
-    with tf.control_dependencies(
-        [source(i, auto_convert=False) for i in range(len(self.sources))]
-    ) if self.sources else contextlib.nullcontext():
+    with (
+        tf.control_dependencies([source(i, auto_convert=False) for i in range(len(self.sources))])
+        if self.sources
+        else contextlib.nullcontext()
+    ):
         return _func()

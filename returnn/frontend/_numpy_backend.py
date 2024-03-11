@@ -17,6 +17,7 @@ from ._backend import Backend
 class NumpyBackend(Backend[numpy.ndarray]):
     """Numpy backend"""
 
+    name = "numpy"
     RawTensorType = numpy.ndarray
 
     @staticmethod

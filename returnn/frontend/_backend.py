@@ -25,6 +25,7 @@ class Backend(Generic[T]):
     """
 
     # class attribs set by derived classes
+    name: Optional[str] = None  # e.g. "tensorflow" or "torch"
     RawTensorType: Type[T]
     is_tensorflow: bool = False  # whether this framework uses TensorFlow
     is_backend_raw_tensor_dim_tag_independent: bool = True  # whether raw tensors of backend are independent of Dim
@@ -1299,6 +1300,33 @@ class Backend(Generic[T]):
 global_backend = object.__new__(Backend)
 
 _backend_tensor_type_dispatch_table = {}  # type: Dict[Type, Type[Backend]]
+
+
+def select_backend(name: str):
+    """
+    Select backend by name.
+
+    :param name: "torch", "tf", "returnn_layers_tf", "numpy"
+    """
+    if name == "tf":
+        select_backend_tf()
+    elif name == "returnn_layers_tf":
+        select_backend_returnn_layers_tf()
+    elif name == "torch":
+        select_backend_torch()
+    elif name == "numpy":
+        from ._numpy_backend import NumpyBackend
+
+        global_backend.__class__ = NumpyBackend
+    else:
+        raise ValueError(f"unknown backend {name!r}")
+
+
+def get_selected_backend() -> Optional[str]:
+    """
+    :return: the selected backend name, or None if not selected
+    """
+    return global_backend.__class__.name
 
 
 def select_backend_tf():

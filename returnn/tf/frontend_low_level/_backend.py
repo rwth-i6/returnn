@@ -27,6 +27,7 @@ class TFBackend(Backend[tf.Tensor]):
     TensorFlow low-level backend, operating on tf.Tensor
     """
 
+    name = "tf"
     RawTensorType = tf.Tensor
     is_tensorflow = True
 
