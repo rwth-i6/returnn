@@ -1329,6 +1329,13 @@ def get_selected_backend() -> Optional[str]:
     return global_backend.__class__.name
 
 
+def is_executing_eagerly() -> bool:
+    """
+    :return: whether the current selected backend is executing eagerly
+    """
+    return global_backend.executing_eagerly()
+
+
 def select_backend_tf():
     """
     Selects the RETURNN layers backend (based on TF).
