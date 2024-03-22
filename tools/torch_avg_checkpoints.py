@@ -111,7 +111,7 @@ def merge_checkpoints(in_ckpts: Sequence[str], out_ckpt: str, extra_state: Optio
 
     # Average
     for k in out_model_state:
-        out_model_state[k] /= out_model_state_num[k]
+        out_model_state[k] = out_model_state[k] / out_model_state_num[k]
 
     if extra_state:
         out_state.update(extra_state)
