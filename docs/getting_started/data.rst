@@ -193,11 +193,15 @@ Related work
 * `Tensor Shape Annotation Library (tsalib) for TF/PyTorch/NumPy (2018) <https://github.com/ofnote/tsalib>`__,
   named dimensions (e.g. ``'btd'``)
 * `Mesh TensorFlow (2018) <https://github.com/tensorflow/mesh/>`__,
-  named dimensions, ``einsum``
+  named dimensions, ``Dimension`` object, ``einsum``
 * `NamedTensor for PyTorch (2019) <https://github.com/harvardnlp/NamedTensor>`__
 * `PyTorch official support for named tensors (2019) <https://pytorch.org/docs/stable/named_tensor.html>`__,
   e.g. ``torch.zeros(2, 3, names=('N', 'C'))``
 * `DeepMind TensorAnnotations (2020) <https://github.com/deepmind/tensor_annotations>`__
+* `Named Tensor Notation <https://namedtensor.github.io/>`__ (2022)
+* `TorchDim <https://github.com/facebookresearch/torchdim>`__ (2022)
+  / `functorch.dim <https://github.com/pytorch/pytorch/tree/main/functorch/dim>`__:
+  introduces ``Dim`` object, ``einsum`` etc
 
 In most cases,
 this introduces names to axes.
