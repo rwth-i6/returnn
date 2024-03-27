@@ -1713,7 +1713,10 @@ def parse_orthography_into_symbols(
         else:  # not in_special
             if square_brackets_for_specials and c == "[":
                 in_special = 1
-                ret += ["["]
+                if ret and not ret[-1]:
+                    ret[-1] += c
+                else:
+                    ret += ["["]
             else:
                 if word_based:
                     if c.isspace():
