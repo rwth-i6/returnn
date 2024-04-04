@@ -12,6 +12,7 @@ import torch
 from torch.nn.parallel import DistributedDataParallel
 
 from returnn.config import Config
+from returnn.util.basic import CollectionReadCheckCovered
 
 _logger = logging.getLogger("returnn.torch.distributed")
 
@@ -24,7 +25,7 @@ class DistributedContext:
     def __init__(self, options: Dict[str, Any]):
         import torch.distributed as dist
 
-        self._opts = options
+        self._opts = CollectionReadCheckCovered(options)
 
         # when no backend is specified, both gloo and nccl backends will be created
         # the gloo backend will be used for collectives with CPU tensors and
@@ -53,6 +54,21 @@ class DistributedContext:
             _logger.info("reduce_type grad")
         else:
             raise ValueError(f"invalid reduce_type {self._reduce_type!r}")
+
+        self._check_no_unknown_opts()
+
+    def _check_no_unknown_opts(self):
+        # We check that all opts in self._opts have been used.
+        # This function here is called at the end in __init__,
+        # and not all opts are used yet, so read them now,
+        # such that the check in the end works.
+        if self._reduce_type == "grad":
+            self._opts.get("class")
+            self._opts.get("options")
+        if self._reduce_type == "param":
+            self._opts.get("sync_on_cpu")
+
+        self._opts.assert_all_read()
 
     def local_rank(self) -> int:
         """local rank"""
@@ -83,6 +99,7 @@ class DistributedContext:
         """
         if self._reduce_type == "param":
             return None
+        assert self._reduce_type == "grad"
         cls = self._opts.get("class", DistributedDataParallel)
         if cls is not DistributedDataParallel:
             _logger.warning(f"Using custom class {cls} instead of DistributedDataParallel, might be unsupported.")
