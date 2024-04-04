@@ -506,9 +506,9 @@ def describe_tensorflow_version():
     return "%s (%s in %s)" % (version, git_info, tdir)
 
 
-def describe_torch_version():
+def describe_torch_version() -> str:
     """
-    :rtype: str
+    :return: Torch version and path info
     """
     try:
         # noinspection PyPackageRequirements
@@ -3406,6 +3406,24 @@ def _consider_check_for_gpu():
             if dev == "all":
                 return True
     return False
+
+
+def get_cpu_model_name() -> str:
+    """
+    :return: e.g. "Intel(R) Core(TM) i5-8500 CPU @ 3.00GHz" via /proc/cpuinfo. falls back to platform.processor().
+    """
+    if os.path.exists("/proc/cpuinfo"):
+        for line in open("/proc/cpuinfo").read().splitlines():
+            if not line.startswith("model name"):
+                continue
+            key, value = line.split(":", 1)
+            key, value = key.strip(), value.strip()
+            assert key == "model name"
+            return value
+
+    import platform
+
+    return platform.processor()
 
 
 def get_gpu_names():

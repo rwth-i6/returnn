@@ -9,6 +9,7 @@ from contextlib import nullcontext
 import gc
 import os
 import time
+import socket
 
 import torch
 import torch.distributed
@@ -283,6 +284,11 @@ class Engine(EngineBase):
             {
                 "global_train_step": self.global_train_step,
                 "effective_learning_rate": self._updater.get_effective_learning_rate(),
+                "torch": util.describe_torch_version(),
+                "time": time.strftime("%Y-%m-%d-%H-%M-%S (UTC%z)"),
+                "hostname": socket.gethostname(),
+                "device": torch.cuda.get_device_name() if torch.device(self._device).type == "cuda" else self._device,
+                "cpu": util.get_cpu_model_name(),
             }
         )
 
@@ -450,6 +456,7 @@ class Engine(EngineBase):
             {
                 "epoch_num_train_steps": step_idx,
                 "epoch_train_time_secs": round(elapsed),
+                "global_train_step_end": self.global_train_step,
             }
         )
 
