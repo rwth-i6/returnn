@@ -69,8 +69,7 @@ class OggZipDataset(CachedDataset2):
           Value in [0,1] to specify the fraction, or integer >=1 which specifies number of seqs.
           If given, will use this random subset. This will be applied initially at loading time,
           i.e. not dependent on the epoch.
-          If fixed_random_subset_seed is not given it will use an internally hardcoded fixed random seed,
-          i.e. it's deterministic.
+          It uses the fixed fixed_random_subset_seed as seed, i.e. it's deterministic.
         :param int fixed_random_subset_seed: Seed for drawing the fixed random subset, default 42
         :param dict|None epoch_wise_filter: see init_seq_order
         """
