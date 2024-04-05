@@ -289,6 +289,7 @@ class Engine(EngineBase):
                 "hostname": socket.gethostname(),
                 "device": torch.cuda.get_device_name() if torch.device(self._device).type == "cuda" else self._device,
                 "cpu": util.get_cpu_model_name(),
+                "distributed": self._torch_distributed_ctx.__repr__() if self._torch_distributed_ctx else None,
             }
         )
 

@@ -57,6 +57,9 @@ class DistributedContext:
 
         self._check_no_unknown_opts()
 
+    def __repr__(self):
+        return f"<{self.__class__.__name__} rank={self._rank} reduce_type={self._reduce_type}>"
+
     def _check_no_unknown_opts(self):
         # We check that all opts in self._opts have been used.
         # This function here is called at the end in __init__,
