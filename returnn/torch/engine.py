@@ -284,6 +284,7 @@ class Engine(EngineBase):
             {
                 "global_train_step": self.global_train_step,
                 "effective_learning_rate": self._updater.get_effective_learning_rate(),
+                "returnn": util.describe_returnn_version(),
                 "torch": util.describe_torch_version(),
                 "time": time.strftime("%Y-%m-%d-%H-%M-%S (UTC%z)"),
                 "hostname": socket.gethostname(),
