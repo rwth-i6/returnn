@@ -50,6 +50,7 @@ class OggZipDataset(CachedDataset2):
         segment_file=None,
         zip_audio_files_have_name_as_prefix=True,
         fixed_random_subset=None,
+        fixed_random_subset_seed=42,
         epoch_wise_filter=None,
         **kwargs,
     ):
@@ -68,7 +69,9 @@ class OggZipDataset(CachedDataset2):
           Value in [0,1] to specify the fraction, or integer >=1 which specifies number of seqs.
           If given, will use this random subset. This will be applied initially at loading time,
           i.e. not dependent on the epoch.
-          It will use an internally hardcoded fixed random seed, i.e. it's deterministic.
+          If fixed_random_subset_seed is not given it will use an internally hardcoded fixed random seed,
+          i.e. it's deterministic.
+        :param int fixed_random_subset_seed: Seed for drawing the fixed random subset, default 42
         :param dict|None epoch_wise_filter: see init_seq_order
         """
         import os
@@ -153,6 +156,7 @@ class OggZipDataset(CachedDataset2):
             self.num_outputs["data"] = [0, 2]
         self._data: Optional[List[Dict[str, Any]]] = None  # lazily loaded
         self._fixed_random_subset = fixed_random_subset
+        self._fixed_random_subset_seed = fixed_random_subset_seed
         if epoch_wise_filter is None:
             self.epoch_wise_filter = None  # type: Optional[EpochWiseFilter]
         elif isinstance(epoch_wise_filter, dict):
@@ -249,7 +253,7 @@ class OggZipDataset(CachedDataset2):
             if 0 < fixed_random_subset < 1:
                 fixed_random_subset = int(len(data) * fixed_random_subset)
             assert isinstance(fixed_random_subset, int) and fixed_random_subset > 0
-            rnd = numpy.random.RandomState(42)
+            rnd = numpy.random.RandomState(self._fixed_random_subset_seed)
             rnd.shuffle(data)
             data = data[:fixed_random_subset]
 
