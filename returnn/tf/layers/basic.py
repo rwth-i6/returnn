@@ -4236,7 +4236,13 @@ class PadLayer(_ConcatInputLayer):
                             f"pad: mode {mode} not implemented with dynamic dims and handle_dynamic_dims=True"
                         )
                     if isinstance(right, Dim) or right > 0:
-                        mask = rf.compare_bc(rf.range_over_dim(out_dim), "<", (left + middle).dyn_size_ext)
+                        mask = rf.compare_bc(
+                            rf.range_over_dim(out_dim),
+                            "<",
+                            (left + middle)
+                            .get_for_batch_ctx(self.output.batch, self.output.control_flow_ctx)
+                            .dyn_size_ext,
+                        )
                         self.output.raw_tensor = tf_util.where_bc(
                             mask.copy_compatible_to(self.output, check_sparse=False, check_dtype=False).raw_tensor,
                             self.output.raw_tensor,
