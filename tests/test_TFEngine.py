@@ -4409,29 +4409,35 @@ def test_search_multi_choice_hdf_dump():
                             "loss": "as_is",
                             "loss_scale": 0,
                         },
-                        "use_t_search": {
-                            "class": "compare",
-                            "kind": "less",
-                            "from": ["existing_align_score", "extra.search:search_score"],
-                        }
-                        if have_existing_align
-                        else {"class": "constant", "value": True},
-                        "t_search_or_fallback": {
-                            "class": "switch",
-                            "condition": "use_t_search",
-                            "true_from": "extra.search:t_search",
-                            "false_from": "data:t_base",
-                        }
-                        if have_existing_align
-                        else {"class": "copy", "from": "data:t_base"},
-                        "t_search_or_fallback_score": {
-                            "class": "switch",
-                            "condition": "use_t_search",
-                            "true_from": "extra.search:search_score",
-                            "false_from": "existing_align_score",
-                        }
-                        if have_existing_align
-                        else {"class": "copy", "from": "extra.search:search_score"},
+                        "use_t_search": (
+                            {
+                                "class": "compare",
+                                "kind": "less",
+                                "from": ["existing_align_score", "extra.search:search_score"],
+                            }
+                            if have_existing_align
+                            else {"class": "constant", "value": True}
+                        ),
+                        "t_search_or_fallback": (
+                            {
+                                "class": "switch",
+                                "condition": "use_t_search",
+                                "true_from": "extra.search:t_search",
+                                "false_from": "data:t_base",
+                            }
+                            if have_existing_align
+                            else {"class": "copy", "from": "data:t_base"}
+                        ),
+                        "t_search_or_fallback_score": (
+                            {
+                                "class": "switch",
+                                "condition": "use_t_search",
+                                "true_from": "extra.search:search_score",
+                                "false_from": "existing_align_score",
+                            }
+                            if have_existing_align
+                            else {"class": "copy", "from": "extra.search:search_score"}
+                        ),
                     }
                 )
                 if epoch0 is not None and epoch0 < StoreAlignmentUpToEpoch:

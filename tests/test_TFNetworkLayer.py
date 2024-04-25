@@ -362,7 +362,16 @@ def test_PadLayer_time():
         padding = (2, 3)
         net = TFNetwork(config=config)
         net.construct_from_dict(
-            {"output": {"class": "pad", "axes": "T", "padding": padding, "mode": "replication", "from": "data:data"}}
+            {
+                "output": {
+                    "class": "pad",
+                    "axes": "T",
+                    "padding": padding,
+                    "handle_dynamic_dims": False,  # our test below does not handle dyn seq lens
+                    "mode": "replication",
+                    "from": "data:data",
+                }
+            }
         )
         out_t = net.get_default_output_layer().output.placeholder
         assert out_t.shape.as_list() == [None, None, n_in]
@@ -395,7 +404,16 @@ def test_PadLayer_feature():
         padding = (2, 3)
         net = TFNetwork(config=config)
         net.construct_from_dict(
-            {"output": {"class": "pad", "axes": "F", "padding": padding, "mode": "replication", "from": "data:data"}}
+            {
+                "output": {
+                    "class": "pad",
+                    "axes": "F",
+                    "padding": padding,
+                    "handle_dynamic_dims": False,  # our test below does not handle dyn seq lens
+                    "mode": "replication",
+                    "from": "data:data",
+                }
+            }
         )
         out_t = net.get_default_output_layer().output.placeholder
         assert out_t.shape.as_list() == [None, None, None]
@@ -12397,6 +12415,7 @@ def test_automatic_seq_lengths():
                     "mode": "reflect",
                     "axes": "spatial",
                     "padding": (3, 3),
+                    "handle_dynamic_dims": False,  # not supported yet otherwise
                     "from": "data",
                 },  # len+6
                 "layer1": {
