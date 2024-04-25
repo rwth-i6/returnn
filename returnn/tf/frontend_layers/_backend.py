@@ -355,6 +355,7 @@ class ReturnnLayersBackend(Backend[Layer]):
         axes: Sequence[Dim],
         padding: Sequence[Tuple[Union[Dim, int], Union[Dim, int]]],
         out_dims: Sequence[Dim],
+        handle_dynamic_dims: bool,
         mode: str = "constant",
         value: Union[rf.RawTensorTypes, Tensor] = None,
     ) -> Tensor:
@@ -367,6 +368,7 @@ class ReturnnLayersBackend(Backend[Layer]):
                 "axes": axes,
                 "padding": padding,
                 "out_dims": out_dims,
+                "handle_dynamic_dims": handle_dynamic_dims,
                 "mode": mode,
                 "value": value,
             },

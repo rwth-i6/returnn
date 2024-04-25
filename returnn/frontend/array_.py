@@ -4,6 +4,7 @@ Array (Tensor) functions
 
 from __future__ import annotations
 from typing import Optional, Union, Type, TypeVar, Sequence, Tuple
+import logging
 import numpy
 from returnn.tensor import Tensor, Dim
 import returnn.frontend as rf
@@ -385,6 +386,7 @@ def pad(
     out_dims: Optional[Sequence[Dim]] = None,
     mode: str = "constant",
     value: Optional[Union[rf.RawTensorTypes, Tensor]] = None,
+    handle_dynamic_dims: Optional[bool] = None,
 ) -> Tuple[Tensor, Sequence[Dim]]:
     """
     Pad values left/right in the specified axes.
@@ -392,9 +394,13 @@ def pad(
     :param source:
     :param axes: which axes to add padding to
     :param padding: list of (left, right) padding for each axis
-    :param out_dims: (optional) predefined out dim tags, otherwise will automatically create
+    :param out_dims: (optional) predefined out dims for each padded dim in axes. will automatically create if not given
     :param mode: 'constant', 'reflect', 'replicate' or 'circular'
     :param value: (optional) value to pad with in "constant" mode
+    :param handle_dynamic_dims: True: when doing right padding on a dynamic dim, value will be added after the seq end,
+        not at the end of the dimension. False: value will be added at the end of the dimension.
+        By default, in behavior version >=21, this is True, in older versions, this is False.
+    :return: padded tensor, out_dims. out dims are for each dim in axes
     """
     assert len(axes) == len(padding)
     if not out_dims:
@@ -405,11 +411,60 @@ def pad(
                 assert not right.need_masking(), f"padding {padding} does not support dynamic right padding"
             # Note that even dynamic middle dims is not exactly correct...
         out_dims = [left + middle + right for middle, (left, right) in zip(axes, padding)]
+    if handle_dynamic_dims is None:
+        handle_dynamic_dims = _pad_handle_dynamic_dims_default(axes, padding, mode=mode)
     # noinspection PyProtectedMember
     return (
-        source._raw_backend.pad(source, axes=axes, padding=padding, out_dims=out_dims, mode=mode, value=value),
+        source._raw_backend.pad(
+            source,
+            axes=axes,
+            padding=padding,
+            out_dims=out_dims,
+            handle_dynamic_dims=handle_dynamic_dims,
+            mode=mode,
+            value=value,
+        ),
         out_dims,
     )
+
+
+_pad_handle_dynamic_dims_shown_warning = False
+
+
+def _pad_handle_dynamic_dims_default(
+    pad_axes: Sequence[Dim], padding: Sequence[Tuple[Union[Dim, int], Union[Dim, int]]], *, mode: str
+) -> bool:
+    """
+    :param pad_axes: list of axes to pad
+    :param padding: list of (left, right) padding for each axis
+    :param mode: 'constant', 'reflect', 'replicate' or 'circular'
+    :return: True if dynamic dims should be handled as specified in the default behavior
+    """
+    from returnn.util.basic import BehaviorVersion
+
+    if BehaviorVersion.get() >= 21:
+        return True
+
+    # Check whether not handling the dynamic dims is safe. Print a warning if not safe.
+    global _pad_handle_dynamic_dims_shown_warning
+    if not _pad_handle_dynamic_dims_shown_warning:
+        for middle, (left, right) in zip(pad_axes, padding):
+            middle: Dim
+            if not middle.need_masking() and (isinstance(left, int) or not left.need_masking()):
+                continue
+            if mode != "circular" and isinstance(right, int) and right == 0:
+                continue
+
+            logging.getLogger("returnn.frontend").warning(
+                f"rf.pad applied on dynamic dim {middle} but handle_dynamic_dims=False used by default"
+                f" due to behavior version {BehaviorVersion.get()} < 21."
+                " Set handle_dynamic_dims explicitly to avoid the warning,"
+                " or switch to a new behavior version >= 21."
+                " (This warning is only printed once.)"
+            )
+            _pad_handle_dynamic_dims_shown_warning = True
+            break
+    return False
 
 
 def cum_concat_step(

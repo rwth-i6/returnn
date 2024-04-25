@@ -439,6 +439,7 @@ class TorchBackend(Backend[torch.Tensor]):
         axes: Sequence[Dim],
         padding: Sequence[Tuple[Union[Dim, int], Union[Dim, int]]],
         out_dims: Sequence[Dim],
+        handle_dynamic_dims: bool,
         mode: str = "constant",
         value: Optional[Union[rf.RawTensorTypes, Tensor]] = None,
     ) -> Tensor:
@@ -465,6 +466,23 @@ class TorchBackend(Backend[torch.Tensor]):
             assert value.dims == (), f"value {value} must be a scalar"
             value = value.raw_tensor
         out.raw_tensor = torch.nn.functional.pad(source.raw_tensor, pad=raw_pad, mode=mode, value=value)
+        if any(dim.need_masking() for dim in out_dims) and handle_dynamic_dims:
+            if all(right == 0 for right in raw_pad[1::2]) and mode != "circular":
+                pass  # no masking needed
+            else:
+                if mode != "constant":
+                    raise NotImplementedError(
+                        f"pad: mode {mode} not implemented with dynamic dims and handle_dynamic_dims=True"
+                    )
+                for out_dim, middle, (left, right) in zip(out_dims, axes, padding):
+                    if middle.need_masking() or (isinstance(left, Dim) and left.need_masking()):
+                        if isinstance(right, Dim) or right > 0:
+                            mask = rf.compare_bc(rf.range_over_dim(out_dim), "<", (left + middle).dyn_size_ext)
+                            out.raw_tensor = torch.where(
+                                mask.copy_compatible_to(out, check_dtype=False, check_sparse=False).raw_tensor,
+                                out.raw_tensor,
+                                value,
+                            )
         return out
 
     @staticmethod

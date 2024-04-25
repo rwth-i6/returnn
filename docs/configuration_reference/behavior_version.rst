@@ -22,6 +22,12 @@ and not listing legacy/deprecated parameters.
 Version History
 ---------------
 
+Behavior version 21 (2024-04-25)
+
+RF ``pad`` and TF ``PadLayer`` defaults changed:
+
+* ``handle_dynamic_dims``: False → True
+
 Behavior version 20 (2024-01-05)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 

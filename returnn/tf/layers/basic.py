@@ -1981,13 +1981,15 @@ class ScatterNdLayer(_ConcatInputLayer):
         # Now we need to implement a similar logic as `returnn.tf.util.basic.nd_indices`, but more generic.
         idxs = [
             (
-                tf.reshape(
-                    tf.range(pos_shape[i], dtype=pos_v.dtype), [1] * i + [pos_shape[i]] + [1] * (pos_ndim - i - 1)
+                (
+                    tf.reshape(
+                        tf.range(pos_shape[i], dtype=pos_v.dtype), [1] * i + [pos_shape[i]] + [1] * (pos_ndim - i - 1)
+                    )
+                    + tf.zeros_like(pos_v)
                 )
-                + tf.zeros_like(pos_v)
+                if i != replace_common_axis
+                else pos_v
             )
-            if i != replace_common_axis
-            else pos_v
             for i in range(pos_ndim)
         ]
         nd_idxs = tf.stack(idxs, axis=-1)
@@ -4173,13 +4175,28 @@ class PadLayer(_ConcatInputLayer):
 
     layer_class = "pad"
 
-    def __init__(self, axes, padding, out_dims=None, value=0, mode="constant", **kwargs):
+    def __init__(
+        self,
+        *,
+        axes: Union[Dim, str, Sequence[Union[Dim, str]]],
+        padding: Union[int, Tuple[int, int], Sequence[Tuple[int, int]]],
+        out_dims: Optional[Union[Dim, Sequence[Dim]]] = None,
+        handle_dynamic_dims: Optional[bool] = None,
+        value: Union[int, float] = 0,
+        mode: str = "constant",
+        **kwargs,
+    ):
         """
-        :param Dim|str|list[Dim|str] axes: e.g. "F" etc. see :func:`Data.get_axes_from_description`.
-        :param list[(int,int)]|(int,int)|int padding: how much to pad left/right in each axis
-        :param Dim|list[Dim]|None out_dims:
-        :param int|float value: what constant value to pad, with mode=="constant"
-        :param str mode: "constant", "reflect", "symmetric" and "replication"
+        :param axes: e.g. "F" etc. see :func:`Data.get_axes_from_description`.
+        :param padding: how much to pad left/right in each axis
+        :param out_dims:
+        :param handle_dynamic_dims: True: when doing right padding on a dynamic dim,
+            value will be added after the seq end,
+            not at the end of the dimension.
+            False: value will be added at the end of the dimension.
+            By default, in behavior version >=21, this is True, in older versions, this is False.
+        :param value: what constant value to pad, with mode=="constant"
+        :param mode: "constant", "reflect", "symmetric" and "replication"
         """
         out_dims  # noqa  # handled in get_out_data_from_opts
         super(PadLayer, self).__init__(**kwargs)
@@ -4190,15 +4207,42 @@ class PadLayer(_ConcatInputLayer):
         paddings = [(0, 0)] * len(range(self.input_data.batch_ndim))
         for i, a in enumerate(axes):
             paddings[a] = padding[i]
-        mode = mode.upper()
+        mode = mode.lower()
+        if handle_dynamic_dims is None:
+            handle_dynamic_dims = self._handle_dynamic_dims_default(
+                pad_axes=[self.input_data.dims[axis] for axis in axes_],
+                padding=padding,
+                mode=mode,
+            )
         if all(sum(p) == 0 for p in padding):
             self.output.placeholder = self.input_data.placeholder
-        elif mode == "REPLICATION":
+        elif mode == "replication":
             self.output.placeholder = tf_util.pad_replicate(self.input_data.placeholder, axes, padding)
         else:
             self.output.placeholder = tf.pad(
                 self.input_data.placeholder, paddings=paddings, mode=mode, constant_values=value
             )
+        if any(dim.need_masking() for dim in out_dims) and handle_dynamic_dims:
+            if all(right == 0 for left, right in padding) and mode != "circular":
+                pass  # no masking needed
+            else:
+                import returnn.frontend as rf
+
+                if mode != "constant":
+                    raise NotImplementedError(
+                        f"pad: mode {mode} not implemented with dynamic dims and handle_dynamic_dims=True"
+                    )
+                for out_dim, middle_axis, (left, right) in zip(out_dims, axes, padding):
+                    out_dim: Dim
+                    middle = self.input_data.dims[middle_axis]
+                    if middle.need_masking() or (isinstance(left, Dim) and left.need_masking()):
+                        if isinstance(right, Dim) or right > 0:
+                            mask = rf.compare_bc(rf.range_over_dim(out_dim), "<", (left + middle).dyn_size_ext)
+                            self.output.raw_tensor = tf_util.where_bc(
+                                mask.copy_compatible_to(self.output, check_sparse=False, check_dtype=False).raw_tensor,
+                                self.output.raw_tensor,
+                                tf.convert_to_tensor(value, dtype=self.output.dtype),
+                            )
 
     @classmethod
     def _transform_padding(cls, padding, axes):
@@ -4217,6 +4261,45 @@ class PadLayer(_ConcatInputLayer):
         else:
             padding = [(padding, padding)] * len(axes)
         return padding
+
+    _handle_dynamic_dims_shown_warning = False
+
+    @classmethod
+    def _handle_dynamic_dims_default(
+        cls, pad_axes: Sequence[Dim], padding: Sequence[Tuple[Union[Dim, int], Union[Dim, int]]], *, mode: str
+    ) -> bool:
+        """
+        :param pad_axes: list of axes to pad
+        :param padding: list of (left, right) padding for each axis
+        :param mode: 'constant', 'reflect', 'replicate' or 'circular'
+        :return: True if dynamic dims should be handled as specified in the default behavior
+        """
+        from returnn.util.basic import BehaviorVersion
+
+        if BehaviorVersion.get() >= 21:
+            return True
+
+        # Check whether not handling the dynamic dims is safe. Print a warning if not safe.
+        if not cls._handle_dynamic_dims_shown_warning:
+            import logging
+
+            for middle, (left, right) in zip(pad_axes, padding):
+                middle: Dim
+                if not middle.need_masking() and (isinstance(left, int) or not left.need_masking()):
+                    continue
+                if mode != "circular" and isinstance(right, int) and right == 0:
+                    continue
+
+                logging.getLogger("returnn.tf").warning(
+                    f"PadLayer applied on dynamic dim {middle} but handle_dynamic_dims=False used by default"
+                    f" due to behavior version {BehaviorVersion.get()} < 21."
+                    " Set handle_dynamic_dims explicitly to avoid the warning,"
+                    " or switch to a new behavior version >= 21."
+                    " (This warning is only printed once.)"
+                )
+                cls._handle_dynamic_dims_shown_warning = True
+                break
+        return False
 
     @classmethod
     def get_out_data_from_opts(cls, name, sources, axes, padding, out_dims=None, **kwargs):
@@ -4929,14 +5012,16 @@ class SplitDimsLayer(_ConcatInputLayer):
                 rem_dim = None
             if not resolved_dims:
                 resolved_dims = tuple(
-                    Dim(
-                        kind=axis_dim_tag.kind if not axis_dim_tag.is_batch_dim() else Dim.Types.Spatial,
-                        description="%s_split_dims%i" % (name, i),
-                        dimension=shape_dim,
-                        auto_generated=True,
+                    (
+                        Dim(
+                            kind=axis_dim_tag.kind if not axis_dim_tag.is_batch_dim() else Dim.Types.Spatial,
+                            description="%s_split_dims%i" % (name, i),
+                            dimension=shape_dim,
+                            auto_generated=True,
+                        )
+                        if rem_dim is None or i != rem_dim_idx
+                        else rem_dim
                     )
-                    if rem_dim is None or i != rem_dim_idx
-                    else rem_dim
                     for i, shape_dim in enumerate(resolved_shape_dims)
                 )
         out_batch = data.batch

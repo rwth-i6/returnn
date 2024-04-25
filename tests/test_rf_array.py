@@ -5,6 +5,7 @@ RETURNN frontend (returnn.frontend) tests
 from __future__ import annotations
 from typing import Tuple
 import _setup_test_env  # noqa
+import numpy as np
 import returnn.frontend as rf
 from returnn.tensor import Tensor, Dim, TensorDict, batch_dim
 from rf_utils import run_model
@@ -128,7 +129,7 @@ def test_pad_time():
     )
 
     class _Net(rf.Module):
-        def __call__(self, x: Tensor) -> Tuple[Tensor, Tuple[Dim, Dim]]:
+        def __call__(self, x: Tensor) -> Tuple[Tensor, Tuple[Dim]]:
             pack, (new_time,) = rf.pad(x, axes=[time_dim], padding=[(1, 0)], value=0)
             return pack, (new_time,)
 
@@ -138,6 +139,48 @@ def test_pad_time():
         out.mark_as_default_output(shape=(batch_dim, new_time, in_dim))
 
     run_model(extern_data, lambda *, epoch, step: _Net(), _forward_step)
+
+
+def test_pad_time_right():
+    time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
+    in_dim = Dim(7, name="in")
+    extern_data = TensorDict(
+        {
+            "data": Tensor("data", [batch_dim, time_dim, in_dim], dtype="float32"),
+        }
+    )
+
+    class _Net(rf.Module):
+        def __call__(self, x: Tensor) -> Tuple[Tensor, Tuple[Dim]]:
+            pack, (new_time,) = rf.pad(x, axes=[time_dim], padding=[(0, 1)], value=1)
+            return pack, (new_time,)
+
+    # noinspection PyShadowingNames
+    def _forward_step(*, model: _Net, extern_data: TensorDict):
+        data = extern_data["data"]
+        data.mark_as_output("data", shape=(batch_dim, time_dim, in_dim))
+        out, (new_time,) = model(data)
+        out.mark_as_default_output(shape=(batch_dim, new_time, in_dim))
+
+    res = run_model(extern_data, lambda *, epoch, step: _Net(), _forward_step)
+    data_: Tensor = res["data"]
+    out_: Tensor = res["output"]
+    assert data_.dims == (batch_dim, time_dim, in_dim)
+    new_time_dim = out_.dims[1]
+    assert out_.dims == (batch_dim, new_time_dim, in_dim) and new_time_dim != time_dim
+    assert new_time_dim == time_dim + 1  # math dim... not really necessary check here...
+    assert time_dim.dyn_size_ext.dims == new_time_dim.dyn_size_ext.dims == (batch_dim,)
+    batch_size = batch_dim.get_dim_value()
+    assert batch_size > 1
+    assert len(set(time_dim.dyn_size_ext.raw_tensor)) > 1  # not all the same
+    for b in range(batch_size):
+        seq_len = time_dim.dyn_size_ext.raw_tensor[b]
+        new_seq_len = new_time_dim.dyn_size_ext.raw_tensor[b]
+        print(f"batch {b}, seq_len {seq_len}, new_seq_len {new_seq_len}")
+        assert new_seq_len == seq_len + 1
+        np.testing.assert_allclose(data_.raw_tensor[b, :seq_len], out_.raw_tensor[b, :seq_len])
+        print(out_.raw_tensor[b])
+        assert all(out_.raw_tensor[b, seq_len] == 1.0)
 
 
 def test_gather():
