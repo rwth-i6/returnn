@@ -477,7 +477,11 @@ class TorchBackend(Backend[torch.Tensor]):
                 for out_dim, middle, (left, right) in zip(out_dims, axes, padding):
                     if middle.need_masking() or (isinstance(left, Dim) and left.need_masking()):
                         if isinstance(right, Dim) or right > 0:
-                            mask = rf.compare_bc(rf.range_over_dim(out_dim), "<", (left + middle).dyn_size_ext)
+                            mask = rf.compare_bc(
+                                rf.range_over_dim(out_dim, device=out.device),
+                                "<",
+                                rf.copy_to_device((left + middle).dyn_size_ext, out.device),
+                            )
                             out.raw_tensor = torch.where(
                                 mask.copy_compatible_to(out, check_dtype=False, check_sparse=False).raw_tensor,
                                 out.raw_tensor,
