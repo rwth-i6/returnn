@@ -4222,27 +4222,26 @@ class PadLayer(_ConcatInputLayer):
             self.output.placeholder = tf.pad(
                 self.input_data.placeholder, paddings=paddings, mode=mode, constant_values=value
             )
-        if any(dim.need_masking() for dim in out_dims) and handle_dynamic_dims:
-            if all(right == 0 for left, right in padding) and mode != "circular":
-                pass  # no masking needed
-            else:
-                import returnn.frontend as rf
+        if all(right == 0 for left, right in padding) and mode != "circular":
+            pass  # no masking needed
+        else:
+            import returnn.frontend as rf
 
-                if mode != "constant":
-                    raise NotImplementedError(
-                        f"pad: mode {mode} not implemented with dynamic dims and handle_dynamic_dims=True"
-                    )
-                for out_dim, middle_axis, (left, right) in zip(out_dims, axes, padding):
-                    out_dim: Dim
-                    middle = self.input_data.dims[middle_axis]
-                    if middle.need_masking() or (isinstance(left, Dim) and left.need_masking()):
-                        if isinstance(right, Dim) or right > 0:
-                            mask = rf.compare_bc(rf.range_over_dim(out_dim), "<", (left + middle).dyn_size_ext)
-                            self.output.raw_tensor = tf_util.where_bc(
-                                mask.copy_compatible_to(self.output, check_sparse=False, check_dtype=False).raw_tensor,
-                                self.output.raw_tensor,
-                                tf.convert_to_tensor(value, dtype=self.output.dtype),
-                            )
+            for middle_axis, (left, right) in zip(axes, padding):
+                out_dim: Dim = self.output.dims[middle_axis]
+                middle = self.input_data.dims[middle_axis]
+                if handle_dynamic_dims and middle.need_masking() or (isinstance(left, Dim) and left.need_masking()):
+                    if mode != "constant":
+                        raise NotImplementedError(
+                            f"pad: mode {mode} not implemented with dynamic dims and handle_dynamic_dims=True"
+                        )
+                    if isinstance(right, Dim) or right > 0:
+                        mask = rf.compare_bc(rf.range_over_dim(out_dim), "<", (left + middle).dyn_size_ext)
+                        self.output.raw_tensor = tf_util.where_bc(
+                            mask.copy_compatible_to(self.output, check_sparse=False, check_dtype=False).raw_tensor,
+                            self.output.raw_tensor,
+                            tf.convert_to_tensor(value, dtype=self.output.dtype),
+                        )
 
     @classmethod
     def _transform_padding(cls, padding, axes):
