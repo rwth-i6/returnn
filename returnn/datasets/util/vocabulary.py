@@ -13,9 +13,9 @@ __all__ = [
     "Utf8ByteTargets",
 ]
 
-import sys
+from typing import Optional, Union, Type, List
 import typing
-
+import sys
 import numpy
 
 from returnn.log import log
@@ -107,13 +107,13 @@ class Vocabulary(object):
             parts.append("pad_label=%r" % self.id_to_label(self.pad_label_id))
         return "%s(%s)" % (self.__class__.__name__, ", ".join(parts))
 
-    def set_random_seed(self, seed):
+    def set_random_seed(self, seed: int):
         """
         This can be called for a new epoch or so.
         Usually it has no effect, as there is no randomness.
         However, some vocab class could introduce some sampling process.
 
-        :param int seed:
+        :param seed:
         """
         pass  # usually there is no randomness, so ignore
 
@@ -205,12 +205,16 @@ class Vocabulary(object):
 
         return init_vocab_var
 
-    def to_id(self, label, default=KeyError, allow_none=False):
+    def to_id(
+        self,
+        label: Union[str, int, None],
+        default: Union[str, Type[KeyError], None] = KeyError,
+        allow_none: bool = False,
+    ) -> Optional[int]:
         """
-        :param str|int|None label:
-        :param str|type[KeyError]|None default:
-        :param bool allow_none: whether label can be None. in this case, None is returned
-        :rtype: int|None
+        :param label:
+        :param default:
+        :param allow_none: whether label can be None. in this case, None is returned
         """
         if isinstance(label, str):
             return self.label_to_id(label, default=default)
@@ -226,21 +230,19 @@ class Vocabulary(object):
             return None
         raise TypeError("invalid label type %r" % type(label))
 
-    def label_to_id(self, label, default=KeyError):
+    def label_to_id(self, label: str, default: Union[int, Type[KeyError], None] = KeyError) -> Optional[int]:
         """
-        :param str label:
-        :param int|type[KeyError]|None default:
-        :rtype: int|None
+        :param label:
+        :param default:
         """
         if default is KeyError:
             return self._vocab[label]
         return self._vocab.get(label, default)
 
-    def id_to_label(self, idx, default=KeyError):
+    def id_to_label(self, idx: int, default: Union[str, Type[KeyError], None] = KeyError) -> Optional[str]:
         """
-        :param int idx:
-        :param str|KeyError|None default:
-        :rtype: str|None
+        :param idx:
+        :param default:
         """
         if self.is_id_valid(idx):
             return self._labels[idx]
@@ -248,43 +250,43 @@ class Vocabulary(object):
             raise KeyError("idx %i out of range" % idx)
         return default
 
-    def is_id_valid(self, idx):
+    def is_id_valid(self, idx: int) -> bool:
         """
-        :param int idx:
-        :rtype: bool
+        :param idx:
         """
         return 0 <= idx < len(self._labels)
 
     @property
-    def labels(self):
-        """
-        :rtype: list[str]
-        """
+    def labels(self) -> List[str]:
+        """list of labels"""
         return self._labels
 
-    def get_seq(self, sentence):
+    def get_seq(self, sentence: str) -> List[int]:
         """
-        :param str sentence: assumed to be seq of vocab entries separated by whitespace
-        :rtype: list[int]
+        :param sentence: assumed to be seq of vocab entries separated by whitespace
+        :return: seq of label indices
         """
         segments = sentence.split()
         return self.get_seq_indices(segments) + self.seq_postfix
 
-    def get_seq_indices(self, seq):
+    def get_seq_indices(self, seq: List[str]) -> List[int]:
         """
-        :param list[str] seq:
-        :rtype: list[int]
+        :param seq: seq of labels (entries in vocab)
+        :return: seq of label indices, returns unknown_label_id if unknown_label is set
         """
         if self.unknown_label is not None:
             return [self._vocab.get(k, self.unknown_label_id) for k in seq]
         return [self._vocab[k] for k in seq]
 
-    def get_seq_labels(self, seq):
+    def get_seq_labels(self, seq: Union[List[int], numpy.ndarray]) -> str:
         """
-        :param list[int]|numpy.ndarray seq: 1D sequence
-        :rtype: str
+        Inverse of :func:`get_seq`.
+
+        :param seq: 1D sequence of label indices
+        :return: serialized sequence string, such that ``get_seq(get_seq_labels(seq)) == seq``
         """
-        return " ".join(map(self._labels.__getitem__, seq))
+        labels = self.labels
+        return " ".join(map(labels.__getitem__, seq))
 
 
 class BytePairEncoding(Vocabulary):
@@ -421,10 +423,8 @@ class SentencePieces(Vocabulary):
         # Do not load labels/vocab here. This is not really needed.
 
     @property
-    def labels(self):
-        """
-        :rtype: list[str]
-        """
+    def labels(self) -> List[str]:
+        """list of labels"""
         if self._cache_key and self._cache_key in self._cache:
             self._vocab, self._labels = self._cache[self._cache_key]
             assert self.num_labels == len(self._vocab) == len(self._labels)
@@ -435,28 +435,25 @@ class SentencePieces(Vocabulary):
                 self._cache[self._cache_key] = (self._vocab, self._labels)
         return self._labels
 
-    def is_id_valid(self, idx):
+    def is_id_valid(self, idx: int) -> bool:
         """
-        :param int idx:
-        :rtype: bool
+        :param idx:
         """
         return not self.sp.IsUnused(idx)
 
-    def id_to_label(self, idx, default=KeyError):
+    def id_to_label(self, idx: int, default: Union[str, Type[KeyError], None] = KeyError) -> Optional[str]:
         """
-        :param int idx:
-        :param str|KeyError|None default:
-        :rtype: str|None
+        :param idx:
+        :param default:
         """
         if default is not KeyError and not self.is_id_valid(idx):
             return default
         return self.sp.IdToPiece(idx)
 
-    def label_to_id(self, label, default=KeyError):
+    def label_to_id(self, label: str, default: Union[int, Type[KeyError], None] = KeyError) -> Optional[int]:
         """
-        :param str label:
-        :param int|type[KeyError]|None default:
-        :rtype: int|None
+        :param label:
+        :param default:
         """
         res = self.sp.PieceToId(label)
         if res == self.unknown_label_id or res < 0 or res is None:
@@ -468,9 +465,9 @@ class SentencePieces(Vocabulary):
             return default
         return res
 
-    def set_random_seed(self, seed):
+    def set_random_seed(self, seed: int):
         """
-        :param int seed:
+        :param seed:
         """
         # Unfortunately, there is only a global seed,
         # and also, it will only be used for new threads
@@ -480,10 +477,9 @@ class SentencePieces(Vocabulary):
 
         spm.set_random_generator_seed(seed)
 
-    def get_seq(self, sentence):
+    def get_seq(self, sentence: str) -> List[int]:
         """
-        :param str sentence: assumed to be seq of vocab entries separated by whitespace
-        :rtype: list[int]
+        :param sentence: assumed to be seq of vocab entries separated by whitespace
         """
         return self.sp.encode(sentence, out_type=int)  # noqa
 
