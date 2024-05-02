@@ -23,6 +23,7 @@ Version History
 ---------------
 
 Behavior version 21 (2024-04-25)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 RF ``pad`` and TF ``PadLayer`` defaults changed:
 
