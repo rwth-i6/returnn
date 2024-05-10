@@ -236,6 +236,8 @@ def init(config_str, config_dataset, verbosity):
     config = rnn.config
     config.set("log", None)
     config.set("log_verbosity", verbosity)
+    config.set("torch_distributed", None)
+    config.set("use_horovod", None)
     if dataset_dict:
         assert not config_dataset
         dataset = init_dataset(dataset_dict)
