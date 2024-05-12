@@ -18,11 +18,14 @@ References:
 
 from __future__ import annotations
 
+import sys
 import time
 from typing import Optional, Any, Callable, Tuple
 import os
 import signal
 import atexit
+from .basic import serialize_object, deserialize_object, close_all_fds_except
+from .better_exchook import better_exchook
 
 # noinspection PyProtectedMember
 from multiprocessing.context import BaseContext, SpawnProcess
@@ -124,16 +127,29 @@ class NonDaemonicSpawnProcess(SpawnProcess):
         # this is the way to do it.
         # Note that internally, multiprocessing SpawnProcess does sth similar,
         # see multiprocessing.spawn._main, spawn.prepare.
-        return (self._reconstruct_with_pre_init_func, (reconstruct_func, reconstruct_args, self.pre_init_func)) + tuple(
-            other
-        )
+        return (
+            self._reconstruct_with_pre_init_func,
+            (reconstruct_func, reconstruct_args, serialize_object(self.pre_init_func)),
+        ) + tuple(other)
 
     @staticmethod
     def _reconstruct_with_pre_init_func(
-        reconstruct_func: Callable, reconstruct_args: Tuple[Any, ...], pre_init_func: Callable[[], None]
+        reconstruct_func: Callable, reconstruct_args: Tuple[Any, ...], pre_init_func_serialized: bytes
     ):
-        pre_init_func()
-        return reconstruct_func(*reconstruct_args)
+        try:
+            pre_init_func: Callable[[], None] = deserialize_object(pre_init_func_serialized)
+            pre_init_func()
+            return reconstruct_func(*reconstruct_args)
+        except Exception as exc:
+            print(
+                f"[PID {os.getpid()}, PPID {os.getppid()}]"
+                f" Error in NonDaemonicSpawnProcess._reconstruct_with_pre_init_func: {exc}"
+            )
+            better_exchook(*sys.exc_info(), autodebugshell=False)
+            # Make sure that we don't keep any file descriptors open, such that the parent will not hang.
+            # https://github.com/rwth-i6/returnn/issues/1514
+            close_all_fds_except({0, 1, 2})
+            raise
 
 
 class NonDaemonicSpawnContext(BaseContext):
