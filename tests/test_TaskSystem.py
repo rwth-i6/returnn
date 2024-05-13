@@ -5,6 +5,7 @@ import _setup_test_env  # noqa
 from io import BytesIO
 from returnn.util.task_system import *
 import inspect
+import unittest
 from nose.tools import assert_equal, assert_is_instance
 from returnn.util import better_exchook
 
@@ -18,8 +19,11 @@ def pickle_dumps(obj):
     return sio.getvalue()
 
 
-def pickle_loads(s):
-    p = Unpickler(BytesIO(s))
+def pickle_loads(s, *, encoding=None):
+    kwargs = {}
+    if encoding:
+        kwargs["encoding"] = encoding
+    p = Unpickler(BytesIO(s), **kwargs)
     return p.load()
 
 
@@ -101,3 +105,30 @@ def test_pickle():
     s = pickle_dumps(obj.method)
     inst = pickle_loads(s)
     assert_equal(inst(), 42)
+
+
+def test_pickle_unicode_str():
+    assert_equal(pickle_loads(pickle_dumps("â"), encoding="utf8"), "â")
+
+
+if __name__ == "__main__":
+    better_exchook.install()
+    if len(sys.argv) <= 1:
+        for k, v in sorted(globals().items()):
+            if k.startswith("test_"):
+                print("-" * 40)
+                print("Executing: %s" % k)
+                try:
+                    v()
+                except unittest.SkipTest as exc:
+                    print("SkipTest:", exc)
+                print("-" * 40)
+        print("Finished all tests.")
+    else:
+        assert len(sys.argv) >= 2
+        for arg in sys.argv[1:]:
+            print("Executing: %s" % arg)
+            if arg in globals():
+                globals()[arg]()  # assume function and execute
+            else:
+                eval(arg)  # assume Python code and execute

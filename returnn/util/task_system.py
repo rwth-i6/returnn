@@ -657,15 +657,6 @@ class Pickler(_BasePickler):
 
     dispatch[ModuleType] = save_module
 
-    def save_string(self, obj, pack=struct.pack):
-        # Difference to base: We just always use BINSTRING (simpler)
-        # and use a separate write for the obj itself.
-        # For a huge obj, this avoids one unnecessary copy of the data.
-        self.write(pickle.BINSTRING + pack("<i", len(obj)))
-        self.write(bytes(obj, "utf8"))
-
-    dispatch[str] = save_string
-
     def save_ndarray(self, obj):
         if use_shared_mem_for_numpy_array(obj):
             try:
