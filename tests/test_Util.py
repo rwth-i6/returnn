@@ -10,6 +10,7 @@ import numpy as np
 import numpy
 import unittest
 import textwrap
+import signal
 
 from returnn.util import better_exchook
 from returnn.util.py_ext_mod_compiler import PyExtModCompiler
@@ -17,6 +18,25 @@ from returnn.util.py_ext_mod_compiler import PyExtModCompiler
 better_exchook.replace_traceback_format_tb()
 
 my_dir = os.path.dirname(os.path.realpath(__file__))
+
+
+def _sig_alarm_handler(signum, frame):
+    raise Exception(f"Alarm (timeout) signal handler")
+
+
+signal.signal(signal.SIGALRM, _sig_alarm_handler)
+
+
+@contextlib.contextmanager
+def timeout(seconds=10):
+    """
+    :param seconds: when the context is not closed within this time, an exception will be raised
+    """
+    signal.alarm(seconds)
+    try:
+        yield
+    finally:
+        signal.alarm(0)
 
 
 def test_cmd_true():
@@ -535,6 +555,46 @@ def test_native_signal_handler():
     from returnn.util.debug import install_native_signal_handler
 
     install_native_signal_handler(reraise_exceptions=True)
+
+
+class _PreInitUnpicklingRaiseException:
+    def __getstate__(self):
+        return 42
+
+    def __setstate__(self, state):
+        raise Exception("_PreInitUnpicklingRaiseException")
+
+
+class _PreInitDummy:
+    def __init__(self, *, payload):
+        self.payload = payload
+
+    def __call__(self):
+        pass  # nothing
+
+
+def _noop_func():
+    pass
+
+
+def test_NonDaemonicSpawnProcess_hang_1514():
+    # https://github.com/rwth-i6/returnn/issues/1514
+    from returnn.util.multi_proc_non_daemonic_spawn import NonDaemonicSpawnProcess
+
+    with timeout():
+        proc = NonDaemonicSpawnProcess(target=_noop_func)
+        proc.start()
+        proc.join()
+        assert proc.exitcode == 0
+
+        proc = NonDaemonicSpawnProcess(target=_noop_func)
+        # Give it some payload large enough such that it will the pipe buffer to trigger the potential hang.
+        proc.pre_init_func = _PreInitDummy(payload=["A" * 100_000, _PreInitUnpicklingRaiseException(), "B" * 100_000])
+        # After fixing this, we expect that the unpickling of pre_init_func will raise an exception,
+        # however, the parent then will not hang.
+        proc.start()
+        proc.join()
+        assert proc.exitcode != 0
 
 
 if __name__ == "__main__":

@@ -18,14 +18,21 @@ References:
 
 from __future__ import annotations
 
+import io
+import pickle
 import time
-from typing import Optional, Any, Callable, Tuple
+from typing import Optional, Callable
 import os
 import signal
 import atexit
+from .basic import serialize_object, deserialize_object
+from . import better_exchook
 
 # noinspection PyProtectedMember
 from multiprocessing.context import BaseContext, SpawnProcess
+
+# noinspection PyUnresolvedReferences
+from multiprocessing import reduction
 
 # noinspection PyUnresolvedReferences
 from multiprocessing.util import is_exiting
@@ -111,10 +118,14 @@ class NonDaemonicSpawnProcess(SpawnProcess):
         self._at_exit_cleanup_handler = None
 
     def __reduce__(self):
-        res_tuple = super().__reduce__()
         if not self.pre_init_func:
-            return res_tuple
-        reconstruct_func, reconstruct_args, *other = res_tuple
+            return super().__reduce__()
+        reconstruct_func, reconstruct_args, reconstruct_state = super().__reduce__()
+        reconstruct_state = reconstruct_state.copy()
+        reconstruct_state.pop("pre_init_func")
+        # For pickling the process object, we need to use the multiprocessing pickler.
+        buffer = io.BytesIO()
+        reduction.dump((reconstruct_func, reconstruct_args, reconstruct_state), buffer)
         # Use our own reconstruct function to call the pre_init_func.
         # This is unpickled and executed *before* the other state is unpickled.
         # This is important: This allows to potentially prepare some global state,
@@ -124,16 +135,39 @@ class NonDaemonicSpawnProcess(SpawnProcess):
         # this is the way to do it.
         # Note that internally, multiprocessing SpawnProcess does sth similar,
         # see multiprocessing.spawn._main, spawn.prepare.
-        return (self._reconstruct_with_pre_init_func, (reconstruct_func, reconstruct_args, self.pre_init_func)) + tuple(
-            other
+        return (
+            self._reconstruct_with_pre_init_func,
+            (
+                serialize_object(self.pre_init_func),
+                buffer.getvalue(),
+            ),
         )
 
     @staticmethod
     def _reconstruct_with_pre_init_func(
-        reconstruct_func: Callable, reconstruct_args: Tuple[Any, ...], pre_init_func: Callable[[], None]
+        pre_init_func_serialized: bytes,
+        reconstruct_func_and_args_and_state_serialized: bytes,
     ):
-        pre_init_func()
-        return reconstruct_func(*reconstruct_args)
+        better_exchook.install()
+        try:
+            pre_init_func: Callable[[], None] = deserialize_object(pre_init_func_serialized)
+            pre_init_func()
+            buffer = io.BytesIO(reconstruct_func_and_args_and_state_serialized)
+            reconstruct_func, reconstruct_args, reconstruct_state = pickle.load(buffer)
+            obj = reconstruct_func(*reconstruct_args)
+            for k, v in reconstruct_state.items():
+                setattr(obj, k, v)
+            return obj
+        except Exception as exc:
+            print(
+                f"[PID {os.getpid()}, PPID {os.getppid()}]"
+                f" Error in NonDaemonicSpawnProcess._reconstruct_with_pre_init_func: {exc}"
+            )
+            # Note: All relevant data should have been read already from the pipe in the child proc,
+            # so we should not hang anymore in the parent while writing to the pipe.
+            # Thus, it should be safe to just reraise here.
+            # https://github.com/rwth-i6/returnn/issues/1514
+            raise
 
 
 class NonDaemonicSpawnContext(BaseContext):

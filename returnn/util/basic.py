@@ -2672,6 +2672,23 @@ def write_pickled_object(p: typing.BinaryIO, obj: Any):
     p.flush()
 
 
+def serialize_object(obj: Any) -> bytes:
+    """
+    Uses :func:`write_pickled_object`.
+    """
+    stream = BytesIO()
+    write_pickled_object(stream, obj)
+    return stream.getvalue()
+
+
+def deserialize_object(data: bytes) -> Any:
+    """
+    Uses :func:`read_pickled_object`.
+    """
+    stream = BytesIO(data)
+    return read_pickled_object(stream)
+
+
 def load_txt_vector(filename):
     """
     Expect line-based text encoding in file.
