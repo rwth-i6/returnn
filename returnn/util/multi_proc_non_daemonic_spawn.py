@@ -159,11 +159,6 @@ class NonDaemonicSpawnProcess(SpawnProcess):
             raise
 
 
-class _NonDaemonicSpawnProcessDummyExceptionInit:
-    def _bootstrap(self, *args, **kwargs):
-        raise Exception("Got earlier exception in NonDaemonicSpawnProcess._reconstruct_with_pre_init_func.")
-
-
 class NonDaemonicSpawnContext(BaseContext):
     """
     Spawn start methods, where all procs are non-daemonic.
