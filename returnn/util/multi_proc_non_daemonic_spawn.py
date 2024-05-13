@@ -151,11 +151,16 @@ class NonDaemonicSpawnProcess(SpawnProcess):
             obj = reconstruct_func(*reconstruct_args)
             for k, v in reconstruct_state.items():
                 setattr(obj, k, v)
+            return obj
         except Exception as exc:
             print(
                 f"[PID {os.getpid()}, PPID {os.getppid()}]"
                 f" Error in NonDaemonicSpawnProcess._reconstruct_with_pre_init_func: {exc}"
             )
+            # Note: All relevant data should have been read already from the pipe in the child proc,
+            # so we should not hang anymore in the parent while writing to the pipe.
+            # Thus, it should be safe to just reraise here.
+            # https://github.com/rwth-i6/returnn/issues/1514
             raise
 
 
