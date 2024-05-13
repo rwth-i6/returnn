@@ -146,9 +146,6 @@ class NonDaemonicSpawnProcess(SpawnProcess):
                 f" Error in NonDaemonicSpawnProcess._reconstruct_with_pre_init_func: {exc}"
             )
             better_exchook(*sys.exc_info(), autodebugshell=False)
-            # Make sure that we don't keep any file descriptors open, such that the parent will not hang.
-            # https://github.com/rwth-i6/returnn/issues/1514
-            close_all_fds_except({0, 1, 2})
             raise
 
 
