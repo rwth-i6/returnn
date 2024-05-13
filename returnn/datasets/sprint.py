@@ -402,9 +402,9 @@ class SprintDatasetBase(Dataset):
                 self.reduce_target_factor,
             )
         if "speaker_name" in targets:
-            targets["speaker_name"] = targets["speaker_name"].decode("utf8").strip()
+            targets["speaker_name"] = targets["speaker_name"].strip()
         if "orth" in targets:
-            targets["orth"] = targets["orth"].decode("utf8").strip()
+            targets["orth"] = targets["orth"].strip()
         if "orth" in targets and self.orth_post_process:
             targets["orth"] = self.orth_post_process(targets["orth"])
         if self.bpe:
@@ -975,11 +975,7 @@ class ExternSprintDataset(SprintDatasetBase):
                     if data_type == "data":
                         seq_count += 1
                         segment_name, features, targets = args
-                        if segment_name is not None:
-                            segment_name = segment_name.decode("utf8")
                         assert isinstance(features, numpy.ndarray)
-                        if isinstance(targets, dict):
-                            targets = {key.decode("utf8"): value for (key, value) in targets.items()}
                         self.add_new_data(
                             numpy_copy_and_set_unused(features),
                             numpy_copy_and_set_unused(targets),
