@@ -815,7 +815,7 @@ class ExternSprintDataset(SprintDatasetBase):
 
         try:
             init_signal, (input_dim, output_dim, num_segments) = self._read_next_raw()
-            assert init_signal == b"init"
+            assert init_signal == "init"
             assert isinstance(input_dim, int) and isinstance(output_dim, int)
             # Ignore num_segments. It can be totally different than the real number of sequences.
             self.set_dimensions(input_dim, output_dim)
@@ -922,9 +922,7 @@ class ExternSprintDataset(SprintDatasetBase):
         :return: (data_type, args)
         :rtype: (str, object)
         """
-        # encoding is for converting Python2 strings to Python3.
-        # Cannot use utf8 because Numpy will also encode the data as strings and there we need it as bytes.
-        data_type, args = util.read_pickled_object(self.pipe_c2p[0], encoding="bytes")
+        data_type, args = util.read_pickled_object(self.pipe_c2p[0])
         return data_type, args
 
     def _join_child(self, wait=True, expected_exit_status=None):
@@ -974,7 +972,7 @@ class ExternSprintDataset(SprintDatasetBase):
                     if self.python_exit or not self.child_pid:
                         break
 
-                    if data_type == b"data":
+                    if data_type == "data":
                         seq_count += 1
                         segment_name, features, targets = args
                         if segment_name is not None:
@@ -987,7 +985,7 @@ class ExternSprintDataset(SprintDatasetBase):
                             numpy_copy_and_set_unused(targets),
                             segment_name=segment_name,
                         )
-                    elif data_type == b"exit":
+                    elif data_type == "exit":
                         have_seen_the_whole = True
                         break
                     else:
@@ -1148,7 +1146,7 @@ class SprintCacheDataset(CachedDataset2):
             """
             res = self.sprint_cache.read(name, typ=self.type)
             if self.type == "align":
-                for (t, a, s, w) in res:
+                for t, a, s, w in res:
                     assert w == 1, "soft alignment not supported"
                 label_seq = numpy.array(
                     [self.allophone_labeling.get_label_idx(a, s) for (t, a, s, w) in res], dtype=self.dtype
@@ -1156,7 +1154,7 @@ class SprintCacheDataset(CachedDataset2):
                 assert label_seq.shape == (len(res),)
                 return label_seq
             elif self.type == "align_raw":
-                for (t, a, s, w) in res:
+                for t, a, s, w in res:
                     assert w == 1, "soft alignment not supported"
                 label_seq = numpy.array(
                     [self.allophone_labeling.state_tying_by_allo_state_idx[a] for (t, a, s, w) in res], dtype=self.dtype
