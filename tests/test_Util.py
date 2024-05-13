@@ -573,17 +573,21 @@ class _PreInitDummy:
         pass  # nothing
 
 
+def _noop_func():
+    pass
+
+
 def test_NonDaemonicSpawnProcess_hang_1514():
     # https://github.com/rwth-i6/returnn/issues/1514
     from returnn.util.multi_proc_non_daemonic_spawn import NonDaemonicSpawnProcess
 
     with timeout():
-        proc = NonDaemonicSpawnProcess(target=sys.exit)
+        proc = NonDaemonicSpawnProcess(target=_noop_func)
         proc.start()
         proc.join()
         assert proc.exitcode == 0
 
-        proc = NonDaemonicSpawnProcess(target=sys.exit)
+        proc = NonDaemonicSpawnProcess(target=_noop_func)
         # Give it some payload large enough such that it will the pipe buffer to trigger the potential hang.
         proc.pre_init_func = _PreInitDummy(payload=["A" * 100_000, _PreInitUnpicklingRaiseException(), "B" * 100_000])
         # After fixing this, we expect that the unpickling of pre_init_func will raise an exception,
