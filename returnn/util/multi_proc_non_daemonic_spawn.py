@@ -18,9 +18,10 @@ References:
 
 from __future__ import annotations
 
-import sys
+import io
+import pickle
 import time
-from typing import Optional, Any, Callable, Tuple
+from typing import Optional, Callable
 import os
 import signal
 import atexit
@@ -29,6 +30,7 @@ from . import better_exchook
 
 # noinspection PyProtectedMember
 from multiprocessing.context import BaseContext, SpawnProcess
+from multiprocessing import reduction
 
 # noinspection PyUnresolvedReferences
 from multiprocessing.util import is_exiting
@@ -119,6 +121,9 @@ class NonDaemonicSpawnProcess(SpawnProcess):
         reconstruct_func, reconstruct_args, reconstruct_state = super().__reduce__()
         reconstruct_state = reconstruct_state.copy()
         reconstruct_state.pop("pre_init_func")
+        # For pickling the process object, we need to use the multiprocessing pickler.
+        buffer = io.BytesIO()
+        reduction.dump((reconstruct_func, reconstruct_args, reconstruct_state), buffer)
         # Use our own reconstruct function to call the pre_init_func.
         # This is unpickled and executed *before* the other state is unpickled.
         # This is important: This allows to potentially prepare some global state,
@@ -132,7 +137,7 @@ class NonDaemonicSpawnProcess(SpawnProcess):
             self._reconstruct_with_pre_init_func,
             (
                 serialize_object(self.pre_init_func),
-                serialize_object((reconstruct_func, reconstruct_args, reconstruct_state)),
+                buffer.getvalue(),
             ),
         )
 
@@ -145,9 +150,8 @@ class NonDaemonicSpawnProcess(SpawnProcess):
         try:
             pre_init_func: Callable[[], None] = deserialize_object(pre_init_func_serialized)
             pre_init_func()
-            reconstruct_func, reconstruct_args, reconstruct_state = deserialize_object(
-                reconstruct_func_and_args_and_state_serialized
-            )
+            buffer = io.BytesIO(reconstruct_func_and_args_and_state_serialized)
+            reconstruct_func, reconstruct_args, reconstruct_state = pickle.load(buffer)
             obj = reconstruct_func(*reconstruct_args)
             for k, v in reconstruct_state.items():
                 setattr(obj, k, v)
