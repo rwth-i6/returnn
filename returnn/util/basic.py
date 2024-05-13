@@ -2637,13 +2637,12 @@ def read_bytes_to_new_buffer(p: typing.BinaryIO, size: int) -> BytesIO:
     return stream
 
 
-def read_pickled_object(p: typing.BinaryIO, *, encoding=None) -> Any:
+def read_pickled_object(p: typing.BinaryIO) -> Any:
     """
     Read pickled object from stream p,
     after it was written via :func:`read_bytes_to_new_buffer`.
 
     :param p:
-    :param encoding: if given, passed to Unpickler
     """
     from returnn.util.task_system import Unpickler
 
@@ -2651,10 +2650,7 @@ def read_pickled_object(p: typing.BinaryIO, *, encoding=None) -> Any:
     (size,) = struct.unpack("<i", size_raw)
     assert size > 0, "read_pickled_object: We expect to get some non-empty package."
     stream = read_bytes_to_new_buffer(p, size)
-    unpickler_kwargs = {}
-    if encoding:
-        unpickler_kwargs["encoding"] = encoding
-    return Unpickler(stream, **unpickler_kwargs).load()
+    return Unpickler(stream).load()
 
 
 def write_pickled_object(p: typing.BinaryIO, obj: Any):

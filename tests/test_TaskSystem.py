@@ -19,11 +19,8 @@ def pickle_dumps(obj):
     return sio.getvalue()
 
 
-def pickle_loads(s, *, encoding=None):
-    kwargs = {}
-    if encoding:
-        kwargs["encoding"] = encoding
-    p = Unpickler(BytesIO(s), **kwargs)
+def pickle_loads(s):
+    p = Unpickler(BytesIO(s))
     return p.load()
 
 
@@ -108,7 +105,7 @@ def test_pickle():
 
 
 def test_pickle_unicode_str():
-    assert_equal(pickle_loads(pickle_dumps("â"), encoding="utf8"), "â")
+    assert_equal(pickle_loads(pickle_dumps("â")), "â")
 
 
 if __name__ == "__main__":
