@@ -24,8 +24,8 @@ from typing import Optional, Any, Callable, Tuple
 import os
 import signal
 import atexit
-from .basic import serialize_object, deserialize_object, close_all_fds_except
-from .better_exchook import better_exchook
+from .basic import serialize_object, deserialize_object
+from . import better_exchook
 
 # noinspection PyProtectedMember
 from multiprocessing.context import BaseContext, SpawnProcess
@@ -114,10 +114,11 @@ class NonDaemonicSpawnProcess(SpawnProcess):
         self._at_exit_cleanup_handler = None
 
     def __reduce__(self):
-        res_tuple = super().__reduce__()
         if not self.pre_init_func:
-            return res_tuple
-        reconstruct_func, reconstruct_args, *other = res_tuple
+            return super().__reduce__()
+        reconstruct_func, reconstruct_args, reconstruct_state = super().__reduce__()
+        reconstruct_state = reconstruct_state.copy()
+        reconstruct_state.pop("pre_init_func")
         # Use our own reconstruct function to call the pre_init_func.
         # This is unpickled and executed *before* the other state is unpickled.
         # This is important: This allows to potentially prepare some global state,
@@ -129,24 +130,38 @@ class NonDaemonicSpawnProcess(SpawnProcess):
         # see multiprocessing.spawn._main, spawn.prepare.
         return (
             self._reconstruct_with_pre_init_func,
-            (reconstruct_func, reconstruct_args, serialize_object(self.pre_init_func)),
-        ) + tuple(other)
+            (
+                serialize_object(self.pre_init_func),
+                serialize_object((reconstruct_func, reconstruct_args, reconstruct_state)),
+            ),
+        )
 
     @staticmethod
     def _reconstruct_with_pre_init_func(
-        reconstruct_func: Callable, reconstruct_args: Tuple[Any, ...], pre_init_func_serialized: bytes
+        pre_init_func_serialized: bytes,
+        reconstruct_func_and_args_and_state_serialized: bytes,
     ):
+        better_exchook.install()
         try:
             pre_init_func: Callable[[], None] = deserialize_object(pre_init_func_serialized)
             pre_init_func()
-            return reconstruct_func(*reconstruct_args)
+            reconstruct_func, reconstruct_args, reconstruct_state = deserialize_object(
+                reconstruct_func_and_args_and_state_serialized
+            )
+            obj = reconstruct_func(*reconstruct_args)
+            for k, v in reconstruct_state.items():
+                setattr(obj, k, v)
         except Exception as exc:
             print(
                 f"[PID {os.getpid()}, PPID {os.getppid()}]"
                 f" Error in NonDaemonicSpawnProcess._reconstruct_with_pre_init_func: {exc}"
             )
-            better_exchook(*sys.exc_info(), autodebugshell=False)
             raise
+
+
+class _NonDaemonicSpawnProcessDummyExceptionInit:
+    def _bootstrap(self, *args, **kwargs):
+        raise Exception("Got earlier exception in NonDaemonicSpawnProcess._reconstruct_with_pre_init_func.")
 
 
 class NonDaemonicSpawnContext(BaseContext):

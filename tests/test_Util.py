@@ -558,7 +558,6 @@ def test_native_signal_handler():
 
 
 class _PreInitUnpicklingRaiseException:
-
     def __getstate__(self):
         return 42
 
@@ -587,6 +586,8 @@ def test_NonDaemonicSpawnProcess_hang_1514():
         proc = NonDaemonicSpawnProcess(target=sys.exit)
         # Give it some payload large enough such that it will the pipe buffer to trigger the potential hang.
         proc.pre_init_func = _PreInitDummy(payload=["A" * 100_000, _PreInitUnpicklingRaiseException(), "B" * 100_000])
+        # After fixing this, we expect that the unpickling of pre_init_func will raise an exception,
+        # however, the parent then will not hang.
         proc.start()
         proc.join()
         assert proc.exitcode != 0
