@@ -30,6 +30,8 @@ from . import better_exchook
 
 # noinspection PyProtectedMember
 from multiprocessing.context import BaseContext, SpawnProcess
+
+# noinspection PyUnresolvedReferences
 from multiprocessing import reduction
 
 # noinspection PyUnresolvedReferences
