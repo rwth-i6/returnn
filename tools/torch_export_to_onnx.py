@@ -182,6 +182,13 @@ def main():
     parser.add_argument("out_onnx_filename", type=str, help="Filename of the final ONNX model.")
     parser.add_argument("--verbosity", default=4, type=int, help="5 for all seqs (default: 4)")
     parser.add_argument("--device", type=str, default="cpu", help="'cpu' (default) or 'gpu'.")
+    parser.add_argument(
+        "--dyn_dim_min_sizes", type=dict, default=None, help="Specify min sizes for dim tags with dynamic sizes"
+    )
+    parser.add_argument(
+        "--dyn_dim_max_sizes", type=dict, default=None, help="Specify max sizes for dim tags with dynamic sizes"
+    )
+
     args = parser.parse_args()
 
     init(config_filename=args.config, checkpoint=args.checkpoint, log_verbosity=args.verbosity, device=args.device)
@@ -223,7 +230,9 @@ def main():
         if not v.available_for_inference:
             del extern_data.data[k]
 
-    tensor_dict_fill_random_numpy_(extern_data)
+    tensor_dict_fill_random_numpy_(
+        extern_data, dyn_dim_max_sizes=args.dyn_dim_max_sizes, dyn_dim_min_sizes=args.dyn_dim_min_sizes
+    )
     tensor_dict_numpy_to_torch_(extern_data)
     extern_data_raw = extern_data.as_raw_tensor_dict(include_scalar_dyn_sizes=False, exclude_duplicate_dims=True)
     model_outputs_raw_keys = _get_model_outputs_raw_keys()
