@@ -32,7 +32,7 @@ We distinguish three cases on RASR side:
 
 from __future__ import annotations
 import torch
-from typing import Callable, Optional, Dict
+from typing import Callable, Optional, Dict, List
 import argparse
 import os
 from random import random
@@ -157,7 +157,7 @@ def _check_matching_outputs():
     )
 
 
-def _get_model_outputs_raw_keys():
+def _get_model_outputs_raw_keys() -> List[str]:
     model_outputs = rf.get_run_ctx().expected_outputs
     model_outputs_raw_keys = []
     for k, v in model_outputs.data.items():
@@ -182,6 +182,8 @@ def main():
     parser.add_argument("out_onnx_filename", type=str, help="Filename of the final ONNX model.")
     parser.add_argument("--verbosity", default=4, type=int, help="5 for all seqs (default: 4)")
     parser.add_argument("--device", type=str, default="cpu", help="'cpu' (default) or 'gpu'.")
+    parser.add_argument("--input_names", type=str, help="Comma-separated list of input names.")
+    parser.add_argument("--output_names", type=str, help="Comma-separated list of output names.")
     args = parser.parse_args()
 
     init(config_filename=args.config, checkpoint=args.checkpoint, log_verbosity=args.verbosity, device=args.device)
@@ -250,8 +252,23 @@ def main():
                     j: dim_.name for j, dim_ in enumerate(dim.dyn_size_ext.dims) if dim_.is_dynamic()
                 }
 
-    print("*** Input names:", list(extern_data_raw.keys()))
-    print("*** Output names:", model_outputs_raw_keys)
+    if args.input_names:
+        input_names = args.input_names.split(",")
+        assert set(extern_data_raw.keys()) == set(
+            input_names
+        ), f"missmatch between input_names {input_names} and extern_data keys {list(extern_data_raw.keys())}"
+    else:
+        input_names = list(extern_data_raw.keys())
+    if args.output_names:
+        output_names = args.output_names.split(",")
+        assert set(model_outputs_raw_keys) == set(
+            output_names
+        ), f"missmatch between output_names {output_names} and model_outputs keys {model_outputs_raw_keys}"
+    else:
+        output_names = model_outputs_raw_keys
+
+    print("*** Input names:", input_names)
+    print("*** Output names:", output_names)
     print("*** Dynamic axes:", dynamic_axes)
 
     export_func(
@@ -259,8 +276,8 @@ def main():
         (extern_data_raw, {}),
         f=args.out_onnx_filename,
         verbose=True,
-        input_names=list(extern_data_raw.keys()),
-        output_names=model_outputs_raw_keys,
+        input_names=input_names,
+        output_names=output_names,
         dynamic_axes=dynamic_axes,
     )
 
