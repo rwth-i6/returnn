@@ -168,7 +168,7 @@ Contains code from CPython:
  - https://www.python.org/
  - Python Software Foundation License (PSF)
  - Copyright 2001..2021 Python Software Foundation
- - py-to-pickle.cpp
+ - py-to-pickle.cpp, util/task_system.py, util/basic.py
 
 Contains code from PyTorch:
  - https://github.com/pytorch/pytorch/

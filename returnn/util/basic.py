@@ -3188,6 +3188,31 @@ class LockFile(object):
         self.unlock()
 
 
+def touch_file(filename: str, *, mode: int = 0o666):
+    """
+    If file does not exist, creates it,
+    otherwise updates its mtime.
+
+    :param filename:
+    :param mode: if it does not exist, use given file permission mode
+    """
+    # Code adapted from pathlib.Path.touch.
+    # First try to bump modification time
+    # Implementation note: GNU touch uses the UTIME_NOW option of
+    # the utimensat() / futimens() functions.
+    try:
+        os.utime(filename, None)
+    except OSError:
+        # Does not exist? Create now.
+        flags = os.O_CREAT | os.O_WRONLY
+        fd = os.open(filename, flags, mode)
+        os.close(fd)
+
+    # Check mtime.
+    mtime = os.stat(filename).st_mtime
+    assert 0 <= time.time() - mtime <= 10, f"mtime {mtime} of {filename} is too old, now {time.time()}"
+
+
 def str_is_number(s):
     """
     :param str s: e.g. "1", ".3" or "x"
