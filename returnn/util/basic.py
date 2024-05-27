@@ -3053,20 +3053,22 @@ def get_login_username():
         return str(os.getuid())
 
 
-def get_temp_dir():
+def get_temp_dir(*, with_username: bool = True) -> str:
     """
-    :rtype: str
-    :return: e.g. "/tmp/$USERNAME"
+    Similar as :func:`tempfile.gettempdir` but prefers `/var/tmp` over `/tmp`.
+
+    :param with_username: whether to append the username to the path
+    :return: e.g. "/var/tmp/$USERNAME"
     """
-    username = get_login_username()
+    postfix = ("/" + get_login_username()) if with_username else ""
     for envname in ["TMPDIR", "TEMP", "TMP"]:
         dirname = os.getenv(envname)
         if dirname:
-            return "%s/%s" % (dirname, username)
+            return dirname + postfix
     # /var/tmp should be more persistent than /tmp usually.
     if os.path.exists("/var/tmp"):
-        return "/var/tmp/%s" % username
-    return "/tmp/%s" % username
+        return "/var/tmp" + postfix
+    return "/tmp" + postfix
 
 
 def get_cache_dir():
