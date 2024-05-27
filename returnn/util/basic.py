@@ -565,6 +565,9 @@ def eval_shell_str(s):
     Parses `s` as shell like arguments (via shlex.split) and evaluates shell environment variables
     (:func:`eval_shell_env`).
     `s` or its elements can also be callable. In those cases, they will be called and the returned value is used.
+
+    Also see :func:`expand_env_vars` or `os.path.expandvars` or :func:`string.Template.substitute` or
+    :mod:`shlex` utils.
     """
     tokens = []
     if callable(s):
@@ -583,6 +586,61 @@ def eval_shell_str(s):
         else:
             tokens += [token]
     return tokens
+
+
+def expand_env_vars(s: str) -> str:
+    """
+    Similar as :func:`os.path.expandvars`:
+
+    It replaces ``$var`` or ``${var}`` with the value of the environment variable ``var``.
+    Also, ``$$`` is replaced by ``$``.
+    Any usage of an undefined env vars will be an error.
+
+    In addition to :func:`os.path.expandvars`,
+    it handles ``$TMPDIR`` and ``$USER`` specially
+    when they are not defined in ``os.environ``,
+    by using :func:`get_temp_dir` or :func:`get_login_username`.
+
+    Also see :func:`string.Template.substitute`.
+
+    :param s: string with env vars like "$TMPDIR/$USER"
+    :return: s with expanded env vars
+    """
+
+    # Code adapted from string.Template.substitute.
+    delim = "$"
+    delim_ = re.escape(delim)
+    id_ = r"(?a:[_a-z][_a-z0-9]*)"
+    pattern = rf"""
+        {delim_}(?:
+          (?P<escaped>{delim_})  |   # Escape sequence of two delimiters
+          (?P<named>{id_})       |   # delimiter and a Python identifier
+          (?P<invalid>)              # Other ill-formed delimiter exprs
+        )
+        """
+
+    pattern_ = re.compile(pattern, re.VERBOSE | re.IGNORECASE)
+
+    # Helper function for .sub()
+    def _convert(mo: re.Match) -> str:
+        # Check the most common path first.
+        name = mo.group("named")
+        if name is not None:
+            if name in os.environ:
+                return os.environ[name]
+            if name in {"TMPDIR", "TEMP", "TMP"}:
+                return get_temp_dir(with_username=False)
+            if name == "USER":
+                return get_login_username()
+            raise ValueError(f"Undefined environment variable {name!r}")
+        if mo.group("escaped") is not None:
+            return delim
+        if mo.group("invalid") is not None:
+            i = mo.start("invalid")
+            raise ValueError(f"Invalid placeholder in string: {s[i:i+2]!r}...")
+        raise ValueError(f"Unrecognized named group in pattern {pattern}")
+
+    return pattern_.sub(_convert, s)
 
 
 def hdf5_dimension(filename, dimension):

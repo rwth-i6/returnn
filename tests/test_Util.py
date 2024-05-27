@@ -597,6 +597,12 @@ def test_NonDaemonicSpawnProcess_hang_1514():
         assert proc.exitcode != 0
 
 
+def test_expand_env_vars():
+    os.environ["TMPA"] = "/testA"
+    os.environ["TMPB"] = "testB"
+    assert_equal(expand_env_vars("$TMPA/$TMPB/returnn/file_cache"), "/testA/testB/returnn/file_cache")
+
+
 if __name__ == "__main__":
     better_exchook.install()
     if len(sys.argv) <= 1:
