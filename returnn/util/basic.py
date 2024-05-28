@@ -3241,8 +3241,9 @@ class LockFile(object):
         os.close(self.fd)
         os.remove(self.lockfile)
 
-    def __enter__(self):
+    def __enter__(self) -> LockFile:
         self.lock()
+        return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.unlock()
