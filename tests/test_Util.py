@@ -39,6 +39,20 @@ def timeout(seconds=10):
         signal.alarm(0)
 
 
+def _get_tmp_dir() -> str:
+    """
+    :return: dirname
+    """
+    import tempfile
+    import shutil
+    import atexit
+
+    name = tempfile.mkdtemp()
+    assert name and os.path.isdir(name) and not os.listdir(name)
+    atexit.register(lambda: shutil.rmtree(name))
+    return name
+
+
 def test_cmd_true():
     r = sys_cmd_out_lines("true")
     assert_equal(r, [])
@@ -601,6 +615,112 @@ def test_expand_env_vars():
     os.environ["TMPA"] = "/testA"
     os.environ["TMPB"] = "testB"
     assert_equal(expand_env_vars("$TMPA/$TMPB/returnn/file_cache"), "/testA/testB/returnn/file_cache")
+
+
+def test_file_cache():
+    from returnn.util.file_cache import FileCache, CachedFile
+
+    # First create some dummy data, to be used for the test below.
+    src_dir = _get_tmp_dir() + "/returnn/file_cache_src"
+    os.makedirs(src_dir, exist_ok=True)
+    os.makedirs(src_dir + "/dirA/subdirB", exist_ok=True)
+    os.makedirs(src_dir + "/dirC", exist_ok=True)
+    with open(src_dir + "/dummy1.txt", "w") as f:
+        f.write("Hello dummy1.txt\n")
+    with open(src_dir + "/dirA/subdirB/dummy2.txt", "w") as f:
+        f.write("Hello dummy2.txt\n")
+    with open(src_dir + "/dirC/dummy3.txt", "w") as f:
+        f.write("Hello dummy3.txt\n")
+
+    cache_dir = _get_tmp_dir() + "/returnn/file_cache"
+    cache = FileCache(cache_directory=cache_dir)
+    cache._lock_timeout = 5  # for testing
+
+    # Copy some dummy file.
+    cached_fn1 = cache.get_file(src_dir + "/dummy1.txt")
+    assert cached_fn1 == cache_dir + src_dir + "/dummy1.txt" and os.path.exists(cached_fn1)
+    with open(cached_fn1) as f:
+        assert f.read() == "Hello dummy1.txt\n"
+    cached_fn2 = cache.get_file(src_dir + "/dirA/subdirB/dummy2.txt")
+    assert cached_fn2 == cache_dir + src_dir + "/dirA/subdirB/dummy2.txt" and os.path.exists(cached_fn2)
+    with open(cached_fn2) as f:
+        assert f.read() == "Hello dummy2.txt\n"
+    cached_fn3 = cache.get_file(src_dir + "/dirC/dummy3.txt")
+    assert cached_fn3 == cache_dir + src_dir + "/dirC/dummy3.txt" and os.path.exists(cached_fn3)
+    with open(cached_fn3) as f:
+        assert f.read() == "Hello dummy3.txt\n"
+    assert dict(cache._touch_files_thread.files) == {
+        cache_dir + src_dir + "/dummy1.txt": 1,
+        cache_dir + src_dir + "/dirA/subdirB/dummy2.txt": 1,
+        cache_dir + src_dir + "/dirC/dummy3.txt": 1,
+    }
+
+    # Check config handle_cached_files_in_config.
+    config, config_cached_files = cache.handle_cached_files_in_config(
+        {"class": "Dataset", "files": [CachedFile(src_dir + "/dirA/subdirB/dummy2.txt")]}
+    )
+    assert config == {"class": "Dataset", "files": [cache_dir + src_dir + "/dirA/subdirB/dummy2.txt"]}
+    assert config_cached_files == [cache_dir + src_dir + "/dirA/subdirB/dummy2.txt"]
+    assert dict(cache._touch_files_thread.files) == {
+        cache_dir + src_dir + "/dummy1.txt": 1,
+        cache_dir + src_dir + "/dirA/subdirB/dummy2.txt": 2,
+        cache_dir + src_dir + "/dirC/dummy3.txt": 1,
+    }
+
+    # Check that file is kept up-to-date until we release it.
+    mtimes = set()
+    for t in range(10):
+        print(f"Sec {t}...")
+        mtime = os.stat(cache_dir + src_dir + "/dirA/subdirB/dummy2.txt").st_mtime
+        mtimes.add(mtime)
+        assert 0 <= time.time() - mtime < 2
+        time.sleep(1)
+    assert len(mtimes) > 1, "mtime should change"
+
+    # Now release the files.
+    cache.release_files(
+        [
+            cache_dir + src_dir + "/dummy1.txt",
+            cache_dir + src_dir + "/dirA/subdirB/dummy2.txt",
+            cache_dir + src_dir + "/dirC/dummy3.txt",
+        ]
+    )
+    cache.release_files([cache_dir + src_dir + "/dirA/subdirB/dummy2.txt"])  # was acquired twice
+    assert dict(cache._touch_files_thread.files) == {}
+    time.sleep(5)
+    mtime = os.stat(cache_dir + src_dir + "/dirA/subdirB/dummy2.txt").st_mtime
+    assert 4 <= time.time() - mtime
+
+    # Check cleanup mechanism.
+    cache._cleanup_files_always_older_than_days = 4 / 60 / 60 / 24
+    print("Cache older than secs:", cache._cleanup_files_always_older_than_days * 24 * 60 * 60)
+    print("Recent cleanup is ago:", time.monotonic() - cache._recent_full_cleanup_time, "secs")
+    # Note: After the first cleanup, there are still dirs maybe left over, because dirs are only cleaned
+    # when their mtime is a older than some threshold.
+    # However, when we just deleted some file inside, that would have updated the mtime of the dir.
+    # This effectively means that we need several cleanup runs to clean up also the empty dirs.
+    cache._lock_timeout = 0.05  # used for the threshold
+    prev_count_dirs = None
+    while True:
+        time.sleep(0.1)
+        cache._recent_full_cleanup_time = float("-inf")  # reset
+        cache.cleanup()
+        count_files = 0
+        count_dirs = 0
+        for root, dirs, files in os.walk(cache_dir):
+            for fn in dirs + files:
+                print(f"{root}/{fn}", "age:", time.time() - os.stat(f"{root}/{fn}").st_mtime, "sec")
+            count_files += len(files)
+            count_dirs += len(dirs)
+        print("count files:", count_files, "count dirs:", count_dirs)
+        assert count_files == 0
+        if prev_count_dirs is None:
+            assert count_dirs > 0
+        else:
+            assert count_dirs < prev_count_dirs
+        prev_count_dirs = count_dirs
+        if count_dirs == 0:
+            break
 
 
 if __name__ == "__main__":
