@@ -781,3 +781,36 @@ class _GlobalConfigAsPyModuleProxy(_types.ModuleType):
         cfg: Optional[Config] = self._get_config()
         if cfg:
             cfg.typed_dict[key] = value
+
+
+class SubProcCopyGlobalConfigPreInitFunc:
+    """
+    A pre-init hook for a subprocess which copies the global config to the subprocess.
+
+    It can be important that this init function is called even before the unpickling of other data,
+    as that unpickling might depend on the right context, e.g. having the global RETURNN config.
+    Example issue with MultiProcDataset: https://github.com/rwth-i6/returnn/issues/1495
+
+    Example usage::
+
+        NonDaemonicSpawnContext(process_pre_init_func=SubProcCopyGlobalConfigPreInitFunc())
+    """
+
+    def __init__(self):
+        # Get the RETURNN global config here. Allow this to be optional (for use outside of RETURNN).
+        # We store it here such that pickling this worker init func will also pickle the config,
+        # so that we can reset it as global config inside the worker.
+        # Some RETURNN datasets might depend on the config.
+        # https://github.com/rwth-i6/returnn/issues/1495
+        # MultiProcDataset has a similar logic, see https://github.com/rwth-i6/returnn/issues/1384.
+        self.global_config = get_global_config(raise_exception=False)
+
+    def __call__(self):
+        from returnn.util import better_exchook
+        from returnn import __old_mod_loader__
+
+        better_exchook.install()
+        __old_mod_loader__.disable_lazy_mod_loads()
+
+        if self.global_config:
+            set_global_config(self.global_config)
