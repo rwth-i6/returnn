@@ -6,11 +6,12 @@ from __future__ import annotations
 from typing import Optional, Any, Dict, List
 import sys
 import gc
+import multiprocessing as mp
+from returnn.util.basic import try_run
+from returnn.config import SubProcCopyGlobalConfigPreInitFunc
+from returnn.util.multi_proc_non_daemonic_spawn import NonDaemonicSpawnContext
 from .basic import init_dataset, Dataset, DatasetSeq
 from .cached2 import CachedDataset2
-from returnn.util.basic import try_run
-import multiprocessing as mp
-from returnn.util.multi_proc_non_daemonic_spawn import NonDaemonicSpawnContext
 
 # noinspection PyProtectedMember
 from multiprocessing.connection import Connection as mpConnection
@@ -89,7 +90,7 @@ class MultiProcDataset(CachedDataset2):
 
     def _lazy_init(self):
         if not self._worker_procs:
-            _mp = NonDaemonicSpawnContext(process_pre_init_func=_SetupProcPreInit())
+            _mp = NonDaemonicSpawnContext(process_pre_init_func=SubProcCopyGlobalConfigPreInitFunc())
 
             # Seq order proc (first worker) directly sends the seq order to each (other) worker.
             seq_order_to_worker = []  # type: List[mpConnection]
@@ -344,28 +345,3 @@ class MultiProcDataset(CachedDataset2):
         super().finish_epoch(free_resources=free_resources)
         for worker_parent_conn in self._worker_parent_conns:
             worker_parent_conn.send(("finish_epoch", {"free_resources": free_resources}))
-
-
-class _SetupProcPreInit:
-    def __init__(self):
-        # Get the RETURNN global config here. Allow this to be optional (for use outside of RETURNN).
-        # We store it here such that pickling this worker init func will also pickle the config,
-        # so that we can reset it as global config inside the worker.
-        # Some RETURNN datasets might depend on the config.
-        # https://github.com/rwth-i6/returnn/issues/1384.
-        # Pickling the config works, as the config has special pickling support.
-        from returnn.config import get_global_config
-
-        self.global_config = get_global_config(raise_exception=False)
-
-    def __call__(self):
-        from returnn.util import better_exchook
-        from returnn import __old_mod_loader__
-
-        better_exchook.install()
-        __old_mod_loader__.disable_lazy_mod_loads()
-
-        if self.global_config:
-            from returnn.config import set_global_config
-
-            set_global_config(self.global_config)
