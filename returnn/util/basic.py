@@ -1497,10 +1497,11 @@ def wrap_async_func(f):
         interrupt_main()
 
 
-def try_run(func, args=(), catch_exc=Exception, default=None):
+def try_run(func, args=(), *, kwargs=None, catch_exc=Exception, default=None):
     """
     :param (()->T)|((X)->T) func:
     :param tuple args:
+    :param dict|None kwargs:
     :param type[Exception] catch_exc:
     :param T2 default:
     :return: either ``func()`` or ``default`` if there was some exception
@@ -1508,7 +1509,7 @@ def try_run(func, args=(), catch_exc=Exception, default=None):
     """
     # noinspection PyBroadException
     try:
-        return func(*args)
+        return func(*args, **(kwargs or {}))
     except catch_exc:
         return default
 
