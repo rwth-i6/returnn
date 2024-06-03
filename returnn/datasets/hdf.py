@@ -1556,6 +1556,7 @@ class HDFDatasetWriter:
         assert offsets == total_seq_len  # Sanity check.
 
         # Set some old-format attribs. Not needed for newer RETURNN versions.
+        assert isinstance(dataset.num_inputs, int)
         hdf_dataset.attrs[attr_inputPattSize] = dataset.num_inputs
 
         print("All done.", file=log.v3)
