@@ -484,7 +484,7 @@ def test_get_seq_order():
 
 @contextlib.contextmanager
 def create_ogg_zip_txt_only_dataset_opts(*, text: str = "hello world", seq_tag: str = "sequence0.wav"):
-    """create OggZipDataset"""
+    """create OggZipDataset dict using temp data, consisting of a single sequence with text only"""
     import zipfile
 
     with tempfile.NamedTemporaryFile(suffix=".zip") as tmp_zip_file, tempfile.NamedTemporaryFile(
@@ -509,8 +509,8 @@ def create_ogg_zip_txt_only_dataset_opts(*, text: str = "hello world", seq_tag: 
 
 
 @contextlib.contextmanager
-def create_ogg_zip_txt_only_dataset(*, text: str = "hello world", seq_tag: str = "sequence0.wav", num_seqs: int = 1):
-    """create OggZipDataset"""
+def create_ogg_zip_txt_only_dataset(*, text: str = "hello world", seq_tag: str = "sequence0.wav"):
+    """create OggZipDataset via :func:`create_ogg_zip_txt_only_dataset_opts`"""
     from returnn.datasets.audio import OggZipDataset
 
     with create_ogg_zip_txt_only_dataset_opts(text=text, seq_tag=seq_tag) as opts:
