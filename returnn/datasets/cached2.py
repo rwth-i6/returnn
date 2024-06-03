@@ -169,6 +169,7 @@ class CachedDataset2(Dataset):
         if self.added_data:
             return
         self.load_seqs(self.expected_load_seq_start, self.expected_load_seq_start + 1)
+        assert self.added_data, f"{self}: _load_something: could not load anything"
 
     def get_seq_length(self, sorted_seq_idx):
         """
