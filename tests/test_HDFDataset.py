@@ -4,6 +4,7 @@ tests for HDF dataset
 
 from __future__ import annotations
 
+from typing import Dict, Any
 import os
 import sys
 import _setup_test_env  # noqa
@@ -106,19 +107,21 @@ def get_test_tmp_file(suffix=".hdf"):
 _hdf_cache = {}  # opts -> hdf fn
 
 
-def generate_hdf_from_other(opts, suffix=".hdf"):
+def generate_hdf_from_other(opts: Dict[str, Any], suffix: str = ".hdf", *, use_cache: bool = True) -> str:
     """
-    :param dict[str] opts:
-    :param str suffix:
+    :param opts:
+    :param suffix:
+    :param use_cache:
     :return: hdf filename
-    :rtype: str
     """
     # See test_hdf_dump.py and tools/hdf_dump.py.
     from returnn.util.basic import make_hashable
 
-    cache_key = make_hashable(opts)
-    if cache_key in _hdf_cache:
-        return _hdf_cache[cache_key]
+    cache_key = None
+    if use_cache:
+        cache_key = make_hashable(opts)
+        if cache_key in _hdf_cache:
+            return _hdf_cache[cache_key]
     fn = get_test_tmp_file(suffix=suffix)
     from returnn.datasets.basic import init_dataset
 
@@ -126,7 +129,8 @@ def generate_hdf_from_other(opts, suffix=".hdf"):
     hdf_dataset = HDFDatasetWriter(fn)
     hdf_dataset.dump_from_dataset(dataset)
     hdf_dataset.close()
-    _hdf_cache[cache_key] = fn
+    if use_cache:
+        _hdf_cache[cache_key] = fn
     return fn
 
 
@@ -464,7 +468,7 @@ def test_SimpleHDFWriter_swmr():
         for i in range(len(seq_lens))
     ]
     seqs = numpy.random.normal(size=(len(seq_lens), max(seq_lens), n_dim)).astype("float32")
-    for (s, e) in [(0, 3), (3, len(seq_lens))]:
+    for s, e in [(0, 3), (3, len(seq_lens))]:
         writer.insert_batch(inputs=seqs[s:e, : max(seq_lens[s:e])], seq_len=seq_lens[s:e], seq_tag=seq_tags[s:e])
         writer.flush()  # TODO when do we want it?
 
