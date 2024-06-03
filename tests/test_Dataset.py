@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import List
+from typing import Any, List, Dict
 import os
 import sys
 import _setup_test_env  # noqa
@@ -621,6 +621,120 @@ def test_MapDatasetWrapper():
     (res,) = dummy_iter_dataset(ds)
     assert isinstance(res, DatasetSeq)
     assert res.features["data"].shape == (5, 3)
+
+
+def test_ConcatFilesDataset_get_files_per_sub_epochs():
+    from returnn.datasets.concat_files import ConcatFilesDataset
+
+    def _test(sizes: List[int], partition_epoch: int, expected: List[List[int]]):
+        files = [f"file-{i}" for i in range(len(sizes))]
+        file_sizes = {f: s for f, s in zip(files, sizes)}
+        res = ConcatFilesDataset._get_files_per_sub_epochs(
+            partition_epoch=partition_epoch, file_sizes=file_sizes, files_order=files
+        )
+        assert all(res) and len(res) == partition_epoch
+        assert set(sum(res, [])) == set(files)
+        res_ = [[file_sizes[fn] for fn in sub_epoch] for sub_epoch in res]
+        assert res_ == expected
+
+    _test([1, 1, 78, 120], 4, [[1], [1], [78], [120]])
+    _test([1, 1, 1, 56, 141], 5, [[1], [1], [1], [56], [141]])
+    _test([1, 1, 1, 56, 141], 4, [[1, 1], [1], [56], [141]])
+    _test([5, 5] + [10] * 7, 5, [[5, 5, 10], [10, 10], [10, 10], [10], [10]])
+
+
+def test_ConcatFilesDataset():
+    from returnn.datasets.concat_files import ConcatFilesDataset
+    from test_HDFDataset import generate_hdf_from_other
+
+    # Create a few HDF files such that we can easily verify the data later.
+    hdf_files = []
+    num_hdf_files = 20
+    seq_len = 5
+    num_seqs = 5
+    max_idx = num_hdf_files * num_seqs * seq_len
+    n_tgt_dim = max_idx
+    for hdf_idx in range(num_hdf_files):
+        hdf_files.append(
+            generate_hdf_from_other(
+                {
+                    "class": "StaticDataset",
+                    "data": [
+                        {
+                            "classes": numpy.array(
+                                [hdf_idx * num_seqs * seq_len + seq_idx * seq_len + t for t in range(seq_len)],
+                                dtype="int32",
+                            ),
+                        }
+                        for seq_idx in range(num_seqs)
+                    ],
+                    "output_dim": {"classes": [n_tgt_dim, 1]},
+                },
+                suffix=f"-{hdf_idx}.hdf",
+                use_cache=False,
+            )
+        )
+
+    # Test to load all together.
+    single_hdf_dataset = init_dataset({"class": "HDFDataset", "files": hdf_files})
+    total_num_seqs = 0
+    for seq in dummy_iter_dataset(single_hdf_dataset):
+        assert seq.seq_idx == total_num_seqs
+        data = seq.features["classes"]
+        assert data.shape == (seq_len,)
+        assert data.tolist() == list(range(seq.seq_idx * seq_len, (seq.seq_idx + 1) * seq_len))
+        total_num_seqs += 1
+    assert total_num_seqs == num_hdf_files * num_seqs
+
+    # Test to load via ConcatFilesDataset.
+
+    def _get_sub_epoch_dataset(files_subepoch: List[str]) -> Dict[str, Any]:
+        return {"class": "HDFDataset", "files": files_subepoch, "seq_ordering": "default"}
+
+    partition_epoch = 5
+    assert num_hdf_files % partition_epoch == 0  # just for easier testing here
+    concat_dataset = init_dataset(
+        {
+            "class": "ConcatFilesDataset",
+            "files": hdf_files,
+            "get_sub_epoch_dataset": _get_sub_epoch_dataset,
+            "partition_epoch": partition_epoch,
+        }
+    )
+    assert isinstance(concat_dataset, ConcatFilesDataset)
+    assert concat_dataset.get_data_keys() == ["classes"]
+    num_hdfs_per_part = num_hdf_files // partition_epoch
+    global_seq_idx = 0
+    for sub_epoch in range(1, partition_epoch + 1):
+        print(f"Sub-epoch {sub_epoch}...")
+        concat_dataset.init_seq_order(sub_epoch)
+        if sub_epoch == 1:
+            assert concat_dataset._files_order_cache == {
+                0: [hdf_files[ep * num_hdfs_per_part : (ep + 1) * num_hdfs_per_part] for ep in range(partition_epoch)]
+            }
+        assert (
+            concat_dataset._workers[sub_epoch].dataset_dict["files"]
+            == hdf_files[(sub_epoch - 1) * num_hdfs_per_part : sub_epoch * num_hdfs_per_part]
+        )
+        # We preload one sub-epoch.
+        assert set(concat_dataset._workers.keys()) == {sub_epoch, sub_epoch + 1}  # cur sub-epoch + next sub-epoch
+        for ep, worker in concat_dataset._workers.items():
+            assert worker.worker_proc.is_alive()
+        next_part_idx = sub_epoch % partition_epoch  # wrap around at the end
+        assert (
+            concat_dataset._workers[sub_epoch + 1].dataset_dict["files"]
+            == hdf_files[next_part_idx * num_hdfs_per_part : (next_part_idx + 1) * num_hdfs_per_part]
+        )
+        local_seq_idx = 0
+        while concat_dataset.is_less_than_num_seqs(local_seq_idx):
+            print(f"Sub-epoch {sub_epoch}, seq {local_seq_idx} (global seq {global_seq_idx})...")
+            concat_dataset.load_seqs(local_seq_idx, local_seq_idx + 1)
+            data = concat_dataset.get_data(local_seq_idx, "classes")
+            assert data.shape == (seq_len,)
+            assert data.tolist() == list(range(global_seq_idx * seq_len, (global_seq_idx + 1) * seq_len))
+            local_seq_idx += 1
+            global_seq_idx += 1
+    assert global_seq_idx == num_hdf_files * num_seqs
 
 
 if __name__ == "__main__":
