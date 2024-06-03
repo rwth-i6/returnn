@@ -3,6 +3,7 @@ Provides :class:`CachedDataset2`.
 """
 
 from __future__ import annotations
+import numpy
 import typing
 from typing import Optional
 from threading import Condition
@@ -180,33 +181,29 @@ class CachedDataset2(Dataset):
         self.load_seqs(self.expected_load_seq_start, sorted_seq_idx + 1)
         return self._get_seq(sorted_seq_idx).num_frames
 
-    def get_data(self, seq_idx, key):
+    def get_data(self, seq_idx: int, key: str) -> numpy.ndarray:
         """
-        :param int seq_idx:
-        :param str key:
-        :rtype: numpy.ndarray
+        :param seq_idx:
+        :param key:
         """
         return self._get_seq(seq_idx).features[key]
 
-    def get_input_data(self, seq_idx):
+    def get_input_data(self, seq_idx: int) -> numpy.ndarray:
         """
-        :param int seq_idx:
-        :rtype: numpy.ndarray
+        :param seq_idx:
         """
         return self.get_data(seq_idx, "data")
 
-    def get_targets(self, target, seq_idx):
+    def get_targets(self, target: str, seq_idx: int) -> numpy.ndarray:
         """
-        :param str target:
-        :param int seq_idx:
-        :rtype: numpy.ndarray
+        :param target:
+        :param seq_idx:
         """
         return self.get_data(seq_idx, target)
 
-    def get_tag(self, sorted_seq_idx):
+    def get_tag(self, sorted_seq_idx: int) -> str:
         """
-        :param int sorted_seq_idx:
-        :rtype: str
+        :param sorted_seq_idx:
         """
         # get_tag() can be called before the seq is loaded via load_seqs().
         # Thus, we just call load_seqs() ourselves here.
