@@ -1115,7 +1115,12 @@ class StaticDataset(CachedDataset2):
                 assert output_dim[key][0] == first_data_output.shape[-1]
         assert set(output_dim.keys()) == set(self.data_keys), "output_dim does not match the given data"
 
-        self.num_inputs = input_dim
+        assert input_dim or output_dim
+        if input_dim is not None:
+            self.num_inputs = input_dim
+        else:
+            # Some code requires this to be set, although it should not really matter.
+            self.num_inputs = next(iter(output_dim.values()))[0]
         output_dim = convert_data_dims(output_dim, leave_dict_as_is=False)
         if "data" not in output_dim and input_dim is not None:
             output_dim["data"] = (input_dim * self.window, 2)  # not sparse
