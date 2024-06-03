@@ -1,4 +1,5 @@
 from __future__ import annotations
+from typing import List
 import gc
 import sys
 import time
@@ -620,6 +621,14 @@ class CachedDataset(Dataset):
         seq_start = self.get_seq_start(seq_idx)[idx]
         seq_len = self.get_seq_length_nd(sorted_seq_idx)[idx]
         return self.targets[target][seq_start : seq_start + seq_len]
+
+    def get_data_keys(self) -> List[str]:
+        """data keys"""
+        res = []
+        if self.num_inputs > 0:
+            res.append("data")
+        res.extend(self.get_target_list())
+        return res
 
     def get_target_list(self):
         return list(self.targets.keys())
