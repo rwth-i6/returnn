@@ -75,6 +75,44 @@ class ConcatFilesDataset(CachedDataset2):
           "partition_epoch": P,  # P << M
         }
 
+    Instead of a plain list of strings, you can also provide a list of any nested structures to keep
+    multimodal data together::
+
+        def get_sub_epoch_dataset(files_subepoch: List[Tuple[str, str]]) -> Dict[str, Any]:
+          from returnn.util.file_cache import CachedFile
+
+          alignments, features = tuple(zip(*files_subepoch)) # transpose
+
+          return {
+            "class": "MetaDataset",
+            "data_map": {"classes": ("alignments", "data"), "data": ("features", "data")},
+            "datasets": {
+              "alignments": {
+                "class": "HDFDataset",
+                "files": alignments,
+                "seq_ordering": "random",
+              },
+              "features": {
+                "class": "HDFDataset",
+                "files": features,
+              },
+            },
+            "seq_order_control_dataset": "alignments",
+          }
+
+        train = {
+          "class": "ConcatFilesDataset",
+          "files": [
+            ("/nfs/alignment_1.hdf", "/nfs/features_1.hdf"),
+            ...
+          ],  # M entries
+          "get_sub_epoch_dataset": get_sub_epoch_dataset,
+          "partition_epoch": P,  # P << M
+        }
+
+    In this case the file sizes for sub epoch distribution are summed up per list entry
+    by iterating over the structure leaves.
+
     For some discussion, see https://github.com/rwth-i6/returnn/issues/1519.
     """
 
@@ -90,7 +128,7 @@ class ConcatFilesDataset(CachedDataset2):
         **kwargs,
     ):
         """
-        :param files: the files to shuffle over
+        :param files: the files to shuffle over, can also be a list of arbirarily nested python objects to keep associated heterogenous data together
         :param get_sub_epoch_dataset: callable which returns a dataset dict for a given subset of files
         :param preload_next_n_sub_epochs: how many sub epoch datasets to preload
         :param buffer_size: buffer size for each worker, amount of seqs to prefetch
