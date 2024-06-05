@@ -3986,9 +3986,10 @@ class Stats:
     https://en.wikipedia.org/wiki/Algorithms_for_calculating_variance
     """
 
-    def __init__(self, format_str=None):
+    def __init__(self, *, format_str=None):
         """
-        :param None|((float|numpy.ndarray)->str) format_str:
+        :param None|((float|numpy.ndarray)->str) format_str: used for __str__ and logging. :func:`str` by default.
+            Could be e.g. :func:`human_bytes_size` for bytes.
         """
         self.format_str = format_str or str
         self.mean = 0.0
@@ -4102,6 +4103,15 @@ class Stats:
             print("  Write mean/std-dev to %s.(mean|std_dev).txt." % (output_file_prefix,), file=stream)
             numpy.savetxt("%s.mean.txt" % output_file_prefix, self.get_mean())
             numpy.savetxt("%s.std_dev.txt" % output_file_prefix, self.get_std_dev())
+            print("  Write min/max to %s.(min|max).txt." % (output_file_prefix,), file=stream)
+            numpy.savetxt("%s.min.txt" % output_file_prefix, self.min)
+            numpy.savetxt("%s.max.txt" % output_file_prefix, self.max)
+            print("  Write extra info to %s.info.txt." % (output_file_prefix,), file=stream)
+            with open("%s.info.txt" % output_file_prefix, "w") as f:
+                print("{", file=f)
+                print('"num_seqs": %i,' % self.num_seqs, file=f)
+                print('"total_data_len": %i,' % self.total_data_len, file=f)
+                print("}", file=f)
 
 
 def is_namedtuple(cls):
