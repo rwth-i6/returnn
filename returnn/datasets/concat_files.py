@@ -25,7 +25,8 @@ _mp = NonDaemonicSpawnContext(process_pre_init_func=SubProcCopyGlobalConfigPreIn
 
 __all__ = ["ConcatFilesDataset"]
 
-FileTree = Union[str, Tuple["FileTree", ...], Dict[str, "FileTree"], List["FileTree"]]
+Filename = str
+FileTree = Union[Filename, Tuple["FileTree", ...], Dict[Any, "FileTree"], List["FileTree"]]
 
 
 class ConcatFilesDataset(CachedDataset2):
