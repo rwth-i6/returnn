@@ -395,7 +395,6 @@ class ConcatFilesDataset(CachedDataset2):
         return self._data_keys
 
 
-@staticmethod
 def _get_key_for_file_tree(t: FileTree) -> str:
     """generates a deterministic key given a file tree"""
     import tree
