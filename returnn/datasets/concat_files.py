@@ -116,7 +116,8 @@ class ConcatFilesDataset(CachedDataset2):
     In this case the file sizes for sub epoch distribution are summed up per list entry
     by iterating over the structure leaves.
 
-    For some discussion, see https://github.com/rwth-i6/returnn/issues/1519.
+    For some discussion, see https://github.com/rwth-i6/returnn/issues/1519 and
+    https://github.com/rwth-i6/returnn/issues/1524.
     """
 
     def __init__(
