@@ -25,7 +25,6 @@ class Parameter(Tensor[T]):
     def __init__(
         self,
         dims_or_tensor: Union[None, Sequence[Dim], Tensor] = None,
-        /,
         dtype: Optional[str] = None,
         *,
         dims: Optional[Sequence[Dim]] = None,
