@@ -131,7 +131,8 @@ class ConcatFilesDataset(CachedDataset2):
         **kwargs,
     ):
         """
-        :param files: the files to shuffle over, can also be a list of arbirarily nested python objects to keep associated heterogenous data together
+        :param files: the files to shuffle over, can also be a list of arbirarily nested python objects
+            to keep associated heterogenous data together
         :param get_sub_epoch_dataset: callable which returns a dataset dict for a given subset of files
         :param preload_next_n_sub_epochs: how many sub epoch datasets to preload
         :param buffer_size: buffer size for each worker, amount of seqs to prefetch
@@ -361,6 +362,7 @@ class ConcatFilesDataset(CachedDataset2):
     def _get_key_for_file_tree(t: FileTree) -> str:
         """generates a deterministic key given a file tree"""
         import tree
+
         return ":".join(tree.flatten(t))
 
     def _collect_single_seq(self, seq_idx: int) -> Optional[DatasetSeq]:
