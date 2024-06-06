@@ -10,6 +10,7 @@ from typing import Optional, Any, Dict, Tuple, List, Sequence, Collection, Calla
 import os
 import sys
 import numpy
+from returnn.log import log
 from returnn.util.basic import try_run
 from returnn.util.multi_proc_non_daemonic_spawn import NonDaemonicSpawnContext
 from returnn.config import SubProcCopyGlobalConfigPreInitFunc
@@ -274,7 +275,9 @@ class ConcatFilesDataset(CachedDataset2):
                 continue
             full_epoch_0idx_ = (ep_ - 1) // self.partition_epoch
             files_order: List[List[FileTree]] = self._files_order_cache[full_epoch_0idx_]
-            dataset_dict, exit_hook = self._get_sub_dataset_dict(files=files_order[(ep_ - 1) % self.partition_epoch])
+            files_for_subep = files_order[(ep_ - 1) % self.partition_epoch]
+            print(f"{self}: using files for epoch {ep_}: {files_for_subep}", file=log.v5)
+            dataset_dict, exit_hook = self._get_sub_dataset_dict(files=files_for_subep)
             worker = _WorkerProcParent(
                 name=f"{self.__class__.__name__} {self.name} ep {epoch}",
                 epoch=ep_,
