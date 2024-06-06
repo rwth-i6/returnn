@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, List, Dict
+from typing import Any, List, Dict, Union
 import os
 import sys
 import _setup_test_env  # noqa
@@ -623,24 +623,30 @@ def test_MapDatasetWrapper():
     assert res.features["data"].shape == (5, 3)
 
 
+NestedSize = Union[int, List["NestedSize"]]
+
+
 def test_ConcatFilesDataset_get_files_per_sub_epochs():
     from returnn.datasets.concat_files import ConcatFilesDataset
+    import tree
 
-    def _test(sizes: List[int], partition_epoch: int, expected: List[List[int]]):
-        files = [f"file-{i}" for i in range(len(sizes))]
-        file_sizes = {f: s for f, s in zip(files, sizes)}
+    def _test(sizes: List[NestedSize], partition_epoch: int, expected: List[NestedSize]):
+        files = tree.map_structure_with_path(lambda p, v: f"{v}-{':'.join(map(str, p))}", sizes)
+        file_sizes = {ConcatFilesDataset._get_key_for_file_tree(t): sum(tree.flatten(s)) for t, s in zip(files, sizes)}
         res = ConcatFilesDataset._get_files_per_sub_epochs(
             partition_epoch=partition_epoch, file_sizes=file_sizes, files_order=files
         )
         assert all(res) and len(res) == partition_epoch
-        assert set(sum(res, [])) == set(files)
-        res_ = [[file_sizes[fn] for fn in sub_epoch] for sub_epoch in res]
+        assert set(tree.flatten(res)) == set(tree.flatten(files))
+        res_ = tree.map_structure(lambda v: int(v.split("-")[0]), res)
         assert res_ == expected
 
     _test([1, 1, 78, 120], 4, [[1], [1], [78], [120]])
     _test([1, 1, 1, 56, 141], 5, [[1], [1], [1], [56], [141]])
     _test([1, 1, 1, 56, 141], 4, [[1, 1], [1], [56], [141]])
     _test([5, 5] + [10] * 7, 5, [[5, 5, 10], [10, 10], [10, 10], [10], [10]])
+
+    _test([[[5], 5]] + [10] * 7 + [[12], 10], 5, [[[[5], 5], 10], [10, 10], [10, 10], [10, 10], [[12], 10]])
 
 
 def test_ConcatFilesDataset():
