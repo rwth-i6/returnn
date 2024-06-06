@@ -627,12 +627,12 @@ NestedSize = Union[int, List["NestedSize"]]
 
 
 def test_ConcatFilesDataset_get_files_per_sub_epochs():
-    from returnn.datasets.concat_files import ConcatFilesDataset
+    from returnn.datasets.concat_files import ConcatFilesDataset, _get_key_for_file_tree
     import tree
 
     def _test(sizes: List[NestedSize], partition_epoch: int, expected: List[NestedSize]):
         files = tree.map_structure_with_path(lambda p, v: f"{v}-{':'.join(map(str, p))}", sizes)
-        file_sizes = {ConcatFilesDataset._get_key_for_file_tree(t): sum(tree.flatten(s)) for t, s in zip(files, sizes)}
+        file_sizes = {_get_key_for_file_tree(t): sum(tree.flatten(s)) for t, s in zip(files, sizes)}
         res = ConcatFilesDataset._get_files_per_sub_epochs(
             partition_epoch=partition_epoch, file_sizes=file_sizes, files_order=files
         )

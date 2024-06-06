@@ -204,8 +204,7 @@ class ConcatFilesDataset(CachedDataset2):
         if self._file_sizes:
             return
         self._file_sizes = {
-            ConcatFilesDataset._get_key_for_file_tree(t): sum((os.path.getsize(fn) for fn in tree.flatten(t)), 0)
-            for t in self.files
+            _get_key_for_file_tree(t): sum((os.path.getsize(fn) for fn in tree.flatten(t)), 0) for t in self.files
         }
 
     def _lazy_init_file_cache_proc(self):
@@ -323,7 +322,7 @@ class ConcatFilesDataset(CachedDataset2):
         sub_epoch_idx = 0
         size_taken = 0
         for i, f_tree in enumerate(files_order):
-            size = file_sizes[ConcatFilesDataset._get_key_for_file_tree(f_tree)]
+            size = file_sizes[_get_key_for_file_tree(f_tree)]
             num_remaining = len(files_order) - i
             if num_remaining <= partition_epoch - sub_epoch_idx - 1:
                 # All remaining sub epochs must be filled.
@@ -357,13 +356,6 @@ class ConcatFilesDataset(CachedDataset2):
             sub_epoch_idx += 1
         assert all(files_per_sub_epochs)
         return files_per_sub_epochs
-
-    @staticmethod
-    def _get_key_for_file_tree(t: FileTree) -> str:
-        """generates a deterministic key given a file tree"""
-        import tree
-
-        return ":".join(tree.flatten(t))
 
     def _collect_single_seq(self, seq_idx: int) -> Optional[DatasetSeq]:
         if seq_idx >= self._num_seqs:
@@ -400,6 +392,14 @@ class ConcatFilesDataset(CachedDataset2):
         if self._data_keys is None:
             self._lazy_init_num_outputs()
         return self._data_keys
+
+
+@staticmethod
+def _get_key_for_file_tree(t: FileTree) -> str:
+    """generates a deterministic key given a file tree"""
+    import tree
+
+    return ":".join(tree.flatten(t))
 
 
 class _WorkerProcParent:
