@@ -13,7 +13,6 @@ import numpy
 from returnn.util.basic import try_run
 from returnn.util.multi_proc_non_daemonic_spawn import NonDaemonicSpawnContext
 from returnn.config import SubProcCopyGlobalConfigPreInitFunc
-import tree
 from .basic import init_dataset, DatasetSeq
 from .cached2 import CachedDataset2
 
@@ -199,6 +198,8 @@ class ConcatFilesDataset(CachedDataset2):
             exit_hook()
 
     def _lazy_init_file_sizes(self):
+        import tree
+
         if self._file_sizes:
             return
         self._file_sizes = {
@@ -359,6 +360,7 @@ class ConcatFilesDataset(CachedDataset2):
     @staticmethod
     def _get_key_for_file_tree(t: FileTree) -> str:
         """generates a deterministic key given a file tree"""
+        import tree
         return ":".join(tree.flatten(t))
 
     def _collect_single_seq(self, seq_idx: int) -> Optional[DatasetSeq]:
