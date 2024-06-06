@@ -13,6 +13,7 @@ import numpy
 from returnn.util.basic import try_run
 from returnn.util.multi_proc_non_daemonic_spawn import NonDaemonicSpawnContext
 from returnn.config import SubProcCopyGlobalConfigPreInitFunc
+import tree
 from .basic import init_dataset, DatasetSeq
 from .cached2 import CachedDataset2
 
@@ -199,9 +200,10 @@ class ConcatFilesDataset(CachedDataset2):
     def _lazy_init_file_sizes(self):
         if self._file_sizes:
             return
-
-        import tree
-        self._file_sizes = {":".join(tree.flatten(t)): sum((os.path.getsize(fn) for fn in tree.flatten(t)), 0) for t in self.files}
+        self._file_sizes = {
+            ConcatFilesDataset._get_key_for_file_tree(t): sum((os.path.getsize(fn) for fn in tree.flatten(t)), 0)
+            for t in self.files
+        }
 
     def _lazy_init_file_cache_proc(self):
         if self._file_cache:
@@ -299,7 +301,6 @@ class ConcatFilesDataset(CachedDataset2):
     def _get_files_per_sub_epochs(
         *, partition_epoch: int, file_sizes: Dict[str, int], files_order: Sequence[FileTree]
     ) -> List[List[FileTree]]:
-        import tree
         total_size = sum(file_sizes.values())
         avg_size_per_sub_epoch = total_size / partition_epoch
         # Now evenly distribute the files over the sub epochs.
@@ -319,7 +320,7 @@ class ConcatFilesDataset(CachedDataset2):
         sub_epoch_idx = 0
         size_taken = 0
         for i, f_tree in enumerate(files_order):
-            size = file_sizes[":".join(tree.flatten(f_tree))]
+            size = file_sizes[ConcatFilesDataset._get_key_for_file_tree(f_tree)]
             num_remaining = len(files_order) - i
             if num_remaining <= partition_epoch - sub_epoch_idx - 1:
                 # All remaining sub epochs must be filled.
@@ -353,6 +354,11 @@ class ConcatFilesDataset(CachedDataset2):
             sub_epoch_idx += 1
         assert all(files_per_sub_epochs)
         return files_per_sub_epochs
+
+    @staticmethod
+    def _get_key_for_file_tree(t: FileTree) -> str:
+        """generates a deterministic key given a file tree"""
+        return ":".join(tree.flatten(t))
 
     def _collect_single_seq(self, seq_idx: int) -> Optional[DatasetSeq]:
         if seq_idx >= self._num_seqs:
