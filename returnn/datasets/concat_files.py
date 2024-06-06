@@ -6,7 +6,7 @@ https://github.com/rwth-i6/returnn/issues/1519
 
 from __future__ import annotations
 
-from typing import Optional, Any, Dict, Tuple, List, Sequence, Collection, Callable
+from typing import Optional, Any, Dict, Tuple, List, Sequence, Collection, Callable, Union
 import os
 import sys
 import numpy
@@ -24,6 +24,9 @@ _mp = NonDaemonicSpawnContext(process_pre_init_func=SubProcCopyGlobalConfigPreIn
 
 __all__ = ["ConcatFilesDataset"]
 
+Filename = str
+FileTree = Union[Filename, Tuple["FileTree", ...], Dict[Any, "FileTree"], List["FileTree"]]
+
 
 class ConcatFilesDataset(CachedDataset2):
     """
@@ -36,7 +39,7 @@ class ConcatFilesDataset(CachedDataset2):
     This scheme allows to shuffle over the files,
     which makes shuffling much more efficient over a large dataset
     at the cost of no longer shuffling over the full dataset in every subepoch.
-    Instead the quality of the shuffle depends on the number of files the dataset is
+    Instead, the quality of the shuffle depends on the number of files the dataset is
     split into -- the more files per subepoch, the better.
 
     Additionally, this scheme allows to prefetch and cache the upcoming needed files,
@@ -75,14 +78,53 @@ class ConcatFilesDataset(CachedDataset2):
           "partition_epoch": P,  # P << M
         }
 
-    For some discussion, see https://github.com/rwth-i6/returnn/issues/1519.
+    Instead of a plain list of strings, you can also provide a list of any nested structures to keep
+    multimodal data together::
+
+        def get_sub_epoch_dataset(files_subepoch: List[Tuple[str, str]]) -> Dict[str, Any]:
+          from returnn.util.file_cache import CachedFile
+
+          alignments, features = tuple(zip(*files_subepoch)) # transpose
+
+          return {
+            "class": "MetaDataset",
+            "data_map": {"classes": ("alignments", "data"), "data": ("features", "data")},
+            "datasets": {
+              "alignments": {
+                "class": "HDFDataset",
+                "files": alignments,
+                "seq_ordering": "random",
+              },
+              "features": {
+                "class": "HDFDataset",
+                "files": features,
+              },
+            },
+            "seq_order_control_dataset": "alignments",
+          }
+
+        train = {
+          "class": "ConcatFilesDataset",
+          "files": [
+            ("/nfs/alignment_1.hdf", "/nfs/features_1.hdf"),
+            ...
+          ],  # M entries
+          "get_sub_epoch_dataset": get_sub_epoch_dataset,
+          "partition_epoch": P,  # P << M
+        }
+
+    In this case the file sizes for sub epoch distribution are summed up per list entry
+    by iterating over the structure leaves.
+
+    For some discussion, see https://github.com/rwth-i6/returnn/issues/1519 and
+    https://github.com/rwth-i6/returnn/issues/1524.
     """
 
     def __init__(
         self,
         *,
-        files: List[str],
-        get_sub_epoch_dataset: Callable[[List[str]], Dict[str, Any]],
+        files: List[FileTree],
+        get_sub_epoch_dataset: Callable[[List[FileTree]], Dict[str, Any]],
         preload_next_n_sub_epochs: int = 1,
         buffer_size: int = 1,
         file_cache_opts: Optional[Dict[str, Any]] = None,
@@ -90,7 +132,8 @@ class ConcatFilesDataset(CachedDataset2):
         **kwargs,
     ):
         """
-        :param files: the files to shuffle over
+        :param files: the files to shuffle over, can also be a list of arbitrarily nested python objects
+            to keep associated heterogeneous data together
         :param get_sub_epoch_dataset: callable which returns a dataset dict for a given subset of files
         :param preload_next_n_sub_epochs: how many sub epoch datasets to preload
         :param buffer_size: buffer size for each worker, amount of seqs to prefetch
@@ -103,13 +146,13 @@ class ConcatFilesDataset(CachedDataset2):
         self.preload_next_n_sub_epochs = preload_next_n_sub_epochs
         self.buffer_size = buffer_size
         self.file_cache_opts = file_cache_opts or {}
-        self._file_sizes: Optional[Dict[str, int]] = None  # file -> size. for equal distribution across sub epochs
+        self._file_sizes: Optional[Dict[str, int]] = None  # key -> size. for equal distribution across sub epochs
         self._data_keys: Optional[List[str]] = None
         self._num_seqs: Optional[int] = None
 
         self._file_cache: Optional[_FileCacheProc] = None
         self._workers: Dict[int, _WorkerProcParent] = {}  # epoch -> worker
-        self._files_order_cache: Dict[int, List[List[str]]] = {}  # full epoch (0-indexed) -> files order
+        self._files_order_cache: Dict[int, List[List[FileTree]]] = {}  # full epoch (0-indexed) -> files order
 
         if _meta_info_cache:
             # This allows to skip the lazy init in self.initialize().
@@ -157,9 +200,13 @@ class ConcatFilesDataset(CachedDataset2):
             exit_hook()
 
     def _lazy_init_file_sizes(self):
+        import tree
+
         if self._file_sizes:
             return
-        self._file_sizes = {fn: os.path.getsize(fn) for fn in self.files}
+        self._file_sizes = {
+            _get_key_for_file_tree(t): sum((os.path.getsize(fn) for fn in tree.flatten(t)), 0) for t in self.files
+        }
 
     def _lazy_init_file_cache_proc(self):
         if self._file_cache:
@@ -226,7 +273,7 @@ class ConcatFilesDataset(CachedDataset2):
             if ep_ in self._workers:
                 continue
             full_epoch_0idx_ = (ep_ - 1) // self.partition_epoch
-            files_order: List[List[str]] = self._files_order_cache[full_epoch_0idx_]
+            files_order: List[List[FileTree]] = self._files_order_cache[full_epoch_0idx_]
             dataset_dict, exit_hook = self._get_sub_dataset_dict(files=files_order[(ep_ - 1) % self.partition_epoch])
             worker = _WorkerProcParent(
                 name=f"{self.__class__.__name__} {self.name} ep {epoch}",
@@ -241,7 +288,7 @@ class ConcatFilesDataset(CachedDataset2):
         self._num_seqs = self._workers[epoch].get_num_seqs()
         return True
 
-    def _get_sub_dataset_dict(self, files: List[str]) -> Tuple[Dict[str, Any], _FileCacheExitHook]:
+    def _get_sub_dataset_dict(self, files: List[FileTree]) -> Tuple[Dict[str, Any], _FileCacheExitHook]:
         dataset_dict = self.get_sub_epoch_dataset(files)
         if "random_seed_offset" not in dataset_dict:
             dataset_dict["random_seed_offset"] = self.random_seed_offset
@@ -255,8 +302,8 @@ class ConcatFilesDataset(CachedDataset2):
 
     @staticmethod
     def _get_files_per_sub_epochs(
-        *, partition_epoch: int, file_sizes: Dict[str, int], files_order: Sequence[str]
-    ) -> List[List[str]]:
+        *, partition_epoch: int, file_sizes: Dict[str, int], files_order: Sequence[FileTree]
+    ) -> List[List[FileTree]]:
         total_size = sum(file_sizes.values())
         avg_size_per_sub_epoch = total_size / partition_epoch
         # Now evenly distribute the files over the sub epochs.
@@ -275,24 +322,24 @@ class ConcatFilesDataset(CachedDataset2):
         assert len(files_per_sub_epochs) == partition_epoch
         sub_epoch_idx = 0
         size_taken = 0
-        for i, fn in enumerate(files_order):
+        for i, f_tree in enumerate(files_order):
+            size = file_sizes[_get_key_for_file_tree(f_tree)]
             num_remaining = len(files_order) - i
-            size = file_sizes[fn]
             if num_remaining <= partition_epoch - sub_epoch_idx - 1:
                 # All remaining sub epochs must be filled.
                 assert files_per_sub_epochs[sub_epoch_idx]
                 sub_epoch_idx += 1
-                files_per_sub_epochs[sub_epoch_idx].append(fn)
+                files_per_sub_epochs[sub_epoch_idx].append(f_tree)
                 size_taken = size
                 continue
             if sub_epoch_idx == partition_epoch - 1:
                 # We are done. Just add the rest to the last sub epoch.
-                files_per_sub_epochs[sub_epoch_idx].append(fn)
+                files_per_sub_epochs[sub_epoch_idx].append(f_tree)
                 size_taken += size
                 continue
             assert size_taken <= avg_size_per_sub_epoch
             if size_taken + size <= avg_size_per_sub_epoch:
-                files_per_sub_epochs[sub_epoch_idx].append(fn)
+                files_per_sub_epochs[sub_epoch_idx].append(f_tree)
                 size_taken += size
                 continue
             # We should increase the sub epoch index.
@@ -302,10 +349,10 @@ class ConcatFilesDataset(CachedDataset2):
                 abs((size_taken + size) - avg_size_per_sub_epoch)
                 <= abs(size_taken - avg_size_per_sub_epoch)
             ):
-                files_per_sub_epochs[sub_epoch_idx].append(fn)
+                files_per_sub_epochs[sub_epoch_idx].append(f_tree)
                 size_taken = 0
             else:
-                files_per_sub_epochs[sub_epoch_idx + 1].append(fn)
+                files_per_sub_epochs[sub_epoch_idx + 1].append(f_tree)
                 size_taken = size
             sub_epoch_idx += 1
         assert all(files_per_sub_epochs)
@@ -346,6 +393,13 @@ class ConcatFilesDataset(CachedDataset2):
         if self._data_keys is None:
             self._lazy_init_num_outputs()
         return self._data_keys
+
+
+def _get_key_for_file_tree(t: FileTree) -> str:
+    """generates a deterministic key given a file tree"""
+    import tree
+
+    return ":".join(tree.flatten(t))
 
 
 class _WorkerProcParent:
