@@ -24,9 +24,11 @@ class Parameter(Tensor[T]):
 
     def __init__(
         self,
-        dims: Sequence[Dim],
+        dims_or_tensor: Union[None, Sequence[Dim], Tensor] = None,
+        /,
         dtype: Optional[str] = None,
         *,
+        dims: Optional[Sequence[Dim]] = None,
         sparse_dim: Optional[Dim] = None,
         trainable: Optional[bool] = None,
         auxiliary: bool = False,
@@ -37,6 +39,7 @@ class Parameter(Tensor[T]):
         device: Optional[str] = None,
     ):
         """
+        :param dims_or_tensor:
         :param dims:
         :param dtype:
         :param sparse_dim:
@@ -52,12 +55,31 @@ class Parameter(Tensor[T]):
         :param raw_tensor:
         :param device:
         """
+        if dims_or_tensor is None:
+            if dims is None:
+                raise ValueError("rf.Parameter: dims must be set.")
+        elif isinstance(dims_or_tensor, (tuple, list)):
+            if dims is not None:
+                raise ValueError("rf.Parameter: dims is set twice.")
+            dims = dims_or_tensor
+        elif isinstance(dims_or_tensor, Tensor):
+            if initial is not None:
+                raise ValueError("rf.Parameter: initial is set twice.")
+            initial = dims_or_tensor
+            if dims is None:
+                dims = initial.dims
+            if dtype is None:
+                dtype = initial.dtype
+            if sparse_dim is None:
+                sparse_dim = initial.sparse_dim
+        else:
+            raise TypeError(f"rf.Parameter: invalid type for dims_or_tensor: {type(dims_or_tensor)}")
         if not all(isinstance(dim, Dim) for dim in dims):
-            raise TypeError(f"shape {dims} must be a sequence of Dim")
+            raise TypeError(f"rf.Parameter: shape {dims} must be a sequence of Dim")
         if not all(isinstance(dim.dimension, int) for dim in dims):
-            raise ValueError(f"shape {dims} must be static")
+            raise ValueError(f"rf.Parameter: shape {dims} must be static")
         if len(dims) != len(set((d, d.match_priority) for d in dims)):
-            raise ValueError(f"shape {dims} dims must be unique")
+            raise ValueError(f"rf.Parameter: shape {dims} dims must be unique")
         super(Parameter, self).__init__(
             "parameter",
             dims=dims,
