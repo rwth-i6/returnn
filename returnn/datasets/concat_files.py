@@ -39,7 +39,7 @@ class ConcatFilesDataset(CachedDataset2):
     This scheme allows to shuffle over the files,
     which makes shuffling much more efficient over a large dataset
     at the cost of no longer shuffling over the full dataset in every subepoch.
-    Instead the quality of the shuffle depends on the number of files the dataset is
+    Instead, the quality of the shuffle depends on the number of files the dataset is
     split into -- the more files per subepoch, the better.
 
     Additionally, this scheme allows to prefetch and cache the upcoming needed files,
@@ -131,8 +131,8 @@ class ConcatFilesDataset(CachedDataset2):
         **kwargs,
     ):
         """
-        :param files: the files to shuffle over, can also be a list of arbirarily nested python objects
-            to keep associated heterogenous data together
+        :param files: the files to shuffle over, can also be a list of arbitrarily nested python objects
+            to keep associated heterogeneous data together
         :param get_sub_epoch_dataset: callable which returns a dataset dict for a given subset of files
         :param preload_next_n_sub_epochs: how many sub epoch datasets to preload
         :param buffer_size: buffer size for each worker, amount of seqs to prefetch
