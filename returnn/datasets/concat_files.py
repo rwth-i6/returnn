@@ -297,8 +297,11 @@ class ConcatFilesDataset(CachedDataset2):
             dataset_dict["random_seed_offset"] = self.random_seed_offset
         if dataset_dict.get("partition_epoch", 1) != 1:
             raise ValueError(f"{self}: sub dataset should not have partition_epoch, got: {dataset_dict}")
-        if "seq_ordering" not in dataset_dict:
-            raise ValueError(f"{self}: sub dataset should have explicit seq_ordering, got: {dataset_dict}")
+        if "seq_ordering" not in dataset_dict and "seq_order_control_dataset" not in dataset_dict:
+            raise ValueError(
+                f"{self}: sub dataset should have explicit seq_ordering "
+                "(or seq_order_control_dataset for MetaDataset), got: {dataset_dict}"
+            )
         self._lazy_init_file_cache_proc()
         dataset_dict, exit_hook = self._file_cache.handle_cached_files_in_config(dataset_dict)
         return dataset_dict, exit_hook
