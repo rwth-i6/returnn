@@ -373,6 +373,9 @@ class ConcatFilesDataset(CachedDataset2):
         seq.seq_idx = seq_idx
         return seq
 
+    def have_seqs(self) -> bool:
+        return bool(self.files)
+
     @property
     def num_seqs(self) -> int:
         """num seqs"""
