@@ -2018,6 +2018,7 @@ class TorchBackend(Backend[torch.Tensor]):
 
         out = source.copy_template_replace_dim_tag(axis=-1, new_dim_tag=out_dim, name="lstm")
         out.feature_dim = out_dim
+        out.dtype = TorchBackend.get_dtype_name_raw(out_raw)  # maybe due to AMP
         out.raw_tensor = out_raw
 
         new_state_h = state_h.copy_template()
