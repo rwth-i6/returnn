@@ -94,7 +94,7 @@ class NonDaemonicSpawnProcess(SpawnProcess):
             signals = ["SIGINT"] * 3 + ["SIGTERM", "SIGKILL"]
             for sig in signals:
                 try:
-                    print(f"Send signal {sig} to pid {self.ident}")
+                    print(f"Send signal {sig} to pid {self.ident}/'{self.name or 'N/A'}'")
                     os.kill(self.ident, getattr(signal, sig))
                 except ProcessLookupError:
                     break
