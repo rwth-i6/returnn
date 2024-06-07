@@ -427,14 +427,21 @@ class _WorkerProcParent:
         self.full_epoch_0idx = full_epoch_0idx
         self.dataset_dict = dataset_dict
         self.exit_hook = exit_hook
+        self.name = name
+        self.buffer_size = buffer_size
 
+        self._has_reinit = False
+
+        self._init_worker()
+
+    def _init_worker(self):
         parent_conn, child_conn = _mp.Pipe()
         self.parent_conn: mpConnection = parent_conn
 
         self.worker_proc = _mp.Process(
-            name=f"{name} worker ep {epoch}",
+            name=f"{self.name} worker ep {self.epoch}",
             target=_worker_proc_loop,
-            args=(epoch, buffer_size, dataset_dict, child_conn),
+            args=(self.epoch, self.buffer_size, self.dataset_dict, child_conn),
             daemon=True,
         )
         self.worker_proc.start()
@@ -453,6 +460,16 @@ class _WorkerProcParent:
         self.parent_conn.send(("init_seq_order", {"epoch": self.full_epoch_0idx + 1}))
         self._num_seqs: Optional[int] = None
 
+    def _with_retry(self, fn: Callable) -> Any:
+        try:
+            return fn()
+        except ConnectionResetError:  # child has died
+            if self._has_reinit:
+                raise RuntimeError("cannot reinitialize worker process more than one time")
+            self._has_reinit = True
+            self._init_worker()
+            return fn()
+
     def _lazy_wait_for_init_seq_order(self):
         if self._num_seqs is not None:
             return
@@ -462,26 +479,35 @@ class _WorkerProcParent:
 
     def get_num_seqs(self) -> int:
         """num seqs for this sub epoch"""
-        self._lazy_wait_for_init_seq_order()
+        self._with_retry(lambda: self._lazy_wait_for_init_seq_order())
         return self._num_seqs
 
     def get_data_seq(self, seq_idx: int) -> Optional[DatasetSeq]:
         """get data seq"""
-        self._lazy_wait_for_init_seq_order()
-        self.parent_conn.send(("get_data_seq", {"seq_idx": seq_idx}))
-        msg, data = self.parent_conn.recv()
-        assert msg == "data_seq"
-        return data
+
+        def do():
+            self._lazy_wait_for_init_seq_order()
+            self.parent_conn.send(("get_data_seq", {"seq_idx": seq_idx}))
+            msg, data = self.parent_conn.recv()
+            assert msg == "data_seq"
+            return data
+
+        return self._with_retry(lambda: do())
 
     def exit(self, *, join: bool = True):
         """exit"""
-        self._lazy_wait_for_init_seq_order()
-        self.parent_conn.send(("exit", {}))
-        if join:
-            self.worker_proc.join()
-        if self.exit_hook:
-            self.exit_hook()
-            self.exit_hook = None
+
+        try:
+            self._lazy_wait_for_init_seq_order()
+            self.parent_conn.send(("exit", {}))
+            if join:
+                self.worker_proc.join()
+            if self.exit_hook:
+                self.exit_hook()
+                self.exit_hook = None
+        except ConnectionResetError:
+            # child is already dead
+            pass
 
     def __del__(self):
         # noinspection PyBroadException
