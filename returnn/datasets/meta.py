@@ -26,7 +26,7 @@ from __future__ import annotations
 from typing import Optional, Any, Sequence, List, Dict
 from returnn.datasets.basic import Dataset, DatasetSeq, init_dataset, convert_data_dims
 from .cached2 import CachedDataset2
-from returnn.util.basic import NumbersDict, load_json
+from returnn.util.basic import NumbersDict, load_json, OptionalNotImplementedError
 from returnn.log import log
 from random import Random
 import numpy
@@ -1889,6 +1889,109 @@ class VariableDataset(Dataset):
     def is_data_sparse(self, key: str) -> bool:
         """is data sparse"""
         return self._dataset.is_data_sparse(key)
+
+
+class AnythingDataset(Dataset):
+    def __init__(self, *, data_keys: Dict[str, Dict[str, Any]], **kwargs):
+        """
+        :param data_keys: similar like extern_data. defines shape, dtype, sparse, dim, etc
+        """
+        super().__init__(**kwargs)
+        self._data_keys = data_keys
+        self._input_key = next(iter(data_keys))
+        self.num_inputs = data_keys[self._input_key]["dim"]
+        self.num_outputs = {k: (v["dim"], len(v["shape"])) for (k, v) in data_keys.items()}
+        self.labels = None
+        self._seq_list = None
+        self._seq_order = None
+
+    def init_seq_order(self, epoch=None, seq_list=None, seq_order=None):
+        """init seq order"""
+        super().init_seq_order()
+        self._seq_list = seq_list
+        self._seq_order = seq_order
+
+    def supports_seq_order_sorting(self) -> bool:
+        """supports sorting"""
+        return True
+
+    def get_current_seq_order(self) -> Sequence[int]:
+        """current seq order"""
+        if self._seq_order is not None:
+            return self._seq_order
+        raise OptionalNotImplementedError
+
+    def have_seqs(self) -> bool:
+        """total num seqs"""
+        return True
+
+    def get_seq_length(self, sorted_seq_idx: int) -> NumbersDict:
+        """seq len"""
+        return NumbersDict(1)
+
+    def get_tag(self, sorted_seq_idx: int) -> str:
+        """tag"""
+        if self._seq_list:
+            return self._seq_list[sorted_seq_idx]
+        return f"seq-{sorted_seq_idx}"
+
+    def get_data_keys(self) -> List[str]:
+        """data keys"""
+        return list(self._data_keys)
+
+    def get_target_list(self) -> List[str]:
+        """target list"""
+        return [key for key in self._data_keys if key != self._input_key]
+
+    def is_cached(self, start: int, end: int) -> bool:
+        """is cached"""
+        return True
+
+    @property
+    def num_seqs(self) -> int:
+        """num seqs"""
+        if self._seq_order:
+            return len(self._seq_order)
+        if self._seq_list:
+            return len(self._seq_list)
+        raise NotImplementedError
+
+    def is_less_than_num_seqs(self, n: int) -> bool:
+        """n < num_seqs"""
+        if self._seq_order:
+            return n < len(self._seq_order)
+        if self._seq_list:
+            return n < len(self._seq_list)
+        return True  # we can always generate more
+
+    def get_data(self, seq_idx: int, key: str) -> numpy.ndarray:
+        """data"""
+        data = self._data_keys[key]
+        return numpy.zeros([d or 1 for d in data["shape"]], dtype=data["dtype"])
+
+    def get_input_data(self, seq_idx: int) -> numpy.ndarray:
+        """input data"""
+        return self.get_data(seq_idx, self._input_key)
+
+    def get_targets(self, target: str, seq_idx: int) -> numpy.ndarray:
+        """target data"""
+        return self.get_data(seq_idx, target)
+
+    def get_data_dim(self, key: str) -> int:
+        """data dim"""
+        return self._data_keys[key]["dim"]
+
+    def get_data_shape(self, data_key: str) -> List[int]:
+        """data shape"""
+        return list(self._data_keys[data_key]["shape"])
+
+    def get_data_dtype(self, key: str) -> str:
+        """data dtype"""
+        return self._data_keys[key]["dtype"]
+
+    def is_data_sparse(self, key: str) -> bool:
+        """is data sparse"""
+        return self._data_keys[key].get("sparse", False)
 
 
 def _select_dtype(key, data_dims, data_dtypes):
