@@ -1862,6 +1862,13 @@ class VariableDataset(Dataset):
         """num timesteps"""
         return self._dataset.get_num_timesteps()
 
+    def load_seqs(self, start: int, end: int):
+        """load seqs"""
+        self._dataset.load_seqs(start, end)
+
+    def _load_seqs(self, start: int, end: int):
+        raise Exception(f"{self}: _load_seqs: should not get here")
+
     def get_data(self, seq_idx: int, key: str) -> numpy.ndarray:
         """data"""
         return self._dataset.get_data(seq_idx, key)
@@ -1963,6 +1970,9 @@ class AnythingDataset(Dataset):
         if self._seq_list:
             return n < len(self._seq_list)
         return True  # we can always generate more
+
+    def _load_seqs(self, start: int, end: int):
+        pass  # noop
 
     def get_data(self, seq_idx: int, key: str) -> numpy.ndarray:
         """data"""
