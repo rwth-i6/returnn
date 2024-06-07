@@ -374,6 +374,7 @@ class ConcatFilesDataset(CachedDataset2):
         return seq
 
     def have_seqs(self) -> bool:
+        """have seqs"""
         return bool(self.files)
 
     @property
