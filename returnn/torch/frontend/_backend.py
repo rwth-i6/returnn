@@ -2022,12 +2022,12 @@ class TorchBackend(Backend[torch.Tensor]):
         out.raw_tensor = out_raw
 
         new_state_h = state_h.copy_template()
-        new_state_h.dtype = TorchBackend.get_dtype_name_raw(new_state_h_raw) # maybe due to AMP
+        new_state_h.dtype = TorchBackend.get_dtype_name_raw(new_state_h_raw)  # maybe due to AMP
         new_state_h.raw_tensor = new_state_h_raw
         new_state_h.feature_dim = out_dim
 
         new_state_c = state_c.copy_template()
-        new_state_c.dtype = TorchBackend.get_dtype_name_raw(new_state_c_raw) # maybe due to AMP
+        new_state_c.dtype = TorchBackend.get_dtype_name_raw(new_state_c_raw)  # maybe due to AMP
         new_state_c.raw_tensor = new_state_c_raw
         new_state_c.feature_dim = out_dim
 
