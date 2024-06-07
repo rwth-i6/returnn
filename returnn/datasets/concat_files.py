@@ -276,7 +276,7 @@ class ConcatFilesDataset(CachedDataset2):
             full_epoch_0idx_ = (ep_ - 1) // self.partition_epoch
             files_order: List[List[FileTree]] = self._files_order_cache[full_epoch_0idx_]
             files_for_subep = files_order[(ep_ - 1) % self.partition_epoch]
-            print(f"{self}: using files for epoch {ep_}: {files_for_subep}", file=log.v5)
+            print(f"{self}: using files for epoch {ep_}: {files_for_subep}", file=log.v4)
             dataset_dict, exit_hook = self._get_sub_dataset_dict(files=files_for_subep)
             worker = _WorkerProcParent(
                 name=f"{self.__class__.__name__} {self.name} ep {epoch}",
