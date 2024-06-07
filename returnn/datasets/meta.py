@@ -23,7 +23,7 @@ The dataset classes MetaDataset and CombinedDataset which perform these tasks ar
 
 from __future__ import annotations
 
-from typing import List
+from typing import Optional, Any, Sequence, List, Dict
 from returnn.datasets.basic import Dataset, DatasetSeq, init_dataset, convert_data_dims
 from .cached2 import CachedDataset2
 from returnn.util.basic import NumbersDict, load_json
@@ -1770,6 +1770,125 @@ class ChunkShuffleDataset(CachedDataset2):
         :rtype: list[str]
         """
         return self.dataset.get_target_list()
+
+
+class VariableDataset(Dataset):
+    """
+    For every (sub)epoch, it would generate a new subdataset,
+    based on a user-provided function.
+    """
+
+    def __init__(self, *, get_dataset, **kwargs):
+        """
+        :param get_dataset: function (*, epoch: int, **_) -> Dict[str,Any], will be called for every sub-epoch.
+            It will cache the dict from the prev call, and if the dict is the same, it will not recreate the dataset.
+        """
+        super().__init__(**kwargs)
+        self._get_dataset = get_dataset
+        self._dataset_dict: Optional[Dict[str, Any]] = None
+        self._dataset: Optional[Dataset] = None
+        self._load_dataset(epoch=1)
+        self.num_inputs = self._dataset.num_inputs
+        self.num_outputs = self._dataset.num_outputs
+        self.labels = self._dataset.labels
+
+    def _load_dataset(self, epoch: int):
+        dataset_dict = self._get_dataset(epoch=epoch)
+        if dataset_dict != self._dataset_dict:
+            self._dataset_dict = dataset_dict
+            self._dataset = init_dataset(dataset_dict)
+
+    def init_seq_order(self, epoch=None, seq_list=None, seq_order=None):
+        """init seq order"""
+        super().init_seq_order()
+        if epoch is None:
+            if seq_list is not None or seq_order is not None:
+                raise ValueError(f"{self}: epoch is None, but given seq_list or seq_order, not supported")
+            return
+        self._load_dataset(epoch)
+        self._dataset.init_seq_order(epoch=epoch, seq_list=seq_list, seq_order=seq_order)
+
+    def finish_epoch(self, *, free_resources: bool = False):
+        """finish epoch"""
+        super().finish_epoch(free_resources=free_resources)
+        self._dataset.finish_epoch(free_resources=free_resources)
+
+    def supports_seq_order_sorting(self) -> bool:
+        """supports sorting"""
+        return self._dataset.supports_seq_order_sorting()
+
+    def get_current_seq_order(self) -> Sequence[int]:
+        """current seq order"""
+        return self._dataset.get_current_seq_order()
+
+    def get_all_tags(self) -> List[str]:
+        """all tags"""
+        return self._dataset.get_all_tags()
+
+    def get_total_num_seqs(self) -> int:
+        """total num seqs"""
+        return self._dataset.get_total_num_seqs()
+
+    def get_seq_length(self, sorted_seq_idx: int) -> NumbersDict:
+        """seq len"""
+        return self._dataset.get_seq_length(sorted_seq_idx)
+
+    def get_tag(self, sorted_seq_idx: int) -> str:
+        """tag"""
+        return self._dataset.get_tag(sorted_seq_idx)
+
+    def get_data_keys(self) -> List[str]:
+        """data keys"""
+        return self._dataset.get_data_keys()
+
+    def get_target_list(self) -> List[str]:
+        """target list"""
+        return self._dataset.get_target_list()
+
+    def is_cached(self, start: int, end: int) -> bool:
+        """is cached"""
+        return self._dataset.is_cached(start, end)
+
+    @property
+    def num_seqs(self) -> int:
+        """num seqs"""
+        return self._dataset.num_seqs
+
+    def is_less_than_num_seqs(self, n: int) -> bool:
+        """n < num_seqs"""
+        return self._dataset.is_less_than_num_seqs(n)
+
+    def get_num_timesteps(self) -> int:
+        """num timesteps"""
+        return self._dataset.get_num_timesteps()
+
+    def get_data(self, seq_idx: int, key: str) -> numpy.ndarray:
+        """data"""
+        return self._dataset.get_data(seq_idx, key)
+
+    def get_input_data(self, seq_idx: int) -> numpy.ndarray:
+        """input data"""
+        return self._dataset.get_input_data(seq_idx)
+
+    def get_targets(self, target: str, seq_idx: int) -> numpy.ndarray:
+        """target data"""
+        return self._dataset.get_targets(target, seq_idx)
+
+    def get_data_dim(self, key: str) -> int:
+        """data dim"""
+        return self._dataset.get_data_dim(key)
+
+    def get_data_shape(self, data_key: str) -> List[int]:
+        """data shape"""
+        return self._dataset.get_data_shape(data_key)
+
+    def get_data_dtype(self, key: str) -> str:
+        """data dtype"""
+        return self._dataset.get_data_dtype(key)
+
+    def is_data_sparse(self, key: str) -> bool:
+        """is data sparse"""
+        return self._dataset.is_data_sparse(key)
 
 
 def _select_dtype(key, data_dims, data_dtypes):
