@@ -1772,15 +1772,6 @@ class ChunkShuffleDataset(CachedDataset2):
         return self.dataset.get_target_list()
 
 
-def _simple_to_bool(v):
-    if v == 0:
-        v = False
-    if v == 1:
-        v = True
-    assert isinstance(v, bool)
-    return v
-
-
 def _select_dtype(key, data_dims, data_dtypes):
     if data_dtypes and key in data_dtypes:
         v = data_dtypes[key]
