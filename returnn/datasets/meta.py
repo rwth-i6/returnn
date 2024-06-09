@@ -1899,6 +1899,15 @@ class VariableDataset(Dataset):
 
 
 class AnythingDataset(Dataset):
+    """
+    An infinite dataset, creating dummy (zero) data on the fly,
+    given the data-keys and their shapes.
+
+    When this is used inside a :class:`MetaDataset`,
+    controlled by the seqs list from another dataset,
+    it will just take over whatever seq list is given.
+    """
+
     def __init__(self, *, data_keys: Dict[str, Dict[str, Any]], **kwargs):
         """
         :param data_keys: similar like extern_data. defines shape, dtype, sparse, dim, etc
