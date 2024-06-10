@@ -4534,4 +4534,7 @@ def override_env_var(var_name: str, value: str):
     try:
         yield
     finally:
-        os.environ[var_name] = cur_val
+        if cur_val is not None:
+            os.environ[var_name] = cur_val
+        else:
+            os.environ.pop(var_name)
