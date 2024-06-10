@@ -3,6 +3,7 @@ Provides :class:`HDFDataset`.
 """
 
 from __future__ import annotations
+import bisect
 import typing
 import collections
 import gc
