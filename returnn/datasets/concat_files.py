@@ -434,6 +434,7 @@ class _WorkerProcParent:
         parent_conn, child_conn = _mp.Pipe()
         self.parent_conn: mpConnection = parent_conn
 
+        # the env will be forwarded to the child process
         with override_env_var(RANDOM_SEED_OFFSET_ENV_VAR, dataset_dict["random_seed_offset"]):
             self.worker_proc = _mp.Process(
                 name=f"{name} worker ep {epoch}",
