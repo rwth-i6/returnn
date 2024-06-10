@@ -556,4 +556,5 @@ class TFBackend(Backend[tf.Tensor]):
 
     @staticmethod
     def gradient_checkpoint(fn: Callable[[Tensor], Tensor], *args: List[Tensor]) -> Tensor:
+        """gradient_checkpoint"""
         return tf.recompute_grad(fn)(*args)

@@ -66,11 +66,12 @@ class LinearWithWeightDropout(rf.Module):
         if self.in_dim not in source.dims:
             raise ValueError(f"{self}: input {source} does not have in_dim {self.in_dim}")
 
-        def apply_weight_dropout(weight, prob):
+        def _apply_weight_dropout(weight, prob):
+            """weight dropout applicator function"""
             return rf.dropout(weight, prob)
 
         if on_forward:
-            w = rf.gradient_checkpoint(apply_weight_dropout, self.weight, self.weight_dropout_prob)
+            w = rf.gradient_checkpoint(_apply_weight_dropout, self.weight, self.weight_dropout_prob)
         else:
             w = self.weight
         out = rf.matmul(source, w, reduce=self.in_dim)

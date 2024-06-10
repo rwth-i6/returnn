@@ -2069,4 +2069,5 @@ class TorchBackend(Backend[torch.Tensor]):
 
     @staticmethod
     def gradient_checkpoint(fn: Callable[[Tensor], Tensor], *args: Tuple[Tensor]) -> Tensor:
+        """gradient_checkpoint"""
         return gradient_checkpoint(fn, *args, use_reentrant=False, preserve_rng_state=True)
