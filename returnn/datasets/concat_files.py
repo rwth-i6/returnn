@@ -11,10 +11,10 @@ import os
 import sys
 import numpy
 from returnn.log import log
-from returnn.util.basic import try_run
+from returnn.util.basic import override_env_var, try_run
 from returnn.util.multi_proc_non_daemonic_spawn import NonDaemonicSpawnContext
 from returnn.config import SubProcCopyGlobalConfigPreInitFunc
-from .basic import init_dataset, DatasetSeq
+from .basic import init_dataset, DatasetSeq, RANDOM_SEED_OFFSET_ENV_VAR
 from .cached2 import CachedDataset2
 
 # noinspection PyProtectedMember
@@ -423,6 +423,8 @@ class _WorkerProcParent:
         buffer_size: int,
         exit_hook: Optional[Callable[[], None]] = None,
     ):
+        assert "random_seed_offset" in dataset_dict
+
         self.epoch = epoch
         self.full_epoch_0idx = full_epoch_0idx
         self.dataset_dict = dataset_dict
@@ -431,13 +433,15 @@ class _WorkerProcParent:
         parent_conn, child_conn = _mp.Pipe()
         self.parent_conn: mpConnection = parent_conn
 
-        self.worker_proc = _mp.Process(
-            name=f"{name} worker ep {epoch}",
-            target=_worker_proc_loop,
-            args=(epoch, buffer_size, dataset_dict, child_conn),
-            daemon=True,
-        )
-        self.worker_proc.start()
+        with override_env_var(RANDOM_SEED_OFFSET_ENV_VAR, dataset_dict["random_seed_offset"]):
+            self.worker_proc = _mp.Process(
+                name=f"{name} worker ep {epoch}",
+                target=_worker_proc_loop,
+                args=(epoch, buffer_size, dataset_dict, child_conn),
+                daemon=True,
+            )
+            self.worker_proc.start()
+
         # Make sure the child connection is closed here.
         # It stays open in the child, until the child dies.
         # When that happens, now any consecutive read on the pipe

@@ -4519,3 +4519,19 @@ def find_libcudart_from_runtime():
             return fn
     _find_libcudart_from_runtime_cached = [None]
     return None
+
+
+@contextlib.contextmanager
+def override_env_var(var_name: str, value: str):
+    """
+    context manager for temporarily overriding the value of an env var
+    :param str var_name: the name of the environment variable to override
+    :param str value: the value to set while the context mgr is active
+    """
+
+    cur_val = os.environ.get(var_name)
+    os.environ[var_name] = value
+    try:
+        yield
+    finally:
+        os.environ[var_name] = cur_val

@@ -28,6 +28,9 @@ from returnn.util.basic import try_run, NumbersDict, OptionalNotImplementedError
 from returnn.tensor import TensorDict
 
 
+RANDOM_SEED_OFFSET_ENV_VAR = "RETURNN_RANDOM_SEED_OFFSET"
+
+
 class Dataset(object):
     """
     Base class for any dataset. This defines the dataset API.
@@ -245,6 +248,13 @@ class Dataset(object):
         config = get_global_config(raise_exception=False)
         if not config:
             return 0
+
+        env_val = os.environ.get(RANDOM_SEED_OFFSET_ENV_VAR)
+        if env_val is not None:
+            try:
+                return int(env_val)
+            except ValueError:
+                pass
         if config.typed_value("torch_distributed") is not None:
             import returnn.torch.distributed
 
