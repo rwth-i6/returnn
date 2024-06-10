@@ -949,7 +949,15 @@ class CombinedDataset(CachedDataset2):
         self.sampling_sizes = sampling_sizes
 
         # This will only initialize datasets needed for features occurring in data_map
-        self.datasets = {key: init_dataset(datasets[key]) for key in self.dataset_keys}
+        self.datasets = {
+            key: init_dataset(
+                {
+                    **datasets[key],
+                    "random_seed_offset": datasets[key].get("random_seed_offset", self.random_seed_offset),
+                }
+            )
+            for key in self.dataset_keys
+        }
 
         self._estimated_num_seqs = sum([self.datasets[k].estimated_num_seqs for k in sorted(self.datasets.keys())])
         self.estimated_num_seq_per_subset = [self.datasets[k].estimated_num_seqs for k in sorted(self.datasets.keys())]
