@@ -3,7 +3,7 @@ Backend for exposing TensorFlow-specific functionality.
 """
 
 from __future__ import annotations
-from typing import Optional, Any, Union, Sequence, Tuple
+from typing import Callable, List, Optional, Any, Union, Sequence, Tuple
 import contextlib
 import tensorflow as tf
 
@@ -553,3 +553,7 @@ class TFBackend(Backend[tf.Tensor]):
                 y = tf_util.optional_mul(y, correction_factor)
             out_data.raw_tensor = y
             return out_data
+
+    @staticmethod
+    def gradient_checkpoint(fn: Callable[[Tensor], Tensor], args: List[Tensor]) -> Tensor:
+        return tf.recompute_grad(fn)(*args)

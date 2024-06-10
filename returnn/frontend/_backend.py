@@ -1293,6 +1293,19 @@ class Backend(Generic[T]):
             return tensor_array[index]
         raise NotImplementedError
 
+    @classmethod
+    def gradient_checkpoint(cls, fn: Callable[[Tensor], Tensor], *args: List[Tensor]) -> Tensor:
+        """
+        Calls `fn` with the given args within a gradient checkpoint.
+
+        `fn` will be called multiple times, e.g. during backprop. Random state will be saved/restored.
+
+        :param fn: callable to run under a gradient checkpoint
+        :param args: arguments for the callable
+        :return: tensor
+        """
+        raise NotImplementedError
+
 
 # We use a global instance, and we modify __class__ inplace,
 # such that any reference to this can be updated.
