@@ -1298,13 +1298,16 @@ class Backend(Generic[T]):
         """
         Calls `fn` with the given args within a gradient checkpoint.
 
-        `fn` will be called multiple times, e.g. during backprop. Random state will be saved/restored.
+        `fn` will be called multiple times, e.g. during backprop. Random state depends on the framework.
+
+        The default impl just calls fn with args and does not gradient checkpoint.
+        True checkpointing is available in Torch and the raw TF backend.
 
         :param fn: callable to run under a gradient checkpoint
         :param args: arguments for the callable
         :return: tensor
         """
-        raise NotImplementedError
+        return fn(*args)
 
 
 # We use a global instance, and we modify __class__ inplace,
