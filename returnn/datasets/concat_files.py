@@ -423,6 +423,7 @@ class _WorkerProcParent:
         buffer_size: int,
         exit_hook: Optional[Callable[[], None]] = None,
     ):
+        # the dataset makes sure this is set
         assert "random_seed_offset" in dataset_dict
 
         self.epoch = epoch
