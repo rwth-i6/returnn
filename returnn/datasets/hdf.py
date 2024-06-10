@@ -457,10 +457,10 @@ class HDFDataset(CachedDataset):
         return ", ".join(["HDF dataset", "sequences: %i" % self.num_seqs, "frames: %i" % self.get_num_timesteps()])
 
     def _get_file_index(self, real_seq_idx):
-        file_index = 0
-        while file_index < len(self.file_start) - 1 and real_seq_idx >= self.file_start[file_index + 1]:
-            file_index += 1
-        return file_index
+        # bisect() returns the position for which all elements to the left of the returned index are <= real_seq_idx,
+        # so it actually returns the next file index in which the sequence can be found.
+        # Therefore, we subtract 1 to the index provided.
+        return bisect.bisect(self.file_start, real_seq_idx) - 1
 
 
 # ------------------------------------------------------------------------------
