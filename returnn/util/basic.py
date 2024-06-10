@@ -4525,8 +4525,9 @@ def find_libcudart_from_runtime():
 def override_env_var(var_name: str, value: str):
     """
     context manager for temporarily overriding the value of an env var
-    :param str var_name: the name of the environment variable to override
-    :param str value: the value to set while the context mgr is active
+
+    :param var_name: the name of the environment variable to override
+    :param value: the value to set while the context mgr is active
     """
 
     cur_val = os.environ.get(var_name)
