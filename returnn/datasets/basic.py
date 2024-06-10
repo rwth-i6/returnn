@@ -19,13 +19,16 @@ import os
 import numpy
 import functools
 import typing
-from typing import Optional, Any, Union, Type, Dict, Sequence, List, Callable
+from typing import TYPE_CHECKING, Optional, Any, Union, Type, Dict, Sequence, List, Callable
 
 from returnn.log import log
 from returnn.engine.batch import Batch, BatchSetGenerator
 from returnn.datasets.util.vocabulary import Vocabulary
 from returnn.util.basic import try_run, NumbersDict, OptionalNotImplementedError
 from returnn.tensor import TensorDict
+
+if TYPE_CHECKING:
+    from returnn.config import Config
 
 
 RANDOM_SEED_OFFSET_ENV_VAR = "RETURNN_RANDOM_SEED_OFFSET"
@@ -37,10 +40,12 @@ class Dataset(object):
     """
 
     @staticmethod
-    def kwargs_update_from_config(config, kwargs):
+    def kwargs_update_from_config(config: Config, kwargs: Dict[str, Any]):
         """
-        :type config: returnn.config.Config
-        :type kwargs: dict[str]
+        Update kwargs inplace from config
+
+        :param config:
+        :param kwargs: updates will be done inplace
         """
 
         def set_or_remove(key, value):
@@ -62,10 +67,10 @@ class Dataset(object):
         set_or_remove("chunking_variance", config.float("chunking_variance", 0))
 
     @staticmethod
-    def get_default_kwargs_eval(config):
+    def get_default_kwargs_eval(config: Config) -> Dict[str, Any]:
         """
-        :param returnn.config.Config config:
-        :rtype: dict[str]
+        :param config:
+        :return: default kwargs for an eval dataset based on the config
         """
         # For dev/eval, by default, we should not do chunking (i.e. chunking = "0").
         chunking = "0"
@@ -78,11 +83,11 @@ class Dataset(object):
         return dict(chunking=chunking, seq_ordering="sorted", shuffle_frames_of_nseqs=0)
 
     @classmethod
-    def from_config(cls, config, **kwargs):
+    def from_config(cls, config: Config, **kwargs) -> Dataset:
         """
-        :type config: returnn.config.Config
-        :param dict[str] kwargs: passed on to __init__
-        :rtype: Dataset
+        :param config:
+        :param kwargs: passed on to __init__
+        :return: new dataset via cls(...)
         """
         cls.kwargs_update_from_config(config, kwargs)
         return cls(**kwargs)
@@ -109,20 +114,20 @@ class Dataset(object):
         """
         :param str name: e.g. "train" or "eval"
         :param int window: features will be of dimension window * feature_dim, as we add a context-window around.
-          not all datasets support this option.
+            not all datasets support this option.
         :param None|int|dict|NumbersDict|(dict,dict) context_window: will add this context for each chunk
         :param None|str|int|(int,int)|dict|(dict,dict)|function chunking: "chunk_size:chunk_step"
         :param str seq_ordering: "batching"-option in config. e.g. "default", "sorted" or "random".
-          See self.get_seq_order_for_epoch() for more details.
+            See self.get_seq_order_for_epoch() for more details.
         :param int|None fixed_random_seed: for the shuffling, e.g. for seq_ordering='random'.
             otherwise epoch will be used.
             useful when used as eval dataset.
         :param int|None random_seed_offset: for shuffling, e.g. for seq_ordering='random'.
             ignored when fixed_random_seed is set.
         :param int|None partition_epoch:
-        :param int|None repeat_epoch: Repeat the sequences in an epoch this many times. Useful to scale the dataset
-          relative to other datasets, e.g. when used in CombinedDataset. Not allowed to be used in combination with
-          partition_epoch.
+        :param int|None repeat_epoch: Repeat the sequences in an epoch this many times.
+            Useful to scale the dataset relative to other datasets, e.g. when used in CombinedDataset.
+            Not allowed to be used in combination with partition_epoch.
         :param str|None seq_list_filter_file: defines a subset of sequences (by tag) to use
         :param bool unique_seq_tags: uniquify seqs with same seq tags in seq order
         :param str|None seq_order_seq_lens_file: for seq order, use the seq length given by this file
@@ -452,17 +457,18 @@ class Dataset(object):
             self._seq_order_seq_lens_by_idx = [seq_lens[tag] for tag in all_tags]
         return self._seq_order_seq_lens_by_idx[seq_idx]
 
-    def get_seq_order_for_epoch(self, epoch, num_seqs, get_seq_len=None):
+    def get_seq_order_for_epoch(
+        self, epoch: Optional[int], num_seqs: int, get_seq_len: Optional[Callable[[int], int]] = None
+    ) -> Sequence[int]:
         """
         Returns the order of the given epoch.
         This is mostly a static method, except that is depends on the configured type of ordering,
         such as 'default' (= as-is), 'sorted' or 'random'. 'sorted' also uses the sequence length.
 
-        :param int|None epoch: for 'random', this determines the random seed
-        :param int num_seqs:
-        :param ((int) -> int)|None get_seq_len: function (originalSeqIdx: int) -> int
+        :param epoch: for 'random', this determines the random seed
+        :param num_seqs:
+        :param get_seq_len: function (originalSeqIdx: int) -> int
         :return: the order for the given epoch. such that seq_idx -> underlying idx
-        :rtype: typing.Sequence[int]
         """
         if epoch is None:
             # This might be called in the beginning. Skip this and wait until we init the real relevant epoch.

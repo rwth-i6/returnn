@@ -23,9 +23,10 @@ The dataset classes MetaDataset and CombinedDataset which perform these tasks ar
 
 from __future__ import annotations
 
-from typing import Optional, Any, Sequence, List, Dict
+from typing import Optional, Union, Any, Callable, Sequence, List, Dict, Tuple
 from returnn.datasets.basic import Dataset, DatasetSeq, init_dataset, convert_data_dims
 from .cached2 import CachedDataset2
+import returnn.util.basic as util
 from returnn.util.basic import NumbersDict, load_json, OptionalNotImplementedError
 from returnn.log import log
 from random import Random
@@ -39,26 +40,31 @@ class EpochWiseFilter:
     Applies some filter to the sequences (e.g. by seq length) for some epoch.
     """
 
-    def __init__(self, epochs_opts, debug_msg_prefix="EpochWiseFilter"):
+    def __init__(
+        self, epochs_opts: Dict[Tuple[int, Optional[int]], Dict[str, Any]], debug_msg_prefix: str = "EpochWiseFilter"
+    ):
         """
-        :param dict[(int,int|None),dict[str]] epochs_opts: (ep_start, ep_end) -> epoch opts
-        :param str debug_msg_prefix:
+        :param epochs_opts: (ep_start, ep_end) -> epoch opts
+        :param debug_msg_prefix:
         """
         self.epochs_opts = epochs_opts
         self.debug_msg_prefix = debug_msg_prefix
 
     @classmethod
-    def filter_epoch(cls, opts, seq_order, get_seq_len, debug_msg_prefix):
+    def filter_epoch(
+        cls,
+        opts: Union[Dict[str, Any], util.CollectionReadCheckCovered],
+        seq_order: Sequence[int],
+        get_seq_len: Callable[[int], int],
+        debug_msg_prefix: str,
+    ) -> List[int]:
         """
-        :param dict[str]|returnn.util.basic.CollectionReadCheckCovered opts:
-        :param typing.Sequence[int] seq_order: list of seq idxs
-        :param ((int)->int) get_seq_len: seq idx -> len
-        :param str debug_msg_prefix:
+        :param opts:
+        :param seq_order: list of seq idxs
+        :param get_seq_len: seq idx -> len
+        :param debug_msg_prefix:
         :return: new seq_order
-        :rtype: list[int]
         """
-        import returnn.util.basic as util
-
         if not isinstance(opts, util.CollectionReadCheckCovered):
             opts = util.CollectionReadCheckCovered(opts)
         if opts.get("max_mean_len"):
@@ -150,7 +156,7 @@ class MetaDataset(CachedDataset2):
             'corpus/ted_1/1',
             'corpus/ted_1/2',
             'corpus/ted_1/3',
-            'corpus/ted_1/4',
+            'corpus/ted_1/4'],
         'translation': [
             'line-0',
             'line-1',
@@ -194,33 +200,33 @@ class MetaDataset(CachedDataset2):
 
     def __init__(
         self,
-        datasets,
-        data_map,
-        seq_list_file=None,
-        seq_order_control_dataset=None,
-        seq_lens_file=None,
-        data_dims=None,
-        data_dtypes=None,  # noqa  # not used
-        window=1,
+        datasets: Dict[str, Dict[str, Any]],
+        data_map: Dict[str, Tuple[str, str]],
+        seq_list_file: Optional[str] = None,
+        seq_order_control_dataset: Optional[str] = None,
+        seq_lens_file: Optional[str] = None,
+        data_dims: Optional[Dict[str, Tuple[int, int]]] = None,  # deprecated
+        data_dtypes: Optional[Dict[str, str]] = None,  # noqa  # deprecated, not used
+        window: int = 1,
         **kwargs,
     ):
         """
-        :param dict[str,dict[str]] datasets: dataset-key -> dataset-kwargs. including keyword 'class' and maybe 'files'
-        :param dict[str,(str,str)] data_map: self-data-key -> (dataset-key, dataset-data-key).
-          Should contain 'data' as key. Also defines the target-list, which is all except 'data'.
-        :param str|None seq_list_file: filename. pickle. dict[str,list[str]], dataset-key -> list of sequence tags.
-          Can be None if tag format is the same for all datasets.
-            Then the sequence list will be default sequence order of default dataset (``data_map["data"][0]``),
-            or seq_order_control_dataset.
-            You only need it if the tag name is not the same for all datasets.
-            It will currently not act as filter,
-            as the subdataset controls the sequence order (and thus what seqs to use).
-        :param str|None seq_order_control_dataset: if set, this dataset will define the order for each epoch.
-        :param str|None seq_lens_file: filename. json. dict[str,dict[str,int]], seq-tag -> data-key -> len.
-          Use if getting sequence length from loading data is too costly.
-        :param dict[str,(int,int)] data_dims: self-data-key -> data-dimension, len(shape) (1 ==> sparse repr).
-           Deprecated/Only to double check. Read from data if not specified.
-        :param dict[str,str] data_dtypes: self-data-key -> dtype. Read from data if not specified.
+        :param datasets: dataset-key -> dataset-kwargs. including keyword 'class' and maybe 'files'
+        :param data_map: self-data-key -> (dataset-key, dataset-data-key).
+            Should contain 'data' as key. Also defines the target-list, which is all except 'data'.
+        :param seq_list_file: filename. pickle. dict[str,list[str]], dataset-key -> list of sequence tags.
+            Can be None if tag format is the same for all datasets.
+                Then the sequence list will be default sequence order of default dataset (``data_map["data"][0]``),
+                or seq_order_control_dataset.
+                You only need it if the tag name is not the same for all datasets.
+                It will currently not act as filter,
+                as the subdataset controls the sequence order (and thus what seqs to use).
+        :param seq_order_control_dataset: if set, this dataset will define the order for each epoch.
+        :param seq_lens_file: filename. json. dict[str,dict[str,int]], seq-tag -> data-key -> len.
+            Use if getting sequence length from loading data is too costly.
+        :param data_dims: self-data-key -> data-dimension, len(shape) (1 ==> sparse repr).
+            Deprecated/Only to double-check. Read from data if not specified.
+        :param data_dtypes: self-data-key -> dtype. Read from data if not specified. Deprecated, not used.
         """
         assert window == 1  # not implemented
         super(MetaDataset, self).__init__(**kwargs)
@@ -283,11 +289,9 @@ class MetaDataset(CachedDataset2):
         self.orig_seq_order_is_initialized = False
         self.seq_list_ordered = None  # type: typing.Optional[typing.Dict[str,typing.List[str]]]
 
-    def _is_same_seq_name_for_each_dataset(self):
+    def _is_same_seq_name_for_each_dataset(self) -> bool:
         """
         This should be fast.
-
-        :rtype: bool
         """
         main_list = self.seq_list_original[self.default_dataset_key]
         for key, other_list in self.seq_list_original.items():
@@ -295,11 +299,10 @@ class MetaDataset(CachedDataset2):
                 return False
         return True
 
-    def _load_seq_list(self, seq_list_file=None):
+    def _load_seq_list(self, seq_list_file: Optional[str] = None) -> Dict[str, List[str]]:
         """
-        :param str seq_list_file:
+        :param seq_list_file:
         :return: dict: dataset key -> seq list
-        :rtype: dict[str,list[str]]
         """
         if seq_list_file:
             seq_list = Dataset._load_seq_list_file(seq_list_file, expect_list=False)
@@ -361,7 +364,7 @@ class MetaDataset(CachedDataset2):
 
         return seq_list
 
-    def _get_dataset_seq_length(self, seq_idx):
+    def _get_dataset_seq_length(self, seq_idx: int):
         if not self.orig_seq_order_is_initialized:
             # To use get_seq_length() we first have to init the sequence order once in original order.
             # If sequence lengths are not needed by get_seq_order_for_epoch this is never executed.
@@ -576,11 +579,13 @@ class ClusteringDataset(CachedDataset2):
     We will read the cluster-map (seq-name -> cluster-idx) here directly.
     """
 
-    def __init__(self, dataset, cluster_map_file, n_clusters, single_cluster=False, **kwargs):
+    def __init__(
+        self, dataset: Dict[str, Any], cluster_map_file: str, n_clusters: int, single_cluster: bool = False, **kwargs
+    ):
         """
-        :param dict[str] dataset:
+        :param dataset:
         :param cluster_map_file:
-        :param int n_clusters:
+        :param n_clusters:
         :param single_cluster:
         """
         super(CachedDataset2, self).__init__(**kwargs)
@@ -594,7 +599,7 @@ class ClusteringDataset(CachedDataset2):
         self.num_outputs["cluster_idx"] = (n_clusters, 1)  # will be a single int32
         self.expected_load_seq_start = 0
 
-    def _load_cluster_map(self, filename):
+    def _load_cluster_map(self, filename: str):
         lines = open(filename).read().splitlines()
         assert "<coprus-key-map>" in lines[:3], "We expect the Sprint XML format."
         # It has lines like: <map-item key="CHiME3/dt05_bth/M03_22GC010M_BTH.CH5/1" value="0"/>
@@ -733,9 +738,9 @@ class ConcatDataset(CachedDataset2):
     It will go through the datasets always in order.
     """
 
-    def __init__(self, datasets, **kwargs):
+    def __init__(self, datasets: Sequence[Dict[str, Any]], **kwargs):
         """
-        :param list[dict[str]] datasets: list of kwargs for init_dataset
+        :param datasets: list of kwargs for init_dataset
         """
         super(ConcatDataset, self).__init__(**kwargs)
         self.datasets = [init_dataset(d_kwargs) for d_kwargs in datasets]
@@ -1605,11 +1610,11 @@ class ChunkShuffleDataset(CachedDataset2):
 
     def __init__(
         self,
-        dataset,
-        chunk_shuffle_cache=1000,
-        batch_gen_batch_size=5000,
-        batch_gen_max_seqs=1,
-        batch_gen_recurrent_net=True,
+        dataset: Dict[str, Any],
+        chunk_shuffle_cache: int = 1000,
+        batch_gen_batch_size: int = 5000,
+        batch_gen_max_seqs: int = 1,
+        batch_gen_recurrent_net: bool = True,
         **kwargs,
     ):
         """
