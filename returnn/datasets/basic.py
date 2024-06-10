@@ -1456,6 +1456,17 @@ def _dataset_extend_default_kwargs_from_parent_dataset(
     return default_kwargs
 
 
+def extend_dataset_dict_from_parent_dataset(
+    dataset_dict: Dict[str, Any], parent_dataset: Optional[Dataset]
+) -> Dict[str, Any]:
+    """
+    :param dataset_dict:
+    :param parent_dataset:
+    :return: extended dataset_dict
+    """
+    return _dataset_extend_default_kwargs_from_parent_dataset(dataset_dict, parent_dataset)
+
+
 def init_dataset_via_str(config_str, config=None, cache_byte_size=None, **kwargs):
     """
     :param str config_str: hdf-files, or "LmDataset:..." or so

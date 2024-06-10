@@ -10,7 +10,7 @@ import multiprocessing as mp
 from returnn.util.basic import try_run
 from returnn.config import SubProcCopyGlobalConfigPreInitFunc
 from returnn.util.multi_proc_non_daemonic_spawn import NonDaemonicSpawnContext
-from .basic import init_dataset, Dataset, DatasetSeq
+from .basic import init_dataset, extend_dataset_dict_from_parent_dataset, Dataset, DatasetSeq
 from .cached2 import CachedDataset2
 
 # noinspection PyProtectedMember
@@ -46,10 +46,8 @@ class MultiProcDataset(CachedDataset2):
         assert num_workers > 0 and buffer_size > 0
         dataset = dataset.copy()
         for k, v in kwargs.items():
-            if k not in dataset:
-                dataset[k] = v
-        if "random_seed_offset" not in dataset:
-            dataset["random_seed_offset"] = self.random_seed_offset
+            dataset.setdefault(k, v)
+        dataset = extend_dataset_dict_from_parent_dataset(dataset, parent_dataset=self)
         self.dataset = dataset
         self.num_workers = num_workers
         self.buffer_size = buffer_size

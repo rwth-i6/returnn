@@ -14,7 +14,7 @@ from returnn.log import log
 from returnn.util.basic import override_env_var, try_run
 from returnn.util.multi_proc_non_daemonic_spawn import NonDaemonicSpawnContext
 from returnn.config import SubProcCopyGlobalConfigPreInitFunc
-from .basic import init_dataset, DatasetSeq, RANDOM_SEED_OFFSET_ENV_VAR
+from .basic import init_dataset, extend_dataset_dict_from_parent_dataset, DatasetSeq, RANDOM_SEED_OFFSET_ENV_VAR
 from .cached2 import CachedDataset2
 
 # noinspection PyProtectedMember
@@ -293,8 +293,7 @@ class ConcatFilesDataset(CachedDataset2):
 
     def _get_sub_dataset_dict(self, files: List[FileTree]) -> Tuple[Dict[str, Any], _FileCacheExitHook]:
         dataset_dict = self.get_sub_epoch_dataset(files)
-        if "random_seed_offset" not in dataset_dict:
-            dataset_dict["random_seed_offset"] = self.random_seed_offset
+        dataset_dict = extend_dataset_dict_from_parent_dataset(dataset_dict, parent_dataset=self)
         if dataset_dict.get("partition_epoch", 1) != 1:
             raise ValueError(f"{self}: sub dataset should not have partition_epoch, got: {dataset_dict}")
         if "seq_ordering" not in dataset_dict and "seq_order_control_dataset" not in dataset_dict:
