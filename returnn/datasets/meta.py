@@ -1934,7 +1934,6 @@ class AnythingDataset(Dataset):
         self._input_key = next(iter(data_keys))
         self.num_inputs = data_keys[self._input_key]["dim"]
         self.num_outputs = {k: (v["dim"], len(v["shape"])) for (k, v) in data_keys.items()}
-        self.labels = None
         self._seq_list = None
         self._seq_order = None
 
