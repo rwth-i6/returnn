@@ -967,12 +967,7 @@ class CombinedDataset(CachedDataset2):
 
         # This will only initialize datasets needed for features occurring in data_map
         self.datasets = {
-            key: init_dataset(
-                {
-                    **datasets[key],
-                    "random_seed_offset": datasets[key].get("random_seed_offset", self.random_seed_offset),
-                }
-            )
+            key: init_dataset(datasets[key], default_kwargs={"random_seed_offset": self.random_seed_offset})
             for key in self.dataset_keys
         }
 
