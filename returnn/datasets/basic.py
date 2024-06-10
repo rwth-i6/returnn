@@ -1385,11 +1385,14 @@ def init_dataset(
     kwargs: Union[Dict[str, Any], str, Callable[[], Dict[str, Any]], Dataset],
     extra_kwargs: Optional[Dict[str, Any]] = None,
     default_kwargs: Optional[Dict[str, Any]] = None,
+    *,
+    parent_dataset: Optional[Dataset] = None,
 ) -> Dataset:
     """
     :param kwargs:
     :param extra_kwargs:
     :param default_kwargs:
+    :param parent_dataset: if given, will adapt some of the default_kwargs (when not set)
     """
     assert kwargs
     if isinstance(kwargs, Dataset):
@@ -1397,7 +1400,9 @@ def init_dataset(
         data.initialize()
         return data
     if callable(kwargs):
-        return init_dataset(kwargs(), extra_kwargs=extra_kwargs, default_kwargs=default_kwargs)
+        return init_dataset(
+            kwargs(), extra_kwargs=extra_kwargs, default_kwargs=default_kwargs, parent_dataset=parent_dataset
+        )
     if isinstance(kwargs, str):
         if kwargs.startswith("{"):
             kwargs = eval(kwargs)
@@ -1406,10 +1411,13 @@ def init_dataset(
 
             config = get_global_config()
             data = eval(kwargs[len("config:") :], config.typed_dict, config.typed_dict)
-            return init_dataset(data, extra_kwargs=extra_kwargs, default_kwargs=default_kwargs)
+            return init_dataset(
+                data, extra_kwargs=extra_kwargs, default_kwargs=default_kwargs, parent_dataset=parent_dataset
+            )
         else:
             config_str = kwargs
             kwargs = {}
+            default_kwargs = _dataset_extend_default_kwargs_from_parent_dataset(default_kwargs, parent_dataset)
             if default_kwargs:
                 kwargs.update(default_kwargs)
             if extra_kwargs:
@@ -1422,6 +1430,7 @@ def init_dataset(
     clazz = get_dataset_class(clazz_name)
     if not clazz:
         raise Exception("Dataset class %r not found" % clazz_name)
+    default_kwargs = _dataset_extend_default_kwargs_from_parent_dataset(default_kwargs, parent_dataset)
     if default_kwargs:
         for key, value in default_kwargs.items():
             kwargs.setdefault(key, value)
@@ -1431,6 +1440,20 @@ def init_dataset(
     assert isinstance(obj, Dataset)
     obj.initialize()
     return obj
+
+
+def _dataset_extend_default_kwargs_from_parent_dataset(
+    default_kwargs: Optional[Dict[str, Any]], parent_dataset: Optional[Dataset]
+) -> Optional[Dict[str, Any]]:
+    """
+    :param default_kwargs:
+    :param parent_dataset:
+    """
+    if not parent_dataset:
+        return default_kwargs
+    default_kwargs = default_kwargs.copy() if default_kwargs else {}
+    default_kwargs.setdefault("random_seed_offset", parent_dataset.random_seed_offset)
+    return default_kwargs
 
 
 def init_dataset_via_str(config_str, config=None, cache_byte_size=None, **kwargs):
