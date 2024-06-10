@@ -192,7 +192,7 @@ class ConcatFilesDataset(CachedDataset2):
         # Init the dataset with the first file.
         dataset_dict, exit_hook = self._get_sub_dataset_dict(files=[self.files[0]])
         try:
-            dataset = init_dataset(dataset_dict, extra_kwargs={"seq_ordering": "default"})
+            dataset = init_dataset(dataset_dict, extra_kwargs={"seq_ordering": "default"}, parent_dataset=self)
             self.num_inputs = dataset.num_inputs
             self.num_outputs = dataset.num_outputs
             self.labels = dataset.labels

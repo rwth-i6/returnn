@@ -245,7 +245,7 @@ class MetaDataset(CachedDataset2):
 
         # This will only initialize datasets needed for features occuring in data_map
         self.datasets = {
-            key: init_dataset(datasets[key], extra_kwargs={"name": "%s_%s" % (self.name, key)})
+            key: init_dataset(datasets[key], extra_kwargs={"name": "%s_%s" % (self.name, key)}, parent_dataset=self)
             for key in self.dataset_keys
         }  # type: typing.Dict[str,Dataset]
 
@@ -589,7 +589,7 @@ class ClusteringDataset(CachedDataset2):
         :param single_cluster:
         """
         super(CachedDataset2, self).__init__(**kwargs)
-        self.dataset = init_dataset(dataset)
+        self.dataset = init_dataset(dataset, parent_dataset=self)
         self.n_clusters = n_clusters
         self.single_cluster = single_cluster
         self.cluster_map = self._load_cluster_map(cluster_map_file)
@@ -743,7 +743,7 @@ class ConcatDataset(CachedDataset2):
         :param datasets: list of kwargs for init_dataset
         """
         super(ConcatDataset, self).__init__(**kwargs)
-        self.datasets = [init_dataset(d_kwargs) for d_kwargs in datasets]
+        self.datasets = [init_dataset(d_kwargs, parent_dataset=self) for d_kwargs in datasets]
         assert self.datasets
         self.num_inputs = self.datasets[0].num_inputs
         self.num_outputs = self.datasets[0].num_outputs
@@ -1417,7 +1417,7 @@ class ConcatSeqsDataset(CachedDataset2):
         if isinstance(dataset, dict):
             dataset = dataset.copy()
             dataset.setdefault("name", "%s_subdataset" % self.name)
-        self.sub_dataset = init_dataset(dataset)
+        self.sub_dataset = init_dataset(dataset, parent_dataset=self)
         self.num_outputs = self.sub_dataset.num_outputs
         self.num_inputs = self.sub_dataset.num_inputs
         self.labels = self.sub_dataset.labels
@@ -1625,7 +1625,7 @@ class ChunkShuffleDataset(CachedDataset2):
         :param dict[str] dataset: kwargs for init_dataset
         """
         super(ChunkShuffleDataset, self).__init__(**kwargs)
-        self.dataset = init_dataset(dataset)
+        self.dataset = init_dataset(dataset, parent_dataset=self)
         assert self.dataset
         self.dataset_last_load_seq_end = None
         self.chunk_shuffle_cache = chunk_shuffle_cache
@@ -1813,7 +1813,7 @@ class VariableDataset(Dataset):
         dataset_dict = self._get_dataset(epoch=epoch)
         if dataset_dict != self._dataset_dict:
             self._dataset_dict = dataset_dict
-            self._dataset = init_dataset(dataset_dict)
+            self._dataset = init_dataset(dataset_dict, parent_dataset=self)
 
     def init_seq_order(self, epoch=None, seq_list=None, seq_order=None):
         """init seq order"""
