@@ -231,27 +231,28 @@ def test_dropout():
     run_model(extern_data, lambda *, epoch, step: _Net(), _forward_step)
 
 
-def test_weight_dropout():
+def test_linear():
     time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
     in_dim, out_dim = Dim(7, name="in"), Dim(13, name="out")
     extern_data = TensorDict(
         {
             "data": Tensor("data", [batch_dim, time_dim, in_dim], dtype="float32"),
+            "classes": Tensor("classes", [batch_dim, time_dim], dtype="int32", sparse_dim=out_dim),
         }
     )
 
     class _Net(rf.Module):
         def __init__(self):
             super().__init__()
-            self.linear = rf.LinearWithWeightDropout(in_dim, out_dim)
+            self.linear = rf.LinearWithWeightDropout(in_dim, out_dim, weight_dropout_prob=0.1)
 
         def __call__(self, x: Tensor) -> Tensor:
-            return self.linear(x, on_forward=True)
+            return self.linear(x)
 
     # noinspection PyShadowingNames
     def _forward_step(*, model: _Net, extern_data: TensorDict):
         out = model(extern_data["data"])
-        out.mark_as_default_output(shape=(batch_dim, time_dim, in_dim))
+        out.mark_as_default_output()
 
     run_model(extern_data, lambda *, epoch, step: _Net(), _forward_step)
 

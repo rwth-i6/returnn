@@ -26,4 +26,4 @@ def gradient_checkpoint(fn: Callable[..., T], *args: ...) -> T:
 
     if not args:
         raise ValueError(f"cannot gradient checkpoint without any input args")
-    return args[0]._raw_backend.gradient_checkpoint(fn, args)
+    return args[0]._raw_backend.gradient_checkpoint(fn, *args)
