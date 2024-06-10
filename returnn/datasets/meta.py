@@ -911,19 +911,31 @@ class CombinedDataset(CachedDataset2):
     Also see :class:`MetaDataset`.
     """
 
-    def __init__(self, datasets, data_map, data_dims=None, data_dtypes=None, sampling_sizes=None, window=1, **kwargs):
+    def __init__(
+        self,
+        datasets: Dict[str, Dict[str, Any]],
+        data_map: Dict[Tuple[str, str], str],
+        sampling_sizes: Union[None, int, Dict[str, int]] = None,
+        data_dims: Optional[Dict[str, Tuple[int, int]]] = None,
+        data_dtypes: Optional[Dict[str, str]] = None,
+        window: int = 1,
+        **kwargs,
+    ):
         """
-        :param dict[str,dict[str]] datasets: dataset-key -> dataset-kwargs. including keyword 'class' and maybe 'files'
-        :param dict[(str,str),str] data_map: (dataset-key, dataset-data-key) -> self-data-key.
-          Should contain 'data' as key. Also defines the target-list, which is all except 'data'.
-        :param dict[str,int]|int sampling_sizes: dataset-key -> number-of-sequences. If set, the given fixed amount of
-          sequences is taken from each dataset in every epoch (instead of using all). If an int is given, this number
-          is used for all datasets. The sequences will be taken in the order provided by the sub-datasets and we will
-          loop back to the beginning of the dataset each time we reach the end. Sequence ordering will be applied
-          after the sampling. Partition and repeat epoch are not supported when sampling.
-        :param dict[str,(int,int)] data_dims: self-data-key -> data-dimension, len(shape) (1 ==> sparse repr).
-           Deprecated/Only to double check. Read from data if not specified.
-        :param dict[str,str] data_dtypes: self-data-key -> dtype. Read from data if not specified.
+        :param datasets: dataset-key -> dataset-kwargs. including keyword 'class' and maybe 'files'
+        :param data_map: (dataset-key, dataset-data-key) -> self-data-key.
+            Should contain 'data' as key. Also defines the target-list, which is all except 'data'.
+        :param sampling_sizes: dataset-key -> number-of-sequences.
+            If set, the given fixed amount of sequences is taken
+            from each dataset in every epoch (instead of using all).
+            If an int is given, this number is used for all datasets.
+            The sequences will be taken in the order provided by the sub-datasets
+            nd we will loop back to the beginning of the dataset each time we reach the end.
+            Sequence ordering will be applied after the sampling.
+            Partition and repeat epoch are not supported when sampling.
+        :param data_dims: self-data-key -> data-dimension, len(shape) (1 ==> sparse repr).
+            Deprecated/Only to double check. Read from data if not specified.
+        :param data_dtypes: self-data-key -> dtype. Read from data if not specified.
         """
         assert window == 1  # not implemented
         super(CombinedDataset, self).__init__(**kwargs)
