@@ -282,6 +282,7 @@ class DistributeFilesDataset(CachedDataset2):
             elif self.seq_ordering == "random":
                 # do not use `self._get_random_seed_for_epoch` to exclude `random_seed_offset`
                 # to ensure an equal distribution in every worker
+                # since the sequences might collide between workers if a different seed is chosen.
                 random_generator = numpy.random.RandomState(full_epoch_0idx_)
                 files = list(self.files)
                 random_generator.shuffle(files)
