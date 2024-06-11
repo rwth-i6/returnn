@@ -65,12 +65,8 @@ class DistributeFilesDataset(CachedDataset2):
     In case the dataset grows so large it is unreasonable to expect one worker to
     ever see all the data, this dataset can also shard the file list on a per-worker
     basis before distributing across subepochs.
-    This behavior can be configured with the property ``num_shards``, which can either
-    be set to the string ``per-worker``, which automatically selects the number of shards
-    or to an integer between 1..=NUM_GPU_WORKERS to manually select how many shards the
-    data is split into.
+    This behavior can be configured by setting the property ``"shard": "per-worker"``.
     The dataset attempts to split the files as evenly as possible based on the file size.
-    When ``seq_ordering: "random"``, the files are shuffled before every full epoch before sharding.
 
     Example usage::
 
@@ -141,7 +137,7 @@ class DistributeFilesDataset(CachedDataset2):
         preload_next_n_sub_epochs: int = 1,
         buffer_size: int = 1,
         file_cache_opts: Optional[Dict[str, Any]] = None,
-        num_shards: Union[None, int, str] = 1,
+        shard: Union[None, str] = None,
         _meta_info_cache: Optional[Dict[str, Any]] = None,
         **kwargs,
     ):
@@ -151,16 +147,13 @@ class DistributeFilesDataset(CachedDataset2):
         :param get_sub_epoch_dataset: callable which returns a dataset dict for a given subset of files
         :param preload_next_n_sub_epochs: how many sub epoch datasets to preload
         :param buffer_size: buffer size for each worker, amount of seqs to prefetch
-        :param num_shards: shard the data into this many pieces and distribute between worker processes
-            before distributing the data over subepochs.
-
-            Valid values here are a string "per-worker" to automatically select the number of shards
-            based on the number of GPU workers or integers from 1..=NUM_GPU_WORKERS. When an integer
-            is set, it must cleanly divide the number of workers to avoid introducing a bias in the
-            seen data.
+        :param shard: set to "per-worker" to shard the data across worker processes
         :param _meta_info_cache: for internal use
         """
         super().__init__(**kwargs)
+
+        assert shard is None or shard == "per-worker"
+
         self.files = files
         self.get_sub_epoch_dataset = get_sub_epoch_dataset
         assert preload_next_n_sub_epochs >= 0
@@ -170,7 +163,7 @@ class DistributeFilesDataset(CachedDataset2):
         self._file_sizes: Optional[Dict[str, int]] = None  # key -> size. for equal distribution across sub epochs
         self._data_keys: Optional[List[str]] = None
         self._num_seqs: Optional[int] = None
-        self._worker_index, self._num_shards = _parse_num_shards_input(num_shards)
+        self._worker_index, self._num_shards = _get_rank_and_size() if shard == "per-worker" else 0, 1
 
         self._file_cache: Optional[_FileCacheProc] = None
         self._workers: Dict[int, _WorkerProcParent] = {}  # epoch -> worker
@@ -463,6 +456,7 @@ def _get_key_for_file_tree(t: FileTree) -> str:
 def _get_rank_and_size() -> Tuple[int, int]:
     """
     gets the global rank and size for multiprocess trainings
+    :return: tuple of rank and size
     """
 
     from returnn.config import get_global_config
@@ -484,33 +478,6 @@ def _get_rank_and_size() -> Tuple[int, int]:
         return ctx.rank(), ctx.size()
     else:
         return 0, 1
-
-
-def _parse_num_shards_input(num_shards_input: Union[None, int, str]) -> Tuple[int, int]:
-    """
-    parses the given input for the number of shards into an integer
-    and returns the local shard index for this worker
-    :param num_shards_input: the user-configured value for the number of shards
-    """
-
-    if num_shards_input is None:
-        return 0, 1
-    rank, size = _get_rank_and_size()
-    if isinstance(num_shards_input, int):
-        if num_shards_input <= 0:
-            raise ValueError(f"num_shards must be positive")
-        if num_shards_input > size:
-            raise ValueError(f"cannot shard into more splits ({num_shards_input}) than number of workers ({size})")
-        if size % num_shards_input != 0:
-            raise ValueError(
-                f"number of shards ({num_shards_input}) must cleanly divide number "
-                f"of workers ({size}) to avoid introducing a bias in the seen data"
-            )
-        return rank, num_shards_input
-    elif num_shards_input == "per-worker":
-        return rank, size
-    else:
-        raise ValueError(f"invalid input for num_shards: {num_shards_input}, can be None, int or 'per-worker'")
 
 
 class _WorkerProcParent:
