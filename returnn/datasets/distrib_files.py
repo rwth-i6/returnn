@@ -31,11 +31,9 @@ FileTree = Union[Filename, Tuple["FileTree", ...], Dict[Any, "FileTree"], List["
 
 class DistributeFilesDataset(CachedDataset2):
     """
-    This is similar to :class:`ConcatDataset`, but instead of concatenating datasets,
-    we distribute files over subepochs,
-    and then create a sub dataset for every sub epoch
-    for a given subset of the files
-    via the given ``get_sub_epoch_dataset``.
+    Wrapper dataset that distributes files over subepochs and then creates a
+    sub dataset for every sub epoch for a given (random) subset of the files.
+    The sub dataset is user-defined via a function ``get_sub_epoch_dataset``.
 
     This scheme allows to shuffle over the files,
     which makes shuffling much more efficient over a large dataset
