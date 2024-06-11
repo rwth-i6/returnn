@@ -172,9 +172,9 @@ class DistributeFilesDataset(CachedDataset2):
         self._file_cache: Optional[_FileCacheProc] = None
         self._workers: Dict[int, _WorkerProcParent] = {}  # epoch -> worker
         self._files_order_cache: Dict[int, List[List[FileTree]]] = {}  # full epoch (0-indexed) -> files order
-        self._files_for_this_worker: Dict[int, List[FileTree]] = (
-            {}
-        )  # full epoch (0-indexed) -> file shard for this worker
+        self._files_for_this_worker: Dict[
+            int, List[FileTree]
+        ] = {}  # full epoch (0-indexed) -> file shard for this worker
 
         if _meta_info_cache:
             # This allows to skip the lazy init in self.initialize().
