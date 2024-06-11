@@ -70,6 +70,7 @@ class DistributeFilesDataset(CachedDataset2):
     or to an integer between 1..=NUM_GPU_WORKERS to manually select how many shards the
     data is split into.
     The dataset attempts to split the files as evenly as possible based on the file size.
+    When ``seq_ordering: "random"``, the files are shuffled before every full epoch before sharding.
 
     Example usage::
 
