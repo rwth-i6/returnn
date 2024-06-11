@@ -351,6 +351,11 @@ class DistributeFilesDataset(CachedDataset2):
     def _distribute_evenly_by_size(
         *, num_bins: int, file_sizes: Dict[str, int], files_order: Sequence[FileTree]
     ) -> List[List[FileTree]]:
+        """
+        Distributes the files from files_order into ``num_bins`` while attempting
+        to make every bin as evenly sized (based on ``file_sizes``) as possible.
+        """
+
         total_size = sum(file_sizes.values())
         avg_size_per_sub_epoch = total_size / num_bins
         # Now evenly distribute the files over the bins.
