@@ -172,9 +172,9 @@ class DistributeFilesDataset(CachedDataset2):
         self._file_cache: Optional[_FileCacheProc] = None
         self._workers: Dict[int, _WorkerProcParent] = {}  # epoch -> worker
         self._files_order_cache: Dict[int, List[List[FileTree]]] = {}  # full epoch (0-indexed) -> files order
-        self._files_for_this_worker: Dict[
-            int, List[FileTree]
-        ] = {}  # full epoch (0-indexed) -> file shard for this worker
+        self._files_for_this_worker: Dict[int, List[FileTree]] = (
+            {}
+        )  # full epoch (0-indexed) -> file shard for this worker
 
         if _meta_info_cache:
             # This allows to skip the lazy init in self.initialize().
@@ -465,21 +465,21 @@ def _get_rank_and_size() -> Tuple[int, int]:
 
     config = get_global_config(raise_exception=False)
     if not config:
-        return (0, 1)
+        return 0, 1
     if config.typed_value("torch_distributed") is not None:
         import returnn.torch.distributed
 
         ctx = returnn.torch.distributed.get_ctx(config=config)
-        return (ctx.rank(), ctx.size())
+        return ctx.rank(), ctx.size()
     elif config.is_true("use_horovod"):
         assert config.bool("use_tensorflow", False) or config.value("backend", "").startswith("tensorflow")
 
         import returnn.tf.horovod
 
         ctx = returnn.tf.horovod.get_ctx(config=config)
-        return (ctx.rank(), ctx.size())
+        return ctx.rank(), ctx.size()
     else:
-        return (0, 1)
+        return 0, 1
 
 
 def _parse_num_shards_input(num_shards_input: Union[None, int, str]) -> Tuple[int, int]:
