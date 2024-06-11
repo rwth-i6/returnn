@@ -3,11 +3,20 @@ Utilities which affect the gradient
 """
 
 from __future__ import annotations
-from typing import Optional, Union
+from typing import Optional, TypeVar, Union
 from returnn.tensor import Tensor, Dim
 
 
-__all__ = ["set_requires_gradient", "gradient", "stop_gradient", "scaled_gradient", "scaled_gradient_ext"]
+__all__ = [
+    "set_requires_gradient",
+    "gradient",
+    "stop_gradient",
+    "scaled_gradient",
+    "scaled_gradient_ext",
+    "gradient_checkpoint",
+]
+
+T = TypeVar("T")
 
 
 def set_requires_gradient(source: Tensor):
@@ -27,6 +36,24 @@ def gradient(y: Tensor, x: Tensor) -> Tensor:
     """
     # noinspection PyProtectedMember
     return y._raw_backend.gradient(y, x)
+
+
+def gradient_checkpoint(fn, *args) -> T:
+    """
+    Computes the callable `fn` under a gradient checkpoint, i.e. does not save
+    intermediate tensors and instead recomputes intermediate values during backprop
+    to trade memory against compute.
+
+    :param fn: the callable for computing the value at hand
+    :param args: arguments for `fn`
+    :return: the tensor computed by `fn`
+    """
+
+    if not args:
+        raise ValueError(f"cannot gradient checkpoint without any input args")
+
+    # noinspection PyProtectedMember
+    return args[0]._raw_backend.gradient_checkpoint(fn, *args)
 
 
 def stop_gradient(source: Tensor) -> Tensor:

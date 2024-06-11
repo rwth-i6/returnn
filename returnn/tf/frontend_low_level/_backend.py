@@ -553,8 +553,3 @@ class TFBackend(Backend[tf.Tensor]):
                 y = tf_util.optional_mul(y, correction_factor)
             out_data.raw_tensor = y
             return out_data
-
-    @staticmethod
-    def gradient_checkpoint(fn: Callable[[Tensor], Tensor], *args: List[Tensor]) -> Tensor:
-        """gradient_checkpoint"""
-        return tf.recompute_grad(fn)(*args)
