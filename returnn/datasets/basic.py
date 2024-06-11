@@ -1367,7 +1367,7 @@ def get_dataset_class(name: Union[str, Type[Dataset]]) -> Optional[Type[Dataset]
         "raw_wav",
         "map",
         "multi_proc",
-        "concat_files",
+        "distrib_files",
     ]
     for mod_name in mod_names:
         mod = import_module("returnn.datasets.%s" % mod_name)

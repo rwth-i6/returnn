@@ -1,5 +1,5 @@
 """
-:class:`ConcatFilesDataset `
+:class:`DistributeFilesDataset `
 
 https://github.com/rwth-i6/returnn/issues/1519
 """
@@ -23,13 +23,13 @@ from multiprocessing.connection import Connection as mpConnection
 _mp = NonDaemonicSpawnContext(process_pre_init_func=SubProcCopyGlobalConfigPreInitFunc())
 
 
-__all__ = ["ConcatFilesDataset"]
+__all__ = ["DistributeFilesDataset"]
 
 Filename = str
 FileTree = Union[Filename, Tuple["FileTree", ...], Dict[Any, "FileTree"], List["FileTree"]]
 
 
-class ConcatFilesDataset(CachedDataset2):
+class DistributeFilesDataset(CachedDataset2):
     """
     This is similar to :class:`ConcatDataset`, but instead of concatenating datasets,
     we distribute files over subepochs,
@@ -70,7 +70,7 @@ class ConcatFilesDataset(CachedDataset2):
           }
 
         train = {
-          "class": "ConcatFilesDataset",
+          "class": "DistributeFilesDataset",
           "files": [
             "/nfs/big_data_1.hdf",
             ...
@@ -105,7 +105,7 @@ class ConcatFilesDataset(CachedDataset2):
           }
 
         train = {
-          "class": "ConcatFilesDataset",
+          "class": "DistributeFilesDataset",
           "files": [
             ("/nfs/alignment_1.hdf", "/nfs/features_1.hdf"),
             ...
@@ -321,7 +321,7 @@ class ConcatFilesDataset(CachedDataset2):
         # [[1,1], [78], [120], []] or [[1,1,78], [120], [], []].
         # Or consider [5,5]+[10]*7, partition_epoch=5, which has avg size 16.
         # A simple algorithm could end up with [[5,5,10], [10,10], [10,10], [10,10], []].
-        # See test_ConcatFilesDataset_get_files_per_sub_epochs for some test cases.
+        # See test_DistributeFilesDataset_get_files_per_sub_epochs for some test cases.
         assert len(files_order) >= partition_epoch
         files_per_sub_epochs = [[] for _ in range(partition_epoch)]
         assert len(files_per_sub_epochs) == partition_epoch

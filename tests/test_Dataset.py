@@ -623,13 +623,13 @@ def test_MapDatasetWrapper():
     assert res.features["data"].shape == (5, 3)
 
 
-def test_ConcatFilesDataset_get_files_per_sub_epochs():
-    from returnn.datasets.concat_files import ConcatFilesDataset
+def test_DistributeFilesDataset_get_files_per_sub_epochs():
+    from returnn.datasets.distrib_files import DistributeFilesDataset
 
     def _test(sizes: List[int], partition_epoch: int, expected: List[List[int]]):
         files = [f"file-{i}" for i in range(len(sizes))]
         file_sizes = {f: s for f, s in zip(files, sizes)}
-        res = ConcatFilesDataset._get_files_per_sub_epochs(
+        res = DistributeFilesDataset._get_files_per_sub_epochs(
             partition_epoch=partition_epoch, file_sizes=file_sizes, files_order=files
         )
         assert all(res) and len(res) == partition_epoch
@@ -643,8 +643,8 @@ def test_ConcatFilesDataset_get_files_per_sub_epochs():
     _test([5, 5] + [10] * 7, 5, [[5, 5, 10], [10, 10], [10, 10], [10], [10]])
 
 
-def test_ConcatFilesDataset():
-    from returnn.datasets.concat_files import ConcatFilesDataset
+def test_DistributeFilesDataset():
+    from returnn.datasets.distrib_files import DistributeFilesDataset
     from test_HDFDataset import generate_hdf_from_other
 
     # Create a few HDF files such that we can easily verify the data later.
@@ -686,7 +686,7 @@ def test_ConcatFilesDataset():
         total_num_seqs += 1
     assert total_num_seqs == num_hdf_files * num_seqs
 
-    # Test to load via ConcatFilesDataset.
+    # Test to load via DistributeFilesDataset.
 
     def _get_sub_epoch_dataset(files_subepoch: List[str]) -> Dict[str, Any]:
         return {"class": "HDFDataset", "files": files_subepoch, "seq_ordering": "default"}
@@ -695,13 +695,13 @@ def test_ConcatFilesDataset():
     assert num_hdf_files % partition_epoch == 0  # just for easier testing here
     concat_dataset = init_dataset(
         {
-            "class": "ConcatFilesDataset",
+            "class": "DistributeFilesDataset",
             "files": hdf_files,
             "get_sub_epoch_dataset": _get_sub_epoch_dataset,
             "partition_epoch": partition_epoch,
         }
     )
-    assert isinstance(concat_dataset, ConcatFilesDataset)
+    assert isinstance(concat_dataset, DistributeFilesDataset)
     assert concat_dataset.get_data_keys() == ["classes"]
     num_hdfs_per_part = num_hdf_files // partition_epoch
     global_seq_idx = 0
