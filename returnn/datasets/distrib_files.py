@@ -287,7 +287,7 @@ class DistributeFilesDataset(CachedDataset2):
             files_per_worker = self._distribute_evenly_by_size(
                 num_bins=self._num_shards, file_sizes=self._file_sizes, files_order=files
             )
-            self._files_for_this_worker[full_epoch_0idx_] = files_per_worker[self._worker_index % len(files_per_worker)]
+            self._files_for_this_worker[full_epoch_0idx_] = files_per_worker[self._worker_index % self._num_shards]
 
         # Cleanup and fill _files_order_cache.
         for k in list(self._files_order_cache.keys()):
