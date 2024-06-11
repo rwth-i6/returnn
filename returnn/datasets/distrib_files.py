@@ -35,7 +35,7 @@ class DistributeFilesDataset(CachedDataset2):
     sub dataset for every sub epoch for a given (random) subset of the files.
     The sub dataset is user-defined via a function ``get_sub_epoch_dataset``.
     Thus, this dataset wraps the sub datasets.
-    
+
     It is conceptually very similar to :class:`ConcatDataset` in the sense
     that it concatenates all the sub datasets together to form one larger dataset.
 
