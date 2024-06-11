@@ -63,7 +63,7 @@ class DistributeFilesDataset(CachedDataset2):
     (at least its expected value should be the same).
 
     In case the dataset grows so large it is unreasonable to expect one worker to
-    ever see all of the data, this dataset can also shard the file list on a per-worker
+    ever see all the data, this dataset can also shard the file list on a per-worker
     basis before distributing across subepochs.
     This behavior can be configured with the property ``num_shards``, which can either
     be set to the string ``per-worker``, which automatically selects the number of shards
@@ -150,7 +150,9 @@ class DistributeFilesDataset(CachedDataset2):
         :param get_sub_epoch_dataset: callable which returns a dataset dict for a given subset of files
         :param preload_next_n_sub_epochs: how many sub epoch datasets to preload
         :param buffer_size: buffer size for each worker, amount of seqs to prefetch
-        :param num_shards: shard the data into this many pieces before distributing over subepochs.
+        :param num_shards: shard the data into this many pieces and distribute between worker processes
+            before distributing the data over subepochs.
+
             Valid values here are a string "per-worker" to automatically select the number of shards
             based on the number of GPU workers or integers from 1..=NUM_GPU_WORKERS. When an integer
             is set, it must cleanly divide the number of workers to avoid introducing a bias in the
