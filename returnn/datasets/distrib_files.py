@@ -1,5 +1,5 @@
 """
-:class:`DistributeFilesDataset `
+:class:`DistributeFilesDataset`
 
 https://github.com/rwth-i6/returnn/issues/1519
 """
