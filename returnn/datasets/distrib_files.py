@@ -151,8 +151,10 @@ class DistributeFilesDataset(CachedDataset2):
         :param preload_next_n_sub_epochs: how many sub epoch datasets to preload
         :param buffer_size: buffer size for each worker, amount of seqs to prefetch
         :param num_shards: shard the data into this many pieces before distributing over subepochs.
-            Valid values here are integers from 1..=NUM_GPU_WORKERS or a string "per-worker" to automatically
-            select the number of shards based on the number of GPU workers.
+            Valid values here are a string "per-worker" to automatically select the number of shards
+            based on the number of GPU workers or integers from 1..=NUM_GPU_WORKERS. When an integer
+            is set, it must cleanly divide the number of workers to avoid introducing a bias in the
+            seen data.
         :param _meta_info_cache: for internal use
         """
         super().__init__(**kwargs)
