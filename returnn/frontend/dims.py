@@ -2,7 +2,6 @@
 Utilities for dimension tags, dimensions, axes.
 """
 
-
 from __future__ import annotations
 from typing import Optional, Union, TypeVar, Sequence, Tuple
 from returnn.tensor import Tensor, Dim
@@ -18,6 +17,7 @@ __all__ = [
     "replace_dim",
     "dim_match_priority_when_needed",
     "num_elements_of_shape",
+    "masked_fraction_of_shape",
 ]
 
 
@@ -151,3 +151,19 @@ def num_elements_of_shape(dims: Sequence[Dim]) -> Union[int, Tensor]:
         n_ = rf.reduce_sum(dim.dyn_size_ext, axis=dim.dyn_size_ext.dims)
         n *= n_
     return n
+
+
+def masked_fraction_of_shape(dims: Sequence[Dim], *, inverse: bool = False) -> Union[int, float, Tensor]:
+    """
+    :param dims:
+    :param inverse: if True, return the inverse of the fraction
+    :return: :func:`num_elements_of_shape`(dims) / prod(dims) if not inverse else prod(dims) / num_elements
+    """
+    dims = [dim for dim in dims if dim.need_masking()]
+    if not dims:
+        return 1
+    num_elems_masked = num_elements_of_shape(dims)
+    num_elems_total = 1
+    for dim in dims:
+        num_elems_total *= dim.get_dim_value_tensor()
+    return (num_elems_masked / num_elems_total) if not inverse else (num_elems_total / num_elems_masked)

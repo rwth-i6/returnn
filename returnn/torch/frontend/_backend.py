@@ -1270,21 +1270,7 @@ class TorchBackend(Backend[torch.Tensor]):
                 mask_value = 0
             elif mode == "mean":
                 mask_value = 0
-                for dim in axis:
-                    if dim.need_masking():
-                        total_num_el = dim.get_dim_value_tensor()
-                        actual_num_el = dim.get_size_tensor()
-                        num_el_reduce_dims = [dim_ for dim_ in axis if dim_ in actual_num_el.dims]
-                        if num_el_reduce_dims:
-                            actual_num_el = rf.reduce_sum(actual_num_el, axis=num_el_reduce_dims)
-                            for dim_ in num_el_reduce_dims:
-                                total_num_el *= dim_.get_dim_value_tensor()
-                        correction_factor_ = rf.cast(total_num_el, source.dtype) / rf.cast(actual_num_el, source.dtype)
-                        correction_factor__ = correction_factor_.copy_compatible_to_dims_raw(res_dims)
-                        if correction_factor is None:
-                            correction_factor = correction_factor__
-                        else:
-                            correction_factor *= correction_factor__
+                correction_factor = rf.masked_fraction_of_shape(axis)
             else:
                 raise NotImplementedError(f"reduce_{mode} not implemented with masking on tensor {source!r}.")
             for dim in axis:
