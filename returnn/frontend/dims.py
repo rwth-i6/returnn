@@ -169,8 +169,7 @@ def masked_fraction_of_shape(dims: Union[Dim, Sequence[Dim]], *, inverse: bool =
     """
     if isinstance(dims, Dim):
         dims = [dims]
-    dims = [dim for dim in dims if dim.need_masking()]
-    if not dims:
+    if not any(dim.need_masking() for dim in dims):
         return 1
     num_elems_masked = num_elements_of_shape(dims)
     num_elems_total = 1
