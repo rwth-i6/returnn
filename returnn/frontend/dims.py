@@ -122,11 +122,19 @@ def dim_match_priority_when_needed(dim: Dim, *other_dims: Dim) -> Dim:
     return dim
 
 
-def num_elements_of_shape(dims: Sequence[Dim]) -> Union[int, Tensor]:
+def num_elements_of_shape(dims: Union[Dim, Sequence[Dim]], *, use_mask: bool = True) -> Union[int, Tensor]:
     """
     :param dims:
+    :param use_mask:
     :return: num elements of a tensor of shape dims, properly considering masking
     """
+    if isinstance(dims, Dim):
+        dims = [dims]
+    if not use_mask:
+        n = 1
+        for dim in dims:
+            n *= dim.get_dim_value_tensor()
+        return n
     if all(dim.is_static() for dim in dims):
         n = 1
         for dim in dims:
@@ -135,7 +143,7 @@ def num_elements_of_shape(dims: Sequence[Dim]) -> Union[int, Tensor]:
 
     n = 1
     dims = list(dims)
-    dims.sort(key=lambda dim: -dim.dyn_size_ext.batch_ndim if dim.dyn_size_ext else 0)
+    dims.sort(key=lambda dim__: -dim__.dyn_size_ext.batch_ndim if dim__.dyn_size_ext else 0)
     while dims:
         dim = dims.pop(0)
         if dim.is_static():
@@ -153,12 +161,14 @@ def num_elements_of_shape(dims: Sequence[Dim]) -> Union[int, Tensor]:
     return n
 
 
-def masked_fraction_of_shape(dims: Sequence[Dim], *, inverse: bool = False) -> Union[int, float, Tensor]:
+def masked_fraction_of_shape(dims: Union[Dim, Sequence[Dim]], *, inverse: bool = False) -> Union[int, float, Tensor]:
     """
     :param dims:
     :param inverse: if True, return the inverse of the fraction
     :return: :func:`num_elements_of_shape`(dims) / prod(dims) if not inverse else prod(dims) / num_elements
     """
+    if isinstance(dims, Dim):
+        dims = [dims]
     dims = [dim for dim in dims if dim.need_masking()]
     if not dims:
         return 1
