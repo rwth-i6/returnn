@@ -11,16 +11,34 @@ import returnn.frontend as rf
 __all__ = ["moments", "LayerNorm", "BatchNorm", "normalize", "Normalize"]
 
 
-def moments(x: Tensor, axis: Union[Dim, Sequence[Dim]], *, use_mask: bool = True) -> Tuple[Tensor, Tensor]:
+def moments(
+    x: Tensor, axis: Union[Dim, Sequence[Dim]], *, use_mask: bool = True, correction: Union[int, float, Tensor] = 0
+) -> Tuple[Tensor, Tensor]:
     """
     :param x: input
-    :param axis: the axis to be reduced, to calculate statistics over
+    :param axis: the axis (or axes) to be reduced, to calculate statistics over
     :param use_mask: whether to use a mask for dynamic spatial dims in the reduction
-    :return: mean, variance. it has the same shape as the input with the axis removed
+    :param correction:
+        The variance will be estimated by ``sum((x - mean)**2) / (n-correction)``
+        where ``n`` is the number of elements in the axis (or the axes)
+        (with ``use_mask=True``, taking masking into account, using :func:`num_elements_of_shape`).
+        The default ``correction=0`` will return the biased variance estimation.
+        ``correction=1`` is the `Bessel correction <https://en.wikipedia.org/wiki/Bessel%27s_correction>`__
+        and will return the unbiased variance estimation.
+        In PyTorch, there was an argument ``unbiased`` for this, but this changed recently to ``correction``
+        (`PyTorch issue #61492 <https://github.com/pytorch/pytorch/issues/61492>`__,
+         `Python Array API Standard
+          <https://data-apis.org/array-api/latest/API_specification/generated/array_api.var.html>`__).
+        In PyTorch, the default is ``correction=1``, which is the unbiased variance estimation,
+        while in most other frameworks, the default is ``correction=0``, which is the biased variance estimation.
+    :return: tuple (mean, variance). it has the same shape as the input with the axis removed
     """
     mean = rf.reduce_mean(x, axis=axis)
     # stop_gradient does not change the gradient here
     variance = rf.reduce_mean(rf.squared_difference(x, rf.stop_gradient(mean)), axis=axis, use_mask=use_mask)
+    if isinstance(correction, Tensor) or correction != 0:
+        n = rf.num_elements_of_shape(axis, use_mask=use_mask)
+        variance *= n / (n - correction)
     return mean, variance
 
 
