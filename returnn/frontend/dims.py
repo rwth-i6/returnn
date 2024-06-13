@@ -152,11 +152,13 @@ def num_elements_of_shape(dims: Union[Dim, Sequence[Dim]], *, use_mask: bool = T
         # E.g. dyn_size_ext is shape [B], and self has shape [B,T].
         # Due to the sorting of dims above, dims will be [T,B], and we will first process T.
         # We want to sum over dyn_size_ext, but then we need to remove the other dims it covers.
+        dims_to_reduce = []
         for dim_ in dim.dyn_size_ext.dims:
-            assert dim_ in dims  # num elements not really well-defined then
-            assert not dim_.need_masking()  # not implemented
-            dims.remove(dim_)
-        n_ = rf.reduce_sum(dim.dyn_size_ext, axis=dim.dyn_size_ext.dims)
+            if dim_ in dims:
+                assert not dim_.need_masking()  # not implemented
+                dims.remove(dim_)
+                dims_to_reduce.append(dim_)
+        n_ = rf.reduce_sum(dim.dyn_size_ext, axis=dims_to_reduce) if dims_to_reduce else dim.dyn_size_ext
         n *= n_
     return n
 

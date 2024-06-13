@@ -1270,7 +1270,7 @@ class TorchBackend(Backend[torch.Tensor]):
                 mask_value = 0
             elif mode == "mean":
                 mask_value = 0
-                correction_factor = rf.masked_fraction_of_shape(axis)
+                correction_factor = rf.masked_fraction_of_shape(axis, inverse=True)
             else:
                 raise NotImplementedError(f"reduce_{mode} not implemented with masking on tensor {source!r}.")
             for dim in axis:
@@ -1289,7 +1289,7 @@ class TorchBackend(Backend[torch.Tensor]):
             raw_result = func(source.raw_tensor, dim=raw_dims)
         if correction_factor is not None:
             raw_result *= (
-                correction_factor.raw_tensor.to(raw_result.device)
+                correction_factor.copy_compatible_to_dims_raw(res_dims).to(raw_result.device)
                 if isinstance(correction_factor, Tensor)
                 else correction_factor
             )
