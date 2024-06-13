@@ -2,7 +2,6 @@
 Normalization functions such as batch norm
 """
 
-
 from __future__ import annotations
 from typing import Optional, Sequence, Union, Tuple
 from returnn.tensor import Tensor, Dim
@@ -12,15 +11,16 @@ import returnn.frontend as rf
 __all__ = ["moments", "LayerNorm", "BatchNorm", "normalize", "Normalize"]
 
 
-def moments(x: Tensor, axis: Union[Dim, Sequence[Dim]]) -> Tuple[Tensor, Tensor]:
+def moments(x: Tensor, axis: Union[Dim, Sequence[Dim]], *, use_mask: bool = True) -> Tuple[Tensor, Tensor]:
     """
     :param x: input
     :param axis: the axis to be reduced, to calculate statistics over
+    :param use_mask: whether to use a mask for dynamic spatial dims in the reduction
     :return: mean, variance. it has the same shape as the input with the axis removed
     """
     mean = rf.reduce_mean(x, axis=axis)
     # stop_gradient does not change the gradient here
-    variance = rf.reduce_mean(rf.squared_difference(x, rf.stop_gradient(mean)), axis=axis)
+    variance = rf.reduce_mean(rf.squared_difference(x, rf.stop_gradient(mean)), axis=axis, use_mask=use_mask)
     return mean, variance
 
 
