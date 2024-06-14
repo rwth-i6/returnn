@@ -96,6 +96,26 @@ def test_slice_pad_zeros():
     assert_equal(list(slice_pad_zeros(np.array([1, 2, 3, 4]), begin=2, end=6)), [3, 4, 0, 0])
 
 
+def test_math_PiecewiseLinear():
+    from returnn.util.math import PiecewiseLinear
+
+    eps = 1e-5
+    f = PiecewiseLinear({1: 2, 3: 4, 5: 1})
+    assert_equal(f(0), 2)
+    assert_equal(f(1 - eps), 2)
+    assert_equal(f(1), 2)
+    assert_almost_equal(f(1 + eps), 2, decimal=4)
+    assert_equal(f(2), 3)
+    assert_almost_equal(f(3 - eps), 4, decimal=4)
+    assert_equal(f(3), 4)
+    assert_almost_equal(f(3 + eps), 4, decimal=4)
+    assert_equal(f(4), 2.5)
+    assert_almost_equal(f(5 - eps), 1, decimal=4)
+    assert_equal(f(5), 1)
+    assert_equal(f(5 + eps), 1)
+    assert_equal(f(6), 1)
+
+
 def test_parse_orthography_into_symbols():
     assert_equal(list("hi"), parse_orthography_into_symbols("hi"))
     assert_equal(list(" hello "), parse_orthography_into_symbols(" hello "))
