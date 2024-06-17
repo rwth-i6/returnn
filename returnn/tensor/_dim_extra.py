@@ -1848,7 +1848,7 @@ class _DimMixin:
         data_list: List[_t.Tensor],
         is_equal_opts: Optional[Dict[str, Any]] = None,
         unique_separate_axes: bool = True,
-    ) -> Tuple[List[Dim], util.DictRefKeys[_t.Tensor, list[Dim]]]:
+    ) -> Tuple[List[Dim], util.DictRefKeys[_t.Tensor, List[Dim]]]:
         """
         :param data_list:
         :param is_equal_opts: passed to Dim.is_equal
