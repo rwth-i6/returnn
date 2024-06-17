@@ -109,19 +109,19 @@ class TorchBackend(Backend[torch.Tensor]):
         return raw_tensor.dim()
 
     @staticmethod
-    def get_shape_raw(raw_tensor: torch.Tensor) -> Tuple[int]:
+    def get_shape_raw(raw_tensor: torch.Tensor) -> Tuple[int, ...]:
         """shape"""
         return tuple(raw_tensor.shape)
 
     @staticmethod
-    def get_shape_tuple_raw(raw_tensor: torch.Tensor) -> Tuple[int]:
+    def get_shape_tuple_raw(raw_tensor: torch.Tensor) -> Tuple[int, ...]:
         """
         :return: shape of raw tensor
         """
         return tuple(raw_tensor.shape)
 
     @staticmethod
-    def get_known_shape_raw(raw_tensor: torch.Tensor) -> Tuple[Optional[int]]:
+    def get_known_shape_raw(raw_tensor: torch.Tensor) -> Tuple[Optional[int], ...]:
         """
         :return: shape of raw tensor; here for PyTorch the full shape is always known
         """

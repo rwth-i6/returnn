@@ -52,14 +52,14 @@ class NumpyBackend(Backend[numpy.ndarray]):
         return raw_tensor.ndim
 
     @staticmethod
-    def get_shape_raw(raw_tensor: numpy.ndarray) -> Tuple[int]:
+    def get_shape_raw(raw_tensor: numpy.ndarray) -> Tuple[int, ...]:
         """
         :return: shape of raw tensor
         """
         return raw_tensor.shape
 
     @staticmethod
-    def get_shape_tuple_raw(raw_tensor: numpy.ndarray) -> Tuple[int]:
+    def get_shape_tuple_raw(raw_tensor: numpy.ndarray) -> Tuple[int, ...]:
         """
         :return: shape of raw tensor. assumes that ndim is known.
             In eager frameworks, all dims are int.
@@ -67,7 +67,7 @@ class NumpyBackend(Backend[numpy.ndarray]):
         return raw_tensor.shape
 
     @staticmethod
-    def get_known_shape_raw(raw_tensor: numpy.ndarray) -> Tuple[int]:
+    def get_known_shape_raw(raw_tensor: numpy.ndarray) -> Tuple[int, ...]:
         """
         :return: shape of raw tensor, int for static known, None otherwise. assumes that ndim is known.
             This will not create any ops.

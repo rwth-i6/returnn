@@ -135,14 +135,14 @@ class Backend(Generic[T]):
         raise NotImplementedError
 
     @staticmethod
-    def get_shape_raw(raw_tensor: T) -> Union[T, Tuple[Union[int, T]]]:
+    def get_shape_raw(raw_tensor: T) -> Union[T, Tuple[Union[int, T], ...]]:
         """
         :return: shape of raw tensor
         """
         raise NotImplementedError
 
     @staticmethod
-    def get_shape_tuple_raw(raw_tensor: T) -> Tuple[Union[int, T]]:
+    def get_shape_tuple_raw(raw_tensor: T) -> Tuple[Union[int, T], ...]:
         """
         :return: shape of raw tensor. assumes that ndim is known.
             In eager frameworks, all dims are int.
@@ -150,7 +150,7 @@ class Backend(Generic[T]):
         raise NotImplementedError
 
     @staticmethod
-    def get_known_shape_raw(raw_tensor: T) -> Tuple[Optional[int]]:
+    def get_known_shape_raw(raw_tensor: T) -> Tuple[Optional[int], ...]:
         """
         :return: shape of raw tensor, int for static known, None otherwise. assumes that ndim is known.
             This will not create any ops.
@@ -159,7 +159,7 @@ class Backend(Generic[T]):
         raise NotImplementedError
 
     @staticmethod
-    def set_known_shape_raw(raw_tensor: T, shape: Tuple[Optional[int]]) -> None:
+    def set_known_shape_raw(raw_tensor: T, shape: Tuple[Optional[int], ...]) -> None:
         """
         Sets the known shape of the raw tensor.
         This is only supported in graph-based frameworks,
