@@ -227,6 +227,10 @@ class ConformerEncoderLayer(rf.Module):
             conv_norm = rf.BatchNorm(out_dim, **conv_norm_opts)
         elif isinstance(conv_norm, type):
             conv_norm = conv_norm(out_dim, **(conv_norm_opts or {}))
+        elif isinstance(conv_norm, dict):
+            conv_norm = rf.build_from_dict(conv_norm, out_dim, **(conv_norm_opts or {}))
+        if not callable(conv_norm):
+            raise TypeError(f"{self}: unexpected conv_norm type {conv_norm!r}")
         self.conv_block = ConformerConvBlock(out_dim=out_dim, kernel_size=conv_kernel_size, norm=conv_norm)
         self.conv_layer_norm = rf.LayerNorm(out_dim)
 

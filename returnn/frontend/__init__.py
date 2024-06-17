@@ -21,6 +21,7 @@ from .state import *
 from .array_ import *
 from .attention import *
 from .backend import *
+from .build_from_dict import *
 from .cond import *
 from .const import *
 from .container import *
