@@ -8,7 +8,7 @@ from returnn.tensor import Tensor, Dim
 import returnn.frontend as rf
 
 
-__all__ = ["moments", "LayerNorm", "BatchNorm", "normalize", "Normalize"]
+__all__ = ["moments", "LayerNorm", "GroupNorm", "BatchNorm", "normalize", "Normalize"]
 
 
 def moments(
@@ -67,6 +67,30 @@ class LayerNorm(rf.Module):
     def __call__(self, x: Tensor) -> Tensor:
         mean, variance = rf.moments(x, axis=self.in_dim)
         norm_x = (x - mean) * rf.rsqrt(variance + self.eps)
+        return norm_x * self.scale + self.bias
+
+
+class GroupNorm(rf.Module):
+    """
+    `Group normalization <https://arxiv.org/abs/1803.08494>`__.
+    """
+
+    def __init__(self, in_dim: Union[rf.Dim, Sequence[rf.Dim]], *, num_groups: Union[int, Dim], eps: float = 1e-6):
+        super().__init__()
+        self.in_dim = in_dim
+        self.num_groups = num_groups if isinstance(num_groups, Dim) else Dim(num_groups, name="groups")
+        self.in_group_dim = in_dim.ceildiv_left(num_groups)
+        self.eps = eps
+        self.scale = rf.Parameter([self.in_dim] if isinstance(self.in_dim, rf.Dim) else self.in_dim)
+        self.scale.initial = 1.0
+        self.bias = rf.Parameter(self.scale.dims)
+        self.bias.initial = 0.0
+
+    def __call__(self, x: Tensor) -> Tensor:
+        x = rf.split_dims(x, axis=self.in_dim, dims=[self.num_groups, self.in_group_dim])
+        mean, variance = rf.moments(x, axis=self.in_group_dim)
+        norm_x = (x - mean) * rf.rsqrt(variance + self.eps)
+        norm_x, _ = rf.merge_dims(norm_x, dims=[self.num_groups, self.in_group_dim], out_dim=self.in_dim)
         return norm_x * self.scale + self.bias
 
 
