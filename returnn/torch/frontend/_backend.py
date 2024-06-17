@@ -1103,6 +1103,38 @@ class TorchBackend(Backend[torch.Tensor]):
         return out
 
     @staticmethod
+    def search_sorted(
+        sorted_seq: Tensor, values: Tensor, *, axis: Dim, side: str = "left", out_dtype: str = "int32"
+    ) -> Tensor:
+        """search sorted"""
+        if out_dtype == "int32":
+            out_int32 = True
+        elif out_dtype == "int64":
+            out_int32 = False
+        else:
+            raise NotImplementedError(f"search_sorted: out_dtype {out_dtype} not supported")
+        if axis not in sorted_seq.dims:
+            raise ValueError(f"search_sorted: axis {axis} not in sorted_seqs {sorted_seq}")
+        if axis.need_masking():
+            raise NotImplementedError(f"search_sorted: dynamic axis {axis} not supported")
+        sorted_seq_dims = [dim for dim in sorted_seq.dims if dim != axis] + [axis]
+        for dim in sorted_seq_dims[:-1]:
+            if dim not in values.dims:
+                raise ValueError(f"search_sorted: dim {dim} in sorted_seq {sorted_seq} but not in values {values}")
+        values_rem_dims = [dim for dim in values.dims if dim not in sorted_seq_dims[:-1]]
+        values_dims = sorted_seq_dims[:-1] + values_rem_dims
+        sorted_seq_raw: torch.Tensor = sorted_seq.copy_compatible_to_dims_raw(sorted_seq_dims)
+        values_raw: torch.Tensor = values.copy_compatible_to_dims_raw(values_dims)
+        if len(values_rem_dims) != 1:
+            values_raw = values_raw.reshape(values_raw.shape[: len(sorted_seq_dims[:-1])] + (-1,))
+        out = Tensor("search_sorted", dims=sorted_seq_dims[:-1] + values_rem_dims, dtype=out_dtype, sparse_dim=axis)
+        out_raw = torch.searchsorted(sorted_seq_raw, values_raw, side=side, out_int32=out_int32)
+        if len(values_rem_dims) != 1:
+            out_raw = out_raw.reshape([dim.get_dim_value() for dim in out.dims])
+        out.raw_tensor = out_raw
+        return out
+
+    @staticmethod
     def clip_by_value(
         x: Tensor,
         clip_value_min: Union[Tensor, rf.RawTensorTypes],

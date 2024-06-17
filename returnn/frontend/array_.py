@@ -40,6 +40,7 @@ __all__ = [
     "shift_right",
     "reverse_sequence",
     "where",
+    "search_sorted",
     "sparse_to_dense",
     "one_hot",
 ]
@@ -772,6 +773,23 @@ def where(
     cond = rf.convert_to_tensor(cond)
     # noinspection PyProtectedMember
     return cond._raw_backend.where(cond, true_, false_, allow_broadcast_all_sources=allow_broadcast_all_sources)
+
+
+def search_sorted(
+    sorted_seq: Tensor, values: Tensor, *, axis: Dim, side: str = "left", out_dtype: str = "int32"
+) -> Tensor:
+    """
+    :param sorted_seq: [SharedDims...,axis], sequence of numbers, sorted low to high in the given axis.
+    :param values: [SharedDims...,OtherDims...], sequence of numbers to search for in ``sorted_seq``.
+    :param axis:
+    :param side: "left" or "right"
+    :param out_dtype:
+    :return: [SharedDims...,OtherDims...] -> axis, indices in axis in ``sorted_seq`` such that
+        sorted_seq[i-1] < value <= sorted_seq[i] if side=="left",
+        sorted_seq[i-1] <= value < sorted_seq[i] if side=="right".
+    """
+    # noinspection PyProtectedMember
+    return sorted_seq._raw_backend.search_sorted(sorted_seq, values, axis=axis, side=side, out_dtype=out_dtype)
 
 
 def sparse_to_dense(

@@ -963,6 +963,22 @@ class Backend(Generic[T]):
         raise NotImplementedError
 
     @staticmethod
+    def search_sorted(
+        sorted_seq: Tensor, values: Tensor, *, axis: Dim, side: str = "left", out_dtype: str = "int32"
+    ) -> Tensor:
+        """
+        :param sorted_seq: [SharedDims...,axis], sequence of numbers, sorted low to high in the given axis.
+        :param values: [SharedDims...,OtherDims...], sequence of numbers to search for in ``sorted_seq``.
+        :param axis:
+        :param side: "left" or "right"
+        :param out_dtype:
+        :return: [SharedDims...,OtherDims...] -> axis, indices in axis in ``sorted_seq`` such that
+            sorted_seq[i-1] < value <= sorted_seq[i] if side=="left",
+            sorted_seq[i-1] <= value < sorted_seq[i] if side=="right".
+        """
+        raise NotImplementedError
+
+    @staticmethod
     def clip_by_value(
         x: Tensor,
         clip_value_min: Union[Tensor, rf.RawTensorTypes],
