@@ -343,6 +343,7 @@ jobs:
           - TEST=rf_loop
           - TEST=rf_math
           - TEST=rf_normalization
+          - TEST=rf_piecewise_linear
           - TEST=rf_rec
           - TEST=rf_reduce
           - TEST=rf_signal
