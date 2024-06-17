@@ -26,10 +26,17 @@ class PiecewiseLinear(rf.Module):
             raise ValueError(f"{self}: points must not be empty")
         self._points_sorted = sorted(points.items())
         self.points_dim = Dim(len(self._points_sorted), name="pcw_schd_pieces")
-        self._keys = rf.convert_to_tensor(
-            np.array([k for k, _ in self._points_sorted], dtype=rf.get_default_float_dtype()), dims=[self.points_dim]
+        # Note: Use rf.Parameter to work around deepcopy issue. https://github.com/rwth-i6/returnn/issues/1541
+        self._keys = rf.Parameter(
+            rf.convert_to_tensor(
+                np.array([k for k, _ in self._points_sorted], dtype=rf.get_default_float_dtype()),
+                dims=[self.points_dim],
+            ),
+            auxiliary=True,
         )
-        self._values, _ = rf.stack([rf.convert_to_tensor(v) for _, v in self._points_sorted], out_dim=self.points_dim)
+        self._values, _ = rf.Parameter(
+            rf.stack([rf.convert_to_tensor(v) for _, v in self._points_sorted], out_dim=self.points_dim), auxiliary=True
+        )
 
     def __call__(self, x: Tensor) -> Tensor:
         """
