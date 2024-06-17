@@ -506,6 +506,15 @@ class Backend(Generic[T]):
         """
         raise NotImplementedError
 
+    @staticmethod
+    def stack(sources: Sequence[Tensor], *, out_dim: Dim) -> Tensor:
+        """
+        :param sources:
+        :param out_dim:
+        :return: stacked tensor
+        """
+        raise NotImplementedError
+
     # Restrict the possible activation function names,
     # to not get unexpected behavior,
     # or unwanted incompatibilities.

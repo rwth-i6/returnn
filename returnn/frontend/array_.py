@@ -29,6 +29,7 @@ __all__ = [
     "concat_features",
     "pad",
     "cum_concat_step",
+    "stack",
     "masked_select",
     "masked_scatter",
     "sequence_mask",
@@ -352,6 +353,13 @@ def concat(
 ) -> Tuple[Tensor, Dim]:
     """
     Concatenates multiple sources in the specified dimension.
+
+    Also see :func:`stack`.
+
+    :param sources: list of (tensor, dim) pairs. dim is the axis to concatenate on.
+    :param allow_broadcast: if True, the sources can have different dims, and the result will be broadcasted.
+    :param out_dim: reuse existing dim for the resulting concatenated dim, if given
+    :return: concatenated tensor, out_dim
     """
     assert sources
     if not allow_broadcast:
@@ -488,6 +496,23 @@ def cum_concat_step(
         source._raw_backend.cum_concat_step(source, prev_accum=prev_accum, axis=axis, out_spatial_dim=out_spatial_dim),
         out_spatial_dim,
     )
+
+
+def stack(sources: Sequence[Tensor], *, out_dim: Optional[Dim] = None) -> Tuple[Tensor, Dim]:
+    """
+    Stack the sources in a new dimension.
+    All sources must have the same shape.
+
+    :param sources:
+    :param out_dim: if given, use this as the new dim
+    :return: stacked tensor, out_dim
+    """
+    if not sources:
+        raise ValueError("no sources to stack")
+    if not out_dim:
+        out_dim = Dim(len(sources), name="stack")
+    # noinspection PyProtectedMember
+    return sources[0]._raw_backend.stack(sources, out_dim=out_dim), out_dim
 
 
 def masked_select(

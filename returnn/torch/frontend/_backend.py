@@ -502,6 +502,14 @@ class TorchBackend(Backend[torch.Tensor]):
         return out
 
     @staticmethod
+    def stack(sources: Sequence[Tensor], *, out_dim: Dim) -> Tensor:
+        """stack"""
+        out_dims = (out_dim,) + sources[0].dims
+        out = Tensor("stack", dims=out_dims, dtype=sources[0].dtype, sparse_dim=sources[0].sparse_dim)
+        out.raw_tensor = torch.stack([s.copy_compatible_to_dims_raw(out_dims[1:]) for s in sources], dim=0)
+        return out
+
+    @staticmethod
     def activation_raw(raw_tensor: torch.Tensor, func: str) -> torch.Tensor:
         """
         :param raw_tensor:
