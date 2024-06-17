@@ -974,6 +974,25 @@ class Backend(Generic[T]):
         raise NotImplementedError
 
     @staticmethod
+    def lerp(
+        start: Tensor, end: Tensor, weight: Union[float, Tensor], *, allow_broadcast_all_sources: bool = False
+    ) -> Tensor:
+        """
+        Linear interpolation between start and end.
+        (Some backends might provide an optimized version of this.)
+
+        :param start:
+        :param end:
+        :param weight: scalar or tensor
+        :param allow_broadcast_all_sources:
+        :return: start + weight * (end - start)
+        """
+        # Default implementation.
+        if not allow_broadcast_all_sources:
+            return start + weight * (end - start)
+        return rf.combine_bc(start, "+", rf.combine_bc(weight, "*", rf.combine_bc(end, "-", start)))
+
+    @staticmethod
     def matmul(a: Tensor[T], b: Tensor[T], *, reduce: Union[Dim, Sequence[Dim]], use_mask: bool = True) -> Tensor[T]:
         """
         This performs a batched matmul of two sources a and b

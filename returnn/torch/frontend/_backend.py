@@ -1128,6 +1128,22 @@ class TorchBackend(Backend[torch.Tensor]):
         return out
 
     @staticmethod
+    def lerp(
+        start: Tensor, end: Tensor, weight: Union[float, Tensor], *, allow_broadcast_all_sources: bool = False
+    ) -> Tensor:
+        """lerp"""
+        weight = rf.convert_to_tensor(weight, _backend=TorchBackend, device=start.device)
+        out = Tensor.get_common_data(
+            [start, end, weight], allow_broadcast_all_sources=allow_broadcast_all_sources, name="lerp"
+        )
+        out.raw_tensor = torch.lerp(
+            start.copy_compatible_to_dims_raw(out.dims),
+            end.copy_compatible_to_dims_raw(out.dims),
+            weight.copy_compatible_to_dims_raw(out.dims),
+        )
+        return out
+
+    @staticmethod
     def matmul(a: _TT, b: _TT, *, reduce: Union[Dim, Sequence[Dim]], use_mask: bool = True) -> _TT:
         """
         batched matmul of a and b, see base class doc string
