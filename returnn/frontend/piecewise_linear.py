@@ -13,6 +13,10 @@ __all__ = ["PiecewiseLinear"]
 
 
 class PiecewiseLinear(rf.Module):
+    """
+    Piecewise linear function.
+    """
+
     def __init__(self, points: Dict[Union[int, float], Union[float, Tensor]]):
         """
         :param points: dict of key -> value pairs.
