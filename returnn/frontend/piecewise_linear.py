@@ -34,8 +34,9 @@ class PiecewiseLinear(rf.Module):
             ),
             auxiliary=True,
         )
-        self._values, _ = rf.Parameter(
-            rf.stack([rf.convert_to_tensor(v) for _, v in self._points_sorted], out_dim=self.points_dim), auxiliary=True
+        self._values = rf.Parameter(
+            rf.stack([rf.convert_to_tensor(v) for _, v in self._points_sorted], out_dim=self.points_dim)[0],
+            auxiliary=True,
         )
 
     def __call__(self, x: Tensor) -> Tensor:
