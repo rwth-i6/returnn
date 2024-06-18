@@ -166,9 +166,6 @@ class DistributeFilesDataset(CachedDataset2):
         self._file_cache: Optional[_FileCacheProc] = None
         self._workers: Dict[int, _WorkerProcParent] = {}  # epoch -> worker
         self._files_order_cache: Dict[int, List[List[FileTree]]] = {}  # full epoch (0-indexed) -> files order
-        self._files_for_this_worker: Dict[
-            int, List[FileTree]
-        ] = {}  # full epoch (0-indexed) -> file shard for this worker
 
         if _meta_info_cache:
             # This allows to skip the lazy init in self.initialize().
@@ -260,13 +257,14 @@ class DistributeFilesDataset(CachedDataset2):
 
         full_epoch_0idx = (epoch - 1) // self.partition_epoch
 
-        # Shard files across GPU workers with deterministic seed
-        for k in list(self._files_for_this_worker.keys()):
+        # Cleanup and fill _files_order_cache, also shard files across GPU workers
+        # with deterministic seed
+        for k in list(self._files_order_cache.keys()):
             if k < full_epoch_0idx:
-                del self._files_for_this_worker[k]
+                del self._files_order_cache[k]
         for ep_ in range(epoch, epoch + self.preload_next_n_sub_epochs + 1):
             full_epoch_0idx_ = (ep_ - 1) // self.partition_epoch
-            if full_epoch_0idx_ in self._files_for_this_worker:
+            if full_epoch_0idx_ in self._files_order_cache:
                 continue
             if self.seq_ordering == "default":
                 files = self.files
@@ -280,24 +278,12 @@ class DistributeFilesDataset(CachedDataset2):
                 random_generator.shuffle(files)
             else:
                 raise ValueError(f"{self}: seq_ordering {self.seq_ordering!r} not supported")
-            files_per_worker = self._distribute_evenly_by_size(
-                num_bins=self._num_shards, file_sizes=self._file_sizes, files_order=files
+            file_bins = self._distribute_evenly_by_size(
+                num_bins=self._num_shards * self.partition_epoch, file_sizes=self._file_sizes, files_order=files
             )
-            self._files_for_this_worker[full_epoch_0idx_] = files_per_worker[self._worker_index]
-
-        # Cleanup and fill _files_order_cache.
-        for k in list(self._files_order_cache.keys()):
-            if k < full_epoch_0idx:
-                del self._files_order_cache[k]
-        for ep_ in range(epoch, epoch + self.preload_next_n_sub_epochs + 1):
-            full_epoch_0idx_ = (ep_ - 1) // self.partition_epoch
-            if full_epoch_0idx_ in self._files_order_cache:
-                continue
-            self._files_order_cache[full_epoch_0idx_] = self._distribute_evenly_by_size(
-                num_bins=self.partition_epoch,
-                file_sizes=self._file_sizes,
-                files_order=self._files_for_this_worker[full_epoch_0idx_],
-            )
+            self_index_base = self.partition_epoch * self._worker_index
+            self_index_end = self_index_base + self.partition_epoch
+            self._files_order_cache[full_epoch_0idx_] = file_bins[self_index_base:self_index_end]
 
         # Cleanup and fill _workers.
         for k, worker in list(self._workers.items()):
