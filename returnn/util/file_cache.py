@@ -279,22 +279,20 @@ class FileCache:
             os.utime(dst_filename, None)  # touch
             return
 
-        # Make sure we have enough disk space.
-        self.cleanup(need_at_least_free_space_size=os.stat(src_filename).st_size)
-
-        print(f"FileCache: Copy file {src_filename} to cache")
-
         # Create dirs.
         dst_dir = os.path.dirname(dst_filename)
         os.makedirs(dst_dir, exist_ok=True)
 
         # Copy the file, while holding a lock. See comment on lock_timeout above.
-        with LockFile(
-            directory=dst_dir, name=os.path.basename(dst_filename) + ".lock", lock_timeout=self._lock_timeout
-        ) as lock:
+        with LockFile(directory=self.cache_directory, name="dir.lock", lock_timeout=self._lock_timeout) as lock:
             # Maybe it was copied in the meantime, while waiting for the lock.
-            if os.path.exists(dst_filename):
+            if self._check_existing_copied_file_maybe_cleanup(src_filename, dst_filename):
                 return
+
+            print(f"FileCache: Copy file {src_filename} to cache")
+
+            # Make sure we have enough disk space.
+            self.cleanup(need_at_least_free_space_size=os.stat(src_filename).st_size)
 
             dst_tmp_filename = dst_filename + ".copy"
             if os.path.exists(dst_tmp_filename):
