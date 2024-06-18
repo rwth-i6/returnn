@@ -336,9 +336,9 @@ def _copy_with_prealloc(src: str, dst: str):
     dst_size = os.stat(src).st_size
     with open(dst, "wb") as dst_file:
         if dst_size > 0:
-            try:
+            if os.name == "posix":
                 os.posix_fallocate(dst_file.fileno(), 0, dst_size)
-            except:
+            else:
                 dst_file.seek(dst_size - 1)
                 dst_file.write(b"\0")
                 dst_file.seek(0)
