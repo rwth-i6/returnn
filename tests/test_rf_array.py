@@ -183,6 +183,22 @@ def test_pad_time_right():
         assert all(out_.raw_tensor[b, seq_len] == 1.0)
 
 
+def test_stack():
+    batch_dim_ = Dim(3, name="batch")
+    time_dim = Dim(5, name="time")
+
+    # noinspection PyShadowingNames,PyUnusedLocal
+    def _forward_step(*, model: rf.Module, extern_data: TensorDict):
+        seq = rf.range_over_dim(time_dim)  # [T]
+        out, _ = rf.stack([seq, seq, seq], out_dim=batch_dim_)  # [B,T]
+        out.mark_as_default_output(shape=(batch_dim_, time_dim))
+
+    out = run_model(TensorDict(), lambda *, epoch, step: rf.Module(), _forward_step, test_tensorflow=False)
+    out = out["output"]
+    assert out.dims == (batch_dim_, time_dim)
+    assert out.raw_tensor.tolist() == [[0, 1, 2, 3, 4], [0, 1, 2, 3, 4], [0, 1, 2, 3, 4]]
+
+
 def test_gather():
     time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
     in_dim = Dim(7, name="in")
@@ -329,6 +345,35 @@ def test_where():
         out.mark_as_default_output(shape=(batch_dim, time_dim, in_dim))
 
     run_model(extern_data, lambda *, epoch, step: rf.Module(), _forward_step)
+
+
+def test_search_sorted():
+    batch_dim_ = Dim(3, name="batch")
+    time_dim = Dim(13, name="time")
+
+    # noinspection PyShadowingNames,PyUnusedLocal
+    def _forward_step(*, model: rf.Module, extern_data: TensorDict):
+        sorted_seq = rf.range_over_dim(time_dim, dtype="float32")  # [T]
+        index1 = rf.search_sorted(sorted_seq, rf.constant(4.5, dims=()), axis=time_dim)  # [] -> T
+        assert index1.dims == () and index1.sparse_dim == time_dim and index1.dtype == "int32"
+        index1.mark_as_output("index1", shape=())
+        index2 = rf.search_sorted(sorted_seq, rf.constant(4.0, dims=()), axis=time_dim)  # [] -> T
+        assert index2.dims == () and index2.sparse_dim == time_dim and index2.dtype == "int32"
+        index2.mark_as_output("index2", shape=())
+        index3 = rf.search_sorted(sorted_seq, rf.constant(4.0, dims=()), axis=time_dim, side="right")  # [] -> T
+        assert index3.dims == () and index3.sparse_dim == time_dim and index3.dtype == "int32"
+        index3.mark_as_output("index3", shape=())
+        index4 = rf.search_sorted(
+            sorted_seq, rf.convert_to_tensor(np.array([4.0, 4.5, 5.0]), dims=[batch_dim_]), axis=time_dim
+        )  # [] -> T
+        assert index4.dims == (batch_dim_,) and index4.sparse_dim == time_dim and index4.dtype == "int32"
+        index4.mark_as_output("index4", shape=(batch_dim_,))
+
+    out = run_model(TensorDict(), lambda *, epoch, step: rf.Module(), _forward_step, test_tensorflow=False)
+    assert out["index1"].dims == () and out["index1"].raw_tensor.item() == 5
+    assert out["index2"].dims == () and out["index2"].raw_tensor.item() == 4
+    assert out["index3"].dims == () and out["index3"].raw_tensor.item() == 5
+    assert out["index4"].dims == (batch_dim_,) and out["index4"].raw_tensor.tolist() == [4, 5, 5]
 
 
 def test_where_int():

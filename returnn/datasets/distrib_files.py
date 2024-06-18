@@ -333,7 +333,7 @@ class DistributeFilesDataset(CachedDataset2):
         if "seq_ordering" not in dataset_dict and "seq_order_control_dataset" not in dataset_dict:
             raise ValueError(
                 f"{self}: sub dataset should have explicit seq_ordering "
-                "(or seq_order_control_dataset for MetaDataset), got: {dataset_dict}"
+                f"(or seq_order_control_dataset for MetaDataset), got: {dataset_dict}"
             )
         self._lazy_init_file_cache_proc()
         dataset_dict, exit_hook = self._file_cache.handle_cached_files_in_config(dataset_dict)

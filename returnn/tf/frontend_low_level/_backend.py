@@ -72,7 +72,7 @@ class TFBackend(Backend[tf.Tensor]):
             return tf.shape(raw_tensor)
 
     @staticmethod
-    def get_shape_tuple_raw(raw_tensor: tf.Tensor) -> Tuple[Union[int, tf.Tensor]]:
+    def get_shape_tuple_raw(raw_tensor: tf.Tensor) -> Tuple[Union[int, tf.Tensor], ...]:
         """
         :return: shape of raw tensor. assumes that ndim is known
         """
@@ -87,14 +87,14 @@ class TFBackend(Backend[tf.Tensor]):
             return tuple(shape)
 
     @staticmethod
-    def get_known_shape_raw(raw_tensor: tf.Tensor) -> Tuple[Optional[int]]:
+    def get_known_shape_raw(raw_tensor: tf.Tensor) -> Tuple[Optional[int], ...]:
         """
         :return: shape of raw tensor, int for static known, None otherwise. assumes that ndim is known.
         """
         return tuple(raw_tensor.shape.as_list())
 
     @staticmethod
-    def set_known_shape_raw(raw_tensor: tf.Tensor, shape: Tuple[Optional[int]]) -> None:
+    def set_known_shape_raw(raw_tensor: tf.Tensor, shape: Tuple[Optional[int], ...]) -> None:
         """
         wrap tf.Tensor.set_shape
         """

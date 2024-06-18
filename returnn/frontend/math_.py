@@ -66,6 +66,7 @@ __all__ = [
     "softmax",
     "log_softmax",
     "gating",
+    "lerp",
 ]
 
 
@@ -567,3 +568,20 @@ def gating(
 
     a, b = rf.split(x, axis=axis, out_dims=[out_dim, out_dim])
     return act_func(a) * gate_func(b), out_dim
+
+
+def lerp(
+    start: Tensor, end: Tensor, weight: Union[float, Tensor], *, allow_broadcast_all_sources: bool = False
+) -> Tensor:
+    """
+    Linear interpolation between start and end.
+    (Some backends might provide an optimized version of this.)
+
+    :param start:
+    :param end:
+    :param weight: scalar or tensor
+    :param allow_broadcast_all_sources:
+    :return: start + weight * (end - start)
+    """
+    # noinspection PyProtectedMember
+    return start._raw_backend.lerp(start, end, weight, allow_broadcast_all_sources=allow_broadcast_all_sources)

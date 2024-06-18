@@ -2,7 +2,6 @@
 Utilities for dimension tags, dimensions, axes.
 """
 
-
 from __future__ import annotations
 from typing import Optional, Union, TypeVar, Sequence, Tuple
 from returnn.tensor import Tensor, Dim
@@ -18,6 +17,7 @@ __all__ = [
     "replace_dim",
     "dim_match_priority_when_needed",
     "num_elements_of_shape",
+    "masked_fraction_of_shape",
 ]
 
 
@@ -122,11 +122,19 @@ def dim_match_priority_when_needed(dim: Dim, *other_dims: Dim) -> Dim:
     return dim
 
 
-def num_elements_of_shape(dims: Sequence[Dim]) -> Union[int, Tensor]:
+def num_elements_of_shape(dims: Union[Dim, Sequence[Dim]], *, use_mask: bool = True) -> Union[int, Tensor]:
     """
     :param dims:
+    :param use_mask:
     :return: num elements of a tensor of shape dims, properly considering masking
     """
+    if isinstance(dims, Dim):
+        dims = [dims]
+    if not use_mask:
+        n = 1
+        for dim in dims:
+            n *= dim.get_dim_value_tensor()
+        return n
     if all(dim.is_static() for dim in dims):
         n = 1
         for dim in dims:
@@ -135,7 +143,7 @@ def num_elements_of_shape(dims: Sequence[Dim]) -> Union[int, Tensor]:
 
     n = 1
     dims = list(dims)
-    dims.sort(key=lambda dim: -dim.dyn_size_ext.batch_ndim if dim.dyn_size_ext else 0)
+    dims.sort(key=lambda dim__: -dim__.dyn_size_ext.batch_ndim if dim__.dyn_size_ext else 0)
     while dims:
         dim = dims.pop(0)
         if dim.is_static():
@@ -144,10 +152,29 @@ def num_elements_of_shape(dims: Sequence[Dim]) -> Union[int, Tensor]:
         # E.g. dyn_size_ext is shape [B], and self has shape [B,T].
         # Due to the sorting of dims above, dims will be [T,B], and we will first process T.
         # We want to sum over dyn_size_ext, but then we need to remove the other dims it covers.
+        dims_to_reduce = []
         for dim_ in dim.dyn_size_ext.dims:
-            assert dim_ in dims  # num elements not really well-defined then
-            assert not dim_.need_masking()  # not implemented
-            dims.remove(dim_)
-        n_ = rf.reduce_sum(dim.dyn_size_ext, axis=dim.dyn_size_ext.dims)
+            if dim_ in dims:
+                assert not dim_.need_masking()  # not implemented
+                dims.remove(dim_)
+                dims_to_reduce.append(dim_)
+        n_ = rf.reduce_sum(dim.dyn_size_ext, axis=dims_to_reduce) if dims_to_reduce else dim.dyn_size_ext
         n *= n_
     return n
+
+
+def masked_fraction_of_shape(dims: Union[Dim, Sequence[Dim]], *, inverse: bool = False) -> Union[int, float, Tensor]:
+    """
+    :param dims:
+    :param inverse: if True, return the inverse of the fraction
+    :return: :func:`num_elements_of_shape`(dims) / prod(dims) if not inverse else prod(dims) / num_elements
+    """
+    if isinstance(dims, Dim):
+        dims = [dims]
+    if not any(dim.need_masking() for dim in dims):
+        return 1
+    num_elems_masked = num_elements_of_shape(dims)
+    num_elems_total = 1
+    for dim in dims:
+        num_elems_total *= dim.get_dim_value_tensor()
+    return (num_elems_masked / num_elems_total) if not inverse else (num_elems_total / num_elems_masked)

@@ -135,14 +135,14 @@ class Backend(Generic[T]):
         raise NotImplementedError
 
     @staticmethod
-    def get_shape_raw(raw_tensor: T) -> Union[T, Tuple[Union[int, T]]]:
+    def get_shape_raw(raw_tensor: T) -> Union[T, Tuple[Union[int, T], ...]]:
         """
         :return: shape of raw tensor
         """
         raise NotImplementedError
 
     @staticmethod
-    def get_shape_tuple_raw(raw_tensor: T) -> Tuple[Union[int, T]]:
+    def get_shape_tuple_raw(raw_tensor: T) -> Tuple[Union[int, T], ...]:
         """
         :return: shape of raw tensor. assumes that ndim is known.
             In eager frameworks, all dims are int.
@@ -150,7 +150,7 @@ class Backend(Generic[T]):
         raise NotImplementedError
 
     @staticmethod
-    def get_known_shape_raw(raw_tensor: T) -> Tuple[Optional[int]]:
+    def get_known_shape_raw(raw_tensor: T) -> Tuple[Optional[int], ...]:
         """
         :return: shape of raw tensor, int for static known, None otherwise. assumes that ndim is known.
             This will not create any ops.
@@ -159,7 +159,7 @@ class Backend(Generic[T]):
         raise NotImplementedError
 
     @staticmethod
-    def set_known_shape_raw(raw_tensor: T, shape: Tuple[Optional[int]]) -> None:
+    def set_known_shape_raw(raw_tensor: T, shape: Tuple[Optional[int], ...]) -> None:
         """
         Sets the known shape of the raw tensor.
         This is only supported in graph-based frameworks,
@@ -503,6 +503,15 @@ class Backend(Generic[T]):
         :param out_spatial_dim: the spatial dim of the output will be this dim. like axis+1.
         :return: accumulated. accumulated shape {..., out_spatial_dim},
             same shape as prev_accum with axis replaced by out_spatial_dim.
+        """
+        raise NotImplementedError
+
+    @staticmethod
+    def stack(sources: Sequence[Tensor], *, out_dim: Dim) -> Tensor:
+        """
+        :param sources:
+        :param out_dim:
+        :return: stacked tensor
         """
         raise NotImplementedError
 
@@ -954,6 +963,22 @@ class Backend(Generic[T]):
         raise NotImplementedError
 
     @staticmethod
+    def search_sorted(
+        sorted_seq: Tensor, values: Tensor, *, axis: Dim, side: str = "left", out_dtype: str = "int32"
+    ) -> Tensor:
+        """
+        :param sorted_seq: [SharedDims...,axis], sequence of numbers, sorted low to high in the given axis.
+        :param values: [SharedDims...,OtherDims...], sequence of numbers to search for in ``sorted_seq``.
+        :param axis:
+        :param side: "left" or "right"
+        :param out_dtype:
+        :return: [SharedDims...,OtherDims...] -> axis, indices in axis in ``sorted_seq`` such that
+            sorted_seq[i-1] < value <= sorted_seq[i] if side=="left",
+            sorted_seq[i-1] <= value < sorted_seq[i] if side=="right".
+        """
+        raise NotImplementedError
+
+    @staticmethod
     def clip_by_value(
         x: Tensor,
         clip_value_min: Union[Tensor, rf.RawTensorTypes],
@@ -963,6 +988,25 @@ class Backend(Generic[T]):
     ) -> Tensor:
         """clip by value"""
         raise NotImplementedError
+
+    @staticmethod
+    def lerp(
+        start: Tensor, end: Tensor, weight: Union[float, Tensor], *, allow_broadcast_all_sources: bool = False
+    ) -> Tensor:
+        """
+        Linear interpolation between start and end.
+        (Some backends might provide an optimized version of this.)
+
+        :param start:
+        :param end:
+        :param weight: scalar or tensor
+        :param allow_broadcast_all_sources:
+        :return: start + weight * (end - start)
+        """
+        # Default implementation.
+        if not allow_broadcast_all_sources:
+            return start + weight * (end - start)
+        return rf.combine_bc(start, "+", rf.combine_bc(weight, "*", rf.combine_bc(end, "-", start)))
 
     @staticmethod
     def matmul(a: Tensor[T], b: Tensor[T], *, reduce: Union[Dim, Sequence[Dim]], use_mask: bool = True) -> Tensor[T]:

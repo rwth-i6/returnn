@@ -1262,13 +1262,15 @@ class _TensorMixin(_TensorMixinBase):
             raw_tensor = backend.transpose_raw(raw_tensor, [p for p in out_permutation if p >= 0])
             raw_tensor = backend.reshape_raw(raw_tensor, [raw_shape[p] if p >= 0 else 1 for p in out_permutation])
         out_dims = [
-            dims[i]
-            if p >= 0
-            else Dim(
-                kind=dims[i].kind,
-                description="%s_bc_dim1" % (dims[i].description or "unnamed"),
-                dimension=1,
-                auto_generated=True,
+            (
+                dims[i]
+                if p >= 0
+                else Dim(
+                    kind=dims[i].kind,
+                    description="%s_bc_dim1" % (dims[i].description or "unnamed"),
+                    dimension=1,
+                    auto_generated=True,
+                )
             )
             for i, p in enumerate(out_permutation)
         ]
@@ -1300,6 +1302,7 @@ class _TensorMixin(_TensorMixinBase):
         """
         Simpler variant of :func:`copy_compatible_to` which just takes a list of dims,
         and uses simple Dim equality.
+        This adds broadcast dims for any missing dims.
 
         :param dims:
         :return: raw tensor from self with dims permuted and broadcast dims added
@@ -3342,9 +3345,9 @@ class _TensorMixin(_TensorMixinBase):
             max_match_priority = max(dim.match_priority for dim in self.dims)
             return max(
                 matching,
-                key=lambda ax: (max_match_priority + 1)
-                if (self.dims[ax] is other_axis_dim_tag)
-                else self.dims[ax].match_priority,
+                key=lambda ax: (
+                    (max_match_priority + 1) if (self.dims[ax] is other_axis_dim_tag) else self.dims[ax].match_priority
+                ),
             )
 
         other_to_self_mapping = {}

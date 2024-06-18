@@ -151,12 +151,12 @@ class ReturnnLayersBackend(Backend[Layer]):
         raise NotImplementedError
 
     @staticmethod
-    def get_shape_tuple_raw(raw_tensor: Layer) -> Tuple[Union[int, Layer]]:
+    def get_shape_tuple_raw(raw_tensor: Layer) -> Tuple[Union[int, Layer], ...]:
         """shape"""
         raise NotImplementedError
 
     @staticmethod
-    def get_known_shape_raw(raw_tensor: Layer) -> Tuple[Optional[int]]:
+    def get_known_shape_raw(raw_tensor: Layer) -> Tuple[Optional[int], ...]:
         """known shape"""
         return raw_tensor.tensor.batch_shape
 

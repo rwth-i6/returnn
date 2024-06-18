@@ -109,19 +109,19 @@ class TorchBackend(Backend[torch.Tensor]):
         return raw_tensor.dim()
 
     @staticmethod
-    def get_shape_raw(raw_tensor: torch.Tensor) -> Tuple[int]:
+    def get_shape_raw(raw_tensor: torch.Tensor) -> Tuple[int, ...]:
         """shape"""
         return tuple(raw_tensor.shape)
 
     @staticmethod
-    def get_shape_tuple_raw(raw_tensor: torch.Tensor) -> Tuple[int]:
+    def get_shape_tuple_raw(raw_tensor: torch.Tensor) -> Tuple[int, ...]:
         """
         :return: shape of raw tensor
         """
         return tuple(raw_tensor.shape)
 
     @staticmethod
-    def get_known_shape_raw(raw_tensor: torch.Tensor) -> Tuple[Optional[int]]:
+    def get_known_shape_raw(raw_tensor: torch.Tensor) -> Tuple[Optional[int], ...]:
         """
         :return: shape of raw tensor; here for PyTorch the full shape is always known
         """
@@ -499,6 +499,14 @@ class TorchBackend(Backend[torch.Tensor]):
         )
         source_raw = source.copy_compatible_to_dims_raw(prev_accum.dims)
         out.raw_tensor = torch.cat((prev_accum.raw_tensor, source_raw), dim=prev_accum.get_axis_from_description(axis))
+        return out
+
+    @staticmethod
+    def stack(sources: Sequence[Tensor], *, out_dim: Dim) -> Tensor:
+        """stack"""
+        out_dims = (out_dim,) + sources[0].dims
+        out = Tensor("stack", dims=out_dims, dtype=sources[0].dtype, sparse_dim=sources[0].sparse_dim)
+        out.raw_tensor = torch.stack([s.copy_compatible_to_dims_raw(out_dims[1:]) for s in sources], dim=0)
         return out
 
     @staticmethod
@@ -1095,6 +1103,38 @@ class TorchBackend(Backend[torch.Tensor]):
         return out
 
     @staticmethod
+    def search_sorted(
+        sorted_seq: Tensor, values: Tensor, *, axis: Dim, side: str = "left", out_dtype: str = "int32"
+    ) -> Tensor:
+        """search sorted"""
+        if out_dtype == "int32":
+            out_int32 = True
+        elif out_dtype == "int64":
+            out_int32 = False
+        else:
+            raise NotImplementedError(f"search_sorted: out_dtype {out_dtype} not supported")
+        if axis not in sorted_seq.dims:
+            raise ValueError(f"search_sorted: axis {axis} not in sorted_seqs {sorted_seq}")
+        if axis.need_masking():
+            raise NotImplementedError(f"search_sorted: dynamic axis {axis} not supported")
+        sorted_seq_dims = [dim for dim in sorted_seq.dims if dim != axis] + [axis]
+        for dim in sorted_seq_dims[:-1]:
+            if dim not in values.dims:
+                raise ValueError(f"search_sorted: dim {dim} in sorted_seq {sorted_seq} but not in values {values}")
+        values_rem_dims = [dim for dim in values.dims if dim not in sorted_seq_dims[:-1]]
+        values_dims = sorted_seq_dims[:-1] + values_rem_dims
+        sorted_seq_raw: torch.Tensor = sorted_seq.copy_compatible_to_dims_raw(sorted_seq_dims)
+        values_raw: torch.Tensor = values.copy_compatible_to_dims_raw(values_dims)
+        if len(values_rem_dims) != 1:
+            values_raw = values_raw.reshape(values_raw.shape[: len(sorted_seq_dims[:-1])] + (-1,))
+        out = Tensor("search_sorted", dims=sorted_seq_dims[:-1] + values_rem_dims, dtype=out_dtype, sparse_dim=axis)
+        out_raw = torch.searchsorted(sorted_seq_raw, values_raw, side=side, out_int32=out_int32)
+        if len(values_rem_dims) != 1:
+            out_raw = out_raw.reshape([dim.get_dim_value() for dim in out.dims])
+        out.raw_tensor = out_raw
+        return out
+
+    @staticmethod
     def clip_by_value(
         x: Tensor,
         clip_value_min: Union[Tensor, rf.RawTensorTypes],
@@ -1117,6 +1157,22 @@ class TorchBackend(Backend[torch.Tensor]):
         min_bc_raw = clip_value_min.copy_compatible_to_dims_raw(out.dims)
         max_bc_raw = clip_value_max.copy_compatible_to_dims_raw(out.dims)
         out.raw_tensor = torch.clamp(x_bc_raw, min_bc_raw, max_bc_raw)
+        return out
+
+    @staticmethod
+    def lerp(
+        start: Tensor, end: Tensor, weight: Union[float, Tensor], *, allow_broadcast_all_sources: bool = False
+    ) -> Tensor:
+        """lerp"""
+        weight = rf.convert_to_tensor(weight, _backend=TorchBackend, device=start.device)
+        out = Tensor.get_common_data(
+            [start, end, weight], allow_broadcast_all_sources=allow_broadcast_all_sources, name="lerp"
+        )
+        out.raw_tensor = torch.lerp(
+            start.copy_compatible_to_dims_raw(out.dims),
+            end.copy_compatible_to_dims_raw(out.dims),
+            weight.copy_compatible_to_dims_raw(out.dims),
+        )
         return out
 
     @staticmethod
@@ -1258,7 +1314,7 @@ class TorchBackend(Backend[torch.Tensor]):
         assert all(isinstance(dim, Dim) for dim in axis)
         raw_dims = [source.get_axis_from_description(dim) for dim in axis]
         res_dims = [dim for i, dim in enumerate(source.dims) if i not in raw_dims]
-        correction_factor: Optional[torch.Tensor] = None
+        correction_factor: Union[None, float, Tensor] = None
         if use_mask and any(dim.need_masking() for dim in axis):
             source = source.copy()
             dtype = source.raw_tensor.dtype
@@ -1270,21 +1326,7 @@ class TorchBackend(Backend[torch.Tensor]):
                 mask_value = 0
             elif mode == "mean":
                 mask_value = 0
-                for dim in axis:
-                    if dim.need_masking():
-                        total_num_el = dim.get_dim_value_tensor()
-                        actual_num_el = dim.get_size_tensor()
-                        num_el_reduce_dims = [dim_ for dim_ in axis if dim_ in actual_num_el.dims]
-                        if num_el_reduce_dims:
-                            actual_num_el = rf.reduce_sum(actual_num_el, axis=num_el_reduce_dims)
-                            for dim_ in num_el_reduce_dims:
-                                total_num_el *= dim_.get_dim_value_tensor()
-                        correction_factor_ = rf.cast(total_num_el, source.dtype) / rf.cast(actual_num_el, source.dtype)
-                        correction_factor__ = correction_factor_.copy_compatible_to_dims_raw(res_dims)
-                        if correction_factor is None:
-                            correction_factor = correction_factor__
-                        else:
-                            correction_factor *= correction_factor__
+                correction_factor = rf.masked_fraction_of_shape(axis, inverse=True)
             else:
                 raise NotImplementedError(f"reduce_{mode} not implemented with masking on tensor {source!r}.")
             for dim in axis:
@@ -1302,7 +1344,11 @@ class TorchBackend(Backend[torch.Tensor]):
         else:
             raw_result = func(source.raw_tensor, dim=raw_dims)
         if correction_factor is not None:
-            raw_result *= correction_factor.to(raw_result.device)
+            raw_result *= (
+                correction_factor.copy_compatible_to_dims_raw(res_dims).to(raw_result.device)
+                if isinstance(correction_factor, Tensor)
+                else correction_factor
+            )
         res = Tensor(
             name=f"reduce_{mode}",
             raw_tensor=raw_result,

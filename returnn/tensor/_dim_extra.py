@@ -4,7 +4,7 @@ or just rarely used attribs, such that we can save memory for the common case.
 """
 
 from __future__ import annotations
-from typing import TYPE_CHECKING, Optional, Union, Tuple, Sequence, Dict, List, Callable
+from typing import TYPE_CHECKING, Optional, Union, Any, Tuple, Sequence, Dict, List, Set, Callable
 import operator
 
 from returnn.util.basic import Entity
@@ -1286,15 +1286,15 @@ class _DimMixin:
         self: Dim,
         other: Dim,
         *,
-        ignore_feature_dim=False,
-        allow_same_feature_dim=False,
-        allow_same_spatial_dim=None,
-        treat_feature_as_spatial=False,
-        broadcast_matches=False,
-        unknown_spatial_matches=False,
-        undefined_matches=False,
-        derived_matches=False,
-        allow_old_behavior=False,
+        ignore_feature_dim: bool = False,
+        allow_same_feature_dim: bool = False,
+        allow_same_spatial_dim: Optional[bool] = None,
+        treat_feature_as_spatial: bool = False,
+        broadcast_matches: bool = False,
+        unknown_spatial_matches: bool = False,
+        undefined_matches: bool = False,
+        derived_matches: bool = False,
+        allow_old_behavior: bool = False,
     ) -> bool:
         """
         Compares self to other for equality.
@@ -1307,16 +1307,16 @@ class _DimMixin:
         and might potentially change in the future.
           https://github.com/rwth-i6/returnn/issues/634
 
-        :param Dim other:
-        :param bool ignore_feature_dim:
-        :param bool allow_same_feature_dim:
-        :param bool|None allow_same_spatial_dim:
-        :param bool treat_feature_as_spatial:
-        :param bool broadcast_matches:
-        :param bool unknown_spatial_matches:
-        :param bool undefined_matches:
-        :param bool derived_matches:
-        :param bool allow_old_behavior: useful e.g. for find_matching_dim_map
+        :param other:
+        :param ignore_feature_dim:
+        :param allow_same_feature_dim:
+        :param allow_same_spatial_dim:
+        :param treat_feature_as_spatial:
+        :param broadcast_matches:
+        :param unknown_spatial_matches:
+        :param undefined_matches:
+        :param derived_matches:
+        :param allow_old_behavior: useful e.g. for find_matching_dim_map
         """
         if self is other:  # first some fast path check
             return True
@@ -1820,12 +1820,13 @@ class _DimMixin:
         self._make_extra().copy_same_as = other
 
     @classmethod
-    def get_existing_tag_from_collection(cls, other, tags, is_equal_opts=None):
+    def get_existing_tag_from_collection(
+        cls, other: Dim, tags: Union[Sequence[Dim], Set[Dim]], is_equal_opts: Optional[Dict[str, Any]] = None
+    ) -> Optional[Dim]:
         """
-        :param Dim other:
-        :param list[Dim]|tuple[Dim]|set[Dim] tags:
-        :param dict[str]|None is_equal_opts: passed to Dim.is_equal
-        :rtype: Dim|None
+        :param other:
+        :param tags:
+        :param is_equal_opts: passed to Dim.is_equal
         """
         if is_equal_opts is None:
             is_equal_opts = {}
@@ -1842,13 +1843,17 @@ class _DimMixin:
         return None
 
     @classmethod
-    def get_all_dimension_tags(cls, data_list, is_equal_opts=None, unique_separate_axes=True):
+    def get_all_dimension_tags(
+        cls,
+        data_list: List[_t.Tensor],
+        is_equal_opts: Optional[Dict[str, Any]] = None,
+        unique_separate_axes: bool = True,
+    ) -> Tuple[List[Dim], util.DictRefKeys[_t.Tensor, List[Dim]]]:
         """
-        :param list[_t.Tensor] data_list:
-        :param dict[str]|None is_equal_opts: passed to Dim.is_equal
-        :param bool unique_separate_axes: e.g. data_list=[Data with shape (B,5,5,10)] results in 4 dim tags, not 3.
+        :param data_list:
+        :param is_equal_opts: passed to Dim.is_equal
+        :param unique_separate_axes: e.g. data_list=[Data with shape (B,5,5,10)] results in 4 dim tags, not 3.
         :return: list of dimension tags, dict for data -> list of dimension tags (for each axis)
-        :rtype: (list[Dim], util.DictRefKeys[_t.Tensor, list[Dim]])
         """
         tags = []
         data_axes_dict = util.DictRefKeys()  # type: util.DictRefKeys[_t.Tensor, List[Dim]]
@@ -2323,11 +2328,11 @@ class Op:
     Op on :class:`Dim` which results in a derived :class:`Dim`.
     """
 
-    def __init__(self, kind, inputs, attribs=None):
+    def __init__(self, kind: str, inputs: List[Dim], attribs: Optional[Dict[str, Any]] = None):
         """
-        :param str kind: "add", "sub", "mul", "ceildiv"
-        :param list[Dim] inputs:
-        :param dict[str]|None attribs:
+        :param kind: "add", "sub", "mul", "ceildiv"
+        :param inputs:
+        :param attribs:
         """
         self.kind = kind
         self.inputs = inputs

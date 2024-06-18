@@ -40,6 +40,7 @@ from .math_ import *
 from .matmul import *
 from .normalization import *
 from .parameter import *
+from .piecewise_linear import *
 from .rand import *
 from .rec import *
 from .reduce import *

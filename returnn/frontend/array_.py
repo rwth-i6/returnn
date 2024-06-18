@@ -29,6 +29,7 @@ __all__ = [
     "concat_features",
     "pad",
     "cum_concat_step",
+    "stack",
     "masked_select",
     "masked_scatter",
     "sequence_mask",
@@ -39,6 +40,7 @@ __all__ = [
     "shift_right",
     "reverse_sequence",
     "where",
+    "search_sorted",
     "sparse_to_dense",
     "one_hot",
 ]
@@ -352,6 +354,13 @@ def concat(
 ) -> Tuple[Tensor, Dim]:
     """
     Concatenates multiple sources in the specified dimension.
+
+    Also see :func:`stack`.
+
+    :param sources: list of (tensor, dim) pairs. dim is the axis to concatenate on.
+    :param allow_broadcast: if True, the sources can have different dims, and the result will be broadcasted.
+    :param out_dim: reuse existing dim for the resulting concatenated dim, if given
+    :return: concatenated tensor, out_dim
     """
     assert sources
     if not allow_broadcast:
@@ -488,6 +497,23 @@ def cum_concat_step(
         source._raw_backend.cum_concat_step(source, prev_accum=prev_accum, axis=axis, out_spatial_dim=out_spatial_dim),
         out_spatial_dim,
     )
+
+
+def stack(sources: Sequence[Tensor], *, out_dim: Optional[Dim] = None) -> Tuple[Tensor, Dim]:
+    """
+    Stack the sources in a new dimension.
+    All sources must have the same shape.
+
+    :param sources:
+    :param out_dim: if given, use this as the new dim
+    :return: stacked tensor, out_dim
+    """
+    if not sources:
+        raise ValueError("no sources to stack")
+    if not out_dim:
+        out_dim = Dim(len(sources), name="stack")
+    # noinspection PyProtectedMember
+    return sources[0]._raw_backend.stack(sources, out_dim=out_dim), out_dim
 
 
 def masked_select(
@@ -747,6 +773,23 @@ def where(
     cond = rf.convert_to_tensor(cond)
     # noinspection PyProtectedMember
     return cond._raw_backend.where(cond, true_, false_, allow_broadcast_all_sources=allow_broadcast_all_sources)
+
+
+def search_sorted(
+    sorted_seq: Tensor, values: Tensor, *, axis: Dim, side: str = "left", out_dtype: str = "int32"
+) -> Tensor:
+    """
+    :param sorted_seq: [SharedDims...,axis], sequence of numbers, sorted low to high in the given axis.
+    :param values: [SharedDims...,OtherDims...], sequence of numbers to search for in ``sorted_seq``.
+    :param axis:
+    :param side: "left" or "right"
+    :param out_dtype:
+    :return: [SharedDims...,OtherDims...] -> axis, indices in axis in ``sorted_seq`` such that
+        sorted_seq[i-1] < value <= sorted_seq[i] if side=="left",
+        sorted_seq[i-1] <= value < sorted_seq[i] if side=="right".
+    """
+    # noinspection PyProtectedMember
+    return sorted_seq._raw_backend.search_sorted(sorted_seq, values, axis=axis, side=side, out_dtype=out_dtype)
 
 
 def sparse_to_dense(
