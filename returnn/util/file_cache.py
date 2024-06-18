@@ -333,10 +333,15 @@ def _copy_with_prealloc(src: str, dst: str):
     :param src: source file
     :param dst: destination file
     """
-    stat = os.stat(src)
+    dst_size = os.stat(src).st_size
     with open(dst, "wb") as dst_file:
-        dst_file.truncate(stat.st_size)
-        dst_file.seek(0)
+        if dst_size > 0:
+            try:
+                os.posix_fallocate(dst_file.fileno(), 0, dst_size)
+            except:
+                dst_file.seek(dst_size - 1)
+                dst_file.write(b"\0")
+                dst_file.seek(0)
         with open(src, "rb") as src_file:
             shutil.copyfileobj(src_file, dst_file)
 
