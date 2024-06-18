@@ -621,10 +621,12 @@ class Dataset(object):
 
         return seq_index
 
-    def _get_random_seed_for_epoch(self, epoch, num_epochs_fixed=1):
+    def _get_random_seed_for_epoch(self, epoch, num_epochs_fixed=1, include_random_seed_offset=True):
         """
         :param int|None epoch:
         :param int num_epochs_fixed: keep random seed fixed for n subsequent epochs
+        :param bool include_random_seed_offset: whether to add in the local random_seed_offset.
+            Can be disabled to get deterministic seeds in multi-process settings.
         :rtype: int
         """
         if self.fixed_random_seed is not None:
@@ -635,7 +637,7 @@ class Dataset(object):
             seed = (seed - 1) // partition_epoch + 1  # taking partitions requires constant seed during full epoch
         if num_epochs_fixed > 1:
             seed = (seed - 1) // num_epochs_fixed + 1
-        return seed + self.random_seed_offset
+        return seed + (self.random_seed_offset * include_random_seed_offset)
 
     def init_seq_order(self, epoch=None, seq_list=None, seq_order=None):
         """
