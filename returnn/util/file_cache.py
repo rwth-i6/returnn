@@ -66,7 +66,7 @@ class FileCache:
         :param cleanup_files_wanted_older_than_days: if cleanup_disk_usage_wanted_free_ratio not reached,
             cleanup files older than this.
         :param cleanup_disk_usage_wanted_free_ratio: try to free at least this ratio of disk space.
-        :param num_retries: how many times to try caching a file before giving up
+        :param num_tries: how many times to try caching a file before giving up
         """
         self.cache_directory = expand_env_vars(cache_directory)
         self._cleanup_files_always_older_than_days = cleanup_files_always_older_than_days
