@@ -309,7 +309,7 @@ class FileCache:
                 )
 
             with self._touch_files_thread.files_added_context([dst_dir, lock.lockfile]):
-                shutil.copyfile(src_filename, dst_tmp_filename)
+                _copy_with_prealloc(src_filename, dst_tmp_filename)
                 os.rename(dst_tmp_filename, dst_filename)
 
     @staticmethod
@@ -325,6 +325,20 @@ class FileCache:
             os.remove(dst_filename)
             return False
         return True
+
+
+def _copy_with_prealloc(src: str, dst: str):
+    """
+    copies from src to dst preallocating the disk space at dst before copying
+    :param src: source file
+    :param dst: destination file
+    """
+    stat = os.stat(src)
+    with open(dst, "wb") as dst_file:
+        dst_file.truncate(stat.st_size)
+        dst_file.seek(0)
+        with open(src, "rb") as src_file:
+            shutil.copyfileobj(src_file, dst_file)
 
 
 @dataclass
