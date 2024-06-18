@@ -19,7 +19,6 @@ from collections import defaultdict
 from contextlib import contextmanager
 from threading import Thread, Event
 from .basic import expand_env_vars, LockFile, human_bytes_size
-from returnn.log import log
 
 
 __all__ = ["FileCache", "CachedFile"]
