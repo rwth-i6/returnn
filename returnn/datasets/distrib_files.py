@@ -293,9 +293,10 @@ class DistributeFilesDataset(CachedDataset2):
             full_epoch_0idx_ = (ep_ - 1) // self.partition_epoch
             if full_epoch_0idx_ in self._files_order_cache:
                 continue
-            files_order_flat = self._files_for_this_worker[full_epoch_0idx_]
             self._files_order_cache[full_epoch_0idx_] = self._distribute_evenly_by_size(
-                num_bins=self.partition_epoch, file_sizes=self._file_sizes, files_order=files_order_flat
+                num_bins=self.partition_epoch,
+                file_sizes=self._file_sizes,
+                files_order=self._files_for_this_worker[full_epoch_0idx_],
             )
 
         # Cleanup and fill _workers.
