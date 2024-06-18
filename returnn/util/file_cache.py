@@ -329,6 +329,7 @@ class FileCache:
 def _copy_with_prealloc(src: str, dst: str):
     """
     copies from src to dst preallocating the disk space at dst before copying
+
     :param src: source file
     :param dst: destination file
     """
