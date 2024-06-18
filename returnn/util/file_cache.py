@@ -105,7 +105,9 @@ class FileCache:
         """
         dst_filename = self._get_dst_filename(src_filename)
         last_error = None
-        for _ in range(self._num_tries):
+        for try_nr in range(self._num_tries):
+            if try_nr > 0:
+                print(f"FileCache: Ignoring error while copying {dst_filename}: {type(last_error).__name__}: {last_error}")
             try:
                 self._copy_file_if_needed(src_filename, dst_filename)
                 break
