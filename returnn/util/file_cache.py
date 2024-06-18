@@ -68,9 +68,6 @@ class FileCache:
         :param cleanup_disk_usage_wanted_free_ratio: try to free at least this ratio of disk space.
         :param num_retries: how many times to try caching a file before giving up
         """
-
-        assert num_tries > 0
-
         self.cache_directory = expand_env_vars(cache_directory)
         self._cleanup_files_always_older_than_days = cleanup_files_always_older_than_days
         self._cleanup_files_wanted_older_than_days = cleanup_files_wanted_older_than_days
@@ -78,6 +75,7 @@ class FileCache:
         self._touch_files_thread = _TouchFilesThread(cache_base_dir=self.cache_directory)
         self._touch_files_thread.start()
         self._recent_full_cleanup_time = float("-inf")
+        assert num_tries > 0
         self._num_tries = num_tries
 
     # Note on lock_timeout: It will check whether a potentially existing lock file is older than this timeout,
