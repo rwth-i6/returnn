@@ -10,6 +10,7 @@ Main class is :class:`FileCache`.
 """
 
 from typing import Any, Collection, List, Tuple
+import errno
 import os
 import time
 import shutil
@@ -105,13 +106,15 @@ class FileCache:
         """
         dst_filename = self._get_dst_filename(src_filename)
         last_error = None
-        for num_try in range(1, self._num_tries + 1):
+        for _ in range(self._num_tries):
             try:
                 self._copy_file_if_needed(src_filename, dst_filename)
                 break
-            except Exception as e:
-                print(f"FileCache: {e} while copying file in try {num_try} of {self._num_tries}", file=log.v5)
-                last_error = e
+            except OSError as e:
+                if e.errno == errno.ENOSPC:
+                    last_error = e
+                else:
+                    raise e
         if last_error is not None:
             raise last_error
         self._touch_files_thread.files_extend([dst_filename])
