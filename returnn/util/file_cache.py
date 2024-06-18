@@ -18,6 +18,7 @@ from collections import defaultdict
 from contextlib import contextmanager
 from threading import Thread, Event
 from .basic import expand_env_vars, LockFile, human_bytes_size
+from returnn.log import log
 
 
 __all__ = ["FileCache", "CachedFile"]
@@ -56,6 +57,7 @@ class FileCache:
         cleanup_files_always_older_than_days: float = 31.0,
         cleanup_files_wanted_older_than_days: float = 7.0,
         cleanup_disk_usage_wanted_free_ratio: float = 0.2,  # try to free at least 20% disk space
+        num_tries: int = 3,  # retry twice by default
     ):
         """
         :param cache_directory: directory where to cache files.
@@ -64,7 +66,11 @@ class FileCache:
         :param cleanup_files_wanted_older_than_days: if cleanup_disk_usage_wanted_free_ratio not reached,
             cleanup files older than this.
         :param cleanup_disk_usage_wanted_free_ratio: try to free at least this ratio of disk space.
+        :param num_retries: how many times to try caching a file before giving up
         """
+
+        assert num_tries > 0
+
         self.cache_directory = expand_env_vars(cache_directory)
         self._cleanup_files_always_older_than_days = cleanup_files_always_older_than_days
         self._cleanup_files_wanted_older_than_days = cleanup_files_wanted_older_than_days
@@ -72,6 +78,7 @@ class FileCache:
         self._touch_files_thread = _TouchFilesThread(cache_base_dir=self.cache_directory)
         self._touch_files_thread.start()
         self._recent_full_cleanup_time = float("-inf")
+        self._num_tries = num_tries
 
     # Note on lock_timeout: It will check whether a potentially existing lock file is older than this timeout,
     # and if so, then it would delete the existing lock file, assuming it is from a crashed previous run.
@@ -99,7 +106,16 @@ class FileCache:
         :return: cached file path (in the cache directory)
         """
         dst_filename = self._get_dst_filename(src_filename)
-        self._copy_file_if_needed(src_filename, dst_filename)
+        last_error = None
+        for num_try in range(1, self._num_tries + 1):
+            try:
+                self._copy_file_if_needed(src_filename, dst_filename)
+                break
+            except Exception as e:
+                print(f"FileCache: {e} while copying file in try {num_try} of {self._num_tries}", file=log.v5)
+                last_error = e
+        if last_error is not None:
+            raise last_error
         self._touch_files_thread.files_extend([dst_filename])
         return dst_filename
 
