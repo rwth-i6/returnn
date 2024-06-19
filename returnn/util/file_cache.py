@@ -331,12 +331,18 @@ class FileCache:
 
 
 def _copy_with_prealloc(src: str, dst: str):
+    """
+    Copies the file at `src` to `dst` preallocating the space at `dst` before the
+    copy to reduce the chance of race conditions w/ free-disk-space checks occuring.
+
+    Note the function preallocates `size + 1` to allow detecting incompletely copied
+    files by a mismatch in the file size, should the copy process be interrupted. The
+    additional byte is then truncated away after copying.
+    """
     file_size = os.stat(src).st_size
     with open(dst, "wb") as dst_file:
         if file_size > 0:
-            # We prealloc size + 1 to avoid having a file that has the exact same
-            # size as its original. After copying, we then truncate the additional
-            # byte away. This allows detecting incompletely copied files.
+            # Prealloc size + 1, see docstring for why.
             #
             # See also `_check_existing_copied_file_maybe_cleanup`.
             if os.name == "posix":
