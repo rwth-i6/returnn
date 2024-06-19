@@ -246,7 +246,7 @@ class Dataset(object):
             self._random_seed_offset = self._get_default_random_seed_offset()
         return self._random_seed_offset
 
-    def _uses_custom_distributed_sharding(self):
+    def _uses_custom_distributed_sharding(self) -> bool:
         """override if the dataset has its own sharding logic independent of TF/PT"""
         return False
 
