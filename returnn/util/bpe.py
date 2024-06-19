@@ -258,24 +258,27 @@ class PrefixTree:
             else:
                 assert self.root
                 root = self.root
-        if postfix == BpePostMergeSymbol:
-            arc = postfix
-            postfix_ = ""
-        else:
-            arc = postfix[:1]
-            postfix_ = postfix[1:]
-        if arc in self.arcs:
-            child = self.arcs[arc]
-        else:
-            child = PrefixTree(root=root, prefix=self.prefix + arc)
-            self.arcs[arc] = child
-        if arc == BpePostMergeSymbol and not postfix_:
-            self.bpe_finished = True
-        if postfix_:
-            return child.add(postfix_, root=root)
-        else:
-            child.finished = True
-            return child
+        self_ = self
+        while True:
+            if postfix == BpePostMergeSymbol:
+                arc = postfix
+                postfix_ = ""
+            else:
+                arc = postfix[:1]
+                postfix_ = postfix[1:]
+            if arc in self_.arcs:
+                child = self_.arcs[arc]
+            else:
+                child = PrefixTree(root=root, prefix=self_.prefix + arc)
+                self_.arcs[arc] = child
+            if arc == BpePostMergeSymbol and not postfix_:
+                self_.bpe_finished = True
+            if postfix_:
+                self_ = child
+                postfix = postfix_
+            else:
+                child.finished = True
+                return child
 
 
 class Hyp:
