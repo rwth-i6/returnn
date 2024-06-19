@@ -86,8 +86,8 @@ def test_self_attention_to_pure_torch():
 
     batch_dim = Dim(3, name="batch")
     spatial_dim = Dim(11, name="spatial")
-    out_dim = Dim(53, name="out")
-    num_heads = 1
+    out_dim = Dim(54, name="out")
+    num_heads = 2
 
     random_opts = {"distribution": "normal", "dtype": "float32"}
     rf_input = rf.random(dims=[batch_dim, spatial_dim, out_dim], **random_opts)
@@ -116,9 +116,19 @@ def test_self_attention_to_pure_torch():
     )
     torch_mhsa.load_state_dict(
         {
-            "in_proj_weight": qkv_weight.raw_tensor.T,
-            "in_proj_bias": qkv_bias.raw_tensor,
-            "out_proj.weight": proj_weight.raw_tensor.T,
+            "in_proj_weight": qkv_weight.raw_tensor.reshape(
+                out_dim.dimension, num_heads, 3, out_dim.dimension // num_heads
+            )
+            .permute(2, 1, 3, 0)
+            .reshape(-1, out_dim.dimension),
+            "in_proj_bias": qkv_bias.raw_tensor.reshape(num_heads, 3, out_dim.dimension // num_heads)
+            .permute(1, 0, 2)
+            .reshape(-1),
+            "out_proj.weight": proj_weight.raw_tensor.reshape(
+                num_heads, out_dim.dimension // num_heads, out_dim.dimension
+            )
+            .permute(2, 0, 1)
+            .reshape(-1, out_dim.dimension),
             "out_proj.bias": proj_bias.raw_tensor,
         }
     )
