@@ -260,7 +260,6 @@ class DistributeFilesDataset(CachedDataset2):
         full_epoch_0idx = (epoch - 1) // self.partition_epoch
 
         # Cleanup and fill _files_order_cache, also shard files across GPU workers
-        # with deterministic seed
         for k in list(self._files_order_cache.keys()):
             if k < full_epoch_0idx:
                 del self._files_order_cache[k]
@@ -271,6 +270,8 @@ class DistributeFilesDataset(CachedDataset2):
             if self.seq_ordering == "default":
                 files_order_flat = self.files
             elif self.seq_ordering == "random":
+                # when sharding, _get_random_seed_for_epoch makes sure to use a fixed
+                # random_seed_offset
                 rnd_seed = self._get_random_seed_for_epoch(full_epoch_0idx_ * self.partition_epoch + 1)
                 random_generator = numpy.random.RandomState(rnd_seed)
                 files_order_flat = list(self.files)
