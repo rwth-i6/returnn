@@ -150,9 +150,7 @@ class DistributeFilesDataset(CachedDataset2):
         :param shard: set to true to shard the data across worker processes
         :param _meta_info_cache: for internal use
         """
-
         super().__init__(**kwargs)
-
         self.files = files
         self.get_sub_epoch_dataset = get_sub_epoch_dataset
         assert preload_next_n_sub_epochs >= 0
