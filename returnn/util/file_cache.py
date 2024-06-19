@@ -329,23 +329,26 @@ class FileCache:
 
 
 def _copy_with_prealloc(src: str, dst: str):
-    dst_size = os.stat(src).st_size
+    file_size = os.stat(src).st_size
     with open(dst, "wb") as dst_file:
-        if dst_size > 0:
+        if file_size > 0:
             # We prealloc size + 1 to avoid having a file that has the exact same
             # size as its original. After copying, we then truncate the additional
             # byte away. This allows detecting incompletely copied files.
             #
             # See also `_check_existing_copied_file_maybe_cleanup`.
             if os.name == "posix":
-                os.posix_fallocate(dst_file.fileno(), 0, dst_size + 1)
+                os.posix_fallocate(dst_file.fileno(), 0, file_size + 1)
             else:
-                dst_file.seek(dst_size)
+                dst_file.seek(file_size)
                 dst_file.write(b"\0")
                 dst_file.seek(0)
         with open(src, "rb") as src_file:
+            if os.name == "posix":
+                os.posix_fadvise(src_file.fileno(), 0, file_size, os.POSIX_FADV_SEQUENTIAL)
+                os.posix_fadvise(dst_file.fileno(), 0, file_size, os.POSIX_FADV_SEQUENTIAL)
             shutil.copyfileobj(src_file, dst_file)
-        dst_file.truncate(dst_size)
+        dst_file.truncate(file_size)
 
 
 @dataclass
