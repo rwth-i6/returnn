@@ -271,7 +271,9 @@ class DistributeFilesDataset(CachedDataset2):
             if self.seq_ordering == "default":
                 files = self.files
             elif self.seq_ordering == "random":
-                random_generator = numpy.random.RandomState(self._get_random_seed_for_epoch(ep_))
+                random_generator = numpy.random.RandomState(
+                    self._get_random_seed_for_epoch(full_epoch_0idx_ * self.partition_epoch + 1)
+                )
                 files = list(self.files)
                 random_generator.shuffle(files)
             else:
