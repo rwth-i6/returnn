@@ -150,6 +150,11 @@ class DistributeFilesDataset(CachedDataset2):
         :param shard: set to true to shard the data across worker processes
         :param _meta_info_cache: for internal use
         """
+
+        # set before the super().__init__() runs to correctly set
+        # default random seed offset
+        self._shard_index, self._num_shards = _get_rank_and_size() if shard else 0, 1
+
         super().__init__(**kwargs)
 
         self.files = files
@@ -161,7 +166,6 @@ class DistributeFilesDataset(CachedDataset2):
         self._file_sizes: Optional[Dict[str, int]] = None  # key -> size. for equal distribution across sub epochs
         self._data_keys: Optional[List[str]] = None
         self._num_seqs: Optional[int] = None
-        self._worker_index, self._num_shards = _get_rank_and_size() if shard else 0, 1
 
         self._file_cache: Optional[_FileCacheProc] = None
         self._workers: Dict[int, _WorkerProcParent] = {}  # epoch -> worker
@@ -196,6 +200,9 @@ class DistributeFilesDataset(CachedDataset2):
             "data_keys": self._data_keys,
             "file_sizes": self._file_sizes,
         }
+
+    def _uses_custom_distributed_sharding(self):
+        return self._num_shards > 1
 
     def _lazy_init_num_outputs(self):
         if self.num_outputs:
@@ -269,11 +276,7 @@ class DistributeFilesDataset(CachedDataset2):
             if self.seq_ordering == "default":
                 files = self.files
             elif self.seq_ordering == "random":
-                # do not use `self._get_random_seed_for_epoch` to exclude
-                # `random_seed_offset` to ensure an equal distribution in every
-                # worker since the sequences might collide between workers if a
-                # different seed is chosen.
-                random_generator = numpy.random.RandomState(full_epoch_0idx_ * 9941 + 4423)
+                random_generator = numpy.random.RandomState(self._get_random_seed_for_epoch(ep_))
                 files = list(self.files)
                 random_generator.shuffle(files)
             else:
@@ -281,7 +284,7 @@ class DistributeFilesDataset(CachedDataset2):
             file_bins = self._distribute_evenly_by_size(
                 num_bins=self._num_shards * self.partition_epoch, file_sizes=self._file_sizes, files_order=files
             )
-            self_index_base = self.partition_epoch * self._worker_index
+            self_index_base = self.partition_epoch * self._shard_index
             self_index_end = self_index_base + self.partition_epoch
             self._files_order_cache[full_epoch_0idx_] = file_bins[self_index_base:self_index_end]
 

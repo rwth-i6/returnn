@@ -242,18 +242,22 @@ class Dataset(object):
         state = {attr: getattr(self, attr) for attr in ["epoch", "zpad"]}
         return Dataset._create_from_reduce, (self.__class__, kwargs, state)
 
-    @staticmethod
-    def _get_default_random_seed_offset():
+    def _uses_custom_distributed_sharding(self):
+        """override if the dataset has its own sharding logic independent of TF/PT"""
+        return False
+
+    def _get_default_random_seed_offset(self):
         """
         :return: 0 usually
         :rtype: int
         """
         from returnn.config import get_global_config
 
+        if self._uses_custom_distributed_sharding():
+            return 0
         config = get_global_config(raise_exception=False)
         if not config:
             return 0
-
         env_val = os.environ.get(RANDOM_SEED_OFFSET_ENV_VAR)
         if env_val is not None:
             return int(env_val)
