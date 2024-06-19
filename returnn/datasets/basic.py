@@ -144,9 +144,7 @@ class Dataset(object):
         self.window = window
         self.seq_ordering = seq_ordering  # "default", "sorted" or "random". See self.get_seq_order_for_epoch().
         self.fixed_random_seed = fixed_random_seed
-        if random_seed_offset is None:
-            random_seed_offset = self._get_default_random_seed_offset()
-        self.random_seed_offset = random_seed_offset
+        self._random_seed_offset = random_seed_offset
         self.partition_epoch = partition_epoch or 1
         self.repeat_epoch = repeat_epoch or 1
         self._seq_list_filter_file = seq_list_filter_file
@@ -241,6 +239,12 @@ class Dataset(object):
 
         state = {attr: getattr(self, attr) for attr in ["epoch", "zpad"]}
         return Dataset._create_from_reduce, (self.__class__, kwargs, state)
+
+    @property
+    def random_seed_offset(self) -> int:
+        if self._random_seed_offset is None:
+            self._random_seed_offset = self._get_default_random_seed_offset()
+        return self._random_seed_offset
 
     def _uses_custom_distributed_sharding(self):
         """override if the dataset has its own sharding logic independent of TF/PT"""

@@ -151,10 +151,6 @@ class DistributeFilesDataset(CachedDataset2):
         :param _meta_info_cache: for internal use
         """
 
-        # set before the super().__init__() runs to correctly set
-        # default random seed offset
-        self._shard_index, self._num_shards = _get_rank_and_size() if shard else 0, 1
-
         super().__init__(**kwargs)
 
         self.files = files
@@ -166,6 +162,7 @@ class DistributeFilesDataset(CachedDataset2):
         self._file_sizes: Optional[Dict[str, int]] = None  # key -> size. for equal distribution across sub epochs
         self._data_keys: Optional[List[str]] = None
         self._num_seqs: Optional[int] = None
+        self._shard_index, self._num_shards = _get_rank_and_size() if shard else 0, 1
 
         self._file_cache: Optional[_FileCacheProc] = None
         self._workers: Dict[int, _WorkerProcParent] = {}  # epoch -> worker
