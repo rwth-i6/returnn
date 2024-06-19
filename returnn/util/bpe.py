@@ -2,12 +2,14 @@
 Provide basic Byte-Pair-Encoding (BPE) utilities.
 """
 
-import re
+from __future__ import annotations
+from typing import Dict
 import typing
+import re
 import numpy
 
 
-BpeMergeSymbol = "@@"
+BpePostMergeSymbol = "@@"
 
 
 class StandardBytePairEncoder:
@@ -33,7 +35,7 @@ class StandardBytePairEncoder:
         self.labels = labels
         self._load(bpe_codes_file)
         self._bpe_encode_cache = {}
-        self._bpe_separator = BpeMergeSymbol
+        self._bpe_separator = BpePostMergeSymbol
 
     _file_cache = {}  # filename -> bpe_file_version, bpe_codes, bpe_codes_reverse
 
@@ -238,9 +240,9 @@ class PrefixTree:
         :param PrefixTree|None root:
         """
         self.prefix = prefix
-        self.arcs = {}  # type: typing.Dict[str,PrefixTree]
-        self.finished = False
-        self.bpe_finished = False
+        self.arcs: Dict[str, PrefixTree] = {}  # single char (or BpePostMergeSymbol) -> sub tree
+        self.finished = False  # word finished here
+        self.bpe_finished = False  # partial word finished here with BpePostMergeSymbol at end
         self.is_root = not root
         self.root = root
 
@@ -256,7 +258,7 @@ class PrefixTree:
             else:
                 assert self.root
                 root = self.root
-        if postfix == BpeMergeSymbol:
+        if postfix == BpePostMergeSymbol:
             arc = postfix
             postfix_ = ""
         else:
@@ -267,7 +269,7 @@ class PrefixTree:
         else:
             child = PrefixTree(root=root, prefix=self.prefix + arc)
             self.arcs[arc] = child
-        if arc == BpeMergeSymbol and not postfix_:
+        if arc == BpePostMergeSymbol and not postfix_:
             self.bpe_finished = True
         if postfix_:
             return child.add(postfix_, root=root)
@@ -321,11 +323,12 @@ class CharSyncSearch:
         new_hyps = []  # type: typing.List[Hyp]
         for hyp in self.hyps:
             if hyp.cur_node.bpe_finished:
+                # Start again from root node.
                 next_node = self.bpe.arcs.get(char)
                 if next_node:
                     new_hyps.append(
                         Hyp(
-                            bpe_sym_history=hyp.bpe_sym_history + [hyp.cur_node.prefix + BpeMergeSymbol],
+                            bpe_sym_history=hyp.bpe_sym_history + [hyp.cur_node.prefix + BpePostMergeSymbol],
                             cur_node=next_node,
                         )
                     )
@@ -397,11 +400,12 @@ class DepthFirstSearch:
         char = self.word[hyp.pos]
         new_hyps = []  # type: typing.List[HypInPos]
         if hyp.cur_node.bpe_finished:
+            # Start again from root node.
             next_node = self.bpe.arcs.get(char)
             if next_node:
                 new_hyps.append(
                     HypInPos(
-                        bpe_sym_history=hyp.bpe_sym_history + [hyp.cur_node.prefix + BpeMergeSymbol],
+                        bpe_sym_history=hyp.bpe_sym_history + [hyp.cur_node.prefix + BpePostMergeSymbol],
                         cur_node=next_node,
                         pos=hyp.pos + 1,
                     )

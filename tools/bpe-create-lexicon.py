@@ -140,7 +140,7 @@ def main():
         visit_word(word)
 
     for bpe_sym in bpe_syms:
-        if bpe_sym.endswith(bpe_utils.BpeMergeSymbol):
+        if bpe_sym.endswith(bpe_utils.BpePostMergeSymbol):
             continue
         if bpe_sym not in words:
             continue
