@@ -242,6 +242,7 @@ class Dataset(object):
 
     @property
     def random_seed_offset(self) -> int:
+        """:return: random seed offset for shuffling"""
         if self._random_seed_offset is None:
             self._random_seed_offset = self._get_default_random_seed_offset()
         return self._random_seed_offset
