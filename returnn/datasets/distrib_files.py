@@ -198,7 +198,7 @@ class DistributeFilesDataset(CachedDataset2):
             "file_sizes": self._file_sizes,
         }
 
-    def _uses_custom_distributed_sharding(self):
+    def _uses_custom_distributed_sharding(self) -> bool:
         return self._num_shards > 1
 
     def _lazy_init_num_outputs(self):
