@@ -438,8 +438,7 @@ def _get_key_for_file_tree(t: FileTree) -> str:
 
 def _get_rank_and_size() -> Tuple[int, int]:
     """
-    gets the global rank and size for multiprocess trainings
-    :return: tuple of rank and size
+    :return: tuple (rank, size): the global rank and size for distributed trainings
     """
 
     from returnn.config import get_global_config
