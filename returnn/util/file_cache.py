@@ -110,6 +110,7 @@ class FileCache:
                 print(
                     f"FileCache: Ignoring error while copying {dst_filename}: {type(last_error).__name__}: {last_error}"
                 )
+                time.sleep(1)
             try:
                 self._copy_file_if_needed(src_filename, dst_filename)
                 break
