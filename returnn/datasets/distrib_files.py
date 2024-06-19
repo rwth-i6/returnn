@@ -271,11 +271,10 @@ class DistributeFilesDataset(CachedDataset2):
             if self.seq_ordering == "default":
                 files = self.files
             elif self.seq_ordering == "random":
-                random_generator = numpy.random.RandomState(
-                    self._get_random_seed_for_epoch(full_epoch_0idx_ * self.partition_epoch + 1)
-                )
-                files = list(self.files)
-                random_generator.shuffle(files)
+                rnd_seed = self._get_random_seed_for_epoch(full_epoch_0idx_ * self.partition_epoch + 1)
+                random_generator = numpy.random.RandomState(rnd_seed)
+                files_order_flat = list(self.files)
+                random_generator.shuffle(files_order_flat)
             else:
                 raise ValueError(f"{self}: seq_ordering {self.seq_ordering!r} not supported")
             file_bins = self._distribute_evenly_by_size(
