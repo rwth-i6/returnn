@@ -248,7 +248,10 @@ class Dataset(object):
         return self._random_seed_offset
 
     def _uses_custom_distributed_sharding(self) -> bool:
-        """override if the dataset has its own sharding logic independent of TF/PT"""
+        """
+        :return: if dataset has its own data sharding logic independent of TF/PT.
+            Leads to a fixed random_seed_offset independent of the workers local rank.
+        """
         return False
 
     def _get_default_random_seed_offset(self):
