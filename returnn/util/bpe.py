@@ -549,9 +549,10 @@ def _demo():
 
     vocab = Vocabulary(vocab_file=args.vocab, unknown_label=None)
     rnd = numpy.random.RandomState(args.seed)
+    opts = BpeOpts(label_postfix_merge_symbol=BpePostMergeSymbol)
 
     if args.input:
-        bpe_prefix_tree = PrefixTree(opts=BpeOpts(label_postfix_merge_symbol=BpePostMergeSymbol))
+        bpe_prefix_tree = PrefixTree(opts=opts)
         for bpe_sym in vocab.labels:
             bpe_prefix_tree.add(bpe_sym)
 
@@ -568,7 +569,9 @@ def _demo():
                 print("%s: %s" % (word, " ".join(greedy)))
         return
 
-    bpe = SamplingBytePairEncoder(labels=vocab.labels, breadth_prob=args.breadth_prob, rnd=rnd, unknown_label=args.unk)
+    bpe = SamplingBytePairEncoder(
+        labels=vocab.labels, breadth_prob=args.breadth_prob, rnd=rnd, unknown_label=args.unk, opts=opts
+    )
     print("Reading from stdin:")
     while True:
         try:
