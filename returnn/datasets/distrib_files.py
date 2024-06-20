@@ -65,7 +65,7 @@ class DistributeFilesDataset(CachedDataset2):
     In case the dataset grows so large it is unreasonable to expect one worker to
     ever see all the data, this dataset can also shard the file list on a per-worker
     basis before distributing across subepochs.
-    This behavior can be configured by setting the property ``"shard": True``.
+    This behavior can be configured by setting the property ``"distrib_shard_files": True``.
     The dataset attempts to split the files as evenly as possible based on the file size.
 
     Example usage::
