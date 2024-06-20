@@ -10,6 +10,7 @@ Main class is :class:`FileCache`.
 """
 
 from typing import Any, Collection, List, Tuple
+import errno
 import os
 import time
 import shutil
@@ -56,6 +57,7 @@ class FileCache:
         cleanup_files_always_older_than_days: float = 31.0,
         cleanup_files_wanted_older_than_days: float = 7.0,
         cleanup_disk_usage_wanted_free_ratio: float = 0.2,  # try to free at least 20% disk space
+        num_tries: int = 3,  # retry twice by default
     ):
         """
         :param cache_directory: directory where to cache files.
@@ -64,6 +66,7 @@ class FileCache:
         :param cleanup_files_wanted_older_than_days: if cleanup_disk_usage_wanted_free_ratio not reached,
             cleanup files older than this.
         :param cleanup_disk_usage_wanted_free_ratio: try to free at least this ratio of disk space.
+        :param num_tries: how many times to try caching a file before giving up
         """
         self.cache_directory = expand_env_vars(cache_directory)
         self._cleanup_files_always_older_than_days = cleanup_files_always_older_than_days
@@ -72,6 +75,8 @@ class FileCache:
         self._touch_files_thread = _TouchFilesThread(cache_base_dir=self.cache_directory)
         self._touch_files_thread.start()
         self._recent_full_cleanup_time = float("-inf")
+        assert num_tries > 0
+        self._num_tries = num_tries
 
     # Note on lock_timeout: It will check whether a potentially existing lock file is older than this timeout,
     # and if so, then it would delete the existing lock file, assuming it is from a crashed previous run.
@@ -99,7 +104,23 @@ class FileCache:
         :return: cached file path (in the cache directory)
         """
         dst_filename = self._get_dst_filename(src_filename)
-        self._copy_file_if_needed(src_filename, dst_filename)
+        last_error = None
+        for try_nr in range(self._num_tries):
+            if try_nr > 0:
+                print(
+                    f"FileCache: Ignoring error while copying {dst_filename}: {type(last_error).__name__}: {last_error}"
+                )
+                time.sleep(1)
+            try:
+                self._copy_file_if_needed(src_filename, dst_filename)
+                break
+            except OSError as e:
+                if e.errno == errno.ENOSPC:
+                    last_error = e
+                else:
+                    raise e
+        if last_error is not None:
+            raise last_error
         self._touch_files_thread.files_extend([dst_filename])
         return dst_filename
 
@@ -265,22 +286,20 @@ class FileCache:
             os.utime(dst_filename, None)  # touch
             return
 
-        # Make sure we have enough disk space.
-        self.cleanup(need_at_least_free_space_size=os.stat(src_filename).st_size)
-
-        print(f"FileCache: Copy file {src_filename} to cache")
-
         # Create dirs.
         dst_dir = os.path.dirname(dst_filename)
         os.makedirs(dst_dir, exist_ok=True)
 
         # Copy the file, while holding a lock. See comment on lock_timeout above.
-        with LockFile(
-            directory=dst_dir, name=os.path.basename(dst_filename) + ".lock", lock_timeout=self._lock_timeout
-        ) as lock:
+        with LockFile(directory=self.cache_directory, name="dir.lock", lock_timeout=self._lock_timeout) as lock:
             # Maybe it was copied in the meantime, while waiting for the lock.
-            if os.path.exists(dst_filename):
+            if self._check_existing_copied_file_maybe_cleanup(src_filename, dst_filename):
                 return
+
+            print(f"FileCache: Copy file {src_filename} to cache")
+
+            # Make sure we have enough disk space.
+            self.cleanup(need_at_least_free_space_size=os.stat(src_filename).st_size)
 
             dst_tmp_filename = dst_filename + ".copy"
             if os.path.exists(dst_tmp_filename):
@@ -294,7 +313,7 @@ class FileCache:
                 )
 
             with self._touch_files_thread.files_added_context([dst_dir, lock.lockfile]):
-                shutil.copyfile(src_filename, dst_tmp_filename)
+                _copy_with_prealloc(src_filename, dst_tmp_filename)
                 os.rename(dst_tmp_filename, dst_filename)
 
     @staticmethod
@@ -310,6 +329,39 @@ class FileCache:
             os.remove(dst_filename)
             return False
         return True
+
+
+def _copy_with_prealloc(src: str, dst: str):
+    """
+    Copies the file at `src` to `dst` preallocating the space at `dst` before the
+    copy to reduce the chance of race conditions w/ free-disk-space checks occuring.
+
+    Note the function preallocates `size + 1` to allow detecting incompletely copied
+    files by a mismatch in the file size, should the copy process be interrupted. The
+    additional byte is then truncated away after copying.
+
+    In practice this function is used to copy to a temporary file first, so the
+    +1-size trick is technically not necessary -- but it also does not hurt leaving
+    it in.
+    """
+    file_size = os.stat(src).st_size
+    with open(dst, "wb") as dst_file:
+        if file_size > 0:
+            # Prealloc size + 1, see docstring for why.
+            #
+            # See also `_check_existing_copied_file_maybe_cleanup`.
+            if os.name == "posix":
+                os.posix_fallocate(dst_file.fileno(), 0, file_size + 1)
+            else:
+                dst_file.seek(file_size)
+                dst_file.write(b"\0")
+                dst_file.seek(0)
+        with open(src, "rb") as src_file:
+            if os.name == "posix":
+                os.posix_fadvise(src_file.fileno(), 0, file_size, os.POSIX_FADV_SEQUENTIAL)
+                os.posix_fadvise(dst_file.fileno(), 0, file_size, os.POSIX_FADV_SEQUENTIAL)
+            shutil.copyfileobj(src_file, dst_file)
+        dst_file.truncate(file_size)
 
 
 @dataclass
