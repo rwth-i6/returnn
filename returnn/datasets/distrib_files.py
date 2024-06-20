@@ -161,7 +161,7 @@ class DistributeFilesDataset(CachedDataset2):
         self._file_sizes: Optional[Dict[str, int]] = None  # key -> size. for equal distribution across sub epochs
         self._data_keys: Optional[List[str]] = None
         self._num_seqs: Optional[int] = None
-        self._shard_index, self._num_shards = _get_rank_and_size() if distrib_shard_files else 0, 1
+        self._shard_index, self._num_shards = _get_rank_and_size() if distrib_shard_files else (0, 1)
 
         self._file_cache: Optional[_FileCacheProc] = None
         self._workers: Dict[int, _WorkerProcParent] = {}  # epoch -> worker
