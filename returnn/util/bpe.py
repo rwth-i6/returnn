@@ -4,6 +4,7 @@ Provide basic Byte-Pair-Encoding (BPE) utilities.
 
 from __future__ import annotations
 from typing import Optional, List, Dict, Callable
+from dataclasses import dataclass
 import re
 import numpy
 
@@ -279,18 +280,14 @@ class PrefixTree:
                 return child
 
 
+@dataclass
 class Hyp:
     """
     Represents a hypothesis in the search.
     """
 
-    def __init__(self, bpe_sym_history, cur_node):
-        """
-        :param list[str] bpe_sym_history:
-        :param PrefixTree cur_node:
-        """
-        self.bpe_sym_history = bpe_sym_history
-        self.cur_node = cur_node
+    bpe_sym_history: List[str]
+    cur_node: PrefixTree
 
 
 class CharSyncSearch:
@@ -349,20 +346,15 @@ class CharSyncSearch:
         return self.final_bpe_seqs
 
 
+@dataclass
 class HypInPos:
     """
     Represents a hypothesis in the search.
     """
 
-    def __init__(self, bpe_sym_history, cur_node, pos):
-        """
-        :param list[str] bpe_sym_history:
-        :param PrefixTree cur_node:
-        :param int pos:
-        """
-        self.bpe_sym_history = bpe_sym_history
-        self.cur_node = cur_node
-        self.pos = pos
+    bpe_sym_history: List[str]
+    cur_node: PrefixTree
+    pos: int
 
 
 class DepthFirstSearch:

@@ -663,6 +663,62 @@ def test_bpe_PrefixTree():
     assert set(node_o_post.arcs.keys()) == set()
 
 
+def test_bpe_DepthFirstSearch():
+    import itertools
+    from returnn.util.bpe import PrefixTree, DepthFirstSearch
+
+    tree = PrefixTree()
+    tree.add("llo")
+    tree.add("helo@@")
+    tree.add("he@@")
+
+    dfs = DepthFirstSearch(tree, "hello")
+    assert_equal(dfs.search(), ["he@@", "llo"])
+    dfs = DepthFirstSearch(tree, "helo")
+    assert_equal(dfs.search(), None)
+    dfs = DepthFirstSearch(tree, "x")
+    assert_equal(dfs.search(), None)
+    dfs = DepthFirstSearch(tree, "llo")
+    assert_equal(dfs.search(), ["llo"])
+
+    tree.add("hello")
+    dfs = DepthFirstSearch(tree, "hello")
+    assert_equal(dfs.search(), ["hello"])
+    dfs = DepthFirstSearch(tree, "hello", sampler=lambda: True)
+    assert_equal(dfs.search(), ["he@@", "llo"])
+
+    tree.add("hel@@")
+    tree.add("lo")
+    dfs = DepthFirstSearch(tree, "hello")
+    assert_equal(dfs.search(), ["hello"])
+    dfs = DepthFirstSearch(tree, "hello", sampler=lambda: True)
+    assert_equal(dfs.search(), ["he@@", "llo"])
+    dfs = DepthFirstSearch(tree, "hello", sampler=lambda _it=itertools.count(): next(_it) in {3})
+    assert_equal(dfs.search(), ["hel@@", "lo"])
+
+
+def test_bpe_CharSyncSearch():
+    from returnn.util.bpe import PrefixTree, CharSyncSearch
+
+    tree = PrefixTree()
+    tree.add("llo")
+    tree.add("helo@@")
+    tree.add("he@@")
+
+    search = CharSyncSearch(tree, "hello")
+    assert_equal(search.search(), [["he@@", "llo"]])
+    search = CharSyncSearch(tree, "helo")
+    assert_equal(search.search(), [])
+    search = CharSyncSearch(tree, "x")
+    assert_equal(search.search(), [])
+    search = CharSyncSearch(tree, "llo")
+    assert_equal(search.search(), [["llo"]])
+
+    tree.add("hello")
+    search = CharSyncSearch(tree, "hello")
+    assert_equal(search.search(), [["he@@", "llo"], ["hello"]])
+
+
 def test_file_cache():
     from returnn.util.file_cache import FileCache, CachedFile
 
