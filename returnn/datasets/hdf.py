@@ -13,6 +13,7 @@ from .cached import CachedDataset
 from .cached2 import CachedDataset2
 from .basic import Dataset, DatasetSeq
 from returnn.log import log
+from returnn.util.file_cache import FileCache
 
 
 # Common attribute names for HDF dataset, which should be used in order to be proceed with HDFDataset class.
@@ -51,8 +52,10 @@ class HDFDataset(CachedDataset):
         self.data_dtype = {}  # type: typing.Dict[str,str]
         self.data_sparse = {}  # type: typing.Dict[str,bool]
         self._num_codesteps = None  # type: typing.Optional[typing.List[int]]  # accumulated sequence length per target
+        self._file_cache = FileCache()
 
         if files:
+            files, _ = self._file_cache.handle_cached_files_in_config(files)
             for fn in files:
                 self.add_file(fn)
 
