@@ -339,6 +339,10 @@ def _copy_with_prealloc(src: str, dst: str):
     Note the function preallocates `size + 1` to allow detecting incompletely copied
     files by a mismatch in the file size, should the copy process be interrupted. The
     additional byte is then truncated away after copying.
+
+    In practice this function is used to copy to a temporary file first, so the
+    +1-size trick is technically not necessary -- but it also does not hurt leaving
+    it in.
     """
     file_size = os.stat(src).st_size
     with open(dst, "wb") as dst_file:
