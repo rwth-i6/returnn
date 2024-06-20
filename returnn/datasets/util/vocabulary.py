@@ -19,6 +19,7 @@ import sys
 import numpy
 
 from returnn.log import log
+from returnn.util.basic import NotSpecified
 
 
 class Vocabulary(object):
@@ -327,14 +328,48 @@ class SamplingBytePairEncoding(Vocabulary):
     This will encode the text on-the-fly with BPE.
     """
 
-    def __init__(self, vocab_file, breadth_prob, seq_postfix=None, **kwargs):
+    def __init__(
+        self,
+        vocab_file: str,
+        breadth_prob: float,
+        seq_postfix: Optional[List[int]] = None,
+        label_postfix_merge_symbol: Optional[str] = NotSpecified,
+        word_prefix_symbol: Optional[str] = NotSpecified,
+        **kwargs,
+    ):
         """
-        :param str vocab_file:
-        :param float breadth_prob:
-        :param list[int]|None seq_postfix: labels will be added to the seq in self.get_seq
+        :param vocab_file:
+        :param breadth_prob:
+        :param seq_postfix: labels will be added to the seq in self.get_seq
+        :param label_postfix_merge_symbol: If given, will use this as label postfix merge symbol,
+            i.e. when this occurs at the end of a label, it is supposed to be merged with the next label,
+            i.e. the space between them is removed and is not a word boundary.
+            If None, will not use any postfix merge symbol.
+            If not specified, and also word_prefix_symbol is not specified, will use "@@" by default here,
+            the standard from subword-nmt, and our original behavior.
+        :param word_prefix_symbol: If given, every new word starts with this symbol.
+            This also implies that there are no spaces between words
+            and this symbol is a placeholder for the space.
+            If None, will not use this logic.
+            For SentencePiece, you usually would use "▁" here.
         """
         super(SamplingBytePairEncoding, self).__init__(vocab_file=vocab_file, seq_postfix=seq_postfix, **kwargs)
-        from returnn.util.bpe import SamplingBytePairEncoder
+        from returnn.util.bpe import SamplingBytePairEncoder, BpePostMergeSymbol, BpeOpts
+
+        if label_postfix_merge_symbol is NotSpecified and word_prefix_symbol is NotSpecified:
+            label_postfix_merge_symbol = BpePostMergeSymbol
+            word_prefix_symbol = None
+        else:
+            if label_postfix_merge_symbol is NotSpecified:
+                label_postfix_merge_symbol = None
+            if word_prefix_symbol is NotSpecified:
+                word_prefix_symbol = None
+        if word_prefix_symbol is not None:
+            # I'm not sure if this makes sense otherwise...
+            assert label_postfix_merge_symbol is None, (
+                f"{self}: word_prefix_symbol {word_prefix_symbol},"
+                f" label_postfix_merge_symbol {label_postfix_merge_symbol}"
+            )
 
         self.rnd = numpy.random.RandomState(0)
         self.bpe = SamplingBytePairEncoder(
@@ -342,6 +377,7 @@ class SamplingBytePairEncoding(Vocabulary):
             breadth_prob=breadth_prob,
             rnd=self.rnd,
             unknown_label=self.id_to_label(self.unknown_label_id) if self.unknown_label_id is not None else None,
+            opts=BpeOpts(label_postfix_merge_symbol=label_postfix_merge_symbol, word_prefix_symbol=word_prefix_symbol),
         )
 
     def set_random_seed(self, seed):

@@ -638,9 +638,9 @@ def test_expand_env_vars():
 
 
 def test_bpe_PrefixTree():
-    from returnn.util.bpe import PrefixTree, BpePostMergeSymbol
+    from returnn.util.bpe import PrefixTree, BpeOpts, BpePostMergeSymbol
 
-    tree = PrefixTree()
+    tree = PrefixTree(opts=BpeOpts(label_postfix_merge_symbol=BpePostMergeSymbol))
     tree.add("hello")
     tree.add("helo" + BpePostMergeSymbol)
     assert not tree.finished and not tree.bpe_finished
@@ -663,11 +663,42 @@ def test_bpe_PrefixTree():
     assert set(node_o_post.arcs.keys()) == set()
 
 
+def test_bpe_PrefixTree_word_prefix():
+    from returnn.util.bpe import PrefixTree, BpeOpts
+
+    tree = PrefixTree(opts=BpeOpts(word_prefix_symbol="▁"))
+    tree.add("▁hello")
+    tree.add("▁hel")
+    tree.add("lo")
+    tree.add("▁hi")
+    assert not tree.finished and not tree.bpe_finished
+    assert set(tree.arcs.keys()) == {"▁", "l"}
+    node = tree.arcs["▁"]
+    assert not node.finished and not node.bpe_finished
+    assert set(node.arcs.keys()) == {"h"}
+    node = node.arcs["h"]
+    assert not node.finished and not node.bpe_finished
+    assert set(node.arcs.keys()) == {"e", "i"}
+    node_ = node.arcs["i"]
+    assert node_.finished and not node_.bpe_finished and not node_.arcs
+    node = node.arcs["e"]
+    assert not node.finished and not node.bpe_finished
+    assert set(node.arcs.keys()) == {"l"}
+    node = node.arcs["l"]
+    assert node.finished and not node.bpe_finished
+    assert set(node.arcs.keys()) == {"l"}
+    node = node.arcs["l"]
+    assert not node.finished and not node.bpe_finished
+    assert set(node.arcs.keys()) == {"o"}
+    node = node.arcs["o"]
+    assert node.finished and not node.bpe_finished and not node.arcs
+
+
 def test_bpe_DepthFirstSearch():
     import itertools
-    from returnn.util.bpe import PrefixTree, DepthFirstSearch
+    from returnn.util.bpe import PrefixTree, BpeOpts, DepthFirstSearch
 
-    tree = PrefixTree()
+    tree = PrefixTree(opts=BpeOpts(label_postfix_merge_symbol="@@"))
     tree.add("llo")
     tree.add("helo@@")
     tree.add("he@@")
@@ -697,10 +728,32 @@ def test_bpe_DepthFirstSearch():
     assert_equal(dfs.search(), ["hel@@", "lo"])
 
 
-def test_bpe_CharSyncSearch():
-    from returnn.util.bpe import PrefixTree, CharSyncSearch
+def test_bpe_DepthFirstSearch_word_prefix():
+    import itertools
+    from returnn.util.bpe import PrefixTree, BpeOpts, DepthFirstSearch
 
-    tree = PrefixTree()
+    tree = PrefixTree(opts=BpeOpts(word_prefix_symbol="▁"))
+    tree.add("▁hello")
+    tree.add("▁hel")
+    tree.add("lo")
+
+    search = DepthFirstSearch(tree, "hello")
+    assert_equal(search.search(), ["▁hello"])
+    search = DepthFirstSearch(tree, "hello", sampler=lambda: True)
+    assert_equal(search.search(), ["▁hel", "lo"])
+
+    tree.add("▁he")
+    tree.add("llo")
+    search = DepthFirstSearch(tree, "hello", sampler=lambda: True)
+    assert_equal(search.search(), ["▁he", "llo"])
+    search = DepthFirstSearch(tree, "hello", sampler=lambda _it=itertools.count(): next(_it) in {3})
+    assert_equal(search.search(), ["▁hel", "lo"])
+
+
+def test_bpe_CharSyncSearch():
+    from returnn.util.bpe import PrefixTree, BpeOpts, CharSyncSearch
+
+    tree = PrefixTree(opts=BpeOpts(label_postfix_merge_symbol="@@"))
     tree.add("llo")
     tree.add("helo@@")
     tree.add("he@@")
@@ -717,6 +770,27 @@ def test_bpe_CharSyncSearch():
     tree.add("hello")
     search = CharSyncSearch(tree, "hello")
     assert_equal(search.search(), [["he@@", "llo"], ["hello"]])
+
+
+def test_bpe_CharSyncSearch_word_prefix():
+    from returnn.util.bpe import PrefixTree, BpeOpts, CharSyncSearch
+
+    tree = PrefixTree(opts=BpeOpts(word_prefix_symbol="▁"))
+    tree.add("▁hello")
+    tree.add("▁hel")
+    tree.add("lo")
+    tree.add("▁hi")
+
+    search = CharSyncSearch(tree, "hello")
+    assert_equal(search.search(), [["▁hel", "lo"], ["▁hello"]])
+    search = CharSyncSearch(tree, "helo")
+    assert_equal(search.search(), [])
+    search = CharSyncSearch(tree, "x")
+    assert_equal(search.search(), [])
+    search = CharSyncSearch(tree, "lo")
+    assert_equal(search.search(), [])
+    search = CharSyncSearch(tree, "hi")
+    assert_equal(search.search(), [["▁hi"]])
 
 
 def test_file_cache():

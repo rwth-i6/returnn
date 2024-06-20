@@ -228,56 +228,59 @@ class StandardBytePairEncoder:
         return output
 
 
+@dataclass
+class BpeOpts:
+    """
+    Options, should allow for both subword-nmt BPE and SentencePiece BPE/Unigram.
+    """
+
+    label_postfix_merge_symbol: Optional[str] = None  # eg. "@@"
+    word_prefix_symbol: Optional[str] = None  # eg. "▁"
+
+
 class PrefixTree:
     """
     Prefix tree / trie.
     This class represents both a single node and the tree.
     """
 
-    def __init__(self, prefix: str = "", root: Optional[PrefixTree] = None):
+    def __init__(self, *, prefix: str = "", opts: BpeOpts):
         """
-        :param prefix:
-        :param root:
+        :param prefix: if this is not the root, the prefix to get here
         """
         self.prefix = prefix
         self.arcs: Dict[str, PrefixTree] = {}  # single char (or BpePostMergeSymbol) -> sub tree
-        self.finished = False  # word finished here
+        self.finished = False  # label finished here
         self.bpe_finished = False  # partial word finished here with BpePostMergeSymbol at end
-        self.is_root = not root
-        self.root = root
+        self.opts = opts
 
-    def add(self, postfix: str, root: Optional[PrefixTree] = None) -> PrefixTree:
+    def add(self, postfix: str) -> PrefixTree:
         """
         :param postfix:
-        :param root:
         """
-        if not root:
-            if self.is_root:
-                root = self
-            else:
-                assert self.root
-                root = self.root
         self_ = self
+        opts = self.opts
+        label_postfix_merge_symbol = self.opts.label_postfix_merge_symbol
         while True:
-            if postfix == BpePostMergeSymbol:
+            if self_ is self and opts.word_prefix_symbol and postfix.startswith(opts.word_prefix_symbol):
+                arc = opts.word_prefix_symbol
+            elif postfix == label_postfix_merge_symbol:
                 arc = postfix
-                postfix_ = ""
             else:
                 arc = postfix[:1]
-                postfix_ = postfix[1:]
+            postfix_ = postfix[len(arc) :]
             if arc in self_.arcs:
                 child = self_.arcs[arc]
             else:
-                child = PrefixTree(root=root, prefix=self_.prefix + arc)
+                child = PrefixTree(prefix=self_.prefix + arc, opts=opts)
                 self_.arcs[arc] = child
-            if arc == BpePostMergeSymbol and not postfix_:
+            if arc == label_postfix_merge_symbol and not postfix_:
                 self_.bpe_finished = True
-            if postfix_:
-                self_ = child
-                postfix = postfix_
-            else:
+            if not postfix_:
                 child.finished = True
                 return child
+            self_ = child
+            postfix = postfix_
 
 
 @dataclass
@@ -302,9 +305,15 @@ class CharSyncSearch:
         :param word_pos:
         """
         self.bpe = bpe
+        self.opts = bpe.opts
         self.word = word
         self.word_pos = word_pos
-        self.hyps: List[Hyp] = [Hyp(bpe_sym_history=[], cur_node=bpe)]
+        self.hyps: List[Hyp] = [
+            Hyp(
+                bpe_sym_history=[],
+                cur_node=bpe if self.opts.word_prefix_symbol is None else bpe.arcs[self.opts.word_prefix_symbol],
+            )
+        ]
         self.final_bpe_seqs: Optional[List[List[str]]] = None
 
     def _get_finished(self):
@@ -326,9 +335,16 @@ class CharSyncSearch:
                 if next_node:
                     new_hyps.append(
                         Hyp(
-                            bpe_sym_history=hyp.bpe_sym_history + [hyp.cur_node.prefix + BpePostMergeSymbol],
+                            bpe_sym_history=hyp.bpe_sym_history
+                            + [hyp.cur_node.prefix + self.opts.label_postfix_merge_symbol],
                             cur_node=next_node,
                         )
+                    )
+            if self.opts.word_prefix_symbol is not None and hyp.cur_node.finished:
+                next_node = self.bpe.arcs.get(char)
+                if next_node:
+                    new_hyps.append(
+                        Hyp(bpe_sym_history=hyp.bpe_sym_history + [hyp.cur_node.prefix], cur_node=next_node)
                     )
             next_node = hyp.cur_node.arcs.get(char)
             if next_node:
@@ -369,11 +385,18 @@ class DepthFirstSearch:
         :param sampler:
         """
         self.bpe = bpe
+        self.opts = bpe.opts
         self.word = word
         self.sampler = sampler
         self.hyps: List[HypInPos] = []
         self.final_bpe_seq: Optional[List[str]] = None
-        self._add_hyp(HypInPos(bpe_sym_history=[], cur_node=bpe, pos=0))
+        self._add_hyp(
+            HypInPos(
+                bpe_sym_history=[],
+                cur_node=bpe if self.opts.word_prefix_symbol is None else bpe.arcs[self.opts.word_prefix_symbol],
+                pos=0,
+            )
+        )
 
     def _add_hyp(self, hyp: HypInPos):
         if hyp.pos >= len(self.word):
@@ -394,9 +417,18 @@ class DepthFirstSearch:
             if next_node:
                 new_hyps.append(
                     HypInPos(
-                        bpe_sym_history=hyp.bpe_sym_history + [hyp.cur_node.prefix + BpePostMergeSymbol],
+                        bpe_sym_history=hyp.bpe_sym_history
+                        + [hyp.cur_node.prefix + self.opts.label_postfix_merge_symbol],
                         cur_node=next_node,
                         pos=hyp.pos + 1,
+                    )
+                )
+        if self.opts.word_prefix_symbol is not None and hyp.cur_node.finished:
+            next_node = self.bpe.arcs.get(char)
+            if next_node:
+                new_hyps.append(
+                    HypInPos(
+                        bpe_sym_history=hyp.bpe_sym_history + [hyp.cur_node.prefix], cur_node=next_node, pos=hyp.pos + 1
                     )
                 )
         next_node = hyp.cur_node.arcs.get(char)
@@ -404,6 +436,7 @@ class DepthFirstSearch:
             new_hyps.append(HypInPos(bpe_sym_history=hyp.bpe_sym_history, cur_node=next_node, pos=hyp.pos + 1))
 
         # Note that the order we check them will make this a depth-first or breadth-first search.
+        # We pop(-1) from the hyps list. So the last entry we add here will be the next one we expand.
         if self.sampler and self.sampler():
             new_hyps = list(reversed(new_hyps))
         for hyp in new_hyps:
@@ -423,13 +456,22 @@ class SamplingBytePairEncoder:
     Will randomly sample from any possible BPE split.
     """
 
-    def __init__(self, labels, breadth_prob, rnd, unknown_label=None):
+    def __init__(
+        self,
+        *,
+        labels: List[str],
+        breadth_prob: float,
+        rnd: numpy.random.RandomState,
+        unknown_label: Optional[str] = None,
+        opts: BpeOpts,
+    ):
         """
-        :param list[str] labels: vocab
-        :param float breadth_prob: 1.0 will lead to breadth-first search, 0.0 to depth-first search.
-          other values are stochastic.
-        :param numpy.random.RandomState rnd:
-        :param str|None unknown_label:
+        :param labels: vocab
+        :param breadth_prob: 1.0 will lead to breadth-first search, 0.0 to depth-first search.
+            other values are stochastic.
+        :param rnd:
+        :param unknown_label:
+        :param opts:
         """
         self.labels = labels
         self.unknown_label = unknown_label
@@ -437,9 +479,10 @@ class SamplingBytePairEncoder:
             assert unknown_label in self.labels
         self.breadth_prob = breadth_prob
         self.rnd = rnd
+        self.opts = opts
 
         # build prefix tree
-        bpe = PrefixTree()
+        bpe = PrefixTree(opts=opts)
         for bpe_sym in labels:
             bpe.add(bpe_sym)
         self._bpe_prefix_tree = bpe
@@ -508,7 +551,7 @@ def _demo():
     rnd = numpy.random.RandomState(args.seed)
 
     if args.input:
-        bpe_prefix_tree = PrefixTree()
+        bpe_prefix_tree = PrefixTree(opts=BpeOpts(label_postfix_merge_symbol=BpePostMergeSymbol))
         for bpe_sym in vocab.labels:
             bpe_prefix_tree.add(bpe_sym)
 
