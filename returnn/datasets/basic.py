@@ -289,6 +289,10 @@ class Dataset(object):
         return 0
 
     def set_cached_files_for_release(self, files: List[str]):
+        """
+        Registers the given files for release from :class:`FileCache` when the
+        dataset's destructor runs.
+        """
         self._cached_files = files
 
     @staticmethod
