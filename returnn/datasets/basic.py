@@ -25,6 +25,7 @@ from returnn.log import log
 from returnn.engine.batch import Batch, BatchSetGenerator
 from returnn.datasets.util.vocabulary import Vocabulary
 from returnn.util.basic import try_run, NumbersDict, OptionalNotImplementedError
+from returnn.util import file_cache
 from returnn.tensor import TensorDict
 
 if TYPE_CHECKING:
@@ -195,6 +196,11 @@ class Dataset(object):
         self.shuffle_frames_of_nseqs = shuffle_frames_of_nseqs
         self.epoch = None
         self.zpad = None
+        self._cached_files: Optional[List[str]] = None
+
+    def __del__(self):
+        if self._cached_files is not None:
+            file_cache.get_instance().release_files(self._cached_files)
 
     def __repr__(self):
         return "<%s %r epoch=%s>" % (
@@ -281,6 +287,9 @@ class Dataset(object):
             if returnn.tf.horovod.get_ctx(config=config).is_dataset_distribution_random_seed_offset():
                 return returnn.tf.horovod.get_ctx(config=config).rank() * 16127
         return 0
+
+    def set_cached_files_for_release(self, files: List[str]):
+        self._cached_files = files
 
     @staticmethod
     def _parse_chunking(chunking):
@@ -1448,9 +1457,12 @@ def init_dataset(
             kwargs.setdefault(key, value)
     if extra_kwargs:
         kwargs.update(extra_kwargs)
+    kwargs, cached_files = file_cache.get_instance().handle_cached_files_in_config(kwargs)
     obj = clazz(**kwargs)
     assert isinstance(obj, Dataset)
     obj.initialize()
+    if cached_files:
+        obj.set_cached_files_for_release(cached_files)
     return obj
 
 

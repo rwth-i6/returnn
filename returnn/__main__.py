@@ -31,6 +31,7 @@ from returnn.datasets import Dataset, init_dataset, init_dataset_via_str
 from returnn.datasets.hdf import HDFDataset
 from returnn.util import debug as debug_util
 from returnn.util import basic as util
+from returnn.util import file_cache
 from returnn.util.basic import BackendEngine, BehaviorVersion
 
 # These imports are not directly used here, but make them available, as other code imports them from here.
@@ -135,6 +136,13 @@ def init_log():
     Initializes the global :class:`Log`.
     """
     log.init_by_config(config)
+
+
+def init_file_cache():
+    """
+    Initializes the global :class:`FileCache`.
+    """
+    file_cache.init_by_config(config)
 
 
 def get_cache_byte_sizes():
@@ -481,6 +489,7 @@ def init(config_filename=None, command_line_options=(), config_updates=None, ext
         startup_callback = config.typed_value("startup_callback")
         startup_callback(config=config)
     if need_data():
+        init_file_cache()
         if config.bool("use_dummy_datasets", False):
             setup_dummy_datasets()
         init_data()
