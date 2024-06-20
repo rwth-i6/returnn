@@ -62,6 +62,12 @@ class DistributeFilesDataset(CachedDataset2):
     Specifically, we don't want that some data might be visited more often than others
     (at least its expected value should be the same).
 
+    In case the dataset grows so large it is unreasonable to expect one worker to
+    ever see all the data, this dataset can also shard the file list on a per-worker
+    basis before distributing across subepochs.
+    This behavior can be configured by setting the property ``"distrib_shard_files": True``.
+    The dataset attempts to split the files as evenly as possible based on the file size.
+
     Example usage::
 
         def get_sub_epoch_dataset(files_subepoch: List[str]) -> Dict[str, Any]:
@@ -131,6 +137,7 @@ class DistributeFilesDataset(CachedDataset2):
         preload_next_n_sub_epochs: int = 1,
         buffer_size: int = 1,
         file_cache_opts: Optional[Dict[str, Any]] = None,
+        distrib_shard_files: bool = False,
         _meta_info_cache: Optional[Dict[str, Any]] = None,
         **kwargs,
     ):
@@ -140,6 +147,8 @@ class DistributeFilesDataset(CachedDataset2):
         :param get_sub_epoch_dataset: callable which returns a dataset dict for a given subset of files
         :param preload_next_n_sub_epochs: how many sub epoch datasets to preload
         :param buffer_size: buffer size for each worker, amount of seqs to prefetch
+        :param distrib_shard_files: set to true to shard the data across worker processes in
+            distributed training scenaria
         :param _meta_info_cache: for internal use
         """
         super().__init__(**kwargs)
@@ -152,6 +161,7 @@ class DistributeFilesDataset(CachedDataset2):
         self._file_sizes: Optional[Dict[str, int]] = None  # key -> size. for equal distribution across sub epochs
         self._data_keys: Optional[List[str]] = None
         self._num_seqs: Optional[int] = None
+        self._shard_index, self._num_shards = _get_rank_and_size() if distrib_shard_files else 0, 1
 
         self._file_cache: Optional[_FileCacheProc] = None
         self._workers: Dict[int, _WorkerProcParent] = {}  # epoch -> worker
@@ -186,6 +196,9 @@ class DistributeFilesDataset(CachedDataset2):
             "data_keys": self._data_keys,
             "file_sizes": self._file_sizes,
         }
+
+    def _uses_custom_distributed_sharding(self) -> bool:
+        return self._num_shards > 1
 
     def _lazy_init_num_outputs(self):
         if self.num_outputs:
@@ -245,8 +258,9 @@ class DistributeFilesDataset(CachedDataset2):
         self._lazy_init_file_sizes()
         self._lazy_init_file_cache_proc()
 
-        # Cleanup and fill _files_order_cache.
         full_epoch_0idx = (epoch - 1) // self.partition_epoch
+
+        # Cleanup and fill _files_order_cache, also shard files across GPU workers
         for k in list(self._files_order_cache.keys()):
             if k < full_epoch_0idx:
                 del self._files_order_cache[k]
@@ -257,15 +271,22 @@ class DistributeFilesDataset(CachedDataset2):
             if self.seq_ordering == "default":
                 files_order_flat = self.files
             elif self.seq_ordering == "random":
+                # when sharding, _get_random_seed_for_epoch makes sure to use a fixed
+                # random_seed_offset
                 rnd_seed = self._get_random_seed_for_epoch(full_epoch_0idx_ * self.partition_epoch + 1)
                 random_generator = numpy.random.RandomState(rnd_seed)
                 files_order_flat = list(self.files)
                 random_generator.shuffle(files_order_flat)
             else:
                 raise ValueError(f"{self}: seq_ordering {self.seq_ordering!r} not supported")
-            self._files_order_cache[full_epoch_0idx_] = self._get_files_per_sub_epochs(
-                partition_epoch=self.partition_epoch, file_sizes=self._file_sizes, files_order=files_order_flat
+            file_bins = self._distribute_evenly_by_size(
+                num_bins=self._num_shards * self.partition_epoch,
+                file_sizes=self._file_sizes,
+                files_order=files_order_flat,
             )
+            self_index_base = self.partition_epoch * self._shard_index
+            self_index_end = self_index_base + self.partition_epoch
+            self._files_order_cache[full_epoch_0idx_] = file_bins[self_index_base:self_index_end]
 
         # Cleanup and fill _workers.
         for k, worker in list(self._workers.items()):
@@ -308,62 +329,67 @@ class DistributeFilesDataset(CachedDataset2):
         return dataset_dict, exit_hook
 
     @staticmethod
-    def _get_files_per_sub_epochs(
-        *, partition_epoch: int, file_sizes: Dict[str, int], files_order: Sequence[FileTree]
+    def _distribute_evenly_by_size(
+        *, num_bins: int, file_sizes: Dict[str, int], files_order: Sequence[FileTree]
     ) -> List[List[FileTree]]:
+        """
+        Distributes the files from files_order into ``num_bins`` while attempting
+        to make every bin as evenly sized (based on ``file_sizes``) as possible.
+        """
+
         total_size = sum(file_sizes.values())
-        avg_size_per_sub_epoch = total_size / partition_epoch
-        # Now evenly distribute the files over the sub epochs.
+        avg_size_per_sub_epoch = total_size / num_bins
+        # Now evenly distribute the files over the bins.
         # Note that many one-pass variants of algorithms to evenly distribute
-        # can end up with some empty sub epochs,
+        # can end up with some empty bins,
         # so we need to make sure that this is not the case.
-        # E.g. consider the seqs of size [1,1,78,120] and partition_epoch=4.
+        # E.g. consider the seqs of size [1,1,78,120] and num_bins=4.
         # That has avg size per sub epoch 50.
         # Some simple algorithms could end up with the sub epochs
         # [[1,1], [78], [120], []] or [[1,1,78], [120], [], []].
-        # Or consider [5,5]+[10]*7, partition_epoch=5, which has avg size 16.
+        # Or consider [5,5]+[10]*7, num_bins=5, which has avg size 16.
         # A simple algorithm could end up with [[5,5,10], [10,10], [10,10], [10,10], []].
-        # See test_DistributeFilesDataset_get_files_per_sub_epochs for some test cases.
-        assert len(files_order) >= partition_epoch
-        files_per_sub_epochs = [[] for _ in range(partition_epoch)]
-        assert len(files_per_sub_epochs) == partition_epoch
-        sub_epoch_idx = 0
+        # See test_DistributeFilesDataset_distribute_evenly_by_size for some test cases.
+        assert len(files_order) >= num_bins
+        files_per_bin = [[] for _ in range(num_bins)]
+        assert len(files_per_bin) == num_bins
+        bin_idx = 0
         size_taken = 0
         for i, f_tree in enumerate(files_order):
             size = file_sizes[_get_key_for_file_tree(f_tree)]
             num_remaining = len(files_order) - i
-            if num_remaining <= partition_epoch - sub_epoch_idx - 1:
+            if num_remaining <= num_bins - bin_idx - 1:
                 # All remaining sub epochs must be filled.
-                assert files_per_sub_epochs[sub_epoch_idx]
-                sub_epoch_idx += 1
-                files_per_sub_epochs[sub_epoch_idx].append(f_tree)
+                assert files_per_bin[bin_idx]
+                bin_idx += 1
+                files_per_bin[bin_idx].append(f_tree)
                 size_taken = size
                 continue
-            if sub_epoch_idx == partition_epoch - 1:
+            if bin_idx == num_bins - 1:
                 # We are done. Just add the rest to the last sub epoch.
-                files_per_sub_epochs[sub_epoch_idx].append(f_tree)
+                files_per_bin[bin_idx].append(f_tree)
                 size_taken += size
                 continue
             assert size_taken <= avg_size_per_sub_epoch
             if size_taken + size <= avg_size_per_sub_epoch:
-                files_per_sub_epochs[sub_epoch_idx].append(f_tree)
+                files_per_bin[bin_idx].append(f_tree)
                 size_taken += size
                 continue
             # We should increase the sub epoch index.
             # We need to decide where to add this file, to the current or the next sub epoch.
-            if not files_per_sub_epochs[sub_epoch_idx] or (
+            if not files_per_bin[bin_idx] or (
                 # Better to add this file to the current sub epoch?
                 abs((size_taken + size) - avg_size_per_sub_epoch)
                 <= abs(size_taken - avg_size_per_sub_epoch)
             ):
-                files_per_sub_epochs[sub_epoch_idx].append(f_tree)
+                files_per_bin[bin_idx].append(f_tree)
                 size_taken = 0
             else:
-                files_per_sub_epochs[sub_epoch_idx + 1].append(f_tree)
+                files_per_bin[bin_idx + 1].append(f_tree)
                 size_taken = size
-            sub_epoch_idx += 1
-        assert all(files_per_sub_epochs)
-        return files_per_sub_epochs
+            bin_idx += 1
+        assert all(files_per_bin)
+        return files_per_bin
 
     def _collect_single_seq(self, seq_idx: int) -> Optional[DatasetSeq]:
         if seq_idx >= self._num_seqs:
@@ -411,6 +437,32 @@ def _get_key_for_file_tree(t: FileTree) -> str:
     import tree
 
     return ":".join(tree.flatten(t))
+
+
+def _get_rank_and_size() -> Tuple[int, int]:
+    """
+    :return: tuple (rank, size): the global rank and size for distributed trainings
+    """
+
+    from returnn.config import get_global_config
+
+    config = get_global_config(raise_exception=False)
+    if not config:
+        return 0, 1
+    if config.typed_value("torch_distributed") is not None:
+        import returnn.torch.distributed
+
+        ctx = returnn.torch.distributed.get_ctx(config=config)
+        return ctx.rank(), ctx.size()
+    elif config.is_true("use_horovod"):
+        assert config.bool("use_tensorflow", False) or config.value("backend", "").startswith("tensorflow")
+
+        import returnn.tf.horovod
+
+        ctx = returnn.tf.horovod.get_ctx(config=config)
+        return ctx.rank(), ctx.size()
+    else:
+        return 0, 1
 
 
 class _WorkerProcParent:
