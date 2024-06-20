@@ -137,7 +137,7 @@ class DistributeFilesDataset(CachedDataset2):
         preload_next_n_sub_epochs: int = 1,
         buffer_size: int = 1,
         file_cache_opts: Optional[Dict[str, Any]] = None,
-        shard: bool = False,
+        distrib_shard_files: bool = False,
         _meta_info_cache: Optional[Dict[str, Any]] = None,
         **kwargs,
     ):
@@ -147,7 +147,8 @@ class DistributeFilesDataset(CachedDataset2):
         :param get_sub_epoch_dataset: callable which returns a dataset dict for a given subset of files
         :param preload_next_n_sub_epochs: how many sub epoch datasets to preload
         :param buffer_size: buffer size for each worker, amount of seqs to prefetch
-        :param shard: set to true to shard the data across worker processes
+        :param distrib_shard_files: set to true to shard the data across worker processes in
+            distributed training scenaria
         :param _meta_info_cache: for internal use
         """
         super().__init__(**kwargs)
@@ -160,7 +161,7 @@ class DistributeFilesDataset(CachedDataset2):
         self._file_sizes: Optional[Dict[str, int]] = None  # key -> size. for equal distribution across sub epochs
         self._data_keys: Optional[List[str]] = None
         self._num_seqs: Optional[int] = None
-        self._shard_index, self._num_shards = _get_rank_and_size() if shard else 0, 1
+        self._shard_index, self._num_shards = _get_rank_and_size() if distrib_shard_files else 0, 1
 
         self._file_cache: Optional[_FileCacheProc] = None
         self._workers: Dict[int, _WorkerProcParent] = {}  # epoch -> worker
