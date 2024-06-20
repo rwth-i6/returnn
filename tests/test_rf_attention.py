@@ -72,6 +72,82 @@ def test_self_attention():
     run_model(extern_data, lambda *, epoch, step: _Net(), _forward_step)
 
 
+def test_self_attention_to_pure_torch():
+    # test whether the torch and returnn implementation of the mhsa layer are equivalent
+    import torch
+    import returnn.frontend as rf
+    from returnn.tensor import Dim
+
+    # torch.backends.mha.set_fastpath_enabled(False)
+
+    rf.select_backend_torch()
+    rf.init_forward_step_run_ctx()
+    rf.set_random_seed(1)
+
+    batch_dim = Dim(3, name="batch")
+    spatial_dim = Dim(11, name="spatial")
+    out_dim = Dim(54, name="out")
+    num_heads = 2
+
+    random_opts = {"distribution": "normal", "dtype": "float32"}
+    rf_input = rf.random(dims=[batch_dim, spatial_dim, out_dim], **random_opts)
+    qkv_weight = rf.random(dims=[out_dim, 3 * out_dim], **random_opts)
+    qkv_bias = rf.random(dims=[3 * out_dim], **random_opts)
+    proj_weight = rf.random(dims=[out_dim.copy(match_priority=1), out_dim], **random_opts)
+    proj_bias = rf.random(dims=[out_dim], **random_opts)
+
+    rf_mhsa = rf.SelfAttention(
+        in_dim=out_dim,
+        proj_dim=out_dim,
+        key_dim_total=out_dim,
+        value_dim_total=out_dim,
+        num_heads=num_heads,
+    )
+    rf_mhsa.qkv.weight.initial = qkv_weight
+    rf_mhsa.qkv.bias.initial = qkv_bias
+    rf_mhsa.proj.weight.initial = proj_weight
+    rf_mhsa.proj.bias.initial = proj_bias
+
+    torch_input = rf_input.raw_tensor
+    torch_mhsa = torch.nn.MultiheadAttention(
+        out_dim.dimension,
+        num_heads,
+        batch_first=True,
+    )
+    torch_mhsa.load_state_dict(
+        {
+            "in_proj_weight": qkv_weight.raw_tensor.reshape(
+                out_dim.dimension, num_heads, 3, out_dim.dimension // num_heads
+            )
+            .permute(2, 1, 3, 0)
+            .reshape(-1, out_dim.dimension),
+            "in_proj_bias": qkv_bias.raw_tensor.reshape(num_heads, 3, out_dim.dimension // num_heads)
+            .permute(1, 0, 2)
+            .reshape(-1),
+            "out_proj.weight": proj_weight.raw_tensor.reshape(
+                num_heads, out_dim.dimension // num_heads, out_dim.dimension
+            )
+            .permute(2, 0, 1)
+            .reshape(-1, out_dim.dimension),
+            "out_proj.bias": proj_bias.raw_tensor,
+        }
+    )
+    torch_mhsa.eval()
+
+    rf_output = rf_mhsa(rf_input, axis=spatial_dim)
+    torch_output, torch_attn_weights = torch_mhsa(torch_input, torch_input, torch_input, key_padding_mask=None)
+
+    print("RF output")
+    print(rf_output.raw_tensor)
+    print(rf_output.raw_tensor.shape)
+    print("---------------------------")
+    print("Torch output")
+    print(torch_output)
+    print(torch_output.shape)
+
+    torch.testing.assert_allclose(rf_output.raw_tensor, torch_output, atol=1e-3, rtol=1e-4)
+
+
 def test_causal_self_attention():
     from returnn.tensor import single_step_dim
 

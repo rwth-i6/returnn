@@ -14,7 +14,7 @@ import returnn.frontend as rf
 from . import _backend
 
 
-__all__ = ["RunCtx", "Loss", "get_run_ctx", "init_train_step_run_ctx", "init_forward_step_run_ctx"]
+__all__ = ["RunCtx", "Loss", "get_run_ctx", "get_run_ctx_step", "init_train_step_run_ctx", "init_forward_step_run_ctx"]
 
 
 _run_ctx = None  # type: Optional[RunCtx]
@@ -134,12 +134,24 @@ class RunCtx:
         """
         return self._step
 
+    def get_step_tensor(self) -> Tensor:
+        """
+        :return: step as tensor
+        """
+        return rf.convert_to_tensor(self.step)
+
     @property
     def epoch(self) -> Union[int, Tensor]:
         """
         :return: epoch
         """
         return self._epoch
+
+    def get_epoch_tensor(self) -> Tensor:
+        """
+        :return: epoch as tensor
+        """
+        return rf.convert_to_tensor(self.epoch)
 
     def mark_as_loss(
         self,
@@ -348,6 +360,13 @@ class RunCtx:
                 continue
             loss += loss_obj.get_scaled_reduced_loss()
         return loss
+
+
+def get_run_ctx_step() -> Tensor:
+    """
+    :return: shortcut for ``get_run_ctx().get_step_tensor()``
+    """
+    return get_run_ctx().get_step_tensor()
 
 
 @dataclass

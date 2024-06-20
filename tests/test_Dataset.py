@@ -623,14 +623,14 @@ def test_MapDatasetWrapper():
     assert res.features["data"].shape == (5, 3)
 
 
-def test_DistributeFilesDataset_get_files_per_sub_epochs():
+def test_DistributeFilesDataset_distribute_evenly_by_size():
     from returnn.datasets.distrib_files import DistributeFilesDataset
 
     def _test(sizes: List[int], partition_epoch: int, expected: List[List[int]]):
         files = [f"file-{i}" for i in range(len(sizes))]
         file_sizes = {f: s for f, s in zip(files, sizes)}
-        res = DistributeFilesDataset._get_files_per_sub_epochs(
-            partition_epoch=partition_epoch, file_sizes=file_sizes, files_order=files
+        res = DistributeFilesDataset._distribute_evenly_by_size(
+            num_bins=partition_epoch, file_sizes=file_sizes, files_order=files
         )
         assert all(res) and len(res) == partition_epoch
         assert set(sum(res, [])) == set(files)

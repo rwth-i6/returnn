@@ -144,9 +144,7 @@ class Dataset(object):
         self.window = window
         self.seq_ordering = seq_ordering  # "default", "sorted" or "random". See self.get_seq_order_for_epoch().
         self.fixed_random_seed = fixed_random_seed
-        if random_seed_offset is None:
-            random_seed_offset = self._get_default_random_seed_offset()
-        self.random_seed_offset = random_seed_offset
+        self._random_seed_offset = random_seed_offset
         self.partition_epoch = partition_epoch or 1
         self.repeat_epoch = repeat_epoch or 1
         self._seq_list_filter_file = seq_list_filter_file
@@ -242,18 +240,32 @@ class Dataset(object):
         state = {attr: getattr(self, attr) for attr in ["epoch", "zpad"]}
         return Dataset._create_from_reduce, (self.__class__, kwargs, state)
 
-    @staticmethod
-    def _get_default_random_seed_offset():
+    @property
+    def random_seed_offset(self) -> int:
+        """:return: random seed offset for shuffling"""
+        if self._random_seed_offset is None:
+            self._random_seed_offset = self._get_default_random_seed_offset()
+        return self._random_seed_offset
+
+    def _uses_custom_distributed_sharding(self) -> bool:
+        """
+        :return: if dataset has its own data sharding logic independent of TF/PT.
+            Leads to a fixed random_seed_offset independent of the workers local rank.
+        """
+        return False
+
+    def _get_default_random_seed_offset(self):
         """
         :return: 0 usually
         :rtype: int
         """
         from returnn.config import get_global_config
 
+        if self._uses_custom_distributed_sharding():
+            return 0
         config = get_global_config(raise_exception=False)
         if not config:
             return 0
-
         env_val = os.environ.get(RANDOM_SEED_OFFSET_ENV_VAR)
         if env_val is not None:
             return int(env_val)

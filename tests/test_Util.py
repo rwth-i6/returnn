@@ -637,6 +637,32 @@ def test_expand_env_vars():
     assert_equal(expand_env_vars("$TMPA/$TMPB/returnn/file_cache"), "/testA/testB/returnn/file_cache")
 
 
+def test_bpe_PrefixTree():
+    from returnn.util.bpe import PrefixTree, BpePostMergeSymbol
+
+    tree = PrefixTree()
+    tree.add("hello")
+    tree.add("helo" + BpePostMergeSymbol)
+    assert not tree.finished and not tree.bpe_finished
+    assert set(tree.arcs.keys()) == {"h"}
+    node = tree.arcs["h"]
+    assert not node.finished and not node.bpe_finished
+    assert set(node.arcs.keys()) == {"e"}
+    node = node.arcs["e"]
+    assert not node.finished and not node.bpe_finished
+    assert set(node.arcs.keys()) == {"l"}
+    node = node.arcs["l"]
+    assert not node.finished and not node.bpe_finished
+    assert set(node.arcs.keys()) == {"l", "o"}
+    node_o = node.arcs["o"]
+    assert not node_o.finished and node_o.bpe_finished
+    # The following BpePostMergeSymbol arc and its node is somewhat arbitrary, probably does not matter...
+    assert set(node_o.arcs.keys()) == {BpePostMergeSymbol}
+    node_o_post = node_o.arcs[BpePostMergeSymbol]
+    assert node_o_post.finished and not node_o_post.bpe_finished
+    assert set(node_o_post.arcs.keys()) == set()
+
+
 def test_file_cache():
     from returnn.util.file_cache import FileCache, CachedFile
 

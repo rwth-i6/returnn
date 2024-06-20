@@ -2,12 +2,13 @@
 Provide basic Byte-Pair-Encoding (BPE) utilities.
 """
 
+from __future__ import annotations
+from typing import Optional, List, Dict, Callable
 import re
-import typing
 import numpy
 
 
-BpeMergeSymbol = "@@"
+BpePostMergeSymbol = "@@"
 
 
 class StandardBytePairEncoder:
@@ -33,7 +34,7 @@ class StandardBytePairEncoder:
         self.labels = labels
         self._load(bpe_codes_file)
         self._bpe_encode_cache = {}
-        self._bpe_separator = BpeMergeSymbol
+        self._bpe_separator = BpePostMergeSymbol
 
     _file_cache = {}  # filename -> bpe_file_version, bpe_codes, bpe_codes_reverse
 
@@ -232,23 +233,22 @@ class PrefixTree:
     This class represents both a single node and the tree.
     """
 
-    def __init__(self, prefix="", root=None):
+    def __init__(self, prefix: str = "", root: Optional[PrefixTree] = None):
         """
-        :param str prefix:
-        :param PrefixTree|None root:
+        :param prefix:
+        :param root:
         """
         self.prefix = prefix
-        self.arcs = {}  # type: typing.Dict[str,PrefixTree]
-        self.finished = False
-        self.bpe_finished = False
+        self.arcs: Dict[str, PrefixTree] = {}  # single char (or BpePostMergeSymbol) -> sub tree
+        self.finished = False  # word finished here
+        self.bpe_finished = False  # partial word finished here with BpePostMergeSymbol at end
         self.is_root = not root
         self.root = root
 
-    def add(self, postfix, root=None):
+    def add(self, postfix: str, root: Optional[PrefixTree] = None) -> PrefixTree:
         """
-        :param str postfix:
-        :param None|PrefixTree root:
-        :rtype: PrefixTree
+        :param postfix:
+        :param root:
         """
         if not root:
             if self.is_root:
@@ -256,24 +256,27 @@ class PrefixTree:
             else:
                 assert self.root
                 root = self.root
-        if postfix == BpeMergeSymbol:
-            arc = postfix
-            postfix_ = ""
-        else:
-            arc = postfix[:1]
-            postfix_ = postfix[1:]
-        if arc in self.arcs:
-            child = self.arcs[arc]
-        else:
-            child = PrefixTree(root=root, prefix=self.prefix + arc)
-            self.arcs[arc] = child
-        if arc == BpeMergeSymbol and not postfix_:
-            self.bpe_finished = True
-        if postfix_:
-            return child.add(postfix_, root=root)
-        else:
-            child.finished = True
-            return child
+        self_ = self
+        while True:
+            if postfix == BpePostMergeSymbol:
+                arc = postfix
+                postfix_ = ""
+            else:
+                arc = postfix[:1]
+                postfix_ = postfix[1:]
+            if arc in self_.arcs:
+                child = self_.arcs[arc]
+            else:
+                child = PrefixTree(root=root, prefix=self_.prefix + arc)
+                self_.arcs[arc] = child
+            if arc == BpePostMergeSymbol and not postfix_:
+                self_.bpe_finished = True
+            if postfix_:
+                self_ = child
+                postfix = postfix_
+            else:
+                child.finished = True
+                return child
 
 
 class Hyp:
@@ -295,21 +298,21 @@ class CharSyncSearch:
     Covers the search hyps and the search itself.
     """
 
-    def __init__(self, bpe, word, word_pos=0):
+    def __init__(self, bpe: PrefixTree, word: str, word_pos: int = 0):
         """
-        :param PrefixTree bpe:
-        :param str word:
-        :param int word_pos:
+        :param bpe:
+        :param word:
+        :param word_pos:
         """
         self.bpe = bpe
         self.word = word
         self.word_pos = word_pos
-        self.hyps = [Hyp(bpe_sym_history=[], cur_node=bpe)]  # type: typing.List[Hyp]
-        self.final_bpe_seqs = None  # type: typing.Optional[typing.List[typing.List[str]]]
+        self.hyps: List[Hyp] = [Hyp(bpe_sym_history=[], cur_node=bpe)]
+        self.final_bpe_seqs: Optional[List[List[str]]] = None
 
     def _get_finished(self):
         assert self.word_pos == len(self.word)
-        finals = []  # type: typing.List[typing.List[str]]
+        finals: List[List[str]] = []
         for hyp in self.hyps:
             if hyp.cur_node.finished:
                 finals.append(hyp.bpe_sym_history + [hyp.cur_node.prefix])
@@ -318,14 +321,15 @@ class CharSyncSearch:
     def _expand(self):
         assert self.word_pos < len(self.word)
         char = self.word[self.word_pos]
-        new_hyps = []  # type: typing.List[Hyp]
+        new_hyps: List[Hyp] = []
         for hyp in self.hyps:
             if hyp.cur_node.bpe_finished:
+                # Start again from root node.
                 next_node = self.bpe.arcs.get(char)
                 if next_node:
                     new_hyps.append(
                         Hyp(
-                            bpe_sym_history=hyp.bpe_sym_history + [hyp.cur_node.prefix + BpeMergeSymbol],
+                            bpe_sym_history=hyp.bpe_sym_history + [hyp.cur_node.prefix + BpePostMergeSymbol],
                             cur_node=next_node,
                         )
                     )
@@ -334,10 +338,9 @@ class CharSyncSearch:
                 new_hyps.append(Hyp(bpe_sym_history=hyp.bpe_sym_history, cur_node=next_node))
         self.hyps = new_hyps
 
-    def search(self):
+    def search(self) -> List[List[str]]:
         """
         :return: collection of possible BPE symbol seqs
-        :rtype: list[list[str]]
         """
         while self.word_pos < len(self.word):
             self._expand()
@@ -367,23 +370,20 @@ class DepthFirstSearch:
     Depth-first search.
     """
 
-    def __init__(self, bpe, word, sampler=None):
+    def __init__(self, bpe: PrefixTree, word: str, sampler: Optional[Callable[[], bool]] = None):
         """
-        :param PrefixTree bpe:
-        :param str word:
-        :param (()->bool)|None sampler:
+        :param bpe:
+        :param word:
+        :param sampler:
         """
         self.bpe = bpe
         self.word = word
         self.sampler = sampler
-        self.hyps = []  # type: typing.List[HypInPos]
-        self.final_bpe_seq = None  # type: typing.Optional[typing.List[str]]
+        self.hyps: List[HypInPos] = []
+        self.final_bpe_seq: Optional[List[str]] = None
         self._add_hyp(HypInPos(bpe_sym_history=[], cur_node=bpe, pos=0))
 
-    def _add_hyp(self, hyp):
-        """
-        :param HypInPos hyp:
-        """
+    def _add_hyp(self, hyp: HypInPos):
         if hyp.pos >= len(self.word):
             if hyp.cur_node.finished:
                 self.final_bpe_seq = hyp.bpe_sym_history + [hyp.cur_node.prefix]
@@ -395,13 +395,14 @@ class DepthFirstSearch:
 
         # Now check for possible further hyps.
         char = self.word[hyp.pos]
-        new_hyps = []  # type: typing.List[HypInPos]
+        new_hyps: List[HypInPos] = []
         if hyp.cur_node.bpe_finished:
+            # Start again from root node.
             next_node = self.bpe.arcs.get(char)
             if next_node:
                 new_hyps.append(
                     HypInPos(
-                        bpe_sym_history=hyp.bpe_sym_history + [hyp.cur_node.prefix + BpeMergeSymbol],
+                        bpe_sym_history=hyp.bpe_sym_history + [hyp.cur_node.prefix + BpePostMergeSymbol],
                         cur_node=next_node,
                         pos=hyp.pos + 1,
                     )
@@ -416,10 +417,9 @@ class DepthFirstSearch:
         for hyp in new_hyps:
             self._add_hyp(hyp)
 
-    def search(self):
+    def search(self) -> Optional[List[str]]:
         """
         :return: BPE symbol seq if one is found
-        :rtype: list[str]|None
         """
         while self.hyps and self.final_bpe_seq is None:
             self._expand()
@@ -452,23 +452,21 @@ class SamplingBytePairEncoder:
             bpe.add(bpe_sym)
         self._bpe_prefix_tree = bpe
 
-    def _sampler(self):
+    def _sampler(self) -> bool:
         # When this returns true, it will differ from depth-first search.
         return self.rnd.random_sample() <= self.breadth_prob
 
-    def get_bpe_split_for_word(self, word):
+    def get_bpe_split_for_word(self, word: str) -> Optional[List[str]]:
         """
-        :param str word:
-        :rtype: list[str]|None
+        :param word:
         """
         return DepthFirstSearch(bpe=self._bpe_prefix_tree, word=word, sampler=self._sampler).search()
 
-    def segment_sentence(self, sentence):
+    def segment_sentence(self, sentence: str) -> List[str]:
         """
         Segment single sentence (whitespace-tokenized string) with BPE encoding.
 
-        :param str sentence:
-        :rtype: list[str]
+        :param sentence:
         """
         output = []
         for word in sentence.split():
