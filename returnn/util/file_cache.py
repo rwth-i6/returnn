@@ -114,6 +114,8 @@ class FileCache:
             try:
                 self._copy_file_if_needed(src_filename, dst_filename)
                 break
+            except FileNotFoundError as e:
+                last_error = e
             except OSError as e:
                 if e.errno == errno.ENOSPC:
                     last_error = e
