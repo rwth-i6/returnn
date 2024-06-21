@@ -338,8 +338,8 @@ def get_instance(config: Optional[Config] = None) -> FileCache:
 
     Uses defaults if no global config is set.
     """
-    config = config or get_global_config(raise_exception=False)
-    kwargs = config.value("file_cache_opts", {}) if config is not None else {}
+    config = config or get_global_config(return_empty_if_none=True)
+    kwargs = config.typed_value("file_cache_opts") or {}
     return FileCache(**kwargs)
 
 
