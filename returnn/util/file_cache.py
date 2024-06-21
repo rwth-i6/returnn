@@ -24,20 +24,6 @@ from .basic import expand_env_vars, LockFile, human_bytes_size
 __all__ = ["FileCache", "CachedFile"]
 
 
-class TargetFileNotFoundException(Exception):
-    """
-    Exception when the target file of a copying operation could not be found or
-    opened for writing.
-
-    This usually indicates that the directory of the target file does not exist and
-    needs to be created.
-    """
-
-    def __init__(self, msg, inner: FileNotFoundError):
-        super().__init__(msg)
-        self.inner = inner
-
-
 class FileCache:
     """
     File cache.
@@ -133,10 +119,6 @@ class FileCache:
             try:
                 self._copy_file_if_needed(src_filename, dst_filename)
                 break
-            except TargetFileNotFoundException as e:
-                # Catch the race condition where the target directory was removed by
-                # the empty directory cleanup. The directory will then be recreated.
-                last_error = e
             except OSError as e:
                 if e.errno == errno.ENOSPC:
                     last_error = e
@@ -369,28 +351,23 @@ def _copy_with_prealloc(src: str, dst: str):
     it in.
     """
     file_size = os.stat(src).st_size
-    try:
-        f = open(dst, "wb")
-    except FileNotFoundError as e:
-        raise TargetFileNotFoundException(f"{dst} not found", e)
-    else:
-        with f as dst_file:
-            if file_size > 0:
-                # Prealloc size + 1, see docstring for why.
-                #
-                # See also `_check_existing_copied_file_maybe_cleanup`.
-                if os.name == "posix":
-                    os.posix_fallocate(dst_file.fileno(), 0, file_size + 1)
-                else:
-                    dst_file.seek(file_size)
-                    dst_file.write(b"\0")
-                    dst_file.seek(0)
-            with open(src, "rb") as src_file:
-                if os.name == "posix":
-                    os.posix_fadvise(src_file.fileno(), 0, file_size, os.POSIX_FADV_SEQUENTIAL)
-                    os.posix_fadvise(dst_file.fileno(), 0, file_size, os.POSIX_FADV_SEQUENTIAL)
-                shutil.copyfileobj(src_file, dst_file)
-            dst_file.truncate(file_size)
+    with open(dst, "wb") as dst_file:
+        if file_size > 0:
+            # Prealloc size + 1, see docstring for why.
+            #
+            # See also `_check_existing_copied_file_maybe_cleanup`.
+            if os.name == "posix":
+                os.posix_fallocate(dst_file.fileno(), 0, file_size + 1)
+            else:
+                dst_file.seek(file_size)
+                dst_file.write(b"\0")
+                dst_file.seek(0)
+        with open(src, "rb") as src_file:
+            if os.name == "posix":
+                os.posix_fadvise(src_file.fileno(), 0, file_size, os.POSIX_FADV_SEQUENTIAL)
+                os.posix_fadvise(dst_file.fileno(), 0, file_size, os.POSIX_FADV_SEQUENTIAL)
+            shutil.copyfileobj(src_file, dst_file)
+        dst_file.truncate(file_size)
 
 
 @dataclass
