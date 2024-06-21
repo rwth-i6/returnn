@@ -25,6 +25,11 @@ It also was specifically designed with distributed training in mind.
 The distributed random_seed_offset method can be used,
 but sharding is also supported ([PR #1538](https://github.com/rwth-i6/returnn/pull/1538)).
 
+## 2023-11-28: [`lovely_tensors`](https://xl0.github.io/lovely-tensors/) support
+
+Set `use_lovely_tensors = True` in the config.
+Should always be safe to use, thus can always be enabled.
+
 ## 2023-11-09: `LearningRateControl` saves more meta info in learning-rate-file
 
 Like effective learning rate (after `dynamic_learning_rate`),
@@ -33,11 +38,15 @@ training step, GPU, RETURNN version, etc.
 
 ## 2024-01-09: [Train proc manager](https://github.com/rwth-i6/returnn/blob/master/returnn/util/train_proc_manager.py)
 
+Set `use_train_proc_manager = True` (currently PyTorch only).
+Should always be safe to use, thus can always be enabled.
 Auto restart RETURNN on crashes under certain conditions
 (e.g. it must have trained at least one epoch successfully since the most recent restart).
 
 ## 2023-12-30: PyTorch handle OOM for forwarding, auto-split batch
 
+Set `forward_auto_split_batch_on_oom = True` in the config (currently PyTorch only).
+Should always be safe to use, thus can always be enabled.
 This went through several iterations of approaches,
 stumbling through a number of CPython and PyTorch bugs,
 e.g. [CPython #113939](https://github.com/python/cpython/issues/113939),
@@ -49,6 +58,9 @@ e.g. [CPython #113939](https://github.com/python/cpython/issues/113939),
 In the `torch_distributed` config dict: Set `"reduce_type": "param"` and `"param_sync_step": ...`.
 
 ## 2023-10-24: [`watch_memory`](https://github.com/rwth-i6/returnn/blob/master/returnn/util/watch_memory.py): watches memory of all procs
+
+Set `watch_memory = True` in the config.
+Should not influence anything, thus can always be enabled.
 
 ## 2023-10-03: RETURNN frontend (RF) native helpers ([PR #1403](https://github.com/rwth-i6/returnn/pull/1403))
 
@@ -199,6 +211,8 @@ and you probably want `update_sample_only_in_training=True`
 and `delay_sample_update=True`.
 
 ## 2020-11-06: [PyTorch-to-RETURNN project](https://github.com/rwth-i6/pytorch-to-returnn)
+
+## 2020-08-14: GitHub actions CI to replace Travis ([PR #340](https://github.com/rwth-i6/returnn/pull/340), [issue #308](https://github.com/rwth-i6/returnn/issues/308))
 
 ## 2020-08-03: New code structure ([discussion](https://github.com/rwth-i6/returnn/issues/162))
 
