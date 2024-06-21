@@ -96,7 +96,7 @@ def main():
     print("Words: num %i, first %r" % (len(words), words[0]))
 
     print("Build BPE prefix tree...")
-    bpe = bpe_utils.PrefixTree()
+    bpe = bpe_utils.PrefixTree(opts=bpe_utils.BpeOpts(label_postfix_merge_symbol=bpe_utils.BpePostMergeSymbol))
     for bpe_sym in bpe_syms:
         bpe.add(bpe_sym)
 
