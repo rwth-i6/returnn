@@ -392,7 +392,7 @@ class _TouchFilesThread(Thread):
         self.files = defaultdict(int)  # usage counter
         self.interval = interval
         self.cache_base_dir = cache_base_dir
-        self._started = False
+        self._is_started = False  # careful: `_started` is already a member of the base class
 
     def run(self):
         """thread main loop"""
@@ -408,10 +408,10 @@ class _TouchFilesThread(Thread):
 
     def start_once(self):
         """reentrant variant of start() that can safely be called multiple times"""
-        if self._started:
+        if self._is_started:
             return
+        self._is_started = True
         self.start()
-        self._started = True
 
     def files_extend(self, files: Collection[str]):
         """append"""
