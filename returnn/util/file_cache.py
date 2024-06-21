@@ -55,8 +55,9 @@ class FileCache:
         *,
         cache_directory: str = "$TMPDIR/$USER/returnn/file_cache",
         cleanup_files_always_older_than_days: float = 31.0,
-        cleanup_files_wanted_older_than_days: float = 7.0,
+        cleanup_files_wanted_older_than_days: float = 1.0,
         cleanup_disk_usage_wanted_free_ratio: float = 0.2,  # try to free at least 20% disk space
+        cleanup_disk_usage_wanted_multiplier: float = 2.0,  # try to free 2x the required space for a file
         num_tries: int = 3,  # retry twice by default
     ):
         """
@@ -66,12 +67,16 @@ class FileCache:
         :param cleanup_files_wanted_older_than_days: if cleanup_disk_usage_wanted_free_ratio not reached,
             cleanup files older than this.
         :param cleanup_disk_usage_wanted_free_ratio: try to free at least this ratio of disk space.
+        :param cleanup_disk_usage_wanted_multiplier: when making space for a new file, try to free at
+            least this times as much space.
         :param num_tries: how many times to try caching a file before giving up
         """
         self.cache_directory = expand_env_vars(cache_directory)
         self._cleanup_files_always_older_than_days = cleanup_files_always_older_than_days
         self._cleanup_files_wanted_older_than_days = cleanup_files_wanted_older_than_days
         self._cleanup_disk_usage_wanted_free_ratio = cleanup_disk_usage_wanted_free_ratio
+        assert cleanup_disk_usage_wanted_multiplier >= 1.0
+        self._cleanup_disk_usage_wanted_multiplier = cleanup_disk_usage_wanted_multiplier
         self._touch_files_thread = _TouchFilesThread(cache_base_dir=self.cache_directory)
         self._touch_files_thread.start()
         self._recent_full_cleanup_time = float("-inf")
@@ -143,7 +148,8 @@ class FileCache:
             return
         disk_usage = shutil.disk_usage(self.cache_directory)
         want_free_space_size = max(
-            need_at_least_free_space_size, int(self._cleanup_disk_usage_wanted_free_ratio * disk_usage.total)
+            int(self._cleanup_disk_usage_wanted_multiplier * need_at_least_free_space_size),
+            int(self._cleanup_disk_usage_wanted_free_ratio * disk_usage.total),
         )
         # If we have enough free space, and we did a full cleanup recently, we don't need to do anything.
         if want_free_space_size <= disk_usage.free and time.monotonic() - self._recent_full_cleanup_time < 60 * 10:
@@ -282,24 +288,24 @@ class FileCache:
         """
         Copy the file to the cache directory.
         """
-        if self._check_existing_copied_file_maybe_cleanup(src_filename, dst_filename):
-            os.utime(dst_filename, None)  # touch
-            return
-
         # Create dirs.
         dst_dir = os.path.dirname(dst_filename)
         os.makedirs(dst_dir, exist_ok=True)
 
         # Copy the file, while holding a lock. See comment on lock_timeout above.
-        with LockFile(directory=self.cache_directory, name="dir.lock", lock_timeout=self._lock_timeout) as lock:
+        with LockFile(
+            directory=dst_dir, name=os.path.basename(dst_filename) + ".lock", lock_timeout=self._lock_timeout
+        ) as lock:
             # Maybe it was copied in the meantime, while waiting for the lock.
             if self._check_existing_copied_file_maybe_cleanup(src_filename, dst_filename):
+                print(f"FileCache: using existing file {dst_filename}")
+                os.utime(dst_filename, None)  # touch
                 return
 
             print(f"FileCache: Copy file {src_filename} to cache")
 
-            # Make sure we have enough disk space.
-            self.cleanup(need_at_least_free_space_size=os.stat(src_filename).st_size)
+            # Make sure we have enough disk space, st_size +1 due to _copy_with_prealloc
+            self.cleanup(need_at_least_free_space_size=os.stat(src_filename).st_size + 1)
 
             dst_tmp_filename = dst_filename + ".copy"
             if os.path.exists(dst_tmp_filename):
