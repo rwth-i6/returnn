@@ -29,7 +29,7 @@ from returnn.log import log
 from returnn.config import Config, get_global_config
 from returnn.datasets import Dataset, init_dataset, init_dataset_via_str
 from returnn.datasets.hdf import HDFDataset
-from returnn.util import basic as util, debug as debug_util, file_cache
+from returnn.util import basic as util, debug as debug_util
 from returnn.util.basic import BackendEngine, BehaviorVersion
 
 # These imports are not directly used here, but make them available, as other code imports them from here.
