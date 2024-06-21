@@ -282,11 +282,6 @@ class FileCache:
         """
         Copy the file to the cache directory.
         """
-        if self._check_existing_copied_file_maybe_cleanup(src_filename, dst_filename):
-            print(f"FileCache: using existing file {dst_filename}")
-            os.utime(dst_filename, None)  # touch
-            return
-
         # Create dirs.
         dst_dir = os.path.dirname(dst_filename)
         os.makedirs(dst_dir, exist_ok=True)
@@ -297,6 +292,8 @@ class FileCache:
         ) as lock:
             # Maybe it was copied in the meantime, while waiting for the lock.
             if self._check_existing_copied_file_maybe_cleanup(src_filename, dst_filename):
+                print(f"FileCache: using existing file {dst_filename}")
+                os.utime(dst_filename, None)  # touch
                 return
 
             print(f"FileCache: Copy file {src_filename} to cache")
