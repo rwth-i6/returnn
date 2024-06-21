@@ -9,9 +9,10 @@ See https://github.com/rwth-i6/returnn/issues/1519 for initial discussion.
 Main class is :class:`FileCache`.
 """
 
-from typing import Any, Collection, List, Tuple
+from typing import Any, Collection, List, Optional, Tuple
 import errno
 import os
+import pathlib
 import time
 import shutil
 from dataclasses import dataclass
@@ -19,9 +20,10 @@ from collections import defaultdict
 from contextlib import contextmanager
 from threading import Thread, Event
 from .basic import expand_env_vars, LockFile, human_bytes_size
+from returnn.config import Config, get_global_config
 
 
-__all__ = ["FileCache", "CachedFile"]
+__all__ = ["FileCache", "CachedFile", "get_instance"]
 
 
 class FileCache:
@@ -78,8 +80,6 @@ class FileCache:
         assert cleanup_disk_usage_wanted_multiplier >= 1.0
         self._cleanup_disk_usage_wanted_multiplier = cleanup_disk_usage_wanted_multiplier
         self._touch_files_thread = _TouchFilesThread(cache_base_dir=self.cache_directory)
-        self._touch_files_thread.start()
-        self._recent_full_cleanup_time = float("-inf")
         assert num_tries > 0
         self._num_tries = num_tries
 
@@ -151,13 +151,21 @@ class FileCache:
             int(self._cleanup_disk_usage_wanted_multiplier * need_at_least_free_space_size),
             int(self._cleanup_disk_usage_wanted_free_ratio * disk_usage.total),
         )
-        # If we have enough free space, and we did a full cleanup recently, we don't need to do anything.
-        if want_free_space_size <= disk_usage.free and time.monotonic() - self._recent_full_cleanup_time < 60 * 10:
-            return
-        # Do a full cleanup, i.e. iterate through all files in cache directory and check their mtime.
+        cleanup_timestamp_file = self.cache_directory + "/.recent_full_cleanup"
+        try:
+            last_full_cleanup = os.stat(cleanup_timestamp_file).st_mtime
+        except FileNotFoundError:
+            last_full_cleanup = float("-inf")
         # Get current time now, so that cur_time - mtime is pessimistic,
         # and does not count the time for the cleanup itself.
         cur_time = time.time()
+        # If we have enough free space, and we did a full cleanup recently, we don't need to do anything.
+        if want_free_space_size <= disk_usage.free and cur_time - last_full_cleanup < 60 * 10:
+            return
+        # immediately update the file's timestamp to reduce racyness between worker processes
+        # Path().touch() also creates the file if it doesn't exist yet
+        pathlib.Path(cleanup_timestamp_file).touch(exist_ok=True)
+        # Do a full cleanup, i.e. iterate through all files in cache directory and check their mtime.
         all_files = []  # mtime, neg size (better for sorting), filename
         for root, dirs, files in os.walk(self.cache_directory):
             for rel_fn in files:
@@ -256,8 +264,6 @@ class FileCache:
             except Exception as exc:
                 print(f"FileCache: Error while removing empty dir {root}: {type(exc).__name__}: {exc}")
 
-        self._recent_full_cleanup_time = time.monotonic()
-
     def handle_cached_files_in_config(self, config: Any) -> Tuple[Any, List[str]]:
         """
         :param config: some config, e.g. dict, or any nested structure
@@ -337,6 +343,17 @@ class FileCache:
         return True
 
 
+def get_instance(config: Optional[Config] = None) -> FileCache:
+    """
+    Returns a file cache instance potentially initialized by the global config.
+
+    Uses defaults if no global config is set.
+    """
+    config = config or get_global_config(return_empty_if_none=True)
+    kwargs = config.typed_value("file_cache_opts") or {}
+    return FileCache(**kwargs)
+
+
 def _copy_with_prealloc(src: str, dst: str):
     """
     Copies the file at `src` to `dst` preallocating the space at `dst` before the
@@ -387,6 +404,7 @@ class _TouchFilesThread(Thread):
         self.files = defaultdict(int)  # usage counter
         self.interval = interval
         self.cache_base_dir = cache_base_dir
+        self._is_started = False  # careful: `_started` is already a member of the base class
 
     def run(self):
         """thread main loop"""
@@ -400,9 +418,17 @@ class _TouchFilesThread(Thread):
             if self.stop.wait(self.interval):
                 return
 
+    def start_once(self):
+        """reentrant variant of start() that can safely be called multiple times"""
+        if self._is_started:
+            return
+        self._is_started = True
+        self.start()
+
     def files_extend(self, files: Collection[str]):
         """append"""
         assert isinstance(files, (list, set, tuple))
+        self.start_once()
         for file in files:
             self.files[file] += 1
 

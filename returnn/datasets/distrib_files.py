@@ -6,7 +6,7 @@ https://github.com/rwth-i6/returnn/issues/1519
 
 from __future__ import annotations
 
-from typing import Optional, Any, Dict, Tuple, List, Sequence, Collection, Callable, Union
+from typing import Optional, Any, Dict, Tuple, List, Sequence, Callable, Union
 import os
 import sys
 import numpy
@@ -136,7 +136,6 @@ class DistributeFilesDataset(CachedDataset2):
         get_sub_epoch_dataset: Callable[[List[FileTree]], Dict[str, Any]],
         preload_next_n_sub_epochs: int = 1,
         buffer_size: int = 1,
-        file_cache_opts: Optional[Dict[str, Any]] = None,
         distrib_shard_files: bool = False,
         _meta_info_cache: Optional[Dict[str, Any]] = None,
         **kwargs,
@@ -157,13 +156,11 @@ class DistributeFilesDataset(CachedDataset2):
         assert preload_next_n_sub_epochs >= 0
         self.preload_next_n_sub_epochs = preload_next_n_sub_epochs
         self.buffer_size = buffer_size
-        self.file_cache_opts = file_cache_opts or {}
         self._file_sizes: Optional[Dict[str, int]] = None  # key -> size. for equal distribution across sub epochs
         self._data_keys: Optional[List[str]] = None
         self._num_seqs: Optional[int] = None
         self._shard_index, self._num_shards = _get_rank_and_size() if distrib_shard_files else (0, 1)
 
-        self._file_cache: Optional[_FileCacheProc] = None
         self._workers: Dict[int, _WorkerProcParent] = {}  # epoch -> worker
         self._files_order_cache: Dict[int, List[List[FileTree]]] = {}  # full epoch (0-indexed) -> files order
 
@@ -205,15 +202,12 @@ class DistributeFilesDataset(CachedDataset2):
             return
         # First, we need to know the num_inputs, num_outputs, total_num_seqs, labels.
         # Init the dataset with the first file.
-        dataset_dict, exit_hook = self._get_sub_dataset_dict(files=[self.files[0]])
-        try:
-            dataset = init_dataset(dataset_dict, extra_kwargs={"seq_ordering": "default"}, parent_dataset=self)
-            self.num_inputs = dataset.num_inputs
-            self.num_outputs = dataset.num_outputs
-            self.labels = dataset.labels
-            self._data_keys = dataset.get_data_keys()
-        finally:
-            exit_hook()
+        dataset_dict = self._get_sub_dataset_dict(files=[self.files[0]])
+        dataset = init_dataset(dataset_dict, extra_kwargs={"seq_ordering": "default"}, parent_dataset=self)
+        self.num_inputs = dataset.num_inputs
+        self.num_outputs = dataset.num_outputs
+        self.labels = dataset.labels
+        self._data_keys = dataset.get_data_keys()
 
     def _lazy_init_file_sizes(self):
         import tree
@@ -224,17 +218,7 @@ class DistributeFilesDataset(CachedDataset2):
             _get_key_for_file_tree(t): sum((os.path.getsize(fn) for fn in tree.flatten(t)), 0) for t in self.files
         }
 
-    def _lazy_init_file_cache_proc(self):
-        if self._file_cache:
-            return
-        self._file_cache = _FileCacheProc(
-            name=f"{self.__class__.__name__} {self.name}", file_cache_opts=self.file_cache_opts
-        )
-
     def __del__(self):
-        if self._file_cache:
-            try_run(self._file_cache.exit, kwargs={"join": False})
-            self._file_cache = None
         for k, worker in self._workers.items():
             try_run(worker.exit, kwargs={"join": False})
         self._workers.clear()
@@ -256,7 +240,6 @@ class DistributeFilesDataset(CachedDataset2):
             return True
 
         self._lazy_init_file_sizes()
-        self._lazy_init_file_cache_proc()
 
         full_epoch_0idx = (epoch - 1) // self.partition_epoch
 
@@ -300,21 +283,20 @@ class DistributeFilesDataset(CachedDataset2):
             files_order: List[List[FileTree]] = self._files_order_cache[full_epoch_0idx_]
             files_for_subep = files_order[(ep_ - 1) % self.partition_epoch]
             print(f"{self}: using files for epoch {ep_}: {files_for_subep}", file=log.v4)
-            dataset_dict, exit_hook = self._get_sub_dataset_dict(files=files_for_subep)
+            dataset_dict = self._get_sub_dataset_dict(files=files_for_subep)
             worker = _WorkerProcParent(
                 name=f"{self.__class__.__name__} {self.name} ep {epoch}",
                 epoch=ep_,
                 full_epoch_0idx=full_epoch_0idx_,
                 dataset_dict=dataset_dict,
                 buffer_size=self.buffer_size,
-                exit_hook=exit_hook,
             )
             self._workers[ep_] = worker
 
         self._num_seqs = self._workers[epoch].get_num_seqs()
         return True
 
-    def _get_sub_dataset_dict(self, files: List[FileTree]) -> Tuple[Dict[str, Any], _FileCacheExitHook]:
+    def _get_sub_dataset_dict(self, files: List[FileTree]) -> Dict[str, Any]:
         dataset_dict = self.get_sub_epoch_dataset(files)
         dataset_dict = extend_dataset_dict_from_parent_dataset(dataset_dict, parent_dataset=self)
         if dataset_dict.get("partition_epoch", 1) != 1:
@@ -324,9 +306,7 @@ class DistributeFilesDataset(CachedDataset2):
                 f"{self}: sub dataset should have explicit seq_ordering "
                 f"(or seq_order_control_dataset for MetaDataset), got: {dataset_dict}"
             )
-        self._lazy_init_file_cache_proc()
-        dataset_dict, exit_hook = self._file_cache.handle_cached_files_in_config(dataset_dict)
-        return dataset_dict, exit_hook
+        return dataset_dict
 
     @staticmethod
     def _distribute_evenly_by_size(
@@ -417,9 +397,6 @@ class DistributeFilesDataset(CachedDataset2):
                 worker.exit()
             self._workers.clear()
             self._files_order_cache.clear()
-            if self._file_cache:
-                self._file_cache.exit()
-                self._file_cache = None
         else:
             if self.epoch in self._workers:
                 worker = self._workers.pop(self.epoch)
@@ -643,98 +620,6 @@ def _worker_proc_loop(
                 got_init_seq_order = True
                 next_seq_idx = 0
                 cache[:] = []
-            else:
-                raise Exception(f"unknown msg {msg!r}")
-    except KeyboardInterrupt:  # when parent dies
-        pass
-
-
-class _FileCacheProc:
-    def __init__(self, *, name: str, file_cache_opts: Dict[str, Any]):
-        self.file_cache_opts = file_cache_opts
-
-        parent_conn, child_conn = _mp.Pipe()
-        self.parent_conn: mpConnection = parent_conn
-
-        self.proc = _mp.Process(
-            name=f"{name} file cache",
-            target=_file_cache_proc_loop,
-            args=(file_cache_opts, child_conn),
-            daemon=True,
-        )
-        self.proc.start()
-        # Make sure the child connection is closed here.
-        # It stays open in the child, until the child dies.
-        # When that happens, now any consecutive read on the pipe
-        # should yield an exception -- which is what we want,
-        # otherwise it would just hang.
-        child_conn.close()
-
-    def handle_cached_files_in_config(self, config: Dict[str, Any]) -> Tuple[Dict[str, Any], _FileCacheExitHook]:
-        """:func:`FileCache.handle_cached_files_in_config`"""
-        self.parent_conn.send(("handle_cached_files_in_config", {"config": config}))
-        msg, (res, files) = self.parent_conn.recv()
-        assert msg == "config_and_cached_files" and isinstance(config, dict) and isinstance(files, list)
-        return res, _FileCacheExitHook(self, files)
-
-    def release_files(self, filenames: Collection[str]):
-        """:func:`FileCache.release_files`"""
-        self.parent_conn.send(("release_files", {"filenames": filenames}))
-
-    def exit(self, *, join: bool = True):
-        """exit"""
-        if self.proc.exitcode is not None:  # already stopped?
-            return
-        self.parent_conn.send(("exit", {}))
-        if join:
-            self.proc.join()
-
-    def __del__(self):
-        # noinspection PyBroadException
-        try:
-            self.exit(join=False)
-        except Exception:
-            pass
-        else:
-            try_run(self.proc.join)
-
-
-class _FileCacheExitHook:
-    def __init__(self, file_cache_proc: _FileCacheProc, cached_files: List[str]):
-        self.file_cache_proc = file_cache_proc
-        self.cached_files = cached_files
-
-    def __call__(self):
-        if self.file_cache_proc.proc.exitcode is not None:
-            return
-        self.file_cache_proc.release_files(self.cached_files)
-
-
-def _file_cache_proc_loop(
-    file_cache_opts: Dict[str, Any],
-    parent_conn: mpConnection,
-):
-    if sys.platform == "linux":
-        with open("/proc/self/comm", "w") as f:
-            f.write(f"File cache")
-
-    assert isinstance(file_cache_opts, dict)
-    assert isinstance(parent_conn, mpConnection)
-
-    from returnn.util.file_cache import FileCache
-
-    file_cache = FileCache(**file_cache_opts)
-
-    try:
-        while True:
-            msg, kwargs = parent_conn.recv()
-            if msg == "exit":
-                break
-            elif msg == "handle_cached_files_in_config":
-                res, files = file_cache.handle_cached_files_in_config(**kwargs)
-                parent_conn.send(("config_and_cached_files", (res, files)))
-            elif msg == "release_files":
-                file_cache.release_files(**kwargs)
             else:
                 raise Exception(f"unknown msg {msg!r}")
     except KeyboardInterrupt:  # when parent dies

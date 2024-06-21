@@ -870,7 +870,12 @@ def test_file_cache():
     # Check cleanup mechanism.
     cache._cleanup_files_always_older_than_days = 4 / 60 / 60 / 24
     print("Cache older than secs:", cache._cleanup_files_always_older_than_days * 24 * 60 * 60)
-    print("Recent cleanup is ago:", time.monotonic() - cache._recent_full_cleanup_time, "secs")
+    cleanup_timestamp_file = cache_dir + "/.recent_full_cleanup"
+    try:
+        last_full_cleanup = os.stat(cleanup_timestamp_file).st_mtime
+    except FileNotFoundError:
+        last_full_cleanup = float("-inf")
+    print("Recent cleanup is ago:", time.time() - last_full_cleanup, "secs")
     # Note: After the first cleanup, there are still dirs maybe left over, because dirs are only cleaned
     # when their mtime is a older than some threshold.
     # However, when we just deleted some file inside, that would have updated the mtime of the dir.
@@ -879,14 +884,17 @@ def test_file_cache():
     prev_count_dirs = None
     while True:
         time.sleep(0.1)
-        cache._recent_full_cleanup_time = float("-inf")  # reset
+        os.unlink(cleanup_timestamp_file)  # reset
+        time.sleep(0.1)
         cache.cleanup()
         count_files = 0
         count_dirs = 0
         for root, dirs, files in os.walk(cache_dir):
+            # ignore cleanup timestamp file
             for fn in dirs + files:
                 print(f"{root}/{fn}", "age:", time.time() - os.stat(f"{root}/{fn}").st_mtime, "sec")
-            count_files += len(files)
+            leftover_files = [f for f in files if "recent_full_cleanup" not in f]
+            count_files += len(leftover_files)
             count_dirs += len(dirs)
         print("count files:", count_files, "count dirs:", count_dirs)
         assert count_files == 0

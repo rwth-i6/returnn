@@ -25,6 +25,7 @@ from returnn.log import log
 from returnn.engine.batch import Batch, BatchSetGenerator
 from returnn.datasets.util.vocabulary import Vocabulary
 from returnn.util.basic import try_run, NumbersDict, OptionalNotImplementedError
+from returnn.util import file_cache
 from returnn.tensor import TensorDict
 
 if TYPE_CHECKING:
@@ -195,6 +196,7 @@ class Dataset(object):
         self.shuffle_frames_of_nseqs = shuffle_frames_of_nseqs
         self.epoch = None
         self.zpad = None
+        self._file_cache: Optional[file_cache.FileCache] = None
 
     def __repr__(self):
         return "<%s %r epoch=%s>" % (
@@ -281,6 +283,13 @@ class Dataset(object):
             if returnn.tf.horovod.get_ctx(config=config).is_dataset_distribution_random_seed_offset():
                 return returnn.tf.horovod.get_ctx(config=config).rank() * 16127
         return 0
+
+    def set_file_cache(self, cache: file_cache.FileCache):
+        """
+        Stores the given file cache with the dataset to unregister the files within
+        the cache when the dataset is deinitialized.
+        """
+        self._file_cache = cache
 
     @staticmethod
     def _parse_chunking(chunking):
@@ -1434,7 +1443,13 @@ def init_dataset(
                 kwargs.update(default_kwargs)
             if extra_kwargs:
                 kwargs.update(extra_kwargs)
-            return init_dataset_via_str(config_str=config_str, **kwargs)
+            cache = file_cache.get_instance()
+            kwargs, cached_files = cache.handle_cached_files_in_config(kwargs)
+            obj = init_dataset_via_str(config_str=config_str, **kwargs)
+            assert isinstance(obj, Dataset)
+            if cached_files:
+                obj.set_file_cache(cache)
+            return obj
     assert isinstance(kwargs, dict)
     kwargs = kwargs.copy()
     assert "class" in kwargs
@@ -1448,9 +1463,13 @@ def init_dataset(
             kwargs.setdefault(key, value)
     if extra_kwargs:
         kwargs.update(extra_kwargs)
+    cache = file_cache.get_instance()
+    kwargs, cached_files = cache.handle_cached_files_in_config(kwargs)
     obj = clazz(**kwargs)
     assert isinstance(obj, Dataset)
     obj.initialize()
+    if cached_files:
+        obj.set_file_cache(cache)
     return obj
 
 
