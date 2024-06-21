@@ -283,6 +283,7 @@ class FileCache:
         Copy the file to the cache directory.
         """
         if self._check_existing_copied_file_maybe_cleanup(src_filename, dst_filename):
+            print(f"FileCache: using existing file {dst_filename}")
             os.utime(dst_filename, None)  # touch
             return
 
@@ -291,7 +292,9 @@ class FileCache:
         os.makedirs(dst_dir, exist_ok=True)
 
         # Copy the file, while holding a lock. See comment on lock_timeout above.
-        with LockFile(directory=self.cache_directory, name="dir.lock", lock_timeout=self._lock_timeout) as lock:
+        with LockFile(
+            directory=dst_dir, name=os.path.basename(dst_filename) + ".lock", lock_timeout=self._lock_timeout
+        ) as lock:
             # Maybe it was copied in the meantime, while waiting for the lock.
             if self._check_existing_copied_file_maybe_cleanup(src_filename, dst_filename):
                 return
