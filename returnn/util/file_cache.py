@@ -12,6 +12,7 @@ Main class is :class:`FileCache`.
 from typing import Any, Collection, List, Optional, Tuple
 import errno
 import os
+import pathlib
 import time
 import shutil
 from dataclasses import dataclass
@@ -74,7 +75,6 @@ class FileCache:
         self._cleanup_files_wanted_older_than_days = cleanup_files_wanted_older_than_days
         self._cleanup_disk_usage_wanted_free_ratio = cleanup_disk_usage_wanted_free_ratio
         self._touch_files_thread = _TouchFilesThread(cache_base_dir=self.cache_directory)
-        self._recent_full_cleanup_time = float("-inf")
         assert num_tries > 0
         self._num_tries = num_tries
 
@@ -145,13 +145,20 @@ class FileCache:
         want_free_space_size = max(
             need_at_least_free_space_size, int(self._cleanup_disk_usage_wanted_free_ratio * disk_usage.total)
         )
-        # If we have enough free space, and we did a full cleanup recently, we don't need to do anything.
-        if want_free_space_size <= disk_usage.free and time.monotonic() - self._recent_full_cleanup_time < 60 * 10:
-            return
-        # Do a full cleanup, i.e. iterate through all files in cache directory and check their mtime.
+        cleanup_timestamp_file = self.cache_directory + "/.recent_full_cleanup"
+        try:
+            last_full_cleanup = os.stat(cleanup_timestamp_file).st_mtime
+        except FileNotFoundError:
+            last_full_cleanup = float("-inf")
         # Get current time now, so that cur_time - mtime is pessimistic,
         # and does not count the time for the cleanup itself.
         cur_time = time.time()
+        # If we have enough free space, and we did a full cleanup recently, we don't need to do anything.
+        if want_free_space_size <= disk_usage.free and cur_time - last_full_cleanup < 60 * 10:
+            return
+        # immediately update the file's timestamp to reduce racyness between worker processes
+        pathlib.Path(cleanup_timestamp_file).touch(exist_ok=True)
+        # Do a full cleanup, i.e. iterate through all files in cache directory and check their mtime.
         all_files = []  # mtime, neg size (better for sorting), filename
         for root, dirs, files in os.walk(self.cache_directory):
             for rel_fn in files:
@@ -249,8 +256,6 @@ class FileCache:
                 os.rmdir(root)
             except Exception as exc:
                 print(f"FileCache: Error while removing empty dir {root}: {type(exc).__name__}: {exc}")
-
-        self._recent_full_cleanup_time = time.monotonic()
 
     def handle_cached_files_in_config(self, config: Any) -> Tuple[Any, List[str]]:
         """
