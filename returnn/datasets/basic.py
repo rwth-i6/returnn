@@ -111,7 +111,6 @@ class Dataset(object):
         min_chunk_size=0,
         chunking_variance=0,
         estimated_num_seqs=None,
-        file_cache=None,
     ):
         """
         :param str name: e.g. "train" or "eval"
@@ -135,7 +134,6 @@ class Dataset(object):
         :param str|None seq_order_seq_lens_file: for seq order, use the seq length given by this file
         :param int shuffle_frames_of_nseqs: shuffles the frames. not always supported
         :param None|int estimated_num_seqs: for progress reporting in case the real num_seqs is unknown
-        :param None|FileCache: file cache instance handling the files in this dataset
         """
         self.name = name or ("dataset_id%s" % id(self))
         self.lock = None  # type: Optional[RLock]  # Used when manipulating our data potentially from multiple threads.
@@ -198,7 +196,7 @@ class Dataset(object):
         self.shuffle_frames_of_nseqs = shuffle_frames_of_nseqs
         self.epoch = None
         self.zpad = None
-        self._file_cache = file_cache
+        self._file_cache: Optional[file_cache.FileCache] = None
 
     def __repr__(self):
         return "<%s %r epoch=%s>" % (
@@ -286,12 +284,12 @@ class Dataset(object):
                 return returnn.tf.horovod.get_ctx(config=config).rank() * 16127
         return 0
 
-    def set_cached_files_for_release(self, files: List[str]):
+    def set_file_cache(self, cache: file_cache.FileCache):
         """
-        Registers the given files for release from :class:`FileCache` when the
-        dataset's destructor runs.
+        Stores the given file cache with the dataset to unregister the files within
+        the cache when the dataset is deinitialized.
         """
-        self._cached_files = files
+        self._file_cache = cache
 
     @staticmethod
     def _parse_chunking(chunking):
@@ -1450,7 +1448,7 @@ def init_dataset(
             obj = init_dataset_via_str(config_str=config_str, **kwargs)
             assert isinstance(obj, Dataset)
             if cached_files:
-                obj.set_cached_files_for_release(cached_files)
+                obj.set_file_cache(cache)
             return obj
     assert isinstance(kwargs, dict)
     kwargs = kwargs.copy()
@@ -1471,7 +1469,7 @@ def init_dataset(
     assert isinstance(obj, Dataset)
     obj.initialize()
     if cached_files:
-        obj.set_cached_files_for_release(cached_files)
+        obj.set_file_cache(cache)
     return obj
 
 
