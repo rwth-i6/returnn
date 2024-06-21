@@ -480,7 +480,6 @@ def init(config_filename=None, command_line_options=(), config_updates=None, ext
         startup_callback = config.typed_value("startup_callback")
         startup_callback(config=config)
     if need_data():
-        init_file_cache()
         if config.bool("use_dummy_datasets", False):
             setup_dummy_datasets()
         init_data()
