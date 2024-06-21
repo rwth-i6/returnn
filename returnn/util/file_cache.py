@@ -157,6 +157,7 @@ class FileCache:
         if want_free_space_size <= disk_usage.free and cur_time - last_full_cleanup < 60 * 10:
             return
         # immediately update the file's timestamp to reduce racyness between worker processes
+        # Path().touch() also creates the file if it doesn't exist yet
         pathlib.Path(cleanup_timestamp_file).touch(exist_ok=True)
         # Do a full cleanup, i.e. iterate through all files in cache directory and check their mtime.
         all_files = []  # mtime, neg size (better for sorting), filename
