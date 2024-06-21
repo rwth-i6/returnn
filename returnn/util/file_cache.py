@@ -120,6 +120,13 @@ class FileCache:
                 self._copy_file_if_needed(src_filename, dst_filename)
                 break
             except FileNotFoundError as e:
+                # This also catches the race condition where the target directory was
+                # removed by the empty directory cleanup. The directory will then be
+                # recreated.
+                #
+                # This ofc also catches the condition when the source file does not
+                # exist, and in that case we just rely on retrying a finite amount of
+                # times, so that eventually this error will propagate.
                 last_error = e
             except OSError as e:
                 if e.errno == errno.ENOSPC:
