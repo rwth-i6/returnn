@@ -111,6 +111,7 @@ class Dataset(object):
         min_chunk_size=0,
         chunking_variance=0,
         estimated_num_seqs=None,
+        file_cache=None,
     ):
         """
         :param str name: e.g. "train" or "eval"
@@ -134,6 +135,7 @@ class Dataset(object):
         :param str|None seq_order_seq_lens_file: for seq order, use the seq length given by this file
         :param int shuffle_frames_of_nseqs: shuffles the frames. not always supported
         :param None|int estimated_num_seqs: for progress reporting in case the real num_seqs is unknown
+        :param None|FileCache: file cache instance handling the files in this dataset
         """
         self.name = name or ("dataset_id%s" % id(self))
         self.lock = None  # type: Optional[RLock]  # Used when manipulating our data potentially from multiple threads.
@@ -196,11 +198,7 @@ class Dataset(object):
         self.shuffle_frames_of_nseqs = shuffle_frames_of_nseqs
         self.epoch = None
         self.zpad = None
-        self._cached_files: Optional[List[str]] = None
-
-    def __del__(self):
-        if self._cached_files is not None:
-            file_cache.get_instance().release_files(self._cached_files)
+        self._file_cache = file_cache
 
     def __repr__(self):
         return "<%s %r epoch=%s>" % (
@@ -1447,7 +1445,13 @@ def init_dataset(
                 kwargs.update(default_kwargs)
             if extra_kwargs:
                 kwargs.update(extra_kwargs)
-            return init_dataset_via_str(config_str=config_str, **kwargs)
+            cache = file_cache.get_instance()
+            kwargs, cached_files = cache.handle_cached_files_in_config(kwargs)
+            obj = init_dataset_via_str(config_str=config_str, **kwargs)
+            assert isinstance(obj, Dataset)
+            if cached_files:
+                obj.set_cached_files_for_release(cached_files)
+            return obj
     assert isinstance(kwargs, dict)
     kwargs = kwargs.copy()
     assert "class" in kwargs
@@ -1461,7 +1465,8 @@ def init_dataset(
             kwargs.setdefault(key, value)
     if extra_kwargs:
         kwargs.update(extra_kwargs)
-    kwargs, cached_files = file_cache.get_instance().handle_cached_files_in_config(kwargs)
+    cache = file_cache.get_instance()
+    kwargs, cached_files = cache.handle_cached_files_in_config(kwargs)
     obj = clazz(**kwargs)
     assert isinstance(obj, Dataset)
     obj.initialize()

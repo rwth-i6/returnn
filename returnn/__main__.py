@@ -136,13 +136,6 @@ def init_log():
     log.init_by_config(config)
 
 
-def init_file_cache():
-    """
-    Initializes the global :class:`FileCache`.
-    """
-    file_cache.init_by_config(config)
-
-
 def get_cache_byte_sizes():
     """
     :rtype: (int,int,int)

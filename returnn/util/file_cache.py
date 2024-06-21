@@ -22,56 +22,7 @@ from .basic import expand_env_vars, LockFile, human_bytes_size
 from returnn.config import Config, get_global_config
 
 
-__all__ = ["FileCache", "CachedFile", "get_instance", "init_by_config"]
-
-
-DEFAULT_CACHE_DIR = "$TMPDIR/$USER/returnn/file_cache"
-DEFAULT_CLEANUP_FILES_ALWAYS_OLDER_THAN_DAYS = 31.0
-DEFAULT_CLEANUP_FILES_WANTED_OLDER_THAN_DAYS = 7.0
-DEFAULT_CLEANUP_DISK_USAGE_WANTED_FREE_RATIO = 0.2  # try to free at least 20% disk space
-DEFAULT_NUM_TRIES = 3  # retry twice by default
-
-
-cache_instance: Optional["FileCache"] = None
-
-
-def init_by_config(config: Config):
-    """Initializes the global file cache using values from `config`."""
-    global cache_instance
-    if cache_instance:
-        return
-    # TODO: just pass along all `file_cache_*` config values as kwargs?
-    cache_instance = FileCache(
-        cache_directory=config.value(
-            "file_cache_cache_directory",
-            DEFAULT_CACHE_DIR,
-        ),
-        cleanup_files_always_older_than_days=config.value(
-            "file_cache_cleanup_files_always_older_than_days",
-            DEFAULT_CLEANUP_FILES_ALWAYS_OLDER_THAN_DAYS,
-        ),
-        cleanup_files_wanted_older_than_days=config.value(
-            "file_cache_cleanup_files_wanted_older_than_days",
-            DEFAULT_CLEANUP_FILES_WANTED_OLDER_THAN_DAYS,
-        ),
-        cleanup_disk_usage_wanted_free_ratio=config.value(
-            "file_cache_cleanup_disk_usage_wanted_free_ratio",
-            DEFAULT_CLEANUP_DISK_USAGE_WANTED_FREE_RATIO,
-        ),
-        num_tries=config.value(
-            "file_cache_num_tries",
-            DEFAULT_NUM_TRIES,
-        ),
-    )
-
-
-def get_instance() -> "FileCache":
-    """:return: the global file cache instance. Initializes with defaults if not yet initialized."""
-    global cache_instance
-    if cache_instance is None:
-        print("FileCache: global instance not initialized yet, using default")
-        cache_instance = FileCache()
-    return cache_instance
+__all__ = ["FileCache", "CachedFile", "get_instance"]
 
 
 class FileCache:
@@ -103,11 +54,11 @@ class FileCache:
     def __init__(
         self,
         *,
-        cache_directory: str = DEFAULT_CACHE_DIR,
-        cleanup_files_always_older_than_days: float = DEFAULT_CLEANUP_FILES_ALWAYS_OLDER_THAN_DAYS,
-        cleanup_files_wanted_older_than_days: float = DEFAULT_CLEANUP_FILES_WANTED_OLDER_THAN_DAYS,
-        cleanup_disk_usage_wanted_free_ratio: float = DEFAULT_CLEANUP_DISK_USAGE_WANTED_FREE_RATIO,
-        num_tries: int = DEFAULT_NUM_TRIES,
+        cache_directory: str = "$TMPDIR/$USER/returnn/file_cache",
+        cleanup_files_always_older_than_days: float = 31.0,
+        cleanup_files_wanted_older_than_days: float = 7.0,
+        cleanup_disk_usage_wanted_free_ratio: float = 0.2,  # try to free at least 20% disk space
+        num_tries: int = 3,  # retry twice by default
     ):
         """
         :param cache_directory: directory where to cache files.
@@ -379,6 +330,17 @@ class FileCache:
             os.remove(dst_filename)
             return False
         return True
+
+
+def get_instance(config: Optional[Config] = None) -> FileCache:
+    """
+    Returns a file cache instance potentially initialized by the global config.
+
+    Uses defaults if no global config is set.
+    """
+    config = config or get_global_config(raise_exception=False)
+    kwargs = config.value("file_cache_opts", {}) if config is not None else {}
+    return FileCache(**kwargs)
 
 
 def _copy_with_prealloc(src: str, dst: str):
