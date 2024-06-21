@@ -54,8 +54,8 @@ class FileCache:
         self,
         *,
         cache_directory: str = "$TMPDIR/$USER/returnn/file_cache",
-        cleanup_files_always_older_than_days: float = 31.0,
-        cleanup_files_wanted_older_than_days: float = 7.0,
+        cleanup_files_always_older_than_days: float = 7.0,
+        cleanup_files_wanted_older_than_days: float = 1.0,
         cleanup_disk_usage_wanted_free_ratio: float = 0.2,  # try to free at least 20% disk space
         cleanup_disk_usage_wanted_multiplier: float = 2.0,  # try to free 2x the required space for a file
         num_tries: int = 3,  # retry twice by default
