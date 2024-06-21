@@ -74,7 +74,6 @@ class FileCache:
         self._cleanup_files_wanted_older_than_days = cleanup_files_wanted_older_than_days
         self._cleanup_disk_usage_wanted_free_ratio = cleanup_disk_usage_wanted_free_ratio
         self._touch_files_thread = _TouchFilesThread(cache_base_dir=self.cache_directory)
-        self._touch_files_thread.start()
         self._recent_full_cleanup_time = float("-inf")
         assert num_tries > 0
         self._num_tries = num_tries
@@ -393,6 +392,7 @@ class _TouchFilesThread(Thread):
         self.files = defaultdict(int)  # usage counter
         self.interval = interval
         self.cache_base_dir = cache_base_dir
+        self._started = False
 
     def run(self):
         """thread main loop"""
@@ -406,9 +406,17 @@ class _TouchFilesThread(Thread):
             if self.stop.wait(self.interval):
                 return
 
+    def start_once(self):
+        """reentrant variant of start() that can safely be called multiple times"""
+        if self._started:
+            return
+        self.start()
+        self._started = True
+
     def files_extend(self, files: Collection[str]):
         """append"""
         assert isinstance(files, (list, set, tuple))
+        self.start_once()
         for file in files:
             self.files[file] += 1
 
