@@ -193,13 +193,13 @@ class FileCache:
             size = -neg_size
             delete_reason = None
             if cur_time - mtime > self._cleanup_files_always_older_than_days * 60 * 60 * 24:
-                delete_reason = f"File is {(cur_time - mtime) / 60 / 60 / 24} days old"
+                delete_reason = f"File is {(cur_time - mtime) / 60 / 60 / 24:.1f} days old"
             else:
                 reached_more_recent_files = True
             if not delete_reason and need_at_least_free_space_size > cur_expected_free:
                 # Still must delete some files.
                 if cur_time - mtime > cur_used_time_threshold:
-                    delete_reason = f"Still need more space, file is {cur_time - mtime} secs old"
+                    delete_reason = f"Still need more space, file is {(cur_time - mtime) / 60 / 60:.1f} hours old"
                 else:
                     raise Exception(
                         f"We cannot free enough space on {self.cache_directory}.\n"
@@ -210,7 +210,7 @@ class FileCache:
                     )
             if not delete_reason and want_free_space_size > cur_expected_free:
                 if cur_time - mtime > self._cleanup_files_wanted_older_than_days * 60 * 60 * 24:
-                    delete_reason = f"Still want more space, file is {(cur_time - mtime) / 60} min old"
+                    delete_reason = f"Still want more space, file is {(cur_time - mtime) / 60 / 60:.1f} hours old"
                 else:
                     # All further files are even more recent, so we would neither cleanup them,
                     # so we can also just stop now.
