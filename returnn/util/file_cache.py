@@ -321,7 +321,7 @@ class FileCache:
                 assert dst_tmp_file_age > self._lock_timeout * 0.8, (
                     f"FileCache: Expected left-over temp copy file {dst_tmp_filename}"
                     f" from crashed previous copy attempt"
-                    f" to be older than {self._lock_timeout * 0.8}s but it is {dst_tmp_file_age} seconds old"
+                    f" to be older than {self._lock_timeout * 0.8:.1f}s but it is {dst_tmp_file_age} seconds old"
                 )
 
             with self._touch_files_thread.files_added_context([dst_dir, lock.lockfile]):
