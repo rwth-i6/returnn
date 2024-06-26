@@ -21,7 +21,14 @@ class ConformerPositionwiseFeedForward(rf.Module):
         FF -> Activation -> Dropout -> FF
     """
 
-    def __init__(self, out_dim: Dim, *, ff_dim: Dim, dropout: float, activation: Callable[[Tensor], Tensor]):
+    def __init__(
+        self,
+        out_dim: Dim,
+        *,
+        ff_dim: Dim,
+        dropout: float,
+        activation: Union[Callable[[Tensor], Tensor], Dict[str, Any], rf.Module],
+    ):
         """
         :param out_dim: output feature dimension
         :param ff_dim: dimension of the feed-forward layers
@@ -33,7 +40,9 @@ class ConformerPositionwiseFeedForward(rf.Module):
         self.out_dim = out_dim
         self.dropout = dropout
         self.dropout_broadcast = rf.dropout_broadcast_default()
-        if not callable(activation):
+        if isinstance(activation, dict):
+            activation = rf.build_from_dict(activation)
+        elif not callable(activation):
             raise TypeError(f"{self}: unexpected activation type {activation!r}")
         self.activation = activation
 
@@ -180,7 +189,7 @@ class ConformerEncoderLayer(rf.Module):
         out_dim: Dim = Dim(512, name="conformer-enc-default-out-dim"),
         *,
         ff_dim: Dim = NotSpecified,
-        ff_activation: Callable[[Tensor], Tensor] = rf.swish,
+        ff_activation: Union[Callable[[Tensor], Tensor], Dict[str, Any], rf.Module] = rf.swish,
         dropout: float = 0.1,
         conv_kernel_size: int = 32,
         conv_norm: Union[rf.BatchNorm, type, Dict[str, Any], Any] = NotSpecified,
@@ -307,7 +316,7 @@ class ConformerEncoder(ISeqDownsamplingEncoder):
         input_layer: Union[ConformerConvSubsample, ISeqDownsamplingEncoder, rf.Module, Any],
         input_dropout: float = 0.1,
         ff_dim: Dim = NotSpecified,
-        ff_activation: Callable[[Tensor], Tensor] = rf.swish,
+        ff_activation: Union[Callable[[Tensor], Tensor], Dict[str, Any], rf.Module] = rf.swish,
         dropout: float = 0.1,
         conv_kernel_size: int = 32,
         conv_norm: Union[rf.BatchNorm, type, Dict[str, Any], Any] = NotSpecified,
