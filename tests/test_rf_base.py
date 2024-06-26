@@ -397,3 +397,34 @@ def test_rf_range_over_dim():
         rf.range_over_dim(time_dim, dtype="float32").mark_as_output("range_float", shape=[time_dim])
 
     run_model(extern_data, lambda *, epoch, step: rf.Module(), _forward_step)
+
+
+def test_build_dict():
+    d = rf.build_dict(rf.BatchNorm, use_mask=True)
+    assert d == {"class": "rf.BatchNorm", "use_mask": True}
+
+
+def test_build_dict_func():
+    d = rf.build_dict(rf.relu)
+    assert d == {"class": "rf.relu"}
+
+
+def test_build_from_dict():
+    rf.select_backend_torch()
+    in_dim = Dim(7, name="in")
+    mod = rf.build_from_dict({"class": "rf.BatchNorm", "use_mask": True}, in_dim, eps=1e-4)
+    assert isinstance(mod, rf.BatchNorm)
+    assert mod.in_dim == in_dim
+    assert mod.use_mask
+    assert mod.eps == 1e-4
+
+
+def test_build_from_dict_func():
+    import functools
+
+    func = rf.build_from_dict({"class": "rf.relu"})
+    assert func is rf.relu
+    func = rf.build_from_dict({"class": "rf.combine", "kind": "+", "b": 1})
+    assert isinstance(func, functools.partial)
+    assert func.func is rf.combine
+    assert func.keywords == {"kind": "+", "b": 1}
