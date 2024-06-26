@@ -3979,6 +3979,22 @@ def close_all_fds_except(except_fds):
             os.closerange(except_fds[i] + 1, except_fds[i + 1])
 
 
+def is_valid_fd(fd: int) -> bool:
+    """
+    :return: whether the file descriptor (fd) is still open and valid
+    """
+    # https://stackoverflow.com/questions/12340695/how-to-check-if-a-given-file-descriptor-stored-in-a-variable-is-still-valid
+    import fcntl
+    import errno
+
+    try:
+        fcntl.fcntl(fd, fcntl.F_GETFD)
+        return True  # no matter what fcntl returned, it's a valid fd
+    except OSError as exc:
+        assert exc.errno == errno.EBADF
+        return False
+
+
 class Stats:
     """
     Collects mean and variance, running average.
