@@ -58,6 +58,7 @@ __all__ = [
     "floor",
     "round",
     "relu",
+    "relu_square",
     "elu",
     "selu",
     "silu",
@@ -491,6 +492,13 @@ def relu(a: Tensor) -> Tensor:
     """relu"""
     # noinspection PyProtectedMember
     return a._raw_backend.activation(a, "relu")
+
+
+def relu_square(x: Tensor) -> Tensor:
+    """
+    :return: ``relu(x) ** 2``
+    """
+    return square(relu(x))
 
 
 def elu(a: Tensor) -> Tensor:
