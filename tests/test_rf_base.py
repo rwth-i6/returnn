@@ -428,3 +428,12 @@ def test_build_from_dict_func():
     assert isinstance(func, functools.partial)
     assert func.func is rf.combine
     assert func.keywords == {"kind": "+", "b": 1}
+
+
+def test_build_from_dict_func_native():
+    from types import BuiltinFunctionType
+
+    rf.select_backend_torch()  # enables some of the native optimizations
+    assert isinstance(rf.combine, BuiltinFunctionType)  # due to native optimizations
+    func = rf.build_from_dict({"class": "rf.combine"})
+    assert func is rf.combine

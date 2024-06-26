@@ -3,7 +3,7 @@ Construct modules (or other objects) from dictionaries.
 """
 
 from __future__ import annotations
-from types import FunctionType
+from types import FunctionType, BuiltinFunctionType
 from typing import Union, Any, Type, Callable, Dict
 import importlib
 import functools
@@ -29,7 +29,7 @@ def build_from_dict(d: Dict[str, Any], *args, **kwargs) -> Union[rf.Module, Any]
     d = d.copy()
     cls_name = d.pop("class")
     cls = _get_cls(cls_name)
-    if isinstance(cls, FunctionType):
+    if isinstance(cls, (FunctionType, BuiltinFunctionType)):
         if args or kwargs or d:
             return functools.partial(cls, *args, **d, **kwargs)
         return cls
@@ -38,7 +38,7 @@ def build_from_dict(d: Dict[str, Any], *args, **kwargs) -> Union[rf.Module, Any]
     return cls(*args, **d, **kwargs)
 
 
-def build_dict(cls: Union[Type, FunctionType, Callable[..., Any]], **kwargs) -> Dict[str, Any]:
+def build_dict(cls: Union[Type, FunctionType, BuiltinFunctionType, Callable[..., Any]], **kwargs) -> Dict[str, Any]:
     """
     Build a dictionary for :func:`build_from_dict`.
     The class name is stored in the `"class"` key.
@@ -55,7 +55,7 @@ def build_dict(cls: Union[Type, FunctionType, Callable[..., Any]], **kwargs) -> 
     :param kwargs: other kwargs put into the dict. expect to contain only other serializable values.
     :return: build dict. can easily be serialized. to be used with :func:`build_from_dict`.
     """
-    if not isinstance(cls, (type, FunctionType)):
+    if not isinstance(cls, (type, FunctionType, BuiltinFunctionType)):
         raise TypeError(f"build_dict: Expected class or function, got: {cls!r}")
     return {"class": _get_cls_name(cls), **kwargs}
 
