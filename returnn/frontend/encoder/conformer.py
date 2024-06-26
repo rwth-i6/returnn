@@ -33,6 +33,8 @@ class ConformerPositionwiseFeedForward(rf.Module):
         self.out_dim = out_dim
         self.dropout = dropout
         self.dropout_broadcast = rf.dropout_broadcast_default()
+        if not callable(activation):
+            raise TypeError(f"{self}: unexpected activation type {activation!r}")
         self.activation = activation
 
         self.linear_ff = rf.Linear(out_dim, ff_dim)
@@ -67,6 +69,8 @@ class ConformerConvBlock(rf.Module):
             out_dim, out_dim, filter_size=kernel_size, groups=out_dim.dimension, padding="same"
         )
         self.positionwise_conv2 = rf.Linear(out_dim, out_dim)
+        if not callable(norm):
+            raise TypeError(f"{self}: unexpected norm type {norm!r}")
         self.norm = norm
 
     def __call__(self, inp: Tensor, *, spatial_dim: Dim) -> Tensor:
@@ -179,10 +183,10 @@ class ConformerEncoderLayer(rf.Module):
         ff_activation: Callable[[Tensor], Tensor] = rf.swish,
         dropout: float = 0.1,
         conv_kernel_size: int = 32,
-        conv_norm: Union[rf.BatchNorm, type, Any] = NotSpecified,
+        conv_norm: Union[rf.BatchNorm, type, Dict[str, Any], Any] = NotSpecified,
         conv_norm_opts: Optional[Dict[str, Any]] = None,
         num_heads: int = 4,
-        self_att: Optional[Union[rf.RelPosSelfAttention, rf.Module, type, Any]] = None,
+        self_att: Optional[Union[rf.RelPosSelfAttention, rf.Module, type, Dict[str, Any], Any]] = None,
         self_att_opts: Optional[Dict[str, Any]] = None,
         att_dropout: float = 0.1,
     ):
@@ -234,7 +238,7 @@ class ConformerEncoderLayer(rf.Module):
         self.conv_block = ConformerConvBlock(out_dim=out_dim, kernel_size=conv_kernel_size, norm=conv_norm)
         self.conv_layer_norm = rf.LayerNorm(out_dim)
 
-        if self_att is None or isinstance(self_att, type):
+        if self_att is None or isinstance(self_att, (dict, type)):
             self_att_opts_ = dict(
                 in_dim=out_dim,
                 proj_dim=out_dim,
@@ -247,9 +251,15 @@ class ConformerEncoderLayer(rf.Module):
                 self_att_opts_.update(self_att_opts)
             if self_att is None:
                 self.self_att = rf.RelPosSelfAttention(**self_att_opts_)
-            else:
+            elif isinstance(self_att, type):
                 self.self_att = self_att(**self_att_opts_)
+            elif isinstance(self_att, dict):
+                self.self_att = rf.build_from_dict(self_att, **self_att_opts_)
+            else:
+                raise TypeError(f"{self}: invalid type: self_att {self_att!r}")
         else:
+            if not callable(self_att):
+                raise TypeError(f"{self}: invalid non-callable: self_att {self_att!r}")
             self.self_att = self_att
         self.self_att_layer_norm = rf.LayerNorm(out_dim)
 
@@ -299,10 +309,10 @@ class ConformerEncoder(ISeqDownsamplingEncoder):
         ff_activation: Callable[[Tensor], Tensor] = rf.swish,
         dropout: float = 0.1,
         conv_kernel_size: int = 32,
-        conv_norm: Union[rf.BatchNorm, type, Any] = NotSpecified,
+        conv_norm: Union[rf.BatchNorm, type, Dict[str, Any], Any] = NotSpecified,
         num_heads: int = 4,
         att_dropout: float = 0.1,
-        encoder_layer: Optional[Union[ConformerEncoderLayer, rf.Module, type, Any]] = None,
+        encoder_layer: Optional[Union[ConformerEncoderLayer, rf.Module, type, Dict[str, Any], Any]] = None,
         encoder_layer_opts: Optional[Dict[str, Any]] = None,
         sequential=rf.Sequential,
     ):
@@ -337,7 +347,7 @@ class ConformerEncoder(ISeqDownsamplingEncoder):
         )
         self.input_dropout = input_dropout
 
-        if not encoder_layer or isinstance(encoder_layer, type):
+        if not encoder_layer or isinstance(encoder_layer, (dict, type)):
             encoder_layer_opts_ = dict(
                 out_dim=out_dim,
                 ff_dim=ff_dim,
@@ -354,8 +364,20 @@ class ConformerEncoder(ISeqDownsamplingEncoder):
                 encoder_layer = ConformerEncoderLayer(**encoder_layer_opts_)
             elif isinstance(encoder_layer, type):
                 encoder_layer = encoder_layer(**encoder_layer_opts_)
+            elif isinstance(encoder_layer, dict):
+                # Note: Reuse all the encoder_layer_opts_.
+                # If this does not make sense for the specific encoder_layer class here,
+                # we would suggest to use a different ConformerEncoder class.
+                # (The alternative, to not reuse encoder_layer_opts_ here,
+                #  would probably be more confusing, as those options are all ignored then.
+                #  It's also not clear what args to pass then and what not.)
+                # (Maybe we should do a ConformerEncoderV2 if this is confusing here...)
+                encoder_layer = rf.build_from_dict(encoder_layer, **encoder_layer_opts_)
             else:
                 raise TypeError(f"unexpected encoder_layer {encoder_layer!r}")
+        else:
+            if not callable(encoder_layer):
+                raise TypeError(f"{self}: invalid non-callable encoder_layer {encoder_layer!r}")
 
         self.layers = sequential(_copy.deepcopy(encoder_layer) for _ in range(num_layers))
 
