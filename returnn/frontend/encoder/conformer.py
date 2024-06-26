@@ -254,6 +254,7 @@ class ConformerEncoderLayer(rf.Module):
             elif isinstance(self_att, type):
                 self.self_att = self_att(**self_att_opts_)
             elif isinstance(self_att, dict):
+                self_att_opts_ = {k: v for (k, v) in self_att_opts_.items() if k not in self_att}
                 self.self_att = rf.build_from_dict(self_att, **self_att_opts_)
             else:
                 raise TypeError(f"{self}: invalid type: self_att {self_att!r}")
@@ -372,6 +373,7 @@ class ConformerEncoder(ISeqDownsamplingEncoder):
                 #  would probably be more confusing, as those options are all ignored then.
                 #  It's also not clear what args to pass then and what not.)
                 # (Maybe we should do a ConformerEncoderV2 if this is confusing here...)
+                encoder_layer_opts_ = {k: v for (k, v) in encoder_layer_opts_.items() if k not in encoder_layer}
                 encoder_layer = rf.build_from_dict(encoder_layer, **encoder_layer_opts_)
             else:
                 raise TypeError(f"unexpected encoder_layer {encoder_layer!r}")
