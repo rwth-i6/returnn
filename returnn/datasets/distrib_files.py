@@ -451,7 +451,6 @@ class _WorkerProcParent:
         full_epoch_0idx: int,
         dataset_dict: Dict[str, Any],
         buffer_size: int,
-        exit_hook: Optional[Callable[[], None]] = None,
     ):
         # the dataset makes sure this is set
         assert "random_seed_offset" in dataset_dict
@@ -459,7 +458,6 @@ class _WorkerProcParent:
         self.epoch = epoch
         self.full_epoch_0idx = full_epoch_0idx
         self.dataset_dict = dataset_dict
-        self.exit_hook = exit_hook
 
         parent_conn, child_conn = _mp.Pipe()
         self.parent_conn: mpConnection = parent_conn
@@ -515,9 +513,6 @@ class _WorkerProcParent:
         self.parent_conn.send(("exit", {}))
         if join:
             self.worker_proc.join()
-        if self.exit_hook:
-            self.exit_hook()
-            self.exit_hook = None
 
     def __del__(self):
         # noinspection PyBroadException
