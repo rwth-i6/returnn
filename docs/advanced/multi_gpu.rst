@@ -9,9 +9,22 @@ Multi GPU training with PyTorch
 
 Main configuration option is ``torch_distributed``.
 
-Example: Just put ``torch_distributed = {}`` into the config. This will by default use PyTorch ``DistributedDataParallel``.
+Example: Just put ``torch_distributed = {}`` into the config.
+This will by default use PyTorch ``DistributedDataParallel``.
 
-See `our wiki on distributed PyTorch <https://github.com/rwth-i6/returnn/wiki/Distributed-PyTorch>`__.
+Or maybe use ``torch_distributed = {"reduce_type": "param", "param_sync_step": 100}``.
+This uses parameter averaging after every 100 steps.
+
+For the dataset, by default, we do not use sharding,
+but instead, every dataset uses a different random seed
+(see ``random_seed_offset`` in the code).
+
+As an efficient dataset for large scale training,
+see :class:`DistributeFilesDataset`.
+This dataset is one of the exceptions
+which also supports sharding.
+
+Also see `our wiki on distributed PyTorch <https://github.com/rwth-i6/returnn/wiki/Distributed-PyTorch>`__.
 
 
 ==================================
