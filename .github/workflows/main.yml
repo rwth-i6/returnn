@@ -52,7 +52,10 @@ jobs:
         pip install --user nose
 
         pip install --user -r requirements.txt
-        pip install --user --upgrade --progress-bar=off tensorflow==${{ matrix.tf-version }}
+        # Retry several times in case download breaks. https://github.com/pypa/pip/issues/4796
+        for ((i=0; i<3; i++)); do
+          if pip install --user --upgrade --progress-bar=off tensorflow==${{ matrix.tf-version }}; then break; fi
+        end
         pip install --user --progress-bar=off torch torchdata
 
     - name: Test Python/Numpy/TF versions.
