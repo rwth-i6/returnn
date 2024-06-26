@@ -46,14 +46,14 @@ jobs:
         echo "pip: $(type pip)"
 
         pip install --user --upgrade pip setuptools wheel
-        pip install --user typing | cat  # needed for Python 2 in some cases
+        pip install --user typing  # needed for Python 2 in some cases
 
         pip install --user pytest
         pip install --user nose
 
-        pip install --user -r requirements.txt | cat
-        pip install --user --upgrade tensorflow==${{ matrix.tf-version }} | cat
-        pip install --user torch torchdata | cat
+        pip install --user -r requirements.txt
+        pip install --user --upgrade --progress-bar=off tensorflow==${{ matrix.tf-version }}
+        pip install --user --progress-bar=off torch torchdata
 
     - name: Test Python/Numpy/TF versions.
       run: |
@@ -120,14 +120,14 @@ jobs:
         echo "pip: $(type pip)"
 
         pip install --user --upgrade pip setuptools wheel
-        pip install --user typing | cat  # needed for Python 2 in some cases
+        pip install --user typing  # needed for Python 2 in some cases
 
         pip install --user pytest
 
         # Install nose anyway because we currently use some of its helper functions.
         pip install --user nose
 
-        pip install --user -r requirements.txt | cat
+        pip install --user --progress-bar=off -r requirements.txt
 
     - name: Test Python/Numpy/TF versions.
       run: |
@@ -207,7 +207,7 @@ jobs:
         echo "pip: $(type pip)"
 
         pip install --user --upgrade pip setuptools wheel
-        pip install --user typing | cat  # needed for Python 2 in some cases
+        pip install --user typing  # needed for Python 2 in some cases
 
         pip install --user pytest
 
@@ -230,9 +230,9 @@ jobs:
           pip install --user --upgrade "gast<=0.4.0"
         fi
 
-        pip install --user -r requirements.txt | cat
-        pip install --user scipy | cat  # for some tests
-        pip install --user --upgrade tensorflow==${{ matrix.tf-version }} | cat
+        pip install --user --progress-bar=off -r requirements.txt
+        pip install --user --progress-bar=off scipy  # for some tests
+        pip install --user --upgrade --progress-bar=off tensorflow==${{ matrix.tf-version }}
 
     - name: Test Python/Numpy/TF versions.
       run: |
@@ -289,18 +289,18 @@ jobs:
         echo "pip: $(type pip)"
 
         pip install --user --upgrade pip setuptools wheel
-        pip install --user typing | cat  # needed for Python 2 in some cases
+        pip install --user typing  # needed for Python 2 in some cases
 
         pip install --user pytest
 
         # Install nose anyway because we currently use some of its helper functions.
         pip install --user nose
 
-        pip install --user -r requirements.txt | cat
-        pip install --user scipy | cat  # for some tests
-        pip install --user --upgrade torch==${{ matrix.torch-version }} | cat
-        pip install --user torchdata | cat
-        pip install --user onnxruntime | cat
+        pip install --user --progress-bar=off -r requirements.txt
+        pip install --user --progress-bar=off scipy  # for some tests
+        pip install --user --upgrade --progress-bar=off torch==${{ matrix.torch-version }}
+        pip install --user --progress-bar=off torchdata
+        pip install --user --progress-bar=off onnxruntime
 
     - name: Test Python/Numpy/PyTorch versions.
       run: |
@@ -372,17 +372,17 @@ jobs:
         echo "pip: $(type pip)"
 
         pip install --user --upgrade pip setuptools wheel
-        pip install --user typing | cat  # needed for Python 2 in some cases
+        pip install --user typing  # needed for Python 2 in some cases
 
         pip install --user pytest
 
         # Install nose anyway because we currently use some of its helper functions.
         pip install --user nose
 
-        pip install --user -r requirements.txt | cat
-        pip install --user scipy | cat  # for some tests
-        pip install --user --upgrade torch==${{ matrix.torch-version }} | cat
-        pip install --user torchdata | cat
+        pip install --user --progress-bar=off -r requirements.txt
+        pip install --user --progress-bar=off scipy  # for some tests
+        pip install --user --upgrade torch==${{ matrix.torch-version }}
+        pip install --user --progress-bar=off torchdata
 
         if [[ "${{matrix.tf-version}}" == 2.10.* ]]; then
           # TF 2.10 requires gast<=0.4.0,>=0.2.1. But for example, with gast 0.2.2, we get some AutoGraph error:
@@ -391,7 +391,7 @@ jobs:
           pip install --user --upgrade "gast<=0.4.0"
         fi
 
-        pip install --user --upgrade tensorflow==${{ matrix.tf-version }} | cat
+        pip install --user --upgrade --progress-bar=off tensorflow==${{ matrix.tf-version }}
 
     - name: Test Python/Numpy/PyTorch versions.
       run: |
