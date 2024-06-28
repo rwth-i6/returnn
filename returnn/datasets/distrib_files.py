@@ -138,6 +138,7 @@ class DistributeFilesDataset(CachedDataset2):
         buffer_size: int = 1,
         distrib_shard_files: bool = False,
         _meta_info_cache: Optional[Dict[str, Any]] = None,
+        _distrib_info: Optional[Dict[str, int]] = None,
         **kwargs,
     ):
         """
@@ -149,6 +150,7 @@ class DistributeFilesDataset(CachedDataset2):
         :param distrib_shard_files: set to true to shard the data across worker processes in
             distributed training scenaria
         :param _meta_info_cache: for internal use
+        :param _distrib_info: for internal use
         """
         super().__init__(**kwargs)
         self.files = files
@@ -159,11 +161,23 @@ class DistributeFilesDataset(CachedDataset2):
         self._file_sizes: Optional[Dict[str, int]] = None  # key -> size. for equal distribution across sub epochs
         self._data_keys: Optional[List[str]] = None
         self._num_seqs: Optional[int] = None
-        self.distrib_shard_files = distrib_shard_files
-        self._shard_index, self._num_shards = _get_rank_and_size() if distrib_shard_files else (0, 1)
 
         self._workers: Dict[int, _WorkerProcParent] = {}  # epoch -> worker
         self._files_order_cache: Dict[int, List[List[FileTree]]] = {}  # full epoch (0-indexed) -> files order
+
+        self.distrib_shard_files = distrib_shard_files
+        if distrib_shard_files:
+            if _distrib_info:
+                # If we're in a child process `_get_rank_and_size()` no longer works,
+                # so we pass the info about the shards via a pickled property.
+                # See also Dataset.__reduce__.
+                self._shard_index = _distrib_info["shard_index"]
+                self._num_shards = _distrib_info["num_shards"]
+            else:
+                self._shard_index, self._num_shards = _get_rank_and_size()
+        else:
+            self._shard_index = 0
+            self._num_shards = 1
 
         if _meta_info_cache:
             # This allows to skip the lazy init in self.initialize().
@@ -182,6 +196,10 @@ class DistributeFilesDataset(CachedDataset2):
         """init"""
         self._lazy_init_num_outputs()
         super().initialize()
+
+    @property
+    def _distrib_info(self):
+        return {"num_shards": self._num_shards, "shard_index": self._shard_index}
 
     @property
     def _meta_info_cache(self):
