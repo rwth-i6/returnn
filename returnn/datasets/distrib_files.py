@@ -167,11 +167,14 @@ class DistributeFilesDataset(CachedDataset2):
 
         self.distrib_shard_files = distrib_shard_files
         if distrib_shard_files:
-            if not _distrib_info:
-                self._shard_index, self._num_shards = _get_rank_and_size()
-            else:
+            if _distrib_info:
+                # If we're in a child process `_get_rank_and_size()` no longer works,
+                # so we pass the info about the shards via a pickled property.
+                # See also Dataset.__reduce__.
                 self._shard_index = _distrib_info["shard_index"]
                 self._num_shards = _distrib_info["num_shards"]
+            else:
+                self._shard_index, self._num_shards = _get_rank_and_size()
         else:
             self._shard_index = 0
             self._num_shards = 1
