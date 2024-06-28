@@ -238,9 +238,10 @@ class DistributeFilesDataset(CachedDataset2):
         }
 
     def __del__(self):
-        for k, worker in self._workers.items():
-            try_run(worker.exit, kwargs={"join": False})
-        self._workers.clear()
+        if hasattr(self, "_workers"):  # might not be set after an early exception in __init__
+            for k, worker in self._workers.items():
+                try_run(worker.exit, kwargs={"join": False})
+            self._workers.clear()
 
     def init_seq_order(self, epoch: Optional[int] = None, seq_list=None, seq_order=None) -> bool:
         """
