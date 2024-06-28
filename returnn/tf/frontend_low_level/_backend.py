@@ -3,7 +3,7 @@ Backend for exposing TensorFlow-specific functionality.
 """
 
 from __future__ import annotations
-from typing import Optional, Any, Union, Sequence, Tuple
+from typing import Callable, List, Optional, Any, Union, Sequence, Tuple
 import contextlib
 import tensorflow as tf
 

@@ -3,9 +3,10 @@ Backend for exposing PyTorch-specific functionality.
 """
 
 from __future__ import annotations
-from typing import Optional, Union, Sequence, Tuple, List, Dict, Generator
+from typing import Callable, Optional, Union, Sequence, Tuple, List, Dict, Generator
 import contextlib
 import torch
+from torch.utils.checkpoint import checkpoint as gradient_checkpoint
 import numpy
 
 from returnn.tensor import Tensor, Dim, single_step_dim
@@ -2111,3 +2112,8 @@ class TorchBackend(Backend[torch.Tensor]):
         out_tensor_raw = torch.stack(tensor_array_raw, dim=0)
         out_tensor.raw_tensor = out_tensor_raw
         return out_tensor
+
+    @staticmethod
+    def gradient_checkpoint(fn: Callable[[Tensor], Tensor], *args: Tuple[Tensor]) -> Tensor:
+        """gradient_checkpoint"""
+        return gradient_checkpoint(fn, *args, use_reentrant=False, preserve_rng_state=True)
