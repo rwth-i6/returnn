@@ -931,9 +931,11 @@ class Updater(object):
 
                 grads_and_vars = [
                     (
-                        hvd.allreduce(grad, average=self.config.is_true("horovod_avg_grad"))
-                        if grad is not None
-                        else None,
+                        (
+                            hvd.allreduce(grad, average=self.config.is_true("horovod_avg_grad"))
+                            if grad is not None
+                            else None
+                        ),
                         var,
                     )
                     for (grad, var) in grads_and_vars
@@ -1028,6 +1030,7 @@ def accum_grad_multiple_step(grad, var, train_step, num_accum_steps):
         )
 
 
+# noinspection PyAbstractClass
 class _KerasOptimizerWrapper(Optimizer):
     """
     Wraps a TF optimizer into a standard TF optimizer.
@@ -1090,6 +1093,7 @@ class _KerasOptimizerWrapper(Optimizer):
         return self.keras_optimizer._resource_apply_sparse(grad, handle, indices, None)
 
 
+# noinspection PyAbstractClass
 class BaseCustomOptimizer(Optimizer):
     """
     Base class for our own optimizer implementations.
@@ -1200,6 +1204,7 @@ class BaseCustomOptimizer(Optimizer):
         return dense
 
 
+# noinspection PyAbstractClass
 class CustomGradientDescentOptimizer(BaseCustomOptimizer):
     """
     Just an example implementation for simple gradient descent.
@@ -1217,6 +1222,7 @@ class CustomGradientDescentOptimizer(BaseCustomOptimizer):
         return self._assign_sub(ref=var, updates=lr * grad, indices=indices).op
 
 
+# noinspection PyAbstractClass
 class NormalizedSGD(CustomGradientDescentOptimizer):
     """
     All grads are L2 normalized (via :func:`tf.nn.l2_normalize`), otherwise it's standard SGD.
@@ -1234,6 +1240,7 @@ class NormalizedSGD(CustomGradientDescentOptimizer):
         return super(NormalizedSGD, self)._apply(grad=tf.nn.l2_normalize(grad, None), var=var, indices=indices)
 
 
+# noinspection PyAbstractClass
 class NeuralOptimizer1(BaseCustomOptimizer):
     """
     Via Neural Optimizer Search with Reinforcement Learning (https://proceedings.mlr.press/v70/bello17a/bello17a.pdf).
@@ -1282,6 +1289,7 @@ class NeuralOptimizer1(BaseCustomOptimizer):
         return tf.group(*[var_update, m_t])
 
 
+# noinspection PyAbstractClass
 class GradVarianceScaledOptimizer(BaseCustomOptimizer):
     """
     Let m be the running average of g.
@@ -1344,6 +1352,7 @@ class GradVarianceScaledOptimizer(BaseCustomOptimizer):
         return tf.group(*[var_update, m_t])
 
 
+# noinspection PyAbstractClass
 class NadamOptimizer(tf_compat.v1.train.AdamOptimizer):
     """
     Optimizer that implements the Nadam algorithm.
@@ -1439,6 +1448,7 @@ class NadamOptimizer(tf_compat.v1.train.AdamOptimizer):
         return control_flow_ops.group(*[var_update, m_bar, v_t])
 
 
+# noinspection PyAbstractClass
 class CustomAdamOptimizer(BaseCustomOptimizer):
     """
     Reimplementation of Adam.
@@ -1515,6 +1525,7 @@ class CustomAdamOptimizer(BaseCustomOptimizer):
         return tf.group(*update_ops + [update_beta1, update_beta2], name=name_scope)
 
 
+# noinspection PyAbstractClass
 class AMSGradOptimizer(Optimizer):
     """
     https://colab.research.google.com/notebook#fileId=1xXFAuHM2Ae-OmF5M8Cn9ypGCa_HHBgfG&scrollTo=N1-2wPHN1Otn
@@ -1555,7 +1566,7 @@ class AMSGradOptimizer(Optimizer):
                 learning_rate /= tf.sqrt(self.t)
             update_ops = []
 
-            for (g, var) in gradient_variables:
+            for g, var in gradient_variables:
                 m = self.m[var].assign(self.beta1 * self.m[var] + (1 - self.beta1) * g)
                 v = self.v[var].assign(self.beta2 * self.v[var] + (1 - self.beta2) * g * g)
                 v_hat = self.v_hat[var].assign(tf.maximum(self.v_hat[var], v))

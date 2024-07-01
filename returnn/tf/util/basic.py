@@ -3033,9 +3033,9 @@ class OpCodeCompiler(NativeCodeCompiler):
                 "tf_version": describe_tensorflow_version(),
                 "with_cuda": self._with_cuda(),
                 "cuda_path": self._cuda_env.cuda_path if self._with_cuda() else None,
-                "nvcc_opts": (tuple(self._cuda_env.get_compiler_opts()) + tuple(self._nvcc_opts))
-                if self._with_cuda()
-                else None,
+                "nvcc_opts": (
+                    (tuple(self._cuda_env.get_compiler_opts()) + tuple(self._nvcc_opts)) if self._with_cuda() else None
+                ),
             }
         )
         return d
@@ -5469,7 +5469,10 @@ def gaussian_kernel_2d(size, std):
     if isinstance(size, (tuple, list)):
         size_x, size_y = size
     else:
-        size_x, size_y, = (
+        (
+            size_x,
+            size_y,
+        ) = (
             size,
             size,
         )
