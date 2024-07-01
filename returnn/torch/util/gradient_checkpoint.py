@@ -23,6 +23,8 @@ from __future__ import annotations
 from typing import Optional, Union, Any, Sequence, List, Dict
 from dataclasses import dataclass, field
 import contextlib
+from weakref import ref
+import threading
 
 import torch
 from torch.utils.weak import WeakTensorKeyDictionary  # needs Torch >=2.0.0
@@ -57,8 +59,10 @@ class gradient_checkpoint_scope:
         self.record_graph_scope = _RecordGraph()
         self.record_graph_scope.graph.gradient_checkpoint_scope_backref = self
         # Note: saved_tensors_hooks is thread local.
+        # TODO maybe hook into saved_tensors_hooks.__enter__ and __exit__ to fix our del issue?
         self.saved_tensors_hooks_scope = torch.autograd.graph.saved_tensors_hooks(self._pack_hook, self._unpack_hook)
         self.entered = False
+        self.entered_thread_ref = None
         self.exit_args: Optional[tuple] = None
         self.exited_saved_tensors_hooks_scope = False
 
@@ -66,6 +70,7 @@ class gradient_checkpoint_scope:
         self.record_graph_scope.__enter__()
         self.saved_tensors_hooks_scope.__enter__()
         self.entered = True
+        self.entered_thread_ref = ref(threading.current_thread())
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.exit_args = (exc_type, exc_val, exc_tb)
@@ -78,9 +83,17 @@ class gradient_checkpoint_scope:
         else:
             self.exit_saved_tensors_hooks_scope()
 
-    # Note, be very careful what we do in __del__.
-    # We do not directly want to exit_saved_tensors_hooks_scope() there
-    # because it might be called in a different thread.
+    def __del__(self):
+        # Note that we keep this alive via _Graph.gradient_checkpoint_scope_backref
+        # as long as any _GraphTensor is alive due to backprop pack_hook.
+        # Note, be very careful what we do in __del__ because it might be called in a different thread!
+        if self.entered_thread_ref() is threading.current_thread():
+            # We are still in the same thread.
+            # This is fine, we can exit the scope.
+            self.exit_saved_tensors_hooks_scope()
+        else:
+            # TODO what now?
+            pass
 
     def exit_saved_tensors_hooks_scope(self):
         """
