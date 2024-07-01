@@ -25,7 +25,7 @@ from dataclasses import dataclass, field
 import contextlib
 
 import torch
-from torch.utils.weak import WeakTensorKeyDictionary
+from torch.utils.weak import WeakTensorKeyDictionary  # needs Torch >=2.0.0
 
 # noinspection PyProtectedMember
 from torch.utils._python_dispatch import TorchDispatchMode
