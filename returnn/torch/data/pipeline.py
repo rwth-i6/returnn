@@ -27,6 +27,7 @@ import numpy
 import torch
 import torch.utils.data
 
+from returnn.log import log
 from returnn.util.basic import NumbersDict
 
 
@@ -306,7 +307,7 @@ def create_data_loader_from_batches(
     if loader_opts is None:
         loader_opts: Dict[str, Any] = {}
 
-    if loader_opts.get("num_workers"):
+    if loader_opts.get("num_workers", 0) > 0:
         loader_opts = loader_opts.copy()
         loader_opts.setdefault("persistent_workers", True)
         loader_opts["worker_init_fn"] = _DataLoaderWorkerInitFunc(
@@ -328,6 +329,12 @@ def create_data_loader_from_batches(
                 # See _DataLoaderWorkerPreInitFunc below, https://github.com/rwth-i6/returnn/issues/1495.
                 process_pre_init_func=SubProcCopyGlobalConfigPreInitFunc()
             )
+    else:
+        log.print_warning(
+            "Not using dedicated worker processes for torch data loading.\n"
+            'It is strongly recommended to set torch_dataloader_opts = {"num_workers": 1}\n'
+            "to improve GPU utilization (and to work around issues wrt. leaking file descriptors)."
+        )
 
     return torch.utils.data.DataLoader(
         batches_dataset,
