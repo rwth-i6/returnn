@@ -1442,7 +1442,7 @@ def dump_all_thread_tracebacks(exclude_thread_ids=None, file=None):
             thread = threads.get(tid)
             if thread:
                 assert isinstance(thread, threading.Thread)
-                if thread is threading.currentThread():
+                if thread is threading.current_thread():
                     tags += ["current"]
                 # noinspection PyProtectedMember,PyUnresolvedReferences
                 if isinstance(thread, threading._MainThread):
