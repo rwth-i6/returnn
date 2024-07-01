@@ -39,6 +39,7 @@ _MarkedDim = MarkedDim
 # Provide some simple wrappers. https://github.com/rwth-i6/returnn/issues/782
 # Use CamelCase function names (invalidates PEP8) to make it look like a class instance.
 
+
 # noinspection PyPep8Naming
 def FeatureDim(description, dimension, **kwargs):
     """
@@ -324,7 +325,7 @@ class BatchInfo:
                     # We want to get a reasonable order.
                     same_type_last_idx = None
                     for i, dim_ in enumerate(all_virtual_dims):
-                        if type(dim_) == type(dim):
+                        if type(dim_) == type(dim):  # noqa
                             same_type_last_idx = i
                     if same_type_last_idx is not None:
                         all_virtual_dims.insert(same_type_last_idx + 1, dim)
