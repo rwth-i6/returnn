@@ -27,6 +27,7 @@ We extended it a bit.
 from __future__ import annotations
 
 import _setup_returnn_env  # noqa
+from typing import Dict, Any
 import sys
 import argparse
 import numpy
@@ -115,7 +116,7 @@ def parse_numpy_printoption(kv_str):
     if len(k_v_str) != 2 or not k_v_str[0]:
         raise argparse.ArgumentTypeError("'%s' is not in the form k=v." % kv_str)
     k, v_str = k_v_str
-    printoptions = numpy.get_printoptions()
+    printoptions: Dict[str, Any] = numpy.get_printoptions()
     if k not in printoptions:
         raise argparse.ArgumentTypeError("'%s' is not a valid printoption." % k)
     v_type = type(printoptions[k])
