@@ -2271,7 +2271,11 @@ def constant_with_shape(x, shape, dtype=None, name="constant_with_shape"):
     :rtype: tf.Tensor
     """
     with tf.name_scope(name):
-        if type(x) in [int, float, bool] and type(shape) in [list, tuple] and all([type(d) == int for d in shape]):
+        if (
+            isinstance(x, (int, float, bool))
+            and isinstance(shape, (list, tuple))
+            and all(isinstance(d, int) for d in shape)
+        ):
             if dtype is None:
                 dtype = {int: tf.int32, float: tf.float32, bool: tf.bool}[type(x)]
             if x in (0, 0.0, False):
@@ -5073,7 +5077,7 @@ def simplify_add(a, b):
     if isinstance(b, int):
         b = numpy.int32(b)  # use right type
     if isinstance(b, float):
-        b = numpy.float(b)
+        b = numpy.float(b)  # noqa
     if a.op.type in {"Add", "AddV2"}:
         a_dyn_parts = []
         a_const_parts = [b] if numpy.count_nonzero(b) > 0 else []
