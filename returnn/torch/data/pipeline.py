@@ -307,7 +307,7 @@ def create_data_loader_from_batches(
     if loader_opts is None:
         loader_opts: Dict[str, Any] = {}
 
-    if loader_opts.get("num_workers", 0) > 0:
+    if loader_opts.get("num_workers"):
         loader_opts = loader_opts.copy()
         loader_opts.setdefault("persistent_workers", True)
         loader_opts["worker_init_fn"] = _DataLoaderWorkerInitFunc(
