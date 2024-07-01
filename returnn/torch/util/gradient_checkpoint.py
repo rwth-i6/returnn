@@ -79,7 +79,7 @@ class gradient_checkpoint_scope:
             # Do not exit saved_tensors_hooks_scope here
             # because we still want to pack any tensors which were captured in our graph
             # by giving it a ref to the graph tensor.
-            pass
+            pass  # TODO prepare saved_tensors_hooks hook
         else:
             self.exit_saved_tensors_hooks_scope()
 
