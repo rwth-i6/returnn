@@ -395,7 +395,7 @@ class FeedDictDataProvider(DataProviderBase):
                 if enqueue_args is not None:
                     self.queue.put(enqueue_args)
                 with self.state_change_cond:
-                    self.state_change_cond.notifyAll()
+                    self.state_change_cond.notify_all()
                 self.batches.advance(1)
 
             self.reached_end = not self.batches.has_more()
@@ -407,7 +407,7 @@ class FeedDictDataProvider(DataProviderBase):
         finally:
             with self.state_change_cond:
                 self.thread_finished = True
-                self.state_change_cond.notifyAll()
+                self.state_change_cond.notify_all()
 
     def have_more_data(self, session):
         """
