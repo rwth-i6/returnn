@@ -99,6 +99,7 @@ class gradient_checkpoint_scope:
         """
         exit saved_tensors_hooks_scope if not yet done.
         """
+        assert self.entered_thread_ref() is threading.current_thread()
         if self.exit_args and not self.exited_saved_tensors_hooks_scope:
             self.saved_tensors_hooks_scope.__exit__(*self.exit_args)
             self.exited_saved_tensors_hooks_scope = True
