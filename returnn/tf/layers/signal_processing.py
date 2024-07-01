@@ -625,7 +625,7 @@ class MultiChannelMultiResolutionStftLayer(_ConcatInputLayer):
                     # noinspection PyPackageRequirements
                     import scipy.signal
 
-                    window = tf.constant(scipy.signal.windows.blackman(frame_size), dtype=tf.float32)
+                    window = tf.constant(scipy.signal.windows.blackman(frame_size), dtype=tf.float32)  # noqa
                 elif self._window == "None" or self._window == "ones":
                     window = tf.ones((window_length,), dtype=dtype)
                 else:

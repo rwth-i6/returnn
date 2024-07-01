@@ -523,7 +523,7 @@ def _get_random_permuted_audio(audio, sample_rate, opts, random_state):
             warnings.simplefilter("ignore")
             # Alternative: scipy.interpolate.interp2d
             factor = random_state.uniform(opts.get("rnd_zoom_lower", 0.9), opts.get("rnd_zoom_upper", 1.1))
-            audio = scipy.ndimage.zoom(audio, factor, order=opts.get("rnd_zoom_order", 3))
+            audio = scipy.ndimage.zoom(audio, factor, order=opts.get("rnd_zoom_order", 3))  # noqa
     if opts.get("rnd_stretch_switch", 1.0) > 0.0:
         opts.get("rnd_stretch_lower"), opts.get("rnd_stretch_upper")  # Mark as read.
     if random_state.uniform(0.0, 1.0) < opts.get("rnd_stretch_switch", 0.2):

@@ -2543,7 +2543,7 @@ class Enwik8Corpus(CachedDataset2):
         num_test_chars = 5000000
 
         raw_data = zipfile.ZipFile(self._zip_filename).read("enwik8").decode("utf8")
-        raw_data = numpy.fromstring(raw_data, dtype=numpy.uint8)
+        raw_data = numpy.fromstring(raw_data, dtype=numpy.uint8)  # noqa
         unique, data = numpy.unique(raw_data, return_inverse=True)
 
         train_data = data[: -2 * num_test_chars]

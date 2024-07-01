@@ -2271,7 +2271,11 @@ def constant_with_shape(x, shape, dtype=None, name="constant_with_shape"):
     :rtype: tf.Tensor
     """
     with tf.name_scope(name):
-        if type(x) in [int, float, bool] and type(shape) in [list, tuple] and all([type(d) == int for d in shape]):
+        if (
+            isinstance(x, (int, float, bool))
+            and isinstance(shape, (list, tuple))
+            and all(isinstance(d, int) for d in shape)
+        ):
             if dtype is None:
                 dtype = {int: tf.int32, float: tf.float32, bool: tf.bool}[type(x)]
             if x in (0, 0.0, False):
@@ -3033,9 +3037,9 @@ class OpCodeCompiler(NativeCodeCompiler):
                 "tf_version": describe_tensorflow_version(),
                 "with_cuda": self._with_cuda(),
                 "cuda_path": self._cuda_env.cuda_path if self._with_cuda() else None,
-                "nvcc_opts": (tuple(self._cuda_env.get_compiler_opts()) + tuple(self._nvcc_opts))
-                if self._with_cuda()
-                else None,
+                "nvcc_opts": (
+                    (tuple(self._cuda_env.get_compiler_opts()) + tuple(self._nvcc_opts)) if self._with_cuda() else None
+                ),
             }
         )
         return d
@@ -3161,7 +3165,7 @@ def make_var_tuple(v):
     :rtype: tuple[tf.Tensor]
     """
     if isinstance(v, (int, float, tf.Tensor, tf.Operation)):
-        return (v,)
+        return (v,)  # noqa
     if isinstance(v, list):
         return tuple(v)
     assert isinstance(v, tuple)
@@ -5073,7 +5077,7 @@ def simplify_add(a, b):
     if isinstance(b, int):
         b = numpy.int32(b)  # use right type
     if isinstance(b, float):
-        b = numpy.float(b)
+        b = numpy.float(b)  # noqa
     if a.op.type in {"Add", "AddV2"}:
         a_dyn_parts = []
         a_const_parts = [b] if numpy.count_nonzero(b) > 0 else []
@@ -5469,10 +5473,7 @@ def gaussian_kernel_2d(size, std):
     if isinstance(size, (tuple, list)):
         size_x, size_y = size
     else:
-        size_x, size_y, = (
-            size,
-            size,
-        )
+        size_x, size_y = size, size
     if isinstance(std, (tuple, list)):
         std_x, std_y = std
     else:

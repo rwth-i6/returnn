@@ -15,12 +15,12 @@ jobs:
       fail-fast: false
       matrix:
         python-version:
-          - 3.7
+          - "3.10"
+        torch-version:
+          # Some code uses newer features.
+          - 2.0.0
         tf-version:
-          # Below we have a newer TF version for the TF tests.
-          # However, it seems somewhat broken for the inspections,
-          # so we keep this older TF version for now just for the inspections.
-          - 2.4.2
+          - 2.10.0
 
     steps:
     - uses: actions/checkout@v3
@@ -35,7 +35,7 @@ jobs:
         path: |
           ~/.cache
           ~/.local
-        key: cache-${{ runner.os }}-py${{ matrix.python-version }}-tf${{ matrix.tf-version }}
+        key: cache-${{ runner.os }}-py${{ matrix.python-version }}-torch${{ matrix.torch-version }}-tf${{ matrix.tf-version }}
         restore-keys: |
           cache-${{ runner.os }}-py${{ matrix.python-version }}-
 
@@ -51,17 +51,24 @@ jobs:
         pip install --user pytest
         pip install --user nose
 
-        pip install --user -r requirements.txt
+        pip install --user dm-tree h5py typing
+        pip install --user --progress-bar=off "numpy<2"
+        pip install --user --progress-bar=off scipy  # for some tests
+
+        pip install --user --upgrade --progress-bar=off torch==${{ matrix.torch-version }}
+
         # Retry several times in case download breaks. https://github.com/pypa/pip/issues/4796
         for ((i=0; i<3; i++)); do
           if pip install --user --upgrade --progress-bar=off tensorflow==${{ matrix.tf-version }}; then break; fi
         done
-        pip install --user --progress-bar=off torch torchdata
 
     - name: Test Python/Numpy/TF versions.
       run: |
         echo "Python env: $(type python) $(python --version)"
         python -c "import numpy; print('NumPy:', numpy.version.full_version)"
+        python -c "import torch; print('PyTorch:', torch.__version__, torch.__file__)"
+        # torch.__version__ is for example "1.13.1+cu117"
+        python -c "import torch; assert (torch.__version__ + '+').startswith('${{ matrix.torch-version }}+')"
         python -c "import tensorflow as tf; print('TensorFlow:', tf.__git_version__, tf.__version__, tf.__file__)"
         python -c "import tensorflow as tf; assert tf.__version__ == '${{ matrix.tf-version }}'"
 
@@ -70,7 +77,7 @@ jobs:
       with:
         path: |
           ~/.cache/JetBrains
-        key: cache-pycharm-${{ runner.os }}-py${{ matrix.python-version }}-tf${{ matrix.tf-version }}
+        key: cache-pycharm-${{ runner.os }}-py${{ matrix.python-version }}-torch${{ matrix.torch-version }}-tf${{ matrix.tf-version }}
 
     - name: Run PyCharm inspect
       run: |
@@ -302,7 +309,6 @@ jobs:
         pip install --user --progress-bar=off -r requirements.txt
         pip install --user --progress-bar=off scipy  # for some tests
         pip install --user --upgrade --progress-bar=off torch==${{ matrix.torch-version }}
-        pip install --user --progress-bar=off torchdata
         pip install --user --progress-bar=off onnxruntime
 
     - name: Test Python/Numpy/PyTorch versions.
@@ -385,7 +391,6 @@ jobs:
         pip install --user --progress-bar=off -r requirements.txt
         pip install --user --progress-bar=off scipy  # for some tests
         pip install --user --upgrade torch==${{ matrix.torch-version }}
-        pip install --user --progress-bar=off torchdata
 
         if [[ "${{matrix.tf-version}}" == 2.10.* ]]; then
           # TF 2.10 requires gast<=0.4.0,>=0.2.1. But for example, with gast 0.2.2, we get some AutoGraph error:

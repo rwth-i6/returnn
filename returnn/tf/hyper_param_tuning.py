@@ -230,7 +230,7 @@ class HyperParam:
             x = 1.0 - eps
         import scipy.special
 
-        return self.dtype(scipy.special.ndtri(x))
+        return self.dtype(scipy.special.ndtri(x))  # noqa
 
     def get_initial_value(self):
         """

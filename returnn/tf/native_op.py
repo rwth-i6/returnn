@@ -359,9 +359,9 @@ class OpMaker(object):
                 code_set_io += "outputs[%i] = &output_%i;\n" % (out_idx, out_idx)
                 cshape = "TensorShape({%s})" % ", ".join(
                     [
-                        str(dim)
-                        if isinstance(dim, int)
-                        else ("inputs[%i]->dim_size(%i)" % dim)  # also see make_dim_str
+                        (
+                            str(dim) if isinstance(dim, int) else ("inputs[%i]->dim_size(%i)" % dim)
+                        )  # also see make_dim_str
                         for dim in v["shape"]
                     ]
                 )
@@ -704,7 +704,7 @@ def load_dump_file(filename):
         data = _read_bytes()
         assert len(data) == numpy.prod(dims) * dtype.itemsize
         # noinspection PyTypeChecker
-        v_flat = numpy.fromstring(data, dtype=dtype)
+        v_flat = numpy.fromstring(data, dtype=dtype)  # noqa
         v = v_flat.reshape(dims)
         return v
 

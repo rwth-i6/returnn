@@ -123,6 +123,7 @@ def init(name, reference, config, sprint_unit=None, version_number=None, callbac
 
 # Start Sprint PythonSegmentOrder interface. {
 
+
 # Keep names for compatibility.
 # noinspection PyPep8Naming,PyUnusedLocal
 def getSegmentList(corpusName, segmentList, config, **kwargs):
@@ -268,7 +269,7 @@ class SprintNnPythonLayer:
         seg_len = errorSignalIn.shape[1]
         PythonControl.instance.set_current_seg_error_signal(seg_len=seg_len, error_signal=errorSignalIn.T)
         # must return a 1-tuple
-        return (numpy.zeros((self.input_size, seg_len), dtype="float32"),)
+        return (numpy.zeros((self.input_size, seg_len), dtype="float32"),)  # noqa
 
 
 # End SprintNnPythonLayer. }
@@ -400,7 +401,7 @@ class PythonControl:
         with self.cond:
             self.loss = loss
             self.error_signal = error_signal
-            self.cond.notifyAll()
+            self.cond.notify_all()
 
     def _get_loss_and_error_signal_via_sprint_callback(self, seg_name, orthography, posteriors):
         """
@@ -484,13 +485,13 @@ class PythonControl:
             self.loss = None
             self.asked_for_posteriors = False
             self.notified_for_segment = False
-            self.cond.notifyAll()
+            self.cond.notify_all()
         loss, error_signal = self.callback("get_loss_and_error_signal", seg_name, seg_len, posteriors)
         assert error_signal.shape == posteriors.shape
         with self.cond:
             self.control_thread__have_new_error_signal = True
             self.posteriors = None
-            self.cond.notifyAll()
+            self.cond.notify_all()
         numpy_set_unused(posteriors)
         error_signal = error_signal.astype("float32", copy=False)
         return loss, error_signal
@@ -544,14 +545,14 @@ class PythonControl:
         with self.cond:
             assert not self.control_loop_started
             self.control_loop_started = True
-            self.cond.notifyAll()
+            self.cond.notify_all()
         try:
             while True:
                 self.handle_next()
         finally:
             with self.cond:
                 self.control_loop_exited = True
-                self.cond.notifyAll()
+                self.cond.notify_all()
 
     # noinspection PyMethodMayBeStatic
     def exit(self, **kwargs):
@@ -635,7 +636,7 @@ class PythonControl:
         with self.cond:
             assert self.seg_name == segment_name
             self.notified_for_segment = True
-            self.cond.notifyAll()
+            self.cond.notify_all()
 
     def notify_segment_loss(self, segment_name, loss):
         """
@@ -654,7 +655,7 @@ class PythonControl:
             assert self.seg_len == seg_len
             assert self.posteriors.shape[0] == seg_len
             self.asked_for_posteriors = True
-            self.cond.notifyAll()
+            self.cond.notify_all()
             return self.posteriors
 
     def set_current_seg_error_signal(self, seg_len, error_signal):
@@ -667,7 +668,7 @@ class PythonControl:
             assert error_signal.ndim == 2
             assert error_signal.shape[0] == seg_len
             self.error_signal = error_signal
-            self.cond.notifyAll()
+            self.cond.notify_all()
 
     def set_current_seg_loss(self, seg_name, loss):
         """
@@ -678,7 +679,7 @@ class PythonControl:
             if seg_name:
                 assert self.seg_name == seg_name
             self.loss = loss
-            self.cond.notifyAll()
+            self.cond.notify_all()
 
     # noinspection PyMethodMayBeStatic
     def _default_skipped_loss(self):
@@ -702,7 +703,7 @@ class PythonControl:
                 self.loss = self._default_skipped_loss()
             if self.error_signal is None:
                 self.error_signal = self._default_skipped_error_signal(self.posteriors)
-            self.cond.notifyAll()
+            self.cond.notify_all()
 
     def _wait_for_control_loop_error_signal(self):
         while True:

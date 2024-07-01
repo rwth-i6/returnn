@@ -6291,9 +6291,11 @@ class ChoiceLayer(BaseChoiceLayer):
                         out=self._debug_out,
                         x=labels[0],
                         args={
-                            "step": self.network.get_rec_step_index()
-                            if self.network.have_rec_step_info()
-                            else tf.constant(-1),
+                            "step": (
+                                self.network.get_rec_step_index()
+                                if self.network.have_rec_step_info()
+                                else tf.constant(-1)
+                            ),
                             "base_beam_in": base_beam_in,
                             "scores_in_orig": self.sources[0].output.placeholder,
                             "scores_in": scores_in,
@@ -8213,6 +8215,7 @@ class SelfAttentionLayer(_ConcatInputLayer):
         :param tf.Tensor v: [B,H,T,V]
         :param tf.Tensor mask: shape [B,T]
         """
+
         # noinspection PyUnusedLocal,PyShadowingNames
         def _masked_transform_mask(value, prev_value, mask):
             """
@@ -8506,33 +8509,35 @@ class KenLmStateLayer(_ConcatInputLayer):
                 tf.less_equal(prev_step, 2),
                 lambda: py_print(
                     new_rel_scores,
-                    [
-                        str(self),
-                        "; step: ",
-                        prev_step,
-                        "; input shape: ",
-                        tf.shape(self.input_data.placeholder),
-                        str(self.input_data),
-                        "; input: ",
-                        self.input_data.placeholder,
-                        "; strings shape: ",
-                        tf.shape(next_strings),
-                        "; strings: ",
-                        "'" + next_strings + "'",
-                        "; new_abs_scores: ",
-                        new_abs_scores,
-                        "; sparse rel scores: ",
-                        new_abs_scores - prev_scores,
-                        "; min/max/mean rel scores: ",
-                        tf.reduce_min(new_rel_scores),
-                        "/",
-                        tf.reduce_max(new_rel_scores),
-                        "/",
-                        tf.reduce_mean(new_rel_scores),
-                    ]
-                    + ["; vocab: ", self.tf_vocab]
-                    if self.tf_vocab is not None
-                    else [],
+                    (
+                        [
+                            str(self),
+                            "; step: ",
+                            prev_step,
+                            "; input shape: ",
+                            tf.shape(self.input_data.placeholder),
+                            str(self.input_data),
+                            "; input: ",
+                            self.input_data.placeholder,
+                            "; strings shape: ",
+                            tf.shape(next_strings),
+                            "; strings: ",
+                            "'" + next_strings + "'",
+                            "; new_abs_scores: ",
+                            new_abs_scores,
+                            "; sparse rel scores: ",
+                            new_abs_scores - prev_scores,
+                            "; min/max/mean rel scores: ",
+                            tf.reduce_min(new_rel_scores),
+                            "/",
+                            tf.reduce_max(new_rel_scores),
+                            "/",
+                            tf.reduce_mean(new_rel_scores),
+                        ]
+                        + ["; vocab: ", self.tf_vocab]
+                        if self.tf_vocab is not None
+                        else []
+                    ),
                 ),
                 lambda: new_rel_scores,
             )
@@ -9897,6 +9902,7 @@ class BaseRNNCell(rnn_cell.RNNCell):
         return x
 
 
+# noinspection PyAbstractClass
 class VanillaLSTMCell(BaseRNNCell):
     """
     Just a vanilla LSTM cell, which is compatible to our NativeLSTM (v1 and v2).
@@ -9964,6 +9970,7 @@ class VanillaLSTMCell(BaseRNNCell):
             return new_h, rnn_cell.LSTMStateTuple(new_c, new_h)
 
 
+# noinspection PyAbstractClass
 class RHNCell(BaseRNNCell):
     """
     Recurrent Highway Layer.
@@ -10119,6 +10126,7 @@ class RHNCell(BaseRNNCell):
         return current_state, current_state
 
 
+# noinspection PyAbstractClass
 class _WrapBaseCell(BaseRNNCell):
     """
     Simpler helper wrapper class, for :class:`BaseRNNCell`.
@@ -10172,6 +10180,7 @@ class _WrapBaseCell(BaseRNNCell):
         return self.cell.call(inputs, state)
 
 
+# noinspection PyAbstractClass
 class BlocksparseLSTMCell(_WrapBaseCell):
     """
     Standard LSTM but uses OpenAI blocksparse kernels to support bigger matrices.
@@ -10269,6 +10278,7 @@ class BlocksparseLSTMCell(_WrapBaseCell):
         m1["bias"].load(b_new, session=session)
 
 
+# noinspection PyAbstractClass
 class BlocksparseMultiplicativeMultistepLSTMCell(_WrapBaseCell):
     """
     Multiplicative LSTM with multiple steps, as in the OpenAI blocksparse paper.
@@ -10324,6 +10334,7 @@ class BlocksparseMultiplicativeMultistepLSTMCell(_WrapBaseCell):
         return y
 
 
+# noinspection PyAbstractClass
 class LayerNormVariantsLSTMCell(BaseRNNCell):
     """LSTM unit with layer normalization and recurrent dropout
 
@@ -10988,6 +10999,7 @@ class TwoDLSTMLayer(LayerBase):
         return y
 
 
+# noinspection PyAbstractClass
 class ZoneoutLSTMCell(BaseRNNCell):
     """
     Wrapper for tf LSTM to create Zoneout LSTM Cell.
