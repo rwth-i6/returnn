@@ -5473,13 +5473,7 @@ def gaussian_kernel_2d(size, std):
     if isinstance(size, (tuple, list)):
         size_x, size_y = size
     else:
-        (
-            size_x,
-            size_y,
-        ) = (
-            size,
-            size,
-        )
+        size_x, size_y = size, size
     if isinstance(std, (tuple, list)):
         std_x, std_y = std
     else:
