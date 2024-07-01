@@ -55,6 +55,7 @@ class gradient_checkpoint_scope:
 
     def __init__(self):
         self.record_graph_scope = _RecordGraph()
+        self.record_graph_scope.graph.gradient_checkpoint_scope_backref = self
         # Note: saved_tensors_hooks is thread local.
         self.saved_tensors_hooks_scope = torch.autograd.graph.saved_tensors_hooks(self._pack_hook, self._unpack_hook)
         self.entered = False
@@ -85,6 +86,7 @@ class gradient_checkpoint_scope:
             self.saved_tensors_hooks_scope.__exit__(*self.exit_args)
             self.exited_saved_tensors_hooks_scope = True
 
+    # Note that _Graph.gradient_checkpoint_scope_backref will keep us alive as long as any _GraphTensor is alive.
     def __del__(self):
         self.exit_saved_tensors_hooks_scope()
 
@@ -124,6 +126,8 @@ class _Graph:
     )
     stored_device_rng_states: Dict[torch.device, Any] = field(default_factory=dict)
     stored_device_amp_states: Dict[torch.device, Any] = field(default_factory=dict)
+    # Keep scope alive as long as any _GraphTensor is alive due to backprop pack_hook.
+    gradient_checkpoint_scope_backref: Optional[gradient_checkpoint_scope] = None
 
     def record_op(self, func: Any, args: Sequence[Any], kwargs: Dict[str, Any], out: Any):
         """record op"""
