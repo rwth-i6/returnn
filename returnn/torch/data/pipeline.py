@@ -332,8 +332,10 @@ def create_data_loader_from_batches(
     else:
         log.print_warning(
             "Not using dedicated worker processes for torch data loading.\n"
-            'It is strongly recommended to set torch_dataloader_opts = {"num_workers": 1}\n'
-            "to improve GPU utilization (and to work around issues wrt. leaking file descriptors)."
+            'It is strongly recommended to set torch_dataloader_opts = {"num_workers": 1} '
+            "to improve GPU utilization and to work around some issues.\n"
+            "See e.g. https://github.com/rwth-i6/returnn/issues/1560 for an issue that is fixed by "
+            "using dedicated worker processes."
         )
 
     return torch.utils.data.DataLoader(
