@@ -1204,7 +1204,7 @@ def obj_diff_list(self, other, **kwargs):
         return ["%sself is None and other is %r" % (prefix, other)]
     if self is not None and other is None:
         return ["%sother is None and self is %r" % (prefix, self)]
-    if type(self) != type(other):
+    if type(self) != type(other):  # noqa
         return ["%stype diff: self is %s but other is %s" % (prefix, type(self).__name__, type(other).__name__)]
 
     if allowed_mapping:
