@@ -1349,7 +1349,7 @@ def init_thread_join_hack():
         # https://github.com/albertz/playground/blob/master/thread-join-block.py
         # https://github.com/albertz/playground/blob/master/cond-wait-block.py
         return
-    main_thread = threading.currentThread()
+    main_thread = threading.current_thread()
     # noinspection PyUnresolvedReferences,PyProtectedMember
     assert isinstance(main_thread, threading._MainThread)
     main_thread_id = thread.get_ident()
@@ -1487,7 +1487,7 @@ def interrupt_main():
     :return: nothing
     """
     # noinspection PyProtectedMember,PyUnresolvedReferences
-    is_main_thread = isinstance(threading.currentThread(), threading._MainThread)
+    is_main_thread = isinstance(threading.current_thread(), threading._MainThread)
     if is_quitting():  # ignore if we are already quitting
         if is_main_thread:  # strange to get again in main thread
             raise Exception("interrupt_main() from main thread while already quitting")

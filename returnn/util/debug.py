@@ -75,7 +75,7 @@ def dump_all_thread_tracebacks(exclude_thread_ids=None, exclude_self=False):
             thread_ = threads.get(tid)
             if thread_:
                 assert isinstance(thread_, threading.Thread)
-                if thread_ is threading.currentThread():
+                if thread_ is threading.current_thread():
                     tags += ["current"]
                 # noinspection PyUnresolvedReferences,PyProtectedMember
                 if isinstance(thread_, threading._MainThread):
@@ -136,7 +136,7 @@ def init_better_exchook():
         # noinspection PyBroadException
         try:
             # noinspection PyUnresolvedReferences,PyProtectedMember
-            is_main_thread = isinstance(threading.currentThread(), threading._MainThread)
+            is_main_thread = isinstance(threading.current_thread(), threading._MainThread)
         except Exception:  # Can happen at a very late state while quitting.
             if exc_type is KeyboardInterrupt:
                 return
@@ -147,12 +147,12 @@ def init_better_exchook():
                     return
                 # An unhandled exception in the main thread. This means that we are going to quit now.
                 sys.exited = True
-        print("Unhandled exception %s in thread %s, proc %i." % (exc_type, threading.currentThread(), os.getpid()))
+        print("Unhandled exception %s in thread %s, proc %i." % (exc_type, threading.current_thread(), os.getpid()))
         if exc_type is KeyboardInterrupt:
             return
 
         # noinspection PyUnresolvedReferences,PyProtectedMember
-        if isinstance(threading.currentThread(), threading._MainThread):
+        if isinstance(threading.current_thread(), threading._MainThread):
             main_thread_id = thread.get_ident()
             if not isinstance(exc_type, Exception):
                 # We are the main thread and we got an exit-exception. This is likely fatal.
@@ -403,7 +403,7 @@ def init_ipython_kernel():
     # Do in mainthread to avoid history sqlite DB errors at exit.
     # https://github.com/ipython/ipython/issues/680
     # noinspection PyUnresolvedReferences,PyProtectedMember
-    assert isinstance(threading.currentThread(), threading._MainThread)
+    assert isinstance(threading.current_thread(), threading._MainThread)
     try:
         ip = socket.gethostbyname(socket.gethostname())
         connection_file = "ipython-kernel-%s-%s.json" % (ip, os.getpid())
