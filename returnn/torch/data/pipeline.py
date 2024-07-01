@@ -27,6 +27,7 @@ import numpy
 import torch
 import torch.utils.data
 
+from returnn.log import log
 from returnn.util.basic import NumbersDict
 
 
@@ -328,6 +329,14 @@ def create_data_loader_from_batches(
                 # See _DataLoaderWorkerPreInitFunc below, https://github.com/rwth-i6/returnn/issues/1495.
                 process_pre_init_func=SubProcCopyGlobalConfigPreInitFunc()
             )
+    else:
+        log.print_warning(
+            "Not using dedicated worker processes for torch data loading.\n"
+            'It is strongly recommended to set torch_dataloader_opts = {"num_workers": 1} '
+            "to improve GPU utilization and to work around some issues.\n"
+            "See e.g. https://github.com/rwth-i6/returnn/issues/1560 for an issue that is fixed by "
+            "using dedicated worker processes."
+        )
 
     return torch.utils.data.DataLoader(
         batches_dataset,
