@@ -23,7 +23,7 @@ from __future__ import annotations
 from typing import Optional, Union, Any, Sequence, List, Dict
 from dataclasses import dataclass, field
 import contextlib
-from weakref import ref
+from weakref import ref, WeakSet
 import threading
 
 import torch
@@ -310,3 +310,45 @@ def _get_dev_amp_state(dev: torch.device):
         }
 
     return None
+
+
+# TODO...
+_orig_saved_tensors_hooks_enter = torch.autograd.graph.saved_tensors_hooks.__enter__
+_orig_saved_tensors_hooks_exit = torch.autograd.graph.saved_tensors_hooks.__exit__
+_custom_saved_tensors_hooks_tls_ctx = threading.local()
+_custom_saved_tensors_hooks_lock = threading.Lock()
+_custom_saved_tensors_hooks_registered_threads = WeakSet()
+
+
+def _register_custom_saved_tensors_hooks():
+    thread = threading.current_thread()
+    with _custom_saved_tensors_hooks_lock:
+        if thread in _custom_saved_tensors_hooks_registered_threads:
+            return
+        _custom_saved_tensors_hooks_registered_threads.add(thread)
+        _custom_saved_tensors_hooks_tls_ctx.stack = []
+        if len(_custom_saved_tensors_hooks_registered_threads) == 1:
+            torch.autograd.graph.saved_tensors_hooks.__enter__ = _custom_saved_tensors_hooks_enter
+            torch.autograd.graph.saved_tensors_hooks.__exit__ = _custom_saved_tensors_hooks_exit
+
+
+def _unregister_custom_saved_tensors_hooks():
+    thread = threading.current_thread()
+    with _custom_saved_tensors_hooks_lock:
+        assert thread in _custom_saved_tensors_hooks_registered_threads
+        del _custom_saved_tensors_hooks_tls_ctx.stack
+        _custom_saved_tensors_hooks_registered_threads.remove(thread)
+        if not _custom_saved_tensors_hooks_registered_threads:
+            torch.autograd.graph.saved_tensors_hooks.__enter__ = _orig_saved_tensors_hooks_enter
+            torch.autograd.graph.saved_tensors_hooks.__exit__ = _orig_saved_tensors_hooks_exit
+
+
+def _custom_saved_tensors_hooks_enter(self):
+    _custom_saved_tensors_hooks_tls_ctx.stack.append(self)
+    return _orig_saved_tensors_hooks_enter(self)
+
+
+def _custom_saved_tensors_hooks_exit(self, exc_type, exc_val, exc_tb):
+    scope = _custom_saved_tensors_hooks_tls_ctx.stack.pop(-1)
+    assert scope is self
+    _orig_saved_tensors_hooks_exit(self, exc_type, exc_val, exc_tb)
