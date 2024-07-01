@@ -78,6 +78,10 @@ class gradient_checkpoint_scope:
         else:
             self.exit_saved_tensors_hooks_scope()
 
+    # Note, be very careful what we do in __del__.
+    # We do not directly want to exit_saved_tensors_hooks_scope() there
+    # because it might be called in a different thread.
+
     def exit_saved_tensors_hooks_scope(self):
         """
         exit saved_tensors_hooks_scope if not yet done.
@@ -85,10 +89,6 @@ class gradient_checkpoint_scope:
         if self.exit_args and not self.exited_saved_tensors_hooks_scope:
             self.saved_tensors_hooks_scope.__exit__(*self.exit_args)
             self.exited_saved_tensors_hooks_scope = True
-
-    # Note that _Graph.gradient_checkpoint_scope_backref will keep us alive as long as any _GraphTensor is alive.
-    def __del__(self):
-        self.exit_saved_tensors_hooks_scope()
 
     def _pack_hook(self, x: torch.Tensor) -> Union[torch.Tensor, _GraphTensor]:
         if self.exit_args and not self.record_graph_scope.graph.graph_tensor_from_raw_tensor:
