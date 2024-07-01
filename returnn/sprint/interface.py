@@ -102,6 +102,7 @@ def init(name=None, sprint_unit=None, **kwargs):
 # <editor-fold desc="PythonFeatureScorer">
 # Start Sprint PythonFeatureScorer interface. {
 
+
 # noinspection PyShadowingNames
 def init_python_feature_scorer(config, **kwargs):
     """
@@ -324,6 +325,7 @@ class PythonFeatureScorer(object):
 # <editor-fold desc="PythonSegmentOrder">
 # Start Sprint PythonSegmentOrder interface. {
 
+
 # Names need to stay that way for compatibility.
 # noinspection PyPep8Naming
 def getSegmentList(corpusName, segmentList, **kwargs):
@@ -398,6 +400,7 @@ def getSegmentList(corpusName, segmentList, **kwargs):
 
 # <editor-fold desc="PythonTrainer">
 # Start Sprint PythonTrainer interface. {
+
 
 # noinspection PyPep8Naming,PyShadowingNames
 def init_python_trainer(inputDim, outputDim, config, targetMode, **kwargs):
@@ -996,7 +999,7 @@ def make_criterion_class():
         errorSignal = None
 
         def __eq__(self, other):
-            return type(self) == type(other)
+            return type(self) == type(other)  # nopep8
 
         def __hash__(self):
             return hash(type(self))

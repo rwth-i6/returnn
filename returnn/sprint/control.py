@@ -269,7 +269,7 @@ class SprintNnPythonLayer:
         seg_len = errorSignalIn.shape[1]
         PythonControl.instance.set_current_seg_error_signal(seg_len=seg_len, error_signal=errorSignalIn.T)
         # must return a 1-tuple
-        return (numpy.zeros((self.input_size, seg_len), dtype="float32"),)
+        return (numpy.zeros((self.input_size, seg_len), dtype="float32"),)  # noqa
 
 
 # End SprintNnPythonLayer. }
