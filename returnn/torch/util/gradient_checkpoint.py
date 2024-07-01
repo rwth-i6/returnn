@@ -128,6 +128,7 @@ class _Graph:
     def record_op(self, func: Any, args: Sequence[Any], kwargs: Dict[str, Any], out: Any):
         """record op"""
         self.maybe_store_rng_state(torch.device("cpu"))
+        self.maybe_store_amp_state(torch.device("cpu"))
         pytree.tree_map(self.maybe_store_rng_state, args)
         pytree.tree_map(self.maybe_store_rng_state, kwargs)
         wrapped_args = pytree.tree_map_only(torch.Tensor, self.maybe_map_raw_tensor_to_graph_tensor, args)
