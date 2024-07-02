@@ -27,7 +27,6 @@ import numpy
 import torch
 import torch.utils.data
 
-from returnn.log import log
 from returnn.util.basic import NumbersDict
 
 
