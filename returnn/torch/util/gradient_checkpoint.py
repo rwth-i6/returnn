@@ -84,16 +84,15 @@ class gradient_checkpoint_scope:
             self.exit_saved_tensors_hooks_scope()
 
     def __del__(self):
-        # Note that we keep this alive via _Graph.gradient_checkpoint_scope_backref
-        # as long as any _GraphTensor is alive due to backprop pack_hook.
         # Note, be very careful what we do in __del__ because it might be called in a different thread!
+        # Note that the __del__ will likely be called very late,
+        # as the reference to the _Graph is kept alive until we used it for backprop,
+        # as we keep this alive via _Graph.gradient_checkpoint_scope_backref
+        # as long as any _GraphTensor is alive due to backprop pack_hook.
         if self.entered_thread_ref() is threading.current_thread():
-            # We are still in the same thread.
-            # This is fine, we can exit the scope.
             self.exit_saved_tensors_hooks_scope()
         else:
-            # TODO what now?
-            pass
+            self.exit_saved_tensors_hooks_scope_other_thread()
 
     def exit_saved_tensors_hooks_scope(self):
         """
@@ -101,8 +100,15 @@ class gradient_checkpoint_scope:
         """
         assert self.entered_thread_ref() is threading.current_thread()
         if self.exit_args and not self.exited_saved_tensors_hooks_scope:
+            # TODO check right order
             self.saved_tensors_hooks_scope.__exit__(*self.exit_args)
             self.exited_saved_tensors_hooks_scope = True
+
+    def exit_saved_tensors_hooks_scope_other_thread(self):
+        """
+        exit saved_tensors_hooks_scope if not yet done from another thread
+        """
+        pass  # TODO
 
     def _pack_hook(self, x: torch.Tensor) -> Union[torch.Tensor, _GraphTensor]:
         if self.exit_args and not self.record_graph_scope.graph.graph_tensor_from_raw_tensor:
@@ -110,7 +116,17 @@ class gradient_checkpoint_scope:
             # so we can exit saved_tensors_hooks_scope now.
             self.exit_saved_tensors_hooks_scope()
             return x
-        return self.record_graph_scope.graph.graph_tensor_from_raw_tensor.get(x, x)
+        x_ = self.record_graph_scope.graph.graph_tensor_from_raw_tensor.get(x, x)
+        if isinstance(x_, _GraphTensor):
+            x._RETURNN_grad_ckpt_del_hook = _DelHook(self._tensor_del_hook)
+        return x_
+
+    def _tensor_del_hook(self):
+        # Some of the relevant tensors got deleted.
+        # If we are in the right thread, maybe we can do the cleanup now.
+        if self.entered_thread_ref() is threading.current_thread():
+            if self.exit_args and not self.record_graph_scope.graph.graph_tensor_from_raw_tensor:
+                self.exit_saved_tensors_hooks_scope()
 
     @staticmethod
     def _unpack_hook(x: Union[torch.Tensor, _GraphTensor]) -> torch.Tensor:
@@ -310,6 +326,14 @@ def _get_dev_amp_state(dev: torch.device):
         }
 
     return None
+
+
+class _DelHook:
+    def __init__(self, callback):
+        self.callback = callback
+
+    def __del__(self):
+        self.callback()
 
 
 # TODO...
