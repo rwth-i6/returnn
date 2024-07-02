@@ -929,7 +929,8 @@ class Engine(EngineBase):
 
         # keep only the last two optimizer states (two in case one file gets corrupted)
         clean_epoch = self.epoch - 2
-        if clean_epoch > 0:
+        apply_keep_logic = self.config.bool("torch_apply_keep_epoch_to_optim_states", False)
+        if clean_epoch > 0 and not apply_keep_logic:
             filename = self.get_epoch_model_filename(epoch=clean_epoch) + ".opt" + util.get_model_filename_postfix()
             if os.path.isfile(filename):
                 os.unlink(filename)
