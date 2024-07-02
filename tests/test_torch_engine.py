@@ -20,44 +20,46 @@ from returnn.forward_iface import ForwardCallbackIface
 from returnn.datasets import init_dataset
 
 
+# must be in the global scope due to pickling
+class TrainTestModel(torch.nn.Module):
+    def __init__(self, **_kwargs):
+        super().__init__()
+        self.lin = torch.nn.Linear(9, 2)
+
+    def __call__(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        :param x: [B,T,D]
+        :return: [B,T,D']
+        """
+        x = self.lin(x)
+        return torch.nn.functional.log_softmax(x, dim=-1)
+
+    @classmethod
+    def train_step(cls, *, model: TrainTestModel, extern_data: TensorDict, **_kwargs):
+        """train step"""
+        data: Tensor = extern_data["data"]
+        logits = model(data.raw_tensor)
+        logits_packed = torch.nn.utils.rnn.pack_padded_sequence(
+            logits, data.dims[1].dyn_size_ext.raw_tensor, batch_first=True, enforce_sorted=False
+        )
+        targets = extern_data["classes"]
+        targets_packed = torch.nn.utils.rnn.pack_padded_sequence(
+            targets.raw_tensor, data.dims[1].dyn_size_ext.raw_tensor, batch_first=True, enforce_sorted=False
+        )
+        loss = torch.nn.CrossEntropyLoss(reduction="none")(logits_packed.data, targets_packed.data.long())
+        rf.get_run_ctx().mark_as_loss(name="ce", loss=loss)
+        frame_error = torch.argmax(logits_packed.data, dim=-1).not_equal(targets_packed.data)
+        rf.get_run_ctx().mark_as_loss(name="fer", loss=frame_error, as_error=True)
+
+
 def test_torch_engine_train():
-    class _Model(torch.nn.Module):
-        def __init__(self, **_kwargs):
-            super(_Model, self).__init__()
-            self.lin = torch.nn.Linear(9, 2)
-
-        def __call__(self, x: torch.Tensor) -> torch.Tensor:
-            """
-            :param x: [B,T,D]
-            :return: [B,T,D']
-            """
-            x = self.lin(x)
-            return torch.nn.functional.log_softmax(x, dim=-1)
-
-        @classmethod
-        def train_step(cls, *, model: _Model, extern_data: TensorDict, **_kwargs):
-            """train step"""
-            data: Tensor = extern_data["data"]
-            logits = model(data.raw_tensor)
-            logits_packed = torch.nn.utils.rnn.pack_padded_sequence(
-                logits, data.dims[1].dyn_size_ext.raw_tensor, batch_first=True, enforce_sorted=False
-            )
-            targets = extern_data["classes"]
-            targets_packed = torch.nn.utils.rnn.pack_padded_sequence(
-                targets.raw_tensor, data.dims[1].dyn_size_ext.raw_tensor, batch_first=True, enforce_sorted=False
-            )
-            loss = torch.nn.CrossEntropyLoss(reduction="none")(logits_packed.data, targets_packed.data.long())
-            rf.get_run_ctx().mark_as_loss(name="ce", loss=loss)
-            frame_error = torch.argmax(logits_packed.data, dim=-1).not_equal(targets_packed.data)
-            rf.get_run_ctx().mark_as_loss(name="fer", loss=frame_error, as_error=True)
-
     config = Config(
         dict(
             task="train",
             device="cpu",
             extern_data={"data": {"dim": 9}, "classes": {"dim": 2, "sparse": True}},
-            get_model=_Model,
-            train_step=_Model.train_step,
+            get_model=TrainTestModel,
+            train_step=TrainTestModel.train_step,
             batch_size=500,
             optimizer={"class": "adam"},
         )
@@ -458,44 +460,46 @@ class _TestTorchSubModelRaisingException(torch.nn.Module):
         return x
 
 
+# must be in the global scope due to pickling
+class TrainExceptionModel(torch.nn.Module):
+    def __init__(self, **_kwargs):
+        super().__init__()
+        self.sub = _TestTorchSubModelRaisingException(9, 2)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        :param x: [B,T,D]
+        :return: [B,T,D']
+        """
+        x = self.sub(x)
+        return torch.nn.functional.log_softmax(x, dim=-1)
+
+    @classmethod
+    def train_step(cls, *, model: TrainExceptionModel, extern_data: TensorDict, **_kwargs):
+        """train step"""
+        data: Tensor = extern_data["data"]
+        logits = model(data.raw_tensor)
+        logits_packed = torch.nn.utils.rnn.pack_padded_sequence(
+            logits, data.dims[1].dyn_size_ext.raw_tensor, batch_first=True, enforce_sorted=False
+        )
+        targets = extern_data["classes"]
+        targets_packed = torch.nn.utils.rnn.pack_padded_sequence(
+            targets.raw_tensor, data.dims[1].dyn_size_ext.raw_tensor, batch_first=True, enforce_sorted=False
+        )
+        loss = torch.nn.CrossEntropyLoss(reduction="none")(logits_packed.data, targets_packed.data.long())
+        rf.get_run_ctx().mark_as_loss(name="ce", loss=loss)
+        frame_error = torch.argmax(logits_packed.data, dim=-1).not_equal(targets_packed.data)
+        rf.get_run_ctx().mark_as_loss(name="fer", loss=frame_error, as_error=True)
+
+
 def test_torch_engine_train_exception():
-    class _Model(torch.nn.Module):
-        def __init__(self, **_kwargs):
-            super(_Model, self).__init__()
-            self.sub = _TestTorchSubModelRaisingException(9, 2)
-
-        def forward(self, x: torch.Tensor) -> torch.Tensor:
-            """
-            :param x: [B,T,D]
-            :return: [B,T,D']
-            """
-            x = self.sub(x)
-            return torch.nn.functional.log_softmax(x, dim=-1)
-
-        @classmethod
-        def train_step(cls, *, model: _Model, extern_data: TensorDict, **_kwargs):
-            """train step"""
-            data: Tensor = extern_data["data"]
-            logits = model(data.raw_tensor)
-            logits_packed = torch.nn.utils.rnn.pack_padded_sequence(
-                logits, data.dims[1].dyn_size_ext.raw_tensor, batch_first=True, enforce_sorted=False
-            )
-            targets = extern_data["classes"]
-            targets_packed = torch.nn.utils.rnn.pack_padded_sequence(
-                targets.raw_tensor, data.dims[1].dyn_size_ext.raw_tensor, batch_first=True, enforce_sorted=False
-            )
-            loss = torch.nn.CrossEntropyLoss(reduction="none")(logits_packed.data, targets_packed.data.long())
-            rf.get_run_ctx().mark_as_loss(name="ce", loss=loss)
-            frame_error = torch.argmax(logits_packed.data, dim=-1).not_equal(targets_packed.data)
-            rf.get_run_ctx().mark_as_loss(name="fer", loss=frame_error, as_error=True)
-
     config = Config(
         dict(
             task="train",
             device="cpu",
             extern_data={"data": {"dim": 9}, "classes": {"dim": 2, "sparse": True}},
-            get_model=_Model,
-            train_step=_Model.train_step,
+            get_model=TrainExceptionModel,
+            train_step=TrainExceptionModel.train_step,
             batch_size=500,
             optimizer={"class": "adam"},
         )

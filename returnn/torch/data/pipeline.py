@@ -27,7 +27,6 @@ import numpy
 import torch
 import torch.utils.data
 
-from returnn.log import log
 from returnn.util.basic import NumbersDict
 
 
@@ -306,9 +305,19 @@ def create_data_loader_from_batches(
     """
     if loader_opts is None:
         loader_opts: Dict[str, Any] = {}
+    else:
+        loader_opts = loader_opts.copy()
+
+    # Make sure to use workers unless specified otherwise to ensure reasonable GPU
+    # utilization and to work around some issues wrt. overflowing ulimits when
+    # workers are non-persistent.
+    #
+    # See for context:
+    # - https://github.com/rwth-i6/returnn/issues/1560
+    # - https://github.com/pytorch/pytorch/issues/129868
+    loader_opts.setdefault("num_workers", 1)
 
     if loader_opts.get("num_workers"):
-        loader_opts = loader_opts.copy()
         loader_opts.setdefault("persistent_workers", True)
         loader_opts["worker_init_fn"] = _DataLoaderWorkerInitFunc(
             other_worker_init_fn=loader_opts.get("worker_init_fn")
@@ -329,14 +338,6 @@ def create_data_loader_from_batches(
                 # See _DataLoaderWorkerPreInitFunc below, https://github.com/rwth-i6/returnn/issues/1495.
                 process_pre_init_func=SubProcCopyGlobalConfigPreInitFunc()
             )
-    else:
-        log.print_warning(
-            "Not using dedicated worker processes for torch data loading.\n"
-            'It is strongly recommended to set torch_dataloader_opts = {"num_workers": 1} '
-            "to improve GPU utilization and to work around some issues.\n"
-            "See e.g. https://github.com/rwth-i6/returnn/issues/1560 for an issue that is fixed by "
-            "using dedicated worker processes."
-        )
 
     return torch.utils.data.DataLoader(
         batches_dataset,
