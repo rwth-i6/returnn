@@ -1079,12 +1079,14 @@ class Engine(EngineBase):
         # They consist of a file with the extension ".pt" and potentially an optimizer state with extension ".opt.pt"
 
         count_bytes = 0
-        assert os.path.exists(filename + ".pt")
-        count_bytes += os.stat(filename + ".pt").st_size
-        os.remove(filename + ".pt")
-        if os.path.exists(filename + "opt.pt"):
-            count_bytes += os.stat(filename + "opt.pt").st_size
-            os.remove(filename + "opt.pt")
+        fname = filename + ".pt"
+        assert os.path.exists(fname)
+        count_bytes += os.stat(fname).st_size
+        os.remove(fname)
+        opt_fname = filename + ".opt.pt"
+        if os.path.exists(opt_fname):
+            count_bytes += os.stat(opt_fname).st_size
+            os.remove(opt_fname)
         assert count_bytes > 0
         return count_bytes
 
