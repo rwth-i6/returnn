@@ -2018,7 +2018,7 @@ class NumbersDict:
         :param T default:
         :rtype: object|T
         """
-        # Keep consistent with self.__get_item__. If self.value is set, this will always be the default value.
+        # Keep consistent with self.__getitem__. If self.value is set, this will always be the default value.
         return self.dict.get(key, self.value if self.value is not None else default)
 
     def pop(self, key, *args):
@@ -2054,6 +2054,12 @@ class NumbersDict:
         :rtype: str[(str,object)]
         """
         return self.dict.items()
+
+    def has_value_for(self, key: str) -> bool:
+        """
+        :return: If self.value is set, always True, otherwise if key is in self.dict
+        """
+        return self.value is not None or key in self.dict
 
     def has_values(self):
         """

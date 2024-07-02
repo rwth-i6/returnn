@@ -18,7 +18,7 @@ from returnn.log import log
 import argparse
 import numpy
 from returnn.datasets import init_dataset, Dataset
-from returnn.util.basic import Stats, hms, hms_fraction, pretty_print
+from returnn.util.basic import Stats, hms, hms_fraction, pretty_print, NumbersDict
 from returnn.util import basic as util
 
 
@@ -49,9 +49,13 @@ def dump_dataset(options):
     print("Dataset keys:", dataset.get_data_keys(), file=log.v3)
     print("Dataset target keys:", dataset.get_target_list(), file=log.v3)
     assert options.key in dataset.get_data_keys()
+    max_seq_length = NumbersDict(options.max_seq_length)
+    min_seq_length = NumbersDict(options.min_seq_length)
 
     if options.get_num_seqs:
         print("Get num seqs.")
+        if max_seq_length or min_seq_length:
+            raise Exception("Cannot use --get_num_seqs together with --max_seq_length or --min_seq_length.")
         print("estimated_num_seqs: %r" % dataset.estimated_num_seqs)
         try:
             print("num_seqs: %r" % dataset.num_seqs)
@@ -114,6 +118,7 @@ def dump_dataset(options):
     start_time = time.time()
     stats = Stats() if (options.stats or options.dump_stats) else None
     seq_len_stats = {key: Stats() for key in dataset.get_data_keys()}
+    seq_len_stats_filtered = {key: Stats() for key in dataset.get_data_keys()}
     seq_idx = options.startseq
     if options.endseq < 0:
         options.endseq = float("inf")
@@ -128,6 +133,19 @@ def dump_dataset(options):
                 num_seqs_s = "~%i" % dataset.estimated_num_seqs
             except TypeError:  # a number is required, not NoneType
                 num_seqs_s = "?"
+        seq_len = dataset.get_seq_length(seq_idx)
+        for key in dataset.get_data_keys():
+            seq_len_stats[key].collect([seq_len[key]])
+        filter_out_seq_reasons = []
+        if max_seq_length or min_seq_length:
+            for key in dataset.get_data_keys():
+                if max_seq_length.has_value_for(key) and seq_len[key] > max_seq_length[key]:
+                    filter_out_seq_reasons.append(f"len({key}) = {seq_len[key]} > {max_seq_length[key]}")
+                if min_seq_length.has_value_for(key) and seq_len[key] < min_seq_length[key]:
+                    filter_out_seq_reasons.append(f"len({key}) = {seq_len[key]} < {min_seq_length[key]}")
+        if not filter_out_seq_reasons:
+            for key in dataset.get_data_keys():
+                seq_len_stats_filtered[key].collect([seq_len[key]])
         progress_prefix = "%i/%s" % (seq_idx, num_seqs_s)
         progress = "%s (%.02f%%)" % (progress_prefix, complete_frac * 100)
         data = None
@@ -135,7 +153,18 @@ def dump_dataset(options):
             total_time_estimated = start_elapsed / complete_frac
             remaining_estimated = total_time_estimated - start_elapsed
             progress += " (%s)" % hms(remaining_estimated)
-        if options.type == "print_tag":
+        if filter_out_seq_reasons:
+            if options.type != "null":
+                print(
+                    "seq %s tag %r filtered out: %s"
+                    % (
+                        progress,
+                        dataset.get_tag(seq_idx),
+                        ", ".join(filter_out_seq_reasons),
+                    ),
+                    file=log.v2,
+                )
+        elif options.type == "print_tag":
             print("seq %s tag:" % (progress if log.verbose[2] else progress_prefix), dataset.get_tag(seq_idx))
         elif options.type == "dump_tag":
             print("seq %s tag:" % (progress if log.verbose[2] else progress_prefix), dataset.get_tag(seq_idx))
@@ -180,10 +209,7 @@ def dump_dataset(options):
                 from returnn.util.debug import debug_shell
 
                 debug_shell(locals())
-        seq_len = dataset.get_seq_length(seq_idx)
-        for key in dataset.get_data_keys():
-            seq_len_stats[key].collect([seq_len[key]])
-        if stats:
+        if stats and not filter_out_seq_reasons:
             stats.collect(data)
         if options.type == "null":
             util.progress_bar_with_time(complete_frac, prefix=progress_prefix)
@@ -197,6 +223,10 @@ def dump_dataset(options):
     )
     for key in dataset.get_data_keys():
         seq_len_stats[key].dump(stream_prefix="Seq-length %r " % key, stream=log.v2)
+        if max_seq_length or min_seq_length:
+            seq_len_stats_filtered[key].dump(stream_prefix="Seq-length-filtered %r " % key, stream=log.v2)
+    if max_seq_length or min_seq_length:
+        print("Used max_seq_length %r and min_seq_length %r." % (max_seq_length, min_seq_length), file=log.v3)
     if stats:
         stats.dump(output_file_prefix=options.dump_stats, stream_prefix="Data %r " % options.key, stream=log.v1)
     if options.type == "dump_seq_len":
@@ -206,20 +236,16 @@ def dump_dataset(options):
         dump_file.close()
 
 
-config = None  # type: typing.Optional["returnn.config.Config"]
-
-
-def init(config_str, config_dataset, verbosity):
+def init(options):
     """
-    :param str config_str: either filename to config-file, or dict for dataset
-    :param str|None config_dataset:
-    :param int verbosity:
+    :param argparse.Namespace options:
     """
     global dataset
     rnn.init_better_exchook()
     rnn.init_thread_join_hack()
     dataset_dict = None
     config_filename = None
+    config_str = options.returnn_config
     if config_str.strip().startswith("{"):
         print("Using dataset %s." % config_str)
         dataset_dict = eval(config_str.strip())
@@ -232,12 +258,12 @@ def init(config_str, config_dataset, verbosity):
         print("Using config file %r." % config_filename)
         assert os.path.exists(config_filename)
     rnn.init_config(config_filename=config_filename, default_config={"cache_size": "0"})
-    global config
     config = rnn.config
     config.set("log", None)
-    config.set("log_verbosity", verbosity)
+    config.set("log_verbosity", options.verbosity)
     config.set("torch_distributed", None)
     config.set("use_horovod", None)
+    config_dataset = options.dataset
     if dataset_dict:
         assert not config_dataset
         dataset = init_dataset(dataset_dict)
@@ -256,6 +282,14 @@ def init(config_str, config_dataset, verbosity):
     print("  input:", dataset.num_inputs, "x", dataset.window, file=log.v2)
     print("  output:", dataset.num_outputs, file=log.v2)
     print(" ", dataset.len_info() or "no info", file=log.v2)
+    if options.max_seq_length == "config":
+        options.max_seq_length = config.typed_value("max_seq_length", sys.maxsize)
+    elif options.max_seq_length:
+        options.max_seq_length = eval(options.max_seq_length)  # noqa
+    if options.min_seq_length == "config":
+        options.min_seq_length = config.typed_value("min_seq_length", 0)
+    elif options.min_seq_length:
+        options.min_seq_length = eval(options.min_seq_length)  # noqa
 
 
 def main():
@@ -279,10 +313,12 @@ def main():
     argparser.add_argument("--key", default="data", help="data-key, e.g. 'data' or 'classes'. (default: 'data')")
     argparser.add_argument("--stats", action="store_true", help="calculate mean/stddev stats")
     argparser.add_argument("--dump_stats", help="file-prefix to dump stats to")
+    argparser.add_argument("--max_seq_length", help="'config' or dict or int")
+    argparser.add_argument("--min_seq_length", help="'config' or dict or int")
     args = argparser.parse_args()
     if args.endseq is None:
         args.endseq = 10 if not args.seqtags else -1
-    init(config_str=args.returnn_config, config_dataset=args.dataset, verbosity=args.verbosity)
+    init(args)
     try:
         dump_dataset(args)
     except KeyboardInterrupt:
