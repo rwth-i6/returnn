@@ -59,7 +59,6 @@ class gradient_checkpoint_scope:
         self.record_graph_scope = _RecordGraph()
         self.record_graph_scope.graph.gradient_checkpoint_scope_backref = self
         # Note: saved_tensors_hooks is thread local.
-        # TODO maybe hook into saved_tensors_hooks.__enter__ and __exit__ to fix our del issue?
         self.saved_tensors_hooks_scope = torch.autograd.graph.saved_tensors_hooks(self._pack_hook, self._unpack_hook)
         self.entered = False
         self.entered_thread_ref = None
@@ -79,7 +78,9 @@ class gradient_checkpoint_scope:
             # Do not exit saved_tensors_hooks_scope here
             # because we still want to pack any tensors which were captured in our graph
             # by giving it a ref to the graph tensor.
-            pass  # TODO prepare saved_tensors_hooks hook
+            # However, we must track any further external calls to saved_tensors_hooks_scope,
+            # to be able to properly remove it from the stack at the right point.
+            _register_custom_saved_tensors_hooks(existing_scope=self.saved_tensors_hooks_scope)
         else:
             self.exit_saved_tensors_hooks_scope()
 
@@ -100,7 +101,9 @@ class gradient_checkpoint_scope:
         """
         assert self.entered_thread_ref() is threading.current_thread()
         if self.exit_args and not self.exited_saved_tensors_hooks_scope:
-            # TODO check right order
+            # Note that via _register_custom_saved_tensors_hooks,
+            # this saved_tensors_hooks_scope.__exit__ might get to our _custom_saved_tensors_hooks_exit below,
+            # which will make sure that the order of __exit__ is correct.
             self.saved_tensors_hooks_scope.__exit__(*self.exit_args)
             self.exited_saved_tensors_hooks_scope = True
 
@@ -336,7 +339,6 @@ class _DelHook:
         self.callback()
 
 
-# TODO...
 _orig_saved_tensors_hooks_enter = torch.autograd.graph.saved_tensors_hooks.__enter__
 _orig_saved_tensors_hooks_exit = torch.autograd.graph.saved_tensors_hooks.__exit__
 _custom_saved_tensors_hooks_tls_ctx = threading.local()
@@ -344,13 +346,19 @@ _custom_saved_tensors_hooks_lock = threading.Lock()
 _custom_saved_tensors_hooks_registered_threads = WeakSet()
 
 
-def _register_custom_saved_tensors_hooks():
+def _register_custom_saved_tensors_hooks(*, existing_scope: Optional[torch.autograd.graph.saved_tensors_hooks] = None):
+    """
+    The purpose of our custom saved_tensors_hooks __enter__/__exit__ is to make sure that
+    the order of __exit__ is correct, i.e. that we exit the scope in the correct order.
+    See :func:`_custom_saved_tensors_hooks_exit`.
+    """
     thread = threading.current_thread()
     with _custom_saved_tensors_hooks_lock:
         if thread in _custom_saved_tensors_hooks_registered_threads:
             return
         _custom_saved_tensors_hooks_registered_threads.add(thread)
-        _custom_saved_tensors_hooks_tls_ctx.stack = []
+        _custom_saved_tensors_hooks_tls_ctx.stack = [existing_scope] if existing_scope else []
+        _custom_saved_tensors_hooks_tls_ctx.queued_exits = []
         if len(_custom_saved_tensors_hooks_registered_threads) == 1:
             torch.autograd.graph.saved_tensors_hooks.__enter__ = _custom_saved_tensors_hooks_enter
             torch.autograd.graph.saved_tensors_hooks.__exit__ = _custom_saved_tensors_hooks_exit
@@ -361,18 +369,36 @@ def _unregister_custom_saved_tensors_hooks():
     with _custom_saved_tensors_hooks_lock:
         assert thread in _custom_saved_tensors_hooks_registered_threads
         del _custom_saved_tensors_hooks_tls_ctx.stack
+        del _custom_saved_tensors_hooks_tls_ctx.queued_exits
         _custom_saved_tensors_hooks_registered_threads.remove(thread)
         if not _custom_saved_tensors_hooks_registered_threads:
             torch.autograd.graph.saved_tensors_hooks.__enter__ = _orig_saved_tensors_hooks_enter
             torch.autograd.graph.saved_tensors_hooks.__exit__ = _orig_saved_tensors_hooks_exit
 
 
-def _custom_saved_tensors_hooks_enter(self):
+def _custom_saved_tensors_hooks_enter(self: torch.autograd.graph.saved_tensors_hooks):
     _custom_saved_tensors_hooks_tls_ctx.stack.append(self)
     return _orig_saved_tensors_hooks_enter(self)
 
 
-def _custom_saved_tensors_hooks_exit(self, exc_type, exc_val, exc_tb):
-    scope = _custom_saved_tensors_hooks_tls_ctx.stack.pop(-1)
-    assert scope is self
-    _orig_saved_tensors_hooks_exit(self, exc_type, exc_val, exc_tb)
+def _custom_saved_tensors_hooks_exit(self: torch.autograd.graph.saved_tensors_hooks, exc_type, exc_val, exc_tb):
+    if self not in _custom_saved_tensors_hooks_tls_ctx.stack:
+        raise Exception(
+            f"saved_tensors_hooks __exit__ mismatch."
+            f" stack {_custom_saved_tensors_hooks_tls_ctx.stack},"
+            f" queued_exits {_custom_saved_tensors_hooks_tls_ctx.queued_exits},"
+            f" got self {self}"
+        )
+    _custom_saved_tensors_hooks_tls_ctx.queued_exits.append(self)
+    while _custom_saved_tensors_hooks_tls_ctx.stack:
+        scope = _custom_saved_tensors_hooks_tls_ctx.stack[-1]
+        if scope not in _custom_saved_tensors_hooks_tls_ctx.queued_exits:
+            # Need to wait for this scope to exit first.
+            # Once we exit it, we would then exit also the others when they are on top.
+            break
+        _custom_saved_tensors_hooks_tls_ctx.stack.pop(-1)
+        _custom_saved_tensors_hooks_tls_ctx.queued_exits.remove(scope)
+        _orig_saved_tensors_hooks_exit(scope, exc_type, exc_val, exc_tb)
+    if not _custom_saved_tensors_hooks_tls_ctx.stack:
+        assert not _custom_saved_tensors_hooks_tls_ctx.queued_exits
+        _unregister_custom_saved_tensors_hooks()
