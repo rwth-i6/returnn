@@ -6,7 +6,7 @@ https://github.com/rwth-i6/returnn/issues/1519
 
 from __future__ import annotations
 
-from typing import Optional, Any, Dict, Tuple, List, Sequence, Callable, Union
+from typing import Optional, Any, Dict, Tuple, List, Callable, Union
 import os
 import sys
 import numpy
@@ -330,7 +330,7 @@ class DistributeFilesDataset(CachedDataset2):
 
     @staticmethod
     def _distribute_evenly_by_size(
-        *, num_bins: int, file_sizes: Dict[str, int], files_order: Sequence[FileTree]
+        *, num_bins: int, file_sizes: Dict[str, int], files_order: List[FileTree]
     ) -> List[List[FileTree]]:
         """
         Distributes the files from files_order into ``num_bins`` while attempting
@@ -355,39 +355,45 @@ class DistributeFilesDataset(CachedDataset2):
         assert len(files_per_bin) == num_bins
         bin_idx = 0
         size_taken = 0
+        total_size_taken = 0
         for i, f_tree in enumerate(files_order):
             size = file_sizes[_get_key_for_file_tree(f_tree)]
             num_remaining = len(files_order) - i
-            if num_remaining <= num_bins - bin_idx - 1:
-                # All remaining sub epochs must be filled.
-                assert files_per_bin[bin_idx]
+
+            try:
+                if num_remaining <= num_bins - bin_idx - 1:
+                    # All remaining sub epochs must be filled.
+                    assert files_per_bin[bin_idx]
+                    bin_idx += 1
+                    files_per_bin[bin_idx].append(f_tree)
+                    size_taken = size
+                    continue
+                if bin_idx == num_bins - 1:
+                    # We are done. Just add the rest to the last sub epoch.
+                    files_per_bin[bin_idx].append(f_tree)
+                    size_taken += size
+                    continue
+                # assert size_taken <= avg_size_per_sub_epoch
+                if size_taken + size <= avg_size_per_sub_epoch:
+                    files_per_bin[bin_idx].append(f_tree)
+                    size_taken += size
+                    continue
+                # We should increase the sub epoch index.
+                # We need to decide where to add this file, to the current or the next sub epoch.
+                if not files_per_bin[bin_idx] or (
+                    # Better to add this file to the current sub epoch?
+                    abs((size_taken + size) - avg_size_per_sub_epoch)
+                    <= abs(size_taken - avg_size_per_sub_epoch)
+                ):
+                    files_per_bin[bin_idx].append(f_tree)
+                    size_taken = 0
+                else:
+                    files_per_bin[bin_idx + 1].append(f_tree)
+                    size_taken = size
                 bin_idx += 1
-                files_per_bin[bin_idx].append(f_tree)
-                size_taken = size
-                continue
-            if bin_idx == num_bins - 1:
-                # We are done. Just add the rest to the last sub epoch.
-                files_per_bin[bin_idx].append(f_tree)
-                size_taken += size
-                continue
-            assert size_taken <= avg_size_per_sub_epoch
-            if size_taken + size <= avg_size_per_sub_epoch:
-                files_per_bin[bin_idx].append(f_tree)
-                size_taken += size
-                continue
-            # We should increase the sub epoch index.
-            # We need to decide where to add this file, to the current or the next sub epoch.
-            if not files_per_bin[bin_idx] or (
-                # Better to add this file to the current sub epoch?
-                abs((size_taken + size) - avg_size_per_sub_epoch)
-                <= abs(size_taken - avg_size_per_sub_epoch)
-            ):
-                files_per_bin[bin_idx].append(f_tree)
-                size_taken = 0
-            else:
-                files_per_bin[bin_idx + 1].append(f_tree)
-                size_taken = size
-            bin_idx += 1
+            finally:
+                total_size_taken += size
+                avg_size_per_sub_epoch = (total_size - total_size_taken + size_taken) / (num_bins - bin_idx)
         assert all(files_per_bin)
         return files_per_bin
 
