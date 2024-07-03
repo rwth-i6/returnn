@@ -6,7 +6,7 @@ https://github.com/rwth-i6/returnn/issues/1519
 
 from __future__ import annotations
 
-from typing import Optional, Any, Dict, Tuple, List, Callable, Union
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, Union
 import os
 import sys
 import numpy
@@ -330,7 +330,7 @@ class DistributeFilesDataset(CachedDataset2):
 
     @staticmethod
     def _distribute_evenly_by_size(
-        *, num_bins: int, file_sizes: Dict[str, int], files_order: List[FileTree]
+        *, num_bins: int, file_sizes: Dict[str, int], files_order: Sequence[FileTree]
     ) -> List[List[FileTree]]:
         """
         Distributes the files from files_order into ``num_bins`` while attempting
@@ -373,7 +373,7 @@ class DistributeFilesDataset(CachedDataset2):
                     files_per_bin[bin_idx].append(f_tree)
                     size_taken += size
                     continue
-                # assert size_taken <= avg_size_per_sub_epoch
+                assert size_taken <= avg_size_per_sub_epoch
                 if size_taken + size <= avg_size_per_sub_epoch:
                     files_per_bin[bin_idx].append(f_tree)
                     size_taken += size
