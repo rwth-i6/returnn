@@ -20,7 +20,7 @@ https://gist.github.com/soulitzer/ec1049a947be046de7fbc2af61a4ee8c
 
 from __future__ import annotations
 
-from typing import Optional, Union, Any, Sequence, List, Dict
+from typing import Optional, Union, Any, Callable, Sequence, List, Dict
 from dataclasses import dataclass, field
 import contextlib
 from weakref import ref, WeakSet
@@ -81,8 +81,19 @@ class gradient_checkpoint_scope:
             # However, we must track any further external calls to saved_tensors_hooks_scope,
             # to be able to properly remove it from the stack at the right point.
             _register_custom_saved_tensors_hooks(existing_scope=self.saved_tensors_hooks_scope)
-        else:
+            _register_custom_saved_tensors_hooks_thread_local_callback(self._custom_saved_tensors_hooks_callback)
+        else:  # no relevant tensors alive anymore
             self.exit_saved_tensors_hooks_scope()
+
+    def _maybe_exit_saved_tensors_hooks_scope(self):
+        if self.exited_saved_tensors_hooks_scope:
+            return
+        if not self.exit_args:
+            return
+        # If we are in the right thread, maybe we can do the cleanup now.
+        if self.entered_thread_ref() is threading.current_thread():
+            if not self.record_graph_scope.graph.graph_tensor_from_raw_tensor:
+                self.exit_saved_tensors_hooks_scope()
 
     def __del__(self):
         # Note, be very careful what we do in __del__ because it might be called in a different thread!
@@ -90,10 +101,7 @@ class gradient_checkpoint_scope:
         # as the reference to the _Graph is kept alive until we used it for backprop,
         # as we keep this alive via _Graph.gradient_checkpoint_scope_backref
         # as long as any _GraphTensor is alive due to backprop pack_hook.
-        if self.entered_thread_ref() is threading.current_thread():
-            self.exit_saved_tensors_hooks_scope()
-        else:
-            self.exit_saved_tensors_hooks_scope_other_thread()
+        self._maybe_exit_saved_tensors_hooks_scope()
 
     def exit_saved_tensors_hooks_scope(self):
         """
@@ -107,12 +115,6 @@ class gradient_checkpoint_scope:
             self.saved_tensors_hooks_scope.__exit__(*self.exit_args)
             self.exited_saved_tensors_hooks_scope = True
 
-    def exit_saved_tensors_hooks_scope_other_thread(self):
-        """
-        exit saved_tensors_hooks_scope if not yet done from another thread
-        """
-        pass  # TODO
-
     def _pack_hook(self, x: torch.Tensor) -> Union[torch.Tensor, _GraphTensor]:
         if self.exit_args and not self.record_graph_scope.graph.graph_tensor_from_raw_tensor:
             # No raw tensors alive anymore in graph_tensor_from_raw_tensor,
@@ -124,19 +126,27 @@ class gradient_checkpoint_scope:
             x._RETURNN_grad_ckpt_del_hook = _DelHook(self._tensor_del_hook)
         return x_
 
-    def _tensor_del_hook(self):
-        # Some of the relevant tensors got deleted.
-        # If we are in the right thread, maybe we can do the cleanup now.
-        if self.entered_thread_ref() is threading.current_thread():
-            if self.exit_args and not self.record_graph_scope.graph.graph_tensor_from_raw_tensor:
-                self.exit_saved_tensors_hooks_scope()
-
     @staticmethod
     def _unpack_hook(x: Union[torch.Tensor, _GraphTensor]) -> torch.Tensor:
         if isinstance(x, _GraphTensor):
+            x.op.graph.gradient_checkpoint_scope_backref._maybe_exit_saved_tensors_hooks_scope()
             x.op.graph.recompute()
             return x.get_recomputed()
         return x
+
+    def _tensor_del_hook(self):
+        # Some of the relevant tensors got deleted.
+        # If we are in the right thread, maybe we can do the cleanup now.
+        self._maybe_exit_saved_tensors_hooks_scope()
+
+    def _custom_saved_tensors_hooks_callback(self) -> bool:
+        assert self.entered_thread_ref() is threading.current_thread()
+        assert self.exit_args
+        if self.record_graph_scope.graph.graph_tensor_from_raw_tensor:
+            return True  # keep callback alive
+        else:
+            self.exit_saved_tensors_hooks_scope()
+            return False  # we are done
 
 
 class _RecordGraph(TorchDispatchMode):
@@ -342,23 +352,32 @@ class _DelHook:
 _orig_saved_tensors_hooks_enter = torch.autograd.graph.saved_tensors_hooks.__enter__
 _orig_saved_tensors_hooks_exit = torch.autograd.graph.saved_tensors_hooks.__exit__
 _custom_saved_tensors_hooks_tls_ctx = threading.local()
-_custom_saved_tensors_hooks_lock = threading.Lock()
+_custom_saved_tensors_hooks_lock = threading.Lock()  # only needed for non thread-locals, i.e. threads, methods
 _custom_saved_tensors_hooks_registered_threads = WeakSet()
 
 
-def _register_custom_saved_tensors_hooks(*, existing_scope: Optional[torch.autograd.graph.saved_tensors_hooks] = None):
+def _register_custom_saved_tensors_hooks(*, existing_scope: torch.autograd.graph.saved_tensors_hooks):
     """
     The purpose of our custom saved_tensors_hooks __enter__/__exit__ is to make sure that
     the order of __exit__ is correct, i.e. that we exit the scope in the correct order.
-    See :func:`_custom_saved_tensors_hooks_exit`.
+
+    See :func:`_custom_saved_tensors_hooks_enter` and :func:`_custom_saved_tensors_hooks_exit`.
+
+    There is no need to call :func:`_unregister_custom_saved_tensors_hooks` later.
+    It will be called automatically when the last scope is exited.
     """
     thread = threading.current_thread()
     with _custom_saved_tensors_hooks_lock:
         if thread in _custom_saved_tensors_hooks_registered_threads:
             return
+        if getattr(_custom_saved_tensors_hooks_tls_ctx, "stack", None) is None:
+            _custom_saved_tensors_hooks_tls_ctx.stack = []
+            _custom_saved_tensors_hooks_tls_ctx.in_callback = False
+            _custom_saved_tensors_hooks_tls_ctx.callbacks = []
+            _custom_saved_tensors_hooks_tls_ctx.queued_exits = []
+        _custom_saved_tensors_hooks_tls_ctx.active = True
+        _custom_saved_tensors_hooks_tls_ctx.stack.append(existing_scope)
         _custom_saved_tensors_hooks_registered_threads.add(thread)
-        _custom_saved_tensors_hooks_tls_ctx.stack = [existing_scope] if existing_scope else []
-        _custom_saved_tensors_hooks_tls_ctx.queued_exits = []
         if len(_custom_saved_tensors_hooks_registered_threads) == 1:
             torch.autograd.graph.saved_tensors_hooks.__enter__ = _custom_saved_tensors_hooks_enter
             torch.autograd.graph.saved_tensors_hooks.__exit__ = _custom_saved_tensors_hooks_exit
@@ -368,8 +387,12 @@ def _unregister_custom_saved_tensors_hooks():
     thread = threading.current_thread()
     with _custom_saved_tensors_hooks_lock:
         assert thread in _custom_saved_tensors_hooks_registered_threads
-        del _custom_saved_tensors_hooks_tls_ctx.stack
-        del _custom_saved_tensors_hooks_tls_ctx.queued_exits
+        assert (
+            not _custom_saved_tensors_hooks_tls_ctx.stack
+            and not _custom_saved_tensors_hooks_tls_ctx.callbacks
+            and not _custom_saved_tensors_hooks_tls_ctx.queued_exits
+        )
+        _custom_saved_tensors_hooks_tls_ctx.active = False
         _custom_saved_tensors_hooks_registered_threads.remove(thread)
         if not _custom_saved_tensors_hooks_registered_threads:
             torch.autograd.graph.saved_tensors_hooks.__enter__ = _orig_saved_tensors_hooks_enter
@@ -377,7 +400,10 @@ def _unregister_custom_saved_tensors_hooks():
 
 
 def _custom_saved_tensors_hooks_enter(self: torch.autograd.graph.saved_tensors_hooks):
-    _custom_saved_tensors_hooks_tls_ctx.stack.append(self)
+    _custom_saved_tensors_hooks_call_callbacks()
+    # The callbacks might have unregistered us. Only add to the stack if we are still active.
+    if _custom_saved_tensors_hooks_tls_ctx.active:
+        _custom_saved_tensors_hooks_tls_ctx.stack.append(self)
     return _orig_saved_tensors_hooks_enter(self)
 
 
@@ -390,6 +416,7 @@ def _custom_saved_tensors_hooks_exit(self: torch.autograd.graph.saved_tensors_ho
             f" got self {self}"
         )
     _custom_saved_tensors_hooks_tls_ctx.queued_exits.append(self)
+    _custom_saved_tensors_hooks_call_callbacks()
     while _custom_saved_tensors_hooks_tls_ctx.stack:
         scope = _custom_saved_tensors_hooks_tls_ctx.stack[-1]
         if scope not in _custom_saved_tensors_hooks_tls_ctx.queued_exits:
@@ -399,6 +426,28 @@ def _custom_saved_tensors_hooks_exit(self: torch.autograd.graph.saved_tensors_ho
         _custom_saved_tensors_hooks_tls_ctx.stack.pop(-1)
         _custom_saved_tensors_hooks_tls_ctx.queued_exits.remove(scope)
         _orig_saved_tensors_hooks_exit(scope, exc_type, exc_val, exc_tb)
+        exc_type, exc_val, exc_tb = None, None, None  # do not propagate this again (even though it's ignored anyway)
     if not _custom_saved_tensors_hooks_tls_ctx.stack:
         assert not _custom_saved_tensors_hooks_tls_ctx.queued_exits
-        _unregister_custom_saved_tensors_hooks()
+        if _custom_saved_tensors_hooks_tls_ctx.active:  # might have been unregistered in the meantime by callbacks
+            _unregister_custom_saved_tensors_hooks()
+
+
+def _register_custom_saved_tensors_hooks_thread_local_callback(cb: Callable[[], bool]):
+    """
+    Register some thread-local callback function which is called on saved_tensors_hooks __enter__ and __exit__.
+    If it returns True, it is kept alive, otherwise removed.
+    """
+    _custom_saved_tensors_hooks_tls_ctx.callbacks.append(cb)
+
+
+def _custom_saved_tensors_hooks_call_callbacks():
+    if _custom_saved_tensors_hooks_tls_ctx.in_callback:
+        return  # avoid recursive calls
+    try:
+        _custom_saved_tensors_hooks_tls_ctx.in_callback = True
+        _custom_saved_tensors_hooks_tls_ctx.callbacks = [
+            cb for cb in _custom_saved_tensors_hooks_tls_ctx.callbacks if cb()
+        ]
+    finally:
+        _custom_saved_tensors_hooks_tls_ctx.in_callback = False
