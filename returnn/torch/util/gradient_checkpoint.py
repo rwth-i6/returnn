@@ -21,6 +21,7 @@ https://gist.github.com/soulitzer/ec1049a947be046de7fbc2af61a4ee8c
 from __future__ import annotations
 
 from typing import Optional, Union, Any, Callable, Sequence, List, Dict
+from types import MethodType
 from dataclasses import dataclass, field
 import contextlib
 from weakref import ref, WeakSet
@@ -81,7 +82,9 @@ class gradient_checkpoint_scope:
             # However, we must track any further external calls to saved_tensors_hooks_scope,
             # to be able to properly remove it from the stack at the right point.
             _register_custom_saved_tensors_hooks(existing_scope=self.saved_tensors_hooks_scope)
-            _register_custom_saved_tensors_hooks_thread_local_callback(self._custom_saved_tensors_hooks_callback)
+            _register_custom_saved_tensors_hooks_thread_local_callback(
+                _WeakMethod(self._custom_saved_tensors_hooks_callback, return_if_dead=False)
+            )
         else:  # no relevant tensors alive anymore
             self.exit_saved_tensors_hooks_scope()
 
@@ -123,7 +126,7 @@ class gradient_checkpoint_scope:
             return x
         x_ = self.record_graph_scope.graph.graph_tensor_from_raw_tensor.get(x, x)
         if isinstance(x_, _GraphTensor):
-            x._RETURNN_grad_ckpt_del_hook = _DelHook(self._tensor_del_hook)
+            x._RETURNN_grad_ckpt_del_hook = _DelHook(_WeakMethod(self._tensor_del_hook))
         return x_
 
     @staticmethod
@@ -146,7 +149,7 @@ class gradient_checkpoint_scope:
             return True  # keep callback alive
         else:
             self.exit_saved_tensors_hooks_scope()
-            return False  # we are done
+            return False  # we are done, can delete callback
 
 
 class _RecordGraph(TorchDispatchMode):
@@ -347,6 +350,21 @@ class _DelHook:
 
     def __del__(self):
         self.callback()
+
+
+class _WeakMethod:
+    # wrong type hint because mypy/PyCharm don't handle MethodType well
+    def __init__(self, method: Union[MethodType, Callable], *, return_if_dead: Any = None):
+        assert isinstance(method, MethodType)
+        self.obj = ref(method.__self__)
+        self.func = method.__func__
+        self.return_if_dead = return_if_dead
+
+    def __call__(self, *args, **kwargs):
+        obj = self.obj()
+        if obj is None:
+            return self.return_if_dead
+        return self.func(obj, *args, **kwargs)
 
 
 _orig_saved_tensors_hooks_enter = torch.autograd.graph.saved_tensors_hooks.__enter__
