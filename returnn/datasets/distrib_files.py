@@ -337,12 +337,6 @@ class DistributeFilesDataset(CachedDataset2):
         to make every bin as evenly sized (based on ``file_sizes``) as possible.
         """
 
-        def _compute_avg(total_size: int, total_size_taken: int, size_taken: int, num_bins: int, bin_idx: int) -> int:
-            """
-            :return: new average size per bin measure
-            """
-            return (total_size - total_size_taken + size_taken) / (num_bins - bin_idx)
-
         total_size = sum(file_sizes.values())
         avg_size_per_sub_epoch = total_size / num_bins
         # Now evenly distribute the files over the bins.
@@ -371,6 +365,7 @@ class DistributeFilesDataset(CachedDataset2):
                 # All remaining sub epochs must be filled.
                 assert files_per_bin[bin_idx]
                 bin_idx += 1
+                avg_size_per_sub_epoch = (total_size - total_size_taken) / (num_bins - bin_idx)
                 files_per_bin[bin_idx].append(f_tree)
                 size_taken = size
                 continue
@@ -383,7 +378,6 @@ class DistributeFilesDataset(CachedDataset2):
             if size_taken + size <= avg_size_per_sub_epoch:
                 files_per_bin[bin_idx].append(f_tree)
                 size_taken += size
-                avg_size_per_sub_epoch = _compute_avg(total_size, total_size_taken, size_taken, num_bins, bin_idx)
                 continue
             # We should increase the sub epoch index.
             # We need to decide where to add this file, to the current or the next sub epoch.
@@ -398,7 +392,7 @@ class DistributeFilesDataset(CachedDataset2):
                 files_per_bin[bin_idx + 1].append(f_tree)
                 size_taken = size
             bin_idx += 1
-            avg_size_per_sub_epoch = _compute_avg(total_size, total_size_taken, size_taken, num_bins, bin_idx)
+            avg_size_per_sub_epoch = (total_size - total_size_taken) / (num_bins - bin_idx)
         assert all(files_per_bin)
         return files_per_bin
 
