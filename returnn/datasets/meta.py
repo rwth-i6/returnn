@@ -1556,13 +1556,14 @@ class ConcatSeqsDataset(CachedDataset2):
                     assert data.ndim == 1 and data[-1] == self.remove_in_between_postfix[key]
                     data = data[:-1]
                 if key in self.force_align and sub_seq_idx != sub_seq_idxs[-1]:
-                    # deal with the frame shift caused by raw wav: simply cut down redundant frames(15ms)
                     ref_key, frame_rate = self.force_align[key]
                     ref_data = self.sub_dataset.get_data(sub_seq_idx, ref_key)
                     len_diff = data.shape[0] - ref_data.shape[0] * frame_rate
                     if len_diff > 0:
+                        # if data longer than ref_data * frame_rate, cut down
                         data = data[:-len_diff,]
                     elif len_diff < 0:
+                        # if data shorter than ref_data * frame_rate, pad by repeating last frame
                         data = numpy.concatenate([data] + [data[-1:]] * -len_diff, axis=0)
                     assert data.shape[0] == ref_data.shape[0] * frame_rate
                 features[key].append(data)
