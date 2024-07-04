@@ -1390,7 +1390,7 @@ class ConcatSeqsDataset(CachedDataset2):
         seq_len_file,
         seq_tag_delim=";",
         remove_in_between_postfix=None,
-        repeat_in_between_last_frame_up_to_multiple_of=None,
+        force_align=None,
         use_cache_manager=False,
         epoch_wise_filter=None,
         **kwargs,
@@ -1401,18 +1401,16 @@ class ConcatSeqsDataset(CachedDataset2):
         :param str seq_len_file: file with Python dict, (single) seg_name -> len, which is used for sorting
         :param str seq_tag_delim:
         :param dict[str,int]|None remove_in_between_postfix: data_key -> expected postfix label. e.g. {"targets": 0}
-        :param dict[str,int]|None repeat_in_between_last_frame_up_to_multiple_of: data_key -> multiple of.
-          Example: you have downsampling factor 6, i.e. ceildiv(data_len, 6) == align_len.
-          Now it could happen that ceildiv(data_len1 + data_len2, 6) < align_len1 + align_len2.
-          This option would repeat intermediate ending frames such that data_len1 % 6 == 0,
-          by setting it to {"data": 6}.
+        :param dict[str,(str,int)]|None force_align: data_key -> (class_key, subsampling_rate).
+            to make sure the alignment is still valid after concatenation, we force length of every seq in data_key
+            to be length of seq in class_key * subsampling_rate
         :param bool use_cache_manager:
         :param dict[(int,int),dict] epoch_wise_filter: see :class:`EpochWiseFilter`
         """
         super(ConcatSeqsDataset, self).__init__(**kwargs)
         self.seq_tag_delim = seq_tag_delim
         self.remove_in_between_postfix = remove_in_between_postfix or {}
-        self.repeat_in_between_last_frame_up_to_multiple_of = repeat_in_between_last_frame_up_to_multiple_of or {}
+        self.force_align = force_align or {}
         self.epoch_wise_filter = EpochWiseFilter(epoch_wise_filter) if epoch_wise_filter else None
         if isinstance(dataset, dict):
             dataset = dataset.copy()
@@ -1486,7 +1484,7 @@ class ConcatSeqsDataset(CachedDataset2):
             sub_seq_list.extend(sub_seq_tags)
         assert sub_seq_idx == len(sub_seq_list) and len(seq_list) == len(sub_seq_idxs)
         self.cur_sub_seq_idxs = sub_seq_idxs
-        return self.sub_dataset.init_seq_order(seq_list=sub_seq_list)
+        return self.sub_dataset.init_seq_order(epoch=epoch, seq_list=sub_seq_list)
 
     def supports_seq_order_sorting(self) -> bool:
         """supports sorting"""
@@ -1531,10 +1529,10 @@ class ConcatSeqsDataset(CachedDataset2):
                     key,
                     sub_dataset_keys,
                 )
-            for key in self.repeat_in_between_last_frame_up_to_multiple_of:
+            for key in self.force_align:
                 assert (
                     key in sub_dataset_keys
-                ), "%s: repeat_in_between_last_frame_up_to_multiple_of key %r not in sub dataset data-keys %r" % (
+                ), "%s: force_align key %r not in sub dataset data-keys %r" % (
                     self,
                     key,
                     sub_dataset_keys,
@@ -1557,11 +1555,16 @@ class ConcatSeqsDataset(CachedDataset2):
                 if key in self.remove_in_between_postfix and sub_seq_idx != sub_seq_idxs[-1]:
                     assert data.ndim == 1 and data[-1] == self.remove_in_between_postfix[key]
                     data = data[:-1]
-                if key in self.repeat_in_between_last_frame_up_to_multiple_of and sub_seq_idx != sub_seq_idxs[-1]:
-                    multiple = self.repeat_in_between_last_frame_up_to_multiple_of[key]
-                    if data.shape[0] % multiple != 0:
-                        data = numpy.concatenate([data] + [data[-1:]] * (multiple - data.shape[0] % multiple), axis=0)
-                        assert data.shape[0] % multiple == 0
+                if key in self.force_align and sub_seq_idx != sub_seq_idxs[-1]:
+                    # deal with the frame shift caused by raw wav: simply cut down redundant frames(15ms)
+                    ref_key, frame_rate = self.force_align[key]
+                    ref_data = self.sub_dataset.get_data(sub_seq_idx, ref_key)
+                    len_diff = data.shape[0] - ref_data.shape[0] * frame_rate
+                    if len_diff > 0:
+                        data = data[:-len_diff,]
+                    elif len_diff < 0:
+                        data = numpy.concatenate([data] + [data[-1:]] * -len_diff, axis=0)
+                    assert data.shape[0] == ref_data.shape[0] * frame_rate
                 features[key].append(data)
         features = {key: numpy.concatenate(values, axis=0) for (key, values) in features.items()}
         return DatasetSeq(seq_idx=seq_idx, seq_tag=seq_tag, features=features)
@@ -1605,6 +1608,12 @@ class ConcatSeqsDataset(CachedDataset2):
         :rtype: list[int]
         """
         return self.sub_dataset.get_data_shape(key)
+
+    def get_total_num_seqs(self):
+        """
+        :rtype: int
+        """ 
+        return len(self.full_seq_list)
 
 
 class ChunkShuffleDataset(CachedDataset2):
