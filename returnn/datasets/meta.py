@@ -1491,7 +1491,7 @@ class ConcatSeqsDataset(CachedDataset2):
             sub_seq_list.extend(sub_seq_tags)
         assert sub_seq_idx == len(sub_seq_list) and len(seq_list) == len(sub_seq_idxs)
         self.cur_sub_seq_idxs = sub_seq_idxs
-        return self.sub_dataset.init_seq_order(seq_list=sub_seq_list)
+        return self.sub_dataset.init_seq_order(epoch=epoch, seq_list=sub_seq_list)
 
     def supports_seq_order_sorting(self) -> bool:
         """supports sorting"""
@@ -1536,10 +1536,10 @@ class ConcatSeqsDataset(CachedDataset2):
                     key,
                     sub_dataset_keys,
                 )
-            for key in self.repeat_in_between_last_frame_up_to_multiple_of:
+            for key in self.force_align:
                 assert (
                     key in sub_dataset_keys
-                ), "%s: repeat_in_between_last_frame_up_to_multiple_of key %r not in sub dataset data-keys %r" % (
+                ), "%s: force_align key %r not in sub dataset data-keys %r" % (
                     self,
                     key,
                     sub_dataset_keys,
@@ -1621,6 +1621,12 @@ class ConcatSeqsDataset(CachedDataset2):
         :rtype: list[int]
         """
         return self.sub_dataset.get_data_shape(key)
+
+    def get_total_num_seqs(self):
+        """
+        :rtype: int
+        """ 
+        return len(self.full_seq_list)
 
 
 class ChunkShuffleDataset(CachedDataset2):
