@@ -1,4 +1,4 @@
-numpy
+numpy<2
 scipy
 h5py
 theano==0.9
