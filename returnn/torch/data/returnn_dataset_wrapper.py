@@ -1,7 +1,7 @@
 """
 Wrapper for RETURNN datasets.
 
-We make use of TorchData data pipelines.
+We make use of torch.utils.data.IterDataPipe.
 """
 
 from __future__ import annotations

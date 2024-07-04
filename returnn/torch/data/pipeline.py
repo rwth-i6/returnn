@@ -1,7 +1,8 @@
 """
 Code to create PyTorch datasets that can be used with the PyTorch DataLoader.
 
-We make use of TorchData data pipelines.
+We make use of torch.utils.data.IterDataPipe data pipelines.
+(We used TorchData before but migrated back to pure PyTorch. https://github.com/rwth-i6/returnn/issues/1382)
 
 Most functionality is implemented as a dataset/datapipe, as this seems to be the common way in PyTorch,
 as it is also commonly done in Fairseq:
