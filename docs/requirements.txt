@@ -1,13 +1,11 @@
 numpy<2
 scipy
 h5py
-theano==0.9
 nose
 pytest
 dm-tree
 tensorflow==2.11.1
 torch
-torchdata
 torchaudio
 numpydoc
 better_exchook
