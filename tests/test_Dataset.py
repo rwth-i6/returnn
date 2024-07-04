@@ -654,11 +654,12 @@ def test_DistributeFilesDataset_distribute_evenly_by_size():
         res = DistributeFilesDataset._distribute_evenly_by_size(
             num_bins=partition_epoch, file_sizes=file_sizes, files_order=files
         )
-        sizes = numpy.sum([[file_sizes[s] for s in v] for v in res], axis=-1)
+        sizes = [sum([file_sizes[s] for s in v]) for v in res]
         assert numpy.std(sizes) <= max_stddev_percent * avg_per_bin
 
     # This test verifies the algorithm distributes evenly in easy cases
-    _test_stddev(numpy.random.uniform(low=97, high=103, size=(100,)), 20, 0.03)
+    rng = numpy.random.RandomState(42)
+    _test_stddev(rng.uniform(low=97, high=103, size=(100,)), 20, 0.03)
 
 
 def test_DistributeFilesDataset():
