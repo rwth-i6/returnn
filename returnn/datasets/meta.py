@@ -1536,10 +1536,18 @@ class ConcatSeqsDataset(CachedDataset2):
                     key,
                     sub_dataset_keys,
                 )
-            for key in self.force_align:
+            for key in self.repeat_in_between_last_frame_up_to_multiple_of:
                 assert (
                     key in sub_dataset_keys
-                ), "%s: force_align key %r not in sub dataset data-keys %r" % (
+                ), "%s: repeat_in_between_last_frame_up_to_multiple_of key %r not in sub dataset data-keys %r" % (
+                    self,
+                    key,
+                    sub_dataset_keys,
+                )
+            for key in self.pad_truncate_data_to_multiple_of:
+                assert (
+                    key in sub_dataset_keys
+                ), "%s: pad_truncate_data_to_multiple_of key %r not in sub dataset data-keys %r" % (
                     self,
                     key,
                     sub_dataset_keys,
