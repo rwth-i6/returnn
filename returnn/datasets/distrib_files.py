@@ -6,7 +6,7 @@ https://github.com/rwth-i6/returnn/issues/1519
 
 from __future__ import annotations
 
-from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, Union
+from typing import Union, Optional, Any, Callable, Sequence, Tuple, List, Dict
 import os
 import sys
 import numpy
