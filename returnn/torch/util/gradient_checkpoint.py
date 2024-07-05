@@ -75,7 +75,7 @@ class gradient_checkpoint_scope:
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.exit_args = (exc_type, exc_val, exc_tb)
         self.record_graph_scope.__exit__(exc_type, exc_val, exc_tb)
-        if self.record_graph_scope.graph.graph_tensor_from_raw_tensor:
+        if self.record_graph_scope.graph.is_any_recorded_tensor_alive():
             # Do not exit saved_tensors_hooks_scope here
             # because we still want to pack any tensors which were captured in our graph
             # by giving it a ref to the graph tensor.
@@ -95,7 +95,7 @@ class gradient_checkpoint_scope:
             return
         # If we are in the right thread, maybe we can do the cleanup now.
         if self.entered_thread_ref() is threading.current_thread():
-            if not self.record_graph_scope.graph.graph_tensor_from_raw_tensor:
+            if not self.record_graph_scope.graph.is_any_recorded_tensor_alive():
                 self.exit_saved_tensors_hooks_scope()
 
     def __del__(self):
@@ -119,12 +119,12 @@ class gradient_checkpoint_scope:
             self.saved_tensors_hooks_scope.__exit__(*self.exit_args)
 
     def _pack_hook(self, x: torch.Tensor) -> Union[torch.Tensor, _GraphTensor]:
-        if self.exit_args and not self.record_graph_scope.graph.graph_tensor_from_raw_tensor:
+        if self.exit_args and not self.record_graph_scope.graph.is_any_recorded_tensor_alive():
             # No raw tensors alive anymore in graph_tensor_from_raw_tensor,
             # so we can exit saved_tensors_hooks_scope now.
             self.exit_saved_tensors_hooks_scope()
             return x
-        x_ = self.record_graph_scope.graph.graph_tensor_from_raw_tensor.get(x, x)
+        x_ = self.record_graph_scope.graph.graph_tensor_from_weak_raw_tensor.get(x, x)
         if isinstance(x_, _GraphTensor):
             x._RETURNN_grad_ckpt_del_hook = _DelHook(_WeakMethod(self._tensor_del_hook))
         return x_
@@ -145,7 +145,7 @@ class gradient_checkpoint_scope:
     def _custom_saved_tensors_hooks_callback(self) -> bool:
         assert self.entered_thread_ref() is threading.current_thread()
         assert self.exit_args
-        if self.record_graph_scope.graph.graph_tensor_from_raw_tensor:
+        if self.record_graph_scope.graph.is_any_recorded_tensor_alive():
             return True  # keep callback alive
         else:
             self.exit_saved_tensors_hooks_scope()
@@ -167,13 +167,24 @@ class _RecordGraph(TorchDispatchMode):
 @dataclass
 class _Graph:
     ops_to_be_recomputed: List[_GraphOp] = field(default_factory=list)
-    graph_tensor_from_raw_tensor: WeakTensorKeyDictionary[torch.Tensor, _GraphTensor] = field(
+    graph_tensor_from_weak_raw_tensor: WeakTensorKeyDictionary[torch.Tensor, _GraphTensor] = field(
         default_factory=WeakTensorKeyDictionary
     )
     stored_device_rng_states: Dict[torch.device, Any] = field(default_factory=dict)
     stored_device_amp_states: Dict[torch.device, Any] = field(default_factory=dict)
     # Keep scope alive as long as any _GraphTensor is alive due to backprop pack_hook.
     gradient_checkpoint_scope_backref: Optional[gradient_checkpoint_scope] = None
+
+    def is_any_recorded_tensor_alive(self) -> bool:
+        """
+        :return: any recorded tensor is still alive.
+            Recorded tensors are outputs from any ops which were recorded,
+            i.e. ops under the gradient_checkpoint_scope.
+        """
+        # graph_tensor_from_weak_raw_tensor is a WeakTensorKeyDictionary,
+        # i.e. once there is no other strong reference to some Tensor anymore,
+        # it would also be removed from graph_tensor_from_weak_raw_tensor.
+        return bool(self.graph_tensor_from_weak_raw_tensor)
 
     def record_op(self, func: Any, args: Sequence[Any], kwargs: Dict[str, Any], out: Any):
         """record op"""
@@ -194,10 +205,10 @@ class _Graph:
         self.ops_to_be_recomputed.append(op)
         for i, out_flat_elem in enumerate(out_flat):
             if isinstance(out_flat_elem, torch.Tensor):
-                if out_flat_elem in self.graph_tensor_from_raw_tensor:
+                if out_flat_elem in self.graph_tensor_from_weak_raw_tensor:
                     continue
                 tensor_ = _GraphTensor(op=op, out_flat_idx=i)
-                self.graph_tensor_from_raw_tensor[out_flat_elem] = tensor_
+                self.graph_tensor_from_weak_raw_tensor[out_flat_elem] = tensor_
 
     def maybe_store_rng_state(self, arg: Any):
         """store RNG state if not yet stored for this device."""
@@ -223,7 +234,7 @@ class _Graph:
 
     def maybe_map_raw_tensor_to_graph_tensor(self, tensor: torch.Tensor) -> Union[_GraphTensor, torch.Tensor]:
         """raw tensor to graph tensor if available, otherwise return raw tensor."""
-        return self.graph_tensor_from_raw_tensor.get(tensor, tensor)
+        return self.graph_tensor_from_weak_raw_tensor.get(tensor, tensor)
 
     def recompute(self):
         """
