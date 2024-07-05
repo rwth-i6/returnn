@@ -269,8 +269,8 @@ class _Graph:
 class _GraphOp:
     graph: _Graph
     func: Any
-    args: Sequence[Union[_GraphTensor, Any]]
-    kwargs: Dict[str, Union[_GraphTensor, Any]]
+    args: Optional[Sequence[Union[_GraphTensor, Any]]]
+    kwargs: Optional[Dict[str, Union[_GraphTensor, Any]]]
     out_flat_num: int
     recomputed_out_flat: Optional[Sequence[torch.Tensor]] = None
 
@@ -282,6 +282,9 @@ class _GraphOp:
         out_flat, _ = pytree.tree_flatten(out)
         assert len(out_flat) == self.out_flat_num
         self.recomputed_out_flat = out_flat
+        # potentially free any referenced resources. we don't need them anymore.
+        self.args = None
+        self.kwargs = None
 
 
 @dataclass
