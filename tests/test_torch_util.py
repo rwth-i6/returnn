@@ -53,64 +53,64 @@ def test_gradient_checkpoint_scope():
     with profile(activities=[ProfilerActivity.CPU], profile_memory=True, with_stack=True, record_shapes=True) as prof:
         with record_function("train_step_no_grad_ckpt"):
             model.demo_run()
-
-    # Note: I tried prof.events(), prof.profiler.kineto_results.events(), prof._memory_profile().timeline,
-    # but they all are not really giving me the information I want.
-    # Either the Python stack is missing, or the memory information is incomplete,
-    # or the Python/TorchOp events are missing.
-    # The only complete information source seems to be prof.profiler.kineto_results.experimental_event_tree().
-
-    from torch.profiler._utils import traverse_dfs
-    from torch._C._profiler import _EventType  # noqa
-
-    for ev in sorted(
-        traverse_dfs(prof.profiler.kineto_results.experimental_event_tree()), key=lambda ev: ev.start_time_ns
-    ):
-        # ev: torch._C._profiler._ProfilerEvent
-        # print(ev.start_time_ns, ev.id, ev.name, ev.typed)
-        if ev.typed[0] == _EventType.Allocation:
-            ex = ev.typed[1]  # torch._C._profiler._ExtraFields_Allocation
-            print("alloc", ex.allocation_id, ex.alloc_size, ex.id, ex.ptr, ex.total_allocated)
-        elif ev.typed[0] == _EventType.TorchOp:
-            ex = ev.typed[1]  # torch._C._profiler._ExtraFields_TorchOp
-            print("torchop", ex.name)
-        elif ev.typed[0] == _EventType.PyCall:
-            ex = ev.typed[1]  # torch._C._profiler._ExtraFields_PyCall
-            ex0 = ex.caller  # torch._C._profiler._PyFrameState
-            ex1 = ex.callsite  # torch._C._profiler._PyFrameState
-            if _pycall_filter_fn(ex0.file_name) or _pycall_filter_fn(ex1.file_name):
-                print("pycall", ex0.function_name, ex0.file_name, ":", ex0.line_number, "->", ex1.function_name)
-
-    # TODO how to understand memory? i want to know: where is what allocated? and when deallocated? total consumption?
-    # TODO...
-    # TODO now model = _Model(use_grad_ckpt=True) ...
-    # TODO also use sys.settrace to really check the flow of logic
+    _report_profile(prof)
+    # TODO... check?
 
     print("**** now with grad chkpt ****")
     model = _Model(use_grad_ckpt=True)
     with profile(activities=[ProfilerActivity.CPU], profile_memory=True, with_stack=True, record_shapes=True) as prof:
         with record_function("train_step_grad_ckpt"):
             model.demo_run()
+    _report_profile(prof)
+    # TODO check...
 
+
+def _report_profile(prof: torch.profiler.profiler):
+    # Note: I tried prof.events(), prof.profiler.kineto_results.events(), prof._memory_profile().timeline,
+    # but they all are not really giving me the information I want.
+    # Either the Python stack is missing, or the memory information is incomplete,
+    # or the Python/TorchOp events are missing.
+    # The only complete information source seems to be prof.profiler.kineto_results.experimental_event_tree().
+
+    # TODO how to understand memory? i want to know: where is what allocated? and when deallocated? total consumption?
+    # TODO also use sys.settrace to really check the flow of logic; not really needed anymore, have the trace already
+
+    # noinspection PyProtectedMember
     from torch.profiler._utils import traverse_dfs
     from torch._C._profiler import _EventType  # noqa
 
-    for ev in sorted(
-        traverse_dfs(prof.profiler.kineto_results.experimental_event_tree()), key=lambda ev: ev.start_time_ns
-    ):
+    def _ev_repr(ev) -> str:
+        if not ev:
+            return "None"
         # ev: torch._C._profiler._ProfilerEvent
         if ev.typed[0] == _EventType.Allocation:
             ex = ev.typed[1]  # torch._C._profiler._ExtraFields_Allocation
-            print("alloc", ex.allocation_id, ex.alloc_size, ex.id, ex.ptr, ex.total_allocated)
+            # ex.allocation_id/ex.ptr redundant with ex.id?
+            return (
+                f"alloc id={ex.id} size={ex.alloc_size} total_alloc={ex.total_allocated}"
+                f" parent={_ev_repr(ev.parent)}"
+            )
         elif ev.typed[0] == _EventType.TorchOp:
             ex = ev.typed[1]  # torch._C._profiler._ExtraFields_TorchOp
-            print("torchop", ex.name)
+            return f"torchop {ex.name} parent={_ev_repr(ev.parent)}"
         elif ev.typed[0] == _EventType.PyCall:
             ex = ev.typed[1]  # torch._C._profiler._ExtraFields_PyCall
             ex0 = ex.caller  # torch._C._profiler._PyFrameState
             ex1 = ex.callsite  # torch._C._profiler._PyFrameState
             if _pycall_filter_fn(ex0.file_name) or _pycall_filter_fn(ex1.file_name):
-                print("pycall", ex0.function_name, ex0.file_name, ":", ex0.line_number, "->", ex1.function_name)
+                return (
+                    f"pycall {ex0.file_name}:{ex0.line_number} {ex0.function_name} -> {ex1.function_name},"
+                    f" parent={_ev_repr(ev.parent)}"
+                )
+        return "Other"
+
+    for ev_ in sorted(
+        traverse_dfs(prof.profiler.kineto_results.experimental_event_tree()), key=lambda ev: ev.start_time_ns
+    ):
+        # ev: torch._C._profiler._ProfilerEvent
+        s = _ev_repr(ev_)
+        if s != "Other":
+            print(s)
 
 
 def _pycall_filter_fn(filename: str) -> bool:
