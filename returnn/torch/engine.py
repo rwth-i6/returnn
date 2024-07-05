@@ -929,7 +929,8 @@ class Engine(EngineBase):
 
         # keep only the last two optimizer states (two in case one file gets corrupted)
         clean_epoch = self.epoch - 2
-        if clean_epoch > 0:
+        apply_keep_logic = self.config.bool("apply_cleanup_old_models_to_optim_states", False)
+        if clean_epoch > 0 and not apply_keep_logic:
             filename = self.get_epoch_model_filename(epoch=clean_epoch) + ".opt" + util.get_model_filename_postfix()
             if os.path.isfile(filename):
                 os.unlink(filename)
@@ -1078,12 +1079,14 @@ class Engine(EngineBase):
         # They consist of a file with the extension ".pt" and potentially an optimizer state with extension ".opt.pt"
 
         count_bytes = 0
-        assert os.path.exists(filename + ".pt")
-        count_bytes += os.stat(filename + ".pt").st_size
-        os.remove(filename + ".pt")
-        if os.path.exists(filename + "opt.pt"):
-            count_bytes += os.stat(filename + "opt.pt").st_size
-            os.remove(filename + "opt.pt")
+        fname = filename + ".pt"
+        assert os.path.exists(fname)
+        count_bytes += os.stat(fname).st_size
+        os.remove(fname)
+        opt_fname = filename + ".opt.pt"
+        if os.path.exists(opt_fname):
+            count_bytes += os.stat(opt_fname).st_size
+            os.remove(opt_fname)
         assert count_bytes > 0
         return count_bytes
 
