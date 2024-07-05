@@ -107,7 +107,9 @@ def _report_profile(prof: torch.profiler.profiler):
                     "size": ex.alloc_size,
                     "name": f"(id {ex.allocation_id}) ({parent_op_name or 'unknown'})",
                 }
-            return f"alloc {_allocs[ex.allocation_id]['name']} size={ex.alloc_size} total_alloc={ex.total_allocated}"
+            return (
+                "de" if ex.alloc_size < 0 else ""
+            ) + f"alloc {_allocs[ex.allocation_id]['name']} size={ex.alloc_size} total_alloc={ex.total_allocated}"
         elif ev.typed[0] == _EventType.TorchOp:
             ex = ev.typed[1]  # torch._C._profiler._ExtraFields_TorchOp
             return f"torchop {ex.name}"
