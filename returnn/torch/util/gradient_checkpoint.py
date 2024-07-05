@@ -183,7 +183,7 @@ class _Graph:
         pytree.tree_map(self.maybe_store_rng_state, kwargs)
         wrapped_args = pytree.tree_map_only(torch.Tensor, self.maybe_map_raw_tensor_to_graph_tensor, args)
         wrapped_kwargs = pytree.tree_map_only(torch.Tensor, self.maybe_map_raw_tensor_to_graph_tensor, kwargs)
-        out_flat = pytree.tree_flatten(out)
+        out_flat, _ = pytree.tree_flatten(out)
         op = _GraphOp(
             graph=self,
             op_idx=len(self.ops),
