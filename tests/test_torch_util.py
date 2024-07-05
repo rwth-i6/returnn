@@ -44,8 +44,10 @@ def test_gradient_checkpoint_scope():
         def demo_run(self):
             x = self.input_var
             y = self(x)
-            loss = y.sum()  # dummy...
+            loss = y.sum()  # dummy loss
+            del x, y  # not needed anymore. makes test cleaner.
             loss.backward()
+            del loss  # not needed anymore
             self.opt.step()
             self.opt.zero_grad()
 
