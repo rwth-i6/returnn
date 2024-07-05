@@ -1580,7 +1580,7 @@ class ConcatSeqsDataset(CachedDataset2):
                     len_diff = data.shape[0] - target_data.shape[0] * multiple
                     if len_diff > 0:
                         # if data longer than ref_data * frame_rate, truncate
-                        data = data[:-len_diff,]
+                        data = data[:-len_diff]
                     elif len_diff < 0:
                         # if data shorter than ref_data * frame_rate, pad by repeating last frame
                         data = numpy.concatenate([data] + [data[-1:]] * -len_diff, axis=0)
