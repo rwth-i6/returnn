@@ -6,7 +6,7 @@ https://github.com/rwth-i6/returnn/issues/1519
 
 from __future__ import annotations
 
-from typing import Optional, Any, Dict, Tuple, List, Sequence, Callable, Union
+from typing import Union, Optional, Any, Callable, Sequence, Tuple, List, Dict
 import os
 import sys
 import numpy
@@ -355,13 +355,17 @@ class DistributeFilesDataset(CachedDataset2):
         assert len(files_per_bin) == num_bins
         bin_idx = 0
         size_taken = 0
+        total_size_taken = 0
         for i, f_tree in enumerate(files_order):
             size = file_sizes[_get_key_for_file_tree(f_tree)]
             num_remaining = len(files_order) - i
+            total_size_taken += size
+
             if num_remaining <= num_bins - bin_idx - 1:
                 # All remaining sub epochs must be filled.
                 assert files_per_bin[bin_idx]
                 bin_idx += 1
+                avg_size_per_sub_epoch = (total_size - total_size_taken) / (num_bins - bin_idx)
                 files_per_bin[bin_idx].append(f_tree)
                 size_taken = size
                 continue
@@ -370,7 +374,6 @@ class DistributeFilesDataset(CachedDataset2):
                 files_per_bin[bin_idx].append(f_tree)
                 size_taken += size
                 continue
-            assert size_taken <= avg_size_per_sub_epoch
             if size_taken + size <= avg_size_per_sub_epoch:
                 files_per_bin[bin_idx].append(f_tree)
                 size_taken += size
@@ -388,6 +391,7 @@ class DistributeFilesDataset(CachedDataset2):
                 files_per_bin[bin_idx + 1].append(f_tree)
                 size_taken = size
             bin_idx += 1
+            avg_size_per_sub_epoch = (total_size - total_size_taken) / (num_bins - bin_idx)
         assert all(files_per_bin)
         return files_per_bin
 
