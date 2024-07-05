@@ -1545,12 +1545,9 @@ class ConcatSeqsDataset(CachedDataset2):
                     sub_dataset_keys,
                 )
             for key in self.pad_truncate_data_to_multiple_of:
-                assert (
-                    key in sub_dataset_keys
-                ), "%s: pad_truncate_data_to_multiple_of key %r not in sub dataset data-keys %r" % (
-                    self,
-                    key,
-                    sub_dataset_keys,
+                assert key in sub_dataset_keys, (
+                    f"{self}: pad_truncate_data_to_multiple_of key {key}"
+                    f" not in sub dataset data-keys {sub_dataset_keys}"
                 )
         for sub_seq_idx, sub_seq_tag in zip(sub_seq_idxs, sub_seq_tags):
             self.sub_dataset.load_seqs(sub_seq_idx, sub_seq_idx + 1)
