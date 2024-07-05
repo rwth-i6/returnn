@@ -1408,10 +1408,10 @@ class ConcatSeqsDataset(CachedDataset2):
           This option would repeat intermediate ending frames such that data_len1 % 6 == 0,
           by setting it to {"data": 6}.
         :param dict[str,(str,int)]|None pad_truncate_data_to_multiple_of: data_key -> (target_key, multiple).
-          Force data_len == target_len * multiple for specified data and target.
-          Similar to repeat_in_between_last_frame_up_to_multiple_of but also truncates the data.
-          Mainly for raw wav alignment, where data_len could be slightly longer than target_len * multiple
-          due to mismatch in feature extraction.
+            Force data_len == target_len * multiple for specified data and target.
+            Similar to repeat_in_between_last_frame_up_to_multiple_of but also truncates the data.
+            Mainly for raw wav alignment, where data_len could be slightly longer than target_len * multiple
+            due to mismatch in feature extraction.
         :param bool use_cache_manager:
         :param dict[(int,int),dict] epoch_wise_filter: see :class:`EpochWiseFilter`
         """
