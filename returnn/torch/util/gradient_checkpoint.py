@@ -186,7 +186,6 @@ class _Graph:
         out_flat, _ = pytree.tree_flatten(out)
         op = _GraphOp(
             graph=self,
-            op_idx=len(self.ops),
             func=func,
             args=wrapped_args,
             kwargs=wrapped_kwargs,
@@ -243,7 +242,6 @@ class _Graph:
 @dataclass
 class _GraphOp:
     graph: _Graph
-    op_idx: int
     func: Any
     args: Sequence[Union[_GraphTensor, Any]]
     kwargs: Dict[str, Union[_GraphTensor, Any]]
