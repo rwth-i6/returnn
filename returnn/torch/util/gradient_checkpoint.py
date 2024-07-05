@@ -254,7 +254,8 @@ class _GraphOp:
         """recompute, assuming all args are recomputed."""
         args = pytree.tree_map_only(_GraphTensor, _GraphTensor.get_recomputed, self.args)
         kwargs = pytree.tree_map_only(_GraphTensor, _GraphTensor.get_recomputed, self.kwargs)
-        out_flat = self.func(*args, **kwargs)
+        out = self.func(*args, **kwargs)
+        out_flat, _ = pytree.tree_flatten(out)
         assert len(out_flat) == self.out_flat_num
         self.recomputed_out_flat = out_flat
 
