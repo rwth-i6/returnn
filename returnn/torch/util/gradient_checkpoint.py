@@ -166,7 +166,7 @@ class _RecordGraph(TorchDispatchMode):
 
 @dataclass
 class _Graph:
-    ops: List[_GraphOp] = field(default_factory=list)
+    ops_to_be_recomputed: List[_GraphOp] = field(default_factory=list)
     graph_tensor_from_raw_tensor: WeakTensorKeyDictionary[torch.Tensor, _GraphTensor] = field(
         default_factory=WeakTensorKeyDictionary
     )
@@ -191,7 +191,7 @@ class _Graph:
             kwargs=wrapped_kwargs,
             out_flat_num=len(out_flat),
         )
-        self.ops.append(op)
+        self.ops_to_be_recomputed.append(op)
         for i, out_flat_elem in enumerate(out_flat):
             if isinstance(out_flat_elem, torch.Tensor):
                 if out_flat_elem in self.graph_tensor_from_raw_tensor:
@@ -238,11 +238,15 @@ class _Graph:
         This works fine except of one important aspect: The RNG state.
         If there are any other ops in between which use the RNG state, the RNG state would not be correct anymore.
         So we cannot allow this. We must recompute all ops together right now.
+
+        However, we can at least remove the op from the list once it is computed.
+        So once any referenced tensor is not needed anymore, it can be garbage collected.
         """
         with _reset_rng_states_scope(self.stored_device_rng_states), _reset_amp_states_scope(
             self.stored_device_amp_states
         ):
-            for op in self.ops:
+            while self.ops_to_be_recomputed:
+                op = self.ops_to_be_recomputed.pop(0)
                 op.recompute()
 
 
