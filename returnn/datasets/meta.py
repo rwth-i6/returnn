@@ -1408,8 +1408,10 @@ class ConcatSeqsDataset(CachedDataset2):
           This option would repeat intermediate ending frames such that data_len1 % 6 == 0,
           by setting it to {"data": 6}.
         :param dict[str,(str,int)]|None pad_truncate_data_to_multiple_of: data_key -> (target_key, multiple).
-            to make sure the alignment is still valid after concatenation, we force length of every seq in data_key
-            to be length of seq in target_key * multiple
+          Force data_len == target_len * multiple for specified data and target.
+          Similar to repeat_in_between_last_frame_up_to_multiple_of but also truncates the data.
+          Mainly for raw wav alignment, where data_len could be slightly longer than target_len * multiple
+          due to mismatch in feature extraction.
         :param bool use_cache_manager:
         :param dict[(int,int),dict] epoch_wise_filter: see :class:`EpochWiseFilter`
         """
@@ -1545,12 +1547,9 @@ class ConcatSeqsDataset(CachedDataset2):
                     sub_dataset_keys,
                 )
             for key in self.pad_truncate_data_to_multiple_of:
-                assert (
-                    key in sub_dataset_keys
-                ), "%s: pad_truncate_data_to_multiple_of key %r not in sub dataset data-keys %r" % (
-                    self,
-                    key,
-                    sub_dataset_keys,
+                assert key in sub_dataset_keys, (
+                    f"{self}: pad_truncate_data_to_multiple_of key {key}"
+                    f" not in sub dataset data-keys {sub_dataset_keys}"
                 )
         for sub_seq_idx, sub_seq_tag in zip(sub_seq_idxs, sub_seq_tags):
             self.sub_dataset.load_seqs(sub_seq_idx, sub_seq_idx + 1)
@@ -1630,10 +1629,8 @@ class ConcatSeqsDataset(CachedDataset2):
         """
         return self.sub_dataset.get_data_shape(key)
 
-    def get_total_num_seqs(self):
-        """
-        :rtype: int
-        """
+    def get_total_num_seqs(self) -> int:
+        """total num seqs"""
         return len(self.full_seq_list)
 
 
