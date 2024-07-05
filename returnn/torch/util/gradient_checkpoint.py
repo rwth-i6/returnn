@@ -115,8 +115,8 @@ class gradient_checkpoint_scope:
             # Note that via _register_custom_saved_tensors_hooks,
             # this saved_tensors_hooks_scope.__exit__ might get to our _custom_saved_tensors_hooks_exit below,
             # which will make sure that the order of __exit__ is correct.
-            self.saved_tensors_hooks_scope.__exit__(*self.exit_args)
             self.exited_saved_tensors_hooks_scope = True
+            self.saved_tensors_hooks_scope.__exit__(*self.exit_args)
 
     def _pack_hook(self, x: torch.Tensor) -> Union[torch.Tensor, _GraphTensor]:
         if self.exit_args and not self.record_graph_scope.graph.graph_tensor_from_raw_tensor:
