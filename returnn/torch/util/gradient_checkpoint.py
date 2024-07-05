@@ -133,7 +133,7 @@ class gradient_checkpoint_scope:
     def _unpack_hook(x: Union[torch.Tensor, _GraphTensor]) -> torch.Tensor:
         if isinstance(x, _GraphTensor):
             x.op.graph.gradient_checkpoint_scope_backref._maybe_exit_saved_tensors_hooks_scope()
-            x.op.graph.recompute()
+            x.op.graph.maybe_recompute()
             return x.get_recomputed()
         return x
 
@@ -236,7 +236,7 @@ class _Graph:
         """raw tensor to graph tensor if available, otherwise return raw tensor."""
         return self.graph_tensor_from_weak_raw_tensor.get(tensor, tensor)
 
-    def recompute(self):
+    def maybe_recompute(self):
         """
         Recompute.
 
@@ -253,12 +253,16 @@ class _Graph:
         However, we can at least remove the op from the list once it is computed.
         So once any referenced tensor is not needed anymore, it can be garbage collected.
         """
+        if not self.ops_to_be_recomputed:
+            return
         with _reset_rng_states_scope(self.stored_device_rng_states), _reset_amp_states_scope(
             self.stored_device_amp_states
         ):
             while self.ops_to_be_recomputed:
                 op = self.ops_to_be_recomputed.pop(0)
                 op.recompute()
+        self.stored_device_rng_states.clear()
+        self.stored_device_amp_states.clear()
 
 
 @dataclass
