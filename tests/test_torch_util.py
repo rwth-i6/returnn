@@ -79,37 +79,52 @@ def _report_profile(prof: torch.profiler.profiler):
     from torch.profiler._utils import traverse_dfs
     from torch._C._profiler import _EventType  # noqa
 
-    def _ev_repr(ev) -> str:
+    _allocs = {}  # id -> dict with "size", "name"
+
+    def _ev_visit(ev) -> str:
         if not ev:
             return "None"
         # ev: torch._C._profiler._ProfilerEvent
         if ev.typed[0] == _EventType.Allocation:
             ex = ev.typed[1]  # torch._C._profiler._ExtraFields_Allocation
-            # ex.allocation_id/ex.ptr redundant with ex.id?
-            return (
-                f"alloc id={ex.id} size={ex.alloc_size} total_alloc={ex.total_allocated}"
-                f" parent={_ev_repr(ev.parent)}"
-            )
+            # ex.id/ex.allocation_id/ex.ptr redundant?
+            if ex.allocation_id in _allocs:
+                # deallocation
+                assert _allocs[ex.allocation_id]["size"] == -ex.alloc_size
+            else:
+                assert ex.alloc_size > 0
+                assert ev.parent
+                parent_op_name = None
+                parent = ev.parent
+                while parent and parent.typed[0] == _EventType.TorchOp:  # go to top torch op
+                    parent_op_name = parent.typed[1].name
+                    parent = parent.parent
+                if not parent_op_name and ev.parent.typed[0] == _EventType.PyCall:
+                    parent_op_name = ev.parent.typed[1].callsite.function_name
+                if not parent_op_name and ev.parent.typed[0] == _EventType.PyCCall:
+                    parent_op_name = ev.parent.typed[1].caller.function_name
+                _allocs[ex.allocation_id] = {
+                    "size": ex.alloc_size,
+                    "name": f"(id {ex.allocation_id}) ({parent_op_name or 'unknown'})",
+                }
+            return f"alloc {_allocs[ex.allocation_id]['name']} size={ex.alloc_size} total_alloc={ex.total_allocated}"
         elif ev.typed[0] == _EventType.TorchOp:
             ex = ev.typed[1]  # torch._C._profiler._ExtraFields_TorchOp
-            return f"torchop {ex.name} parent={_ev_repr(ev.parent)}"
+            return f"torchop {ex.name}"
         elif ev.typed[0] == _EventType.PyCall:
             ex = ev.typed[1]  # torch._C._profiler._ExtraFields_PyCall
             ex0 = ex.caller  # torch._C._profiler._PyFrameState
             ex1 = ex.callsite  # torch._C._profiler._PyFrameState
             if _pycall_filter_fn(ex0.file_name) or _pycall_filter_fn(ex1.file_name):
-                return (
-                    f"pycall {ex0.file_name}:{ex0.line_number} {ex0.function_name} -> {ex1.function_name},"
-                    f" parent={_ev_repr(ev.parent)}"
-                )
-        return "Other"
+                return f"pycall {ex0.file_name}:{ex0.line_number} {ex0.function_name} -> {ex1.function_name}"
+        return "other"
 
     for ev_ in sorted(
         traverse_dfs(prof.profiler.kineto_results.experimental_event_tree()), key=lambda ev: ev.start_time_ns
     ):
         # ev: torch._C._profiler._ProfilerEvent
-        s = _ev_repr(ev_)
-        if s != "Other":
+        s = _ev_visit(ev_)
+        if s != "other":
             print(s)
 
 
