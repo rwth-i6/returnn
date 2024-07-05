@@ -637,6 +637,7 @@ def test_DistributeFilesDataset_distribute_evenly_by_size():
         res_ = [[file_sizes[fn] for fn in sub_epoch] for sub_epoch in res]
         assert res_ == expected
 
+    _test([1, 10, 1, 1], 3, [[1], [10], [1, 1]])
     _test([1, 1, 78, 120], 4, [[1], [1], [78], [120]])
     _test([1, 1, 1, 56, 141], 5, [[1], [1], [1], [56], [141]])
     _test([1, 1, 1, 56, 141], 4, [[1, 1], [1], [56], [141]])

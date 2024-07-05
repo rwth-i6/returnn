@@ -374,7 +374,6 @@ class DistributeFilesDataset(CachedDataset2):
                 files_per_bin[bin_idx].append(f_tree)
                 size_taken += size
                 continue
-            assert size_taken <= avg_size_per_sub_epoch
             if size_taken + size <= avg_size_per_sub_epoch:
                 files_per_bin[bin_idx].append(f_tree)
                 size_taken += size
