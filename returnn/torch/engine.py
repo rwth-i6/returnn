@@ -862,7 +862,7 @@ class Engine(EngineBase):
         else:
             raise TypeError(f"get_model returned {model} of type {type(model)}, expected rf.Module or torch.nn.Module")
         assert isinstance(self._pt_model, torch.nn.Module)
-        print("Model:", self._pt_model, file=log.v4)
+        print("Model:", self._pt_model, file=log.v3)
         num_params = sum([parameter.numel() for parameter in self._pt_model.parameters()])
         print(f"net params #: {num_params}", file=log.v2)
 
