@@ -1627,10 +1627,8 @@ class ConcatSeqsDataset(CachedDataset2):
         """
         return self.sub_dataset.get_data_shape(key)
 
-    def get_total_num_seqs(self):
-        """
-        :rtype: int
-        """ 
+    def get_total_num_seqs(self) -> int:
+        """total num seqs"""
         return len(self.full_seq_list)
 
 
