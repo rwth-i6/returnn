@@ -1417,7 +1417,7 @@ class ConcatSeqsDataset(CachedDataset2):
         self.seq_tag_delim = seq_tag_delim
         self.remove_in_between_postfix = remove_in_between_postfix or {}
         self.repeat_in_between_last_frame_up_to_multiple_of = repeat_in_between_last_frame_up_to_multiple_of or {}
-        self.pad_truncate_data_to_multiple_of = pad_truncate_data_to_target_length or {}
+        self.pad_truncate_data_to_multiple_of = pad_truncate_data_to_multiple_of or {}
         self.epoch_wise_filter = EpochWiseFilter(epoch_wise_filter) if epoch_wise_filter else None
         if isinstance(dataset, dict):
             dataset = dataset.copy()
@@ -1633,7 +1633,7 @@ class ConcatSeqsDataset(CachedDataset2):
     def get_total_num_seqs(self):
         """
         :rtype: int
-        """ 
+        """
         return len(self.full_seq_list)
 
 
