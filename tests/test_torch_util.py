@@ -78,15 +78,49 @@ def test_gradient_checkpoint_scope():
             ex = ev.typed[1]  # torch._C._profiler._ExtraFields_PyCall
             ex0 = ex.caller  # torch._C._profiler._PyFrameState
             ex1 = ex.callsite  # torch._C._profiler._PyFrameState
-            if os.path.basename(ex1.file_name) == os.path.basename(__file__) or os.path.basename(
-                ex0.file_name
-            ) == os.path.basename(__file__):
+            if _pycall_filter_fn(ex0.file_name) or _pycall_filter_fn(ex1.file_name):
                 print("pycall", ex0.function_name, ex0.file_name, ":", ex0.line_number, "->", ex1.function_name)
 
     # TODO how to understand memory? i want to know: where is what allocated? and when deallocated? total consumption?
     # TODO...
     # TODO now model = _Model(use_grad_ckpt=True) ...
     # TODO also use sys.settrace to really check the flow of logic
+
+    print("**** now with grad chkpt ****")
+    model = _Model(use_grad_ckpt=True)
+    with profile(activities=[ProfilerActivity.CPU], profile_memory=True, with_stack=True, record_shapes=True) as prof:
+        with record_function("train_step_grad_ckpt"):
+            model.demo_run()
+
+    from torch.profiler._utils import traverse_dfs
+    from torch._C._profiler import _EventType  # noqa
+
+    for ev in sorted(
+        traverse_dfs(prof.profiler.kineto_results.experimental_event_tree()), key=lambda ev: ev.start_time_ns
+    ):
+        # ev: torch._C._profiler._ProfilerEvent
+        if ev.typed[0] == _EventType.Allocation:
+            ex = ev.typed[1]  # torch._C._profiler._ExtraFields_Allocation
+            print("alloc", ex.allocation_id, ex.alloc_size, ex.id, ex.ptr, ex.total_allocated)
+        elif ev.typed[0] == _EventType.TorchOp:
+            ex = ev.typed[1]  # torch._C._profiler._ExtraFields_TorchOp
+            print("torchop", ex.name)
+        elif ev.typed[0] == _EventType.PyCall:
+            ex = ev.typed[1]  # torch._C._profiler._ExtraFields_PyCall
+            ex0 = ex.caller  # torch._C._profiler._PyFrameState
+            ex1 = ex.callsite  # torch._C._profiler._PyFrameState
+            if _pycall_filter_fn(ex0.file_name) or _pycall_filter_fn(ex1.file_name):
+                print("pycall", ex0.function_name, ex0.file_name, ":", ex0.line_number, "->", ex1.function_name)
+
+
+def _pycall_filter_fn(filename: str) -> bool:
+    assert not filename.startswith("/")  # currently the case...
+    if os.path.basename(filename) == os.path.basename(__file__):
+        assert "/" not in filename  # currently the case...
+        return True
+    if filename.startswith("returnn/"):
+        return True
+    return False
 
 
 if __name__ == "__main__":
