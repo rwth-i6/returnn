@@ -231,6 +231,13 @@ class _Graph:
 
         Make sure that the recomputations happen in the correct order,
         to get any random number generator state correct.
+
+        Note that we considered to have an API here which allowed to only recompute a subset of the ops.
+        It would still compute all from op idx 0 to some given op idx, but not the rest.
+        On subsequent calls, it would then continue from the last idx until again the requested op idx.
+        This works fine except of one important aspect: The RNG state.
+        If there are any other ops in between which use the RNG state, the RNG state would not be correct anymore.
+        So we cannot allow this. We must recompute all ops together right now.
         """
         with _reset_rng_states_scope(self.stored_device_rng_states), _reset_amp_states_scope(
             self.stored_device_amp_states
