@@ -17,6 +17,7 @@ from returnn.torch.util.gradient_checkpoint import gradient_checkpoint_scope
 
 def test_gradient_checkpoint_scope():
     # https://github.com/rwth-i6/returnn/issues/1552
+    from copy import deepcopy
     from torch.profiler import profile, record_function, ProfilerActivity
 
     shape = (101, 103)
@@ -52,19 +53,24 @@ def test_gradient_checkpoint_scope():
             self.opt.zero_grad()
 
     model = _Model(use_grad_ckpt=False)
+    param_state = deepcopy(model.state_dict())
     with profile(activities=[ProfilerActivity.CPU], profile_memory=True, with_stack=True, record_shapes=True) as prof:
         with record_function("train_step_no_grad_ckpt"):
             model.demo_run()
     _report_profile(prof)
+    param_post_state = deepcopy(model.state_dict())
     # TODO... check?
 
     print("**** now with grad chkpt ****")
     model = _Model(use_grad_ckpt=True)
+    model.load_state_dict(param_state)
     with profile(activities=[ProfilerActivity.CPU], profile_memory=True, with_stack=True, record_shapes=True) as prof:
         with record_function("train_step_grad_ckpt"):
             model.demo_run()
     _report_profile(prof)
-    # TODO check...
+    # TODO check grad chkpt logic, mem consumption, etc...
+    param_post_state_ = deepcopy(model.state_dict())
+    # TODO check that we got the same grads, indirectly by checking the post state is the same
 
 
 def _report_profile(prof: torch.profiler.profiler):
