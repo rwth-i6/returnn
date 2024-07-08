@@ -69,6 +69,10 @@ __all__ = ["gradient_checkpoint_scope"]
 # We also hook into Tensor.__del__ and also handle gradient_checkpoint_scope.__del__,
 # but as that might run in a different thread, we cannot always do the cleanup there.
 # We always check for this.
+# (Note that this is due to the API of torch.autograd.graph.saved_tensors_hooks.
+# We actually would want to always use it for a set of specified tensors.
+# We also discuss some potentially better PyTorch API to implement this in an easier way:
+# https://github.com/pytorch/pytorch/issues/129867)
 #
 # For the recomputation, we make sure that we properly reset the RNG and AMP states,
 # and that we perform the recomputation in the exact same order, such that RNG state is correct.
@@ -104,6 +108,29 @@ class gradient_checkpoint_scope:
     as we need it beyond the scope of the ``gradient_checkpoint_scope``,
     specifically for all future usages of the tensor ``x`` in the example.
     See the code documentation for more details on this.
+
+    Note, PyTorch itself also provides a gradient checkpointing API,
+    namely `torch.utils.checkpoint <https://pytorch.org/docs/stable/checkpoint.html>`__.
+    This API is different: You cannot easily specify what not to store / what to recompute.
+    You rather specify a start/end point what to *store* for backpropagation,
+    and then PyTorch will recompute everything in between.
+    For the example above, you define that ``y`` is the end point and will be stored.
+    It looks like this::
+
+        a = ...
+        b = ...
+        c = ...
+        y = torch.utils.checkpoint.checkpoint(lambda: (a + b) * c)
+
+    PyTorch will not recompute ``... * c`` here,
+    but it will recompute ``a + b``.
+    We find this API more cumbersome to use and less flexible,
+    because in many case, you know what you want to recompute, i.e. what you don't want to store.
+    The PyTorch API is more about what you want to store, and then recompute everything else between.
+
+    See also:
+    https://github.com/rwth-i6/returnn/issues/1552
+    https://discuss.pytorch.org/t/gradient-checkpointing/205416
     """
 
     def __init__(self):
