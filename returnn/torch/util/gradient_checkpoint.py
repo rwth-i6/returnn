@@ -236,8 +236,13 @@ class _RecordGraph(TorchDispatchMode):
 
     def __torch_dispatch__(self, func, types, args=(), kwargs=None):
         kwargs = {} if kwargs is None else kwargs
+        graph = self.graph
+        graph.maybe_store_rng_state(torch.device("cpu"))
+        graph.maybe_store_amp_state(torch.device("cpu"))
+        pytree.tree_map(graph.maybe_store_rng_state, args)
+        pytree.tree_map(graph.maybe_store_rng_state, kwargs)
         out = func(*args, **kwargs)
-        self.graph.record_op(func, args, kwargs, out)
+        graph.record_op(func, args, kwargs, out)
         return out
 
 
@@ -265,13 +270,9 @@ class _Graph:
 
     def record_op(self, func: Any, args: Sequence[Any], kwargs: Dict[str, Any], out: Any):
         """record op"""
-        self.maybe_store_rng_state(torch.device("cpu"))
-        self.maybe_store_amp_state(torch.device("cpu"))
-        pytree.tree_map(self.maybe_store_rng_state, args)
-        pytree.tree_map(self.maybe_store_rng_state, kwargs)
+        out_flat, _ = pytree.tree_flatten(out)
         wrapped_args = pytree.tree_map_only(torch.Tensor, self.maybe_map_raw_tensor_to_graph_tensor, args)
         wrapped_kwargs = pytree.tree_map_only(torch.Tensor, self.maybe_map_raw_tensor_to_graph_tensor, kwargs)
-        out_flat, _ = pytree.tree_flatten(out)
         op = _GraphOp(
             graph=self,
             func=func,

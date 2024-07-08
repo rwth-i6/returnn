@@ -54,13 +54,13 @@ def test_gradient_checkpoint_scope():
 
     model = _Model(use_grad_ckpt=False)
     param_state = deepcopy(model.state_dict())
+    rng_state = torch.get_rng_state()
     with profile(activities=[ProfilerActivity.CPU], profile_memory=True, with_stack=True, record_shapes=True) as prof:
         with record_function("train_step_no_grad_ckpt"):
             model.demo_run()
     b = 4  # size single f32
     t = shape[0] * shape[1] * b  # size tensor
-    _rng_state = torch.get_rng_state()
-    r = _rng_state.numel() * _rng_state.element_size()
+    r = rng_state.numel() * rng_state.element_size()
     _report_profile(
         prof,
         [
@@ -90,6 +90,7 @@ def test_gradient_checkpoint_scope():
     print("**** now with grad chkpt ****")
     model = _Model(use_grad_ckpt=True)
     model.load_state_dict(param_state)
+    torch.set_rng_state(rng_state)
     with profile(activities=[ProfilerActivity.CPU], profile_memory=True, with_stack=True, record_shapes=True) as prof:
         with record_function("train_step_grad_ckpt"):
             model.demo_run()
@@ -100,9 +101,9 @@ def test_gradient_checkpoint_scope():
             ("pycall", {"callsite_name": "forward"}),
             ("pycall", {"callsite_name": "get_var_noise"}),
             ("pycall", {"callsite_name": "__torch_dispatch__"}),
-            ("alloc", {"name": "*/get_var_noise/aten::randn", "size": t, "total_alloc": t}),
+            ("alloc", {"name": "*/get_rng_state", "size": r, "total_alloc": r}),
+            ("alloc", {"name": "*/get_var_noise/aten::randn", "size": t, "total_alloc": t + r}),
             ("pycall", {"callsite_name": "record_op"}),
-            ("alloc", {"name": "*/get_rng_state", "size": r, "total_alloc": t + r}),
             ("alloc", {"name": "*/forward/aten::add", "size": t, "total_alloc": t * 2 + r}),
             ("pycall", {"callsite_name": "record_op"}),
             ("dealloc", {"name": "*/get_var_noise/aten::randn", "size": -t, "total_alloc": t + r}),
@@ -145,7 +146,9 @@ def test_gradient_checkpoint_scope():
         ],
     )
     param_post_state_ = deepcopy(model.state_dict())
-    # TODO check that we got the same grads, indirectly by checking the post state is the same
+    assert set(param_post_state.keys()) == set(param_post_state_.keys())
+    for k in param_post_state.keys():
+        torch.testing.assert_allclose(param_post_state[k], param_post_state_[k])
 
 
 def _report_profile(prof: torch.profiler.profiler, check_events=(), *, _size_threshold=100):
