@@ -40,6 +40,45 @@ import torch.utils._pytree as pytree
 __all__ = ["gradient_checkpoint_scope"]
 
 
+# gradient_checkpoint_scope is the public API to the user.
+# gradient_checkpoint_scope.__enter__ will enter two other scopes:
+#
+# - record_graph_scope: _RecordGraph(TorchDispatchMode),
+#   to record the computation graph for all ops within the scope.
+#
+# - saved_tensors_hooks_scope: torch.autograd.graph.saved_tensors_hooks,
+#   to overwrite what we store for backpropagation, and how to recompute it.
+#   Specifically, for all tensors which were created within the gradient_checkpoint_scope,
+#   we will never store them in the pack_hook,
+#   and unpack_hook will trigger the recomputation of the computation graph.
+#
+# gradient_checkpoint_scope.__exit__ will exit the record_graph_scope,
+# but the saved_tensors_hooks_scope will stay alive as long as needed,
+# while any of the created tensors are still alive.
+# We keep a weak tensor key dictionary to map from the created raw tensors
+# to the point in the recorded computation graph (specifically _GraphTensor objects).
+# We just check whether any of the weak tensor refs is still alive.
+#
+# To keep saved_tensors_hooks_scope alive and make sure
+# that other calls to torch.autograd.graph.saved_tensors_hooks are correctly handled,
+# specifically that the order of enter/exit is correct,
+# we hook into torch.autograd.graph.saved_tensors_hooks.__enter__/__exit__ itself.
+# See _register_custom_saved_tensors_hooks below.
+# Further, torch.autograd.graph.saved_tensors_hooks is thread local,
+# so we can do any such logic only within the same thread.
+# We also hook into Tensor.__del__ and also handle gradient_checkpoint_scope.__del__,
+# but as that might run in a different thread, we cannot always do the cleanup there.
+# We always check for this.
+#
+# For the recomputation, we make sure that we properly reset the RNG and AMP states,
+# and that we perform the recomputation in the exact same order, such that RNG state is correct.
+#
+# Once some recomputed tensor was used and is not needed anymore, the GC should free it.
+# We try to make sure that no unnecessary references are kept alive.
+#
+# Also see test_gradient_checkpoint_scope() which tests this.
+
+
 class gradient_checkpoint_scope:
     """
     Create a gradient checkpoint scope.
@@ -54,6 +93,17 @@ class gradient_checkpoint_scope:
         with gradient_checkpoint_scope():
             x = a + b
         y = x * c
+
+    In this example, the tensor ``x`` will not be stored for backpropagation,
+    i.e. the computation ``x = a + b`` will be recomputed during backpropagation.
+
+    Internally, this uses the PyTorch ``torch.autograd.graph.saved_tensors_hooks`` mechanism
+    to override what we store for backpropagation, and how to recompute it.
+    And we use the PyTorch ``TorchDispatchMode`` to intercept all operations within the scope.
+    Note that the usage of ``torch.autograd.graph.saved_tensors_hooks`` is tricky here
+    as we need it beyond the scope of the ``gradient_checkpoint_scope``,
+    specifically for all future usages of the tensor ``x`` in the example.
+    See the code documentation for more details on this.
     """
 
     def __init__(self):
