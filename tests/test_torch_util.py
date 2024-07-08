@@ -59,7 +59,8 @@ def test_gradient_checkpoint_scope():
             model.demo_run()
     b = 4  # size single f32
     t = shape[0] * shape[1] * b  # size tensor
-    size_rng_state = torch.get_rng_state().nbytes
+    _rng_state = torch.get_rng_state()
+    r = _rng_state.numel() * _rng_state.itemsize
     _report_profile(
         prof,
         [
@@ -78,14 +79,13 @@ def test_gradient_checkpoint_scope():
             ("alloc", {"name": "*/backward/*MulBackward0", "size": t, "total_alloc": t * 2}),
             ("alloc", {"name": "*/backward/*MulBackward0", "size": t, "total_alloc": t * 3}),
             ("dealloc", {"name": "*/forward/aten::add", "size": -t, "total_alloc": t * 2}),
-            ("pycall", {"callsite_name": model.opt.step.__name__}),
-            ("pycall", {"callsite_name": model.opt.zero_grad.__name__}),
+            ("torchop", {"name": "Optimizer.step#SGD.step"}),
+            ("torchop", {"name": "Optimizer.zero_grad#SGD.zero_grad"}),
             ("dealloc", {"name": "*/backward/*MulBackward0", "size": -t, "total_alloc": t}),
             ("dealloc", {"name": "*/backward/*MulBackward0", "size": -t, "total_alloc": 0}),
         ],
     )
     param_post_state = deepcopy(model.state_dict())
-    # TODO... check?
 
     print("**** now with grad chkpt ****")
     model = _Model(use_grad_ckpt=True)
@@ -93,24 +93,76 @@ def test_gradient_checkpoint_scope():
     with profile(activities=[ProfilerActivity.CPU], profile_memory=True, with_stack=True, record_shapes=True) as prof:
         with record_function("train_step_grad_ckpt"):
             model.demo_run()
-    _report_profile(prof)
-    # TODO check grad chkpt logic, mem consumption, etc...
+    _report_profile(
+        prof,
+        [
+            ("pycall", {"callsite_name": "demo_run"}),
+            ("pycall", {"callsite_name": "forward"}),
+            ("pycall", {"callsite_name": "get_var_noise"}),
+            ("pycall", {"callsite_name": "__torch_dispatch__"}),
+            ("alloc", {"name": "*/get_var_noise/aten::randn", "size": t, "total_alloc": t}),
+            ("pycall", {"callsite_name": "record_op"}),
+            ("alloc", {"name": "*/get_rng_state", "size": r, "total_alloc": t + r}),
+            ("alloc", {"name": "*/forward/aten::add", "size": t, "total_alloc": t * 2 + r}),
+            ("pycall", {"callsite_name": "record_op"}),
+            ("dealloc", {"name": "*/get_var_noise/aten::randn", "size": -t, "total_alloc": t + r}),
+            ("pycall", {"callsite_name": "_pack_hook"}),
+            ("alloc", {"name": "*/forward/aten::mul", "size": t, "total_alloc": t * 2 + r}),
+            # Not sure that we can always rely on this order here in the test...
+            ("pycall", {"callsite_name": "_tensor_del_hook"}),
+            ("pycall", {"callsite_name": "exit_saved_tensors_hooks_scope"}),
+            ("pycall", {"callsite_name": "_custom_saved_tensors_hooks_exit"}),
+            ("pycall", {"callsite_name": "_unregister_custom_saved_tensors_hooks"}),
+            ("dealloc", {"name": "*/forward/aten::add", "size": -t, "total_alloc": t + r}),  # !!
+            ("dealloc", {"name": "*/forward/aten::mul", "size": -t, "total_alloc": r}),
+            ("pycall", {"callsite_name": "backward"}),
+            ("pycall", {"callsite_name": "_unpack_hook"}),
+            ("pycall", {"callsite_name": "maybe_recompute"}),
+            ("pycall", {"callsite_name": "get_rng_state"}),
+            ("alloc", {"name": "*/get_rng_state", "size": r, "total_alloc": r * 2}),
+            ("pycall", {"callsite_name": "set_rng_state"}),
+            ("pycall", {"callsite_name": "recompute"}),
+            (
+                "alloc",
+                {
+                    "name": "*/backward/_unpack_hook/maybe_recompute/recompute/aten::randn",
+                    "size": t,
+                    "total_alloc": t + r * 2,
+                },
+            ),
+            ("alloc", {"name": "*/backward/*/recompute/aten::add", "size": t, "total_alloc": t * 2 + r * 2}),
+            ("dealloc", {"name": "*/recompute/aten::randn", "size": -t, "total_alloc": t + r * 2}),
+            ("pycall", {"callsite_name": "set_rng_state"}),
+            ("dealloc", {"name": "*/backward/*/get_rng_state", "size": -r, "total_alloc": t + r}),
+            ("dealloc", {"name": "*/forward/*/get_rng_state", "size": -r, "total_alloc": t}),
+            ("alloc", {"name": "*/backward/*MulBackward0", "size": t, "total_alloc": t * 2}),
+            ("alloc", {"name": "*/backward/*MulBackward0", "size": t, "total_alloc": t * 3}),
+            ("dealloc", {"name": "*/recompute/aten::add", "size": -t, "total_alloc": t * 2}),
+            ("torchop", {"name": "Optimizer.step#SGD.step"}),
+            ("torchop", {"name": "Optimizer.zero_grad#SGD.zero_grad"}),
+            ("dealloc", {"name": "*/backward/*MulBackward0", "size": -t, "total_alloc": t}),
+            ("dealloc", {"name": "*/backward/*MulBackward0", "size": -t, "total_alloc": 0}),
+        ],
+    )
     param_post_state_ = deepcopy(model.state_dict())
     # TODO check that we got the same grads, indirectly by checking the post state is the same
 
 
-def _report_profile(prof: torch.profiler.profiler, check_events=None):
+def _report_profile(prof: torch.profiler.profiler, check_events=(), *, _size_threshold=100):
     # Note: I tried prof.events(), prof.profiler.kineto_results.events(), prof._memory_profile().timeline,
     # but they all are not really giving me the information I want.
     # Either the Python stack is missing, or the memory information is incomplete,
     # or the Python/TorchOp events are missing.
     # The only complete information source seems to be prof.profiler.kineto_results.experimental_event_tree().
 
+    import fnmatch
+
     # noinspection PyProtectedMember
     from torch.profiler._utils import traverse_dfs
     from torch._C._profiler import _EventType  # noqa
 
     _allocs = {}  # id -> dict with "size", "name"
+    check_events = list(check_events)
 
     def _ev_visit(ev):
         # ev: torch._C._profiler._ProfilerEvent
@@ -126,7 +178,7 @@ def _report_profile(prof: torch.profiler.profiler, check_events=None):
                 ev_name = "alloc"
                 assert ex.alloc_size > 0
                 assert ev.parent
-                name = f"{_ctx(ev.parent)}"
+                name = _ctx(ev.parent)
                 _allocs[ex.allocation_id] = {"size": ex.alloc_size, "name": name}
             opts = {"id": ex.allocation_id, "name": name, "size": ex.alloc_size, "total_alloc": ex.total_allocated}
         elif ev.typed[0] == _EventType.TorchOp:
@@ -148,7 +200,38 @@ def _report_profile(prof: torch.profiler.profiler, check_events=None):
                 return
         else:
             return
-        print(ev_name, opts)
+
+        next_check = check_events[0] if check_events else None
+        if next_check:
+            next_check_name, next_check_opts = next_check
+            if ev_name == next_check_name:
+                for k, v in next_check_opts.items():
+                    if isinstance(v, str) and "*" in v:
+                        if not fnmatch.fnmatch(opts[k], v):
+                            mismatch = f"Pattern mismatch: {opts[k]} vs {v}"
+                            break
+                    elif k == "total_alloc":
+                        if abs(opts[k] - v) >= _size_threshold:
+                            mismatch = f"Size mismatch: {opts[k]} vs {v}"
+                            break
+                    elif opts[k] != v:
+                        mismatch = f"Value mismatch: {opts[k]} vs {v}"
+                        break
+                else:
+                    mismatch = None
+            else:
+                mismatch = f"Different event: {ev_name} vs {next_check_name}"
+        else:
+            mismatch = "No check event"
+
+        if ev_name in {"alloc", "dealloc"} and abs(opts["size"]) >= _size_threshold:
+            assert not mismatch, f"Event not matched: {ev_name} {opts} to {next_check}: {mismatch}"
+
+        if not mismatch:
+            print(f"{ev_name} {opts} ✓")
+            check_events.pop(0)
+        else:
+            print(f"({ev_name} {opts})")
 
     def _ctx(ev) -> str:
         stack = [None]
@@ -165,9 +248,10 @@ def _report_profile(prof: torch.profiler.profiler, check_events=None):
             if parent.typed[0] == _EventType.PyCall:
                 ex0 = parent.typed[1].caller  # torch._C._profiler._PyFrameState
                 ex1 = parent.typed[1].callsite  # torch._C._profiler._PyFrameState
-                if _pycall_filter_fn(ex1.file_name) or (
-                    _pycall_filter_fn(ex0.file_name) and ex1.function_name == "backward"
-                ):
+                if (
+                    _pycall_filter_fn(ex1.file_name)
+                    or (_pycall_filter_fn(ex0.file_name) and ex1.function_name == "backward")
+                ) and ex1.function_name not in {"__torch_dispatch__"}:
                     stack.append(ex1.function_name)
             parent = parent.parent
         stack.reverse()
@@ -179,9 +263,8 @@ def _report_profile(prof: torch.profiler.profiler, check_events=None):
         # ev: torch._C._profiler._ProfilerEvent
         _ev_visit(ev_)
 
-    # TODO check check_events...
-
     assert not _allocs, f"Remaining allocs: {_allocs}"
+    assert not check_events, f"Remaining check events: {check_events}"
 
 
 def _pycall_filter_fn(filename: str) -> bool:
