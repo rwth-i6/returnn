@@ -60,7 +60,7 @@ def test_gradient_checkpoint_scope():
     b = 4  # size single f32
     t = shape[0] * shape[1] * b  # size tensor
     _rng_state = torch.get_rng_state()
-    r = _rng_state.numel() * _rng_state.itemsize
+    r = _rng_state.numel() * _rng_state.element_size()
     _report_profile(
         prof,
         [
