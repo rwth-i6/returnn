@@ -31,15 +31,15 @@ def test_gradient_checkpoint_scope():
             self.use_grad_ckpt = use_grad_ckpt
 
         @staticmethod
-        def _get_var_noise() -> torch.Tensor:
+        def get_var_noise() -> torch.Tensor:
             return torch.randn(shape)
 
         def forward(self, x: torch.Tensor) -> torch.Tensor:
             if not self.use_grad_ckpt:
-                return (self.var + self._get_var_noise()) * x
+                return (self.var + self.get_var_noise()) * x
 
             with gradient_checkpoint_scope():
-                v_ = self.var + self._get_var_noise()
+                v_ = self.var + self.get_var_noise()
             return v_ * x
 
         def demo_run(self):
@@ -57,7 +57,33 @@ def test_gradient_checkpoint_scope():
     with profile(activities=[ProfilerActivity.CPU], profile_memory=True, with_stack=True, record_shapes=True) as prof:
         with record_function("train_step_no_grad_ckpt"):
             model.demo_run()
-    _report_profile(prof)
+    b = 4  # size single f32
+    t = shape[0] * shape[1] * b  # size tensor
+    size_rng_state = torch.get_rng_state().nbytes
+    _report_profile(
+        prof,
+        [
+            # ignore private calls
+            # ignore torchop
+            # ignore allocs/deallocs <=b
+            ("pycall", {"callsite_name": "demo_run"}),
+            ("pycall", {"callsite_name": "forward"}),
+            ("pycall", {"callsite_name": "get_var_noise"}),
+            ("alloc", {"name": "*/get_var_noise/aten::randn", "size": t, "total_alloc": t}),
+            ("alloc", {"name": "*/forward/aten::add", "size": t, "total_alloc": t * 2}),
+            ("dealloc", {"name": "*/get_var_noise/aten::randn", "size": -t, "total_alloc": t}),
+            ("alloc", {"name": "*/forward/aten::mul", "size": t, "total_alloc": t * 2}),
+            ("dealloc", {"name": "*/forward/aten::mul", "size": -t, "total_alloc": t}),
+            ("pycall", {"callsite_name": "backward"}),
+            ("alloc", {"name": "*/backward/*MulBackward0", "size": t, "total_alloc": t * 2}),
+            ("alloc", {"name": "*/backward/*MulBackward0", "size": t, "total_alloc": t * 3}),
+            ("dealloc", {"name": "*/forward/aten::add", "size": -t, "total_alloc": t * 2}),
+            ("pycall", {"callsite_name": model.opt.step.__name__}),
+            ("pycall", {"callsite_name": model.opt.zero_grad.__name__}),
+            ("dealloc", {"name": "*/backward/*MulBackward0", "size": -t, "total_alloc": t}),
+            ("dealloc", {"name": "*/backward/*MulBackward0", "size": -t, "total_alloc": 0}),
+        ],
+    )
     param_post_state = deepcopy(model.state_dict())
     # TODO... check?
 
@@ -73,15 +99,12 @@ def test_gradient_checkpoint_scope():
     # TODO check that we got the same grads, indirectly by checking the post state is the same
 
 
-def _report_profile(prof: torch.profiler.profiler):
+def _report_profile(prof: torch.profiler.profiler, check_events=None):
     # Note: I tried prof.events(), prof.profiler.kineto_results.events(), prof._memory_profile().timeline,
     # but they all are not really giving me the information I want.
     # Either the Python stack is missing, or the memory information is incomplete,
     # or the Python/TorchOp events are missing.
     # The only complete information source seems to be prof.profiler.kineto_results.experimental_event_tree().
-
-    # TODO how to understand memory? i want to know: where is what allocated? and when deallocated? total consumption?
-    # TODO also use sys.settrace to really check the flow of logic; not really needed anymore, have the trace already
 
     # noinspection PyProtectedMember
     from torch.profiler._utils import traverse_dfs
@@ -89,53 +112,76 @@ def _report_profile(prof: torch.profiler.profiler):
 
     _allocs = {}  # id -> dict with "size", "name"
 
-    def _ev_visit(ev) -> str:
-        if not ev:
-            return "None"
+    def _ev_visit(ev):
         # ev: torch._C._profiler._ProfilerEvent
         if ev.typed[0] == _EventType.Allocation:
             ex = ev.typed[1]  # torch._C._profiler._ExtraFields_Allocation
             # ex.id/ex.allocation_id/ex.ptr redundant?
             if ex.allocation_id in _allocs:
-                # deallocation
+                ev_name = "dealloc"  # deallocation
                 assert _allocs[ex.allocation_id]["size"] == -ex.alloc_size
+                name = _allocs[ex.allocation_id]["name"]
+                del _allocs[ex.allocation_id]
             else:
+                ev_name = "alloc"
                 assert ex.alloc_size > 0
                 assert ev.parent
-                parent_op_name = None
-                parent = ev.parent
-                while parent and parent.typed[0] == _EventType.TorchOp:  # go to top torch op
-                    parent_op_name = parent.typed[1].name
-                    parent = parent.parent
-                if not parent_op_name and ev.parent.typed[0] == _EventType.PyCall:
-                    parent_op_name = ev.parent.typed[1].callsite.function_name
-                if not parent_op_name and ev.parent.typed[0] == _EventType.PyCCall:
-                    parent_op_name = ev.parent.typed[1].caller.function_name
-                _allocs[ex.allocation_id] = {
-                    "size": ex.alloc_size,
-                    "name": f"(id {ex.allocation_id}) ({parent_op_name or 'unknown'})",
-                }
-            return (
-                "de" if ex.alloc_size < 0 else ""
-            ) + f"alloc {_allocs[ex.allocation_id]['name']} size={ex.alloc_size} total_alloc={ex.total_allocated}"
+                name = f"{_ctx(ev.parent)}"
+                _allocs[ex.allocation_id] = {"size": ex.alloc_size, "name": name}
+            opts = {"id": ex.allocation_id, "name": name, "size": ex.alloc_size, "total_alloc": ex.total_allocated}
         elif ev.typed[0] == _EventType.TorchOp:
+            ev_name = "torchop"
             ex = ev.typed[1]  # torch._C._profiler._ExtraFields_TorchOp
-            return f"torchop {ex.name}"
+            opts = {"name": ex.name}
         elif ev.typed[0] == _EventType.PyCall:
+            ev_name = "pycall"
             ex = ev.typed[1]  # torch._C._profiler._ExtraFields_PyCall
             ex0 = ex.caller  # torch._C._profiler._PyFrameState
             ex1 = ex.callsite  # torch._C._profiler._PyFrameState
             if _pycall_filter_fn(ex0.file_name) or _pycall_filter_fn(ex1.file_name):
-                return f"pycall {ex0.file_name}:{ex0.line_number} {ex0.function_name} -> {ex1.function_name}"
-        return "other"
+                opts = {
+                    "caller_loc": f"{ex0.file_name}:{ex0.line_number}",
+                    "caller_name": ex0.function_name,
+                    "callsite_name": ex1.function_name,
+                }
+            else:
+                return
+        else:
+            return
+        print(ev_name, opts)
+
+    def _ctx(ev) -> str:
+        stack = [None]
+        parent = ev
+        while parent and parent.typed[0] == _EventType.TorchOp:  # go to top torch op
+            stack[-1] = parent.typed[1].name
+            parent = parent.parent
+        if not stack[-1] and parent.typed[0] == _EventType.PyCCall:
+            stack[-1] = parent.typed[1].caller.function_name
+            parent = parent.parent
+        if not stack[-1]:
+            stack.pop(-1)
+        while parent:
+            if parent.typed[0] == _EventType.PyCall:
+                ex0 = parent.typed[1].caller  # torch._C._profiler._PyFrameState
+                ex1 = parent.typed[1].callsite  # torch._C._profiler._PyFrameState
+                if _pycall_filter_fn(ex1.file_name) or (
+                    _pycall_filter_fn(ex0.file_name) and ex1.function_name == "backward"
+                ):
+                    stack.append(ex1.function_name)
+            parent = parent.parent
+        stack.reverse()
+        return "/".join(stack) or "unknown"
 
     for ev_ in sorted(
         traverse_dfs(prof.profiler.kineto_results.experimental_event_tree()), key=lambda ev: ev.start_time_ns
     ):
         # ev: torch._C._profiler._ProfilerEvent
-        s = _ev_visit(ev_)
-        if s != "other":
-            print(s)
+        _ev_visit(ev_)
+
+    # TODO check check_events...
+
+    assert not _allocs, f"Remaining allocs: {_allocs}"
 
 
 def _pycall_filter_fn(filename: str) -> bool:
