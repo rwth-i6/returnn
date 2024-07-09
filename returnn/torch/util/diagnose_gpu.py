@@ -113,6 +113,27 @@ def diagnose_no_gpu() -> List[str]:
     return res
 
 
+def print_relevant_env_vars(*, file: Optional[TextIO] = None):
+    """
+    Print relevant environment variables which might affect the GPU usage,
+    or PyTorch usage in general.
+    For example:
+    PYTORCH_CUDA_ALLOC_CONF, CUDA_LAUNCH_BLOCKING, etc.
+    https://pytorch.org/docs/stable/torch_environment_variables.html
+
+    :param file: where to print to. stdout by default
+    """
+    if file is None:
+        file = sys.stdout
+    _Prefixes = {"PYTORCH", "TORCH", "CUDA", "CUBLAS", "CUBLASLT", "CUDNN", "NVIDIA", "NCCL", "OMP", "MKL"}
+    for k, v in os.environ.items():
+        if "_" not in k:
+            continue
+        prefix, _ = k.split("_", 1)
+        if prefix in _Prefixes:
+            print(f"{k}={v}", file=file)
+
+
 def garbage_collect():
     """
     Perform garbage collection, including any special logic for GPU.

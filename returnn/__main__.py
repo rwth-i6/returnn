@@ -429,6 +429,7 @@ def init_backend_engine(*, config_opts: Optional[Dict[str, Any]] = None):
 
         from returnn.torch.util import diagnose_gpu
 
+        diagnose_gpu.print_relevant_env_vars(file=log.v2)
         diagnose_gpu.print_available_devices(file=log.v2)
 
         if config.is_true("use_lovely_tensors"):
