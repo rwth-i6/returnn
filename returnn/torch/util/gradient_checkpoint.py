@@ -199,6 +199,8 @@ class gradient_checkpoint_scope:
         if self.exit_args and not self.record_graph_scope.graph.is_any_recorded_tensor_alive():
             # No raw tensors alive anymore in graph_tensor_from_raw_tensor,
             # so we can exit saved_tensors_hooks_scope now.
+            # (We might not always catch this properly in the Tensor _DelHook,
+            #  e.g. when Tensor.__del__ runs in a different thread.)
             self.exit_saved_tensors_hooks_scope()
             return x
         x_ = self.record_graph_scope.graph.graph_tensor_from_weak_raw_tensor.get(x, x)
