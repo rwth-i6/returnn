@@ -1391,6 +1391,7 @@ class ConcatSeqsDataset(CachedDataset2):
         seq_tag_delim=";",
         remove_in_between_postfix=None,
         repeat_in_between_last_frame_up_to_multiple_of=None,
+        pad_narrow_data_to_multiple_of_target_len=None,
         use_cache_manager=False,
         epoch_wise_filter=None,
         **kwargs,
@@ -1406,6 +1407,12 @@ class ConcatSeqsDataset(CachedDataset2):
           Now it could happen that ceildiv(data_len1 + data_len2, 6) < align_len1 + align_len2.
           This option would repeat intermediate ending frames such that data_len1 % 6 == 0,
           by setting it to {"data": 6}.
+        :param dict[str,(str,int)]|None pad_narrow_data_to_multiple_of_target_len: data_key -> (target_key, multiple).
+            Similar as repeat_in_between_last_frame_up_to_multiple_of, but works for more padding/alignment schemes.
+            Example: align_len == ceildiv(data_len - P, F) for all your sub-sequences, where P is a custom number,
+            repeat_in_between_last_frame_up_to_multiple_of would not work because align_len != ceildiv(data_len, F)
+            This option would pad/narrow so that align_len * F == data_len for all but the last sub-sequences
+            by setting it to {"data": ("classes", F)} to ensure concat_align_len == ceildiv(concat_data_len - P, F)
         :param bool use_cache_manager:
         :param dict[(int,int),dict] epoch_wise_filter: see :class:`EpochWiseFilter`
         """
@@ -1413,6 +1420,7 @@ class ConcatSeqsDataset(CachedDataset2):
         self.seq_tag_delim = seq_tag_delim
         self.remove_in_between_postfix = remove_in_between_postfix or {}
         self.repeat_in_between_last_frame_up_to_multiple_of = repeat_in_between_last_frame_up_to_multiple_of or {}
+        self.pad_narrow_data_to_multiple_of_target_len = pad_narrow_data_to_multiple_of_target_len or {}
         self.epoch_wise_filter = EpochWiseFilter(epoch_wise_filter) if epoch_wise_filter else None
         if isinstance(dataset, dict):
             dataset = dataset.copy()
@@ -1486,7 +1494,7 @@ class ConcatSeqsDataset(CachedDataset2):
             sub_seq_list.extend(sub_seq_tags)
         assert sub_seq_idx == len(sub_seq_list) and len(seq_list) == len(sub_seq_idxs)
         self.cur_sub_seq_idxs = sub_seq_idxs
-        return self.sub_dataset.init_seq_order(seq_list=sub_seq_list)
+        return self.sub_dataset.init_seq_order(epoch=epoch, seq_list=sub_seq_list)
 
     def supports_seq_order_sorting(self) -> bool:
         """supports sorting"""
@@ -1539,6 +1547,11 @@ class ConcatSeqsDataset(CachedDataset2):
                     key,
                     sub_dataset_keys,
                 )
+            for key in self.pad_narrow_data_to_multiple_of_target_len:
+                assert key in sub_dataset_keys, (
+                    f"{self}: pad_narrow_data_to_multiple_of_target_len key {key}"
+                    f" not in sub dataset data-keys {sub_dataset_keys}"
+                )
         for sub_seq_idx, sub_seq_tag in zip(sub_seq_idxs, sub_seq_tags):
             self.sub_dataset.load_seqs(sub_seq_idx, sub_seq_idx + 1)
             sub_dataset_tag = self.sub_dataset.get_tag(sub_seq_idx)
@@ -1562,6 +1575,17 @@ class ConcatSeqsDataset(CachedDataset2):
                     if data.shape[0] % multiple != 0:
                         data = numpy.concatenate([data] + [data[-1:]] * (multiple - data.shape[0] % multiple), axis=0)
                         assert data.shape[0] % multiple == 0
+                if key in self.pad_narrow_data_to_multiple_of_target_len and sub_seq_idx != sub_seq_idxs[-1]:
+                    target_key, multiple = self.pad_narrow_data_to_multiple_of_target_len[key]
+                    target_data = self.sub_dataset.get_data(sub_seq_idx, target_key)
+                    len_diff = data.shape[0] - target_data.shape[0] * multiple
+                    if len_diff > 0:
+                        # if data longer than ref_data * frame_rate, narrow the data
+                        data = data[:-len_diff]
+                    elif len_diff < 0:
+                        # if data shorter than ref_data * frame_rate, pad by repeating last frame
+                        data = numpy.concatenate([data] + [data[-1:]] * -len_diff, axis=0)
+                    assert data.shape[0] == target_data.shape[0] * multiple
                 features[key].append(data)
         features = {key: numpy.concatenate(values, axis=0) for (key, values) in features.items()}
         return DatasetSeq(seq_idx=seq_idx, seq_tag=seq_tag, features=features)
@@ -1605,6 +1629,10 @@ class ConcatSeqsDataset(CachedDataset2):
         :rtype: list[int]
         """
         return self.sub_dataset.get_data_shape(key)
+
+    def get_total_num_seqs(self) -> int:
+        """total num seqs"""
+        return len(self.full_seq_list)
 
 
 class ChunkShuffleDataset(CachedDataset2):
