@@ -33,6 +33,8 @@ from torch.utils.weak import WeakTensorKeyDictionary  # needs Torch >=2.0.0
 # noinspection PyProtectedMember
 from torch.utils._python_dispatch import TorchDispatchMode
 
+# PyTree is very common and semi-standard for PyTorch, e.g. __torch_dispatch__.
+# We might use dm-tree or so alternatively here, but PyTree should be fine.
 # noinspection PyProtectedMember
 import torch.utils._pytree as pytree
 
