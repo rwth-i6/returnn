@@ -205,6 +205,7 @@ class gradient_checkpoint_scope:
             #  e.g. when Tensor.__del__ runs in a different thread.)
             self.exit_saved_tensors_hooks_scope()
             return x
+        # _RecordGraph.__torch_dispatch__ should have recorded all newly created tensors.
         x_ = self.record_graph_scope.graph.graph_tensor_from_weak_raw_tensor.get(x, x)
         if isinstance(x_, _GraphTensor):
             x._RETURNN_grad_ckpt_del_hook = _DelHook(_WeakMethod(self._tensor_del_hook))
