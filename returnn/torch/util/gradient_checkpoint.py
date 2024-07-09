@@ -336,8 +336,11 @@ class _Graph:
         with _reset_rng_states_scope(self.stored_device_rng_states), _reset_amp_states_scope(
             self.stored_device_amp_states
         ):
-            while self.ops_to_be_recomputed:
-                op = self.ops_to_be_recomputed.pop(0)
+            ops_reversed_queue = list(self.ops_to_be_recomputed)
+            ops_reversed_queue.reverse()
+            self.ops_to_be_recomputed.clear()
+            while ops_reversed_queue:
+                op = ops_reversed_queue.pop(-1)
                 op.recompute()
         self.stored_device_rng_states.clear()
         self.stored_device_amp_states.clear()
