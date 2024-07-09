@@ -326,7 +326,9 @@ class _Graph:
         On subsequent calls, it would then continue from the last idx until again the requested op idx.
         This works fine except of one important aspect: The RNG state.
         If there are any other ops in between which use the RNG state, the RNG state would not be correct anymore.
-        So we cannot allow this. We must recompute all ops together right now.
+        To allow this, we then would need to get the RNG state again and reset it later again,
+        which would add some further overhead.
+        To keep things simple and to avoid this overhead, we recompute all ops together right now.
 
         However, we can at least remove the op from the list once it is computed.
         So once any referenced tensor is not needed anymore, it can be garbage collected.
