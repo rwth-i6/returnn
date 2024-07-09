@@ -366,6 +366,7 @@ class _GraphOp:
         # potentially free any referenced resources. we don't need them anymore.
         self.args = None
         self.kwargs = None
+        # self.func should be ok to keep, should ref some of the low-level aten functions
 
 
 @dataclass
