@@ -289,7 +289,13 @@ class _Graph:
                 self.graph_tensor_from_weak_raw_tensor[out_flat_elem] = tensor_
 
     def maybe_store_rng_state(self, arg: Any):
-        """store RNG state if not yet stored for this device."""
+        """
+        Store RNG state if not yet stored for this device.
+        We store it only once for the first usage,
+        as we only restore it once for the recomputation,
+        and then we rely on performing the recomputation in the correct order,
+        which should be deterministic and lead to the same RNG output.
+        """
         if isinstance(arg, torch.Tensor):
             device = arg.device
         elif isinstance(arg, torch.device):
