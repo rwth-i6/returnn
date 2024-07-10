@@ -125,7 +125,7 @@ def print_relevant_env_vars(*, file: Optional[TextIO] = None):
     """
     if file is None:
         file = sys.stdout
-    _Prefixes = {"PYTORCH", "TORCH", "CUDA", "CUBLAS", "CUBLASLT", "CUDNN", "NVIDIA", "NCCL", "OMP", "MKL"}
+    _Prefixes = {"PYTORCH", "TORCH", "CUDA", "CUBLAS", "CUBLASLT", "CUDNN", "NVIDIA", "NCCL", "OMP", "MKL", "XLA"}
     for k, v in os.environ.items():
         if "_" not in k:
             continue
