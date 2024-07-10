@@ -1421,14 +1421,23 @@ class ConcatSeqsDataset(CachedDataset2):
         self.remove_in_between_postfix = remove_in_between_postfix or {}
         self.repeat_in_between_last_frame_up_to_multiple_of = repeat_in_between_last_frame_up_to_multiple_of or {}
         self.pad_narrow_data_to_multiple_of_target_len = pad_narrow_data_to_multiple_of_target_len or {}
-        self.epoch_wise_filter = EpochWiseFilter(epoch_wise_filter) if epoch_wise_filter else None
+        if epoch_wise_filter is None:
+            self.epoch_wise_filter = None  # type: Optional[EpochWiseFilter]
+        elif isinstance(epoch_wise_filter, dict):
+            self.epoch_wise_filter = EpochWiseFilter(epoch_wise_filter)
+        else:
+            assert isinstance(epoch_wise_filter, EpochWiseFilter)
+            self.epoch_wise_filter = epoch_wise_filter
         if isinstance(dataset, dict):
             dataset = dataset.copy()
             dataset.setdefault("name", "%s_subdataset" % self.name)
-        self.sub_dataset = init_dataset(dataset, parent_dataset=self)
-        self.num_outputs = self.sub_dataset.num_outputs
-        self.num_inputs = self.sub_dataset.num_inputs
-        self.labels = self.sub_dataset.labels
+        self.dataset = init_dataset(dataset, parent_dataset=self)
+        self.num_outputs = self.dataset.num_outputs
+        self.num_inputs = self.dataset.num_inputs
+        self.labels = self.dataset.labels
+        self._seq_list_file = seq_list_file
+        self._seq_len_file = seq_len_file
+        self._use_cache_manager = use_cache_manager
         if use_cache_manager:
             from returnn.util.basic import cf
 
@@ -1494,7 +1503,7 @@ class ConcatSeqsDataset(CachedDataset2):
             sub_seq_list.extend(sub_seq_tags)
         assert sub_seq_idx == len(sub_seq_list) and len(seq_list) == len(sub_seq_idxs)
         self.cur_sub_seq_idxs = sub_seq_idxs
-        return self.sub_dataset.init_seq_order(epoch=epoch, seq_list=sub_seq_list)
+        return self.dataset.init_seq_order(epoch=epoch, seq_list=sub_seq_list)
 
     def supports_seq_order_sorting(self) -> bool:
         """supports sorting"""
@@ -1530,7 +1539,7 @@ class ConcatSeqsDataset(CachedDataset2):
         assert len(sub_seq_tags) == len(sub_seq_idxs)
         features = {key: [] for key in self.get_data_keys()}
         if seq_idx == 0:  # some extra check, but enough to do for first seq only
-            sub_dataset_keys = self.sub_dataset.get_data_keys()
+            sub_dataset_keys = self.dataset.get_data_keys()
             for key in self.remove_in_between_postfix:
                 assert (
                     key in sub_dataset_keys
@@ -1553,8 +1562,8 @@ class ConcatSeqsDataset(CachedDataset2):
                     f" not in sub dataset data-keys {sub_dataset_keys}"
                 )
         for sub_seq_idx, sub_seq_tag in zip(sub_seq_idxs, sub_seq_tags):
-            self.sub_dataset.load_seqs(sub_seq_idx, sub_seq_idx + 1)
-            sub_dataset_tag = self.sub_dataset.get_tag(sub_seq_idx)
+            self.dataset.load_seqs(sub_seq_idx, sub_seq_idx + 1)
+            sub_dataset_tag = self.dataset.get_tag(sub_seq_idx)
             assert (
                 sub_dataset_tag == sub_seq_tag
             ), "%s: expected tag %r for sub seq idx %i but got %r, part of seq %i %r" % (
@@ -1566,7 +1575,7 @@ class ConcatSeqsDataset(CachedDataset2):
                 seq_tag,
             )
             for key in self.get_data_keys():
-                data = self.sub_dataset.get_data(sub_seq_idx, key)
+                data = self.dataset.get_data(sub_seq_idx, key)
                 if key in self.remove_in_between_postfix and sub_seq_idx != sub_seq_idxs[-1]:
                     assert data.ndim == 1 and data[-1] == self.remove_in_between_postfix[key]
                     data = data[:-1]
@@ -1577,7 +1586,7 @@ class ConcatSeqsDataset(CachedDataset2):
                         assert data.shape[0] % multiple == 0
                 if key in self.pad_narrow_data_to_multiple_of_target_len and sub_seq_idx != sub_seq_idxs[-1]:
                     target_key, multiple = self.pad_narrow_data_to_multiple_of_target_len[key]
-                    target_data = self.sub_dataset.get_data(sub_seq_idx, target_key)
+                    target_data = self.dataset.get_data(sub_seq_idx, target_key)
                     len_diff = data.shape[0] - target_data.shape[0] * multiple
                     if len_diff > 0:
                         # if data longer than ref_data * frame_rate, narrow the data
@@ -1594,41 +1603,41 @@ class ConcatSeqsDataset(CachedDataset2):
         """
         :rtype: list[str]
         """
-        return self.sub_dataset.get_data_keys()
+        return self.dataset.get_data_keys()
 
     def get_target_list(self):
         """
         :rtype: list[str]
         """
-        return self.sub_dataset.get_target_list()
+        return self.dataset.get_target_list()
 
     def get_data_dtype(self, key):
         """
         :param str key:
         :rtype: str
         """
-        return self.sub_dataset.get_data_dtype(key)
+        return self.dataset.get_data_dtype(key)
 
     def get_data_dim(self, key):
         """
         :param str key:
         :rtype: int
         """
-        return self.sub_dataset.get_data_dim(key)
+        return self.dataset.get_data_dim(key)
 
     def is_data_sparse(self, key):
         """
         :param str key:
         :rtype: bool
         """
-        return self.sub_dataset.is_data_sparse(key)
+        return self.dataset.is_data_sparse(key)
 
     def get_data_shape(self, key):
         """
         :param str key:
         :rtype: list[int]
         """
-        return self.sub_dataset.get_data_shape(key)
+        return self.dataset.get_data_shape(key)
 
     def get_total_num_seqs(self) -> int:
         """total num seqs"""
