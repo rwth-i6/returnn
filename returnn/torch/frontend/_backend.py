@@ -246,6 +246,13 @@ class TorchBackend(Backend[torch.Tensor]):
         return out
 
     @staticmethod
+    def gradient_checkpoint_scope():
+        """gradient checkpoint scope"""
+        from returnn.torch.util.gradient_checkpoint import gradient_checkpoint_scope
+
+        return gradient_checkpoint_scope()
+
+    @staticmethod
     def merge_dims(
         source: Tensor,
         *,
