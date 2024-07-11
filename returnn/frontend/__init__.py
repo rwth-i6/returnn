@@ -41,6 +41,7 @@ from .math_ import *
 from .matmul import *
 from .normalization import *
 from .parameter import *
+from .parametrizations import *
 from .parametrize import *
 from .piecewise_linear import *
 from .rand import *
