@@ -437,3 +437,43 @@ def test_build_from_dict_func_native():
     assert isinstance(rf.combine, BuiltinFunctionType)  # due to native optimizations
     func = rf.build_from_dict({"class": "rf.combine"})
     assert func is rf.combine
+
+
+def test_parametrization():
+    from functools import partial
+
+    rf.select_backend_torch()  # any, doesn't really matter for the test
+    rf.init_train_step_run_ctx(train_flag=True)  # such that dropout is used below
+
+    in_dim = Dim(7, name="in")
+    out_dim = Dim(13, name="out")
+    mod = rf.Linear(in_dim, out_dim)
+    orig_weight = mod.weight
+    assert isinstance(orig_weight, rf.Parameter)
+    orig_bias = mod.bias
+
+    # Test parametrization.
+    rf.register_parametrization(mod, "weight", partial(rf.dropout, drop_prob=0.5))
+    assert rf.is_parametrized(mod)
+    assert rf.is_parametrized(mod, "weight")
+    weight = mod.weight
+    assert weight is not orig_weight and not isinstance(weight, rf.Parameter)
+    params = dict(mod.named_parameters())
+    assert set(params.keys()) == {"weight", "bias"}
+    assert params["weight"] is orig_weight
+    assert params["bias"] is orig_bias
+
+    rf.init_train_step_run_ctx(train_flag=False)
+    weight = mod.weight
+    assert weight is orig_weight  # no dropout in eval mode
+
+    rf.init_train_step_run_ctx(train_flag=True)  # such that dropout would be used again
+    rf.remove_parametrization(mod, "weight")
+    weight = mod.weight
+    assert weight is orig_weight
+    assert not rf.is_parametrized(mod, "weight")
+    assert not rf.is_parametrized(mod)
+    params = dict(mod.named_parameters())
+    assert set(params.keys()) == {"weight", "bias"}
+    assert params["weight"] is orig_weight
+    assert params["bias"] is orig_bias
