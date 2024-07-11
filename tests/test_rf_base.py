@@ -504,3 +504,16 @@ def test_weight_noise():
     assert set(params.keys()) == {"weight", "bias"}
     assert params["weight"] is orig_weight
     assert params["bias"] is orig_bias
+
+    class _Model(rf.Module):
+        def __init__(self):
+            super().__init__()
+            self.linear = rf.Linear(in_dim, out_dim)
+
+    model = _Model()
+    for mod in model.modules():
+        for param_name, param in mod.named_parameters(recurse=False):
+            if param_name.endswith("bias"):  # no bias
+                continue
+            print("***", mod, param_name, param)
+            rf.weight_noise(mod, param_name, std=0.0025)

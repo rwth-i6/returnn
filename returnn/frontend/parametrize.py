@@ -48,10 +48,7 @@ def register_parametrization(
         # (see https://docs.python.org/3/howto/descriptor.html)
         # and also we do not want to modify the original class.
         cls = module.__class__
-        param_cls = _new_classes.get(cls, None)
-        if not param_cls:
-            param_cls = _Metaclass(f"Parametrized{cls.__name__}", (cls,), {})
-            _new_classes[cls] = param_cls
+        param_cls = _Metaclass(f"Parametrized{cls.__name__}", (cls,), {})
         module.__class__ = param_cls
 
     if hasattr(module.__class__, param_name):
@@ -151,9 +148,6 @@ _ParametrizationType = Union[
     _ParametrizationWithAssign,
     _ParametrizationWithoutAssign,
 ]
-
-
-_new_classes: weakref.WeakKeyDictionary[type, type] = weakref.WeakKeyDictionary()
 
 
 class _Metaclass(type):
