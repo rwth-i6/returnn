@@ -5,9 +5,16 @@ Utilities which affect the gradient
 from __future__ import annotations
 from typing import Optional, Union
 from returnn.tensor import Tensor, Dim
+from ._backend import global_backend
 
-
-__all__ = ["set_requires_gradient", "gradient", "stop_gradient", "scaled_gradient", "scaled_gradient_ext"]
+__all__ = [
+    "set_requires_gradient",
+    "gradient",
+    "stop_gradient",
+    "scaled_gradient",
+    "scaled_gradient_ext",
+    "gradient_checkpoint_scope",
+]
 
 
 def set_requires_gradient(source: Tensor):
@@ -72,3 +79,30 @@ def scaled_gradient_ext(
     return source._raw_backend.scaled_gradient_ext(
         source, scale=scale, shift=shift, scale_shift_by_sum_over_axis=scale_shift_by_sum_over_axis
     )
+
+
+def gradient_checkpoint_scope():
+    """
+    Create a gradient checkpoint scope.
+    All tensors created within this scope will not be stored for backpropagation,
+    but will be recomputed on the fly during backpropagation.
+
+    Example::
+
+        a = ...
+        b = ...
+        c = ...
+        with gradient_checkpoint_scope():
+            x = a + b
+        y = x * c
+
+    In this example, the tensor ``x`` will not be stored for backpropagation,
+    i.e. the computation ``x = a + b`` will be recomputed during backpropagation.
+
+    See :class:`returnn.torch.util.gradient_checkpoint.gradient_checkpoint_scope` for more documentation
+    for the PyTorch specific implementation.
+
+    :return: context manager which enables gradient checkpointing. It supports __enter__ and __exit__,
+        and the intended usage is with the `with` statement.
+    """
+    return global_backend.gradient_checkpoint_scope()

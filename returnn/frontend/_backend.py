@@ -377,6 +377,11 @@ class Backend(Generic[T]):
         raise NotImplementedError
 
     @staticmethod
+    def gradient_checkpoint_scope():
+        """gradient checkpoint scope"""
+        raise NotImplementedError
+
+    @staticmethod
     def merge_dims(
         source: Tensor,
         *,
