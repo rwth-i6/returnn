@@ -4,6 +4,7 @@ RETURNN frontend (returnn.frontend) tests
 
 from __future__ import annotations
 from typing import Tuple
+from unittest import SkipTest
 import _setup_test_env  # noqa
 import returnn.frontend as rf
 from returnn.tensor import Tensor, Dim, TensorDict, batch_dim
@@ -473,6 +474,32 @@ def test_parametrization():
     assert weight is orig_weight
     assert not rf.is_parametrized(mod, "weight")
     assert not rf.is_parametrized(mod)
+    params = dict(mod.named_parameters())
+    assert set(params.keys()) == {"weight", "bias"}
+    assert params["weight"] is orig_weight
+    assert params["bias"] is orig_bias
+
+
+def test_weight_noise():
+    import torch
+
+    if torch.__version__ < (2, 0):
+        raise SkipTest("Torch version too old for this test (gradient_checkpoint_scope needs Torch >= 2.0)")
+    rf.select_backend_torch()  # any, doesn't really matter for the test
+    rf.init_train_step_run_ctx(train_flag=True)  # such that weight noise is used below
+
+    in_dim = Dim(7, name="in")
+    out_dim = Dim(13, name="out")
+    mod = rf.Linear(in_dim, out_dim)
+    orig_weight = mod.weight
+    assert isinstance(orig_weight, rf.Parameter)
+    orig_bias = mod.bias
+
+    # Test parametrization.
+    rf.weight_noise(mod, "weight", std=0.1)
+    assert rf.is_parametrized(mod, "weight")
+    weight = mod.weight
+    assert weight is not orig_weight and not isinstance(weight, rf.Parameter)
     params = dict(mod.named_parameters())
     assert set(params.keys()) == {"weight", "bias"}
     assert params["weight"] is orig_weight
