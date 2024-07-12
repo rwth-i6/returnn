@@ -151,6 +151,51 @@ def test_gradient_checkpoint_scope():
         torch.testing.assert_allclose(param_post_state[k], param_post_state_[k])
 
 
+def test_gradient_checkpoint_scope_twice():
+    # https://github.com/rwth-i6/returnn/issues/1579
+    shape = (101, 103)
+
+    class _Model(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.var = torch.nn.Parameter(torch.randn(shape))
+            self.input_var = torch.nn.Parameter(torch.randn(shape))
+            self.opt = torch.optim.SGD(self.parameters(), lr=0.1)  # not common to have this here but ok for the test
+
+        def forward(self, x: torch.Tensor) -> torch.Tensor:
+            return self.get_var() * x
+
+        def get_var(self) -> torch.Tensor:
+            with gradient_checkpoint_scope():
+                return self.var + torch.randn(shape)
+
+        def get_input(self) -> torch.Tensor:
+            x = self.input_var
+            with gradient_checkpoint_scope():
+                return x + torch.randn(shape)
+
+        def demo_run(self):
+            self.opt.zero_grad()
+            y = self(self.get_input())
+            loss = y.sum()  # dummy loss
+            del y  # not needed anymore
+            loss.backward()
+            del loss  # not needed anymore
+            self.opt.step()
+
+    orig_gradient_checkpoint_scope_tensor_del_hook = gradient_checkpoint_scope._tensor_del_hook
+    try:
+        # Overwrite this here to trigger the case where the tensor del hook will not do the cleanup.
+        gradient_checkpoint_scope._tensor_del_hook = lambda self: None
+
+        model = _Model()
+        model.demo_run()
+        model.demo_run()
+
+    finally:
+        gradient_checkpoint_scope._tensor_del_hook = orig_gradient_checkpoint_scope_tensor_del_hook
+
+
 def _report_profile(prof: torch.profiler.profiler, check_events=(), *, _size_threshold=100):
     # Note: I tried prof.events(), prof.profiler.kineto_results.events(), prof._memory_profile().timeline,
     # but they all are not really giving me the information I want.

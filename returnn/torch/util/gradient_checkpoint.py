@@ -530,8 +530,14 @@ def _unregister_custom_saved_tensors_hooks():
         assert thread in _custom_saved_tensors_hooks_registered_threads
         assert (
             not _custom_saved_tensors_hooks_tls_ctx.stack
-            and not _custom_saved_tensors_hooks_tls_ctx.callbacks
+            and (_custom_saved_tensors_hooks_tls_ctx.in_callback or not _custom_saved_tensors_hooks_tls_ctx.callbacks)
             and not _custom_saved_tensors_hooks_tls_ctx.queued_exits
+        ), (
+            f"_unregister_custom_saved_tensors_hooks:"
+            f" stack {_custom_saved_tensors_hooks_tls_ctx.stack},"
+            f" in_callback {_custom_saved_tensors_hooks_tls_ctx.in_callback},"
+            f" callbacks {_custom_saved_tensors_hooks_tls_ctx.callbacks},"
+            f" queued_exits {_custom_saved_tensors_hooks_tls_ctx.queued_exits}"
         )
         _custom_saved_tensors_hooks_tls_ctx.active = False
         _custom_saved_tensors_hooks_registered_threads.remove(thread)
@@ -579,6 +585,7 @@ def _register_custom_saved_tensors_hooks_thread_local_callback(cb: Callable[[], 
     Register some thread-local callback function which is called on saved_tensors_hooks __enter__ and __exit__.
     If it returns True, it is kept alive, otherwise removed.
     """
+    assert not _custom_saved_tensors_hooks_tls_ctx.in_callback
     _custom_saved_tensors_hooks_tls_ctx.callbacks.append(cb)
 
 
@@ -590,5 +597,7 @@ def _custom_saved_tensors_hooks_call_callbacks():
         _custom_saved_tensors_hooks_tls_ctx.callbacks = [
             cb for cb in _custom_saved_tensors_hooks_tls_ctx.callbacks if cb()
         ]
+        if not _custom_saved_tensors_hooks_tls_ctx.active:  # was cleaned up by some of the callbacks
+            assert not _custom_saved_tensors_hooks_tls_ctx.callbacks and not _custom_saved_tensors_hooks_tls_ctx.stack
     finally:
         _custom_saved_tensors_hooks_tls_ctx.in_callback = False
