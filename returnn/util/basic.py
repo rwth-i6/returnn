@@ -2396,6 +2396,31 @@ def help_on_type_error_wrong_args(cls, kwargs):
         print("Args mismatch? Missing are %r, unknowns are %r. Kwargs %r." % (mandatory_args, unknown_args, kwargs))
 
 
+def type_attrib_mro_chain(cls: type, attr_name: str) -> list:
+    """
+    :return: list of all attributes with the given name in the MRO chain
+    """
+    attribs = []
+    for cls_ in cls.mro():
+        if attr_name in cls_.__dict__:
+            attribs.append(cls_.__dict__[attr_name])
+    return attribs
+
+
+def next_type_attrib_in_mro_chain(cls: type, attr_name: str, attr):
+    """
+    :param cls:
+    :param attr_name:
+    :param attr: must be in the attrib MRO chain
+    :return: next attribute in the MRO chain
+    """
+    attribs = type_attrib_mro_chain(cls, attr_name)
+    assert attr in attribs
+    idx = attribs.index(attr)
+    assert idx + 1 < len(attribs)
+    return attribs[idx + 1]
+
+
 def custom_exec(source: str, source_filename: str, user_ns: Dict[str, Any], user_global_ns: Dict[str, Any]):
     """
     :param source:

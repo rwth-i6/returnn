@@ -517,3 +517,9 @@ def test_weight_noise():
                 continue
             print("***", mod, param_name, param)
             rf.weight_noise(mod, param_name, std=0.0025)
+
+    # https://github.com/rwth-i6/returnn/issues/1580
+    conv = rf.Conv1d(in_dim, out_dim, 3, padding="same")
+    rf.weight_noise(conv, "filter", std=0.1)
+    time_dim = Dim(11, name="time")
+    conv(rf.random_normal([time_dim, in_dim]), in_spatial_dim=time_dim)

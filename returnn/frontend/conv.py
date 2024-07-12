@@ -4,6 +4,7 @@ Convolution, transposed convolution, pooling
 
 from __future__ import annotations
 from typing import Optional, Sequence, Tuple, Union
+from returnn.util.basic import next_type_attrib_in_mro_chain
 from returnn.tensor import Tensor, Dim
 import returnn.frontend as rf
 
@@ -98,7 +99,7 @@ class _ConvOrTransposedConv(rf.Module):
         out_spatial_dim: Optional[Dim] = None,
     ) -> Tuple[Tensor, Dim]:
         assert self.nd == 1
-        out, (out_spatial_dim,) = self.__class__.__base__.__call__(
+        out, (out_spatial_dim,) = next_type_attrib_in_mro_chain(self.__class__, "__call__", self.__class__._call_nd1)(
             self,
             source,
             in_spatial_dims=[in_spatial_dim],

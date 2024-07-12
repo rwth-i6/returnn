@@ -376,6 +376,23 @@ def test_get_func_kwargs():
     assert_equal(list(getargspec(dummy_func).args), ["net", "var", "update_ops"])
 
 
+def test_next_type_attrib_in_mro_chain():
+    class Base:
+        def method(self):
+            return id(self)
+
+    class Foo(Base):
+        def method(self):
+            return 2
+
+    class Bar(Foo):
+        pass
+
+    assert_equal(type_attrib_mro_chain(Foo, "method"), [Foo.method, Base.method])
+    assert_equal(type_attrib_mro_chain(Bar, "method"), [Foo.method, Base.method])
+    assert_equal(next_type_attrib_in_mro_chain(Bar, "method", Foo.method), Base.method)
+
+
 def test_simple_obj_repr():
     class X:
         def __init__(self, a, b=13):
