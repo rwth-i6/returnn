@@ -457,6 +457,7 @@ class ReturnnLayersBackend(Backend[Layer]):
     def ctc_loss(
         *,
         logits: Tensor,
+        logits_normalized: bool = False,
         targets: Tensor,
         input_spatial_dim: Dim,
         targets_spatial_dim: Dim,
@@ -475,6 +476,7 @@ class ReturnnLayersBackend(Backend[Layer]):
             {
                 "class": "ctc_loss",
                 "logits": logits,
+                "logits_normalized": logits_normalized,
                 "targets": targets,
                 "blank_index": blank_index,
                 "max_approx": max_approx,

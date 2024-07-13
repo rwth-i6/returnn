@@ -632,6 +632,7 @@ class TorchBackend(Backend[torch.Tensor]):
     def ctc_loss(
         *,
         logits: Tensor,
+        logits_normalized: bool = False,
         targets: Tensor,
         input_spatial_dim: Dim,
         targets_spatial_dim: Dim,
@@ -651,7 +652,10 @@ class TorchBackend(Backend[torch.Tensor]):
         if len(batch_dims) != 1:
             logits_raw = torch.reshape(logits_raw, logits_raw.shape[:1] + (-1,) + logits_raw.shape[-1:])  # [T, B', C]
             input_lengths = torch.reshape(input_lengths, (-1,))  # [B']
-        log_probs = torch.nn.functional.log_softmax(logits_raw, dim=-1)
+        if logits_normalized:
+            log_probs = logits_raw
+        else:
+            log_probs = torch.nn.functional.log_softmax(logits_raw, dim=-1)
         # PyTorch expects the targets to be of shape (B, S) where S is the targets spatial dim.
         targets = targets.copy_transpose(batch_dims + [targets_spatial_dim])
         targets_raw = targets.raw_tensor  # [B..., S]

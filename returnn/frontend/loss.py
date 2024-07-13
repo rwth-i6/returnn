@@ -57,6 +57,7 @@ def cross_entropy(
 def ctc_loss(
     *,
     logits: Tensor,
+    logits_normalized: bool = False,
     targets: Tensor,
     input_spatial_dim: Dim,
     targets_spatial_dim: Dim,
@@ -72,6 +73,7 @@ def ctc_loss(
     Output is of shape [B].
 
     :param logits: (before softmax). shape [B...,input_spatial,C]
+    :param logits_normalized: whether the logits are already normalized (e.g. via log-softmax)
     :param targets: sparse. shape [B...,targets_spatial] -> C
     :param input_spatial_dim: spatial dim of input logits
     :param targets_spatial_dim: spatial dim of targets
@@ -82,6 +84,7 @@ def ctc_loss(
     # noinspection PyProtectedMember
     return logits._raw_backend.ctc_loss(
         logits=logits,
+        logits_normalized=logits_normalized,
         targets=targets,
         input_spatial_dim=input_spatial_dim,
         targets_spatial_dim=targets_spatial_dim,

@@ -620,6 +620,7 @@ class Backend(Generic[T]):
     def ctc_loss(
         *,
         logits: Tensor,
+        logits_normalized: bool = False,
         targets: Tensor,
         input_spatial_dim: Dim,
         targets_spatial_dim: Dim,

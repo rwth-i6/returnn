@@ -11454,10 +11454,11 @@ class CtcLossLayer(LayerBase):
     layer_class = "ctc_loss"
     recurrent = True  # order matters
 
-    def __init__(self, logits, targets, blank_index=-1, max_approx=False, **kwargs):
+    def __init__(self, logits, targets, logits_normalized=False, blank_index=-1, max_approx=False, **kwargs):
         """
         :param LayerBase logits: (before softmax). shape [B,T,D]
         :param LayerBase targets: sparse. shape [B,T]
+        :param bool logits_normalized: whether the logits are already normalized (e.g. via log-softmax)
         :param int blank_index: vocab index of the blank symbol
         :param bool max_approx: if True, use max instead of sum over alignments (max approx, Viterbi)
         """
@@ -11477,6 +11478,8 @@ class CtcLossLayer(LayerBase):
             logits=logits.output.copy_as_time_batch_major().placeholder,
             logits_time_major=True,
             logits_seq_lens=logits.output.get_sequence_lengths(),
+            logits_normalize=not logits_normalized,
+            grad_wrt_softmax_in=not logits_normalized,
             targets=targets.output.copy_as_batch_major().placeholder,
             targets_seq_lens=targets.output.get_sequence_lengths(),
             blank_index=blank_index,
