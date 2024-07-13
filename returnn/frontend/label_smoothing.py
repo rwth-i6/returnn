@@ -63,36 +63,55 @@ def label_smoothed_log_prob_gradient(
     """
     :param log_prob: shape [...,D] (not necessarily the same as loss)
     :param smoothing: smoothing factor, for :func:`label_smoothing`
-    :param axis: label axis. uses feature_dim by default
+    :param axis: label axis in ``log_prob`` (D). uses feature_dim by default
     :param exclude_labels: list of labels to exclude from smoothing (e.g. blank)
+    :return: ``log_prob``, but the gradient is smoothed
 
-    Assume some cross-entropy-like loss:
+    Assume some cross-entropy-like loss::
 
-      loss = - sum_i target_prob[i] * log_prob[i] .
+        loss = - sum_i target_prob[i] * log_prob[i] .
 
     The sum is over the label indices i (corresponding to the ``axis`` argument).
-    Then the gradient of loss w.r.t. log_prob[i] is:
+    Then the gradient of loss w.r.t. log_prob[i] is::
 
-      grad_logprob[i] loss = -target_prob[i] .
+        grad_logprob[i] loss = -target_prob[i] .
 
-    We assume that the negative gradient is a probability distribution, and apply :func:`label_smoothing` on it.
+    We assume that the negative gradient is a probability distribution
+    (potentially scaled by some factor, e.g. when you scale the loss by some factor)
+    and apply :func:`label_smoothing` on it.
     More specifically, we apply the same scale and shift as in the :func:`label_smoothing` function
-    via :func:`scaled_gradient`.
+    via :func:`scaled_gradient_ext`.
 
-    Just as a side remark: assume
+    Note, this is also the case for CTC or RNNT loss,
+    that the negative gradient of the loss w.r.t. the log-probabilities
+    is a probability distribution.
 
-      log_prob = log_softmax(z) .
+    Common usage example::
 
-    The gradient of log_softmax is:
+        # E.g. there was some log_softmax, or anything to get log probs.
+        log_probs = model.get_log_probs(...)
 
-      grad_z[j] log_prob[i] = delta(i==j) - softmax(z)[j] .
+        # Now apply label smoothing on the log prob gradients.
+        log_probs = rf.label_smoothed_log_prob_gradient(log_probs, 0.1)
 
-    Then the gradient w.r.t. z[j] is:
+        # E.g. CE, CTC, or similar, any kind of NLL should work.
+        loss = loss_func(log_probs, targets)
+        loss.sum().backward()
 
-      grad_z[j] loss = sum_i (grad_logprob[i] loss) (grad_z[j] logprob[i])
-                     = sum_i -target_prob[i] delta(i==j) + target_prob[i] softmax(z)[j]
-                     = -target_prob[j] + (sum_i target_prob[i]) softmax(z)[j]
-                     = softmax(z)[j] - target_prob[j]    # assuming (sum_i target_prob[i]) == 1
+    Just as a side remark: assume::
+
+        log_prob = log_softmax(z) .
+
+    The gradient of log_softmax is::
+
+        grad_z[j] log_prob[i] = delta(i==j) - softmax(z)[j] .
+
+    Then the gradient w.r.t. z[j] is::
+
+        grad_z[j] loss = sum_i (grad_logprob[i] loss) (grad_z[j] logprob[i])
+                       = sum_i -target_prob[i] delta(i==j) + target_prob[i] softmax(z)[j]
+                       = -target_prob[j] + (sum_i target_prob[i]) softmax(z)[j]
+                       = softmax(z)[j] - target_prob[j]    # assuming (sum_i target_prob[i]) == 1
 
     """
     if not axis:
