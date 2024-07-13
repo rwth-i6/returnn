@@ -114,6 +114,8 @@ def label_smoothed_log_prob_gradient(
                        = softmax(z)[j] - target_prob[j]    # assuming (sum_i target_prob[i]) == 1
 
     """
+    if not isinstance(smoothing, Tensor) and smoothing == 0:
+        return log_prob  # no-op
     if not axis:
         assert log_prob.feature_dim
         axis = log_prob.feature_dim
