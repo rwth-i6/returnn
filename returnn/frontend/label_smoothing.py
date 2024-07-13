@@ -100,9 +100,15 @@ def label_smoothed_log_prob_gradient(
         axis = log_prob.feature_dim
     # See formula above for label_smoothing.
     dim = axis.dimension
-    floor_prob = smoothing / (dim - 1)
-    factor = 1.0 - dim * floor_prob
-    if exclude_labels:
+    if not exclude_labels:
+        # See formula in code comments in label_smoothing above.
+        floor_prob = smoothing / (dim - 1)
+        factor = 1.0 - dim * floor_prob
+    else:  # have exclude_labels
+        # Sum of prob over included labels does not change with this factor.
+        # For prob[i] == 1, we still have (1 - smoothing) for the smoothed prob.
+        floor_prob = smoothing / (dim - len(exclude_labels) - 1)
+        factor = 1.0 - (dim - len(exclude_labels)) * floor_prob
         indices = rf.range_over_dim(axis)
         mask = True
         for label in exclude_labels:
