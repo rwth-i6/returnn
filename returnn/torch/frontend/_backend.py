@@ -516,6 +516,8 @@ class TorchBackend(Backend[torch.Tensor]):
         out.raw_tensor = torch.stack([s.copy_compatible_to_dims_raw(out_dims[1:]) for s in sources], dim=0)
         return out
 
+    _ActivationFuncMapping = {"log_sigmoid": torch.nn.functional.logsigmoid}
+
     @staticmethod
     def activation_raw(raw_tensor: torch.Tensor, func: str) -> torch.Tensor:
         """
@@ -524,11 +526,12 @@ class TorchBackend(Backend[torch.Tensor]):
         :return: raw tensor after activation
         """
         assert func in Backend._AllowedActivationFuncs
-        if hasattr(torch, func):
-            f = getattr(torch, func)
-        elif hasattr(torch.nn.functional, func):
-            f = getattr(torch.nn.functional, func)
-        else:
+        f = getattr(torch, func, None)
+        if not f:
+            f = getattr(torch.nn.functional, func, None)
+        if not f:
+            f = TorchBackend._ActivationFuncMapping.get(func)
+        if not f:
             raise ValueError(f"unknown activation function {func!r}")
         return f(raw_tensor)
 
