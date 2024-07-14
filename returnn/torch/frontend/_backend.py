@@ -529,10 +529,10 @@ class TorchBackend(Backend[torch.Tensor]):
         f = getattr(torch, func, None)
         if not f:
             f = getattr(torch.nn.functional, func, None)
-        if not f:
-            f = TorchBackend._ActivationFuncMapping.get(func)
-        if not f:
-            raise ValueError(f"unknown activation function {func!r}")
+            if not f:
+                f = TorchBackend._ActivationFuncMapping.get(func)
+                if not f:
+                    raise ValueError(f"unknown activation function {func!r}")
         return f(raw_tensor)
 
     @staticmethod
