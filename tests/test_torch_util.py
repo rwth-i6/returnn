@@ -12,7 +12,9 @@ import unittest
 import torch
 
 from returnn.util import better_exchook
-from returnn.torch.util.gradient_checkpoint import gradient_checkpoint_scope
+
+# noinspection PyProtectedMember
+from returnn.torch.util.gradient_checkpoint import gradient_checkpoint_scope, _can_exit_saved_tensors_hooks_inside_hooks
 
 
 def test_gradient_checkpoint_scope():
@@ -194,6 +196,45 @@ def test_gradient_checkpoint_scope_twice():
 
     finally:
         gradient_checkpoint_scope._tensor_del_hook = orig_gradient_checkpoint_scope_tensor_del_hook
+
+
+def test_saved_tensors_hooks_gc_segfault():
+    # https://github.com/rwth-i6/returnn/issues/1581
+    # https://github.com/pytorch/pytorch/issues/130734
+    if not _can_exit_saved_tensors_hooks_inside_hooks():
+        raise unittest.SkipTest("Not yet fixed.")
+
+    shape = (101, 103)
+    for i in range(10):
+        print("**** iter", i)
+        v = torch.nn.Parameter(torch.randn(shape))
+
+        class _Handler:
+            def __init__(self):
+                self.scope = torch.autograd.graph.saved_tensors_hooks(self._pack_hook, self._unpack_hook)
+                self.scope.__enter__()
+                self.exited = False
+
+            def _pack_hook(self, x):
+                print(f"*** _pack_hook {self}")
+                return x
+
+            def _unpack_hook(self, x):
+                print(f"*** _unpack_hook {self}")
+                if not self.exited:
+                    self.exited = True
+                    print(
+                        f"*** exit {self.scope},"
+                        f" pack_hook {hex(id(self.scope.pack_hook))},"
+                        f" unpack_hook {hex(id(self.scope.unpack_hook))}"
+                    )
+                    self.scope.__exit__()
+                return x
+
+        with torch.autograd.graph.saved_tensors_hooks(lambda x: x, lambda x: x):
+            handler = _Handler()  # keep ref...  # noqa
+            x = v * torch.randn(shape)
+            x.sum().backward()
 
 
 def _report_profile(prof: torch.profiler.profiler, check_events=(), *, _size_threshold=100):

@@ -206,7 +206,8 @@ class gradient_checkpoint_scope:
             # so we can exit saved_tensors_hooks_scope now.
             # (We might not always catch this properly in the Tensor _DelHook,
             #  e.g. when Tensor.__del__ runs in a different thread.)
-            self.exit_saved_tensors_hooks_scope()
+            if _can_exit_saved_tensors_hooks_inside_hooks():
+                self.exit_saved_tensors_hooks_scope()
             return x
         # _RecordGraph.__torch_dispatch__ should have recorded all newly created tensors.
         x_ = self.record_graph_scope.graph.graph_tensor_from_weak_raw_tensor.get(x, x)
@@ -217,7 +218,8 @@ class gradient_checkpoint_scope:
     @staticmethod
     def _unpack_hook(x: Union[torch.Tensor, _GraphTensor]) -> torch.Tensor:
         if isinstance(x, _GraphTensor):
-            x.op.graph.gradient_checkpoint_scope_backref._maybe_exit_saved_tensors_hooks_scope()
+            if _can_exit_saved_tensors_hooks_inside_hooks():
+                x.op.graph.gradient_checkpoint_scope_backref._maybe_exit_saved_tensors_hooks_scope()
             x.op.graph.maybe_recompute()
             return x.get_recomputed()
         return x
@@ -495,6 +497,18 @@ class _WeakMethod:
         return self.func(obj, *args, **kwargs)
 
 
+def _can_exit_saved_tensors_hooks_inside_hooks() -> bool:
+    """
+    Check whether we can call torch.autograd.graph.saved_tensors_hooks.__exit__
+    inside the pack or unpack hook itself.
+
+    https://github.com/rwth-i6/returnn/issues/1581
+    https://github.com/pytorch/pytorch/issues/130734
+    """
+    # TODO Return True in some later PyTorch version? Check https://github.com/pytorch/pytorch/issues/130734.
+    return False
+
+
 _orig_saved_tensors_hooks_enter = torch.autograd.graph.saved_tensors_hooks.__enter__
 _orig_saved_tensors_hooks_exit = torch.autograd.graph.saved_tensors_hooks.__exit__
 _custom_saved_tensors_hooks_tls_ctx = threading.local()
@@ -559,7 +573,9 @@ def _custom_saved_tensors_hooks_enter(self: torch.autograd.graph.saved_tensors_h
     return _orig_saved_tensors_hooks_enter(self)
 
 
-def _custom_saved_tensors_hooks_exit(self: torch.autograd.graph.saved_tensors_hooks, exc_type, exc_val, exc_tb):
+def _custom_saved_tensors_hooks_exit(
+    self: torch.autograd.graph.saved_tensors_hooks, exc_type=None, exc_val=None, exc_tb=None
+):
     if self not in _custom_saved_tensors_hooks_tls_ctx.stack:
         raise Exception(
             f"saved_tensors_hooks __exit__ mismatch."
