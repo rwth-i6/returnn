@@ -11,6 +11,8 @@ import math
 import sys
 import unittest
 
+from torch_utils import report_profile
+
 from returnn.util import better_exchook
 from returnn.tensor import Tensor, Dim
 import returnn.frontend as rf
@@ -429,6 +431,72 @@ def test_pack_padded():
 
         prev_loss_value = loss_value
         prev_bias_grad = bias_grad
+
+
+def test_pack_padded_memory():
+    import numpy as np
+    import torch
+    from returnn.tensor import Dim
+
+    rnd = np.random.RandomState(42)
+    batch_dim_ = Dim(5, name="batch")
+    batch_dims = [batch_dim_]
+    vocab_dim = Dim(7, name="vocab")
+    enc_dim = Dim(rf.convert_to_tensor(torch.tensor([17, 16, 15, 13, 12]), dims=[batch_dim_]), name="enc")
+    dec_dim = Dim(rf.convert_to_tensor(torch.tensor([11, 10, 8, 7, 5]), dims=[batch_dim_]), name="dec")
+    logits = rf.convert_to_tensor(
+        torch.tensor(
+            rnd.randn(
+                batch_dim_.dimension,
+                enc_dim.dyn_size_ext.raw_tensor.max(),
+                dec_dim.dyn_size_ext.raw_tensor.max(),
+                vocab_dim.dimension,
+            )
+        ),
+        dims=[batch_dim_, enc_dim, dec_dim, vocab_dim],
+    )
+
+    def _get_rf_pack_packed() -> torch.Tensor:
+        logits_packed, pack_dim = rf.pack_padded(
+            logits, dims=batch_dims + [enc_dim, dec_dim], enforce_sorted=False
+        )  # [B * T * (S+1), D]
+        return logits_packed.raw_tensor
+
+    def _get_naive_pack_padded() -> torch.Tensor:
+        logits_raw = logits.copy_transpose(batch_dims + [enc_dim, dec_dim, vocab_dim]).raw_tensor
+        enc_lens = enc_dim.dyn_size_ext.raw_tensor
+        non_blank_lens = dec_dim.dyn_size_ext.raw_tensor
+        vocab_len = vocab_dim.dimension
+
+        batch_tensors = []
+
+        for b in range(logits_raw.shape[0]):
+            enc_len = enc_lens[b]
+            non_blank_len = non_blank_lens[b]
+            combined_len = enc_len * non_blank_len
+            logits_single = logits_raw[b, :enc_len, :non_blank_len]
+            logits_single = torch.reshape(logits_single, (combined_len, vocab_len))
+            batch_tensors.append(logits_single)
+
+        return torch.cat(batch_tensors, dim=0)
+
+    from torch.profiler import profile, ProfilerActivity
+
+    with profile(
+        activities=[ProfilerActivity.CPU], profile_memory=True, with_stack=True, record_shapes=True
+    ) as prof_rf:
+        rf_pack_padded_res = _get_rf_pack_packed()
+
+    with profile(
+        activities=[ProfilerActivity.CPU], profile_memory=True, with_stack=True, record_shapes=True
+    ) as prof_naive:
+        naive_pack_padded_res = _get_naive_pack_padded()
+
+    assert rf_pack_padded_res.shape == naive_pack_padded_res.shape
+    assert torch.eq(rf_pack_padded_res, naive_pack_padded_res).all()
+
+    report_profile(prof_rf, allow_remaining_allocs=True)
+    report_profile(prof_naive, allow_remaining_allocs=True)
 
 
 def test_Data_copy_compatible_to_match_priority():
