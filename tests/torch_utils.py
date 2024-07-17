@@ -3,11 +3,17 @@ Utilities for PyTorch tests
 """
 
 from __future__ import annotations
+from typing import Optional, Any, Sequence, Tuple, Dict
 import os
 import torch
 
 
-def report_profile(prof: torch.profiler.profiler, check_events=(), *, _size_threshold=100) -> None:
+def report_profile(
+    prof: torch.profiler.profiler,
+    check_events: Optional[Sequence[Tuple[str, Dict[str, Any]]]] = None,
+    *,
+    _size_threshold: int = 100,
+) -> None:
     """
     Report profile
     """
@@ -24,7 +30,7 @@ def report_profile(prof: torch.profiler.profiler, check_events=(), *, _size_thre
     from torch._C._profiler import _EventType  # noqa
 
     _allocs = {}  # id -> dict with "size", "name"
-    check_events = list(check_events)
+    check_events = list(check_events) if check_events is not None else None
 
     def _ev_visit(ev):
         # ev: torch._C._profiler._ProfilerEvent
@@ -61,6 +67,10 @@ def report_profile(prof: torch.profiler.profiler, check_events=(), *, _size_thre
             else:
                 return
         else:
+            return
+
+        if check_events is None:
+            print(f"{ev_name} {opts}")
             return
 
         next_check = check_events[0] if check_events else None
