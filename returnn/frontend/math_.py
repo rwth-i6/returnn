@@ -36,6 +36,7 @@ __all__ = [
     "logical_or",
     "logical_not",
     "opt_logical_or",
+    "opt_logical_and",
     "maximum",
     "minimum",
     "clip_by_value",
@@ -339,6 +340,24 @@ def opt_logical_or(a: Union[Tensor, bool], b: Union[Tensor, bool]) -> Union[Tens
             return True
         return a
     return combine(a, "logical_or", b)
+
+
+@overload
+def opt_logical_and(a: bool, b: bool) -> bool:
+    """logical and"""
+
+
+def opt_logical_and(a: Union[Tensor, bool], b: Union[Tensor, bool]) -> Union[Tensor, bool]:
+    """logical and"""
+    if isinstance(a, bool):
+        if not a:
+            return False
+        return b
+    if isinstance(b, bool):
+        if not b:
+            return False
+        return a
+    return combine(a, "logical_and", b)
 
 
 def maximum(a: Tensor, b: Union[Tensor, _RawTensorTypes], *other_tensors) -> Tensor:
