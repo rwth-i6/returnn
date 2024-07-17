@@ -495,8 +495,11 @@ def test_pack_padded_memory():
     assert rf_pack_padded_res.shape == naive_pack_padded_res.shape
     assert torch.eq(rf_pack_padded_res, naive_pack_padded_res).all()
 
+    print("*** RF ***")
     report_profile(prof_rf, allow_remaining_allocs=True)
+    print("*** Naive ***")
     report_profile(prof_naive, allow_remaining_allocs=True)
+    print("***")
 
 
 def test_Data_copy_compatible_to_match_priority():
