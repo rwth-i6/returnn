@@ -12,10 +12,32 @@ def report_profile(
     prof: torch.profiler.profiler,
     check_events: Optional[Sequence[Tuple[str, Dict[str, Any]]]] = None,
     *,
+    allow_remaining_allocs: bool = False,
     _size_threshold: int = 100,
 ) -> None:
     """
-    Report profile
+    Report profile.
+
+    Example usage::
+
+        from torch.profiler import profile, ProfilerActivity
+
+        with profile(
+            activities=[ProfilerActivity.CPU], profile_memory=True, with_stack=True, record_shapes=True
+        ) as prof:
+            # code to profile
+            ...
+
+        report_profile(prof)
+
+    :param prof: via torch.profiler.profile.
+    :param check_events: if given, will check that the report matches the given events.
+        Each entry is a tuple (event_name, event_opts).
+        The event_name can be "alloc", "dealloc", "torchop", "pycall".
+        The event_opts is a dict with the expected values.
+        You can use "*" as a wildcard in the event_opts.
+    :param allow_remaining_allocs: if True, will not raise an error if there are remaining allocations.
+    :param _size_threshold: internal
     """
     # Note: I tried prof.events(), prof.profiler.kineto_results.events(), prof._memory_profile().timeline,
     # but they all are not really giving me the information I want.
@@ -135,7 +157,11 @@ def report_profile(
         # ev: torch._C._profiler._ProfilerEvent
         _ev_visit(ev_)
 
-    assert not _allocs, f"Remaining allocs: {_allocs}"
+    if allow_remaining_allocs:
+        for alloc_id, alloc in _allocs.items():
+            print(f"Remaining alloc: {alloc_id} {alloc}")
+    else:
+        assert not _allocs, f"Remaining allocs: {_allocs}"
     assert not check_events, f"Remaining check events: {check_events}"
 
 
