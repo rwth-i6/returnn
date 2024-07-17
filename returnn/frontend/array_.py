@@ -558,8 +558,12 @@ def sequence_mask(dims: Union[Dim, Sequence[Dim]], *, device: Optional[str] = No
         dims = [dims]
     assert len(dims) > 0
     dyn_dims = [d for d in dims if d.need_masking()]
-    assert len(dyn_dims) == 1  # not implemented otherwise yet...
-    return dyn_dims[0].get_mask(dim_order=dims, device=device)
+    if not dyn_dims:
+        return rf.constant(True, dims=())
+    mask = True
+    for dim in dyn_dims:
+        mask = rf.opt_logical_and(mask, dim.get_mask(dim_order=dims, device=device))
+    return mask
 
 
 def pack_padded(
