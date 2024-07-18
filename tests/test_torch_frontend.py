@@ -433,6 +433,7 @@ def test_pack_padded():
         prev_bias_grad = bias_grad
 
 
+@unittest.skipIf(torch.__version__ < (2,), "report_profile needs PyTorch >= 2.0")
 def test_pack_padded_memory():
     import numpy as np
     import torch
