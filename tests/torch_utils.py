@@ -50,6 +50,8 @@ def report_profile(
     from torch.profiler._utils import traverse_dfs
     from torch._C._profiler import _EventType  # noqa
 
+    _printed_events = set()
+    _events_stack_depth = {}
     _allocs = {}  # id -> dict with "size", "name"
     check_events = list(check_events) if check_events is not None else None
 
@@ -101,8 +103,30 @@ def report_profile(
         else:
             return
 
+        depth = 0
+        if ev.parent:
+            ev__ = ev.parent
+            while ev__:
+                if ev__ in _printed_events:
+                    depth = _events_stack_depth[ev__] + 1
+                    break
+                if ev__ in _events_stack_depth:
+                    depth = _events_stack_depth[ev__]
+                    break
+                ev__ = ev__.parent
+            ev__ = ev
+            while ev__:
+                if ev__ in _events_stack_depth:
+                    break
+                _events_stack_depth[ev__] = depth
+                ev__ = ev__.parent
+        else:
+            _events_stack_depth[ev] = 0
+        _printed_events.add(ev)
+        prefix = "  " * depth
+
         if check_events is None:
-            print(f"{ev_name} {opts}")
+            print(f"{prefix}{ev_name} {opts}")
             return
 
         next_check = check_events[0] if check_events else None
@@ -132,10 +156,10 @@ def report_profile(
             assert not mismatch, f"Event not matched: {ev_name} {opts} to {next_check}: {mismatch}"
 
         if not mismatch:
-            print(f"{ev_name} {opts} ✓")
+            print(f"{prefix}{ev_name} {opts} ✓")
             check_events.pop(0)
         else:
-            print(f"({ev_name} {opts})")
+            print(f"{prefix}({ev_name} {opts})")
 
     def _ctx(ev) -> str:
         stack = [None]
