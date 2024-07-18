@@ -4,7 +4,6 @@ Utilities for PyTorch tests
 
 from __future__ import annotations
 from typing import Optional, Any, Sequence, Tuple, Dict
-import os
 import torch
 
 
@@ -178,7 +177,7 @@ def report_profile(
 
 def _pycall_filter_fn(filename: str) -> bool:
     assert not filename.startswith("/")  # currently the case...
-    if os.path.basename(filename) == os.path.basename(__file__):
+    if filename.startswith("test_"):
         assert "/" not in filename  # currently the case...
         return True
     if filename.startswith("returnn/"):
