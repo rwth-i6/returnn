@@ -214,6 +214,8 @@ def _repr_tensor_metadata(x) -> Any:
     :param x: torch._C._profiler._TensorMetadata or int
     :return: obj which has a nice __repr__/__str__
     """
+    if isinstance(x, (list, tuple)):
+        return type(x)(_repr_tensor_metadata(i) for i in x)
     if not type(x).__module__.startswith("torch"):
         return x
     assert x is not None
