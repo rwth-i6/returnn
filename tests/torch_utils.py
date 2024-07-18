@@ -75,7 +75,7 @@ def report_profile(
         elif ev.typed[0] == _EventType.TorchOp:
             ev_name = "torchop"
             ex = ev.typed[1]  # torch._C._profiler._ExtraFields_TorchOp
-            opts = {"name": ex.name}
+            opts = {"name": ex.name, "inputs": [_repr_tensor_metadata(i) for i in ex.inputs]}
         elif ev.typed[0] == _EventType.PyCall:
             ev_name = "pycall"
             ex = ev.typed[1]  # torch._C._profiler._ExtraFields_PyCall
@@ -207,3 +207,22 @@ def _pycall_filter_fn(filename: str) -> bool:
     if filename.startswith("returnn/"):
         return True
     return False
+
+
+def _repr_tensor_metadata(x) -> Any:
+    """
+    :param x: torch._C._profiler._TensorMetadata or int
+    :return: obj which has a nice __repr__/__str__
+    """
+    if not type(x).__module__.startswith("torch"):
+        return x
+    assert x is not None
+    return _ReprObj(f"<_T id={x.id} shape={x.sizes} dtype={x.dtype}>")
+
+
+class _ReprObj:
+    def __init__(self, obj: str):
+        self.obj = obj
+
+    def __repr__(self):
+        return self.obj
