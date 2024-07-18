@@ -265,19 +265,17 @@ jobs:
       fail-fast: false
       matrix:
         python-version:
-          - 3.7
+          - "3.10"
         torch-version:
           - 1.13.1
+          - 2.0.0
         action:
           - TEST=demos RETURNN_DISABLE_TF=1
           - TEST=torch_dataset
           - TEST=torch_engine
           - TEST=torch_frontend
           - TEST=torch_internal_frontend
-        include:
-          - action: TEST=torch_util
-            python-version: "3.10"
-            torch-version: 2.0.0  # needs PyTorch >=2.0 for grad scope test
+          - TEST=torch_util
 
     steps:
     - uses: actions/checkout@v3
