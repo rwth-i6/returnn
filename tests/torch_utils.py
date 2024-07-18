@@ -88,6 +88,17 @@ def report_profile(
                 }
             else:
                 return
+        elif ev.typed[0] == _EventType.PyCCall:
+            ev_name = "pyccall"
+            ex = ev.typed[1]  # torch._C._profiler._ExtraFields_PyCCall
+            ex0 = ex.caller  # torch._C._profiler._PyFrameState
+            if _pycall_filter_fn(ex0.file_name):
+                opts = {
+                    "caller_loc": f"{ex0.file_name}:{ex0.line_number}",
+                    "caller_name": ex0.function_name,
+                }
+            else:
+                return
         else:
             return
 
