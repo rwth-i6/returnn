@@ -311,7 +311,7 @@ jobs:
         pip install --user --progress-bar=off -r requirements.txt
         pip install --user --progress-bar=off scipy  # for some tests
         pip install --user --upgrade --progress-bar=off torch==${{ matrix.torch-version }}
-        pip install --user --progress-bar=off onnxruntime
+        pip install --user --progress-bar=off onnx onnxruntime
 
     - name: Test Python/Numpy/PyTorch versions.
       run: |
