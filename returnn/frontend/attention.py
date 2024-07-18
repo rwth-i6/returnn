@@ -542,7 +542,7 @@ class RelPosCausalSelfAttention(CausalSelfAttention):
         output, _ = rf.merge_dims(att, dims=(self.num_heads, self.value_dim_per_head), out_dim=self.value_dim_total)
         if self.proj:
             output = self.proj(output)
-        return output
+        return output, new_state
 
 
 class CrossAttention(rf.Module):
