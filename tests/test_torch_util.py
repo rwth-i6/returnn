@@ -13,14 +13,13 @@ import torch
 
 from returnn.util import better_exchook
 
-# noinspection PyProtectedMember
-from returnn.torch.util.gradient_checkpoint import gradient_checkpoint_scope, _can_exit_saved_tensors_hooks_inside_hooks
 
-
+@unittest.skipIf(torch.__version__ < (2,), "gradient_checkpoint_scope needs PyTorch >= 2.0")
 def test_gradient_checkpoint_scope():
     # https://github.com/rwth-i6/returnn/issues/1552
     from copy import deepcopy
     from torch.profiler import profile, record_function, ProfilerActivity
+    from returnn.torch.util.gradient_checkpoint import gradient_checkpoint_scope
 
     shape = (101, 103)
 
@@ -153,8 +152,12 @@ def test_gradient_checkpoint_scope():
         torch.testing.assert_allclose(param_post_state[k], param_post_state_[k])
 
 
+@unittest.skipIf(torch.__version__ < (2,), "gradient_checkpoint_scope needs PyTorch >= 2.0")
 def test_gradient_checkpoint_scope_twice():
     # https://github.com/rwth-i6/returnn/issues/1579
+
+    from returnn.torch.util.gradient_checkpoint import gradient_checkpoint_scope
+
     shape = (101, 103)
 
     class _Model(torch.nn.Module):
@@ -198,9 +201,14 @@ def test_gradient_checkpoint_scope_twice():
         gradient_checkpoint_scope._tensor_del_hook = orig_gradient_checkpoint_scope_tensor_del_hook
 
 
+@unittest.skipIf(torch.__version__ < (2,), "gradient_checkpoint_scope needs PyTorch >= 2.0")
 def test_saved_tensors_hooks_gc_segfault():
     # https://github.com/rwth-i6/returnn/issues/1581
     # https://github.com/pytorch/pytorch/issues/130734
+
+    # noinspection PyProtectedMember
+    from returnn.torch.util.gradient_checkpoint import _can_exit_saved_tensors_hooks_inside_hooks
+
     if not _can_exit_saved_tensors_hooks_inside_hooks():
         raise unittest.SkipTest("Not yet fixed.")
 
