@@ -10,6 +10,7 @@ import numpy
 from returnn.tensor import Tensor, Dim
 import returnn.frontend as rf
 from ._backend import Backend
+from returnn.frontend import RawTensorTypes
 
 
 # We do not expect that we will ever implement all the methods of the Backend interface.
@@ -74,6 +75,27 @@ class NumpyBackend(Backend[numpy.ndarray]):
             In eager frameworks, all dims are known.
         """
         return raw_tensor.shape
+
+    @staticmethod
+    def convert_to_tensor(
+        value: Union[Tensor, numpy.ndarray, RawTensorTypes],
+        *,
+        dims: Sequence[Dim],
+        dtype: str,
+        sparse_dim: Optional[Dim] = None,
+        device: Optional[str] = None,
+        name: Optional[str] = None,
+    ) -> Tensor[numpy.ndarray]:
+        """convert to tensor"""
+        if isinstance(value, Tensor):
+            return value
+        if isinstance(value, numpy.ndarray):
+            name = name or "raw_tensor"
+        else:
+            name = name or "const"
+            value = numpy.array(value, dtype=NumpyBackend.as_dtype_raw(dtype))
+        assert isinstance(value, numpy.ndarray)
+        return Tensor(name, dims=dims, dtype=dtype, sparse_dim=sparse_dim, raw_tensor=value)
 
     @staticmethod
     def expand_dims_raw(raw_tensor: numpy.ndarray, axis: int) -> numpy.ndarray:

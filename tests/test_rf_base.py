@@ -14,6 +14,13 @@ from rf_utils import run_model, run_model_torch_train
 # Keep test_linear_direct and test_linear first here to have some very canonical examples.
 
 
+def _setup():
+    rf.select_backend_torch()  # enables some of the native optimizations
+
+
+_setup()
+
+
 def test_linear_direct():
     time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
     in_dim, out_dim = Dim(7, name="in"), Dim(13, name="out")
@@ -307,6 +314,16 @@ def test_num_elements_of_shape():
     assert calc_n_dec == n_b_dec.raw_tensor.item()
     n_prod = rf.num_elements_of_shape([batch_dim_, enc_dim, dec_dim])
     assert calc_n_prod == n_prod.raw_tensor.item()
+
+
+def test_convert_to_tensor_numpy_backend():
+    import numpy as np
+    from returnn.frontend._numpy_backend import NumpyBackend
+
+    x = rf.convert_to_tensor(1, dims=(), dtype="int32", _backend=NumpyBackend)
+    assert isinstance(x.raw_tensor, np.ndarray)
+    assert x.raw_tensor.dtype == np.int32
+    assert x.raw_tensor.item() == 1
 
 
 def test_param_assign():
