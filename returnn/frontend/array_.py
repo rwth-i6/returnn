@@ -584,11 +584,15 @@ def pack_padded(
     assert not enforce_sorted  # not implemented yet...
     mask = rf.sequence_mask(dims, device=source.device)
     assert mask.dims_set == set(dims)
-    if not out_dim:
-        # Note: Already calculating out_dim here can trigger a more efficient calculation path in masked_select,
-        # where we can avoid a CUDA host-device synchronization, e.g. in the PyTorch backend.
-        # See https://github.com/rwth-i6/returnn/pull/1593.
-        out_dim = Dim(rf.num_elements_of_shape(dims), name="packed")
+    # Note: We could already calculate out_dim here, as follows:
+    #   out_dim = Dim(rf.num_elements_of_shape(dims), name="packed")
+    # This could trigger a more efficient calculation path in masked_select,
+    # where we can avoid a CUDA host-device synchronization, e.g. in the PyTorch backend.
+    # However, in our benchmarks so far, it seems it's not helping so far,
+    # so we don't do this, to also avoid the (minor) overhead of num_elements_of_shape here.
+    # See: https://github.com/rwth-i6/returnn/pull/1593
+    # This might change in the future when we have this:
+    # https://github.com/pytorch/pytorch/issues/131256
     return rf.masked_select(source, mask=mask, dims=dims, out_dim=out_dim)
 
 

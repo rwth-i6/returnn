@@ -28,10 +28,14 @@ def masked_select(input: torch.Tensor, mask: torch.Tensor, *, mask_len: Optional
     assert input.ndim >= mask.ndim
     assert all(input.shape[i] == mask.shape[i] for i in range(mask.ndim))
     mask_flat = mask.flatten()
+    # Note: So far it seems that our custom nonzero is always slower than torch.nonzero,
+    # thus we always use torch.nonzero here for now.
+    # https://github.com/rwth-i6/returnn/pull/1593
+    # We might change this in the future. See also:
+    # https://github.com/pytorch/pytorch/issues/131256
+    indices = torch.nonzero(mask_flat).squeeze(1)  # [out_len]
     if mask_len is not None:
-        indices = nonzero(mask_flat, out_len=mask_len)  # [out_len]
-    else:
-        indices = torch.nonzero(mask_flat).squeeze(1)  # [out_len]
+        assert indices.shape[0] == mask_len
     input_flat = input.flatten(end_dim=mask.ndim - 1)
     return input_flat[indices]
 
@@ -41,6 +45,10 @@ def nonzero(mask: torch.Tensor, *, out_len: Union[int, torch.Tensor]) -> torch.T
     This has the advantage over :func:`torch.nonzero`
     that we do not need to perform a CUDA synchronization.
     We can avoid that when we know the output length in advance.
+
+    However, in my benchmarks, it seems this is slower than torch.nonzero.
+    https://github.com/rwth-i6/returnn/pull/1593
+    https://github.com/pytorch/pytorch/issues/131256
 
     :param mask: flattened (dim() == 1) mask, bool
     :param out_len:
