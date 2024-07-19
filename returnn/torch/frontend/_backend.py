@@ -1578,36 +1578,32 @@ class TorchBackend(Backend[torch.Tensor]):
             the new dim is also returned.
             if mask==True for all elements, the returned tensor would be simply the flattened input tensor.
         """
+        from returnn.torch.util.array_ import masked_select
+
         assert mask.dtype == "bool"
         assert set(mask.dims) == set(dims)
         remaining_dims = [d for d in tensor.dims if d not in mask.dims]
         tensor_templ_dims = tuple(dims) + tuple(remaining_dims)
         in_raw = tensor.copy_compatible_to_dims_raw(tensor_templ_dims)
-        mask_raw = mask.copy_compatible_to_dims_raw(tensor_templ_dims)
-        # We have a very strange problem with the gradient of masked_select,
-        # when used together with some specific other operations before that,
-        # like convolution.
-        # This clone() with contiguous_format seems to fix the problem.
-        # https://github.com/pytorch/pytorch/issues/99638
-        in_raw = in_raw.clone(memory_format=torch.contiguous_format)
-        if mask_raw.device.type == "meta":
+        if mask.raw_tensor.device.type == "meta":
             # This is not supported, but also, we would anyway not know the out shape.
             # However, instead of erroring, just assume some dummy mask.
             # https://github.com/pytorch/pytorch/issues/109871
             out_raw = in_raw.flatten()
         else:
-            out_raw = torch.masked_select(in_raw, mask_raw)
-        remaining_shape = [d.get_dim_value() for d in remaining_dims]
-        remaining_num_elements = numpy.prod(remaining_shape) if remaining_shape else 1
-        assert out_raw.numel() % remaining_num_elements == 0
-        flattened_num_elements = out_raw.numel() // remaining_num_elements
-        out_raw = torch.reshape(out_raw, [flattened_num_elements] + remaining_shape)
+            mask_raw = mask.copy_compatible_to_dims_raw(dims)
+            known_mask_len = (
+                out_dim.get_dim_value()
+                if out_dim and out_dim.dyn_size_ext is not None and out_dim.dyn_size_ext.raw_tensor is not None
+                else None
+            )
+            out_raw = masked_select(in_raw, mask_raw, mask_len=known_mask_len)
         if not out_dim:
             out_dim = Dim(None, name="masked_select")
         if not out_dim.dyn_size_ext:
             out_dim.dyn_size_ext = Tensor("masked_select_size", dims=(), dtype="int64")
         if out_dim.dyn_size_ext.raw_tensor is None:
-            out_dim.dyn_size_ext.raw_tensor = torch.tensor(flattened_num_elements, dtype=torch.int64)
+            out_dim.dyn_size_ext.raw_tensor = torch.tensor(out_raw.shape[0], dtype=torch.int64)
         out = Tensor(
             "masked_select",
             dims=(out_dim,) + tuple(remaining_dims),
