@@ -114,6 +114,8 @@ class NumpyBackend(Backend[numpy.ndarray]):
         op = getattr(numpy, kind)  # e.g. numpy.equal
         return op(a, b)
 
+    _CombineKindMap = {"mul": numpy.multiply}
+
     @staticmethod
     def combine_raw(a: numpy.ndarray, kind: str, b: numpy.ndarray) -> numpy.ndarray:
         """
@@ -124,7 +126,11 @@ class NumpyBackend(Backend[numpy.ndarray]):
         :return: a `kind` b
         """
         assert a.ndim == b.ndim or a.ndim == 0 or b.ndim == 0
-        op = getattr(numpy, kind)  # e.g. numpy.add
+        op = getattr(numpy, kind, None)  # e.g. numpy.add
+        if not op:
+            op = NumpyBackend._CombineKindMap.get(kind)
+            if not op:
+                raise ValueError(f"RF NumpyBackend: combine kind {kind!r} not supported")
         return op(a, b)
 
     @staticmethod
