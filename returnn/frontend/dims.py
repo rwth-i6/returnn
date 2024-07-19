@@ -141,25 +141,26 @@ def num_elements_of_shape(dims: Union[Dim, Sequence[Dim]], *, use_mask: bool = T
             n *= dim.dimension
         return n
 
-    n = 1
-    dims = list(dims)
-    dims.sort(key=lambda dim__: -dim__.dyn_size_ext.batch_ndim if dim__.dyn_size_ext else 0)
-    while dims:
-        dim = dims.pop(0)
-        if dim.is_static():
-            n *= dim.dimension
-            continue
-        # E.g. dyn_size_ext is shape [B], and self has shape [B,T].
-        # Due to the sorting of dims above, dims will be [T,B], and we will first process T.
-        # We want to sum over dyn_size_ext, but then we need to remove the other dims it covers.
-        dims_to_reduce = []
-        for dim_ in dim.dyn_size_ext.dims:
-            if dim_ in dims:
-                assert not dim_.need_masking()  # not implemented
-                dims.remove(dim_)
-                dims_to_reduce.append(dim_)
-        n_ = rf.reduce_sum(dim.dyn_size_ext, axis=dims_to_reduce) if dims_to_reduce else dim.dyn_size_ext
-        n *= n_
+    n: Union[int, Tensor] = 1
+    postponed_dims = []
+    for i, dim in enumerate(dims):
+        # E.g. if dim==B, and some other dim dyn_size_ext has B, then we need to postpone this.
+        related_dims = []
+        for j, dim_ in enumerate(dims):
+            if i == j:
+                continue
+            if dim_.dyn_size_ext and dim in dim_.dyn_size_ext.dims:
+                related_dims.append(dim_)
+        if not related_dims:
+            if dim.is_static():
+                n *= dim.dimension
+            else:
+                n *= dim.dyn_size_ext
+        else:
+            postponed_dims.append(dim)
+    if postponed_dims:
+        n: Tensor
+        n = rf.reduce_sum(n, axis=postponed_dims)
     return n
 
 
