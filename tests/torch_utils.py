@@ -3,7 +3,7 @@ Utilities for PyTorch tests
 """
 
 from __future__ import annotations
-from typing import Optional, Any, Sequence, Tuple, Dict
+from typing import Optional, Any, Sequence, Tuple, List, Dict
 import torch
 
 
@@ -69,7 +69,7 @@ def report_profile(
                 ev_name = "alloc"
                 assert ex.alloc_size > 0
                 assert ev.parent
-                name = _ctx(ev.parent)
+                name = _ev_ctx(ev.parent)
                 _allocs[ex.allocation_id] = {"size": ex.alloc_size, "name": name}
             opts = {"id": ex.allocation_id, "name": name, "size": ex.alloc_size, "total_alloc": ex.total_allocated}
         elif ev.typed[0] == _EventType.TorchOp:
@@ -161,30 +161,6 @@ def report_profile(
         else:
             print(f"{prefix}({ev_name} {opts})")
 
-    def _ctx(ev) -> str:
-        stack = [None]
-        parent = ev
-        while parent and parent.typed[0] == _EventType.TorchOp:  # go to top torch op
-            stack[-1] = parent.typed[1].name
-            parent = parent.parent
-        if not stack[-1] and parent.typed[0] == _EventType.PyCCall:
-            stack[-1] = parent.typed[1].caller.function_name
-            parent = parent.parent
-        if not stack[-1]:
-            stack.pop(-1)
-        while parent:
-            if parent.typed[0] == _EventType.PyCall:
-                ex0 = parent.typed[1].caller  # torch._C._profiler._PyFrameState
-                ex1 = parent.typed[1].callsite  # torch._C._profiler._PyFrameState
-                if (
-                    _pycall_filter_fn(ex1.file_name)
-                    or (_pycall_filter_fn(ex0.file_name) and ex1.function_name == "backward")
-                ) and ex1.function_name not in {"__torch_dispatch__"}:
-                    stack.append(ex1.function_name)
-            parent = parent.parent
-        stack.reverse()
-        return "/".join(stack) or "unknown"
-
     for ev_ in sorted(
         traverse_dfs(prof.profiler.kineto_results.experimental_event_tree()), key=lambda ev: ev.start_time_ns
     ):
@@ -199,6 +175,107 @@ def report_profile(
     assert not check_events, f"Remaining check events: {check_events}"
 
 
+def get_remaining_allocs_from_profile(prof: torch.profiler.profiler) -> Dict[int, Dict[str, Any]]:
+    """
+    Get remaining allocs from profile.
+
+    :param prof: via torch.profiler.profile.
+    :return: allocs dict: id -> dict with "size", "name"
+    """
+    # noinspection PyProtectedMember
+    from torch.profiler._utils import traverse_dfs
+    from torch._C._profiler import _EventType  # noqa
+
+    _allocs = {}  # id -> dict with "size", "name"
+
+    for ev in sorted(
+        traverse_dfs(prof.profiler.kineto_results.experimental_event_tree()), key=lambda ev: ev.start_time_ns
+    ):
+        # ev: torch._C._profiler._ProfilerEvent
+        if ev.typed[0] == _EventType.Allocation:
+            ex = ev.typed[1]  # torch._C._profiler._ExtraFields_Allocation
+            # ex.id/ex.allocation_id/ex.ptr redundant?
+            if ex.allocation_id in _allocs:
+                # expect deallocation
+                assert _allocs[ex.allocation_id]["size"] == -ex.alloc_size
+                del _allocs[ex.allocation_id]
+            else:
+                # allocation
+                assert ex.alloc_size > 0
+                assert ev.parent
+                name = _ev_ctx(ev.parent)
+                _allocs[ex.allocation_id] = {"size": ex.alloc_size, "name": name}
+
+    return _allocs
+
+
+def get_allocs_from_profile(prof: torch.profiler.profiler) -> List[Dict[str, Any]]:
+    """
+    Get allocs from profile.
+
+    :param prof: via torch.profiler.profile.
+    :return: allocs dict: id -> dict with "size", "name"
+    """
+    # noinspection PyProtectedMember
+    from torch.profiler._utils import traverse_dfs
+    from torch._C._profiler import _EventType  # noqa
+
+    _allocs = []  # dict with "id", "size", "name"
+
+    for ev in sorted(
+        traverse_dfs(prof.profiler.kineto_results.experimental_event_tree()), key=lambda ev: ev.start_time_ns
+    ):
+        # ev: torch._C._profiler._ProfilerEvent
+        if ev.typed[0] == _EventType.Allocation:
+            ex = ev.typed[1]  # torch._C._profiler._ExtraFields_Allocation
+            if ex.alloc_size > 0:
+                assert ev.parent
+                name = _ev_ctx(ev.parent)
+                _allocs.append({"id": ex.allocation_id, "size": ex.alloc_size, "name": name})
+
+    return _allocs
+
+
+def get_peak_alloc_from_profile(prof: torch.profiler.profiler) -> int:
+    """
+    Get remaining allocs from profile.
+
+    :param prof: via torch.profiler.profile.
+    :return: peak alloc size
+    """
+    # noinspection PyProtectedMember
+    from torch.profiler._utils import traverse_dfs
+    from torch._C._profiler import _EventType  # noqa
+
+    _allocs = {}  # id -> dict with "size", "name"
+    peak_alloc = 0
+
+    for ev in sorted(
+        traverse_dfs(prof.profiler.kineto_results.experimental_event_tree()), key=lambda ev: ev.start_time_ns
+    ):
+        # ev: torch._C._profiler._ProfilerEvent
+        # ev: torch._C._profiler._ProfilerEvent
+        if ev.typed[0] == _EventType.Allocation:
+            ex = ev.typed[1]  # torch._C._profiler._ExtraFields_Allocation
+            # ex.id/ex.allocation_id/ex.ptr redundant?
+            if ex.allocation_id in _allocs:
+                # expect deallocation
+                assert _allocs[ex.allocation_id]["size"] == -ex.alloc_size
+                del _allocs[ex.allocation_id]
+            else:
+                # allocation
+                assert ex.alloc_size > 0
+                assert ev.parent
+                name = _ev_ctx(ev.parent)
+                _allocs[ex.allocation_id] = {"size": ex.alloc_size, "name": name}
+
+                cur_total_alloc = sum(alloc["size"] for alloc in _allocs.values())
+                if cur_total_alloc > peak_alloc:
+                    peak_alloc = cur_total_alloc
+
+    return peak_alloc
+
+
 def _pycall_filter_fn(filename: str) -> bool:
     assert not filename.startswith("/")  # currently the case...
     if filename.startswith("test_"):
@@ -207,6 +284,33 @@ def _pycall_filter_fn(filename: str) -> bool:
     if filename.startswith("returnn/"):
         return True
     return False
+
+
+def _ev_ctx(ev) -> str:
+    from torch._C._profiler import _EventType  # noqa
+
+    stack = [None]
+    parent = ev
+    while parent and parent.typed[0] == _EventType.TorchOp:  # go to top torch op
+        stack[-1] = parent.typed[1].name
+        parent = parent.parent
+    if not stack[-1] and parent.typed[0] == _EventType.PyCCall:
+        stack[-1] = parent.typed[1].caller.function_name
+        parent = parent.parent
+    if not stack[-1]:
+        stack.pop(-1)
+    while parent:
+        if parent.typed[0] == _EventType.PyCall:
+            ex0 = parent.typed[1].caller  # torch._C._profiler._PyFrameState
+            ex1 = parent.typed[1].callsite  # torch._C._profiler._PyFrameState
+            if (
+                _pycall_filter_fn(ex1.file_name)
+                or (_pycall_filter_fn(ex0.file_name) and ex1.function_name == "backward")
+            ) and ex1.function_name not in {"__torch_dispatch__"}:
+                stack.append(ex1.function_name)
+        parent = parent.parent
+    stack.reverse()
+    return "/".join(stack) or "unknown"
 
 
 def _repr_tensor_metadata(x) -> Any:
