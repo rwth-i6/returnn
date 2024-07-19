@@ -363,7 +363,7 @@ def test_cross_entropy_dense_target():
     assert cross_entropy_list[1] == pytest.approx(-0.3 * math.log(5 / 7) - 0.7 * math.log(1 / 7))
 
 
-def test_pack_padded():
+def test_pack_padded_wrong_grad():
     # https://github.com/pytorch/pytorch/issues/99638
 
     # noinspection PyShadowingNames
@@ -558,9 +558,9 @@ def test_pack_padded_memory():
     print("Remaining allocs:")
     allocs_rf = get_remaining_allocs_from_profile(prof_rf)
     allocs_rf = _filter_rf_allocs_dict(allocs_rf)
-    print(allocs_rf)
+    print("RF:", allocs_rf)
     allocs_naive = get_remaining_allocs_from_profile(prof_naive)
-    print(allocs_naive)
+    print("Naive:", allocs_naive)
     assert len(allocs_rf) == len(allocs_naive) == 1
     assert (
         list(allocs_rf.values())[0]["size"]
@@ -569,13 +569,20 @@ def test_pack_padded_memory():
         # == rf_pack_padded_res.numel() * sizeof_float
     )
 
-    print("All allocs:")
-    pprint(_filter_rf_allocs_list(get_allocs_from_profile(prof_rf)))
-    pprint(get_allocs_from_profile(prof_naive))
+    print("All allocs RF:")
+    for alloc in _filter_rf_allocs_list(get_allocs_from_profile(prof_rf)):
+        alloc["name"] = alloc["name"][alloc["name"].find("/_get_rf_pack_packed/") + len("/_get_rf_pack_packed/") :]
+        print(" ", alloc)
+    print("All allocs naive:")
+    for alloc in get_allocs_from_profile(prof_naive):
+        alloc["name"] = alloc["name"][
+            alloc["name"].find("/_get_naive_pack_padded/") + len("/_get_naive_pack_padded/") :
+        ]
+        print(" ", alloc)
 
     print("Peak alloc:")
-    print(get_peak_alloc_from_profile(prof_rf))
-    print(get_peak_alloc_from_profile(prof_naive))
+    print("RF:", get_peak_alloc_from_profile(prof_rf))
+    print("Naive:", get_peak_alloc_from_profile(prof_naive))
 
     print("dev:", rf_pack_padded_res.device)
 
