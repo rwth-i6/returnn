@@ -11,7 +11,6 @@ import pytest
 import math
 import sys
 import unittest
-from pprint import pprint
 
 from torch_utils import (
     report_profile,
@@ -25,15 +24,16 @@ from returnn.tensor import Tensor, Dim
 import returnn.frontend as rf
 
 
+_torch_default_device = torch.device("cpu")
+
+
 def _setup():
     rf.select_backend_torch()
-    dev = None
+    global _torch_default_device
     if torch.cuda.is_available():
-        dev = "cuda"
+        _torch_default_device = torch.device("cuda")
     elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available() and torch.backends.mps.is_built():
-        dev = "mps"
-    if dev:
-        torch.set_default_device(dev)
+        _torch_default_device = torch.device("mps")
 
 
 _setup()
@@ -470,7 +470,8 @@ def test_pack_padded_memory():
                 enc_dim.dyn_size_ext.raw_tensor.max(),
                 dec_dim.dyn_size_ext.raw_tensor.max(),
                 vocab_dim.dimension,
-            ).astype(np.float32)
+            ).astype(np.float32),
+            device=_torch_default_device,
         ),
         dims=[batch_dim_, enc_dim, dec_dim, vocab_dim],
     )
@@ -585,6 +586,135 @@ def test_pack_padded_memory():
     print("Naive:", get_peak_alloc_from_profile(prof_naive))
 
     print("dev:", rf_pack_padded_res.device)
+
+
+def _benchmark_pack_padded():
+    from torch.utils.benchmark import Timer
+    import numpy as np
+    import torch
+    from returnn.tensor import Dim
+
+    rnd = np.random.RandomState(42)
+    batch_dim_ = Dim(113, name="batch")
+    batch_dims = [batch_dim_]
+    vocab_dim = Dim(1023, name="vocab")
+    enc_dim = Dim(
+        rf.convert_to_tensor(
+            torch.tensor(rnd.randint(11, 55, size=[batch_dim_.dimension]), device="cpu"), dims=[batch_dim_]
+        ),
+        name="enc",
+    )
+    dec_dim = Dim(
+        rf.convert_to_tensor(
+            torch.tensor(rnd.randint(7, 23, size=[batch_dim_.dimension]), device="cpu"), dims=[batch_dim_]
+        ),
+        name="dec",
+    )
+    logits = rf.convert_to_tensor(
+        torch.tensor(
+            rnd.randn(
+                batch_dim_.dimension,
+                enc_dim.dyn_size_ext.raw_tensor.max(),
+                dec_dim.dyn_size_ext.raw_tensor.max(),
+                vocab_dim.dimension,
+            ).astype(np.float32),
+            device=_torch_default_device,
+        ),
+        dims=[batch_dim_, enc_dim, dec_dim, vocab_dim],
+    )
+    eye = rf.convert_to_tensor(
+        torch.eye(vocab_dim.dimension, device=logits.raw_tensor.device, dtype=logits.raw_tensor.dtype),
+        dims=[vocab_dim.copy(match_priority=1), vocab_dim],
+    )
+    sizeof_float = 4
+    print("logits size:", logits.raw_tensor.numel() * sizeof_float, "bytes")
+    print("dev:", logits.device)
+
+    # Call this once because this will cache some things.
+    # Exclude this part for the benchmark to have it fair.
+    dims = batch_dims + [enc_dim, dec_dim]
+    rf.sequence_mask(dims, device=logits.device)
+
+    def _no_op_test():
+        pass
+
+    def _get_logits() -> Tensor:
+        # Maybe do sth with logits, to better see effects of CUDA host-device synchronization.
+        # return rf.matmul(logits, eye, reduce=vocab_dim)
+        # return logits * 0.9 + 0.1
+        return logits
+
+    def _get_rf_pack_packed() -> torch.Tensor:
+        logits_ = _get_logits()
+        logits_packed, pack_dim = rf.pack_padded(logits_, dims=dims, enforce_sorted=False)  # [B * T * S, D]
+        return logits_packed.raw_tensor
+
+    def _get_rf_pack_padded_known_lens() -> torch.Tensor:
+        logits_ = _get_logits()
+        mask = rf.sequence_mask(dims, device=logits.device)
+        assert mask.dims_set == set(dims)
+        # Note: Already calculating out_dim here can trigger a more efficient calculation path in masked_select,
+        # where we can avoid a CUDA host-device synchronization, e.g. in the PyTorch backend.
+        # See https://github.com/rwth-i6/returnn/pull/1593.
+        pack_dim = Dim(rf.num_elements_of_shape(dims), name="packed")
+        logits_packed, _ = rf.masked_select(logits_, mask=mask, dims=dims, out_dim=pack_dim)
+        return logits_packed.raw_tensor
+
+    def _get_rf_pack_padded_no_known_lens() -> torch.Tensor:
+        logits_ = _get_logits()
+        mask = rf.sequence_mask(dims, device=logits.device)
+        assert mask.dims_set == set(dims)
+        logits_packed, pack_dim = rf.masked_select(logits_, mask=mask, dims=dims)
+        return logits_packed.raw_tensor
+
+    def _get_torch_masked_select_pack_padded() -> torch.Tensor:
+        logits_ = _get_logits()
+        # This was the old implementation of rf.pack_padded before https://github.com/rwth-i6/returnn/pull/1586.
+        remaining_dims = [vocab_dim]
+        tensor_templ_dims = dims + remaining_dims
+        mask = rf.sequence_mask(dims, device=logits.device)
+        in_raw = logits_.copy_compatible_to_dims_raw(tensor_templ_dims)
+        mask_raw = mask.copy_compatible_to_dims_raw(tensor_templ_dims)
+        out_raw = torch.masked_select(in_raw, mask_raw)
+        remaining_shape = [d.get_dim_value() for d in remaining_dims]
+        remaining_num_elements = numpy.prod(remaining_shape) if remaining_shape else 1
+        assert out_raw.numel() % remaining_num_elements == 0
+        flattened_num_elements = out_raw.numel() // remaining_num_elements
+        out_raw = torch.reshape(out_raw, [flattened_num_elements] + remaining_shape)
+        return out_raw
+
+    def _get_naive_pack_padded() -> torch.Tensor:
+        logits_ = _get_logits()
+        tensor_templ_dims = dims + [vocab_dim]
+        logits_raw = logits_.copy_compatible_to_dims_raw(tensor_templ_dims)
+        enc_lens = enc_dim.dyn_size_ext.raw_tensor
+        non_blank_lens = dec_dim.dyn_size_ext.raw_tensor
+        vocab_len = vocab_dim.dimension
+
+        batch_tensors = []
+
+        for b in range(logits_raw.shape[0]):
+            enc_len = enc_lens[b]
+            non_blank_len = non_blank_lens[b]
+            combined_len = enc_len * non_blank_len
+            logits_single = logits_raw[b, :enc_len, :non_blank_len]
+            logits_single = torch.reshape(logits_single, (combined_len, vocab_len))
+            batch_tensors.append(logits_single)
+
+        return torch.cat(batch_tensors, dim=0)
+
+    for f in [
+        _no_op_test,  # test
+        _get_logits,  # warmup dummy
+        _get_rf_pack_packed,
+        _get_rf_pack_padded_known_lens,
+        _get_rf_pack_padded_no_known_lens,
+        _get_torch_masked_select_pack_padded,
+        _get_naive_pack_padded,
+    ]:
+        print("func:", f)
+        t = Timer(stmt="func()", globals={"func": f})
+        print(t.blocked_autorange(min_run_time=0.5))
 
 
 def test_Data_copy_compatible_to_match_priority():
