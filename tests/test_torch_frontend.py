@@ -18,7 +18,18 @@ from returnn.tensor import Tensor, Dim
 import returnn.frontend as rf
 
 
-rf.select_backend_torch()
+def _setup():
+    rf.select_backend_torch()
+    dev = None
+    if torch.cuda.is_available():
+        dev = "cuda"
+    elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available() and torch.backends.mps.is_built():
+        dev = "mps"
+    if dev:
+        torch.set_default_device(dev)
+
+
+_setup()
 
 
 def test_dot_scalar_multiplication():
@@ -456,6 +467,7 @@ def test_pack_padded_memory():
         ),
         dims=[batch_dim_, enc_dim, dec_dim, vocab_dim],
     )
+    print("dev:", logits.device)
 
     def _get_rf_pack_packed() -> torch.Tensor:
         logits_packed, pack_dim = rf.pack_padded(
@@ -484,16 +496,23 @@ def test_pack_padded_memory():
     from torch.profiler import profile, ProfilerActivity
 
     with profile(
-        activities=[ProfilerActivity.CPU], profile_memory=True, with_stack=True, record_shapes=True
+        activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
+        profile_memory=True,
+        with_stack=True,
+        record_shapes=True,
     ) as prof_rf:
         rf_pack_padded_res = _get_rf_pack_packed()
 
     with profile(
-        activities=[ProfilerActivity.CPU], profile_memory=True, with_stack=True, record_shapes=True
+        activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
+        profile_memory=True,
+        with_stack=True,
+        record_shapes=True,
     ) as prof_naive:
         naive_pack_padded_res = _get_naive_pack_padded()
 
     assert rf_pack_padded_res.shape == naive_pack_padded_res.shape
+    assert rf_pack_padded_res.device == naive_pack_padded_res.device
     assert torch.eq(rf_pack_padded_res, naive_pack_padded_res).all()
 
     print("*** RF ***")
@@ -501,6 +520,7 @@ def test_pack_padded_memory():
     print("*** Naive ***")
     report_profile(prof_naive, allow_remaining_allocs=True)
     print("***")
+    print("dev:", rf_pack_padded_res.device)
 
 
 def test_Data_copy_compatible_to_match_priority():
