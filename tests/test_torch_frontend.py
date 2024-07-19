@@ -4,14 +4,21 @@ tests for returnn.torch.frontend
 
 import _setup_test_env  # noqa
 
+from typing import Any, Dict, List
 import numpy.testing
 import torch
 import pytest
 import math
 import sys
 import unittest
+from pprint import pprint
 
-from torch_utils import report_profile
+from torch_utils import (
+    report_profile,
+    get_remaining_allocs_from_profile,
+    get_allocs_from_profile,
+    get_peak_alloc_from_profile,
+)
 
 from returnn.util import better_exchook
 from returnn.tensor import Tensor, Dim
@@ -454,8 +461,8 @@ def test_pack_padded_memory():
     batch_dim_ = Dim(5, name="batch")
     batch_dims = [batch_dim_]
     vocab_dim = Dim(7, name="vocab")
-    enc_dim = Dim(rf.convert_to_tensor(torch.tensor([17, 16, 15, 13, 12]), dims=[batch_dim_]), name="enc")
-    dec_dim = Dim(rf.convert_to_tensor(torch.tensor([11, 10, 8, 7, 5]), dims=[batch_dim_]), name="dec")
+    enc_dim = Dim(rf.convert_to_tensor(torch.tensor([17, 16, 15, 13, 12], device="cpu"), dims=[batch_dim_]), name="enc")
+    dec_dim = Dim(rf.convert_to_tensor(torch.tensor([11, 10, 8, 7, 5], device="cpu"), dims=[batch_dim_]), name="dec")
     logits = rf.convert_to_tensor(
         torch.tensor(
             rnd.randn(
@@ -463,11 +470,12 @@ def test_pack_padded_memory():
                 enc_dim.dyn_size_ext.raw_tensor.max(),
                 dec_dim.dyn_size_ext.raw_tensor.max(),
                 vocab_dim.dimension,
-            )
+            ).astype(np.float32)
         ),
         dims=[batch_dim_, enc_dim, dec_dim, vocab_dim],
     )
     print("dev:", logits.device)
+    sizeof_float = 4
 
     def _get_rf_pack_packed() -> torch.Tensor:
         logits_packed, pack_dim = rf.pack_padded(
@@ -511,6 +519,7 @@ def test_pack_padded_memory():
     ) as prof_naive:
         naive_pack_padded_res = _get_naive_pack_padded()
 
+    print("result shape:", rf_pack_padded_res.shape, "numel:", rf_pack_padded_res.numel())
     assert rf_pack_padded_res.shape == naive_pack_padded_res.shape
     assert rf_pack_padded_res.device == naive_pack_padded_res.device
     assert torch.eq(rf_pack_padded_res, naive_pack_padded_res).all()
@@ -520,6 +529,54 @@ def test_pack_padded_memory():
     print("*** Naive ***")
     report_profile(prof_naive, allow_remaining_allocs=True)
     print("***")
+
+    def _filter_rf_alloc(alloc: Dict[str, Any]) -> bool:
+        # Filter some RF internal caches which will get created.
+        return "/sequence_mask/get_mask/" not in alloc["name"]
+
+    def _filter_rf_allocs_dict(allocs: Dict[int, Dict[str, Any]]):
+        return {k: v for k, v in allocs.items() if _filter_rf_alloc(v)}
+
+    def _filter_rf_allocs_list(allocs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        return [v for v in allocs if _filter_rf_alloc(v)]
+
+    print("inputs shape:", logits.raw_tensor.shape, "numel:", logits.raw_tensor.numel())
+    print("  byte size:", logits.raw_tensor.numel() * sizeof_float)
+    print("result shape:", rf_pack_padded_res.shape, "numel:", rf_pack_padded_res.numel())
+    print("  byte size:", rf_pack_padded_res.numel() * sizeof_float)
+    enc_lens = enc_dim.dyn_size_ext.raw_tensor
+    non_blank_lens = dec_dim.dyn_size_ext.raw_tensor
+    print("Mask size:", batch_dim_.dimension * max(enc_lens) * max(non_blank_lens))
+    total_num_el = 0
+    for b in range(batch_dim_.dimension):
+        enc_len = enc_lens[b]
+        non_blank_len = non_blank_lens[b]
+        total_num_el += enc_len * non_blank_len
+    print("Expected total num elements:", total_num_el, "with vocab:", total_num_el * vocab_dim.dimension)
+    print("Size:", total_num_el * vocab_dim.dimension * sizeof_float)
+
+    print("Remaining allocs:")
+    allocs_rf = get_remaining_allocs_from_profile(prof_rf)
+    allocs_rf = _filter_rf_allocs_dict(allocs_rf)
+    print(allocs_rf)
+    allocs_naive = get_remaining_allocs_from_profile(prof_naive)
+    print(allocs_naive)
+    assert len(allocs_rf) == len(allocs_naive) == 1
+    assert (
+        list(allocs_rf.values())[0]["size"]
+        == list(allocs_naive.values())[0]["size"]
+        # On CPU, it should match, but on GPU, it will allocate more.
+        # == rf_pack_padded_res.numel() * sizeof_float
+    )
+
+    print("All allocs:")
+    pprint(_filter_rf_allocs_list(get_allocs_from_profile(prof_rf)))
+    pprint(get_allocs_from_profile(prof_naive))
+
+    print("Peak alloc:")
+    print(get_peak_alloc_from_profile(prof_rf))
+    print(get_peak_alloc_from_profile(prof_naive))
+
     print("dev:", rf_pack_padded_res.device)
 
 
