@@ -289,6 +289,26 @@ def test_dim_mask():
     run_model(extern_data, lambda *, epoch, step: _Net(), _forward_step)
 
 
+def test_num_elements_of_shape():
+    import numpy as np
+
+    batch_dim_ = Dim(5, name="batch")
+    enc_dim = Dim(Tensor("enc", dims=[batch_dim_], dtype="int64"))
+    dec_dim = Dim(Tensor("dec", dims=[batch_dim_], dtype="int64"))
+    enc_dim.dyn_size_ext.raw_tensor = np.array([17, 16, 15, 13, 12])
+    dec_dim.dyn_size_ext.raw_tensor = np.array([11, 10, 8, 7, 5])
+    calc_n_enc = sum(enc_dim.dyn_size_ext.raw_tensor)
+    calc_n_dec = sum(dec_dim.dyn_size_ext.raw_tensor)
+    calc_n_prod = sum(enc_dim.dyn_size_ext.raw_tensor * dec_dim.dyn_size_ext.raw_tensor)
+    assert rf.num_elements_of_shape([batch_dim_]) == batch_dim_.dimension
+    n_b_enc = rf.num_elements_of_shape([batch_dim_, enc_dim])
+    assert calc_n_enc == n_b_enc.raw_tensor.item()
+    n_b_dec = rf.num_elements_of_shape([dec_dim, batch_dim_])
+    assert calc_n_dec == n_b_dec.raw_tensor.item()
+    n_prod = rf.num_elements_of_shape([batch_dim_, enc_dim, dec_dim])
+    assert calc_n_prod == n_prod.raw_tensor.item()
+
+
 def test_param_assign():
     time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
     in_dim = Dim(7, name="in")
