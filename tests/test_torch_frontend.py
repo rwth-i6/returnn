@@ -622,6 +622,10 @@ def _benchmark_pack_padded():
         ),
         dims=[batch_dim_, enc_dim, dec_dim, vocab_dim],
     )
+    eye = rf.convert_to_tensor(
+        torch.eye(vocab_dim.dimension, device=logits.raw_tensor.device, dtype=logits.raw_tensor.dtype),
+        dims=[vocab_dim.copy(match_priority=1), vocab_dim],
+    )
     sizeof_float = 4
     print("logits size:", logits.raw_tensor.numel() * sizeof_float, "bytes")
     print("dev:", logits.device)
@@ -631,13 +635,29 @@ def _benchmark_pack_padded():
     dims = batch_dims + [enc_dim, dec_dim]
     rf.sequence_mask(dims, device=logits.device)
 
+    def _no_op_test():
+        pass
+
     def _get_logits() -> Tensor:
-        # Do sth with logits, to better see effects of CUDA host-device synchronization.
-        return logits * 3.5 + 0.1
+        # Maybe do sth with logits, to better see effects of CUDA host-device synchronization.
+        # return rf.matmul(logits, eye, reduce=vocab_dim)
+        # return logits * 0.9 + 0.1
+        return logits
 
     def _get_rf_pack_packed() -> torch.Tensor:
         logits_ = _get_logits()
         logits_packed, pack_dim = rf.pack_padded(logits_, dims=dims, enforce_sorted=False)  # [B * T * S, D]
+        return logits_packed.raw_tensor
+
+    def _get_rf_pack_padded_known_lens() -> torch.Tensor:
+        logits_ = _get_logits()
+        mask = rf.sequence_mask(dims, device=logits.device)
+        assert mask.dims_set == set(dims)
+        # Note: Already calculating out_dim here can trigger a more efficient calculation path in masked_select,
+        # where we can avoid a CUDA host-device synchronization, e.g. in the PyTorch backend.
+        # See https://github.com/rwth-i6/returnn/pull/1593.
+        pack_dim = Dim(rf.num_elements_of_shape(dims), name="packed")
+        logits_packed, _ = rf.masked_select(logits_, mask=mask, dims=dims, out_dim=pack_dim)
         return logits_packed.raw_tensor
 
     def _get_rf_pack_padded_no_known_lens() -> torch.Tensor:
@@ -684,14 +704,17 @@ def _benchmark_pack_padded():
         return torch.cat(batch_tensors, dim=0)
 
     for f in [
+        _no_op_test,  # test
+        _get_logits,  # warmup dummy
         _get_rf_pack_packed,
+        _get_rf_pack_padded_known_lens,
         _get_rf_pack_padded_no_known_lens,
         _get_torch_masked_select_pack_padded,
         _get_naive_pack_padded,
     ]:
         print("func:", f)
-        t = Timer(stmt="func", globals={"func": f})
-        print(t.blocked_autorange())
+        t = Timer(stmt="func()", globals={"func": f})
+        print(t.blocked_autorange(min_run_time=0.5))
 
 
 def test_Data_copy_compatible_to_match_priority():
