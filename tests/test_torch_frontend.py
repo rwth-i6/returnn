@@ -712,7 +712,7 @@ def _benchmark_pack_padded():
         _get_torch_masked_select_pack_padded,
         _get_naive_pack_padded,
     ]:
-        print("func:", f)
+        print("func:", f.__name__)
         t = Timer(stmt="func()", globals={"func": f})
         print(t.blocked_autorange(min_run_time=0.5))
 
@@ -842,7 +842,7 @@ def _benchmark_pack_padded_one_dim():
         _get_naive_pack_padded,
         _get_torch_pack_padded_sequence,
     ]:
-        print("func:", f)
+        print("func:", f.__name__)
         t = Timer(stmt="func()", globals={"func": f})
         print(t.blocked_autorange(min_run_time=0.5))
 
