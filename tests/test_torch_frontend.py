@@ -627,6 +627,7 @@ def _benchmark_pack_padded():
         dims=[vocab_dim.copy(match_priority=1), vocab_dim],
     )
     sizeof_float = 4
+    print("logits shape:", logits.raw_tensor.shape)
     print("logits size:", logits.raw_tensor.numel() * sizeof_float, "bytes")
     print("dev:", logits.device)
 
@@ -714,7 +715,10 @@ def _benchmark_pack_padded():
     ]:
         print("func:", f.__name__)
         t = Timer(stmt="func()", globals={"func": f})
-        print(t.blocked_autorange(min_run_time=0.5))
+        try:
+            print(t.blocked_autorange(min_run_time=0.5))
+        except torch.cuda.OutOfMemoryError:
+            print("CUDA OOM")
 
 
 def _benchmark_pack_padded_one_dim():
@@ -745,6 +749,7 @@ def _benchmark_pack_padded_one_dim():
         dims=[batch_dim_, enc_dim, vocab_dim],
     )
     sizeof_float = 4
+    print("logits shape:", logits.raw_tensor.shape)
     print("logits size:", logits.raw_tensor.numel() * sizeof_float, "bytes")
     print("dev:", logits.device)
 
@@ -844,7 +849,10 @@ def _benchmark_pack_padded_one_dim():
     ]:
         print("func:", f.__name__)
         t = Timer(stmt="func()", globals={"func": f})
-        print(t.blocked_autorange(min_run_time=0.5))
+        try:
+            print(t.blocked_autorange(min_run_time=0.5))
+        except torch.cuda.OutOfMemoryError:
+            print("CUDA OOM")
 
 
 def test_Data_copy_compatible_to_match_priority():
