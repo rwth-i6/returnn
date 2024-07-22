@@ -613,6 +613,7 @@ class Engine(EngineBase):
 
         assert self.config.typed_value("batch_size") is not None, "batch_size not defined in config"
         batch_size = self.config.typed_value("batch_size", 1)
+        batch_size = self.config.typed_value(f"batch_size_{dataset.name}", batch_size)
         max_seqs = self.config.int("max_seqs", -1)
         batches_dataset = data_pipeline.BatchingIterDataPipe(wrapped_dataset, batch_size=batch_size, max_seqs=max_seqs)
 
