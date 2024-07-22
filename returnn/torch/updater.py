@@ -181,6 +181,9 @@ class Updater(object):
         """
         Perform one step, i.e. update the parameters using the optimizer given the current calculated gradients.
         """
+        if grad_scaler is not None:
+            grad_scaler.unscale_(self.optimizer)
+
         if self._grad_noise:
             gradient_noise_(self.network.parameters(), self._grad_noise)
         if self._grad_clip:
