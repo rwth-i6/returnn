@@ -193,20 +193,17 @@ class LmDataset(CachedDataset2):
             self.orth_replace_map[" "] = [word_end_symbol]  # Replace all spaces by word_end_symbol.
 
         num_labels = len(self.labels["data"])
-        use_uint_types = False
-        if BackendEngine.is_tensorflow_selected():
-            use_uint_types = True
         if num_labels <= 2**7:
             self.dtype = "int8"
-        elif num_labels <= 2**8 and use_uint_types:
+        elif num_labels <= 2**8:
             self.dtype = "uint8"
         elif num_labels <= 2**31:
             self.dtype = "int32"
-        elif num_labels <= 2**32 and use_uint_types:
+        elif num_labels <= 2**32:
             self.dtype = "uint32"
-        elif num_labels <= 2**61:
+        elif num_labels <= 2**63:
             self.dtype = "int64"
-        elif num_labels <= 2**62 and use_uint_types:
+        elif num_labels <= 2**64:
             self.dtype = "uint64"
         else:
             raise Exception("cannot handle so much labels: %i" % num_labels)
