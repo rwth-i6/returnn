@@ -722,12 +722,15 @@ def test_LmDataset_pickle():
             }
         )
         assert isinstance(dataset, LmDataset)
+        assert dataset.orths is None  # not yet loaded, will be lazily loaded
 
         s = pickle.dumps(dataset)
         dataset = pickle.loads(s)
         assert isinstance(dataset, LmDataset)
+        assert dataset.orths is None  # not yet loaded, will be lazily loaded
 
         dataset.init_seq_order(epoch=1)
+        assert dataset.orths is not None  # loaded now
         dataset.load_seqs(0, 2)
         orth = dataset.get_data(0, "data")
         assert orth.tolist() == [1, 2]

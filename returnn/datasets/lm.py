@@ -115,16 +115,12 @@ class LmDataset(CachedDataset2):
         self._orth_replace_map_file = orth_replace_map_file
         self._phone_info = phone_info
 
-        if callable(corpus_file):
-            corpus_file = corpus_file()
         if callable(orth_symbols_file):
             orth_symbols_file = orth_symbols_file()
         if callable(orth_symbols_map_file):
             orth_symbols_map_file = orth_symbols_map_file()
         if callable(orth_replace_map_file):
             orth_replace_map_file = orth_replace_map_file()
-
-        print("LmDataset, loading file", corpus_file, file=log.v4)
 
         self.word_based = word_based
         self.word_end_symbol = word_end_symbol
@@ -266,24 +262,35 @@ class LmDataset(CachedDataset2):
             self.num_outputs["delayed"] = self.num_outputs["data"]
             self.labels["delayed"] = self.labels["data"]
 
-        if isinstance(corpus_file, list):  # If a list of files is provided, concatenate all.
-            self.orths = []
-            for file_name in corpus_file:
-                if use_cache_manager:
-                    file_name = cf(file_name)
-                self.orths += read_corpus(file_name, skip_empty_lines=skip_empty_lines)
-        else:
-            if use_cache_manager:
-                corpus_file = cf(corpus_file)
-            self.orths = read_corpus(corpus_file, skip_empty_lines=skip_empty_lines)
-        # It's only estimated because we might filter some out or so.
-        self._estimated_num_seqs = len(self.orths) // self.partition_epoch
-        print("  done, loaded %i sequences" % len(self.orths), file=log.v4)
+        self.orths = None  # will be loaded in _lazy_init
 
         self.next_orth_idx = 0
         self.next_seq_idx = 0
         self.num_skipped = 0
         self.num_unknown = 0
+
+    def _lazy_init(self):
+        if self.orths is not None:
+            return
+
+        corpus_file = self._corpus_file
+        if callable(corpus_file):
+            corpus_file = corpus_file()
+        print("LmDataset, loading file", corpus_file, file=log.v4)
+        if isinstance(corpus_file, list):  # If a list of files is provided, concatenate all.
+            self.orths = []
+            for file_name in corpus_file:
+                if self._use_cache_manager:
+                    file_name = cf(file_name)
+                self.orths += read_corpus(file_name, skip_empty_lines=self._skip_empty_lines)
+        else:
+            if self._use_cache_manager:
+                corpus_file = cf(corpus_file)
+            self.orths = read_corpus(corpus_file, skip_empty_lines=self._skip_empty_lines)
+        print("  done, loaded %i sequences" % len(self.orths), file=log.v4)
+
+        # It's only estimated because we might filter some out or so.
+        self._estimated_num_seqs = len(self.orths) // self.partition_epoch
 
     def get_data_keys(self):
         """
@@ -332,7 +339,10 @@ class LmDataset(CachedDataset2):
             self.seq_order = seq_order
         elif seq_list is not None:
             self.seq_order = [int(s[len(self._tag_prefix) :]) for s in seq_list]
+        elif epoch is None:
+            self.seq_order = []
         else:
+            self._lazy_init()
             self.seq_order = self.get_seq_order_for_epoch(
                 epoch=epoch, num_seqs=len(self.orths), get_seq_len=lambda i: len(self.orths[i])
             )
@@ -350,6 +360,7 @@ class LmDataset(CachedDataset2):
 
     def get_total_num_seqs(self) -> int:
         """total num seqs"""
+        self._lazy_init()
         return len(self.orths)
 
     def _reduce_log_skipped_seqs(self):
@@ -380,10 +391,11 @@ class LmDataset(CachedDataset2):
             if self.next_orth_idx >= len(self.seq_order):
                 assert self.next_seq_idx <= seq_idx, "We expect that we iterate through all seqs."
                 if self.num_skipped > 0:
-                    print("LmDataset: reached end, skipped %i sequences" % self.num_skipped)
+                    print("LmDataset: reached end, skipped %i sequences" % self.num_skipped, file=log.v2)
                 return None
             assert self.next_seq_idx == seq_idx, "We expect that we iterate through all seqs."
             true_idx = self.seq_order[self.next_orth_idx]
+            self._lazy_init()
             orth = self.orths[true_idx]  # get sequence for the next index given by seq_order
             seq_tag = self._tag_prefix + str(true_idx)
             self.next_orth_idx += 1
