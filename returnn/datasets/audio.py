@@ -62,7 +62,7 @@ class OggZipDataset(CachedDataset2):
             (e.g. :class:`BytePairEncoding`)
         :param str|list[str]|((str)->str)|None targets_post_process: :func:`get_post_processor_function`,
             applied on orth
-        :param bool use_cache_manager: uses :func:`Util.cf`
+        :param bool use_cache_manager: uses :func:`returnn.util.basic.cf`
         :param str|None segment_file: .txt or .gz text file containing sequence tags that will be used as whitelist
         :param bool zip_audio_files_have_name_as_prefix:
         :param float|int|None fixed_random_subset:
