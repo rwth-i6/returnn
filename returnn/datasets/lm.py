@@ -121,9 +121,11 @@ class LmDataset(CachedDataset2):
             # In this case, sentences end with self.word_end_symbol followed by the self.seq_end_symbol.
             self.parse_orth_opts.setdefault(
                 "postfix",
-                [self.word_end_symbol, self.seq_end_symbol]
-                if self.seq_end_symbol is not None
-                else [self.word_end_symbol],
+                (
+                    [self.word_end_symbol, self.seq_end_symbol]
+                    if self.seq_end_symbol is not None
+                    else [self.word_end_symbol]
+                ),
             )
         else:
             self.parse_orth_opts.setdefault("postfix", [self.seq_end_symbol] if self.seq_end_symbol is not None else [])
