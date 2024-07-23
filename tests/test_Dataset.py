@@ -697,6 +697,45 @@ def test_LmDataset_vocab_based():
         assert not dataset.is_less_than_num_seqs(2)
 
 
+def test_LmDataset_pickle():
+    import pickle
+    from returnn.datasets.lm import LmDataset
+
+    with tempfile.NamedTemporaryFile("wt", suffix=".txt") as txt_file, tempfile.NamedTemporaryFile(
+        "wt", suffix=".syms"
+    ) as orth_syms_file:
+        txt_file.write("Hello world\n")
+        txt_file.write("Next line\n")
+        txt_file.flush()
+        orth_syms_file.write(repr({"[END]": 0, "Hello": 1, "world": 2, "Next": 3, "line": 4}))
+        orth_syms_file.write("\n")
+        orth_syms_file.flush()
+
+        dataset = init_dataset(
+            {
+                "class": "LmDataset",
+                "corpus_file": txt_file.name,
+                "orth_vocab": {
+                    "vocab_file": orth_syms_file.name,
+                    "unknown_label": None,
+                },
+            }
+        )
+        assert isinstance(dataset, LmDataset)
+
+        s = pickle.dumps(dataset)
+        dataset = pickle.loads(s)
+        assert isinstance(dataset, LmDataset)
+
+        dataset.init_seq_order(epoch=1)
+        dataset.load_seqs(0, 2)
+        orth = dataset.get_data(0, "data")
+        assert orth.tolist() == [1, 2]
+        orth = dataset.get_data(1, "data")
+        assert orth.tolist() == [3, 4]
+        assert not dataset.is_less_than_num_seqs(2)
+
+
 def test_MetaDataset():
     _demo_txt = "some utterance text"
 

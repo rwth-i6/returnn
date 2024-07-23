@@ -78,7 +78,7 @@ class LmDataset(CachedDataset2):
 
         :param str|()->str|list[str]|()->list[str] corpus_file: Bliss XML or line-based txt. optionally can be gzip.
         :param bool skip_empty_lines: for line-based txt
-        :param dict[str,typing.Any] orth_vocab:
+        :param dict[str,typing.Any]|Vocabulary orth_vocab:
         :param str|()->str|None orth_symbols_file: a text file containing a list of orthography symbols
         :param str|()->str|None orth_symbols_map_file: either a list of orth symbols, each line: "<symbol> <index>",
                                                        a python dict with {"<symbol>": <index>, ...}
@@ -104,6 +104,13 @@ class LmDataset(CachedDataset2):
         :param str delayed_seq_data_start_symbol: used for add_delayed_seq_data.
         """
         super(LmDataset, self).__init__(**kwargs)
+
+        self._corpus_file = corpus_file
+        self._skip_empty_lines = skip_empty_lines
+        self._orth_symbols_file = orth_symbols_file
+        self._orth_symbols_map_file = orth_symbols_map_file
+        self._orth_replace_map_file = orth_replace_map_file
+        self._phone_info = phone_info
 
         if callable(corpus_file):
             corpus_file = corpus_file()
