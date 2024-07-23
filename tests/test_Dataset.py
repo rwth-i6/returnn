@@ -584,6 +584,119 @@ def test_OggZipDataset():
         assert classes_ == _demo_txt + "."
 
 
+def test_LmDataset_char_based():
+    from returnn.datasets.lm import LmDataset
+
+    with tempfile.NamedTemporaryFile("wt", suffix=".txt") as txt_file, tempfile.NamedTemporaryFile(
+        "wt", suffix=".syms"
+    ) as orth_syms_file:
+        txt_file.write("Hello world\n")
+        txt_file.write("Next line\n")
+        txt_file.flush()
+        orth_syms_file.write("[END]\n")
+        covered = set()
+        for c in open(txt_file.name, "r").read():
+            if c not in covered and c != "\n":
+                orth_syms_file.write(c + "\n")
+                covered.add(c)
+        orth_syms_file.flush()
+
+        dataset = init_dataset(
+            {
+                "class": "LmDataset",
+                "corpus_file": txt_file.name,
+                "orth_symbols_file": orth_syms_file.name,
+            }
+        )
+        assert isinstance(dataset, LmDataset)
+        dataset.init_seq_order(epoch=1)
+        dataset.load_seqs(0, 2)
+        orth = dataset.get_data(0, "data")
+        assert orth.tolist() == [1, 2, 3, 3, 4, 5, 6, 4, 7, 3, 8, 0]
+        orth = dataset.get_data(1, "data")
+        assert orth.tolist() == [9, 2, 10, 11, 5, 3, 12, 13, 2, 0]
+        assert not dataset.is_less_than_num_seqs(2)
+
+
+def test_LmDataset_word_based():
+    from returnn.datasets.lm import LmDataset
+
+    with tempfile.NamedTemporaryFile("wt", suffix=".txt") as txt_file, tempfile.NamedTemporaryFile(
+        "wt", suffix=".syms"
+    ) as orth_syms_file:
+        txt_file.write("Hello world\n")
+        txt_file.write("Next line\n")
+        txt_file.flush()
+        orth_syms_file.write("[END]\n")
+        orth_syms_file.write("Hello\n")
+        orth_syms_file.write("world\n")
+        orth_syms_file.write("Next\n")
+        orth_syms_file.write("line\n")
+        orth_syms_file.flush()
+
+        dataset = init_dataset(
+            {
+                "class": "LmDataset",
+                "corpus_file": txt_file.name,
+                "word_based": True,
+                "orth_symbols_file": orth_syms_file.name,
+            }
+        )
+        assert isinstance(dataset, LmDataset)
+        dataset.init_seq_order(epoch=1)
+        dataset.load_seqs(0, 2)
+        orth = dataset.get_data(0, "data")
+        assert orth.tolist() == [1, 2, 0]
+        orth = dataset.get_data(1, "data")
+        assert orth.tolist() == [3, 4, 0]
+        assert not dataset.is_less_than_num_seqs(2)
+
+
+def test_LmDataset_vocab_based():
+    from returnn.datasets.lm import LmDataset
+
+    with tempfile.NamedTemporaryFile("wt", suffix=".txt") as txt_file, tempfile.NamedTemporaryFile(
+        "wt", suffix=".syms"
+    ) as orth_syms_file:
+        txt_file.write("Hello world\n")
+        txt_file.write("Next line\n")
+        txt_file.flush()
+        orth_syms_file.write(
+            repr(
+                {
+                    "[END]": 0,
+                    "Hello": 1,
+                    "world": 2,
+                    "Next": 3,
+                    "line": 4,
+                }
+            )
+        )
+        orth_syms_file.write("\n")
+        orth_syms_file.flush()
+
+        dataset = init_dataset(
+            {
+                "class": "LmDataset",
+                "corpus_file": txt_file.name,
+                "orth_vocab": {
+                    "class": "SamplingBytePairEncoding",  # just as an example
+                    "vocab_file": orth_syms_file.name,
+                    "breadth_prob": 0.0,
+                    "unknown_label": None,
+                },
+            }
+        )
+        assert isinstance(dataset, LmDataset)
+        dataset.init_seq_order(epoch=1)
+        dataset.load_seqs(0, 2)
+        orth = dataset.get_data(0, "data")
+        assert orth.tolist() == [1, 2]
+        orth = dataset.get_data(1, "data")
+        assert orth.tolist() == [3, 4]
+        assert not dataset.is_less_than_num_seqs(2)
+
+
 def test_MetaDataset():
     _demo_txt = "some utterance text"
 

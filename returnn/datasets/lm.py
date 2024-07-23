@@ -23,6 +23,7 @@ from returnn.log import log
 
 from .basic import DatasetSeq
 from .cached2 import CachedDataset2
+from .util.vocabulary import Vocabulary
 
 
 class LmDataset(CachedDataset2):
@@ -37,6 +38,7 @@ class LmDataset(CachedDataset2):
         self,
         corpus_file,
         skip_empty_lines=True,
+        orth_vocab=None,
         orth_symbols_file=None,
         orth_symbols_map_file=None,
         orth_replace_map_file=None,
@@ -76,6 +78,7 @@ class LmDataset(CachedDataset2):
 
         :param str|()->str|list[str]|()->list[str] corpus_file: Bliss XML or line-based txt. optionally can be gzip.
         :param bool skip_empty_lines: for line-based txt
+        :param dict[str,typing.Any] orth_vocab:
         :param str|()->str|None orth_symbols_file: a text file containing a list of orthography symbols
         :param str|()->str|None orth_symbols_map_file: either a list of orth symbols, each line: "<symbol> <index>",
                                                        a python dict with {"<symbol>": <index>, ...}
@@ -117,32 +120,31 @@ class LmDataset(CachedDataset2):
         self.word_end_symbol = word_end_symbol
         self.seq_end_symbol = seq_end_symbol
         self.unknown_symbol = unknown_symbol
-        self.parse_orth_opts = parse_orth_opts or {}
-        self.parse_orth_opts.setdefault("word_based", self.word_based)
-        if self.word_end_symbol and not self.word_based:  # Character-based modeling and word_end_symbol is specified.
-            # In this case, sentences end with self.word_end_symbol followed by the self.seq_end_symbol.
-            self.parse_orth_opts.setdefault(
-                "postfix",
-                (
-                    [self.word_end_symbol, self.seq_end_symbol]
-                    if self.seq_end_symbol is not None
-                    else [self.word_end_symbol]
-                ),
-            )
-        else:
-            self.parse_orth_opts.setdefault("postfix", [self.seq_end_symbol] if self.seq_end_symbol is not None else [])
 
-        self.seq_gen = None
+        self.orth_vocab = None
         self.orth_symbols = None
         self.orth_symbols_map = None
-        if orth_symbols_file:
+        self.seq_gen = None
+        if orth_vocab:
+            assert not orth_symbols_file, "LmDataset: either orth_vocab or orth_symbols_file"
+            assert not phone_info, "LmDataset: either orth_vocab or phone_info"
+            assert not orth_symbols_map_file, "LmDataset: either orth_vocab or orth_symbols_map_file"
+            assert not auto_replace_unknown_symbol, "LmDataset: auto_replace_unknown_symbol is controlled via the vocab"
+            if isinstance(orth_vocab, dict):
+                self.orth_vocab = Vocabulary.create_vocab(**orth_vocab)
+            elif isinstance(orth_vocab, Vocabulary):
+                self.orth_vocab = orth_vocab
+            else:
+                raise TypeError(f"LmDataset: unexpected orth_vocab type {type(orth_vocab)}")
+            self.labels["data"] = self.orth_vocab.labels
+        elif orth_symbols_file:
             assert not phone_info
             assert not orth_symbols_map_file
             orth_symbols = open(orth_symbols_file).read().splitlines()
             self.orth_symbols_map = {sym: i for (i, sym) in enumerate(orth_symbols)}
             self.orth_symbols = orth_symbols
             self.labels["data"] = orth_symbols
-        if orth_symbols_map_file and orth_symbols_map_file.endswith(".pkl"):
+        elif orth_symbols_map_file and orth_symbols_map_file.endswith(".pkl"):
             import pickle
 
             with open(orth_symbols_map_file, "rb") as f:
@@ -170,28 +172,57 @@ class LmDataset(CachedDataset2):
             self.orth_symbols = [sym for (i, sym) in orth_symbols_imap_list]
             reverse_map = {i: sym for (i, sym) in orth_symbols_imap_list}
             self.labels["data"] = [sym for (i, sym) in sorted(reverse_map.items())]
-        else:
+        elif phone_info is not None:
             assert not orth_symbols_file
             assert isinstance(phone_info, dict)
             self.seq_gen = PhoneSeqGenerator(**phone_info)
             self.labels["data"] = self.seq_gen.get_class_labels()
-        if orth_replace_map_file:
-            orth_replace_map = load_json(filename=orth_replace_map_file)
-            assert isinstance(orth_replace_map, dict)
-            self.orth_replace_map = {
-                key: parse_orthography_into_symbols(v, word_based=self.word_based)
-                for (key, v) in orth_replace_map.items()
-            }
-            if self.orth_replace_map:
-                if len(self.orth_replace_map) <= 5:
-                    print("  orth_replace_map: %r" % self.orth_replace_map, file=log.v5)
-                else:
-                    print("  orth_replace_map: %i entries" % len(self.orth_replace_map), file=log.v5)
         else:
-            self.orth_replace_map = {}
+            raise ValueError("LmDataset: need orth_symbols_file or orth_symbols_map_file or phone_info")
 
-        if word_end_symbol and not word_based:  # Character-based modeling and word_end_symbol is specified.
-            self.orth_replace_map[" "] = [word_end_symbol]  # Replace all spaces by word_end_symbol.
+        self.parse_orth_opts = None
+        if self.orth_symbols is not None:
+            self.parse_orth_opts = parse_orth_opts.copy() if parse_orth_opts else {}
+            self.parse_orth_opts.setdefault("word_based", self.word_based)
+            if self.word_end_symbol and not self.word_based:
+                # Character-based modeling and word_end_symbol is specified.
+                # In this case, sentences end with self.word_end_symbol followed by the self.seq_end_symbol.
+                self.parse_orth_opts.setdefault(
+                    "postfix",
+                    (
+                        [self.word_end_symbol, self.seq_end_symbol]
+                        if self.seq_end_symbol is not None
+                        else [self.word_end_symbol]
+                    ),
+                )
+            else:
+                self.parse_orth_opts.setdefault(
+                    "postfix", [self.seq_end_symbol] if self.seq_end_symbol is not None else []
+                )
+        else:
+            assert not parse_orth_opts
+
+        self.orth_replace_map = None
+        if self.orth_symbols is not None:
+            if orth_replace_map_file:
+                orth_replace_map = load_json(filename=orth_replace_map_file)
+                assert isinstance(orth_replace_map, dict)
+                self.orth_replace_map = {
+                    key: parse_orthography_into_symbols(v, word_based=self.word_based)
+                    for (key, v) in orth_replace_map.items()
+                }
+                if self.orth_replace_map:
+                    if len(self.orth_replace_map) <= 5:
+                        print("  orth_replace_map: %r" % self.orth_replace_map, file=log.v5)
+                    else:
+                        print("  orth_replace_map: %i entries" % len(self.orth_replace_map), file=log.v5)
+            else:
+                self.orth_replace_map = {}
+
+            if word_end_symbol and not word_based:  # Character-based modeling and word_end_symbol is specified.
+                self.orth_replace_map[" "] = [word_end_symbol]  # Replace all spaces by word_end_symbol.
+        else:
+            assert not orth_replace_map_file
 
         num_labels = len(self.labels["data"])
         if num_labels <= 2**7:
@@ -345,23 +376,10 @@ class LmDataset(CachedDataset2):
             if orth == "</s>":
                 continue  # special sentence end symbol. empty seq, ignore.
 
-            if self.seq_gen:
-                try:
-                    phones = self.seq_gen.generate_seq(orth)
-                except KeyError as e:
-                    if self.log_skipped_seqs:
-                        print(
-                            "LmDataset: skipping sequence %r because of missing lexicon entry: %s" % (orth, e),
-                            file=log.v4,
-                        )
-                        self._reduce_log_skipped_seqs()
-                    if self.error_on_invalid_seq:
-                        raise Exception("LmDataset: invalid seq %r, missing lexicon entry %r" % (orth, e))
-                    self.num_skipped += 1
-                    continue  # try another seq
-                data = self.seq_gen.seq_to_class_idxs(phones, dtype=self.dtype)
+            if self.orth_vocab is not None:
+                data = numpy.array(self.orth_vocab.get_seq(orth), dtype=self.dtype)
 
-            elif self.orth_symbols:
+            elif self.orth_symbols is not None:
                 orth_syms = parse_orthography(orth, **self.parse_orth_opts)
                 while True:
                     orth_syms = sum([self.orth_replace_map.get(s, [s]) for s in orth_syms], [])
@@ -415,8 +433,24 @@ class LmDataset(CachedDataset2):
                     self.num_skipped += 1
                     continue  # try another seq
 
+            elif self.seq_gen is not None:
+                try:
+                    phones = self.seq_gen.generate_seq(orth)
+                except KeyError as e:
+                    if self.log_skipped_seqs:
+                        print(
+                            "LmDataset: skipping sequence %r because of missing lexicon entry: %s" % (orth, e),
+                            file=log.v4,
+                        )
+                        self._reduce_log_skipped_seqs()
+                    if self.error_on_invalid_seq:
+                        raise Exception("LmDataset: invalid seq %r, missing lexicon entry %r" % (orth, e))
+                    self.num_skipped += 1
+                    continue  # try another seq
+                data = self.seq_gen.seq_to_class_idxs(phones, dtype=self.dtype)
+
             else:
-                assert False
+                assert False, f"{self}, {self.orth_vocab}, {self.orth_symbols}, {self.seq_gen}"
 
             targets = {}
             for i in range(self.add_random_phone_seqs):
