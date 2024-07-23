@@ -185,9 +185,9 @@ class Engine(EngineBase):
             for dataset_name, dataset_opts in config.typed_value("eval_datasets", {}).items():
                 self.eval_datasets[dataset_name] = init_dataset(dataset_opts, default_kwargs={"name": dataset_name})
 
-        self._train_dataloader = self._create_data_loader(train_data) if train_data else None
+        self._train_dataloader = self._create_data_loader(train_data, train=True) if train_data else None
         for dataset_name, dataset in self.eval_datasets.items():
-            self._eval_dataloaders[dataset_name] = self._create_data_loader(dataset)
+            self._eval_dataloaders[dataset_name] = self._create_data_loader(dataset, train=False)
 
         self._start_epoch = self.get_train_start_epoch(self.config)
         self._final_epoch = self.config_get_final_epoch(self.config)
@@ -588,7 +588,7 @@ class Engine(EngineBase):
             assert isinstance(ls[0], self.learning_rate_control.EpochData)
             self.learning_rate_control.epoch_data[self.epoch] = ls[0]
 
-    def _create_data_loader(self, dataset: Dataset) -> DataLoader:
+    def _create_data_loader(self, dataset: Dataset, *, train: bool = False) -> DataLoader:
         """
         :param dataset: RETURNN dataset
         :return: PyTorch data loader created from given RETURNN dataset
@@ -611,9 +611,12 @@ class Engine(EngineBase):
                 wrapped_dataset, chunking, min_chunk_size=min_chunk_size
             )
 
-        assert self.config.typed_value("batch_size") is not None, "batch_size not defined in config"
+        assert self.config.typed_value("batch_size") is not None or (
+            self.config.typed_value("batch_size_train") is not None
+            and self.config.typed_value("batch_size_dev") is not None
+        ), "batch_size not defined in config"
         batch_size = self.config.typed_value("batch_size", 1)
-        batch_size = self.config.typed_value(f"batch_size_{dataset.name}", batch_size)
+        batch_size = self.config.typed_value(f"batch_size_{'train' if train else 'dev'}", batch_size)
         max_seqs = self.config.int("max_seqs", -1)
         batches_dataset = data_pipeline.BatchingIterDataPipe(wrapped_dataset, batch_size=batch_size, max_seqs=max_seqs)
 
