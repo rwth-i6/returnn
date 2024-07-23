@@ -7,20 +7,22 @@ and some related helpers.
 
 from __future__ import annotations
 
+import typing
 import os
 import sys
-from .basic import DatasetSeq
-from .cached2 import CachedDataset2
-import gzip
-import xml.etree.ElementTree as ElementTree
-from returnn.util.basic import parse_orthography, parse_orthography_into_symbols, load_json, BackendEngine, unicode
-from returnn.util.literal_py_to_pickle import literal_eval
-from returnn.log import log
-import numpy
 import time
 import re
-import typing
+import gzip
+import xml.etree.ElementTree as ElementTree
+import numpy
 from random import Random
+
+from returnn.util.basic import parse_orthography, parse_orthography_into_symbols, load_json, unicode
+from returnn.util.literal_py_to_pickle import literal_eval
+from returnn.log import log
+
+from .basic import DatasetSeq
+from .cached2 import CachedDataset2
 
 
 class LmDataset(CachedDataset2):
