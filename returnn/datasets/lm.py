@@ -87,7 +87,7 @@ class LmDataset(CachedDataset2):
         :param str|None seq_end_symbol: what to add at the end, if given.
           will be set as postfix=[seq_end_symbol] or postfix=[] for parse_orth_opts.
         :param str|None unknown_symbol: token to represent unknown words.
-        :param dict[str]|None parse_orth_opts: kwargs for parse_orthography().
+        :param dict[str,typing.Any]|None parse_orth_opts: kwargs for parse_orthography().
         :param dict|None phone_info: A dict containing parameters including a lexicon file for
                                      :class:`LmDataset.PhoneSeqGenerator`.
         :param int add_random_phone_seqs: will add random seqs with the same len as the real seq as additional data.
@@ -132,6 +132,9 @@ class LmDataset(CachedDataset2):
         else:
             self.parse_orth_opts.setdefault("postfix", [self.seq_end_symbol] if self.seq_end_symbol is not None else [])
 
+        self.seq_gen = None
+        self.orth_symbols = None
+        self.orth_symbols_map = None
         if orth_symbols_file:
             assert not phone_info
             assert not orth_symbols_map_file
@@ -139,7 +142,6 @@ class LmDataset(CachedDataset2):
             self.orth_symbols_map = {sym: i for (i, sym) in enumerate(orth_symbols)}
             self.orth_symbols = orth_symbols
             self.labels["data"] = orth_symbols
-            self.seq_gen = None
         if orth_symbols_map_file and orth_symbols_map_file.endswith(".pkl"):
             import pickle
 
@@ -148,7 +150,6 @@ class LmDataset(CachedDataset2):
             self.orth_symbols = self.orth_symbols_map.keys()
             reverse_map = {i: sym for (sym, i) in sorted(self.orth_symbols_map.items())}
             self.labels["data"] = [sym for (i, sym) in sorted(reverse_map.items())]
-            self.seq_gen = None
         elif orth_symbols_map_file:
             assert not phone_info
             with open(orth_symbols_map_file, "r") as f:
@@ -169,12 +170,10 @@ class LmDataset(CachedDataset2):
             self.orth_symbols = [sym for (i, sym) in orth_symbols_imap_list]
             reverse_map = {i: sym for (i, sym) in orth_symbols_imap_list}
             self.labels["data"] = [sym for (i, sym) in sorted(reverse_map.items())]
-            self.seq_gen = None
         else:
             assert not orth_symbols_file
             assert isinstance(phone_info, dict)
             self.seq_gen = PhoneSeqGenerator(**phone_info)
-            self.orth_symbols = None
             self.labels["data"] = self.seq_gen.get_class_labels()
         if orth_replace_map_file:
             orth_replace_map = load_json(filename=orth_replace_map_file)
