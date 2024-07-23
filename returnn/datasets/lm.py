@@ -17,7 +17,7 @@ import xml.etree.ElementTree as ElementTree
 import numpy
 from random import Random
 
-from returnn.util.basic import parse_orthography, parse_orthography_into_symbols, load_json, unicode
+from returnn.util.basic import parse_orthography, parse_orthography_into_symbols, load_json, unicode, cf
 from returnn.util.literal_py_to_pickle import literal_eval
 from returnn.log import log
 
@@ -37,6 +37,7 @@ class LmDataset(CachedDataset2):
     def __init__(
         self,
         corpus_file,
+        use_cache_manager=False,
         skip_empty_lines=True,
         orth_vocab=None,
         orth_symbols_file=None,
@@ -77,6 +78,7 @@ class LmDataset(CachedDataset2):
         mapping from symbol to integer index (in case ``phone_info`` is not set).
 
         :param str|()->str|list[str]|()->list[str] corpus_file: Bliss XML or line-based txt. optionally can be gzip.
+        :param bool use_cache_manager: uses :func:`returnn.util.basic.cf`
         :param bool skip_empty_lines: for line-based txt
         :param dict[str,typing.Any]|Vocabulary orth_vocab:
         :param str|()->str|None orth_symbols_file: a text file containing a list of orthography symbols
@@ -106,6 +108,7 @@ class LmDataset(CachedDataset2):
         super(LmDataset, self).__init__(**kwargs)
 
         self._corpus_file = corpus_file
+        self._use_cache_manager = use_cache_manager
         self._skip_empty_lines = skip_empty_lines
         self._orth_symbols_file = orth_symbols_file
         self._orth_symbols_map_file = orth_symbols_map_file
@@ -266,8 +269,12 @@ class LmDataset(CachedDataset2):
         if isinstance(corpus_file, list):  # If a list of files is provided, concatenate all.
             self.orths = []
             for file_name in corpus_file:
+                if use_cache_manager:
+                    file_name = cf(file_name)
                 self.orths += read_corpus(file_name, skip_empty_lines=skip_empty_lines)
         else:
+            if use_cache_manager:
+                corpus_file = cf(corpus_file)
             self.orths = read_corpus(corpus_file, skip_empty_lines=skip_empty_lines)
         # It's only estimated because we might filter some out or so.
         self._estimated_num_seqs = len(self.orths) // self.partition_epoch
