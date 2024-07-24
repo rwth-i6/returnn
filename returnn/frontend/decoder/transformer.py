@@ -30,10 +30,10 @@ class TransformerDecoder(rf.Module):
         self,
         encoder_dim: Optional[Dim],
         vocab_dim: Dim,
-        model_dim: Dim = Dim(512, name="transformer-dec-default-model-dim"),
+        model_dim: Union[Dim, int] = Dim(512, name="transformer-dec-default-model-dim"),
         *,
         num_layers: int,
-        ff_dim: Dim = NotSpecified,
+        ff_dim: Union[Dim, int] = NotSpecified,
         ff_activation: Callable[[Tensor], Tensor] = rf.relu,
         dropout: float = 0.1,
         num_heads: int = 8,
@@ -67,6 +67,13 @@ class TransformerDecoder(rf.Module):
         :param sequential:
         """
         super().__init__()
+
+        if not isinstance(vocab_dim, Dim):
+            raise TypeError(f"TransformerDecoder: unexpected vocab_dim {vocab_dim!r} type {type(vocab_dim)}")
+        if isinstance(model_dim, int):
+            model_dim = Dim(model_dim, name="transformer-dec-model-dim")
+        if not isinstance(model_dim, Dim):
+            raise TypeError(f"TransformerDecoder: unexpected model_dim {model_dim!r} type {type(model_dim)}")
 
         self.encoder_dim = encoder_dim
         self.vocab_dim = vocab_dim
@@ -210,7 +217,7 @@ class TransformerDecoderLayer(rf.Module):
         encoder_dim: Optional[Dim],
         out_dim: Dim = Dim(512, name="transformer-dec-default-out-dim"),
         *,
-        ff_dim: Dim = NotSpecified,
+        ff_dim: Union[Dim, int] = NotSpecified,
         ff_activation: Callable[[Tensor], Tensor] = rf.relu,
         dropout: float = 0.1,
         num_heads: int = 8,
@@ -236,8 +243,6 @@ class TransformerDecoderLayer(rf.Module):
         self.dropout_broadcast = rf.dropout_broadcast_default()
         self.out_dim = out_dim
 
-        if ff_dim is None:
-            ff_dim = 4 * out_dim
         self.ff = FeedForward(out_dim=out_dim, ff_dim=ff_dim, dropout=dropout, activation=ff_activation)
         self.ff_layer_norm = rf.LayerNorm(out_dim)
 
@@ -320,7 +325,7 @@ class FeedForward(rf.Module):
         self,
         out_dim: Dim,
         *,
-        ff_dim: Optional[Dim] = NotSpecified,
+        ff_dim: Optional[Union[Dim, int]] = NotSpecified,
         dropout: float,
         activation: Callable[[Tensor], Tensor],
     ):
@@ -332,8 +337,12 @@ class FeedForward(rf.Module):
         """
         super().__init__()
 
-        if ff_dim is NotSpecified:
+        if isinstance(ff_dim, int):
+            ff_dim = Dim(ff_dim, name="transformer-ff-dim")
+        if ff_dim is NotSpecified or ff_dim is None:
             ff_dim = out_dim * 4
+        if not isinstance(ff_dim, Dim):
+            raise TypeError(f"Transformer FeedForward: unexpected ff_dim {ff_dim!r} type {type(ff_dim)}")
 
         self.out_dim = out_dim
         self.dropout = dropout
