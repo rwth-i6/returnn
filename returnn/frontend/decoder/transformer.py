@@ -1,5 +1,5 @@
 """
-(Label-sync) Transformer decoder, including cross attention to encoder
+(Label-sync) Transformer decoder, optionally including cross attention to encoder
 
 References:
 
@@ -81,7 +81,7 @@ class TransformerDecoder(rf.Module):
         if embed_dim:
             self.input_embedding_proj = rf.Linear(embed_dim, model_dim, with_bias=False)
 
-        # This could also be configurable...
+        # TODO This should be configurable...
         self.pos_enc = functools.partial(
             rf.sinusoidal_positional_encoding, feat_dim=embed_dim or model_dim, dtype=self.input_embedding.weight.dtype
         )
