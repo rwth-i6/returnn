@@ -25,6 +25,7 @@ from returnn.util.basic import (
     unicode,
     cf,
     human_bytes_size,
+    hms,
 )
 from returnn.util.literal_py_to_pickle import literal_eval
 from returnn.log import log
@@ -297,6 +298,7 @@ class LmDataset(CachedDataset2):
         offset = 0
         self._orth_tmp_file = tmp_file
         self._orths_offsets_and_lens = orths
+        start_time = time.time()
 
         def _add_line(line: bytes):
             nonlocal offset
@@ -318,7 +320,12 @@ class LmDataset(CachedDataset2):
 
         tmp_file.flush()
         self._orth_mmap = mmap.mmap(tmp_file.fileno(), 0, flags=mmap.MAP_PRIVATE)
-        print(f"  done, loaded {len(self._orths_offsets_and_lens)} sequences, {human_bytes_size(offset)}", file=log.v4)
+        print(
+            f"  done, loaded {len(self._orths_offsets_and_lens)} sequences,"
+            f" {human_bytes_size(offset)},"
+            f" in {hms(time.time() - start_time)}",
+            file=log.v4,
+        )
 
         # It's only estimated because we might filter some out or so.
         self._estimated_num_seqs = len(self._orths_offsets_and_lens) // self.partition_epoch
