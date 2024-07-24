@@ -71,7 +71,7 @@ def init(config_filename, cmd_line_opts, dataset_config_str):
     else:
         assert dataset_config_str
         dataset = init_dataset(dataset_config_str)
-    print("Source dataset:", dataset.len_info(), file=log.v3)
+    print("Source dataset:", dataset.len_info(fast=True), file=log.v3)
     return dataset
 
 

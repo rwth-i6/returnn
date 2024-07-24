@@ -1223,7 +1223,7 @@ class SprintCacheDataset(CachedDataset2):
         self._num_seqs = len(self.seq_list_ordered)
         return True
 
-    def get_total_num_seqs(self) -> int:
+    def get_total_num_seqs(self, *, fast: bool = False) -> int:
         """total num seqs"""
         return len(self.seq_list_original)
 

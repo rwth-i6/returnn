@@ -393,10 +393,12 @@ class OggZipDataset(CachedDataset2):
         self._lazy_init()
         return [self._get_tag_from_info_dict(seq) for seq in self._data]
 
-    def get_total_num_seqs(self):
+    def get_total_num_seqs(self, *, fast: bool = False) -> int:
         """
         :rtype: int
         """
+        if fast and self._data is None:
+            raise Exception(f"{self} not initialized")
         self._lazy_init()
         return len(self._data)
 

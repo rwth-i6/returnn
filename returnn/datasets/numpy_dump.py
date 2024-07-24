@@ -123,12 +123,6 @@ class NumpyDumpDataset(Dataset):
         """
         return self._num_seqs
 
-    def len_info(self):
-        """
-        :rtype: str
-        """
-        return "%s, %i seqs" % (self.__class__.__name__, self.num_seqs)
-
     # ------------ Seq cache management -----------
 
     def _cleanup_old_seq_cache(self, seq_end):

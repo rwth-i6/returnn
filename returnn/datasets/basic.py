@@ -812,11 +812,12 @@ class Dataset(object):
         """
         raise OptionalNotImplementedError(f"{self} get_all_tags not implemented")
 
-    def get_total_num_seqs(self) -> int:
+    def get_total_num_seqs(self, *, fast: bool = False) -> int:
         """
+        :param fast: if True, might raise an exception if not possible to get fast.
         :return: total number of seqs, without partition epoch.
-          Should be the same as len(self.get_all_tags()).
-          Note that this is not possible with all datasets.
+            Should be the same as len(self.get_all_tags()).
+            Note that this is not possible with all datasets.
         """
         raise OptionalNotImplementedError(f"{self} get_total_num_seqs not implemented")
 
@@ -994,16 +995,14 @@ class Dataset(object):
             return self.is_less_than_num_seqs(0)
         raise NotImplementedError(f"{self} have_seqs() is not implemented (and neither get_total_num_seqs())")
 
-    def len_info(self):
+    def len_info(self, *, fast: bool = False) -> str:
         """
-        :rtype: str
-        :returns a string to present the user as information about our len.
-        Depending on our implementation, we can give some more or some less information.
+        :return: string to present the user as information about our len.
         """
         return ", ".join(
             [
                 self.__class__.__name__,
-                "sequences: %s" % try_run(self.get_total_num_seqs, default="unknown"),
+                "sequences: %s" % try_run(self.get_total_num_seqs, kwargs=dict(fast=fast), default="unknown"),
                 "frames: %s" % try_run(self.get_num_timesteps, default="unknown"),
             ]
         )

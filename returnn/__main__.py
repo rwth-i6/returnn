@@ -270,13 +270,13 @@ def print_task_properties():
         print("Train data:", file=log.v2)
         print("  input:", train_data.num_inputs, "x", train_data.window, file=log.v2)
         print("  output:", train_data.num_outputs, file=log.v2)
-        print(" ", train_data.len_info() or "no info", file=log.v2)
+        print(" ", train_data.len_info(fast=True) or "no info", file=log.v2)
     if dev_data:
         print("Dev data:", file=log.v2)
-        print(" ", dev_data.len_info() or "no info", file=log.v2)
+        print(" ", dev_data.len_info(fast=True) or "no info", file=log.v2)
     if eval_data:
         print("Eval data:", file=log.v2)
-        print(" ", eval_data.len_info() or "no info", file=log.v2)
+        print(" ", eval_data.len_info(fast=True) or "no info", file=log.v2)
 
 
 def init_engine():

@@ -199,7 +199,7 @@ class GeneratingDataset(Dataset):
         """
         return self._num_seqs
 
-    def get_total_num_seqs(self) -> int:
+    def get_total_num_seqs(self, *, fast: bool = False) -> int:
         """
         :return: total num seqs
         """
@@ -1189,7 +1189,7 @@ class StaticDataset(CachedDataset2):
         """
         return self.data[0][key].dtype
 
-    def get_total_num_seqs(self):
+    def get_total_num_seqs(self, *, fast: bool = False) -> int:
         """
         :rtype: int
         """
@@ -2335,7 +2335,7 @@ class LibriSpeechCorpus(CachedDataset2):
         """
         return [self._get_tag(i) for i in range(len(self._reference_seq_order))]
 
-    def get_total_num_seqs(self):
+    def get_total_num_seqs(self, *, fast: bool = False) -> int:
         """
         :rtype: int
         """

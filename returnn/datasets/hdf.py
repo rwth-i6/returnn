@@ -428,7 +428,7 @@ class HDFDataset(CachedDataset):
             tags += h5_file["seqTags"][...].tolist()
         return list(map(self._decode, tags))
 
-    def get_total_num_seqs(self):
+    def get_total_num_seqs(self, *, fast: bool = False) -> int:
         """
         :rtype: int
         """
@@ -450,12 +450,6 @@ class HDFDataset(CachedDataset):
         :rtype: str
         """
         return self.data_dtype[key]
-
-    def len_info(self):
-        """
-        :rtype: str
-        """
-        return ", ".join(["HDF dataset", "sequences: %i" % self.num_seqs, "frames: %i" % self.get_num_timesteps()])
 
     def _get_file_index(self, real_seq_idx):
         # bisect() returns the position for which all elements to the left of the returned index are <= real_seq_idx,

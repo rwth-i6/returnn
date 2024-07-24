@@ -408,8 +408,10 @@ class LmDataset(CachedDataset2):
         """supports sorting"""
         return True
 
-    def get_total_num_seqs(self) -> int:
+    def get_total_num_seqs(self, *, fast: bool = False) -> int:
         """total num seqs"""
+        if fast and self._orths_offsets_and_lens is None:
+            raise Exception(f"{self} not initialized")
         self._lazy_init()
         return len(self._orths_offsets_and_lens)
 
