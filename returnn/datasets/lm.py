@@ -299,14 +299,24 @@ class LmDataset(CachedDataset2):
         self._orth_tmp_file = tmp_file
         self._orths_offsets_and_lens = orths
         start_time = time.time()
+        last_print_time = start_time
 
         def _add_line(line: bytes):
-            nonlocal offset
+            nonlocal offset, last_print_time
 
             orths.append((offset, len(line)))
             tmp_file.write(line)
             tmp_file.write(b"\n")
             offset += len(line) + 1
+
+            if time.time() - last_print_time > 10:
+                print(
+                    f"  ..., loaded {len(self._orths_offsets_and_lens)} sequences,"
+                    f" {human_bytes_size(offset)},"
+                    f" after {hms(time.time() - start_time)}",
+                    file=log.v4,
+                )
+                last_print_time = time.time()
 
         if isinstance(corpus_file, list):  # If a list of files is provided, concatenate all.
             for file_name in corpus_file:
