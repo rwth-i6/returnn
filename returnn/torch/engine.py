@@ -18,6 +18,7 @@ from torch.utils.data import DataLoader
 from torch import autocast
 from torch.cuda import amp
 from random import random
+import math
 
 import returnn
 from returnn.config import Config
@@ -118,6 +119,7 @@ class Engine(EngineBase):
 
         self._log_memory_usage = config.bool("torch_log_memory_usage", False)
         self._log_batch_size = config.bool("log_batch_size", False) and log.verbose[5]
+        self._calculate_exp_loss = config.bool("calculate_exp_loss", False)
         self._reset_dev_memory_caches = config.bool("reset_dev_memory_caches", False)
         self._forward_auto_split_batch_on_oom = config.bool("forward_auto_split_batch_on_oom", False)
 
@@ -433,10 +435,11 @@ class Engine(EngineBase):
 
             accumulated_losses_dict += losses_dict
             accumulated_inv_norm_factors_dict += inv_norm_factors_dict
+            eval_info = self._maybe_extend_losses_info(losses_dict / inv_norm_factors_dict)
             _print_process(
                 f"ep {self.epoch} train",
                 step=step_idx,
-                eval_info=dict(losses_dict / inv_norm_factors_dict),
+                eval_info=dict(eval_info),
                 step_duration=step_duration,
                 batch_size_info=_get_batch_size_info(extern_data) if self._log_batch_size else None,
                 log_memory_usage_device=self._device if self._log_memory_usage else None,
@@ -463,6 +466,7 @@ class Engine(EngineBase):
         )
 
         accumulated_losses_dict = accumulated_losses_dict / accumulated_inv_norm_factors_dict
+        accumulated_losses_dict = self._maybe_extend_losses_info(accumulated_losses_dict)
         self.learning_rate_control.set_epoch_error(
             self.epoch, {f"train_loss_{k}": v for k, v in accumulated_losses_dict.items()}
         )
@@ -530,8 +534,8 @@ class Engine(EngineBase):
                     train_ctx = rf.get_run_ctx()
 
                     if score_keys is None:
-                        score_keys = [name for name, loss in train_ctx.losses.items() if not loss.as_error]
-                        error_keys = [name for name, loss in train_ctx.losses.items() if loss.as_error]
+                        score_keys = set(name for name, loss in train_ctx.losses.items() if not loss.as_error)
+                        error_keys = set(name for name, loss in train_ctx.losses.items() if loss.as_error)
 
                     losses_dict = NumbersDict(
                         {
@@ -549,16 +553,18 @@ class Engine(EngineBase):
 
                     accumulated_losses_dict += losses_dict
                     accumulated_inv_norm_factors_dict += inv_norm_factors_dict
+                    eval_info = self._maybe_extend_losses_info(losses_dict / inv_norm_factors_dict)
                     _print_process(
                         f"ep {self.epoch} {dataset_name} eval",
                         step=step_idx,
-                        eval_info=dict(losses_dict / inv_norm_factors_dict),
+                        eval_info=dict(eval_info),
                         log_memory_usage_device=self._device if self._log_memory_usage else None,
                     )
                     step_idx += 1
 
             assert step_idx > 0, f"No data in dataset {dataset_name!r}."
             accumulated_losses_dict = accumulated_losses_dict / accumulated_inv_norm_factors_dict
+            accumulated_losses_dict = self._maybe_extend_losses_info(accumulated_losses_dict)
 
             self.learning_rate_control.set_epoch_error(
                 self.epoch, {f"{dataset_name}_loss_{k}": v for k, v in accumulated_losses_dict.items()}
@@ -587,6 +593,23 @@ class Engine(EngineBase):
             torch.distributed.broadcast_object_list(ls, src=0, device=torch.device("cpu"))
             assert isinstance(ls[0], self.learning_rate_control.EpochData)
             self.learning_rate_control.epoch_data[self.epoch] = ls[0]
+
+    def _maybe_extend_losses_info(self, losses: NumbersDict) -> NumbersDict:
+        """
+        :param losses:
+        :return: maybe extended losses
+        """
+        if self._calculate_exp_loss and losses.has_values():
+            # Assume the current run ctx still has info about the losses from the last step.
+            assert rf.get_run_ctx().losses
+            score_keys = set(k for k, v in rf.get_run_ctx().losses.items() if not v.as_error)
+            losses_ = {}
+            for key, value in losses.items():
+                losses_[key] = value
+                if key in score_keys:
+                    losses_[f"{key}:exp"] = math.exp(value)
+            losses = NumbersDict(losses_)
+        return losses
 
     def _create_data_loader(self, dataset: Dataset, *, train: bool = False) -> DataLoader:
         """
