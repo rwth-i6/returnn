@@ -7,7 +7,7 @@ and some related helpers.
 
 from __future__ import annotations
 
-from typing import Optional, Union, Callable, List, Tuple
+from typing import Optional, Union, Callable, List, Tuple, BinaryIO, cast
 import typing
 import os
 import sys
@@ -271,8 +271,8 @@ class LmDataset(CachedDataset2):
             self.num_outputs["delayed"] = self.num_outputs["data"]
             self.labels["delayed"] = self.labels["data"]
 
-        self._orth_tmp_file = None
-        self._orth_mmap = None
+        self._orth_files: Optional[List[BinaryIO]] = None
+        self._orth_mmaps = None
         self._orths_offsets_and_lens: Optional[List[Tuple[int, int]]] = None  # will be loaded in _lazy_init
 
         self.next_orth_idx = 0
@@ -293,46 +293,94 @@ class LmDataset(CachedDataset2):
         import tempfile
         import mmap
 
-        tmp_file = tempfile.NamedTemporaryFile(prefix="returnn_lm_dataset_", suffix="_tmp.txt")
+        self._orth_mmaps = []
+        self._orth_files = []
+        tmp_file_orth_files_index: Optional[int] = None
+        tmp_file: Optional[BinaryIO] = None
+        tmp_file_offset = 0
+        total_bytes_read = 0
         orths = []
-        offset = 0
-        self._orth_tmp_file = tmp_file
         self._orths_offsets_and_lens = orths
         start_time = time.time()
         last_print_time = start_time
 
-        def _add_line(line: bytes):
-            nonlocal offset, last_print_time
+        def _init_tmp_file():
+            nonlocal tmp_file, tmp_file_orth_files_index
 
-            orths.append((offset, len(line)))
+            tmp_file = tempfile.NamedTemporaryFile(prefix="returnn_lm_dataset_", suffix="_tmp.txt")
+            tmp_file = cast(BinaryIO, tmp_file)
+            tmp_file_orth_files_index = len(self._orth_files)
+            self._orth_files.append(tmp_file)
+            self._orth_mmaps.append(None)  # will be set later
+
+        def _tmp_file_add_line(line: bytes):
+            nonlocal tmp_file_offset, total_bytes_read
+
+            orths.append((tmp_file_orth_files_index, tmp_file_offset, len(line)))
             tmp_file.write(line)
             tmp_file.write(b"\n")
-            offset += len(line) + 1
+            tmp_file_offset += len(line) + 1
+            total_bytes_read += len(line) + 1
+
+            _maybe_report_status()
+
+        def _maybe_report_status():
+            nonlocal last_print_time
 
             if time.time() - last_print_time > 10:
                 print(
-                    f"  ..., loaded {len(self._orths_offsets_and_lens)} sequences,"
-                    f" {human_bytes_size(offset)},"
+                    f"  ... loaded {len(self._orths_offsets_and_lens)} sequences,"
+                    f" {human_bytes_size(total_bytes_read)},"
                     f" after {hms(time.time() - start_time)}",
                     file=log.v4,
                 )
                 last_print_time = time.time()
 
-        if isinstance(corpus_file, list):  # If a list of files is provided, concatenate all.
-            for file_name in corpus_file:
-                if self._use_cache_manager:
-                    file_name = cf(file_name)
-                iter_corpus(file_name, skip_empty_lines=self._skip_empty_lines, decode=False, callback=_add_line)
-        else:
+        # If a list of files is provided, concatenate all.
+        if not isinstance(corpus_file, list):
+            corpus_file = [corpus_file]
+        for file_name in corpus_file:
             if self._use_cache_manager:
-                corpus_file = cf(corpus_file)
-            iter_corpus(corpus_file, skip_empty_lines=self._skip_empty_lines, decode=False, callback=_add_line)
+                file_name = cf(file_name)
+            if _is_bliss(file_name):
+                _init_tmp_file()
+                _iter_bliss(filename=file_name, callback=_tmp_file_add_line, decode=False)
+            elif file_name.endswith(".gz"):
+                _init_tmp_file()
+                _iter_txt(
+                    filename=file_name,
+                    callback=_tmp_file_add_line,
+                    skip_empty_lines=self._skip_empty_lines,
+                    decode=False,
+                )
+            else:  # Raw txt file
+                # Directly mmap the file.
+                # We just need to scan once through it to find line offsets.
+                file = open(file_name, "rb")
+                file_index = len(self._orth_files)
+                file_mmap = mmap.mmap(file.fileno(), 0, flags=mmap.MAP_PRIVATE)
+                self._orth_files.append(file)
+                self._orth_mmaps.append(file_mmap)
 
-        tmp_file.flush()
-        self._orth_mmap = mmap.mmap(tmp_file.fileno(), 0, flags=mmap.MAP_PRIVATE)
+                pos = 0
+                while True:
+                    next_new_line = file_mmap.find(b"\n", pos)
+                    if next_new_line == -1:
+                        break
+                    line_len = next_new_line - pos
+                    if line_len or not self._skip_empty_lines:
+                        orths.append((file_index, pos, line_len))
+                    total_bytes_read += line_len + 1
+                    pos = next_new_line + 1
+                    _maybe_report_status()
+
+        if tmp_file:
+            tmp_file.flush()
+            self._orth_mmaps[tmp_file_orth_files_index] = mmap.mmap(tmp_file.fileno(), 0, flags=mmap.MAP_PRIVATE)
+
         print(
             f"  done, loaded {len(self._orths_offsets_and_lens)} sequences,"
-            f" {human_bytes_size(offset)},"
+            f" {human_bytes_size(total_bytes_read)},"
             f" in {hms(time.time() - start_time)}",
             file=log.v4,
         )
@@ -449,8 +497,8 @@ class LmDataset(CachedDataset2):
             true_idx = self.seq_order[self.next_orth_idx]
             self._lazy_init()
             # get sequence for the next index given by seq_order
-            offset, len_ = self._orths_offsets_and_lens[true_idx]
-            orth = self._orth_mmap[offset : offset + len_].decode("utf8")
+            idx, offset, len_ = self._orths_offsets_and_lens[true_idx]
+            orth = self._orth_mmaps[idx][offset : offset + len_].decode("utf8").strip()
             seq_tag = self._tag_prefix + str(true_idx)
             self.next_orth_idx += 1
             if orth == "</s>":
