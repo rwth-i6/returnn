@@ -5,11 +5,14 @@ We make use of torch.utils.data.IterDataPipe.
 """
 
 from __future__ import annotations
+
 from typing import Callable, Optional, Iterable, Dict
+import sys
 import numpy
 import torch.utils.data
 from returnn.datasets.basic import Dataset as ReturnnDataset
 from returnn.datasets.util.strings import str_to_numpy_array
+from returnn.util.better_exchook import better_exchook
 
 ResetCallbackT = Callable[[], None]
 
@@ -72,15 +75,22 @@ class ReturnnDatasetIterDataPipe(torch.utils.data.IterDataPipe):
         """
         :return: generator providing data samples in the form of a dict data_key -> data
         """
-        data_keys = self._dataset.get_data_keys()
+        try:
+            data_keys = self._dataset.get_data_keys()
 
-        seq_index = 0
-        while self._dataset.is_less_than_num_seqs(seq_index):
-            self._dataset.load_seqs(seq_index, seq_index + 1)
-            data = {data_key: self._dataset.get_data(seq_index, data_key) for data_key in data_keys}
-            data["seq_tag"] = str_to_numpy_array(self._dataset.get_tag(seq_index))
-            yield data
-            seq_index += 1
+            seq_index = 0
+            while self._dataset.is_less_than_num_seqs(seq_index):
+                self._dataset.load_seqs(seq_index, seq_index + 1)
+                data = {data_key: self._dataset.get_data(seq_index, data_key) for data_key in data_keys}
+                data["seq_tag"] = str_to_numpy_array(self._dataset.get_tag(seq_index))
+                yield data
+                seq_index += 1
+
+        except Exception:
+            # Report here as well, because the parent caller (PyTorch DataLoader) might first catch it
+            # and only report a stripped version.
+            better_exchook(*sys.exc_info(), autodebugshell=False)
+            raise
 
     def __getitem__(self, index):
         raise Exception(f"{self.__class__.__name__}.__getitem__ not supported")
