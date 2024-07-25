@@ -34,7 +34,7 @@ class TransformerDecoder(rf.Module):
         *,
         num_layers: int,
         ff_dim: Union[Dim, int] = NotSpecified,
-        ff_activation: Callable[[Tensor], Tensor] = rf.relu,
+        ff_activation: Union[Callable[[Tensor], Tensor], Dict[str, Any], rf.Module] = rf.relu,
         dropout: float = 0.1,
         num_heads: int = 8,
         att_dropout: float = 0.1,
@@ -218,7 +218,7 @@ class TransformerDecoderLayer(rf.Module):
         out_dim: Dim = Dim(512, name="transformer-dec-default-out-dim"),
         *,
         ff_dim: Union[Dim, int] = NotSpecified,
-        ff_activation: Callable[[Tensor], Tensor] = rf.relu,
+        ff_activation: Union[Callable[[Tensor], Tensor], Dict[str, Any], rf.Module] = rf.relu,
         dropout: float = 0.1,
         num_heads: int = 8,
         self_att: Optional[Union[rf.CausalSelfAttention, rf.RelPosCausalSelfAttention, rf.Module, type, Any]] = None,
@@ -327,7 +327,7 @@ class FeedForward(rf.Module):
         *,
         ff_dim: Optional[Union[Dim, int]] = NotSpecified,
         dropout: float,
-        activation: Callable[[Tensor], Tensor],
+        activation: Union[Callable[[Tensor], Tensor], Dict[str, Any], rf.Module],
     ):
         """
         :param out_dim: output feature dimension
@@ -343,6 +343,11 @@ class FeedForward(rf.Module):
             ff_dim = out_dim * 4
         if not isinstance(ff_dim, Dim):
             raise TypeError(f"Transformer FeedForward: unexpected ff_dim {ff_dim!r} type {type(ff_dim)}")
+
+        if isinstance(activation, dict):
+            activation = rf.build_from_dict(activation)
+        elif not callable(activation):
+            raise TypeError(f"{self}: unexpected activation type {activation!r}")
 
         self.out_dim = out_dim
         self.dropout = dropout
