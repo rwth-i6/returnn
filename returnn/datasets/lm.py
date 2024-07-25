@@ -193,7 +193,7 @@ class LmDataset(CachedDataset2):
             self.seq_gen = PhoneSeqGenerator(**phone_info)
             self.labels["data"] = self.seq_gen.get_class_labels()
         else:
-            raise ValueError("LmDataset: need orth_symbols_file or orth_symbols_map_file or phone_info")
+            raise ValueError("LmDataset: need orth_vocab or orth_symbols_file or orth_symbols_map_file or phone_info")
 
         self.parse_orth_opts = None
         if self.orth_symbols is not None:
