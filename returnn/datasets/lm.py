@@ -307,6 +307,8 @@ class LmDataset(CachedDataset2):
         def _init_tmp_file():
             nonlocal tmp_file, tmp_file_orth_files_index
 
+            if tmp_file is not None:
+                return
             tmp_file = tempfile.NamedTemporaryFile(prefix="returnn_lm_dataset_", suffix="_tmp.txt")
             tmp_file = cast(BinaryIO, tmp_file)
             tmp_file_orth_files_index = len(self._orth_files)
@@ -357,8 +359,8 @@ class LmDataset(CachedDataset2):
                 # Directly mmap the file.
                 # We just need to scan once through it to find line offsets.
                 file = open(file_name, "rb")
-                file_index = len(self._orth_files)
                 file_mmap = mmap.mmap(file.fileno(), 0, flags=mmap.MAP_PRIVATE)
+                file_index = len(self._orth_files)
                 self._orth_files.append(file)
                 self._orth_mmaps.append(file_mmap)
 
@@ -374,7 +376,7 @@ class LmDataset(CachedDataset2):
                     pos = next_new_line + 1
                     _maybe_report_status()
 
-        if tmp_file:
+        if tmp_file is not None:
             tmp_file.flush()
             self._orth_mmaps[tmp_file_orth_files_index] = mmap.mmap(tmp_file.fileno(), 0, flags=mmap.MAP_PRIVATE)
 
