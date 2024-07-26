@@ -88,9 +88,11 @@ class PostprocessingDataset(CachedDataset2):
         self._data_keys: Optional[List[str]] = None
         self._data_iter: Optional[Iterator[Tuple[int, TensorDict]]] = None
         self._data_iter_seq_idx = -1
-        self._dim_cache: Dict[str, List[Dim]] = {}
+        self._default_input: Optional[str] = None
+        self._dim_cache: Dict[str, Tuple[List[Dim], Optional[Dim]]] = {}
 
         if _meta_info_cache:
+            self._default_input = _meta_info_cache["_default_input"]
             self._dim_cache = _meta_info_cache["_dim_cache"]
             self._estimated_num_seqs = _meta_info_cache["_estimated_num_seqs"]
             self.labels = _meta_info_cache["labels"]
@@ -107,6 +109,7 @@ class PostprocessingDataset(CachedDataset2):
         if self.num_outputs is None:
             return None
         return {
+            "_default_input": self._default_input,
             "_dim_cache": self._dim_cache,
             "_estimated_num_seqs": self._estimated_num_seqs,
             "labels": self.labels,
@@ -120,15 +123,15 @@ class PostprocessingDataset(CachedDataset2):
 
         dataset = init_dataset(self._dataset_def, parent_dataset=self)
         self.labels = dataset.labels
+        self._default_input = "data" if "data" in self._map_outputs else next(self._map_outputs.keys())
         self._estimated_num_seqs = dataset.estimated_num_seqs
+
         if self._map_outputs is not None:
             tdict = TensorDict(self._map_outputs)
-            # TODO: What if feature_dim == None?
-            self.num_inputs = tdict.data["data"].feature_dim.size
             self.num_outputs = {
-                k: (t.sparse_dim.size, 1) if t.sparse_dim is not None else (t.feature_dim.size, t.ndim)
-                for k, t in tdict.data.items()
+                k: (t.sparse_dim.size if t.sparse_dim else t.shape[-1] or 1, t.ndim) for k, t in tdict.data.items()
             }
+            self.num_inputs = self.num_outputs[self._default_input][0]
         else:
             self.num_inputs = dataset.num_inputs
             self.num_outputs = dataset.num_outputs
@@ -180,15 +183,22 @@ class PostprocessingDataset(CachedDataset2):
         """
 
         def _make_tensor(name: str, data: ndarray) -> Tensor:
-            dims, sparse_dim = self._dim_cache.get(name, None)
+            dims, sparse_dim = self._dim_cache.get(name, (None, None))
             if dims is None:
                 dims = [Dim(dimension=v, name=f"{name}_dim{i + 1}") for i, v in enumerate(dataset.get_data_shape(name))]
-                sparse_dim = Dim(
-                    dimension=dataset.get_data_dim(name) if dataset.is_data_sparse(name) else None,
-                    name=f"{name}_sparse",
-                )
+                if dataset.is_data_sparse(name):
+                    sparse_dim = Dim(
+                        dimension=dataset.get_data_dim(name) if dataset.is_data_sparse(name) else None,
+                        name=f"{name}_sparse",
+                    )
                 self._dim_cache[name] = (dims, sparse_dim)
-            return Tensor(name, dims=dims, sparse_dim=sparse_dim, raw_tensor=data)
+            try:
+                return Tensor(name, dims=dims, sparse_dim=sparse_dim, raw_tensor=data)
+            except Exception as exc:
+                raise Exception(
+                    f"could not convert from mapping function output to `TensorDict`,"
+                    f"do the data shapes ({data.shape}) match up with the ones declared in `map_output` (inferred to: {dims}, sparse={sparse_dim})?"
+                ) from exc
 
         return TensorDict({k: _make_tensor(k, v) for k, v in data_dict.items()})
 
