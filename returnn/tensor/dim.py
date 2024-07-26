@@ -25,7 +25,6 @@ between a spatial dim and a feature dim (the batch dim is often handled differen
 
 """
 
-
 from __future__ import annotations
 from typing import Optional, Union
 
@@ -77,6 +76,8 @@ class Dim(_DimMixin):
             self.size = dimension
             self.dyn_size_ext = None
         elif isinstance(dimension, _t.Tensor):
+            if not dimension.dtype.startswith("int") and not dimension.dtype.startswith("uint"):
+                raise TypeError(f"unexpected dtype for dimension: {dimension.dtype}")
             self.capacity = capacity
             self.size = None
             self.dyn_size_ext = dimension.copy()
