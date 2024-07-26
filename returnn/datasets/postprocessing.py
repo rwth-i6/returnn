@@ -123,7 +123,9 @@ class PostprocessingDataset(CachedDataset2):
 
         dataset = init_dataset(self._dataset_def, parent_dataset=self)
         self.labels = dataset.labels
-        self._default_input = "data" if "data" in self._map_outputs else next(self._map_outputs.keys())
+        self._default_input = (
+            "data" if not self._map_outputs or "data" in self._map_outputs else next(self._map_outputs.keys())
+        )
         self._estimated_num_seqs = dataset.estimated_num_seqs
 
         if self._map_outputs is not None:
@@ -185,7 +187,10 @@ class PostprocessingDataset(CachedDataset2):
         def _make_tensor(name: str, data: ndarray) -> Tensor:
             dims, sparse_dim = self._dim_cache.get(name, (None, None))
             if dims is None:
-                dims = [Dim(dimension=v, name=f"{name}_dim{i + 1}") for i, v in enumerate(dataset.get_data_shape(name))]
+                dims = [Dim(dimension=None, name=f"{name}_num_frames")]
+                dims.extend(
+                    Dim(dimension=v, name=f"{name}_dim{i + 1}") for i, v in enumerate(dataset.get_data_shape(name))
+                )
                 if dataset.is_data_sparse(name):
                     sparse_dim = Dim(
                         dimension=dataset.get_data_dim(name) if dataset.is_data_sparse(name) else None,
@@ -193,11 +198,12 @@ class PostprocessingDataset(CachedDataset2):
                     )
                 self._dim_cache[name] = (dims, sparse_dim)
             try:
-                return Tensor(name, dims=dims, sparse_dim=sparse_dim, raw_tensor=data)
+                return Tensor(name, dims=dims, dtype=data.dtype, sparse_dim=sparse_dim, raw_tensor=data)
             except Exception as exc:
                 raise Exception(
-                    f"could not convert from mapping function output to `TensorDict`,"
-                    f"do the data shapes ({data.shape}) match up with the ones declared in `map_output` (inferred to: {dims}, sparse={sparse_dim})?"
+                    "Could not convert from mapping function output to `TensorDict`, "
+                    f"do the data shapes {data.shape} match up with the ones declared "
+                    f"in `map_output` (inferred to: {dims}, sparse={sparse_dim})?"
                 ) from exc
 
         return TensorDict({k: _make_tensor(k, v) for k, v in data_dict.items()})
