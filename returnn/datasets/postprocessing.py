@@ -9,6 +9,7 @@ from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple
 
 from returnn.datasets.basic import DatasetSeq
 from returnn.tensor import Tensor, TensorDict
+from returnn.tensor.dim import Dim
 from .basic import Dataset, init_dataset
 from .cached2 import CachedDataset2
 from .util.strings import str_to_numpy_array
@@ -36,10 +37,13 @@ class PostprocessingDataset(CachedDataset2):
     Example usage:
         train = {
             "class": "PostprocessingDataset",
-            "dataset": { "class": ".." },
+            "dataset": {
+                "class": "HDFDataset",
+                "files": ["/path/to/data.hdf"],
+            },
             # at least one of them:
-            "map_seq": segment_mapping_function,
-            "map_seq_stream": multiple_segment_mapping_function,
+            "map_seq": map_seq,  # (data: TensorDict) -> TensorDict
+            "map_seq_stream": map_seqs,  # (iter: Iterator[TensorDict]) -> Iterator[TensorDict]
         }
     """
 
@@ -48,6 +52,7 @@ class PostprocessingDataset(CachedDataset2):
         dataset: Dict[str, Any],
         map_seq: Optional[Callable[[TensorDict], TensorDict]] = None,
         map_seq_stream: Optional[Callable[[Iterator[TensorDict]], Iterator[TensorDict]]] = None,
+        map_outputs: Optional[Dict[str, Any]] = None,
         _meta_info_cache: Optional[Dict[str, Any]] = None,
         **kwargs,
     ):
@@ -58,6 +63,10 @@ class PostprocessingDataset(CachedDataset2):
             Allows merging multiple segments into one, or generating multiple output segments from one input segment.
             When both functions are specified, the segment-level function is applied first to every segment, and the
             results are passed to the iterator-level function.
+        :param output: Type and axis specification of the outputs of the mapping functions,
+            like extern_data and model_outputs.
+            To simplify the common case when no shapes change, this value can be left unspecified. The dataset then
+            assumes the same data layout as returned by the wrapped dataset.
         :param _meta_info_cache: internal usage
         :param kwargs: see :class:`CachedDataset2`, :class:`Dataset`
         """
@@ -73,13 +82,16 @@ class PostprocessingDataset(CachedDataset2):
         self._dataset_def = dataset
         self._map_seq = map_seq or self._identity
         self._map_seq_stream = map_seq_stream or self._identity
+        self._map_outputs = map_outputs
 
         self._dataset: Optional[Dataset] = None
         self._data_keys: Optional[List[str]] = None
         self._data_iter: Optional[Iterator[Tuple[int, TensorDict]]] = None
         self._data_iter_seq_idx = -1
+        self._dim_cache: Dict[str, List[Dim]] = {}
 
         if _meta_info_cache:
+            self._dim_cache = _meta_info_cache["_dim_cache"]
             self._estimated_num_seqs = _meta_info_cache["_estimated_num_seqs"]
             self.labels = _meta_info_cache["labels"]
             self.num_inputs = _meta_info_cache["num_inputs"]
@@ -95,6 +107,7 @@ class PostprocessingDataset(CachedDataset2):
         if self.num_outputs is None:
             return None
         return {
+            "_dim_cache": self._dim_cache,
             "_estimated_num_seqs": self._estimated_num_seqs,
             "labels": self.labels,
             "num_inputs": self.num_inputs,
@@ -106,13 +119,15 @@ class PostprocessingDataset(CachedDataset2):
             return
 
         dataset = init_dataset(self._dataset_def, parent_dataset=self)
-        dataset.init_seq_order(epoch=1)
+        self.labels = dataset.labels
         self._estimated_num_seqs = dataset.estimated_num_seqs
-        tdict = next(self._build_dataset_iter(dataset))
-
-        # TODO: is this correct?
-        self.num_inputs = tdict.data["data"].feature_dim.size
-        self.num_outputs = {k: (t.feature_dim_or_sparse_dim.size, t.ndim) for k, t in tdict.data.items()}
+        if self._map_outputs is not None:
+            tdict = TensorDict(self._map_outputs)
+            self.num_inputs = tdict.data["data"].feature_dim.size
+            self.num_outputs = {k: (t.feature_dim.size, t.ndim) for k, t in tdict.data.items()}
+        else:
+            self.num_inputs = dataset.num_inputs
+            self.num_outputs = dataset.num_outputs
 
     def init_seq_order(self, epoch: Optional[int] = None, seq_list=None, seq_order=None):
         super().init_seq_order(epoch=epoch, seq_list=seq_list, seq_order=seq_order)
@@ -149,17 +164,25 @@ class PostprocessingDataset(CachedDataset2):
         """
         return self._map_seq_stream(map(self._map_seq, self._iterate_dataset(dataset)))
 
-    @staticmethod
-    def _data_dict_to_tensor_dict(data_dict: Dict[str, ndarray]) -> TensorDict:
+    def _data_dict_to_tensor_dict(self, dataset: Dataset, data_dict: Dict[str, ndarray]) -> TensorDict:
         """
         :return: the given data dict converted to a TensorDict class
         """
-        tdict = TensorDict({k: Tensor(name=k, dtype=v.dtype, raw_tensor=v) for k, v in data_dict.items()})
-        raise NotImplementedError
-        return tdict
 
-    @staticmethod
-    def _iterate_dataset(dataset: Dataset) -> Iterator[TensorDict]:
+        def make_tensor(name: str, data: ndarray) -> Tensor:
+            dims, sparse_dim = self._dim_cache.get(name, None)
+            if dims is None:
+                dims = [Dim(dimension=v, name=f"{name}_dim{i + 1}") for i, v in enumerate(dataset.get_data_shape(name))]
+                sparse_dim = Dim(
+                    dimension=dataset.get_data_dim(name) if dataset.is_data_sparse(name) else None,
+                    name=f"{name}_sparse",
+                )
+                self._dim_cache[name] = (dims, sparse_dim)
+            return Tensor(name, dims=dims, sparse_dim=sparse_dim, raw_tensor=data)
+
+        return TensorDict({k: make_tensor(k, v) for k, v in data_dict.items()})
+
+    def _iterate_dataset(self, dataset: Dataset) -> Iterator[TensorDict]:
         """
         :return: generator providing data samples in the form of a TensorDict
         """
@@ -170,7 +193,7 @@ class PostprocessingDataset(CachedDataset2):
             dataset.load_seqs(seq_index, seq_index + 1)
             data = {data_key: dataset.get_data(seq_index, data_key) for data_key in data_keys}
             data["seq_tag"] = str_to_numpy_array(dataset.get_tag(seq_index))
-            yield PostprocessingDataset._data_dict_to_tensor_dict(data)
+            yield self._data_dict_to_tensor_dict(dataset, data)
             seq_index += 1
 
     @staticmethod
