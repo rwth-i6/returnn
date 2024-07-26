@@ -10,6 +10,7 @@ from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple
 from returnn.datasets.basic import DatasetSeq
 from returnn.tensor import Tensor, TensorDict
 from returnn.tensor.dim import Dim
+from returnn.util.basic import NumbersDict
 from .basic import Dataset, init_dataset
 from .cached2 import CachedDataset2
 from .util.strings import str_to_numpy_array
@@ -179,15 +180,25 @@ class PostprocessingDataset(CachedDataset2):
         """
         return self._map_seq_stream(map(self._map_seq, self._iterate_dataset(dataset)))
 
-    def _data_dict_to_tensor_dict(self, dataset: Dataset, data_dict: Dict[str, ndarray]) -> TensorDict:
+    def _data_dict_to_tensor_dict(
+        self, dataset: Dataset, data_dict: Dict[str, ndarray], seq_len: NumbersDict
+    ) -> TensorDict:
         """
         :return: the given data dict converted to a TensorDict class
         """
 
         def _make_tensor(name: str, data: ndarray) -> Tensor:
-            dims, sparse_dim = self._dim_cache.get(name, (None, None))
+            dims = None
+            sparse_dim = None
+            dtype = data.dtype
+            if data.dtype.name.startswith("str"):
+                # TODO: is this correct?
+                dims = []
+                dtype = "string"
             if dims is None:
-                dims = [Dim(dimension=None, name=f"{name}_num_frames")]
+                dims, sparse_dim = self._dim_cache.get(name, (None, None))
+            if dims is None:
+                dims = [Dim(dimension=seq_len[name], name=f"{name}_num_frames")]
                 dims.extend(
                     Dim(dimension=v, name=f"{name}_dim{i + 1}") for i, v in enumerate(dataset.get_data_shape(name))
                 )
@@ -198,7 +209,7 @@ class PostprocessingDataset(CachedDataset2):
                     )
                 self._dim_cache[name] = (dims, sparse_dim)
             try:
-                return Tensor(name, dims=dims, dtype=data.dtype, sparse_dim=sparse_dim, raw_tensor=data)
+                return Tensor(name, dims=dims, dtype=dtype, sparse_dim=sparse_dim, raw_tensor=data)
             except Exception as exc:
                 raise Exception(
                     "Could not convert from mapping function output to `TensorDict`, "
@@ -218,8 +229,9 @@ class PostprocessingDataset(CachedDataset2):
         while dataset.is_less_than_num_seqs(seq_index):
             dataset.load_seqs(seq_index, seq_index + 1)
             data = {data_key: dataset.get_data(seq_index, data_key) for data_key in data_keys}
+            data_len = dataset.get_seq_length(seq_index)
             data["seq_tag"] = str_to_numpy_array(dataset.get_tag(seq_index))
-            yield self._data_dict_to_tensor_dict(dataset, data)
+            yield self._data_dict_to_tensor_dict(dataset, data, data_len)
             seq_index += 1
 
     @staticmethod
