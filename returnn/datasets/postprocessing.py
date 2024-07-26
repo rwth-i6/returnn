@@ -23,7 +23,7 @@ class PostprocessingDataset(CachedDataset2):
     an iterator.
 
     This allows integrating various data augmentation techniques like e.g. Mixup, or
-    speed pertubation into the data loading pipeline.
+    speed perturbation into the data loading pipeline.
 
     The integration into the data loading pipeline makes it easy to distribute the
     data processing work across multiple CPU cores using `MultiProcDataset` and in
@@ -35,7 +35,11 @@ class PostprocessingDataset(CachedDataset2):
 
     Example usage:
         train = {
-            "class": "PostprocessingDataset", "dataset": { "class": "..." },
+            "class": "PostprocessingDataset",
+            "dataset": { "class": ".." },
+            # at least one of them:
+            "map_seq": segment_mapping_function,
+            "map_seq_stream": multiple_segment_mapping_function,
         }
     """
 
