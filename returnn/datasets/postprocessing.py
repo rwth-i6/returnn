@@ -4,6 +4,7 @@ Provides :class:`PostprocessingDataset`.
 
 from __future__ import annotations
 
+import numpy as np
 from numpy import ndarray
 from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple
 
@@ -16,6 +17,8 @@ from .cached2 import CachedDataset2
 from .util.strings import str_to_numpy_array
 
 __all__ = ["PostprocessingDataset"]
+
+one_element_dim = Dim(1)
 
 
 class PostprocessingDataset(CachedDataset2):
@@ -208,7 +211,16 @@ class PostprocessingDataset(CachedDataset2):
                             name=f"{name}_sparse",
                         )
                     self._dim_cache[name] = (feature_dims, sparse_dim)
-                dims = [Dim(dimension=seq_len[name], name=f"{name}_num_frames"), *feature_dims]
+                dyn_size_ext = Tensor(
+                    dims=[one_element_dim],
+                    name=f"{name}_num_frames_size_ext",
+                    dtype="int64",
+                    raw_tensor=np.array([seq_len[name]]),
+                )
+                dims = [
+                    Dim(dimension=None, dyn_size_ext=dyn_size_ext, name=f"{name}_num_frames"),
+                    *feature_dims,
+                ]
 
             try:
                 return Tensor(name, dims=dims, dtype=dtype, sparse_dim=sparse_dim, raw_tensor=data)
