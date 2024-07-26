@@ -928,12 +928,13 @@ def test_PostprocessingDataset_map_seq():
             "map_seq": add_1337_to_classes,
         }
         dataset = init_dataset(ds_opts)
+        dataset.init_seq_order(epoch=1)
         assert dataset.have_seqs()
         dataset.init_seq_order(epoch=1)
         dataset.load_seqs(0, 1)
 
         classes = dataset.get_data(0, "classes")
-        assert all(c - 1337 > 0 for c in classes)
+        assert all(c - 1337 >= 0 for c in classes)
 
 
 if __name__ == "__main__":
