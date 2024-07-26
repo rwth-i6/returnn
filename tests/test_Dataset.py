@@ -912,8 +912,28 @@ def test_DistributeFilesDataset():
     assert global_seq_idx == num_hdf_files * num_seqs
 
 
-def test_PostprocessingDataset():
-    from returnn.datasets.postprocessing import PostprocessingDataset
+def test_PostprocessingDataset_map_seq():
+    from returnn.tensor.tensor_dict import TensorDict
+
+    _demo_txt = "some utterance text that has a few words"
+
+    def add_1337_to_classes(tdict: TensorDict) -> TensorDict:
+        tdict.data["classes"] += 1337
+        return tdict
+
+    with create_ogg_zip_txt_only_dataset_opts(text=_demo_txt) as sub_ds_opts:
+        ds_opts = {
+            "class": "PostprocessingDataset",
+            "dataset": sub_ds_opts,
+            "map_seq": add_1337_to_classes,
+        }
+        dataset = init_dataset(ds_opts)
+        assert dataset.have_seqs()
+        dataset.init_seq_order(epoch=1)
+        dataset.load_seqs(0, 1)
+
+        classes = dataset.get_data(0, "classes")
+        assert all(c - 1337 > 0 for c in classes)
 
 
 if __name__ == "__main__":
