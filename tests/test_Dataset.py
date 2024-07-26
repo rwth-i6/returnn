@@ -912,6 +912,10 @@ def test_DistributeFilesDataset():
     assert global_seq_idx == num_hdf_files * num_seqs
 
 
+def test_PostprocessingDataset():
+    from returnn.datasets.postprocessing import PostprocessingDataset
+
+
 if __name__ == "__main__":
     better_exchook.install()
     if len(sys.argv) <= 1:
