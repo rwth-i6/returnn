@@ -134,6 +134,12 @@ class PostprocessingDataset(CachedDataset2):
             self.num_outputs = dataset.num_outputs
 
     def init_seq_order(self, epoch: Optional[int] = None, seq_list=None, seq_order=None):
+        """
+        :param epoch:
+        :param seq_list:
+        :param seq_order:
+        :return: whether the order changed (True is always safe to return)
+        """
         super().init_seq_order(epoch=epoch, seq_list=seq_list, seq_order=seq_order)
 
         if epoch is None:
@@ -148,7 +154,7 @@ class PostprocessingDataset(CachedDataset2):
         self._lazy_init_num_outputs()
         return True
 
-    def _collect_single_seq(self, seq_idx: int) -> DatasetSeq | None:
+    def _collect_single_seq(self, seq_idx: int) -> Optional[DatasetSeq]:
         assert seq_idx > self._data_iter_seq_idx, "collecting seqs must be done strictly monotonically"
         self._data_iter_seq_idx = seq_idx
 
@@ -173,7 +179,7 @@ class PostprocessingDataset(CachedDataset2):
         :return: the given data dict converted to a TensorDict class
         """
 
-        def make_tensor(name: str, data: ndarray) -> Tensor:
+        def _make_tensor(name: str, data: ndarray) -> Tensor:
             dims, sparse_dim = self._dim_cache.get(name, None)
             if dims is None:
                 dims = [Dim(dimension=v, name=f"{name}_dim{i + 1}") for i, v in enumerate(dataset.get_data_shape(name))]
@@ -184,7 +190,7 @@ class PostprocessingDataset(CachedDataset2):
                 self._dim_cache[name] = (dims, sparse_dim)
             return Tensor(name, dims=dims, sparse_dim=sparse_dim, raw_tensor=data)
 
-        return TensorDict({k: make_tensor(k, v) for k, v in data_dict.items()})
+        return TensorDict({k: _make_tensor(k, v) for k, v in data_dict.items()})
 
     def _iterate_dataset(self, dataset: Dataset) -> Iterator[TensorDict]:
         """
