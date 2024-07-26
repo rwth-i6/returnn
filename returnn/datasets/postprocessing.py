@@ -191,23 +191,25 @@ class PostprocessingDataset(CachedDataset2):
             dims = None
             sparse_dim = None
             dtype = data.dtype
+
             if data.dtype.name.startswith("str"):
                 # TODO: is this correct?
                 dims = []
                 dtype = "string"
-            if dims is None:
-                dims, sparse_dim = self._dim_cache.get(name, (None, None))
-            if dims is None:
-                dims = [Dim(dimension=seq_len[name], name=f"{name}_num_frames")]
-                dims.extend(
-                    Dim(dimension=v, name=f"{name}_dim{i + 1}") for i, v in enumerate(dataset.get_data_shape(name))
-                )
-                if dataset.is_data_sparse(name):
-                    sparse_dim = Dim(
-                        dimension=dataset.get_data_dim(name) if dataset.is_data_sparse(name) else None,
-                        name=f"{name}_sparse",
-                    )
-                self._dim_cache[name] = (dims, sparse_dim)
+            elif dims is None:
+                feature_dims, sparse_dim = self._dim_cache.get(name, (None, None))
+                if feature_dims is None:
+                    feature_dims = [
+                        Dim(dimension=v, name=f"{name}_dim{i + 1}") for i, v in enumerate(dataset.get_data_shape(name))
+                    ]
+                    if dataset.is_data_sparse(name):
+                        sparse_dim = Dim(
+                            dimension=dataset.get_data_dim(name) if dataset.is_data_sparse(name) else None,
+                            name=f"{name}_sparse",
+                        )
+                    self._dim_cache[name] = (feature_dims, sparse_dim)
+                dims = [Dim(dimension=seq_len[name], name=f"{name}_num_frames"), *feature_dims]
+
             try:
                 return Tensor(name, dims=dims, dtype=dtype, sparse_dim=sparse_dim, raw_tensor=data)
             except Exception as exc:
