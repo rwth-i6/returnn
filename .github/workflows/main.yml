@@ -312,6 +312,7 @@ jobs:
         pip install --user --progress-bar=off scipy  # for some tests
         pip install --user --upgrade --progress-bar=off torch==${{ matrix.torch-version }}
         pip install --user --progress-bar=off onnx onnxruntime
+        pip install --user --progress-bar=off lovely_tensors
 
     - name: Test Python/Numpy/PyTorch versions.
       run: |
@@ -400,6 +401,7 @@ jobs:
         pip install --user --progress-bar=off scipy  # for some tests
 
         pip install --user --upgrade torch==${{ matrix.torch-version }}
+        pip install --user --progress-bar=off lovely_tensors
 
         if [[ "${{matrix.tf-version}}" == 2.10.* ]]; then
           # TF 2.10 requires gast<=0.4.0,>=0.2.1. But for example, with gast 0.2.2, we get some AutoGraph error:
