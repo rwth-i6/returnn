@@ -123,8 +123,12 @@ class PostprocessingDataset(CachedDataset2):
         self._estimated_num_seqs = dataset.estimated_num_seqs
         if self._map_outputs is not None:
             tdict = TensorDict(self._map_outputs)
+            # TODO: What if feature_dim == None?
             self.num_inputs = tdict.data["data"].feature_dim.size
-            self.num_outputs = {k: (t.feature_dim.size, t.ndim) for k, t in tdict.data.items()}
+            self.num_outputs = {
+                k: (t.sparse_dim.size, 1) if t.sparse_dim is not None else (t.feature_dim.size, t.ndim)
+                for k, t in tdict.data.items()
+            }
         else:
             self.num_inputs = dataset.num_inputs
             self.num_outputs = dataset.num_outputs
