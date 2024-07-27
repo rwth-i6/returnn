@@ -2,7 +2,6 @@
 Attention
 """
 
-
 from __future__ import annotations
 from typing import Tuple, Union, Optional, Sequence
 import weakref
@@ -836,7 +835,7 @@ def relative_positional_encoding(
         return emb, out_spatial_dim
 
 
-_positional_encoding_cache = weakref.WeakKeyDictionary()  # run ctx -> (spatial_dim, feat_dim) -> enc
+_sinusoidal_positional_encoding_cache = weakref.WeakKeyDictionary()  # run ctx -> (spatial_dim, feat_dim) -> enc
 
 
 def sinusoidal_positional_encoding(
@@ -844,6 +843,7 @@ def sinusoidal_positional_encoding(
     spatial_dim: Dim,
     feat_dim: Dim,
     offset: Optional[Union[int, Tensor]] = None,
+    base: Union[int, float] = 1e4,
     dtype: Optional[str] = None,
     device: Optional[str] = None,
 ) -> Tensor:
@@ -867,8 +867,8 @@ def sinusoidal_positional_encoding(
         dtype = rf.get_default_float_dtype()
     if not device:
         device = rf.get_default_device()
-    cache = _positional_encoding_cache.setdefault(rf.get_run_ctx(), {})
-    cache_key = (spatial_dim, feat_dim, offset, dtype, device)
+    cache = _sinusoidal_positional_encoding_cache.setdefault(rf.get_run_ctx(), {})
+    cache_key = (spatial_dim, feat_dim, offset, base, dtype, device)
     if cache_key in cache:
         return cache[cache_key]
     import math
@@ -886,7 +886,7 @@ def sinusoidal_positional_encoding(
 
         feat2_dim = feat_dim.div_left(2)
         div_term = rf.exp(
-            rf.range_over_dim(feat2_dim, dtype=dtype, device=device) * -(math.log(1e4) / (feat2_dim.dimension - 1))
+            rf.range_over_dim(feat2_dim, dtype=dtype, device=device) * -(math.log(base) / (feat2_dim.dimension - 1))
         )
         arg_sin = rf.combine_bc(rf.cast(indices, dtype), "*", div_term)
         arg_cos = arg_sin + math.pi / 2.0
