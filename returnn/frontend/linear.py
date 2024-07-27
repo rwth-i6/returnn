@@ -15,7 +15,7 @@ class Linear(rf.Module):
     Linear transformation.
     """
 
-    def __init__(self, in_dim: Dim, out_dim: Dim, *, with_bias=True):
+    def __init__(self, in_dim: Dim, out_dim: Dim, *, with_bias: bool = True):
         super().__init__()
         assert isinstance(in_dim, Dim) and isinstance(out_dim, Dim)
         self.in_dim = in_dim
