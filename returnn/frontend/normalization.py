@@ -8,7 +8,7 @@ from returnn.tensor import Tensor, Dim
 import returnn.frontend as rf
 
 
-__all__ = ["moments", "LayerNorm", "GroupNorm", "BatchNorm", "normalize", "Normalize"]
+__all__ = ["moments", "LayerNorm", "RMSNorm", "GroupNorm", "BatchNorm", "normalize", "Normalize"]
 
 
 def moments(
@@ -69,6 +69,37 @@ class LayerNorm(rf.Module):
     def __call__(self, x: Tensor) -> Tensor:
         mean, variance = rf.moments(x, axis=self.in_dim)
         norm_x = (x - mean) * rf.rsqrt(variance + self.eps)
+        out = norm_x * self.scale
+        if self.bias is not None:
+            out += self.bias
+        return out
+
+
+class RMSNorm(rf.Module):
+    """
+    `Root Mean Square Layer Normalization (RMSNorm) <https://arxiv.org/abs/1910.07467>`__.
+
+    Alternative to :class:`LayerNorm` that uses the root-mean-square of the input as the normalization factor.
+    I.e. the main difference to layer norm is: *No subtraction of mean.*
+
+    Note, the bias here is optional, *and disabled by default* (in line with most implementations of RMSNorm),
+    unlike our :class:`LayerNorm`, where the bias is enabled by default.
+    """
+
+    def __init__(self, in_dim: Union[rf.Dim, Sequence[rf.Dim]], *, eps: float = 1e-6, with_bias: bool = False):
+        super().__init__()
+        self.in_dim = in_dim
+        self.eps = eps
+        self.scale = rf.Parameter([self.in_dim] if isinstance(self.in_dim, rf.Dim) else self.in_dim)
+        self.scale.initial = 1.0
+        self.bias = None
+        if with_bias:
+            self.bias = rf.Parameter(self.scale.dims)
+            self.bias.initial = 0.0
+
+    def __call__(self, x: Tensor) -> Tensor:
+        variance = rf.reduce_mean(rf.square(x), axis=self.in_dim)
+        norm_x = x * rf.rsqrt(variance + self.eps)
         out = norm_x * self.scale
         if self.bias is not None:
             out += self.bias
