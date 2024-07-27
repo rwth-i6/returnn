@@ -38,6 +38,7 @@ class TransformerDecoder(rf.Module):
         dropout: float = 0.1,
         num_heads: int = 8,
         att_dropout: float = 0.1,
+        norm: Union[type, Dict[str, Any], rf.Module, Callable] = rf.LayerNorm,
         decoder_layer: Optional[Union[TransformerDecoderLayer, rf.Module, type, Any]] = None,
         decoder_layer_opts: Optional[Dict[str, Any]] = None,
         embed_dim: Optional[Dim] = None,
@@ -57,6 +58,7 @@ class TransformerDecoder(rf.Module):
         :param dropout: the dropout value for the FF block
         :param num_heads: the number of attention heads
         :param att_dropout: attention dropout value
+        :param norm: pre-normalization for FF and attention blocks
         :param decoder_layer: an instance of :class:`TransformerDecoderLayer` or similar
         :param decoder_layer_opts: options for the encoder layer
         :param embed_dim: if given, will first have an embedding [vocab,embed] and then a linear [embed,model].
@@ -128,6 +130,7 @@ class TransformerDecoder(rf.Module):
                 dropout=dropout,
                 num_heads=num_heads,
                 att_dropout=att_dropout,
+                norm=norm,
             )
             if decoder_layer_opts:
                 decoder_layer_opts_.update(decoder_layer_opts)
@@ -140,7 +143,7 @@ class TransformerDecoder(rf.Module):
 
         self.layers = sequential(_copy.deepcopy(decoder_layer) for _ in range(num_layers))
 
-        self.final_layer_norm = rf.LayerNorm(model_dim)
+        self.final_layer_norm = _make_norm(norm, model_dim)
 
         self.logits = rf.Linear(model_dim, vocab_dim, with_bias=logits_with_bias)
 
@@ -224,6 +227,7 @@ class TransformerDecoderLayer(rf.Module):
         self_att: Optional[Union[rf.CausalSelfAttention, rf.RelPosCausalSelfAttention, rf.Module, type, Any]] = None,
         self_att_opts: Optional[Dict[str, Any]] = None,
         att_dropout: float = 0.1,
+        norm: Union[type, Dict[str, Any], rf.Module, Callable] = rf.LayerNorm,
     ):
         """
         :param encoder_dim: for cross-attention. None if no cross-attention.
@@ -235,6 +239,7 @@ class TransformerDecoderLayer(rf.Module):
         :param self_att: the self-attention layer. RelPosSelfAttention originally and default
         :param self_att_opts: options for the self-attention layer, for :class:`nn.RelPosSelfAttention`
         :param att_dropout: attention dropout value
+        :param norm: pre-normalization for FF and attention blocks
         """
         super().__init__()
 
@@ -244,7 +249,7 @@ class TransformerDecoderLayer(rf.Module):
         self.out_dim = out_dim
 
         self.ff = FeedForward(out_dim=out_dim, ff_dim=ff_dim, dropout=dropout, activation=ff_activation)
-        self.ff_layer_norm = rf.LayerNorm(out_dim)
+        self.ff_layer_norm = _make_norm(norm, out_dim)
 
         if self_att is None or isinstance(self_att, type):
             self_att_opts_ = dict(
@@ -263,7 +268,7 @@ class TransformerDecoderLayer(rf.Module):
                 self.self_att = self_att(**self_att_opts_)
         else:
             self.self_att = self_att
-        self.self_att_layer_norm = rf.LayerNorm(out_dim)
+        self.self_att_layer_norm = _make_norm(norm, out_dim)
 
         self.cross_att = None
         self.cross_att_layer_norm = None
@@ -277,7 +282,7 @@ class TransformerDecoderLayer(rf.Module):
                 num_heads=num_heads,
                 att_dropout=att_dropout,
             )
-            self.cross_att_layer_norm = rf.LayerNorm(out_dim)
+            self.cross_att_layer_norm = _make_norm(norm, out_dim)
 
     def default_initial_state(self, *, batch_dims: Sequence[Dim]) -> rf.State:
         """default initial state"""
@@ -364,3 +369,15 @@ class FeedForward(rf.Module):
         x_drop = rf.dropout(x_act, self.dropout, axis=self.dropout_broadcast and self.linear_ff.out_dim)
         x_ff2 = self.linear_out(x_drop)
         return x_ff2
+
+
+def _make_norm(norm: Union[type, Dict[str, Any], rf.Module, Callable], out_dim: Dim) -> Union[rf.Module, Callable]:
+    if isinstance(norm, type):
+        norm = norm(out_dim)
+    elif isinstance(norm, dict):
+        norm = rf.build_from_dict(norm, out_dim)
+    elif isinstance(norm, rf.Module):
+        norm = _copy.deepcopy(norm)
+    if not callable(norm):
+        raise TypeError(f"unexpected norm type {norm!r}")
+    return norm
