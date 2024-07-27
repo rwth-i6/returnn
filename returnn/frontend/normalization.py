@@ -55,19 +55,24 @@ class LayerNorm(rf.Module):
     For a more generic variant, see :func:`norm`.
     """
 
-    def __init__(self, in_dim: Union[rf.Dim, Sequence[rf.Dim]], *, eps: float = 1e-6):
+    def __init__(self, in_dim: Union[rf.Dim, Sequence[rf.Dim]], *, eps: float = 1e-6, with_bias: bool = True):
         super().__init__()
         self.in_dim = in_dim
         self.eps = eps
         self.scale = rf.Parameter([self.in_dim] if isinstance(self.in_dim, rf.Dim) else self.in_dim)
         self.scale.initial = 1.0
-        self.bias = rf.Parameter(self.scale.dims)
-        self.bias.initial = 0.0
+        self.bias = None
+        if with_bias:
+            self.bias = rf.Parameter(self.scale.dims)
+            self.bias.initial = 0.0
 
     def __call__(self, x: Tensor) -> Tensor:
         mean, variance = rf.moments(x, axis=self.in_dim)
         norm_x = (x - mean) * rf.rsqrt(variance + self.eps)
-        return norm_x * self.scale + self.bias
+        out = norm_x * self.scale
+        if self.bias is not None:
+            out += self.bias
+        return out
 
 
 class GroupNorm(rf.Module):
