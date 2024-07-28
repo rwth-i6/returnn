@@ -4,21 +4,17 @@ Provides :class:`PostprocessingDataset`.
 
 from __future__ import annotations
 
-import numpy as np
 from numpy import ndarray
 from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple, Union
 
 from returnn.datasets.basic import DatasetSeq
 from returnn.tensor import Tensor, TensorDict
 from returnn.tensor.dim import Dim
-from returnn.util.basic import NumbersDict
 from .basic import Dataset, init_dataset
 from .cached2 import CachedDataset2
 from .util.strings import str_to_numpy_array
 
 __all__ = ["PostprocessingDataset"]
-
-one_element_dim = Dim(1)
 
 
 class PostprocessingDataset(CachedDataset2):
@@ -199,9 +195,7 @@ class PostprocessingDataset(CachedDataset2):
         assert isinstance(map_iter, Iterator), "map_seq_stream must produce an iterator"
         return map_iter
 
-    def _data_dict_to_tensor_dict(
-        self, dataset: Dataset, data_dict: Dict[str, ndarray], seq_len: NumbersDict
-    ) -> TensorDict:
+    def _data_dict_to_tensor_dict(self, dataset: Dataset, data_dict: Dict[str, ndarray]) -> TensorDict:
         """
         :return: the given data dict converted to a TensorDict class
         """
@@ -248,9 +242,8 @@ class PostprocessingDataset(CachedDataset2):
         while dataset.is_less_than_num_seqs(seq_index):
             dataset.load_seqs(seq_index, seq_index + 1)
             data = {data_key: dataset.get_data(seq_index, data_key) for data_key in data_keys}
-            data_len = dataset.get_seq_length(seq_index)
             data["seq_tag"] = str_to_numpy_array(dataset.get_tag(seq_index))
-            yield self._data_dict_to_tensor_dict(dataset, data, data_len)
+            yield self._data_dict_to_tensor_dict(dataset, data)
             seq_index += 1
 
     @staticmethod
