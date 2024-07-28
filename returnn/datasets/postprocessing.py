@@ -174,7 +174,7 @@ class PostprocessingDataset(CachedDataset2):
                 return None
             if loaded_seq_idx != seq_idx:
                 continue
-            seq = DatasetSeq(features=tensor_dict.as_raw_tensor_dict(), seq_idx=seq_idx)
+            seq = DatasetSeq(features=tensor_dict.as_raw_tensor_dict(exclude_sequence_lengths=True), seq_idx=seq_idx)
             return seq
 
     def _build_dataset_iter(self, dataset: Dataset) -> Iterator[TensorDict]:
@@ -200,27 +200,18 @@ class PostprocessingDataset(CachedDataset2):
                 dims = []
                 dtype = "string"
             elif dims is None:
-                feature_dims, sparse_dim = self._dim_cache.get(name, (None, None))
-                if feature_dims is None:
+                dims, sparse_dim = self._dim_cache.get(name, (None, None))
+                if dims is None:
                     feature_dims = [
                         Dim(dimension=v, name=f"{name}_dim{i + 1}") for i, v in enumerate(dataset.get_data_shape(name))
                     ]
+                    dims = [Dim(dimension=None, name=f"{name}_num_frames"), *feature_dims]
                     if dataset.is_data_sparse(name):
                         sparse_dim = Dim(
                             dimension=dataset.get_data_dim(name) if dataset.is_data_sparse(name) else None,
                             name=f"{name}_sparse",
                         )
-                    self._dim_cache[name] = (feature_dims, sparse_dim)
-                dyn_size_ext = Tensor(
-                    dims=[one_element_dim],
-                    name=f"{name}_num_frames_size_ext",
-                    dtype="int64",
-                    raw_tensor=np.array([seq_len[name]]),
-                )
-                dims = [
-                    Dim(dimension=None, dyn_size_ext=dyn_size_ext, name=f"{name}_num_frames"),
-                    *feature_dims,
-                ]
+                    self._dim_cache[name] = (dims, sparse_dim)
 
             try:
                 return Tensor(name, dims=dims, dtype=dtype, sparse_dim=sparse_dim, raw_tensor=data)
