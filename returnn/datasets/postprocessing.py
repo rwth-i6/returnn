@@ -191,6 +191,7 @@ class PostprocessingDataset(CachedDataset2):
         """
 
         def _make_tensor(name: str, data: ndarray) -> Tensor:
+            sparse_dim = None
             if data.dtype.name.startswith("str"):
                 dims = []
                 dtype = "string"
