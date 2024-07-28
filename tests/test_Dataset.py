@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, List, Dict
+from typing import Any, Iterator, List, Dict
 import os
 import sys
 import _setup_test_env  # noqa
@@ -962,12 +962,12 @@ def test_DistributeFilesDataset():
     assert global_seq_idx == num_hdf_files * num_seqs
 
 
-def test_PostprocessingDataset_map_seq():
+def test_PostprocessingDataset():
     from returnn.tensor.tensor_dict import TensorDict
 
     _demo_txt = "some utterance text that has a few words"
 
-    def add_1337_to_classes(tdict: TensorDict) -> TensorDict:
+    def _add_1337_to_classes(tdict: TensorDict) -> TensorDict:
         tdict.data["classes"] += 1337
         return tdict
 
@@ -975,7 +975,7 @@ def test_PostprocessingDataset_map_seq():
         ds_opts = {
             "class": "PostprocessingDataset",
             "dataset": sub_ds_opts,
-            "map_seq": add_1337_to_classes,
+            "map_seq": _add_1337_to_classes,
         }
         dataset = init_dataset(ds_opts)
         dataset.init_seq_order(epoch=1)
@@ -985,6 +985,34 @@ def test_PostprocessingDataset_map_seq():
 
         classes = dataset.get_data(0, "classes")
         assert all(c - 1337 >= 0 for c in classes)
+
+    i = 0
+
+    def _count(tdict: TensorDict) -> TensorDict:
+        nonlocal i
+        i += 1
+        return tdict
+
+    def _repeat2(input_iter: Iterator[TensorDict]) -> Iterator[TensorDict]:
+        for tdict in input_iter:
+            yield tdict
+            yield tdict
+
+    with create_ogg_zip_txt_only_dataset_opts(text=_demo_txt) as sub_ds_opts:
+        ds_opts = {
+            "class": "PostprocessingDataset",
+            "dataset": sub_ds_opts,
+            "map_seq": _count,
+            "map_seq_stream": _repeat2,
+        }
+        dataset = init_dataset(ds_opts)
+        dataset.init_seq_order(epoch=1)
+        assert dataset.have_seqs()
+        dataset.init_seq_order(epoch=1)
+
+        dataset.load_seqs(0, 2)
+        for i in range(2):
+            dataset.get_data(i, "classes")
 
 
 if __name__ == "__main__":
