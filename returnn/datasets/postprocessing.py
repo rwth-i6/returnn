@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import numpy as np
 from numpy import ndarray
-from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple
+from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple, Union
 
 from returnn.datasets.basic import DatasetSeq
 from returnn.tensor import Tensor, TensorDict
@@ -54,7 +54,12 @@ class PostprocessingDataset(CachedDataset2):
     def __init__(
         self,
         dataset: Dict[str, Any],
-        map_seq: Optional[Callable[[TensorDict], TensorDict]] = None,
+        map_seq: Optional[
+            Union[
+                Callable[[TensorDict], TensorDict],
+                Callable[[TensorDict], Iterator[TensorDict]],
+            ]
+        ] = None,
         map_seq_stream: Optional[Callable[[Iterator[TensorDict]], Iterator[TensorDict]]] = None,
         map_outputs: Optional[Dict[str, Any]] = None,
         _meta_info_cache: Optional[Dict[str, Any]] = None,
@@ -181,7 +186,18 @@ class PostprocessingDataset(CachedDataset2):
         """
         :return: an iterator applying both the segment level and across-segment transformations on the given dataset
         """
-        return self._map_seq_stream(map(self._map_seq, self._iterate_dataset(dataset)))
+
+        def _wrap_map_seq():
+            for item in self._iterate_dataset(dataset):
+                mapped_item = self._map_seq(item)
+                if isinstance(mapped_item, Iterator):
+                    yield from mapped_item
+                else:
+                    yield mapped_item
+
+        map_iter = self._map_seq_stream(_wrap_map_seq())
+        assert isinstance(map_iter, Iterator), "map_seq_stream must produce an iterator"
+        return map_iter
 
     def _data_dict_to_tensor_dict(
         self, dataset: Dataset, data_dict: Dict[str, ndarray], seq_len: NumbersDict
