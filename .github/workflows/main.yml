@@ -415,6 +415,9 @@ jobs:
           if pip install --user --upgrade --progress-bar=off tensorflow==${{ matrix.tf-version }}; then break; fi
         done
 
+        # Needed for some tests.
+        pip install --user --progress-bar=off transformers
+
     - name: Test Python/Numpy/PyTorch versions.
       run: |
         echo "Python env: $(type python) $(python --version)"
