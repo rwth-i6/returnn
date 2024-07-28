@@ -459,7 +459,7 @@ class MetaDataset(CachedDataset2):
         """
         return self.seq_list_original[self.default_dataset_key]
 
-    def get_total_num_seqs(self) -> int:
+    def get_total_num_seqs(self, *, fast: bool = False) -> int:
         """
         :return: total number of seqs, without partition epoch
         """
@@ -1639,7 +1639,7 @@ class ConcatSeqsDataset(CachedDataset2):
         """
         return self.dataset.get_data_shape(key)
 
-    def get_total_num_seqs(self) -> int:
+    def get_total_num_seqs(self, *, fast: bool = False) -> int:
         """total num seqs"""
         return len(self.full_seq_list)
 
@@ -1879,9 +1879,9 @@ class VariableDataset(Dataset):
         """all tags"""
         return self._dataset.get_all_tags()
 
-    def get_total_num_seqs(self) -> int:
+    def get_total_num_seqs(self, *, fast: bool = False) -> int:
         """total num seqs"""
-        return self._dataset.get_total_num_seqs()
+        return self._dataset.get_total_num_seqs(fast=fast)
 
     def get_seq_length(self, sorted_seq_idx: int) -> NumbersDict:
         """seq len"""

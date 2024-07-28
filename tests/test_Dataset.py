@@ -722,21 +722,71 @@ def test_LmDataset_pickle():
             }
         )
         assert isinstance(dataset, LmDataset)
-        assert dataset.orths is None  # not yet loaded, will be lazily loaded
+        assert dataset._orths_offsets_and_lens is None  # not yet loaded, will be lazily loaded
 
         s = pickle.dumps(dataset)
         dataset = pickle.loads(s)
         assert isinstance(dataset, LmDataset)
-        assert dataset.orths is None  # not yet loaded, will be lazily loaded
+        assert dataset._orths_offsets_and_lens is None  # not yet loaded, will be lazily loaded
 
         dataset.init_seq_order(epoch=1)
-        assert dataset.orths is not None  # loaded now
+        assert dataset._orths_offsets_and_lens is not None  # loaded now
         dataset.load_seqs(0, 2)
         orth = dataset.get_data(0, "data")
         assert orth.tolist() == [1, 2]
         orth = dataset.get_data(1, "data")
         assert orth.tolist() == [3, 4]
         assert not dataset.is_less_than_num_seqs(2)
+
+
+def test_LmDataset_multiple_and_gzipped():
+    import pickle
+    import gzip
+    from returnn.datasets.lm import LmDataset
+
+    with tempfile.NamedTemporaryFile("wb", suffix=".txt.gz") as gz_txt_file, tempfile.NamedTemporaryFile(
+        "wb", suffix=".txt.gz"
+    ) as gz_txt_file2, tempfile.NamedTemporaryFile("wt", suffix=".txt") as txt_file3, tempfile.NamedTemporaryFile(
+        "wt", suffix=".syms"
+    ) as orth_syms_file:
+        with gzip.GzipFile(gz_txt_file.name, "wb") as txt_file:
+            txt_file.write(b"Hello world\n")
+            txt_file.write(b"Next line\n")
+        with gzip.GzipFile(gz_txt_file2.name, "wb") as txt_file2:
+            txt_file2.write(b"Next world\n")
+        txt_file3.write("Hello line\n")
+        txt_file3.flush()
+        orth_syms_file.write("[END]\n")
+        covered = set()
+        for c in gzip.open(gz_txt_file.name, "rt").read():
+            if c not in covered and c != "\n":
+                orth_syms_file.write(c + "\n")
+                covered.add(c)
+        orth_syms_file.flush()
+
+        dataset = init_dataset(
+            {
+                "class": "LmDataset",
+                "corpus_file": [gz_txt_file.name, gz_txt_file2.name, txt_file3.name],
+                "orth_symbols_file": orth_syms_file.name,
+            }
+        )
+        assert isinstance(dataset, LmDataset)
+        s = pickle.dumps(dataset)
+        dataset = pickle.loads(s)
+        assert isinstance(dataset, LmDataset)
+
+        dataset.init_seq_order(epoch=1)
+        dataset.load_seqs(0, 4)
+        orth = dataset.get_data(0, "data")
+        assert orth.tolist() == [1, 2, 3, 3, 4, 5, 6, 4, 7, 3, 8, 0]
+        orth = dataset.get_data(1, "data")
+        assert orth.tolist() == [9, 2, 10, 11, 5, 3, 12, 13, 2, 0]
+        orth = dataset.get_data(2, "data")
+        assert orth.tolist() == [9, 2, 10, 11, 5, 6, 4, 7, 3, 8, 0]
+        orth = dataset.get_data(3, "data")
+        assert orth.tolist() == [1, 2, 3, 3, 4, 5, 3, 12, 13, 2, 0]
+        assert not dataset.is_less_than_num_seqs(4)
 
 
 def test_MetaDataset():

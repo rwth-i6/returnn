@@ -270,13 +270,13 @@ def print_task_properties():
         print("Train data:", file=log.v2)
         print("  input:", train_data.num_inputs, "x", train_data.window, file=log.v2)
         print("  output:", train_data.num_outputs, file=log.v2)
-        print(" ", train_data.len_info() or "no info", file=log.v2)
+        print(" ", train_data.len_info(fast=True) or "no info", file=log.v2)
     if dev_data:
         print("Dev data:", file=log.v2)
-        print(" ", dev_data.len_info() or "no info", file=log.v2)
+        print(" ", dev_data.len_info(fast=True) or "no info", file=log.v2)
     if eval_data:
         print("Eval data:", file=log.v2)
-        print(" ", eval_data.len_info() or "no info", file=log.v2)
+        print(" ", eval_data.len_info(fast=True) or "no info", file=log.v2)
 
 
 def init_engine():
@@ -536,9 +536,9 @@ def execute_main_task():
     if config.is_true("dry_run"):
         print("Dry run, will not save anything.", file=log.v1)
     if task == "train":
-        assert (
-            train_data and train_data.have_seqs()
-        ), "no train files specified, check 'train' option: %s" % config.value("train", None)
+        # Avoid too many investigations on train_data (like have_seqs()),
+        # to avoid triggering any lazy init, which could be unnecessary in the main proc.
+        assert train_data, "no train files specified, check 'train' option: %s" % config.value("train", None)
         engine.init_train_from_config(config, train_data, dev_data, eval_data)
         engine.train()
     elif task == "eval":

@@ -281,7 +281,7 @@ def init(options):
     print("Dataset:", file=log.v2)
     print("  input:", dataset.num_inputs, "x", dataset.window, file=log.v2)
     print("  output:", dataset.num_outputs, file=log.v2)
-    print(" ", dataset.len_info() or "no info", file=log.v2)
+    print(" ", dataset.len_info(fast=True) or "no info", file=log.v2)
     if options.max_seq_length == "config":
         options.max_seq_length = config.typed_value("max_seq_length", sys.maxsize)
     elif options.max_seq_length:

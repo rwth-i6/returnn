@@ -332,7 +332,7 @@ class MultiProcDataset(CachedDataset2):
         """num seqs"""
         return self._num_seqs
 
-    def get_total_num_seqs(self) -> int:
+    def get_total_num_seqs(self, *, fast: bool = False) -> int:
         """total num seqs"""
         if self._total_num_seqs is not None:
             return self._total_num_seqs

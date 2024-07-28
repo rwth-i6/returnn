@@ -7,6 +7,7 @@ and some related helpers.
 
 from __future__ import annotations
 
+from typing import Optional, Union, Callable, List, Tuple, BinaryIO, cast
 import typing
 import os
 import sys
@@ -17,7 +18,15 @@ import xml.etree.ElementTree as ElementTree
 import numpy
 from random import Random
 
-from returnn.util.basic import parse_orthography, parse_orthography_into_symbols, load_json, unicode, cf
+from returnn.util.basic import (
+    parse_orthography,
+    parse_orthography_into_symbols,
+    load_json,
+    unicode,
+    cf,
+    human_bytes_size,
+    hms,
+)
 from returnn.util.literal_py_to_pickle import literal_eval
 from returnn.log import log
 
@@ -184,7 +193,7 @@ class LmDataset(CachedDataset2):
             self.seq_gen = PhoneSeqGenerator(**phone_info)
             self.labels["data"] = self.seq_gen.get_class_labels()
         else:
-            raise ValueError("LmDataset: need orth_symbols_file or orth_symbols_map_file or phone_info")
+            raise ValueError("LmDataset: need orth_vocab or orth_symbols_file or orth_symbols_map_file or phone_info")
 
         self.parse_orth_opts = None
         if self.orth_symbols is not None:
@@ -262,7 +271,9 @@ class LmDataset(CachedDataset2):
             self.num_outputs["delayed"] = self.num_outputs["data"]
             self.labels["delayed"] = self.labels["data"]
 
-        self.orths = None  # will be loaded in _lazy_init
+        self._orth_files: Optional[List[BinaryIO]] = None
+        self._orth_mmaps = None
+        self._orths_offsets_and_lens: Optional[List[Tuple[int, int]]] = None  # will be loaded in _lazy_init
 
         self.next_orth_idx = 0
         self.next_seq_idx = 0
@@ -270,27 +281,114 @@ class LmDataset(CachedDataset2):
         self.num_unknown = 0
 
     def _lazy_init(self):
-        if self.orths is not None:
+        if self._orths_offsets_and_lens is not None:
             return
 
         corpus_file = self._corpus_file
         if callable(corpus_file):
             corpus_file = corpus_file()
+
         print("LmDataset, loading file", corpus_file, file=log.v4)
-        if isinstance(corpus_file, list):  # If a list of files is provided, concatenate all.
-            self.orths = []
-            for file_name in corpus_file:
-                if self._use_cache_manager:
-                    file_name = cf(file_name)
-                self.orths += read_corpus(file_name, skip_empty_lines=self._skip_empty_lines)
-        else:
+
+        import tempfile
+        import mmap
+
+        self._orth_mmaps = []
+        self._orth_files = []
+        tmp_file_orth_files_index: Optional[int] = None
+        tmp_file: Optional[BinaryIO] = None
+        tmp_file_offset = 0
+        total_bytes_read = 0
+        orths = []
+        self._orths_offsets_and_lens = orths
+        start_time = time.time()
+        last_print_time = start_time
+
+        def _init_tmp_file():
+            nonlocal tmp_file, tmp_file_orth_files_index
+
+            if tmp_file is not None:
+                return
+            tmp_file = tempfile.NamedTemporaryFile(prefix="returnn_lm_dataset_", suffix="_tmp.txt")
+            tmp_file = cast(BinaryIO, tmp_file)
+            tmp_file_orth_files_index = len(self._orth_files)
+            self._orth_files.append(tmp_file)
+            self._orth_mmaps.append(None)  # will be set later
+
+        def _tmp_file_add_line(line: bytes):
+            nonlocal tmp_file_offset, total_bytes_read
+
+            orths.append((tmp_file_orth_files_index, tmp_file_offset, len(line)))
+            tmp_file.write(line)
+            tmp_file.write(b"\n")
+            tmp_file_offset += len(line) + 1
+            total_bytes_read += len(line) + 1
+
+            _maybe_report_status()
+
+        def _maybe_report_status():
+            nonlocal last_print_time
+
+            if time.time() - last_print_time > 10:
+                print(
+                    f"  ... loaded {len(self._orths_offsets_and_lens)} sequences,"
+                    f" {human_bytes_size(total_bytes_read)},"
+                    f" after {hms(time.time() - start_time)}",
+                    file=log.v4,
+                )
+                last_print_time = time.time()
+
+        # If a list of files is provided, concatenate all.
+        if not isinstance(corpus_file, list):
+            corpus_file = [corpus_file]
+        for file_name in corpus_file:
             if self._use_cache_manager:
-                corpus_file = cf(corpus_file)
-            self.orths = read_corpus(corpus_file, skip_empty_lines=self._skip_empty_lines)
-        print("  done, loaded %i sequences" % len(self.orths), file=log.v4)
+                file_name = cf(file_name)
+            if _is_bliss(file_name):
+                _init_tmp_file()
+                _iter_bliss(filename=file_name, callback=_tmp_file_add_line, decode=False)
+            elif file_name.endswith(".gz"):
+                _init_tmp_file()
+                _iter_txt(
+                    filename=file_name,
+                    callback=_tmp_file_add_line,
+                    skip_empty_lines=self._skip_empty_lines,
+                    decode=False,
+                )
+            else:  # Raw txt file
+                # Directly mmap the file.
+                # We just need to scan once through it to find line offsets.
+                file = open(file_name, "rb")
+                file_mmap = mmap.mmap(file.fileno(), 0, flags=mmap.MAP_PRIVATE)
+                file_index = len(self._orth_files)
+                self._orth_files.append(file)
+                self._orth_mmaps.append(file_mmap)
+
+                pos = 0
+                while True:
+                    next_new_line = file_mmap.find(b"\n", pos)
+                    if next_new_line == -1:
+                        break
+                    line_len = next_new_line - pos
+                    if line_len or not self._skip_empty_lines:
+                        orths.append((file_index, pos, line_len))
+                    total_bytes_read += line_len + 1
+                    pos = next_new_line + 1
+                    _maybe_report_status()
+
+        if tmp_file is not None:
+            tmp_file.flush()
+            self._orth_mmaps[tmp_file_orth_files_index] = mmap.mmap(tmp_file.fileno(), 0, flags=mmap.MAP_PRIVATE)
+
+        print(
+            f"  done, loaded {len(self._orths_offsets_and_lens)} sequences,"
+            f" {human_bytes_size(total_bytes_read)},"
+            f" in {hms(time.time() - start_time)}",
+            file=log.v4,
+        )
 
         # It's only estimated because we might filter some out or so.
-        self._estimated_num_seqs = len(self.orths) // self.partition_epoch
+        self._estimated_num_seqs = len(self._orths_offsets_and_lens) // self.partition_epoch
 
     def get_data_keys(self):
         """
@@ -344,7 +442,9 @@ class LmDataset(CachedDataset2):
         else:
             self._lazy_init()
             self.seq_order = self.get_seq_order_for_epoch(
-                epoch=epoch, num_seqs=len(self.orths), get_seq_len=lambda i: len(self.orths[i])
+                epoch=epoch,
+                num_seqs=len(self._orths_offsets_and_lens),
+                get_seq_len=lambda i: self._orths_offsets_and_lens[i][1],
             )
         self.next_orth_idx = 0
         self.next_seq_idx = 0
@@ -358,10 +458,12 @@ class LmDataset(CachedDataset2):
         """supports sorting"""
         return True
 
-    def get_total_num_seqs(self) -> int:
+    def get_total_num_seqs(self, *, fast: bool = False) -> int:
         """total num seqs"""
+        if fast and self._orths_offsets_and_lens is None:
+            raise Exception(f"{self} not initialized")
         self._lazy_init()
-        return len(self.orths)
+        return len(self._orths_offsets_and_lens)
 
     def _reduce_log_skipped_seqs(self):
         if isinstance(self.log_skipped_seqs, bool):
@@ -396,7 +498,9 @@ class LmDataset(CachedDataset2):
             assert self.next_seq_idx == seq_idx, "We expect that we iterate through all seqs."
             true_idx = self.seq_order[self.next_orth_idx]
             self._lazy_init()
-            orth = self.orths[true_idx]  # get sequence for the next index given by seq_order
+            # get sequence for the next index given by seq_order
+            idx, offset, len_ = self._orths_offsets_and_lens[true_idx]
+            orth = self._orth_mmaps[idx][offset : offset + len_].decode("utf8").strip()
             seq_tag = self._tag_prefix + str(true_idx)
             self.next_orth_idx += 1
             if orth == "</s>":
@@ -512,10 +616,10 @@ def _is_bliss(filename):
     return False
 
 
-def _iter_bliss(filename, callback):
+def _iter_bliss(filename: str, callback: Callable[[Union[str, bytes]], None], *, decode: bool = True):
     """
-    :param str filename:
-    :param (str)->None callback:
+    :param filename:
+    :param callback:
     """
     corpus_file = open(filename, "rb")
     if filename.endswith(".gz"):
@@ -546,51 +650,68 @@ def _iter_bliss(filename, callback):
         orth_split = orth_raw.split()
         orth = " ".join(orth_split)
 
+        if not decode:
+            orth = orth.encode("utf8")
         callback(orth)
 
 
-def _iter_txt(filename, callback, skip_empty_lines=True):
+def _iter_txt(
+    filename: str, callback: Callable[[Union[str, bytes]], None], *, skip_empty_lines: bool = True, decode: bool = True
+) -> None:
     """
-    :param str filename:
-    :param (str)->None callback:
-    :param bool skip_empty_lines:
+    :param filename:
+    :param callback:
+    :param skip_empty_lines:
+    :param decode:
     """
     f = open(filename, "rb")
     if filename.endswith(".gz"):
         f = gzip.GzipFile(fileobj=f)
 
     for line in f:
-        try:
-            line = line.decode("utf8")
-        except UnicodeDecodeError:
-            line = line.decode("latin_1")  # or iso8859_15?
+        if decode:
+            try:
+                line = line.decode("utf8")
+            except UnicodeDecodeError:
+                line = line.decode("latin_1")  # or iso8859_15?
         line = line.strip()
         if skip_empty_lines and not line:
             continue
         callback(line)
 
 
-def iter_corpus(filename, callback, skip_empty_lines=True):
+def iter_corpus(
+    filename: str, callback: Callable[[Union[str, bytes]], None], *, skip_empty_lines: bool = True, decode: bool = True
+) -> None:
     """
-    :param str filename:
-    :param ((str)->None) callback:
-    :param bool skip_empty_lines:
+    :param filename:
+    :param callback:
+    :param skip_empty_lines:
+    :param decode:
     """
     if _is_bliss(filename):
-        _iter_bliss(filename=filename, callback=callback)
+        _iter_bliss(filename=filename, callback=callback, decode=decode)
     else:
-        _iter_txt(filename=filename, callback=callback, skip_empty_lines=skip_empty_lines)
+        _iter_txt(filename=filename, callback=callback, skip_empty_lines=skip_empty_lines, decode=decode)
 
 
-def read_corpus(filename, skip_empty_lines=True):
+def read_corpus(
+    filename: str,
+    *,
+    skip_empty_lines: bool = True,
+    decode: bool = True,
+    out_list: Optional[Union[List[str], List[bytes]]] = None,
+) -> Union[List[str], List[bytes]]:
     """
-    :param str filename: either Bliss XML or line-based text
-    :param bool skip_empty_lines: in case of line-based text, skip empty lines
-    :return: list of orthographies
-    :rtype: list[str]
+    :param filename: either Bliss XML or line-based text
+    :param skip_empty_lines: in case of line-based text, skip empty lines
+    :param decode: if True, return str, otherwise bytes
+    :param out_list: if given, append to this list
+    :return: out_list, list of orthographies
     """
-    out_list = []
-    iter_corpus(filename=filename, callback=out_list.append, skip_empty_lines=skip_empty_lines)
+    if out_list is None:
+        out_list = []
+    iter_corpus(filename=filename, callback=out_list.append, skip_empty_lines=skip_empty_lines, decode=decode)
     return out_list
 
 

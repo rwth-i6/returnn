@@ -205,7 +205,10 @@ def random(
             if seed is None:
                 seed = get_static_step_based_seed()
     if dtype is None:
-        dtype = rf.get_default_float_dtype()
+        if sparse_dim:
+            dtype = rf.get_default_array_index_dtype()
+        else:
+            dtype = rf.get_default_float_dtype()
     return _global_backend.random(
         dims=dims,
         dtype=dtype,

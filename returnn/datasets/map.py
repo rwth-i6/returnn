@@ -109,7 +109,7 @@ class MapDatasetWrapper(CachedDataset2):
             raise NotImplementedError("'num_seqs' is only known after calling init_seq_order().")
         return len(self._seq_order)
 
-    def get_total_num_seqs(self) -> int:
+    def get_total_num_seqs(self, *, fast: bool = False) -> int:
         """
         :return: total number of seqs
         """
