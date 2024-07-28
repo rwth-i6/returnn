@@ -33,8 +33,9 @@ class TransformerDecoder(rf.Module):
         model_dim: Union[Dim, int] = Dim(512, name="transformer-dec-default-model-dim"),
         *,
         num_layers: int,
+        ff: Union[type, Dict[str, Any], rf.Module] = NotSpecified,
         ff_dim: Union[Dim, int] = NotSpecified,
-        ff_activation: Union[Callable[[Tensor], Tensor], Dict[str, Any], rf.Module] = rf.relu,
+        ff_activation: Union[Callable[[Tensor], Tensor], Dict[str, Any], rf.Module] = NotSpecified,
         dropout: float = 0.1,
         num_heads: int = 8,
         att_dropout: float = 0.1,
@@ -53,6 +54,7 @@ class TransformerDecoder(rf.Module):
         :param vocab_dim:
         :param model_dim: the output feature dimension
         :param num_layers: the number of encoder layers
+        :param ff: feed-forward / MLP block. Default is :class:`FeedForward`
         :param ff_dim: the dimension of feed-forward layers. 2048 originally, or 4 times out_dim
         :param ff_activation: activation function for feed-forward network
         :param dropout: the dropout value for the FF block
@@ -125,6 +127,7 @@ class TransformerDecoder(rf.Module):
             decoder_layer_opts_ = dict(
                 encoder_dim=encoder_dim,
                 out_dim=model_dim,
+                ff=ff,
                 ff_dim=ff_dim,
                 ff_activation=ff_activation,
                 dropout=dropout,
@@ -220,8 +223,9 @@ class TransformerDecoderLayer(rf.Module):
         encoder_dim: Optional[Dim],
         out_dim: Dim = Dim(512, name="transformer-dec-default-out-dim"),
         *,
+        ff: Union[type, Dict[str, Any], rf.Module] = NotSpecified,
         ff_dim: Union[Dim, int] = NotSpecified,
-        ff_activation: Union[Callable[[Tensor], Tensor], Dict[str, Any], rf.Module] = rf.relu,
+        ff_activation: Union[Callable[[Tensor], Tensor], Dict[str, Any], rf.Module] = NotSpecified,
         dropout: float = 0.1,
         num_heads: int = 8,
         self_att: Optional[Union[rf.CausalSelfAttention, rf.RelPosCausalSelfAttention, rf.Module, type, Any]] = None,
@@ -232,6 +236,7 @@ class TransformerDecoderLayer(rf.Module):
         """
         :param encoder_dim: for cross-attention. None if no cross-attention.
         :param out_dim: the output feature dimension
+        :param ff: feed-forward / MLP block. Default is :class:`FeedForward`
         :param ff_dim: the dimension of feed-forward layers. 2048 originally, or 4 times out_dim
         :param ff_activation: activation function for feed-forward network
         :param dropout: the dropout value for the FF block
@@ -248,7 +253,22 @@ class TransformerDecoderLayer(rf.Module):
         self.dropout_broadcast = rf.dropout_broadcast_default()
         self.out_dim = out_dim
 
-        self.ff = FeedForward(out_dim=out_dim, ff_dim=ff_dim, dropout=dropout, activation=ff_activation)
+        if ff is NotSpecified:
+            ff = FeedForward
+        if isinstance(ff, rf.Module):
+            ff = _copy.deepcopy(ff)
+        else:
+            ff_kwargs = dict(out_dim=out_dim, ff_dim=ff_dim, dropout=dropout, activation=ff_activation)
+            ff_kwargs = {k: v for (k, v) in ff_kwargs.items() if v is not NotSpecified}
+            if isinstance(ff, type):
+                ff = ff(**ff_kwargs)
+            elif isinstance(ff, dict):
+                ff = rf.build_from_dict(ff, **ff_kwargs)
+            else:
+                raise TypeError(f"unexpected ff type {ff!r}")
+        assert isinstance(ff, rf.Module)
+
+        self.ff = ff
         self.ff_layer_norm = _make_norm(norm, out_dim)
 
         if self_att is None or isinstance(self_att, type):
@@ -331,14 +351,14 @@ class FeedForward(rf.Module):
         out_dim: Dim,
         *,
         ff_dim: Optional[Union[Dim, int]] = NotSpecified,
-        dropout: float,
-        activation: Union[Callable[[Tensor], Tensor], Dict[str, Any], rf.Module],
+        dropout: float = 0.1,
+        activation: Union[Callable[[Tensor], Tensor], Dict[str, Any], rf.Module] = rf.relu,
     ):
         """
         :param out_dim: output feature dimension
         :param ff_dim: dimension of the feed-forward layers
         :param dropout: dropout value
-        :param activation: activation function
+        :param activation: activation function, relu by default
         """
         super().__init__()
 
@@ -349,7 +369,9 @@ class FeedForward(rf.Module):
         if not isinstance(ff_dim, Dim):
             raise TypeError(f"Transformer FeedForward: unexpected ff_dim {ff_dim!r} type {type(ff_dim)}")
 
-        if isinstance(activation, dict):
+        if activation is NotSpecified:
+            activation = rf.relu
+        elif isinstance(activation, dict):
             activation = rf.build_from_dict(activation)
         elif not callable(activation):
             raise TypeError(f"{self}: unexpected activation type {activation!r}")
@@ -367,6 +389,60 @@ class FeedForward(rf.Module):
         x_ff1 = self.linear_ff(inp)
         x_act = self.activation(x_ff1)
         x_drop = rf.dropout(x_act, self.dropout, axis=self.dropout_broadcast and self.linear_ff.out_dim)
+        x_ff2 = self.linear_out(x_drop)
+        return x_ff2
+
+
+class FeedForwardGated(rf.Module):
+    """
+    E.g. with f=swish=silu:
+    SwiGLU, from `GLU Variants Improve Transformer <https://arxiv.org/abs/2002.05202>`__::
+
+        f(Linear(x)) * Linear(x)
+
+    This is a feed-forward block based on SwiGLU, as defined in the paper.
+    """
+
+    def __init__(
+        self,
+        out_dim: Dim,
+        *,
+        ff_dim: Optional[Union[Dim, int]] = NotSpecified,
+        dropout: float = 0.1,
+        activation: Union[Callable[[Tensor], Tensor], Dict[str, Any], rf.Module] = rf.swish,
+    ):
+        super().__init__()
+
+        if isinstance(ff_dim, int):
+            ff_dim = Dim(ff_dim, name="transformer-ff-dim")
+        if ff_dim is NotSpecified or ff_dim is None:
+            # Factor 2/3 to keep same number of parameters as in the original FF block, just as in the paper.
+            ff_dim = out_dim * 2 // 3
+        if not isinstance(ff_dim, Dim):
+            raise TypeError(f"Transformer FeedForward: unexpected ff_dim {ff_dim!r} type {type(ff_dim)}")
+
+        if activation is NotSpecified:
+            activation = rf.swish
+        elif isinstance(activation, dict):
+            activation = rf.build_from_dict(activation)
+        elif not callable(activation):
+            raise TypeError(f"{self}: unexpected activation type {activation!r}")
+
+        self.out_dim = out_dim
+        self.dropout = dropout
+        self.dropout_broadcast = rf.dropout_broadcast_default()
+        self.activation = activation
+
+        # Factor 2 because we concatenate the two paths.
+        self.linear_ff = rf.Linear(out_dim, 2 * ff_dim)
+        self.linear_out = rf.Linear(ff_dim, out_dim)
+
+    def __call__(self, inp: Tensor) -> Tensor:
+        """forward"""
+        x_ff1 = self.linear_ff(inp)
+        x_ff1a, x_ff1b = rf.split(x_ff1, axis=self.linear_ff.out_dim, out_dims=[self.linear_out.in_dim] * 2)
+        x_act = self.activation(x_ff1a) * x_ff1b
+        x_drop = rf.dropout(x_act, self.dropout, axis=self.dropout_broadcast and self.linear_out.in_dim)
         x_ff2 = self.linear_out(x_drop)
         return x_ff2
 
