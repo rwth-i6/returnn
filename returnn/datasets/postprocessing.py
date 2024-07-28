@@ -191,27 +191,24 @@ class PostprocessingDataset(CachedDataset2):
         """
 
         def _make_tensor(name: str, data: ndarray) -> Tensor:
-            dims = None
-            sparse_dim = None
-            dtype = data.dtype
-
             if data.dtype.name.startswith("str"):
-                # TODO: is this correct?
                 dims = []
                 dtype = "string"
-            elif dims is None:
+            else:
                 dims, sparse_dim = self._dim_cache.get(name, (None, None))
-                if dims is None:
-                    feature_dims = [
-                        Dim(dimension=v, name=f"{name}_dim{i + 1}") for i, v in enumerate(dataset.get_data_shape(name))
-                    ]
-                    dims = [Dim(dimension=None, name=f"{name}_num_frames"), *feature_dims]
-                    if dataset.is_data_sparse(name):
-                        sparse_dim = Dim(
-                            dimension=dataset.get_data_dim(name) if dataset.is_data_sparse(name) else None,
-                            name=f"{name}_sparse",
-                        )
-                    self._dim_cache[name] = (dims, sparse_dim)
+                dtype = data.dtype
+
+            if dims is None:
+                feature_dims = [
+                    Dim(dimension=v, name=f"{name}_dim{i + 1}") for i, v in enumerate(dataset.get_data_shape(name))
+                ]
+                dims = [Dim(dimension=None, name=f"{name}_num_frames"), *feature_dims]
+                if dataset.is_data_sparse(name):
+                    sparse_dim = Dim(
+                        dimension=dataset.get_data_dim(name) if dataset.is_data_sparse(name) else None,
+                        name=f"{name}_sparse",
+                    )
+                self._dim_cache[name] = (dims, sparse_dim)
 
             try:
                 return Tensor(name, dims=dims, dtype=dtype, sparse_dim=sparse_dim, raw_tensor=data)
