@@ -8,6 +8,7 @@ from numpy import ndarray
 from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple, Union
 
 from returnn.datasets.basic import DatasetSeq
+from returnn.datasets.util.vocabulary import Vocabulary
 from returnn.tensor import Tensor, TensorDict
 from returnn.tensor.dim import Dim
 from returnn.tensor.tensor import ShapeMismatchException
@@ -229,6 +230,8 @@ class PostprocessingDataset(CachedDataset2):
                         dimension=self._dataset.get_data_dim(name) if self._dataset.is_data_sparse(name) else None,
                         name=f"{name}_sparse",
                     )
+                    if name in self._dataset.labels:
+                        sparse_dim.vocab = Vocabulary.create_vocab_from_labels(self._dataset.labels[name])
                 self._dim_cache[name] = (dims, sparse_dim)
 
             try:
