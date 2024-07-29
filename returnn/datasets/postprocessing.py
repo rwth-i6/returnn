@@ -124,7 +124,12 @@ class PostprocessingDataset(CachedDataset2):
             return
 
         self._dataset = init_dataset(self._dataset_def, parent_dataset=self)
-        self.labels = self._dataset.labels
+        self.labels = {}
+        for k, v in self._map_outputs_tensor_dict.data.items():
+            if v.vocab:
+                self.labels[k] = v.vocab.labels
+            elif v.sparse_dim:  # sparse_dim but not vocab
+                self.labels[k] = list(map(str, range(v.sparse_dim.dimension)))  # dummy labels
         self._estimated_num_seqs = self._dataset.estimated_num_seqs
 
         if self._map_outputs is not None:
