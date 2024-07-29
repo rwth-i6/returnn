@@ -30,16 +30,10 @@ from ._tensor_op_overloads import _TensorOpOverloadsMixin
 import returnn.tensor._tensor_extra as _tensor_extra
 
 
-__all__ = ["ShapeMismatchException", "Tensor"]
+__all__ = ["Tensor"]
 
 
 RawTensorType = TypeVar("RawTensorType")  # e.g. torch.Tensor, tf.Tensor, numpy.ndarray, ...
-
-
-class ShapeMismatchException(Exception):
-    """
-    Exception raised when the assignment to `Tensor.raw_tensor` fails due to mismatching shapes.
-    """
 
 
 class Tensor(_TensorMixin, _TensorOpOverloadsMixin, Generic[RawTensorType]):
@@ -186,7 +180,7 @@ class Tensor(_TensorMixin, _TensorOpOverloadsMixin, Generic[RawTensorType]):
                 if dim.dimension is None:
                     continue  # we allow anything in the raw_tensor dim
                 if raw_shape[i] != dim.dimension:
-                    raise ShapeMismatchException(
+                    raise Exception(
                         f"Mismatching shape: Raw tensor {raw_shape} vs Tensor {self};\n"
                         + backend.format_graph_output(value, max_depth=3)
                     )
