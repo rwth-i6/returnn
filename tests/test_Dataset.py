@@ -980,7 +980,6 @@ def test_PostprocessingDataset():
         dataset = init_dataset(ds_opts)
         dataset.init_seq_order(epoch=1)
         assert dataset.have_seqs()
-        dataset.init_seq_order(epoch=1)
         dataset.load_seqs(0, 1)
 
         classes = dataset.get_data(0, "classes")
@@ -1006,7 +1005,6 @@ def test_PostprocessingDataset():
         dataset = init_dataset(ds_opts)
         dataset.init_seq_order(epoch=1)
         assert dataset.have_seqs()
-        dataset.init_seq_order(epoch=1)
 
         dataset.load_seqs(0, 2)
         for i in range(2):
