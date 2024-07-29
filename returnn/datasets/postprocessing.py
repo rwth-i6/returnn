@@ -50,12 +50,7 @@ class PostprocessingDataset(CachedDataset2):
     def __init__(
         self,
         dataset: Dict[str, Any],
-        map_seq: Optional[
-            Union[
-                Callable[[TensorDict], TensorDict],
-                Callable[[TensorDict], Iterator[TensorDict]],
-            ]
-        ] = None,
+        map_seq: Optional[Union[Callable[[TensorDict], TensorDict]]] = None,
         map_seq_stream: Optional[Callable[[Iterator[TensorDict]], Iterator[TensorDict]]] = None,
         map_outputs: Optional[Dict[str, Any]] = None,
         _meta_info_cache: Optional[Dict[str, Any]] = None,
@@ -159,7 +154,7 @@ class PostprocessingDataset(CachedDataset2):
         self._lazy_init_dataset()
         assert self._dataset is not None
         self._dataset.init_seq_order(epoch=epoch, seq_list=seq_list, seq_order=seq_order)
-        self._data_iter = enumerate(self._build_dataset_iter(self._dataset))
+        self._data_iter = enumerate(self._build_dataset_iter())
         self._data_iter_seq_idx = -1
         return True
 
@@ -177,24 +172,33 @@ class PostprocessingDataset(CachedDataset2):
             seq = DatasetSeq(features={k: t.raw_tensor for k, t in tensor_dict.data.items()}, seq_idx=seq_idx)
             return seq
 
-    def _build_dataset_iter(self, dataset: Dataset) -> Iterator[TensorDict]:
+    def _build_dataset_iter(self) -> Iterator[TensorDict]:
         """
         :return: an iterator applying both the segment level and across-segment transformations on the given dataset
         """
 
-        def _wrap_map_seq():
-            for item in self._iterate_dataset(dataset):
-                mapped_item = self._map_seq(item)
-                if isinstance(mapped_item, Iterator):
-                    yield from mapped_item
-                else:
-                    yield mapped_item
+        def _iterate_dataset() -> Iterator[TensorDict]:
+            """
+            :return: generator providing data samples in the form of a TensorDict
+            """
+            data_keys = self._dataset.get_data_keys()
 
-        map_iter = self._map_seq_stream(_wrap_map_seq())
-        assert isinstance(map_iter, Iterator), "map_seq_stream must produce an iterator"
+            seq_index = 0
+            while self._dataset.is_less_than_num_seqs(seq_index):
+                self._dataset.load_seqs(seq_index, seq_index + 1)
+                data = {data_key: self._dataset.get_data(seq_index, data_key) for data_key in data_keys}
+                data["seq_tag"] = str_to_numpy_array(self._dataset.get_tag(seq_index))
+                tensor_dict = self._data_dict_to_tensor_dict(data)
+                mapped_tensor_dict = self._map_seq(tensor_dict)
+                assert isinstance(mapped_tensor_dict, TensorDict), "map_seq must produce a TensorDict"
+                yield mapped_tensor_dict
+                seq_index += 1
+
+        map_iter = self._map_seq_stream(_iterate_dataset())
+        assert isinstance(map_iter, Iterator), "map_seq_stream must produce an Iterator"
         return map_iter
 
-    def _data_dict_to_tensor_dict(self, dataset: Dataset, data_dict: Dict[str, ndarray]) -> TensorDict:
+    def _data_dict_to_tensor_dict(self, data_dict: Dict[str, ndarray]) -> TensorDict:
         """
         :return: the given data dict converted to a TensorDict class
         """
@@ -210,12 +214,13 @@ class PostprocessingDataset(CachedDataset2):
 
             if dims is None:
                 feature_dims = [
-                    Dim(dimension=v, name=f"{name}_dim{i + 1}") for i, v in enumerate(dataset.get_data_shape(name))
+                    Dim(dimension=v, name=f"{name}_dim{i + 1}")
+                    for i, v in enumerate(self._dataset.get_data_shape(name))
                 ]
                 dims = [Dim(dimension=None, name=f"{name}_num_frames"), *feature_dims]
-                if dataset.is_data_sparse(name):
+                if self._dataset.is_data_sparse(name):
                     sparse_dim = Dim(
-                        dimension=dataset.get_data_dim(name) if dataset.is_data_sparse(name) else None,
+                        dimension=self._dataset.get_data_dim(name) if self._dataset.is_data_sparse(name) else None,
                         name=f"{name}_sparse",
                     )
                 self._dim_cache[name] = (dims, sparse_dim)
@@ -230,20 +235,6 @@ class PostprocessingDataset(CachedDataset2):
                 ) from exc
 
         return TensorDict({k: _make_tensor(k, v) for k, v in data_dict.items()})
-
-    def _iterate_dataset(self, dataset: Dataset) -> Iterator[TensorDict]:
-        """
-        :return: generator providing data samples in the form of a TensorDict
-        """
-        data_keys = dataset.get_data_keys()
-
-        seq_index = 0
-        while dataset.is_less_than_num_seqs(seq_index):
-            dataset.load_seqs(seq_index, seq_index + 1)
-            data = {data_key: dataset.get_data(seq_index, data_key) for data_key in data_keys}
-            data["seq_tag"] = str_to_numpy_array(dataset.get_tag(seq_index))
-            yield self._data_dict_to_tensor_dict(dataset, data)
-            seq_index += 1
 
     @staticmethod
     def _identity(x):
