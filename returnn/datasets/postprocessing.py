@@ -81,11 +81,11 @@ class PostprocessingDataset(CachedDataset2):
         super().__init__(**kwargs)
 
         if self.seq_ordering != "default":
-            raise ValueError(f"specify seq_ordering in wrapped dataset, not in {self.__class__.__name__}")
+            raise ValueError(f"{self}: specify seq_ordering in wrapped dataset, not in {self.__class__.__name__}")
         if map_seq is None and map_seq_stream is None:
-            raise ValueError("need to either set map_seq or map_seq_stream")
+            raise ValueError(f"{self}: need to either set map_seq or map_seq_stream")
         if map_seq and map_seq_stream:
-            raise ValueError("cannot set both map_seq and map_seq_stream")
+            raise ValueError(f"{self}: cannot set both map_seq and map_seq_stream")
 
         self._dataset_def = dataset
         self._map_seq = map_seq
