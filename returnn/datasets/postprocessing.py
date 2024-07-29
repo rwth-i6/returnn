@@ -220,7 +220,7 @@ class PostprocessingDataset(CachedDataset2):
                     Dim(dimension=v, name=f"{name}_dim{i + 1}")
                     for i, v in enumerate(self._dataset.get_data_shape(name))
                 ]
-                dims = [Dim(dimension=None, name=f"{name}_num_frames"), *feature_dims]
+                dims = [Dim(dimension=None, name=f"{name}_frame"), *feature_dims]
                 if self._dataset.is_data_sparse(name):
                     sparse_dim = Dim(
                         dimension=self._dataset.get_data_dim(name) if self._dataset.is_data_sparse(name) else None,
