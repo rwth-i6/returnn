@@ -148,7 +148,7 @@ class PostprocessingDataset(CachedDataset2):
         """
         super().init_seq_order(epoch=epoch, seq_list=seq_list, seq_order=seq_order)
 
-        if epoch is None:
+        if epoch is None and seq_list is None and seq_order is None:
             self._num_seqs = 0
             return True
 
