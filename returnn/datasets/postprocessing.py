@@ -37,6 +37,11 @@ class PostprocessingDataset(CachedDataset2):
     multiple-segments-level function.
 
     Example usage:
+        from returnn.tensor.dim import Dim, DimTypes
+
+        time_dim = Dim(None, kind=DimTypes.Spatial)
+        new_data_dim = Dim(128)
+
         train = {
             "class": "PostprocessingDataset",
             "dataset": {
@@ -46,6 +51,10 @@ class PostprocessingDataset(CachedDataset2):
             # at least one of them:
             "map_seq": map_seq,  # (data: TensorDict) -> TensorDict
             "map_seq_stream": map_seqs,  # (iter: Iterator[TensorDict]) -> Iterator[TensorDict]
+            # only required when data shapes change wrt. the wrapped dataset:
+            "map_outputs": {
+                "data": { "dims": [time_dim, new_data_dim] },
+            },
         }
     """
 
@@ -65,7 +74,7 @@ class PostprocessingDataset(CachedDataset2):
             Allows merging multiple segments into one, or generating multiple output segments from one input segment.
             When both functions are specified, the segment-level function is applied first to every segment, and the
             results are passed to the iterator-level function.
-        :param output: Type and axis specification of the outputs of the mapping functions,
+        :param map_outputs: Type and axis specification of the outputs of the mapping functions,
             like extern_data and model_outputs.
             To simplify the common case when no shapes change, this value can be left unspecified. The dataset then
             assumes the same data layout as returned by the wrapped dataset.
