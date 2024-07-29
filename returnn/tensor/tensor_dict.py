@@ -79,7 +79,6 @@ class TensorDict:
         include_scalar_dyn_sizes: bool = True,
         exclude_duplicate_dims: bool = False,
         expected_value_type: Union[Type, Sequence[Type]] = object,
-        exclude_sequence_lengths: bool = False,
     ) -> Dict[str, Any]:
         """
         :return: dict of raw tensors, including any sequence lengths / dynamic sizes
@@ -93,8 +92,6 @@ class TensorDict:
                 value.raw_tensor, expected_value_type
             ), f"key {key} {value}: unexpected {type(value.raw_tensor)}, expected {expected_value_type}"
             out[key] = value.raw_tensor
-            if exclude_sequence_lengths:
-                continue
             for i, dim in enumerate(value.dims):
                 if exclude_duplicate_dims and dim in visited_dims:
                     continue

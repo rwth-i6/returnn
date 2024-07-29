@@ -175,7 +175,7 @@ class PostprocessingDataset(CachedDataset2):
                 return None
             if loaded_seq_idx != seq_idx:
                 continue
-            seq = DatasetSeq(features=tensor_dict.as_raw_tensor_dict(exclude_sequence_lengths=True), seq_idx=seq_idx)
+            seq = DatasetSeq(features={k: t.raw_tensor for k, t in tensor_dict.data.items()}, seq_idx=seq_idx)
             return seq
 
     def _build_dataset_iter(self, dataset: Dataset) -> Iterator[TensorDict]:
