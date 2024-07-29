@@ -89,7 +89,6 @@ class PostprocessingDataset(CachedDataset2):
         self._dataset: Optional[Dataset] = None
         self._data_keys: Optional[List[str]] = None
         self._data_iter: Optional[Iterator[Tuple[int, TensorDict]]] = None
-        self._data_iter_seq_idx = -1
         self._default_input: Optional[str] = None
         self._dim_cache: Dict[str, Tuple[List[Dim], Optional[Dim]]] = {}
 
@@ -157,18 +156,15 @@ class PostprocessingDataset(CachedDataset2):
         assert self._dataset is not None
         self._dataset.init_seq_order(epoch=epoch, seq_list=seq_list, seq_order=seq_order)
         self._data_iter = enumerate(self._build_dataset_iter())
-        self._data_iter_seq_idx = -1
         return True
 
     def _collect_single_seq(self, seq_idx: int) -> Optional[DatasetSeq]:
-        assert seq_idx > self._data_iter_seq_idx, "collecting seqs must be done strictly monotonically"
-        self._data_iter_seq_idx = seq_idx
-
         while True:
             try:
                 loaded_seq_idx, tensor_dict = next(self._data_iter)
             except StopIteration:
                 return None
+            assert loaded_seq_idx <= seq_idx, "_collect_single_seq must be done monotonically"
             if loaded_seq_idx != seq_idx:
                 continue
             seq = DatasetSeq(features={k: t.raw_tensor for k, t in tensor_dict.data.items()}, seq_idx=seq_idx)
