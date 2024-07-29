@@ -30,7 +30,7 @@ from ._tensor_op_overloads import _TensorOpOverloadsMixin
 import returnn.tensor._tensor_extra as _tensor_extra
 
 
-__all__ = ["Tensor"]
+__all__ = ["ShapeMismatchException", "Tensor"]
 
 
 RawTensorType = TypeVar("RawTensorType")  # e.g. torch.Tensor, tf.Tensor, numpy.ndarray, ...
