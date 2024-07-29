@@ -103,8 +103,8 @@ class PostprocessingDataset(CachedDataset2):
 
             def _make_tensor_template(name: str) -> Tensor:
                 feature_dims = [
-                    Dim(dimension=v, name=f"{name}_dim{i + 1}")
-                    for i, v in enumerate(self._dataset.get_data_shape(name))
+                    Dim(dimension=dim, name=f"{name}_dim{i + 1}")
+                    for i, dim in enumerate(self._dataset.get_data_shape(name))
                 ]
                 dims = [Dim(dimension=None, name=f"{name}_frame"), *feature_dims]
                 sparse_dim = None
@@ -131,11 +131,11 @@ class PostprocessingDataset(CachedDataset2):
         self.num_inputs = self.num_outputs[self._default_input][0]
 
         self.labels = {}
-        for k, v in self._dim_template_dict.data.items():
-            if v.vocab:
-                self.labels[k] = v.vocab.labels
-            elif v.sparse_dim:  # sparse_dim but not vocab
-                self.labels[k] = list(map(str, range(v.sparse_dim.dimension)))  # dummy labels
+        for k, t in self._dim_template_dict.data.items():
+            if t.vocab:
+                self.labels[k] = t.vocab.labels
+            elif t.sparse_dim:  # sparse_dim but not vocab
+                self.labels[k] = list(map(str, range(t.sparse_dim.dimension)))  # dummy labels
 
     def init_seq_order(
         self, epoch: Optional[int] = None, seq_list: Optional[List[str]] = None, seq_order: Optional[List[int]] = None
