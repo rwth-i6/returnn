@@ -10,6 +10,7 @@ from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple, Union
 from returnn.datasets.basic import DatasetSeq
 from returnn.tensor import Tensor, TensorDict
 from returnn.tensor.dim import Dim
+from returnn.tensor.tensor import ShapeMismatchException
 from .basic import Dataset, init_dataset
 from .cached2 import CachedDataset2
 from .util.strings import str_to_numpy_array
@@ -227,8 +228,8 @@ class PostprocessingDataset(CachedDataset2):
 
             try:
                 return Tensor(name, dims=dims, dtype=dtype, sparse_dim=sparse_dim, raw_tensor=data)
-            except Exception as exc:
-                raise Exception(
+            except ShapeMismatchException as exc:
+                raise ShapeMismatchException(
                     "Could not convert from mapping function output to `TensorDict`, "
                     f"do the data shapes {data.shape} match up with the ones declared "
                     f"in `map_output` (inferred to: {dims}, sparse={sparse_dim})?"
