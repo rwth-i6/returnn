@@ -181,7 +181,7 @@ class PostprocessingDataset(CachedDataset2):
 
         assert self._dataset is not None
         self._dataset.init_seq_order(epoch=epoch, seq_list=seq_list, seq_order=seq_order)
-        self._data_iter = enumerate(self._build_dataset_iter())
+        self._data_iter = enumerate(self._build_mapping_iter())
         return True
 
     def _collect_single_seq(self, seq_idx: int) -> Optional[DatasetSeq]:
@@ -196,11 +196,10 @@ class PostprocessingDataset(CachedDataset2):
             seq = DatasetSeq(features={k: t.raw_tensor for k, t in tensor_dict.data.items()}, seq_idx=seq_idx)
             return seq
 
-    def _build_dataset_iter(self) -> Iterator[TensorDict]:
+    def _build_mapping_iter(self) -> Iterator[TensorDict]:
         """
         :return: an iterator applying both the segment level and across-segment transformations on the given dataset
         """
-
         data_iter = self._iterate_dataset()
         if self._map_seq_stream is None:
             return data_iter
