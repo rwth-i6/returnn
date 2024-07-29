@@ -10,7 +10,7 @@ from returnn.datasets.basic import DatasetSeq
 from returnn.datasets.util.vocabulary import Vocabulary
 from returnn.tensor import Tensor, TensorDict
 from returnn.tensor.dim import Dim
-from .basic import Dataset, init_dataset
+from .basic import init_dataset
 from .cached2 import CachedDataset2
 
 __all__ = ["PostprocessingDataset"]
@@ -90,19 +90,10 @@ class PostprocessingDataset(CachedDataset2):
         self._map_seq_stream = map_seq_stream
         self._map_outputs = map_outputs
 
-        self._dataset: Optional[Dataset] = None
-        self._data_keys: Optional[List[str]] = None
-        self._data_iter: Optional[Iterator[Tuple[int, TensorDict]]] = None
-        self._default_input: Optional[str] = None
-        self._dim_template_dict: Optional[TensorDict] = None
-
-    def initialize(self):
-        """init"""
-        if self._dataset is not None:
-            return
-
         self._dataset = init_dataset(self._dataset_def, parent_dataset=self)
         self._estimated_num_seqs = self._dataset.estimated_num_seqs
+        self._data_iter: Optional[Iterator[Tuple[int, TensorDict]]] = None
+        self._dim_template_dict: Optional[TensorDict]
 
         if self._map_outputs is not None:
             self._dim_template_dict = TensorDict(self._map_outputs)
@@ -145,8 +136,6 @@ class PostprocessingDataset(CachedDataset2):
                 self.labels[k] = v.vocab.labels
             elif v.sparse_dim:  # sparse_dim but not vocab
                 self.labels[k] = list(map(str, range(v.sparse_dim.dimension)))  # dummy labels
-
-        super().initialize()
 
     def init_seq_order(
         self, epoch: Optional[int] = None, seq_list: Optional[List[str]] = None, seq_order: Optional[List[int]] = None
