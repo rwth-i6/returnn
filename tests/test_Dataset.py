@@ -1013,6 +1013,7 @@ def test_PostprocessingDataset():
         dataset.load_seqs(0, 2)
         for i in range(2):
             dataset.get_data(i, "classes")
+        assert i == 1
 
 
 if __name__ == "__main__":
