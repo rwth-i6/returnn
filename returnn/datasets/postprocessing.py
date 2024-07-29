@@ -109,11 +109,6 @@ class PostprocessingDataset(CachedDataset2):
             self.num_inputs = _meta_info_cache["num_inputs"]
             self.num_outputs = _meta_info_cache["num_outputs"]
 
-    def initialize(self):
-        """init"""
-        self._lazy_init_dataset()
-        super().initialize()
-
     @property
     def _meta_info_cache(self) -> Optional[Dict[str, Any]]:
         if self.num_outputs is None:
@@ -127,7 +122,7 @@ class PostprocessingDataset(CachedDataset2):
             "num_outputs": self.num_outputs,
         }
 
-    def _lazy_init_dataset(self):
+    def initialize(self):
         if self._dataset is not None:
             return
 
@@ -148,6 +143,8 @@ class PostprocessingDataset(CachedDataset2):
             self.num_inputs = self._dataset.num_inputs
             self.num_outputs = self._dataset.num_outputs
 
+        super().initialize()
+
     def init_seq_order(
         self, epoch: Optional[int] = None, seq_list: Optional[List[str]] = None, seq_order: Optional[List[int]] = None
     ):
@@ -163,7 +160,6 @@ class PostprocessingDataset(CachedDataset2):
             self._num_seqs = 0
             return True
 
-        self._lazy_init_dataset()
         assert self._dataset is not None
         self._dataset.init_seq_order(epoch=epoch, seq_list=seq_list, seq_order=seq_order)
         self._data_iter = enumerate(self._build_dataset_iter())
