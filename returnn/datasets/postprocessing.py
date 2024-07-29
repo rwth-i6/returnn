@@ -74,7 +74,6 @@ class PostprocessingDataset(CachedDataset2):
             like extern_data and model_outputs.
             To simplify the common case when no shapes change, this value can be left unspecified. The dataset then
             assumes the same data layout as returned by the wrapped dataset.
-        :param _meta_info_cache: internal usage
         :param kwargs: see :class:`CachedDataset2`, :class:`Dataset`
         """
         super().__init__(**kwargs)
