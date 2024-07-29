@@ -81,8 +81,8 @@ class PostprocessingDataset(CachedDataset2):
         ), "need to either define map_seq or map_seq_stream functions"
 
         self._dataset_def = dataset
-        self._map_seq = map_seq or self._identity
-        self._map_seq_stream = map_seq_stream or self._identity
+        self._map_seq = map_seq
+        self._map_seq_stream = map_seq_stream
         self._map_outputs = map_outputs
 
         self._dataset: Optional[Dataset] = None
@@ -190,14 +190,19 @@ class PostprocessingDataset(CachedDataset2):
                 data = {data_key: self._dataset.get_data(seq_index, data_key) for data_key in data_keys}
                 data["seq_tag"] = str_to_numpy_array(self._dataset.get_tag(seq_index))
                 tensor_dict = self._data_dict_to_tensor_dict(data)
-                mapped_tensor_dict = self._map_seq(tensor_dict)
-                assert isinstance(mapped_tensor_dict, TensorDict), "map_seq must produce a TensorDict"
-                yield mapped_tensor_dict
+                if self._map_seq is not None:
+                    tensor_dict = self._map_seq(tensor_dict)
+                    assert isinstance(tensor_dict, TensorDict), "map_seq must produce a TensorDict"
+                yield tensor_dict
                 seq_index += 1
 
-        map_iter = self._map_seq_stream(_iterate_dataset())
-        assert isinstance(map_iter, Iterator), "map_seq_stream must produce an Iterator"
-        return map_iter
+        data_iter = _iterate_dataset()
+        if self._map_seq_stream is None:
+            return data_iter
+
+        data_iter = self._map_seq_stream(data_iter)
+        assert isinstance(data_iter, Iterator), "map_seq_stream must produce an Iterator"
+        return data_iter
 
     def _data_dict_to_tensor_dict(self, data_dict: Dict[str, ndarray]) -> TensorDict:
         """
@@ -236,7 +241,3 @@ class PostprocessingDataset(CachedDataset2):
                 ) from exc
 
         return TensorDict({k: _make_tensor(k, v) for k, v in data_dict.items()})
-
-    @staticmethod
-    def _identity(x):
-        return x
