@@ -139,7 +139,9 @@ class PostprocessingDataset(CachedDataset2):
             self.num_inputs = self._dataset.num_inputs
             self.num_outputs = self._dataset.num_outputs
 
-    def init_seq_order(self, epoch: Optional[int] = None, seq_list=None, seq_order=None):
+    def init_seq_order(
+        self, epoch: Optional[int] = None, seq_list: Optional[List[str]] = None, seq_order: Optional[List[int]] = None
+    ):
         """
         :param epoch:
         :param seq_list:
