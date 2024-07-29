@@ -988,13 +988,12 @@ def test_PostprocessingDataset():
 
     i = 0
 
-    def _count(tdict: TensorDict) -> TensorDict:
-        nonlocal i
-        i += 1
-        return tdict
-
     def _repeat2(input_iter: Iterator[TensorDict]) -> Iterator[TensorDict]:
+        nonlocal i
+
         for tdict in input_iter:
+            i += 1
+
             yield tdict
             yield tdict
 
@@ -1002,7 +1001,6 @@ def test_PostprocessingDataset():
         ds_opts = {
             "class": "PostprocessingDataset",
             "dataset": sub_ds_opts,
-            "map_seq": _count,
             "map_seq_stream": _repeat2,
         }
         dataset = init_dataset(ds_opts)

@@ -48,7 +48,7 @@ class PostprocessingDataset(CachedDataset2):
                 "class": "HDFDataset",
                 "files": ["/path/to/data.hdf"],
             },
-            # at least one of them:
+            # one of them, but not both:
             "map_seq": map_seq,  # (data: TensorDict) -> TensorDict
             "map_seq_stream": map_seqs,  # (iter: Iterator[TensorDict]) -> Iterator[TensorDict]
             # only required when data shapes change wrt. the wrapped dataset:
@@ -83,12 +83,12 @@ class PostprocessingDataset(CachedDataset2):
         """
         super().__init__(**kwargs)
 
-        assert (
-            self.seq_ordering == "default"
-        ), f"specify seq_ordering in wrapped dataset, not in {self.__class__.__name__}"
-        assert (
-            map_seq is not None or map_seq_stream is not None
-        ), "need to either define map_seq or map_seq_stream functions"
+        if self.seq_ordering != "default":
+            raise ValueError(f"specify seq_ordering in wrapped dataset, not in {self.__class__.__name__}")
+        if map_seq is None and map_seq_stream is None:
+            raise ValueError("need to either set map_seq or map_seq_stream")
+        if map_seq and map_seq_stream:
+            raise ValueError("cannot set both map_seq and map_seq_stream")
 
         self._dataset_def = dataset
         self._map_seq = map_seq
