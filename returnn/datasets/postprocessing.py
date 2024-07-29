@@ -61,7 +61,6 @@ class PostprocessingDataset(CachedDataset2):
         map_seq: Optional[Union[Callable[[TensorDict], TensorDict]]] = None,
         map_seq_stream: Optional[Callable[[Iterator[TensorDict]], Iterator[TensorDict]]] = None,
         map_outputs: Optional[Dict[str, Any]] = None,
-        _meta_info_cache: Optional[Dict[str, Any]] = None,
         **kwargs,
     ):
         """
@@ -98,28 +97,8 @@ class PostprocessingDataset(CachedDataset2):
         self._default_input: Optional[str] = None
         self._dim_template_dict: Optional[TensorDict] = None
 
-        if _meta_info_cache:
-            self._default_input = _meta_info_cache["_default_input"]
-            self._dim_template_dict = _meta_info_cache["_dim_template_dict"]
-            self._estimated_num_seqs = _meta_info_cache["_estimated_num_seqs"]
-            self.labels = _meta_info_cache["labels"]
-            self.num_inputs = _meta_info_cache["num_inputs"]
-            self.num_outputs = _meta_info_cache["num_outputs"]
-
-    @property
-    def _meta_info_cache(self) -> Optional[Dict[str, Any]]:
-        if self.num_outputs is None:
-            return None
-        return {
-            "_default_input": self._default_input,
-            "_dim_template_dict": self._dim_template_dict,
-            "_estimated_num_seqs": self._estimated_num_seqs,
-            "labels": self.labels,
-            "num_inputs": self.num_inputs,
-            "num_outputs": self.num_outputs,
-        }
-
     def initialize(self):
+        """init"""
         if self._dataset is not None:
             return
 
