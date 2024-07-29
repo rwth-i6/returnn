@@ -36,7 +36,7 @@ class PostprocessingDataset(CachedDataset2):
     combined by first applying the segment-level function and then the
     multiple-segments-level function.
 
-    Example usage:
+    Example usage::
         from returnn.tensor.dim import Dim, DimTypes
 
         time_dim = Dim(None, kind=DimTypes.Spatial)
