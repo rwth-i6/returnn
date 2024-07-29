@@ -53,7 +53,7 @@ class PostprocessingDataset(CachedDataset2):
             "map_seq_stream": map_seqs,  # (iter: Iterator[TensorDict]) -> Iterator[TensorDict]
             # only required when data shapes change wrt. the wrapped dataset:
             "map_outputs": {
-                "data": { "dims": [time_dim, new_data_dim] },
+                "data": {"dims": [time_dim, new_data_dim]},
             },
         }
     """
