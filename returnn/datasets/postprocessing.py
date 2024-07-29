@@ -203,7 +203,6 @@ class PostprocessingDataset(CachedDataset2):
         data_iter = self._iterate_dataset()
         if self._map_seq_stream is None:
             return data_iter
-
         data_iter = self._map_seq_stream(data_iter)
         assert isinstance(data_iter, Iterator), "map_seq_stream must produce an Iterator"
         return data_iter
