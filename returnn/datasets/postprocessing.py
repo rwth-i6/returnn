@@ -106,7 +106,7 @@ class PostprocessingDataset(CachedDataset2):
 
     def initialize(self):
         """init"""
-        self._lazy_init_num_outputs()
+        self._lazy_init_dataset()
         super().initialize()
 
     @property
@@ -122,16 +122,16 @@ class PostprocessingDataset(CachedDataset2):
             "num_outputs": self.num_outputs,
         }
 
-    def _lazy_init_num_outputs(self):
-        if self.num_outputs is not None:
+    def _lazy_init_dataset(self):
+        if self._dataset is not None:
             return
 
-        dataset = init_dataset(self._dataset_def, parent_dataset=self)
-        self.labels = dataset.labels
+        self._dataset = init_dataset(self._dataset_def, parent_dataset=self)
+        self.labels = self._dataset.labels
         self._default_input = (
             "data" if not self._map_outputs or "data" in self._map_outputs else next(self._map_outputs.keys())
         )
-        self._estimated_num_seqs = dataset.estimated_num_seqs
+        self._estimated_num_seqs = self._dataset.estimated_num_seqs
 
         if self._map_outputs is not None:
             tdict = TensorDict(self._map_outputs)
@@ -140,8 +140,8 @@ class PostprocessingDataset(CachedDataset2):
             }
             self.num_inputs = self.num_outputs[self._default_input][0]
         else:
-            self.num_inputs = dataset.num_inputs
-            self.num_outputs = dataset.num_outputs
+            self.num_inputs = self._dataset.num_inputs
+            self.num_outputs = self._dataset.num_outputs
 
     def init_seq_order(self, epoch: Optional[int] = None, seq_list=None, seq_order=None):
         """
@@ -156,12 +156,11 @@ class PostprocessingDataset(CachedDataset2):
             self._num_seqs = 0
             return True
 
-        if self._dataset is None:
-            self._dataset = init_dataset(self._dataset_def, parent_dataset=self)
+        self._lazy_init_dataset()
+        assert self._dataset is not None
         self._dataset.init_seq_order(epoch=epoch, seq_list=seq_list, seq_order=seq_order)
         self._data_iter = enumerate(self._build_dataset_iter(self._dataset))
         self._data_iter_seq_idx = -1
-        self._lazy_init_num_outputs()
         return True
 
     def _collect_single_seq(self, seq_idx: int) -> Optional[DatasetSeq]:
