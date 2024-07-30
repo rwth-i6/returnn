@@ -985,13 +985,13 @@ def test_PostprocessingDataset():
         classes = dataset.get_data(0, "classes")
         assert all(c - 1337 >= 0 for c in classes)
 
-    i = 0
+    count = 0
 
     def _repeat2(input_iter: Iterator[TensorDict]) -> Iterator[TensorDict]:
-        nonlocal i
+        nonlocal count
 
         for tdict in input_iter:
-            i += 1
+            count += 1
 
             yield tdict
             yield tdict
@@ -1009,7 +1009,7 @@ def test_PostprocessingDataset():
         dataset.load_seqs(0, 2)
         for i in range(2):
             dataset.get_data(i, "classes")
-        assert i == 1
+        assert count == 1
 
 
 if __name__ == "__main__":
