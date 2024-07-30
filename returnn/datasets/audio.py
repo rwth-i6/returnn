@@ -400,6 +400,24 @@ class OggZipDataset(CachedDataset2):
         self._lazy_init()
         return len(self._data)
 
+    def get_data_dtype(self, key):
+        if key == "data":
+            return "float32"
+        elif key == "classes":
+            return "int32"
+        elif key == "raw":
+            return "string"
+        elif key == "orth":
+            return "uint8"
+        else:
+            raise ValueError(f"{self}: unknown data key: {key}")
+
+    def get_data_keys(self):
+        keys = ["classes", "orth", "raw"]
+        if self.feature_extractor is not None:
+            keys.append("data")
+        return keys
+
     def get_data_shape(self, key):
         """
         :returns get_data(*, key).shape[1:], i.e. num-frames excluded
@@ -408,7 +426,14 @@ class OggZipDataset(CachedDataset2):
         if key == "data" and self.feature_extractor is not None:
             if self.feature_extractor.num_channels is not None:
                 return [self.feature_extractor.num_channels, self.feature_extractor.get_feature_dimension()]
+        if key == "raw":
+            return []
         return super(OggZipDataset, self).get_data_shape(key)
+
+    def is_data_sparse(self, key):
+        if key == "raw":
+            return False
+        return super().is_data_sparse(key)
 
     def _get_transcription(self, corpus_seq_idx: int):
         """
