@@ -490,11 +490,11 @@ class OggZipDataset(CachedDataset2):
         """
         self._lazy_init()
         seq_tag = self._get_tag_from_info_dict(self._data[corpus_seq_idx])
+        data_features = {}
         if self.feature_extractor:
             with self._open_audio_file(corpus_seq_idx) as audio_file:
-                features = self.feature_extractor.get_audio_features_from_raw_bytes(audio_file, seq_name=seq_tag)
-        else:
-            features = numpy.zeros((), dtype=numpy.float32)  # currently the API requires some dummy values...
+                data = self.feature_extractor.get_audio_features_from_raw_bytes(audio_file, seq_name=seq_tag)
+            data_features = {"data": data}
         targets, txt = self._get_transcription(corpus_seq_idx)
         targets = numpy.array(targets, dtype="int32")
         raw_txt = str_to_numpy_array(txt)
@@ -506,8 +506,7 @@ class OggZipDataset(CachedDataset2):
             orth = list(map(ord, orth))
         orth = numpy.array(orth, dtype="uint8")
         return DatasetSeq(
-            features=features,
-            targets={"classes": targets, "raw": raw_txt, "orth": orth},
+            features={**data_features, "classes": targets, "raw": raw_txt, "orth": orth},
             seq_idx=corpus_seq_idx,
             seq_tag=seq_tag,
         )
