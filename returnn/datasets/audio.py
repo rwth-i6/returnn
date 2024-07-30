@@ -441,11 +441,6 @@ class OggZipDataset(CachedDataset2):
         """:return: whether data entry with `key` is sparse"""
         return key == "classes"
 
-    def is_data_sparse(self, key):
-        if key == "raw":
-            return False
-        return super().is_data_sparse(key)
-
     def _get_transcription(self, corpus_seq_idx: int):
         """
         :param corpus_seq_idx:
