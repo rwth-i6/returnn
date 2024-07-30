@@ -4,7 +4,7 @@ h5py
 nose
 pytest
 dm-tree
-tensorflow==2.11.1
+tensorflow==2.12.1
 torch
 torchaudio
 numpydoc
