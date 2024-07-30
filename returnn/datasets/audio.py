@@ -415,10 +415,12 @@ class OggZipDataset(CachedDataset2):
 
     def get_data_keys(self) -> List[str]:
         """:return: available data keys"""
-        keys = ["classes", "orth", "raw"]
+        keys = []
         if self.feature_extractor is not None:
             keys.append("data")
-        return keys
+        if self.targets is not None:
+            keys.append("classes")
+        return [*keys, "orth", "raw"]
 
     def get_data_shape(self, key):
         """
@@ -493,13 +495,14 @@ class OggZipDataset(CachedDataset2):
         """
         self._lazy_init()
         seq_tag = self._get_tag_from_info_dict(self._data[corpus_seq_idx])
-        data_features = {}
+        features = {}
         if self.feature_extractor:
             with self._open_audio_file(corpus_seq_idx) as audio_file:
                 data = self.feature_extractor.get_audio_features_from_raw_bytes(audio_file, seq_name=seq_tag)
-            data_features = {"data": data}
+            features["data"] = data
         targets, txt = self._get_transcription(corpus_seq_idx)
-        targets = numpy.array(targets, dtype="int32")
+        if self.targets is not None:
+            features["classes"] = numpy.array(targets, dtype="int32")
         raw_txt = str_to_numpy_array(txt)
         orth = txt.encode("utf8")
         if PY3:
@@ -509,7 +512,7 @@ class OggZipDataset(CachedDataset2):
             orth = list(map(ord, orth))
         orth = numpy.array(orth, dtype="uint8")
         return DatasetSeq(
-            features={**data_features, "classes": targets, "raw": raw_txt, "orth": orth},
+            features={**features, "raw": raw_txt, "orth": orth},
             seq_idx=corpus_seq_idx,
             seq_tag=seq_tag,
         )
