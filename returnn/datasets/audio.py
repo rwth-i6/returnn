@@ -429,8 +429,9 @@ class OggZipDataset(CachedDataset2):
         """
         if key == "data":
             assert self.feature_extractor is not None
-            assert self.feature_extractor.num_channels is not None
-            return [self.feature_extractor.num_channels, self.feature_extractor.get_feature_dimension()]
+            if self.feature_extractor.num_channels is not None:
+                return [self.feature_extractor.num_channels, self.feature_extractor.get_feature_dimension()]
+            return [self.feature_extractor.get_feature_dimension()]
         elif key in ["classes", "orth", "raw"]:
             return []
         else:
