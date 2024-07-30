@@ -3,7 +3,8 @@ Some generic debugging utilities.
 """
 
 from __future__ import annotations
-from typing import Optional, Any, Dict
+from typing import TYPE_CHECKING, Optional, Union, Any, Sequence, Callable, Tuple, List, Dict
+from types import FunctionType
 import os
 import sys
 import signal
@@ -13,6 +14,11 @@ try:
 except ImportError:
     import _thread as thread
 import threading
+
+
+if TYPE_CHECKING:
+    from returnn.tensor import Tensor, Dim
+    import torch
 
 
 signum_to_signame = {
@@ -539,3 +545,184 @@ def debug_shell(
     if exit_afterwards:
         print("Debug shell exit. Exit now.")
         sys.exit(1)
+
+
+class PyTracer:
+    """
+    Trace Python function execution to get intermediate outputs from the local variables.
+
+    E.g. for PyTorch code, when comparing results, it can be useful to see the intermediate tensors.
+
+    Example::
+
+        with PyTracer([my_func], torch.Tensor) as trace_my_impl:
+            ...
+
+        with PyTracer([reference_func], torch.Tensor) as trace_ref_impl:
+            ...
+
+    Or another example::
+
+        from returnn.tensor import Tensor
+
+        with PyTracer([my_func], Tensor) as trace_my_impl:
+            ...
+
+        with PyTracer([reference_func], torch.Tensor) as trace_ref_impl:
+            ...
+
+        check_py_traces_rf_to_pt_equal(trace_my_impl.captured_locals, trace_ref_impl.captured_locals, [...])
+
+    See also :func:`check_py_traces_rf_to_pt_equal` to compare the traces.
+    """
+
+    def __init__(
+        self, funcs_to_trace_list: Sequence[Union[Callable, FunctionType]], capture_type: Union[type, Tuple[type, ...]]
+    ):
+        """
+        :param funcs_to_trace_list: list of functions to trace the locals. only those functions will be traced.
+        :param capture_type: only capture variables of this type, e.g. torch.Tensor.
+        """
+        self.funcs_to_trace_list = []
+        for func in funcs_to_trace_list:
+            # E.g. when the function was decorated, see functools.wraps.
+            while getattr(func, "__wrapped__", None) is not None:
+                func = func.__wrapped__
+            self.funcs_to_trace_list.append(func)
+        self._code_obj_to_func = {func.__code__: func for func in self.funcs_to_trace_list}
+        self.capture_type = capture_type
+
+        self._prev_trace_func = None
+        self.captured_locals = {}  # func -> (list of calls) -> tensor local name -> (list of versions) -> tensor
+
+    def __enter__(self) -> PyTracer:
+        self._prev_trace_func = sys.gettrace()
+        # Note: We might get such a warning here when using PyDev/PyCharm:
+        #   PYDEV DEBUGGER WARNING:
+        #   sys.settrace() should not be used when the debugger is being used.
+        #   This may cause the debugger to stop working correctly.
+        # This is ok.
+        # In fact, we even call this prev_trace_func in our own __call__ as well,
+        # so debugging (breakpoints etc.) should still work (I tested it.).
+        sys.settrace(self)
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        sys.settrace(self._prev_trace_func)
+        self._prev_trace_func = None
+
+    def __call__(self, frame, event, arg) -> Optional[PyTracer]:
+        """
+        Trace func to get intermediate outputs.
+        """
+        prev_trace_func_res = None
+        if self._prev_trace_func:
+            prev_trace_func_res = self._prev_trace_func(frame, event, arg)
+        func = self._code_obj_to_func.get(frame.f_code)
+        if func:
+            if event == "call":
+                self.captured_locals.setdefault(func, []).append({})
+            else:
+                for k, v in frame.f_locals.items():
+                    if not isinstance(v, self.capture_type):
+                        continue
+                    prev = self.captured_locals[func][-1].get(k, None)
+                    if prev is None or prev[-1] is not v:
+                        print(f"{func.__qualname__} tensor var changed: {k} = {v}")
+                        self.captured_locals[func][-1].setdefault(k, []).append(v)
+            return self
+        return prev_trace_func_res
+
+
+def check_py_traces_rf_to_pt_equal(
+    trace_rf: Dict[Callable, List[Dict[str, List[Tensor]]]],
+    trace_pt: Dict[Callable, List[Dict[str, List[torch.Tensor]]]],
+    checks: List[
+        Tuple[
+            Tuple[Callable, int, str, int],
+            Tuple[Callable, int, str, int],
+            Union[Tuple[Union[Dim, str], ...], Callable[[torch.Tensor], Tensor]],
+        ],
+    ],
+):
+    """
+    Compares traces from some RETURNN-frontend (RF) based implementation
+    with some pure PyTorch (PT) based implementation.
+
+    :param trace_rf: RETURNN-frontend trace, from :class:`PyTracer`
+    :param trace_pt: pure PyTorch trace, from :class:`PyTracer`
+    :param checks: list of checks to perform. each check is a tuple of:
+        - RF trace entry, e.g. (func, i, name, j)
+        - PT trace entry, e.g. (func, i, name, j)
+        - PT dims, e.g. (batch_dim, other_dim, ...).
+            Instead of Dim, you can also use a string, which will be resolved from the RF trace
+            (then you also need ``Dim`` in ``capture_type`` of the :class:`PyTracer`).
+            If callable, it gets the PyTorch tensor and should return the RETURNN tensor.
+            Sometimes you might want to perform some reshaping, slicing, or similar,
+            and then use rf.convert_to_tensor.
+    """
+    import random
+    import torch
+    from returnn.tensor import Tensor, Dim
+    import returnn.frontend as rf
+
+    # noinspection PyProtectedMember
+    from torch.testing._comparison import make_tensor_mismatch_msg
+
+    dummy_forward_compat_kwargs = {f"_random_forward_compat_arg_{random.randint(0, 1_000_000)}": "please"}
+
+    def _get_entry(trace, func, i, name, j):
+        while getattr(func, "__wrapped__", None) is not None:
+            func = func.__wrapped__
+        return trace[func][i][name][j]
+
+    def _resolve_dim(dim: Union[Dim, str]) -> Dim:
+        if isinstance(dim, Dim):
+            return dim
+        elif isinstance(dim, str):
+            dim = _get_entry(trace_rf, *check_rf[:2], dim, -1)
+            assert isinstance(dim, Dim)
+            return dim
+        else:
+            raise TypeError(f"invalid dim type: {dim!r}")
+
+    non_matching = []
+    for check_rf, check_pt, pt_dims in checks:
+        print(f"checking {check_rf} vs {check_pt} ({pt_dims})...")
+        tensor_rf: Tensor = _get_entry(trace_rf, *check_rf)
+        tensor_pt: torch.Tensor = _get_entry(trace_pt, *check_pt)
+        if callable(pt_dims):
+            tensor_pt_ = pt_dims(tensor_pt, name=check_pt[2], resolve_dim=_resolve_dim, **dummy_forward_compat_kwargs)
+        else:
+            pt_dims = [_resolve_dim(dim) for dim in pt_dims]
+            tensor_pt_ = rf.convert_to_tensor(tensor_pt, dims=pt_dims, name=check_pt[2])
+        tensor_pt_ = tensor_pt_.copy_transpose(tensor_rf.dims)
+        tensor_rf = tensor_rf.copy_masked(0.0)
+        tensor_pt_ = tensor_pt_.copy_masked(0.0)
+        rtol, atol = 1e-4, 1e-5  # defaults from torch.testing.assert_allclose
+        matches = torch.isclose(tensor_rf.raw_tensor, tensor_pt_.raw_tensor, rtol=rtol, atol=atol)
+        if matches.all():
+            print("  matched!")
+        else:
+            msgs = make_tensor_mismatch_msg(
+                tensor_rf.raw_tensor, tensor_pt_.raw_tensor, matches, rtol=rtol, atol=atol, identifier="Tensors"
+            )
+            msgs_prefix = [
+                f"{check_rf} vs {check_pt}:",
+                f"  RF: {tensor_rf} {tensor_rf.raw_tensor}",
+                f"  PT: {tensor_pt_} {tensor_pt_.raw_tensor}",
+            ]
+            msgs = ["  " + line for line in msgs.splitlines() if line and "Tensors are not " not in line]
+            indices = (~matches).nonzero().detach().cpu()
+            for idx in indices[:5]:
+                idx = tuple(idx.numpy())
+                msgs.append(f"  non-matching at {idx}: RF={tensor_rf.raw_tensor[idx]} PT={tensor_pt_.raw_tensor[idx]}")
+            if len(indices) > 5:
+                msgs.append("  non-matching ...")
+            non_matching.append("\n".join(msgs_prefix + msgs))
+            print(f"  mismatch!")
+            for msg in msgs:
+                print(msg)
+
+    if non_matching:
+        raise AssertionError("\n\n".join(non_matching))
