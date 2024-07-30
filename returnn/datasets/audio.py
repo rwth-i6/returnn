@@ -422,23 +422,25 @@ class OggZipDataset(CachedDataset2):
             keys.append("classes")
         return [*keys, "orth", "raw"]
 
-    def get_data_shape(self, key):
+    def get_data_shape(self, key: str):
         """
         :returns get_data(*, key).shape[1:], i.e. num-frames excluded
         :rtype: list[int]
         """
+        assert key in self.get_data_keys()
         if key == "data" and self.feature_extractor is not None:
-            if self.feature_extractor.num_channels is not None:
-                return [self.feature_extractor.num_channels, self.feature_extractor.get_feature_dimension()]
-        if key == "raw":
+            assert self.feature_extractor is not None
+            assert self.feature_extractor.num_channels is not None
+            return [self.feature_extractor.num_channels, self.feature_extractor.get_feature_dimension()]
+        elif key in ["classes", "orth", "raw"]:
             return []
-        return super(OggZipDataset, self).get_data_shape(key)
+        else:
+            raise ValueError(f"{self}: unknown data key {key}")
 
-    def is_data_sparse(self, key) -> bool:
+    def is_data_sparse(self, key: str) -> bool:
         """:return: whether data entry with `key` is sparse"""
-        if key == "raw":
-            return False
-        return super().is_data_sparse(key)
+        assert key in self.get_data_keys()
+        return key == "classes"
 
     def _get_transcription(self, corpus_seq_idx: int):
         """
