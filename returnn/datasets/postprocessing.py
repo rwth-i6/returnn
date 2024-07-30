@@ -77,7 +77,7 @@ class PostprocessingDataset(CachedDataset2):
             like extern_data and model_outputs.
             To simplify the common case when no shapes change, this value can be left unspecified. The dataset then
             assumes the same data layout as returned by the wrapped dataset.
-            Example: `map_outputs={"data":{"dim": 42}}`
+            Example: `map_outputs={"data": {"dim": 42}}`
         :param kwargs: see :class:`CachedDataset2`, :class:`Dataset`
         """
         super().__init__(**kwargs)
