@@ -336,9 +336,9 @@ jobs:
       fail-fast: false
       matrix:
         python-version:
-          - 3.7
+          - "3.10"
         torch-version:
-          - 1.13.1
+          - 2.0.0
         tf-version:
           - 2.10.0
         action:
@@ -360,9 +360,10 @@ jobs:
           - TEST=rf_reduce
           - TEST=rf_signal
         include:
+          # Some selected tests (but not all) with some other versions.
           - action: TEST=rf_base
-            python-version: "3.10"
-            torch-version: 2.0.0  # needs PyTorch >=2.0 for grad scope test
+            python-version: 3.7
+            torch-version: 1.13.1
             tf-version: 2.10.0
 
     steps:
