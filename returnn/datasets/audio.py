@@ -400,7 +400,8 @@ class OggZipDataset(CachedDataset2):
         self._lazy_init()
         return len(self._data)
 
-    def get_data_dtype(self, key):
+    def get_data_dtype(self, key: str) -> str:
+        """:return: dtype of data entry with `key`"""
         if key == "data":
             return "float32"
         elif key == "classes":
@@ -412,7 +413,8 @@ class OggZipDataset(CachedDataset2):
         else:
             raise ValueError(f"{self}: unknown data key: {key}")
 
-    def get_data_keys(self):
+    def get_data_keys(self) -> List[str]:
+        """:return: available data keys"""
         keys = ["classes", "orth", "raw"]
         if self.feature_extractor is not None:
             keys.append("data")
@@ -430,7 +432,8 @@ class OggZipDataset(CachedDataset2):
             return []
         return super(OggZipDataset, self).get_data_shape(key)
 
-    def is_data_sparse(self, key):
+    def is_data_sparse(self, key) -> bool:
+        """:return: whether data entry with `key` is sparse"""
         if key == "raw":
             return False
         return super().is_data_sparse(key)
