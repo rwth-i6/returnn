@@ -16,6 +16,7 @@ __all__ = [
     "SelfAttention",
     "CausalSelfAttention",
     "CausalSelfAttentionState",
+    "RotaryPosCausalSelfAttention",
     "RelPosSelfAttention",
     "RelPosCausalSelfAttention",
     "CrossAttention",
@@ -261,6 +262,69 @@ class CausalSelfAttentionState(rf.State):
             self.k_accum = k_accum
             self.v_accum = v_accum
             self.accum_axis = accum_axis
+
+
+class RotaryPosCausalSelfAttention(CausalSelfAttention):
+    """
+    Rotary positional encoding (RoPE)-based causal self attention
+    """
+
+    def __call__(
+        self,
+        source: Tensor,
+        axis: Dim,
+        *,
+        state: Optional[CausalSelfAttentionState] = None,
+    ) -> Tuple[Tensor, CausalSelfAttentionState]:
+        """forward"""
+        q, k, v = self.forward_qkv(source)
+        k, v, hist_dim, new_state = _causal_self_att_step(k, v, axis=axis, state=state, self=self)
+
+        # Apply RoPE using sinusoidal positional encoding.
+        # Note: base is a bit different in rf.sinusoidal_positional_encoding (like the original)
+        # vs how it's commonly used for RoPE.
+        # log(base) / (dim / 2 - 1) = log(10_000) * 2 / dim
+        # <=> log(base) = log(10_000) * (dim / 2 - 1) * 2 / dim = log(10_000) * (1 - 2 / dim)
+        # <=> base = 10_000 ** (1 - 2 / dim)
+        pos_enc = rf.sinusoidal_positional_encoding(
+            spatial_dim=hist_dim,
+            feat_dim=self.key_dim_per_head,
+            base=10_000 ** (1 - 2 / self.key_dim_per_head.dimension),
+        )  # [T,D]
+        q = _apply_rope(
+            q,
+            (
+                rf.gather(pos_enc, axis=hist_dim, indices=hist_dim.dyn_size_ext - 1)
+                if axis == single_step_dim
+                else rf.replace_dim(pos_enc, in_dim=hist_dim, out_dim=axis)[0]
+            ),
+            self.key_dim_per_head,
+        )
+        k = _apply_rope(k, pos_enc, self.key_dim_per_head)
+
+        output = self.attention(q, k, v, kv_axis=hist_dim)
+        return output, new_state
+
+
+def _apply_rope(x: Tensor, pos_enc: Tensor, feat_dim: Dim) -> Tensor:
+    """
+    :param x: [...,T,D] or [...,D]
+    :param pos_enc: [T,D] or [D]
+    :param feat_dim: D
+    :return: [...,T,D] or [...,D]
+    """
+    feat_half_dim = feat_dim.div_left(2)
+    pe_imag, pe_real = rf.split(pos_enc, axis=feat_dim, out_dims=[feat_half_dim] * 2)  # [T,D/2]
+    # pe_imag = sin, pe_real = cos
+    d2 = Dim(2, name="complex")
+    x = rf.split_dims(x, axis=feat_dim, dims=(feat_half_dim, d2))  # [...,T,D/2,2]
+    x_real = rf.gather(x, indices=0, axis=d2)
+    x_imag = rf.gather(x, indices=1, axis=d2)
+    x_real_ = x_real * pe_real - x_imag * pe_imag
+    x_imag_ = x_real * pe_imag + x_imag * pe_real
+    x_, _ = rf.stack((x_real_, x_imag_), out_dim=d2)  # [...,T,D/2,2]
+    x_, _ = rf.merge_dims(x_, dims=(feat_half_dim, d2), out_dim=feat_dim)  # [...,T,D]
+    return x_
 
 
 class RelPosSelfAttention(SelfAttentionBase):

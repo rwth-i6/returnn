@@ -12,6 +12,18 @@ from returnn.tensor import Tensor, Dim, TensorDict, batch_dim
 from rf_utils import run_model, tf_scope
 
 
+def _setup():
+    try:
+        import lovely_tensors
+
+        lovely_tensors.monkey_patch()
+    except ImportError:
+        pass
+
+
+_setup()
+
+
 def test_dot_attention():
     time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
     key_dim = Dim(7, name="key")
@@ -199,6 +211,233 @@ def test_causal_self_attention():
         # TF needs TensorArray unstack, not implemented yet
         test_tensorflow=False,
     )
+
+
+def test_rotary_embedding():
+    import torch
+    from transformers.models.llama.modeling_llama import LlamaConfig, LlamaRotaryEmbedding
+
+    config = LlamaConfig(
+        vocab_size=11,
+        hidden_size=64,
+        intermediate_size=64 * 4,
+        num_hidden_layers=2,
+        num_attention_heads=2,
+        max_position_embeddings=128,
+    )
+    model_hf = LlamaRotaryEmbedding(config=config)
+
+    rf.select_backend_torch()
+    rf.set_random_seed(42)
+
+    batch_dim = Dim(3, name="batch")
+    seq_dim = Dim(rf.random_uniform([batch_dim], minval=7, maxval=13, dtype="int32"), name="seq")
+    model_head_dim = Dim(config.hidden_size // config.num_attention_heads, name="model_head")
+
+    # base is a bit different in rf.sinusoidal_positional_encoding (like the original)
+    # vs how it's used for RoPE.
+    # log(base) / (dim / 2 - 1) = log(10_000) * 2 / dim
+    # <=> log(base) = log(10_000) * (dim / 2 - 1) * 2 / dim = log(10_000) * (1 - 2 / dim)
+    # <=> base = 10_000 ** (1 - 2 / dim)
+    out_rf = rf.sinusoidal_positional_encoding(
+        spatial_dim=seq_dim, feat_dim=model_head_dim, base=10_000 ** (1 - 2 / model_head_dim.dimension)
+    )
+    print("out_rf:", out_rf)
+    # For the comparison below.
+    out_rf = rf.expand_dim(out_rf, batch_dim)
+    out_rf = out_rf.copy_transpose((batch_dim, seq_dim, model_head_dim))
+    # Split the sin/cos for the comparison below.
+    out_rf_sin, out_rf_cos = rf.split(out_rf, axis=model_head_dim, out_dims=[model_head_dim.div_left(2)] * 2)
+    print("out_rf':", out_rf_sin, out_rf_cos)
+
+    position_ids = rf.expand_dim(rf.range_over_dim(seq_dim), batch_dim)  # LlamaRotaryEmbedding wants this
+    out_hf_cos, out_hf_sin = model_hf(
+        torch.zeros(()), position_ids=position_ids.copy_compatible_to_dims_raw((batch_dim, seq_dim))
+    )
+    print("out_hf:", out_hf_sin, out_hf_cos)
+    # The values are just repeated. Cut off the second half for comparison.
+    out_hf_cos = out_hf_cos[:, :, : out_hf_cos.shape[-1] // 2]
+    out_hf_sin = out_hf_sin[:, :, : out_hf_sin.shape[-1] // 2]
+    print("out_hf':", out_hf_sin, out_hf_cos)
+
+    assert out_rf_sin.raw_tensor.shape == out_hf_sin.shape
+    assert out_rf_cos.raw_tensor.shape == out_hf_cos.shape
+    torch.testing.assert_allclose(out_rf_sin.raw_tensor, out_hf_sin)
+    torch.testing.assert_allclose(out_rf_cos.raw_tensor, out_hf_cos)
+
+
+def test_rope_causal_self_att():
+    import torch
+    from returnn.util.pprint import pprint
+    from returnn.util.debug import PyTracer, check_py_traces_rf_to_pt_equal
+
+    # noinspection PyProtectedMember
+    from returnn.frontend.attention import _apply_rope as rf_apply_rope
+    from returnn.frontend.conversions.hf_llama import import_params_hf_llama_att_to_rf_rotary_att
+
+    from transformers.models.llama.modeling_llama import (
+        LlamaAttention,
+        LlamaRotaryEmbedding,
+        LlamaConfig,
+        apply_rotary_pos_emb,
+    )
+
+    config = LlamaConfig(
+        vocab_size=11,
+        hidden_size=64,
+        intermediate_size=64 * 4,
+        num_hidden_layers=2,
+        num_attention_heads=2,
+        max_position_embeddings=128,
+    )
+
+    model_hf = LlamaAttention(config, layer_idx=0)
+
+    rf.select_backend_torch()
+    rf.set_random_seed(42)
+
+    model_dim = Dim(config.hidden_size, name="model")
+    model_rf = rf.RotaryPosCausalSelfAttention(
+        in_dim=model_dim,
+        proj_dim=model_dim,
+        num_heads=config.num_attention_heads,
+        key_dim_total=model_dim,
+        value_dim_total=model_dim,
+        with_bias=False,
+    )
+    import_params_hf_llama_att_to_rf_rotary_att(model_hf, model_rf)
+
+    batch_dim = Dim(3, name="batch")
+    seq_dim = Dim(rf.random_uniform([batch_dim], minval=7, maxval=13, dtype="int32"), name="seq")
+    in_ = rf.random_uniform([batch_dim, seq_dim, model_dim])
+    in_.name = "input"
+
+    with PyTracer(
+        [rf.RotaryPosCausalSelfAttention.__call__, rf.sinusoidal_positional_encoding, rf.dot_attention, rf_apply_rope],
+        (Tensor, Dim),
+    ) as trace_rf:
+        out_rf, _ = model_rf(in_, axis=seq_dim, state=model_rf.default_initial_state(batch_dims=[batch_dim]))
+        out_rf = out_rf.copy_transpose((batch_dim, seq_dim, model_dim))
+    pprint(trace_rf.captured_locals)
+
+    position_ids = rf.expand_dim(rf.range_over_dim(seq_dim), batch_dim)  # LlamaRotaryEmbedding wants this
+    with PyTracer(
+        [LlamaAttention.forward, LlamaRotaryEmbedding.forward, apply_rotary_pos_emb], torch.Tensor
+    ) as trace_hf:
+        # causal_mask code copied from LlamaAttention
+        sequence_length = target_length = in_.raw_tensor.shape[1]
+        causal_mask = torch.full(
+            (sequence_length, target_length),
+            fill_value=torch.finfo(in_.raw_tensor.dtype).min,
+            dtype=in_.raw_tensor.dtype,
+            device=in_.raw_tensor.device,
+        )
+        causal_mask = torch.triu(causal_mask, diagonal=1)
+        cache_position = torch.arange(0, in_.raw_tensor.shape[1], device=in_.raw_tensor.device)
+        causal_mask *= torch.arange(target_length, device=cache_position.device) > cache_position.reshape(-1, 1)
+        causal_mask = causal_mask[None, None, :, :].expand(in_.raw_tensor.shape[0], 1, -1, -1)
+        rotary_emb = LlamaRotaryEmbedding(config=config)
+        position_embeddings = rotary_emb(
+            torch.zeros(()), position_ids=position_ids.copy_compatible_to_dims_raw((batch_dim, seq_dim))
+        )
+        out_hf, _, _ = model_hf(in_.raw_tensor, attention_mask=causal_mask, position_embeddings=position_embeddings)
+    pprint(trace_hf.captured_locals)
+
+    print("First HF att weight tensor:")
+    print(trace_hf.captured_locals[LlamaAttention.forward][0]["attn_weights"][2][0, 0, 0].detach().numpy())
+
+    check_py_traces_rf_to_pt_equal(
+        trace_rf.captured_locals,
+        trace_hf.captured_locals,
+        [
+            (
+                (rf.RotaryPosCausalSelfAttention.__call__, 0, "q", 0),
+                (LlamaAttention.forward, 0, "query_states", 1),
+                lambda x, *, name, **_: rf.convert_to_tensor(
+                    x.reshape(*x.shape[:-1], 2, -1).transpose(-1, -2).flatten(-2),
+                    dims=(batch_dim, model_rf.num_heads, seq_dim, model_rf.key_dim_per_head),
+                    name=name,
+                ),
+            ),
+            (
+                (rf.RotaryPosCausalSelfAttention.__call__, 0, "k", 0),
+                (LlamaAttention.forward, 0, "key_states", 1),
+                lambda x, *, name, **_: rf.convert_to_tensor(
+                    x.reshape(*x.shape[:-1], 2, -1).transpose(-1, -2).flatten(-2),
+                    dims=(batch_dim, model_rf.num_heads, seq_dim, model_rf.key_dim_per_head),
+                    name=name,
+                ),
+            ),
+            (
+                (rf.sinusoidal_positional_encoding, 0, "div_term", 0),
+                (LlamaRotaryEmbedding.forward, 0, "inv_freq_expanded", 0),
+                lambda x, *, name, **_: rf.convert_to_tensor(
+                    x[0, :, 0], dims=[model_rf.key_dim_per_head.div_left(2)], name=name
+                ),
+            ),
+            (
+                (rf.sinusoidal_positional_encoding, 0, "arg_sin", 0),
+                (LlamaRotaryEmbedding.forward, 0, "freqs", 0),
+                lambda x, *, name, resolve_dim, **_: rf.convert_to_tensor(
+                    x[0],
+                    dims=(resolve_dim("spatial_dim"), model_rf.key_dim_per_head.div_left(2)),
+                    name=name,
+                ),
+            ),
+            (
+                (rf_apply_rope, 0, "pe_imag", 0),
+                (apply_rotary_pos_emb, 0, "sin", 0),
+                lambda x, *, name, **_: rf.convert_to_tensor(
+                    x[0, :, : x.shape[2] // 2], dims=(seq_dim, model_rf.key_dim_per_head.div_left(2)), name=name
+                ),
+            ),
+            (
+                (rf_apply_rope, 0, "pe_imag", 0),
+                (apply_rotary_pos_emb, 0, "sin", 0),
+                lambda x, *, name, **_: rf.convert_to_tensor(
+                    x[-1, :, x.shape[2] // 2 :], dims=(seq_dim, model_rf.key_dim_per_head.div_left(2)), name=name
+                ),
+            ),
+            (
+                (rf_apply_rope, 0, "pe_real", 0),
+                (apply_rotary_pos_emb, 0, "cos", 0),
+                lambda x, *, name, **_: rf.convert_to_tensor(
+                    x[0, :, : x.shape[2] // 2],
+                    dims=(seq_dim, model_rf.key_dim_per_head.div_left(2)),
+                    name=name,
+                ),
+            ),
+            (
+                (rf.RotaryPosCausalSelfAttention.__call__, 0, "q", -1),
+                (LlamaAttention.forward, 0, "query_states", -1),
+                lambda x, *, name, **_: rf.convert_to_tensor(
+                    x.reshape(*x.shape[:-1], 2, -1).transpose(-1, -2).flatten(-2),
+                    dims=(batch_dim, model_rf.num_heads, seq_dim, model_rf.key_dim_per_head),
+                    name=name,
+                ),
+            ),
+            (
+                (rf.dot_attention, 0, "energy", 0),
+                (LlamaAttention.forward, 0, "attn_weights", 0),
+                (batch_dim, model_rf.num_heads, seq_dim, "axis"),
+            ),
+            (
+                (rf.dot_attention, 0, "att_weights", 0),
+                (LlamaAttention.forward, 0, "attn_weights", 2),
+                (batch_dim, model_rf.num_heads, seq_dim, "axis"),
+            ),
+            (
+                (rf.dot_attention, 0, "att", 0),
+                (LlamaAttention.forward, 0, "attn_output", 0),
+                (batch_dim, model_rf.num_heads, seq_dim, model_rf.value_dim_per_head),
+            ),
+        ],
+    )
+
+    print("Final check...")
+    assert out_rf.raw_tensor.shape == out_hf.shape
+    torch.testing.assert_allclose(out_rf.raw_tensor, out_hf)
+    print("  all matched!")
 
 
 def test_relative_positional_encoding():
