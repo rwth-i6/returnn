@@ -93,45 +93,23 @@ class PostprocessingDataset(CachedDataset2):
         self._dataset = init_dataset(self._dataset_def, parent_dataset=self)
         self._estimated_num_seqs = self._dataset.estimated_num_seqs
         self._data_iter: Optional[Iterator[Tuple[int, TensorDict]]] = None
-        self._dim_template_dict: Optional[TensorDict]
+        self._tensor_dict_template: Optional[TensorDict]
 
         if self._map_outputs is not None:
-            self._dim_template_dict = TensorDict(self._map_outputs)
+            self._tensor_dict_template = TensorDict(self._map_outputs)
         else:
-            # Some sub datasets need their seq order initialized for the shape/dtype accessor functions to work
-            self._dataset.init_seq_order(epoch=1)
-
-            def _make_tensor_template(name: str) -> Tensor:
-                feature_dims = [
-                    Dim(dimension=dim, name=f"{name}_dim{i + 1}")
-                    for i, dim in enumerate(self._dataset.get_data_shape(name))
-                ]
-                dims = [Dim(dimension=None, name=f"{name}_frame"), *feature_dims]
-                sparse_dim = None
-                if self._dataset.is_data_sparse(name):
-                    sparse_dim = Dim(dimension=self._dataset.get_data_dim(name), name=f"{name}_sparse")
-                    if name in self._dataset.labels:
-                        sparse_dim.vocab = Vocabulary.create_vocab_from_labels(self._dataset.labels[name])
-                dtype = self._dataset.get_data_dtype(name)
-                return Tensor(name, dims=dims, dtype=dtype, sparse_dim=sparse_dim)
-
-            tensor_dict = {
-                name: _make_tensor_template(name)
-                for name, num_output_def in self._dataset.num_outputs.items()
-                if isinstance(
-                    num_output_def, (tuple, list)
-                )  # Some datasets (e.g. OggZipDataset) have data that does not conform to the typings in num_outputs
-            }
-            self._dim_template_dict = TensorDict(tensor_dict)
+            self._tensor_dict_template = TensorDict(
+                {name: self._make_tensor_template(name) for name in self._dataset.get_data_keys()}
+            )
         self.num_outputs = {
-            k: (t.sparse_dim.size if t.sparse_dim else t.shape[-1] or 1, t.ndim)
-            for k, t in self._dim_template_dict.data.items()
+            k: (t.sparse_dim.size if t.sparse_dim else t.shape[-1] if len(t.shape) > 0 else 1, t.ndim)
+            for k, t in self._tensor_dict_template.data.items()
         }
         self._default_input = "data" if "data" in self.num_outputs else next(iter(self.num_outputs.keys()))
         self.num_inputs = self.num_outputs[self._default_input][0]
 
         self.labels = {}
-        for k, t in self._dim_template_dict.data.items():
+        for k, t in self._tensor_dict_template.data.items():
             if t.vocab:
                 self.labels[k] = t.vocab.labels
             elif t.sparse_dim:  # sparse_dim but not vocab
@@ -189,11 +167,28 @@ class PostprocessingDataset(CachedDataset2):
         seq_index = 0
         while self._dataset.is_less_than_num_seqs(seq_index):
             self._dataset.load_seqs(seq_index, seq_index + 1)
-            data = {data_key: self._dataset.get_data(seq_index, data_key) for data_key in data_keys}
-            tensor_dict = self._dim_template_dict.copy_template()
-            tensor_dict.assign_from_raw_tensor_dict_(data)
+            tensor_dict = self._tensor_dict_template.copy_template()
+            for data_key in data_keys:
+                tensor_dict.data[data_key].raw_tensor = self._dataset.get_data(seq_index, data_key)
             if self._map_seq is not None:
                 tensor_dict = self._map_seq(tensor_dict)
                 assert isinstance(tensor_dict, TensorDict), "map_seq must produce a TensorDict"
             yield tensor_dict
             seq_index += 1
+
+    def _make_tensor_template(self, name: str) -> Tensor:
+        dtype = self._dataset.get_data_dtype(name)
+        if dtype == "string":
+            dims = []
+        else:
+            feature_dims = [
+                Dim(dimension=dim, name=f"{name}_dim{i + 1}")
+                for i, dim in enumerate(self._dataset.get_data_shape(name))
+            ]
+            dims = [Dim(dimension=None, name=f"{name}_frame"), *feature_dims]
+        sparse_dim = None
+        if self._dataset.is_data_sparse(name):
+            sparse_dim = Dim(dimension=self._dataset.get_data_dim(name), name=f"{name}_sparse")
+            if name in self._dataset.labels:
+                sparse_dim.vocab = Vocabulary.create_vocab_from_labels(self._dataset.labels[name])
+        return Tensor(name, dims=dims, dtype=dtype, sparse_dim=sparse_dim)
