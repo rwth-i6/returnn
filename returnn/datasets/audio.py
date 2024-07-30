@@ -151,8 +151,6 @@ class OggZipDataset(CachedDataset2):
             self.num_outputs["classes"] = [self.targets.num_labels, 1]
         if self.feature_extractor:
             self.num_outputs["data"] = [self.num_inputs, 2]
-        else:
-            self.num_outputs["data"] = [0, 2]
         self._data: Optional[List[Dict[str, Any]]] = None  # lazily loaded
         self._fixed_random_subset = fixed_random_subset
         self._fixed_random_subset_seed = fixed_random_subset_seed
