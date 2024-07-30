@@ -400,7 +400,8 @@ class OggZipDataset(CachedDataset2):
         self._lazy_init()
         return len(self._data)
 
-    def get_data_dtype(self, key):
+    def get_data_dtype(self, key: str) -> str:
+        """:return: dtype of data entry with `key`"""
         if key == "data":
             return "float32"
         elif key == "classes":
@@ -412,23 +413,33 @@ class OggZipDataset(CachedDataset2):
         else:
             raise ValueError(f"{self}: unknown data key: {key}")
 
-    def get_data_keys(self):
-        keys = ["classes", "orth", "raw"]
+    def get_data_keys(self) -> List[str]:
+        """:return: available data keys"""
+        keys = []
         if self.feature_extractor is not None:
             keys.append("data")
-        return keys
+        if self.targets is not None:
+            keys.append("classes")
+        return [*keys, "orth", "raw"]
 
-    def get_data_shape(self, key):
+    def get_data_shape(self, key: str):
         """
         :returns get_data(*, key).shape[1:], i.e. num-frames excluded
         :rtype: list[int]
         """
-        if key == "data" and self.feature_extractor is not None:
+        if key == "data":
+            assert self.feature_extractor is not None
             if self.feature_extractor.num_channels is not None:
                 return [self.feature_extractor.num_channels, self.feature_extractor.get_feature_dimension()]
-        if key == "raw":
+            return [self.feature_extractor.get_feature_dimension()]
+        elif key in ["classes", "orth", "raw"]:
             return []
-        return super(OggZipDataset, self).get_data_shape(key)
+        else:
+            raise ValueError(f"{self}: unknown data key {key}")
+
+    def is_data_sparse(self, key: str) -> bool:
+        """:return: whether data entry with `key` is sparse"""
+        return key == "classes"
 
     def is_data_sparse(self, key):
         if key == "raw":
@@ -490,13 +501,14 @@ class OggZipDataset(CachedDataset2):
         """
         self._lazy_init()
         seq_tag = self._get_tag_from_info_dict(self._data[corpus_seq_idx])
-        data_features = {}
+        features = {}
         if self.feature_extractor:
             with self._open_audio_file(corpus_seq_idx) as audio_file:
                 data = self.feature_extractor.get_audio_features_from_raw_bytes(audio_file, seq_name=seq_tag)
-            data_features = {"data": data}
+            features["data"] = data
         targets, txt = self._get_transcription(corpus_seq_idx)
-        targets = numpy.array(targets, dtype="int32")
+        if self.targets is not None:
+            features["classes"] = numpy.array(targets, dtype="int32")
         raw_txt = str_to_numpy_array(txt)
         orth = txt.encode("utf8")
         if PY3:
@@ -506,7 +518,7 @@ class OggZipDataset(CachedDataset2):
             orth = list(map(ord, orth))
         orth = numpy.array(orth, dtype="uint8")
         return DatasetSeq(
-            features={**data_features, "classes": targets, "raw": raw_txt, "orth": orth},
+            features={**features, "raw": raw_txt, "orth": orth},
             seq_idx=corpus_seq_idx,
             seq_tag=seq_tag,
         )
