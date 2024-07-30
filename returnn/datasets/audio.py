@@ -427,8 +427,7 @@ class OggZipDataset(CachedDataset2):
         :returns get_data(*, key).shape[1:], i.e. num-frames excluded
         :rtype: list[int]
         """
-        assert key in self.get_data_keys()
-        if key == "data" and self.feature_extractor is not None:
+        if key == "data":
             assert self.feature_extractor is not None
             assert self.feature_extractor.num_channels is not None
             return [self.feature_extractor.num_channels, self.feature_extractor.get_feature_dimension()]
@@ -439,7 +438,6 @@ class OggZipDataset(CachedDataset2):
 
     def is_data_sparse(self, key: str) -> bool:
         """:return: whether data entry with `key` is sparse"""
-        assert key in self.get_data_keys()
         return key == "classes"
 
     def _get_transcription(self, corpus_seq_idx: int):
