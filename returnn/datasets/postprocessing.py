@@ -99,23 +99,22 @@ class PostprocessingDataset(CachedDataset2):
             # if the stream mapper is set, the num_seqs may change and the estimation is less accurate
             self._estimated_num_seqs = self._dataset.estimated_num_seqs
         self._data_iter: Optional[Iterator[Tuple[int, TensorDict]]] = None
-        self._tensor_dict_template: Optional[TensorDict]
 
-        if self._map_outputs is not None:
-            self._tensor_dict_template = TensorDict(self._map_outputs)
-        else:
-            self._tensor_dict_template = TensorDict(
-                {name: self._make_tensor_template(name) for name in self._dataset.get_data_keys()}
-            )
+        self._in_tensor_dict_template = TensorDict(
+            {name: self._make_tensor_template_from_input(name) for name in self._dataset.get_data_keys()}
+        )
+        self._out_tensor_dict_template = (
+            TensorDict(self._map_outputs) if self._map_outputs is not None else self._in_tensor_dict_template
+        )
         self.num_outputs = {
             k: (t.sparse_dim.size if t.sparse_dim else t.shape[-1] if len(t.shape) > 0 else 1, t.ndim)
-            for k, t in self._tensor_dict_template.data.items()
+            for k, t in self._out_tensor_dict_template.data.items()
         }
         self._default_input = "data" if "data" in self.num_outputs else next(iter(self.num_outputs.keys()))
         self.num_inputs = self.num_outputs[self._default_input][0]
 
         self.labels = {}
-        for k, t in self._tensor_dict_template.data.items():
+        for k, t in self._out_tensor_dict_template.data.items():
             if t.vocab:
                 self.labels[k] = t.vocab.labels
             elif t.sparse_dim:  # sparse_dim but not vocab
@@ -157,14 +156,25 @@ class PostprocessingDataset(CachedDataset2):
         """
         :return: an iterator applying both the segment level and across-segment transformations on the given dataset
         """
+
+        def _validate_tensor_dict_iter(inner: Iterator[TensorDict]) -> Iterator[TensorDict]:
+            for t_dict in inner:
+                for data_key, out_t in self._out_tensor_dict_template.data.items():
+                    in_t = t_dict.data[data_key]
+                    assert (
+                        in_t.ndim == out_t.batch_ndim
+                        and in_t.dtype == out_t.dtype
+                        and all(d.dimension in (d_, None) for (d, d_) in zip(in_t.dims, out_t.shape))
+                    )
+                yield t_dict
+
         data_iter = self._iterate_dataset()
-        if self._map_seq_stream is None:
-            return data_iter
-        data_iter = self._map_seq_stream(data_iter)
-        assert isinstance(
-            data_iter, Iterator
-        ), f"map_seq_stream must produce an {Iterator.__name__}, but produced {type(data_iter).__name__}"
-        return data_iter
+        if self._map_seq_stream is not None:
+            data_iter = self._map_seq_stream(data_iter)
+            assert isinstance(
+                data_iter, Iterator
+            ), f"map_seq_stream must produce an {Iterator.__name__}, but produced {type(data_iter).__name__}"
+        return _validate_tensor_dict_iter(data_iter)
 
     def _iterate_dataset(self) -> Iterator[TensorDict]:
         """
@@ -175,7 +185,7 @@ class PostprocessingDataset(CachedDataset2):
         seq_index = 0
         while self._dataset.is_less_than_num_seqs(seq_index):
             self._dataset.load_seqs(seq_index, seq_index + 1)
-            tensor_dict = self._tensor_dict_template.copy_template()
+            tensor_dict = self._in_tensor_dict_template.copy_template()
             for data_key in data_keys:
                 tensor_dict.data[data_key].raw_tensor = self._dataset.get_data(seq_index, data_key)
             if self._map_seq is not None:
@@ -186,19 +196,19 @@ class PostprocessingDataset(CachedDataset2):
             yield tensor_dict
             seq_index += 1
 
-    def _make_tensor_template(self, name: str) -> Tensor:
-        dtype = self._dataset.get_data_dtype(name)
+    def _make_tensor_template_from_input(self, data_key: str) -> Tensor:
+        dtype = self._dataset.get_data_dtype(data_key)
         if dtype == "string":
             dims = []
         else:
             feature_dims = [
-                Dim(dimension=dim, name=f"{name}_dim{i + 1}")
-                for i, dim in enumerate(self._dataset.get_data_shape(name))
+                Dim(dimension=dim, name=f"{data_key}_dim{i + 1}")
+                for i, dim in enumerate(self._dataset.get_data_shape(data_key))
             ]
-            dims = [Dim(dimension=None, name=f"{name}_frame"), *feature_dims]
+            dims = [Dim(dimension=None, name=f"{data_key}_frame"), *feature_dims]
         sparse_dim = None
-        if self._dataset.is_data_sparse(name):
-            sparse_dim = Dim(dimension=self._dataset.get_data_dim(name), name=f"{name}_sparse")
-            if name in self._dataset.labels:
-                sparse_dim.vocab = Vocabulary.create_vocab_from_labels(self._dataset.labels[name])
-        return Tensor(name, dims=dims, dtype=dtype, sparse_dim=sparse_dim)
+        if self._dataset.is_data_sparse(data_key):
+            sparse_dim = Dim(dimension=self._dataset.get_data_dim(data_key), name=f"{data_key}_sparse")
+            if data_key in self._dataset.labels:
+                sparse_dim.vocab = Vocabulary.create_vocab_from_labels(self._dataset.labels[data_key])
+        return Tensor(data_key, dims=dims, dtype=dtype, sparse_dim=sparse_dim)
