@@ -155,7 +155,9 @@ class PostprocessingDataset(CachedDataset2):
         if self._map_seq_stream is None:
             return data_iter
         data_iter = self._map_seq_stream(data_iter)
-        assert isinstance(data_iter, Iterator), "map_seq_stream must produce an Iterator"
+        assert isinstance(
+            data_iter, Iterator
+        ), f"map_seq_stream must produce an {Iterator.__name__}, but produced {type(data_iter).__name__}"
         return data_iter
 
     def _iterate_dataset(self) -> Iterator[TensorDict]:
@@ -172,7 +174,9 @@ class PostprocessingDataset(CachedDataset2):
                 tensor_dict.data[data_key].raw_tensor = self._dataset.get_data(seq_index, data_key)
             if self._map_seq is not None:
                 tensor_dict = self._map_seq(tensor_dict)
-                assert isinstance(tensor_dict, TensorDict), "map_seq must produce a TensorDict"
+                assert isinstance(
+                    tensor_dict, TensorDict
+                ), f"map_seq must produce a {TensorDict.__name__}, but produced {type(tensor_dict).__name__}"
             yield tensor_dict
             seq_index += 1
 
