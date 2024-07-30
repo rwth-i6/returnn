@@ -1388,6 +1388,7 @@ def get_dataset_class(name: Union[str, Type[Dataset]]) -> Optional[Type[Dataset]
         "map",
         "multi_proc",
         "distrib_files",
+        "postprocessing",
     ]
     for mod_name in mod_names:
         mod = import_module("returnn.datasets.%s" % mod_name)
