@@ -1008,7 +1008,8 @@ def test_PostprocessingDataset():
 
         dataset.load_seqs(0, 2)
         for i in range(2):
-            dataset.get_data(i, "classes")
+            classes = dataset.get_data(i, "classes")
+            assert len(classes) > 0
         assert count == 1
 
 
