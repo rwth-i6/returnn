@@ -66,14 +66,17 @@ class PostprocessingDataset(CachedDataset2):
         """
         :param dataset: inner dataset to be post-processed
         :param map_seq: post processor function operating on the single-segment level.
+            To avoid confusion on the order of how the processing functions are applied to the data, only one of
+            `map_seq` and `map_seq_stream` can be specified at a time.
         :param map_seq_stream: post processor function operating on the multiple segment level via an iterator.
             Allows merging multiple segments into one, or generating multiple output segments from one input segment.
-            When both functions are specified, the segment-level function is applied first to every segment, and the
-            results are passed to the iterator-level function.
+            To avoid confusion on the order of how the processing functions are applied to the data, only one of
+            `map_seq` and `map_seq_stream` can be specified at a time.
         :param map_outputs: Type and axis specification of the outputs of the mapping functions,
             like extern_data and model_outputs.
             To simplify the common case when no shapes change, this value can be left unspecified. The dataset then
             assumes the same data layout as returned by the wrapped dataset.
+            Example: `map_outputs={"data":{"dim": 42}}`
         :param kwargs: see :class:`CachedDataset2`, :class:`Dataset`
         """
         super().__init__(**kwargs)
