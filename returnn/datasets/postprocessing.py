@@ -19,19 +19,15 @@ __all__ = ["PostprocessingDataset"]
 class PostprocessingDataset(CachedDataset2):
     """
     A dataset that allows for generic post-processing of data from another dataset
-    using a function on the segment level and on the level of multiply segments via
+    using a function on the segment level and on the level of multiple segments via
     an iterator.
 
-    This allows integrating various data augmentation techniques like e.g. Mixup, or
-    speed perturbation into the data loading pipeline.
+    This allows integrating various data augmentation techniques like e.g. Mixup,
+    SpecAugment or speed perturbation into the data loading pipeline.
 
     The integration into the data loading pipeline makes it easy to distribute the
     data processing work across multiple CPU cores using `MultiProcDataset` and in
     turn frees the GPU from data preprocessing tasks.
-
-    Both functions can be specified at the same time, and their results will be
-    combined by first applying the segment-level function and then the
-    multiple-segments-level function.
 
     Example usage::
 
