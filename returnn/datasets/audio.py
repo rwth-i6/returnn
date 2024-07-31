@@ -400,6 +400,21 @@ class OggZipDataset(CachedDataset2):
         self._lazy_init()
         return len(self._data)
 
+    def get_data_dim(self, key: str) -> int:
+        """:return: dim of data entry with `key`"""
+        if key == "data":
+            assert self.feature_extractor is not None
+            return self.feature_extractor.get_feature_dimension()
+        elif key == "classes":
+            assert self.targets is not None
+            return self.targets.num_labels
+        elif key == "raw":
+            return 0
+        elif key == "orth":
+            return 256
+        else:
+            raise ValueError(f"{self}: unknown data key: {key}")
+
     def get_data_dtype(self, key: str) -> str:
         """:return: dtype of data entry with `key`"""
         if key == "data":
