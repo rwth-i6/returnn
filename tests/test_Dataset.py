@@ -789,6 +789,39 @@ def test_LmDataset_multiple_and_gzipped():
         assert not dataset.is_less_than_num_seqs(4)
 
 
+def test_LmDataset_sorted():
+    # https://github.com/rwth-i6/returnn/commit/660b07e8b766de3f2148169e15818a8ea001b4bb
+    from returnn.datasets.lm import LmDataset
+
+    with tempfile.NamedTemporaryFile("wt", suffix=".txt") as txt_file:
+        txt_file.write("Hello world\n")
+        txt_file.write("Next line\n")
+        txt_file.write("Shorty\n")
+        txt_file.write("Longer than all the others\n")
+        txt_file.flush()
+
+        dataset = init_dataset(
+            {
+                "class": "LmDataset",
+                "corpus_file": txt_file.name,
+                "orth_vocab": {"class": "Utf8ByteTargets"},
+                "seq_ordering": "sorted",
+            }
+        )
+        assert isinstance(dataset, LmDataset)
+        dataset.init_seq_order(epoch=1)
+        dataset.load_seqs(0, 4)
+        orth = dataset.get_data(0, "data")
+        assert (orth == numpy.array(list("Shorty".encode("utf8")))).all()
+        orth = dataset.get_data(1, "data")
+        assert (orth == numpy.array(list("Next line".encode("utf8")))).all()
+        orth = dataset.get_data(2, "data")
+        assert (orth == numpy.array(list("Hello world".encode("utf8")))).all()
+        orth = dataset.get_data(3, "data")
+        assert (orth == numpy.array(list("Longer than all the others".encode("utf8")))).all()
+        assert not dataset.is_less_than_num_seqs(4)
+
+
 def test_MetaDataset():
     _demo_txt = "some utterance text"
 
