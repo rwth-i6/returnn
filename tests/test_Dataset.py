@@ -482,6 +482,48 @@ def test_get_seq_order():
         assert set(all_partitions_seq_index) == set(seq_index)
 
 
+def test_get_seq_order_laplace_reference():
+    num_seqs = 3023
+    rnd = numpy.random.RandomState(42)
+    seq_lens = rnd.randint(1, 23, size=[num_seqs])
+    get_seq_len = seq_lens.__getitem__
+
+    dataset = Dataset()
+    dataset.epoch = 1
+    dataset.seq_ordering = "laplace:.100"
+
+    seq_index_ = dataset.get_seq_order_for_epoch(epoch=1, num_seqs=num_seqs, get_seq_len=get_seq_len)
+    assert isinstance(seq_index_, (list, range, numpy.ndarray))
+    assert len(set(seq_index_)) == num_seqs  # right number of sequences, no duplicates
+    print("current implementation returns seq_lens[seq_index]:", list(seq_lens[seq_index_]))
+
+    tmp = dataset.seq_ordering.split(":")[1:]
+    if len(tmp) == 0:
+        bins = 2
+    else:
+        if tmp[0].startswith("."):  # starting with "." -> approx chunk size (num of seqs in one bin)
+            bins = max(num_seqs // int(tmp[0][1:]), 2)
+        else:  # the number of bins
+            bins = int(tmp[0])
+    assert len(tmp) <= 1
+    rnd_seed = dataset.epoch
+    random_generator = numpy.random.RandomState(rnd_seed)
+    seq_index = random_generator.permutation(num_seqs)
+    out_index = []
+    for i in range(bins):
+        if i == bins - 1:
+            part = seq_index[i * len(seq_index) // bins :].tolist()
+        else:
+            part = seq_index[i * len(seq_index) // bins : (i + 1) * len(seq_index) // bins].tolist()
+        part.sort(key=get_seq_len, reverse=(i % 2 == 1))
+        out_index += part
+    seq_index = out_index
+    print("reference seq_lens[seq_index]:", list(seq_lens[seq_index]))
+
+    assert len(seq_index) == num_seqs == len(seq_index_)
+    assert seq_index == list(seq_index_)
+
+
 @contextlib.contextmanager
 def create_ogg_zip_txt_only_dataset_opts(*, text: str = "hello world", seq_tag: str = "sequence0.wav"):
     """create OggZipDataset dict using temp data, consisting of a single sequence with text only"""

@@ -573,18 +573,20 @@ class Dataset(object):
                 nth = 1
             else:
                 nth = int(tmp[1])
+            seq_lens = numpy.array([get_seq_len(i) for i in range(num_seqs)])
             rnd_seed = self._get_random_seed_for_epoch(epoch=epoch, num_epochs_fixed=nth)
             random_generator = numpy.random.RandomState(rnd_seed)
             seq_index = random_generator.permutation(num_seqs)  # type: Union[numpy.ndarray, List[int]]
             out_index = []
             for i in range(bins):
-                if i == bins - 1:
-                    part = seq_index[i * len(seq_index) // bins :].tolist()
-                else:
-                    part = seq_index[i * len(seq_index) // bins : (i + 1) * len(seq_index) // bins].tolist()
-                part.sort(key=get_seq_len, reverse=(i % 2 == 1))
-                out_index += part
-            seq_index = out_index
+                part = seq_index[i * len(seq_index) // bins : (i + 1) * len(seq_index) // bins]
+                seq_lens_ = seq_lens[part]
+                if i % 2 == 1:
+                    seq_lens_ = -seq_lens_
+                indices = numpy.argsort(seq_lens_, kind="stable")
+                part = part[indices]
+                out_index.append(part)
+            seq_index = numpy.concatenate(out_index)
         else:
             assert False, "invalid batching specified: " + self.seq_ordering
 
