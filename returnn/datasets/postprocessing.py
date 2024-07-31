@@ -99,9 +99,11 @@ class PostprocessingDataset(CachedDataset2):
         self._in_tensor_dict_template = TensorDict(
             {name: self._make_tensor_template_from_input(name) for name in self._dataset.get_data_keys()}
         )
-        self._out_tensor_dict_template = (
-            TensorDict(self._map_outputs) if self._map_outputs is not None else self._in_tensor_dict_template
-        )
+        if self._map_outputs is not None:
+            self._out_tensor_dict_template = TensorDict()
+            self._out_tensor_dict_template.update(self._map_outputs, auto_convert=True)
+        else:
+            self._out_tensor_dict_template = self._in_tensor_dict_template
         self.num_outputs = {
             k: (t.sparse_dim.size if t.sparse_dim else t.shape[-1] if len(t.shape) > 0 else 1, t.ndim)
             for k, t in self._out_tensor_dict_template.data.items()
