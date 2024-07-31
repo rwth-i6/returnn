@@ -444,7 +444,7 @@ class LmDataset(CachedDataset2):
             self.seq_order = self.get_seq_order_for_epoch(
                 epoch=epoch,
                 num_seqs=len(self._orths_offsets_and_lens),
-                get_seq_len=lambda i: self._orths_offsets_and_lens[i][1],
+                get_seq_len=lambda i: self._orths_offsets_and_lens[i][2],
             )
         self.next_orth_idx = 0
         self.next_seq_idx = 0
