@@ -993,7 +993,8 @@ class CombinedDataset(CachedDataset2):
         self.num_outputs = self.data_dims
 
         self.data_dtypes = {
-            data_key: _select_dtype(data_key, self.data_dims, data_dtypes) for data_key in self.data_keys
+            data_key: _select_dtype(data_key, dset_data_key, self.datasets[dset_key], data_dtypes)
+            for (dset_key, dset_data_key), data_key in data_map.items()
         }
 
         self.dataset_seq_idx_boundaries = None  # type: typing.Optional[typing.List[int]]
@@ -2066,13 +2067,16 @@ class AnythingDataset(Dataset):
         return self._data_keys[key].get("sparse", False)
 
 
-def _select_dtype(key, data_dims, data_dtypes):
-    if data_dtypes and key in data_dtypes:
-        v = data_dtypes[key]
+def _select_dtype(
+    data_key: str,
+    dataset_data_key: str,
+    dataset: Dataset,
+    existing_dtype_map: Optional[Dict[str, str]],
+):
+    if existing_dtype_map and data_key in existing_dtype_map:
+        v = existing_dtype_map[data_key]
         assert isinstance(v, str)  # e.g. "int32" or "float32"
         return v
-    assert key in data_dims
-    if data_dims[key][1] == 1:  # sparse
-        return "int32"  # standard for 1-of-k
-    else:
-        return "float32"  # standard otherwise
+    if dataset.is_data_sparse(dataset_data_key):
+        return "int32"  # standard 1-of-k
+    return "float32"  # default float32 otherwise
