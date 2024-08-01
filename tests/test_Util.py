@@ -843,9 +843,9 @@ def test_file_cache():
     with open(cached_fn3) as f:
         assert f.read() == "Hello dummy3.txt\n"
     assert dict(cache._touch_files_thread.files) == {
-        cache_dir + src_dir + "/dummy1.txt": 1,
-        cache_dir + src_dir + "/dirA/subdirB/dummy2.txt": 1,
-        cache_dir + src_dir + "/dirC/dummy3.txt": 1,
+        FileCache._get_keepalive_filename(cache_dir + src_dir + "/dummy1.txt"): 1,
+        FileCache._get_keepalive_filename(cache_dir + src_dir + "/dirA/subdirB/dummy2.txt"): 1,
+        FileCache._get_keepalive_filename(cache_dir + src_dir + "/dirC/dummy3.txt"): 1,
     }
 
     # Check config handle_cached_files_in_config.
@@ -855,9 +855,9 @@ def test_file_cache():
     assert config == {"class": "Dataset", "files": [cache_dir + src_dir + "/dirA/subdirB/dummy2.txt"]}
     assert config_cached_files == [cache_dir + src_dir + "/dirA/subdirB/dummy2.txt"]
     assert dict(cache._touch_files_thread.files) == {
-        cache_dir + src_dir + "/dummy1.txt": 1,
-        cache_dir + src_dir + "/dirA/subdirB/dummy2.txt": 2,
-        cache_dir + src_dir + "/dirC/dummy3.txt": 1,
+        FileCache._get_keepalive_filename(cache_dir + src_dir + "/dummy1.txt"): 1,
+        FileCache._get_keepalive_filename(cache_dir + src_dir + "/dirA/subdirB/dummy2.txt"): 2,
+        FileCache._get_keepalive_filename(cache_dir + src_dir + "/dirC/dummy3.txt"): 1,
     }
 
     # Check that file is kept up-to-date until we release it.

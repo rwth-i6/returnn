@@ -130,7 +130,7 @@ class FileCache:
         self._touch_files_thread.files_extend(keepalive_filename)
         return dst_filename
 
-    def release_files(self, filenames: Collection[str]):
+    def release_files(self, filenames: Union[str, Iterable[str]]):
         """
         Release cached files.
         This just says that we are not using the files anymore for now.
@@ -139,6 +139,8 @@ class FileCache:
 
         :param filenames: files to release (paths in the cache directory)
         """
+        if isinstance(filenames, str):
+            filenames = [filenames]
         self._touch_files_thread.files_remove(self._get_keepalive_filename(fn) for fn in filenames)
 
     def cleanup(self, *, need_at_least_free_space_size: int = 0):
