@@ -170,10 +170,12 @@ class FileCache:
         all_files = []  # mtime, neg size (better for sorting), filename
         for root, dirs, files in os.walk(self.cache_directory):
             for rel_fn in files:
-                if self._is_keepalive_filename(rel_fn):
+                fn = root + "/" + rel_fn
+                if fn == cleanup_timestamp_file:
+                    continue
+                elif self._is_keepalive_filename(fn):
                     # skip keepalive files, they are processed together with the file they guard
                     continue
-                fn = root + "/" + rel_fn
                 try:
                     f_stat = os.stat(fn)
                     ka_stat = os.stat(self._get_keepalive_filename(fn))
