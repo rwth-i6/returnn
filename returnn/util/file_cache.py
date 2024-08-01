@@ -15,12 +15,14 @@ import os
 import pathlib
 import time
 import shutil
+import dataclasses
 from dataclasses import dataclass
 from collections import defaultdict
 from contextlib import contextmanager
+import json
 from threading import Thread, Event
-from .basic import expand_env_vars, LockFile, human_bytes_size
 from returnn.config import Config, get_global_config
+from .basic import expand_env_vars, LockFile, human_bytes_size
 
 
 __all__ = ["FileCache", "CachedFile", "get_instance"]
@@ -124,10 +126,9 @@ class FileCache:
                     raise e
         if last_error is not None:
             raise last_error
-        keepalive_filename = self._get_keepalive_filename(dst_filename)
         # Path will create the keepalive file, if needed
-        pathlib.Path(keepalive_filename).touch(exist_ok=True)
-        self._touch_files_thread.files_extend(keepalive_filename)
+        pathlib.Path(dst_filename).touch(exist_ok=True)
+        self._touch_files_thread.files_extend([dst_filename, self._get_info_filename(dst_filename)])
         return dst_filename
 
     def release_files(self, filenames: Union[str, Iterable[str]]):
@@ -141,7 +142,7 @@ class FileCache:
         """
         if isinstance(filenames, str):
             filenames = [filenames]
-        self._touch_files_thread.files_remove(self._get_keepalive_filename(fn) for fn in filenames)
+        self._touch_files_thread.files_remove(fn_ for fn in filenames for fn_ in [fn, self._get_info_filename(fn)])
 
     def cleanup(self, *, need_at_least_free_space_size: int = 0):
         """
@@ -175,17 +176,16 @@ class FileCache:
                 fn = root + "/" + rel_fn
                 if fn == cleanup_timestamp_file:
                     continue
-                elif self._is_keepalive_filename(fn):
+                elif self._is_info_filename(fn):
                     # skip keepalive files, they are processed together with the file they guard
                     continue
                 try:
                     f_stat = os.stat(fn)
-                    ka_stat = os.stat(self._get_keepalive_filename(fn))
                 except Exception as exc:
-                    print(f"FileCache: Error while stat {fn} or its keepalive file: {type(exc).__name__}: {exc}")
+                    print(f"FileCache: Error while stat {fn}: {type(exc).__name__}: {exc}")
                     continue
                 else:
-                    all_files.append((ka_stat.st_mtime, -f_stat.st_blocks * 512, fn))
+                    all_files.append((f_stat.st_mtime, -f_stat.st_blocks * 512, fn))
         all_files.sort()
         cur_expected_free = disk_usage.free
         reached_more_recent_files = False
@@ -237,11 +237,9 @@ class FileCache:
                     print(f"FileCache: Error while removing {fn}: {type(exc).__name__}: {exc}")
                     cur_expected_free -= size
                 try:
-                    os.remove(self._get_keepalive_filename(fn))
+                    os.remove(self._get_info_filename(fn))
                 except Exception as exc:
-                    print(
-                        f"FileCache: Ignoring error file removing keepalive file of {fn}: {type(exc).__name__}: {exc}"
-                    )
+                    print(f"FileCache: Ignoring error file removing info file of {fn}: {type(exc).__name__}: {exc}")
 
             if reached_more_recent_files and want_free_space_size <= cur_expected_free:
                 # Have enough free space now.
@@ -307,14 +305,14 @@ class FileCache:
         return dst_file_name
 
     @staticmethod
-    def _get_keepalive_filename(filename: str) -> str:
-        """:return: the name of the corresponding keepalive file to `filename`."""
-        return f"{filename}.returnn-keepalive"
+    def _get_info_filename(filename: str) -> str:
+        """:return: the name of the corresponding info file to `filename`."""
+        return f"{filename}.returnn-info"
 
     @staticmethod
-    def _is_keepalive_filename(filename: str) -> bool:
-        """:return: whether `filename` points to a keepalive file."""
-        return filename.endswith(".returnn-keepalive")
+    def _is_info_filename(filename: str) -> bool:
+        """:return: whether `filename` points to a info file."""
+        return filename.endswith(".returnn-info")
 
     def _copy_file_if_needed(self, src_filename: str, dst_filename: str):
         """
@@ -331,7 +329,7 @@ class FileCache:
             # Maybe it was copied in the meantime, while waiting for the lock.
             if self._check_existing_copied_file_maybe_cleanup(src_filename, dst_filename):
                 print(f"FileCache: using existing file {dst_filename}")
-                pathlib.Path(self._get_keepalive_filename(dst_filename)).touch(exist_ok=True)
+                pathlib.Path(dst_filename).touch(exist_ok=True)
                 return
 
             print(f"FileCache: Copy file {src_filename} to cache")
@@ -351,6 +349,10 @@ class FileCache:
                 )
 
             with self._touch_files_thread.files_added_context([dst_dir, lock.lockfile]):
+                # save mtime before the copy process to have it pessimistic
+                orig_mtime_ns = os.stat(src_filename).st_mtime_ns
+                FileInfo(mtime_ns=orig_mtime_ns).save(self._get_info_filename(dst_filename))
+
                 _copy_with_prealloc(src_filename, dst_tmp_filename)
                 os.rename(dst_tmp_filename, dst_filename)
 
@@ -363,12 +365,18 @@ class FileCache:
             return False
         src_stat = os.stat(src_filename)
         dst_stat = os.stat(dst_filename)
-        if src_stat.st_size != dst_stat.st_size or src_stat.st_mtime > dst_stat.st_mtime:
+        try:
+            last_known_mtime_ns = FileInfo.load(FileCache._get_info_filename(dst_filename)).mtime_ns
+        except FileNotFoundError:
+            # for existing setups where files may be cached, but the info file has
+            # not been written to disk yet, we re-fetch the file
+            last_known_mtime_ns = None
+        if (
+            src_stat.st_size != dst_stat.st_size
+            or last_known_mtime_ns is None
+            or src_stat.st_mtime_ns > last_known_mtime_ns
+        ):
             os.remove(dst_filename)
-            try:
-                os.remove(FileCache._get_keepalive_filename(dst_filename))
-            except FileNotFoundError:
-                pass
             return False
         return True
 
@@ -388,7 +396,6 @@ def _copy_with_prealloc(src: str, dst: str):
     """
     Copies the file at `src` to `dst` preallocating the space at `dst` before the
     copy to reduce the chance of race conditions w/ free-disk-space checks occuring.
-    Also keeps atime and mtime intact.
 
     Note the function preallocates `size + 1` to allow detecting incompletely copied
     files by a mismatch in the file size, should the copy process be interrupted. The
@@ -417,7 +424,6 @@ def _copy_with_prealloc(src: str, dst: str):
                 os.posix_fadvise(dst_file.fileno(), 0, file_size, os.POSIX_FADV_SEQUENTIAL)
             shutil.copyfileobj(src_file, dst_file)
         dst_file.truncate(file_size)
-    os.utime(dst, ns=(src_stat.st_atime_ns, src_stat.st_mtime_ns))
 
 
 @dataclass
@@ -428,6 +434,29 @@ class CachedFile:
     """
 
     filename: str  # original filename
+
+
+@dataclass(frozen=True)
+class FileInfo:
+    """
+    Represents meta information about cached files.
+
+    We currently save the last known mtime of the source file.
+    """
+
+    mtime_ns: int
+
+    def save(self, filename: str):
+        """Saves this instance to `filename`."""
+        with open(filename, "wt") as f:
+            f.write(json.dumps(dataclasses.asdict(self)))
+
+    @classmethod
+    def load(cls, filename: str) -> "FileInfo":
+        """Loads a previously saved FileInfo from the file at `filename`."""
+        with open(filename, "rt") as f:
+            data = json.load(f)
+        return cls(**data)
 
 
 class _TouchFilesThread(Thread):
