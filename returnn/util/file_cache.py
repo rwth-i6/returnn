@@ -126,9 +126,11 @@ class FileCache:
                     raise e
         if last_error is not None:
             raise last_error
-        # Path will create the keepalive file, if needed
-        pathlib.Path(dst_filename).touch(exist_ok=True)
-        self._touch_files_thread.files_extend([dst_filename, self._get_info_filename(dst_filename)])
+        info_file = self._get_info_filename(dst_filename)
+        os.utime(dst_filename, None)
+        os.utime(info_file, None)
+        # protect info file from tempreaper, which looks at the mtime
+        self._touch_files_thread.files_extend([dst_filename, info_file])
         return dst_filename
 
     def release_files(self, filenames: Union[str, Iterable[str]]):
@@ -329,7 +331,6 @@ class FileCache:
             # Maybe it was copied in the meantime, while waiting for the lock.
             if self._check_existing_copied_file_maybe_cleanup(src_filename, dst_filename):
                 print(f"FileCache: using existing file {dst_filename}")
-                pathlib.Path(dst_filename).touch(exist_ok=True)
                 return
 
             print(f"FileCache: Copy file {src_filename} to cache")
