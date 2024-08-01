@@ -458,21 +458,21 @@ class _TouchFilesThread(Thread):
         self._is_started = True
         self.start()
 
-    def files_extend(self, files: Union[str, Iterable[str]]):
+    def files_extend(self, to_add: Union[str, Iterable[str]]):
         """append"""
-        if isinstance(files, str):
-            files = [files]
-        assert isinstance(files, Iterable)
+        if isinstance(to_add, str):
+            to_add = [to_add]
+        assert isinstance(to_add, Iterable)
         self.start_once()
-        for file in files:
+        for file in to_add:
             self.files[file] += 1
 
-    def files_remove(self, files: Union[str, Iterable[str]]):
+    def files_remove(self, to_remove: Union[str, Iterable[str]]):
         """remove"""
-        if isinstance(files, str):
-            files = [files]
-        assert isinstance(files, Iterable)
-        for filename in files:
+        if isinstance(to_remove, str):
+            to_remove = [to_remove]
+        assert isinstance(to_remove, Iterable)
+        for filename in to_remove:
             self.files[filename] -= 1
             if self.files[filename] <= 0:
                 del self.files[filename]
