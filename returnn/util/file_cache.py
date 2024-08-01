@@ -39,7 +39,7 @@ class FileCache:
 
     - When a cached file is available,
       and its size matches the original file
-      and its mtime is not older than the remove file,
+      and its mtime is not older than the original file,
       we can use it.
     - We will update the mtime of a proxy file frequently (every second) via a background thread
       of used cached files, to mark that they are used.
