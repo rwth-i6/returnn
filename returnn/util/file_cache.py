@@ -406,8 +406,7 @@ def _copy_with_prealloc(src: str, dst: str):
     +1-size trick is technically not necessary -- but it also does not hurt leaving
     it in.
     """
-    src_stat = os.stat(src)
-    file_size = src_stat.st_size
+    file_size = os.stat(src).st_size
     with open(dst, "wb") as dst_file:
         if file_size > 0:
             # Prealloc size + 1, see docstring for why.
