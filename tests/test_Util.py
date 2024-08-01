@@ -864,7 +864,7 @@ def test_file_cache():
     mtimes = set()
     for t in range(10):
         print(f"Sec {t}...")
-        mtime = os.stat(cache_dir + src_dir + "/dirA/subdirB/dummy2.txt").st_mtime
+        mtime = os.stat(FileCache._get_keepalive_filename(cache_dir + src_dir + "/dirA/subdirB/dummy2.txt")).st_mtime
         mtimes.add(mtime)
         assert 0 <= time.time() - mtime < 2
         time.sleep(1)
@@ -881,7 +881,7 @@ def test_file_cache():
     cache.release_files([cache_dir + src_dir + "/dirA/subdirB/dummy2.txt"])  # was acquired twice
     assert dict(cache._touch_files_thread.files) == {}
     time.sleep(5)
-    mtime = os.stat(cache_dir + src_dir + "/dirA/subdirB/dummy2.txt").st_mtime
+    mtime = os.stat(FileCache._get_keepalive_filename(cache_dir + src_dir + "/dirA/subdirB/dummy2.txt")).st_mtime
     assert 4 <= time.time() - mtime
 
     # Check cleanup mechanism.
