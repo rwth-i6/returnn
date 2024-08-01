@@ -312,7 +312,7 @@ class FileCache:
         return f"{filename}.returnn-keepalive"
 
     @staticmethod
-    def _is_keepalive_filename(filename: str) -> str:
+    def _is_keepalive_filename(filename: str) -> bool:
         """:return: whether `filename` points to a keepalive file."""
         return filename.endswith(".returnn-keepalive")
 
