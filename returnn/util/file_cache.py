@@ -41,7 +41,7 @@ class FileCache:
       and its size matches the original file
       and its mtime is not older than the original file,
       we can use it.
-    - We will update the mtime of a proxy file frequently (every second) via a background thread
+    - We will update the cached file mtime frequently (every second) via a background thread
       of used cached files, to mark that they are used.
       (We would maybe want to use atime, but we don't expect that atime can be relied on.)
       Note that updating mtime might influence the behavior of some external tools.
