@@ -17,6 +17,7 @@ import functools
 import logging
 import copy as _copy
 from returnn.util.basic import NotSpecified, BehaviorVersion
+from returnn.util.math import ceil_div
 import returnn.frontend as rf
 from returnn.tensor import Tensor, Dim, single_step_dim
 
@@ -404,6 +405,8 @@ class FeedForwardGated(rf.Module):
         f(Linear(x)) * Linear(x)
 
     This is a feed-forward block based on SwiGLU, as defined in the paper.
+
+    Alternative to :class:`FeedForward`.
     """
 
     def __init__(
@@ -413,14 +416,30 @@ class FeedForwardGated(rf.Module):
         ff_dim: Optional[Union[Dim, int]] = NotSpecified,
         dropout: float = 0.1,
         activation: Union[Callable[[Tensor], Tensor], Dict[str, Any], rf.Module] = rf.swish,
+        with_bias: bool = False,
     ):
+        """
+        :param out_dim:
+        :param ff_dim: intermediate dimension.
+            Unlike :class:`FeedForward`:
+            If not provided, factor 4*2/3 to keep same number of parameters as in the original :class:`FeedForward`,
+            just as in the paper, and also making it a multiple of 256.
+        :param dropout:
+        :param activation: activation function for the gating. unlike :class:`FeedForward`, default is swish.
+        :param with_bias: whether to use bias in the linear layers.
+            unlike :class:`FeedForward`, default is False.
+        """
         super().__init__()
 
         if isinstance(ff_dim, int):
             ff_dim = Dim(ff_dim, name="transformer-ff-dim")
         if ff_dim is NotSpecified or ff_dim is None:
-            # Factor 2/3 to keep same number of parameters as in the original FF block, just as in the paper.
-            ff_dim = out_dim * 2 // 3
+            # Factor 4 as usual.
+            # The additional factor 2/3 to keep same number of parameters as in the original FF block,
+            # just as in the paper.
+            ff_dim_ = out_dim.dimension * 4 * 2 // 3
+            ff_dim_ = ceil_div(ff_dim_, 256) * 256  # make multiple of 256
+            ff_dim = Dim(ff_dim_, name="transformer-ff-dim")
         if not isinstance(ff_dim, Dim):
             raise TypeError(f"Transformer FeedForward: unexpected ff_dim {ff_dim!r} type {type(ff_dim)}")
 
@@ -437,8 +456,8 @@ class FeedForwardGated(rf.Module):
         self.activation = activation
 
         # Factor 2 because we concatenate the two paths.
-        self.linear_ff = rf.Linear(out_dim, 2 * ff_dim)
-        self.linear_out = rf.Linear(ff_dim, out_dim)
+        self.linear_ff = rf.Linear(out_dim, 2 * ff_dim, with_bias=with_bias)
+        self.linear_out = rf.Linear(ff_dim, out_dim, with_bias=with_bias)
 
     def __call__(self, inp: Tensor) -> Tensor:
         """forward"""

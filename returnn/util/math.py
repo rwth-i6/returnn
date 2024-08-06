@@ -7,6 +7,11 @@ from typing import Union, Dict
 import numpy
 
 
+def ceil_div(a: int, b: int) -> int:
+    """ceil(a / b)"""
+    return -(-a // b)
+
+
 def next_power_of_two(n: int) -> int:
     """next power of two, >= n"""
     return 2 ** (int(n - 1).bit_length())
