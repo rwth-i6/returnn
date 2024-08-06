@@ -9,18 +9,20 @@ See https://github.com/rwth-i6/returnn/issues/1519 for initial discussion.
 Main class is :class:`FileCache`.
 """
 
-from typing import Any, Collection, List, Optional, Tuple
+from typing import Any, Collection, Iterable, List, Optional, Tuple, Union
 import errno
 import os
 import pathlib
 import time
 import shutil
+import dataclasses
 from dataclasses import dataclass
 from collections import defaultdict
 from contextlib import contextmanager
+import json
 from threading import Thread, Event
-from .basic import expand_env_vars, LockFile, human_bytes_size
 from returnn.config import Config, get_global_config
+from .basic import expand_env_vars, LockFile, human_bytes_size
 
 
 __all__ = ["FileCache", "CachedFile", "get_instance"]
@@ -35,16 +37,14 @@ class FileCache:
 
     Some assumptions we depend on:
 
-    - When a cached file is available, and its size matches the original file,
+    - When a cached file is available,
+      and its size matches the original file
+      and its mtime is not older than the original file,
       we can use it.
-      (We might want to extend this logic later, e.g. by storing and checking the original source mtime.
-       But for simplicity, we don't do this for now.)
     - We will update the cached file mtime frequently (every second) via a background thread
       of used cached files, to mark that they are used.
       (We would maybe want to use atime, but we don't expect that atime can be relied on.)
       Note that updating mtime might influence the behavior of some external tools.
-      (If this becomes a problem at some point, instead of abusing mtime this way,
-       we might store the most recent usage time e.g. in a separate file.)
     - :func:`os.utime` will update mtime, and mtime is somewhat accurate (up to 10 secs maybe),
       mtime compares to time.time().
     - :func:`shutil.disk_usage` can be relied on.
@@ -126,10 +126,14 @@ class FileCache:
                     raise e
         if last_error is not None:
             raise last_error
-        self._touch_files_thread.files_extend([dst_filename])
+        info_file = self._get_info_filename(dst_filename)
+        os.utime(dst_filename, None)
+        os.utime(info_file, None)
+        # protect info file from tempreaper, which looks at the mtime
+        self._touch_files_thread.files_extend([dst_filename, info_file])
         return dst_filename
 
-    def release_files(self, filenames: Collection[str]):
+    def release_files(self, filenames: Union[str, Iterable[str]]):
         """
         Release cached files.
         This just says that we are not using the files anymore for now.
@@ -138,7 +142,9 @@ class FileCache:
 
         :param filenames: files to release (paths in the cache directory)
         """
-        self._touch_files_thread.files_remove(filenames)
+        if isinstance(filenames, str):
+            filenames = [filenames]
+        self._touch_files_thread.files_remove(fn_ for fn in filenames for fn_ in [fn, self._get_info_filename(fn)])
 
     def cleanup(self, *, need_at_least_free_space_size: int = 0):
         """
@@ -170,6 +176,11 @@ class FileCache:
         for root, dirs, files in os.walk(self.cache_directory):
             for rel_fn in files:
                 fn = root + "/" + rel_fn
+                if fn == cleanup_timestamp_file:
+                    continue
+                elif self._is_info_filename(fn):
+                    # skip keepalive files, they are processed together with the file they guard
+                    continue
                 try:
                     f_stat = os.stat(fn)
                 except Exception as exc:
@@ -227,6 +238,10 @@ class FileCache:
                 except Exception as exc:
                     print(f"FileCache: Error while removing {fn}: {type(exc).__name__}: {exc}")
                     cur_expected_free -= size
+                try:
+                    os.remove(self._get_info_filename(fn))
+                except Exception as exc:
+                    print(f"FileCache: Ignoring error file removing info file of {fn}: {type(exc).__name__}: {exc}")
 
             if reached_more_recent_files and want_free_space_size <= cur_expected_free:
                 # Have enough free space now.
@@ -288,7 +303,18 @@ class FileCache:
         Get the destination filename in the cache directory.
         """
         assert src_filename.startswith("/")
-        return self.cache_directory + src_filename
+        dst_file_name = self.cache_directory + src_filename
+        return dst_file_name
+
+    @staticmethod
+    def _get_info_filename(filename: str) -> str:
+        """:return: the name of the corresponding info file to `filename`."""
+        return f"{filename}.returnn-info"
+
+    @staticmethod
+    def _is_info_filename(filename: str) -> bool:
+        """:return: whether `filename` points to a info file."""
+        return filename.endswith(".returnn-info")
 
     def _copy_file_if_needed(self, src_filename: str, dst_filename: str):
         """
@@ -305,7 +331,6 @@ class FileCache:
             # Maybe it was copied in the meantime, while waiting for the lock.
             if self._check_existing_copied_file_maybe_cleanup(src_filename, dst_filename):
                 print(f"FileCache: using existing file {dst_filename}")
-                os.utime(dst_filename, None)  # touch
                 return
 
             print(f"FileCache: Copy file {src_filename} to cache")
@@ -325,6 +350,10 @@ class FileCache:
                 )
 
             with self._touch_files_thread.files_added_context([dst_dir, lock.lockfile]):
+                # save mtime before the copy process to have it pessimistic
+                orig_mtime_ns = os.stat(src_filename).st_mtime_ns
+                FileInfo(mtime_ns=orig_mtime_ns).save(self._get_info_filename(dst_filename))
+
                 _copy_with_prealloc(src_filename, dst_tmp_filename)
                 os.rename(dst_tmp_filename, dst_filename)
 
@@ -337,7 +366,17 @@ class FileCache:
             return False
         src_stat = os.stat(src_filename)
         dst_stat = os.stat(dst_filename)
-        if src_stat.st_size != dst_stat.st_size:
+        try:
+            last_known_mtime_ns = FileInfo.load(FileCache._get_info_filename(dst_filename)).mtime_ns
+        except FileNotFoundError:
+            # for existing setups where files may be cached, but the info file has
+            # not been written to disk yet, we re-fetch the file
+            last_known_mtime_ns = None
+        if (
+            src_stat.st_size != dst_stat.st_size
+            or last_known_mtime_ns is None
+            or src_stat.st_mtime_ns > last_known_mtime_ns
+        ):
             os.remove(dst_filename)
             return False
         return True
@@ -397,6 +436,29 @@ class CachedFile:
     filename: str  # original filename
 
 
+@dataclass(frozen=True)
+class FileInfo:
+    """
+    Represents meta information about cached files.
+
+    We currently save the last known mtime of the source file.
+    """
+
+    mtime_ns: int
+
+    def save(self, filename: str):
+        """Saves this instance to `filename`."""
+        with open(filename, "wt") as f:
+            f.write(json.dumps(dataclasses.asdict(self)))
+
+    @classmethod
+    def load(cls, filename: str) -> "FileInfo":
+        """Loads a previously saved FileInfo from the file at `filename`."""
+        with open(filename, "rt") as f:
+            data = json.load(f)
+        return cls(**data)
+
+
 class _TouchFilesThread(Thread):
     def __init__(self, *, interval: float = 1.0, cache_base_dir: str):
         super().__init__(daemon=True)
@@ -425,19 +487,21 @@ class _TouchFilesThread(Thread):
         self._is_started = True
         self.start()
 
-    def files_extend(self, files: Collection[str]):
+    def files_extend(self, to_add: Union[str, Iterable[str]]):
         """append"""
-        assert isinstance(files, (list, set, tuple))
+        if isinstance(to_add, str):
+            to_add = [to_add]
+        assert isinstance(to_add, Iterable)
         self.start_once()
-        for file in files:
+        for file in to_add:
             self.files[file] += 1
 
-    def files_remove(self, files: Collection[str]):
+    def files_remove(self, to_remove: Union[str, Iterable[str]]):
         """remove"""
-        if isinstance(files, str):
-            files = [files]
-        assert isinstance(files, (list, set, tuple))
-        for filename in files:
+        if isinstance(to_remove, str):
+            to_remove = [to_remove]
+        assert isinstance(to_remove, Iterable)
+        for filename in to_remove:
             self.files[filename] -= 1
             if self.files[filename] <= 0:
                 del self.files[filename]

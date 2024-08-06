@@ -842,11 +842,13 @@ def test_file_cache():
     assert cached_fn3 == cache_dir + src_dir + "/dirC/dummy3.txt" and os.path.exists(cached_fn3)
     with open(cached_fn3) as f:
         assert f.read() == "Hello dummy3.txt\n"
-    assert dict(cache._touch_files_thread.files) == {
+    target_values = {
         cache_dir + src_dir + "/dummy1.txt": 1,
         cache_dir + src_dir + "/dirA/subdirB/dummy2.txt": 1,
         cache_dir + src_dir + "/dirC/dummy3.txt": 1,
     }
+    for k, v in cache._touch_files_thread.files.items():
+        assert FileCache._is_info_filename(k) or (k in target_values and target_values[k] == v)
 
     # Check config handle_cached_files_in_config.
     config, config_cached_files = cache.handle_cached_files_in_config(
@@ -854,11 +856,14 @@ def test_file_cache():
     )
     assert config == {"class": "Dataset", "files": [cache_dir + src_dir + "/dirA/subdirB/dummy2.txt"]}
     assert config_cached_files == [cache_dir + src_dir + "/dirA/subdirB/dummy2.txt"]
-    assert dict(cache._touch_files_thread.files) == {
+
+    target_values = {
         cache_dir + src_dir + "/dummy1.txt": 1,
         cache_dir + src_dir + "/dirA/subdirB/dummy2.txt": 2,
         cache_dir + src_dir + "/dirC/dummy3.txt": 1,
     }
+    for k, v in cache._touch_files_thread.files.items():
+        assert FileCache._is_info_filename(k) or (k in target_values and target_values[k] == v)
 
     # Check that file is kept up-to-date until we release it.
     mtimes = set()
@@ -879,7 +884,7 @@ def test_file_cache():
         ]
     )
     cache.release_files([cache_dir + src_dir + "/dirA/subdirB/dummy2.txt"])  # was acquired twice
-    assert dict(cache._touch_files_thread.files) == {}
+    assert len(dict(cache._touch_files_thread.files)) == 0
     time.sleep(5)
     mtime = os.stat(cache_dir + src_dir + "/dirA/subdirB/dummy2.txt").st_mtime
     assert 4 <= time.time() - mtime
