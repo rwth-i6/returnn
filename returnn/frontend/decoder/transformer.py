@@ -353,12 +353,15 @@ class FeedForward(rf.Module):
         ff_dim: Optional[Union[Dim, int]] = NotSpecified,
         dropout: float = 0.1,
         activation: Union[Callable[[Tensor], Tensor], Dict[str, Any], rf.Module] = rf.relu,
+        with_bias: bool = True,
     ):
         """
         :param out_dim: output feature dimension
         :param ff_dim: dimension of the feed-forward layers
         :param dropout: dropout value
         :param activation: activation function, relu by default
+        :param with_bias: whether to use bias in the linear layers.
+            True by default for compatibility, but nowadays it's common to use without bias.
         """
         super().__init__()
 
@@ -381,8 +384,8 @@ class FeedForward(rf.Module):
         self.dropout_broadcast = rf.dropout_broadcast_default()
         self.activation = activation
 
-        self.linear_ff = rf.Linear(out_dim, ff_dim)
-        self.linear_out = rf.Linear(ff_dim, out_dim)
+        self.linear_ff = rf.Linear(out_dim, ff_dim, with_bias=with_bias)
+        self.linear_out = rf.Linear(ff_dim, out_dim, with_bias=with_bias)
 
     def __call__(self, inp: Tensor) -> Tensor:
         """forward"""
