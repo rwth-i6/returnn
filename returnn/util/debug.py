@@ -689,9 +689,13 @@ def check_py_traces_rf_to_pt_equal(
         else:
             raise TypeError(f"invalid dim type: {dim!r}")
 
+    def _format_check(check: Tuple[Union[FunctionType, Callable], int, str, int]) -> str:
+        func, i, var_name, j = check
+        return f"{func.__qualname__}[{i}] {var_name}[{j}]"
+
     non_matching = []
     for check_rf, check_pt, pt_dims in checks:
-        print(f"checking {check_rf} vs {check_pt} ({pt_dims})...")
+        print(f"checking {_format_check(check_rf)} vs {_format_check(check_pt)} ({pt_dims})...")
         tensor_rf: Tensor = _get_entry(trace_rf, *check_rf)
         tensor_pt: torch.Tensor = _get_entry(trace_pt, *check_pt)
         if callable(pt_dims):
