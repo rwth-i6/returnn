@@ -628,7 +628,10 @@ class PyTracer:
                         continue
                     prev = self.captured_locals[func][-1].get(k, None)
                     if prev is None or prev[-1] is not v:
-                        print(f"{func.__qualname__} tensor var changed: {k} = {v}")
+                        print(
+                            f"{func.__qualname__}[{len(self.captured_locals[func]) - 1}]"
+                            f" {type(v).__qualname__} var changed: {k} = {v}"
+                        )
                         self.captured_locals[func][-1].setdefault(k, []).append(v)
             return self
         return prev_trace_func_res
