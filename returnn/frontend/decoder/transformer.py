@@ -13,6 +13,7 @@ References:
 
 from __future__ import annotations
 from typing import Optional, Any, Union, Tuple, Dict, Callable, Sequence
+from types import FunctionType
 import functools
 import logging
 import copy as _copy
@@ -37,6 +38,7 @@ class TransformerDecoder(rf.Module):
         ff: Union[type, Dict[str, Any], rf.Module] = NotSpecified,
         ff_dim: Union[Dim, int] = NotSpecified,
         ff_activation: Union[Callable[[Tensor], Tensor], Dict[str, Any], rf.Module] = NotSpecified,
+        pos_enc: Union[None, Callable, Dict[str, Any], rf.Module] = rf.sinusoidal_positional_encoding,
         dropout: float = 0.1,
         num_heads: int = 8,
         att_dropout: float = 0.1,
@@ -58,6 +60,7 @@ class TransformerDecoder(rf.Module):
         :param ff: feed-forward / MLP block. Default is :class:`FeedForward`
         :param ff_dim: the dimension of feed-forward layers. 2048 originally, or 4 times out_dim
         :param ff_activation: activation function for feed-forward network
+        :param pos_enc: positional encoding. Default is sinusoidal positional encoding.
         :param dropout: the dropout value for the FF block
         :param num_heads: the number of attention heads
         :param att_dropout: attention dropout value
@@ -93,10 +96,21 @@ class TransformerDecoder(rf.Module):
         if embed_dim:
             self.input_embedding_proj = rf.Linear(embed_dim, model_dim, with_bias=False)
 
-        # TODO This should be configurable...
-        self.pos_enc = functools.partial(
-            rf.sinusoidal_positional_encoding, feat_dim=embed_dim or model_dim, dtype=self.input_embedding.weight.dtype
-        )
+        if pos_enc is None:
+            pass
+        elif isinstance(pos_enc, dict):
+            pos_enc = rf.build_from_dict(
+                pos_enc, feat_dim=embed_dim or model_dim, dtype=self.input_embedding.weight.dtype
+            )
+        elif isinstance(pos_enc, rf.Module):
+            pass
+        elif isinstance(pos_enc, FunctionType):
+            pos_enc = functools.partial(
+                pos_enc, feat_dim=embed_dim or model_dim, dtype=self.input_embedding.weight.dtype
+            )
+        else:
+            raise TypeError(f"unexpected pos_enc type {pos_enc!r}")
+        self.pos_enc = pos_enc
         if share_embedding is None:
             if BehaviorVersion.get() < 20:
                 logging.getLogger("returnn.frontend").warning(
@@ -190,7 +204,8 @@ class TransformerDecoder(rf.Module):
         new_state = rf.State()
 
         decoded = self.input_embedding(source) * self.input_embedding_scale
-        decoded = decoded + self.pos_enc(spatial_dim=spatial_dim, offset=state.pos)
+        if self.pos_enc is not None:
+            decoded = decoded + self.pos_enc(spatial_dim=spatial_dim, offset=state.pos)
         decoded = rf.dropout(decoded, self.input_dropout)
         if self.input_embedding_proj is not None:
             decoded = self.input_embedding_proj(decoded)
