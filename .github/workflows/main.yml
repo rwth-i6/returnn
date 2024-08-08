@@ -352,6 +352,7 @@ jobs:
           - TEST=rf_const
           - TEST=rf_container
           - TEST=rf_conv
+          - TEST=rf_decoder_transformer
           - TEST=rf_encoder_conformer
           - TEST=rf_gradient
           - TEST=rf_label_smoothing
