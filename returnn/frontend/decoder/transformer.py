@@ -244,7 +244,9 @@ class TransformerDecoderLayer(rf.Module):
         ff_activation: Union[Callable[[Tensor], Tensor], Dict[str, Any], rf.Module] = NotSpecified,
         dropout: float = 0.1,
         num_heads: int = 8,
-        self_att: Optional[Union[rf.CausalSelfAttention, rf.RelPosCausalSelfAttention, rf.Module, type, Any]] = None,
+        self_att: Optional[
+            Union[rf.CausalSelfAttention, rf.RelPosCausalSelfAttention, rf.Module, type, Dict[str, Any]]
+        ] = None,
         self_att_opts: Optional[Dict[str, Any]] = None,
         att_dropout: float = 0.1,
         norm: Union[type, Dict[str, Any], rf.Module, Callable] = rf.LayerNorm,
@@ -287,7 +289,7 @@ class TransformerDecoderLayer(rf.Module):
         self.ff = ff
         self.ff_layer_norm = _make_norm(norm, out_dim)
 
-        if self_att is None or isinstance(self_att, type):
+        if self_att is None or isinstance(self_att, type) or isinstance(self_att, dict):
             self_att_opts_ = dict(
                 in_dim=out_dim,
                 proj_dim=out_dim,
@@ -300,10 +302,16 @@ class TransformerDecoderLayer(rf.Module):
                 self_att_opts_.update(self_att_opts)
             if self_att is None:
                 self.self_att = rf.CausalSelfAttention(**self_att_opts_)
-            else:
+            elif isinstance(self_att, type):
                 self.self_att = self_att(**self_att_opts_)
+            elif isinstance(self_att, dict):
+                self.self_att = rf.build_from_dict(self_att, **self_att_opts_)
+            else:
+                raise TypeError(f"unexpected self_att type {self_att!r}")
+        elif isinstance(self_att, rf.Module):
+            self.self_att = _copy.deepcopy(self_att)
         else:
-            self.self_att = self_att
+            raise TypeError(f"unexpected self_att type {self_att!r}")
         self.self_att_layer_norm = _make_norm(norm, out_dim)
 
         self.cross_att = None
