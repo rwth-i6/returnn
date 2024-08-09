@@ -13,7 +13,9 @@ from returnn.tensor import Tensor, Dim
 import returnn.frontend as rf
 from returnn.util.basic import NotSpecified
 from .base import ISeqDownsamplingEncoder
-from ..decoder.transformer import FeedForward
+
+# noinspection PyProtectedMember
+from ..decoder.transformer import FeedForward, _make_norm
 
 
 class ConformerPositionwiseFeedForward(FeedForward):
@@ -183,6 +185,7 @@ class ConformerEncoderLayer(rf.Module):
         self_att: Optional[Union[rf.RelPosSelfAttention, rf.Module, type, Dict[str, Any], Any]] = None,
         self_att_opts: Optional[Dict[str, Any]] = None,
         att_dropout: float = 0.1,
+        norm: Union[type, Dict[str, Any], rf.Module, Callable] = rf.LayerNorm,
     ):
         """
         :param out_dim: the output feature dimension
@@ -200,6 +203,7 @@ class ConformerEncoderLayer(rf.Module):
         :param self_att: the self-attention layer. RelPosSelfAttention originally and default
         :param self_att_opts: options for the self-attention layer, for :class:`nn.RelPosSelfAttention`
         :param att_dropout: attention dropout value
+        :param norm: pre-normalization for FF, conv and attention blocks
         """
         super().__init__()
 
@@ -208,10 +212,10 @@ class ConformerEncoderLayer(rf.Module):
         self.out_dim = out_dim
 
         self.ffn1 = _make_ff(ff=ff, out_dim=out_dim, ff_dim=ff_dim, dropout=dropout, ff_activation=ff_activation)
-        self.ffn1_layer_norm = rf.LayerNorm(out_dim)
+        self.ffn1_layer_norm = _make_norm(norm, out_dim)
 
         self.ffn2 = _make_ff(ff=ff, out_dim=out_dim, ff_dim=ff_dim, dropout=dropout, ff_activation=ff_activation)
-        self.ffn2_layer_norm = rf.LayerNorm(out_dim)
+        self.ffn2_layer_norm = _make_norm(norm, out_dim)
 
         if conv_norm is NotSpecified or conv_norm is rf.BatchNorm:
             conv_norm_opts = conv_norm_opts.copy() if conv_norm_opts else {}
@@ -224,7 +228,7 @@ class ConformerEncoderLayer(rf.Module):
         if not callable(conv_norm):
             raise TypeError(f"{self}: unexpected conv_norm type {conv_norm!r}")
         self.conv_block = ConformerConvBlock(out_dim=out_dim, kernel_size=conv_kernel_size, norm=conv_norm)
-        self.conv_layer_norm = rf.LayerNorm(out_dim)
+        self.conv_layer_norm = _make_norm(norm, out_dim)
 
         if self_att is None or isinstance(self_att, (dict, type)):
             self_att_opts_ = dict(
@@ -250,9 +254,9 @@ class ConformerEncoderLayer(rf.Module):
             if not callable(self_att):
                 raise TypeError(f"{self}: invalid non-callable: self_att {self_att!r}")
             self.self_att = self_att
-        self.self_att_layer_norm = rf.LayerNorm(out_dim)
+        self.self_att_layer_norm = _make_norm(norm, out_dim)
 
-        self.final_layer_norm = rf.LayerNorm(out_dim)
+        self.final_layer_norm = _make_norm(norm, out_dim)
 
     def __call__(self, inp: Tensor, *, spatial_dim: Dim) -> Tensor:
         """forward"""
