@@ -193,6 +193,7 @@ class ConformerEncoderLayer(rf.Module):
         self,
         out_dim: Dim = Dim(512, name="conformer-enc-default-out-dim"),
         *,
+        ff: Union[type, Dict[str, Any], rf.Module] = NotSpecified,
         ff_dim: Dim = NotSpecified,
         ff_activation: Union[Callable[[Tensor], Tensor], Dict[str, Any], rf.Module] = NotSpecified,
         dropout: float = 0.1,
@@ -227,14 +228,10 @@ class ConformerEncoderLayer(rf.Module):
         self.dropout_broadcast = rf.dropout_broadcast_default()
         self.out_dim = out_dim
 
-        self.ffn1 = ConformerPositionwiseFeedForward(
-            out_dim=out_dim, ff_dim=ff_dim, dropout=dropout, activation=ff_activation
-        )
+        self.ffn1 = _make_ff(ff=ff, out_dim=out_dim, ff_dim=ff_dim, dropout=dropout, ff_activation=ff_activation)
         self.ffn1_layer_norm = rf.LayerNorm(out_dim)
 
-        self.ffn2 = ConformerPositionwiseFeedForward(
-            out_dim=out_dim, ff_dim=ff_dim, dropout=dropout, activation=ff_activation
-        )
+        self.ffn2 = _make_ff(ff=ff, out_dim=out_dim, ff_dim=ff_dim, dropout=dropout, ff_activation=ff_activation)
         self.ffn2_layer_norm = rf.LayerNorm(out_dim)
 
         if conv_norm is NotSpecified or conv_norm is rf.BatchNorm:
@@ -411,3 +408,28 @@ class ConformerEncoder(ISeqDownsamplingEncoder):
         x = rf.dropout(x_linear, self.input_dropout, axis=self.dropout_broadcast and self.input_projection.out_dim)
         x = self.layers(x, spatial_dim=out_spatial_dim, collected_outputs=collected_outputs)
         return x, out_spatial_dim
+
+
+def _make_ff(
+    *,
+    out_dim: Dim,
+    ff: Union[type, Dict[str, Any], rf.Module],
+    ff_dim: Dim,
+    ff_activation: Union[Callable[[Tensor], Tensor], Dict[str, Any], rf.Module],
+    dropout: float,
+) -> Union[ConformerPositionwiseFeedForward, rf.Module]:
+    if ff is NotSpecified:
+        ff = ConformerPositionwiseFeedForward
+    if isinstance(ff, rf.Module):
+        ff = _copy.deepcopy(ff)
+    else:
+        ff_kwargs = dict(out_dim=out_dim, ff_dim=ff_dim, dropout=dropout, activation=ff_activation)
+        ff_kwargs = {k: v for (k, v) in ff_kwargs.items() if v is not NotSpecified}
+        if isinstance(ff, type):
+            ff = ff(**ff_kwargs)
+        elif isinstance(ff, dict):
+            ff = rf.build_from_dict(ff, **ff_kwargs)
+        else:
+            raise TypeError(f"unexpected ff type {ff!r}")
+    assert isinstance(ff, rf.Module)
+    return ff
