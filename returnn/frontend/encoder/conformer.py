@@ -13,9 +13,10 @@ from returnn.tensor import Tensor, Dim
 import returnn.frontend as rf
 from returnn.util.basic import NotSpecified
 from .base import ISeqDownsamplingEncoder
+from ..decoder.transformer import FeedForward
 
 
-class ConformerPositionwiseFeedForward(rf.Module):
+class ConformerPositionwiseFeedForward(FeedForward):
     """
     Conformer position-wise feedforward neural network layer
         FF -> Activation -> Dropout -> FF
@@ -27,40 +28,18 @@ class ConformerPositionwiseFeedForward(rf.Module):
         *,
         ff_dim: Dim = NotSpecified,
         dropout: float = 0.1,
-        activation: Union[Callable[[Tensor], Tensor], Dict[str, Any], rf.Module] = NotSpecified,
+        activation: Union[Callable[[Tensor], Tensor], Dict[str, Any], rf.Module] = rf.swish,
+        **kwargs,
     ):
         """
         :param out_dim: output feature dimension
         :param ff_dim: dimension of the feed-forward layers
         :param dropout: dropout value
-        :param activation: activation function
+        :param activation: activation function. swish by default, unlike the base :class:`FeedForward`
         """
-        super().__init__()
-
-        if ff_dim is NotSpecified:
-            ff_dim = 4 * out_dim
-        self.out_dim = out_dim
-        self.dropout = dropout
-        self.dropout_broadcast = rf.dropout_broadcast_default()
         if activation is NotSpecified:
             activation = rf.swish
-        elif isinstance(activation, dict):
-            activation = rf.build_from_dict(activation)
-        elif not callable(activation):
-            raise TypeError(f"{self}: unexpected activation type {activation!r}")
-        assert callable(activation)
-        self.activation = activation
-
-        self.linear_ff = rf.Linear(out_dim, ff_dim)
-        self.linear_out = rf.Linear(ff_dim, out_dim)
-
-    def __call__(self, inp: Tensor) -> Tensor:
-        """forward"""
-        x_ff1 = self.linear_ff(inp)
-        x_act = self.activation(x_ff1)
-        x_drop = rf.dropout(x_act, self.dropout, axis=self.dropout_broadcast and self.linear_ff.out_dim)
-        x_ff2 = self.linear_out(x_drop)
-        return x_ff2
+        super().__init__(out_dim=out_dim, ff_dim=ff_dim, dropout=dropout, activation=activation, **kwargs)
 
 
 class ConformerConvBlock(rf.Module):
