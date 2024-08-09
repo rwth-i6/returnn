@@ -25,9 +25,9 @@ class ConformerPositionwiseFeedForward(rf.Module):
         self,
         out_dim: Dim,
         *,
-        ff_dim: Dim,
-        dropout: float,
-        activation: Union[Callable[[Tensor], Tensor], Dict[str, Any], rf.Module],
+        ff_dim: Dim = NotSpecified,
+        dropout: float = 0.1,
+        activation: Union[Callable[[Tensor], Tensor], Dict[str, Any], rf.Module] = NotSpecified,
     ):
         """
         :param out_dim: output feature dimension
@@ -37,13 +37,18 @@ class ConformerPositionwiseFeedForward(rf.Module):
         """
         super().__init__()
 
+        if ff_dim is NotSpecified:
+            ff_dim = 4 * out_dim
         self.out_dim = out_dim
         self.dropout = dropout
         self.dropout_broadcast = rf.dropout_broadcast_default()
-        if isinstance(activation, dict):
+        if activation is NotSpecified:
+            activation = rf.swish
+        elif isinstance(activation, dict):
             activation = rf.build_from_dict(activation)
         elif not callable(activation):
             raise TypeError(f"{self}: unexpected activation type {activation!r}")
+        assert callable(activation)
         self.activation = activation
 
         self.linear_ff = rf.Linear(out_dim, ff_dim)
@@ -189,7 +194,7 @@ class ConformerEncoderLayer(rf.Module):
         out_dim: Dim = Dim(512, name="conformer-enc-default-out-dim"),
         *,
         ff_dim: Dim = NotSpecified,
-        ff_activation: Union[Callable[[Tensor], Tensor], Dict[str, Any], rf.Module] = rf.swish,
+        ff_activation: Union[Callable[[Tensor], Tensor], Dict[str, Any], rf.Module] = NotSpecified,
         dropout: float = 0.1,
         conv_kernel_size: int = 32,
         conv_norm: Union[rf.BatchNorm, type, Dict[str, Any], Any] = NotSpecified,
@@ -222,8 +227,6 @@ class ConformerEncoderLayer(rf.Module):
         self.dropout_broadcast = rf.dropout_broadcast_default()
         self.out_dim = out_dim
 
-        if ff_dim is None:
-            ff_dim = 4 * out_dim
         self.ffn1 = ConformerPositionwiseFeedForward(
             out_dim=out_dim, ff_dim=ff_dim, dropout=dropout, activation=ff_activation
         )
@@ -316,7 +319,7 @@ class ConformerEncoder(ISeqDownsamplingEncoder):
         input_layer: Union[ConformerConvSubsample, ISeqDownsamplingEncoder, rf.Module, Any],
         input_dropout: float = 0.1,
         ff_dim: Dim = NotSpecified,
-        ff_activation: Union[Callable[[Tensor], Tensor], Dict[str, Any], rf.Module] = rf.swish,
+        ff_activation: Union[Callable[[Tensor], Tensor], Dict[str, Any], rf.Module] = NotSpecified,
         dropout: float = 0.1,
         conv_kernel_size: int = 32,
         conv_norm: Union[rf.BatchNorm, type, Dict[str, Any], Any] = NotSpecified,
