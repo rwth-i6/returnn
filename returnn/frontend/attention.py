@@ -16,6 +16,7 @@ __all__ = [
     "SelfAttention",
     "CausalSelfAttention",
     "CausalSelfAttentionState",
+    "RotaryPosSelfAttention",
     "RotaryPosCausalSelfAttention",
     "RelPosSelfAttention",
     "RelPosCausalSelfAttention",
@@ -262,6 +263,36 @@ class CausalSelfAttentionState(rf.State):
             self.k_accum = k_accum
             self.v_accum = v_accum
             self.accum_axis = accum_axis
+
+
+class RotaryPosSelfAttention(SelfAttention):
+    """
+    Rotary positional encoding (RoPE)-based self attention
+    """
+
+    def __call__(self, source: Tensor, *, axis: Dim) -> Tensor:
+        """forward"""
+        q, k, v = self.forward_qkv(source)
+
+        # Apply RoPE using sinusoidal positional encoding.
+        # Note: base is a bit different in rf.sinusoidal_positional_encoding (like the original)
+        # vs how it's commonly used for RoPE.
+        # log(base) / (dim / 2 - 1) = log(10_000) * 2 / dim
+        # <=> log(base) = log(10_000) * (dim / 2 - 1) * 2 / dim = log(10_000) * (1 - 2 / dim)
+        # <=> base = 10_000 ** (1 - 2 / dim)
+        pos_enc = rf.sinusoidal_positional_encoding(
+            spatial_dim=axis,
+            feat_dim=self.key_dim_per_head,
+            base=10_000 ** (1 - 2 / self.key_dim_per_head.dimension),
+        )  # [T,D]
+        q = _apply_rope(q, pos_enc, self.key_dim_per_head)
+        k = _apply_rope(k, pos_enc, self.key_dim_per_head)
+
+        kv_axis = Dim(None, name=f"{axis.name}-kv")
+        k, _ = rf.replace_dim(k, in_dim=axis, out_dim=kv_axis)
+        v, _ = rf.replace_dim(v, in_dim=axis, out_dim=kv_axis)
+        output = self.attention(q, k, v, kv_axis=kv_axis)
+        return output
 
 
 class RotaryPosCausalSelfAttention(CausalSelfAttention):
