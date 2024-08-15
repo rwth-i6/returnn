@@ -78,8 +78,20 @@ class PostprocessingDataset(CachedDataset2):
         """
         super().__init__(**kwargs)
 
-        if self.seq_ordering != "default":
-            raise ValueError(f"{self}: specify seq_ordering in wrapped dataset, not in {self.__class__.__name__}")
+        if self.seq_ordering != "default" and not self.seq_ordering.startswith("laplace:."):
+            raise ValueError(
+                f"{self}: can only specify default or laplace:.num_seqs-style seq ordering "
+                f"in {self.__class__.__name__}. "
+                "Any other seq_ordering must be set on wrapped dataset."
+            )
+        if self._seq_list_filter_file is not None:
+            raise ValueError(
+                f"{self}: specify seq_list_filter_file in wrapped dataset, not in {self.__class__.__name__}"
+            )
+        if self._seq_order_seq_lens_file is not None:
+            raise ValueError(
+                f"{self}: specify seq_order_seq_lens_file in wrapped dataset, not in {self.__class__.__name__}"
+            )
         if map_seq is None and map_seq_stream is None:
             raise ValueError(f"{self}: need to either set map_seq or map_seq_stream")
         if map_seq and map_seq_stream:
@@ -135,7 +147,7 @@ class PostprocessingDataset(CachedDataset2):
 
         assert self._dataset is not None
         self._dataset.init_seq_order(epoch=epoch, seq_list=seq_list, seq_order=seq_order)
-        self._data_iter = enumerate(self._build_mapping_iter())
+        self._data_iter = self._build_mapping_iter(epoch)
         return True
 
     def _collect_single_seq(self, seq_idx: int) -> Optional[DatasetSeq]:
@@ -150,12 +162,66 @@ class PostprocessingDataset(CachedDataset2):
             seq = DatasetSeq(features={k: t.raw_tensor for k, t in tensor_dict.data.items()}, seq_idx=seq_idx)
             return seq
 
-    def _build_mapping_iter(self) -> Iterator[TensorDict]:
+    def _build_mapping_iter(self, epoch: Optional[int]) -> Iterator[Tuple[int, TensorDict]]:
         """
-        :return: an iterator applying both the segment level and across-segment transformations on the given dataset
+        :return: an iterator applying both the segment level and across-segment transformations
+            as well as sequence ordering on the given dataset.
         """
 
+        def _apply_seq_ordering(inner: Iterator[TensorDict]) -> Iterator[TensorDict]:
+            """:return: generator applying sequence ordering on the data"""
+            if self.seq_ordering == "default":
+                yield from inner
+                return
+
+            assert self.seq_ordering.startswith("laplace:.")
+
+            has_ended = False
+            num_laplace_seqs_per_bin = int(self.seq_ordering.split(".")[1])
+            assert num_laplace_seqs_per_bin > 0
+            seq_buffer: List[TensorDict] = []
+
+            def _get_seq_len(i: int) -> int:
+                return seq_buffer[i].data[self._default_input].raw_tensor.shape[0]
+
+            while not has_ended:
+                # Fill two bins to complete one full upwards and downwards cycle wrt. the resulting seq lens
+                while len(seq_buffer) < 2 * num_laplace_seqs_per_bin:
+                    try:
+                        seq_buffer.append(next(inner))
+                    except StopIteration:
+                        has_ended = True
+                        break
+                seq_order = self.get_seq_order_for_epoch(
+                    epoch=epoch, num_seqs=len(seq_buffer), get_seq_len=_get_seq_len
+                )
+                for idx in seq_order:
+                    yield seq_buffer[idx]
+                seq_buffer.clear()
+
+        def _iterate_dataset() -> Iterator[TensorDict]:
+            """
+            :return: generator providing data samples from the underlying dataset in the form of a TensorDict
+            """
+            data_keys = self._dataset.get_data_keys()
+            seq_index = 0
+            while self._dataset.is_less_than_num_seqs(seq_index):
+                self._dataset.load_seqs(seq_index, seq_index + 1)
+                tensor_dict = self._in_tensor_dict_template.copy_template()
+                for data_key in data_keys:
+                    tensor_dict.data[data_key].raw_tensor = self._dataset.get_data(seq_index, data_key)
+                if self._map_seq is not None:
+                    tensor_dict = self._map_seq(tensor_dict)
+                    assert isinstance(
+                        tensor_dict, TensorDict
+                    ), f"map_seq must produce a {TensorDict.__name__}, but produced {type(tensor_dict).__name__}"
+                yield tensor_dict
+                seq_index += 1
+
         def _validate_tensor_dict_iter(inner: Iterator[TensorDict]) -> Iterator[TensorDict]:
+            """
+            :return: a generator validating the resulting TensorDicts against the configured template
+            """
             for t_dict in inner:
                 for data_key, out_t in self._out_tensor_dict_template.data.items():
                     in_t = t_dict.data[data_key]
@@ -166,33 +232,16 @@ class PostprocessingDataset(CachedDataset2):
                     )
                 yield t_dict
 
-        data_iter = self._iterate_dataset()
+        data_iter = _iterate_dataset()
         if self._map_seq_stream is not None:
             data_iter = self._map_seq_stream(data_iter)
             assert isinstance(
                 data_iter, Iterator
             ), f"map_seq_stream must produce an {Iterator.__name__}, but produced {type(data_iter).__name__}"
-        return _validate_tensor_dict_iter(data_iter)
-
-    def _iterate_dataset(self) -> Iterator[TensorDict]:
-        """
-        :return: generator providing data samples in the form of a TensorDict
-        """
-        data_keys = self._dataset.get_data_keys()
-
-        seq_index = 0
-        while self._dataset.is_less_than_num_seqs(seq_index):
-            self._dataset.load_seqs(seq_index, seq_index + 1)
-            tensor_dict = self._in_tensor_dict_template.copy_template()
-            for data_key in data_keys:
-                tensor_dict.data[data_key].raw_tensor = self._dataset.get_data(seq_index, data_key)
-            if self._map_seq is not None:
-                tensor_dict = self._map_seq(tensor_dict)
-                assert isinstance(
-                    tensor_dict, TensorDict
-                ), f"map_seq must produce a {TensorDict.__name__}, but produced {type(tensor_dict).__name__}"
-            yield tensor_dict
-            seq_index += 1
+        validated_iter = _validate_tensor_dict_iter(data_iter)
+        sorted_iter = _apply_seq_ordering(validated_iter)
+        iter_w_seq_idx = enumerate(sorted_iter)
+        return iter_w_seq_idx
 
     def _make_tensor_template_from_input(self, data_key: str) -> Tensor:
         dtype = self._dataset.get_data_dtype(data_key)
