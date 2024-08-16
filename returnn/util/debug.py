@@ -4,7 +4,7 @@ Some generic debugging utilities.
 
 from __future__ import annotations
 from typing import TYPE_CHECKING, Optional, Union, Any, Sequence, Callable, Tuple, List, Dict
-from types import FunctionType
+from types import FunctionType, CodeType
 import os
 import sys
 import signal
@@ -583,13 +583,14 @@ class PyTracer:
         :param funcs_to_trace_list: list of functions to trace the locals. only those functions will be traced.
         :param capture_type: only capture variables of this type, e.g. torch.Tensor.
         """
-        self.funcs_to_trace_list = []
-        for func in funcs_to_trace_list:
-            # E.g. when the function was decorated, see functools.wraps.
+
+        def _get_func_code(func: FunctionType) -> CodeType:
             while getattr(func, "__wrapped__", None) is not None:
                 func = func.__wrapped__
-            self.funcs_to_trace_list.append(func)
-        self._code_obj_to_func = {func.__code__: func for func in self.funcs_to_trace_list}
+            return func.__code__
+
+        self.funcs_to_trace_list = funcs_to_trace_list
+        self._code_obj_to_func = {_get_func_code(func): func for func in self.funcs_to_trace_list}
         self.capture_type = capture_type
 
         self._prev_trace_func = None
@@ -676,8 +677,6 @@ def check_py_traces_rf_to_pt_equal(
     dummy_forward_compat_kwargs = {f"_random_forward_compat_arg_{random.randint(0, 1_000_000)}": "please"}
 
     def _get_entry(trace, func, i, name, j):
-        while getattr(func, "__wrapped__", None) is not None:
-            func = func.__wrapped__
         return trace[func][i][name][j]
 
     def _resolve_dim(dim: Union[Dim, str]) -> Dim:
