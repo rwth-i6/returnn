@@ -4,7 +4,7 @@ Some generic debugging utilities.
 
 from __future__ import annotations
 from typing import TYPE_CHECKING, Optional, Union, Any, Sequence, Callable, Tuple, List, Dict
-from types import FunctionType, CodeType
+from types import FunctionType, CodeType, FrameType
 import os
 import sys
 import signal
@@ -574,6 +574,15 @@ class PyTracer:
         check_py_traces_rf_to_pt_equal(trace_my_impl.captured_locals, trace_ref_impl.captured_locals, [...])
 
     See also :func:`check_py_traces_rf_to_pt_equal` to compare the traces.
+
+    This class uses the Python :func:`sys.settrace` mechanism to trace the locals.
+    It accesses ``frame.f_locals`` to get the local variables.
+    Note that this behavior is slightly buggy in versions of CPython <3.13,
+    see for example:
+    https://github.com/python/cpython/issues/113939
+    https://github.com/python/cpython/issues/74929
+    And thus the behavior might be different depending on the Python version.
+    In Python >=3.13, you likely get a few more locals than before.
     """
 
     def __init__(
@@ -612,7 +621,7 @@ class PyTracer:
         sys.settrace(self._prev_trace_func)
         self._prev_trace_func = None
 
-    def __call__(self, frame, event, arg) -> Optional[PyTracer]:
+    def __call__(self, frame: FrameType, event, arg) -> Optional[PyTracer]:
         """
         Trace func to get intermediate outputs.
         """
@@ -624,6 +633,8 @@ class PyTracer:
             if event == "call":
                 self.captured_locals.setdefault(func, []).append({})
             else:
+                # Note that accessing frame.f_locals is not always totally accurate.
+                # See the corresponding comment in our class docstring.
                 for k, v in frame.f_locals.items():
                     if not isinstance(v, self.capture_type):
                         continue
