@@ -79,7 +79,7 @@ def _get_class_init_kwargs(optim_class):
     return optim_class_init_kwargs
 
 
-class Updater(object):
+class Updater:
     """
     Wraps a torch.optim.Optimizer, and extends it by some further functionality.
     """
