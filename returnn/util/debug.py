@@ -3,7 +3,7 @@ Some generic debugging utilities.
 """
 
 from __future__ import annotations
-from typing import TYPE_CHECKING, Optional, Union, Any, Sequence, Callable, Tuple, List, Dict
+from typing import TYPE_CHECKING, Optional, Union, Any, Collection, Sequence, Callable, Tuple, List, Dict, TextIO
 from types import FunctionType, CodeType, FrameType
 import os
 import sys
@@ -54,13 +54,19 @@ def auto_exclude_all_new_threads(func):
     return wrapped
 
 
-def dump_all_thread_tracebacks(exclude_thread_ids=None, exclude_self=False):
+def dump_all_thread_tracebacks(
+    *, exclude_thread_ids: Optional[Collection[int]] = None, exclude_self: bool = False, file: Optional[TextIO] = None
+):
     """
-    :param set[int] exclude_thread_ids:
-    :param bool exclude_self:
+    :param exclude_thread_ids:
+    :param exclude_self:
+    :param file:
     """
     if exclude_thread_ids is None:
         exclude_thread_ids = set()
+    if file is None:
+        file = sys.stdout
+
     from returnn.util.better_exchook import print_tb
     import threading
 
@@ -68,7 +74,7 @@ def dump_all_thread_tracebacks(exclude_thread_ids=None, exclude_self=False):
         exclude_thread_ids = set(list(exclude_thread_ids) + [threading.current_thread().ident])
 
     if hasattr(sys, "_current_frames"):
-        print("")
+        print("", file=file)
         threads = {t.ident: t for t in threading.enumerate()}
         # noinspection PyProtectedMember
         for tid, stack in sorted(sys._current_frames().items()):
@@ -89,17 +95,17 @@ def dump_all_thread_tracebacks(exclude_thread_ids=None, exclude_self=False):
                 tags += [str(thread_)]
             else:
                 tags += ["unknown with id %i" % tid]
-            print("Thread %s:" % ", ".join(tags))
+            print("Thread %s:" % ", ".join(tags), file=file)
             if tid in global_exclude_thread_ids:
-                print("(Auto-ignored traceback.)")
+                print("(Auto-ignored traceback.)", file=file)
             elif tid in exclude_thread_ids:
-                print("(Excluded thread.)")
+                print("(Excluded thread.)", file=file)
             else:
-                print_tb(stack, file=sys.stdout)
-            print("")
-        print("That were all threads.")
+                print_tb(stack, file=file)
+            print("", file=file)
+        print("That were all threads.", file=file)
     else:
-        print("Does not have sys._current_frames, cannot get thread tracebacks.")
+        print("Does not have sys._current_frames, cannot get thread tracebacks.", file=file)
 
 
 def setup_warn_with_traceback():
@@ -132,6 +138,7 @@ def init_better_exchook():
     but adds some special handling for the main thread.
     """
     from returnn.util.better_exchook import better_exchook
+    from returnn.log import log
 
     def excepthook(exc_type, exc_obj, exc_tb):
         """
@@ -139,6 +146,8 @@ def init_better_exchook():
         :param exc_obj:
         :param exc_tb:
         """
+        file = log.v1 or sys.stdout
+
         # noinspection PyBroadException
         try:
             # noinspection PyUnresolvedReferences,PyProtectedMember
@@ -153,7 +162,10 @@ def init_better_exchook():
                     return
                 # An unhandled exception in the main thread. This means that we are going to quit now.
                 sys.exited = True
-        print("Unhandled exception %s in thread %s, proc %i." % (exc_type, threading.current_thread(), os.getpid()))
+        print(
+            "Unhandled exception %s in thread %s, proc %i." % (exc_type, threading.current_thread(), os.getpid()),
+            file=file,
+        )
         if exc_type is KeyboardInterrupt:
             return
 
@@ -164,9 +176,9 @@ def init_better_exchook():
                 # We are the main thread and we got an exit-exception. This is likely fatal.
                 # This usually means an exit. (We ignore non-daemon threads and procs here.)
                 # Print the stack of all other threads.
-                dump_all_thread_tracebacks(exclude_thread_ids={main_thread_id})
+                dump_all_thread_tracebacks(exclude_thread_ids={main_thread_id}, file=file)
 
-        better_exchook(exc_type, exc_obj, exc_tb, file=sys.stdout)
+        better_exchook(exc_type, exc_obj, exc_tb, file=file)
 
     sys.excepthook = excepthook
 
