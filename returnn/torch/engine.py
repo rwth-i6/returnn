@@ -10,6 +10,8 @@ import gc
 import os
 import time
 import socket
+import fnmatch
+import re
 
 import torch
 import torch.distributed
@@ -760,6 +762,20 @@ class Engine(EngineBase):
                 else:  # default: init for recog
                     if is_training:
                         continue
+                if opts["filename"] is None:
+                    print(f"Pre-load (initialize) weights for key '{preload_key}'", file=log.v3)
+                    pattern = opts["pattern"]
+                    match = re.compile(fnmatch.translate(pattern)).match
+                    remove = []
+                    for name in self._pt_model.state_dict().keys():
+                        if match(name) and name in missing_keys:
+                            remove.append(name)
+                    if remove:
+                        print(f"Randomly initialize params: {remove}", file=log.v3)
+                        missing_keys.difference_update(remove)
+                    else:
+                        print("(No relevant parameters matching.)", file=log.v3)
+                    continue
                 print(f"Pre-load weights for key '{preload_key}' from {opts['filename']}", file=log.v3)
                 preload_model_state = torch.load(opts["filename"])
                 if opts.get("checkpoint_key", "model") is not None:
