@@ -520,8 +520,11 @@ def masked_select(
     tensor: Tensor, *, mask: Tensor, dims: Sequence[Dim], out_dim: Optional[Dim] = None
 ) -> Tuple[Tensor, Dim]:
     """
+    This will pack the tensor based on the mask.
     In TF, this is ``boolean_mask``.
     The inverse of this is :func:`masked_scatter`.
+
+    Related: :func:`pack_padded`, which uses :func:`sequence_mask` as the mask.
 
     :param tensor:
     :param mask:
@@ -553,6 +556,7 @@ def sequence_mask(dims: Union[Dim, Sequence[Dim]], *, device: Optional[str] = No
     """
     :param dims:
     :param device:
+    :return: mask based on the sequence lengths
     """
     if isinstance(dims, Dim):
         dims = [dims]
