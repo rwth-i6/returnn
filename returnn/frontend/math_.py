@@ -69,6 +69,7 @@ __all__ = [
     "log_softmax",
     "gating",
     "lerp",
+    "cumsum",
 ]
 
 
@@ -612,3 +613,11 @@ def lerp(
     """
     # noinspection PyProtectedMember
     return start._raw_backend.lerp(start, end, weight, allow_broadcast_all_sources=allow_broadcast_all_sources)
+
+
+def cumsum(source: Tensor, *, spatial_dim: Dim) -> Tensor:
+    """
+    Applies cumsum.
+    """
+    # noinspection PyProtectedMember
+    return source._raw_backend.cumsum(source, spatial_dim=spatial_dim)

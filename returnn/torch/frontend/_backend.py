@@ -1193,6 +1193,14 @@ class TorchBackend(Backend[torch.Tensor]):
         return out
 
     @staticmethod
+    def cumsum(source: Tensor, *, spatial_dim: Dim) -> Tensor:
+        """cumsum"""
+        axis = source.get_axis_from_description(spatial_dim)
+        out = source.copy_template("cumsum")
+        out.raw_tensor = torch.cumsum(source.raw_tensor, dim=axis, dtype=source.raw_tensor.dtype)
+        return out
+
+    @staticmethod
     def matmul(a: _TT, b: _TT, *, reduce: Union[Dim, Sequence[Dim]], use_mask: bool = True) -> _TT:
         """
         batched matmul of a and b, see base class doc string

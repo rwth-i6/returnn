@@ -731,6 +731,11 @@ class ReturnnLayersBackend(Backend[Layer]):
         )
 
     @staticmethod
+    def cumsum(source: Tensor, *, spatial_dim: Dim) -> Tensor:
+        """cumsum"""
+        return rfl.make_layer({"class": "cumsum", "from": source, "axis": spatial_dim}, name="cumsum")
+
+    @staticmethod
     def matmul(a: Tensor, b: Tensor, *, reduce: Union[Dim, Sequence[Dim]], use_mask: bool = True) -> Tensor:
         """matmul"""
         args = {}

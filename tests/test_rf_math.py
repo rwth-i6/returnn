@@ -109,3 +109,19 @@ def test_log_sigmoid():
         out.mark_as_default_output(shape=(batch_dim, time_dim, in_dim))
 
     run_model(extern_data, lambda *, epoch, step: rf.Module(), _forward_step)
+
+
+def test_cumsum():
+    time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
+    extern_data = TensorDict(
+        {
+            "data": Tensor("data", [batch_dim, time_dim], dtype="int32"),
+        }
+    )
+
+    # noinspection PyShadowingNames
+    def _forward_step(*, model: rf.Module, extern_data: TensorDict):
+        out = rf.cumsum(extern_data["data"], spatial_dim=time_dim)
+        out.mark_as_default_output(shape=(batch_dim, time_dim))
+
+    run_model(extern_data, lambda *, epoch, step: rf.Module(), _forward_step)

@@ -1015,6 +1015,15 @@ class Backend(Generic[T]):
         return rf.combine_bc(start, "+", rf.combine_bc(weight, "*", rf.combine_bc(end, "-", start)))
 
     @staticmethod
+    def cumsum(source: Tensor, *, spatial_dim: Dim) -> Tensor:
+        """
+        :param source:
+        :param spatial_dim:
+        :return: cumsum over spatial dim
+        """
+        raise NotImplementedError
+
+    @staticmethod
     def matmul(a: Tensor[T], b: Tensor[T], *, reduce: Union[Dim, Sequence[Dim]], use_mask: bool = True) -> Tensor[T]:
         """
         This performs a batched matmul of two sources a and b
