@@ -3,7 +3,7 @@ Main engine for PyTorch
 """
 
 from __future__ import annotations
-from typing import Optional, Any, Union, Callable, Dict
+from typing import Optional, Any, Union, Callable, Dict, Set
 from contextlib import nullcontext
 
 import gc
@@ -43,6 +43,7 @@ from .data import extern_data as extern_data_util
 from .data.queued_data_iter import QueuedDataIter
 from .frontend.bridge import rf_module_to_pt_module
 from .util import diagnose_gpu
+from .util import module as util_module
 from .distributed import DistributedContext, get_ctx as dist_get_ctx
 
 
@@ -85,6 +86,7 @@ class Engine(EngineBase):
             self._forward_step_expected_outputs = TensorDict()
             self._forward_step_expected_outputs.update(self.config.typed_value("model_outputs"), auto_convert=True)
         self._save_model_epoch_interval = 1
+        self._ignore_param_set: Set[str] = set()  # for the updater and for saving the model checkpoint
         self._updater = None  # type: Optional[Updater]
 
         self._use_autocast = False
@@ -723,6 +725,7 @@ class Engine(EngineBase):
 
         self._create_model(epoch=epoch, step=step)
 
+        self._ignore_param_set.clear()
         loaded_state_keys = set()
         missing_keys = set()
         unexpected_keys = set()
@@ -747,6 +750,7 @@ class Engine(EngineBase):
 
         preload_from_files = self.config.typed_value("preload_from_files", {})
         if preload_from_files:
+            model_state_keys_set = set(self._pt_model.state_dict().keys())
             # see `preload_from_files` in tf engine and `returnn.tf.network.CustomCheckpointLoader`
             # We use the reversed sorted order here to achieve consistent behavior with the TF engine.
             # There, the keys are used in sorted order but if a variable is loaded,
@@ -756,9 +760,22 @@ class Engine(EngineBase):
             # In order to get consistent behavior, we use the reversed order.
             for preload_key, opts in reversed(sorted(preload_from_files.items())):
                 assert isinstance(opts, dict) and "filename" in opts
-                if opts.get("init_for_train", False):
-                    if not is_first_train_epoch:
-                        continue
+                init_for_train = opts.get("init_for_train", False)
+                if init_for_train:
+                    if isinstance(init_for_train, str) and init_for_train == "always":
+                        # No matter if this is the first train epoch
+                        # or training with loading some prev epoch,
+                        # those parameters will always be loaded via preload_from_files,
+                        # and thus also not stored in our own checkpoint.
+                        pass
+                    elif isinstance(init_for_train, bool) and init_for_train:
+                        if not is_first_train_epoch:
+                            continue
+                    else:
+                        raise ValueError(
+                            f"preload key {preload_key}:"
+                            f" invalid init_for_train value {init_for_train!r} (type {type(init_for_train).__name__})"
+                        )
                 else:  # default: init for recog
                     if is_training:
                         continue
@@ -802,6 +819,8 @@ class Engine(EngineBase):
                         preload_model_state.pop(key)
                 for new_name, name_in_checkpoint in opts.get("var_name_mapping", {}).items():
                     preload_model_state[new_name] = preload_model_state.pop(name_in_checkpoint)
+                if init_for_train == "always":
+                    self._ignore_param_set.update(set(preload_model_state.keys()).intersection(model_state_keys_set))
                 missing_keys_preload, unexpected_keys_preload = self._pt_model.load_state_dict(
                     preload_model_state, strict=False
                 )
@@ -813,7 +832,7 @@ class Engine(EngineBase):
                 if opts.get("prefix", ""):
                     prefix_keys = [key for key in self._pt_model.state_dict() if key.startswith(opts.get("prefix", ""))]
                 else:
-                    prefix_keys = self._pt_model.state_dict().keys()
+                    prefix_keys = model_state_keys_set
                 missing_keys_preload = (
                     set(prefix_keys).intersection(set(missing_keys_preload)).difference(loaded_state_keys)
                 )
@@ -831,6 +850,9 @@ class Engine(EngineBase):
                         file=log.v4,
                     )
                     unexpected_keys.update(unexpected_keys_preload)
+
+        if self._ignore_param_set:
+            util_module.convert_parameters_to_buffers(self._pt_model, self._ignore_param_set, persistent=False)
 
         if missing_keys:
             raise Exception(
@@ -929,9 +951,16 @@ class Engine(EngineBase):
         tmp_filename = filename + ".tmp_write"
         if os.path.exists(tmp_filename):
             os.unlink(tmp_filename)
+        state_dict = self._pt_model.state_dict()
+        if self._ignore_param_set:
+            # Do some extra check that we don't save the ignored parameters.
+            # Should not be in the state_dict anymore because we should have converted them to buffers
+            # via util_module.convert_parameters_to_buffers before.
+            remaining = set(state_dict.keys()).intersection(self._ignore_param_set)
+            assert not remaining, f"_save_model: found remaining params in state_dict to ignore: {remaining}"
         torch.save(
             {
-                "model": self._pt_model.state_dict(),
+                "model": state_dict,
                 "epoch": self.epoch,
                 "step": self.global_train_step,
                 "effective_learning_rate": self._updater.get_effective_learning_rate() if self._updater else None,
