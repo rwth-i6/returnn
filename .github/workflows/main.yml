@@ -311,7 +311,8 @@ jobs:
         # Install nose anyway because we currently use some of its helper functions.
         pip install --user nose
 
-        pip install --user --progress-bar=off -r requirements.txt
+        pip install --user dm-tree h5py typing
+        pip install --user --progress-bar=off "numpy<2"
         pip install --user --progress-bar=off scipy  # for some tests
         pip install --user --upgrade --progress-bar=off torch==${{ matrix.torch-version }}
         pip install --user --progress-bar=off onnx onnxruntime
