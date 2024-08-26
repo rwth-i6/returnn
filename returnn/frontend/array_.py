@@ -528,14 +528,45 @@ def masked_select(
 
     :param tensor:
     :param mask:
-    :param dims: the order of the dims defines the format. those dims should be exactly the dims of the mask.
-    :param out_dim:
-    :return: tensor where all dims in mask/dims are removed and replaced by a new dim.
-        the new dim is also returned.
-        if mask==True for all elements, the returned tensor would be simply the flattened input tensor.
+    :param dims: The same or a subset of the dims of ``mask``.
+        The order of the dims defines the packed format (in ``out_dim``).
+        If only a single dim is given, only this dim is packed, while all other dims are kept as is.
+    :param out_dim: packed ``dims`` into this dim. Automatically created if not given, and then returned.
+    :return: Tensor where all ``dims`` are removed and replaced by a new dim (``out_dim``).
+        The new dim (``out_dim``) is also returned.
+        If mask==True for all elements, the returned tensor would be simply the flattened input tensor.
     """
-    # noinspection PyProtectedMember
-    return tensor._raw_backend.masked_select(tensor, mask=mask, dims=dims, out_dim=out_dim)
+    mask_dims_set = set(mask.dims)
+    dims_set = set(dims)
+    if not dims_set.issubset(mask_dims_set):
+        raise ValueError(f"masked_select: dims {dims} not subset of mask dims {mask.dims}")
+    if not dims_set:
+        raise ValueError(f"masked_select: dims {dims} empty")
+    if dims_set == mask_dims_set:
+        # noinspection PyProtectedMember
+        return tensor._raw_backend.masked_select(tensor, mask=mask, dims=dims, out_dim=out_dim)
+    # Separate implementation for the case where we have a subset of the mask dims, specifically one single dim.
+    # See https://github.com/rwth-i6/returnn/issues/1605 for discussion.
+    if len(dims) != 1:
+        # Please check https://github.com/rwth-i6/returnn/issues/1605 when you need this.
+        raise NotImplementedError(f"masked_select: dims {dims} len {len(dims)} > 1 not supported")
+    (in_dim,) = dims
+    in_dim: Dim
+    mask = mask.copy_masked(mask_value=False, dims=dims)
+    idxs = rf.cumsum(rf.cast(mask, "int32"), spatial_dim=in_dim)  # [T,B] -> idx in T' + 1
+    new_size = rf.gather(idxs, indices=in_dim.get_size_tensor() - 1, axis=in_dim)  # [B]
+    if out_dim is None:
+        out_dim = Dim(new_size, name="masked_select")
+    elif out_dim.dyn_size_ext is None:
+        out_dim.dyn_size_ext = new_size
+    elif out_dim.dyn_size_ext is not None and out_dim.dyn_size_ext.raw_tensor is None:
+        out_dim.dyn_size_ext.raw_tensor = new_size.raw_tensor
+    new_time = rf.reduce_max(new_size, axis=new_size.dims)  # T'
+    idxs = rf.where(mask, idxs - 1, new_time)  # new_time is the padding idx
+    ext_out_dim = out_dim + 1  # one more for the padded data
+    ext_res = rf.scatter(tensor, indices=idxs, indices_dim=in_dim, out_dim=ext_out_dim)
+    res, _ = rf.slice(ext_res, axis=ext_out_dim, size=out_dim)
+    return res, out_dim
 
 
 def masked_scatter(source: Tensor, *, mask: Tensor, dims: Sequence[Dim], in_dim: Dim) -> Tensor:

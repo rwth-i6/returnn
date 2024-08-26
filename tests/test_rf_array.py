@@ -33,6 +33,76 @@ def test_pack_padded():
     run_model(extern_data, lambda *, epoch, step: _Net(), _forward_step)
 
 
+def test_masked_select():
+    time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
+    in_dim = Dim(7, name="in")
+    extern_data = TensorDict(
+        {
+            "data": Tensor("data", [batch_dim, time_dim, in_dim], dtype="float32"),
+            "mask": Tensor("mask", [batch_dim, time_dim], dtype="bool"),
+        }
+    )
+
+    # noinspection PyShadowingNames
+    def _forward_step(*, extern_data: TensorDict, **_kwargs):
+        x = extern_data["data"]
+        mask = extern_data["mask"]
+        out, pack_dim = rf.masked_select(x, mask=mask, dims=[batch_dim, time_dim])
+        out.mark_as_default_output(shape=(pack_dim, in_dim))
+
+    run_model(extern_data, lambda *, epoch, step: rf.Module(), _forward_step)
+
+
+def test_masked_select_single_dim():
+    # https://github.com/rwth-i6/returnn/issues/1605
+    time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
+    in_dim = Dim(7, name="in")
+    extern_data = TensorDict(
+        {
+            "data": Tensor("data", [batch_dim, time_dim, in_dim], dtype="float32"),
+            "mask": Tensor("mask", [batch_dim, time_dim], dtype="bool"),
+        }
+    )
+
+    # noinspection PyShadowingNames
+    def _forward_step(*, extern_data: TensorDict, **_kwargs):
+        x = extern_data["data"]
+        mask = extern_data["mask"]
+        out, pack_dim = rf.masked_select(x, mask=mask, dims=[time_dim])
+        out.mark_as_default_output(shape=(batch_dim, pack_dim, in_dim))
+        pack_dim.dyn_size_ext.mark_as_output("out_size", shape=[batch_dim])
+        x.mark_as_output("input", shape=[batch_dim, time_dim, in_dim])
+        mask.mark_as_output("mask", shape=[batch_dim, time_dim])
+        time_dim.dyn_size_ext.mark_as_output("in_size", shape=[batch_dim])
+
+    res = run_model(extern_data, lambda *, epoch, step: rf.Module(), _forward_step, test_tensorflow=False)
+    for k, v in res.data.items():
+        print(f"{k} {v} = {v.raw_tensor}")
+    num_batches = res["input"].raw_tensor.shape[0]
+    have_non_zero = False
+    have_less = False
+    for b in range(num_batches):
+        in_size = res["in_size"].raw_tensor[b]
+        out_size = res["out_size"].raw_tensor[b]
+        print(f"batch {b}, in_size {in_size}, out_size {out_size}")
+        assert 0 <= out_size <= in_size
+        if out_size > 0:
+            have_non_zero = True
+        if out_size < in_size:
+            have_less = True
+        c = 0
+        for t in range(in_size):
+            if res["mask"].raw_tensor[b, t]:
+                c += 1
+        assert c == out_size
+        t_ = 0
+        for t in range(in_size):
+            if res["mask"].raw_tensor[b, t]:
+                assert (res["input"].raw_tensor[b, t] == res["output"].raw_tensor[b, t_]).all()
+                t_ += 1
+    assert have_non_zero and have_less  # just that the test case covered all cases
+
+
 def test_reshape():
     time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
     in_dim = Dim(7, name="in")
