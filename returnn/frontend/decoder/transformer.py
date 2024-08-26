@@ -161,7 +161,7 @@ class TransformerDecoder(rf.Module):
 
         self.layers = sequential(_copy.deepcopy(decoder_layer) for _ in range(num_layers))
 
-        self.final_layer_norm = _make_norm(norm, model_dim)
+        self.final_layer_norm = make_norm(norm, model_dim)
 
         self.logits = rf.Linear(model_dim, vocab_dim, with_bias=logits_with_bias)
 
@@ -287,7 +287,7 @@ class TransformerDecoderLayer(rf.Module):
         assert isinstance(ff, rf.Module)
 
         self.ff = ff
-        self.ff_layer_norm = _make_norm(norm, out_dim)
+        self.ff_layer_norm = make_norm(norm, out_dim)
 
         if self_att is None or isinstance(self_att, type) or isinstance(self_att, dict):
             self_att_opts_ = dict(
@@ -312,7 +312,7 @@ class TransformerDecoderLayer(rf.Module):
             self.self_att = _copy.deepcopy(self_att)
         else:
             raise TypeError(f"unexpected self_att type {self_att!r}")
-        self.self_att_layer_norm = _make_norm(norm, out_dim)
+        self.self_att_layer_norm = make_norm(norm, out_dim)
 
         self.cross_att = None
         self.cross_att_layer_norm = None
@@ -326,7 +326,7 @@ class TransformerDecoderLayer(rf.Module):
                 num_heads=num_heads,
                 att_dropout=att_dropout,
             )
-            self.cross_att_layer_norm = _make_norm(norm, out_dim)
+            self.cross_att_layer_norm = make_norm(norm, out_dim)
 
     def default_initial_state(self, *, batch_dims: Sequence[Dim]) -> rf.State:
         """default initial state"""
@@ -492,7 +492,12 @@ class FeedForwardGated(rf.Module):
         return x_ff2
 
 
-def _make_norm(norm: Union[type, Dict[str, Any], rf.Module, Callable], out_dim: Dim) -> Union[rf.Module, Callable]:
+def make_norm(norm: Union[type, Dict[str, Any], rf.Module, Callable], out_dim: Dim) -> Union[rf.Module, Callable]:
+    """
+    :param norm: norm type or dict or module or callable. e.g. ``rf.LayerNorm``
+    :param out_dim: model/out dim
+    :return: norm module or callable. e.g. ``rf.LayerNorm(out_dim)``
+    """
     if isinstance(norm, type):
         norm = norm(out_dim)
     elif isinstance(norm, dict):
