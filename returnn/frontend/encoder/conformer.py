@@ -209,10 +209,10 @@ class ConformerEncoderLayer(rf.Module):
         self.dropout_broadcast = rf.dropout_broadcast_default()
         self.out_dim = out_dim
 
-        self.ffn1 = _make_ff(ff=ff, out_dim=out_dim, ff_dim=ff_dim, dropout=dropout, ff_activation=ff_activation)
+        self.ffn1 = make_ff(ff=ff, out_dim=out_dim, ff_dim=ff_dim, dropout=dropout, ff_activation=ff_activation)
         self.ffn1_layer_norm = make_norm(norm, out_dim)
 
-        self.ffn2 = _make_ff(ff=ff, out_dim=out_dim, ff_dim=ff_dim, dropout=dropout, ff_activation=ff_activation)
+        self.ffn2 = make_ff(ff=ff, out_dim=out_dim, ff_dim=ff_dim, dropout=dropout, ff_activation=ff_activation)
         self.ffn2_layer_norm = make_norm(norm, out_dim)
 
         if conv_norm is NotSpecified or conv_norm is rf.BatchNorm:
@@ -392,7 +392,7 @@ class ConformerEncoder(ISeqDownsamplingEncoder):
         return x, out_spatial_dim
 
 
-def _make_ff(
+def make_ff(
     *,
     out_dim: Dim,
     ff: Union[type, Dict[str, Any], rf.Module],
@@ -400,6 +400,9 @@ def _make_ff(
     ff_activation: Union[Callable[[Tensor], Tensor], Dict[str, Any], rf.Module],
     dropout: float,
 ) -> Union[ConformerPositionwiseFeedForward, rf.Module]:
+    """
+    make the feed-forward part of the Conformer layer
+    """
     if ff is NotSpecified:
         ff = ConformerPositionwiseFeedForward
     if isinstance(ff, rf.Module):
