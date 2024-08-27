@@ -26,7 +26,7 @@ class ConformerPositionwiseFeedForward(FeedForward):
         self,
         out_dim: Dim,
         *,
-        ff_dim: Dim = NotSpecified,
+        ff_dim: Union[Dim, int] = NotSpecified,
         dropout: float = 0.1,
         activation: Union[Callable[[Tensor], Tensor], Dict[str, Any], rf.Module] = rf.swish,
         **kwargs,
@@ -396,7 +396,7 @@ def make_ff(
     *,
     out_dim: Dim,
     ff: Union[type, Dict[str, Any], rf.Module],
-    ff_dim: Dim,
+    ff_dim: Union[Dim, int],
     ff_activation: Union[Callable[[Tensor], Tensor], Dict[str, Any], rf.Module],
     dropout: float,
 ) -> Union[ConformerPositionwiseFeedForward, rf.Module]:
