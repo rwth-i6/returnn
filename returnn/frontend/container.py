@@ -66,14 +66,17 @@ class ModuleList(rf.Module, Generic[__ModT]):
         """module items"""
         return self._get_modules().items()
 
-    def __getitem__(self, idx: Union[slice, int]) -> Union[ModuleList[__ModT], __ModT]:
+    def __getitem__(self, idx: Union[slice, int, str]) -> Union[ModuleList[__ModT], __ModT]:
         if isinstance(idx, slice):
             return self.__class__(dict(list(self._get_modules().items())[idx]))
-        else:
+        elif isinstance(idx, str):
+            return getattr(self, idx)
+        elif isinstance(idx, int):
             return list(self._get_modules().values())[idx]
+        else:
+            raise TypeError(f"{self} __getitem__ Invalid idx type {type(idx).__name__}")
 
     def __setitem__(self, idx: Union[slice, int], module: Union[__ModT, Iterable[__ModT]]) -> None:
-        key = list(self._get_modules().keys())[idx]
         if isinstance(idx, slice):
             assert not idx.step or idx.step == 1  # not supported
             mod_items = list(self._get_modules().items())
@@ -95,8 +98,13 @@ class ModuleList(rf.Module, Generic[__ModT]):
                 assert not hasattr(self, k)
                 setattr(self, k, v)
                 i += 1
-        else:
+        elif isinstance(idx, str):
+            setattr(self, idx, module)
+        elif isinstance(idx, int):
+            key = list(self._get_modules().keys())[idx]
             setattr(self, key, _convert_to_module(module))
+        else:
+            raise TypeError(f"{self} __setitem___ Invalid idx type {type(idx).__name__}")
 
     def __delitem__(self, key: Union[slice, int]):
         if isinstance(key, slice):
