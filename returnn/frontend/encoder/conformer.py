@@ -301,7 +301,7 @@ class ConformerEncoder(ISeqDownsamplingEncoder):
         ff_dim: Dim = NotSpecified,
         ff_activation: Union[Callable[[Tensor], Tensor], Dict[str, Any], rf.Module] = NotSpecified,
         dropout: float = 0.1,
-        conv_kernel_size: int = 32,
+        conv_kernel_size: int = NotSpecified,
         conv_norm: Union[rf.BatchNorm, type, Dict[str, Any], Any] = NotSpecified,
         num_heads: int = 4,
         att_dropout: float = 0.1,
@@ -351,6 +351,7 @@ class ConformerEncoder(ISeqDownsamplingEncoder):
                 num_heads=num_heads,
                 att_dropout=att_dropout,
             )
+            encoder_layer_opts_ = {k: v for (k, v) in encoder_layer_opts_.items() if v is not NotSpecified}
             if encoder_layer_opts:
                 encoder_layer_opts_.update(encoder_layer_opts)
             if not encoder_layer:
