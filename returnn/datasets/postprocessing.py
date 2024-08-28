@@ -239,7 +239,7 @@ class LaplaceOrdering(Callable[[Iterator[TensorDict]], Iterator[TensorDict]]):
         assert num_seqs_per_bin > 0
         self.num_seqs_per_bin = num_seqs_per_bin
 
-    def __call__(self, iterator: Iterator[TensorDict]) -> Iterator[TensorDict]:
+    def __call__(self, iterator: Iterator[TensorDict], **kwargs) -> Iterator[TensorDict]:
         """:return: generator applying laplace sequence ordering on the data"""
         iterator = iter(iterator)
         is_down_phase = False
