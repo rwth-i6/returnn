@@ -149,13 +149,16 @@ class RFModuleAsPTModule(torch.nn.Module):
         for name, rf_param in self._rf_module.named_parameters(recurse=False):
             pt_param = getattr(self, name)
             if rf_param.auxiliary and self._aux_params_as_buffers:
-                assert isinstance(pt_param, torch.Tensor)  # but not torch.nn.Parameter
-                # See similar logic in torch.nn.Module._apply.
-                pt_param = torch.nn.Parameter(pt_param, pt_param.requires_grad)
-            else:
-                assert isinstance(pt_param, torch.nn.Parameter), (
-                    f"{self}.{name} is not a Parameter" f" but {type(pt_param).__name__}"
-                )
+                if not isinstance(pt_param, torch.nn.Parameter):
+                    assert isinstance(pt_param, torch.Tensor)  # but not torch.nn.Parameter
+                    # See similar logic in torch.nn.Module._apply.
+                    pt_param = torch.nn.Parameter(pt_param, pt_param.requires_grad)
+            # Otherwise, we do not care whether it is a torch.nn.Parameter or not.
+            # Its type might have changed due to convert_parameters_to_buffers.
+            # Just make sure it is a tensor.
+            assert isinstance(pt_param, torch.Tensor)
+            # noinspection PyProtectedMember
+            rf_param.dtype = rf_param._raw_backend.get_dtype_name_raw(pt_param)  # dtype might have changed
             rf_param.raw_tensor = pt_param
 
     def register_parameter(self, name: str, param: Optional[torch.nn.Parameter]) -> None:
