@@ -4,6 +4,7 @@ Provides :class:`PostprocessingDataset`.
 
 from __future__ import annotations
 
+from itertools import islice
 from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple, Union
 
 from returnn.datasets.basic import DatasetSeq
@@ -210,3 +211,46 @@ class PostprocessingDataset(CachedDataset2):
             if data_key in self._dataset.labels:
                 sparse_dim.vocab = Vocabulary.create_vocab_from_labels(self._dataset.labels[data_key])
         return Tensor(data_key, dims=dims, dtype=dtype, sparse_dim=sparse_dim)
+
+
+class LaplaceOrdering(Callable[[Iterator[TensorDict]], Iterator[TensorDict]]):
+    """
+    Iterator compatible with `PostprocessingDataset`'s `map_seq_stream` applying
+    laplace sequence ordering based on the number of segments per bin.
+    """
+
+    def __init__(self, num_seqs_per_bin: int, length_key: str = "data"):
+        """
+        :param num_seqs_per_bin: number of segments in a single laplace bin.
+        :param length_key: data key to determine the segment length from for ordering.
+        """
+        self.length_key = length_key
+        assert num_seqs_per_bin > 0
+        self.num_seqs_per_bin = num_seqs_per_bin
+
+    def __call__(self, iterator: Iterator[TensorDict]) -> Iterator[TensorDict]:
+        """:return: generator applying laplace sequence ordering on the data"""
+        iterator = iter(iterator)
+        num_full_cycle = 2 * self.num_seqs_per_bin
+
+        while True:
+            # Fill two bins to complete one full upwards and downwards cycle wrt. the
+            # resulting seq lens and avoid a step/break.
+            seq_buffer = list(islice(iterator, num_full_cycle))
+
+            # 1. Sort by segment length
+            # 2. yield even elements
+            # 3. yield odd elements in reverse order
+            # ... resulting in a laplace seq length cycle.
+            seq_buffer.sort(key=self._get_seq_len)
+            yield from seq_buffer[::2]
+            yield from seq_buffer[1::2][::-1]
+
+            if len(seq_buffer) < num_full_cycle:
+                break
+
+    def _get_seq_len(self, tdict: TensorDict) -> int:
+        """
+        :return: segment length of the segment in `tdict` as measured by `self.length_key` for comparison.
+        """
+        return tdict.data[self.length_key].raw_tensor.shape[0]
