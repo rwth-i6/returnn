@@ -1042,7 +1042,7 @@ def test_PostprocessingDataset():
 
     _demo_txt = "some utterance text that has a few words"
 
-    def _add_1337_to_classes(tdict: TensorDict) -> TensorDict:
+    def _add_1337_to_classes(tdict: TensorDict, **kwargs) -> TensorDict:
         tdict.data["classes"] += 1337
         return tdict
 
@@ -1062,7 +1062,7 @@ def test_PostprocessingDataset():
 
     count = 0
 
-    def _repeat2(input_iter: Iterator[TensorDict]) -> Iterator[TensorDict]:
+    def _repeat2(input_iter: Iterator[TensorDict], **kwargs) -> Iterator[TensorDict]:
         nonlocal count
 
         for tdict in input_iter:
