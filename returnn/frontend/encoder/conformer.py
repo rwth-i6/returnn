@@ -333,8 +333,10 @@ class ConformerEncoder(ISeqDownsamplingEncoder):
 
         # TODO once we figured out good defaults, we would create ConformerConvSubsample here when not given
         self.input_layer = input_layer
-        self.input_projection = rf.Linear(
-            self.input_layer.out_dim if self.input_layer else self.in_dim, self.out_dim, with_bias=False
+        self.input_projection = (
+            rf.Linear(self.input_layer.out_dim if self.input_layer else self.in_dim, self.out_dim, with_bias=False)
+            if input_layer
+            else None
         )
         self.input_dropout = input_dropout
 
@@ -386,8 +388,8 @@ class ConformerEncoder(ISeqDownsamplingEncoder):
             x_subsample, out_spatial_dim = self.input_layer(source, in_spatial_dim=in_spatial_dim)
         else:
             x_subsample, out_spatial_dim = source, in_spatial_dim
-        x_linear = self.input_projection(x_subsample)
-        x = rf.dropout(x_linear, self.input_dropout, axis=self.dropout_broadcast and self.input_projection.out_dim)
+        x = self.input_projection(x_subsample) if self.input_projection else x_subsample
+        x = rf.dropout(x, self.input_dropout, axis=self.dropout_broadcast and self.out_dim)
         x = self.layers(x, spatial_dim=out_spatial_dim, collected_outputs=collected_outputs)
         return x, out_spatial_dim
 
