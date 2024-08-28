@@ -5,6 +5,7 @@ Provides :class:`PostprocessingDataset`.
 from __future__ import annotations
 
 from itertools import islice
+import numpy as np
 from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple, Union
 
 from returnn.datasets.basic import DatasetSeq
@@ -44,8 +45,8 @@ class PostprocessingDataset(CachedDataset2):
                 "files": ["/path/to/data.hdf"],
             },
             # one of them, but not both:
-            "map_seq": map_seq,  # (data: TensorDict) -> TensorDict
-            "map_seq_stream": map_seqs,  # (iter: Iterator[TensorDict]) -> Iterator[TensorDict]
+            "map_seq": map_seq,  # (data: TensorDict, *, rng: numpy.random.Generator, **kwargs) -> TensorDict
+            "map_seq_stream": map_seqs,  # (iter: Iterator[TensorDict], *, rng: numpy.random.Generator, **kwargs) -> Iterator[TensorDict]
             # only required when data shapes change wrt. the wrapped dataset:
             "map_outputs": {
                 "data": {"dims": [time_dim, new_data_dim]},
@@ -66,10 +67,14 @@ class PostprocessingDataset(CachedDataset2):
         :param map_seq: post processor function operating on the single-segment level.
             To avoid confusion on the order of how the processing functions are applied to the data, only one of
             `map_seq` and `map_seq_stream` can be specified at a time.
+            To ensure forwards compatibility, the function must accept **kwargs as its last argument. This is enforced
+            by passing randomly named parameters at runtime.
         :param map_seq_stream: post processor function operating on the multiple segment level via an iterator.
             Allows merging multiple segments into one, or generating multiple output segments from one input segment.
             To avoid confusion on the order of how the processing functions are applied to the data, only one of
             `map_seq` and `map_seq_stream` can be specified at a time.
+            To ensure forwards compatibility, the function must accept **kwargs as its last argument. This is enforced
+            by passing randomly named parameters at runtime.
         :param map_outputs: Type and axis specification of the outputs of the mapping functions,
             like extern_data and model_outputs.
             To simplify the common case when no shapes change, this value can be left unspecified. The dataset then
@@ -90,6 +95,7 @@ class PostprocessingDataset(CachedDataset2):
         self._map_seq = map_seq
         self._map_seq_stream = map_seq_stream
         self._map_outputs = map_outputs
+        self._rng = np.random.default_rng(self._get_random_seed_for_epoch(0))
 
         self._dataset = init_dataset(self._dataset_def, parent_dataset=self)
         if self._map_seq_stream is None:
@@ -134,6 +140,7 @@ class PostprocessingDataset(CachedDataset2):
             self._num_seqs = 0
             return True
 
+        self._rng = np.random.default_rng(self._get_random_seed_for_epoch(epoch=epoch))
         assert self._dataset is not None
         self._dataset.init_seq_order(epoch=epoch, seq_list=seq_list, seq_order=seq_order)
         self._data_iter = enumerate(self._build_mapping_iter())
@@ -169,7 +176,9 @@ class PostprocessingDataset(CachedDataset2):
 
         data_iter = self._iterate_dataset()
         if self._map_seq_stream is not None:
-            data_iter = self._map_seq_stream(data_iter)
+            data_iter = self._map_seq_stream(
+                data_iter, rng=self._rng, **{f"random-kwarg-{self._rng.integers(0, 1000)}": None}
+            )
             assert isinstance(
                 data_iter, Iterator
             ), f"map_seq_stream must produce an {Iterator.__name__}, but produced {type(data_iter).__name__}"
@@ -188,7 +197,9 @@ class PostprocessingDataset(CachedDataset2):
             for data_key in data_keys:
                 tensor_dict.data[data_key].raw_tensor = self._dataset.get_data(seq_index, data_key)
             if self._map_seq is not None:
-                tensor_dict = self._map_seq(tensor_dict)
+                tensor_dict = self._map_seq(
+                    tensor_dict, rng=self._rng, **{f"random-kwarg-{self._rng.integers(0, 1000)}": None}
+                )
                 assert isinstance(
                     tensor_dict, TensorDict
                 ), f"map_seq must produce a {TensorDict.__name__}, but produced {type(tensor_dict).__name__}"
