@@ -215,7 +215,7 @@ class PostprocessingDataset(CachedDataset2):
 
 class LaplaceOrdering(Callable[[Iterator[TensorDict]], Iterator[TensorDict]]):
     """
-    Iterator compatible with `PostprocessingDataset`'s `map_seq_stream` applying
+    Iterator compatible with :class:`PostprocessingDataset`'s ``map_seq_stream`` applying
     laplace sequence ordering based on the number of segments per bin.
     """
 
