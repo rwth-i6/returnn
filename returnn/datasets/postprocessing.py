@@ -5,7 +5,7 @@ Provides :class:`PostprocessingDataset`.
 from __future__ import annotations
 
 import numpy as np
-from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple, Union
+from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple
 
 from returnn.datasets.basic import DatasetSeq
 from returnn.datasets.util.vocabulary import Vocabulary
@@ -44,8 +44,10 @@ class PostprocessingDataset(CachedDataset2):
                 "files": ["/path/to/data.hdf"],
             },
             # one of them, but not both:
-            "map_seq": map_seq,  # (data: TensorDict, *, rng: numpy.random.Generator, **kwargs) -> TensorDict
-            "map_seq_stream": map_seqs,  # (iter: Iterator[TensorDict], *, rng: numpy.random.Generator, **kwargs) -> Iterator[TensorDict]
+            # (data: TensorDict, *, rng: numpy.random.Generator, **kwargs) -> TensorDict
+            "map_seq": map_seq,
+            # (iter: Iterator[TensorDict], *, rng: numpy.random.Generator, **kwargs) -> Iterator[TensorDict]
+            "map_seq_stream": map_seqs,
             # only required when data shapes change wrt. the wrapped dataset:
             "map_outputs": {
                 "data": {"dims": [time_dim, new_data_dim]},
@@ -56,24 +58,26 @@ class PostprocessingDataset(CachedDataset2):
     def __init__(
         self,
         dataset: Dict[str, Any],
-        map_seq: Optional[Union[Callable[[TensorDict], TensorDict]]] = None,
-        map_seq_stream: Optional[Callable[[Iterator[TensorDict]], Iterator[TensorDict]]] = None,
+        map_seq: Optional[Callable] = None,
+        map_seq_stream: Optional[Callable] = None,
         map_outputs: Optional[Dict[str, Any]] = None,
         **kwargs,
     ):
         """
         :param dataset: inner dataset to be post-processed
         :param map_seq: post processor function operating on the single-segment level.
+            Signature: `(data: TensorDict, *, rng: numpy.random.Generator, **kwargs) -> TensorDict`
             To avoid confusion on the order of how the processing functions are applied to the data, only one of
             `map_seq` and `map_seq_stream` can be specified at a time.
-            To ensure forwards compatibility, the function must accept **kwargs as its last argument. This is enforced
-            by passing randomly named parameters at runtime.
+            To ensure forwards compatibility, the function must accept `**kwargs` as its last argument.
+            This is enforced by passing randomly named parameters at runtime.
         :param map_seq_stream: post processor function operating on the multiple segment level via an iterator.
             Allows merging multiple segments into one, or generating multiple output segments from one input segment.
+            Signature: `(iter: Iterator[TensorDict], *, rng: numpy.random.Generator, **kwargs) -> Iterator[TensorDict]`
             To avoid confusion on the order of how the processing functions are applied to the data, only one of
             `map_seq` and `map_seq_stream` can be specified at a time.
-            To ensure forwards compatibility, the function must accept **kwargs as its last argument. This is enforced
-            by passing randomly named parameters at runtime.
+            To ensure forwards compatibility, the function must accept `**kwargs` as its last argument.
+            This is enforced by passing randomly named parameters at runtime.
         :param map_outputs: Type and axis specification of the outputs of the mapping functions,
             like extern_data and model_outputs.
             To simplify the common case when no shapes change, this value can be left unspecified. The dataset then
