@@ -1087,6 +1087,30 @@ def test_PostprocessingDataset():
             assert len(classes) > 0
         assert count == 1
 
+    # test laplace ordering
+    with create_ogg_zip_txt_only_dataset_mult_seqs() as sub_ds_opts:
+        from returnn.datasets.postprocessing import LaplaceOrdering
+
+        ds_opts = {
+            "class": "PostprocessingDataset",
+            "dataset": sub_ds_opts,
+            "map_seq_stream": LaplaceOrdering(3, "classes"),
+        }
+        dataset = init_dataset(ds_opts)
+        dataset.init_seq_order(epoch=1)
+        assert dataset.have_seqs()
+        dataset.load_seqs(0, 6)
+
+        prev_len = None
+        for i in range(3):
+            classes = dataset.get_data(i, "classes")
+            assert prev_len is None or classes.shape[0] >= prev_len
+            prev_len = classes.shape[0]
+        for i in range(3, 6):
+            classes = dataset.get_data(i, "classes")
+            assert prev_len is None or classes.shape[0] <= prev_len or i == 3
+            prev_len = classes.shape[0]
+
 
 if __name__ == "__main__":
     better_exchook.install()
