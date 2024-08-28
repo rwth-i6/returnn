@@ -231,22 +231,16 @@ class LaplaceOrdering(Callable[[Iterator[TensorDict]], Iterator[TensorDict]]):
     def __call__(self, iterator: Iterator[TensorDict]) -> Iterator[TensorDict]:
         """:return: generator applying laplace sequence ordering on the data"""
         iterator = iter(iterator)
-        num_full_cycle = 2 * self.num_seqs_per_bin
+        is_down_phase = False
 
         while True:
-            # Fill two bins to complete one full upwards and downwards cycle wrt. the
-            # resulting seq lens and avoid a step/break.
-            seq_buffer = list(islice(iterator, num_full_cycle))
+            seq_buffer = list(islice(iterator, self.num_seqs_per_bin))
+            seq_buffer.sort(key=self._get_seq_len, reverse=is_down_phase)
+            yield from seq_buffer
 
-            # 1. Sort by segment length
-            # 2. yield even elements
-            # 3. yield odd elements in reverse order
-            # ... resulting in a laplace seq length cycle.
-            seq_buffer.sort(key=self._get_seq_len)
-            yield from seq_buffer[::2]
-            yield from seq_buffer[1::2][::-1]
+            is_down_phase = not is_down_phase
 
-            if len(seq_buffer) < num_full_cycle:
+            if len(seq_buffer) < self.num_seqs_per_bin:
                 break
 
     def _get_seq_len(self, tdict: TensorDict) -> int:
