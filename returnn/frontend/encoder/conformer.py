@@ -294,7 +294,7 @@ class ConformerEncoder(ISeqDownsamplingEncoder):
         out_dim: Dim = Dim(512, name="conformer-enc-default-out-dim"),
         *,
         num_layers: int,
-        input_layer: Union[ConformerConvSubsample, ISeqDownsamplingEncoder, rf.Module, Any],
+        input_layer: Optional[Union[ConformerConvSubsample, ISeqDownsamplingEncoder, rf.Module, Any]],
         input_dropout: float = 0.1,
         ff_dim: Dim = NotSpecified,
         ff_activation: Union[Callable[[Tensor], Tensor], Dict[str, Any], rf.Module] = NotSpecified,
