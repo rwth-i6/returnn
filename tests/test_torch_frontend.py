@@ -1005,6 +1005,29 @@ def test_forward_hook():
     assert call_count == 5 and hook_call_count == 2
 
 
+def test_convert_parameter_to_buffer():
+    from returnn.torch.frontend.bridge import rf_module_to_pt_module
+    from returnn.torch.util.module import convert_parameters_to_buffers
+
+    # Replicate the case of Engine preload_from_files with init_for_train == "always".
+    in_dim = Dim(2, name="in")
+    out_dim = Dim(3, name="out")
+    mod_rf = rf.Linear(in_dim, out_dim)
+    mod_pt = rf_module_to_pt_module(mod_rf)
+    convert_parameters_to_buffers(mod_pt, ["weight", "bias"], persistent=False)
+    assert dict(mod_pt.named_parameters()) == {}
+    assert set(dict(mod_pt.named_buffers()).keys()) == {"weight", "bias"}
+    # The following type checks are implementation details,
+    # and maybe we might change this behavior in the future.
+    assert type(mod_pt.weight) is torch.nn.Parameter  # still same instance
+    # After mod_pt.to(...), buffers will not be torch.nn.Parameter anymore.
+    # Note, the test here is actually to run the to() method,
+    # which runs our RFModuleAsPTModule._apply, because there was a bug, leading to:
+    #   Linear[RF→PT]().weight is not a Parameter but Tensor
+    mod_pt.to(torch.bfloat16)
+    assert type(mod_pt.weight) is torch.Tensor
+
+
 if __name__ == "__main__":
     better_exchook.install()
     if len(sys.argv) <= 1:
