@@ -1112,10 +1112,10 @@ def test_PostprocessingDataset():
             prev_len = classes.shape[0]
 
     # test composition
-    from returnn.datasets.postprocessing import compose
+    from returnn.datasets.postprocessing import Sequential
 
-    func = compose(lambda x: x * 10, lambda y: y + 1)
-    assert func(2) == 30
+    func = Sequential(lambda x: x * 10, lambda y: y + 1)
+    assert func(2) == 21
 
 
 if __name__ == "__main__":
