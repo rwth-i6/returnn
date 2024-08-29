@@ -181,7 +181,7 @@ class PostprocessingDataset(CachedDataset2):
         data_iter = self._iterate_dataset()
         if self._map_seq_stream is not None:
             data_iter = self._map_seq_stream(
-                data_iter, rng=self._rng, **{f"random-kwarg-{self._rng.integers(0, 1000)}": None}
+                data_iter, rng=self._rng, **{f"fwd_compatible_random_kwarg_{self._rng.integers(0, 1000)}": None}
             )
             assert isinstance(
                 data_iter, Iterator
@@ -202,7 +202,7 @@ class PostprocessingDataset(CachedDataset2):
                 tensor_dict.data[data_key].raw_tensor = self._dataset.get_data(seq_index, data_key)
             if self._map_seq is not None:
                 tensor_dict = self._map_seq(
-                    tensor_dict, rng=self._rng, **{f"random-kwarg-{self._rng.integers(0, 1000)}": None}
+                    tensor_dict, rng=self._rng, **{f"fwd_compatible_random_kwarg_{self._rng.integers(0, 1000)}": None}
                 )
                 assert isinstance(
                     tensor_dict, TensorDict
