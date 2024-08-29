@@ -425,7 +425,15 @@ jobs:
         # Needed for some tests.
         pip install --user --progress-bar=off transformers
         pip install --user --progress-bar=off espnet
-        pip install --user --progress-bar=off torchaudio  # needed by espnet
+        # TorchAudio needed by ESPnet.
+        # https://pytorch.org/audio/stable/installation.html#compatibility-matrix
+        if [[ "${{matrix.torch-version}}" == 2.0.0 ]]; then
+          pip install --user --progress-bar=off torchaudio==2.0.1
+        elif [[ "${{matrix.torch-version}}" == 1.13.1 ]]; then
+          pip install --user --progress-bar=off torchaudio==0.13.1
+        else
+          pip install --user --progress-bar=off torchaudio==${{matrix.torch-version}}
+        fi
 
     - name: Test Python/Numpy/PyTorch versions.
       run: |
