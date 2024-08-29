@@ -5,7 +5,7 @@ Provides :class:`PostprocessingDataset`.
 from __future__ import annotations
 
 from itertools import islice
-import numpy as np
+from numpy.random import Generator, PCG64
 from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple
 
 from returnn.datasets.basic import DatasetSeq
@@ -99,7 +99,7 @@ class PostprocessingDataset(CachedDataset2):
         self._map_seq = map_seq
         self._map_seq_stream = map_seq_stream
         self._map_outputs = map_outputs
-        self._rng = np.random.default_rng(self._get_random_seed_for_epoch(0))
+        self._rng = Generator(PCG64(self._get_random_seed_for_epoch(0)))
 
         self._dataset = init_dataset(self._dataset_def, parent_dataset=self)
         if self._map_seq_stream is None:
@@ -144,7 +144,7 @@ class PostprocessingDataset(CachedDataset2):
             self._num_seqs = 0
             return True
 
-        self._rng = np.random.default_rng(self._get_random_seed_for_epoch(epoch=epoch))
+        self._rng = Generator(PCG64(self._get_random_seed_for_epoch(epoch=epoch)))
         assert self._dataset is not None
         self._dataset.init_seq_order(epoch=epoch, seq_list=seq_list, seq_order=seq_order)
         self._data_iter = enumerate(self._build_mapping_iter())
