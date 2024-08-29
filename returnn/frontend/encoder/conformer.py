@@ -295,6 +295,7 @@ class ConformerEncoder(ISeqDownsamplingEncoder):
         *,
         num_layers: int,
         input_layer: Optional[Union[ConformerConvSubsample, ISeqDownsamplingEncoder, rf.Module, Any]],
+        input_embedding_scale: float = 1.0,
         input_dropout: float = 0.1,
         ff_dim: Dim = NotSpecified,
         ff_activation: Union[Callable[[Tensor], Tensor], Dict[str, Any], rf.Module] = NotSpecified,
@@ -312,6 +313,8 @@ class ConformerEncoder(ISeqDownsamplingEncoder):
         :param num_layers: the number of encoder layers
         :param input_layer: input/frontend/prenet with potential subsampling.
             (x, in_spatial_dim) -> (y, out_spatial_dim)
+        :param input_embedding_scale: applied after input_layer. 1.0 by default for historic reasons.
+            In std Transformer, also ESPnet E-Branchformer and Conformer, this is sqrt(out_dim).
         :param input_dropout: applied after input_projection(input_layer(x))
         :param ff_dim: the dimension of feed-forward layers. 2048 originally, or 4 times out_dim
         :param ff_activation: activation function for feed-forward network
@@ -338,6 +341,7 @@ class ConformerEncoder(ISeqDownsamplingEncoder):
             if input_layer
             else None
         )
+        self.input_embedding_scale = input_embedding_scale
         self.input_dropout = input_dropout
 
         if not encoder_layer or isinstance(encoder_layer, (dict, type)):
@@ -389,6 +393,8 @@ class ConformerEncoder(ISeqDownsamplingEncoder):
         else:
             x_subsample, out_spatial_dim = source, in_spatial_dim
         x = self.input_projection(x_subsample) if self.input_projection else x_subsample
+        if self.input_embedding_scale != 1.0:
+            x = x * self.input_embedding_scale
         x = rf.dropout(x, self.input_dropout, axis=self.dropout_broadcast and self.out_dim)
         x = self.layers(x, spatial_dim=out_spatial_dim, collected_outputs=collected_outputs)
         return x, out_spatial_dim
