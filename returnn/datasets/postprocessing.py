@@ -257,7 +257,7 @@ class LaplaceOrdering(Callable[[Iterator[TensorDict]], Iterator[TensorDict]]):
     Iterator compatible with :class:`PostprocessingDataset`'s ``map_seq_stream`` applying
     laplace sequence ordering based on the number of segments per bin.
 
-    To be composed with any custom data postprocessing logic via ``compose``.
+    To be composed with any custom data postprocessing logic via :class:`Sequential`.
     """
 
     def __init__(self, num_seqs_per_bin: int, length_key: str = "data"):
