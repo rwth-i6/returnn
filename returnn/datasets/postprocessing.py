@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from itertools import islice
 from numpy.random import Generator, PCG64
-from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple, Union
+from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple, TypeVar
 
 from returnn.datasets.basic import DatasetSeq
 from returnn.datasets.util.vocabulary import Vocabulary
@@ -252,6 +252,9 @@ class PostprocessingDataset(CachedDataset2):
         return Tensor(data_key, dims=dims, dtype=dtype, sparse_dim=sparse_dim)
 
 
+T = TypeVar("T", TensorDict, Iterator[TensorDict])
+
+
 def compose(*postprocessing_funcs: Callable):
     """
     Composes multiple postprocessing functions into one by sequential application,
@@ -265,7 +268,7 @@ def compose(*postprocessing_funcs: Callable):
     :return: composite function applying :param:``postprocessing_funcs`` in reverse order.
     """
 
-    def wrapper(arg: Union[TensorDict, Iterator[TensorDict]], **kwargs) -> Union[TensorDict, Iterator[TensorDict]]:
+    def wrapper(arg: T, **kwargs) -> T:
         """composite postprocessing function"""
 
         # If we are passed an iterator do not check for the concrete type (which may be some generator),
