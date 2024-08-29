@@ -61,7 +61,7 @@ class PostprocessingDataset(CachedDataset2):
 
     However, we provide an iterator that implements the common `laplace:.NUM_SEQS_PER_BIN`-variant
     of seq ordering that any custom ``map_seq_stream``-style postprocessing iterator can be composed
-    with to implement the ordering.
+    with to implement the ordering via :class:`LaplaceOrdering`.
 
     Like this::
 
