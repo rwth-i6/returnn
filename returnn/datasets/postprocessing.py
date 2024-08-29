@@ -275,8 +275,8 @@ def compose(*postprocessing_funcs: Callable):
         # but for parent `Iterator` type instead.
         arg_type = Iterator if isinstance(arg, Iterator) else type(arg)
 
-        for i, callable in enumerate(reversed(postprocessing_funcs)):
-            arg = callable(arg, **kwargs)
+        for i, func in enumerate(reversed(postprocessing_funcs)):
+            arg = func(arg, **kwargs)
             assert isinstance(arg, arg_type), (
                 f"Function {i} returned a value of type {type(arg)}, "
                 f"but must return the same type as the input ({arg_type}) to ensure valid composition. "
