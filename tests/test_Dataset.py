@@ -1111,6 +1111,12 @@ def test_PostprocessingDataset():
             assert prev_len is None or classes.shape[0] <= prev_len or i == 3
             prev_len = classes.shape[0]
 
+    # test composition
+    from returnn.datasets.postprocessing import compose
+
+    func = compose(lambda x: x * 10, lambda y: y + 1)
+    assert func(2) == 30
+
 
 if __name__ == "__main__":
     better_exchook.install()
