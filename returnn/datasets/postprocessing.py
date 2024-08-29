@@ -45,9 +45,9 @@ class PostprocessingDataset(CachedDataset2):
                 "files": ["/path/to/data.hdf"],
             },
             # one of them, but not both:
-            # (data: TensorDict, *, rng: numpy.random.Generator, **kwargs) -> TensorDict
+            # (data: TensorDict, *, rng: numpy.random.RandomState, **kwargs) -> TensorDict
             "map_seq": map_seq,
-            # (iter: Iterator[TensorDict], *, rng: numpy.random.Generator, **kwargs) -> Iterator[TensorDict]
+            # (iter: Iterator[TensorDict], *, rng: numpy.random.RandomState, **kwargs) -> Iterator[TensorDict]
             "map_seq_stream": map_seqs,
             # only required when data shapes change wrt. the wrapped dataset:
             "map_outputs": {
@@ -67,17 +67,18 @@ class PostprocessingDataset(CachedDataset2):
         """
         :param dataset: inner dataset to be post-processed
         :param map_seq: post processor function operating on the single-segment level.
-            Signature: `(data: TensorDict, *, rng: numpy.random.Generator, **kwargs) -> TensorDict`
+            Signature: `(data: TensorDict, *, rng: numpy.random.RandomState, **kwargs) -> TensorDict`
             To avoid confusion on the order of how the processing functions are applied to the data, only one of
-            `map_seq` and `map_seq_stream` can be specified at a time.
-            To ensure forwards compatibility, the function must accept `**kwargs` as its last argument.
+            ``map_seq`` and ``map_seq_stream`` can be specified at a time.
+            To ensure forwards compatibility, the function must accept ``**kwargs`` as its last argument.
             This is enforced by passing randomly named parameters at runtime.
         :param map_seq_stream: post processor function operating on the multiple segment level via an iterator.
             Allows merging multiple segments into one, or generating multiple output segments from one input segment.
-            Signature: `(iter: Iterator[TensorDict], *, rng: numpy.random.Generator, **kwargs) -> Iterator[TensorDict]`
+            Signature:
+                ``(iter: Iterator[TensorDict], *, rng: numpy.random.RandomState, **kwargs) -> Iterator[TensorDict]``
             To avoid confusion on the order of how the processing functions are applied to the data, only one of
-            `map_seq` and `map_seq_stream` can be specified at a time.
-            To ensure forwards compatibility, the function must accept `**kwargs` as its last argument.
+            ``map_seq`` and ``map_seq_stream`` can be specified at a time.
+            To ensure forwards compatibility, the function must accept ``**kwargs`` as its last argument.
             This is enforced by passing randomly named parameters at runtime.
         :param map_outputs: Type and axis specification of the outputs of the mapping functions,
             like extern_data and model_outputs.
