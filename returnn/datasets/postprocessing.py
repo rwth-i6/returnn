@@ -15,7 +15,7 @@ from returnn.tensor.dim import Dim
 from .basic import init_dataset
 from .cached2 import CachedDataset2
 
-__all__ = ["PostprocessingDataset"]
+__all__ = ["PostprocessingDataset", "LaplaceOrdering", "T", "Sequential"]
 
 
 class PostprocessingDataset(CachedDataset2):
@@ -65,7 +65,7 @@ class PostprocessingDataset(CachedDataset2):
 
     Like this::
 
-        from returnn.datasets.postprocessing import compose, LaplaceOrdering
+        from returnn.datasets.postprocessing import LaplaceOrdering, Sequential
 
         def my_map_seq_stream(iterator):
             ...
@@ -73,9 +73,9 @@ class PostprocessingDataset(CachedDataset2):
         train = {
             "class": "PostprocessingDataset",
             # ...
-            "map_seq_stream": compose(
-                LaplaceOrdering(num_seqs_per_bin=1000),
+            "map_seq_stream": Sequential(
                 my_map_seq_stream,
+                LaplaceOrdering(num_seqs_per_bin=1000),
             ),
         }
     """
@@ -252,41 +252,6 @@ class PostprocessingDataset(CachedDataset2):
         return Tensor(data_key, dims=dims, dtype=dtype, sparse_dim=sparse_dim)
 
 
-T = TypeVar("T", TensorDict, Iterator[TensorDict])
-
-
-def compose(*postprocessing_funcs: Callable):
-    """
-    Composes multiple postprocessing functions into one by sequential application,
-    i.e. compose(f, g)(x) = (f ∘ g)(x) = f(g(x)).
-
-    Can either compose ``map_seq``-style single-segment processor functions or ``map_seq_stream``-style
-    iterators operating on multiple segments.
-
-    The functions are applied in reverse order, i.e. last argument first.
-
-    :return: composite function applying :param:``postprocessing_funcs`` in reverse order.
-    """
-
-    def wrapper(arg: T, **kwargs) -> T:
-        """composite postprocessing function"""
-
-        # If we are passed an iterator do not check for the concrete type (which may be some generator),
-        # but for parent `Iterator` type instead.
-        arg_type = Iterator if isinstance(arg, Iterator) else type(arg)
-
-        for i, func in enumerate(reversed(postprocessing_funcs)):
-            arg = func(arg, **kwargs)
-            assert isinstance(arg, arg_type), (
-                f"Function {i} returned a value of type {type(arg)}, "
-                f"but must return the same type as the input ({arg_type}) to ensure valid composition. "
-                "Did you mix map_seq and map_seq_stream-style postprocessing functions?"
-            )
-        return arg
-
-    return wrapper
-
-
 class LaplaceOrdering(Callable[[Iterator[TensorDict]], Iterator[TensorDict]]):
     """
     Iterator compatible with :class:`PostprocessingDataset`'s ``map_seq_stream`` applying
@@ -324,3 +289,29 @@ class LaplaceOrdering(Callable[[Iterator[TensorDict]], Iterator[TensorDict]]):
         :return: segment length of the segment in `tdict` as measured by `self.length_key` for comparison.
         """
         return tdict.data[self.length_key].raw_tensor.shape[0]
+
+
+T = TypeVar("T", TensorDict, Iterator[TensorDict])
+
+
+class Sequential(Callable):
+    """
+    Callable that composes multiple postprocessing functions into one by sequential application,
+    i.e. Sequential(f, g)(x) = (g ∘ f)(x) = g(f(x)).
+
+    Can either compose ``map_seq``-style single-segment processor functions or ``map_seq_stream``-style
+    iterators operating on multiple segments. Just make sure not to mix both styles.
+    """
+
+    def __init__(self, *postprocessing_funcs: Callable):
+        """
+        :param postprocessing_funcs: Postprocessing functions to compose.
+        """
+        self.funcs = postprocessing_funcs
+
+    def __call__(self, arg: T, **kwargs) -> T:
+        """:return: result of sequential application of the postprocessing functions"""
+
+        for func in self.funcs:
+            arg = func(arg, **kwargs)
+        return arg
