@@ -425,6 +425,7 @@ jobs:
         # Needed for some tests.
         pip install --user --progress-bar=off transformers
         pip install --user --progress-bar=off espnet
+        pip install --user --progress-bar=off torchaudio  # needed by espnet
 
     - name: Test Python/Numpy/PyTorch versions.
       run: |
