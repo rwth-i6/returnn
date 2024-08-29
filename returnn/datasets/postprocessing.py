@@ -303,7 +303,7 @@ class Sequential(Callable):
     iterators operating on multiple segments. Just make sure not to mix both styles.
     """
 
-    def __init__(self, *postprocessing_funcs: Callable):
+    def __init__(self, *postprocessing_funcs: Callable[[T], T]):
         """
         :param postprocessing_funcs: Postprocessing functions to compose.
         """
