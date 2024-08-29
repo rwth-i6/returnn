@@ -15,7 +15,7 @@ from returnn.tensor.dim import Dim
 from .basic import init_dataset
 from .cached2 import CachedDataset2
 
-__all__ = ["PostprocessingDataset", "LaplaceOrdering", "T", "Sequential"]
+__all__ = ["PostprocessingDataset", "LaplaceOrdering", "Sequential"]
 
 
 class PostprocessingDataset(CachedDataset2):
