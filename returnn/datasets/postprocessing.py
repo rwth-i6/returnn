@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from itertools import islice
 from numpy.random import Generator, PCG64
-from typing import Any, Callable, Dict, Generic, Iterator, List, Optional, Tuple, TypeVar
+from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple, TypeVar
 
 from returnn.datasets.basic import DatasetSeq
 from returnn.datasets.util.vocabulary import Vocabulary
@@ -294,7 +294,7 @@ class LaplaceOrdering(Callable[[Iterator[TensorDict]], Iterator[TensorDict]]):
 T = TypeVar("T", TensorDict, Iterator[TensorDict])
 
 
-class Sequential(Generic[T]):
+class Sequential:
     """
     Callable that composes multiple postprocessing functions into one by sequential application,
     i.e. Sequential(f, g)(x) = (g ∘ f)(x) = g(f(x)).
