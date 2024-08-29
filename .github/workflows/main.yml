@@ -64,6 +64,7 @@ jobs:
 
         # Used in some tests.
         pip install --user --progress-bar=off transformers
+        pip install --user --progress-bar=off espnet
 
     - name: Test Python/Numpy/TF versions.
       run: |
@@ -423,6 +424,7 @@ jobs:
 
         # Needed for some tests.
         pip install --user --progress-bar=off transformers
+        pip install --user --progress-bar=off espnet
 
     - name: Test Python/Numpy/PyTorch versions.
       run: |
