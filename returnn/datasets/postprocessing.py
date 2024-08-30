@@ -128,7 +128,7 @@ class PostprocessingDataset(CachedDataset2):
 
         self._dataset = init_dataset(self._dataset_def, parent_dataset=self)
         if self._map_seq_stream is None:
-            # if the stream mapper is set, the num_seqs may change and the estimation is less acxcurate
+            # if the stream mapper is set, the num_seqs may change and the estimation is less accurate
             self._estimated_num_seqs = self._dataset.estimated_num_seqs
         self._data_iter: Optional[Iterator[Tuple[int, TensorDict]]] = None
 
