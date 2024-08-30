@@ -13,9 +13,10 @@ from returnn.tensor import Tensor, Dim
 import returnn.frontend as rf
 from returnn.util.basic import NotSpecified
 from .base import ISeqDownsamplingEncoder
+from ..decoder.transformer import FeedForward, make_norm
 
 
-class ConformerPositionwiseFeedForward(rf.Module):
+class ConformerPositionwiseFeedForward(FeedForward):
     """
     Conformer position-wise feedforward neural network layer
         FF -> Activation -> Dropout -> FF
@@ -25,37 +26,20 @@ class ConformerPositionwiseFeedForward(rf.Module):
         self,
         out_dim: Dim,
         *,
-        ff_dim: Dim,
-        dropout: float,
-        activation: Union[Callable[[Tensor], Tensor], Dict[str, Any], rf.Module],
+        ff_dim: Union[Dim, int] = NotSpecified,
+        dropout: float = 0.1,
+        activation: Union[Callable[[Tensor], Tensor], Dict[str, Any], rf.Module] = rf.swish,
+        **kwargs,
     ):
         """
         :param out_dim: output feature dimension
         :param ff_dim: dimension of the feed-forward layers
         :param dropout: dropout value
-        :param activation: activation function
+        :param activation: activation function. swish by default, unlike the base :class:`FeedForward`
         """
-        super().__init__()
-
-        self.out_dim = out_dim
-        self.dropout = dropout
-        self.dropout_broadcast = rf.dropout_broadcast_default()
-        if isinstance(activation, dict):
-            activation = rf.build_from_dict(activation)
-        elif not callable(activation):
-            raise TypeError(f"{self}: unexpected activation type {activation!r}")
-        self.activation = activation
-
-        self.linear_ff = rf.Linear(out_dim, ff_dim)
-        self.linear_out = rf.Linear(ff_dim, out_dim)
-
-    def __call__(self, inp: Tensor) -> Tensor:
-        """forward"""
-        x_ff1 = self.linear_ff(inp)
-        x_act = self.activation(x_ff1)
-        x_drop = rf.dropout(x_act, self.dropout, axis=self.dropout_broadcast and self.linear_ff.out_dim)
-        x_ff2 = self.linear_out(x_drop)
-        return x_ff2
+        if activation is NotSpecified:
+            activation = rf.swish
+        super().__init__(out_dim=out_dim, ff_dim=ff_dim, dropout=dropout, activation=activation, **kwargs)
 
 
 class ConformerConvBlock(rf.Module):
@@ -188,8 +172,9 @@ class ConformerEncoderLayer(rf.Module):
         self,
         out_dim: Dim = Dim(512, name="conformer-enc-default-out-dim"),
         *,
+        ff: Union[type, Dict[str, Any], rf.Module] = NotSpecified,
         ff_dim: Dim = NotSpecified,
-        ff_activation: Union[Callable[[Tensor], Tensor], Dict[str, Any], rf.Module] = rf.swish,
+        ff_activation: Union[Callable[[Tensor], Tensor], Dict[str, Any], rf.Module] = NotSpecified,
         dropout: float = 0.1,
         conv_kernel_size: int = 32,
         conv_norm: Union[rf.BatchNorm, type, Dict[str, Any], Any] = NotSpecified,
@@ -198,6 +183,7 @@ class ConformerEncoderLayer(rf.Module):
         self_att: Optional[Union[rf.RelPosSelfAttention, rf.Module, type, Dict[str, Any], Any]] = None,
         self_att_opts: Optional[Dict[str, Any]] = None,
         att_dropout: float = 0.1,
+        norm: Union[type, Dict[str, Any], rf.Module, Callable] = rf.LayerNorm,
     ):
         """
         :param out_dim: the output feature dimension
@@ -215,6 +201,7 @@ class ConformerEncoderLayer(rf.Module):
         :param self_att: the self-attention layer. RelPosSelfAttention originally and default
         :param self_att_opts: options for the self-attention layer, for :class:`nn.RelPosSelfAttention`
         :param att_dropout: attention dropout value
+        :param norm: pre-normalization for FF, conv and attention blocks
         """
         super().__init__()
 
@@ -222,17 +209,11 @@ class ConformerEncoderLayer(rf.Module):
         self.dropout_broadcast = rf.dropout_broadcast_default()
         self.out_dim = out_dim
 
-        if ff_dim is None:
-            ff_dim = 4 * out_dim
-        self.ffn1 = ConformerPositionwiseFeedForward(
-            out_dim=out_dim, ff_dim=ff_dim, dropout=dropout, activation=ff_activation
-        )
-        self.ffn1_layer_norm = rf.LayerNorm(out_dim)
+        self.ffn1 = make_ff(ff=ff, out_dim=out_dim, ff_dim=ff_dim, dropout=dropout, ff_activation=ff_activation)
+        self.ffn1_layer_norm = make_norm(norm, out_dim)
 
-        self.ffn2 = ConformerPositionwiseFeedForward(
-            out_dim=out_dim, ff_dim=ff_dim, dropout=dropout, activation=ff_activation
-        )
-        self.ffn2_layer_norm = rf.LayerNorm(out_dim)
+        self.ffn2 = make_ff(ff=ff, out_dim=out_dim, ff_dim=ff_dim, dropout=dropout, ff_activation=ff_activation)
+        self.ffn2_layer_norm = make_norm(norm, out_dim)
 
         if conv_norm is NotSpecified or conv_norm is rf.BatchNorm:
             conv_norm_opts = conv_norm_opts.copy() if conv_norm_opts else {}
@@ -245,7 +226,7 @@ class ConformerEncoderLayer(rf.Module):
         if not callable(conv_norm):
             raise TypeError(f"{self}: unexpected conv_norm type {conv_norm!r}")
         self.conv_block = ConformerConvBlock(out_dim=out_dim, kernel_size=conv_kernel_size, norm=conv_norm)
-        self.conv_layer_norm = rf.LayerNorm(out_dim)
+        self.conv_layer_norm = make_norm(norm, out_dim)
 
         if self_att is None or isinstance(self_att, (dict, type)):
             self_att_opts_ = dict(
@@ -271,9 +252,9 @@ class ConformerEncoderLayer(rf.Module):
             if not callable(self_att):
                 raise TypeError(f"{self}: invalid non-callable: self_att {self_att!r}")
             self.self_att = self_att
-        self.self_att_layer_norm = rf.LayerNorm(out_dim)
+        self.self_att_layer_norm = make_norm(norm, out_dim)
 
-        self.final_layer_norm = rf.LayerNorm(out_dim)
+        self.final_layer_norm = make_norm(norm, out_dim)
 
     def __call__(self, inp: Tensor, *, spatial_dim: Dim) -> Tensor:
         """forward"""
@@ -313,12 +294,12 @@ class ConformerEncoder(ISeqDownsamplingEncoder):
         out_dim: Dim = Dim(512, name="conformer-enc-default-out-dim"),
         *,
         num_layers: int,
-        input_layer: Union[ConformerConvSubsample, ISeqDownsamplingEncoder, rf.Module, Any],
+        input_layer: Optional[Union[ConformerConvSubsample, ISeqDownsamplingEncoder, rf.Module, Any]],
         input_dropout: float = 0.1,
         ff_dim: Dim = NotSpecified,
-        ff_activation: Union[Callable[[Tensor], Tensor], Dict[str, Any], rf.Module] = rf.swish,
+        ff_activation: Union[Callable[[Tensor], Tensor], Dict[str, Any], rf.Module] = NotSpecified,
         dropout: float = 0.1,
-        conv_kernel_size: int = 32,
+        conv_kernel_size: int = NotSpecified,
         conv_norm: Union[rf.BatchNorm, type, Dict[str, Any], Any] = NotSpecified,
         num_heads: int = 4,
         att_dropout: float = 0.1,
@@ -352,8 +333,10 @@ class ConformerEncoder(ISeqDownsamplingEncoder):
 
         # TODO once we figured out good defaults, we would create ConformerConvSubsample here when not given
         self.input_layer = input_layer
-        self.input_projection = rf.Linear(
-            self.input_layer.out_dim if self.input_layer else self.in_dim, self.out_dim, with_bias=False
+        self.input_projection = (
+            rf.Linear(self.input_layer.out_dim if self.input_layer else self.in_dim, self.out_dim, with_bias=False)
+            if input_layer
+            else None
         )
         self.input_dropout = input_dropout
 
@@ -368,6 +351,7 @@ class ConformerEncoder(ISeqDownsamplingEncoder):
                 num_heads=num_heads,
                 att_dropout=att_dropout,
             )
+            encoder_layer_opts_ = {k: v for (k, v) in encoder_layer_opts_.items() if v is not NotSpecified}
             if encoder_layer_opts:
                 encoder_layer_opts_.update(encoder_layer_opts)
             if not encoder_layer:
@@ -404,7 +388,35 @@ class ConformerEncoder(ISeqDownsamplingEncoder):
             x_subsample, out_spatial_dim = self.input_layer(source, in_spatial_dim=in_spatial_dim)
         else:
             x_subsample, out_spatial_dim = source, in_spatial_dim
-        x_linear = self.input_projection(x_subsample)
-        x = rf.dropout(x_linear, self.input_dropout, axis=self.dropout_broadcast and self.input_projection.out_dim)
+        x = self.input_projection(x_subsample) if self.input_projection else x_subsample
+        x = rf.dropout(x, self.input_dropout, axis=self.dropout_broadcast and self.out_dim)
         x = self.layers(x, spatial_dim=out_spatial_dim, collected_outputs=collected_outputs)
         return x, out_spatial_dim
+
+
+def make_ff(
+    *,
+    out_dim: Dim,
+    ff: Union[type, Dict[str, Any], rf.Module],
+    ff_dim: Union[Dim, int],
+    ff_activation: Union[Callable[[Tensor], Tensor], Dict[str, Any], rf.Module],
+    dropout: float,
+) -> Union[ConformerPositionwiseFeedForward, rf.Module]:
+    """
+    make the feed-forward part of the Conformer layer
+    """
+    if ff is NotSpecified:
+        ff = ConformerPositionwiseFeedForward
+    if isinstance(ff, rf.Module):
+        ff = _copy.deepcopy(ff)
+    else:
+        ff_kwargs = dict(out_dim=out_dim, ff_dim=ff_dim, dropout=dropout, activation=ff_activation)
+        ff_kwargs = {k: v for (k, v) in ff_kwargs.items() if v is not NotSpecified}
+        if isinstance(ff, type):
+            ff = ff(**ff_kwargs)
+        elif isinstance(ff, dict):
+            ff = rf.build_from_dict(ff, **ff_kwargs)
+        else:
+            raise TypeError(f"unexpected ff type {ff!r}")
+    assert isinstance(ff, rf.Module)
+    return ff

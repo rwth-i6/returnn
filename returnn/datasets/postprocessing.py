@@ -5,7 +5,7 @@ Provides :class:`PostprocessingDataset`.
 from __future__ import annotations
 
 from itertools import islice
-from numpy.random import Generator, PCG64
+from numpy.random import RandomState
 from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple, TypeVar
 
 from returnn.datasets.basic import DatasetSeq
@@ -45,9 +45,9 @@ class PostprocessingDataset(CachedDataset2):
                 "files": ["/path/to/data.hdf"],
             },
             # one of them, but not both:
-            # (data: TensorDict, *, rng: numpy.random.Generator, **kwargs) -> TensorDict
+            # (data: TensorDict, *, rng: numpy.random.RandomState, **kwargs) -> TensorDict
             "map_seq": map_seq,
-            # (iter: Iterator[TensorDict], *, rng: numpy.random.Generator, **kwargs) -> Iterator[TensorDict]
+            # (iter: Iterator[TensorDict], *, rng: numpy.random.RandomState, **kwargs) -> Iterator[TensorDict]
             "map_seq_stream": map_seqs,
             # only required when data shapes change wrt. the wrapped dataset:
             "map_outputs": {
@@ -91,17 +91,18 @@ class PostprocessingDataset(CachedDataset2):
         """
         :param dataset: inner dataset to be post-processed
         :param map_seq: post processor function operating on the single-segment level.
-            Signature: `(data: TensorDict, *, rng: numpy.random.Generator, **kwargs) -> TensorDict`
+            Signature: `(data: TensorDict, *, rng: numpy.random.RandomState, **kwargs) -> TensorDict`
             To avoid confusion on the order of how the processing functions are applied to the data, only one of
-            `map_seq` and `map_seq_stream` can be specified at a time.
-            To ensure forwards compatibility, the function must accept `**kwargs` as its last argument.
+            ``map_seq`` and ``map_seq_stream`` can be specified at a time.
+            To ensure forwards compatibility, the function must accept ``**kwargs`` as its last argument.
             This is enforced by passing randomly named parameters at runtime.
         :param map_seq_stream: post processor function operating on the multiple segment level via an iterator.
             Allows merging multiple segments into one, or generating multiple output segments from one input segment.
-            Signature: `(iter: Iterator[TensorDict], *, rng: numpy.random.Generator, **kwargs) -> Iterator[TensorDict]`
+            Signature:
+                ``(iter: Iterator[TensorDict], *, rng: numpy.random.RandomState, **kwargs) -> Iterator[TensorDict]``
             To avoid confusion on the order of how the processing functions are applied to the data, only one of
-            `map_seq` and `map_seq_stream` can be specified at a time.
-            To ensure forwards compatibility, the function must accept `**kwargs` as its last argument.
+            ``map_seq`` and ``map_seq_stream`` can be specified at a time.
+            To ensure forwards compatibility, the function must accept ``**kwargs`` as its last argument.
             This is enforced by passing randomly named parameters at runtime.
         :param map_outputs: Type and axis specification of the outputs of the mapping functions,
             like extern_data and model_outputs.
@@ -123,11 +124,11 @@ class PostprocessingDataset(CachedDataset2):
         self._map_seq = map_seq
         self._map_seq_stream = map_seq_stream
         self._map_outputs = map_outputs
-        self._rng = Generator(PCG64(self._get_random_seed_for_epoch(0)))
+        self._rng = RandomState(self._get_random_seed_for_epoch(0))
 
         self._dataset = init_dataset(self._dataset_def, parent_dataset=self)
         if self._map_seq_stream is None:
-            # if the stream mapper is set, the num_seqs may change and the estimation is less accurate
+            # if the stream mapper is set, the num_seqs may change and the estimation is less acxcurate
             self._estimated_num_seqs = self._dataset.estimated_num_seqs
         self._data_iter: Optional[Iterator[Tuple[int, TensorDict]]] = None
 
@@ -168,7 +169,7 @@ class PostprocessingDataset(CachedDataset2):
             self._num_seqs = 0
             return True
 
-        self._rng = Generator(PCG64(self._get_random_seed_for_epoch(epoch=epoch)))
+        self._rng = RandomState(self._get_random_seed_for_epoch(epoch=epoch))
         assert self._dataset is not None
         self._dataset.init_seq_order(epoch=epoch, seq_list=seq_list, seq_order=seq_order)
         self._data_iter = enumerate(self._build_mapping_iter())
@@ -205,7 +206,7 @@ class PostprocessingDataset(CachedDataset2):
         data_iter = self._iterate_dataset()
         if self._map_seq_stream is not None:
             data_iter = self._map_seq_stream(
-                data_iter, rng=self._rng, **{f"fwd_compatible_random_kwarg_{self._rng.integers(0, 1000)}": None}
+                data_iter, rng=self._rng, **{f"fwd_compatible_random_kwarg_{self._rng.randint(0, 1000)}": None}
             )
             assert isinstance(
                 data_iter, Iterator
@@ -226,7 +227,7 @@ class PostprocessingDataset(CachedDataset2):
                 tensor_dict.data[data_key].raw_tensor = self._dataset.get_data(seq_index, data_key)
             if self._map_seq is not None:
                 tensor_dict = self._map_seq(
-                    tensor_dict, rng=self._rng, **{f"fwd_compatible_random_kwarg_{self._rng.integers(0, 1000)}": None}
+                    tensor_dict, rng=self._rng, **{f"fwd_compatible_random_kwarg_{self._rng.randint(0, 1000)}": None}
                 )
                 assert isinstance(
                     tensor_dict, TensorDict
