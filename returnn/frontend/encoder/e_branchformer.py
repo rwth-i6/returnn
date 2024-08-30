@@ -173,7 +173,13 @@ class FeedForwardConvGated(rf.Module):
     ):
         """
         :param out_dim: the encoder (e.g. E-Branchformer) model dim. (usually 256 or 512)
-        :param ff_dim: intermediate dimension. (usually 2048 or 3072, not necessarily factor 4 or 4*2/3)
+        :param ff_dim: intermediate dimension.
+            This is like cgmlp_linear_units/2 in ESPnet.
+            Note the 1/2 factor, which is because in ESPnet, you specify the total dimension,
+            before it is split for the gating,
+            while here, you specify the dimension for the gating part.
+            Common settings are 2048/2 or 3072/2.
+            In the paper, they mention a factor of 3 of the model dimension (factor 6 for ESPnet setting).
         :param kernel_size: for the depthwise convolution (usually 31)
         :param dropout:
         :param activation: activation function after the first linear layer, for both parts.
@@ -190,7 +196,7 @@ class FeedForwardConvGated(rf.Module):
         super().__init__()
 
         if ff_dim is NotSpecified:
-            ff_dim = out_dim * 6  # somewhat arbitrary. with 512, this is 3072.
+            ff_dim = out_dim * 3  # somewhat arbitrary. with 512, this is 3072/2.
         if isinstance(ff_dim, int):
             ff_dim = Dim(ff_dim, name="e-branchformer-ff-dim")
         if not isinstance(ff_dim, Dim):
