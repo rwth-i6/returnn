@@ -185,6 +185,9 @@ def _run_model_net_dict_tf(
 
     from returnn.tf.frontend_layers.config_entry_points import get_net_dict
 
+    # noinspection PyProtectedMember
+    from returnn.frontend import _backend
+
     config = Config(
         {
             "debug_runtime_sanity_checks": True,
@@ -203,6 +206,7 @@ def _run_model_net_dict_tf(
         outputs_layers = rf.get_run_ctx().outputs
         print("*** outputs:", outputs_layers)
 
+        _backend.select_backend_tf()
         net = TFNetwork(config=config, train_flag=False)
         net.construct_from_dict(net_dict)
 

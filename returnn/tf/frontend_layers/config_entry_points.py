@@ -118,6 +118,9 @@ def get_net_dict(
             # but now the TF engine actually wants to have Tensor[tf.Tensor].
             # Reset it now. The TF engine should redefine it again.
             elem.reset_batch_and_raw()
+        elif isinstance(elem, set):
+            # map_structure does not recurse into sets.
+            nest.map_structure(_cleanup_net_dict_value, sorted(list(elem)))
         return elem
 
     # Do some cleanup.
