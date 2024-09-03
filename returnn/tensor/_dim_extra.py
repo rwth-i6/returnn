@@ -2928,6 +2928,15 @@ class _CacheDimMath:
         else:
             return op_dict.dims[__key[1]]
 
+    def __contains__(self, __key: Tuple[str, Union[Dim, int]]) -> bool:
+        op_dict = self._ops.get(__key[0])
+        if not op_dict:
+            return False
+        if isinstance(__key[1], int):
+            return __key[1] in op_dict.statics
+        else:
+            return __key[1] in op_dict.dims
+
     def get(self, __key: Tuple[str, Union[Dim, int]], default: Optional[Dim] = None) -> Optional[Dim]:
         """get"""
         op_dict = self._ops.get(__key[0])
@@ -2937,6 +2946,14 @@ class _CacheDimMath:
             return op_dict.statics.get(__key[1], default)
         else:
             return op_dict.dims.get(__key[1], default)
+
+    def setdefault(self, __key: Tuple[str, Union[Dim, int]], __value: Dim):
+        """setdefault"""
+        existing = self.get(__key)
+        if existing is not None:
+            return existing
+        self[__key] = __value
+        return __value
 
     def clear(self):
         """clear"""
