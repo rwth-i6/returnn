@@ -211,3 +211,14 @@ class NumpyBackend(Backend[numpy.ndarray]):
             sparse_dim=source.sparse_dim,
         )
         return res
+
+    @staticmethod
+    def activation_raw(raw_tensor: numpy.ndarray, func: str) -> numpy.ndarray:
+        """
+        :param raw_tensor:
+        :param func: "tanh", "sigmoid", "relu", ...
+        :return: raw tensor with elementwise activation applied
+        """
+        if func == "relu":
+            return numpy.maximum(raw_tensor, 0)
+        raise NotImplementedError("NumpyBackend: activation %r not implemented" % func)
