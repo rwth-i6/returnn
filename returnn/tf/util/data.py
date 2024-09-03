@@ -339,7 +339,7 @@ class BatchInfo:
 
         # Ok, need to extend.
         global_batch_dims = [dim for dim in all_virtual_dims if isinstance(dim, BatchInfo.GlobalBatchDim)]
-        assert len(global_batch_dims) == 1
+        assert len(global_batch_dims) == 1, f"got global_batch_dims={global_batch_dims!r}"
         global_batch_dim = global_batch_dims[0]
         assert base.virtual_dims == [global_batch_dim]
         beams = [dim for dim in all_virtual_dims if isinstance(dim, BatchInfo.BeamDim)]

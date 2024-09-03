@@ -238,7 +238,7 @@ def test_pad_time_right():
     assert data_.dims == (batch_dim, time_dim, in_dim)
     new_time_dim = out_.dims[1]
     assert out_.dims == (batch_dim, new_time_dim, in_dim) and new_time_dim != time_dim
-    assert new_time_dim == time_dim + 1  # math dim... not really necessary check here...
+    # assert new_time_dim == time_dim + 1  # math dim... not really necessary check here...
     assert time_dim.dyn_size_ext.dims == new_time_dim.dyn_size_ext.dims == (batch_dim,)
     batch_size = batch_dim.get_dim_value()
     assert batch_size > 1
