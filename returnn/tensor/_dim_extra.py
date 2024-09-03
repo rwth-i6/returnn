@@ -4,8 +4,9 @@ or just rarely used attribs, such that we can save memory for the common case.
 """
 
 from __future__ import annotations
-from typing import TYPE_CHECKING, Optional, Union, Any, Tuple, Sequence, Dict, List, Set, Callable
+from typing import TYPE_CHECKING, Optional, Union, Any, Tuple, Sequence, MutableMapping, Dict, List, Set, Callable
 import operator
+import weakref
 
 from returnn.util.basic import Entity
 from returnn.util import basic as util
@@ -118,7 +119,7 @@ class _DimExtra:
         self.same_for_batch_ctx = {}  # type: Dict[Tuple[BatchInfo,Optional[ControlFlowContext]],_d.Dim]
         self.cache_dyn_size_ext_dev = {}  # type: Dict[str,_t.Tensor]  # device -> dyn_size_ext
         self.cache_seq_mask: Dict[Tuple[str, Optional[Tuple[Dim, ...]]], _t.Tensor] = {}  # (dev,dim_order) -> seq_mask
-        self.cache_dim_math: Dict[Tuple[str, Union[Dim, int]], Dim] = {}  # op (add,sub,...), operand -> Dim
+        self.cache_dim_math = _CacheDimMath()  # op (add,sub,...), operand -> Dim
 
     def __getstate__(self):
         d = vars(self).copy()
@@ -389,6 +390,10 @@ class _DimMixin:
             if dim_extra:
                 # Any dims via dim math could also contain raw tensors,
                 # so iterate through them.
+                if dim.dyn_size_ext is not None or dim.dimension is None:
+                    dim_extra.cache_dim_math.clear()
+                else:
+                    dim_extra.cache_dim_math.clear_dynamic()
                 queue += dim_extra.cache_dim_math.values()
                 if dim_extra.same_as:
                     queue.append(dim_extra.same_as)
@@ -2871,6 +2876,106 @@ def dim_cmp_value(obj):
     if isinstance(obj, _m.MarkedDim):
         return obj.__class__.__name__, obj.tag
     return obj
+
+
+class _CacheDimMath:
+    """op (add,sub,...), operand -> Dim"""
+
+    class _OperandCache:
+        def __init__(self):
+            self.dims: MutableMapping[Dim, Dim] = weakref.WeakKeyDictionary()
+            self.statics: Dict[int, Dim] = {}
+
+    def __init__(self):
+        self._ops: Dict[str, _CacheDimMath._OperandCache] = {}
+
+    def __repr__(self):
+        return "_CacheDimMath({%s})" % ", ".join("%r: %r" % (k, v) for k, v in self.items())
+
+    def _get_op_dict(self, __key: Tuple[str, Union[Dim, int]]) -> _OperandCache:
+        if __key[0] in self._ops:
+            return self._ops[__key[0]]
+        else:
+            op_dict = self._OperandCache()
+            self._ops[__key[0]] = op_dict
+            return op_dict
+
+    def __setitem__(self, __key: Tuple[str, Union[Dim, int]], __value: Dim):
+        op_dict = self._get_op_dict(__key)
+        if isinstance(__key[1], int):
+            value_dict = op_dict.statics
+        else:
+            value_dict = op_dict.dims
+        if __key[1] in value_dict:
+            value_dict[__key[1]] = __value
+            return
+        if len(value_dict) >= 5:
+            # Just to avoid memory leaks.
+            value_dict.clear()
+        value_dict[__key[1]] = __value
+
+    def __delitem__(self, __key: Tuple[str, Union[Dim, int]]):
+        op_dict = self._ops[__key[0]]
+        if isinstance(__key[1], int):
+            del op_dict.statics[__key[1]]
+        else:
+            del op_dict.dims[__key[1]]
+
+    def __getitem__(self, __key: Tuple[str, Union[Dim, int]]) -> Dim:
+        op_dict = self._ops[__key[0]]
+        if isinstance(__key[1], int):
+            return op_dict.statics[__key[1]]
+        else:
+            return op_dict.dims[__key[1]]
+
+    def get(self, __key: Tuple[str, Union[Dim, int]], default: Optional[Dim] = None) -> Optional[Dim]:
+        """get"""
+        op_dict = self._ops.get(__key[0])
+        if not op_dict:
+            return default
+        if isinstance(__key[1], int):
+            return op_dict.statics.get(__key[1], default)
+        else:
+            return op_dict.dims.get(__key[1], default)
+
+    def clear(self):
+        """clear"""
+        self._ops.clear()
+
+    def clear_dynamic(self):
+        """clear dynamic part"""
+        for op_dict in self._ops.values():
+            for k, v in list(op_dict.dims.items()):
+                if v.dyn_size_ext is not None or v.dimension is None:
+                    del op_dict.dims[k]
+
+    def __len__(self):
+        count = 0
+        for op_dict in self._ops.values():
+            count += len(op_dict.statics)
+            count += len(op_dict.dims)
+        return count
+
+    def items(self):
+        """items"""
+        for op_name, op_dict in self._ops.items():
+            for key, value in op_dict.statics.items():
+                yield (op_name, key), value
+            for key, value in op_dict.dims.items():
+                yield (op_name, key), value
+
+    def keys(self):
+        """keys"""
+        for k, v in self.items():
+            yield k
+
+    def values(self):
+        """values"""
+        for k, v in self.items():
+            yield v
+
+    def __iter__(self):
+        yield from self.keys()
 
 
 def _behavior_version_reset_callback():
