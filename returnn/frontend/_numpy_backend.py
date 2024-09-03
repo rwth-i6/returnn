@@ -153,7 +153,10 @@ class NumpyBackend(Backend[numpy.ndarray]):
             op = NumpyBackend._CombineKindMap.get(kind)
             if not op:
                 raise ValueError(f"RF NumpyBackend: combine kind {kind!r} not supported")
-        return op(a, b)
+        res = op(a, b)
+        if not isinstance(res, numpy.ndarray):
+            res = numpy.array(res)
+        return res
 
     @staticmethod
     def range_over_dim(dim: Dim, *, dtype: Optional[str] = None, device: Optional[str] = None) -> Tensor[numpy.ndarray]:
@@ -220,5 +223,5 @@ class NumpyBackend(Backend[numpy.ndarray]):
         :return: raw tensor with elementwise activation applied
         """
         if func == "relu":
-            return numpy.maximum(raw_tensor, 0)
+            return numpy.array(numpy.maximum(raw_tensor, 0))
         raise NotImplementedError("NumpyBackend: activation %r not implemented" % func)
