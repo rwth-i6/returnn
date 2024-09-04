@@ -5,7 +5,6 @@ torch.distributed utils
 from __future__ import annotations
 from abc import abstractmethod, ABC
 import logging
-import numpy
 import os
 import socket
 from typing import Callable, Optional, Any, Dict, Type, Union
@@ -13,7 +12,7 @@ from typing import Callable, Optional, Any, Dict, Type, Union
 import torch
 from torch.nn.parallel import DistributedDataParallel
 
-from returnn.util.basic import CollectionReadCheckCovered, OptionalNotImplementedError
+from returnn.util.basic import CollectionReadCheckCovered, OptionalNotImplementedError, get_fwd_compat_kwargs
 
 _logger = logging.getLogger("returnn.torch.distributed")
 
@@ -84,9 +83,6 @@ class DistributedContext:
         import torch.distributed as dist
 
         self._opts = CollectionReadCheckCovered(options)
-        # Only used to generate forwards compatibility ensuring random kwargs, therefore
-        # the seed is not important
-        self._rng = numpy.random.default_rng()
 
         # when no backend is specified, both gloo and nccl backends will be created
         # the gloo backend will be used for collectives with CPU tensors and
@@ -125,7 +121,7 @@ class DistributedContext:
                     size=self._size,
                     local_rank=self._local_rank,
                     local_size=self._local_size,
-                    **{f"fwd_compatible_random_kwarg_{self._rng.integers(0, 100)}": None},
+                    **get_fwd_compat_kwargs(),
                 )
             elif isinstance(self._custom_sync_class, Callable):
                 self._custom_sync = self._custom_sync_class
@@ -194,9 +190,7 @@ class DistributedContext:
 
             if isinstance(self._custom_sync, ParamSynchronizer):
                 try:
-                    return self._custom_sync.make_distributed_model(
-                        module=module, **{f"fwd_compatible_random_kwarg_{self._rng.integers(0, 100)}": None}
-                    )
+                    return self._custom_sync.make_distributed_model(module=module, **get_fwd_compat_kwargs())
                 except OptionalNotImplementedError:
                     pass
             else:
@@ -222,7 +216,7 @@ class DistributedContext:
                 self._custom_sync(
                     module=module,
                     train_step_idx=epoch_step_idx,
-                    **{f"fwd_compatible_random_kwarg_{self._rng.integers(0, 100)}": None},
+                    **get_fwd_compat_kwargs(),
                 )
         elif self._reduce_type == "param" and ((epoch_step_idx % self._param_sync_step) == (self._param_sync_step - 1)):
             _sync_params_avg(module=module, sync_on_cpu=self._opts.get("sync_on_cpu", False))

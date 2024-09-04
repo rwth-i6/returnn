@@ -4586,3 +4586,15 @@ def override_env_var(var_name: str, value: str):
             os.environ[var_name] = cur_val
         else:
             os.environ.pop(var_name)
+
+
+_fwd_compat_rng = np.random.default_rng()
+
+
+def get_fwd_compat_kwargs() -> Dict[str, Any]:
+    """
+    Returns a dictionary suitable for passing as kwargs for any RETURNN userland
+    function where forwards compatibility wrt. additional arguments must be
+    ensured.
+    """
+    return {f"fwd_compatible_random_kwarg_{_fwd_compat_rng.integers(0, 100)}": None}
