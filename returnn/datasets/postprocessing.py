@@ -12,6 +12,7 @@ from returnn.datasets.basic import DatasetSeq
 from returnn.datasets.util.vocabulary import Vocabulary
 from returnn.tensor import Tensor, TensorDict
 from returnn.tensor.dim import Dim
+from returnn.util.basic import get_fwd_compat_kwargs
 from .basic import init_dataset
 from .cached2 import CachedDataset2
 
@@ -205,9 +206,7 @@ class PostprocessingDataset(CachedDataset2):
 
         data_iter = self._iterate_dataset()
         if self._map_seq_stream is not None:
-            data_iter = self._map_seq_stream(
-                data_iter, rng=self._rng, **{f"fwd_compatible_random_kwarg_{self._rng.randint(0, 1000)}": None}
-            )
+            data_iter = self._map_seq_stream(data_iter, rng=self._rng, **get_fwd_compat_kwargs())
             assert isinstance(
                 data_iter, Iterator
             ), f"map_seq_stream must produce an {Iterator.__name__}, but produced {type(data_iter).__name__}"
@@ -226,9 +225,7 @@ class PostprocessingDataset(CachedDataset2):
             for data_key in data_keys:
                 tensor_dict.data[data_key].raw_tensor = self._dataset.get_data(seq_index, data_key)
             if self._map_seq is not None:
-                tensor_dict = self._map_seq(
-                    tensor_dict, rng=self._rng, **{f"fwd_compatible_random_kwarg_{self._rng.randint(0, 1000)}": None}
-                )
+                tensor_dict = self._map_seq(tensor_dict, rng=self._rng, **get_fwd_compat_kwargs())
                 assert isinstance(
                     tensor_dict, TensorDict
                 ), f"map_seq must produce a {TensorDict.__name__}, but produced {type(tensor_dict).__name__}"

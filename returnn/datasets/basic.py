@@ -24,7 +24,7 @@ from typing import TYPE_CHECKING, Optional, Any, Union, Type, Dict, Sequence, Li
 from returnn.log import log
 from returnn.engine.batch import Batch, BatchSetGenerator
 from returnn.datasets.util.vocabulary import Vocabulary
-from returnn.util.basic import try_run, NumbersDict, OptionalNotImplementedError
+from returnn.util.basic import get_fwd_compat_kwargs, try_run, NumbersDict, OptionalNotImplementedError
 from returnn.util import file_cache
 from returnn.tensor import TensorDict
 
@@ -1050,7 +1050,7 @@ class Dataset(object):
         :rtype: list[(int,NumbersDict,NumbersDict)]
         """
         if self.custom_chunking_func:
-            sentinel_kw = {"__fwd_compatible_random_arg_%i" % int(random() * 100): None}
+            sentinel_kw = get_fwd_compat_kwargs()
             for seq_idx, t_start, t_end in self.custom_chunking_func(
                 dataset=self, seq_idx_start=0, recurrent_net=recurrent_net, used_data_keys=used_data_keys, **sentinel_kw
             ):

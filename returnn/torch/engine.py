@@ -17,7 +17,6 @@ from torch.nn.parallel import DistributedDataParallel
 from torch.utils.data import DataLoader
 from torch import autocast
 from torch.cuda import amp
-from random import random
 import math
 
 import returnn
@@ -680,7 +679,7 @@ class Engine(EngineBase):
             if self._use_autocast
             else nullcontext()
         ), rf.set_default_device_ctx(self._device):
-            sentinel_kw = {"__fwd_compatible_random_arg_%i" % int(random() * 100): None}
+            sentinel_kw = util.get_fwd_compat_kwargs()
             if train_func:
                 self._train_step_func(model=self._orig_model, extern_data=extern_data, **sentinel_kw)
             else:
@@ -846,7 +845,7 @@ class Engine(EngineBase):
                 if self._use_autocast
                 else nullcontext()
             ), rf.set_default_device_ctx(self._device):
-                sentinel_kw = {"__fwd_compatible_random_arg_%i" % int(random() * 100): None}
+                sentinel_kw = util.get_fwd_compat_kwargs()
                 for hook in load_model_post_hooks:
                     hook(model=self._orig_model, **sentinel_kw)
 
@@ -876,7 +875,7 @@ class Engine(EngineBase):
 
         get_model_func = self.config.typed_value("get_model")
         assert get_model_func, "get_model not defined in config"
-        sentinel_kw = {"__fwd_compatible_random_arg_%i" % int(random() * 100): None}
+        sentinel_kw = util.get_fwd_compat_kwargs()
         model = get_model_func(epoch=epoch, step=step, **sentinel_kw)
         self._orig_model = model
         if isinstance(model, rf.Module):
