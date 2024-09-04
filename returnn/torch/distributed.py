@@ -26,12 +26,12 @@ class ParamSynchronizer(ABC):
     """
 
     @abstractmethod
-    def __init__(self, *, rank: int, size: int, local_rank: int, local_size: int, **kwargs):
+    def __init__(self, *, rank: int, size: int, local_rank: int, local_size: int):
         """
         `__init__` called after the default global process group is created.
         Can be used to initialize any additional custom process (sub)groups.
 
-        Note this function is passed a randomly named kwarg on every invocation to ensure forwards compatibility.
+        Note the `__init__` is passed a randomly named kwarg on every invocation to ensure forwards compatibility.
 
         :param rank: global rank of the current process across all nodes
         :param size: global world size across all nodes
