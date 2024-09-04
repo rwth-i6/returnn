@@ -35,7 +35,6 @@ import torch
 from typing import Callable, Optional, Dict, List
 import argparse
 import os
-from random import random
 
 import _setup_returnn_env  # noqa
 from returnn.config import Config
