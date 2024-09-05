@@ -560,3 +560,118 @@ def test_weight_noise():
     rf.weight_noise(conv, "filter", std=0.1)
     time_dim = Dim(11, name="time")
     conv(rf.random_normal([time_dim, in_dim]), in_spatial_dim=time_dim)
+
+
+def test_edit_distance():
+    import numpy
+    import torch
+    from typing import Sequence
+    from collections import namedtuple
+    import itertools
+
+    def _edit_distance_ref_b1(a: Sequence[int], b: Sequence[int]) -> int:
+        """
+        Reference implementation for edit distance.
+        """
+        n = len(a) + 1
+        m = len(b) + 1
+        d = torch.zeros((n, m), dtype=torch.int32)
+        for i in range(n):
+            d[i, 0] = i
+        for j in range(m):
+            d[0, j] = j
+        for j in range(1, m):
+            for i in range(1, n):
+                if a[i - 1] == b[j - 1]:
+                    d[i, j] = d[i - 1, j - 1]
+                else:
+                    d[i, j] = min(
+                        d[i - 1, j] + 1,  # deletion
+                        d[i, j - 1] + 1,  # insertion
+                        d[i - 1, j - 1] + 1,  # substitution
+                    )
+        return int(d[n - 1, m - 1])
+
+    # noinspection PyShadowingNames
+    def _edit_distance_ref(a: Tensor, a_spatial_dim: Dim, b: Tensor, b_spatial_dim: Dim) -> torch.Tensor:
+        """
+        Reference implementation for edit distance.
+        """
+        batch_dim = a.dims[0]
+        assert a.dims == (batch_dim, a_spatial_dim) and b.dims == (batch_dim, b_spatial_dim)
+        res = []
+        for i in range(batch_dim.dimension):
+            assert a_spatial_dim.dyn_size[i] <= a.raw_tensor.size(1)
+            assert b_spatial_dim.dyn_size[i] <= b.raw_tensor.size(1)
+            res.append(
+                _edit_distance_ref_b1(
+                    a.raw_tensor[i, : a_spatial_dim.dyn_size[i]], b.raw_tensor[i, : b_spatial_dim.dyn_size[i]]
+                )
+            )
+        return torch.tensor(res, dtype=torch.int32)
+
+    # noinspection PyShadowingNames
+    def _check_edit_distance(a: Tensor, a_spatial_dim: Dim, b: Tensor, b_spatial_dim: Dim):
+        ref = _edit_distance_ref(a, a_spatial_dim, b, b_spatial_dim)
+        res = rf.edit_distance(a, a_spatial_dim, b, b_spatial_dim)
+        assert res.raw_tensor.shape == ref.shape == a_spatial_dim.dyn_size.shape == b_spatial_dim.dyn_size.shape
+        assert len(ref.shape) == 1
+        print("ref:", ref, "res:", res.raw_tensor)
+        batch_size = ref.shape[0]
+        for i in range(batch_size):
+            assert res.raw_tensor[i] == ref[i], (
+                f"batch idx i={i}, a[i]={a.raw_tensor[i]} len {a_spatial_dim.dyn_size[i]},"
+                f" b[i]={b.raw_tensor[i]} len {b_spatial_dim.dyn_size[i]},"
+                f" ref[i]={ref[i]}, res[i]={res.raw_tensor[i]};\n"
+                f" a={a.raw_tensor} lens {a_spatial_dim.dyn_size},"
+                f" b={b.raw_tensor} lens {b_spatial_dim.dyn_size}"
+            )
+        assert (res.raw_tensor == ref).all()
+
+    SizedTensor = namedtuple("SizedTensor", ["tensor", "seq_lens"])
+
+    _SeqsB1 = [
+        SizedTensor(torch.tensor([[1, 2, 3, 4]]), torch.tensor([4])),
+        SizedTensor(torch.tensor([[1, 2, 3]]), torch.tensor([3])),
+        SizedTensor(torch.tensor([[1, 2, 4]]), torch.tensor([3])),
+        SizedTensor(torch.tensor([[1, 4]]), torch.tensor([2])),
+        SizedTensor(torch.tensor([[5, 2, 4]]), torch.tensor([3])),
+        SizedTensor(torch.tensor([[]], dtype=torch.int64), torch.tensor([0])),
+    ]
+
+    for a, b in itertools.product(_SeqsB1, _SeqsB1):
+        a: SizedTensor
+        b: SizedTensor
+        # noinspection PyShadowingNames
+        batch_dim = Dim(1, name="batch")
+        a_spatial_dim = Dim(Tensor("a_sizes", [batch_dim], dtype="int64", raw_tensor=a.seq_lens))
+        b_spatial_dim = Dim(Tensor("b_sizes", [batch_dim], dtype="int64", raw_tensor=b.seq_lens))
+        a_ = Tensor("a", [batch_dim, a_spatial_dim], dtype="int64", raw_tensor=a.tensor)
+        b_ = Tensor("b", [batch_dim, b_spatial_dim], dtype="int64", raw_tensor=b.tensor)
+        _check_edit_distance(a_, a_spatial_dim, b_, b_spatial_dim)
+
+    rnd = numpy.random.RandomState(42)
+    for a, b in itertools.product(_SeqsB1, _SeqsB1):
+        batch_size = rnd.randint(2, 11)
+        a_max_len = rnd.randint(a.seq_lens[0], a.seq_lens[0] + 5)
+        b_max_len = rnd.randint(b.seq_lens[0], b.seq_lens[0] + 5)
+        a_sizes = rnd.randint(0, a_max_len + 1, size=(batch_size,))
+        b_sizes = rnd.randint(0, b_max_len + 1, size=(batch_size,))
+        a_sizes[0] = a.seq_lens[0]
+        b_sizes[0] = b.seq_lens[0]
+        a_max_len = max(a_sizes)
+        b_max_len = max(b_sizes)
+        a_values = rnd.randint(0, 10, (batch_size, a_max_len))
+        b_values = rnd.randint(0, 10, (batch_size, b_max_len))
+        a_values[0, : a.seq_lens[0]] = a.tensor[0, : a.seq_lens[0]]
+        b_values[0, : b.seq_lens[0]] = b.tensor[0, : b.seq_lens[0]]
+        a_sizes = torch.tensor(a_sizes, dtype=torch.int32)
+        b_sizes = torch.tensor(b_sizes, dtype=torch.int32)
+
+        # noinspection PyShadowingNames
+        batch_dim = Dim(batch_size, name="batch")
+        a_spatial_dim = Dim(Tensor("a_sizes", [batch_dim], dtype="int32", raw_tensor=a_sizes))
+        b_spatial_dim = Dim(Tensor("b_sizes", [batch_dim], dtype="int32", raw_tensor=b_sizes))
+        a_ = Tensor("a", [batch_dim, a_spatial_dim], dtype="int64", raw_tensor=torch.tensor(a_values))
+        b_ = Tensor("b", [batch_dim, b_spatial_dim], dtype="int64", raw_tensor=torch.tensor(b_values))
+        _check_edit_distance(a_, a_spatial_dim, b_, b_spatial_dim)
