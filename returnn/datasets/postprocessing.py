@@ -175,6 +175,14 @@ class PostprocessingDataset(CachedDataset2):
         self._data_iter = enumerate(self._build_mapping_iter())
         return True
 
+    def get_data_keys(self):
+        """:return: available data keys"""
+        return list(self._out_tensor_dict_template.data.keys())
+
+    def get_data_dtype(self, key):
+        """:return: dtype of data entry `key`"""
+        return self._out_tensor_dict_template.data[key].dtype
+
     def _collect_single_seq(self, seq_idx: int) -> Optional[DatasetSeq]:
         while True:
             try:

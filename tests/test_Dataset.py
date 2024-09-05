@@ -1053,6 +1053,7 @@ def test_PostprocessingDataset():
             "map_seq": _add_1337_to_classes,
         }
         dataset = init_dataset(ds_opts)
+        dataset.get_data_keys()
         dataset.init_seq_order(epoch=1)
         assert dataset.have_seqs()
         dataset.load_seqs(0, 1)
