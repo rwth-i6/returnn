@@ -723,11 +723,14 @@ def slice(
     :param axis:
     :param start:
     :param end:
-    :param step:
+    :param step: we only support a positive step here. If you want to flip the sequence,
+        use :func:`reverse_sequence`, maybe with ``handle_dynamic_dims=False``.
     :param size:
     :param out_dim:
     :return: tensor, out_dim
     """
+    if isinstance(step, int) and step <= 0:
+        raise ValueError(f"rf.slice with non-positive step {step} not supported")
     if not out_dim:
         # Note: We cover not really all possible cases here but just those we really support.
         # (Actually, it might still be a superset of cases we really support,
@@ -794,14 +797,21 @@ def shift_right(source: Tensor, *, axis: Dim, pad_value: Union[rf.RawTensorTypes
     return padded_slice
 
 
-def reverse_sequence(tensor: Tensor, *, axis: Dim) -> Tensor:
+def reverse_sequence(tensor: Tensor, *, axis: Dim, handle_dynamic_dims: bool = True) -> Tensor:
     """
     Similar as tf.reverse_sequence, or Torch flip (but taking seq lengths into account).
 
     :param tensor:
     :param axis:
+    :param handle_dynamic_dims: if True, the dynamic dims will be handled correctly,
+        i.e. a padded seq "a b c <pad>" will be reversed to "c b a <pad>".
+        If False, the dynamic dims will be handled as if they are static,
+        i.e. a padded seq "a b c <pad>" will be reversed to "<pad> c b a".
     :return: reversed tensor, same dims
     """
+    if not handle_dynamic_dims or not axis.need_masking():
+        # noinspection PyProtectedMember
+        return tensor._raw_backend.flip(tensor, axis=axis)
     indices = rf.combine_bc(axis.get_size_tensor(), "-", rf.range_over_dim(axis)) - 1
     return rf.gather(tensor, indices=indices, axis=axis, clip_to_valid=True)
 

@@ -1097,6 +1097,14 @@ class TorchBackend(Backend[torch.Tensor]):
         return out
 
     @staticmethod
+    def flip(source: Tensor, *, axis: Dim) -> Tensor:
+        """flip"""
+        axis_int = source.get_axis_from_description(axis, allow_int=False)
+        out = source.copy_template("flip")
+        out.raw_tensor = torch.flip(source.raw_tensor, [axis_int])
+        return out
+
+    @staticmethod
     def where(
         cond: Tensor,
         true_: Union[Tensor, rf.RawTensorTypes],

@@ -398,6 +398,23 @@ def test_reverse_sequence():
     run_model(extern_data, lambda *, epoch, step: _Net(), _forward_step)
 
 
+def test_reverse_sequence_no_dyn():
+    time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
+    in_dim = Dim(7, name="in")
+    extern_data = TensorDict(
+        {
+            "data": Tensor("data", [batch_dim, time_dim, in_dim], dtype="float32"),
+        }
+    )
+
+    # noinspection PyShadowingNames
+    def _forward_step(*, extern_data: TensorDict, **_kwargs):
+        out = rf.reverse_sequence(extern_data["data"], axis=time_dim, handle_dynamic_dims=False)
+        out.mark_as_default_output(shape=(batch_dim, time_dim, in_dim))
+
+    run_model(extern_data, lambda *, epoch, step: rf.Module(), _forward_step)
+
+
 def test_where():
     time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
     in_dim = Dim(7, name="in")

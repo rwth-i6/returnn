@@ -958,6 +958,11 @@ class Backend(Generic[T]):
         raise NotImplementedError
 
     @staticmethod
+    def flip(source: Tensor, *, axis: Dim) -> Tensor:
+        """flip"""
+        raise NotImplementedError
+
+    @staticmethod
     def where(
         cond: Tensor,
         true_: Union[Tensor, rf.RawTensorTypes],
