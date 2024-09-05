@@ -317,15 +317,36 @@ class DistributeFilesDataset(CachedDataset2):
         return True
 
     def _get_sub_dataset_dict(self, files: List[FileTree]) -> Dict[str, Any]:
+        import tree
+
         dataset_dict = self.get_sub_epoch_dataset(files)
         dataset_dict = extend_dataset_dict_from_parent_dataset(dataset_dict, parent_dataset=self)
-        if dataset_dict.get("partition_epoch", 1) != 1:
-            raise ValueError(f"{self}: sub dataset should not have partition_epoch, got: {dataset_dict}")
-        if "seq_ordering" not in dataset_dict and "seq_order_control_dataset" not in dataset_dict:
+
+        flat_sub_dset = tree.flatten_with_path(dataset_dict)
+
+        part_epoch_cfg = next(
+            ((path, v) for path, v in flat_sub_dset if path[-1] == "partition_epoch" and v != 1), None
+        )
+        if part_epoch_cfg is not None:
+            path, subeps = part_epoch_cfg
             raise ValueError(
-                f"{self}: sub dataset should have explicit seq_ordering "
-                f"(or seq_order_control_dataset for MetaDataset), got: {dataset_dict}"
+                f"{self}: sub dataset should not have partition_epoch, "
+                f'but got "partition_epoch": {subeps} at {".".join(path)} in {dataset_dict}.'
             )
+
+        # Heuristic check for well-definedness of seq ordering. Might need to be extended in the
+        # future if there are other ways of defining a seq order than the ones below.
+        if (
+            not any(path[-1] == "seq_ordering" for path, _ in flat_sub_dset)
+            and not any(path[-1] == "seq_order_control_dataset" for path, _ in flat_sub_dset)
+            and not any(path[-1] == "map_seq_stream" for path, _ in flat_sub_dset)
+        ):
+            raise ValueError(
+                f"{self}: there should be an explicit seq_ordering somewhere in the sub dataset "
+                f"(or seq_order_control_dataset for MetaDataset or map_seq_stream for PostprocessingDataset), "
+                f"but found none in {dataset_dict}."
+            )
+
         return dataset_dict
 
     @staticmethod
