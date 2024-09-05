@@ -75,8 +75,6 @@ class Parameter(Tensor[T]):
             raise TypeError(f"rf.Parameter: invalid type for dims_or_tensor: {type(dims_or_tensor)}")
         if not all(isinstance(dim, Dim) for dim in dims):
             raise TypeError(f"rf.Parameter: shape {dims} must be a sequence of Dim")
-        if not all(isinstance(dim.dimension, int) for dim in dims):
-            raise ValueError(f"rf.Parameter: shape {dims} must be static")
         if len(dims) != len(set((d, d.match_priority) for d in dims)):
             raise ValueError(f"rf.Parameter: shape {dims} dims must be unique")
         super(Parameter, self).__init__(

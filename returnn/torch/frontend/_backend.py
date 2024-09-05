@@ -690,9 +690,8 @@ class TorchBackend(Backend[torch.Tensor]):
         """
         :return: parameter
         """
-        assert all(d.is_static() for d in tensor.dims)
         data = torch.zeros(
-            [d.dimension for d in tensor.dims],
+            [d.get_dim_value() for d in tensor.dims],
             dtype=TorchBackend.as_dtype_raw(tensor.dtype),
             device=device or rf.get_default_device(),
         )
