@@ -412,16 +412,17 @@ def pad(
     :return: padded tensor, out_dims. out dims are for each dim in axes
     """
     assert len(axes) == len(padding)
-    if not out_dims:
-        for left, right in padding:
-            if isinstance(left, Dim):
-                assert not left.need_masking(), f"padding {padding} does not support dynamic left padding"
-            if isinstance(right, Dim):
-                assert not right.need_masking(), f"padding {padding} does not support dynamic right padding"
-            # Note that even dynamic middle dims is not exactly correct...
-        out_dims = [left + middle + right for middle, (left, right) in zip(axes, padding)]
     if handle_dynamic_dims is None:
         handle_dynamic_dims = _pad_handle_dynamic_dims_default(axes, padding, mode=mode)
+    if not out_dims:
+        if handle_dynamic_dims:
+            for left, right in padding:
+                if isinstance(left, Dim):
+                    assert not left.need_masking(), f"padding {padding} does not support dynamic left padding"
+                if isinstance(right, Dim):
+                    assert not right.need_masking(), f"padding {padding} does not support dynamic right padding"
+                # Note that even dynamic middle dims is not exactly correct...
+        out_dims = [left + middle + right for middle, (left, right) in zip(axes, padding)]
     # noinspection PyProtectedMember
     return (
         source._raw_backend.pad(
