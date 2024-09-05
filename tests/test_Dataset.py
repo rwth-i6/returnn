@@ -943,6 +943,9 @@ def test_DistributeFilesDataset_distribute_evenly_by_size():
     _test_stddev(rng.uniform(low=97, high=103, size=(100,)), 20, 0.03)
 
 
+def iter_identity(x, **kwargs):
+    yield from x
+
 def test_DistributeFilesDataset():
     from returnn.datasets.distrib_files import DistributeFilesDataset
     from test_HDFDataset import generate_hdf_from_other
@@ -1035,6 +1038,27 @@ def test_DistributeFilesDataset():
             local_seq_idx += 1
             global_seq_idx += 1
     assert global_seq_idx == num_hdf_files * num_seqs
+
+    # Test DistributeFilesDataset in conjunction w/ a dataset, that does not have a
+    # defined num_seqs:
+
+    def _get_subepoch_dset_w_unknown_num_seqs(files_subepoch: List[str]) -> Dict[str, Any]:
+        hdf_dset = {"class": "HDFDataset", "files": files_subepoch, "seq_ordering": "default"}
+        return {"class": "PostprocessingDataset", "dataset": hdf_dset, "map_seq_stream": iter_identity}
+
+    concat_dataset = init_dataset(
+        {
+            "class": "DistributeFilesDataset",
+            "files": hdf_files,
+            "get_sub_epoch_dataset": _get_subepoch_dset_w_unknown_num_seqs,
+            "partition_epoch": partition_epoch,
+        }
+    )
+    assert isinstance(concat_dataset, DistributeFilesDataset)
+    for sub_epoch in range(1, partition_epoch + 1):
+        print(f"Sub-epoch {sub_epoch}...")
+        concat_dataset.init_seq_order(epoch=sub_epoch)
+        concat_dataset.load_seqs(0, 1)
 
 
 def test_PostprocessingDataset():

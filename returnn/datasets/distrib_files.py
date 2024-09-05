@@ -417,8 +417,6 @@ class DistributeFilesDataset(CachedDataset2):
         return files_per_bin
 
     def _collect_single_seq(self, seq_idx: int) -> Optional[DatasetSeq]:
-        if seq_idx >= self._num_seqs:
-            return None
         seq = self._workers[self.epoch].get_data_seq(seq_idx)
         if not seq:
             return None
@@ -428,11 +426,6 @@ class DistributeFilesDataset(CachedDataset2):
     def have_seqs(self) -> bool:
         """have seqs"""
         return bool(self.files)
-
-    @property
-    def num_seqs(self) -> int:
-        """num seqs"""
-        return self._num_seqs
 
     def finish_epoch(self, *, free_resources: bool = False):
         """finish epoch"""
@@ -530,16 +523,18 @@ class _WorkerProcParent:
         # Thus, use the full epoch as the epoch here.
         # Make sure this init is async - we should not wait for this in the main process when it is not used yet.
         self.parent_conn.send(("init_seq_order", {"epoch": self.full_epoch_0idx + 1}))
-        self._num_seqs: Optional[int] = None
+        self._has_num_seqs = False
+        self._num_seqs: Optional[int] = None  # remains None if unknown
 
     def _lazy_wait_for_init_seq_order(self):
-        if self._num_seqs is not None:
+        if self._has_num_seqs:
             return
         msg, num_seqs = self.parent_conn.recv()
-        assert msg == "num_seqs" and isinstance(num_seqs, int)
+        assert msg == "num_seqs" and (num_seqs is None or isinstance(num_seqs, int))
         self._num_seqs = num_seqs
+        self._has_num_seqs = True
 
-    def get_num_seqs(self) -> int:
+    def get_num_seqs(self) -> Optional[int]:
         """num seqs for this sub epoch"""
         self._lazy_wait_for_init_seq_order()
         return self._num_seqs
@@ -656,7 +651,11 @@ def _worker_proc_loop(
             elif msg == "init_seq_order":
                 # We are responsible to get the seq order and distrib it to all the other workers.
                 dataset.init_seq_order(**kwargs)
-                parent_conn.send(("num_seqs", dataset.num_seqs))
+                try:
+                    num_seqs = dataset.num_seqs
+                except NotImplementedError:
+                    num_seqs = None
+                parent_conn.send(("num_seqs", num_seqs))
                 got_init_seq_order = True
                 next_seq_idx = 0
                 cache[:] = []
