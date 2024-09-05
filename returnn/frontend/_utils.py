@@ -292,5 +292,5 @@ def _slice_value_is_reduce(v: Union[None, slice, int, numpy.number, numpy.ndarra
         return v.ndim == 0
     if isinstance(v, Tensor):
         assert len(v.dims) <= 1, f"strided_slice: expect scalar or vector, got Tensor with dims {v.dims}"
-        return v.dims == 0
+        return len(v.dims) == 0
     raise TypeError(f"strided_slice: got unexpected value of type {type(v).__name__}")
