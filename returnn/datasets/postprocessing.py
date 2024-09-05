@@ -173,6 +173,13 @@ class PostprocessingDataset(CachedDataset2):
         assert self._dataset is not None
         self._dataset.init_seq_order(epoch=epoch, seq_list=seq_list, seq_order=seq_order)
         self._data_iter = enumerate(self._build_mapping_iter())
+        if self._map_seq_stream is None:
+            # If we don't have an iterable mapper we know the number of segments exactly
+            # equals the number of segments in the wrapped dataset
+            try:
+                self._num_seqs = self._dataset.num_seqs
+            except NotImplementedError:
+                pass  # some datasets don't know their num_seqs
         return True
 
     def get_data_keys(self):
