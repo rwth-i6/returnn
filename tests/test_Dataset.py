@@ -946,6 +946,7 @@ def test_DistributeFilesDataset_distribute_evenly_by_size():
 def iter_identity(x, **kwargs):
     yield from x
 
+
 def test_DistributeFilesDataset():
     from returnn.datasets.distrib_files import DistributeFilesDataset
     from test_HDFDataset import generate_hdf_from_other
