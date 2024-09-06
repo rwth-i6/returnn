@@ -3,7 +3,7 @@ Defines the :class:`TFNetwork` and :class:`ExternData`.
 """
 
 from __future__ import annotations
-from typing import Optional, List, Tuple
+from typing import Optional, Any, List, Tuple, Dict
 import tensorflow as tf
 import sys
 import re
@@ -650,8 +650,8 @@ class TFNetwork(object):
         self.subnets = {}  # type: typing.Dict[str,Subnetwork]
         self._selected_train_layers = None
         self._construction_stack = _NetworkConstructionStack()
-        self.layers_desc = {}  # type: typing.Dict[str,typing.Dict[str]]
-        self.layers = {}  # type: typing.Dict[str,LayerBase]
+        self.layers_desc: Dict[str, Dict[str, Any]] = {}
+        self.layers: Dict[str, LayerBase] = {}
         self.losses_dict = {}  # type: typing.Dict[str,LossHolder]
         self.total_loss = None  # type: typing.Optional[tf.Tensor]
         self.total_constraints = None  # type: typing.Optional[tf.Tensor]
@@ -663,16 +663,16 @@ class TFNetwork(object):
         self.extra_vars_to_save = []  # type: typing.List[tf.Variable]
         self.recurrent = False
         self._assigner_cache = {}  # type: typing.Dict[tf.Variable,tf_util.VariableAssigner]
-        self.concat_sources_dropout_cache = (
-            {}
-        )  # type: typing.Dict[typing.Tuple[typing.Tuple[LayerBase,...],Dim,float,typing.Optional[typing.Tuple[typing.Optional[int],...]]],Data]  # nopep8
+        self.concat_sources_dropout_cache: Dict[
+            Tuple[Tuple[LayerBase, ...], Dim, float, Optional[Tuple[Optional[int], ...]]], Data
+        ] = {}
         self._merge_all_summaries = None  # type: typing.Optional[tf.Tensor]
         self._graph_reset_callbacks = []  # type: typing.List[typing.Callable]
         self._run_opts = {}  # type: typing.Dict[str, typing.Any]
         self._run_finished_callbacks = []  # type: typing.List[typing.Callable]
         self._map_search_beam_to_search_choices = (
             {}
-        )  # type: typing.Dict[tf_util.SearchBeam,"returnn.tf.layers.base.SearchChoices"]  # nopep8
+        )  # type: typing.Dict[tf_util.SearchBeam,"returnn.tf.layers.base.SearchChoices"]
 
     def __repr__(self):
         s = "TFNetwork %r" % self.name
@@ -786,18 +786,17 @@ class TFNetwork(object):
             return self.extra_parent_net.get_absolute_name_prefix() + my_prefix
         return ""
 
-    def construct_from_dict(self, net_dict, get_layer=None):
+    def construct_from_dict(self, net_dict: Dict[str, Dict[str, Any]], get_layer=None):
         """
-        :param dict[str,dict[str]] net_dict:
+        :param net_dict:
         :param GetLayer|((str)->LayerBase)|None get_layer:
         """
         self.layers_desc.update(net_dict)
 
-        def ignore_layer(name_, layer_desc_):
+        def ignore_layer(name_: str, layer_desc_: Dict[str, Any]) -> bool:
             """
-            :param str name_:
-            :param dict layer_desc_:
-            :rtype: bool
+            :param name_:
+            :param layer_desc_:
             """
             assert isinstance(name_, str)
             if name_.startswith("#"):
@@ -1028,14 +1027,21 @@ class TFNetwork(object):
         """
         return self.get_config().bool("flat_net_construction", False)
 
-    def construct_layer(self, net_dict, name, get_layer=None, add_layer=None, check_existing=True):
+    def construct_layer(
+        self,
+        net_dict: Dict[str, Dict[str, Any]],
+        name: str,
+        get_layer=None,
+        add_layer=None,
+        check_existing: bool = True,
+    ) -> LayerBase:
         """
         This triggers the construction of the layer `name` if it is not constructed yet.
         Every construction trigger corresponds to ``add_layer`` call (which by default does the actual construction).
         This can recursively also get/construct other layers (via ``get_layer``).
 
-        :param dict[str,dict[str]] net_dict:
-        :param str name: layer name
+        :param net_dict:
+        :param name: layer name
         :param GetLayer|((str)->LayerBase)|None get_layer: optional, for source layers, for transform_config_dict.
           By default, this wraps self.construct_layer().
           I.e. the name might be misleading, as this should return an existing layer,
@@ -1050,8 +1056,8 @@ class TFNetwork(object):
             But otherwise, this is not an option!
 
         :param ((str, LayerBase, dict) -> LayerBase) | None add_layer: by default self.add_layer
-        :param bool check_existing: check self.get_layer. (self.layers will be checked in any case)
-        :rtype: LayerBase
+        :param check_existing: check self.get_layer. (self.layers will be checked in any case)
+        :return: layer
         """
         if name in self.layers:
             return self.layers[name]
