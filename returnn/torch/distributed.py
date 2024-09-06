@@ -126,10 +126,9 @@ class DistributedContext:
     def step_after_param_update(self, *, module: torch.nn.Module, epoch_step_idx: int):
         """one train step"""
         if self._reduce_type == "custom_step_after_param_update":
-            with torch.no_grad():  # TODO: do we want this for all syncers?
-                self._custom_step_after_param_update(
-                    module=module, train_step_idx=epoch_step_idx, **get_fwd_compat_kwargs()
-                )
+            self._custom_step_after_param_update(
+                module=module, train_step_idx=epoch_step_idx, **get_fwd_compat_kwargs()
+            )
         elif self._reduce_type == "param" and ((epoch_step_idx % self._param_sync_step) == (self._param_sync_step - 1)):
             _sync_params_avg(module=module, sync_on_cpu=self._opts.get("sync_on_cpu", False))
 
