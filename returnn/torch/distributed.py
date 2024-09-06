@@ -57,7 +57,7 @@ class DistributedContext:
             _logger.info("reduce_type grad")
         elif self._reduce_type == "custom_step_after_param_update":
             if not isinstance(self._custom_step_after_param_update, Callable):
-                raise ValueError(f"synchronizer must either be a callable")
+                raise ValueError(f"custom step callback must be a callable, not {self._custom_step_after_param_update}")
             _logger.info("reduce_type custom_step_after_param_update")
         else:
             raise ValueError(f"invalid reduce_type {self._reduce_type!r}")
