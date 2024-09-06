@@ -1259,12 +1259,13 @@ class LayerBase(object):
                 getter.__qualname__ += f"(base_var_scope.custom_getter={base_var_scope.custom_getter})"
 
             param = getter(**getter_kwargs)
+            param_ = param
 
             # Only apply this if we get a variable. Otherwise, maybe variational noise was already applied
             # (by some parent var scope), and we don't want to apply it twice.
-            if param_variational_noise and param.dtype.is_floating and isinstance(param, tf.Variable):
+            if param_variational_noise and param.dtype.is_floating and isinstance(param_, tf.Variable):
                 with default_control_flow_ctx():  # make independent from loop/cond
-                    with reuse_name_scope_of_tensor(param, postfix="_variational_noise", add_tensor_name=True):
+                    with reuse_name_scope_of_tensor(param_, postfix="_variational_noise", add_tensor_name=True):
 
                         def _apply_var_noise():
                             rnd_state = tf_util.StatelessRandomSeed.create(shape=tf_util.get_shape(param))
@@ -1280,11 +1281,11 @@ class LayerBase(object):
             if (
                 param_dropout
                 and param.dtype.is_floating
-                and isinstance(param, tf.Variable)
+                and isinstance(param_, tf.Variable)
                 and param.shape.ndims >= param_dropout_min_ndim
             ):
                 with default_control_flow_ctx():  # make independent from loop/cond
-                    with reuse_name_scope_of_tensor(param, postfix="_weight_dropout", add_tensor_name=True):
+                    with reuse_name_scope_of_tensor(param_, postfix="_weight_dropout", add_tensor_name=True):
                         param = self.network.cond_on_train(
                             fn_train=lambda: tf_util.dropout(
                                 param,

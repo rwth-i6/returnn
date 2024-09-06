@@ -2139,6 +2139,7 @@ class LinearLayer(_ConcatInputLayer):
                     name="W", shape=weights_shape, dtype=tf.float32, initializer=fwd_weights_initializer
                 )
             )
+            self.weights = weights
             weights_ = weights
             if in_split_info:
                 tf_util.set_param_axes_split_info(
@@ -2160,6 +2161,7 @@ class LinearLayer(_ConcatInputLayer):
             else:
                 assert not bias_init
                 b = None
+            self.bias = b
 
         with tf.name_scope("linear"):
             from returnn.tf.util.basic import dot, to_int32_64, is_gpu_available_in_session, move_axis
