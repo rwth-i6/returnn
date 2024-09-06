@@ -3,75 +3,17 @@ torch.distributed utils
 """
 
 from __future__ import annotations
-from abc import abstractmethod, ABC
 import logging
 import os
 import socket
-from typing import Callable, Optional, Any, Dict, Type, Union
+from typing import Callable, Optional, Any, Dict
 
 import torch
 from torch.nn.parallel import DistributedDataParallel
 
-from returnn.util.basic import CollectionReadCheckCovered, OptionalNotImplementedError, get_fwd_compat_kwargs
+from returnn.util.basic import CollectionReadCheckCovered, get_fwd_compat_kwargs
 
 _logger = logging.getLogger("returnn.torch.distributed")
-
-
-class ParamSynchronizer(ABC):
-    """
-    Custom parameter synchronization primitive.
-
-    Contains a callback that is called after every train step to synchronize model parameters
-    across processes/nodes.
-    """
-
-    @abstractmethod
-    def __init__(self, *, rank: int, size: int, local_rank: int, local_size: int, **_kwargs):
-        """
-        `__init__` called after the default global process group is created.
-        Can be used to initialize any additional custom process (sub)groups.
-
-        Note the `__init__` is passed a randomly named kwarg on every invocation to ensure forwards compatibility.
-
-        :param rank: global rank of the current process across all nodes
-        :param size: global world size across all nodes
-        :param local_rank: local rank of the current process on the current node
-        :param local_rank: local world size on the current node
-        :param _kwargs: any additional kwargs
-        """
-        super().__init__()
-
-        self.rank = rank
-        self.size = size
-        self.local_rank = local_rank
-        self.local_size = local_size
-
-    def make_distributed_model(self, *, module: torch.nn.Module, **kwargs) -> DistributedDataParallel:
-        """
-        Creates an associated `DistributedDataParallel` for the given module for gradient synchronization.
-
-        This function can be left unimplemented if no gradient synchronization is done.
-
-        Note this function is passed a randomly named kwarg on every invocation to ensure forwards compatibility.
-        """
-        raise OptionalNotImplementedError
-
-    @abstractmethod
-    def step(self, *, module: torch.nn.Module, train_step_idx: int, **kwargs):
-        """
-        Parameter synchronization callback called after every train step with updated model parameters.
-
-        Note this function is passed a randomly named kwarg on every invocation to ensure forwards compatibility.
-
-        :param module: the NN being trained
-        :param train_step_idx: the current train step
-        :param kwargs: any additional kwargs
-        """
-        raise NotImplementedError
-
-    def __call__(self, *args, **kwargs):
-        """forwards to :func:``step``"""
-        return self.step(*args, **kwargs)
 
 
 class DistributedContext:
@@ -99,10 +41,9 @@ class DistributedContext:
             % (socket.gethostname(), os.getpid(), self._rank, self._size, self._local_rank, self._local_size)
         )
 
-        self._custom_sync_class: Optional[Union[Callable, Type[ParamSynchronizer]]] = self._opts.get(
-            "synchronizer", None
+        self._custom_step_after_param_update: Optional[Callable] = self._opts.get(
+            "custom_step_after_param_update", None
         )
-        self._custom_sync: Optional[Callable] = None
         self._reduce_type = self._opts.get("reduce_type", "grad")
         self._param_sync_step: Optional[int] = self._opts.get("param_sync_step", None)
 
@@ -114,23 +55,10 @@ class DistributedContext:
             _logger.info(f"reduce_type param: param_sync_step {self._param_sync_step}")
         elif self._reduce_type == "grad":
             _logger.info("reduce_type grad")
-        elif self._reduce_type == "custom":
-            if issubclass(self._custom_sync_class, ParamSynchronizer):
-                self._custom_sync = self._custom_sync_class(
-                    rank=self._rank,
-                    size=self._size,
-                    local_rank=self._local_rank,
-                    local_size=self._local_size,
-                    **get_fwd_compat_kwargs(),
-                )
-            elif isinstance(self._custom_sync_class, Callable):
-                self._custom_sync = self._custom_sync_class
-            else:
-                raise ValueError(
-                    f"synchronizer must either be a callable or a class inheriting from {ParamSynchronizer.__name__}"
-                )
-
-            _logger.info(f"reduce_type custom: {type(self._custom_sync)}")
+        elif self._reduce_type == "custom_step_after_param_update":
+            if not isinstance(self._custom_step_after_param_update, Callable):
+                raise ValueError(f"synchronizer must either be a callable")
+            _logger.info("reduce_type custom_step_after_param_update")
         else:
             raise ValueError(f"invalid reduce_type {self._reduce_type!r}")
 
@@ -181,23 +109,9 @@ class DistributedContext:
         :param module: original module
         :return: potentially wrapped module
         """
-        if self._reduce_type == "param":
+        if self._reduce_type in ["param", "custom_step_after_param_update"]:
             return None
-        assert self._reduce_type in ["custom", "grad"]
-
-        if self._reduce_type == "custom":
-            assert isinstance(self._custom_sync, (ParamSynchronizer, Callable))
-
-            if isinstance(self._custom_sync, ParamSynchronizer):
-                try:
-                    return self._custom_sync.make_distributed_model(module=module, **get_fwd_compat_kwargs())
-                except OptionalNotImplementedError:
-                    pass
-            else:
-                # callable short form does not have support for DistributedDataParallel
-                pass
-
-            return None
+        assert self._reduce_type == "grad"
 
         cls = self._opts.get("class", DistributedDataParallel)
         if cls is not DistributedDataParallel:
@@ -211,12 +125,10 @@ class DistributedContext:
 
     def step_after_param_update(self, *, module: torch.nn.Module, epoch_step_idx: int):
         """one train step"""
-        if self._reduce_type == "custom":
+        if self._reduce_type == "custom_step_after_param_update":
             with torch.no_grad():  # TODO: do we want this for all syncers?
-                self._custom_sync(
-                    module=module,
-                    train_step_idx=epoch_step_idx,
-                    **get_fwd_compat_kwargs(),
+                self._custom_step_after_param_update(
+                    module=module, train_step_idx=epoch_step_idx, **get_fwd_compat_kwargs()
                 )
         elif self._reduce_type == "param" and ((epoch_step_idx % self._param_sync_step) == (self._param_sync_step - 1)):
             _sync_params_avg(module=module, sync_on_cpu=self._opts.get("sync_on_cpu", False))
