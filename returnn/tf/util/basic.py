@@ -4,7 +4,7 @@ Lots of random utility functions for TensorFlow.
 
 from __future__ import annotations
 
-from typing import Optional, Union, Sequence, List
+from typing import Optional, Union, Any, Sequence, List, Dict
 import typing
 import contextlib
 from dataclasses import dataclass
@@ -1658,14 +1658,19 @@ class GammatoneFilterbankInitializer(init_ops.Initializer):
         return tf.convert_to_tensor(fbank, dtype=dtype)
 
 
-def get_initializer(s, seed=None, eval_local_ns=None, dtype=tf.float32):
+def get_initializer(
+    s,
+    seed: Optional[Union[int, tf.Tensor]] = None,
+    eval_local_ns: Optional[Dict[str, Any]] = None,
+    dtype: Union[tf.DType, str] = tf.float32,
+):
     """
     :param str|dict[str]|float|numpy.ndarray s: e.g. "glorot_uniform" or "truncated_normal" or "orthogonal",
       or config dict with "class",
       or string to be `eval`ed if it contains "(". constant if a float is given.
-    :param int|tf.Tensor seed: used in case the initializer has no explicit seed specified.
-    :param dict[str]|None eval_local_ns:
-    :param tf.DType|str dtype:
+    :param seed: used in case the initializer has no explicit seed specified.
+    :param eval_local_ns:
+    :param dtype:
     :return: (function (shape) -> tf.Tensor) | tf.Initializer
     :rtype: ((tuple[int]) -> tf.Tensor) | tf.Initializer
     """
