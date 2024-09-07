@@ -868,11 +868,18 @@ class TorchBackend(Backend[torch.Tensor]):
             name = name or "raw_tensor"
         else:
             name = name or "const"
-            value = torch.tensor(
-                value,
-                dtype=TorchBackend.as_dtype_raw(dtype),
-                device=device or rf.get_default_device(),
-            )
+            if isinstance(value, (bool, int, float, bool, complex, numpy.number)):
+                # torch.full avoids a device sync.
+                # https://github.com/pytorch/pytorch/issues/120996#issuecomment-2319976284
+                value = torch.full(
+                    (), value, dtype=TorchBackend.as_dtype_raw(dtype), device=device or rf.get_default_device()
+                )
+            else:
+                value = torch.tensor(
+                    value,
+                    dtype=TorchBackend.as_dtype_raw(dtype),
+                    device=device or rf.get_default_device(),
+                )
         assert isinstance(value, torch.Tensor)
         return Tensor(name, dims=dims, dtype=dtype, sparse_dim=sparse_dim, raw_tensor=value)
 
