@@ -638,13 +638,7 @@ class ReturnnLayersBackend(Backend[Layer]):
         return rfl.make_layer({"class": "combine", "from": [a, b], "kind": kind, **kwargs}, name=kind)
 
     @staticmethod
-    def gather(
-        source: Tensor,
-        *,
-        indices: Union[Tensor, int],
-        axis: Dim,
-        clip_to_valid: bool = False,
-    ) -> Tensor:
+    def gather(source: Tensor, *, indices: Union[Tensor, int], axis: Dim, clip_to_valid: bool = False) -> Tensor:
         """gather"""
         args = {}
         if clip_to_valid:

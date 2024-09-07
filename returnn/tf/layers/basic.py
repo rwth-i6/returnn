@@ -1564,6 +1564,8 @@ class GatherLayer(_ConcatInputLayer):
         :param clip_to_valid: if True, the indices will be clipped to the valid range of the input
             Also taking seq lengths into account.
         """
+        import returnn.frontend as rf
+
         super(GatherLayer, self).__init__(**kwargs)
         self.position = position
 
@@ -1579,10 +1581,7 @@ class GatherLayer(_ConcatInputLayer):
             dyn_size_ext = dim.dyn_size_ext
             if not dyn_size_ext:
                 dyn_size_ext = Data.from_tensor(tf.shape(input_data.placeholder)[old_gather_axis])
-            common = Data.get_common_data([position_data, dyn_size_ext])
-            position_data = position_data.copy_compatible_to(common, check_sparse=False, check_dtype=False)
-            dyn_size_ext = dyn_size_ext.copy_compatible_to(common, check_sparse=False, check_dtype=False)
-            position_data.placeholder = tf.clip_by_value(position_data.placeholder, 0, dyn_size_ext.placeholder - 1)
+            position_data = rf.clip_by_value(position_data, 0, dyn_size_ext - 1)
 
         # determine all common axes of input_data and position_data
         common_axes_input, common_axes_position, input_axes, position_axes = self._get_common_input_position_axes(

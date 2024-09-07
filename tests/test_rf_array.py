@@ -334,6 +334,23 @@ def test_gather_feature_dim():
     run_model(extern_data, lambda *, epoch, step: _Net(), _forward_step)
 
 
+def test_gather_time_static_clip_to_valid():
+    time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
+    in_dim = Dim(7, name="in")
+    extern_data_template = TensorDict(
+        {
+            "data": Tensor("data", [batch_dim, time_dim, in_dim], feature_dim=in_dim, dtype="float32"),
+        }
+    )
+
+    def _forward_step(*, extern_data: TensorDict, **_kwargs):
+        x = extern_data["data"]
+        out = rf.gather(x, indices=0, axis=time_dim, clip_to_valid=True)
+        out.mark_as_default_output(shape=(batch_dim, in_dim))
+
+    run_model(extern_data_template, lambda *, epoch, step: rf.Module(), _forward_step)
+
+
 def test_slice():
     time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
     in_dim = Dim(7, name="in")

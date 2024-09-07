@@ -890,13 +890,7 @@ class Backend(Generic[T]):
         return out
 
     @staticmethod
-    def gather(
-        source: Tensor,
-        *,
-        indices: Union[Tensor, int],
-        axis: Dim,
-        clip_to_valid: bool = False,
-    ) -> Tensor:
+    def gather(source: Tensor, *, indices: Union[Tensor, int], axis: Dim, clip_to_valid: bool = False) -> Tensor:
         """
         Gathers slices on a specified axis from the source using indices.
         If the source is of the shape ``[B,D,F1]``, and indices of shape ``[B,F2]``,

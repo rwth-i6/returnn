@@ -902,13 +902,7 @@ class TorchBackend(Backend[torch.Tensor]):
         )
 
     @staticmethod
-    def gather(
-        source: Tensor,
-        *,
-        indices: Union[Tensor, int],
-        axis: Dim,
-        clip_to_valid: bool = False,
-    ) -> Tensor:
+    def gather(source: Tensor, *, indices: Union[Tensor, int], axis: Dim, clip_to_valid: bool = False) -> Tensor:
         """
         Gather.
 
@@ -933,19 +927,10 @@ class TorchBackend(Backend[torch.Tensor]):
             raise TypeError(f"Unsupported type for indices: {type(indices)}")
         axis_int = source.get_axis_from_description(axis, allow_int=False)
         if clip_to_valid:
-            indices = indices.copy()
-            dim: Dim = source.dims[axis_int]
-            if dim.dyn_size_ext:
-                assert dim.dyn_size_ext.dims_set.issubset(
-                    indices.dims_set
-                ), f"gather with clip_to_valid: indices ({indices}) dims must be a superset of {dim} dyn-size"
-                size = dim.dyn_size_ext.copy_compatible_to(indices, check_sparse=False)
-                indices.raw_tensor = torch.clamp(
-                    indices.raw_tensor,
-                    torch.tensor(0, device=indices.raw_tensor.device),
-                    (size.raw_tensor - 1).to(indices.raw_tensor.device),
-                )
+            if axis.dyn_size_ext:
+                indices = rf.clip_by_value(indices, 0, axis.dyn_size_ext - 1)
             else:
+                indices = indices.copy()
                 indices.raw_tensor = torch.clamp(indices.raw_tensor, 0, source.raw_tensor.shape[axis_int] - 1)
         index_own_dims = [dim for dim in indices.dims if dim not in source.dims or dim == axis]
         out = Tensor(
