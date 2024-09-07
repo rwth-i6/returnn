@@ -921,14 +921,19 @@ class TorchBackend(Backend[torch.Tensor]):
                 "indices_int",
                 dims=(),
                 dtype=rf.get_default_array_index_dtype(),
-                raw_tensor=torch.tensor(indices, dtype=TorchBackend.as_dtype_raw(rf.get_default_array_index_dtype())),
+                raw_tensor=torch.full(
+                    (),
+                    indices,
+                    dtype=TorchBackend.as_dtype_raw(rf.get_default_array_index_dtype()),
+                    device=source.raw_tensor.device,
+                ),
             )
         else:
             raise TypeError(f"Unsupported type for indices: {type(indices)}")
         axis_int = source.get_axis_from_description(axis, allow_int=False)
         if clip_to_valid:
             if axis.dyn_size_ext:
-                indices = rf.clip_by_value(indices, 0, axis.dyn_size_ext - 1)
+                indices = rf.clip_by_value(indices, 0, axis.get_dyn_size_ext_for_device(indices.device) - 1)
             else:
                 indices = indices.copy()
                 indices.raw_tensor = torch.clamp(indices.raw_tensor, 0, source.raw_tensor.shape[axis_int] - 1)
