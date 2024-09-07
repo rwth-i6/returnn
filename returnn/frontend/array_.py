@@ -10,6 +10,7 @@ from returnn.tensor import Tensor, Dim
 import returnn.frontend as rf
 from ._backend import Backend, global_backend, get_backend_by_raw_tensor_type
 from .types import RawTensorTypes
+from . import _utils
 
 T = TypeVar("T")
 
@@ -829,7 +830,9 @@ def where(
 
     :return: true_ if cond else false_, elemwise.
     """
-    cond = rf.convert_to_tensor(cond)
+    if not isinstance(cond, Tensor):
+        backend = _utils.get_backend_from_tensors(true_, false_)
+        cond = rf.convert_to_tensor(cond, _backend=backend)
     # noinspection PyProtectedMember
     return cond._raw_backend.where(cond, true_, false_, allow_broadcast_all_sources=allow_broadcast_all_sources)
 
