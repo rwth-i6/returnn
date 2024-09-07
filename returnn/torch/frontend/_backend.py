@@ -914,9 +914,22 @@ class TorchBackend(Backend[torch.Tensor]):
         - Tensor.__getitem__
         - torch.embedding
         """
+        axis_int = source.get_axis_from_description(axis, allow_int=False)
         if isinstance(indices, Tensor):
             indices: Tensor[torch.Tensor]
         elif isinstance(indices, int):
+            if indices == 0:  # small opt for this case, as we can simplify a bit, and clip_to_valid is not needed
+                out = Tensor(
+                    "gather",
+                    dims=source.dims[:axis_int] + source.dims[axis_int + 1 :],
+                    dtype=source.dtype,
+                    sparse_dim=source.sparse_dim,
+                )
+                if axis_int == 0:
+                    out.raw_tensor = source.raw_tensor[indices]
+                else:
+                    out.raw_tensor = source.raw_tensor[(slice(None),) * axis_int + (indices,)]
+                return out
             indices = Tensor(
                 "indices_int",
                 dims=(),
@@ -930,7 +943,6 @@ class TorchBackend(Backend[torch.Tensor]):
             )
         else:
             raise TypeError(f"Unsupported type for indices: {type(indices)}")
-        axis_int = source.get_axis_from_description(axis, allow_int=False)
         if clip_to_valid:
             if axis.dyn_size_ext:
                 indices = rf.clip_by_value(indices, 0, axis.get_dyn_size_ext_for_device(indices.device) - 1)
