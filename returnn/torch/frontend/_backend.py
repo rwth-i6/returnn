@@ -932,6 +932,8 @@ class TorchBackend(Backend[torch.Tensor]):
                     dtype=source.dtype,
                     sparse_dim=source.sparse_dim,
                 )
+                if source.feature_dim and source.feature_dim in out.dims:
+                    out.feature_dim = source.feature_dim
                 if axis_int == 0:
                     out.raw_tensor = source.raw_tensor[indices]
                 else:
