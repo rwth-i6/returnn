@@ -1086,6 +1086,9 @@ def test_PostprocessingDataset():
         classes = dataset.get_data(0, "classes")
         assert all(c - 1337 >= 0 for c in classes)
 
+        # assert that default seq tags have been replaced w/ ones from oggzip dset
+        assert not dataset.get_tag(0).startswith("seq-")
+
     count = 0
 
     def _repeat2(input_iter: Iterator[TensorDict], **kwargs) -> Iterator[TensorDict]:
