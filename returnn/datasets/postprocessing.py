@@ -203,7 +203,7 @@ class PostprocessingDataset(CachedDataset2):
             if loaded_seq_idx != seq_idx:
                 continue
             seq = DatasetSeq(
-                features={k: t.raw_tensor for k, t in tensor_dict.data.items()},
+                features={k: t.raw_tensor for k, t in tensor_dict.data.items() if k != "seq_tag"},
                 seq_idx=seq_idx,
                 seq_tag=str(tensor_dict["seq_tag"].raw_tensor),
             )
