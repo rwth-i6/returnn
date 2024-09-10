@@ -261,7 +261,7 @@ class PostprocessingDataset(CachedDataset2):
 
                 # Re-adding the seq tag here causes no harm in case it's dropped since we don't
                 # add/drop any segments w/ the non-iterator postprocessing function.
-                if not "seq_tag" in tensor_dict.data:
+                if "seq_tag" not in tensor_dict.data:
                     tensor_dict.data["seq_tag"].raw_tensor = str_to_numpy_array(self._dataset.get_tag(seq_index))
 
             yield tensor_dict
