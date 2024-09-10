@@ -202,7 +202,6 @@ class PostprocessingDataset(CachedDataset2):
             assert loaded_seq_idx <= seq_idx, "_collect_single_seq must be done monotonically"
             if loaded_seq_idx != seq_idx:
                 continue
-            assert "seq_tag" in tensor_dict.data, "seq_tag dropped from TensorDict in postprocessing pipeline"
             seq = DatasetSeq(
                 features={k: t.raw_tensor for k, t in tensor_dict.data.items()},
                 seq_idx=seq_idx,
@@ -217,6 +216,7 @@ class PostprocessingDataset(CachedDataset2):
 
         def _validate_tensor_dict_iter(inner: Iterator[TensorDict]) -> Iterator[TensorDict]:
             for t_dict in inner:
+                assert "seq_tag" in t_dict.data, "seq_tag dropped from TensorDict in postprocessing pipeline"
                 for data_key, out_t in self._out_tensor_dict_template.data.items():
                     in_t = t_dict.data[data_key]
                     assert (
@@ -258,6 +258,12 @@ class PostprocessingDataset(CachedDataset2):
                 assert isinstance(
                     tensor_dict, TensorDict
                 ), f"map_seq must produce a {TensorDict.__name__}, but produced {type(tensor_dict).__name__}"
+
+                # Re-adding the seq tag here causes no harm in case it's dropped since we don't
+                # add/drop any segments w/ the non-iterator postprocessing function.
+                if not "seq_tag" in tensor_dict.data:
+                    tensor_dict.data["seq_tag"].raw_tensor = str_to_numpy_array(self._dataset.get_tag(seq_index))
+
             yield tensor_dict
             seq_index += 1
 
