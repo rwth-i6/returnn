@@ -9,6 +9,7 @@ or forwarding loop.
 from __future__ import annotations
 from typing import Optional, Union, Any, Sequence, Dict
 from dataclasses import dataclass
+from contextlib import contextmanager
 from returnn.tensor import Tensor, Dim, TensorDict, batch_dim
 import returnn.frontend as rf
 from . import _backend
@@ -125,6 +126,25 @@ class RunCtx:
             In a graph-based backend, this can be dynamic.
         """
         return self._train_flag
+
+    @contextmanager
+    def train_flag_ctx(self, train_flag: Union[bool, Tensor]):
+        """
+        Context manager to temporarily set the train_flag.
+
+        Usage example e.g. to disable dropout for some code::
+
+            with rf.get_run_ctx().train_flag_ctx(False):
+                ...
+
+        :param train_flag: whether we are in training mode
+        """
+        old_train_flag = self.train_flag
+        self._train_flag = train_flag
+        try:
+            yield
+        finally:
+            self._train_flag = old_train_flag
 
     @property
     def step(self) -> Union[int, Tensor]:
