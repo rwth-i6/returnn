@@ -980,7 +980,12 @@ class TorchBackend(Backend[torch.Tensor]):
             index_ext_dims = list(source.dims)
             index_ext_dims[axis_int] = index_own_dims_flat
             assert indices.dims == tuple(index_ext_dims)
-            out_raw = torch.gather(source.raw_tensor, dim=axis_int, index=indices.raw_tensor.type(torch.int64))
+            out_raw = torch.gather(
+                source.raw_tensor,
+                dim=axis_int,
+                # torch.gather wants indices as int64, and the indices should be the same device as the source.
+                index=indices.raw_tensor.type(torch.int64).to(source.raw_tensor.device),
+            )
             if len(index_own_dims) == 1:
                 pass  # nothing to do
             elif len(index_own_dims) == 0:
