@@ -2280,7 +2280,7 @@ class _DimMixin:
 
     def _cache_dim_math_get(
         self: Dim, op_kind: str, operand: Union[Dim, int]
-    ) -> Tuple[Dict[Tuple[str, Union[Dim, int]], Dim], Tuple[str, Union[Dim, int]], Optional[Dim]]:
+    ) -> Tuple[_CacheDimMath, Tuple[str, Union[Dim, int]], Optional[Dim]]:
         same_base = self.get_same_base()
         # noinspection PyProtectedMember
         extra = same_base._make_extra()
