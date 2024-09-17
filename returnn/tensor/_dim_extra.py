@@ -136,6 +136,9 @@ class _DimExtra:
         if self.kind is not None:
             self.kind = {v.name: v for v in DimTypes.Types}[self.kind]
 
+    def __sis_state__(self):
+        raise ValueError(f"{self}: currently not expected to be part of the Sisyphus state/hash")
+
 
 class _DimMixin:
     name: Optional[str]
@@ -2289,6 +2292,9 @@ class _DimMixin:
         cache = extra.cache_dim_math
         cache_key = (op_kind, operand)
         return cache, cache_key, cache.get(cache_key, None)
+
+    def __sis_state__(self):
+        raise ValueError(f"{self}: currently not expected to be part of the Sisyphus state/hash")
 
 
 def _make_constant_static_dim(value, kind=None):
