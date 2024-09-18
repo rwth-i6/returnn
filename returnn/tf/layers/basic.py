@@ -4589,7 +4589,6 @@ class MergeDimsLayer(_ConcatInputLayer):
             or input_data.feature_dim_axis_or_unspecified is not NotSpecified
         ):
             data.feature_dim_axis = new_feature_dim_axis  # explicitly set
-            data.dim = data.batch_shape[data.feature_dim_axis] if data.feature_dim_axis is not None else None
 
         if input_data.batch_dim_axis in axes and data.batch:
             for axis in axes:
