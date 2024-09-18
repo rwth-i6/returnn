@@ -222,7 +222,7 @@ class CachedDataset(Dataset):
         assert start >= 0
         assert start <= end
 
-        if self.is_cached(start, end, blocking=True):
+        if self.is_cached(start, end, blocking=False):
             return
 
         if self.cache_byte_size_limit_at_start > 0:  # If the cache is enabled.
