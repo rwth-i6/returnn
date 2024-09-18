@@ -189,7 +189,11 @@ def dump_dataset(options):
                 numpy.savetxt("%s%i.data%s" % (options.dump_prefix, seq_idx, options.dump_postfix), data)
             elif options.type == "stdout":
                 print("seq %s tag:" % progress, dataset.get_tag(seq_idx))
-                print("seq %s data:" % progress, pretty_print(data))
+                extra = ""
+                if "data" in dataset.labels and len(dataset.labels["data"]) > 1:
+                    assert dataset.can_serialize_data("data")
+                    extra += " (%r)" % dataset.serialize_data(key="data", data=data)
+                print("seq %s data: %s%s" % (progress, pretty_print(data), extra))
             elif options.type == "print_shape":
                 print("seq %s data shape:" % progress, data.shape)
             elif options.type == "plot":
