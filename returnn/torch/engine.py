@@ -1086,6 +1086,9 @@ class Engine(EngineBase):
             step_idx = 0
             for extern_data_raw in data_loader:
                 step_begin_time = time.time()
+                if self._forward_step_expected_outputs:
+                    # Also resets any dyn dims, which might have been set in the prev step.
+                    self._forward_step_expected_outputs.reset_content()
                 extern_data = extern_data_util.raw_dict_to_extern_data(
                     extern_data_raw, extern_data_template=self.extern_data, device=self._device
                 )
