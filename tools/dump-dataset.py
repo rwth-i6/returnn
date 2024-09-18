@@ -48,6 +48,11 @@ def dump_dataset(options):
     dataset.init_seq_order(epoch=options.epoch, seq_list=seq_list)
     print("Dataset keys:", dataset.get_data_keys(), file=log.v3)
     print("Dataset target keys:", dataset.get_target_list(), file=log.v3)
+    print(
+        "Dataset labels:",
+        ", ".join(f"{k!r}: {v[:3]}... len {len(v)}" for k, v in dataset.labels.items()) or "None",
+        file=log.v3,
+    )
     assert options.key in dataset.get_data_keys()
     max_seq_length = NumbersDict(options.max_seq_length)
     min_seq_length = NumbersDict(options.min_seq_length)
