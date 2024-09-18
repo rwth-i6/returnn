@@ -119,8 +119,21 @@ class HDFDataset(CachedDataset):
         if len(self.files) >= 2:
             prev_target_keys = self.target_keys
         if "targets" in fin:
+            # Note: Earlier RETURNN versions used "targets/labels" to determine target_keys.
+            # https://github.com/rwth-i6/returnn/blob/c2d8fed877022d1ac1bf68b801604733db51223e/HDFDataset.py#L60
             self.target_keys = sorted(set(fin["targets/data"].keys()) | set(fin["targets/size"].attrs.keys()))
         else:
+            # Actually this "classes" target key is never used.
+            # Only if there are "targets" in the HDF file, we use the keys from there.
+            # HDFDataset.get_target_list() returns an empty list,
+            # and HDFDataset.get_data_keys() uses get_target_list() + optional ["data"].
+            # HDFDataset.get_target_list() returns self.targets.keys().
+            # self.targets is set below but only if "targets" in fin,
+            # which is not the case here.
+            # However, for historical reasons, the shape of seq_lengths (and seq_start)
+            # will count with this dummy target key,
+            # although the seq_lengths/seq_start values are never used.
+            # Thus, we cannot change this now, because then we couldn't handle old HDF files anymore.
             self.target_keys = ["classes"]
 
         seq_lengths = fin[attr_seqLengths][...]  # shape (num_seqs,num_target_keys + 1)
@@ -1110,7 +1123,8 @@ class SimpleHDFWriter:
         # seq_length idx represents (seq_idx,data_key_idx),
         # where data_key_idx == 0 is for the main input data,
         # and otherwise data_key_idx == 1 + sorted(self._prepared_extra).index(data_key).
-        # data_key_idx must allow for 2 entries by default, as HDFDataset assumes 'classes' by default.
+        # data_key_idx must allow for 2 entries by default,
+        # as HDFDataset assumes 'classes' by default, as long as there is no targets/data or targets/labels.
         if extend_existing_file:
             self._seq_lengths = self._file["seqLengths"]
         else:
