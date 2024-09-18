@@ -146,7 +146,7 @@ class OggZipDataset(CachedDataset2):
         # However, some other code might expect that the labels are all strings, not bytes,
         # and the API requires the labels to be strings.
         # The code in Dataset.serialize_data tries to decode this case as utf8 (if possible).
-        self.labels["orth"] = [chr(i) for i in range(255)]
+        self.labels["orth"] = [chr(i) for i in range(256)]
         if self.targets:
             self.num_outputs["classes"] = [self.targets.num_labels, 1]
         if self.feature_extractor:
