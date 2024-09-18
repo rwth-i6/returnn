@@ -549,14 +549,16 @@ def masked_select(
         return tensor._raw_backend.masked_select(tensor, mask=mask, dims=dims, out_dim=out_dim)
     # Separate implementation for the case where we have a subset of the mask dims, specifically one single dim.
     # See https://github.com/rwth-i6/returnn/issues/1605 for discussion.
-    if len(dims) != 1:
-        # Please check https://github.com/rwth-i6/returnn/issues/1605 when you need this.
-        raise NotImplementedError(f"masked_select: dims {dims} len {len(dims)} > 1 not supported")
-    (in_dim,) = dims
-    in_dim: Dim
     mask = mask.copy_masked(mask_value=False, dims=dims)
+    if len(dims) > 1:
+        # Flatten it, in the specified order.
+        tensor, in_dim = rf.merge_dims(tensor, dims=dims)
+        mask, _ = rf.merge_dims(mask, dims=dims, out_dim=in_dim)
+    else:
+        (in_dim,) = dims
+    in_dim: Dim
     idxs = rf.cumsum(rf.cast(mask, "int32"), spatial_dim=in_dim)  # [T,B] -> idx in T' + 1
-    new_size = rf.gather(idxs, indices=in_dim.get_size_tensor() - 1, axis=in_dim)  # [B]
+    new_size = rf.gather(idxs, indices=in_dim.get_dim_value_tensor() - 1, axis=in_dim)  # [B]
     if out_dim is None:
         out_dim = Dim(new_size, name="masked_select")
     elif out_dim.dyn_size_ext is None:
@@ -620,7 +622,6 @@ def pack_padded(
     """
     assert not enforce_sorted  # not implemented yet...
     mask = rf.sequence_mask(dims, device=source.device)
-    assert mask.dims_set == set(dims)
     # Note: We could already calculate out_dim here, as follows:
     #   out_dim = Dim(rf.num_elements_of_shape(dims), name="packed")
     # This could trigger a more efficient calculation path in masked_select,

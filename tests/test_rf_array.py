@@ -33,6 +33,28 @@ def test_pack_padded():
     run_model(extern_data, lambda *, epoch, step: _Net(), _forward_step)
 
 
+def test_pack_padded_md():
+    batch_dim = Dim(3, name="batch")
+    hyps_dim = Dim(5, name="hyps")
+    hyps_spatial_dim = Dim(Tensor("hyps_spatial", [batch_dim, hyps_dim], dtype="int32"))
+    vocab_dim = Dim(1000, name="vocab")
+    extern_data = TensorDict(
+        {"labels": Tensor("labels", [batch_dim, hyps_dim, hyps_spatial_dim], dtype="int32", sparse_dim=vocab_dim)}
+    )
+    hyps_packed_spatial_dim = Dim(None, name="hyps_packed_spatial")
+
+    # noinspection PyShadowingNames
+    def _forward_step(*, extern_data: TensorDict, **_kwargs):
+        labels = extern_data["labels"]
+        assert hyps_spatial_dim in labels.dims
+        assert hyps_spatial_dim.dyn_size_ext.dims == (batch_dim, hyps_dim)
+        labels_, _ = rf.pack_padded(labels, dims=[hyps_dim, hyps_spatial_dim], out_dim=hyps_packed_spatial_dim)
+        assert hyps_packed_spatial_dim.dyn_size_ext.dims == (batch_dim,)
+        labels_.mark_as_default_output(shape=[batch_dim, hyps_packed_spatial_dim])
+
+    run_model(extern_data, lambda **_kwargs: rf.Module(), _forward_step, test_tensorflow=False)
+
+
 def test_masked_select():
     time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
     in_dim = Dim(7, name="in")
