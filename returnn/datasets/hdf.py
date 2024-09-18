@@ -94,23 +94,12 @@ class HDFDataset(CachedDataset):
             from returnn.util.basic import cf
 
             filename = cf(filename)
+        print("parsing file", filename, file=log.v5)
         fin = h5py.File(filename, "r")
-        if "targets" in fin:
-            self.labels = {
-                k: [self._decode(item) for item in fin["targets/labels"][k][...].tolist()]
-                for k in fin["targets/labels"]
-            }
-        if not self.labels and "labels" in fin:
-            labels = [self._decode(item) for item in fin["labels"][...].tolist()]  # type: typing.List[str]
-            self.labels = {"classes": labels}
-            assert len(self.labels["classes"]) == len(labels), (
-                "expected " + str(len(self.labels["classes"])) + " got " + str(len(labels))
-            )
         self.files.append(filename)
         self.h5_files.append(fin)
         self.cached_h5_datasets.append({})
-        print("parsing file", filename, file=log.v5)
-        if "times" in fin:
+        if attr_times in fin:
             if self.timestamps is None:
                 self.timestamps = fin[attr_times][...]
             else:
@@ -135,6 +124,19 @@ class HDFDataset(CachedDataset):
             # although the seq_lengths/seq_start values are never used.
             # Thus, we cannot change this now, because then we couldn't handle old HDF files anymore.
             self.target_keys = ["classes"]
+
+        if "targets" in fin:
+            for k in fin["targets/labels"]:
+                if k not in self.labels:
+                    self.labels[k] = [self._decode(item) for item in fin["targets/labels"][k][...].tolist()]
+        # Note: "labels" in fin was not usd since quite a while in most HDFs
+        # (which I can tell because the code was broken and would have resulted in an exception,
+        # specifically self._decode was missing, and it used item.split("\0")[0] instead,
+        # which does not work because we get bytes since Python 3, thus the split would not work).
+        # However, SimpleHDFWriter might have written it if the provided data has it,
+        # thus those are the labels for "data", not for "classes", as we had it earlier.
+        if "labels" in fin and "data" not in self.labels and "inputs" in fin:
+            self.labels["data"] = [self._decode(item) for item in fin["labels"][...].tolist()]
 
         seq_lengths = fin[attr_seqLengths][...]  # shape (num_seqs,num_target_keys + 1)
         num_input_keys = 1 if "inputs" in fin else 0
