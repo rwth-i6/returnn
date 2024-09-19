@@ -538,7 +538,7 @@ class Engine(EngineBase):
             with torch.no_grad():
                 for extern_data_raw in data_loader:
                     if self._torch_distributed_ctx and step_idx % 100 == 0:
-                        _has_data = torch.Tensor([True]).to(device="cpu", dtype=torch.int8)
+                        _has_data = torch.tensor([True], device="cpu", dtype=torch.int8)
                         torch.distributed.broadcast(_has_data, src=0)
 
                     extern_data = extern_data_util.raw_dict_to_extern_data(
