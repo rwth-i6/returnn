@@ -524,7 +524,7 @@ class Engine(EngineBase):
                 # We wait here until rank 0 is done w/ the eval.
                 # Regularly synchronizing should fix potential timeout issues, like
                 # https://github.com/rwth-i6/returnn/issues/1621.
-                _has_data = torch.Tensor([True]).to(device="cpu", dtype=torch.int8)
+                _has_data = torch.tensor([True], device="cpu", dtype=torch.int8)
                 while _has_data:
                     _has_data = torch.distributed.broadcast(_has_data, src=0)
                 continue
