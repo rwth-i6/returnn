@@ -1,6 +1,8 @@
 """
 (Label-sync) Transformer decoder, optionally including cross attention to encoder
 
+Also see :mod:`returnn.frontend.encoder.transformer`.
+
 References:
 
     (Original paper of course)
@@ -25,7 +27,7 @@ from returnn.tensor import Tensor, Dim, single_step_dim
 
 class TransformerDecoder(rf.Module):
     """
-    Represents Transformer decoder architecture
+    Represents the Transformer decoder architecture
     """
 
     def __init__(
@@ -259,7 +261,7 @@ class TransformerDecoderLayer(rf.Module):
         :param ff_activation: activation function for feed-forward network
         :param dropout: the dropout value for the FF block
         :param num_heads: the number of attention heads
-        :param self_att: the self-attention layer. RelPosSelfAttention originally and default
+        :param self_att: the self-attention layer. CausalSelfAttention originally and default
         :param self_att_opts: options for the self-attention layer, for :class:`nn.RelPosSelfAttention`
         :param att_dropout: attention dropout value
         :param norm: pre-normalization for FF and attention blocks
