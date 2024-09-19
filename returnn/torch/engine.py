@@ -599,7 +599,7 @@ class Engine(EngineBase):
 
             if self._torch_distributed_ctx:
                 assert self._torch_distributed_ctx.rank() == 0
-                _has_data = torch.tensor([False]).to(device="cpu", dtype=torch.int8)
+                _has_data = torch.tensor([False], device="cpu", dtype=torch.int8)
                 torch.distributed.broadcast(_has_data, src=0)
 
         if not self._torch_distributed_ctx or self._torch_distributed_ctx.rank() == 0:
