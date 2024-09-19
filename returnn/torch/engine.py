@@ -1052,6 +1052,9 @@ class Engine(EngineBase):
             else:
                 # Keep it as ndarray.
                 raw = x.raw_tensor[batch_idx : batch_idx + 1].reshape(())
+            if any(d is not d_ for d, d_ in zip(x.dims[1:], y.dims)):  # replaced any dims?
+                # Cut off any padding.
+                raw = raw[tuple(slice(None, dim.get_dim_value()) for dim in y.dims)]
             # Convert it to Numpy array.
             # Note that users might also want to get the PyTorch tensors instead.
             # They might even want to get the whole batched tensor.
