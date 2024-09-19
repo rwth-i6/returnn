@@ -519,9 +519,16 @@ class Engine(EngineBase):
 
             if self._torch_distributed_ctx and self._torch_distributed_ctx.rank() != 0:
                 # We need to make sure the data loader iterator was created for proper synchronization.
-                # However, now we only want to do evaluation on rank 0 for simplicity.
+                # However, we only want to do evaluation on rank 0 for simplicity.
                 iter(data_loader)
+                # We wait here until rank 0 is done w/ the eval.
+                # Regularly synchronizing should fix potential timeout issues, like
+                # https://github.com/rwth-i6/returnn/issues/1621.
+                _has_data = torch.tensor([True], device="cpu", dtype=torch.int8)
+                while _has_data:
+                    _has_data = torch.distributed.broadcast(_has_data, src=0)
                 continue
+
             print(f"Evaluating dataset {dataset_name!r}", file=log.v3)
 
             accumulated_losses_dict = NumbersDict()
@@ -530,6 +537,10 @@ class Engine(EngineBase):
 
             with torch.no_grad():
                 for extern_data_raw in data_loader:
+                    if self._torch_distributed_ctx and step_idx % 100 == 0:
+                        _has_data = torch.tensor([True], device="cpu", dtype=torch.int8)
+                        torch.distributed.broadcast(_has_data, src=0)
+
                     extern_data = extern_data_util.raw_dict_to_extern_data(
                         extern_data_raw, extern_data_template=self.extern_data, device=self._device
                     )
@@ -585,6 +596,11 @@ class Engine(EngineBase):
                     _format_score({name: accumulated_losses_dict[name] for name in error_keys}),
                 )
             ]
+
+            if self._torch_distributed_ctx:
+                assert self._torch_distributed_ctx.rank() == 0
+                _has_data = torch.tensor([False], device="cpu", dtype=torch.int8)
+                torch.distributed.broadcast(_has_data, src=0)
 
         if not self._torch_distributed_ctx or self._torch_distributed_ctx.rank() == 0:
             print(" ".join(eval_dump_str) if eval_dump_str else "(No evaluations.)", file=log.v1)
