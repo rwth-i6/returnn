@@ -515,16 +515,16 @@ class Engine(EngineBase):
             if skip_already_evaluated and self._is_dataset_evaluated(name=dataset_name):
                 continue
 
-            # We need to make sure the data loader iterator was created for proper synchronization.
-            data_loader = iter(self._eval_dataloaders[dataset_name])
-            _has_data = torch.Tensor([True]).to(device="cpu", dtype=torch.int8)
+            data_loader = self._eval_dataloaders[dataset_name]
 
             if self._torch_distributed_ctx and self._torch_distributed_ctx.rank() != 0:
-                # Only want to do evaluation on rank 0 for simplicity.
-                #
+                # We need to make sure the data loader iterator was created for proper synchronization.
+                # However, we only want to do evaluation on rank 0 for simplicity.
+                iter(data_loader)
                 # We wait here until rank 0 is done w/ the eval.
                 # Regularly synchronizing should fix potential timeout issues, like
                 # https://github.com/rwth-i6/returnn/issues/1621.
+                _has_data = torch.Tensor([True]).to(device="cpu", dtype=torch.int8)
                 while _has_data:
                     _has_data = torch.distributed.broadcast(_has_data, src=0)
                 continue
@@ -538,6 +538,7 @@ class Engine(EngineBase):
             with torch.no_grad():
                 for extern_data_raw in data_loader:
                     if self._torch_distributed_ctx and step_idx % 100 == 0:
+                        _has_data = torch.Tensor([True]).to(device="cpu", dtype=torch.int8)
                         torch.distributed.broadcast(_has_data, src=0)
 
                     extern_data = extern_data_util.raw_dict_to_extern_data(
