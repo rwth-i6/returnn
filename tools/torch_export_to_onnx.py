@@ -35,7 +35,6 @@ import torch
 from typing import Callable, Optional, Dict, List
 import argparse
 import os
-from random import random
 
 import _setup_returnn_env  # noqa
 from returnn.config import Config
@@ -204,7 +203,7 @@ def main():
 
     get_model_func = config.typed_value("get_model")
     assert get_model_func, "get_model() isn't specified in the config passed as a parameter."
-    sentinel_kw = {"__fwd_compatible_random_arg_%i" % int(random() * 100): None}
+    sentinel_kw = util.get_fwd_compat_kwargs()
     model = get_model_func(epoch=epoch, step=step, **sentinel_kw)
 
     is_rf_module = isinstance(model, rf.Module)

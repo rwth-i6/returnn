@@ -4586,3 +4586,27 @@ def override_env_var(var_name: str, value: str):
             os.environ[var_name] = cur_val
         else:
             os.environ.pop(var_name)
+
+
+fwd_compatibility_rng = np.random.default_rng()
+fwd_compatibility_explainer = (
+    "Hello!\n"
+    "If you see this error your code is not forwards compatible and you will have **trouble updating RETURNN**. "
+    "RETURNN passes this randomly named argument to your code "
+    "to force it to take `**kwargs` as its last argument to ensure compatibility "
+    "in case RETURNN adds any more arguments to this call in the future.\n"
+    "To fix this error simply make your function take `**kwargs` as its last argument.\n"
+    "Thanks and happy training."
+)
+
+
+def get_fwd_compat_kwargs() -> Dict[str, Any]:
+    """
+    Get randomly named kwargs for ensuring forwards compatibility in user code.
+
+    The randomly named arg's value will be a string which helps the user understand
+    the error they're seeing if their code is not forwards compatible. The user will
+    see the string's value in the python stack trace.
+    """
+    i = fwd_compatibility_rng.integers(0, 100)
+    return {f"__fwd_compat_random_arg_{i:03}": fwd_compatibility_explainer}
