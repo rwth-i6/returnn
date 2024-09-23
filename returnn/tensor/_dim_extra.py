@@ -2294,7 +2294,15 @@ class _DimMixin:
         return cache, cache_key, cache.get(cache_key, None)
 
     def __sis_state__(self):
-        raise ValueError(f"{self}: currently not expected to be part of the Sisyphus state/hash")
+        # Note: The name (description) is deliberately not part of the state/hash,
+        # as this is quite arbitrary set by the user,
+        # and could easily change.
+        # In general, we keep the relevant state for Sisyphus quite minimal.
+        value = {"dim": self.dimension}
+        if self.kind is not None:
+            value["kind"] = self.kind.name
+        assert self.derived_from_op is None  # not handled yet for hashing...
+        return value
 
 
 def _make_constant_static_dim(value, kind=None):
