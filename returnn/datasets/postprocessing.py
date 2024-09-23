@@ -186,6 +186,11 @@ class PostprocessingDataset(CachedDataset2):
                 pass  # some datasets don't know their num_seqs
         return True
 
+    def get_current_seq_order(self):
+        """:return: current seq order of wrapped dataset"""
+        assert self._dataset is not None
+        return self._dataset.get_current_seq_order()
+
     def get_data_keys(self):
         """:return: available data keys"""
         return list(self._out_tensor_dict_template.data.keys())
