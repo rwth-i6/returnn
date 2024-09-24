@@ -187,7 +187,9 @@ class PostprocessingDataset(CachedDataset2):
         return True
 
     def get_current_seq_order(self):
-        """:return: current seq order of wrapped dataset"""
+        """:return: current seq order of wrapped dataset, if map_seq_stream is not used"""
+        if self._map_seq_stream is not None:
+            raise util.OptionalNotImplementedError
         assert self._dataset is not None
         return self._dataset.get_current_seq_order()
 
