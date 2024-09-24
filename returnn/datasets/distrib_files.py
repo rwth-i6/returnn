@@ -171,13 +171,13 @@ class DistributeFilesDataset(CachedDataset2):
                 # If we're in a child process `_get_rank_and_size()` no longer works,
                 # so we pass the info about the shards via a pickled property.
                 # See also Dataset.__reduce__.
-                self._shard_index = _distrib_info["shard_index"]
-                self._num_shards = _distrib_info["num_shards"]
+                self._file_shard_index = _distrib_info["file_shard_index"]
+                self._num_file_shards = _distrib_info["num_file_shards"]
             else:
-                self._shard_index, self._num_shards = _get_rank_and_size()
+                self._file_shard_index, self._num_file_shards = _get_rank_and_size()
         else:
-            self._shard_index = 0
-            self._num_shards = 1
+            self._file_shard_index = 0
+            self._num_file_shards = 1
 
         if _meta_info_cache:
             # This allows to skip the lazy init in self.initialize().
@@ -199,7 +199,7 @@ class DistributeFilesDataset(CachedDataset2):
 
     @property
     def _distrib_info(self):
-        return {"num_shards": self._num_shards, "shard_index": self._shard_index}
+        return {"num_file_shards": self._num_file_shards, "file_shard_index": self._file_shard_index}
 
     @property
     def _meta_info_cache(self):
@@ -214,7 +214,7 @@ class DistributeFilesDataset(CachedDataset2):
         }
 
     def _uses_custom_distributed_sharding(self) -> bool:
-        return self._num_shards > 1
+        return self._num_file_shards > 1
 
     def _lazy_init_num_outputs(self):
         if self.num_outputs:
@@ -283,11 +283,11 @@ class DistributeFilesDataset(CachedDataset2):
             else:
                 raise ValueError(f"{self}: seq_ordering {self.seq_ordering!r} not supported")
             file_bins = self._distribute_evenly_by_size(
-                num_bins=self._num_shards * self.partition_epoch,
+                num_bins=self._num_file_shards * self.partition_epoch,
                 file_sizes=self._file_sizes,
                 files_order=files_order_flat,
             )
-            self_index_base = self.partition_epoch * self._shard_index
+            self_index_base = self.partition_epoch * self._file_shard_index
             self_index_end = self_index_base + self.partition_epoch
             self._files_order_cache[full_epoch_0idx_] = file_bins[self_index_base:self_index_end]
 
