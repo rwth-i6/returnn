@@ -446,7 +446,7 @@ class MetaDataset(CachedDataset2):
         return False
 
     def supports_sharding(self) -> bool:
-        """supports sharding"""
+        """:return: whether this dataset supports sharding"""
         return (
             self.datasets[self.seq_order_control_dataset].supports_sharding()
             if self.seq_order_control_dataset is not None

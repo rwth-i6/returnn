@@ -743,7 +743,7 @@ class NextGenHDFDataset(CachedDataset2):
         return True
 
     def supports_sharding(self) -> bool:
-        """supports sharding"""
+        """:return: whether this dataset supports sharding"""
         return True
 
     def _get_seq_length(self, orig_seq_idx):

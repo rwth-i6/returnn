@@ -202,7 +202,7 @@ class PostprocessingDataset(CachedDataset2):
         return self._out_tensor_dict_template.data[key].dtype
 
     def supports_sharding(self) -> bool:
-        """:return: this dataset supports sharding"""
+        """:return: whether this dataset supports sharding"""
         assert self._dataset is not None
         return self._dataset.supports_sharding()
 

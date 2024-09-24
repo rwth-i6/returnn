@@ -459,7 +459,7 @@ class LmDataset(CachedDataset2):
         return True
 
     def supports_sharding(self) -> bool:
-        """supports sharding"""
+        """:return: whether this dataset supports sharding"""
         return True
 
     def get_total_num_seqs(self, *, fast: bool = False) -> int:
