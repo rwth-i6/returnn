@@ -90,7 +90,7 @@ class GeneratingDataset(Dataset):
         return True
 
     def supports_sharding(self) -> bool:
-        """supports sharding"""
+        """:return: whether this dataset supports sharding"""
         return True
 
     def _cleanup_old_seqs(self, seq_idx_end):
@@ -2291,7 +2291,7 @@ class LibriSpeechCorpus(CachedDataset2):
         return True
 
     def supports_sharding(self) -> bool:
-        """supports sharding"""
+        """:return: whether this dataset supports sharding"""
         return True
 
     def get_current_seq_order(self):
@@ -2503,7 +2503,7 @@ class Enwik8Corpus(CachedDataset2):
         return True
 
     def supports_sharding(self) -> bool:
-        """supports sharding"""
+        """:return: whether this dataset supports sharding"""
         return self._batch_num_seqs is None  # otherwise the logic is not implemented
 
     def _collect_single_seq(self, seq_idx):
