@@ -555,6 +555,14 @@ class TFBackend(Backend[tf.Tensor]):
             return out_data
 
     @staticmethod
+    def is_finite(x: Tensor) -> Tensor:
+        """is finite"""
+        out = x.copy_template("is_finite", dtype="bool")
+        with tf_util.same_control_flow_ctx(x):
+            out.raw_tensor = tf.math.is_finite(x.raw_tensor)
+        return out
+
+    @staticmethod
     def clip_by_value(
         x: Tensor,
         clip_value_min: Union[Tensor, rf.RawTensorTypes],

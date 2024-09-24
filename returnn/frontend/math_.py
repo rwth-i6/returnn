@@ -37,6 +37,7 @@ __all__ = [
     "logical_not",
     "opt_logical_or",
     "opt_logical_and",
+    "is_finite",
     "maximum",
     "minimum",
     "clip_by_value",
@@ -359,6 +360,12 @@ def opt_logical_and(a: Union[Tensor, bool], b: Union[Tensor, bool]) -> Union[Ten
             return False
         return a
     return combine(a, "logical_and", b)
+
+
+def is_finite(a: Tensor) -> Tensor:
+    """is finite"""
+    # noinspection PyProtectedMember
+    return a._raw_backend.is_finite(a)
 
 
 def maximum(a: Tensor, b: Union[Tensor, _RawTensorTypes], *other_tensors) -> Tensor:

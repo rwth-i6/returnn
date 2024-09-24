@@ -984,6 +984,11 @@ class Backend(Generic[T]):
         raise NotImplementedError
 
     @staticmethod
+    def is_finite(x: Tensor) -> Tensor:
+        """is finite"""
+        raise NotImplementedError
+
+    @staticmethod
     def clip_by_value(
         x: Tensor,
         clip_value_min: Union[Tensor, rf.RawTensorTypes],

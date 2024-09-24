@@ -1175,6 +1175,13 @@ class TorchBackend(Backend[torch.Tensor]):
         return out
 
     @staticmethod
+    def is_finite(x: Tensor) -> Tensor:
+        """is finite"""
+        out = x.copy_template("is_finite", dtype="bool")
+        out.raw_tensor = torch.isfinite(x.raw_tensor)
+        return out
+
+    @staticmethod
     def clip_by_value(
         x: Tensor,
         clip_value_min: Union[Tensor, rf.RawTensorTypes],
