@@ -445,6 +445,14 @@ class MetaDataset(CachedDataset2):
             return True
         return False
 
+    def supports_sharding(self) -> bool:
+        """supports sharding"""
+        return (
+            self.datasets[self.seq_order_control_dataset].supports_sharding()
+            if self.seq_order_control_dataset is not None
+            else True
+        )
+
     def get_current_seq_order(self):
         """
         :return: current seq order for the current epoch, after self.init_seq_order was called.

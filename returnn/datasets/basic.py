@@ -111,6 +111,8 @@ class Dataset(object):
         min_chunk_size=0,
         chunking_variance=0,
         estimated_num_seqs=None,
+        _num_data_shards=1,
+        _data_shard_index=0,
     ):
         """
         :param str name: e.g. "train" or "eval"
@@ -134,6 +136,8 @@ class Dataset(object):
         :param str|None seq_order_seq_lens_file: for seq order, use the seq length given by this file
         :param int shuffle_frames_of_nseqs: shuffles the frames. not always supported
         :param None|int estimated_num_seqs: for progress reporting in case the real num_seqs is unknown
+        :param int _num_data_shards: number of shards the data is split into
+        :param int _data_shard_index: local shard index, when sharding is enabled
         """
         self.name = name or ("dataset_id%s" % id(self))
         self.lock = None  # type: Optional[RLock]  # Used when manipulating our data potentially from multiple threads.
@@ -167,6 +171,9 @@ class Dataset(object):
         self._chunking = chunking
         self.chunk_size, self.chunk_step, self.custom_chunking_func = self._parse_chunking(chunking)
         self._context_window = context_window
+        assert _num_data_shards > _data_shard_index
+        self._num_data_shards = _num_data_shards
+        self._data_shard_index = _data_shard_index
         if isinstance(context_window, (tuple, list)):
             assert len(context_window) == 2
             for elem in context_window:
@@ -597,8 +604,10 @@ class Dataset(object):
             seq_index = [
                 i for i in seq_index if (all_seq_tags[i] not in used_seq_tags, used_seq_tags.add(all_seq_tags[i]))[0]
             ]
-        if partition_epoch > 1:
-            seq_index = self._apply_partition_epoch(seq_index, partition_epoch, epoch)
+        if partition_epoch > 1 or self._num_data_shards > 1:
+            seq_index = self._apply_partition_epoch_and_sharding(
+                seq_index, partition_epoch, epoch, self._num_data_shards, self._data_shard_index
+            )
         if repeat_epoch > 1:
             seq_index = list(seq_index) * repeat_epoch
         if self.seq_tags_filter is not None:
@@ -622,27 +631,41 @@ class Dataset(object):
         return seq_index
 
     @classmethod
-    def _apply_partition_epoch(cls, seq_index, partition_epoch, epoch):
+    def _apply_partition_epoch_and_sharding(
+        cls,
+        seq_index: Sequence[int],
+        partition_epoch: int,
+        epoch: Optional[int],
+        num_shards: int,
+        shard_index: int,
+    ) -> Sequence[int]:
         """
-        :param typing.Sequence[int] seq_index: full list of ordered sequence indices
-        :param int partition_epoch: number of partitions seq_index should be split into
-        :param int|None epoch: current epoch
+        :param seq_index: full list of ordered sequence indices
+        :param partition_epoch: number of partitions seq_index should be split into
+        :param epoch: current epoch
+        :param num_shards: how many shards the data is split into
+        :param shard_index: index of the current data shard
         :return: partition of seq_index for current epoch
-        :rtype: typing.Sequence[int]
         """
+        assert num_shards > shard_index
         num_seqs = len(seq_index)
-        current_partition = ((epoch or 1) - 1) % partition_epoch
-        seqs_per_epoch = num_seqs // partition_epoch
-        partition_sizes = [seqs_per_epoch + 1] * (num_seqs % partition_epoch) + [seqs_per_epoch] * (
-            partition_epoch - num_seqs % partition_epoch
+        num_partitions = partition_epoch * num_shards
+        current_partition = ((epoch or 1) - 1) * num_shards % num_partitions + shard_index
+        seqs_per_epoch = num_seqs // num_partitions
+        partition_sizes = [seqs_per_epoch + 1] * (num_seqs % num_partitions) + [seqs_per_epoch] * (
+            num_partitions - num_seqs % num_partitions
         )
-        assert sum(partition_sizes) == num_seqs and len(partition_sizes) == partition_epoch
+        assert sum(partition_sizes) == num_seqs and len(partition_sizes) == num_partitions
         partitions = functools.reduce(lambda a, x: a + [a[-1] + x], partition_sizes, [0])  # cumulative sum
-        assert len(partitions) == partition_epoch + 1
+        assert len(partitions) == num_partitions + 1
         seq_index = seq_index[partitions[current_partition] : partitions[current_partition + 1]]
         assert len(seq_index) == partition_sizes[current_partition]
 
         return seq_index
+
+    def supports_sharding(self) -> bool:
+        """:return: whether the dataset supports sharding based on the seq_order"""
+        return False
 
     def _get_random_seed_for_epoch(self, epoch, num_epochs_fixed=1):
         """
@@ -674,6 +697,7 @@ class Dataset(object):
         """
         self.epoch = epoch
         self.rnd_seq_drop = Random(self._get_random_seed_for_epoch(epoch=epoch))
+        assert self._num_data_shards == 1 or self.supports_sharding()
         return False
 
     def finish_epoch(self, *, free_resources: bool = False):
@@ -1410,6 +1434,7 @@ def init_dataset(
     default_kwargs: Optional[Dict[str, Any]] = None,
     *,
     parent_dataset: Optional[Dataset] = None,
+    forward_sharding_config: bool = False,
 ) -> Dataset:
     """
     :param kwargs:
@@ -1424,7 +1449,11 @@ def init_dataset(
         return data
     if callable(kwargs):
         return init_dataset(
-            kwargs(), extra_kwargs=extra_kwargs, default_kwargs=default_kwargs, parent_dataset=parent_dataset
+            kwargs(),
+            extra_kwargs=extra_kwargs,
+            default_kwargs=default_kwargs,
+            parent_dataset=parent_dataset,
+            forward_sharding_config=forward_sharding_config,
         )
     if isinstance(kwargs, str):
         if kwargs.startswith("{"):
@@ -1435,12 +1464,18 @@ def init_dataset(
             config = get_global_config()
             data = eval(kwargs[len("config:") :], config.typed_dict, config.typed_dict)
             return init_dataset(
-                data, extra_kwargs=extra_kwargs, default_kwargs=default_kwargs, parent_dataset=parent_dataset
+                data,
+                extra_kwargs=extra_kwargs,
+                default_kwargs=default_kwargs,
+                parent_dataset=parent_dataset,
+                forward_sharding_config=forward_sharding_config,
             )
         else:
             config_str = kwargs
             kwargs = {}
-            default_kwargs = _dataset_extend_default_kwargs_from_parent_dataset(default_kwargs, parent_dataset)
+            default_kwargs = _dataset_extend_default_kwargs_from_parent_dataset(
+                default_kwargs, parent_dataset, forward_sharding_config=forward_sharding_config
+            )
             if default_kwargs:
                 kwargs.update(default_kwargs)
             if extra_kwargs:
@@ -1459,7 +1494,9 @@ def init_dataset(
     clazz = get_dataset_class(clazz_name)
     if not clazz:
         raise Exception("Dataset class %r not found" % clazz_name)
-    default_kwargs = _dataset_extend_default_kwargs_from_parent_dataset(default_kwargs, parent_dataset)
+    default_kwargs = _dataset_extend_default_kwargs_from_parent_dataset(
+        default_kwargs, parent_dataset, forward_sharding_config=forward_sharding_config
+    )
     if default_kwargs:
         for key, value in default_kwargs.items():
             kwargs.setdefault(key, value)
@@ -1476,7 +1513,9 @@ def init_dataset(
 
 
 def _dataset_extend_default_kwargs_from_parent_dataset(
-    default_kwargs: Optional[Dict[str, Any]], parent_dataset: Optional[Dataset]
+    default_kwargs: Optional[Dict[str, Any]],
+    parent_dataset: Optional[Dataset],
+    forward_sharding_config: bool = False,
 ) -> Optional[Dict[str, Any]]:
     """
     :param default_kwargs:
@@ -1486,6 +1525,9 @@ def _dataset_extend_default_kwargs_from_parent_dataset(
         return default_kwargs
     default_kwargs = default_kwargs.copy() if default_kwargs else {}
     default_kwargs.setdefault("random_seed_offset", parent_dataset.random_seed_offset)
+    if forward_sharding_config:
+        default_kwargs["_num_data_shards"] = parent_dataset._num_data_shards
+        default_kwargs["_data_shard_index"] = parent_dataset._data_shard_index
     return default_kwargs
 
 

@@ -742,6 +742,10 @@ class NextGenHDFDataset(CachedDataset2):
         """supports sorting"""
         return True
 
+    def supports_sharding(self) -> bool:
+        """supports sharding"""
+        return True
+
     def _get_seq_length(self, orig_seq_idx):
         """
         :type orig_seq_idx: int
