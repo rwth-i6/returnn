@@ -37,6 +37,7 @@ __all__ = [
     "pack_padded",
     "gather",
     "scatter",
+    "scatter_argmax",
     "slice",
     "shift_right",
     "reverse_sequence",
@@ -680,17 +681,24 @@ def scatter(
     *,
     indices: Tensor,
     indices_dim: Union[Dim, Sequence[Dim]],
+    mode: str = "sum",
+    fill_value: Optional[Union[int, float]] = None,
     out_dim: Optional[Union[Dim, Sequence[Dim]]] = None,
 ) -> Tensor:
     """
     Scatters into new zero-tensor.
     If entries in indices are duplicated, the corresponding values in source will be added together
-    (scatter_add in PyTorch).
+    (scatter_add in PyTorch)
+    with mode=="sum",
+    or otherwise it will take the max/min.
+
     (TF segment_sum can be implemented via this.)
 
     :param source: [batch_dims..., indices_dim(s)..., feature_dims...]
     :param indices: [batch_dims..., indices_dim(s)...] -> out_dim
     :param indices_dim:
+    :param mode: "sum" or "max" or "min". also see :func:`scatter_argmax`.
+    :param fill_value:
     :param out_dim: The indices target dim.
         If not given, will be automatically determined as the sparse_dim from indices.
         If multiple out dims, use indices into the merged out dims,
@@ -700,8 +708,81 @@ def scatter(
     if not out_dim:
         assert isinstance(indices, Tensor) and indices.sparse_dim
         out_dim = indices.sparse_dim
+    if fill_value is None:
+        if mode == "sum":
+            fill_value = 0
+        elif mode == "max":
+            if "int" in source.dtype:
+                import numpy
+
+                fill_value = numpy.iinfo(source.raw_tensor.dtype).min
+            else:
+                fill_value = float("-inf")
+        elif mode == "min":
+            if "int" in source.dtype:
+                import numpy
+
+                fill_value = numpy.iinfo(source.raw_tensor.dtype).max
+            else:
+                fill_value = float("inf")
+        else:
+            raise ValueError(f"scatter: invalid mode {mode!r}")
     # noinspection PyProtectedMember
-    return source._raw_backend.scatter(source, indices=indices, indices_dim=indices_dim, out_dim=out_dim)
+    return source._raw_backend.scatter(
+        source, indices=indices, indices_dim=indices_dim, mode=mode, fill_value=fill_value, out_dim=out_dim
+    )
+
+
+def scatter_argmax(
+    source: Tensor,
+    *,
+    indices: Tensor,
+    indices_dim: Union[Dim, Sequence[Dim]],
+    invalid_idx: int = -1,
+    out_dim: Optional[Union[Dim, Sequence[Dim]]] = None,
+) -> Tensor:
+    """
+    Get the index in src which has the max value for each index in index.
+
+    This is like :func:`scatter` with ``mode="argmax"``.
+
+    :param source: [batch_dims..., indices_dim(s)..., feature_dims...]
+    :param indices: [batch_dims..., indices_dim(s)...] -> out_dim
+    :param indices_dim:
+    :param invalid_idx: in case some of the output entries are never set (via ``indices``),
+        this will be used as the value.
+    :param out_dim: The indices target dim.
+    :return: [batch_dims..., out_dim(s)..., feature_dims...]
+    """
+    import numpy
+
+    if not out_dim:
+        assert isinstance(indices, Tensor) and indices.sparse_dim
+        out_dim = indices.sparse_dim
+
+    # For the shape comments, use [B,I,F] for shorter source, [B,O,F] for shorter output.
+    # use scatter to get the max value for each index
+    out_max = rf.scatter(source, indices=indices, indices_dim=indices_dim, mode="max", out_dim=out_dim)  # [B,O,F]
+    src_max = rf.gather(out_max, indices=indices, axis=out_dim)  # [B,I,F] -> max value or invalid_value
+
+    max_invalid_idx = numpy.iinfo(indices.dtype).max
+
+    # then use gather to get the max value back to src.
+    # then mask the src with the max value.
+    src_max_mask = src_max == source
+    src_max_mask = src_max_mask.copy_masked(False)
+    src_indices = rf.where(
+        src_max_mask, rf.range_over_dim(indices_dim, dtype=indices.dtype, device=source.device), max_invalid_idx
+    )  # [B,I,F] -> I
+
+    # now scatter the min of src_indices into tensor
+    out = rf.scatter(
+        src_indices, indices=indices, indices_dim=indices_dim, mode="min", fill_value=invalid_idx, out_dim=out_dim
+    )  # [B,O,F] -> I or invalid_idx or max_invalid_idx
+
+    if max_invalid_idx != invalid_idx:
+        out = rf.where(out != max_invalid_idx, out, invalid_idx)  # [B,O,F] -> I or invalid_idx
+    return out
 
 
 # noinspection PyShadowingBuiltins

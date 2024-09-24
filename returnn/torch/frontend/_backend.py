@@ -1015,6 +1015,8 @@ class TorchBackend(Backend[torch.Tensor]):
         *,
         indices: Tensor,
         indices_dim: Union[Dim, Sequence[Dim]],
+        mode: str,
+        fill_value: Union[int, float],
         out_dim: Union[Dim, Sequence[Dim]],
     ) -> Tensor:
         """
@@ -1026,6 +1028,8 @@ class TorchBackend(Backend[torch.Tensor]):
         :param source: [batch_dims..., indices_dim(s)..., feature_dims...]
         :param indices: [batch_dims..., indices_dim(s)...] -> out_dim
         :param indices_dim:
+        :param mode: "sum", "max", "min"
+        :param fill_value:
         :param out_dim:
         :return: [batch_dims..., out_dim, feature_dims...]
         """
@@ -1065,8 +1069,22 @@ class TorchBackend(Backend[torch.Tensor]):
         )
         out_dims = batch_dims + [out_flat_dim] + feature_dims
         out_shape = [d.get_dim_value() for d in out_dims]
-        out_raw = torch.zeros(out_shape, dtype=source.raw_tensor.dtype, device=source.raw_tensor.device)
-        out_raw.scatter_add_(dim=len(batch_dims), index=indices.raw_tensor.to(torch.int64), src=source.raw_tensor)
+        if isinstance(fill_value, (int, float)) and fill_value == 0:
+            out_raw = torch.zeros(out_shape, dtype=source.raw_tensor.dtype, device=source.raw_tensor.device)
+        else:
+            out_raw = torch.full(out_shape, fill_value, dtype=source.raw_tensor.dtype, device=source.raw_tensor.device)
+        if mode == "sum":
+            out_raw.scatter_add_(dim=len(batch_dims), index=indices.raw_tensor.to(torch.int64), src=source.raw_tensor)
+        elif mode in ("max", "min"):
+            out_raw.scatter_reduce_(
+                dim=len(batch_dims),
+                index=indices.raw_tensor.to(torch.int64),
+                src=source.raw_tensor,
+                reduce="a" + mode,
+                include_self=False,
+            )
+        else:
+            raise ValueError(f"scatter: mode {mode!r} not supported")
         res = Tensor(
             "scatter",
             dims=out_dims,

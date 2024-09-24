@@ -921,6 +921,8 @@ class Backend(Generic[T]):
         *,
         indices: Tensor,
         indices_dim: Union[Dim, Sequence[Dim]],
+        mode: str,
+        fill_value: Union[int, float],
         out_dim: Union[Dim, Sequence[Dim]],
     ) -> Tensor:
         """
@@ -932,6 +934,8 @@ class Backend(Generic[T]):
         :param source: [batch_dims..., indices_dim(s)..., feature_dims...]
         :param indices: [batch_dims..., indices_dim(s)...] -> out_dim
         :param indices_dim:
+        :param mode: "sum" or "max" or "min"
+        :param fill_value:
         :param out_dim:
         :return: [batch_dims..., out_dim, feature_dims...]
         """
