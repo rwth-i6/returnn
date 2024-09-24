@@ -118,12 +118,12 @@ class MultiProcDataset(CachedDataset2):
         worker_procs = []
         for i in range(self.num_workers):
             if self._sharding_method == "seq_order":
-                sub_dataset = (self.dataset,)
+                sub_dataset = self.dataset
             elif self._sharding_method == "dedicated":
                 sub_dataset = {
                     **self.dataset,
-                    "_num_shards": self.num_workers,
-                    "_shard_index": i,
+                    "_num_data_shards": self.num_workers,
+                    "_data_shard_index": i,
                 }
             else:
                 raise ValueError(f"unknown sharding_method {self._sharding_method}")
@@ -341,10 +341,17 @@ class MultiProcDataset(CachedDataset2):
         if self._sharding_method == "dedicated":
             for worker_conn in self._worker_parent_conns:
                 worker_conn.send(("init_seq_order", {"epoch": epoch, "seq_list": seq_list, "seq_order": seq_order}))
+            num_child_seqs = []
             for worker_conn in self._worker_parent_conns:
                 msg, num_seqs = worker_conn.recv()
                 assert msg == "num_seqs"
-                self._num_seqs += num_seqs
+                num_child_seqs.append(num_seqs)
+            if all(num_s is None for num_s in num_child_seqs):
+                self._num_seqs = None
+            elif all(num_s is not None for num_s in num_child_seqs):
+                self._num_seqs = sum(num_child_seqs, 0)
+            else:
+                raise ValueError(f"heterogenous num_seqs in child datasets: {num_child_seqs}")
         elif self._sharding_method == "seq_order":
             self._seq_order_proc_parent_conn.send(
                 ("init_seq_order", {"epoch": epoch, "seq_list": seq_list, "seq_order": seq_order})
