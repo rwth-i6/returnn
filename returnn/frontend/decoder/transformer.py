@@ -441,6 +441,7 @@ class FeedForwardGated(rf.Module):
         ff_dim: Optional[Union[Dim, int]] = NotSpecified,
         dropout: float = 0.1,
         activation: Union[Callable[[Tensor], Tensor], Dict[str, Any], rf.Module] = rf.swish,
+        gate_activation: Union[Callable[[Tensor], Tensor], Dict[str, Any], rf.Module] = rf.identity,
         with_bias: bool = False,
     ):
         """
@@ -474,11 +475,18 @@ class FeedForwardGated(rf.Module):
             activation = rf.build_from_dict(activation)
         elif not callable(activation):
             raise TypeError(f"{self}: unexpected activation type {activation!r}")
+        if gate_activation is NotSpecified:
+            gate_activation = rf.identity
+        elif isinstance(gate_activation, dict):
+            gate_activation = rf.build_from_dict(gate_activation)
+        elif not callable(gate_activation):
+            raise TypeError(f"{self}: unexpected gate_activation type {gate_activation!r}")
 
         self.out_dim = out_dim
         self.dropout = dropout
         self.dropout_broadcast = rf.dropout_broadcast_default()
         self.activation = activation
+        self.gate_activation = gate_activation
 
         # Factor 2 because we concatenate the two paths.
         self.linear_ff = rf.Linear(out_dim, 2 * ff_dim, with_bias=with_bias)
@@ -488,7 +496,7 @@ class FeedForwardGated(rf.Module):
         """forward"""
         x_ff1 = self.linear_ff(inp)
         x_ff1a, x_ff1b = rf.split(x_ff1, axis=self.linear_ff.out_dim, out_dims=[self.linear_out.in_dim] * 2)
-        x_act = self.activation(x_ff1a) * x_ff1b
+        x_act = self.activation(x_ff1a) * self.gate_activation(x_ff1b)
         x_drop = rf.dropout(x_act, self.dropout, axis=self.dropout_broadcast and self.linear_out.in_dim)
         x_ff2 = self.linear_out(x_drop)
         return x_ff2
