@@ -122,8 +122,8 @@ class MultiProcDataset(CachedDataset2):
             elif self._sharding_method == "dedicated":
                 sub_dataset = {
                     **self.dataset,
-                    "num_data_shards": self.num_workers,
-                    "data_shard_index": i,
+                    "_num_data_shards": self.num_workers,
+                    "_data_shard_index": i,
                 }
             else:
                 raise ValueError(f"unknown sharding_method {self._sharding_method}")
