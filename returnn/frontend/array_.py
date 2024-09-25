@@ -50,7 +50,7 @@ __all__ = [
 
 
 def convert_to_tensor(
-    value: Union[Tensor, T, RawTensorTypes],
+    value: Union[Tensor, T, RawTensorTypes, list, tuple],
     *,
     dims: Sequence[Dim] = None,
     dtype: Optional[str] = None,
@@ -75,6 +75,8 @@ def convert_to_tensor(
     """
     if isinstance(value, Tensor):  # fast path
         return value
+    if isinstance(value, (tuple, list)):
+        value = numpy.array(value, dtype=dtype)
     if dims is None and shape is not None:
         dims = shape  # old code
     if isinstance(value, (int, float, complex, bool, str, numpy.number)):
