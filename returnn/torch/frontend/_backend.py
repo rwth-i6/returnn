@@ -1069,13 +1069,20 @@ class TorchBackend(Backend[torch.Tensor]):
         )
         out_dims = batch_dims + [out_flat_dim] + feature_dims
         out_shape = [d.get_dim_value() for d in out_dims]
-        if isinstance(fill_value, (int, float)) and fill_value == 0:
+        if mode == "sum" and isinstance(fill_value, (int, float)) and fill_value == 0:
             out_raw = torch.zeros(out_shape, dtype=source.raw_tensor.dtype, device=source.raw_tensor.device)
-        else:
-            out_raw = torch.full(out_shape, fill_value, dtype=source.raw_tensor.dtype, device=source.raw_tensor.device)
-        if mode == "sum":
             out_raw.scatter_add_(dim=len(batch_dims), index=indices.raw_tensor.to(torch.int64), src=source.raw_tensor)
+        elif mode == "sum":
+            out_raw = torch.full(out_shape, fill_value, dtype=source.raw_tensor.dtype, device=source.raw_tensor.device)
+            out_raw.scatter_reduce_(
+                dim=len(batch_dims),
+                index=indices.raw_tensor.to(torch.int64),
+                src=source.raw_tensor,
+                reduce="sum",
+                include_self=False,
+            )
         elif mode in ("max", "min"):
+            out_raw = torch.full(out_shape, fill_value, dtype=source.raw_tensor.dtype, device=source.raw_tensor.device)
             out_raw.scatter_reduce_(
                 dim=len(batch_dims),
                 index=indices.raw_tensor.to(torch.int64),

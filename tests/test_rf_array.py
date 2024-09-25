@@ -373,6 +373,38 @@ def test_gather_time_static_clip_to_valid():
     run_model(extern_data_template, lambda *, epoch, step: rf.Module(), _forward_step)
 
 
+def test_scatter_fill_inf():
+    batch_dim_ = Dim(3, name="batch")
+    states_dim = Dim(7, name="states")
+
+    def _forward_step(**_kwargs):
+        start_states = rf.convert_to_tensor(
+            [2, 4, 5], name="start_states", dims=[batch_dim_], sparse_dim=states_dim, dtype="int32"
+        )
+        batch_dim_.get_size_tensor().mark_as_output("batch_size", shape=[])
+        start_states.mark_as_output("start_states", shape=[batch_dim_])
+        scores = rf.scatter(
+            rf.zeros([batch_dim_]),
+            indices=start_states,
+            indices_dim=[batch_dim_],
+            fill_value=float("-inf"),
+        )  # [S], per state
+        scores.mark_as_default_output(shape=[states_dim])
+
+    res = run_model(TensorDict(), lambda *, epoch, step: rf.Module(), _forward_step, test_tensorflow=False)
+    batch_size = res["batch_size"].raw_tensor.item()
+    assert res["start_states"].raw_tensor.shape == (batch_size,)
+    assert res["output"].raw_tensor.shape == (states_dim.dimension,)
+    assert res["output"].raw_tensor.tolist().count(0.0) == batch_size
+    assert res["output"].raw_tensor.tolist().count(float("-inf")) == states_dim.dimension - batch_size
+    assert states_dim.dimension > batch_size
+    for i in range(states_dim.dimension):
+        if i in res["start_states"].raw_tensor:
+            assert res["output"].raw_tensor[i] == 0.0
+        else:
+            assert res["output"].raw_tensor[i] == float("-inf")
+
+
 def test_slice():
     time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
     in_dim = Dim(7, name="in")
