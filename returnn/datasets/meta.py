@@ -1149,7 +1149,7 @@ class CombinedDataset(CachedDataset2):
 
         assert sum(counters) == total_num_seqs
 
-        if self.partition_epoch:
+        if self.partition_epoch or self.num_data_shards > 1:
             seq_order = self._apply_partition_epoch_and_sharding(seq_order, self.partition_epoch, self.epoch)
         if self.repeat_epoch:
             seq_order = seq_order * self.repeat_epoch
