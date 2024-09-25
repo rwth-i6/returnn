@@ -24,6 +24,7 @@ __all__ = [
     "reshape",
     "split",
     "expand_dim",
+    "expand_dims",
     "squeeze",
     "window",
     "concat",
@@ -256,6 +257,15 @@ def expand_dim(source: Tensor, dim: Dim) -> Tensor:
     """
     # noinspection PyProtectedMember
     return source._raw_backend.expand_dim(source, dim=dim)
+
+
+def expand_dims(source: Tensor, dims: Sequence[Dim]) -> Tensor:
+    """
+    Expand multiple dims, via :func:`expand_dim`.
+    """
+    for dim in dims:
+        source = expand_dim(source, dim)
+    return source
 
 
 def squeeze(source: Tensor, axis: Dim) -> Tensor:
