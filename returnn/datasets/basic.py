@@ -171,7 +171,7 @@ class Dataset(object):
         self._chunking = chunking
         self.chunk_size, self.chunk_step, self.custom_chunking_func = self._parse_chunking(chunking)
         self._context_window = context_window
-        assert num_data_shards > data_shard_index
+        assert 0 <= data_shard_index < num_data_shards
         self.num_data_shards = num_data_shards
         self.data_shard_index = data_shard_index
         if isinstance(context_window, (tuple, list)):
