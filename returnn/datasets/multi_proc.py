@@ -191,8 +191,6 @@ class MultiProcDataset(CachedDataset2):
             with open("/proc/self/comm", "w") as f:
                 f.write(f"MPD worker {worker_index}")
 
-        assert sharding_method in ["dedicated", "seq_order"]
-
         dataset: Optional[Dataset] = None
 
         got_init_seq_order = False
@@ -303,6 +301,8 @@ class MultiProcDataset(CachedDataset2):
                             msg_, seq_order = seq_order_conn.recv()
                             assert msg_ == "seq_order_shard"
                             dataset.init_seq_order(seq_order=seq_order, **kwargs)
+                    else:
+                        raise ValueError(f"unknown sharding method {sharding_method}")
                     got_init_seq_order = True
                     next_seq_idx = 0
                     cache[:] = []
