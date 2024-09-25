@@ -197,6 +197,10 @@ class DistributeFilesDataset(CachedDataset2):
         self._lazy_init_num_outputs()
         super().initialize()
 
+    def supports_sharding(self) -> bool:
+        """:return: whether the dataset supports sharding based on the seq_order"""
+        return True
+
     @property
     def _distrib_info(self):
         return {"num_file_shards": self._num_file_shards, "file_shard_index": self._file_shard_index}
@@ -283,13 +287,15 @@ class DistributeFilesDataset(CachedDataset2):
             else:
                 raise ValueError(f"{self}: seq_ordering {self.seq_ordering!r} not supported")
             file_bins = self._distribute_evenly_by_size(
-                num_bins=self._num_file_shards * self.partition_epoch,
+                num_bins=self._num_data_shards * self._num_file_shards * self.partition_epoch,
                 file_sizes=self._file_sizes,
                 files_order=files_order_flat,
             )
-            self_index_base = self.partition_epoch * self._file_shard_index
-            self_index_end = self_index_base + self.partition_epoch
-            self._files_order_cache[full_epoch_0idx_] = file_bins[self_index_base:self_index_end]
+            self_index_base = self._num_data_shards * self.partition_epoch * self._file_shard_index
+            self_index_end = self_index_base + (self.partition_epoch * self._num_data_shards)
+            self._files_order_cache[full_epoch_0idx_] = file_bins[self_index_base:self_index_end][
+                self._data_shard_index :: self._num_data_shards
+            ]
 
         # Cleanup and fill _workers.
         for k, worker in list(self._workers.items()):
