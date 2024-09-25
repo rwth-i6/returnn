@@ -7,7 +7,7 @@ from typing import Optional, Any, Dict, List
 import sys
 import gc
 import multiprocessing as mp
-from returnn.util.basic import OptionalNotImplementedError, try_run
+from returnn.util.basic import try_run
 from returnn.config import SubProcCopyGlobalConfigPreInitFunc
 from returnn.util.multi_proc_non_daemonic_spawn import NonDaemonicSpawnContext
 from .basic import init_dataset, extend_dataset_dict_from_parent_dataset, Dataset, DatasetSeq
