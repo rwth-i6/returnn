@@ -19,7 +19,6 @@ from torch.nn.parallel import DistributedDataParallel
 from torch.utils.data import DataLoader
 from torch import autocast
 from torch.cuda import amp
-from random import random
 import math
 
 import returnn

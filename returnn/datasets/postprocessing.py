@@ -316,15 +316,30 @@ class LaplaceOrdering(Callable[[Iterator[TensorDict]], Iterator[TensorDict]]):
         iterator = iter(iterator)
         is_down_phase = False
 
+        seq_buffer = list(islice(iterator, self.num_seqs_per_bin))
         while True:
-            seq_buffer = list(islice(iterator, self.num_seqs_per_bin))
             seq_buffer.sort(key=self._get_seq_len, reverse=is_down_phase)
-            yield from seq_buffer
 
-            is_down_phase = not is_down_phase
+            next_seq_buffer = []
+            has_ended = False
+
+            # Yield items to trainer while gradually pulling more data from PP function.
+            # This optimizes CPU load when multiple workers are used.
+            for item in seq_buffer:
+                yield item
+
+                try:
+                    if not has_ended:
+                        next_seq_buffer.append(next(iterator))
+                except StopIteration:
+                    has_ended = True
 
             if len(seq_buffer) < self.num_seqs_per_bin:
+                assert has_ended and not next_seq_buffer
                 break
+
+            is_down_phase = not is_down_phase
+            seq_buffer = next_seq_buffer
 
     def _get_seq_len(self, tdict: TensorDict) -> int:
         """

@@ -1326,7 +1326,6 @@ class SimpleHDFWriter:
             # Thus, we flatten all together, and calculate the flattened seq len.
             # (Ignore this if there is only a single time dimension.)
             flat_seq_len = int(numpy.prod([seq_len[axis][i] for axis in range(ndim_with_seq_len)]))
-            assert flat_seq_len > 0
             flat_shape = [flat_seq_len]
             if self.dim and not sparse:
                 flat_shape.append(self.dim)
