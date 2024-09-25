@@ -299,7 +299,14 @@ class MultiProcDataset(CachedDataset2):
                             # We are responsible to get the seq order and distrib it to all the other workers.
                             assert other_worker_conns is not None
                             dataset.init_seq_order(**kwargs)
-                            seq_order = dataset.get_current_seq_order()
+                            try:
+                                seq_order = dataset.get_current_seq_order()
+                            except Exception as exc:
+                                raise Exception(
+                                    f"{MultiProcDataset.__name__}: `get_current_seq_order()` failed on {dataset}. "
+                                    f'Consider trying {MultiProcDataset.__name__}\'s "sharding_method": "dedicated", '
+                                    "which uses a different method for distributing the segments across workers."
+                                ) from exc
                             for i, worker_conn in enumerate(other_worker_conns):
                                 worker_conn.send(("seq_order_shard", seq_order[i + 1 :: len(other_worker_conns) + 1]))
                             parent_conn.send(("num_seqs", len(seq_order)))
