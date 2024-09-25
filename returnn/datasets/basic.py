@@ -647,7 +647,7 @@ class Dataset(object):
         :param shard_index: index of the current data shard
         :return: partition of seq_index for current epoch
         """
-        assert num_shards > shard_index
+        assert 0 <= shard_index < num_shards
         num_seqs = len(seq_index)
         num_partitions = partition_epoch * num_shards
         current_partition = (((epoch or 1) - 1) % partition_epoch) * num_shards + shard_index
