@@ -100,10 +100,10 @@ class MultiProcDataset(CachedDataset2):
 
         _mp = NonDaemonicSpawnContext(process_pre_init_func=SubProcCopyGlobalConfigPreInitFunc())
 
+        seq_order_to_worker = []  # type: List[mpConnection]
+        worker_from_seq_order = []  # type: List[mpConnection]
         if self._sharding_method == "seq_order":
             # Seq order proc (first worker) directly sends the seq order to each (other) worker.
-            seq_order_to_worker = []  # type: List[mpConnection]
-            worker_from_seq_order = []  # type: List[mpConnection]
             for i in range(self.num_workers - 1):
                 reader, writer = _mp.Pipe(duplex=False)
                 seq_order_to_worker.append(writer)
