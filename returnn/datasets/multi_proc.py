@@ -291,7 +291,7 @@ class MultiProcDataset(CachedDataset2):
                         dataset.init_seq_order(**kwargs)
                         try:
                             num_seqs = dataset.num_seqs
-                        except OptionalNotImplementedError:
+                        except NotImplementedError:
                             num_seqs = None
                         parent_conn.send(("num_seqs", num_seqs))
                     elif sharding_method == "seq_order":
