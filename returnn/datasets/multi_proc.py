@@ -100,13 +100,14 @@ class MultiProcDataset(CachedDataset2):
 
         _mp = NonDaemonicSpawnContext(process_pre_init_func=SubProcCopyGlobalConfigPreInitFunc())
 
-        # Seq order proc (first worker) directly sends the seq order to each (other) worker.
-        seq_order_to_worker = []  # type: List[mpConnection]
-        worker_from_seq_order = []  # type: List[mpConnection]
-        for i in range(self.num_workers - 1):
-            reader, writer = _mp.Pipe(duplex=False)
-            seq_order_to_worker.append(writer)
-            worker_from_seq_order.append(reader)
+        if self._sharding_method == "seq_order":
+            # Seq order proc (first worker) directly sends the seq order to each (other) worker.
+            seq_order_to_worker = []  # type: List[mpConnection]
+            worker_from_seq_order = []  # type: List[mpConnection]
+            for i in range(self.num_workers - 1):
+                reader, writer = _mp.Pipe(duplex=False)
+                seq_order_to_worker.append(writer)
+                worker_from_seq_order.append(reader)
 
         worker_parent_conns = []  # type: List[mpConnection]
         worker_child_conns = []  # type: List[mpConnection]
@@ -119,18 +120,7 @@ class MultiProcDataset(CachedDataset2):
         for i in range(self.num_workers):
             if self._sharding_method == "seq_order":
                 sub_dataset = self.dataset
-            elif self._sharding_method == "dedicated":
-                sub_dataset = {
-                    **self.dataset,
-                    "_num_data_shards": self.num_workers,
-                    "_data_shard_index": i,
-                }
-            else:
-                raise ValueError(f"unknown sharding_method {self._sharding_method}")
-            worker_proc = _mp.Process(
-                name=f"{self.name} worker proc {i + 1}/{self.num_workers}",
-                target=self._worker_proc_loop,
-                args=(
+                args = (
                     i,
                     sub_dataset,
                     self.buffer_size,
@@ -138,7 +128,28 @@ class MultiProcDataset(CachedDataset2):
                     worker_from_seq_order[i - 1] if i > 0 else None,
                     seq_order_to_worker if i == 0 else None,
                     self._sharding_method,
-                ),
+                )
+            elif self._sharding_method == "dedicated":
+                sub_dataset = {
+                    **self.dataset,
+                    "_num_data_shards": self.num_workers,
+                    "_data_shard_index": i,
+                }
+                args = (
+                    i,
+                    sub_dataset,
+                    self.buffer_size,
+                    worker_child_conns[i],
+                    None,
+                    None,
+                    self._sharding_method,
+                )
+            else:
+                raise ValueError(f"unknown sharding_method {self._sharding_method}")
+            worker_proc = _mp.Process(
+                name=f"{self.name} worker proc {i + 1}/{self.num_workers}",
+                target=self._worker_proc_loop,
+                args=args,
                 daemon=True,
             )
             worker_proc.start()
