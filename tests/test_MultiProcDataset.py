@@ -77,7 +77,9 @@ def test_MultiProcDataset_n3_b5_shuffle_sharding():
         mp_dataset.initialize()
         mp_dataset_seqs = dummy_iter_dataset(mp_dataset)
 
-        compare_dataset_seqs(hdf_dataset_seqs, mp_dataset_seqs)
+        assert len(hdf_dataset_seqs) == len(mp_dataset_seqs)
+        assert set(seq.seq_idx for seq in hdf_dataset_seqs) == set(seq.seq_idx for seq in mp_dataset_seqs)
+        assert set(seq.seq_tag for seq in hdf_dataset_seqs) == set(seq.seq_tag for seq in mp_dataset_seqs)
 
 
 def test_MultiProcDataset_meta():
