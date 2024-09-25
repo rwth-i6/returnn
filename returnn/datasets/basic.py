@@ -647,23 +647,20 @@ class Dataset(object):
         :param shard_index: index of the current data shard
         :return: partition of seq_index for current epoch
         """
-        assert 0 <= shard_index < num_shards
+        assert num_shards > shard_index
         num_seqs = len(seq_index)
-        current_partition = ((epoch or 1) - 1) % partition_epoch
-        seqs_per_epoch = num_seqs // partition_epoch
-        partition_sizes = [seqs_per_epoch + 1] * (num_seqs % partition_epoch) + [seqs_per_epoch] * (
-            partition_epoch - num_seqs % partition_epoch
+        num_partitions = partition_epoch * num_shards
+        current_partition = (((epoch or 1) - 1) % partition_epoch) * num_shards + shard_index
+        seqs_per_epoch = num_seqs // num_partitions
+        partition_sizes = [seqs_per_epoch + 1] * (num_seqs % num_partitions) + [seqs_per_epoch] * (
+            num_partitions - num_seqs % num_partitions
         )
-        assert sum(partition_sizes) == num_seqs and len(partition_sizes) == partition_epoch
+        assert sum(partition_sizes) == num_seqs and len(partition_sizes) == num_partitions
         partitions = functools.reduce(lambda a, x: a + [a[-1] + x], partition_sizes, [0])  # cumulative sum
-        assert len(partitions) == partition_epoch + 1
-        seq_index = seq_index[shard_index:][::num_shards][
-            partitions[current_partition] : partitions[current_partition + 1]
-        ]
-        assert len(seq_index) in [
-            (partition_sizes[current_partition] // num_shards),
-            (partition_sizes[current_partition] // num_shards) + 1,
-        ]
+        assert len(partitions) == num_partitions + 1
+        seq_index = seq_index[partitions[current_partition] : partitions[current_partition + 1]]
+        assert len(seq_index) == partition_sizes[current_partition]
+
         return seq_index
 
     def supports_sharding(self) -> bool:
