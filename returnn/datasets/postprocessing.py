@@ -128,7 +128,7 @@ class PostprocessingDataset(CachedDataset2):
         self._map_outputs = map_outputs
         self._rng = RandomState(self._get_random_seed_for_epoch(0))
 
-        self._dataset = init_dataset(self._dataset_def, parent_dataset=self, forward_sharding_config=True)
+        self._dataset = init_dataset(self._dataset_def, parent_dataset=self)
         if self._map_seq_stream is None:
             # if the stream mapper is set, the num_seqs may change and the estimation is less accurate
             self._estimated_num_seqs = self._dataset.estimated_num_seqs

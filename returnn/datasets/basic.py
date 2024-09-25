@@ -1445,7 +1445,6 @@ def init_dataset(
     :param extra_kwargs:
     :param default_kwargs:
     :param parent_dataset: if given, will adapt some of the default_kwargs (when not set)
-    :param forward_sharding_config: whether to forward the sharding config from the parent dataset
     """
     assert kwargs
     if isinstance(kwargs, Dataset):
