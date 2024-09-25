@@ -1439,7 +1439,6 @@ def init_dataset(
     default_kwargs: Optional[Dict[str, Any]] = None,
     *,
     parent_dataset: Optional[Dataset] = None,
-    forward_sharding_config: bool = False,
 ) -> Dataset:
     """
     :param kwargs:
@@ -1459,7 +1458,6 @@ def init_dataset(
             extra_kwargs=extra_kwargs,
             default_kwargs=default_kwargs,
             parent_dataset=parent_dataset,
-            forward_sharding_config=forward_sharding_config,
         )
     if isinstance(kwargs, str):
         if kwargs.startswith("{"):
@@ -1474,14 +1472,11 @@ def init_dataset(
                 extra_kwargs=extra_kwargs,
                 default_kwargs=default_kwargs,
                 parent_dataset=parent_dataset,
-                forward_sharding_config=forward_sharding_config,
             )
         else:
             config_str = kwargs
             kwargs = {}
-            default_kwargs = _dataset_extend_default_kwargs_from_parent_dataset(
-                default_kwargs, parent_dataset, forward_sharding_config=forward_sharding_config
-            )
+            default_kwargs = _dataset_extend_default_kwargs_from_parent_dataset(default_kwargs, parent_dataset)
             if default_kwargs:
                 kwargs.update(default_kwargs)
             if extra_kwargs:
@@ -1500,9 +1495,7 @@ def init_dataset(
     clazz = get_dataset_class(clazz_name)
     if not clazz:
         raise Exception("Dataset class %r not found" % clazz_name)
-    default_kwargs = _dataset_extend_default_kwargs_from_parent_dataset(
-        default_kwargs, parent_dataset, forward_sharding_config=forward_sharding_config
-    )
+    default_kwargs = _dataset_extend_default_kwargs_from_parent_dataset(default_kwargs, parent_dataset)
     if default_kwargs:
         for key, value in default_kwargs.items():
             kwargs.setdefault(key, value)
@@ -1519,9 +1512,7 @@ def init_dataset(
 
 
 def _dataset_extend_default_kwargs_from_parent_dataset(
-    default_kwargs: Optional[Dict[str, Any]],
-    parent_dataset: Optional[Dataset],
-    forward_sharding_config: bool = False,
+    default_kwargs: Optional[Dict[str, Any]], parent_dataset: Optional[Dataset]
 ) -> Optional[Dict[str, Any]]:
     """
     :param default_kwargs:
@@ -1531,9 +1522,8 @@ def _dataset_extend_default_kwargs_from_parent_dataset(
         return default_kwargs
     default_kwargs = default_kwargs.copy() if default_kwargs else {}
     default_kwargs.setdefault("random_seed_offset", parent_dataset.random_seed_offset)
-    if forward_sharding_config:
-        default_kwargs["num_data_shards"] = parent_dataset.num_data_shards
-        default_kwargs["data_shard_index"] = parent_dataset.data_shard_index
+    default_kwargs.setdefault("num_data_shards", parent_dataset.num_data_shards)
+    default_kwargs.setdefault("data_shard_index", parent_dataset.data_shard_index)
     return default_kwargs
 
 
