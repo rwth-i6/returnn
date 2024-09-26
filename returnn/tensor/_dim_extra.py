@@ -1643,25 +1643,14 @@ class _DimMixin:
         if self._extra:
             self._extra.derived_from_op = None
             self._extra.derived_from_tag = None
-        if self_same_as is not self:
-            assert not self_same_as.same_as
-            if self_same_as is other_same_base:
-                return
-            with util.guard_infinite_recursion(_d.Dim.declare_same_as, self_same_as, other_same_base):
-                self_same_as.declare_same_as(other_same_base)
-            if (self.dyn_size_ext is None or not self._validate_in_current_graph()) and self_same_as.dyn_size_ext:
-                self.dyn_size_ext = self_same_as.get_dyn_size_ext_for_batch_ctx(
-                    self.batch, self.control_flow_ctx, template_only=True
-                )
-        else:
-            if self._extra:
-                for dim_ in self._extra.same_for_batch_ctx.values():
+        if self._extra:
+            for dim_ in self._extra.same_for_batch_ctx.values():
+                # noinspection PyProtectedMember
+                if dim_._extra:
                     # noinspection PyProtectedMember
-                    if dim_._extra:
-                        # noinspection PyProtectedMember
-                        dim_._extra.derived_from_op = None
-                        # noinspection PyProtectedMember
-                        dim_._extra.derived_from_tag = None
+                    dim_._extra.derived_from_op = None
+                    # noinspection PyProtectedMember
+                    dim_._extra.derived_from_tag = None
         # Now merge existing variants. But only if not derived via op, because in that case, we can (and should!)
         # automatically infer it. Note that we only got here when the other is not the same dim, so it means that
         # the other is really different, the sizes are potentially different, but we want to overtake the other.
@@ -1723,6 +1712,13 @@ class _DimMixin:
                 other_same_base.batch, other_same_base.control_flow_ctx, template_only=True
             )
             other_same_base._maybe_update()
+        if (
+            self.dyn_size_ext
+            and self.dyn_size_ext.raw_tensor is None
+            and other_same_base.dyn_size_ext.raw_tensor is not None
+        ):
+            self.dyn_size_ext = other_same_base.dyn_size_ext.copy()
+            self._maybe_update()
         if self.is_dim_known() and other.is_dim_known():
             assert self.dimension == other.dimension
         elif self.is_dim_known() and not other.is_dim_known():
@@ -1762,6 +1758,13 @@ class _DimMixin:
             if self_ is not self:
                 self.control_flow_ctx = self_.control_flow_ctx  # might be different
                 self.dyn_size_ext = self_.dyn_size_ext  # might be unset
+        if self_same_as is not self:
+            assert not self_same_as.same_as
+            assert self_same_as is not other_same_base
+            with util.guard_infinite_recursion(_d.Dim.declare_same_as, self_same_as, other_same_base):
+                # Do this at the end, when this is not our own base anymore,
+                # because otherwise any reset() might incorrectly reset the new other base.
+                self_same_as.declare_same_as(other_same_base)
 
     def _merge_same_for_batch_ctx_dict(self: _d.Dim, other: _d.Dim):
         """
