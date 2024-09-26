@@ -1450,10 +1450,7 @@ def init_dataset(
         return data
     if callable(kwargs):
         return init_dataset(
-            kwargs(),
-            extra_kwargs=extra_kwargs,
-            default_kwargs=default_kwargs,
-            parent_dataset=parent_dataset,
+            kwargs(), extra_kwargs=extra_kwargs, default_kwargs=default_kwargs, parent_dataset=parent_dataset
         )
     if isinstance(kwargs, str):
         if kwargs.startswith("{"):
@@ -1464,15 +1461,12 @@ def init_dataset(
             config = get_global_config()
             data = eval(kwargs[len("config:") :], config.typed_dict, config.typed_dict)
             return init_dataset(
-                data,
-                extra_kwargs=extra_kwargs,
-                default_kwargs=default_kwargs,
-                parent_dataset=parent_dataset,
+                data, extra_kwargs=extra_kwargs, default_kwargs=default_kwargs, parent_dataset=parent_dataset
             )
         else:
             config_str = kwargs
             kwargs = {}
-            default_kwargs = _extend_default_kwargs_from_parent_dataset(default_kwargs, parent_dataset)
+            default_kwargs = _dataset_extend_default_kwargs_from_parent_dataset(default_kwargs, parent_dataset)
             if default_kwargs:
                 kwargs.update(default_kwargs)
             if extra_kwargs:
@@ -1491,7 +1485,7 @@ def init_dataset(
     clazz = get_dataset_class(clazz_name)
     if not clazz:
         raise Exception("Dataset class %r not found" % clazz_name)
-    default_kwargs = _extend_default_kwargs_from_parent_dataset(default_kwargs, parent_dataset)
+    default_kwargs = _dataset_extend_default_kwargs_from_parent_dataset(default_kwargs, parent_dataset)
     if default_kwargs:
         for key, value in default_kwargs.items():
             kwargs.setdefault(key, value)
@@ -1507,7 +1501,7 @@ def init_dataset(
     return obj
 
 
-def _extend_default_kwargs_from_parent_dataset(
+def _dataset_extend_default_kwargs_from_parent_dataset(
     default_kwargs: Optional[Dict[str, Any]], parent_dataset: Optional[Dataset]
 ) -> Optional[Dict[str, Any]]:
     """
@@ -1531,7 +1525,7 @@ def extend_dataset_dict_from_parent_dataset(
     :param parent_dataset:
     :return: extended dataset_dict
     """
-    return _extend_default_kwargs_from_parent_dataset(dataset_dict, parent_dataset)
+    return _dataset_extend_default_kwargs_from_parent_dataset(dataset_dict, parent_dataset)
 
 
 def init_dataset_via_str(config_str, config=None, cache_byte_size=None, **kwargs):
