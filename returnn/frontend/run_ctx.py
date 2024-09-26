@@ -275,8 +275,8 @@ class RunCtx:
         if dims is None and expected_output:
             dims = expected_output.dims
         if dims is not None and expected_output:
-            assert (
-                expected_output.dims == dims
+            assert expected_output.dims == tuple(
+                dims
             ), f"mark_as_output: {name!r} dims mismatch from expected output, given {dims}, expected {expected_output}"
 
         if not isinstance(tensor, Tensor):
