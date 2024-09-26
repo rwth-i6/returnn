@@ -263,6 +263,30 @@ def test_dim_value():
     run_model(extern_data, lambda *, epoch, step: _Net(), _forward_step)
 
 
+def test_dim_size_after_declare_same_as():
+    time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
+    extern_data = TensorDict(
+        {
+            "data": Tensor("data", [batch_dim, time_dim], dtype="float32"),
+        }
+    )
+    out_spatial_dim = Dim(None, name="out_spatial")
+
+    # noinspection PyShadowingNames
+    def _forward_step(**_kwargs):
+        assert time_dim.dyn_size_ext.raw_tensor is not None
+        enc_spatial_dim = time_dim * 2
+        assert enc_spatial_dim.dyn_size_ext.raw_tensor is not None
+        out_spatial_dim.declare_same_as(enc_spatial_dim)
+        assert enc_spatial_dim.dyn_size_ext.raw_tensor is not None
+        assert out_spatial_dim.dyn_size_ext.raw_tensor is not None
+        out_spatial_dim.dyn_size_ext.mark_as_default_output(shape=[batch_dim])
+
+    # Running it twice can trigger some weird behavior in Dim.declare_same_as.
+    run_model(extern_data, lambda **_kwargs: rf.Module(), _forward_step, test_tensorflow=False)
+    run_model(extern_data, lambda **_kwargs: rf.Module(), _forward_step, test_tensorflow=False)
+
+
 def test_dim_mask():
     time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
     in_dim = Dim(7, name="in")
