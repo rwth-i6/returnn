@@ -1330,22 +1330,6 @@ class Dataset(object):
             shape = [max(shape[0], batch.max_num_frames_per_slice[data_key]), shape[1] + batch.num_slices]
         return tuple(shape)
 
-    @classmethod
-    def extend_default_kwargs_from_parent_dataset(
-        cls, default_kwargs: Optional[Dict[str, Any]], parent_dataset: Optional[Dataset]
-    ) -> Optional[Dict[str, Any]]:
-        """
-        :param default_kwargs:
-        :param parent_dataset:
-        """
-        if not parent_dataset:
-            return default_kwargs
-        default_kwargs = default_kwargs.copy() if default_kwargs else {}
-        default_kwargs.setdefault("random_seed_offset", parent_dataset.random_seed_offset)
-        default_kwargs.setdefault("_num_data_shards", parent_dataset._num_data_shards)
-        default_kwargs.setdefault("_data_shard_index", parent_dataset._data_shard_index)
-        return default_kwargs
-
 
 class DatasetSeq:
     """
@@ -1488,7 +1472,7 @@ def init_dataset(
         else:
             config_str = kwargs
             kwargs = {}
-            default_kwargs = Dataset.extend_default_kwargs_from_parent_dataset(default_kwargs, parent_dataset)
+            default_kwargs = _extend_default_kwargs_from_parent_dataset(default_kwargs, parent_dataset)
             if default_kwargs:
                 kwargs.update(default_kwargs)
             if extra_kwargs:
@@ -1507,7 +1491,7 @@ def init_dataset(
     clazz = get_dataset_class(clazz_name)
     if not clazz:
         raise Exception("Dataset class %r not found" % clazz_name)
-    default_kwargs = Dataset.extend_default_kwargs_from_parent_dataset(default_kwargs, parent_dataset)
+    default_kwargs = _extend_default_kwargs_from_parent_dataset(default_kwargs, parent_dataset)
     if default_kwargs:
         for key, value in default_kwargs.items():
             kwargs.setdefault(key, value)
@@ -1523,6 +1507,22 @@ def init_dataset(
     return obj
 
 
+def _extend_default_kwargs_from_parent_dataset(
+    default_kwargs: Optional[Dict[str, Any]], parent_dataset: Optional[Dataset]
+) -> Optional[Dict[str, Any]]:
+    """
+    :param default_kwargs:
+    :param parent_dataset:
+    """
+    if not parent_dataset:
+        return default_kwargs
+    default_kwargs = default_kwargs.copy() if default_kwargs else {}
+    default_kwargs.setdefault("random_seed_offset", parent_dataset.random_seed_offset)
+    default_kwargs.setdefault("_num_data_shards", parent_dataset._num_data_shards)  # noqa
+    default_kwargs.setdefault("_data_shard_index", parent_dataset._data_shard_index)  # noqa
+    return default_kwargs
+
+
 def extend_dataset_dict_from_parent_dataset(
     dataset_dict: Dict[str, Any], parent_dataset: Optional[Dataset]
 ) -> Dict[str, Any]:
@@ -1531,7 +1531,7 @@ def extend_dataset_dict_from_parent_dataset(
     :param parent_dataset:
     :return: extended dataset_dict
     """
-    return Dataset.extend_default_kwargs_from_parent_dataset(dataset_dict, parent_dataset)
+    return _extend_default_kwargs_from_parent_dataset(dataset_dict, parent_dataset)
 
 
 def init_dataset_via_str(config_str, config=None, cache_byte_size=None, **kwargs):
