@@ -355,7 +355,6 @@ class MultiProcDataset(CachedDataset2):
 
         self._lazy_init()
 
-        assert self._sharding_method in ["dedicated", "seq_order"]
         if self._sharding_method == "dedicated":
             for worker_conn in self._worker_parent_conns:
                 worker_conn.send(("init_seq_order", {"epoch": epoch, "seq_list": seq_list, "seq_order": seq_order}))
@@ -379,6 +378,8 @@ class MultiProcDataset(CachedDataset2):
             msg, num_seqs = self._seq_order_proc_parent_conn.recv()
             assert msg == "num_seqs"
             self._num_seqs = num_seqs
+        else:
+            raise ValueError(f"{self}: unknown sharding method {self._sharding_method}")
 
         return True
 
