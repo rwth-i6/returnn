@@ -42,9 +42,11 @@ class MultiProcDataset(CachedDataset2):
         :param num_workers: number of workers to use
         :param buffer_size: buffer size for each worker, amount of seqs to prefetch
         :param sharding_method: which method to use for sharding the data across the worker procs.
-            Default is ``seq_order``, which fetches the full list of seq indices,
+            The default is ``seq_order``, which fetches the full list of seq indices,
             and then distributes shards of that to the other workers.
-            Can also be set to ``dedicated`` to enable a dedicated worker-index based sharding method.
+            Can also be set to ``dedicated`` to enable a worker-index based sharding method.
+            This is compatible with more types of datasets, in particular those
+            that do not know their total number of segments upfront.
         :param _meta_info_cache: for internal use
         """
         super().__init__(**kwargs)
@@ -56,8 +58,11 @@ class MultiProcDataset(CachedDataset2):
         self.dataset = dataset
         self.num_workers = num_workers
         self.buffer_size = buffer_size
-        if sharding_method not in ["seq_order", "dedicated"]:
-            raise ValueError(f"invalid sharding_method {sharding_method}")
+        allowed_sharding_methods = ["seq_order", "dedicated"]
+        if sharding_method not in allowed_sharding_methods:
+            raise ValueError(
+                f"invalid sharding_method '{sharding_method}', must be {' or '.join(allowed_sharding_methods)}"
+            )
         self._sharding_method = sharding_method
         self._data_keys = None
         self._num_seqs = None
@@ -145,7 +150,7 @@ class MultiProcDataset(CachedDataset2):
                     self._sharding_method,
                 )
             else:
-                raise ValueError(f"unknown sharding_method {self._sharding_method}")
+                raise ValueError(f"{self}: unknown sharding_method: {self._sharding_method}")
             worker_proc = _mp.Process(
                 name=f"{self.name} worker proc {i + 1}/{self.num_workers}",
                 target=self._worker_proc_loop,
@@ -320,7 +325,7 @@ class MultiProcDataset(CachedDataset2):
                             assert msg_ == "seq_order_shard"
                             dataset.init_seq_order(seq_order=seq_order, **kwargs)
                     else:
-                        raise ValueError(f"unknown sharding method {sharding_method}")
+                        raise ValueError(f"{MultiProcDataset.__name__}: unknown sharding_method: {sharding_method}")
                     got_init_seq_order = True
                     next_seq_idx = 0
                     cache[:] = []
@@ -379,7 +384,7 @@ class MultiProcDataset(CachedDataset2):
             assert msg == "num_seqs"
             self._num_seqs = num_seqs
         else:
-            raise ValueError(f"{self}: unknown sharding method {self._sharding_method}")
+            raise ValueError(f"{self}: unknown sharding_method: {self._sharding_method}")
 
         return True
 
