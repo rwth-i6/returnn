@@ -2301,7 +2301,6 @@ class _DimMixin:
         value = {"dim": self.dimension}
         if self.kind is not None:
             value["kind"] = self.kind.name
-        assert self.derived_from_op is None  # not handled yet for hashing...
         return value
 
 
