@@ -1512,8 +1512,10 @@ def _dataset_extend_default_kwargs_from_parent_dataset(
         return default_kwargs
     default_kwargs = default_kwargs.copy() if default_kwargs else {}
     default_kwargs.setdefault("random_seed_offset", parent_dataset.random_seed_offset)
-    default_kwargs.setdefault("_num_data_shards", parent_dataset._num_data_shards)  # noqa
-    default_kwargs.setdefault("_data_shard_index", parent_dataset._data_shard_index)  # noqa
+    # noinspection PyProtectedMember
+    default_kwargs.setdefault("_num_data_shards", parent_dataset._num_data_shards)
+    # noinspection PyProtectedMember
+    default_kwargs.setdefault("_data_shard_index", parent_dataset._data_shard_index)
     return default_kwargs
 
 
