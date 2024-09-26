@@ -291,11 +291,12 @@ class DistributeFilesDataset(CachedDataset2):
                 file_sizes=self._file_sizes,
                 files_order=files_order_flat,
             )
-            self_index_base = self._num_data_shards * self.partition_epoch * self._file_shard_index
-            self_index_end = self_index_base + (self.partition_epoch * self._num_data_shards)
-            self._files_order_cache[full_epoch_0idx_] = file_bins[self_index_base:self_index_end][
-                self._data_shard_index :: self._num_data_shards
-            ]
+            num_files_per_data_shard = self._num_file_shards * self.partition_epoch
+            self_index_base = (
+                num_files_per_data_shard * self._data_shard_index + self.partition_epoch * self._file_shard_index
+            )
+            self_index_end = self_index_base + self.partition_epoch
+            self._files_order_cache[full_epoch_0idx_] = file_bins[self_index_base:self_index_end]
 
         # Cleanup and fill _workers.
         for k, worker in list(self._workers.items()):
