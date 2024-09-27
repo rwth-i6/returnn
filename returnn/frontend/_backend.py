@@ -993,6 +993,16 @@ class Backend(Generic[T]):
         raise NotImplementedError
 
     @staticmethod
+    def is_infinite(x: Tensor) -> Tensor:
+        """is positive or negative infinite"""
+        raise NotImplementedError
+
+    @staticmethod
+    def is_neg_infinite(x: Tensor) -> Tensor:
+        """is negative infinite"""
+        raise NotImplementedError
+
+    @staticmethod
     def clip_by_value(
         x: Tensor,
         clip_value_min: Union[Tensor, rf.RawTensorTypes],

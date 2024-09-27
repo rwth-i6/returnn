@@ -1213,6 +1213,20 @@ class TorchBackend(Backend[torch.Tensor]):
         return out
 
     @staticmethod
+    def is_infinite(x: Tensor) -> Tensor:
+        """is positive or negative infinite"""
+        out = x.copy_template("is_infinite", dtype="bool")
+        out.raw_tensor = torch.isinf(x.raw_tensor)
+        return out
+
+    @staticmethod
+    def is_neg_infinite(x: Tensor) -> Tensor:
+        """is negative infinite"""
+        out = x.copy_template("is_neg_infinite", dtype="bool")
+        out.raw_tensor = torch.isneginf(x.raw_tensor)
+        return out
+
+    @staticmethod
     def clip_by_value(
         x: Tensor,
         clip_value_min: Union[Tensor, rf.RawTensorTypes],

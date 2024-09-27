@@ -38,6 +38,8 @@ __all__ = [
     "opt_logical_or",
     "opt_logical_and",
     "is_finite",
+    "is_infinite",
+    "is_neg_infinite",
     "maximum",
     "minimum",
     "clip_by_value",
@@ -366,6 +368,18 @@ def is_finite(a: Tensor) -> Tensor:
     """is finite"""
     # noinspection PyProtectedMember
     return a._raw_backend.is_finite(a)
+
+
+def is_infinite(a: Tensor) -> Tensor:
+    """is positive or negative infinite"""
+    # noinspection PyProtectedMember
+    return a._raw_backend.is_infinite(a)
+
+
+def is_neg_infinite(a: Tensor) -> Tensor:
+    """is negative infinite"""
+    # noinspection PyProtectedMember
+    return a._raw_backend.is_neg_infinite(a)
 
 
 def maximum(a: Tensor, b: Union[Tensor, _RawTensorTypes], *other_tensors) -> Tensor:
