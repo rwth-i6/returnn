@@ -1418,7 +1418,7 @@ class TorchBackend(Backend[torch.Tensor]):
         if use_mask and any(dim.need_masking() for dim in axis):
             source = source.copy()
             dtype = source.raw_tensor.dtype
-            if mode == "max":
+            if mode in ("max", "logsumexp"):
                 mask_value = torch.finfo(dtype).min if dtype.is_floating_point else torch.iinfo(dtype).min
             elif mode == "min":
                 mask_value = torch.finfo(dtype).max if dtype.is_floating_point else torch.iinfo(dtype).max
