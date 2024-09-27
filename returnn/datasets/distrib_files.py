@@ -139,6 +139,8 @@ class DistributeFilesDataset(CachedDataset2):
         distrib_shard_files: bool = False,
         _meta_info_cache: Optional[Dict[str, Any]] = None,
         _distrib_info: Optional[Dict[str, int]] = None,
+        _num_shards: Optional[int] = None,
+        _shard_index: Optional[int] = None,
         **kwargs,
     ):
         """
@@ -151,8 +153,27 @@ class DistributeFilesDataset(CachedDataset2):
             distributed training scenaria
         :param _meta_info_cache: for internal use
         :param _distrib_info: for internal use
+        :param _num_shards: how many data shards there are
+        _param _shard_index: the index of the local shard
         """
-        super().__init__(**kwargs)
+        self.distrib_shard_files = distrib_shard_files
+        if distrib_shard_files:
+            assert _num_shards is None and _shard_index is None, (
+                f"{self}: Cannot use both dataset-sharding via properties _num_shards and _shard index "
+                f"and {self.__class__.__name__}'s own sharding implementation based on the trainings rank and size."
+            )
+            if _distrib_info:
+                # If we're in a child process `_get_rank_and_size()` no longer works,
+                # so we pass the info about the shards via a pickled property.
+                # See also Dataset.__reduce__.
+                shard_index = _distrib_info["_shard_index"]
+                num_shards = _distrib_info["_num_shards"]
+            else:
+                shard_index, num_shards = _get_rank_and_size()
+        else:
+            num_shards = _num_shards or 1
+            shard_index = _shard_index or 0
+        super().__init__(**kwargs, _num_shards=num_shards, _shard_index=shard_index)
         self.files = files
         self.get_sub_epoch_dataset = get_sub_epoch_dataset
         assert preload_next_n_sub_epochs >= 0
@@ -164,20 +185,6 @@ class DistributeFilesDataset(CachedDataset2):
 
         self._workers: Dict[int, _WorkerProcParent] = {}  # epoch -> worker
         self._files_order_cache: Dict[int, List[List[FileTree]]] = {}  # full epoch (0-indexed) -> files order
-
-        self.distrib_shard_files = distrib_shard_files
-        if distrib_shard_files:
-            if _distrib_info:
-                # If we're in a child process `_get_rank_and_size()` no longer works,
-                # so we pass the info about the shards via a pickled property.
-                # See also Dataset.__reduce__.
-                self._file_shard_index = _distrib_info["file_shard_index"]
-                self._num_file_shards = _distrib_info["num_file_shards"]
-            else:
-                self._file_shard_index, self._num_file_shards = _get_rank_and_size()
-        else:
-            self._file_shard_index = 0
-            self._num_file_shards = 1
 
         if _meta_info_cache:
             # This allows to skip the lazy init in self.initialize().
@@ -203,7 +210,7 @@ class DistributeFilesDataset(CachedDataset2):
 
     @property
     def _distrib_info(self):
-        return {"num_file_shards": self._num_file_shards, "file_shard_index": self._file_shard_index}
+        return {"_num_shards": self._num_shards, "_shard_index": self._shard_index}
 
     @property
     def _meta_info_cache(self):
@@ -218,7 +225,7 @@ class DistributeFilesDataset(CachedDataset2):
         }
 
     def _uses_custom_distributed_sharding(self) -> bool:
-        return self._num_file_shards > 1
+        return self._num_shards > 1
 
     def _lazy_init_num_outputs(self):
         if self.num_outputs:
@@ -287,14 +294,11 @@ class DistributeFilesDataset(CachedDataset2):
             else:
                 raise ValueError(f"{self}: seq_ordering {self.seq_ordering!r} not supported")
             file_bins = self._distribute_evenly_by_size(
-                num_bins=self._num_data_shards * self._num_file_shards * self.partition_epoch,
+                num_bins=self._num_shards * self.partition_epoch,
                 file_sizes=self._file_sizes,
                 files_order=files_order_flat,
             )
-            num_files_per_data_shard = self._num_file_shards * self.partition_epoch
-            self_index_base = (
-                num_files_per_data_shard * self._data_shard_index + self.partition_epoch * self._file_shard_index
-            )
+            self_index_base = self.partition_epoch * self._shard_index
             self_index_end = self_index_base + self.partition_epoch
             self._files_order_cache[full_epoch_0idx_] = file_bins[self_index_base:self_index_end]
 

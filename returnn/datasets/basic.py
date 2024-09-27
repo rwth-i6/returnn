@@ -111,8 +111,8 @@ class Dataset(object):
         min_chunk_size=0,
         chunking_variance=0,
         estimated_num_seqs=None,
-        _num_data_shards=1,
-        _data_shard_index=0,
+        _num_shards=1,
+        _shard_index=0,
     ):
         """
         :param str name: e.g. "train" or "eval"
@@ -136,8 +136,8 @@ class Dataset(object):
         :param str|None seq_order_seq_lens_file: for seq order, use the seq length given by this file
         :param int shuffle_frames_of_nseqs: shuffles the frames. not always supported
         :param None|int estimated_num_seqs: for progress reporting in case the real num_seqs is unknown
-        :param int _num_data_shards: number of shards the data is split into
-        :param int _data_shard_index: local shard index, when sharding is enabled
+        :param int _num_shards: number of shards the data is split into
+        :param int _shard_index: local shard index, when sharding is enabled
         """
         self.name = name or ("dataset_id%s" % id(self))
         self.lock = None  # type: Optional[RLock]  # Used when manipulating our data potentially from multiple threads.
@@ -171,9 +171,9 @@ class Dataset(object):
         self._chunking = chunking
         self.chunk_size, self.chunk_step, self.custom_chunking_func = self._parse_chunking(chunking)
         self._context_window = context_window
-        assert 0 <= _data_shard_index < _num_data_shards
-        self._num_data_shards = _num_data_shards
-        self._data_shard_index = _data_shard_index
+        assert 0 <= _shard_index < _num_shards
+        self._num_shards = _num_shards
+        self._shard_index = _shard_index
         if isinstance(context_window, (tuple, list)):
             assert len(context_window) == 2
             for elem in context_window:
@@ -604,9 +604,9 @@ class Dataset(object):
             seq_index = [
                 i for i in seq_index if (all_seq_tags[i] not in used_seq_tags, used_seq_tags.add(all_seq_tags[i]))[0]
             ]
-        if partition_epoch > 1 or self._num_data_shards > 1:
+        if partition_epoch > 1 or self._num_shards > 1:
             seq_index = self._apply_partition_epoch_and_sharding(
-                seq_index, partition_epoch, epoch, self._num_data_shards, self._data_shard_index
+                seq_index, partition_epoch, epoch, self._num_shards, self._shard_index
             )
         if repeat_epoch > 1:
             seq_index = list(seq_index) * repeat_epoch
@@ -698,8 +698,8 @@ class Dataset(object):
         self.epoch = epoch
         self.rnd_seq_drop = Random(self._get_random_seed_for_epoch(epoch=epoch))
         assert (
-            self._num_data_shards == 1 or self.supports_sharding()
-        ), f"{self}: does not support sharding, but got num_data_shards == {self._num_data_shards}"
+            self._num_shards == 1 or self.supports_sharding()
+        ), f"{self}: does not support sharding, but got num_data_shards == {self._num_shards}"
         return False
 
     def finish_epoch(self, *, free_resources: bool = False):
@@ -1513,9 +1513,9 @@ def _dataset_extend_default_kwargs_from_parent_dataset(
     default_kwargs = default_kwargs.copy() if default_kwargs else {}
     default_kwargs.setdefault("random_seed_offset", parent_dataset.random_seed_offset)
     # noinspection PyProtectedMember
-    default_kwargs.setdefault("_num_data_shards", parent_dataset._num_data_shards)
+    default_kwargs.setdefault("_num_shards", parent_dataset._num_shards)
     # noinspection PyProtectedMember
-    default_kwargs.setdefault("_data_shard_index", parent_dataset._data_shard_index)
+    default_kwargs.setdefault("_shard_index", parent_dataset._shard_index)
     return default_kwargs
 
 
