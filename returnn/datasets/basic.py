@@ -699,7 +699,7 @@ class Dataset(object):
         self.rnd_seq_drop = Random(self._get_random_seed_for_epoch(epoch=epoch))
         assert (
             self._num_shards == 1 or self.supports_sharding()
-        ), f"{self}: does not support sharding, but got num_data_shards == {self._num_shards}"
+        ), f"{self}: does not support sharding, but got num_shards == {self._num_shards}"
         return False
 
     def finish_epoch(self, *, free_resources: bool = False):
