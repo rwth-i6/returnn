@@ -139,8 +139,6 @@ class DistributeFilesDataset(CachedDataset2):
         distrib_shard_files: bool = False,
         _meta_info_cache: Optional[Dict[str, Any]] = None,
         _distrib_info: Optional[Dict[str, int]] = None,
-        _num_shards: Optional[int] = None,
-        _shard_index: Optional[int] = None,
         **kwargs,
     ):
         """
@@ -153,27 +151,8 @@ class DistributeFilesDataset(CachedDataset2):
             distributed training scenaria
         :param _meta_info_cache: for internal use
         :param _distrib_info: for internal use
-        :param _num_shards: how many data shards there are
-        _param _shard_index: the index of the local shard
         """
-        self.distrib_shard_files = distrib_shard_files
-        if distrib_shard_files:
-            if _distrib_info:
-                # If we're in a child process `_get_rank_and_size()` no longer works,
-                # so we pass the info about the shards via a pickled property.
-                # See also Dataset.__reduce__.
-                shard_index = _distrib_info["_shard_index"]
-                num_shards = _distrib_info["_num_shards"]
-            else:
-                shard_index, num_shards = _get_rank_and_size()
-        else:
-            num_shards = _num_shards or 1
-            shard_index = _shard_index or 0
-        super().__init__(**kwargs, _num_shards=num_shards, _shard_index=shard_index)
-        assert not distrib_shard_files or (_num_shards == 1 and _shard_index == 0), (
-            f"{self}: Cannot use both dataset-sharding via properties _num_shards and _shard index "
-            f"and {self.__class__.__name__}'s own sharding implementation based on the trainings rank and size."
-        )
+        super().__init__(**kwargs)
         self.files = files
         self.get_sub_epoch_dataset = get_sub_epoch_dataset
         assert preload_next_n_sub_epochs >= 0
@@ -185,6 +164,22 @@ class DistributeFilesDataset(CachedDataset2):
 
         self._workers: Dict[int, _WorkerProcParent] = {}  # epoch -> worker
         self._files_order_cache: Dict[int, List[List[FileTree]]] = {}  # full epoch (0-indexed) -> files order
+
+        self.distrib_shard_files = distrib_shard_files
+        if distrib_shard_files:
+            assert self._num_shards == 1 and self._shard_index == 0, (  # ensure defaults are set
+                f"{self}: Cannot use both dataset-sharding via properties _num_shards and _shard index "
+                f"and {self.__class__.__name__}'s own sharding implementation based on the trainings rank and size."
+            )
+            if _distrib_info:
+                # If we're in a child process `_get_rank_and_size()` no longer works,
+                # so we pass the info about the shards via a pickled property.
+                # See also Dataset.__reduce__.
+                self._shard_index = _distrib_info["_shard_index"]
+                self._num_shards = _distrib_info["_num_shards"]
+            else:
+                self._shard_index, self._num_shards = _get_rank_and_size()
+        assert 0 <= self._shard_index < self._num_shards
 
         if _meta_info_cache:
             # This allows to skip the lazy init in self.initialize().
