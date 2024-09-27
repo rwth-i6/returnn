@@ -158,10 +158,6 @@ class DistributeFilesDataset(CachedDataset2):
         """
         self.distrib_shard_files = distrib_shard_files
         if distrib_shard_files:
-            assert _num_shards is None and _shard_index is None, (
-                f"{self}: Cannot use both dataset-sharding via properties _num_shards and _shard index "
-                f"and {self.__class__.__name__}'s own sharding implementation based on the trainings rank and size."
-            )
             if _distrib_info:
                 # If we're in a child process `_get_rank_and_size()` no longer works,
                 # so we pass the info about the shards via a pickled property.
@@ -174,6 +170,10 @@ class DistributeFilesDataset(CachedDataset2):
             num_shards = _num_shards or 1
             shard_index = _shard_index or 0
         super().__init__(**kwargs, _num_shards=num_shards, _shard_index=shard_index)
+        assert not distrib_shard_files or (_num_shards == 1 and _shard_index == 0), (
+            f"{self}: Cannot use both dataset-sharding via properties _num_shards and _shard index "
+            f"and {self.__class__.__name__}'s own sharding implementation based on the trainings rank and size."
+        )
         self.files = files
         self.get_sub_epoch_dataset = get_sub_epoch_dataset
         assert preload_next_n_sub_epochs >= 0
