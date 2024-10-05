@@ -562,11 +562,11 @@ class Utf8ByteTargets(Vocabulary):
     Also see :class:`CharacterTargets`.
     """
 
-    def __init__(self, seq_postfix=None):
+    def __init__(self, seq_postfix=None, **opts):
         """
         :param list[int]|None seq_postfix: labels will be added to the seq in self.get_seq
         """
-        super(Utf8ByteTargets, self).__init__(vocab_file=None, seq_postfix=seq_postfix, unknown_label=None)
+        super(Utf8ByteTargets, self).__init__(vocab_file=None, seq_postfix=seq_postfix, unknown_label=None, **opts)
 
     def _parse_vocab(self):
         """
