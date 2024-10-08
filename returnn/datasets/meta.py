@@ -1832,25 +1832,35 @@ class VariableDataset(Dataset):
     based on a user-provided function.
     """
 
-    def __init__(self, *, get_dataset, **kwargs):
+    def __init__(self, *, get_dataset, dataset_lru_cache_size: int = 1, **kwargs):
         """
         :param get_dataset: function (*, epoch: int, **_) -> Dict[str,Any], will be called for every sub-epoch.
-            It will cache the dict from the prev call, and if the dict is the same, it will not recreate the dataset.
+            It will cache the dataset(s) from the prev call (dataset_lru_cache_size),
+            and if the dict is the same of those, it will not recreate the dataset.
+        :param dataset_lru_cache_size
         """
+        from functools import lru_cache
+
         super().__init__(**kwargs)
         self._get_dataset = get_dataset
         self._dataset_dict: Optional[Dict[str, Any]] = None
         self._dataset: Optional[Dataset] = None
+        self._dataset_lru_cache_size = dataset_lru_cache_size
+        self._make_dataset = lru_cache(maxsize=self._dataset_lru_cache_size)(
+            lambda dataset_dict: init_dataset(dataset_dict, parent_dataset=self)
+        )
         self._load_dataset(epoch=1)
         self.num_inputs = self._dataset.num_inputs
         self.num_outputs = self._dataset.num_outputs
         self.labels = self._dataset.labels
 
     def _load_dataset(self, epoch: int):
-        dataset_dict = self._get_dataset(epoch=epoch)
-        if dataset_dict != self._dataset_dict:
-            self._dataset_dict = dataset_dict
-            self._dataset = init_dataset(dataset_dict, parent_dataset=self)
+        from returnn.util.basic import get_fwd_compat_kwargs, make_hashable
+
+        dataset_dict = self._get_dataset(self=self, epoch=epoch, **get_fwd_compat_kwargs())
+        assert isinstance(dataset_dict, dict)
+        dataset_dict = make_hashable(dataset_dict)
+        self._dataset = self._make_dataset(dataset_dict)
 
     def init_seq_order(self, epoch=None, seq_list=None, seq_order=None):
         """init seq order"""
