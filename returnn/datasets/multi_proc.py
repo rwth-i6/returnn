@@ -7,6 +7,7 @@ from typing import Optional, Any, Dict, List
 import sys
 import gc
 import multiprocessing as mp
+from returnn.util import better_exchook
 from returnn.util.basic import try_run
 from returnn.config import SubProcCopyGlobalConfigPreInitFunc
 from returnn.util.multi_proc_non_daemonic_spawn import NonDaemonicSpawnContext
@@ -168,6 +169,7 @@ class MultiProcDataset(CachedDataset2):
         if sys.platform == "linux":
             with open("/proc/self/comm", "w") as f:
                 f.write(f"MPD worker {worker_index}")
+        better_exchook.setup_all()
 
         dataset: Optional[Dataset] = None
 

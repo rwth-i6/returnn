@@ -11,6 +11,7 @@ import os
 import sys
 import numpy
 from returnn.log import log
+from returnn.util import better_exchook
 from returnn.util.basic import override_env_var, try_run
 from returnn.util.multi_proc_non_daemonic_spawn import NonDaemonicSpawnContext
 from returnn.config import SubProcCopyGlobalConfigPreInitFunc
@@ -573,6 +574,7 @@ def _worker_proc_loop(
     if sys.platform == "linux":
         with open("/proc/self/comm", "w") as f:
             f.write(f"CFD worker {epoch}")
+    better_exchook.setup_all()
 
     assert isinstance(epoch, int) and isinstance(buffer_size, int)
     assert isinstance(dataset_dict, dict)
