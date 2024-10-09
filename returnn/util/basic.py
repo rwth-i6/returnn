@@ -2469,7 +2469,12 @@ def make_hashable(obj):
 
         if isinstance(obj, tf.Tensor):
             return RefIdEq(obj)
-    assert False, "don't know how to make hashable: %r (%r)" % (obj, type(obj))
+    # Try if this is already hashable.
+    try:
+        hash(obj)
+    except Exception:
+        raise TypeError("don't know how to make hashable: %r (%r)" % (obj, type(obj)))
+    return obj
 
 
 class RefIdEq(Generic[T]):
