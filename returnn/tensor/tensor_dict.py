@@ -52,6 +52,9 @@ class TensorDict:
         else:
             raise TypeError(f"invalid `data` type: {type(data)}")
 
+    def __contains__(self, item: str) -> bool:
+        return item in self.data
+
     def __getitem__(self, item: str) -> Tensor:
         return self.data[item]
 
