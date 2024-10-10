@@ -44,6 +44,7 @@ from .data.queued_data_iter import QueuedDataIter
 from .frontend.bridge import rf_module_to_pt_module
 from .util import diagnose_gpu
 from .util import module as util_module
+from .util.exception_helper import help_on_torch_exception
 from .distributed import DistributedContext, get_ctx as dist_get_ctx
 
 
@@ -239,43 +240,9 @@ class Engine(EngineBase):
             self._epoch_mp_shared.value = self.epoch
 
             self.init_train_epoch()
-            try:
-                self.train_epoch()
-            except Exception as exc:
-                self._handle_run_exception(exc)
-                raise
+            self.train_epoch()
 
         print(f"Finished training at epoch {self.epoch}, global train step {self.global_train_step}", file=log.v3)
-
-    def _handle_run_exception(self, exc: Exception, *, always_direct_print: bool = False):
-        from returnn.util.better_exchook import get_func_from_code_object, iter_traceback
-
-        print(f"{type(exc).__name__}: {exc}", file=log.v1)
-
-        # Extend exception message by module call stack.
-        module_names_by_id = {}  # id -> name
-        for name, mod in self._orig_model.named_modules():
-            if id(mod) not in module_names_by_id:
-                module_names_by_id[id(mod)] = name or "(root)"
-        exc_ext = []
-        for frame in iter_traceback(exc.__traceback__):
-            if frame.f_code.co_nlocals == 0:
-                continue
-            frame_self = frame.f_locals.get("self")
-            if isinstance(frame_self, (torch.nn.Module, rf.Module)):
-                func = get_func_from_code_object(frame.f_code, frame=frame)
-                if func and func.__name__ and func.__name__.startswith("_") and not func.__name__.startswith("__"):
-                    continue
-                func_name = (func and func.__qualname__) or type(frame_self).__name__
-                exc_ext.append(f"({func_name}) {module_names_by_id.get(id(frame_self), '(unknown)')}")
-        if not exc_ext:
-            exc_ext.append("(No module call frames.)")
-        if len(exc.args) == 1 and isinstance(exc.args[0], str) and not always_direct_print:
-            exc.args = ("\n".join([exc.args[0], "", "Module call stack:"] + exc_ext),)
-        else:
-            print("Module call stack:", file=log.v3)
-            for msg in exc_ext:
-                print(msg, file=log.v3)
 
     def init_train_epoch(self):
         """
@@ -371,96 +338,103 @@ class Engine(EngineBase):
 
         zero_grad_next_step = True
         cur_count_grad_accum = 0
-        while True:
-            with torch.no_grad():
-                extern_data_raw = next(data_iter, None)
+        extern_data = None
+        try:
+            while True:
+                with torch.no_grad():
+                    extern_data_raw = next(data_iter, None)
 
-            step_begin_time = time.time()
+                step_begin_time = time.time()
 
-            _has_data = torch.tensor([extern_data_raw is not None], dtype=torch.int8)
-            if self._torch_distributed_ctx:
-                # use all reduce to check if all workers have data, if at least one worker does not have data,
-                # all workers finish this epoch
-                torch.distributed.all_reduce(_has_data, op=torch.distributed.ReduceOp.MIN)
-            if not _has_data[0]:
-                break
+                _has_data = torch.tensor([extern_data_raw is not None], dtype=torch.int8)
+                if self._torch_distributed_ctx:
+                    # use all reduce to check if all workers have data, if at least one worker does not have data,
+                    # all workers finish this epoch
+                    torch.distributed.all_reduce(_has_data, op=torch.distributed.ReduceOp.MIN)
+                if not _has_data[0]:
+                    break
 
-            # clear the gradients when every gradient accumulation loop starts
-            if zero_grad_next_step:
-                self._updater.get_optimizer().zero_grad()
-                cur_count_grad_accum = 0
+                # clear the gradients when every gradient accumulation loop starts
+                if zero_grad_next_step:
+                    self._updater.get_optimizer().zero_grad()
+                    cur_count_grad_accum = 0
 
-            extern_data = extern_data_util.raw_dict_to_extern_data(
-                extern_data_raw, extern_data_template=self.extern_data, device=self._device
-            )
-            self._run_step(extern_data, train_flag=True, train_func=True)
-
-            train_ctx = rf.get_run_ctx()
-            total_loss = train_ctx.total_loss()
-            losses_dict = NumbersDict(
-                {
-                    name: (
-                        float(loss.get_summed_loss().raw_tensor.detach().cpu().numpy())
-                        if self._device != "meta"
-                        else float("nan")
-                    )
-                    for name, loss in train_ctx.losses.items()
-                }
-            )
-            inv_norm_factors_dict = NumbersDict(
-                {name: float(_to_raw(loss.get_inv_norm_factor())) for name, loss in train_ctx.losses.items()}
-            )
-
-            if accum_grad_multiple_step_dyn:
-                accum_grad_multiple_step = accum_grad_multiple_step_dyn(
-                    epoch=self.epoch, global_train_step=self.global_train_step
+                extern_data = extern_data_util.raw_dict_to_extern_data(
+                    extern_data_raw, extern_data_template=self.extern_data, device=self._device
                 )
-            cur_count_grad_accum += 1
-            perform_update_step = cur_count_grad_accum >= accum_grad_multiple_step
-            with (
-                self._ddp_pt_model.no_sync()
-                if (self._ddp_pt_model is not None and not perform_update_step)
-                else nullcontext()
-            ):
-                if self._grad_scaler is not None:
-                    self._grad_scaler.scale(total_loss.raw_tensor).backward()
-                else:
-                    total_loss.raw_tensor.backward()
+                self._run_step(extern_data, train_flag=True, train_func=True)
 
-            # only update the weights when every gradient accumulation loop ends
-            if perform_update_step:
-                self._updater.step(grad_scaler=self._grad_scaler)
-            zero_grad_next_step = perform_update_step
+                train_ctx = rf.get_run_ctx()
+                total_loss = train_ctx.total_loss()
+                losses_dict = NumbersDict(
+                    {
+                        name: (
+                            float(loss.get_summed_loss().raw_tensor.detach().cpu().numpy())
+                            if self._device != "meta"
+                            else float("nan")
+                        )
+                        for name, loss in train_ctx.losses.items()
+                    }
+                )
+                inv_norm_factors_dict = NumbersDict(
+                    {name: float(_to_raw(loss.get_inv_norm_factor())) for name, loss in train_ctx.losses.items()}
+                )
 
-            if self._torch_distributed_ctx:
-                self._torch_distributed_ctx.step_after_param_update(module=self._pt_model, epoch_step_idx=step_idx)
-
-            step_duration = time.time() - step_begin_time
-            elapsed_computation_time += step_duration
-
-            accumulated_losses_dict += losses_dict
-            accumulated_inv_norm_factors_dict += inv_norm_factors_dict
-            eval_info = self._maybe_extend_losses_info(losses_dict / inv_norm_factors_dict)
-            _print_process(
-                f"ep {self.epoch} train",
-                step=step_idx,
-                eval_info=dict(eval_info),
-                step_duration=step_duration,
-                batch_size_info=_get_batch_size_info(extern_data) if self._log_batch_size else None,
-                log_memory_usage_device=self._device if self._log_memory_usage else None,
-            )
-
-            if self._stop_on_nonfinite_train_score:
-                if any(np.isinf(v) or np.isnan(v) for v in accumulated_losses_dict.values()):
-                    print("Model seems broken, got inf or nan score.", file=log.v1)
-                    print(
-                        "Accumulated scores:", accumulated_losses_dict / accumulated_inv_norm_factors_dict, file=log.v1
+                if accum_grad_multiple_step_dyn:
+                    accum_grad_multiple_step = accum_grad_multiple_step_dyn(
+                        epoch=self.epoch, global_train_step=self.global_train_step
                     )
-                    raise Exception(f"Inf/nan score in step {step_idx}.")
+                cur_count_grad_accum += 1
+                perform_update_step = cur_count_grad_accum >= accum_grad_multiple_step
+                with (
+                    self._ddp_pt_model.no_sync()
+                    if (self._ddp_pt_model is not None and not perform_update_step)
+                    else nullcontext()
+                ):
+                    if self._grad_scaler is not None:
+                        self._grad_scaler.scale(total_loss.raw_tensor).backward()
+                    else:
+                        total_loss.raw_tensor.backward()
 
-            step_idx += 1
-            self.global_train_step += 1
-            self._updater.set_current_train_step(global_train_step=self.global_train_step, epoch=self.epoch)
+                # only update the weights when every gradient accumulation loop ends
+                if perform_update_step:
+                    self._updater.step(grad_scaler=self._grad_scaler)
+                zero_grad_next_step = perform_update_step
+
+                if self._torch_distributed_ctx:
+                    self._torch_distributed_ctx.step_after_param_update(module=self._pt_model, epoch_step_idx=step_idx)
+
+                step_duration = time.time() - step_begin_time
+                elapsed_computation_time += step_duration
+
+                accumulated_losses_dict += losses_dict
+                accumulated_inv_norm_factors_dict += inv_norm_factors_dict
+                eval_info = self._maybe_extend_losses_info(losses_dict / inv_norm_factors_dict)
+                _print_process(
+                    f"ep {self.epoch} train",
+                    step=step_idx,
+                    eval_info=dict(eval_info),
+                    step_duration=step_duration,
+                    batch_size_info=_get_batch_size_info(extern_data) if self._log_batch_size else None,
+                    log_memory_usage_device=self._device if self._log_memory_usage else None,
+                )
+
+                if self._stop_on_nonfinite_train_score:
+                    if any(np.isinf(v) or np.isnan(v) for v in accumulated_losses_dict.values()):
+                        print("Model seems broken, got inf or nan score.", file=log.v1)
+                        print(
+                            "Accumulated scores:",
+                            accumulated_losses_dict / accumulated_inv_norm_factors_dict,
+                            file=log.v1,
+                        )
+                        raise Exception(f"Inf/nan score in step {step_idx}.")
+
+                step_idx += 1
+                self.global_train_step += 1
+                self._updater.set_current_train_step(global_train_step=self.global_train_step, epoch=self.epoch)
+        except Exception as exc:
+            help_on_torch_exception(exc, step_idx=step_idx, model=self._orig_model, extern_data=extern_data)
+            raise
 
         elapsed = time.time() - epoch_start_time
         elapsed_computation_percentage = elapsed_computation_time / elapsed
@@ -1128,13 +1102,13 @@ class Engine(EngineBase):
                         and self._forward_auto_split_batch_on_oom
                         and extern_data_util.raw_dict_can_split_batch(extern_data_raw)
                     ):
-                        self._handle_run_exception(exc, always_direct_print=True)
+                        help_on_torch_exception(exc, model=self._orig_model, always_direct_print=True)
                         util.traceback_clear_frames(exc.__traceback__)
                         diagnose_gpu.garbage_collect()
                         print(f"{report_prefix}, split step {step_idx} batch and try again...", file=log.v3)
                         data_loader.extend(extern_data_util.raw_dict_split_batch(extern_data_raw, splits=2))
                         continue
-                    self._handle_run_exception(exc)
+                    help_on_torch_exception(exc, model=self._orig_model)
                     raise
                 ctx = rf.get_run_ctx()
                 ctx.check_outputs_complete()
