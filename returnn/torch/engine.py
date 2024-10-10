@@ -12,6 +12,7 @@ import time
 import socket
 import fnmatch
 import re
+import math
 
 import torch
 import torch.distributed
@@ -19,7 +20,7 @@ from torch.nn.parallel import DistributedDataParallel
 from torch.utils.data import DataLoader
 from torch import autocast
 from torch.cuda import amp
-import math
+import numpy as np
 
 import returnn
 from returnn.config import Config
@@ -125,6 +126,7 @@ class Engine(EngineBase):
         self._calculate_exp_loss = config.bool("calculate_exp_loss", False)
         self._reset_dev_memory_caches = config.bool("reset_dev_memory_caches", False)
         self._forward_auto_split_batch_on_oom = config.bool("forward_auto_split_batch_on_oom", False)
+        self._stop_on_nonfinite_train_score = config.bool("stop_on_nonfinite_train_score", True)
 
         amp_options = self.config.opt_typed_value("torch_amp")
         grad_scaler_opts = self.config.typed_value("grad_scaler", NotSpecified)
@@ -447,6 +449,14 @@ class Engine(EngineBase):
                 batch_size_info=_get_batch_size_info(extern_data) if self._log_batch_size else None,
                 log_memory_usage_device=self._device if self._log_memory_usage else None,
             )
+
+            if self._stop_on_nonfinite_train_score:
+                if any(np.isinf(v) or np.isnan(v) for v in accumulated_losses_dict.values()):
+                    print("Model seems broken, got inf or nan score.", file=log.v1)
+                    print(
+                        "Accumulated scores:", accumulated_losses_dict / accumulated_inv_norm_factors_dict, file=log.v1
+                    )
+                    raise Exception(f"Inf/nan score in step {step_idx}.")
 
             step_idx += 1
             self.global_train_step += 1
