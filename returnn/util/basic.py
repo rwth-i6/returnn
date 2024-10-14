@@ -83,19 +83,38 @@ class Entity:
     This is more efficient than using just the string directly in an enum.
     """
 
-    def __init__(self, name=None):
+    def __init__(
+        self, name: Optional[str] = None, *, global_base: Optional[Any] = None, global_name: Optional[str] = None
+    ):
         """
         :param str|None name:
         """
         self.name = name
+        if global_name and not global_base:
+            frame = try_get_stack_frame(1)
+            global_base = sys.modules[frame.f_globals["__name__"]]
+        self.global_base = global_base
+        self.global_name = global_name
 
     def __str__(self):
-        return self.name
+        return self.name or self.global_name or "<unnamed Entity>"
 
     def __repr__(self):
-        return "<%s>" % self.name
+        return "<%s Entity>" % (self.name or self.global_name or "unnamed")
+
+    def __reduce__(self):
+        if self.global_name:
+            # Sanity check that the global ref is correct.
+            attrs = self.global_name.split(".")
+            assert attr_chain(self.global_base, attrs) is self
+            parent = attr_chain(self.global_base, attrs[:-1])
+            assert getattr(parent, attrs[-1]) is self
+            return getattr, (parent, attrs[-1])
+        raise Exception("Cannot pickle Entity object. (%r)" % self)
 
     def __getstate__(self):
+        if self.global_name:
+            raise Exception("We expect that __reduce__ is used, not __getstate__.")
         raise Exception("Cannot pickle Entity object. (%r)" % self)
 
 

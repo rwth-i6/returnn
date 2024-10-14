@@ -369,6 +369,14 @@ def test_deepcopy_builtins():
     assert o["__builtins__"] is user_ns["__builtins__"]  # no copy, directly reference this module dict
 
 
+_demo_entity = Entity("demo entity", global_name="_demo_entity")
+
+
+def test_deepcopy_Entity():
+    entity_copy = deepcopy(_demo_entity)
+    assert entity_copy is _demo_entity  # no copy, directly reference this entity
+
+
 def test_get_func_kwargs():
     def dummy_func(net, var, update_ops):
         pass

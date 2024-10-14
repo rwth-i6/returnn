@@ -29,10 +29,10 @@ class DimTypes:
     """
 
     Unspecified = None
-    Batch = Entity("batch")
-    Spatial = Entity("spatial")  # also time
+    Batch = Entity("batch", global_base=_d, global_name="Dim.Types.Batch")
+    Spatial = Entity("spatial", global_base=_d, global_name="Dim.Types.Spatial")  # also time
     Time = Spatial  # we don't treat this as different
-    Feature = Entity("feature")
+    Feature = Entity("feature", global_base=_d, global_name="Dim.Types.Feature")
     Types = (Batch, Spatial, Feature)
 
 

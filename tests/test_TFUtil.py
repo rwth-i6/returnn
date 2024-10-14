@@ -1554,6 +1554,15 @@ def test_Dim_pickle():
     assert single_step_dim_copy == single_step_dim
 
 
+def test_DimType_pickle():
+    from returnn.tensor import Dim
+    import pickle
+
+    a = Dim.Types.Spatial
+    a_copy = pickle.loads(pickle.dumps(a))
+    assert a is a_copy
+
+
 def test_Dim_sorted():
     from returnn.util.basic import obj_diff_str
 
