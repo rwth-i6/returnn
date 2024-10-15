@@ -34,6 +34,7 @@ class MultiProcDataset(CachedDataset2):
         dataset: Dict[str, Any],
         num_workers: int,
         buffer_size: int,
+        sharding_method: str = "seq_order",
         _meta_info_cache: Optional[Dict[str, Any]] = None,
         **kwargs,
     ):
@@ -41,6 +42,12 @@ class MultiProcDataset(CachedDataset2):
         :param dataset: the dataset to use
         :param num_workers: number of workers to use
         :param buffer_size: buffer size for each worker, amount of seqs to prefetch
+        :param sharding_method: which method to use for sharding the data across the worker procs.
+            The default is ``seq_order``, which fetches the full list of seq indices,
+            and then distributes shards of that to the other workers.
+            Can also be set to ``dedicated`` to enable a worker-index based sharding method.
+            This is compatible with more types of datasets, in particular those
+            that do not know their total number of segments upfront.
         :param _meta_info_cache: for internal use
         """
         super().__init__(**kwargs)
@@ -52,6 +59,12 @@ class MultiProcDataset(CachedDataset2):
         self.dataset = dataset
         self.num_workers = num_workers
         self.buffer_size = buffer_size
+        allowed_sharding_methods = ["seq_order", "dedicated"]
+        if sharding_method not in allowed_sharding_methods:
+            raise ValueError(
+                f"invalid sharding_method '{sharding_method}', must be {' or '.join(allowed_sharding_methods)}"
+            )
+        self._sharding_method = sharding_method
         self._data_keys = None
         self._num_seqs = None
         self._total_num_seqs = None
@@ -88,61 +101,81 @@ class MultiProcDataset(CachedDataset2):
         }
 
     def _lazy_init(self):
-        if not self._worker_procs:
-            _mp = NonDaemonicSpawnContext(process_pre_init_func=SubProcCopyGlobalConfigPreInitFunc())
+        if self._worker_procs:
+            return
 
+        _mp = NonDaemonicSpawnContext(process_pre_init_func=SubProcCopyGlobalConfigPreInitFunc())
+
+        seq_order_to_worker = []  # type: List[mpConnection]
+        worker_from_seq_order = []  # type: List[mpConnection]
+        if self._sharding_method == "seq_order":
             # Seq order proc (first worker) directly sends the seq order to each (other) worker.
-            seq_order_to_worker = []  # type: List[mpConnection]
-            worker_from_seq_order = []  # type: List[mpConnection]
             for i in range(self.num_workers - 1):
                 reader, writer = _mp.Pipe(duplex=False)
                 seq_order_to_worker.append(writer)
                 worker_from_seq_order.append(reader)
 
-            worker_parent_conns = []  # type: List[mpConnection]
-            worker_child_conns = []  # type: List[mpConnection]
-            for i in range(self.num_workers):
-                parent_conn, child_conn = _mp.Pipe()
-                worker_parent_conns.append(parent_conn)
-                worker_child_conns.append(child_conn)
+        worker_parent_conns = []  # type: List[mpConnection]
+        worker_child_conns = []  # type: List[mpConnection]
+        for i in range(self.num_workers):
+            parent_conn, child_conn = _mp.Pipe()
+            worker_parent_conns.append(parent_conn)
+            worker_child_conns.append(child_conn)
 
-            worker_procs = []
-            for i in range(self.num_workers):
-                worker_proc = _mp.Process(
-                    name=f"{self.name} worker proc {i + 1}/{self.num_workers}",
-                    target=self._worker_proc_loop,
-                    args=(
-                        i,
-                        self.dataset,
-                        self.buffer_size,
-                        worker_child_conns[i],
-                        worker_from_seq_order[i - 1] if i > 0 else None,
-                        seq_order_to_worker if i == 0 else None,
-                    ),
-                    daemon=True,
+        worker_procs = []
+        for i in range(self.num_workers):
+            if self._sharding_method == "seq_order":
+                sub_dataset = self.dataset
+                args = (
+                    i,
+                    sub_dataset,
+                    self.buffer_size,
+                    worker_child_conns[i],
+                    worker_from_seq_order[i - 1] if i > 0 else None,
+                    seq_order_to_worker if i == 0 else None,
+                    self._sharding_method,
                 )
-                worker_proc.start()
-                worker_procs.append(worker_proc)
-                # Make sure the child connection is closed here.
-                # It stays open in the child, until the child dies.
-                # When that happens, now any consecutive read on the pipe
-                # should yield an exception -- which is what we want,
-                # otherwise it would just hang.
-                worker_child_conns[i].close()
+            elif self._sharding_method == "dedicated":
+                sub_dataset = {**self.dataset, "_num_shards": self.num_workers, "_shard_index": i}
+                args = (
+                    i,
+                    sub_dataset,
+                    self.buffer_size,
+                    worker_child_conns[i],
+                    None,
+                    None,
+                    self._sharding_method,
+                )
+            else:
+                raise ValueError(f"{self}: unknown sharding_method: {self._sharding_method}")
+            worker_proc = _mp.Process(
+                name=f"{self.name} worker proc {i + 1}/{self.num_workers}",
+                target=self._worker_proc_loop,
+                args=args,
+                daemon=True,
+            )
+            worker_proc.start()
+            worker_procs.append(worker_proc)
+            # Make sure the child connection is closed here.
+            # It stays open in the child, until the child dies.
+            # When that happens, now any consecutive read on the pipe
+            # should yield an exception -- which is what we want,
+            # otherwise it would just hang.
+            worker_child_conns[i].close()
 
-            self._seq_order_proc_parent_conn = worker_parent_conns[0]  # type: mpConnection
-            self._worker_parent_conns = worker_parent_conns
-            self._worker_procs = worker_procs
+        self._seq_order_proc_parent_conn = worker_parent_conns[0]  # type: mpConnection
+        self._worker_parent_conns = worker_parent_conns
+        self._worker_procs = worker_procs
 
-            self._seq_order_proc_parent_conn.send(("init", {}))
-            msg, self.num_inputs = self._seq_order_proc_parent_conn.recv()
-            assert msg == "num_inputs"
-            msg, self.num_outputs = self._seq_order_proc_parent_conn.recv()
-            assert msg == "num_outputs"
-            msg, self._total_num_seqs = self._seq_order_proc_parent_conn.recv()
-            assert msg == "total_num_seqs"
-            msg, self.labels = self._seq_order_proc_parent_conn.recv()
-            assert msg == "labels"
+        self._seq_order_proc_parent_conn.send(("init", {}))
+        msg, self.num_inputs = self._seq_order_proc_parent_conn.recv()
+        assert msg == "num_inputs"
+        msg, self.num_outputs = self._seq_order_proc_parent_conn.recv()
+        assert msg == "num_outputs"
+        msg, self._total_num_seqs = self._seq_order_proc_parent_conn.recv()
+        assert msg == "total_num_seqs"
+        msg, self.labels = self._seq_order_proc_parent_conn.recv()
+        assert msg == "labels"
 
     def __del__(self):
         if self._worker_procs:
@@ -165,6 +198,7 @@ class MultiProcDataset(CachedDataset2):
         parent_conn: mpConnection,
         seq_order_conn: Optional[mpConnection],
         other_worker_conns: Optional[List[mpConnection]],
+        sharding_method: str,
     ):
         if sys.platform == "linux":
             with open("/proc/self/comm", "w") as f:
@@ -256,23 +290,40 @@ class MultiProcDataset(CachedDataset2):
                 elif msg == "init_seq_order":
                     if dataset is None:
                         dataset = init_dataset(dataset_dict)
-                    if worker_index == 0:
-                        # We are responsible to get the seq order and distrib it to all the other workers.
-                        assert other_worker_conns is not None
+                    if sharding_method == "dedicated":
                         dataset.init_seq_order(**kwargs)
-                        seq_order = dataset.get_current_seq_order()
-                        for i, worker_conn in enumerate(other_worker_conns):
-                            worker_conn.send(("seq_order_shard", seq_order[i + 1 :: len(other_worker_conns) + 1]))
-                        parent_conn.send(("num_seqs", len(seq_order)))
-                        # Now reset seq order for ourself (as the role of a normal worker).
-                        kwargs["seq_order"] = seq_order[0 :: len(other_worker_conns) + 1]
-                        kwargs.pop("seq_list", None)
-                        dataset.init_seq_order(**kwargs)
+                        try:
+                            num_seqs = dataset.num_seqs
+                        except NotImplementedError:
+                            num_seqs = None
+                        parent_conn.send(("num_seqs", num_seqs))
+                    elif sharding_method == "seq_order":
+                        if worker_index == 0:
+                            # We are responsible to get the seq order and distrib it to all the other workers.
+                            assert other_worker_conns is not None
+                            dataset.init_seq_order(**kwargs)
+                            try:
+                                seq_order = dataset.get_current_seq_order()
+                            except Exception as exc:
+                                raise Exception(
+                                    f"{MultiProcDataset.__name__}: `get_current_seq_order()` failed on {dataset}. "
+                                    f'Consider trying {MultiProcDataset.__name__}\'s "sharding_method": "dedicated", '
+                                    "which uses a different method for distributing the segments across workers."
+                                ) from exc
+                            for i, worker_conn in enumerate(other_worker_conns):
+                                worker_conn.send(("seq_order_shard", seq_order[i + 1 :: len(other_worker_conns) + 1]))
+                            parent_conn.send(("num_seqs", len(seq_order)))
+                            # Now reset seq order for ourself (as the role of a normal worker).
+                            kwargs["seq_order"] = seq_order[0 :: len(other_worker_conns) + 1]
+                            kwargs.pop("seq_list", None)
+                            dataset.init_seq_order(**kwargs)
+                        else:
+                            assert seq_order_conn is not None
+                            msg_, seq_order = seq_order_conn.recv()
+                            assert msg_ == "seq_order_shard"
+                            dataset.init_seq_order(seq_order=seq_order, **kwargs)
                     else:
-                        assert seq_order_conn is not None
-                        msg_, seq_order = seq_order_conn.recv()
-                        assert msg_ == "seq_order_shard"
-                        dataset.init_seq_order(seq_order=seq_order, **kwargs)
+                        raise ValueError(f"{MultiProcDataset.__name__}: unknown sharding_method: {sharding_method}")
                     got_init_seq_order = True
                     next_seq_idx = 0
                     cache[:] = []
@@ -300,8 +351,28 @@ class MultiProcDataset(CachedDataset2):
         :returns whether the order changed (True is always safe to return)
         """
         super().init_seq_order(epoch=epoch, seq_list=seq_list, seq_order=seq_order)
-        if epoch is not None or seq_list is not None or seq_order is not None:
-            self._lazy_init()
+
+        if epoch is None and seq_list is None and seq_order is None:
+            self._num_seqs = 0
+            return True
+
+        self._lazy_init()
+
+        if self._sharding_method == "dedicated":
+            for worker_conn in self._worker_parent_conns:
+                worker_conn.send(("init_seq_order", {"epoch": epoch, "seq_list": seq_list, "seq_order": seq_order}))
+            num_child_seqs = []
+            for worker_conn in self._worker_parent_conns:
+                msg, num_seqs = worker_conn.recv()
+                assert msg == "num_seqs"
+                num_child_seqs.append(num_seqs)
+            if all(num_s is None for num_s in num_child_seqs):
+                self._num_seqs = None
+            elif all(num_s is not None for num_s in num_child_seqs):
+                self._num_seqs = sum(num_child_seqs, 0)
+            else:
+                raise ValueError(f"heterogenous num_seqs in child datasets: {num_child_seqs}")
+        elif self._sharding_method == "seq_order":
             self._seq_order_proc_parent_conn.send(
                 ("init_seq_order", {"epoch": epoch, "seq_list": seq_list, "seq_order": seq_order})
             )
@@ -311,13 +382,11 @@ class MultiProcDataset(CachedDataset2):
             assert msg == "num_seqs"
             self._num_seqs = num_seqs
         else:
-            self._num_seqs = 0
+            raise ValueError(f"{self}: unknown sharding_method: {self._sharding_method}")
 
         return True
 
     def _collect_single_seq(self, seq_idx: int) -> Optional[DatasetSeq]:
-        if seq_idx >= self._num_seqs:
-            return None
         worker_idx = seq_idx % self.num_workers
         worker = self._worker_parent_conns[worker_idx]
         worker.send(("get_data_seq", {"seq_idx": seq_idx // self.num_workers}))
@@ -328,11 +397,6 @@ class MultiProcDataset(CachedDataset2):
         assert isinstance(data, DatasetSeq)
         data.seq_idx = seq_idx
         return data
-
-    @property
-    def num_seqs(self) -> int:
-        """num seqs"""
-        return self._num_seqs
 
     def get_total_num_seqs(self, *, fast: bool = False) -> int:
         """total num seqs"""

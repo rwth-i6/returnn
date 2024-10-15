@@ -64,6 +64,24 @@ def test_MultiProcDataset_n3_b5_shuffle():
         compare_dataset_seqs(hdf_dataset_seqs, mp_dataset_seqs)
 
 
+def test_MultiProcDataset_n3_b5_shuffle_sharding():
+    hdf_fn = generate_hdf_from_other({"class": "Task12AXDataset", "num_seqs": 23})
+    hdf_dataset_dict = {"class": "HDFDataset", "files": [hdf_fn], "seq_ordering": "random"}
+    hdf_dataset = init_dataset(hdf_dataset_dict)
+    hdf_dataset_seqs = dummy_iter_dataset(hdf_dataset)
+
+    with timeout():
+        mp_dataset = MultiProcDataset(
+            dataset=hdf_dataset_dict, num_workers=3, buffer_size=5, sharding_method="dedicated"
+        )
+        mp_dataset.initialize()
+        mp_dataset_seqs = dummy_iter_dataset(mp_dataset)
+
+        assert len(hdf_dataset_seqs) == len(mp_dataset_seqs)
+        assert set(seq.seq_idx for seq in hdf_dataset_seqs) == set(seq.seq_idx for seq in mp_dataset_seqs)
+        assert set(seq.seq_tag for seq in hdf_dataset_seqs) == set(seq.seq_tag for seq in mp_dataset_seqs)
+
+
 def test_MultiProcDataset_meta():
     hdf_fn = generate_hdf_from_other({"class": "Task12AXDataset", "num_seqs": 23})
     meta_dataset_dict = {

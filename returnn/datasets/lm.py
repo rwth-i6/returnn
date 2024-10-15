@@ -458,6 +458,10 @@ class LmDataset(CachedDataset2):
         """supports sorting"""
         return True
 
+    def supports_sharding(self) -> bool:
+        """:return: whether this dataset supports sharding"""
+        return True
+
     def get_total_num_seqs(self, *, fast: bool = False) -> int:
         """total num seqs"""
         if fast and self._orths_offsets_and_lens is None:

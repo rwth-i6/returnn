@@ -445,6 +445,14 @@ class MetaDataset(CachedDataset2):
             return True
         return False
 
+    def supports_sharding(self) -> bool:
+        """:return: whether this dataset supports sharding"""
+        return (
+            self.datasets[self.seq_order_control_dataset].supports_sharding()
+            if self.seq_order_control_dataset is not None
+            else True
+        )
+
     def get_current_seq_order(self):
         """
         :return: current seq order for the current epoch, after self.init_seq_order was called.
@@ -1141,8 +1149,10 @@ class CombinedDataset(CachedDataset2):
 
         assert sum(counters) == total_num_seqs
 
-        if self.partition_epoch:
-            seq_order = self._apply_partition_epoch(seq_order, self.partition_epoch, self.epoch)
+        if self.partition_epoch or self._num_shards > 1:
+            seq_order = self._apply_partition_epoch_and_sharding(
+                seq_order, self.partition_epoch, self.epoch, self._num_shards, self._shard_index
+            )
         if self.repeat_epoch:
             seq_order = seq_order * self.repeat_epoch
 

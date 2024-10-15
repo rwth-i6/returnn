@@ -186,6 +186,13 @@ class PostprocessingDataset(CachedDataset2):
                 pass  # some datasets don't know their num_seqs
         return True
 
+    def get_current_seq_order(self):
+        """:return: current seq order of wrapped dataset, if map_seq_stream is not used"""
+        if self._map_seq_stream is not None:
+            raise Exception(f"{self}: get_current_seq_order is not allowed when map_seq_stream is set.")
+        assert self._dataset is not None
+        return self._dataset.get_current_seq_order()
+
     def get_data_keys(self):
         """:return: available data keys"""
         return list(self._out_tensor_dict_template.data.keys())
@@ -193,6 +200,11 @@ class PostprocessingDataset(CachedDataset2):
     def get_data_dtype(self, key):
         """:return: dtype of data entry `key`"""
         return self._out_tensor_dict_template.data[key].dtype
+
+    def supports_sharding(self) -> bool:
+        """:return: whether this dataset supports sharding"""
+        assert self._dataset is not None
+        return self._dataset.supports_sharding()
 
     def _collect_single_seq(self, seq_idx: int) -> Optional[DatasetSeq]:
         while True:

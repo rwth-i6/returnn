@@ -168,17 +168,19 @@ class DistributeFilesDataset(CachedDataset2):
 
         self.distrib_shard_files = distrib_shard_files
         if distrib_shard_files:
+            assert self._num_shards == 1 and self._shard_index == 0, (  # ensure defaults are set
+                f"{self}: Cannot use both dataset-sharding via properties _num_shards and _shard index "
+                f"and {self.__class__.__name__}'s own sharding implementation based on the trainings rank and size."
+            )
             if _distrib_info:
                 # If we're in a child process `_get_rank_and_size()` no longer works,
                 # so we pass the info about the shards via a pickled property.
                 # See also Dataset.__reduce__.
-                self._shard_index = _distrib_info["shard_index"]
-                self._num_shards = _distrib_info["num_shards"]
+                self._shard_index = _distrib_info["_shard_index"]
+                self._num_shards = _distrib_info["_num_shards"]
             else:
                 self._shard_index, self._num_shards = _get_rank_and_size()
-        else:
-            self._shard_index = 0
-            self._num_shards = 1
+        assert 0 <= self._shard_index < self._num_shards
 
         if _meta_info_cache:
             # This allows to skip the lazy init in self.initialize().
@@ -198,9 +200,13 @@ class DistributeFilesDataset(CachedDataset2):
         self._lazy_init_num_outputs()
         super().initialize()
 
+    def supports_sharding(self) -> bool:
+        """:return: whether the dataset supports sharding based on the seq_order"""
+        return True
+
     @property
     def _distrib_info(self):
-        return {"num_shards": self._num_shards, "shard_index": self._shard_index}
+        return {"_num_shards": self._num_shards, "_shard_index": self._shard_index}
 
     @property
     def _meta_info_cache(self):

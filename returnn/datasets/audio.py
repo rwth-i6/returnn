@@ -341,6 +341,10 @@ class OggZipDataset(CachedDataset2):
 
         return True
 
+    def supports_sharding(self) -> bool:
+        """:return: whether this dataset supports sharding"""
+        return True
+
     def supports_seq_order_sorting(self) -> bool:
         """supports sorting"""
         return True

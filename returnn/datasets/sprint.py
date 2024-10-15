@@ -1235,6 +1235,10 @@ class SprintCacheDataset(CachedDataset2):
         """supports sorting"""
         return True
 
+    def supports_sharding(self) -> bool:
+        """:return: whether this dataset supports sharding"""
+        return True
+
     def get_dataset_seq_for_name(self, name, seq_idx=-1):
         """
         :param str name:
