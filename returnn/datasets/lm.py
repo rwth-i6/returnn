@@ -7,7 +7,7 @@ and some related helpers.
 
 from __future__ import annotations
 
-from typing import Optional, Union, Callable, List, Tuple, BinaryIO, cast
+from typing import Optional, Union, Callable, Iterator, List, Tuple, BinaryIO, cast
 import typing
 import os
 import sys
@@ -394,7 +394,16 @@ class LmDataset(CachedDataset2):
         """
         :rtype: list[str]
         """
-        return sorted(self.num_outputs.keys())
+
+        def _data_keys() -> Iterator[str]:
+            # return keys in alphabetically sorted
+            if self.add_delayed_seq_data:
+                yield "delayed"
+            yield "data"
+            for i in range(self.add_random_phone_seqs):
+                yield f"random{i}"
+
+        return list(_data_keys())
 
     def get_target_list(self):
         """
@@ -1625,6 +1634,12 @@ class TranslationDataset(CachedDataset2):
         :rtype: bool
         """
         return True  # all is sparse
+
+    def get_data_dim(self, _key: str) -> int:
+        """
+        :return: the data dim of data entry `_key`
+        """
+        return self.num_inputs  # same dim for all keys
 
     def get_data_dtype(self, key):
         """
