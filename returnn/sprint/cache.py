@@ -698,7 +698,7 @@ def is_sprint_cache_file(filename):
         return header == FileArchive.SprintCacheHeader
 
 
-class AllophoneLabeling(object):
+class AllophoneLabeling:
     """
     Allophone labeling.
     """

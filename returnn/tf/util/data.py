@@ -99,7 +99,7 @@ class BatchInfo:
     However, we maybe can make use of some of the functions in :mod:`tf.ragged`.
     """
 
-    class VirtualDimBase(object):
+    class VirtualDimBase:
         """
         Represents one virtual dim, flattened into the batch dim.
         """

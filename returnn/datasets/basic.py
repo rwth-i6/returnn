@@ -35,7 +35,7 @@ if TYPE_CHECKING:
 RANDOM_SEED_OFFSET_ENV_VAR = "RETURNN_RANDOM_SEED_OFFSET"
 
 
-class Dataset(object):
+class Dataset:
     """
     Base class for any dataset. This defines the dataset API.
     """

@@ -61,7 +61,7 @@ def _check_ts_compatibility(ts0, ts1):
             raise ValueError("Shapes {} and {} are not compatible.".format(shape0, shape1))
 
 
-class _RerouteMode(object):
+class _RerouteMode:
     """Enums for reroute's mode.
 
     swap: the end of tensors a and b are swapped.

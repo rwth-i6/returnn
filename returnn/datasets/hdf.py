@@ -476,7 +476,7 @@ class HDFDataset(CachedDataset):
 # ------------------------------------------------------------------------------
 
 
-class StreamParser(object):
+class StreamParser:
     """
     Stream parser.
     """

@@ -6,7 +6,7 @@ from .bundle_file import BundleFile
 from returnn.util.basic import long
 
 
-class NormalizationData(object):
+class NormalizationData:
     """This class holds normalization data for inputs and outputs.
     It also contains methods to create the normalization HDF file.
     """

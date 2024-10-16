@@ -46,7 +46,7 @@ class CancelTrainingException(Exception):
     """
 
 
-class Runner(object):
+class Runner:
     """
     This encapsulates the logic around TF ``session.run``, i.e. iterating over the dataset.
     """
@@ -196,9 +196,9 @@ class Runner(object):
                     d["extra:%s" % k] = v
                     continue
                 assert isinstance(v, Data)
-                d[
-                    "extra:%s" % k
-                ] = v.placeholder  # see _maybe_handle_extra_fetches, it will transform to batch-major there
+                d["extra:%s" % k] = (
+                    v.placeholder
+                )  # see _maybe_handle_extra_fetches, it will transform to batch-major there
                 for i, s in v.size_placeholder.items():
                     d["extra:%s:size_%i" % (k, i)] = s
 
@@ -2838,7 +2838,7 @@ class Engine(EngineBase):
         assert not os.path.exists(output_file), "Already existing output file %r." % output_file
         print("Compute priors, using output layer %r, writing to %r." % (output_layer, output_file), file=log.v2)
 
-        class Accumulator(object):
+        class Accumulator:
             """
             Also see PriorEstimationTaskThread for reference.
             """

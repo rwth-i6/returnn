@@ -1340,7 +1340,7 @@ class RecLayer(_ConcatInputLayer):
         return []
 
 
-class _SubnetworkRecCell(object):
+class _SubnetworkRecCell:
     """
     This class is used by :class:`RecLayer` to implement
     the generic subnetwork logic inside the recurrency.

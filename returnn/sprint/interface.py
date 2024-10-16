@@ -128,7 +128,7 @@ def init_python_feature_scorer(config, **kwargs):
     return cls(sprint_opts=sprint_opts, **kwargs)
 
 
-class PythonFeatureScorer(object):
+class PythonFeatureScorer:
     """
     Sprint API.
     """

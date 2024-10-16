@@ -9,7 +9,7 @@ from returnn.datasets.cached2 import CachedDataset2
 from returnn.util.basic import OptionalNotImplementedError
 
 
-class MapDatasetBase(object):
+class MapDatasetBase:
     """
     This dataset can be used as template to implement user-side Datasets,
     where the data can be access in arbitrary order.

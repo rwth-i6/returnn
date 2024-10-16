@@ -48,7 +48,7 @@ def inv_greenwood_function(freq, scaling_constant=165.4, constant_of_integration
     return numpy.log10(freq / scaling_constant + constant_of_integration) / slope
 
 
-class GammatoneFilterbank(object):
+class GammatoneFilterbank:
     """
     Class representing a gammatone filterbank.
     Based on

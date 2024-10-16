@@ -18,7 +18,7 @@ from returnn.tf.util.basic import OutputWithActivation, CustomUpdate, reuse_name
 from returnn.log import log
 
 
-class LayerBase(object):
+class LayerBase:
     """
     This is the base class for all layers.
     Every layer by default has a list of source layers `sources`
@@ -2585,7 +2585,7 @@ class ReuseParams:
         return getter(name=name, shape=shape, dtype=dtype, **kwargs)
 
 
-class SearchChoices(object):
+class SearchChoices:
     """
     In beam search, after expanding the beam and then selecting the N best (beam) (see :class:`ChoiceLayer`),
     when doing this multiple times, we need to keep reference where each beam came from,
@@ -2824,7 +2824,7 @@ class SearchChoices(object):
         return common_choices.translate_to_this_search_beam(layer_desc)
 
 
-class Loss(object):
+class Loss:
     """
     Base class for all losses.
     """

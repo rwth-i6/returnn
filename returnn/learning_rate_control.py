@@ -14,7 +14,7 @@ from returnn.log import log
 import numpy
 
 
-class LearningRateControl(object):
+class LearningRateControl:
     """
     Base class for learning rate control / scheduling.
     """

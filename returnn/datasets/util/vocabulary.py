@@ -22,7 +22,7 @@ from returnn.log import log
 from returnn.util.basic import NotSpecified
 
 
-class Vocabulary(object):
+class Vocabulary:
     """
     Represents a vocabulary (set of words, and their ids).
     Used by :class:`BytePairEncoding`.

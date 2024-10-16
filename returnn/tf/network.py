@@ -539,7 +539,7 @@ class _NetworkConstructionStack:
         assert False, "we should not get here"
 
 
-class TFNetwork(object):
+class TFNetwork:
     """
     The main neural network, i.e. collection of interconnected layers, i.e. computation graph with trainable params.
     """
@@ -3679,7 +3679,7 @@ class Subnetwork:
             raise new_exc
 
 
-class TFNetworkParamsSerialized(object):
+class TFNetworkParamsSerialized:
     """
     Holds all the params as numpy arrays, including auxiliary params.
     """
@@ -5141,8 +5141,7 @@ class CustomLoadParamFunc(Protocol):
 
     def __call__(
         self, *, name: str, shape: Tuple[int], reader: tf.compat.v1.train.NewCheckpointReader
-    ) -> Optional[numpy.ndarray]:
-        ...
+    ) -> Optional[numpy.ndarray]: ...
 
 
 def set_custom_post_init(var, func):

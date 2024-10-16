@@ -72,7 +72,7 @@ def have_min_tf_version(version):
     return tf_version >= version
 
 
-class CustomUpdate(object):
+class CustomUpdate:
     """
     Custom updates will be handled by :class:`TFUpdater`.
     """
@@ -295,7 +295,7 @@ def copy_compatible_reduce(source, target, reduce_type):
     return source.copy_compatible_to(target, check_sparse=False, check_dtype=False)
 
 
-class OutputWithActivation(object):
+class OutputWithActivation:
     """
     Stores some tensor before and after some activation function,
     and also the activation function itself.
@@ -645,7 +645,7 @@ def get_root_graph(graph=None):
     return graph
 
 
-class _ScaledGradientBuilder(object):
+class _ScaledGradientBuilder:
     """
     Use the ``scaled_gradient`` instance.
     tf.identity in forward pass, but scales the gradient in backprop.
@@ -2633,7 +2633,7 @@ def matrix_triangular(shape, dtype=tf.float32, lower=False, upper=False):
     return tf_compat.v1.matrix_band_part(x, num_lower=-1 if lower else 0, num_upper=-1 if upper else 0)
 
 
-class VariableAssigner(object):
+class VariableAssigner:
     """
     Object helper to assign some var.
     (This is mostly obsolete now.)
@@ -2766,7 +2766,7 @@ def get_tf_gpp_path():
     return _tf_gpp_path
 
 
-class CudaEnv(object):
+class CudaEnv:
     """
     Information about the Nvidia CUDA environment, and library.
     Also path to ``nvcc``, the CUDA compiler.
@@ -3224,7 +3224,7 @@ def add_scaled_noise_to_gradients(grads_and_vars, gradient_noise_scale, sparse_g
     return list(zip(noisy_gradients, variables))
 
 
-class CustomGradient(object):
+class CustomGradient:
     """
     Utility functions to specify a custom gradient for a given function,
     which will be wrapped around via TF :func:`Defun`.
@@ -3333,7 +3333,7 @@ class CustomGradient(object):
 custom_gradient = CustomGradient()
 
 
-class MetaLosses(object):
+class MetaLosses:
     """
     This provides a way to use an alternative gradient,
     or to use the original gradient (error signal) and do something with it.
@@ -3361,7 +3361,7 @@ class MetaLosses(object):
             self.name = name
             self.source = source
 
-    class Scope(object):
+    class Scope:
         """
         Defines the scope for a synthetic gradient.
         Create this object via :func:`MetaLosses.enter_gradient_scope`.

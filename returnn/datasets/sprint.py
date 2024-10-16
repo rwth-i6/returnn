@@ -1064,7 +1064,7 @@ class SprintCacheDataset(CachedDataset2):
     For alignments, you need to provide all options for the AllophoneLabeling class, such as allophone file, etc.
     """
 
-    class SprintCacheReader(object):
+    class SprintCacheReader:
         """
         Helper class to read a Sprint cache directly.
         """

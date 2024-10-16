@@ -68,7 +68,7 @@ def _check_within_range(mapping, n, repetition):
         raise ValueError("Found repetition in mapping: {}".format(mapping))
 
 
-class SubGraphView(object):
+class SubGraphView:
     """A subgraph view on an existing `tf.Graph`.
 
     An instance of this class is a subgraph view on an existing `tf.Graph`.

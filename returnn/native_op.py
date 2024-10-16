@@ -17,7 +17,7 @@ import typing
 from returnn.util.basic import make_hashable, unicode
 
 
-class NativeOpBaseMixin(object):
+class NativeOpBaseMixin:
     """
     The purpose of having this as a separate base class is to make this independent of any Theano specific
     functionality so that we can also use this base for example for TensorFlow.

@@ -52,7 +52,7 @@ V = TypeVar("V")
 returnn_root_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
-class NotSpecified(object):
+class NotSpecified:
     """
     This is just a placeholder, to be used as default argument to mark that it is not specified.
     """
@@ -3194,7 +3194,7 @@ def get_cache_dir():
     return get_temp_dir()
 
 
-class LockFile(object):
+class LockFile:
     """
     Simple lock file.
     """

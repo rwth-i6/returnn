@@ -339,7 +339,7 @@ def debug_shell(user_ns, user_global_ns, traceback=None, execWrapper=None):
             # noinspection PyPackageRequirements,PyUnresolvedReferences
             import IPython.terminal.embed
 
-            class DummyMod(object):
+            class DummyMod:
                 """Dummy module"""
 
             module = DummyMod()
