@@ -619,6 +619,43 @@ def test_ctc_loss():
     )
 
 
+def test_ctc_loss_broadcast():
+    branch_dim = Dim(3, name="branch")
+    time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
+    target_time_dim = Dim(Tensor("target_time", [batch_dim], dtype="int32"))
+    out_dim = Dim(11, name="classes")
+    out_wb_dim = out_dim + 1
+    extern_data = TensorDict(
+        {
+            "data": Tensor(
+                "data", [batch_dim, branch_dim, time_dim, out_wb_dim], dtype="float32", feature_dim=out_wb_dim
+            ),
+            "classes": Tensor("classes", [batch_dim, target_time_dim], dtype="int32", sparse_dim=out_dim),
+        }
+    )
+
+    def _forward_step(*, extern_data: TensorDict, **_kwargs):
+        logits = extern_data["data"]
+        targets = extern_data["classes"]
+        loss = rf.ctc_loss(
+            logits=logits,
+            targets=targets,
+            input_spatial_dim=time_dim,
+            targets_spatial_dim=target_time_dim,
+            blank_index=out_wb_dim.dimension - 1,
+        )
+        loss.mark_as_default_output()
+
+    run_model(
+        extern_data,
+        lambda **_kwargs: rf.Module(),
+        _forward_step,
+        test_tensorflow=False,
+        dyn_dim_min_sizes={time_dim: 4, target_time_dim: 2},
+        dyn_dim_max_sizes={time_dim: 11, target_time_dim: 5},
+    )
+
+
 def test_edit_distance():
     import numpy
     import torch

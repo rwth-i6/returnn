@@ -648,24 +648,34 @@ class TorchBackend(Backend[torch.Tensor]):
         assert targets.sparse_dim and targets.sparse_dim.dimension <= logits.feature_dim.dimension
         # PyTorch expects the logits to be of shape (T, B, C) where T is the input spatial dim.
         batch_dims = logits.remaining_dims((input_spatial_dim, logits.feature_dim))
+        batch_shape = [d.get_dim_value() for d in batch_dims]
+        batch_n_elems = prod(batch_shape)
         logits = logits.copy_transpose([input_spatial_dim] + batch_dims + [logits.feature_dim])
         logits_raw: torch.Tensor = logits.raw_tensor
-        input_lengths = input_spatial_dim.dyn_size_ext.copy_transpose(batch_dims).raw_tensor
+        input_lengths: torch.Tensor = input_spatial_dim.dyn_size_ext.copy_compatible_to_dims_raw(batch_dims)
+        if input_lengths.numel() != batch_n_elems:
+            input_lengths = input_lengths.expand(batch_shape)
         logits_raw_shape = logits_raw.shape  # [T, B..., C]
         if len(batch_dims) != 1:
-            logits_raw = torch.reshape(logits_raw, logits_raw.shape[:1] + (-1,) + logits_raw.shape[-1:])  # [T, B', C]
-            input_lengths = torch.reshape(input_lengths, (-1,))  # [B']
+            logits_raw = torch.reshape(
+                logits_raw, logits_raw.shape[:1] + (batch_n_elems,) + logits_raw.shape[-1:]
+            )  # [T, B', C]
+            input_lengths = torch.reshape(input_lengths, (batch_n_elems,))  # [B']
         if logits_normalized:
             log_probs = logits_raw
         else:
             log_probs = torch.nn.functional.log_softmax(logits_raw, dim=-1)
         # PyTorch expects the targets to be of shape (B, S) where S is the targets spatial dim.
-        targets = targets.copy_transpose(batch_dims + [targets_spatial_dim])
-        targets_raw = targets.raw_tensor  # [B..., S]
-        targets_lengths = targets_spatial_dim.dyn_size_ext.copy_transpose(batch_dims).raw_tensor
+        targets_raw = targets.copy_compatible_to_dims_raw(batch_dims + [targets_spatial_dim])  # [B..., S]
+        targets_raw_shape = batch_shape + [targets_spatial_dim.get_dim_value()]
+        if targets_raw.numel() != prod(targets_raw_shape):
+            targets_raw = targets_raw.expand(targets_raw_shape)
+        targets_lengths = targets_spatial_dim.dyn_size_ext.copy_compatible_to_dims_raw(batch_dims)
+        if targets_lengths.numel() != batch_n_elems:
+            targets_lengths = targets_lengths.expand(batch_shape)
         if len(batch_dims) != 1:
-            targets_raw = torch.reshape(targets_raw, (-1, targets_raw.shape[-1]))  # [B', S]
-            targets_lengths = torch.reshape(targets_lengths, (-1,))  # [B']
+            targets_raw = torch.reshape(targets_raw, (batch_n_elems, targets_raw.shape[-1]))  # [B', S]
+            targets_lengths = torch.reshape(targets_lengths, (batch_n_elems,))  # [B']
         loss_raw = torch.nn.functional.ctc_loss(
             log_probs=log_probs,
             targets=targets_raw,
