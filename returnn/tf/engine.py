@@ -196,9 +196,9 @@ class Runner:
                     d["extra:%s" % k] = v
                     continue
                 assert isinstance(v, Data)
-                d["extra:%s" % k] = (
-                    v.placeholder
-                )  # see _maybe_handle_extra_fetches, it will transform to batch-major there
+                d[
+                    "extra:%s" % k
+                ] = v.placeholder  # see _maybe_handle_extra_fetches, it will transform to batch-major there
                 for i, s in v.size_placeholder.items():
                     d["extra:%s:size_%i" % (k, i)] = s
 
