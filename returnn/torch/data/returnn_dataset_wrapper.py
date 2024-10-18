@@ -75,6 +75,13 @@ class ReturnnDatasetIterDataPipe(torch.utils.data.IterDataPipe):
         """
         :return: generator providing data samples in the form of a dict data_key -> data
         """
+        # noinspection PyBroadException
+        try:
+            num_seqs = self._dataset.num_seqs
+        except Exception:  # might not work for all datasets
+            num_seqs = -1
+        num_seqs = numpy.array(num_seqs)
+
         try:
             data_keys = self._dataset.get_data_keys()
 
@@ -83,6 +90,10 @@ class ReturnnDatasetIterDataPipe(torch.utils.data.IterDataPipe):
                 self._dataset.load_seqs(seq_index, seq_index + 1)
                 data = {data_key: self._dataset.get_data(seq_index, data_key) for data_key in data_keys}
                 data["seq_tag"] = str_to_numpy_array(self._dataset.get_tag(seq_index))
+                data["seq_idx"] = numpy.array(seq_index)
+                # It's slightly redundant to have num_seqs in each entry,
+                # but it's difficult to pass this back to the main proc otherwise.
+                data["num_seqs"] = num_seqs
                 yield data
                 seq_index += 1
 

@@ -59,6 +59,9 @@ def collate_batch(batch: List[Dict[str, numpy.ndarray]]) -> Dict[str, Union[torc
 
     res = {}
     for key in data_keys:
+        if key == "num_seqs":
+            res[key] = batch[0][key]  # it should always be the same
+            continue
         ls = [create_tensor(sample[key]) for sample in batch]
         if not ls:
             raise ValueError("batch is empty?")
@@ -116,7 +119,7 @@ class ChunkingIterDataPipe(torch.utils.data.IterDataPipe):
 
             if not chunking_data_keys:
                 chunking_data_keys = list(data_dict.keys())  # use all if not configured separately
-                chunking_data_key_black_list = ["seq_tag"]
+                chunking_data_key_black_list = ["seq_tag", "seq_idx", "num_seqs"]
                 for key in chunking_data_key_black_list:
                     if key in chunking_data_keys:
                         chunking_data_keys.remove(key)
