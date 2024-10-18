@@ -13,7 +13,7 @@ import typing
 
 import returnn
 from returnn.log import log
-from returnn.util.basic import RefIdEq
+from returnn.util.basic import RefIdEq, get_fwd_compat_kwargs
 import returnn.frontend as rf
 from returnn.torch.frontend.bridge import wrapped_pt_module_to_rf_module
 
@@ -96,8 +96,11 @@ class Updater:
         self._effective_learning_rate = self.learning_rate
         self.network = network
         self._device = device
+        # Just set the very first step as initial values here.
+        # They will be overwritten via set_current_train_step() below.
         self._current_train_step = 0
-        self._current_epoch = 0
+        self._current_epoch = 1
+        self._current_epoch_continuous = 0.0
 
         self.learning_rate_function = self.config.typed_value("dynamic_learning_rate", None)
         if self.learning_rate_function is not None:
@@ -163,19 +166,38 @@ class Updater:
         self._effective_learning_rate = self.learning_rate
         if self.learning_rate_function is not None:
             lr = self.learning_rate_function(
-                global_train_step=self._current_train_step, epoch=self._current_epoch, learning_rate=self.learning_rate
+                global_train_step=self._current_train_step,
+                epoch=self._current_epoch,
+                epoch_continuous=self._current_epoch_continuous,
+                learning_rate=self.learning_rate,
+                **get_fwd_compat_kwargs(),
             )
             self._effective_learning_rate = float(lr)
         if self.optimizer:
             for param_group in self.optimizer.param_groups:
                 param_group["lr"] = self._effective_learning_rate
 
-    def set_current_train_step(self, *, global_train_step: int, epoch: int):
+    def set_current_train_step(self, *, global_train_step: int, epoch: int, epoch_continuous: Optional[float] = None):
         """
         Obtains an updated learning rate for the current training step inside a (sub)epoch.
+
+        :param global_train_step: Current global training step over the whole training process.
+            In the first epoch, this starts at 0.
+        :param epoch: Current epoch. (First epoch is 1 by RETURNN convention.)
+        :param epoch_continuous: How much of the epoch is finished.
+            In the first step of the first epoch, this starts at 0.0,
+            and when the fist epoch is finished, this reaches 1.0,
+            and the values in between are the fraction of the epoch that is finished.
+            The second epoch (epoch=2) starts at 1.0,
+            and when the second epoch is finished, this reaches 2.0, and so on.
+            We usually calculate this based on ``epoch-1+(last_seq_idx+1)/num_seqs``,
+            if the dataset can provide ``num_seqs``.
+            Other schemes based on the step_idx might be used as well to calculate this,
+            if the number of steps per epoch is known in advance.
         """
         self._current_train_step = global_train_step
         self._current_epoch = epoch
+        self._current_epoch_continuous = epoch_continuous
         self._update_effective_learning_rate()
 
     def step(self, *, grad_scaler: Optional[torch.cuda.amp.GradScaler] = None):

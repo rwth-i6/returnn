@@ -4,6 +4,7 @@ Tests for PyTorch engine.
 
 from __future__ import annotations
 import _setup_test_env  # noqa
+from typing import Optional
 import sys
 import unittest
 import tempfile
@@ -294,7 +295,6 @@ def test_forward_beam_seq_lens():
 
 
 def test_min_seq_len():
-
     from returnn.datasets.generating import DummyDataset
 
     config = Config({"min_seq_length": 2, "batch_size": 3})
@@ -318,7 +318,6 @@ def test_min_seq_len():
 
 
 def test_max_seq_len():
-
     from returnn.datasets.generating import DummyDataset
 
     config = Config({"max_seq_length": 4, "batch_size": 3})
@@ -518,6 +517,71 @@ def test_torch_engine_train_exception():
             assert "Module call stack:" in exc_lines and "(_TestTorchSubModelRaisingException.forward) sub" in exc_lines
         else:
             raise Exception("did not get expected exception")
+
+
+def test_dynamic_learning_rate():
+    num_epochs = 3
+    last_global_train_step: Optional[float] = None
+    last_epoch_continuous: Optional[float] = None
+    epoch_continuous_diffs = []
+
+    def _dynamic_learning_rate(
+        *, global_train_step: int, epoch: int, epoch_continuous: float, learning_rate: float, **_kwargs
+    ) -> float:
+        nonlocal last_global_train_step, last_epoch_continuous
+        assert isinstance(global_train_step, int)
+        assert isinstance(epoch, int)
+        assert isinstance(epoch_continuous, (int, float))
+        assert isinstance(learning_rate, (int, float))
+        print(f"global_train_step: {global_train_step}, epoch: {epoch}, epoch_continuous: {epoch_continuous}")
+        if last_global_train_step is None:
+            assert global_train_step == 0 and epoch == 1
+        else:
+            # The call to this function could be repeated.
+            assert global_train_step in (last_global_train_step, last_global_train_step + 1)
+        if last_epoch_continuous is None:
+            assert epoch_continuous == 0
+        elif global_train_step == last_global_train_step:  # repeated call
+            assert epoch_continuous == last_epoch_continuous
+        else:
+            assert epoch_continuous > last_epoch_continuous
+            assert epoch >= epoch_continuous >= epoch - 1
+            epoch_continuous_diffs.append(epoch_continuous - last_epoch_continuous)
+        last_global_train_step = global_train_step
+        last_epoch_continuous = epoch_continuous
+        return learning_rate * epoch_continuous / num_epochs
+
+    config = Config(
+        dict(
+            task="train",
+            device="cpu",
+            extern_data={"data": {"dim": 9}, "classes": {"dim": 2, "sparse": True}},
+            get_model=TrainTestModel,
+            train_step=TrainTestModel.train_step,
+            batch_size=500,
+            optimizer={"class": "adam"},
+            dynamic_learning_rate=_dynamic_learning_rate,
+            num_epochs=num_epochs,
+        )
+    )
+    num_seqs_per_epoch = 100
+    dataset = init_dataset({"class": "Task12AXDataset", "num_seqs": num_seqs_per_epoch, "name": "train"})
+    dataset.init_seq_order(epoch=1)
+
+    with global_config_ctx(config):
+        engine = Engine(config=config)
+        engine.init_train_from_config(train_data=dataset)
+        engine.train()
+
+    assert last_epoch_continuous == num_epochs
+    assert epoch_continuous_diffs
+    print("epoch continuous diffs:", epoch_continuous_diffs)
+    # Just some sanity check. The exact number here depends on num_seqs_per_epoch, batch_size, etc.
+    assert numpy.min(epoch_continuous_diffs) >= 0.01
+    assert numpy.max(epoch_continuous_diffs) <= 0.1
+    # It's one more (non-repeated) call than num steps (first + very last),
+    # and the diffs is one less, so the length should match final global train step.
+    assert len(epoch_continuous_diffs) == engine.global_train_step
 
 
 if __name__ == "__main__":

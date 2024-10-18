@@ -252,7 +252,9 @@ class Engine(EngineBase):
 
         # Update learning rate
         self._updater.set_learning_rate(self.learning_rate)
-        self._updater.set_current_train_step(global_train_step=self.global_train_step, epoch=self.epoch)
+        self._updater.set_current_train_step(
+            global_train_step=self.global_train_step, epoch=self.epoch, epoch_continuous=self.epoch - 1
+        )
 
         self.learning_rate_control.epoch_data[self.epoch].meta.update(
             {
@@ -453,7 +455,11 @@ class Engine(EngineBase):
 
                 step_idx += 1
                 self.global_train_step += 1
-                self._updater.set_current_train_step(global_train_step=self.global_train_step, epoch=self.epoch)
+                self._updater.set_current_train_step(
+                    global_train_step=self.global_train_step,
+                    epoch=self.epoch,
+                    epoch_continuous=(self.epoch - 1 + (last_seq_idx + 1) / num_seqs) if num_seqs is not None else None,
+                )
         except Exception as exc:
             help_on_torch_exception(exc, step_idx=step_idx, model=self._orig_model, extern_data=extern_data)
             raise
