@@ -543,22 +543,17 @@ class _TensorMixin(_TensorMixinBase):
         res = []
         for axis, dim_tag in enumerate(self.dim_tags):
             descriptions = []
-            if axis == self.batch_dim_axis:
+            if dim_tag.is_batch_dim():
                 if self.batch:
                     descriptions.append(self.batch.short_repr())
                 else:
-                    descriptions.append("B?")
+                    descriptions.append("B")
             if special_axes:
                 if axis == self.time_dim_axis:
                     descriptions.append("T")
                 if axis == self.feature_dim_axis:
                     descriptions.append("F")
-            if self.batch_shape[axis] is None:
-                if axis == self.batch_dim_axis:
-                    pass  # expected
-                else:
-                    descriptions.append(dim_tag.short_repr())
-            elif axis != self.batch_dim_axis or not self.batch:
+            if (not dim_tag.is_batch_dim()) or (not self.batch and dim_tag is not batch_dim):
                 descriptions.append(dim_tag.short_repr())
             res.append("|".join(descriptions) or "?")
         return res

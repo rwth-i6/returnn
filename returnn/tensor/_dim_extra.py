@@ -281,9 +281,11 @@ class _DimMixin:
         :return: some short repr
         :rtype: str
         """
-        if self.is_batch_dim():
+        if self is _d.batch_dim:
             return "B"  # Data.__repr__ will additionally give info on the batch
-        desc = "%s%r" % ("F" if self.is_feature_dim() else "", self.get_same_base().description)
+        desc_ = self.get_same_base().description
+        desc = {Dim.Types.Feature: "F", Dim.Types.Batch: "B"}.get(self.kind, "")
+        desc += repr(desc_) if desc_ is not None else "-"
         if self.special:
             desc += "!"
         elif self.dimension is not None:
