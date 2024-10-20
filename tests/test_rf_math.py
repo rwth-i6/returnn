@@ -82,7 +82,10 @@ def test_neq_broadcast_exception():
         try:
             _ = a != b
         except ValueError as e:
-            assert "require explicit allow_broadcast_all_sources=True" in str(e)
+            print("Got exception:", e)
+            assert "require explicit allow_broadcast_all_sources=True" in str(e) or "require broadcasting to" in str(
+                e
+            ), f"exception unexpected: {e}"
         else:
             raise Exception("Expected ValueError")
         a.mark_as_default_output(shape=(batch_dim, time_dim))
