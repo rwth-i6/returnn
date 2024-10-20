@@ -350,6 +350,7 @@ jobs:
           - TEST=rf_array
           - TEST=rf_attention
           - TEST=rf_base
+          - TEST=rf_base RETURNN_FRONTEND_NATIVE=0
           - TEST=rf_cond
           - TEST=rf_const
           - TEST=rf_container
@@ -360,6 +361,7 @@ jobs:
           - TEST=rf_label_smoothing
           - TEST=rf_loop
           - TEST=rf_math
+          - TEST=rf_math RETURNN_FRONTEND_NATIVE=0
           - TEST=rf_normalization
           - TEST=rf_piecewise_linear
           - TEST=rf_rec
