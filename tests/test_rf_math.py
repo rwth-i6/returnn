@@ -30,6 +30,66 @@ def test_neg():
     run_model(extern_data, lambda *, epoch, step: _Net(), _forward_step)
 
 
+def test_eq():
+    time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
+    in_dim = Dim(7, name="in")
+    extern_data = TensorDict(
+        {
+            "a": Tensor("a", [batch_dim, time_dim, in_dim], dtype="int32"),
+            "b": Tensor("b", [batch_dim, in_dim], dtype="int32"),
+        }
+    )
+
+    # noinspection PyShadowingNames
+    def _forward_step(*, extern_data: TensorDict, **_kwargs):
+        out = extern_data["a"] == extern_data["b"]
+        out.mark_as_default_output(shape=(batch_dim, time_dim, in_dim))
+
+    run_model(extern_data, lambda **_kwargs: rf.Module(), _forward_step)
+
+
+def test_neq():
+    time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
+    in_dim = Dim(7, name="in")
+    extern_data = TensorDict(
+        {
+            "a": Tensor("a", [batch_dim, time_dim, in_dim], dtype="int32"),
+            "b": Tensor("b", [batch_dim, in_dim], dtype="int32"),
+        }
+    )
+
+    # noinspection PyShadowingNames
+    def _forward_step(*, extern_data: TensorDict, **_kwargs):
+        out = extern_data["a"] != extern_data["b"]
+        out.mark_as_default_output(shape=(batch_dim, time_dim, in_dim))
+
+    run_model(extern_data, lambda **_kwargs: rf.Module(), _forward_step)
+
+
+def test_neq_broadcast_exception():
+    time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
+    other_time_dim = Dim(Tensor("other_time", [batch_dim], dtype="int32"))
+    extern_data = TensorDict(
+        {
+            "a": Tensor("a", [batch_dim, time_dim], dtype="int32"),
+            "b": Tensor("b", [batch_dim, other_time_dim], dtype="int32"),
+        }
+    )
+
+    # noinspection PyShadowingNames
+    def _forward_step(*, extern_data: TensorDict, **_kwargs):
+        a, b = extern_data["a"], extern_data["b"]
+        try:
+            _ = a != b
+        except ValueError as e:
+            assert "require explicit allow_broadcast_all_sources=True" in str(e)
+        else:
+            raise Exception("Expected ValueError")
+        a.mark_as_default_output(shape=(batch_dim, time_dim))
+
+    run_model(extern_data, lambda **_kwargs: rf.Module(), _forward_step)
+
+
 def test_squared_difference():
     time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
     in_dim = Dim(7, name="in")
