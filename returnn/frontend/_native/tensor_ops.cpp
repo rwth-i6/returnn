@@ -253,41 +253,6 @@ static bool _isSeqSubsetReorderFast(ASeqT subset, BSeqT superset, std::vector<in
     return true;
 }
 
-static bool _isTupleSubsetReorderList(PyObject* subsetTuple, PyObject* supersetList, bool& error) {
-    int superSize = PyList_GET_SIZE(supersetList);
-    if(superSize < 0) { error = true; return false; }
-    int subSize = PyTuple_GET_SIZE(subsetTuple);
-    if(subSize < 0) { error = true; return false; }
-    if(subSize > superSize)
-        return false;
-    std::vector<bool> subsetTaken(subSize, false);
-    for(int j = 0; j < superSize; ++j) {
-        PyObject* b_ = PyList_GET_ITEM(supersetList, j);
-        int i = 0;
-        for(; i < subSize; ++i) {
-            if(subsetTaken[i]) continue;
-            PyObject* a_ = PyTuple_GET_ITEM(subsetTuple, i);
-            if(a_ == b_) break;
-        }
-        if(i == subSize) {  // not found, try again using rich compare
-            for(; i < subSize; ++i) {
-                if(subsetTaken[i]) continue;
-                PyObject* a_ = PyTuple_GET_ITEM(subsetTuple, i);
-                int eq = PyObject_RichCompareBool(a_, b_, Py_EQ);
-                if(eq < 0) { error = true; return false; }
-                if(eq) break;
-            }
-        }
-        if(i < subSize)
-            subsetTaken[i] = true;
-    }
-    for(int i = 0; i < subSize; ++i) {
-        if(!subsetTaken[i])
-            return false;
-    }
-    return true;
-}
-
 PyObject* pyTensorCopy(PyObject *self, PyObject *args, PyObject *kwargs) {
     static const char *kwlist[] = { "tensor", "name", NULL };
     PyObject* tensor;
@@ -1203,6 +1168,8 @@ static PyObject* compareOrCombine(
         // collect all dims
         PyObjectScopedRef allDims = PyList_New(0);
         if(!allDims) return NULL;
+        bool aDimsHaveAll = true;
+        bool bDimsHaveAll = true;
         for(int i = 0; i < aDimsSeq.size() + bDimsSeq.size(); ++i) {
             PyObject* dim =
                 i < aDimsSeq.size() ?
@@ -1221,8 +1188,10 @@ static PyObject* compareOrCombine(
             // and this allows for a faster path.
             int aDimsCount = PySequence_Count(aDims, dim);
             if(aDimsCount < 0) return NULL;
+            if(aDimsCount == 0) aDimsHaveAll = false;
             int bDimsCount = PySequence_Count(bDims, dim);
             if(bDimsCount < 0) return NULL;
+            if(bDimsCount == 0) bDimsHaveAll = false;
             if(aDimsCount <= 1 && bDimsCount <= 1) {
                 if(PyList_Append(allDims, dim) < 0) return NULL;
                 continue;
@@ -1249,17 +1218,11 @@ static PyObject* compareOrCombine(
         }
         PyTupleOrListStaticRef<false> allDimsSeq(allDims);
 
-        // check if all dims are in a and b, or whether we need allowBroadcastAllSources
-        bool error = false;
-        bool aDimsIsSubset = _isTupleSubsetReorderList(aDims, allDims, error);
-        if(error) return NULL;
-        bool bDimsIsSubset = _isTupleSubsetReorderList(bDims, allDims, error);
-        if(error) return NULL;
-        if(!aDimsIsSubset && !bDimsIsSubset) {
-            if(!allowBroadcastAllSources) {
+        if(!allowBroadcastAllSources) {
+            if(!aDimsHaveAll && !bDimsHaveAll) {
                 PyErr_Format(
                     PyExc_ValueError,
-                    "compareOrCombine: sources %R %R not allowed with allow_broadcast_all_sources=False",
+                    "compareOrCombine: sources %R %R not allowed, require explicit allow_broadcast_all_sources=True",
                     a, b);
                 return NULL;
             }
