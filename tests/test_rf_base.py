@@ -4,6 +4,7 @@ RETURNN frontend (returnn.frontend) tests
 
 from __future__ import annotations
 from typing import Tuple
+import os
 from unittest import SkipTest
 import _setup_test_env  # noqa
 import returnn.frontend as rf
@@ -493,6 +494,9 @@ def test_build_from_dict_func():
 
 
 def test_build_from_dict_func_native():
+    if os.environ.get("RETURNN_FRONTEND_NATIVE", "").strip() not in ("", "1"):
+        raise SkipTest("RETURNN_FRONTEND_NATIVE not enabled")
+
     from types import BuiltinFunctionType
 
     rf.select_backend_torch()  # enables some of the native optimizations
