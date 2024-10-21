@@ -81,13 +81,13 @@ def test_neq_broadcast_exception():
         a, b = extern_data["a"], extern_data["b"]
         try:
             _ = a != b
-        except ValueError as e:
+        except Exception as e:
             print("Got exception:", e)
             assert "require explicit allow_broadcast_all_sources=True" in str(e) or "require broadcasting to" in str(
                 e
             ), f"exception unexpected: {e}"
         else:
-            raise Exception("Expected ValueError")
+            raise Exception("Expected exception for invalid broadcasting")
         a.mark_as_default_output(shape=(batch_dim, time_dim))
 
     run_model(extern_data, lambda **_kwargs: rf.Module(), _forward_step)
