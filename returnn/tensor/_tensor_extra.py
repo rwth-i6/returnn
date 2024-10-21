@@ -2969,10 +2969,10 @@ class _TensorMixin(_TensorMixinBase):
 
         import returnn.frontend as rf
 
-        mask = None
+        mask = True
         for axis in axes:
             mask_ = self._dims[axis].get_mask(dim_order=self.dims, device=self.device)
-            mask = rf.logical_and(mask, mask_) if mask is not None else mask_
+            mask = rf.opt_logical_and(mask, mask_, allow_broadcast_all_sources=True, dim_order=self.dims)
         assert isinstance(mask, _t.Tensor)
         res = rf.where(mask, self, mask_value)
         if use_padding_info:
