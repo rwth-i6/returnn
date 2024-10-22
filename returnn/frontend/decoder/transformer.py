@@ -101,15 +101,11 @@ class TransformerDecoder(rf.Module):
         if pos_enc is None:
             pass
         elif isinstance(pos_enc, dict):
-            pos_enc = rf.build_from_dict(
-                pos_enc, feat_dim=embed_dim or model_dim, dtype=self.input_embedding.weight.dtype
-            )
+            pos_enc = rf.build_from_dict(pos_enc, feat_dim=embed_dim or model_dim)
         elif isinstance(pos_enc, rf.Module):
             pass
         elif isinstance(pos_enc, FunctionType):
-            pos_enc = functools.partial(
-                pos_enc, feat_dim=embed_dim or model_dim, dtype=self.input_embedding.weight.dtype
-            )
+            pos_enc = functools.partial(pos_enc, feat_dim=embed_dim or model_dim)
         else:
             raise TypeError(f"unexpected pos_enc type {pos_enc!r}")
         self.pos_enc = pos_enc
