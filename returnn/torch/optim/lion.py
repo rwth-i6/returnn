@@ -197,7 +197,7 @@ if triton and "restore_value" in inspect.signature(triton.autotune).parameters:
         n_elements = p.numel()
 
         def _grid(meta):
-            return (triton.cdiv(n_elements, meta["BLOCK_SIZE"]),)
+            return tuple((triton.cdiv(n_elements, meta["BLOCK_SIZE"]),))
 
         _triton_update_fn_kernel[_grid](p, grad, exp_avg, lr, wd, beta1, beta2, n_elements)
 
