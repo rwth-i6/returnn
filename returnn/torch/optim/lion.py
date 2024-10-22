@@ -7,7 +7,7 @@ which is adapted from https://github.com/google/automl/blob/master/lion/lion_pyt
 
 from __future__ import annotations
 from typing import Optional, Tuple, Callable
-
+import inspect
 import torch
 from torch.optim.optimizer import Optimizer
 
@@ -37,19 +37,21 @@ class Lion(Optimizer):
         super().__init__(params, defaults)
 
         if use_triton is None:
-            use_triton = bool(triton)
+            use_triton = bool(triton_update_fn)
         self.use_triton = use_triton
 
     @torch.no_grad()
-    def step(self, closure: Callable | None = None):
-
+    def step(self, closure: Optional[Callable] = None):
+        """update step"""
         loss = None
         if closure is not None:
             with torch.enable_grad():
                 loss = closure()
 
         for group in self.param_groups:
-            for p in filter(lambda p: p.grad is not None, group["params"]):
+            for p in group["params"]:
+                if p.grad is None:
+                    continue
 
                 beta1, beta2 = group["betas"]
                 grad, lr, wd, state, decoupled_wd, init_lr = (
@@ -103,17 +105,21 @@ def update_fn(p, grad, exp_avg, lr, wd, beta1, beta2):
 
 
 try:
+    # noinspection PyPackageRequirements
     import triton
+
+    # noinspection PyPackageRequirements
     import triton.language as tl
 except ImportError as e:
     triton = None
     tl = None
 
 
-if triton:
+# restore_value is not available in older versions of triton
+if triton and "restore_value" in inspect.signature(triton.autotune).parameters:
     # triton cuda kernel
 
-    # noinspection PyPep8Naming
+    # noinspection PyPep8Naming,PyArgumentList
     @triton.autotune(
         configs=[
             triton.Config({"BLOCK_SIZE": 128}, num_warps=4),
@@ -190,9 +196,10 @@ if triton:
         assert all([t.is_cuda for t in (p, grad, exp_avg)])
         n_elements = p.numel()
 
-        grid = lambda meta: (triton.cdiv(n_elements, meta["BLOCK_SIZE"]),)
+        def _grid(meta):
+            return (triton.cdiv(n_elements, meta["BLOCK_SIZE"]),)
 
-        _triton_update_fn_kernel[grid](p, grad, exp_avg, lr, wd, beta1, beta2, n_elements)
+        _triton_update_fn_kernel[_grid](p, grad, exp_avg, lr, wd, beta1, beta2, n_elements)
 
 else:
     triton_update_fn = None
