@@ -5,7 +5,7 @@ and model param update logic in general.
 
 from __future__ import annotations
 
-from typing import Optional, Union, Any, Type, Sequence, Iterable, Set, Dict, List, Tuple
+from typing import Optional, Union, Any, Type, Callable, Sequence, Iterable, Set, Dict, List, Tuple
 import os
 import gc
 import torch
@@ -38,28 +38,40 @@ def _init_optimizer_classes_dict():
         _OptimizerClassesDict[name.lower()] = cls
 
 
-def get_optimizer_class(class_name) -> Type[torch.optim.Optimizer]:
+def get_optimizer_class(
+    class_name: Union[str, Type[torch.optim.Optimizer], Callable[[], Type[torch.optim.Optimizer]]]
+) -> Type[torch.optim.Optimizer]:
     """
-    :param str|()->torch.optim.Optimizer|type[torch.optim.Optimizer] class_name:
-        Optimizer data, e.g. "adam", torch.optim.Adam...
-    :return: Optimizer class
+    :param class_name: Optimizer class, either as str (e.g. "adam"), as type (torch.optim.Adam) or callable.
+        If str, we support all torch.optim optimizers (ignoring case) (e.g. "adam"),
+        or class names with full module path (e.g. "returnn.torch.optim.lion.Lion").
+    :return: Optimizer class, e.g. torch.optim.Adam
     """
     _init_optimizer_classes_dict()
     if isinstance(class_name, type):
         assert issubclass(class_name, torch.optim.Optimizer)
+        return class_name
     elif callable(class_name):
-        class_name = class_name()
-    else:
-        assert isinstance(class_name, str)
-        assert (
-            class_name.lower() in _OptimizerClassesDict
-        ), "%s not found in the available torch optimizers list: %s." % (
-            class_name.lower(),
-            ", ".join("'%s'" % key for key in _OptimizerClassesDict),
-        )
-        class_name = _OptimizerClassesDict[class_name.lower()]
+        return class_name()
+    elif isinstance(class_name, str):
+        if "." in class_name:
+            import importlib
 
-    return class_name
+            mod_name, class_name_ = class_name.rsplit(".", 1)
+            mod = importlib.import_module(mod_name)
+            return getattr(mod, class_name_)
+
+        if class_name.lower() not in _OptimizerClassesDict:
+            raise ValueError(
+                "Optimizer %r not found in the available torch optimizers list: %s."
+                % (
+                    class_name.lower(),
+                    ", ".join("'%s'" % key for key in _OptimizerClassesDict),
+                )
+            )
+        return _OptimizerClassesDict[class_name.lower()]
+    else:
+        raise TypeError(f"Invalid optimizer class_name {class_name!r} type {type(class_name).__name__}")
 
 
 def _get_class_init_kwargs(optim_class):
@@ -411,7 +423,7 @@ class Updater:
         # If the user specified it as epsilon, parse it as eps for the optimizer
         if "eps" in optim_class_init_kwargs and "epsilon" in opt_kwargs:
             opt_kwargs["eps"] = opt_kwargs.pop("epsilon")
-        if "learning_rate" in opt_kwargs:
+        if "learning_rate" in opt_kwargs or "lr" in opt_kwargs:
             raise ValueError("'learning_rate' should be set outside of the 'optimizer' dict.")
         lr = lr * opt_kwargs.pop("learning_rate_multiplier", 1.0)
         opt_kwargs["lr"] = lr

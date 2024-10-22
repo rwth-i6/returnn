@@ -584,6 +584,28 @@ def test_dynamic_learning_rate():
     assert len(epoch_continuous_diffs) == engine.global_train_step
 
 
+def test_torch_engine_train_lion_optimizer():
+    config = Config(
+        dict(
+            task="train",
+            device="cpu",
+            extern_data={"data": {"dim": 9}, "classes": {"dim": 2, "sparse": True}},
+            get_model=TrainTestModel,
+            train_step=TrainTestModel.train_step,
+            batch_size=500,
+            optimizer={"class": "returnn.torch.optim.lion.Lion"},
+            num_epochs=1,
+        )
+    )
+    dataset = init_dataset({"class": "Task12AXDataset", "num_seqs": 10, "name": "train"})
+    dataset.init_seq_order(epoch=1)
+
+    with global_config_ctx(config):
+        engine = Engine(config=config)
+        engine.init_train_from_config(train_data=dataset)
+        engine.train()
+
+
 if __name__ == "__main__":
     better_exchook.install()
     if len(sys.argv) <= 1:

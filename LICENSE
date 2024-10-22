@@ -176,4 +176,11 @@ Contains code from PyTorch:
  - Copyright 2016..2023 various developers
  - Various code snippets
 
+Contains code from lion-pytorch:
+ - https://github.com/google/automl/blob/master/lion/lion_pytorch.py
+ - https://github.com/lucidrains/lion-pytorch/
+ - MIT License / Apache License 2.0
+ - Copyright 2023 Google Research, Phil Wang
+ - torch/optim/lion.py
+
 Various code snippets from StackOverflow, which are under Creative Commons / Public Domain.
