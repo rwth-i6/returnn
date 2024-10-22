@@ -606,6 +606,33 @@ def test_torch_engine_train_lion_optimizer():
         engine.train()
 
 
+def test_torch_engine_bf16():
+    config = Config(
+        dict(
+            task="train",
+            device="cpu",
+            default_float_dtype="bfloat16",
+            extern_data={"data": {"dim": 9}, "classes": {"dim": 2, "sparse": True}},
+            get_model=TrainTestModel,
+            train_step=TrainTestModel.train_step,
+            batch_size=500,
+            optimizer={"class": "adam"},
+            num_epochs=1,
+        )
+    )
+    dataset = init_dataset({"class": "Task12AXDataset", "num_seqs": 10, "name": "train"})
+    dataset.init_seq_order(epoch=1)
+
+    with global_config_ctx(config):
+        engine = Engine(config=config)
+        engine.init_train_from_config(train_data=dataset)
+        engine.train()
+        params = list(engine.get_pt_model().parameters())
+        assert params
+        for p in params:
+            assert p.dtype == torch.bfloat16
+
+
 if __name__ == "__main__":
     better_exchook.install()
     if len(sys.argv) <= 1:

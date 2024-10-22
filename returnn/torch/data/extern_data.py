@@ -3,7 +3,7 @@ From raw dict to extern_data tensor dict.
 """
 
 from __future__ import annotations
-from typing import Any, Union, Dict, List, Sequence
+from typing import Optional, Any, Union, Dict, List, Sequence
 import numpy
 import torch
 from returnn.tensor import Tensor, TensorDict, Dim
@@ -27,13 +27,18 @@ def raw_dict_to_extern_data(
     *,
     extern_data_template: TensorDict,
     device: Union[str, torch.device],
+    float_dtype: Optional[Union[str, torch.dtype]] = None,
 ) -> TensorDict:
     """
     :param extern_data_raw: This comes out of the DataLoader, via our collate_batch.
     :param extern_data_template: Specified via `extern_data` in the config.
     :param device: E.g. the GPU.
+    :param float_dtype:
     :return: tensor dict, like extern_data_template, but with raw tensors set to Torch tensors, on the right device.
     """
+    if isinstance(float_dtype, str):
+        float_dtype = getattr(torch, float_dtype)
+        assert isinstance(float_dtype, torch.dtype)
     assert isinstance(extern_data_raw, dict) and extern_data_raw
     batch_dim = get_batch_dim_from_extern_data(extern_data_template)
     for dim in _get_dyn_dims_from_extern_data(extern_data_template):
@@ -51,6 +56,8 @@ def raw_dict_to_extern_data(
                     dim.dimension == raw_tensor.shape[i]
                 ), f"shape mismatch for {k}: {raw_tensor.shape} vs {data.batch_shape}"
         if isinstance(raw_tensor, torch.Tensor):
+            if raw_tensor.dtype.is_floating_point and float_dtype:
+                raw_tensor = raw_tensor.to(dtype=float_dtype)
             data.dtype = str(raw_tensor.dtype).split(".")[-1]  # just overwrite for now...
             data.raw_tensor = raw_tensor.to(device)
         elif isinstance(raw_tensor, numpy.ndarray):

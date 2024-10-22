@@ -86,7 +86,10 @@ def _help_data_or_array(
     :return: (info,(min,max))
     """
     if isinstance(value, torch.Tensor):
-        value = value.detach().cpu().numpy()
+        value = value.detach().cpu()
+        if value.dtype == torch.bfloat16:
+            value = value.float()
+        value = value.numpy()
     v_minmax = -1, -1
     if isinstance(value, np.ndarray):
         info = "shape %s, dtype %s" % (value.shape, value.dtype)

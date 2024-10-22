@@ -4,7 +4,7 @@ Main engine for PyTorch
 
 from __future__ import annotations
 from typing import Optional, Any, Union, Callable, Dict, Set
-from contextlib import nullcontext
+from contextlib import nullcontext, ExitStack, contextmanager
 
 import gc
 import os
@@ -128,6 +128,13 @@ class Engine(EngineBase):
         self._reset_dev_memory_caches = config.bool("reset_dev_memory_caches", False)
         self._forward_auto_split_batch_on_oom = config.bool("forward_auto_split_batch_on_oom", False)
         self._stop_on_nonfinite_train_score = config.bool("stop_on_nonfinite_train_score", True)
+
+        default_float_dtype = config.value("default_float_dtype", None)
+        if default_float_dtype is not None:
+            assert isinstance(default_float_dtype, str)
+            default_float_dtype = getattr(torch, default_float_dtype)
+            assert isinstance(default_float_dtype, torch.dtype)
+        self._default_float_dtype: Optional[torch.dtype] = default_float_dtype
 
         amp_options = self.config.opt_typed_value("torch_amp")
         grad_scaler_opts = self.config.typed_value("grad_scaler", NotSpecified)
@@ -380,7 +387,10 @@ class Engine(EngineBase):
                     cur_count_grad_accum = 0
 
                 extern_data = extern_data_util.raw_dict_to_extern_data(
-                    extern_data_raw, extern_data_template=self.extern_data, device=self._device
+                    extern_data_raw,
+                    extern_data_template=self.extern_data,
+                    device=self._device,
+                    float_dtype=self._default_float_dtype,
                 )
                 self._run_step(extern_data, train_flag=True, train_func=True)
 
@@ -389,7 +399,7 @@ class Engine(EngineBase):
                 losses_dict = NumbersDict(
                     {
                         name: (
-                            float(loss.get_summed_loss().raw_tensor.detach().cpu().numpy())
+                            float(loss.get_summed_loss().raw_tensor.detach().cpu().item())
                             if self._device != "meta"
                             else float("nan")
                         )
@@ -553,7 +563,10 @@ class Engine(EngineBase):
                         torch.distributed.broadcast(_has_data, src=0)
 
                     extern_data = extern_data_util.raw_dict_to_extern_data(
-                        extern_data_raw, extern_data_template=self.extern_data, device=self._device
+                        extern_data_raw,
+                        extern_data_template=self.extern_data,
+                        device=self._device,
+                        float_dtype=self._default_float_dtype,
                     )
 
                     self._run_step(extern_data, train_func=True)
@@ -566,7 +579,7 @@ class Engine(EngineBase):
                     losses_dict = NumbersDict(
                         {
                             name: (
-                                float(loss.get_summed_loss().raw_tensor.detach().cpu().numpy())
+                                float(loss.get_summed_loss().raw_tensor.detach().cpu().item())
                                 if self._device != "meta"
                                 else float("nan")
                             )
@@ -686,6 +699,26 @@ class Engine(EngineBase):
 
         return data_loader
 
+    @contextmanager
+    def _run_ctx_mgr(self):
+        with ExitStack() as stack:
+            if self._use_autocast:
+                stack.enter_context(autocast(device_type=self._device.split(":")[0], dtype=self._autocast_dtype))
+            stack.enter_context(rf.set_default_device_ctx(self._device))
+            if self._default_float_dtype:
+                stack.enter_context(rf.set_default_float_dtype_ctx(str(self._default_float_dtype).split(".")[-1]))
+                stack.enter_context(self._set_torch_default_dtype_ctx_mgr(self._default_float_dtype))
+            yield
+
+    @contextmanager
+    def _set_torch_default_dtype_ctx_mgr(self, dtype: torch.dtype):
+        old_dtype = torch.get_default_dtype()
+        try:
+            torch.set_default_dtype(dtype)
+            yield
+        finally:
+            torch.set_default_dtype(old_dtype)
+
     def _run_step(
         self, extern_data: TensorDict, *, train_flag: bool = False, train_func: bool, _inside_wrapped: bool = False
     ):
@@ -706,11 +739,7 @@ class Engine(EngineBase):
                 expected_outputs=self._forward_step_expected_outputs, step=self.global_train_step, epoch=self.epoch
             )
 
-        with (
-            autocast(device_type=self._device.split(":")[0], dtype=self._autocast_dtype)
-            if self._use_autocast
-            else nullcontext()
-        ), rf.set_default_device_ctx(self._device):
+        with self._run_ctx_mgr():
             sentinel_kw = util.get_fwd_compat_kwargs()
             if train_func:
                 self._train_step_func(model=self._orig_model, extern_data=extern_data, **sentinel_kw)
@@ -893,6 +922,8 @@ class Engine(EngineBase):
                 )
             )
 
+        if self._default_float_dtype:
+            self._pt_model.to(dtype=self._default_float_dtype)
         self._pt_model.to(self._device)
 
         if model_epoch_filename and is_training:
@@ -906,11 +937,7 @@ class Engine(EngineBase):
 
         load_model_post_hooks = self.config.typed_value("load_model_post_hooks")
         if load_model_post_hooks:
-            with (
-                autocast(device_type=self._device.split(":")[0], dtype=self._autocast_dtype)
-                if self._use_autocast
-                else nullcontext()
-            ), rf.set_default_device_ctx(self._device):
+            with self._run_ctx_mgr():
                 sentinel_kw = util.get_fwd_compat_kwargs()
                 for hook in load_model_post_hooks:
                     hook(model=self._orig_model, **sentinel_kw)
@@ -1090,7 +1117,10 @@ class Engine(EngineBase):
             # Currently, this callback interface is intended to also be used by other backends,
             # and then the user can always assume Numpy arrays.
             if isinstance(raw, torch.Tensor):  # might already be numpy array
-                raw = raw.detach().cpu().numpy()
+                raw = raw.detach().cpu()
+                if raw.dtype == torch.bfloat16:
+                    raw = raw.float()
+                raw = raw.numpy()
             y.raw_tensor = raw
             return y
 
@@ -1120,7 +1150,10 @@ class Engine(EngineBase):
                     # Also resets any dyn dims, which might have been set in the prev step.
                     self._forward_step_expected_outputs.reset_content()
                 extern_data = extern_data_util.raw_dict_to_extern_data(
-                    extern_data_raw, extern_data_template=self.extern_data, device=self._device
+                    extern_data_raw,
+                    extern_data_template=self.extern_data,
+                    device=self._device,
+                    float_dtype=self._default_float_dtype,
                 )
                 try:
                     self._run_step(extern_data, train_func=False)
@@ -1224,7 +1257,10 @@ def _to_raw(n: Union[int, float, Tensor]):
     if isinstance(n, (int, float)):
         return n
     if isinstance(n, Tensor):
-        return n.raw_tensor.detach().cpu().numpy()
+        x = n.raw_tensor.detach().cpu()
+        if x.dtype == torch.bfloat16:
+            x = x.float()
+        return x.numpy()
     raise TypeError(f"Unexpected {n} of type {type(n)}")
 
 
