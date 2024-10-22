@@ -2039,6 +2039,12 @@ class TorchBackend(Backend[torch.Tensor]):
                 pad_right = fft_length - frame_length - pad_left
                 window_pt = torch.nn.functional.pad(window_pt, (pad_left, pad_right))
 
+        orig_dtype = x_raw.dtype
+        if orig_dtype == torch.bfloat16:
+            # PyTorch stft does not support bfloat16 currently (PyTorch 2.5):
+            # https://github.com/pytorch/pytorch/issues/117844
+            # (Check back later here whether that's still the case...)
+            x_raw = x_raw.to(torch.float32)
         y_raw = torch.stft(
             x_raw,
             n_fft=fft_length,

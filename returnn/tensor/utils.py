@@ -104,6 +104,9 @@ def tensor_fill_random_numpy_(
             x.raw_tensor = rnd.randint(0, 2, size=shape, dtype=x.dtype)
         elif x.dtype.startswith("float"):
             x.raw_tensor = rnd.normal(0.0, 1.0, size=shape).astype(x.dtype)
+        elif x.dtype == "bfloat16":
+            # Numpy does not support bfloat16, will later be casted to bfloat16
+            x.raw_tensor = rnd.normal(0.0, 1.0, size=shape).astype("float32")
         elif x.dtype.startswith("complex"):
             real = rnd.normal(0.0, 1.0, size=shape)
             imag = rnd.normal(0.0, 1.0, size=shape)

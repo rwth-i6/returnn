@@ -769,3 +769,31 @@ def test_edit_distance():
         a_ = Tensor("a", [batch_dim, a_spatial_dim], dtype="int64", raw_tensor=torch.tensor(a_values))
         b_ = Tensor("b", [batch_dim, b_spatial_dim], dtype="int64", raw_tensor=torch.tensor(b_values))
         _check_edit_distance(a_, a_spatial_dim, b_, b_spatial_dim)
+
+
+def test_audio_log_mel_filterbank_from_raw_bfloat16():
+    time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
+    out_dim = Dim(80, name="freq")
+    extern_data = TensorDict(
+        {
+            "data": Tensor("data", [batch_dim, time_dim], dtype="float32"),
+        }
+    )
+
+    # noinspection PyShadowingNames
+    def _forward_step(*, extern_data: TensorDict, **_kwargs):
+        audio = extern_data["data"]
+        audio = rf.cast(audio, "bfloat16")
+        out, out_spatial_dim = rf.audio.log_mel_filterbank_from_raw(audio, in_spatial_dim=time_dim, out_dim=out_dim)
+        assert out.dtype == "bfloat16"
+        out = rf.cast(out, "float32")  # the test framework doesn't support bfloat16 currently due to Numpy...
+        out.mark_as_default_output(shape=(batch_dim, out_spatial_dim, out_dim))
+
+    run_model(
+        extern_data,
+        lambda **_kwargs: rf.Module(),
+        _forward_step,
+        dyn_dim_min_sizes={time_dim: 2000},
+        dyn_dim_max_sizes={time_dim: 3000},
+        test_tensorflow=False,
+    )
