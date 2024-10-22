@@ -676,6 +676,9 @@ class TorchBackend(Backend[torch.Tensor]):
         if len(batch_dims) != 1:
             targets_raw = torch.reshape(targets_raw, (batch_n_elems, targets_raw.shape[-1]))  # [B', S]
             targets_lengths = torch.reshape(targets_lengths, (batch_n_elems,))  # [B']
+        if log_probs.dtype == torch.bfloat16:
+            # Currently (PyTorch 2.5), ctc_loss does not support bfloat16.
+            log_probs = log_probs.to(torch.float32)
         loss_raw = torch.nn.functional.ctc_loss(
             log_probs=log_probs,
             targets=targets_raw,
@@ -691,7 +694,7 @@ class TorchBackend(Backend[torch.Tensor]):
             name="ctc_loss",
             dims=batch_dims,
             raw_tensor=loss_raw,
-            dtype=logits.dtype,
+            dtype=TorchBackend.get_dtype_name_raw(loss_raw),
         )
         return loss
 
