@@ -455,6 +455,7 @@ class LmDataset(CachedDataset2):
                 num_seqs=len(self._orths_offsets_and_lens),
                 get_seq_len=lambda i: self._orths_offsets_and_lens[i][2],
             )
+        self._num_seqs = len(self.seq_order)
         self.next_orth_idx = 0
         self.next_seq_idx = 0
         self.num_skipped = 0
