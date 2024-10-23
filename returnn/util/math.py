@@ -28,6 +28,7 @@ class PiecewiseLinear:
         self._sorted_values = numpy.array([y for _, y in self._sorted_items])
 
     def __call__(self, x: Union[int, float]) -> Union[int, float]:
+        assert x is not None
         steps = self._sorted_keys
         values = self._sorted_values
         return numpy.interp(x, steps, values)
