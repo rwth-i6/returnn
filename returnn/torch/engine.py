@@ -707,17 +707,8 @@ class Engine(EngineBase):
             stack.enter_context(rf.set_default_device_ctx(self._device))
             if self._default_float_dtype:
                 stack.enter_context(rf.set_default_float_dtype_ctx(str(self._default_float_dtype).split(".")[-1]))
-                stack.enter_context(self._set_torch_default_dtype_ctx_mgr(self._default_float_dtype))
+                stack.enter_context(_set_torch_default_dtype_ctx_mgr(self._default_float_dtype))
             yield
-
-    @contextmanager
-    def _set_torch_default_dtype_ctx_mgr(self, dtype: torch.dtype):
-        old_dtype = torch.get_default_dtype()
-        try:
-            torch.set_default_dtype(dtype)
-            yield
-        finally:
-            torch.set_default_dtype(old_dtype)
 
     def _run_step(
         self, extern_data: TensorDict, *, train_flag: bool = False, train_func: bool, _inside_wrapped: bool = False
@@ -1418,3 +1409,13 @@ class _WrappedModuleRunStep(torch.nn.Module):
         for name, loss in ctx.losses.items():
             res["loss/" + name] = loss.loss.raw_tensor
         return res
+
+
+@contextmanager
+def _set_torch_default_dtype_ctx_mgr(dtype: torch.dtype):
+    old_dtype = torch.get_default_dtype()
+    try:
+        torch.set_default_dtype(dtype)
+        yield
+    finally:
+        torch.set_default_dtype(old_dtype)
