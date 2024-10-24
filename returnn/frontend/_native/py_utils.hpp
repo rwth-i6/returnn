@@ -31,7 +31,7 @@ private:
 Sequence interface contract:
 
 - Holds borrowed reference to PyObject*.
-- Copy object itself is supposed to be fast, small object.
+- Copy PyTupleOrListStaticRef/PyTupleOrListRef itself is supposed to be fast, small object.
 
 Methods:
 

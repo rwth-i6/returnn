@@ -347,11 +347,23 @@ def opt_logical_or(a: Union[Tensor, bool], b: Union[Tensor, bool]) -> Union[Tens
 
 
 @overload
-def opt_logical_and(a: bool, b: bool) -> bool:
+def opt_logical_and(
+    a: bool,
+    b: bool,
+    *,
+    allow_broadcast_all_sources: Optional[bool] = None,
+    dim_order: Optional[Sequence[Dim]] = None,
+) -> bool:
     """logical and"""
 
 
-def opt_logical_and(a: Union[Tensor, bool], b: Union[Tensor, bool]) -> Union[Tensor, bool]:
+def opt_logical_and(
+    a: Union[Tensor, bool],
+    b: Union[Tensor, bool],
+    *,
+    allow_broadcast_all_sources: Optional[bool] = None,
+    dim_order: Optional[Sequence[Dim]] = None,
+) -> Union[Tensor, bool]:
     """logical and"""
     if isinstance(a, bool):
         if not a:
@@ -361,7 +373,7 @@ def opt_logical_and(a: Union[Tensor, bool], b: Union[Tensor, bool]) -> Union[Ten
         if not b:
             return False
         return a
-    return combine(a, "logical_and", b)
+    return combine(a, "logical_and", b, allow_broadcast_all_sources=allow_broadcast_all_sources, dim_order=dim_order)
 
 
 def is_finite(a: Tensor) -> Tensor:
