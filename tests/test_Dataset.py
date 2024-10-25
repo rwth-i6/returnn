@@ -18,12 +18,12 @@ from returnn.util.basic import NumbersDict
 from returnn.util import better_exchook
 
 
-def dummy_iter_dataset(dataset: Dataset) -> List[DatasetSeq]:
+def dummy_iter_dataset(dataset: Dataset, *, epoch: int = 1) -> List[DatasetSeq]:
     """
     :param Dataset dataset:
     :return: seqs
     """
-    dataset.init_seq_order(epoch=1)
+    dataset.init_seq_order(epoch=epoch)
     data_keys = dataset.get_data_keys()
     seq_idx = 0
     seqs = []
@@ -1145,6 +1145,67 @@ def test_PostprocessingDataset():
 
     func = Sequential(lambda x: x * 10, lambda y: y + 1)
     assert func(2) == 21
+
+
+def test_MultiEpochDataset():
+    from returnn.datasets.meta import MultiEpochDataset
+    from returnn.datasets.cached2 import CachedDataset2
+
+    in_dim, out_dim = 11, 7
+    seq_len = 5
+    inner_num_seqs = 10
+
+    class _MyDataset(CachedDataset2):
+        def __init__(self):
+            super().__init__()
+            self.num_inputs = in_dim
+            self.num_outputs = {"classes": out_dim}
+
+        # noinspection PyShadowingNames
+        def init_seq_order(self, epoch=None, seq_list=None, seq_order=None):
+            """init seq order"""
+            super().init_seq_order(epoch=epoch, seq_list=seq_list, seq_order=seq_order)
+            self._num_seqs = inner_num_seqs
+
+        def _collect_single_seq(self, seq_idx: int) -> Optional[DatasetSeq]:
+            if seq_idx >= self._num_seqs:
+                return None
+            return DatasetSeq(
+                seq_idx=seq_idx,
+                seq_tag=repr({"epoch": self.epoch, "seq_idx": seq_idx}),
+                features=numpy.zeros((seq_len, in_dim)),
+                targets={"classes": numpy.zeros((seq_len,), dtype=numpy.int32)},
+            )
+
+    inner_dataset = _MyDataset()
+    inner_dataset.initialize()
+
+    multi_epoch = 3
+    dataset = MultiEpochDataset(dataset=inner_dataset, multi_epoch=multi_epoch)
+    for outer_epoch in [1, 7]:
+        seqs = dummy_iter_dataset(dataset, epoch=outer_epoch)
+        assert len(seqs) == inner_num_seqs * multi_epoch
+        outer_seq_idx = 0
+        sub_ep = (outer_epoch - 1) * multi_epoch + 1  # 1-based
+        sub_seq_idx = 0
+        for seq in seqs:
+            assert outer_seq_idx == seq.seq_idx
+            assert seq.features["data"].shape == (seq_len, in_dim)
+            assert seq.features["classes"].shape == (seq_len,)
+            print("seq:", seq.seq_tag)
+            d = eval(seq.seq_tag)  # seq tag is dict repr
+            assert isinstance(d, dict)
+            assert d["epoch"] == sub_ep
+            assert d["seq_idx"] == sub_seq_idx
+            # Calc next expected values.
+            if sub_seq_idx >= inner_num_seqs - 1:
+                sub_seq_idx = 0
+                sub_ep += 1
+            else:
+                sub_seq_idx += 1
+            outer_seq_idx += 1
+        assert outer_seq_idx == len(seqs)
+        assert sub_ep == outer_epoch * multi_epoch + 1 and sub_seq_idx == 0
 
 
 if __name__ == "__main__":
