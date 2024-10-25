@@ -266,6 +266,12 @@ class EngineBase:
         """
         return self.pretrain and self.epoch == self.pretrain.get_train_num_epochs() + 1
 
+    def set_epoch(self, epoch: int):
+        """
+        Set the current epoch.
+        """
+        self.epoch = epoch
+
     def forward_with_callback(self, *, dataset: Dataset, callback: ForwardCallbackIface):
         """
         Iterate through the dataset, calling `forward_step` from user config,

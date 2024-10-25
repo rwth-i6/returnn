@@ -225,6 +225,11 @@ class Engine(EngineBase):
         self._train_step_func = self.config.typed_value("train_step")
         assert self._train_step_func, "train_step not defined"
 
+    def set_epoch(self, epoch: int):
+        """set epoch"""
+        super().set_epoch(epoch)
+        self._epoch_mp_shared.value = epoch
+
     def train(self):
         """
         Main training loop.
@@ -243,9 +248,7 @@ class Engine(EngineBase):
         )
         self.epoch = self._start_epoch - 1
         while self.epoch + 1 <= self._final_epoch:
-            self.epoch += 1
-            self._epoch_mp_shared.value = self.epoch
-
+            self.set_epoch(self.epoch + 1)
             self.init_train_epoch()
             self.train_epoch()
 
