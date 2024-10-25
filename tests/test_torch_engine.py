@@ -294,6 +294,124 @@ def test_forward_beam_seq_lens():
         assert len(max_sizes) > 1
 
 
+def test_torch_engine_forward_dataset_epoch():
+    import tempfile
+    import shutil
+    import atexit
+    import os
+    import returnn
+
+    model_dir_name = tempfile.mkdtemp()
+    assert model_dir_name and os.path.isdir(model_dir_name) and not os.listdir(model_dir_name)
+    atexit.register(lambda: shutil.rmtree(model_dir_name))
+
+    in_dim, out_dim = 9, 13
+
+    def _get_model(**_kwargs):
+        return torch.nn.Linear(in_dim, out_dim)
+
+    epoch = 17
+    filename = Engine.epoch_model_filename(f"{model_dir_name}/model", epoch=epoch) + ".pt"
+
+    # That's how RETURNN now saves the model (2024-10-25).
+    # Maybe leave it like this for the test, even when RETURNN itself changes it,
+    # so that we also test that we still support this format.
+    torch.save(
+        {
+            "model": _get_model().state_dict(),  # some random model
+            "epoch": epoch,
+            "step": 123,
+            "effective_learning_rate": 0.13,
+            "returnn_version": returnn.__long_version__,
+        },
+        filename,
+    )
+
+    recent_seen_seq_idx: Optional[int] = None
+
+    class _ForwardCallback(ForwardCallbackIface):
+        def process_seq(self, *, seq_tag: str, outputs: TensorDict):
+            print("*** forward callback process seq", seq_tag)
+            d = eval(seq_tag)  # we prepared the dataset this way that we get some dict repr here...
+            assert isinstance(d, dict)
+            assert d["epoch"] == epoch
+            nonlocal recent_seen_seq_idx
+            seq_idx = d["seq_idx"]
+            if seq_idx == 0:
+                assert recent_seen_seq_idx is None
+            else:
+                assert recent_seen_seq_idx is not None
+                assert seq_idx == recent_seen_seq_idx + 1
+            recent_seen_seq_idx = seq_idx
+
+    forward_callback = _ForwardCallback()
+
+    def _forward_step(*, extern_data: TensorDict, **_kwargs):
+        print("*** forward step", extern_data)
+        data = extern_data["data"]
+        # Doesn't matter what we set as output here, not used...
+        # (Without output, maybe RETURNN complains, so put sth.)
+        # We just use the seq_tag in the forward callback, which is anyway available.
+        data.mark_as_default_output(shape=data.dims)
+
+    config = Config(
+        dict(
+            task="forward",
+            batch_size=50,
+            extern_data={"data": {"dim": in_dim}},
+            get_model=_get_model,
+            load=filename,
+            forward_step=_forward_step,
+            torch_dataloader_opts=dict(num_workers=0),  # simplifies the test
+        )
+    )
+
+    from returnn.datasets.cached2 import CachedDataset2
+    from returnn.datasets.basic import DatasetSeq
+
+    num_seqs = 10
+
+    class _MyDataset(CachedDataset2):
+        def __init__(self):
+            super().__init__()
+            self.num_inputs = in_dim
+            self.num_outputs = {"classes": out_dim}
+
+        # noinspection PyShadowingNames
+        def init_seq_order(self, epoch=None, seq_list=None, seq_order=None):
+            """init seq order"""
+            super().init_seq_order(epoch=epoch, seq_list=seq_list, seq_order=seq_order)
+            self._num_seqs = num_seqs
+
+        def _collect_single_seq(self, seq_idx: int) -> Optional[DatasetSeq]:
+            if seq_idx >= self._num_seqs:
+                return None
+            return DatasetSeq(
+                seq_idx=seq_idx,
+                seq_tag=repr({"epoch": self.epoch, "seq_idx": seq_idx}),
+                features=numpy.zeros((10, in_dim)),
+                targets={"classes": numpy.zeros((10,), dtype=numpy.int32)},
+            )
+
+    dataset = _MyDataset()
+    dataset.initialize()
+
+    with global_config_ctx(config):
+        engine = Engine(config=config)
+        engine.init_network_from_config()
+        # We expect that the engine epoch is set to the epoch of the checkpoint.
+        assert engine.epoch == epoch
+
+        for epoch in [3, 7, 11]:
+            engine.set_epoch(epoch)
+            assert engine.epoch == epoch
+            dataset.init_seq_order(epoch=epoch)
+            assert dataset.num_seqs == num_seqs
+            recent_seen_seq_idx = None
+            engine.forward_with_callback(callback=forward_callback, dataset=dataset)
+            assert recent_seen_seq_idx == num_seqs - 1
+
+
 def test_min_seq_len():
     from returnn.datasets.generating import DummyDataset
 
