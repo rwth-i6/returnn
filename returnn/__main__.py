@@ -576,6 +576,10 @@ def execute_main_task():
                 assert data, "set forward_data"
             else:
                 data = init_dataset(config.opt_typed_value("forward_data"))
+            # engine.epoch is usually the epoch of the loaded checkpoint,
+            # or what EngineBase.get_epoch_model will return.
+            # You can have both load and load_epoch, where load points to the checkpoint,
+            # and load_epoch is some other epoch, which you will get here for the dataset.
             data.init_seq_order(epoch=engine.epoch or 1)
             forward_callback = config.typed_value("forward_callback")
             assert forward_callback, "no forward_callback specified"
