@@ -1875,7 +1875,7 @@ class VariableDataset(Dataset):
 
     def init_seq_order(self, epoch=None, seq_list=None, seq_order=None):
         """init seq order"""
-        super().init_seq_order()
+        super().init_seq_order(epoch=epoch, seq_list=seq_list, seq_order=seq_order)
         if epoch is None:
             if seq_list is not None or seq_order is not None:
                 raise ValueError(f"{self}: epoch is None, but given seq_list or seq_order, not supported")
