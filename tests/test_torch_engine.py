@@ -412,6 +412,65 @@ def test_torch_engine_forward_dataset_epoch():
             assert recent_seen_seq_idx == num_seqs - 1
 
 
+def test_torch_engine_forward_load_epoch():
+    import tempfile
+    import shutil
+    import atexit
+    import os
+    import returnn
+
+    model_dir_name = tempfile.mkdtemp()
+    assert model_dir_name and os.path.isdir(model_dir_name) and not os.listdir(model_dir_name)
+    atexit.register(lambda: shutil.rmtree(model_dir_name))
+
+    in_dim, out_dim = 9, 13
+
+    def _get_model(**_kwargs):
+        return torch.nn.Linear(in_dim, out_dim)
+
+    epoch = 17
+    load_epoch = 11  # some other epoch
+    filename = Engine.epoch_model_filename(f"{model_dir_name}/model", epoch=epoch) + ".pt"
+
+    # That's how RETURNN now saves the model (2024-10-25).
+    # Maybe leave it like this for the test, even when RETURNN itself changes it,
+    # so that we also test that we still support this format.
+    torch.save(
+        {
+            "model": _get_model().state_dict(),  # some random model
+            "epoch": epoch,
+            "step": 123,
+            "effective_learning_rate": 0.13,
+            "returnn_version": returnn.__long_version__,
+        },
+        filename,
+    )
+
+    def _forward_step(*, extern_data: TensorDict, **_kwargs):
+        print("*** forward step", extern_data)
+        data = extern_data["data"]
+        data.mark_as_default_output(shape=data.dims)  # dummy...
+
+    config = Config(
+        dict(
+            task="forward",
+            batch_size=50,
+            extern_data={"data": {"dim": in_dim}},
+            get_model=_get_model,
+            load=filename,
+            load_epoch=load_epoch,
+            forward_step=_forward_step,
+            torch_dataloader_opts=dict(num_workers=0),  # simplifies the test
+        )
+    )
+
+    with global_config_ctx(config):
+        engine = Engine(config=config)
+        engine.init_network_from_config()
+        # We expect that even though we loaded the checkpoint, we now have the load_epoch.
+        assert engine.epoch == load_epoch
+
+
 def test_min_seq_len():
     from returnn.datasets.generating import DummyDataset
 
