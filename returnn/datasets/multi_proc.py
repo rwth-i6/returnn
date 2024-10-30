@@ -68,6 +68,7 @@ class MultiProcDataset(CachedDataset2):
         self._data_keys = None
         self._num_seqs = None
         self._total_num_seqs = None
+        self._all_tags = None
 
         self._worker_parent_conns = None  # type: Optional[List[mpConnection]]
         self._seq_order_proc_parent_conn = None  # type: Optional[mpConnection]
@@ -98,6 +99,7 @@ class MultiProcDataset(CachedDataset2):
             "num_outputs": self.num_outputs,
             "labels": self.labels,
             "total_num_seqs": self._total_num_seqs,
+            "all_tags": self._all_tags,
         }
 
     def _lazy_init(self):
@@ -288,6 +290,14 @@ class MultiProcDataset(CachedDataset2):
                     except NotImplementedError as exc:
                         total_num_seqs = NotImplementedError(f"{exc} in {dataset}")
                     parent_conn.send(("total_num_seqs", total_num_seqs))
+                elif msg == "get_all_tags":
+                    assert dataset
+                    try:
+                        all_tags = dataset.get_all_tags()
+                        assert isinstance(all_tags, list)
+                    except NotImplementedError as exc:
+                        all_tags = NotImplementedError(f"{exc} in {dataset}")
+                    parent_conn.send(("all_tags", all_tags))
                 elif msg == "init_seq_order":
                     if dataset is None:
                         dataset = init_dataset(dataset_dict)
@@ -412,6 +422,20 @@ class MultiProcDataset(CachedDataset2):
             raise self._total_num_seqs
         else:
             raise TypeError(f"invalid type {type(self._total_num_seqs)} for total_num_seqs")
+
+    def get_all_tags(self):
+        """all tags"""
+        if self._all_tags is None:
+            worker = self._seq_order_proc_parent_conn
+            worker.send(("get_all_tags", {}))
+            msg, self._all_tags = worker.recv()
+            assert msg == "all_tags" and self._all_tags is not None
+        if isinstance(self._all_tags, list):
+            return self._all_tags
+        elif isinstance(self._all_tags, Exception):
+            raise self._all_tags
+        else:
+            raise TypeError(f"invalid type {type(self._all_tags)} for all_tags")
 
     def finish_epoch(self, *, free_resources: bool = False):
         """finish epoch"""
