@@ -96,8 +96,8 @@ class MultiProcDataset(CachedDataset2):
         return {
             "num_inputs": self.num_inputs,
             "num_outputs": self.num_outputs,
-            "total_num_seqs": self._total_num_seqs,
             "labels": self.labels,
+            "total_num_seqs": self._total_num_seqs,
         }
 
     def _lazy_init(self):
@@ -172,8 +172,6 @@ class MultiProcDataset(CachedDataset2):
         assert msg == "num_inputs"
         msg, self.num_outputs = self._seq_order_proc_parent_conn.recv()
         assert msg == "num_outputs"
-        msg, self._total_num_seqs = self._seq_order_proc_parent_conn.recv()
-        assert msg == "total_num_seqs"
         msg, self.labels = self._seq_order_proc_parent_conn.recv()
         assert msg == "labels"
 
@@ -281,12 +279,15 @@ class MultiProcDataset(CachedDataset2):
                         dataset = init_dataset(dataset_dict)
                     parent_conn.send(("num_inputs", dataset.num_inputs))
                     parent_conn.send(("num_outputs", dataset.num_outputs))
+                    parent_conn.send(("labels", dataset.labels))
+                elif msg == "get_total_num_seqs":
+                    assert dataset
                     try:
                         total_num_seqs = dataset.get_total_num_seqs()
-                    except NotImplementedError:
-                        total_num_seqs = None
+                        assert isinstance(total_num_seqs, int)
+                    except NotImplementedError as exc:
+                        total_num_seqs = NotImplementedError(f"{exc} in {dataset}")
                     parent_conn.send(("total_num_seqs", total_num_seqs))
-                    parent_conn.send(("labels", dataset.labels))
                 elif msg == "init_seq_order":
                     if dataset is None:
                         dataset = init_dataset(dataset_dict)
@@ -400,9 +401,17 @@ class MultiProcDataset(CachedDataset2):
 
     def get_total_num_seqs(self, *, fast: bool = False) -> int:
         """total num seqs"""
-        if self._total_num_seqs is not None:
+        if self._total_num_seqs is None:
+            worker = self._seq_order_proc_parent_conn
+            worker.send(("get_total_num_seqs", {}))
+            msg, self._total_num_seqs = worker.recv()
+            assert msg == "total_num_seqs" and self._total_num_seqs is not None
+        if isinstance(self._total_num_seqs, int):
             return self._total_num_seqs
-        raise NotImplementedError
+        elif isinstance(self._total_num_seqs, Exception):
+            raise self._total_num_seqs
+        else:
+            raise TypeError(f"invalid type {type(self._total_num_seqs)} for total_num_seqs")
 
     def finish_epoch(self, *, free_resources: bool = False):
         """finish epoch"""
