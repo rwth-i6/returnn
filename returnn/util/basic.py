@@ -554,12 +554,11 @@ def describe_torch_version() -> str:
     return "%s (%s in %s)" % (version, git_info, tdir)
 
 
-def get_tensorflow_version_tuple():
+def get_tensorflow_version_tuple() -> Tuple[int, ...]:
     """
     :return: tuple of ints, first entry is the major version
-    :rtype: tuple[int]
     """
-    import tensorflow as tf
+    import tensorflow as tf  # noqa
     import re
 
     return tuple([int(re.sub("(-rc[0-9]|-dev[0-9]*)", "", s)) for s in tf.__version__.split(".")])
@@ -2070,7 +2069,7 @@ class NumbersDict:
     def items(self):
         """
         :return: dict items. this excludes self.value
-        :rtype: str[(str,object)]
+        :rtype: set[(str,object)]
         """
         return self.dict.items()
 
