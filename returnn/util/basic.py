@@ -2030,6 +2030,9 @@ class NumbersDict:
     def __delitem__(self, key):
         del self.dict[key]
 
+    def __contains__(self, item):
+        return item in self.dict
+
     def get(self, key, default=None):
         """
         :param str key:
