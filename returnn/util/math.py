@@ -32,3 +32,11 @@ class PiecewiseLinear:
         steps = self._sorted_keys
         values = self._sorted_values
         return numpy.interp(x, steps, values)
+
+
+def simplify_and_format_number(n: Union[int, float]) -> str:
+    """Format a number, removing trailing zeros and the decimal point if it is an integer"""
+    if isinstance(n, (int, float)):
+        return str(n).rstrip("0").rstrip(".")
+    else:
+        raise TypeError(f"Expected int or float, got {n!r} type {type(n)}")

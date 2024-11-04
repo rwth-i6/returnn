@@ -34,6 +34,7 @@ from returnn.util import NumbersDict
 from returnn.util.basic import hms, NotSpecified
 from returnn.util.result_with_reason import ResultWithReason
 from returnn.util.debug import debug_shell
+from returnn.util.math import simplify_and_format_number
 from returnn.forward_iface import ForwardCallbackIface
 
 from .updater import Updater
@@ -125,6 +126,7 @@ class Engine(EngineBase):
         self._log_memory_usage = config.bool("torch_log_memory_usage", False)
         self._log_batch_size = config.bool("log_batch_size", False) and log.verbose[5]
         self._calculate_exp_loss = config.bool("calculate_exp_loss", False)
+        self._log_grad_norm = _parse_log_grad_norm(config)
         self._reset_dev_memory_caches = config.bool("reset_dev_memory_caches", False)
         self._forward_auto_split_batch_on_oom = config.bool("forward_auto_split_batch_on_oom", False)
         self._stop_on_nonfinite_train_score = config.bool("stop_on_nonfinite_train_score", True)
@@ -428,6 +430,12 @@ class Engine(EngineBase):
                         self._grad_scaler.scale(total_loss.raw_tensor).backward()
                     else:
                         total_loss.raw_tensor.backward()
+
+                if self._log_grad_norm and perform_update_step:
+                    key = f"grad_norm:p{simplify_and_format_number(self._log_grad_norm)}"
+                    assert key not in losses_dict
+                    inv_norm_factors_dict[key] = 1.0  # once per update step
+                    losses_dict[key] = _get_total_grad_norm(self._pt_model, p=self._log_grad_norm)
 
                 # only update the weights when every gradient accumulation loop ends
                 if perform_update_step:
@@ -1286,9 +1294,9 @@ def _print_process(
     if log.verbose[5]:  # report every minibatch
         info = [report_prefix, "step %i" % step]
         if eval_info:  # Such as score.
-            info += ["%s %s" % (k, _format_value(v)) for k, v in eval_info.items()]
+            info += ["%s %s" % (k, _format_score_value(v)) for k, v in eval_info.items()]
         if batch_size_info:
-            info += ["%s %s" % (k, _format_value(v)) for k, v in batch_size_info.items()]
+            info += ["%s %s" % (k, _format_score_value(v)) for k, v in batch_size_info.items()]
         if log_memory_usage_device:
             dev = torch.device(log_memory_usage_device)
             if dev.type == "cuda":
@@ -1324,11 +1332,11 @@ def _format_score(score: Dict[str, float]) -> str:
     if not score:
         return "None"
     if len(score) == 1:
-        return _format_value(list(score.values())[0])
-    return " ".join(["%s %s" % (key.split(":", 2)[-1], _format_value(score[key])) for key in score.keys()])
+        return _format_score_value(list(score.values())[0])
+    return " ".join(["%s %s" % (key.split(":", 2)[-1], _format_score_value(score[key])) for key in score.keys()])
 
 
-def _format_value(v: Any) -> str:
+def _format_score_value(v: Any) -> str:
     if isinstance(v, float):
         if abs(v) > 1.0e3 or abs(v) < 1.0e-3:
             return f"{v:.3e}"
@@ -1422,3 +1430,39 @@ def _set_torch_default_dtype_ctx_mgr(dtype: torch.dtype):
         yield
     finally:
         torch.set_default_dtype(old_dtype)
+
+
+def _parse_log_grad_norm(config: Config) -> Optional[Union[int, float]]:
+    log_grad_norm = config.opt_typed_value("log_grad_norm", False)
+    if isinstance(log_grad_norm, str):
+        if log_grad_norm.lower() in ["true", "false", "none"]:
+            log_grad_norm = {"true": True, "false": False, "none": None}[log_grad_norm.lower()]
+        else:
+            raise ValueError(f"Invalid value for log_grad_norm: {log_grad_norm!r}")
+    if log_grad_norm is None:
+        pass
+    elif isinstance(log_grad_norm, bool):
+        if log_grad_norm:
+            log_grad_norm = 2
+        else:
+            log_grad_norm = None
+    elif isinstance(log_grad_norm, (int, float)):
+        assert log_grad_norm > 0, f"log_grad_norm {log_grad_norm} > 0 expected"  # otherwise fine...
+    else:
+        raise TypeError(f"Invalid type for log_grad_norm: {log_grad_norm!r} type {type(log_grad_norm)}")
+    return log_grad_norm
+
+
+def _get_total_grad_norm(model: torch.nn.Module, p: float) -> float:
+    return float(
+        torch.norm(
+            torch.stack(
+                [
+                    param.grad.norm(p=p).detach().cpu()
+                    for param in model.parameters()
+                    if param.requires_grad and param.grad is not None
+                ]
+            ),
+            p=p,
+        ).item()
+    )
