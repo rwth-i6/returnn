@@ -385,6 +385,7 @@ class Engine(EngineBase):
                 del num_seqs_
                 if num_seqs is not None:
                     assert last_seq_idx < num_seqs
+                epoch_continuous = (self.epoch - 1 + (last_seq_idx + 1) / num_seqs) if num_seqs is not None else None
 
                 # clear the gradients when every gradient accumulation loop starts
                 if zero_grad_next_step:
@@ -417,7 +418,10 @@ class Engine(EngineBase):
 
                 if accum_grad_multiple_step_dyn:
                     accum_grad_multiple_step = accum_grad_multiple_step_dyn(
-                        epoch=self.epoch, global_train_step=self.global_train_step
+                        epoch=self.epoch,
+                        epoch_continuous=epoch_continuous,
+                        global_train_step=self.global_train_step,
+                        **util.get_fwd_compat_kwargs(),
                     )
                 cur_count_grad_accum += 1
                 perform_update_step = cur_count_grad_accum >= accum_grad_multiple_step
@@ -477,9 +481,7 @@ class Engine(EngineBase):
                 step_idx += 1
                 self.global_train_step += 1
                 self._updater.set_current_train_step(
-                    global_train_step=self.global_train_step,
-                    epoch=self.epoch,
-                    epoch_continuous=(self.epoch - 1 + (last_seq_idx + 1) / num_seqs) if num_seqs is not None else None,
+                    global_train_step=self.global_train_step, epoch=self.epoch, epoch_continuous=epoch_continuous
                 )
         except Exception as exc:
             help_on_torch_exception(exc, step_idx=step_idx, model=self._orig_model, extern_data=extern_data)
