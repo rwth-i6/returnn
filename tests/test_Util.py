@@ -101,6 +101,7 @@ def test_math_PiecewiseLinear():
 
     eps = 1e-5
     f = PiecewiseLinear({1: 2, 3: 4, 5: 1})
+    assert str(f) == "PiecewiseLinear({1: 2, 3: 4, 5: 1})"
     assert_equal(f(0), 2)
     assert_equal(f(1 - eps), 2)
     assert_equal(f(1), 2)
@@ -114,6 +115,35 @@ def test_math_PiecewiseLinear():
     assert_equal(f(5), 1)
     assert_equal(f(5 + eps), 1)
     assert_equal(f(6), 1)
+
+
+def test_math_PiecewiseLinear_kwargs():
+    from returnn.util.math import PiecewiseLinear
+
+    f = PiecewiseLinear({1: 2, 3: 4, 5: 1}, kw_name="epoch_continuous")
+    try:
+        f(0)
+    except TypeError:
+        pass  # this is expected
+    else:
+        assert False, "TypeError expected (wrong args)"
+    assert f(epoch_continuous=0) == 2
+    try:
+        f(epoch_continuous=0, seq_idx=123)
+    except TypeError:
+        pass  # this is expected
+    else:
+        assert False, "TypeError expected (wrong args)"
+
+    f = PiecewiseLinear({1: 2, 3: 4, 5: 1}, kw_name="epoch_continuous", ignore_other_kwargs=True)
+    try:
+        f(0)
+    except TypeError:
+        pass  # this is expected
+    else:
+        assert False, "TypeError expected (wrong args)"
+    assert f(epoch_continuous=0) == 2
+    assert f(epoch_continuous=0, seq_idx=123) == 2
 
 
 def test_parse_orthography_into_symbols():

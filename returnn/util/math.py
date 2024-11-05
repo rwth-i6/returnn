@@ -3,7 +3,7 @@ Some mathematical functions, in pure NumPy.
 """
 
 from __future__ import annotations
-from typing import Union, Dict
+from typing import Union, Optional, Dict
 import numpy
 
 
@@ -20,14 +20,59 @@ def next_power_of_two(n: int) -> int:
 class PiecewiseLinear:
     """
     Piecewise linear function.
+    (Basically wraps ``numpy.interp``.)
     """
 
-    def __init__(self, values: Dict[Union[int, float], Union[int, float]]):
+    def __init__(
+        self,
+        values: Dict[Union[int, float], Union[int, float]],
+        *,
+        kw_name: Optional[str] = None,
+        ignore_other_kwargs: bool = False,
+    ):
+        """
+        :param values: dict x -> y. Everything between the x values is linearly interpolated.
+            Everything outside is repeated from the nearest x value.
+        :param kw_name: keyword argument name to use in the __call__. Other keyword arguments are ignored.
+        :param ignore_other_kwargs: if True, ignore other keyword arguments in the __call__.
+        """
         self._sorted_items = sorted(values.items())
         self._sorted_keys = numpy.array([x for x, _ in self._sorted_items])
         self._sorted_values = numpy.array([y for _, y in self._sorted_items])
+        self._kw_name = kw_name
+        self._ignore_other_kwargs = ignore_other_kwargs
 
-    def __call__(self, x: Union[int, float]) -> Union[int, float]:
+    def __getstate__(self):
+        # Note: I was implementing __getnewargs_ex__, but we cannot use this because of this Sisyphus bug:
+        # https://github.com/rwth-i6/sisyphus/issues/215
+        kwargs = {"values": dict(self._sorted_items)}
+        if self._kw_name is not None:
+            kwargs["kw_name"] = self._kw_name
+        if self._ignore_other_kwargs:
+            kwargs["ignore_other_kwargs"] = True
+        return kwargs
+
+    def __setstate__(self, state):
+        self.__init__(**state)
+
+    def __repr__(self) -> str:
+        kwargs = self.__getstate__()
+        values = kwargs.pop("values")
+        all_args_str = ", ".join([repr(values)] + [f"{k}={v!r}" for k, v in kwargs.items()])
+        return f"{self.__class__.__name__}({all_args_str})"
+
+    def __call__(self, *args: Union[int, float], **kwargs) -> Union[int, float]:
+        if self._kw_name:
+            if args:
+                raise TypeError(f"{self}: Expected zero positional arguments, got {args!r}")
+            x = kwargs.pop(self._kw_name, None)
+        else:
+            if len(args) != 1:
+                raise TypeError(f"{self}: Expected one positional argument, got {args!r}")
+            x = args[0]
+        if not self._ignore_other_kwargs:
+            if kwargs:
+                raise TypeError(f"{self}: Unexpected keyword arguments: {kwargs!r}")
         assert x is not None
         steps = self._sorted_keys
         values = self._sorted_values
