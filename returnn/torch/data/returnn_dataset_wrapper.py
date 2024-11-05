@@ -81,6 +81,8 @@ class ReturnnDatasetIterDataPipe(torch.utils.data.IterDataPipe):
         except Exception:  # might not work for all datasets
             num_seqs = -1
         num_seqs = numpy.array(num_seqs)
+        assert self._dataset.epoch is not None
+        epoch = numpy.array(self._dataset.epoch)
 
         try:
             data_keys = self._dataset.get_data_keys()
@@ -94,6 +96,8 @@ class ReturnnDatasetIterDataPipe(torch.utils.data.IterDataPipe):
                 # It's slightly redundant to have num_seqs in each entry,
                 # but it's difficult to pass this back to the main proc otherwise.
                 data["num_seqs"] = num_seqs
+                # epoch is also redundant, but that's the cleanest/simplest way to pass it on to BatchingIterDataPipe.
+                data["epoch"] = epoch
                 yield data
                 seq_index += 1
 

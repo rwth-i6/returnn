@@ -692,7 +692,7 @@ class Engine(EngineBase):
         batch_size = self.config.typed_value("batch_size", -1)
         batch_size = self.config.typed_value(f"batch_size_{'train' if train else 'dev'}", batch_size)
         assert batch_size != -1, f"batch_size or batch_size_{'train' if train else 'dev'} not defined in config"
-        max_seqs = self.config.int("max_seqs", -1)
+        max_seqs = self.config.typed_value("max_seqs", -1)
         batches_dataset = data_pipeline.BatchingIterDataPipe(wrapped_dataset, batch_size=batch_size, max_seqs=max_seqs)
 
         loader_opts = self.config.typed_value("torch_dataloader_opts") or {}

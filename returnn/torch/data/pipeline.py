@@ -28,7 +28,7 @@ import numpy
 import torch
 import torch.utils.data
 
-from returnn.util.basic import NumbersDict
+from returnn.util.basic import NumbersDict, get_fwd_compat_kwargs
 
 
 def create_tensor(array: numpy.ndarray) -> Union[torch.Tensor, numpy.ndarray]:
@@ -59,7 +59,7 @@ def collate_batch(batch: List[Dict[str, numpy.ndarray]]) -> Dict[str, Union[torc
 
     res = {}
     for key in data_keys:
-        if key == "num_seqs":
+        if key in ("num_seqs", "epoch"):
             res[key] = batch[0][key]  # it should always be the same
             continue
         ls = [create_tensor(sample[key]) for sample in batch]
@@ -119,7 +119,7 @@ class ChunkingIterDataPipe(torch.utils.data.IterDataPipe):
 
             if not chunking_data_keys:
                 chunking_data_keys = list(data_dict.keys())  # use all if not configured separately
-                chunking_data_key_black_list = ["seq_tag", "seq_idx", "num_seqs"]
+                chunking_data_key_black_list = ["seq_tag", "seq_idx", "num_seqs", "epoch"]
                 for key in chunking_data_key_black_list:
                     if key in chunking_data_keys:
                         chunking_data_keys.remove(key)
@@ -208,20 +208,66 @@ class BatchingIterDataPipe(torch.utils.data.IterDataPipe):
     def __init__(self, dataset: torch.utils.data.IterableDataset, batch_size=1, max_seqs=None):
         """
         :param dataset: dataset to apply batching to
-        :param int|dict[str,int]|None batch_size: Maximum number of time steps (e.g. audio frames / words) in one
-            batch (padding included).
+        :param int|dict[str,int]|None|function batch_size: Maximum number of time steps (e.g. audio frames / words)
+            in one batch (padding included).
             If given as a dict data_key -> value, sets different individual limits per data key.
             If None, no limit.
-        :param int|None max_seqs: maximum number of sequences in a batch,
-            None means unlimited (also -1 to match TF backend)
+            Can also be a callable with kwargs epoch, seq_idx, epoch_continuous, **_other_kwargs,
+            returning the batch size.
+        :param int|None|function max_seqs: maximum number of sequences in a batch,
+            None means unlimited (also -1 to match TF backend).
+            Can also be a callable with kwargs epoch, seq_idx, epoch_continuous, **_other_kwargs,
+            returning the max seqs.
         """
         super().__init__()
         self._dataset = dataset
-        self._max_batch_size = NumbersDict(sys.maxsize if batch_size is None else batch_size)
-        self._max_seqs = sys.maxsize if (max_seqs is None or max_seqs == -1) else max_seqs
+        self._max_batch_size = self._parse_batch_size(batch_size)
+        self._max_seqs = self._parse_max_seqs(max_seqs)
 
-        assert self._max_batch_size.min_value() > 0
-        assert self._max_seqs > 0
+        if not callable(self._max_batch_size):
+            assert isinstance(self._max_batch_size, NumbersDict) and self._max_batch_size.min_value() > 0
+        if not callable(self._max_seqs):
+            assert isinstance(self._max_seqs, int) and self._max_seqs > 0
+
+    @staticmethod
+    def _parse_batch_size(
+        batch_size: Union[int, Dict[str, int], NumbersDict, None, Callable],
+        *,
+        data_dict: Optional[Dict[str, Any]] = None,
+    ) -> Union[NumbersDict, Callable]:
+        """
+        :param batch_size: see __init__()
+        :return: batch_size
+        """
+        if callable(batch_size):
+            if data_dict:
+                batch_size = batch_size(**BatchingIterDataPipe._get_user_func_kwargs_from_data_dict(data_dict))
+            else:
+                return batch_size
+        return NumbersDict(sys.maxsize if batch_size is None else batch_size)
+
+    @staticmethod
+    def _parse_max_seqs(
+        max_seqs: Union[int, None, Callable], *, data_dict: Optional[Dict[str, Any]] = None
+    ) -> Union[int, Callable]:
+        """
+        :param max_seqs: see __init__()
+        :return: max_seqs
+        """
+        if callable(max_seqs):
+            if data_dict:
+                max_seqs = max_seqs(**BatchingIterDataPipe._get_user_func_kwargs_from_data_dict(data_dict))
+            else:
+                return max_seqs
+        return sys.maxsize if (max_seqs is None or max_seqs == -1) else max_seqs
+
+    @staticmethod
+    def _get_user_func_kwargs_from_data_dict(data_dict: Dict[str, Any]) -> Dict[str, Any]:
+        epoch = int(data_dict["epoch"])
+        seq_idx = int(data_dict["seq_idx"])
+        num_seqs = int(data_dict["num_seqs"])  # >=1 if known, otherwise -1
+        epoch_continuous = (epoch - 1 + (seq_idx + 1) / num_seqs) if num_seqs > 0 else None
+        return {"epoch": epoch, "seq_idx": seq_idx, "epoch_continuous": epoch_continuous, **get_fwd_compat_kwargs()}
 
     def __iter__(self):
         """
@@ -233,7 +279,12 @@ class BatchingIterDataPipe(torch.utils.data.IterDataPipe):
         current_max_sequence_lengths = NumbersDict(0)  # data_key -> length of longest sequence in current batch
 
         for data_dict in self._dataset:
-            if len(current_batch) == self._max_seqs:
+            max_seqs = self._parse_max_seqs(self._max_seqs, data_dict=data_dict)
+            max_batch_size = self._parse_batch_size(self._max_batch_size, data_dict=data_dict)
+            assert isinstance(max_seqs, int) and max_seqs > 0
+            assert isinstance(max_batch_size, NumbersDict) and max_batch_size.min_value() > 0
+
+            if len(current_batch) >= max_seqs:
                 yield current_batch
                 current_batch = []
                 current_max_sequence_lengths = NumbersDict(0)
@@ -246,7 +297,7 @@ class BatchingIterDataPipe(torch.utils.data.IterDataPipe):
             max_sequence_lengths_if_included = NumbersDict.max([current_max_sequence_lengths, sequence_lengths])
             batch_size_if_included = max_sequence_lengths_if_included * (len(current_batch) + 1)  # including padding
 
-            if current_batch and batch_size_if_included.any_compare(self._max_batch_size, (lambda a, b: a > b)):
+            if current_batch and batch_size_if_included.any_compare(max_batch_size, (lambda a, b: a > b)):
                 yield current_batch
                 current_batch = [data_dict]
                 current_max_sequence_lengths = sequence_lengths
