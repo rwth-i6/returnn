@@ -1962,9 +1962,9 @@ class NumbersDict:
         self.value = broadcast_value
         self.max = self._max_error
 
-    def copy(self):
+    def copy(self) -> NumbersDict:
         """
-        :rtype: NumbersDict
+        :return: copy
         """
         return NumbersDict(self)
 
@@ -1981,11 +1981,10 @@ class NumbersDict:
             numbers_dict={k: const_number for k in numbers_dict.dict.keys()},
         )
 
-    def copy_like(self, numbers_dict):
+    def copy_like(self, numbers_dict: NumbersDict) -> NumbersDict:
         """
-        :param NumbersDict numbers_dict:
+        :param numbers_dict:
         :return: copy of self with same keys as numbers_dict as far as we have them
-        :rtype: NumbersDict
         """
         if self.value is not None:
             return NumbersDict(
@@ -1998,11 +1997,11 @@ class NumbersDict:
             )
 
     @property
-    def keys_set(self):
+    def keys_set(self) -> Set[str]:
         """
         Also see :func:`keys_union` if you want to have a deterministic order.
 
-        :rtype: set[str]
+        :return: set of keys
         """
         return set(self.dict.keys())
 
@@ -2019,32 +2018,32 @@ class NumbersDict:
                     res.append(key)
         return res
 
-    def __getitem__(self, key):
+    def __getitem__(self, key: str):
         if self.value is not None:
             return self.dict.get(key, self.value)
         return self.dict[key]
 
-    def __setitem__(self, key, value):
+    def __setitem__(self, key: str, value):
         self.dict[key] = value
 
-    def __delitem__(self, key):
+    def __delitem__(self, key: str):
         del self.dict[key]
 
-    def __contains__(self, item):
+    def __contains__(self, item: str):
         return item in self.dict
 
-    def get(self, key, default=None):
+    def get(self, key: str, default=None):
         """
-        :param str key:
+        :param key:
         :param T default:
         :rtype: object|T
         """
         # Keep consistent with self.__getitem__. If self.value is set, this will always be the default value.
         return self.dict.get(key, self.value if self.value is not None else default)
 
-    def pop(self, key, *args):
+    def pop(self, key: str, *args):
         """
-        :param str key:
+        :param key:
         :param T args: default, or not
         :rtype: object|T
         """
@@ -2057,22 +2056,21 @@ class NumbersDict:
         # which would only make sense for our values, not the dict keys.
         raise Exception("%s.__iter__ is undefined" % self.__class__.__name__)
 
-    def keys(self):
+    def keys(self) -> Iterable[str]:
         """
         :rtype: set[str]
         """
         return self.dict.keys()
 
-    def values(self):
+    def values(self) -> List[Any]:
         """
-        :rtype: list[object]
+        :return: values: dict values + self.value
         """
         return list(self.dict.values()) + ([self.value] if self.value is not None else [])
 
-    def items(self):
+    def items(self) -> Iterable[Tuple[str, Any]]:
         """
         :return: dict items. this excludes self.value
-        :rtype: set[(str,object)]
         """
         return self.dict.items()
 
@@ -2082,9 +2080,9 @@ class NumbersDict:
         """
         return self.value is not None or key in self.dict
 
-    def has_values(self):
+    def has_values(self) -> bool:
         """
-        :rtype: bool
+        :return: any values in self.dict or self.value
         """
         return bool(self.dict) or self.value is not None
 
@@ -2188,12 +2186,12 @@ class NumbersDict:
     def __neg__(self):
         return self.unary_op(op=lambda a: -a)
 
-    def __bool__(self):
+    def __bool__(self) -> bool:
         return any(self.values())
 
     __nonzero__ = __bool__  # Python 2
 
-    def elem_eq(self, other, result_with_default=True):
+    def elem_eq(self, other, result_with_default: bool = True) -> NumbersDict:
         """
         Element-wise equality check with other.
         Note about broadcast default value: Consider some key which is neither in self nor in other.
@@ -2204,8 +2202,8 @@ class NumbersDict:
           You can control the behavior via result_with_default.
 
         :param NumbersDict|T other:
-        :param bool result_with_default:
-        :rtype: NumbersDict
+        :param result_with_default:
+        :return: new NumbersDict with bool values
         """
 
         def op(a, b):
@@ -2225,19 +2223,17 @@ class NumbersDict:
             res.value = None
         return res
 
-    def __eq__(self, other):
+    def __eq__(self, other) -> bool:
         """
         :param NumbersDict|T other:
         :return: whether self == other elemwise. see self.elem_eq
-        :rtype: bool
         """
         return all(self.elem_eq(other).values())
 
-    def __ne__(self, other):
+    def __ne__(self, other) -> bool:
         """
         :param NumbersDict|T other:
         :return: not (self == other)
-        :rtype: bool
         """
         return not (self == other)
 
@@ -2246,11 +2242,10 @@ class NumbersDict:
         # and it would just confuse.
         raise Exception("%s.__cmp__ is undefined" % self.__class__.__name__)
 
-    def any_compare(self, other, cmp):
+    def any_compare(self, other, cmp) -> bool:
         """
         :param NumbersDict other:
         :param ((object,object)->True) cmp:
-        :rtype: True
         """
         for key in self.keys():
             if key in other.keys():
@@ -2283,11 +2278,11 @@ class NumbersDict:
         return min(*args)
 
     @classmethod
-    def max(cls, items):
+    def max(cls, items) -> NumbersDict:
         """
         Element-wise maximum for item in items.
+
         :param list[NumbersDict|int|float] items:
-        :rtype: NumbersDict
         """
         assert items
         if len(items) == 1:
@@ -2297,11 +2292,10 @@ class NumbersDict:
         return cls.max([items[0], cls.max(items[1:])])
 
     @classmethod
-    def min(cls, items):
+    def min(cls, items) -> NumbersDict:
         """
         Element-wise minimum for item in items.
         :param list[NumbersDict|int|float] items:
-        :rtype: NumbersDict
         """
         assert items
         if len(items) == 1:
@@ -2327,7 +2321,7 @@ class NumbersDict:
         """
         return min(self.values())
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         if self.value is None and not self.dict:
             return "%s()" % self.__class__.__name__
         if self.value is None and self.dict:
