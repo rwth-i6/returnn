@@ -383,10 +383,9 @@ class Engine(EngineBase):
                 num_seqs_ = (
                     int(extern_data_raw["num_seqs"]) if extern_data_raw.get("num_seqs", None) is not None else -1
                 )
-                last_seq_idx_ = extern_data_raw["seq_idx"].max()
-                assert last_seq_idx_ >= last_seq_idx
-                last_seq_idx = int(last_seq_idx_)
-                del last_seq_idx_
+                # Note: The batches might have been shuffled,
+                # thus we cannot really assert that the seq_idx is always increasing.
+                last_seq_idx = max(int(extern_data_raw["seq_idx"].max()), last_seq_idx)
                 if step_idx == 0:
                     if num_seqs_ >= 0:
                         print(f"Epoch {self.epoch} num_seqs: {num_seqs_}", file=log.v5)
@@ -701,6 +700,32 @@ class Engine(EngineBase):
         assert batch_size != -1, f"batch_size or batch_size_{'train' if train else 'dev'} not defined in config"
         max_seqs = self.config.typed_value("max_seqs", -1)
         batches_dataset = data_pipeline.BatchingIterDataPipe(wrapped_dataset, batch_size=batch_size, max_seqs=max_seqs)
+
+        online_shuffle_batches = self.config.typed_value("online_shuffle_batches", None)
+        if train and online_shuffle_batches:
+            if isinstance(online_shuffle_batches, int):
+                online_shuffle_batches = {"buffer_size": online_shuffle_batches}
+            elif isinstance(online_shuffle_batches, dict):
+                if "buffer_size" not in online_shuffle_batches:
+                    raise ValueError(
+                        f"config online_shuffle_batches, buffer_size not defined, got {online_shuffle_batches}"
+                    )
+            else:
+                raise TypeError(
+                    f"config online_shuffle_batches, expected int or dict, got {type(online_shuffle_batches)}"
+                )
+            # Note on random seed: This is handled by the PyTorch DataLoader iterator logic and IterDataPipe reset.
+            # Specifically, when we create a new DataLoader iterator,
+            # this will get fetch a new random number (from current Torch RNG state),
+            # use that as seed for the shuffle buffer.
+            # Note: In case of distributed training, it will broadcast the seed from rank 0 to all others.
+            # This is maybe not really what we want?
+            # https://discuss.pytorch.org/t/shuffleriterdatapipe-but-different-random-seed-per-distributed-rank/212612
+            # I currently don't really see a good way to override this behavior.
+            # Also note that we are likely using persistent multiprocessing data loader workers,
+            # so calling torch.utils.data.graph_settings.apply_random_seed here in the main proc
+            # will not have an effect then.
+            batches_dataset = torch.utils.data.datapipes.iter.Shuffler(batches_dataset, **online_shuffle_batches)
 
         loader_opts = self.config.typed_value("torch_dataloader_opts") or {}
         assert isinstance(loader_opts, dict), f"config torch_dataloader_opts, expected dict, got {type(loader_opts)}"
