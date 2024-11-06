@@ -3,8 +3,9 @@ Some mathematical functions, in pure NumPy.
 """
 
 from __future__ import annotations
-from typing import Union, Optional, Dict
+from typing import Union, Optional, Sequence, Dict
 import numpy
+import hashlib
 
 
 def ceil_div(a: int, b: int) -> int:
@@ -85,3 +86,19 @@ def simplify_and_format_number(n: Union[int, float]) -> str:
         return str(n).rstrip("0").rstrip(".")
     else:
         raise TypeError(f"Expected int or float, got {n!r} type {type(n)}")
+
+
+def merge_random_seeds(data_sources: Sequence[int], *, num_bytes: int = 4, signed: bool = False) -> int:
+    """
+    :param data_sources: A list of integers. We expect that they are all representable as 64-bit signed integers.
+    :param num_bytes: for the output seed.
+    :param signed: whether the output seed should be signed.
+    :return: A num_bytes*8-bit integer seed, deterministically derived from the input data.
+    """
+    # Convert each integer to bytes and concatenate them
+    combined = b"".join(int(source).to_bytes(8, "big", signed=True) for source in data_sources)
+    # Use SHA-256 to hash the combined bytes
+    hash_digest = hashlib.sha256(combined).digest()
+    # Convert the hash digest to an integer seed
+    seed = int.from_bytes(hash_digest[:num_bytes], "big", signed=signed)
+    return seed

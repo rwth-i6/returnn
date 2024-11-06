@@ -34,7 +34,7 @@ from returnn.util import NumbersDict
 from returnn.util.basic import hms, NotSpecified
 from returnn.util.result_with_reason import ResultWithReason
 from returnn.util.debug import debug_shell
-from returnn.util.math import simplify_and_format_number
+from returnn.util.math import simplify_and_format_number, merge_random_seeds
 from returnn.forward_iface import ForwardCallbackIface
 
 from .updater import Updater
@@ -281,6 +281,17 @@ class Engine(EngineBase):
                 "distributed": self._torch_distributed_ctx.__repr__() if self._torch_distributed_ctx else None,
             }
         )
+
+        # Note: The RF/Torch default random number generator influences many things during training,
+        # such as dropout and other random operations inside the model,
+        # but also some potential shuffling in the dataset iterator.
+        # Also see Dataset._get_default_random_seed_offset() and Dataset._get_random_seed_for_epoch().
+        random_seed = self.config.int("random_seed", 42)
+        seed_data = [self.epoch, self.global_train_step, random_seed]
+        if self._torch_distributed_ctx:
+            seed_data.append(self._torch_distributed_ctx.rank())
+        random_seed = merge_random_seeds(seed_data)  # Join all seeds into one int.
+        rf.set_random_seed(random_seed)
 
     def _maybe_reset_dev_memory_caches(self, *, force: bool = False):
         if not force and not self._reset_dev_memory_caches:
