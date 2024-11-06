@@ -67,7 +67,14 @@ class ReturnnDatasetIterDataPipe(torch.utils.data.IterDataPipe):
 
     def reset(self):
         """
-        :return:
+        This is called by PyTorch DataLoader mechanism once we create a new iterator over the DataLoader.
+        This happens at the beginning of each epoch.
+
+        (Note: The mechanism where ``reset()`` is actually called is very obfuscated in PyTorch.
+        As I understand it, there is a IterDataPipe metaclass (_IterDataPipeMeta)
+        which automatically registers a hook on ``__iter__`` via ``hook_iterator``.
+        Deep inside the complex logic of this hook, it calls ``_set_datapipe_valid_iterator_id``
+        which then calls ``reset()``.)
         """
         self._reset_callback()
 
