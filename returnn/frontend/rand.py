@@ -180,18 +180,20 @@ def random(
     :param int|float|Tensor|None bound: for uniform, defining the range [-bound, bound)
     :param int|float|Tensor|None minval: for uniform
     :param int|float|Tensor|None maxval: for uniform
-    :param int|list[int]|numpy.ndarray|None seed: If not given, uses self.network.random.randint,
-      i.e. then it is controlled by the global seed setting, and every layer would get its own seed.
-      If you specify it explicitly, make sure every :class:`RandomLayer` uses a different seed,
-      otherwise you would get the same random numbers everywhere.
+    :param int|list[int]|numpy.ndarray|None seed:
+        Only for the case ``static=True``.
+        If not given, uses self.network.random.randint,
+        i.e. then it is controlled by the global seed setting, and every layer would get its own seed.
+        If you specify it explicitly, make sure every :class:`RandomLayer` uses a different seed,
+        otherwise you would get the same random numbers everywhere.
     :param str|tf.random.Algorithm|None algorithm: see :class:`RandomStateInitLayer`
     :param Tensor|None explicit_state: You can pass the state explicitly here.
-      If not given, will be created automatically, and updated automatically.
-      You could pass a :class:`VariableLayer` with initial value via :class:`RandomStateInitLayer`,
-      or directly a :class:`RandomStateInitLayer`.
-      If auto_update_state is True, it must be a variable,
-      and every time a new random number is created, this variable is updated.
-      Otherwise (default), it will not be updated automatically.
+        If not given, will be created automatically, and updated automatically.
+        You could pass a :class:`VariableLayer` with initial value via :class:`RandomStateInitLayer`,
+        or directly a :class:`RandomStateInitLayer`.
+        If auto_update_state is True, it must be a variable,
+        and every time a new random number is created, this variable is updated.
+        Otherwise (default), it will not be updated automatically.
     :param bool|None auto_update_state: only used when you pass an explicit state
     :param bool|None static: if no state at all should be used. it just relies on the seed then.
     :param out: if given, will directly write into it, if possible by backend
