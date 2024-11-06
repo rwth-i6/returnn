@@ -36,6 +36,7 @@ __all__ = [
     "masked_scatter",
     "sequence_mask",
     "pack_padded",
+    "pad_packed",
     "gather",
     "scatter",
     "scatter_argmax",
@@ -627,6 +628,8 @@ def pack_padded(
     Packing means to only store the non-padded frames.
     This uses :func:`masked_select` internally based on the mask of non-masked frames.
 
+    See :func:`pad_packed` for the inverse operation.
+
     :param source:
     :param dims: dims in source to pack. the order defines the format. first dim is major, etc.
         if there are no padded frames, e.g. dims=[B,T] would just result in the [B*T,...] reshaped tensor.
@@ -646,6 +649,14 @@ def pack_padded(
     # This might change in the future when we have this:
     # https://github.com/pytorch/pytorch/issues/131256
     return rf.masked_select(source, mask=mask, dims=dims, out_dim=out_dim)
+
+
+def pad_packed(source: Tensor, *, in_dim: Dim, dims: Sequence[Dim]) -> Tensor:
+    """
+    Inverse of :func:`pack_padded`, i.e. unpack the sequence, i.e. pad it back to the original length.
+    """
+    mask = rf.sequence_mask(dims, device=source.device)
+    return rf.masked_scatter(source, mask=mask, in_dim=in_dim, dims=dims)
 
 
 # noinspection PyUnusedLocal
