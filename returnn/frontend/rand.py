@@ -69,13 +69,14 @@ __all__ = [
 
 def set_random_seed(seed: int):
     """
+    This initializes the random state of the backend
+    and also the step-based random state
+    (see :func:`get_static_step_based_seed`, only used when ``static=True`` in :func:`random`).
+
     Call this at the beginning of the program
     (after the RF backend was selected),
-    or when the model and computation graph is supposed to be reinitialized.
-
-    This initializes the random state of the backend and also the step-based random state.
-
-    This is *not* expected to be called after each epoch or step.
+    or when the model and computation graph is supposed to be reinitialized
+    or at the beginning of each epoch.
 
     :param seed: should depend on epoch or step
     """
@@ -124,6 +125,8 @@ def reset_step_random_state():
 
 def get_static_step_based_seed(*, size=None) -> Union[int, numpy.ndarray]:
     """
+    This is intended as a static seed for :func:`random` when ``static=True`` is used.
+
     :return: from the static step-based random state, get a seed
     """
     return _step_rnd.randint(2**31, size=size)
