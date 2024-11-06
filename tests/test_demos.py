@@ -80,6 +80,9 @@ def parse_last_fer(out: str) -> float:
             # example: dev: score 0.03350000149202181 error 0.009919877954075871
             m = re.match("dev: score .* error ([0-9.]+)\\s?", line)
         if not m:
+            # example: Epoch 2 evaluation: dev: ce 0.034 fer 0.019
+            m = re.match("Epoch [0-9]+ evaluation: dev: .* fer ([0-9.]+)\\s?", line)
+        if not m:
             continue
         parsed_fer = float(m.group(1))
     err_msg = "ERROR: No epoch dev errors found in output"
