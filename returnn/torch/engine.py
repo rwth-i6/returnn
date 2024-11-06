@@ -1335,7 +1335,7 @@ def _format_score(score: Dict[str, float]) -> str:
         return "None"
     if len(score) == 1:
         return _format_score_value(list(score.values())[0])
-    return " ".join(["%s %s" % (key.split(":", 2)[-1], _format_score_value(score[key])) for key in score.keys()])
+    return " ".join(["%s %s" % (k, _format_score_value(v)) for k, v in score.items()])
 
 
 def _format_score_value(v: Any) -> str:
