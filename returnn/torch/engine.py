@@ -586,8 +586,8 @@ class Engine(EngineBase):
                     train_ctx = rf.get_run_ctx()
 
                     if score_keys is None:
-                        score_keys = set(name for name, loss in train_ctx.losses.items() if not loss.as_error)
-                        error_keys = set(name for name, loss in train_ctx.losses.items() if loss.as_error)
+                        score_keys = [name for name, loss in train_ctx.losses.items() if not loss.as_error]
+                        error_keys = [name for name, loss in train_ctx.losses.items() if loss.as_error]
 
                     losses_dict = NumbersDict(
                         {
