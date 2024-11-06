@@ -490,8 +490,8 @@ class Engine(EngineBase):
         elapsed = time.monotonic() - epoch_start_time
         elapsed_computation_percentage = elapsed_computation_time / elapsed
         print(
-            "Trained %i steps, %s elapsed (%.1f%% computing time)"
-            % (step_idx, hms(elapsed), (elapsed_computation_percentage * 100.0)),
+            "Epoch %i: Trained %i steps, %s elapsed (%.1f%% computing time)"
+            % (self.epoch, step_idx, hms(elapsed), (elapsed_computation_percentage * 100.0)),
             file=log.v3,
         )
 
@@ -511,7 +511,7 @@ class Engine(EngineBase):
         if self._do_save():
             self.learning_rate_control.save()
 
-        print(f"Total train loss:", _format_score(dict(accumulated_losses_dict)), file=log.v3)
+        print(f"Epoch {self.epoch}: Total train loss:", _format_score(dict(accumulated_losses_dict)), file=log.v3)
 
         self._maybe_report_dev_memory_stats()
 
@@ -627,7 +627,11 @@ class Engine(EngineBase):
                 torch.distributed.broadcast(_has_data, src=0)
 
         if not self._torch_distributed_ctx or self._torch_distributed_ctx.rank() == 0:
-            print(" ".join(eval_dump_str) if eval_dump_str else "(No evaluations.)", file=log.v1)
+            print(
+                f"Epoch {self.epoch} evaluation:",
+                " ".join(eval_dump_str) if eval_dump_str else "(No evaluations.)",
+                file=log.v1,
+            )
 
         self._maybe_report_dev_memory_stats()
 
