@@ -655,7 +655,10 @@ class Engine(EngineBase):
             for key, value in losses.items():
                 losses_[key] = value
                 if key in score_keys:
-                    losses_[f"{key}:exp"] = math.exp(value)
+                    try:
+                        losses_[f"{key}:exp"] = math.exp(value)
+                    except OverflowError:
+                        losses_[f"{key}:exp"] = float("inf")
             losses = NumbersDict(losses_)
         return losses
 
