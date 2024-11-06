@@ -542,8 +542,6 @@ class Engine(EngineBase):
         self._reset_dev_memory_stats()
 
         eval_dump_str = []
-        score_keys = None
-        error_keys = None
 
         for dataset_name, dataset in self.eval_datasets.items():
             if skip_already_evaluated and self._is_dataset_evaluated(name=dataset_name):
@@ -585,10 +583,6 @@ class Engine(EngineBase):
                     self._run_step(extern_data, train_func=True)
                     train_ctx = rf.get_run_ctx()
 
-                    if score_keys is None:
-                        score_keys = [name for name, loss in train_ctx.losses.items() if not loss.as_error]
-                        error_keys = [name for name, loss in train_ctx.losses.items() if loss.as_error]
-
                     losses_dict = NumbersDict(
                         {
                             name: (
@@ -625,14 +619,7 @@ class Engine(EngineBase):
                 self.learning_rate_control.save()
 
             # Same format as the TF engine.
-            eval_dump_str += [
-                "%s: score %s error %s"
-                % (
-                    dataset_name,
-                    _format_score({name: accumulated_losses_dict[name] for name in score_keys}),
-                    _format_score({name: accumulated_losses_dict[name] for name in error_keys}),
-                )
-            ]
+            eval_dump_str += ["%s: %s" % (dataset_name, _format_score(dict(accumulated_losses_dict)))]
 
             if self._torch_distributed_ctx:
                 assert self._torch_distributed_ctx.rank() == 0
