@@ -248,7 +248,7 @@ class Engine(EngineBase):
         print(
             f"Starting training at epoch {self._start_epoch}, global train step {self.global_train_step}", file=log.v3
         )
-        self.epoch = self._start_epoch - 1
+        self.set_epoch(self._start_epoch - 1)
         while self.epoch + 1 <= self._final_epoch:
             self.set_epoch(self.epoch + 1)
             self.init_train_epoch()
@@ -966,7 +966,7 @@ class Engine(EngineBase):
             # We decremented the step above.
             epoch += 1
             step += 1
-        self.epoch = epoch  # in training, this will be reset to start_epoch
+        self.set_epoch(epoch)  # in training, this will be reset to start_epoch
         self.global_train_step = step
 
         load_model_post_hooks = self.config.typed_value("load_model_post_hooks")
@@ -1276,7 +1276,7 @@ class Engine(EngineBase):
                 if not self._is_dataset_evaluated(name=name, epoch=epoch):
                     raise Exception(f"Scores of epoch {epoch} for {name} are missing.")
 
-        self.epoch = self._start_epoch - 1
+        self.set_epoch(self._start_epoch - 1)
         if not self._is_dataset_evaluated(name="train"):
             raise Exception(f"Scores of last train epoch {self.epoch} are missing.")
         for name in self.eval_datasets.keys():

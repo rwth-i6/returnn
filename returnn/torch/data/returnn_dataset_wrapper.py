@@ -45,7 +45,7 @@ class ReturnnDatasetResetMpSharedEpochCallback:
     def __call__(self):
         # dataset is likely a copy of the original dataset, either in the main process or in a worker process
         # Use epoch_mp_shared to get the current epoch correctly in worked processes
-        epoch = self.epoch_mp_shared.value
+        epoch = self.epoch_mp_shared.value or None
         self.dataset.init_seq_order(epoch=epoch)
 
 
