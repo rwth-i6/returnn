@@ -479,6 +479,7 @@ def test_min_seq_len():
     dataset.initialize()
     dataset.init_seq_order(epoch=1)
     engine = Engine(config=config)
+    engine.set_epoch(1)
     data_loader = engine._create_data_loader(dataset)
     for _ in data_loader:
         assert False, "Should not contain sequences"
@@ -488,6 +489,7 @@ def test_min_seq_len():
     dataset.initialize()
     dataset.init_seq_order(epoch=1)
     engine = Engine(config=config)
+    engine.set_epoch(1)
     data_loader = engine._create_data_loader(dataset)
     for _ in data_loader:
         return
@@ -502,6 +504,7 @@ def test_max_seq_len():
     dataset.initialize()
     dataset.init_seq_order(epoch=1)
     engine = Engine(config=config)
+    engine.set_epoch(1)
     data_loader = engine._create_data_loader(dataset)
     for _ in data_loader:
         assert False, "Should not contain sequences"
@@ -511,6 +514,7 @@ def test_max_seq_len():
     dataset.initialize()
     dataset.init_seq_order(epoch=1)
     engine = Engine(config=config)
+    engine.set_epoch(1)
     data_loader = engine._create_data_loader(dataset)
     for _ in data_loader:
         return
@@ -527,6 +531,7 @@ def test_data_loader_oggzip():
     with create_ogg_zip_txt_only_dataset_mult_seqs(num_seqs=ds_num_seqs, max_seq_len=ds_max_seq_len) as dataset:
         dataset.init_seq_order(epoch=1)
         engine = Engine(config=config)
+        engine.set_epoch(1)
         data_loader = engine._create_data_loader(dataset)
         num_batches = 0
         num_seqs = 0
@@ -551,6 +556,7 @@ def test_data_loader_oggzip():
     with create_ogg_zip_txt_only_dataset_mult_seqs(num_seqs=ds_num_seqs, max_seq_len=ds_max_seq_len) as dataset:
         dataset.init_seq_order(epoch=1)
         engine = Engine(config=config)
+        engine.set_epoch(1)
         data_loader = engine._create_data_loader(dataset)
         for batch in data_loader:
             assert isinstance(batch, dict)
