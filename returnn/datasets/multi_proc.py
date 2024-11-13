@@ -461,7 +461,7 @@ class MultiProcDataset(CachedDataset2):
         """data keys"""
         if self._data_keys is None:
             self._lazy_init()
-            assert self._data_keys  is not None
+            assert self._data_keys is not None
         return self._data_keys
 
     def get_data_dtype(self, key: str):
