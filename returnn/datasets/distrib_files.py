@@ -671,3 +671,5 @@ def _worker_proc_loop(
                 raise Exception(f"unknown msg {msg!r}")
     except KeyboardInterrupt:  # when parent dies
         pass
+    except EOFError:  # when parent dies
+        pass

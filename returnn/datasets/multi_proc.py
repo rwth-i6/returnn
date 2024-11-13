@@ -351,6 +351,8 @@ class MultiProcDataset(CachedDataset2):
                     raise Exception(f"unknown msg {msg!r}")
         except KeyboardInterrupt:  # when parent dies
             pass
+        except EOFError:  # when parent dies
+            pass
 
     def init_seq_order(self, epoch=None, seq_list=None, seq_order=None):
         """
