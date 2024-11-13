@@ -464,14 +464,14 @@ class MultiProcDataset(CachedDataset2):
             assert self._data_keys is not None
         return self._data_keys
 
-    def get_data_dtype(self, key: str):
+    def get_data_dtype(self, key: str) -> str:
         """:return: dtype of `key`"""
         if self._data_dtypes is None:
             self._lazy_init()
             assert self._data_dtype is not None
         return self._data_dtypes[key]
 
-    def is_data_sparse(self, key: str):
+    def is_data_sparse(self, key: str) -> bool:
         """:return: whether `key` is sparse"""
         if self.num_outputs is None:
             self._lazy_init()
