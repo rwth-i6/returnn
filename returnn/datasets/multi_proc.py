@@ -66,6 +66,7 @@ class MultiProcDataset(CachedDataset2):
             )
         self._sharding_method = sharding_method
         self._data_keys = None
+        self._data_dtypes: Optional[Dict[str, str]] = None
         self._num_seqs = None
         self._total_num_seqs = None
         self._all_tags = None
@@ -83,6 +84,8 @@ class MultiProcDataset(CachedDataset2):
             self.num_outputs = _meta_info_cache["num_outputs"]
             self._total_num_seqs = _meta_info_cache["total_num_seqs"]
             self.labels = _meta_info_cache["labels"]
+            self._data_keys = _meta_info_cache["data_keys"]
+            self._data_dtypes = _meta_info_cache["data_dtypes"]
 
     def initialize(self):
         """init"""
@@ -100,6 +103,8 @@ class MultiProcDataset(CachedDataset2):
             "labels": self.labels,
             "total_num_seqs": self._total_num_seqs,
             "all_tags": self._all_tags,
+            "data_keys": self._data_keys,
+            "data_dtypes": self._data_dtypes,
         }
 
     def _lazy_init(self):
@@ -176,6 +181,10 @@ class MultiProcDataset(CachedDataset2):
         assert msg == "num_outputs"
         msg, self.labels = self._seq_order_proc_parent_conn.recv()
         assert msg == "labels"
+        msg, self._data_keys = self._seq_order_proc_parent_conn.recv()
+        assert msg == "data_keys"
+        msg, self._data_dtypes = self._seq_order_proc_parent_conn.recv()
+        assert msg == "data_dtypes"
 
     def __del__(self):
         if self._worker_procs:
@@ -282,6 +291,9 @@ class MultiProcDataset(CachedDataset2):
                     parent_conn.send(("num_inputs", dataset.num_inputs))
                     parent_conn.send(("num_outputs", dataset.num_outputs))
                     parent_conn.send(("labels", dataset.labels))
+                    data_keys = dataset.get_data_keys()
+                    parent_conn.send(("data_keys", data_keys))
+                    parent_conn.send(("data_dtypes", {k: dataset.get_data_dtype(k) for k in data_keys}))
                 elif msg == "get_total_num_seqs":
                     assert dataset
                     try:
@@ -444,3 +456,24 @@ class MultiProcDataset(CachedDataset2):
         super().finish_epoch(free_resources=free_resources)
         for worker_parent_conn in self._worker_parent_conns:
             worker_parent_conn.send(("finish_epoch", {"free_resources": free_resources}))
+
+    def get_data_keys(self) -> List[str]:
+        """data keys"""
+        if self._data_keys is None:
+            self._lazy_init()
+            assert self._data_keys  is not None
+        return self._data_keys
+
+    def get_data_dtype(self, key: str):
+        """:return: dtype of `key`"""
+        if self._data_dtypes is None:
+            self._lazy_init()
+            assert self._data_dtype is not None
+        return self._data_dtypes[key]
+
+    def is_data_sparse(self, key: str):
+        """:return: whether `key` is sparse"""
+        if self.num_outputs is None:
+            self._lazy_init()
+            assert self.num_outputs is not None
+        return super().is_data_sparse(key)

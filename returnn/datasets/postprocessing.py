@@ -155,7 +155,7 @@ class PostprocessingDataset(CachedDataset2):
         for k, t in self._out_tensor_dict_template.data.items():
             if t.vocab:
                 self.labels[k] = t.vocab.labels
-            elif t.sparse_dim:  # sparse_dim but not vocab
+            elif t.sparse_dim and t.sparse_dim.dimension is not None:  # sparse_dim but not vocab
                 self.labels[k] = list(map(str, range(t.sparse_dim.dimension)))  # dummy labels
 
     def init_seq_order(
