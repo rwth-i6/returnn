@@ -5,7 +5,7 @@ and model param update logic in general.
 
 from __future__ import annotations
 
-from typing import Optional, Union, Any, Type, Callable, Sequence, Iterable, Set, Dict, List, Tuple
+from typing import Optional, Union, Any, Type, Callable, Sequence, Iterable, Iterator, Set, Dict, List, Tuple
 import os
 import gc
 import torch
@@ -428,8 +428,8 @@ class Updater:
         lr = lr * opt_kwargs.pop("learning_rate_multiplier", 1.0)
         opt_kwargs["lr"] = lr
 
-        param_groups = self._get_optimizer_param_groups(optim_class, opt_kwargs)
-        optimizer = optim_class(param_groups, **opt_kwargs)
+        params_or_param_groups = self._get_optimizer_param_groups(optim_class, opt_kwargs)
+        optimizer = optim_class(params_or_param_groups, **opt_kwargs)
         print("Optimizer: %s" % optimizer, file=log.v1)
         assert isinstance(optimizer, torch.optim.Optimizer)
 
@@ -447,7 +447,7 @@ class Updater:
 
     def _get_optimizer_param_groups(
         self, optim_class: Type[torch.optim.Optimizer], optimizer_opts: Dict[str, Any]
-    ) -> List[Dict[str, Any]]:
+    ) -> Union[List[Dict[str, Any]], Iterator[torch.nn.Parameter]]:
         """
         The weight_decay parameter from AdamW affects the weights of layers such as LayerNorm and Embedding.
         This function creates a blacklist of network modules and splits the optimizer groups in two:
@@ -502,11 +502,11 @@ class Updater:
             ), "weight_decay not accepted by the chosen optimizer. Accepted values: %s" % ", ".join(
                 "%s" % optim_name for optim_name in cls_init_kwargs
             )
-            return [{"params": network_params}]
+            return network_params
 
         weight_decay = optimizer_opts.get("weight_decay", 0.0)
         if not weight_decay:
-            return [{"params": network_params}]
+            return network_params
 
         # Distinguish between parameters with and without weight_decay/L2 regularization.
         # Parameters without weight decay: biases + LayerNorm/Embedding layers.
