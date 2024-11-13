@@ -196,29 +196,34 @@ class _AtExitCleanupProcess:
         self.proc_pid = proc_pid
 
     def __call__(self):
-        if os.getpid() != self.cur_pid:  # e.g. in fork
-            return  # ignore
-        if self.proc_pid is None:  # already cleaned
-            return
-        # First try SIGINT. See NonDaemonicSpawnProcess docstring.
-        # Then, if that fails, try the others.
-        signals = ["SIGINT"] * 3 + ["SIGTERM", "SIGKILL"]
-        for sig in signals:
-            # The proc might have been killed by some other code. That's ok.
-            try:
-                print(f"Send signal {sig} to pid {self.proc_pid}")
-                os.kill(self.proc_pid, getattr(signal, sig))
-            except ProcessLookupError:
-                break
-            if self._waitpid():
-                break
-            time.sleep(1)
-            if self._waitpid():
-                break
-            time.sleep(4)
-            if self._waitpid():
-                break
-        self.proc_pid = None
+        try:
+            if os.getpid() != self.cur_pid:  # e.g. in fork
+                return  # ignore
+            if self.proc_pid is None:  # already cleaned
+                return
+            # First try SIGINT. See NonDaemonicSpawnProcess docstring.
+            # Then, if that fails, try the others.
+            signals = ["SIGINT"] * 3 + ["SIGTERM", "SIGKILL"]
+            for sig in signals:
+                # The proc might have been killed by some other code. That's ok.
+                try:
+                    print(f"Send signal {sig} to pid {self.proc_pid}")
+                    os.kill(self.proc_pid, getattr(signal, sig))
+                except ProcessLookupError:
+                    break
+                if self._waitpid():
+                    break
+                time.sleep(1)
+                if self._waitpid():
+                    break
+                time.sleep(4)
+                if self._waitpid():
+                    break
+            self.proc_pid = None
+        except KeyboardInterrupt:  # someone is killing us. let it happen
+            pass
+        except RuntimeError:  # e.g. PyTorch SIGCHLD handler does this. just quit
+            pass
 
     def _waitpid(self) -> bool:
         try:
