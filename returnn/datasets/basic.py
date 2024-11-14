@@ -523,7 +523,7 @@ class Dataset:
         elif isinstance(seq_ordering_method, str):
             pass  # fine, checked below
         else:
-            raise TypeError(f"seq_ordering {seq_ordering!r} unexpected type {type(seq_ordering).__name__}")
+            raise TypeError(f"seq_ordering {seq_ordering_method!r} unexpected type {type(seq_ordering_method).__name__}")
 
         if seq_ordering_method == "default":
             seq_index = range(num_seqs)
