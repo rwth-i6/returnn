@@ -120,7 +120,7 @@ class Dataset:
             not all datasets support this option.
         :param None|int|dict|NumbersDict|(dict,dict) context_window: will add this context for each chunk
         :param None|str|int|(int,int)|dict|(dict,dict)|function chunking: "chunk_size:chunk_step"
-        :param str seq_ordering: "batching"-option in config. e.g. "default", "sorted" or "random".
+        :param str|function seq_ordering: "batching"-option in config. e.g. "default", "sorted" or "random".
             See self.get_seq_order_for_epoch() for more details.
         :param int|None fixed_random_seed: for the shuffling, e.g. for seq_ordering='random'.
             otherwise epoch will be used.
@@ -511,34 +511,48 @@ class Dataset:
         if self._seq_order_seq_lens_file:
             get_seq_len = self._get_seq_order_seq_lens_by_idx
 
-        if self.seq_ordering == "default":
+        seq_ordering_method = self.seq_ordering
+        if callable(seq_ordering_method):
+            seq_ordering_method_ = seq_ordering_method(epoch=epoch, **get_fwd_compat_kwargs())
+            if not isinstance(seq_ordering_method_, str):
+                raise TypeError(
+                    f"seq_ordering function {seq_ordering_method} should return a str,"
+                    f" got {seq_ordering_method_!r} (type {type(seq_ordering_method_).__name__})"
+                )
+            seq_ordering_method = seq_ordering_method_
+        elif isinstance(seq_ordering_method, str):
+            pass  # fine, checked below
+        else:
+            raise TypeError(f"seq_ordering {seq_ordering!r} unexpected type {type(seq_ordering).__name__}")
+
+        if seq_ordering_method == "default":
             seq_index = range(num_seqs)
-        elif self.seq_ordering.startswith("default_every_n:"):
+        elif seq_ordering_method.startswith("default_every_n:"):
             # This order is useful if you have "initial_state": "keep_over_epoch",
             # where num == max_seqs, batch_size = inf, max_seq_len = inf, chunking = None.
-            _, num = self.seq_ordering.split(":")
+            _, num = seq_ordering_method.split(":")
             num = int(num)
             seq_index = numpy.arange(num_seqs // num, dtype="int64").repeat(num)
             for i in range(1, num):
                 seq_index[i::num] += i * (num_seqs // num)
-        elif self.seq_ordering == "reverse":
+        elif seq_ordering_method == "reverse":
             seq_index = range(num_seqs - 1, -1, -1)  # type: Union[range, typing.Sequence[int]]
-        elif self.seq_ordering in ["sorted", "sorted_reverse"]:
+        elif seq_ordering_method in ["sorted", "sorted_reverse"]:
             assert get_seq_len
-            reverse = -1 if self.seq_ordering == "sorted_reverse" else 1
+            reverse = -1 if seq_ordering_method == "sorted_reverse" else 1
             seq_lens = [reverse * get_seq_len(i) for i in range(num_seqs)]
             seq_index = numpy.argsort(seq_lens, kind="stable")
-        elif self.seq_ordering.startswith("random"):
-            tmp = self.seq_ordering.split(":")
+        elif seq_ordering_method.startswith("random"):
+            tmp = seq_ordering_method.split(":")
             nth = int(tmp[1]) if len(tmp) > 1 else 1
             # Keep this deterministic! Use fixed seed.
             rnd_seed = self._get_random_seed_for_epoch(epoch=epoch, num_epochs_fixed=nth)
             random_generator = numpy.random.RandomState(rnd_seed)
             seq_index = random_generator.permutation(num_seqs)
-        elif self.seq_ordering.startswith("sort_bin_shuffle"):
+        elif seq_ordering_method.startswith("sort_bin_shuffle"):
             # Shuffle seqs, sort by length, and shuffle bins (then shuffle seqs within each bin if sort_bin_shuffle_x2).
             assert get_seq_len
-            tmp = self.seq_ordering.split(":")[1:]
+            tmp = seq_ordering_method.split(":")[1:]
             # Keep this deterministic! Use fixed seed.
             if len(tmp) <= 1:
                 nth = 1
@@ -562,13 +576,13 @@ class Dataset:
                     part = seq_index[i * len(seq_index) // bins :][:]
                 else:
                     part = seq_index[i * len(seq_index) // bins : (i + 1) * len(seq_index) // bins][:]
-                if self.seq_ordering.startswith("sort_bin_shuffle_x2"):
+                if seq_ordering_method.startswith("sort_bin_shuffle_x2"):
                     random_generator.shuffle(part)  # Shuffle within the bin.
                 out_index.append(part)
             seq_index = numpy.concatenate(out_index)
-        elif self.seq_ordering.startswith("laplace"):
+        elif seq_ordering_method.startswith("laplace"):
             assert get_seq_len
-            tmp = self.seq_ordering.split(":")[1:]
+            tmp = seq_ordering_method.split(":")[1:]
             if len(tmp) == 0:
                 bins = 2
             else:
@@ -595,7 +609,7 @@ class Dataset:
                 out_index.append(part)
             seq_index = numpy.concatenate(out_index)
         else:
-            assert False, "invalid batching specified: " + self.seq_ordering
+            raise ValueError(f"invalid seq_ordering {seq_ordering_method!r}")
 
         if self.unique_seq_tags:
             # Note: This is as generic as possible, but requires that get_all_tags is implemented.
