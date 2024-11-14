@@ -146,6 +146,18 @@ def test_math_PiecewiseLinear_kwargs():
     assert f(epoch_continuous=0, seq_idx=123) == 2
 
 
+def test_math_StepFunction_kwargs():
+    from returnn.util.math import StepFunction
+
+    f = StepFunction({1: "yes", 3: "no"}, kw_name="epoch", ignore_other_kwargs=True)
+    assert f(epoch=0) == "yes"
+    assert f(epoch=1) == "yes"
+    assert f(epoch=2) == "yes"  # boundary, assume left wins
+    assert f(epoch=2.1) == "no"
+    assert f(epoch=3) == "no"
+    assert f(epoch=100, seq_idx=123) == "no"
+
+
 def test_parse_orthography_into_symbols():
     assert_equal(list("hi"), parse_orthography_into_symbols("hi"))
     assert_equal(list(" hello "), parse_orthography_into_symbols(" hello "))
