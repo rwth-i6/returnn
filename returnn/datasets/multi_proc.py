@@ -182,16 +182,23 @@ class MultiProcDataset(CachedDataset2):
         msg, self.labels = self._seq_order_proc_parent_conn.recv()
         assert msg == "labels"
 
-    def _lazy_init_data_keys_and_dtypes(self):
+    def _lazy_init_data_keys(self):
         if self._data_keys is not None:
-            assert self._data_dtypes is not None
             return
 
         self._lazy_init()  # indempotent, will not run twice if not needed
 
-        self._seq_order_proc_parent_conn.send(("get_data_keys_and_dtypes", {}))
+        self._seq_order_proc_parent_conn.send(("get_data_keys", {}))
         msg, self._data_keys = self._seq_order_proc_parent_conn.recv()
         assert msg == "data_keys"
+
+    def _lazy_init_data_dtypes(self):
+        if self._data_dtypes is not None:
+            return
+
+        self._lazy_init()  # indempotent, will not run twice if not needed
+
+        self._seq_order_proc_parent_conn.send(("get_data_dtypes", {}))
         msg, self._data_dtypes = self._seq_order_proc_parent_conn.recv()
         assert msg == "data_dtypes"
 
@@ -316,10 +323,13 @@ class MultiProcDataset(CachedDataset2):
                     except NotImplementedError as exc:
                         all_tags = NotImplementedError(f"{exc} in {dataset}")
                     parent_conn.send(("all_tags", all_tags))
-                elif msg == "get_data_keys_and_dtypes":
+                elif msg == "get_data_keys":
                     assert dataset
                     data_keys = dataset.get_data_keys()
                     parent_conn.send(("data_keys", data_keys))
+                elif msg == "get_data_dtypes":
+                    assert dataset
+                    data_keys = dataset.get_data_keys()
                     parent_conn.send(("data_dtypes", {k: dataset.get_data_dtype(k) for k in data_keys}))
                 elif msg == "init_seq_order":
                     if dataset is None:
@@ -471,14 +481,14 @@ class MultiProcDataset(CachedDataset2):
     def get_data_keys(self) -> List[str]:
         """data keys"""
         if self._data_keys is None:
-            self._lazy_init_data_keys_and_dtypes()
+            self._lazy_init_data_keys()
             assert self._data_keys is not None
         return self._data_keys
 
     def get_data_dtype(self, key: str) -> str:
         """:return: dtype of `key`"""
         if self._data_dtypes is None:
-            self._lazy_init_data_keys_and_dtypes()
+            self._lazy_init_data_dtypes()
             assert self._data_dtypes is not None
         return self._data_dtypes[key]
 
