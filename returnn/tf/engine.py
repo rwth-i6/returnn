@@ -35,7 +35,7 @@ from returnn.tf.updater import Updater
 from returnn.tf.data_pipeline import FeedDictDataProvider, DatasetDataProvider
 import returnn.tf.horovod as tf_horovod
 import returnn.util.basic as util
-from returnn.util.basic import hms, NumbersDict, BackendEngine, BehaviorVersion
+from returnn.util.basic import hms, NumbersDict, BackendEngine
 from returnn.forward_iface import ForwardCallbackIface
 from pprint import pprint
 
