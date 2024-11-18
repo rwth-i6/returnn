@@ -672,16 +672,24 @@ class Engine(EngineBase):
             losses = NumbersDict(losses_)
         return losses
 
-    def _create_data_loader(self, dataset: Dataset, *, train: bool = False) -> DataLoader:
+    def _create_data_loader(
+        self, dataset: Dataset, *, train: bool = False, dataset_init_epoch: bool = True
+    ) -> DataLoader:
         """
         :param dataset: RETURNN dataset
+        :param train: Train might use a separate batch size in the config (batch_size_train vs batch_size_dev).
+            Also online_shuffle_batches is only used in training.
+        :param dataset_init_epoch: Whether to call dataset.init_seq_order(epoch=self.epoch) or not.
         :return: PyTorch data loader created from given RETURNN dataset
         """
         # Make sure that _dataset_reset does not keep a ref to `self`,
         # otherwise it would trigger to pickle `self` and all its members.
-        dataset_reset = returnn_dataset_wrapper.ReturnnDatasetResetMpSharedEpochCallback(
-            dataset=dataset, epoch_mp_shared=self._epoch_mp_shared
-        )
+        if dataset_init_epoch:
+            dataset_reset = returnn_dataset_wrapper.ReturnnDatasetResetMpSharedEpochCallback(
+                dataset=dataset, epoch_mp_shared=self._epoch_mp_shared
+            )
+        else:
+            dataset_reset = returnn_dataset_wrapper.ReturnnDatasetResetNoOpCallback()
 
         wrapped_dataset = returnn_dataset_wrapper.ReturnnDatasetIterDataPipe(dataset, reset_callback=dataset_reset)
         if (self._min_seq_length is not None) or (self._max_seq_length is not None):
@@ -729,6 +737,13 @@ class Engine(EngineBase):
 
         loader_opts = self.config.typed_value("torch_dataloader_opts") or {}
         assert isinstance(loader_opts, dict), f"config torch_dataloader_opts, expected dict, got {type(loader_opts)}"
+
+        if not dataset_init_epoch:
+            loader_opts = loader_opts.copy()
+            # We want to keep the current initialized seq order of the dataset.
+            # Multiprocessing does not quite work with this
+            # (the serialization of the dataset state does not cover the current seq order).
+            loader_opts["num_workers"] = 0
 
         data_loader = data_pipeline.create_data_loader_from_batches(batches_dataset, loader_opts)
 
@@ -1092,7 +1107,9 @@ class Engine(EngineBase):
             if os.path.isfile(filename):
                 os.unlink(filename)
 
-    def forward_with_callback(self, *, dataset: Dataset, callback: ForwardCallbackIface):
+    def forward_with_callback(
+        self, *, dataset: Dataset, callback: ForwardCallbackIface, dataset_init_epoch: bool = True
+    ):
         """forward"""
         assert isinstance(dataset, Dataset)
         assert isinstance(callback, ForwardCallbackIface)
@@ -1119,7 +1136,7 @@ class Engine(EngineBase):
             f" we want to keep all source sentences."
         )
 
-        data_loader = self._create_data_loader(dataset)
+        data_loader = self._create_data_loader(dataset, dataset_init_epoch=dataset_init_epoch)
         if self._forward_auto_split_batch_on_oom:
             data_loader = QueuedDataIter(data_loader)
 

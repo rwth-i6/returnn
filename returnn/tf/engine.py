@@ -2352,7 +2352,9 @@ class Engine(EngineBase):
 
         writer.close()
 
-    def forward_with_callback(self, *, dataset: Dataset, callback: ForwardCallbackIface):
+    def forward_with_callback(
+        self, *, dataset: Dataset, callback: ForwardCallbackIface, dataset_init_epoch: bool = True
+    ):
         """forward"""
         # https://github.com/rwth-i6/returnn/issues/1336
         raise NotImplementedError("TF engine does not support the generic forward func yet...")

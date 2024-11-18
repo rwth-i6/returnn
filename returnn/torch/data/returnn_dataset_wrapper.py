@@ -49,6 +49,15 @@ class ReturnnDatasetResetMpSharedEpochCallback:
         self.dataset.init_seq_order(epoch=epoch)
 
 
+class ReturnnDatasetResetNoOpCallback:
+    """
+    Can be used as reset_callback.
+    """
+
+    def __call__(self):
+        pass
+
+
 class ReturnnDatasetIterDataPipe(torch.utils.data.IterDataPipe):
     """
     Converts a RETURNN dataset into a PyTorch IterableDataset.

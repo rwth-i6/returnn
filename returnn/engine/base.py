@@ -278,11 +278,19 @@ class EngineBase:
         """
         self.epoch = epoch
 
-    def forward_with_callback(self, *, dataset: Dataset, callback: ForwardCallbackIface):
+    def forward_with_callback(
+        self, *, dataset: Dataset, callback: ForwardCallbackIface, dataset_init_epoch: bool = True
+    ):
         """
         Iterate through the dataset, calling `forward_step` from user config,
         collecting outputs in `rf.get_run_ctx()` via `mark_as_output` calls,
         and then calling `callback` for each entry.
+
+        :param dataset:
+        :param callback: see :class:`ForwardCallbackIface`
+        :param dataset_init_epoch: whether the engine will call ``dataset.init_seq_order`` at the beginning,
+            using the current epoch.
+            If False, it assumes that ``dataset.init_seq_order`` was already called.
         """
         raise NotImplementedError
 
