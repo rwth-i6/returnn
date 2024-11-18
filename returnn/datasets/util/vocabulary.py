@@ -592,4 +592,10 @@ class Utf8ByteTargets(Vocabulary):
         :param list[int]|numpy.ndarray seq: 1D sequence
         :rtype: str
         """
+        if not isinstance(seq, numpy.ndarray):
+            seq = numpy.array(seq)
+        assert seq.ndim == 1
+        if seq.dtype != numpy.uint8:
+            assert ((seq >= 0) & (seq < 256)).all(), f"invalid byte value, must be within 0-255: {seq}"
+            seq = seq.astype(numpy.uint8)
         return bytearray(seq).decode(encoding="utf8")
