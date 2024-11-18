@@ -877,10 +877,6 @@ class Engine(EngineBase):
         :param returnn.config.Config|None config:
         """
         super(Engine, self).__init__(config=config)
-        if not log.initialized:
-            log.init_by_config(self.config)
-        if not BehaviorVersion.is_set():
-            BehaviorVersion.set(self.config.int("behavior_version", None))
         if BackendEngine.selected_engine is None:
             # This is only the case if the Engine is initialized directly in a custom script.
             # Otherwise, the RETURNN main entry point would already have selected the engine.

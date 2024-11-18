@@ -28,6 +28,12 @@ class EngineBase:
         """
         if config is None:
             config = get_global_config(auto_create=True)
+        # In case the Engine is used directly by some user script,
+        # make sure that we are properly initialized.
+        if not log.initialized:
+            log.init_by_config(config)
+        if not util.BehaviorVersion.is_set():
+            util.BehaviorVersion.set(config.int("behavior_version", None))
         self.config = config
         self.epoch = 0
         self.global_train_step = None  # type: Optional[int]
