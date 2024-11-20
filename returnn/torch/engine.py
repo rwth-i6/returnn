@@ -830,6 +830,13 @@ class Engine(EngineBase):
 
         self._create_model(epoch=epoch, step=step)
 
+        non_critical_for_restore_set = set()
+        if isinstance(self._orig_model, rf.Module):
+            for key, param in self._orig_model.named_parameters():
+                assert isinstance(param, rf.Parameter)
+                if param.non_critical_for_restore:
+                    non_critical_for_restore_set.add(key)
+
         self._ignore_param_set.clear()
         loaded_state_keys = set()
         missing_keys = set()
@@ -959,6 +966,14 @@ class Engine(EngineBase):
         if self._ignore_param_set:
             util_module.convert_parameters_to_buffers(self._pt_model, self._ignore_param_set, persistent=False)
 
+        if missing_keys.intersection(non_critical_for_restore_set):
+            # We ignore missing keys which are non-critical for restore.
+            print(
+                "Ignoring missing keys which are non-critical for restore:",
+                missing_keys.intersection(non_critical_for_restore_set),
+                file=log.v4,
+            )
+            missing_keys.difference_update(non_critical_for_restore_set)
         if missing_keys:
             raise Exception(
                 "\n".join(
