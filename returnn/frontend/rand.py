@@ -181,8 +181,8 @@ def random(
     :param int|float|Tensor|None mean:
     :param int|float|Tensor|None stddev:
     :param int|float|Tensor|None bound: for uniform, defining the range [-bound, bound)
-    :param int|float|Tensor|None minval: for uniform
-    :param int|float|Tensor|None maxval: for uniform
+    :param int|float|Tensor|None minval: for uniform, inclusive
+    :param int|float|Tensor|None maxval: for uniform, exclusive
     :param int|list[int]|numpy.ndarray|None seed:
         Only for the case ``static=True``.
         If not given, uses self.network.random.randint,
@@ -253,6 +253,7 @@ def random_uniform(
 ):
     """
     See :func:`random`. :func:`random` with ``distribution="uniform"``.
+    ``maxval`` is exclusive.
     """
     return random(
         dims=dims,
