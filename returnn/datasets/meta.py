@@ -2022,6 +2022,10 @@ class MultiEpochDataset(CachedDataset2):
         super().finish_epoch(free_resources=free_resources)
         self._dataset.finish_epoch(free_resources=free_resources)
 
+    def get_current_seq_order(self) -> Sequence[int]:
+        """current seq order"""
+        return self._dataset.get_current_seq_order()
+
     def get_all_tags(self) -> List[str]:
         """all tags"""
         return self._dataset.get_all_tags()
