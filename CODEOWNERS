@@ -5,14 +5,14 @@
 # Use absolute names when necessary or more helpful to identify.
 # Otherwise the basename is fine. Or other patterns.
 
-* @rwth-i6/returnn @albertz
-/returnn/tf	@albertz
-/returnn/theano	@albertz
+* @rwth-i6/returnn @albertz @NeoLegends
+/returnn/tf @albertz
+/returnn/theano @albertz
 
 better_exchook.py @albertz
 
 cached.py @patrick-wilken @JackTemaki
-hdf.py  @patrick-wilken @JackTemaki
+hdf.py @patrick-wilken @JackTemaki
 
 # Could be extended a lot more, but not sure if needed.
 # The global owners are also almost always the owners of more specific things.
