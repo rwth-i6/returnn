@@ -184,7 +184,7 @@ class PostprocessingDataset(CachedDataset2):
         assert self._dataset is not None
         self._dataset.init_seq_order(epoch=epoch, seq_list=seq_list, seq_order=seq_order)
         self._data_iter = enumerate(self._build_mapping_iter())
-        self._seq_list_for_validation = set(seq_list) if seq_list else None
+        self._seq_list_for_validation = seq_list
         if self._map_seq_stream is None:
             # If we don't have an iterable mapper we know the number of segments exactly
             # equals the number of segments in the wrapped dataset
@@ -283,10 +283,11 @@ class PostprocessingDataset(CachedDataset2):
                     tensor_dict.data["seq_tag"].raw_tensor = seq_tag_tensor
 
                 if self._seq_list_for_validation is not None:
-                    seq_tag = tensor_dict.data["seq_tag"].raw_tensor.item()
+                    seq_tag = self._seq_list_for_validation[seq_index]
+                    tag_of_seq = tensor_dict.data["seq_tag"].raw_tensor.item()
                     assert (
-                        seq_tag in self._seq_list_for_validation
-                    ), f"seq tag {seq_tag} not in seq_list given in init_seq_order"
+                        tag_of_seq == seq_tag
+                    ), f"seq tag mismath: {tag_of_seq} != {seq_tag} for seq index {seq_index} when seq list is given"
 
             yield tensor_dict
             seq_index += 1
