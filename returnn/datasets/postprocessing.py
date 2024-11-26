@@ -241,7 +241,7 @@ class PostprocessingDataset(CachedDataset2):
 
         data_iter = self._iterate_dataset()
         if self._map_seq_stream is not None:
-            data_iter = self._map_seq_stream(data_iter, rng=self._rng, **util.get_fwd_compat_kwargs())
+            data_iter = self._map_seq_stream(data_iter, epoch=self.epoch, rng=self._rng, **util.get_fwd_compat_kwargs())
             assert isinstance(
                 data_iter, Iterator
             ), f"map_seq_stream must produce an {Iterator.__name__}, but produced {type(data_iter).__name__}"
@@ -263,7 +263,9 @@ class PostprocessingDataset(CachedDataset2):
             tensor_dict.data["seq_tag"].raw_tensor = str_to_numpy_array(self._dataset.get_tag(seq_index))
 
             if self._map_seq is not None:
-                tensor_dict = self._map_seq(tensor_dict, rng=self._rng, **util.get_fwd_compat_kwargs())
+                tensor_dict = self._map_seq(
+                    tensor_dict, epoch=self.epoch, seq_idx=seq_index, rng=self._rng, **util.get_fwd_compat_kwargs()
+                )
                 assert isinstance(
                     tensor_dict, TensorDict
                 ), f"map_seq must produce a {TensorDict.__name__}, but produced {type(tensor_dict).__name__}"
