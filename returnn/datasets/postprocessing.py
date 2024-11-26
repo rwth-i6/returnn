@@ -176,7 +176,7 @@ class PostprocessingDataset(CachedDataset2):
             if seq_order is not None:
                 raise ValueError("map_seq_stream is set, cannot specify custom seq_order")
 
-        if epoch is None:
+        if epoch is None and seq_list is None and seq_order is None:
             self._num_seqs = 0
             return True
 
