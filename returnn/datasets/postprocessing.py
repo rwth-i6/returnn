@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from itertools import islice
 from numpy.random import RandomState
-from typing import Any, Callable, Dict, Iterator, List, Optional, Set, Tuple, TypeVar
+from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple, TypeVar
 
 from returnn.datasets.basic import DatasetSeq
 from returnn.datasets.util.strings import str_to_numpy_array
@@ -127,7 +127,7 @@ class PostprocessingDataset(CachedDataset2):
         self._map_seq_stream = map_seq_stream
         self._map_outputs = map_outputs
         self._rng = RandomState(self._get_random_seed_for_epoch(0))
-        self._seq_list_for_validation: Optional[Set[str]] = None
+        self._seq_list_for_validation: Optional[List[str]] = None
 
         self._dataset = init_dataset(self._dataset_def, parent_dataset=self)
         if self._map_seq_stream is None:
