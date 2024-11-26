@@ -1075,7 +1075,17 @@ class SimpleHDFWriter:
     Note that we dump to a temp file first, and only at :func:`close` we move it over to the real destination.
     """
 
-    def __init__(self, filename, dim, labels=None, ndim=None, extra_type=None, swmr=False, extend_existing_file=False, extra_labels=None):
+    def __init__(
+        self,
+        filename,
+        dim,
+        labels=None,
+        ndim=None,
+        extra_type=None,
+        swmr=False,
+        extend_existing_file=False,
+        extra_labels=None,
+    ):
         """
         :param str filename: Create file, truncate if exists
         :param int|None dim:
