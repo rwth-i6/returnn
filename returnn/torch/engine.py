@@ -367,7 +367,6 @@ class Engine(EngineBase):
         num_seqs = None
         last_seq_idx = 0
 
-        rel_padding_warn_threshold = self.config.float("rel_padding_warn_threshold", 0.5)
         ep_data_len = 0
         ep_data_space = 0
 
@@ -390,16 +389,6 @@ class Engine(EngineBase):
                 data_len = sum(torch.sum(extern_data_raw[f"{k}:seq_len"]) for k in keys_w_seq_len)
                 data_space = sum(torch.numel(extern_data_raw[k]) for k in keys_w_seq_len)
                 padding_ratio = 1 - (data_len / data_space)
-                if padding_ratio > rel_padding_warn_threshold:
-                    # do not use log.print_warning, as this will cache the messages, which change often
-                    # due to the included data
-                    print(
-                        f"WARNING: step {step_idx} has {padding_ratio:.1%} padding in the train data, "
-                        "consider reviewing seq ordering settings for better training efficiency "
-                        f"(warning above {rel_padding_warn_threshold:.1%}, "
-                        "configure via `rel_padding_warn_threshold`)",
-                        file=log.v3,  # this is not so important as to log it to v2 (where other warnings go)
-                    )
                 ep_data_len += data_len
                 ep_data_space += data_space
 
@@ -524,12 +513,22 @@ class Engine(EngineBase):
         elapsed = time.monotonic() - epoch_start_time
         elapsed_computation_percentage = elapsed_computation_time / elapsed
         total_padding_ratio = 1.0 - (ep_data_len / ep_data_space)
-
         print(
             f"Epoch {self.epoch}: Trained {step_idx} steps, {hms(elapsed)} elapsed "
             f"({elapsed_computation_percentage:.1%} computing time, {total_padding_ratio:.1%} padding)",
             file=log.v3,
         )
+        rel_padding_warn_threshold = self.config.float("rel_padding_warn_threshold", 0.5)
+        if total_padding_ratio > rel_padding_warn_threshold:
+            # do not use log.print_warning, as this will cache the messages, which change often
+            # due to the included data
+            print(
+                f"WARNING: epoch {self.epoch} has an average of {total_padding_ratio:.1%} of padding in the data, "
+                "consider reviewing seq ordering settings for better training efficiency "
+                f"(warning above {rel_padding_warn_threshold:.1%}, "
+                "configure via `rel_padding_warn_threshold`)",
+                file=log.v3,  # this is not so important as to log it to v2 (where other warnings go)
+            )
 
         self.learning_rate_control.epoch_data[self.epoch].meta.update(
             {
