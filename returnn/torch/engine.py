@@ -396,7 +396,8 @@ class Engine(EngineBase):
                     print(
                         f"WARNING: step {step_idx} has {padding_ratio:.1%} padding in the train data, "
                         "consider reviewing seq ordering settings for better training efficiency "
-                        f"(warning above: {rel_padding_warn_threshold:.1%})",
+                        f"(warning above {rel_padding_warn_threshold:.1%}, "
+                        "configure via `rel_padding_warn_threshold`)",
                         file=log.v3,  # this is not so important as to log it to v2 (where other warnings go)
                     )
                 ep_data_len += data_len
