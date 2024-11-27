@@ -1389,7 +1389,7 @@ def _print_process(
         if batch_size_info:
             info += ["%s %s" % (k, _format_score_value(v)) for k, v in batch_size_info.items()]
         if padding_ratio is not None:
-            info += [f"pad {padding_ratio:.1f}"]
+            info += [f"pad {padding_ratio:.1%}"]
         if log_memory_usage_device:
             dev = torch.device(log_memory_usage_device)
             if dev.type == "cuda":
