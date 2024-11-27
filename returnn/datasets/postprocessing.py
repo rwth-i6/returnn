@@ -298,8 +298,8 @@ class PostprocessingDataset(CachedDataset2):
         return Tensor(data_key, dims=dims, dtype=dtype, sparse_dim=sparse_dim)
 
 
-class SeqOrdering:
-    """Base class for defining seq ordering iterators compatible w/ the :class:`PostprocessingDataset`."""
+class _GetSeqLenByKey:
+    """Base class that defines a seq length accessor based on a data key"""
 
     def __init__(self, length_key: str):
         """:param length_key: data key to determine the segment length from for ordering."""
@@ -312,7 +312,7 @@ class SeqOrdering:
         return tdict.data[self._length_key].raw_tensor.shape[0]
 
 
-class BucketOrdering(SeqOrdering, Callable[[Iterator[TensorDict]], Iterator[TensorDict]]):
+class BucketOrdering(_GetSeqLenByKey, Callable[[Iterator[TensorDict]], Iterator[TensorDict]]):
     """
     Iterator compatible with :class:`PostprocessingDataset`'s ``map_seq_stream`` applying
     an ordering that creates batches consisting of segments falling into a few distinct
@@ -364,7 +364,7 @@ class BucketOrdering(SeqOrdering, Callable[[Iterator[TensorDict]], Iterator[Tens
         return batch_size
 
 
-class LaplaceOrdering(SeqOrdering, Callable[[Iterator[TensorDict]], Iterator[TensorDict]]):
+class LaplaceOrdering(_GetSeqLenByKey, Callable[[Iterator[TensorDict]], Iterator[TensorDict]]):
     """
     Iterator compatible with :class:`PostprocessingDataset`'s ``map_seq_stream`` applying
     laplace sequence ordering based on the number of segments per bin.
