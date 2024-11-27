@@ -4,10 +4,12 @@ Provides :class:`PostprocessingDataset`.
 
 from __future__ import annotations
 
+import bisect
 from itertools import islice
 from numpy.random import RandomState
-from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple, TypeVar
+from typing import Any, Callable, Dict, Iterator, List, Optional, Sequence, Tuple, TypeVar
 
+from returnn.config import get_global_config
 from returnn.datasets.basic import DatasetSeq
 from returnn.datasets.util.strings import str_to_numpy_array
 from returnn.datasets.util.vocabulary import Vocabulary
@@ -296,7 +298,73 @@ class PostprocessingDataset(CachedDataset2):
         return Tensor(data_key, dims=dims, dtype=dtype, sparse_dim=sparse_dim)
 
 
-class LaplaceOrdering(Callable[[Iterator[TensorDict]], Iterator[TensorDict]]):
+class SeqOrdering:
+    """Base class for defining seq ordering iterators compatible w/ the :class:`PostprocessingDataset`."""
+
+    def __init__(self, length_key: str):
+        """:param length_key: data key to determine the segment length from for ordering."""
+        self._length_key = length_key
+
+    def _get_seq_len(self, tdict: TensorDict) -> int:
+        """
+        :return: segment length of the segment in `tdict` as measured by `self._length_key` for comparison.
+        """
+        return tdict.data[self._length_key].raw_tensor.shape[0]
+
+
+class BucketOrdering(SeqOrdering, Callable[[Iterator[TensorDict]], Iterator[TensorDict]]):
+    """
+    Iterator compatible with :class:`PostprocessingDataset`'s ``map_seq_stream`` applying
+    an ordering that creates batches consisting of segments falling into a few distinct
+    length buckets.
+
+    To be composed with any custom data postprocessing logic via :class:`Sequential`.
+
+    See also :class:`LaplaceOrdering`.
+    """
+
+    def __init__(self, seq_lens: Sequence[int], length_key: str = "data"):
+        """
+        :param seq_lens: seq length buckets, values must be < batch_size.
+        :param length_key: data key to determine the segment length from for ordering.
+        """
+        super().__init__(length_key)
+        assert seq_lens and all(l > 0 for l in seq_lens)
+        self._seq_lens = sorted(set(seq_lens))
+
+    def __call__(self, iterator: Iterator[TensorDict], **kwargs) -> Iterator[TensorDict]:
+        """:return: generator applying bucket ordering on the data"""
+        batch_size = self._get_batch_size()  # called here because config does not exist yet in __init__
+        buckets: List[List[TensorDict]] = [[] for _ in range(len(self._seq_lens) + 1)]
+        max_len_in_bucket = [0 for _ in range(len(buckets))]
+
+        for seq in iterator:
+            seq_len = self._get_seq_len(seq)
+            bucket_idx = bisect.bisect_left(self._seq_lens, seq_len)
+
+            max_len_if_included = max(max_len_in_bucket[bucket_idx], seq_len)
+            if len(buckets[bucket_idx]) > 0 and max_len_if_included * (len(buckets[bucket_idx]) + 1) > batch_size:
+                # bucket is full, submit batch to trainer
+                yield from buckets[bucket_idx]
+                buckets[bucket_idx].clear()
+                max_len_in_bucket[bucket_idx] = 0
+
+            buckets[bucket_idx].append(seq)
+            max_len_in_bucket[bucket_idx] = max(max_len_in_bucket[bucket_idx], seq_len)
+
+        # yield remaining sequences
+        for bucket in buckets:
+            yield from bucket
+
+    def _get_batch_size(self) -> int:
+        batch_size = get_global_config().typed_value("batch_size")
+        assert batch_size is not None, "could not look up batch size from config, is it set?"
+        for i, length in enumerate(self._seq_lens):
+            assert length < batch_size, f"seq len bucket {i} invalid: {length} >= {batch_size} (batch_size)"
+        return batch_size
+
+
+class LaplaceOrdering(SeqOrdering, Callable[[Iterator[TensorDict]], Iterator[TensorDict]]):
     """
     Iterator compatible with :class:`PostprocessingDataset`'s ``map_seq_stream`` applying
     laplace sequence ordering based on the number of segments per bin.
@@ -309,7 +377,7 @@ class LaplaceOrdering(Callable[[Iterator[TensorDict]], Iterator[TensorDict]]):
         :param num_seqs_per_bin: number of segments in a single laplace bin.
         :param length_key: data key to determine the segment length from for ordering.
         """
-        self.length_key = length_key
+        super().__init__(length_key)
         assert num_seqs_per_bin > 0
         self.num_seqs_per_bin = num_seqs_per_bin
 
@@ -342,12 +410,6 @@ class LaplaceOrdering(Callable[[Iterator[TensorDict]], Iterator[TensorDict]]):
 
             is_down_phase = not is_down_phase
             seq_buffer = next_seq_buffer
-
-    def _get_seq_len(self, tdict: TensorDict) -> int:
-        """
-        :return: segment length of the segment in `tdict` as measured by `self.length_key` for comparison.
-        """
-        return tdict.data[self.length_key].raw_tensor.shape[0]
 
 
 T = TypeVar("T", TensorDict, Iterator[TensorDict])
