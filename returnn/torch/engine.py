@@ -46,6 +46,7 @@ from .frontend.bridge import rf_module_to_pt_module
 from .util import diagnose_gpu
 from .util import module as util_module
 from .util.exception_helper import help_on_torch_exception
+from .util.debug_inf_nan import debug_inf_nan
 from .distributed import DistributedContext, get_ctx as dist_get_ctx
 
 
@@ -499,6 +500,13 @@ class Engine(EngineBase):
                             accumulated_losses_dict / accumulated_inv_norm_factors_dict,
                             file=log.v1,
                         )
+
+                        def _debug_func() -> torch.Tensor:
+                            self._run_step(extern_data, train_flag=True, train_func=True)
+                            return rf.get_run_ctx().total_loss()
+
+                        print("Running debug_inf_nan...", file=log.v1)
+                        debug_inf_nan(_debug_func, with_grad=True)
                         raise Exception(f"Inf/nan score in step {step_idx}.")
 
                 step_idx += 1
