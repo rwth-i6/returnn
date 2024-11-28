@@ -367,8 +367,8 @@ class Engine(EngineBase):
         num_seqs = None
         last_seq_idx = 0
 
-        ep_data_len = 0
-        ep_data_space = 0
+        ep_data_len = NumbersDict()
+        ep_data_space = NumbersDict()
 
         try:
             while True:
@@ -386,9 +386,9 @@ class Engine(EngineBase):
                     break
 
                 keys_w_seq_len = [k for k in extern_data_raw if f"{k}:seq_len" in extern_data_raw]
-                data_len = sum(torch.sum(extern_data_raw[f"{k}:seq_len"]) for k in keys_w_seq_len)
-                data_space = sum(torch.numel(extern_data_raw[k]) for k in keys_w_seq_len)
-                padding_ratio = 1 - (data_len / data_space)
+                data_len = NumbersDict({k: torch.sum(extern_data_raw[f"{k}:seq_len"]) for k in keys_w_seq_len})
+                data_space = NumbersDict({k: torch.prod(extern_data_raw[k].shape[:2]) for k in keys_w_seq_len })
+                padding_ratio = NumbersDict.constant_like(1.0, data_len) - (data_len / data_space)
                 ep_data_len += data_len
                 ep_data_space += data_space
 
@@ -512,23 +512,13 @@ class Engine(EngineBase):
 
         elapsed = time.monotonic() - epoch_start_time
         elapsed_computation_percentage = elapsed_computation_time / elapsed
-        total_padding_ratio = 1.0 - (ep_data_len / ep_data_space)
+        total_padding_ratio = NumbersDict.constant_like(1.0, ep_data_len) - (ep_data_len / ep_data_space)
+        pad_str = ", ".join(f"{k}: {v:.1%}" for k, v in total_padding_ratio.items())
         print(
             f"Epoch {self.epoch}: Trained {step_idx} steps, {hms(elapsed)} elapsed "
-            f"({elapsed_computation_percentage:.1%} computing time, {total_padding_ratio:.1%} padding)",
+            f"({elapsed_computation_percentage:.1%} computing time, padding {pad_str})",
             file=log.v3,
         )
-        rel_padding_warn_threshold = self.config.float("rel_padding_warn_threshold", 0.5)
-        if total_padding_ratio > rel_padding_warn_threshold:
-            # do not use log.print_warning, as this will cache the messages, which change often
-            # due to the included data
-            print(
-                f"WARNING: epoch {self.epoch} has an average of {total_padding_ratio:.1%} of padding in the data, "
-                "consider reviewing seq ordering settings for better training efficiency "
-                f"(warning above {rel_padding_warn_threshold:.1%}, "
-                "configure via `rel_padding_warn_threshold`)",
-                file=log.v3,  # this is not so important as to log it to v2 (where other warnings go)
-            )
 
         self.learning_rate_control.epoch_data[self.epoch].meta.update(
             {
@@ -1366,7 +1356,7 @@ def _print_process(
     seq_idx: Optional[int] = None,
     num_seqs: Optional[int] = None,
     log_memory_usage_device: Optional[str] = None,
-    padding_ratio: Optional[float] = None,
+    padding_ratio: Optional[NumbersDict] = None,
 ):
     """
     Similar but simplified from TF engine _print_process.
@@ -1389,7 +1379,8 @@ def _print_process(
         if batch_size_info:
             info += ["%s %s" % (k, _format_score_value(v)) for k, v in batch_size_info.items()]
         if padding_ratio is not None:
-            info += [f"pad {padding_ratio:.1%}"]
+            ratios = ", ".join(f"{k}: {ratio:.1%}" for k, ratio in padding_ratio.items())
+            info += [f"pad {ratios}"]
         if log_memory_usage_device:
             dev = torch.device(log_memory_usage_device)
             if dev.type == "cuda":
