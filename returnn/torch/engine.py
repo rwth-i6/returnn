@@ -477,7 +477,7 @@ class Engine(EngineBase):
                 accumulated_losses_dict += losses_dict
                 accumulated_inv_norm_factors_dict += inv_norm_factors_dict
                 eval_info = self._maybe_extend_losses_info(losses_dict / inv_norm_factors_dict)
-                if self.config.bool("log_stepwise_padding_ratio"):
+                if self.config.bool("log_stepwise_padding_ratio", False):
                     padding_ratio = NumbersDict.constant_like(1.0, data_len) - (data_len / data_space)
                 else:
                     padding_ratio = None
