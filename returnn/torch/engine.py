@@ -386,10 +386,8 @@ class Engine(EngineBase):
                     break
 
                 keys_w_seq_len = [k for k in extern_data_raw if f"{k}:seq_len" in extern_data_raw]
-                data_size_packed = NumbersDict({k: sum(extern_data_raw[f"{k}:seq_len"]) for k in keys_w_seq_len})
-                data_size_padded = NumbersDict({k: util.prod(extern_data_raw[k].shape[:2]) for k in keys_w_seq_len})
-                ep_data_size_packed += data_size_packed
-                ep_data_size_padded += data_size_padded
+                ep_data_size_packed += NumbersDict({k: sum(extern_data_raw[f"{k}:seq_len"]) for k in keys_w_seq_len})
+                ep_data_size_padded += NumbersDict({k: util.prod(extern_data_raw[k].shape[:2]) for k in keys_w_seq_len})
 
                 num_seqs_ = (
                     int(extern_data_raw["num_seqs"]) if extern_data_raw.get("num_seqs", None) is not None else -1
@@ -477,12 +475,6 @@ class Engine(EngineBase):
                 accumulated_losses_dict += losses_dict
                 accumulated_inv_norm_factors_dict += inv_norm_factors_dict
                 eval_info = self._maybe_extend_losses_info(losses_dict / inv_norm_factors_dict)
-                if self.config.bool("log_stepwise_padding_ratio", False):
-                    padding_ratio = NumbersDict.constant_like(1.0, data_size_packed) - (
-                        data_size_packed / data_size_padded
-                    )
-                else:
-                    padding_ratio = None
                 _print_process(
                     f"ep {self.epoch} train",
                     step=step_idx,
@@ -493,7 +485,6 @@ class Engine(EngineBase):
                     num_seqs=num_seqs,
                     batch_size_info=_get_batch_size_info(extern_data) if self._log_batch_size else None,
                     log_memory_usage_device=self._device if self._log_memory_usage else None,
-                    padding_ratio=padding_ratio,
                 )
 
                 if self._stop_on_nonfinite_train_score:
@@ -1363,7 +1354,6 @@ def _print_process(
     seq_idx: Optional[int] = None,
     num_seqs: Optional[int] = None,
     log_memory_usage_device: Optional[str] = None,
-    padding_ratio: Optional[NumbersDict] = None,
 ):
     """
     Similar but simplified from TF engine _print_process.
@@ -1376,7 +1366,6 @@ def _print_process(
     :param start_elapsed: time elapsed since epoch start (secs)
     :param num_seqs: total number of sequences for this epoch
     :param log_memory_usage_device: if given, will log memory usage (peak allocated memory)
-    :param padding_ratio: relative amount of padding in the minibatch
     :return: nothing, will be printed to log
     """
     if log.verbose[5]:  # report every minibatch
@@ -1385,9 +1374,6 @@ def _print_process(
             info += ["%s %s" % (k, _format_score_value(v)) for k, v in eval_info.items()]
         if batch_size_info:
             info += ["%s %s" % (k, _format_score_value(v)) for k, v in batch_size_info.items()]
-        if padding_ratio is not None:
-            ratios = ", ".join(f"{k}: {ratio:.1%}" for k, ratio in padding_ratio.items())
-            info += [f"pad {ratios}"]
         if log_memory_usage_device:
             dev = torch.device(log_memory_usage_device)
             if dev.type == "cuda":
