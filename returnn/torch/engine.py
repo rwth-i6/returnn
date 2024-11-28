@@ -387,7 +387,9 @@ class Engine(EngineBase):
 
                 keys_w_seq_len = [k for k in extern_data_raw if f"{k}:seq_len" in extern_data_raw]
                 total_data_size_packed += NumbersDict({k: sum(extern_data_raw[f"{k}:seq_len"]) for k in keys_w_seq_len})
-                total_data_size_padded += NumbersDict({k: util.prod(extern_data_raw[k].shape[:2]) for k in keys_w_seq_len})
+                total_data_size_padded += NumbersDict(
+                    {k: util.prod(extern_data_raw[k].shape[:2]) for k in keys_w_seq_len}
+                )
 
                 num_seqs_ = (
                     int(extern_data_raw["num_seqs"]) if extern_data_raw.get("num_seqs", None) is not None else -1
