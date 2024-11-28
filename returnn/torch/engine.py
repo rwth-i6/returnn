@@ -367,8 +367,8 @@ class Engine(EngineBase):
         num_seqs = None
         last_seq_idx = 0
 
-        ep_data_len = NumbersDict()
-        ep_data_space = NumbersDict()
+        ep_data_size_packed = NumbersDict()
+        ep_data_size_padded = NumbersDict()
 
         try:
             while True:
@@ -386,10 +386,10 @@ class Engine(EngineBase):
                     break
 
                 keys_w_seq_len = [k for k in extern_data_raw if f"{k}:seq_len" in extern_data_raw]
-                data_len = NumbersDict({k: torch.sum(extern_data_raw[f"{k}:seq_len"]).item() for k in keys_w_seq_len})
-                data_space = NumbersDict({k: torch.prod(extern_data_raw[k].shape[:2]).item() for k in keys_w_seq_len})
-                ep_data_len += data_len
-                ep_data_space += data_space
+                data_size_packed = NumbersDict({k: sum(extern_data_raw[f"{k}:seq_len"]) for k in keys_w_seq_len})
+                data_size_padded = NumbersDict({k: util.prod(extern_data_raw[k].shape[:2]) for k in keys_w_seq_len})
+                ep_data_size_packed += data_size_packed
+                ep_data_size_padded += data_size_padded
 
                 num_seqs_ = (
                     int(extern_data_raw["num_seqs"]) if extern_data_raw.get("num_seqs", None) is not None else -1
@@ -478,7 +478,9 @@ class Engine(EngineBase):
                 accumulated_inv_norm_factors_dict += inv_norm_factors_dict
                 eval_info = self._maybe_extend_losses_info(losses_dict / inv_norm_factors_dict)
                 if self.config.bool("log_stepwise_padding_ratio", False):
-                    padding_ratio = NumbersDict.constant_like(1.0, data_len) - (data_len / data_space)
+                    padding_ratio = NumbersDict.constant_like(1.0, data_size_packed) - (
+                        data_size_packed / data_size_padded
+                    )
                 else:
                     padding_ratio = None
                 _print_process(
@@ -515,7 +517,9 @@ class Engine(EngineBase):
 
         elapsed = time.monotonic() - epoch_start_time
         elapsed_computation_percentage = elapsed_computation_time / elapsed
-        total_padding_ratio = NumbersDict.constant_like(1.0, ep_data_len) - (ep_data_len / ep_data_space)
+        total_padding_ratio = NumbersDict.constant_like(1.0, ep_data_size_packed) - (
+            ep_data_size_packed / ep_data_size_padded
+        )
         pad_str = ", ".join(f"{k}: {v:.1%}" for k, v in total_padding_ratio.items())
         print(
             f"Epoch {self.epoch}: Trained {step_idx} steps, {hms(elapsed)} elapsed "
