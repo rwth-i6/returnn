@@ -386,9 +386,8 @@ class Engine(EngineBase):
                     break
 
                 keys_w_seq_len = [k for k in extern_data_raw if f"{k}:seq_len" in extern_data_raw]
-                data_len = NumbersDict({k: torch.sum(extern_data_raw[f"{k}:seq_len"]) for k in keys_w_seq_len})
-                data_space = NumbersDict({k: torch.prod(extern_data_raw[k].shape[:2]) for k in keys_w_seq_len })
-                padding_ratio = NumbersDict.constant_like(1.0, data_len) - (data_len / data_space)
+                data_len = NumbersDict({k: torch.sum(extern_data_raw[f"{k}:seq_len"]).item() for k in keys_w_seq_len})
+                data_space = NumbersDict({k: torch.prod(extern_data_raw[k].shape[:2]).item() for k in keys_w_seq_len})
                 ep_data_len += data_len
                 ep_data_space += data_space
 
@@ -478,6 +477,10 @@ class Engine(EngineBase):
                 accumulated_losses_dict += losses_dict
                 accumulated_inv_norm_factors_dict += inv_norm_factors_dict
                 eval_info = self._maybe_extend_losses_info(losses_dict / inv_norm_factors_dict)
+                if self.config.bool("log_stepwise_padding_ratio"):
+                    padding_ratio = NumbersDict.constant_like(1.0, data_len) - (data_len / data_space)
+                else:
+                    padding_ratio = None
                 _print_process(
                     f"ep {self.epoch} train",
                     step=step_idx,
@@ -516,7 +519,7 @@ class Engine(EngineBase):
         pad_str = ", ".join(f"{k}: {v:.1%}" for k, v in total_padding_ratio.items())
         print(
             f"Epoch {self.epoch}: Trained {step_idx} steps, {hms(elapsed)} elapsed "
-            f"({elapsed_computation_percentage:.1%} computing time, padding {pad_str})",
+            f"({elapsed_computation_percentage:.1%} computing time, {pad_str} padding)",
             file=log.v3,
         )
 
