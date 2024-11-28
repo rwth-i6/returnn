@@ -366,6 +366,10 @@ class Engine(EngineBase):
         extern_data = None
         num_seqs = None
         last_seq_idx = 0
+
+        total_data_size_packed = NumbersDict()
+        total_data_size_padded = NumbersDict()
+
         try:
             while True:
                 with torch.no_grad():
@@ -380,6 +384,15 @@ class Engine(EngineBase):
                     torch.distributed.all_reduce(_has_data, op=torch.distributed.ReduceOp.MIN)
                 if not _has_data[0]:
                     break
+
+                keys_w_seq_len = [k for k in extern_data_raw if f"{k}:seq_len" in extern_data_raw]
+                total_data_size_packed += NumbersDict(
+                    {k: sum(extern_data_raw[f"{k}:seq_len"]) for k in keys_w_seq_len},
+                )
+                total_data_size_padded += NumbersDict(
+                    {k: util.prod(extern_data_raw[k].shape[:2]) for k in keys_w_seq_len},
+                )
+
                 num_seqs_ = (
                     int(extern_data_raw["num_seqs"]) if extern_data_raw.get("num_seqs", None) is not None else -1
                 )
@@ -499,9 +512,13 @@ class Engine(EngineBase):
 
         elapsed = time.monotonic() - epoch_start_time
         elapsed_computation_percentage = elapsed_computation_time / elapsed
+        total_padding_ratio = NumbersDict.constant_like(1.0, total_data_size_packed) - (
+            total_data_size_packed / total_data_size_padded
+        )
+        pad_str = ", ".join(f"{k}: {v:.1%}" for k, v in total_padding_ratio.items())
         print(
-            "Epoch %i: Trained %i steps, %s elapsed (%.1f%% computing time)"
-            % (self.epoch, step_idx, hms(elapsed), (elapsed_computation_percentage * 100.0)),
+            f"Epoch {self.epoch}: Trained {step_idx} steps, {hms(elapsed)} elapsed "
+            f"({elapsed_computation_percentage:.1%} computing time, {pad_str} padding)",
             file=log.v3,
         )
 
