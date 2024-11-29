@@ -359,7 +359,8 @@ class BucketOrderingIterDataPipe(torch.utils.data.IterDataPipe):
                 yield buckets[bucket_idx]
                 buckets[bucket_idx] = []
 
-        yield from buckets
+        non_empty_buckets = [b for b in buckets if b]
+        yield from non_empty_buckets
 
 
 def init_batching(
