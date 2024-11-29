@@ -40,7 +40,9 @@ See these functions:
 - get_current_frame
 - dump_all_thread_tracebacks
 - install
+- setup_all
 - replace_traceback_format_tb
+- replace_traceback_print_tb
 
 Although there might be a few more useful functions, thus we export all of them.
 
@@ -324,7 +326,7 @@ def debug_shell(user_ns, user_global_ns, traceback=None, execWrapper=None):
                 """
                 Run the IPython shell.
                 """
-                pdb_obj.interaction(None, traceback=traceback)
+                pdb_obj.interaction(None, traceback)
 
         except Exception:
             print("IPython Pdb exception:")
