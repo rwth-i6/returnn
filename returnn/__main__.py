@@ -585,7 +585,10 @@ def execute_main_task():
             assert forward_callback, "no forward_callback specified"
             if callable(forward_callback):
                 forward_callback = forward_callback()
-            engine.forward_with_callback(dataset=data, callback=forward_callback)
+            allow_skipping_seqs = config.bool("allow_skipping_seqs_in_forward", False)
+            engine.forward_with_callback(
+                dataset=data, callback=forward_callback, allow_skipping_seqs=allow_skipping_seqs
+            )
         else:
             assert BackendEngine.is_tensorflow_selected()
             assert eval_data is not None, "no eval data provided"
