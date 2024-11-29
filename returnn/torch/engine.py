@@ -1172,7 +1172,8 @@ class Engine(EngineBase):
             # Dangerous! If you enable this, you could lose sequences,
             # and your evaluation pipeline may silently produce incorrect results!
             print(
-                f"Note: allow_skipping_seqs is enabled (with min_seq_length {self._min_seq_length}, max_seq_length {self._max_seq_length}),"
+                f"Note: allow_skipping_seqs is enabled (with min_seq_length {self._min_seq_length},"
+                f" max_seq_length {self._max_seq_length}),"
                 f" this may lead to incorrect evaluation results!",
                 file=log.v2,
             )
