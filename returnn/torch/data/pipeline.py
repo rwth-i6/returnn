@@ -311,6 +311,7 @@ class BatchingIterDataPipe(torch.utils.data.IterDataPipe):
             yield current_batch
 
 
+# noinspection PyAbstractClass
 class BucketOrderingIterDataPipe(torch.utils.data.IterDataPipe):
     """
     Converts a dataset yielding sequences (dict data_key -> array per sequence) into
