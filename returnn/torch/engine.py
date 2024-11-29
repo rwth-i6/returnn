@@ -1140,7 +1140,12 @@ class Engine(EngineBase):
                 os.unlink(filename)
 
     def forward_with_callback(
-        self, *, dataset: Dataset, callback: ForwardCallbackIface, dataset_init_epoch: bool = True
+        self,
+        *,
+        dataset: Dataset,
+        callback: ForwardCallbackIface,
+        dataset_init_epoch: bool = True,
+        allow_skipping_seqs: bool = False,
     ):
         """forward"""
         assert isinstance(dataset, Dataset)
@@ -1163,10 +1168,19 @@ class Engine(EngineBase):
                 file=log.v3,
             )
 
-        assert (self._min_seq_length is None) and (self._max_seq_length is None), (
-            f"min_seq_length {self._min_seq_length}, max_seq_length {self._max_seq_length} not allowed,"
-            f" we want to keep all source sentences."
-        )
+        if allow_skipping_seqs:
+            # Dangerous! If you enable this, you could lose sequences,
+            # and your evaluation pipeline may silently produce incorrect results!
+            print(
+                f"Note: allow_skipping_seqs is enabled (with min_seq_length {self._min_seq_length}, max_seq_length {self._max_seq_length}),"
+                f" this may lead to incorrect evaluation results!",
+                file=log.v2,
+            )
+        else:
+            assert (self._min_seq_length is None) and (self._max_seq_length is None), (
+                f"min_seq_length {self._min_seq_length}, max_seq_length {self._max_seq_length} not allowed,"
+                f" we want to keep all source sentences."
+            )
 
         data_loader = self._create_data_loader(dataset, dataset_init_epoch=dataset_init_epoch)
         if self._forward_auto_split_batch_on_oom:
