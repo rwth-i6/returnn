@@ -372,6 +372,13 @@ class BucketOrderingIterDataPipe(torch.utils.data.IterDataPipe):
 def init_batching(
     dataset: torch.utils.data.IterableDataset, config: Config, train: bool
 ) -> torch.utils.data.IterableDataset:
+    """
+    Batches the segments in the given dataset given the config settings.
+
+    :param dataset: dataset whose segments to group into batches
+    :param config: RETURNN config
+    :param train: whether we are in training or in inference mode
+    """
     custom_batching = config.typed_value("custom_batching", None)
     if custom_batching is None:
         batch_size = config.typed_value("batch_size", -1)
