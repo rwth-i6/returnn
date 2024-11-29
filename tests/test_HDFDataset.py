@@ -301,6 +301,62 @@ def test_SimpleHDFWriter_small():
         print(repr(gzip.compress(open(fn, "rb").read())))
 
 
+def test_SimpleHDFWriter_empty_extra():
+    # This tests whether adding empty data in extra works
+    fn = get_test_tmp_file(suffix=".hdf")
+    os.remove(fn)  # SimpleHDFWriter expects that the file does not exist
+    n_dim = 2
+    writer = SimpleHDFWriter(filename=fn, dim=n_dim, labels=None)
+
+    j = 0
+    all_seq_lens = []
+    # seed
+    numpy.random.seed(42)
+    while j < 1000:
+        batch_size = numpy.random.randint(1, 10)
+        seq_lens = numpy.random.randint(0, 8, size=batch_size)
+        main_input = numpy.random.normal(size=(len(seq_lens), max(seq_lens), n_dim)).astype("float32")
+
+        extra_input = main_input.copy() + 4.2
+        assert main_input.shape == extra_input.shape
+
+        writer.insert_batch(
+            inputs=main_input,
+            seq_len=seq_lens,
+            seq_tag=["seq-%i" % (j + i) for i in range(len(seq_lens))],
+            extra={"test-extra": extra_input},
+        )
+        j += len(seq_lens)
+        all_seq_lens += seq_lens.tolist()
+
+    assert 0 in all_seq_lens, "please update random seed, we expect to test empty seqs"
+
+    writer.close()
+
+    dataset = HDFDataset(files=[fn])
+    assert dataset.get_data_keys() == ["data", "test-extra"], dataset.get_data_keys()
+    assert dataset.get_target_list() == ["test-extra"]
+    reader = DatasetTestReader(dataset=dataset)
+    reader.read_all()
+    assert "data" in reader.data_keys
+    assert "test-extra" in reader.data_keys
+    assert reader.data_sparse["data"] is False
+    assert list(reader.data_shape["data"]) == [n_dim]
+    assert reader.data_dtype["data"] == "float32"
+    assert j == reader.num_seqs
+    assert j == len(reader.seq_lens)
+
+    for i, seq_len in enumerate(all_seq_lens):
+        assert reader.seq_lens[i]["data"] == seq_len
+        for k in range(0, seq_len):  # only test the first seq_len elements
+            a = reader.data["data"][i][k] + 4.2
+            b = reader.data["test-extra"][i][k]
+            assert numpy.allclose(a, b), f"i={i}"
+
+    assert_equal(reader.seq_tags, ["seq-%i" % i for i in range(reader.num_seqs)])
+    assert isinstance(reader.seq_tags[0], str)
+
+
 def test_read_simple_hdf():
     if sys.version_info[0] <= 2:  # gzip.decompress is >=PY3
         raise unittest.SkipTest

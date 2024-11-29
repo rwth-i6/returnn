@@ -1257,7 +1257,7 @@ class SimpleHDFWriter:
         assert isinstance(raw_data, numpy.ndarray), "raw_data is %r of type %r" % (raw_data, type(raw_data))
         if add_time_dim or raw_data.ndim == 0:
             raw_data = numpy.expand_dims(raw_data, 0)
-        assert raw_data.ndim > 0 and raw_data.shape[0] > 0
+        assert raw_data.ndim > 0
         if dtype:
             raw_data = raw_data.astype(dtype)
         if dim is None:
