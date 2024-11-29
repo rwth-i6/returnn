@@ -289,16 +289,6 @@ class MetaDataset(CachedDataset2):
         self.orig_seq_order_is_initialized = False
         self.seq_list_ordered = None  # type: typing.Optional[typing.Dict[str,typing.List[str]]]
 
-    def _is_same_seq_name_for_each_dataset(self) -> bool:
-        """
-        This should be fast.
-        """
-        main_list = self.seq_list_original[self.default_dataset_key]
-        for key, other_list in self.seq_list_original.items():
-            if main_list is not other_list:
-                return False
-        return True
-
     def _load_seq_list(self, seq_list_file: Optional[str] = None) -> Dict[str, List[str]]:
         """
         :param seq_list_file:
