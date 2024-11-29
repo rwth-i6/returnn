@@ -399,7 +399,7 @@ def init_batching(
         make_batcher = clazz
     else:
         raise ValueError(f"Custom batching class must either be a string or a type.")
-    batches_dataset = make_batcher(dataset, **custom_batching)
+    batches_dataset = make_batcher(dataset, train=train, **custom_batching)
     return batches_dataset
 
 
