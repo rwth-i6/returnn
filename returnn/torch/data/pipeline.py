@@ -325,7 +325,12 @@ class BucketOrderingIterDataPipe(torch.utils.data.IterDataPipe):
     """
 
     def __init__(
-        self, dataset: torch.utils.data.IterableDataset, *, buckets: Sequence[Tuple[int, int]], length_key: str
+        self,
+        dataset: torch.utils.data.IterableDataset,
+        *,
+        buckets: Sequence[Tuple[int, int]],
+        length_key: str,
+        **kwargs,
     ):
         """
         :param dataset: dataset to apply bucket batching to
@@ -333,6 +338,7 @@ class BucketOrderingIterDataPipe(torch.utils.data.IterDataPipe):
             Segments longer than the largest size limit configured in the buckets are dropped. To avoid dropping
             any segments make sure your largest bucket allows segments larger than your longest training segment.
         :param length_key: data key to take as length measure
+        :param kwargs: unused args
         """
         self._dataset = dataset
         self._length_key = length_key
