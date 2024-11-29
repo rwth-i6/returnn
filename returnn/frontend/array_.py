@@ -616,7 +616,10 @@ def sequence_mask(dims: Union[Dim, Sequence[Dim]], *, device: Optional[str] = No
         return rf.constant(True, dims=())
     mask = True
     for dim in dyn_dims:
-        mask = rf.opt_logical_and(mask, dim.get_mask(dim_order=dims, device=device))
+        mask = rf.opt_logical_and(
+            mask, dim.get_mask(dim_order=dims, device=device), allow_broadcast_all_sources=True, dim_order=dims
+        )
+    assert isinstance(mask, Tensor)
     return mask
 
 

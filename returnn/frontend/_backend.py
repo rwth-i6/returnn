@@ -3,6 +3,8 @@ Backends for the frontend API
 """
 
 from __future__ import annotations
+
+import os
 from typing import Optional, Any, Union, TypeVar, Generic, Type, Callable, Sequence, Dict, Tuple, List
 import contextlib
 import numpy
@@ -1446,10 +1448,11 @@ def select_backend_torch():
     global_backend.__class__ = backend
     BehaviorVersion.set_min_behavior_version(16)
 
-    from returnn.frontend import _native
+    if os.environ.get("RETURNN_FRONTEND_NATIVE", "").strip() in ("", "1"):
+        from returnn.frontend import _native
 
-    _native.setup()
-    _native.setup_torch()
+        _native.setup()
+        _native.setup_torch()
 
 
 def get_backend_by_tensor(tensor: Tensor, *, fallback: Optional[T2] = None) -> Union[Type[Backend[T]], T2]:
