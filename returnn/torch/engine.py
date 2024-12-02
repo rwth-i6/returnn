@@ -730,7 +730,9 @@ class Engine(EngineBase):
                 wrapped_dataset, chunking, min_chunk_size=min_chunk_size
             )
 
-        batches_dataset = data_pipeline.init_batching(wrapped_dataset, self.config, train)
+        batches_dataset = data_pipeline.get_batching_iterable_dataset_from_config(
+            dataset=wrapped_dataset, config=self.config, train=train
+        )
 
         online_shuffle_batches = self.config.typed_value("online_shuffle_batches", None)
         if train and online_shuffle_batches:

@@ -326,12 +326,7 @@ class BucketOrderingIterDataPipe(torch.utils.data.IterDataPipe):
     """
 
     def __init__(
-        self,
-        dataset: torch.utils.data.IterableDataset,
-        *,
-        buckets: Sequence[Tuple[int, int]],
-        length_key: str,
-        **_kwargs,
+        self, dataset: torch.utils.data.IterableDataset, *, buckets: Sequence[Tuple[int, int]], length_key: str
     ):
         """
         :param dataset: dataset to apply bucket batching to
@@ -339,7 +334,6 @@ class BucketOrderingIterDataPipe(torch.utils.data.IterDataPipe):
             Segments longer than the largest size limit configured in the buckets are dropped. To avoid dropping
             any segments make sure your largest bucket allows segments larger than your longest training segment.
         :param length_key: data key to take as length measure
-        :param _kwargs: unused args
         """
         self._dataset = dataset
         self._length_key = length_key
@@ -370,8 +364,8 @@ class BucketOrderingIterDataPipe(torch.utils.data.IterDataPipe):
         yield from non_empty_buckets
 
 
-def init_batching(
-    dataset: torch.utils.data.IterableDataset, config: Config, train: bool
+def get_batching_iterable_dataset_from_config(
+    *, dataset: torch.utils.data.IterableDataset, config: Config, train: bool
 ) -> torch.utils.data.IterableDataset:
     """
     Batches the segments in the given dataset given the config settings.
@@ -389,18 +383,30 @@ def init_batching(
         batches_dataset = BatchingIterDataPipe(dataset, batch_size=batch_size, max_seqs=max_seqs)
         return batches_dataset
 
-    assert isinstance(custom_batching, dict)
-    assert "class" in custom_batching
-    custom_batching = custom_batching.copy()
-    clazz = custom_batching.pop("class")
-    if isinstance(clazz, str):
-        batchers = {c.__name__: c for c in [BatchingIterDataPipe, BucketOrderingIterDataPipe]}
-        make_batcher = batchers[clazz]
-    elif isinstance(clazz, type):
-        make_batcher = clazz
+    if isinstance(custom_batching, dict):
+        assert "class" in custom_batching
+        batching_args = custom_batching.copy()
+        type_or_name = batching_args.pop("class")
+        if isinstance(type_or_name, str):
+            cls = globals()[type_or_name]
+        elif isinstance(type_or_name, (type, Callable)):
+            # custom types need to be forward compatible
+            batching_args.update(get_fwd_compat_kwargs())
+            batching_args["train"] = train
+            cls = type_or_name
+        else:
+            raise ValueError(f"Custom batching class key must either be a string naming a type or a class.")
+    elif isinstance(custom_batching, (type, Callable)):  # short form w/o a dict
+        # callables need to be forward compatible
+        batching_args = get_fwd_compat_kwargs()
+        batching_args["train"] = train
+        cls = custom_batching
     else:
-        raise ValueError(f"Custom batching class must either be a string or a type.")
-    batches_dataset = make_batcher(dataset, train=train, **custom_batching)
+        raise ValueError(
+            f"custom_batching must either be a dict containing a `class` key naming a type, a type or a callable."
+        )
+    batches_dataset = cls(dataset, train=train, **batching_args)
+    assert isinstance(batches_dataset, torch.utils.data.IterableDataset)
     return batches_dataset
 
 
