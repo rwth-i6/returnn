@@ -445,6 +445,7 @@ class LmDataset(CachedDataset2):
         if seq_order is not None:
             self.seq_order = seq_order
         elif seq_list is not None:
+            assert all(s.startswith(self._tag_prefix) for s in seq_list)
             self.seq_order = [int(s[len(self._tag_prefix) :]) for s in seq_list]
         elif epoch is None:
             self.seq_order = []
@@ -478,6 +479,11 @@ class LmDataset(CachedDataset2):
             raise Exception(f"{self} not initialized")
         self._lazy_init()
         return len(self._orths_offsets_and_lens)
+
+    def get_all_tags(self) -> List[str]:
+        """:return: all seq tags"""
+        num_seqs = self.get_total_num_seqs()
+        return [self._tag_prefix + str(line_nr) for line_nr in range(num_seqs)]
 
     def _reduce_log_skipped_seqs(self):
         if isinstance(self.log_skipped_seqs, bool):

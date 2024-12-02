@@ -13,12 +13,15 @@ from returnn.util import better_exchook
 from returnn.util.basic import which_pip
 
 
-try:
-    import torch
-except ImportError:
+if "RETURNN_DISABLE_TORCH" in os.environ and int(os.environ["RETURNN_DISABLE_TORCH"]) == 1:
     torch = None
 else:
-    print("Torch:", torch.__version__)
+    try:
+        import torch
+    except ImportError:
+        torch = None
+    else:
+        print("Torch:", torch.__version__)
 
 
 if "RETURNN_DISABLE_TF" in os.environ and int(os.environ["RETURNN_DISABLE_TF"]) == 1:

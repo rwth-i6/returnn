@@ -193,7 +193,7 @@ jobs:
           - action: TEST=TFNetworkSigProcLayer
             python-version: 3.7
             tf-version: 1.15.3
-          - action: TEST=demos
+          - action: TEST=demos RETURNN_DISABLE_TORCH=1
             python-version: 3.7
             tf-version: 2.3.0
 
