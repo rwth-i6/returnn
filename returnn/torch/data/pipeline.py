@@ -405,7 +405,7 @@ def get_batching_iterable_dataset_from_config(
         raise ValueError(
             f"custom_batching must either be a dict containing a `class` key naming a type, a type or a callable."
         )
-    batches_dataset = cls(dataset, train=train, **batching_args)
+    batches_dataset = cls(dataset, **batching_args)
     assert isinstance(batches_dataset, torch.utils.data.IterableDataset)
     return batches_dataset
 
