@@ -20,7 +20,8 @@ other PyTorch datasets more directly, including also HuggingFace datasets.
 """
 
 from __future__ import annotations
-from typing import Optional, Any, Union, List, Dict, Callable
+import bisect
+from typing import Optional, Any, Sequence, Tuple, Union, List, Dict, Callable
 import sys
 from copy import deepcopy
 
@@ -28,6 +29,7 @@ import numpy
 import torch
 import torch.utils.data
 
+from returnn.config import Config
 from returnn.util.basic import NumbersDict, get_fwd_compat_kwargs
 
 
@@ -307,6 +309,100 @@ class BatchingIterDataPipe(torch.utils.data.IterDataPipe):
 
         if current_batch:
             yield current_batch
+
+
+class BucketOrderingIterDataPipe(torch.utils.data.IterDataPipe):
+    """
+    Converts a dataset yielding sequences (dict data_key -> array per sequence) into
+    a dataset yielding lists of these sequences, i.e. batches. Can be used instead of
+    the default ordered batching via the `custom_batching` config key.
+
+    Sequences are grouped into a distinct set of length buckets. Each bucket has a
+    limit of how many sequences it can buffer before being sent off to training.
+
+    Note, that batches are not yet merged into a single (padded) data array here,
+    this happens in 'collate_batch()'.
+    """
+
+    def __init__(
+        self, dataset: torch.utils.data.IterableDataset, *, buckets: Sequence[Tuple[int, int]], length_key: str
+    ):
+        """
+        :param dataset: dataset to apply bucket batching to
+        :param buckets: Bucket configuration as tuples of seq length and max number of seqs in that bucket.
+            Segments longer than the largest size limit configured in the buckets are dropped. To avoid dropping
+            any segments make sure your largest bucket allows segments larger than your longest training segment.
+        :param length_key: data key to take as length measure
+        """
+        self._dataset = dataset
+        self._length_key = length_key
+
+        assert buckets, "empty bucket batching configuration"
+        if not all(size > 0 and max_seqs > 0 for size, max_seqs in buckets):
+            raise ValueError(f"bucket sizes and max seqs in bucket must be positive")
+        self._max_seq_lens, self._max_bucket_sizes = zip(*sorted(buckets))
+        assert len(set(self._max_seq_lens)) == len(self._max_seq_lens), "seq len boundaries must all be unique"
+
+    def __iter__(self):
+        """:return: generator applying bucket ordering on the data"""
+        buckets: List[List[Dict[str, numpy.ndarray]]] = [[] for _ in range(len(self._max_seq_lens))]
+
+        for data_dict in self._dataset:
+            data_dict: Dict[str, numpy.ndarray]
+            data_size = data_dict[self._length_key].shape[0]
+            bucket_idx = bisect.bisect_left(self._max_seq_lens, data_size)
+            if bucket_idx >= len(self._max_seq_lens):
+                # seg is too long, drop it
+                continue
+            buckets[bucket_idx].append(data_dict)
+            if len(buckets[bucket_idx]) >= self._max_bucket_sizes[bucket_idx]:
+                yield buckets[bucket_idx]
+                buckets[bucket_idx] = []
+
+        non_empty_buckets = [b for b in buckets if b]
+        yield from non_empty_buckets
+
+    def __getitem__(self, index):
+        raise Exception(f"{self.__class__.__name__}.__getitem__ is not supported")
+
+
+def get_batching_iterable_dataset_from_config(
+    *, dataset: torch.utils.data.IterableDataset, config: Config, train: bool
+) -> torch.utils.data.IterableDataset:
+    """
+    Batches the segments in the given dataset given the config settings.
+
+    :param dataset: dataset whose segments to group into batches
+    :param config: RETURNN config
+    :param train: whether we are in training or in inference mode
+    """
+    torch_batching = config.typed_value("torch_batching", None)
+    if torch_batching is None:
+        batch_size = config.typed_value("batch_size", -1)
+        batch_size = config.typed_value(f"batch_size_{'train' if train else 'dev'}", batch_size)
+        assert batch_size != -1, f"batch_size or batch_size_{'train' if train else 'dev'} not defined in config"
+        max_seqs = config.typed_value("max_seqs", -1)
+        batches_dataset = BatchingIterDataPipe(dataset, batch_size=batch_size, max_seqs=max_seqs)
+        return batches_dataset
+
+    if isinstance(torch_batching, dict):
+        assert "class" in torch_batching
+        batching_args = torch_batching.copy()
+        type_name = batching_args.pop("class")
+        assert isinstance(type_name, str)
+        cls = globals()[type_name]
+    elif callable(torch_batching):
+        # callables need to be forward compatible
+        batching_args = get_fwd_compat_kwargs()
+        batching_args["train"] = train
+        cls = torch_batching
+    else:
+        raise ValueError(
+            f"custom_batching must either be a dict containing a `class` key naming a type, a type or a callable."
+        )
+    batches_dataset = cls(dataset, **batching_args)
+    assert isinstance(batches_dataset, torch.utils.data.IterableDataset)
+    return batches_dataset
 
 
 class LenFilterDataPipe(torch.utils.data.IterDataPipe):

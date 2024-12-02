@@ -730,11 +730,9 @@ class Engine(EngineBase):
                 wrapped_dataset, chunking, min_chunk_size=min_chunk_size
             )
 
-        batch_size = self.config.typed_value("batch_size", -1)
-        batch_size = self.config.typed_value(f"batch_size_{'train' if train else 'dev'}", batch_size)
-        assert batch_size != -1, f"batch_size or batch_size_{'train' if train else 'dev'} not defined in config"
-        max_seqs = self.config.typed_value("max_seqs", -1)
-        batches_dataset = data_pipeline.BatchingIterDataPipe(wrapped_dataset, batch_size=batch_size, max_seqs=max_seqs)
+        batches_dataset = data_pipeline.get_batching_iterable_dataset_from_config(
+            dataset=wrapped_dataset, config=self.config, train=train
+        )
 
         online_shuffle_batches = self.config.typed_value("online_shuffle_batches", None)
         if train and online_shuffle_batches:
