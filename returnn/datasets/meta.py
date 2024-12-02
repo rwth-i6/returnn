@@ -202,7 +202,7 @@ class MetaDataset(CachedDataset2):
         self,
         datasets: Dict[str, Dict[str, Any]],
         data_map: Dict[str, Tuple[str, str]],
-        seq_list_file: Optional[str] = None,
+        seq_list_file: Optional[Union[str, Dict[str, str]]] = None,
         seq_order_control_dataset: Optional[str] = None,
         seq_lens_file: Optional[str] = None,
         data_dims: Optional[Dict[str, Tuple[int, int]]] = None,  # deprecated
@@ -214,7 +214,10 @@ class MetaDataset(CachedDataset2):
         :param datasets: dataset-key -> dataset-kwargs. including keyword 'class' and maybe 'files'
         :param data_map: self-data-key -> (dataset-key, dataset-data-key).
             Should contain 'data' as key. Also defines the target-list, which is all except 'data'.
-        :param seq_list_file: filename. pickle. dict[str,list[str]], dataset-key -> list of sequence tags.
+        :param seq_list_file: filename. pickle (.pkl) or txt (line-based seq tags). optionally gzipped (.gz).
+            If a single file, and pickled, it can directly contain the dict:
+                dict[str,list[str]]: dataset-key -> list of sequence tags.
+            If a dict, expect dataset-key -> filename.
             Can be None if tag format is the same for all datasets.
                 Then the sequence list will be default sequence order of default dataset (``data_map["data"][0]``),
                 or seq_order_control_dataset.
@@ -289,14 +292,12 @@ class MetaDataset(CachedDataset2):
         self.orig_seq_order_is_initialized = False
         self.seq_list_ordered = None  # type: typing.Optional[typing.Dict[str,typing.List[str]]]
 
-    def _load_seq_list(self, seq_list_file: Optional[str] = None) -> Dict[str, List[str]]:
+    def _load_seq_list(self, seq_list_file: Optional[Union[str, Dict[str, str]]] = None) -> Dict[str, List[str]]:
         """
         :param seq_list_file:
         :return: dict: dataset key -> seq list
         """
-        if seq_list_file:
-            seq_list = Dataset._load_seq_list_file(seq_list_file, expect_list=False)
-        else:
+        if not seq_list_file:
             # We create a sequence list from all the sequences of the default dataset
             # and hope that it also applies to the
             # other datasets.
@@ -347,10 +348,24 @@ class MetaDataset(CachedDataset2):
                         )
                         break  # only print one
                 raise Exception("Dataset %r is missing seqs." % key)
+        elif isinstance(seq_list_file, str):
+            seq_list = Dataset._load_seq_list_file(seq_list_file, expect_list=False)
+        elif isinstance(seq_list_file, dict):
+            for key in self.dataset_keys:
+                if key not in seq_list_file:
+                    raise ValueError(f"seq_list_file does not contain all datasets, missing {key}")
+            seq_list = {key: Dataset._load_seq_list_file(seq_list_file[key]) for key in self.dataset_keys}
+        else:
+            raise TypeError(f"unexpected seq_list_file type {type(seq_list_file)}")
 
-        assert isinstance(seq_list, (list, dict))
         if isinstance(seq_list, list):
             seq_list = {key: seq_list for key in self.dataset_keys}
+        elif isinstance(seq_list, dict):
+            for key in self.dataset_keys:
+                if key not in seq_list:
+                    raise ValueError(f"seq_list does not contain all datasets, missing {key}")
+        else:
+            raise TypeError(f"unexpected seq_list type {type(seq_list)}")
 
         return seq_list
 
