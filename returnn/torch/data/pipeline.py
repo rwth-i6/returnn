@@ -374,8 +374,8 @@ def get_batching_iterable_dataset_from_config(
     :param config: RETURNN config
     :param train: whether we are in training or in inference mode
     """
-    custom_batching = config.typed_value("custom_batching", None)
-    if custom_batching is None:
+    torch_batching = config.typed_value("torch_batching", None)
+    if torch_batching is None:
         batch_size = config.typed_value("batch_size", -1)
         batch_size = config.typed_value(f"batch_size_{'train' if train else 'dev'}", batch_size)
         assert batch_size != -1, f"batch_size or batch_size_{'train' if train else 'dev'} not defined in config"
@@ -383,17 +383,17 @@ def get_batching_iterable_dataset_from_config(
         batches_dataset = BatchingIterDataPipe(dataset, batch_size=batch_size, max_seqs=max_seqs)
         return batches_dataset
 
-    if isinstance(custom_batching, dict):
-        assert "class" in custom_batching
-        batching_args = custom_batching.copy()
+    if isinstance(torch_batching, dict):
+        assert "class" in torch_batching
+        batching_args = torch_batching.copy()
         type_name = batching_args.pop("class")
         assert isinstance(type_name, str)
         cls = globals()[type_name]
-    elif isinstance(custom_batching, (type, Callable)):
+    elif callable(torch_batching):
         # callables need to be forward compatible
         batching_args = get_fwd_compat_kwargs()
         batching_args["train"] = train
-        cls = custom_batching
+        cls = torch_batching
     else:
         raise ValueError(
             f"custom_batching must either be a dict containing a `class` key naming a type, a type or a callable."
