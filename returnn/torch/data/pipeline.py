@@ -386,17 +386,10 @@ def get_batching_iterable_dataset_from_config(
     if isinstance(custom_batching, dict):
         assert "class" in custom_batching
         batching_args = custom_batching.copy()
-        type_or_name = batching_args.pop("class")
-        if isinstance(type_or_name, str):
-            cls = globals()[type_or_name]
-        elif isinstance(type_or_name, (type, Callable)):
-            # custom types need to be forward compatible
-            batching_args.update(get_fwd_compat_kwargs())
-            batching_args["train"] = train
-            cls = type_or_name
-        else:
-            raise ValueError(f"Custom batching class key must either be a string naming a type or a class.")
-    elif isinstance(custom_batching, (type, Callable)):  # short form w/o a dict
+        type_name = batching_args.pop("class")
+        assert isinstance(type_name, str)
+        cls = globals()[type_name]
+    elif isinstance(custom_batching, (type, Callable)):
         # callables need to be forward compatible
         batching_args = get_fwd_compat_kwargs()
         batching_args["train"] = train
