@@ -331,29 +331,42 @@ class Dataset:
         return chunk_size, chunk_step, None
 
     @staticmethod
-    def _load_seq_list_file(filename, use_cache_manager=False, expect_list=True):
+    def _load_seq_list_file(
+        filename: str, *, use_cache_manager: bool = False, expect_list: bool = True
+    ) -> Union[List[str], Dict[str, List[str]]]:
         """
-        :param str filename:
-        :param bool use_cache_manager:
-        :param bool expect_list:
-        :rtype: list[str]|dict[str,list[str]]
+        :param filename:
+        :param use_cache_manager:
+        :param expect_list:
+        :return: seq list file content. usually a list of seqs.
         """
         if use_cache_manager:
             import returnn.util.basic
 
             filename = returnn.util.basic.cf(filename)
-        if filename.endswith(".pkl"):
-            import pickle
 
-            seq_list = pickle.load(open(filename, "rb"))
-            if expect_list:
-                assert isinstance(seq_list, list)
-        elif filename.endswith(".gz"):
+        if filename.endswith(".gz"):
             import gzip
 
-            seq_list = gzip.open(filename, "rt").read().splitlines()
+            filename = filename[: -len(".gz")]
+
+            def _open(mode):
+                return gzip.open(filename + ".gz", mode)
+
         else:
-            seq_list = open(filename).read().splitlines()
+
+            def _open(mode):
+                return open(filename, mode)
+
+        if filename.endswith(".pkl"):
+            import gzip
+            import pickle
+
+            seq_list = pickle.load(_open("rb"))
+            if expect_list:
+                assert isinstance(seq_list, list)
+        else:
+            seq_list = _open("rt").read().splitlines()
         return seq_list
 
     def _sliding_window(self, xr):
