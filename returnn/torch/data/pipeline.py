@@ -341,7 +341,7 @@ class BucketOrderingIterDataPipe(torch.utils.data.IterDataPipe):
         assert buckets, "empty bucket batching configuration"
         if not all(size > 0 and max_seqs > 0 for size, max_seqs in buckets):
             raise ValueError(f"bucket sizes and max seqs in bucket must be positive")
-        self._max_seq_lens, self._max_bucket_sizes = zip(*sorted(buckets, key=lambda b: b[0]))
+        self._max_seq_lens, self._max_bucket_sizes = zip(*sorted(buckets))
         assert len(set(self._max_seq_lens)) == len(self._max_seq_lens), "seq len boundaries must all be unique"
 
     def __iter__(self):
