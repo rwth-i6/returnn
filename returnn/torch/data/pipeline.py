@@ -363,9 +363,7 @@ class BucketOrderingIterDataPipe(torch.utils.data.IterDataPipe):
         yield from non_empty_buckets
 
     def __getitem__(self, index):
-        raise NotImplementedError(
-            f"{self.__class__.__name__}.__getitem__ is not supported"
-        )
+        raise Exception(f"{self.__class__.__name__}.__getitem__ is not supported")
 
 
 def get_batching_iterable_dataset_from_config(
