@@ -30,6 +30,7 @@ import torch
 import torch.utils.data
 
 from returnn.config import Config
+from returnn.log import log
 from returnn.util.basic import NumbersDict, get_fwd_compat_kwargs
 
 
@@ -346,6 +347,7 @@ class BucketOrderingIterDataPipe(torch.utils.data.IterDataPipe):
     def __iter__(self):
         """:return: generator applying bucket ordering on the data"""
         buckets: List[List[Dict[str, numpy.ndarray]]] = [[] for _ in range(len(self._max_seq_lens))]
+        buckets_full_counter = [0 for _ in range(len(buckets))]
 
         for data_dict in self._dataset:
             data_dict: Dict[str, numpy.ndarray]
@@ -358,9 +360,14 @@ class BucketOrderingIterDataPipe(torch.utils.data.IterDataPipe):
             if len(buckets[bucket_idx]) >= self._max_bucket_sizes[bucket_idx]:
                 yield buckets[bucket_idx]
                 buckets[bucket_idx] = []
+                buckets_full_counter[bucket_idx] += 1
 
         non_empty_buckets = [b for b in buckets if b]
         yield from non_empty_buckets
+
+        # we do not count the buckets w/ leftover data as they were not completely filled
+        description_str = ", ".join(f"{limit}: {cnt}" for limit, cnt in zip(self._max_seq_lens, buckets_full_counter))
+        print(f"Batching buckets full: {description_str}", file=log.v4)
 
     def __getitem__(self, index):
         raise Exception(f"{self.__class__.__name__}.__getitem__ is not supported")
