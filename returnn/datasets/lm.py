@@ -465,6 +465,10 @@ class LmDataset(CachedDataset2):
             self.seq_gen.random_seed(self._get_random_seed_for_epoch(epoch))
         return True
 
+    def get_current_seq_order(self) -> List[int]:
+        """:return: seq order of current epoch"""
+        return self.seq_order
+
     def supports_seq_order_sorting(self) -> bool:
         """supports sorting"""
         return True
