@@ -4,8 +4,9 @@ Datasets dealing with audio
 
 from __future__ import annotations
 from typing import Optional, Union, Any, List, Tuple, Dict
-import numpy
 import typing
+import os
+import numpy
 
 from .basic import DatasetSeq
 from .cached2 import CachedDataset2
@@ -43,6 +44,8 @@ class OggZipDataset(CachedDataset2):
     def __init__(
         self,
         path: Union[str, List[str]],
+        *,
+        resolve_symlink_for_name: bool = False,
         audio: Optional[Dict[str, Any]],
         targets: Union[Vocabulary, Dict[str, Any], None],
         targets_post_process=None,
@@ -56,6 +59,9 @@ class OggZipDataset(CachedDataset2):
     ):
         """
         :param path: filename to zip
+        :param resolve_symlink_for_name: The internal name of the dataset, which is used for filenames inside the ZIP,
+            is determined as ``os.path.splitext(os.path.basename(path))[0]``.
+            If this is True, we will resolve symlinks for the name first.
         :param audio: options for :class:`ExtractAudioFeatures`.
             use {} for default. None means to disable.
         :param targets: options for :func:`Vocabulary.create_vocab`
@@ -75,7 +81,6 @@ class OggZipDataset(CachedDataset2):
         :param fixed_random_subset_seed: Seed for drawing the fixed random subset, default 42
         :param epoch_wise_filter: see init_seq_order
         """
-        import os
         import zipfile
         import returnn.util.basic
         from .meta import EpochWiseFilter
@@ -102,9 +107,7 @@ class OggZipDataset(CachedDataset2):
             self._names = []
             for path_ in path:
                 assert isinstance(path_, str)
-                name, ext = os.path.splitext(os.path.basename(path_))
-                if "." in name and ext == ".gz":
-                    name, ext = name[: name.rindex(".")], name[name.rindex(".") :] + ext
+                name, ext = _get_internal_ogg_zip_name_ext(path_, resolve_symlink=resolve_symlink_for_name)
                 if use_cache_manager:
                     path_ = returnn.util.basic.cf(path_)
                 if ext == ".txt.gz":
@@ -538,3 +541,12 @@ class OggZipDataset(CachedDataset2):
             seq_idx=corpus_seq_idx,
             seq_tag=seq_tag,
         )
+
+
+def _get_internal_ogg_zip_name_ext(path: str, *, resolve_symlink: bool = False) -> Tuple[str, str]:
+    if resolve_symlink:
+        path = os.path.realpath(path)
+    name, ext = os.path.splitext(os.path.basename(path))
+    if "." in name and ext == ".gz":
+        name, ext = name[: name.rindex(".")], name[name.rindex(".") :] + ext
+    return name, ext
