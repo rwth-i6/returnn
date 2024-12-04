@@ -378,6 +378,9 @@ class Engine(EngineBase):
 
                 step_begin_time = time.monotonic()
 
+                if step_idx == 0 and log.verbose[5]:
+                    print("Time to get first batch data:", hms(step_begin_time - epoch_start_time), file=log.v5)
+
                 _has_data = torch.tensor([extern_data_raw is not None], dtype=torch.int8)
                 if self._torch_distributed_ctx:
                     # use all reduce to check if all workers have data, if at least one worker does not have data,
