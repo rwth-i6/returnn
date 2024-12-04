@@ -87,6 +87,7 @@ class OggZipDataset(CachedDataset2):
 
         self._separate_txt_files = {}  # name -> filename
         self._path = path
+        self._resolve_symlink_for_name = resolve_symlink_for_name
         self._use_cache_manager = use_cache_manager
         self._zip_files: Optional[List[zipfile.ZipFile]] = None  # lazily loaded
         if (
