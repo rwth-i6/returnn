@@ -384,7 +384,11 @@ class EngineBase:
                 score_values[key].append(epoch_scores[key])
         for key in list(score_keys):
             scores = score_values[key]
-            if min(scores) == max(scores):
+            if len(scores) == 0:
+                print("Ignoring score key %r because all saved epochs dont have the score." % key, file=log.v3)
+                score_keys.remove(key)
+                score_values.pop(key)
+            elif min(scores) == max(scores):
                 print(
                     "Ignoring score key %r because all epochs have the same value %r." % (key, scores[0]), file=log.v3
                 )
