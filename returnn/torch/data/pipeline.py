@@ -374,6 +374,11 @@ class BucketOrderingIterDataPipe(torch.utils.data.IterDataPipe):
 
 
 class UniformLikelihoodBucketOrderingIterDataPipe(BucketOrderingIterDataPipe):
+    """
+    Like :class:`BucketOrderingIterDataPipe` but redistributes the bucket seq len limits
+    after every subepoch to make every bucket catch a roughly equal number of segments.
+    """
+
     def __iter__(self):
         seq_lens = []
         for batch in super().__iter__():
