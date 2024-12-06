@@ -3213,11 +3213,31 @@ class LockFile:
         """
         try:
             mtime = os.path.getmtime(self.lockfile)
+            if abs(time.time() - mtime) <= self.lock_timeout:
+                return False
+        except FileNotFoundError:
+            return False
         except OSError:
-            mtime = None
-        if mtime and (abs(time.time() - mtime) > self.lock_timeout):
-            return True
-        return False
+            pass
+
+        try:
+            import psutil
+
+            for p in psutil.process_iter():
+                try:
+                    if any(self.lockfile == of.path for of in p.open_files()):
+                        return False
+                except Exception:
+                    pass
+        except ImportError:
+            pass
+        except:
+            print(
+                "Could not inspect running processes to check lockfile for staleness, assuming it is stale.",
+                file=log.v4,
+            )
+
+        return True
 
     def maybe_remove_old_lockfile(self):
         """
