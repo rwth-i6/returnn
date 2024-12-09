@@ -333,20 +333,24 @@ class MetaDataset(CachedDataset2):
                     file=log.v1,
                 )
                 other_tags = self.datasets[key].get_all_tags()
+                other_tags_set = set(other_tags)
                 for tag in seq_list:
-                    if tag not in other_tags:
+                    if tag not in other_tags_set:
                         print(
                             "Seq tag %r in dataset %r but not in dataset %r." % (tag, self.default_dataset_key, key),
                             file=log.v1,
                         )
                         break  # only print one
+                del other_tags_set
+                seq_list_set = set(seq_list)
                 for tag in other_tags:
-                    if tag not in seq_list:
+                    if tag not in seq_list_set:
                         print(
                             "Seq tag %r in dataset %r but not in dataset %r." % (tag, key, self.default_dataset_key),
                             file=log.v1,
                         )
                         break  # only print one
+                del seq_list_set
                 raise Exception("Dataset %r is missing seqs." % key)
         elif isinstance(seq_list_file, str):
             seq_list = Dataset._load_seq_list_file(seq_list_file, expect_list=False)
