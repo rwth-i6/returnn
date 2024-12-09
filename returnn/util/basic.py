@@ -564,6 +564,60 @@ def get_tensorflow_version_tuple() -> Tuple[int, ...]:
     return tuple([int(re.sub("(-rc[0-9]|-dev[0-9]*)", "", s)) for s in tf.__version__.split(".")])
 
 
+class ReportImportedDevModules:
+    """
+    This is supposed to be used as a context manager.
+    We track all additionally loaded modules during this context, and also extensions to sys.path.
+    We try to detect if such loaded module is inside a Git repository, and if so, report the Git commit.
+    """
+
+    def __init__(self, *, description: str):
+        self.description = description
+        self.ignore_sys_path: Optional[Set[str]] = None
+        self.ignore_sys_modules: Optional[Set[str]] = None
+
+    def __enter__(self):
+        self.ignore_sys_path = set(sys.path)
+        self.ignore_sys_modules = set(sys.modules)
+        self.ignore_sys_modules.add("__mp_main__")
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        if not log.verbose:  # it might have never been initialized due to some error, or forked proc
+            return
+        if not log.verbose[3]:
+            return
+        if exc_type:
+            return
+        print(f"Tracked changes to sys.path and sys.modules during {self.description}:", file=log.v4)
+        has_changes = False
+        for path in sys.path:
+            if path not in self.ignore_sys_path:
+                print("New sys.path entry:", path, file=log.v3)
+                has_changes = True
+        for mod_name, mod in sys.modules.items():
+            if "." not in mod_name and mod_name not in self.ignore_sys_modules:
+                if hasattr(mod, "__file__") and mod.__file__:
+                    # __file__ is e.g. ".../recipe/i6_experiments/__init__.py"
+                    mod_dir = os.path.dirname(mod.__file__)  # e.g. ".../recipe/i6_experiments"
+                    if os.path.exists(mod_dir + "/.git"):
+                        git_dir = mod_dir
+                    elif os.path.exists(mod_dir + "/../.git"):
+                        # Use realpath because the mod dir might be a symlink.
+                        git_dir = os.path.dirname(os.path.realpath(mod_dir))
+                    else:
+                        git_dir = None
+                    if git_dir:
+                        try:
+                            git_info = git_describe_head_version(git_dir=git_dir)
+                        except Exception as e:
+                            git_info = f"<git-error: {e}>"
+                        mod_info = "(%s in %s)" % (git_info, mod_dir)
+                        print("New module:", mod_name, mod_info, file=log.v3)
+                        has_changes = True
+        if not has_changes:
+            print("(No changes to sys.modules or sys.path.)", file=log.v4)
+
+
 def eval_shell_env(token):
     """
     :param str token:

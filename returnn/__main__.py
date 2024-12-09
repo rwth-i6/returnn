@@ -452,40 +452,41 @@ def init(config_filename=None, command_line_options=(), config_updates=None, ext
     :param dict[str]|None config_updates: see :func:`init_config`
     :param str|None extra_greeting:
     """
-    debug_util.init_better_exchook()
-    util.init_thread_join_hack()
-    init_config(
-        config_filename=config_filename, command_line_options=command_line_options, extra_updates=config_updates
-    )
-    if config.bool("use_train_proc_manager", False):
-        from returnn.util.train_proc_manager import maybe_start_train_proc_manager
+    with util.ReportImportedDevModules(description="RETURNN init"):
+        debug_util.init_better_exchook()
+        util.init_thread_join_hack()
+        init_config(
+            config_filename=config_filename, command_line_options=command_line_options, extra_updates=config_updates
+        )
+        if config.bool("use_train_proc_manager", False):
+            from returnn.util.train_proc_manager import maybe_start_train_proc_manager
 
-        maybe_start_train_proc_manager(config=config)
-    if config.bool("patch_atfork", False):
-        from returnn.util.basic import maybe_restart_returnn_with_atfork_patch
+            maybe_start_train_proc_manager(config=config)
+        if config.bool("patch_atfork", False):
+            from returnn.util.basic import maybe_restart_returnn_with_atfork_patch
 
-        maybe_restart_returnn_with_atfork_patch()
-    init_log()
-    if extra_greeting:
-        print(extra_greeting, file=log.v1)
-    returnn_greeting(config_filename=config_filename, command_line_options=command_line_options)
-    debug_util.init_faulthandler()
-    if config.bool("watch_memory", False):
-        from returnn.util.watch_memory import watch_memory
+            maybe_restart_returnn_with_atfork_patch()
+        init_log()
+        if extra_greeting:
+            print(extra_greeting, file=log.v1)
+        returnn_greeting(config_filename=config_filename, command_line_options=command_line_options)
+        debug_util.init_faulthandler()
+        if config.bool("watch_memory", False):
+            from returnn.util.watch_memory import watch_memory
 
-        watch_memory()
-    init_backend_engine()
-    if config.bool("ipython", False):
-        debug_util.init_ipython_kernel()
-    if config.typed_value("startup_callback"):
-        startup_callback = config.typed_value("startup_callback")
-        startup_callback(config=config)
-    if need_data():
-        if config.bool("use_dummy_datasets", False):
-            setup_dummy_datasets()
-        init_data()
-    print_task_properties()
-    init_engine()
+            watch_memory()
+        init_backend_engine()
+        if config.bool("ipython", False):
+            debug_util.init_ipython_kernel()
+        if config.typed_value("startup_callback"):
+            startup_callback = config.typed_value("startup_callback")
+            startup_callback(config=config)
+        if need_data():
+            if config.bool("use_dummy_datasets", False):
+                setup_dummy_datasets()
+            init_data()
+        print_task_properties()
+        init_engine()
 
 
 def finalize(error_occurred=False):
