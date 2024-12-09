@@ -45,14 +45,15 @@ class TransformerDecoder(rf.Module):
         num_heads: int = 8,
         att_dropout: float = 0.1,
         norm: Union[type, Dict[str, Any], rf.Module, Callable] = rf.LayerNorm,
-        decoder_layer: Optional[Union[TransformerDecoderLayer, rf.Module, type, Any]] = None,
-        decoder_layer_opts: Optional[Dict[str, Any]] = None,
+        layer: Optional[Union[TransformerDecoderLayer, rf.Module, type, Dict[str, Any], Any]] = None,
+        layer_opts: Optional[Dict[str, Any]] = None,
         embed_dim: Optional[Dim] = None,
         share_embedding: bool = None,
         input_embedding_scale: float = None,
         input_dropout: float = None,
         logits_with_bias: bool = False,
         sequential=rf.Sequential,
+        **compat_kwargs,
     ):
         """
         :param encoder_dim: for cross-attention. None if no cross-attention.
@@ -67,8 +68,8 @@ class TransformerDecoder(rf.Module):
         :param num_heads: the number of attention heads
         :param att_dropout: attention dropout value
         :param norm: pre-normalization for FF and attention blocks
-        :param decoder_layer: an instance of :class:`TransformerDecoderLayer` or similar
-        :param decoder_layer_opts: options for the encoder layer
+        :param layer: an instance of :class:`TransformerDecoderLayer` or similar
+        :param layer_opts: options for the decoder layer
         :param embed_dim: if given, will first have an embedding [vocab,embed] and then a linear [embed,model].
         :param share_embedding:
         :param input_embedding_scale:
@@ -77,6 +78,16 @@ class TransformerDecoder(rf.Module):
         :param sequential:
         """
         super().__init__()
+
+        if compat_kwargs:
+            if "decoder_layer" in compat_kwargs:  # compatibility, we used to have this before
+                assert layer is None
+                layer = compat_kwargs.pop("decoder_layer")
+            if "decoder_layer_opts" in compat_kwargs:  # compatibility, we used to have this before
+                assert layer_opts is None
+                layer_opts = compat_kwargs.pop("decoder_layer_opts")
+            if compat_kwargs:
+                raise TypeError(f"unexpected kwargs {compat_kwargs!r}")
 
         if not isinstance(vocab_dim, Dim):
             raise TypeError(f"TransformerDecoder: unexpected vocab_dim {vocab_dim!r} type {type(vocab_dim)}")
@@ -136,8 +147,8 @@ class TransformerDecoder(rf.Module):
             input_dropout = dropout if BehaviorVersion.get() >= 20 else 0.0
         self.input_dropout = input_dropout
 
-        if not decoder_layer or isinstance(decoder_layer, type):
-            decoder_layer_opts_ = dict(
+        if not layer or isinstance(layer, (dict, type)):
+            layer_opts_ = dict(
                 encoder_dim=encoder_dim,
                 out_dim=model_dim,
                 ff=ff,
@@ -148,16 +159,20 @@ class TransformerDecoder(rf.Module):
                 att_dropout=att_dropout,
                 norm=norm,
             )
-            if decoder_layer_opts:
-                decoder_layer_opts_.update(decoder_layer_opts)
-            if not decoder_layer:
-                decoder_layer = TransformerDecoderLayer(**decoder_layer_opts_)
-            elif isinstance(decoder_layer, type):
-                decoder_layer = decoder_layer(**decoder_layer_opts_)
+            layer_opts_ = {k: v for (k, v) in layer_opts_.items() if v is not NotSpecified}
+            if layer_opts:
+                layer_opts_.update(layer_opts)
+            if not layer:
+                layer = TransformerDecoderLayer(**layer_opts_)
+            elif isinstance(layer, type):
+                layer = layer(**layer_opts_)
+            elif isinstance(layer, dict):
+                layer_opts_ = {k: v for (k, v) in layer_opts_.items() if k not in layer}
+                layer = rf.build_from_dict(layer, **layer_opts_)
             else:
-                raise TypeError(f"unexpected decoder_layer {decoder_layer!r}")
+                raise TypeError(f"unexpected layer {layer!r}")
 
-        self.layers = sequential(_copy.deepcopy(decoder_layer) for _ in range(num_layers))
+        self.layers = sequential(_copy.deepcopy(layer) for _ in range(num_layers))
 
         self.final_layer_norm = make_norm(norm, model_dim)
 

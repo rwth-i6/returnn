@@ -32,11 +32,13 @@ class TransformerEncoder(rf.Module):
         num_heads: int = 8,
         att_dropout: float = 0.1,
         norm: Union[type, Dict[str, Any], rf.Module, Callable] = rf.LayerNorm,
-        decoder_layer: Optional[Union[TransformerEncoderLayer, rf.Module, type, Any]] = None,
+        layer: Optional[Union[TransformerEncoderLayer, rf.Module, type, Dict[str, Any], Any]] = None,
+        layer_opts: Optional[Dict[str, Any]] = None,
         embed_dim: Optional[Dim] = None,
         input_embedding_scale: float = None,
         input_dropout: float = None,
         sequential=rf.Sequential,
+        **compat_kwargs,
     ):
         """
         :param vocab_dim:
@@ -48,13 +50,21 @@ class TransformerEncoder(rf.Module):
         :param num_heads: the number of attention heads
         :param att_dropout: attention dropout value
         :param norm: pre-normalization for FF and attention blocks
-        :param decoder_layer: an instance of :class:`TransformerDecoderLayer` or similar
+        :param layer: an instance of :class:`TransformerEncoderLayer` or similar
+        :param layer_opts: options for the encoder layer
         :param embed_dim: if given, will first have an embedding [vocab,embed] and then a linear [embed,model].
         :param input_embedding_scale:
         :param input_dropout:
         :param sequential:
         """
         super().__init__()
+
+        if compat_kwargs:
+            if "decoder_layer" in compat_kwargs:  # compatibility, we (weirdly) used to have this before
+                assert layer is None
+                layer = compat_kwargs.pop("decoder_layer")
+            if compat_kwargs:
+                raise TypeError(f"unexpected kwargs {compat_kwargs!r}")
 
         if not isinstance(vocab_dim, Dim):
             raise TypeError(f"TransformerDecoder: unexpected vocab_dim {vocab_dim!r} type {type(vocab_dim)}")
@@ -97,8 +107,8 @@ class TransformerEncoder(rf.Module):
             input_dropout = dropout
         self.input_dropout = input_dropout
 
-        if not decoder_layer or isinstance(decoder_layer, type):
-            decoder_layer_opts_ = dict(
+        if not layer or isinstance(layer, (dict, type)):
+            layer_opts_ = dict(
                 out_dim=model_dim,
                 ff=ff,
                 dropout=dropout,
@@ -106,14 +116,20 @@ class TransformerEncoder(rf.Module):
                 att_dropout=att_dropout,
                 norm=norm,
             )
-            if not decoder_layer:
-                decoder_layer = TransformerEncoderLayer(**decoder_layer_opts_)
-            elif isinstance(decoder_layer, type):
-                decoder_layer = decoder_layer(**decoder_layer_opts_)
+            layer_opts_ = {k: v for (k, v) in layer_opts_.items() if v is not NotSpecified}
+            if layer_opts:
+                layer_opts_.update(layer_opts)
+            if not layer:
+                layer = TransformerEncoderLayer(**layer_opts_)
+            elif isinstance(layer, type):
+                layer = layer(**layer_opts_)
+            elif isinstance(layer, dict):
+                layer_opts_ = {k: v for (k, v) in layer_opts_.items() if k not in layer}
+                layer = rf.build_from_dict(layer, **layer_opts_)
             else:
-                raise TypeError(f"unexpected decoder_layer {decoder_layer!r}")
+                raise TypeError(f"unexpected layer {layer!r}")
 
-        self.layers = sequential(_copy.deepcopy(decoder_layer) for _ in range(num_layers))
+        self.layers = sequential(_copy.deepcopy(layer) for _ in range(num_layers))
 
         self.final_layer_norm = make_norm(norm, model_dim)
 
