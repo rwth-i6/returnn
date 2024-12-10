@@ -330,6 +330,8 @@ class Dataset:
             assert chunk_step.max_value() > 0, "chunking step must be positive (for some key)"
         return chunk_size, chunk_step, None
 
+    _seq_list_file_cache: Dict[str, Union[List[str], Dict[str, List[str]]]] = {}
+
     @staticmethod
     def _load_seq_list_file(
         filename: str, *, use_cache_manager: bool = False, expect_list: bool = True
@@ -340,6 +342,12 @@ class Dataset:
         :param expect_list:
         :return: seq list file content. usually a list of seqs.
         """
+        if filename in Dataset._seq_list_file_cache:
+            seq_list = Dataset._seq_list_file_cache[filename]
+            if expect_list:
+                assert isinstance(seq_list, list)
+            return seq_list
+        _filename = filename
         if use_cache_manager:
             import returnn.util.basic
 
@@ -367,6 +375,7 @@ class Dataset:
                 assert isinstance(seq_list, list)
         else:
             seq_list = _open("rt").read().splitlines()
+        Dataset._seq_list_file_cache[_filename] = seq_list
         return seq_list
 
     def _sliding_window(self, xr):
