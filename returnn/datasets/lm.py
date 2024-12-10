@@ -527,8 +527,6 @@ class LmDataset(CachedDataset2):
             orth = self._orth_mmaps[idx][offset : offset + len_].decode("utf8").strip()
             seq_tag = self._tag_prefix + str(true_idx)
             self.next_orth_idx += 1
-            if orth == "</s>":
-                continue  # special sentence end symbol. empty seq, ignore.
 
             if self.orth_vocab is not None:
                 data = numpy.array(self.orth_vocab.get_seq(orth), dtype=self.dtype)
