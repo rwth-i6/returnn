@@ -325,7 +325,7 @@ class RotaryPosCausalSelfAttention(CausalSelfAttention):
         q = _apply_rope(
             q,
             (
-                rf.gather(pos_enc, axis=hist_dim, indices=hist_dim.dyn_size_ext - 1)
+                rf.gather(pos_enc, axis=hist_dim, indices=hist_dim.get_size_tensor() - 1)
                 if axis == single_step_dim
                 else rf.replace_dim(pos_enc, in_dim=hist_dim, out_dim=axis)[0]
             ),
