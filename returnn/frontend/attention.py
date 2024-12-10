@@ -503,6 +503,8 @@ def _rel_pos_enc_shift(x: Tensor, axis: Dim, pos_emb_spatial_dim: Dim, hist_dim:
     :param hist_dim: T' (equal to T but separate dim)
     :return: [B,H,T,T']
     """
+    if pos_emb_spatial_dim == hist_dim:  # happens for single_step_dim
+        return x  # no shift needed
     batch_dims = x.remaining_dims((axis, pos_emb_spatial_dim))
     x_padded, (pos_emb_spatial_dim_,) = rf.pad(
         x, axes=[pos_emb_spatial_dim], padding=[(1, 0)], value=0.0
@@ -604,6 +606,7 @@ class RelPosCausalSelfAttention(CausalSelfAttention):
             pos_emb, pos_emb_spatial_dim = relative_positional_encoding(
                 query_spatial_dim=axis, key_value_spatial_dim=hist_dim, feat_dim=self.pos_emb_feat_dim
             )
+        # pos_emb_spatial_dim is 2*time1-1 if axis!=single_step_dim, else time1
         if self.pos_emb_dropout:
             pos_emb = rf.dropout(pos_emb, self.pos_emb_dropout)
         if self.linear_pos is not None:
@@ -850,7 +853,8 @@ def _make_indices(
     if query_spatial_dim == single_step_dim:
         indices = kv_pos_vec
         out_spatial_dim = key_value_spatial_dim
-        assert query_offset is None  # not sure if any custom query offset makes sense?
+        # not sure if any custom query offset makes sense?
+        assert query_offset is None or (isinstance(query_offset, int) and query_offset == 0)
         # Assume the kv are the accumulated history, and query is cur frame of it,
         # corresponding to the last frame of the kv.
         query_offset = key_value_spatial_dim.get_size_tensor() - 1
