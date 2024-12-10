@@ -167,6 +167,7 @@ class OggZipDataset(CachedDataset2):
         else:
             assert isinstance(epoch_wise_filter, EpochWiseFilter)
             self.epoch_wise_filter = epoch_wise_filter
+        self._seq_index_by_tag: Optional[Dict[str, int]] = None
         self._seq_order = None  # type: typing.Optional[typing.Sequence[int]]
 
     def _read(self, filename, zip_index):
@@ -288,6 +289,11 @@ class OggZipDataset(CachedDataset2):
             segment_file_handle = open(segment_file)
             self.segments = set(segment_file_handle.read().splitlines())
 
+    def _lazy_init_seq_index_by_tag(self):
+        if self._seq_index_by_tag is not None:
+            return
+        self._seq_index_by_tag = {self._get_tag_from_info_dict(seq): i for i, seq in enumerate(self._data)}
+
     def init_seq_order(self, epoch=None, seq_list=None, seq_order=None):
         """
         If random_shuffle_epoch1, for epoch 1 with "random" ordering, we leave the given order as is.
@@ -327,12 +333,12 @@ class OggZipDataset(CachedDataset2):
         if seq_order is not None:
             self._seq_order = seq_order
         elif seq_list is not None:
-            seqs = {self._get_tag_from_info_dict(seq): i for i, seq in enumerate(self._data)}
+            self._lazy_init_seq_index_by_tag()
             for seq_tag in seq_list:
-                assert seq_tag in seqs, "Did not find all requested seqs. We have eg: %s" % (
+                assert seq_tag in self._seq_index_by_tag, "Did not find all requested seqs. We have eg: %s" % (
                     self._get_tag_from_info_dict(self._data[0]),
                 )
-            self._seq_order = [seqs[seq_tag] for seq_tag in seq_list]
+            self._seq_order = [self._seq_index_by_tag[seq_tag] for seq_tag in seq_list]
         else:
             num_seqs = len(self._data)
             self._seq_order = self.get_seq_order_for_epoch(epoch=epoch, num_seqs=num_seqs, get_seq_len=get_seq_len)
