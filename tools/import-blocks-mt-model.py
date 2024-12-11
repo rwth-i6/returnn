@@ -555,7 +555,11 @@ def main():
             ]
             assert blocks_energy_sum_tanh.shape == (seq_len, beam_size, energy_sum.shape[-1])
             assert_almost_equal(blocks_energy_sum_tanh[:, 0], numpy.tanh(energy_sum), decimal=5)
-            assert our_dec_frame_outputs["weight_feedback.output"].shape == (beam_size, seq_len if dec_step > 0 else 1, blocks_enc_ctx_out.shape[-1])
+            assert our_dec_frame_outputs["weight_feedback.output"].shape == (
+                beam_size,
+                seq_len if dec_step > 0 else 1,
+                blocks_enc_ctx_out.shape[-1],
+            )
             assert our_dec_frame_outputs["prev_s_transformed.output"].shape == (beam_size, blocks_enc_ctx_out.shape[-1])
             our_energy_sum = our_dec_frame_outputs["energy_in.output"]
             assert our_energy_sum.shape == (beam_size, seq_len, blocks_enc_ctx_out.shape[-1])
