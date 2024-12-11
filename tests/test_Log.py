@@ -11,7 +11,6 @@ import os
 import sys
 from pprint import pprint
 import unittest
-from nose.tools import assert_in, assert_equal
 from returnn.util import better_exchook
 
 
@@ -126,7 +125,7 @@ def test_returnn_startup():
         raise Exception("unexpected output number of lines")
     assert count_start_with(ls, "RETURNN starting up, version ") == 1
     assert count_start_with(ls, "TensorFlow: ") == 1
-    assert_in("Task: No-operation", ls)
+    assert "Task: No-operation" in ls
 
 
 def test_returnn_startup_verbose():
@@ -139,8 +138,8 @@ def test_returnn_startup_verbose():
     assert count_start_with(ls, "RETURNN starting up, version ") == 1
     assert count_start_with(ls, "RETURNN command line options: ") == 1
     assert count_start_with(ls, "TensorFlow: ") == 1
-    assert_in("Task: No-operation", ls)
-    assert_in("Quitting", ls)
+    assert "Task: No-operation" in ls
+    assert "Quitting" in ls
 
 
 def test_simple_log():

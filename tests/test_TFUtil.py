@@ -7,7 +7,6 @@ import tensorflow as tf
 from returnn.tf.util.basic import *
 from returnn.tf.util.data import SpatialDim, FeatureDim
 import returnn.tf.compat as tf_compat
-from nose.tools import assert_not_equal, assert_is, assert_in
 from numpy.testing import assert_almost_equal, assert_allclose
 from pprint import pprint
 import contextlib
@@ -965,7 +964,7 @@ def test_Data_get_common_data_copy_compatible_to_different_time_dim_different_st
     b = Data(name="b", shape=(3, None, 5), auto_create_placeholders=True)
     print("a:", a)
     print("b:", b)
-    assert_not_equal(a.get_time_dim_tag(), b.get_time_dim_tag())
+    assert a.get_time_dim_tag() != b.get_time_dim_tag()
     common_data = Data.get_common_data([a, b], allow_broadcast_all_sources=True)
     print("common:", common_data)
     assert common_data.shape.count(None) == 2 and 3 in common_data.shape and 5 in common_data.shape
@@ -976,8 +975,8 @@ def test_Data_get_common_data_copy_compatible_to_different_time_dim_different_st
     print("common dim tags:")
     pprint(common_tags)
     assert len(common_tags) == common_data.batch_ndim  # all unique
-    assert_in(a.get_time_dim_tag(), common_tags)
-    assert_in(b.get_time_dim_tag(), common_tags)
+    assert a.get_time_dim_tag() in common_tags
+    assert b.get_time_dim_tag() in common_tags
     aa = a.copy_compatible_to(common_data)
     bb = b.copy_compatible_to(common_data)
     print("aa:", aa)
@@ -2634,8 +2633,8 @@ def test_global_tensor():
     x2 = global_tensor(f, name="hello")
     x3 = global_tensor(f, name="hello")
     assert C.i == 1
-    assert_is(x, x2)
-    assert_is(x, x3)
+    assert x is x2
+    assert x is x3
     assert x.eval() == 42
 
 
@@ -3571,7 +3570,7 @@ def test_get_op_attrib_keys():
     assert isinstance(x, tf.Tensor)
     assert isinstance(x.op, tf.Operation)
     print("x op:", x.op.type)
-    assert_in(x.op.type, ["BatchMatMul", "BatchMatMulV2"])
+    assert x.op.type in ["BatchMatMul", "BatchMatMulV2"]
     assert x.get_shape().as_list() == [3, 4, 7]
     attrib_keys = get_op_attrib_keys(x)
     print("matmul attrib keys:", attrib_keys)
@@ -3585,7 +3584,7 @@ def test_get_op_input_names_MatMul():
     assert isinstance(x, tf.Tensor)
     assert isinstance(x.op, tf.Operation)
     print("x op:", x.op.type)
-    assert_in(x.op.type, ["BatchMatMul", "BatchMatMulV2"])
+    assert x.op.type in ["BatchMatMul", "BatchMatMulV2"]
     input_names = get_op_input_names(x.op)
     print("matmul input names:", input_names)
     assert sorted(input_names) == ["x", "y"]
@@ -3785,7 +3784,7 @@ def test_mixed_dense_sparse_grad():
         print("var:")
         print(var_np)
         assert var_np[0, 0] == var_np[2, 0]
-        assert_not_equal(var_np[0, 0], var_np[1, 0])
+        assert var_np[0, 0] != var_np[1, 0]
 
 
 def test_tensor_array_is_dynamic_size():

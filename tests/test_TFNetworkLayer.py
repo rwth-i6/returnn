@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import _setup_test_env  # noqa
 import tensorflow as tf
-from nose.tools import assert_equal, assert_not_equal
 import unittest
 import numpy.testing
 import tempfile
@@ -7657,7 +7656,7 @@ def test_pad_conv_slice():
         )
         out = net.get_default_output_layer().output
         in_ = net.extern_data.get_default_input_data()
-        assert_not_equal(in_.get_time_dim_tag(), out.get_time_dim_tag())
+        assert in_.get_time_dim_tag() != out.get_time_dim_tag()
         net.initialize_params(session)
         session.run((out.placeholder, out.get_sequence_lengths()), feed_dict=make_feed_dict(net.extern_data))
 
@@ -9095,7 +9094,7 @@ def test_TransposedConvLayer_2d_2x2():
         )
         out = net.get_default_output_layer().output.copy_as_batch_feature_major()
         assert out.batch_shape == (None, 13, None, 2)
-        assert_not_equal(out.get_dim_tag(2), net.extern_data.get_default_input_data().get_time_dim_tag())
+        assert out.get_dim_tag(2) != net.extern_data.get_default_input_data().get_time_dim_tag()
         assert out.dim_tags[1].dimension == n_out and out.dim_tags[3].dimension == 2
         in_v = numpy.arange(0, n_batch * n_time * n_in).astype("float32").reshape((n_batch, n_in, n_time))
         session.run(tf_compat.v1.global_variables_initializer())

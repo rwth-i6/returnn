@@ -10,7 +10,6 @@ import unittest
 import numpy
 import tempfile
 import contextlib
-from nose.tools import assert_equal, assert_is_instance, assert_in, assert_not_in, assert_true, assert_false
 from returnn.datasets.generating import Task12AXDataset, DummyDataset, DummyDatasetMultipleSequenceLength
 from returnn.engine.batch import Batch
 from returnn.datasets.basic import Dataset, DatasetSeq, init_dataset
@@ -202,7 +201,7 @@ def test_batches_recurrent_1():
     " :type: list[Batch] "
     while batch_gen.has_more():
         (batch,) = batch_gen.peek_next_n(1)
-        assert_is_instance(batch, Batch)
+        assert isinstance(batch, Batch)
         print("batch:", batch)
         print("batch seqs:", batch.seqs)
         all_batches.append(batch)
@@ -263,7 +262,7 @@ def test_batches_non_recurrent_1():
     all_batches = []  # type: list[Batch]
     while batch_gen.has_more():
         (batch,) = batch_gen.peek_next_n(1)
-        assert_is_instance(batch, Batch)
+        assert isinstance(batch, Batch)
         print("batch:", batch)
         print("batch seqs:", batch.seqs)
         all_batches.append(batch)
@@ -344,7 +343,7 @@ def test_batches_context_window():
     all_batches = []  # type: list[Batch]
     while batch_gen.has_more():
         (batch,) = batch_gen.peek_next_n(1)
-        assert_is_instance(batch, Batch)
+        assert isinstance(batch, Batch)
         print("batch:", batch)
         print("batch seqs:", batch.seqs)
         all_batches.append(batch)

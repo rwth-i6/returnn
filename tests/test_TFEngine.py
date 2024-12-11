@@ -13,11 +13,11 @@ from returnn.tf.engine import *
 from returnn.tf.util.data import SpatialDim
 from returnn.tf.network import ExternData
 from returnn.config import Config
-from nose.tools import assert_not_equal, assert_raises
 import unittest
 import numpy
 import numpy.testing
 from pprint import pprint
+import pytest
 import contextlib
 from returnn.util import better_exchook
 
@@ -145,7 +145,7 @@ def test_FeedDictDataProvider():
         numpy.testing.assert_almost_equal(list(data[0, -1]), expected_last_data[seq_idx])
         assert classes.tolist() == [expected_classes[seq_idx]]
 
-    with assert_raises(AssertionError):  # assert that there are batches left should fail
+    with pytest.raises(AssertionError):  # assert that there are batches left should fail
         feed_dict, meta = data_provider.get_feed_dict(single_threaded=True)
 
 
@@ -5922,7 +5922,7 @@ def test_net_dict_diff():
         return {"output": {"class": "linear", "activation": "sigmoid", "out_dim": dim}}
 
     assert Engine._net_dict_diff(make_net_dict(13), make_net_dict(13)) == []
-    assert_not_equal(Engine._net_dict_diff(make_net_dict(13), make_net_dict(17)), [])
+    assert Engine._net_dict_diff(make_net_dict(13), make_net_dict(17)) != []
 
 
 if __name__ == "__main__":

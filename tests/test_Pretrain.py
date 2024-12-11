@@ -1,6 +1,5 @@
 from __future__ import annotations
 import _setup_test_env  # noqa
-from nose.tools import assert_in, assert_not_in
 from returnn.pretrain import pretrain_from_config
 from returnn.config import Config
 
@@ -67,10 +66,10 @@ def test_config_net_dict1():
     net1_json = pretrain.get_network_json_for_epoch(1)
     net2_json = pretrain.get_network_json_for_epoch(2)
     net3_json = pretrain.get_network_json_for_epoch(3)
-    assert_in("hidden_0", net1_json)
-    assert_not_in("hidden_1", net1_json)
-    assert_in("hidden_0", net2_json)
-    assert_in("hidden_1", net2_json)
+    assert "hidden_0" in net1_json
+    assert "hidden_1" not in net1_json
+    assert "hidden_0" in net2_json
+    assert "hidden_1" in net2_json
     assert net2_json == net3_json
 
 

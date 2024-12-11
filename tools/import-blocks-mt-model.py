@@ -59,7 +59,6 @@ import sys
 import numpy
 import re
 from pprint import pprint
-from nose.tools import assert_equal
 from numpy.testing import assert_almost_equal
 import tensorflow as tf
 import pickle

@@ -6,7 +6,6 @@ import _setup_test_env  # noqa
 import tensorflow as tf
 import sys
 import os
-from nose.tools import assert_not_equal
 from numpy.testing import assert_almost_equal, assert_allclose
 import unittest
 import numpy.testing
@@ -3712,7 +3711,7 @@ def test_rec_layer_move_out_of_loop_keep_constraints():
     assert isinstance(train_out_layer.cell, _SubnetworkRecCell)
     assert set(train_out_layer.cell.input_layers_moved_out) == {"output", "target_embed"}
     assert set(train_out_layer.cell.output_layers_moved_out) == {"output_prob", "readout_in", "readout"}
-    assert_not_equal(train_net.get_total_constraints(), 0)
+    assert train_net.get_total_constraints() != 0
 
     print("Constructing train network with L2 norm on moved out output layer")
     tf_compat.v1.reset_default_graph()
@@ -3732,7 +3731,7 @@ def test_rec_layer_move_out_of_loop_keep_constraints():
     assert isinstance(train_out_layer.cell, _SubnetworkRecCell)
     assert set(train_out_layer.cell.input_layers_moved_out) == {"output", "target_embed"}
     assert set(train_out_layer.cell.output_layers_moved_out) == {"output_prob", "readout_in", "readout"}
-    assert_not_equal(train_net.get_total_constraints(), 0)
+    assert train_net.get_total_constraints() != 0
 
 
 def test_rec_layer_move_out_of_loop_ref_att_generic_att():

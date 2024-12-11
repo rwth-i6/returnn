@@ -1,5 +1,4 @@
 import _setup_test_env  # noqa
-from nose.tools import assert_true
 from returnn.engine.batch import Batch
 from returnn.config import Config
 import returnn.util.basic as util
@@ -63,7 +62,7 @@ def test_assign_dev_data():
         "--*.feature-dimension=2 --*.trainer-output-dimension=3 --*.crnn-dataset=DummyDataset(2,3,num_seqs=4,seq_len=10)",
     )
     dataset.init_seq_order(epoch=1)
-    assert_true(dataset.is_less_than_num_seqs(0))
+    assert dataset.is_less_than_num_seqs(0) is True
     recurrent = False
     batch_generator = dataset.generate_batches(recurrent_net=recurrent, batch_size=5)
     batches = batch_generator.peek_next_n(2)

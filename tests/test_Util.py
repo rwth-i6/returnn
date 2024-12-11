@@ -1,13 +1,13 @@
 # -*- coding: utf8 -*-
 
 import _setup_test_env  # noqa
-from nose.tools import assert_not_equal, assert_raises, assert_is
 from numpy.testing import assert_almost_equal
 from returnn.util.basic import *
 import sys
 import os
 import numpy as np
 import numpy
+import pytest
 import unittest
 import textwrap
 import signal
@@ -59,7 +59,8 @@ def test_cmd_true():
 
 
 def test_cmd_false():
-    assert_raises(CalledProcessError, lambda: sys_cmd_out_lines("false"))
+    with pytest.raises(CalledProcessError):
+        sys_cmd_out_lines("false")
 
 
 def test_cmd_stdout():
@@ -184,11 +185,11 @@ def test_NumbersDict_eq_1():
     r2 = a.elem_eq(b, result_with_default=True)
     r2a = a == b
     print(a, b, r1, r2, r2a)
-    assert_is(all(r2.values()), r2a)
-    assert_is(r1.value, None)
+    assert all(r2.values()) is r2a
+    assert r1.value is None
     assert r1.dict == {"classes": True, "data": True}
     assert r1 == NumbersDict({"classes": True, "data": True})
-    assert_is(r2.value, None)
+    assert r2.value is None
     assert r2.dict == {"classes": True, "data": True}
     assert r2a is True
 
@@ -196,7 +197,7 @@ def test_NumbersDict_eq_1():
 def test_NumbersDict_eq_2():
     a = NumbersDict(10)
     assert a == 10
-    assert_not_equal(a, 5)
+    assert a != 5
 
 
 def test_NumbersDict_mul():
@@ -498,9 +499,9 @@ def test_obj_diff_list_allowed_mapping():
 @unittest.skipIf(PY3, "only for Python 2")
 def test_py2_utf8_str_to_unicode():
     assert py2_utf8_str_to_unicode("a") == "a"
-    assert_is(type(py2_utf8_str_to_unicode("a")), str)
+    assert type(py2_utf8_str_to_unicode("a")) is str
     assert py2_utf8_str_to_unicode("äöü") == "äöü"
-    assert_is(type(py2_utf8_str_to_unicode("äöü")), unicode)
+    assert type(py2_utf8_str_to_unicode("äöü")) is unicode
 
 
 def test_CollectionReadCheckCovered():

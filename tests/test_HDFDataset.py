@@ -11,7 +11,6 @@ import _setup_test_env  # noqa
 
 from returnn.datasets import Dataset
 from returnn.datasets.hdf import *
-from nose.tools import assert_not_equal
 import returnn.util.basic as util
 import h5py
 import numpy as np
@@ -201,7 +200,7 @@ def test_hdf_dump_not_frame_synced():
     assert hdf_reader.num_seqs == orig_reader.num_seqs == num_seqs
     for seq_idx in range(num_seqs):
         # Not synced, i.e. different lengths:
-        assert_not_equal(orig_reader.seq_lens[seq_idx]["data"], orig_reader.seq_lens[seq_idx]["classes"])
+        assert orig_reader.seq_lens[seq_idx]["data"] != orig_reader.seq_lens[seq_idx]["classes"]
         for key in orig_reader.data_keys:
             assert hdf_reader.seq_lens[seq_idx][key] == orig_reader.seq_lens[seq_idx][key]
             assert hdf_reader.data[key][seq_idx].tolist() == orig_reader.data[key][seq_idx].tolist()
@@ -224,7 +223,7 @@ def test_HDFDataset_partition_epoch():
     assert hdf_reader.num_seqs == orig_reader.num_seqs == num_seqs
     for seq_idx in range(num_seqs):
         # Not synced, i.e. different lengths:
-        assert_not_equal(orig_reader.seq_lens[seq_idx]["data"], orig_reader.seq_lens[seq_idx]["classes"])
+        assert orig_reader.seq_lens[seq_idx]["data"] != orig_reader.seq_lens[seq_idx]["classes"]
         for key in orig_reader.data_keys:
             assert hdf_reader.seq_lens[seq_idx][key] == orig_reader.seq_lens[seq_idx][key]
             assert hdf_reader.data[key][seq_idx].tolist() == orig_reader.data[key][seq_idx].tolist()
