@@ -509,13 +509,18 @@ def cum_concat_step(
     :return: (accumulated, out_spatial_dim). accumulated shape {..., out_spatial_dim},
         same shape as prev_accum with axis replaced by out_spatial_dim.
     """
+    # Note: Before, we had a backend function just for this.
+    # In case of TF-layers, this was using CumConcatLayer.
+    # This would allow for automatic optimization when inside a RecLayer.
+    # However, we don't really need this for eager frameworks,
+    # and we want to simplify this for now,
+    # using pure RF code.
     if not out_spatial_dim:
         out_spatial_dim = axis + 1
-    # noinspection PyProtectedMember
-    return (
-        source._raw_backend.cum_concat_step(source, prev_accum=prev_accum, axis=axis, out_spatial_dim=out_spatial_dim),
-        out_spatial_dim,
+    out, (out_spatial_dim,) = rf.pad(
+        prev_accum, axes=[axis], padding=[(0, 1)], out_dims=[out_spatial_dim], value=source, handle_dynamic_dims=True
     )
+    return out, out_spatial_dim
 
 
 def stack(sources: Sequence[Tensor], *, out_dim: Optional[Dim] = None) -> Tuple[Tensor, Dim]:
