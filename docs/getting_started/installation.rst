@@ -21,7 +21,7 @@ and for PyTorch, use :code:`pip install torch torchaudio`.
 
 For some specific datasets or special layers, additional dependencies might be needed,
 such as ``librosa``.
-For running the tests, you need ``pytest`` and ``nose``.
+For running the tests, you need ``pytest``.
 
 You can also install RETURNN as a framework, via ``pip`` (`PyPI entry <https://pypi.org/project/returnn/>`__),
 like::

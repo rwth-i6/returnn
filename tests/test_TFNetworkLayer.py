@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import _setup_test_env  # noqa
 import tensorflow as tf
-from nose.tools import assert_equal, assert_not_equal, assert_is_instance
 import unittest
 import numpy.testing
 import tempfile
@@ -731,7 +730,7 @@ def test_concat_sources_dim1():
         config.update(dict(num_inputs=4, num_outputs=9))
         network = TFNetwork(config=config, train_flag=True)
         network.construct_from_dict(net_dict)
-        assert_equal(network.get_layer("concat").output.shape, (None, 6))
+        assert network.get_layer("concat").output.shape == (None, 6)
         out = network.get_default_output_layer()
         assert out.output.shape == (None, 9)
         feed_dict = make_feed_dict(network.extern_data.data.values(), same_time=True)
@@ -794,7 +793,7 @@ def test_ConcatLayer():
         network = TFNetwork(config=config)
         network.construct_from_dict(net_dict)
         out = network.get_default_output_layer()
-        assert_equal(out.output.shape, (None, 10))
+        assert out.output.shape == (None, 10)
         feed_dict = make_feed_dict(network.extern_data, same_time=True)
         session.run(tf_compat.v1.global_variables_initializer())
         session.run(out.output.placeholder, feed_dict=feed_dict)
@@ -810,10 +809,10 @@ def test_ConcatLayer_range_dyn():
         network = TFNetwork(config=config)
         network.construct_from_dict(net_dict)
         out = network.get_default_output_layer().output
-        assert_equal(out.batch_shape, (None,))
+        assert out.batch_shape == (None,)
         feed_dict = make_feed_dict(network.extern_data, n_time=7)
         session.run(out.placeholder, feed_dict=feed_dict)
-        assert_equal(session.run(out.dim_tags[0].get_dim_value(), feed_dict=feed_dict), 14)
+        assert session.run(out.dim_tags[0].get_dim_value(), feed_dict=feed_dict) == 14
 
 
 def test_LinearLayer_batch_feature_major():
@@ -883,16 +882,20 @@ def test_batch_norm_vars():
         pprint(layer.params)
         assert layer.use_batch_norm
         bn_prefix = "batch_norm/v2_"
-        assert_equal(
-            set(layer.params.keys()),
-            {"W", "b", bn_prefix + "beta", bn_prefix + "mean", bn_prefix + "gamma", bn_prefix + "variance"},
-        )
-        assert_equal(layer.params["W"].get_shape().as_list(), [n_in, n_out])
-        assert_equal(layer.params["b"].get_shape().as_list(), [n_out])
-        assert_equal(layer.params[bn_prefix + "beta"].get_shape().as_list(), [n_out])
-        assert_equal(layer.params[bn_prefix + "gamma"].get_shape().as_list(), [n_out])
-        assert_equal(layer.params[bn_prefix + "mean"].get_shape().as_list(), [n_out])
-        assert_equal(layer.params[bn_prefix + "variance"].get_shape().as_list(), [n_out])
+        assert set(layer.params.keys()) == {
+            "W",
+            "b",
+            bn_prefix + "beta",
+            bn_prefix + "mean",
+            bn_prefix + "gamma",
+            bn_prefix + "variance",
+        }
+        assert layer.params["W"].get_shape().as_list() == [n_in, n_out]
+        assert layer.params["b"].get_shape().as_list() == [n_out]
+        assert layer.params[bn_prefix + "beta"].get_shape().as_list() == [n_out]
+        assert layer.params[bn_prefix + "gamma"].get_shape().as_list() == [n_out]
+        assert layer.params[bn_prefix + "mean"].get_shape().as_list() == [n_out]
+        assert layer.params[bn_prefix + "variance"].get_shape().as_list() == [n_out]
 
 
 def _test_batch_norm_param_old_to_new_import(old_version, new_version):
@@ -1298,12 +1301,10 @@ def test_activation_layer_net_construct():
                 [[[0, 0], [-1, -1], [2, 2]]], dtype="float32"
             )
         }
-        assert_equal(
-            feed[network.extern_data.get_default_input_data().placeholder].shape, (n_batch, seq_len, num_inputs)
-        )
+        assert feed[network.extern_data.get_default_input_data().placeholder].shape == (n_batch, seq_len, num_inputs)
         v = session.run(out, feed_dict=feed)
-        assert_equal(v.shape, (n_batch, seq_len, num_inputs))
-        assert_equal(v.tolist(), [[[0, 0], [0, 0], [2, 2]]])
+        assert v.shape == (n_batch, seq_len, num_inputs)
+        assert v.tolist() == [[[0, 0], [0, 0], [2, 2]]]
 
 
 def test_activation_layer_abs_for_stft():
@@ -1343,11 +1344,9 @@ def test_activation_layer_abs_for_stft():
                 [[[0], [0], [2], [1], [4], [3]]], dtype=numpy.float32
             )
         }
-        assert_equal(
-            feed[network.extern_data.get_default_input_data().placeholder].shape, (n_batch, seq_len, num_inputs)
-        )
+        assert feed[network.extern_data.get_default_input_data().placeholder].shape == (n_batch, seq_len, num_inputs)
         v = session.run(out, feed_dict=feed)
-        assert_equal(v.shape, (n_batch, seq_len - (frame_size - 1), fft_size // 2 + 1))
+        assert v.shape == (n_batch, seq_len - (frame_size - 1), fft_size // 2 + 1)
 
         input_stft = tf.signal.stft(
             numpy.array([[0, 0, 2, 1, 4, 3]], dtype=numpy.float32),
@@ -1357,7 +1356,7 @@ def test_activation_layer_abs_for_stft():
             window_fn=tf.signal.hann_window,
         )
         exp_output = tf.math.abs(input_stft)
-        assert_equal(v.tolist(), exp_output.eval().tolist())
+        assert v.tolist() == exp_output.eval().tolist()
 
 
 def test_activation_layer_net_construct_two_out():
@@ -1392,12 +1391,10 @@ def test_activation_layer_net_construct_two_out():
                 [[[0, 0], [-1, -1], [2, 2]]], dtype="float32"
             )
         }
-        assert_equal(
-            feed[network.extern_data.get_default_input_data().placeholder].shape, (n_batch, seq_len, num_inputs)
-        )
+        assert feed[network.extern_data.get_default_input_data().placeholder].shape == (n_batch, seq_len, num_inputs)
         v, v2 = session.run([out, out2], feed_dict=feed)
-        assert_equal(v.shape, (n_batch, seq_len, num_inputs))
-        assert_equal(v.tolist(), [[[0, 0], [0, 0], [2, 2]]])
+        assert v.shape == (n_batch, seq_len, num_inputs)
+        assert v.tolist() == [[[0, 0], [0, 0], [2, 2]]]
 
 
 def _test_simple_eval_func(s):
@@ -1575,7 +1572,7 @@ def test_CombineLayer_broadcast():
         config.update(dict(num_inputs=4, num_outputs=9))
         network = TFNetwork(config=config, train_flag=True)
         network.construct_from_dict(net_dict)
-        assert_equal(network.get_layer("combine").output.shape, (None, 5))
+        assert network.get_layer("combine").output.shape == (None, 5)
         out = network.get_default_output_layer()
         assert out.output.shape == (None, 9)
         feed_dict = make_feed_dict(network.extern_data.data.values(), same_time=True)
@@ -1595,7 +1592,7 @@ def test_CombineLayer_broadcast_multiple():
         config.update(dict(num_inputs=4, num_outputs=9))
         network = TFNetwork(config=config, train_flag=True)
         network.construct_from_dict(net_dict)
-        assert_equal(network.get_layer("combine").output.batch_shape, (5, 5, 3))
+        assert network.get_layer("combine").output.batch_shape == (5, 5, 3)
         out = network.get_default_output_layer()
         assert out.output.batch_shape == (5, 5, 9) and not out.output.have_batch_axis()
         feed_dict = make_feed_dict(network.extern_data.data.values(), same_time=True)
@@ -2017,7 +2014,7 @@ def test_CombineLayer_time_broadcast():
         network = TFNetwork(config=config, train_flag=True)
         network.construct_from_dict(net_dict)
         out = network.get_default_output_layer()
-        assert_equal(out.output.batch_shape, (None, n_features, None))
+        assert out.output.batch_shape == (None, n_features, None)
         feed_dict = make_feed_dict(network.extern_data, n_batch=n_batch, n_time=n_time)
         session.run(tf_compat.v1.global_variables_initializer())
         out_v = session.run(out.output.placeholder, feed_dict=feed_dict)
@@ -2047,7 +2044,7 @@ def test_CombineLayer_time_broadcast_swapped():
         network = TFNetwork(config=config, train_flag=True)
         network.construct_from_dict(net_dict)
         out = network.get_default_output_layer()
-        assert_equal(out.output.batch_shape, (None, n_features, None))
+        assert out.output.batch_shape == (None, n_features, None)
         feed_dict = make_feed_dict(network.extern_data, n_batch=n_batch, n_time=n_time)
         session.run(tf_compat.v1.global_variables_initializer())
         out_v = session.run(out.output.placeholder, feed_dict=feed_dict)
@@ -2460,7 +2457,7 @@ def test_subnetwork_layer_net_construct():
         config.update(dict(num_inputs=4, num_outputs=3))
         network = TFNetwork(config=config, train_flag=True)
         network.construct_from_dict(net_dict)
-        assert_equal(network.layers["sub"].output.dim, 2)
+        assert network.layers["sub"].output.dim == 2
         sub_layer = network.layers["sub"]
         assert isinstance(sub_layer, SubnetworkLayer)
         sub_layer_deps = sub_layer.get_dep_layers()
@@ -2541,8 +2538,8 @@ def test_constant_layer():
         network.construct_from_dict(config.typed_dict["network"])
         out = network.get_default_output_layer(must_exist=True)
         v = session.run(out.output.placeholder)
-        assert_equal(v.shape, ())  # (batch,), where batch==1 for broadcasting
-        assert_equal(v, 42)
+        assert v.shape == ()  # (batch,), where batch==1 for broadcasting
+        assert v == 42
 
 
 def test_compare_layer():
@@ -2563,9 +2560,9 @@ def test_compare_layer():
         network.construct_from_dict(config.typed_dict["network"])
         out = network.get_default_output_layer(must_exist=True)
         v = session.run(out.output.placeholder)
-        assert_equal(v.shape, ())  # (batch,), where batch==1 for broadcasting
-        assert_equal(v.dtype, numpy.dtype("bool"))
-        assert_equal(v, True)
+        assert v.shape == ()  # (batch,), where batch==1 for broadcasting
+        assert v.dtype == numpy.dtype("bool")
+        assert v == True
 
 
 def test_ShiftAxisLayer():
@@ -2601,10 +2598,10 @@ def test_ShiftAxisLayer():
         feed_dict = {network.layers["data"].output.placeholder: input_np}
         v = session.run(out.output.placeholder, feed_dict)
 
-        assert_equal(v.shape, (batch_size, time_size, feat_size))
-        assert_equal(np.equal(v[0, shift_amount:, 0], np.arange(time_size - shift_amount)).all(), True)
-        assert_equal((v[:, :shift_amount, :] == 0).all(), True)  # padding
-        assert_equal((v[1:, shift_amount:, :] == 1).all(), True)
+        assert v.shape == (batch_size, time_size, feat_size)
+        assert np.equal(v[0, shift_amount:, 0], np.arange(time_size - shift_amount)).all() == True
+        assert (v[:, :shift_amount, :] == 0).all() == True  # padding
+        assert (v[1:, shift_amount:, :] == 1).all() == True
 
 
 def test_ShiftAxisLayer_small_time():
@@ -2639,8 +2636,8 @@ def test_ShiftAxisLayer_small_time():
         feed_dict = {network.layers["data"].output.placeholder: input_np}
         v = session.run(out.output.placeholder, feed_dict)
 
-        assert_equal(v.shape, (batch_size, time_size, feat_size))
-        assert_equal((v == 0).all(), True)  # padding
+        assert v.shape == (batch_size, time_size, feat_size)
+        assert (v == 0).all() == True  # padding
 
 
 def test_ReinterpretDataLayer_change_batch_to_spatial():
@@ -2812,9 +2809,9 @@ def test_SoftmaxOverSpatialLayer_start():
         out_data = SoftmaxOverSpatialLayer.get_out_data_from_opts(**opts)
         print("output:", out_data)
         out_data.sanity_check(ignore_placeholder=True)  # placeholder might be overwritten later
-        assert_equal(out_data.shape, (n_dim, None))  # layer moves time-dim to back
+        assert out_data.shape == (n_dim, None)  # layer moves time-dim to back
         layer = SoftmaxOverSpatialLayer(output=out_data, **opts)
-        assert_equal(layer.output.shape, (n_dim, None))
+        assert layer.output.shape == (n_dim, None)
         try:
             out_np = session.run(layer.output.placeholder, feed_dict={net.extern_data.get_batch_info().dim: n_batch})
         except Exception as exc:
@@ -2822,13 +2819,13 @@ def test_SoftmaxOverSpatialLayer_start():
 
             help_on_tf_exception(session=session, exception=exc, fetches=layer.output.placeholder)
             raise
-        assert_equal(out_np.shape, (n_batch, n_dim, n_time))
+        assert out_np.shape == (n_batch, n_dim, n_time)
         # check if masking worked
         range_idxs = numpy.ones_like(start_idxs) * numpy.expand_dims(numpy.arange(n_time), axis=0)
         cond = range_idxs < numpy.broadcast_to(start_idxs, [n_batch, n_time])  # (B, T)
         cond = numpy.expand_dims(cond, axis=1)
         cond = numpy.broadcast_to(cond, [n_batch, n_dim, n_time])  # (B, D, T)
-        assert_equal(cond.sum(), n_dim * start_idxs.sum())  # check num of conds
+        assert cond.sum() == n_dim * start_idxs.sum()  # check num of conds
         numpy.testing.assert_array_equal(out_np[cond], 0)
 
 
@@ -2864,12 +2861,12 @@ def test_SoftmaxOverSpatialLayer_window():
         out_data = SoftmaxOverSpatialLayer.get_out_data_from_opts(**opts)
         print("output:", out_data)
         out_data.sanity_check(ignore_placeholder=True)  # placeholder might be overwritten later
-        assert_equal(out_data.shape, (n_dim, None))  # layer moves time-dim to back
+        assert out_data.shape == (n_dim, None)  # layer moves time-dim to back
         layer = SoftmaxOverSpatialLayer(output=out_data, **opts)
         layer.output.sanity_check()
-        assert_equal(layer.output.shape, (n_dim, None))
+        assert layer.output.shape == (n_dim, None)
         out_np = session.run(layer.output.placeholder, feed_dict=make_feed_dict(net.extern_data, n_batch=n_batch))
-        assert_equal(out_np.shape, (n_batch, n_dim, n_time))
+        assert out_np.shape == (n_batch, n_dim, n_time)
         # check if window masking worked:
         # handle edge cases correctly: (start is 0-based)
         # 1. if the energy time-dim is less than `window_size`, we adjust the window size.
@@ -3000,10 +2997,9 @@ def test_SplitDimsLayer_simple_time():
     with make_scope() as session:
         net = TFNetwork(config=config)
         net.construct_from_dict({"output": {"class": "split_dims", "axis": "t", "dims": (-1, 1), "from": "data:data"}})
-        assert_equal(
-            net.get_default_output_layer().output.get_dim_tag(1),
-            net.extern_data.get_default_input_data().get_dim_tag(1),
-        )
+        assert net.get_default_output_layer().output.get_dim_tag(
+            1
+        ) == net.extern_data.get_default_input_data().get_dim_tag(1)
         out_t = net.get_default_output_layer().output.placeholder
         assert out_t.shape.as_list() == [None, None, 1, 20]
         in_v = numpy.arange(0, n_batch * n_time * n_in).astype("float32").reshape((n_batch, n_time, n_in))
@@ -3028,7 +3024,7 @@ def test_SplitDimsLayer_simple_time2():
         out = net.get_default_output_layer().output
         print(in_)
         print(out)
-        assert_equal(out.get_dim_tag(2), in_.get_dim_tag(1))
+        assert out.get_dim_tag(2) == in_.get_dim_tag(1)
         assert out.time_dim_axis == 2
         out_t = out.placeholder
         assert out_t.shape.as_list() == [None, 1, None, 20]
@@ -3040,25 +3036,29 @@ def test_SplitDimsLayer_simple_time2():
 
 
 def test_SplitDimsLayer_resolve_dims():
-    assert_equal(SplitDimsLayer._resolve_dims(old_dim=3 * 5, new_dims=(3, -1)), (3, 5))
-    assert_equal(SplitDimsLayer._resolve_dims(old_dim=3 * 5, new_dims=(3, 5)), (3, 5))
-    assert_equal(SplitDimsLayer._resolve_dims(old_dim=3 * 5, new_dims=(5, -1)), (5, 3))
-    assert_equal(SplitDimsLayer._resolve_dims(old_dim=2 * 3 * 5, new_dims=(-1, 3, 5)), (2, 3, 5))
-    assert_equal(SplitDimsLayer._resolve_dims(old_dim=2 * 3 * 5, new_dims=(2, -1, 5)), (2, 3, 5))
-    assert_equal(SplitDimsLayer._resolve_dims(old_dim=2 * 3 * 5, new_dims=(2, 3, -1)), (2, 3, 5))
-    assert_equal(SplitDimsLayer._resolve_dims(old_dim=2 * 3 * 5, new_dims=(2, 3, -1, 1)), (2, 3, 5, 1))
+    assert SplitDimsLayer._resolve_dims(old_dim=3 * 5, new_dims=(3, -1)) == (3, 5)
+    assert SplitDimsLayer._resolve_dims(old_dim=3 * 5, new_dims=(3, 5)) == (3, 5)
+    assert SplitDimsLayer._resolve_dims(old_dim=3 * 5, new_dims=(5, -1)) == (5, 3)
+    assert SplitDimsLayer._resolve_dims(old_dim=2 * 3 * 5, new_dims=(-1, 3, 5)) == (2, 3, 5)
+    assert SplitDimsLayer._resolve_dims(old_dim=2 * 3 * 5, new_dims=(2, -1, 5)) == (2, 3, 5)
+    assert SplitDimsLayer._resolve_dims(old_dim=2 * 3 * 5, new_dims=(2, 3, -1)) == (2, 3, 5)
+    assert SplitDimsLayer._resolve_dims(old_dim=2 * 3 * 5, new_dims=(2, 3, -1, 1)) == (2, 3, 5, 1)
 
-    assert_equal(SplitDimsLayer._resolve_dims(old_dim=3 * 5, new_dims=(3, -1), pad_to_multiples=True), (3, 5))
-    assert_equal(SplitDimsLayer._resolve_dims(old_dim=3 * 5 + 1, new_dims=(3, -1), pad_to_multiples=True), (3, 6))
-    assert_equal(SplitDimsLayer._resolve_dims(old_dim=2 * 3 * 5, new_dims=(2, 3, -1), pad_to_multiples=True), (2, 3, 5))
-    assert_equal(
-        SplitDimsLayer._resolve_dims(old_dim=2 * 3 * 5, new_dims=(2, 3, -1, 1), pad_to_multiples=True), (2, 3, 5, 1)
+    assert SplitDimsLayer._resolve_dims(old_dim=3 * 5, new_dims=(3, -1), pad_to_multiples=True) == (3, 5)
+    assert SplitDimsLayer._resolve_dims(old_dim=3 * 5 + 1, new_dims=(3, -1), pad_to_multiples=True) == (3, 6)
+    assert SplitDimsLayer._resolve_dims(old_dim=2 * 3 * 5, new_dims=(2, 3, -1), pad_to_multiples=True) == (2, 3, 5)
+    assert SplitDimsLayer._resolve_dims(old_dim=2 * 3 * 5, new_dims=(2, 3, -1, 1), pad_to_multiples=True) == (
+        2,
+        3,
+        5,
+        1,
     )
-    assert_equal(
-        SplitDimsLayer._resolve_dims(old_dim=2 * 3 * 5 + 2, new_dims=(2, 3, -1), pad_to_multiples=True), (2, 3, 6)
-    )
-    assert_equal(
-        SplitDimsLayer._resolve_dims(old_dim=2 * 3 * 5 + 2, new_dims=(2, 3, -1, 1), pad_to_multiples=True), (2, 3, 6, 1)
+    assert SplitDimsLayer._resolve_dims(old_dim=2 * 3 * 5 + 2, new_dims=(2, 3, -1), pad_to_multiples=True) == (2, 3, 6)
+    assert SplitDimsLayer._resolve_dims(old_dim=2 * 3 * 5 + 2, new_dims=(2, 3, -1, 1), pad_to_multiples=True) == (
+        2,
+        3,
+        6,
+        1,
     )
 
 
@@ -3074,7 +3074,7 @@ def test_SplitDimsLayer_batch_feature_major_keep_feature():
             {"output": {"class": "split_dims", "from": "data", "axis": "T", "dims": [-1, 1]}}  # [B,D,T,1]
         )
         out = net.get_default_output_layer().output
-        assert_equal(out.get_dim_tag(2), net.extern_data.get_default_input_data().get_time_dim_tag())
+        assert out.get_dim_tag(2) == net.extern_data.get_default_input_data().get_time_dim_tag()
         assert out.dim_tags[1].dimension == n_in and out.dim_tags[3].dimension == 1
         assert out.placeholder.shape.as_list() == [None, n_in, None, 1]
         assert out.feature_dim_axis == 1  # https://github.com/rwth-i6/returnn/issues/596
@@ -3347,15 +3347,15 @@ def _check_MergeDimsLayer(
     opts.update({"network": net, "name": "merge_dims_test", "sources": [src]})
     out_data = MergeDimsLayer.get_out_data_from_opts(**opts)
     out_data.sanity_check(ignore_placeholder=True)  # placeholder might be overwritten later
-    assert_equal(out_data.shape, out_data_shape)
+    assert out_data.shape == out_data_shape
     layer = MergeDimsLayer(output=out_data, **opts)
-    assert_equal(layer.output.shape, out_data_shape)
+    assert layer.output.shape == out_data_shape
     out_np, size_placeholder = session.run([layer.output.placeholder, layer.output.size_placeholder.as_dict()])
     print("output:", out_data)
-    assert_equal(out_np.shape, out_static_shape)
+    assert out_np.shape == out_static_shape
 
     if out_sizes:
-        assert_equal(sorted(size_placeholder.keys()), sorted(out_sizes))
+        assert sorted(size_placeholder.keys()) == sorted(out_sizes)
         for k in size_placeholder.keys():
             numpy.testing.assert_array_equal(size_placeholder[k], out_sizes[k])
 
@@ -3811,7 +3811,7 @@ def test_FlattenBatchLayer():
         out_v = session.run(out_t, feed_dict={in_data.placeholder: in_v, in_data.size_placeholder[0]: in_seq_lens})
         assert isinstance(out_v, numpy.ndarray)
         assert out_v.shape == (sum(in_seq_lens), n_in)
-        assert_equal(out_v.tolist(), [[0, 1], [2, 3], [4, 5], [6, 7], [8, 9], [10, 11], [12, 13], [14, 15], [18, 19]])
+        assert out_v.tolist() == [[0, 1], [2, 3], [4, 5], [6, 7], [8, 9], [10, 11], [12, 13], [14, 15], [18, 19]]
 
 
 def test_UnflattenBatchLayer():
@@ -6429,8 +6429,8 @@ def test_CondLayer_multiple_outputs():
         net = TFNetwork(config=config)
         net.construct_from_dict(net_dict)
         out_t = net.get_default_output_layer().output.placeholder
-        assert_equal(session.run(out_t, feed_dict={net.extern_data.data["cond"].placeholder: True}), 6)
-        assert_equal(session.run(out_t, feed_dict={net.extern_data.data["cond"].placeholder: False}), 35)
+        assert session.run(out_t, feed_dict={net.extern_data.data["cond"].placeholder: True}) == 6
+        assert session.run(out_t, feed_dict={net.extern_data.data["cond"].placeholder: False}) == 35
 
 
 def test_ScatterNdLayer_RangeLayer():
@@ -6811,23 +6811,23 @@ def test_ScatterNdLayer_pos_batch_last_dim():
         scatter = ScatterNdLayer(output=scatter_out_template, **scatter_opts)
         print("scatter out dim tags:")
         pprint(scatter.output.get_batch_shape_dim_tags())
-        assert_equal(scatter.output.get_size_dim_tag(0), pos.output.get_time_dim_tag())
-        assert_equal(scatter.output.get_size_dim_tag(1), data.output.get_time_dim_tag())
+        assert scatter.output.get_size_dim_tag(0) == pos.output.get_time_dim_tag()
+        assert scatter.output.get_size_dim_tag(1) == data.output.get_time_dim_tag()
         session.run(scatter.output.placeholder, feed_dict=make_feed_dict([data.output, pos.output, val.output]))
 
 
 def test_ConvLayer_get_valid_out_dim():
-    assert_equal(ConvLayer.calc_out_dim(in_dim=10, stride=1, filter_size=2, padding="same"), 10)
-    assert_equal(ConvLayer.calc_out_dim(in_dim=10, stride=1, filter_size=3, padding="same"), 10)
-    assert_equal(ConvLayer.calc_out_dim(in_dim=10, stride=1, filter_size=2, padding="valid"), 9)
-    assert_equal(ConvLayer.calc_out_dim(in_dim=10, stride=1, filter_size=3, padding="valid"), 8)
-    assert_equal(ConvLayer.calc_out_dim(in_dim=10, stride=2, filter_size=2, padding="valid"), 5)
-    assert_equal(ConvLayer.calc_out_dim(in_dim=10, stride=3, filter_size=2, padding="valid"), 3)
-    assert_equal(ConvLayer.calc_out_dim(in_dim=10, stride=3, filter_size=1, padding="valid"), 4)
-    assert_equal(ConvLayer.calc_out_dim(in_dim=10, stride=3, filter_size=2, padding="same"), 4)
-    assert_equal(ConvLayer.calc_out_dim(in_dim=41, stride=1, filter_size=2, padding="valid"), 40)
-    assert_equal(ConvLayer.calc_out_dim(in_dim=40, stride=2, filter_size=2, padding="valid"), 20)
-    assert_equal(ConvLayer.calc_out_dim(in_dim=2, stride=1, filter_size=3, padding="valid"), 0)
+    assert ConvLayer.calc_out_dim(in_dim=10, stride=1, filter_size=2, padding="same") == 10
+    assert ConvLayer.calc_out_dim(in_dim=10, stride=1, filter_size=3, padding="same") == 10
+    assert ConvLayer.calc_out_dim(in_dim=10, stride=1, filter_size=2, padding="valid") == 9
+    assert ConvLayer.calc_out_dim(in_dim=10, stride=1, filter_size=3, padding="valid") == 8
+    assert ConvLayer.calc_out_dim(in_dim=10, stride=2, filter_size=2, padding="valid") == 5
+    assert ConvLayer.calc_out_dim(in_dim=10, stride=3, filter_size=2, padding="valid") == 3
+    assert ConvLayer.calc_out_dim(in_dim=10, stride=3, filter_size=1, padding="valid") == 4
+    assert ConvLayer.calc_out_dim(in_dim=10, stride=3, filter_size=2, padding="same") == 4
+    assert ConvLayer.calc_out_dim(in_dim=41, stride=1, filter_size=2, padding="valid") == 40
+    assert ConvLayer.calc_out_dim(in_dim=40, stride=2, filter_size=2, padding="valid") == 20
+    assert ConvLayer.calc_out_dim(in_dim=2, stride=1, filter_size=3, padding="valid") == 0
 
 
 def test_LengthLayer():
@@ -6934,7 +6934,7 @@ def test_RandIntLayer():
         out = net.layers["output"].output.placeholder
         v = session.run(out, feed_dict=feed)
 
-        assert_equal(v.shape, (5, n_batch, max(input_len), 3))
+        assert v.shape == (5, n_batch, max(input_len), 3)
 
 
 def test_rand_indices():
@@ -6960,8 +6960,8 @@ def test_rand_indices():
             (net.layers["indices_flat"].output.placeholder, net.layers["output"].output.placeholder),
             feed_dict=make_feed_dict(net.extern_data, n_batch=n_batch, n_time=n_time),
         )
-        assert_equal(indices_flat.shape, (n_batch, n_time, sz[-1].dimension))
-        assert_equal(output.shape, (n_batch, n_time, sz[-1].dimension, feature_dim.dimension))
+        assert indices_flat.shape == (n_batch, n_time, sz[-1].dimension)
+        assert output.shape == (n_batch, n_time, sz[-1].dimension, feature_dim.dimension)
 
 
 def test_RandomLayer():
@@ -7153,7 +7153,7 @@ def test_untrainable_params():
         network.construct_from_dict(config.typed_dict["network"])
         l1 = network.layers["l1"]
         l2 = network.layers["output"]
-        assert_equal(set(network.get_trainable_params()), {l1.params["W"], l1.params["b"]})
+        assert set(network.get_trainable_params()) == {l1.params["W"], l1.params["b"]}
 
 
 def test_reuse_params():
@@ -7180,9 +7180,9 @@ def test_reuse_params():
         network.construct_from_dict(config.typed_dict["network"])
         l1 = network.layers["l1"]
         l2 = network.layers["output"]
-        assert_equal(set(l1.params.keys()), {"W", "b"})
-        assert_equal(set(l2.params.keys()), set())
-        assert_equal(set(network.get_trainable_params()), {l1.params["W"], l1.params["b"]})
+        assert set(l1.params.keys()) == {"W", "b"}
+        assert set(l2.params.keys()) == set()
+        assert set(network.get_trainable_params()) == {l1.params["W"], l1.params["b"]}
 
 
 def test_reuse_params_map_custom():
@@ -7224,9 +7224,9 @@ def test_reuse_params_map_custom():
         network.construct_from_dict(config.typed_dict["network"])
         l1 = network.layers["l1"]
         l2 = network.layers["output"]
-        assert_equal(set(l1.params.keys()), {"W"})
-        assert_equal(set(l2.params.keys()), {"b"})
-        assert_equal(set(network.get_trainable_params()), {l1.params["W"], l2.params["b"]})
+        assert set(l1.params.keys()) == {"W"}
+        assert set(l2.params.keys()) == {"b"}
+        assert set(network.get_trainable_params()) == {l1.params["W"], l2.params["b"]}
 
 
 def test_reuse_params_map_custom_rev():
@@ -7268,9 +7268,9 @@ def test_reuse_params_map_custom_rev():
         network.construct_from_dict(config.typed_dict["network"])
         l1 = network.layers["l1"]
         l2 = network.layers["output"]
-        assert_equal(set(l1.params.keys()), {"b"})
-        assert_equal(set(l2.params.keys()), {"W"})
-        assert_equal(set(network.get_trainable_params()), {l2.params["W"], l1.params["b"]})
+        assert set(l1.params.keys()) == {"b"}
+        assert set(l2.params.keys()) == {"W"}
+        assert set(network.get_trainable_params()) == {l2.params["W"], l1.params["b"]}
 
 
 def test_reuse_params_map_custom_dep_loop():
@@ -7393,10 +7393,10 @@ def test_reuse_params_map_custom_dep_loop():
         train_rec_layer = train_net.layers["output"]
         assert isinstance(train_rec_layer, RecLayer)
         assert isinstance(train_rec_layer.cell, _SubnetworkRecCell)
-        assert_equal(set(train_rec_layer.cell.input_layers_moved_out), {"output", "target_embed"})
-        assert_equal(set(train_rec_layer.cell.output_layers_moved_out), {"output_prob", "readout", "readout_in"})
+        assert set(train_rec_layer.cell.input_layers_moved_out) == {"output", "target_embed"}
+        assert set(train_rec_layer.cell.output_layers_moved_out) == {"output_prob", "readout", "readout_in"}
         assert isinstance(train_rec_layer.cell.output_layers_net, TFNetwork)
-        assert_equal(set(train_rec_layer.cell.output_layers_net.layers["output_prob"].params.keys()), {"b"})
+        assert set(train_rec_layer.cell.output_layers_net.layers["output_prob"].params.keys()) == {"b"}
     with make_scope() as session:
         print("Construct for search")
         search_net = TFNetwork(config=config, train_flag=False, eval_flag=True, search_flag=True)
@@ -7513,11 +7513,11 @@ def test_name_scope_share_params():
         network.construct_from_dict(net_dict)
         l1 = network.layers["layer1"]
         l2 = network.layers["output"]
-        assert_equal(set(l1.params.keys()), {"W", "b"})
-        assert_equal(set(l2.params.keys()), {"W", "b"})
+        assert set(l1.params.keys()) == {"W", "b"}
+        assert set(l2.params.keys()) == {"W", "b"}
         assert l1.params["W"] is l2.params["W"]
         assert l1.params["b"] is l2.params["b"]
-        assert_equal(set(network.get_trainable_params()), {l1.params["W"], l1.params["b"]})
+        assert set(network.get_trainable_params()) == {l1.params["W"], l1.params["b"]}
 
 
 def test_SliceLayer_output_placeholder():
@@ -7542,8 +7542,8 @@ def test_SliceLayer_output_placeholder():
         print(seq_lens)
         assert isinstance(out, numpy.ndarray)
         assert isinstance(seq_lens, numpy.ndarray)
-        assert_equal(out.tolist(), [[2, 4], [7, 9], [12, 14]])
-        assert_equal(seq_lens.tolist(), [2, 1, 1])
+        assert out.tolist() == [[2, 4], [7, 9], [12, 14]]
+        assert seq_lens.tolist() == [2, 1, 1]
 
 
 def test_SliceLayer_NCHW():
@@ -7656,7 +7656,7 @@ def test_pad_conv_slice():
         )
         out = net.get_default_output_layer().output
         in_ = net.extern_data.get_default_input_data()
-        assert_not_equal(in_.get_time_dim_tag(), out.get_time_dim_tag())
+        assert in_.get_time_dim_tag() != out.get_time_dim_tag()
         net.initialize_params(session)
         session.run((out.placeholder, out.get_sequence_lengths()), feed_dict=make_feed_dict(net.extern_data))
 
@@ -8237,15 +8237,12 @@ def test_WindowLayer_output_placeholder():
         assert isinstance(out, numpy.ndarray)
         assert isinstance(seq_lens, numpy.ndarray)
         out = out.transpose([2, 1, 0])  # [W, T', B] -> [B, T', W]
-        assert_equal(
-            out.tolist(),
-            [
-                [[1, 2, 3], [2, 3, 4], [3, 4, 5]],
-                [[6, 7, 8], [7, 8, 9], [8, 9, 10]],
-                [[11, 12, 13], [12, 13, 14], [13, 14, 15]],
-            ],
-        )
-        assert_equal(seq_lens.tolist(), [3, 1, 0])
+        assert out.tolist() == [
+            [[1, 2, 3], [2, 3, 4], [3, 4, 5]],
+            [[6, 7, 8], [7, 8, 9], [8, 9, 10]],
+            [[11, 12, 13], [12, 13, 14], [13, 14, 15]],
+        ]
+        assert seq_lens.tolist() == [3, 1, 0]
 
 
 def test_FoldLayer_unchunk():
@@ -8289,8 +8286,8 @@ def test_FoldLayer_unchunk():
         out, seq_lens = session.run([output.raw_tensor, output.dims[1].dyn_size_ext.raw_tensor])
         print(out)
         print(seq_lens)
-        assert_equal(out.tolist(), [[1, 2, 3, 4, 5], [6, 7, 8, 9, 0], [11, 12, 13, 0, 0]])
-        assert_equal(seq_lens.tolist(), [5, 4, 3])
+        assert out.tolist() == [[1, 2, 3, 4, 5], [6, 7, 8, 9, 0], [11, 12, 13, 0, 0]]
+        assert seq_lens.tolist() == [5, 4, 3]
 
 
 def test_conv_window_merge_dims():
@@ -8736,7 +8733,7 @@ def test_conv_layer_NCHW():
             },
         )
         print(out.shape)
-        assert_equal(out.shape, (10, 6, 6, 64))
+        assert out.shape == (10, 6, 6, 64)
         print(seq_lens)
         time_dim_axis = 1 if tf_util.is_gpu_available() else 0
         out, seq_lens = session.run(
@@ -8748,9 +8745,9 @@ def test_conv_layer_NCHW():
         )
         print(out.shape)
         if time_dim_axis == 1:
-            assert_equal(out.shape, (10, 64, 6, 6))
+            assert out.shape == (10, 64, 6, 6)
         else:
-            assert_equal(out.shape, (10, 6, 6, 64))
+            assert out.shape == (10, 6, 6, 64)
         print(seq_lens)
         if tf_util.is_gpu_available():
             out, seq_lens = session.run(
@@ -8761,7 +8758,7 @@ def test_conv_layer_NCHW():
                 },
             )
             print(out.shape)
-            assert_equal(out.shape, (10, 64, 6, 6))
+            assert out.shape == (10, 64, 6, 6)
             print(seq_lens)
 
 
@@ -8786,7 +8783,7 @@ def test_ConvLayer_empty_out():
         print(seq_lens)
         assert isinstance(out, numpy.ndarray)
         assert isinstance(seq_lens, numpy.ndarray)
-        assert_equal(seq_lens.tolist(), [0])
+        assert seq_lens.tolist() == [0]
         assert out.shape == (1, 0, 7)
 
 
@@ -8977,7 +8974,7 @@ def test_pool_layer_NCHW():
             },
         )
         print(out.shape)
-        assert_equal(out.shape, (10, 7, 6, 17))
+        assert out.shape == (10, 7, 6, 17)
         print(seq_lens)
         out, seq_lens = session.run(
             [pool_nchw_from_nhwc.output.placeholder, pool_nchw_from_nhwc.output.get_sequence_lengths()],
@@ -8988,9 +8985,9 @@ def test_pool_layer_NCHW():
         )
         print(pool_nchw_from_nhwc.output, out.shape)
         if pool_nchw_from_nhwc.output.feature_dim_axis == 1:
-            assert_equal(out.shape, (10, 17, 7, 6))
+            assert out.shape == (10, 17, 7, 6)
         else:
-            assert_equal(out.shape, (10, 7, 6, 17))
+            assert out.shape == (10, 7, 6, 17)
         print(seq_lens)
         if tf_util.is_gpu_available():
             out, seq_lens = session.run(
@@ -9001,7 +8998,7 @@ def test_pool_layer_NCHW():
                 },
             )
             print(out.shape)
-            assert_equal(out.shape, (10, 17, 7, 6))
+            assert out.shape == (10, 17, 7, 6)
             print(seq_lens)
 
 
@@ -9060,7 +9057,7 @@ def test_TransposedConvLayer_2d_simple():
         )
         out = net.get_default_output_layer().output.copy_as_batch_feature_major()
         assert out.batch_shape == (None, 13, None, 2)
-        assert_equal(out.get_dim_tag(2), net.extern_data.get_default_input_data().get_time_dim_tag())
+        assert out.get_dim_tag(2) == net.extern_data.get_default_input_data().get_time_dim_tag()
         assert out.dim_tags[1].dimension == n_out and out.dim_tags[3].dimension == 2
         in_v = numpy.arange(0, n_batch * n_time * n_in).astype("float32").reshape((n_batch, n_in, n_time))
         session.run(tf_compat.v1.global_variables_initializer())
@@ -9097,7 +9094,7 @@ def test_TransposedConvLayer_2d_2x2():
         )
         out = net.get_default_output_layer().output.copy_as_batch_feature_major()
         assert out.batch_shape == (None, 13, None, 2)
-        assert_not_equal(out.get_dim_tag(2), net.extern_data.get_default_input_data().get_time_dim_tag())
+        assert out.get_dim_tag(2) != net.extern_data.get_default_input_data().get_time_dim_tag()
         assert out.dim_tags[1].dimension == n_out and out.dim_tags[3].dimension == 2
         in_v = numpy.arange(0, n_batch * n_time * n_in).astype("float32").reshape((n_batch, n_in, n_time))
         session.run(tf_compat.v1.global_variables_initializer())
@@ -9218,8 +9215,8 @@ def test_ReduceLayer_NCHW():
                 src_nchw.output.size_placeholder[1]: np.full(shape=(10,), fill_value=11),
             },
         )
-        assert_equal(out1.shape, (10, 11, 16))
-        assert_equal(out2.shape, (16, 11, 16))
+        assert out1.shape == (10, 11, 16)
+        assert out2.shape == (16, 11, 16)
         assert reduce1.output.time_dim_axis == 1
         assert reduce2.output.feature_dim_axis == 0 and reduce2.output.dim == 16
         assert reduce2.output.batch_dim_axis is None
@@ -9318,30 +9315,27 @@ def test_ResizeLayer_fill_value():
         print(seq_lens)
         assert isinstance(out, numpy.ndarray)
         assert isinstance(seq_lens, numpy.ndarray)
-        assert_equal(
-            out.tolist(),
+        assert out.tolist() == [
             [
-                [
-                    1,
-                    19,
-                    19,
-                    2,
-                    19,
-                    19,
-                    3,
-                    19,
-                    19,
-                    4,
-                    19,
-                    19,
-                    5,
-                    19,
-                    19,
-                ],
-                [6, 19, 19, 7, 19, 19, 8, 19, 19, 9, 19, 19, 10, 19, 19],
+                1,
+                19,
+                19,
+                2,
+                19,
+                19,
+                3,
+                19,
+                19,
+                4,
+                19,
+                19,
+                5,
+                19,
+                19,
             ],
-        )
-        assert_equal(seq_lens.tolist(), [15, 9])
+            [6, 19, 19, 7, 19, 19, 8, 19, 19, 9, 19, 19, 10, 19, 19],
+        ]
+        assert seq_lens.tolist() == [15, 9]
 
 
 def test_ResizeLayer_fill_dropout():
@@ -9382,7 +9376,7 @@ def test_ResizeLayer_fill_dropout():
         # Non-deterministic output. But we can check some constraints.
         for i in range(len(src_seq_lens)):
             assert src_seq_lens[i] <= seq_lens[i] <= src_seq_lens[i] * factor
-            assert_equal([s for s in out[i] if s != fill_value], src_seqs[i])
+            assert [s for s in out[i] if s != fill_value] == src_seqs[i]
 
 
 def test_ResizeLayer_BFT():
@@ -9528,8 +9522,8 @@ def test_DotLayer():
         print(seq_lens)
         assert isinstance(out, numpy.ndarray)
         assert isinstance(seq_lens, numpy.ndarray)
-        assert_equal(seq_lens.tolist(), a_seq_lens)
-        assert_equal(out.shape, (B, H, max(a_seq_lens)))
+        assert seq_lens.tolist() == a_seq_lens
+        assert out.shape == (B, H, max(a_seq_lens))
 
 
 def test_DotLayer2():
@@ -9571,7 +9565,7 @@ def test_DotLayer2():
         assert layer.output.dim == V
         out = session.run(layer.output.placeholder)
         assert isinstance(out, numpy.ndarray)
-        assert_equal(out.shape, (S1, S2, B, V))
+        assert out.shape == (S1, S2, B, V)
 
 
 def test_DotLayer_linear_square_matrix():
@@ -11378,10 +11372,10 @@ def test_VariableLayer_split_info():
         network.construct_from_dict(net_dict)
         layer = network.layers["output"]
         assert isinstance(layer, VariableLayer)
-        assert_equal(
-            tf_util.get_param_axes_split_info(layer.output.placeholder),
-            [2 * [feat1.dimension] + [feat2.dimension], 3 * [feat1.dimension]],
-        )
+        assert tf_util.get_param_axes_split_info(layer.output.placeholder) == [
+            2 * [feat1.dimension] + [feat2.dimension],
+            3 * [feat1.dimension],
+        ]
 
 
 def test_VariableLayer_init_by_layer():
@@ -11421,8 +11415,8 @@ def test_VariableLayer_init_by_layer():
         tf_compat.v1.set_random_seed(tf_rnd_seed)
         net = TFNetwork(config=config)
         net.construct_from_dict(net_dict)
-        assert_equal(net.layers["random"].params, {})
-        assert_equal(net.get_params_list(), [next(iter(net.layers["var"].params.values()))])
+        assert net.layers["random"].params == {}
+        assert net.get_params_list() == [next(iter(net.layers["var"].params.values()))]
         net.initialize_params(session)
         var_v = session.run(net.layers["var"].output.placeholder)
     # Run again to check that it is deterministic.
@@ -11796,7 +11790,7 @@ def test_HDFDumpLayer():
             network.extern_data.data["data"].size_placeholder[0]: seq_lens,
             network.extern_data.data["seq_tag"].placeholder: input_tags,
         }
-        assert_equal(feed[network.extern_data.get_default_input_data().placeholder].shape, (n_batch, seq_len, n_in))
+        assert feed[network.extern_data.get_default_input_data().placeholder].shape == (n_batch, seq_len, n_in)
         session.run([out, network.get_post_control_dependencies()], feed_dict=feed)
 
         network.call_graph_reset_callbacks()
@@ -11806,8 +11800,8 @@ def test_HDFDumpLayer():
     reader.read_all()
     assert reader.num_seqs == 1
     assert reader.seq_tags == ["seq-0"]
-    assert_equal(reader.seq_lens[0]["data"], seq_lens[0])
-    assert_equal(reader.data["data"][0].shape, (seq_lens[0], n_out))
+    assert reader.seq_lens[0]["data"] == seq_lens[0]
+    assert reader.data["data"][0].shape == (seq_lens[0], n_out)
 
 
 def test_HDFDumpLayer_sparse():
@@ -11857,10 +11851,10 @@ def test_HDFDumpLayer_sparse():
     reader.read_all()
     assert reader.num_seqs == 1
     assert reader.seq_tags == ["seq-0"]
-    assert_equal(reader.seq_lens[0]["data"], classes_seq_lens[0])
-    assert_equal(reader.data["data"][0].shape, (classes_seq_lens[0],))
-    assert_equal(reader.data_sparse["data"], True)
-    assert_equal(reader.dataset.get_data_dim("data"), n_out)
+    assert reader.seq_lens[0]["data"] == classes_seq_lens[0]
+    assert reader.data["data"][0].shape == (classes_seq_lens[0],)
+    assert reader.data_sparse["data"] == True
+    assert reader.dataset.get_data_dim("data") == n_out
 
 
 def test_HDFDumpLayer_fixed_length():
@@ -11913,8 +11907,8 @@ def test_HDFDumpLayer_fixed_length():
     reader.read_all()
     assert reader.num_seqs == 1
     assert reader.seq_tags == ["seq-0"]
-    assert_equal(reader.seq_lens[0]["data"], 1)
-    assert_equal(reader.data["data"][0].shape, (1, n_out))
+    assert reader.seq_lens[0]["data"] == 1
+    assert reader.data["data"][0].shape == (1, n_out)
 
 
 def test_HDFDumpLayer_extra():
@@ -11990,10 +11984,10 @@ def test_HDFDumpLayer_extra():
     reader.read_all()
     assert reader.num_seqs == 1
     assert reader.seq_tags == ["seq-0"]
-    assert_equal(reader.seq_lens[0]["data"], input_seq_lens[0])
-    assert_equal(reader.data["data"][0].shape, (input_seq_lens[0], n_in))
-    assert_equal(reader.data["classes1"][0].shape, (classes1_seq_lens[0],))
-    assert_equal(reader.data["classes2"][0].shape, (1,))
+    assert reader.seq_lens[0]["data"] == input_seq_lens[0]
+    assert reader.data["data"][0].shape == (input_seq_lens[0], n_in)
+    assert reader.data["classes1"][0].shape == (classes1_seq_lens[0],)
+    assert reader.data["classes2"][0].shape == (1,)
     numpy.testing.assert_almost_equal(reader.data["data"][0], input_data[0])
     numpy.testing.assert_equal(reader.data["classes1"][0], classes1_data[0])
     numpy.testing.assert_equal(reader.data["classes2"][0], [classes2_data[0]])
@@ -12070,10 +12064,10 @@ def test_HDFDumpLayer_dump_whole_batch_extra_sm():
     reader.read_all()
     assert reader.num_seqs == 1
     assert reader.seq_tags == ["seq-0"]
-    assert_equal(reader.seq_lens[0]["data"], input_seq_lens[0])
-    assert_equal(reader.data["data"][0].shape, (input_seq_lens[0], n_in))
+    assert reader.seq_lens[0]["data"] == input_seq_lens[0]
+    assert reader.data["data"][0].shape == (input_seq_lens[0], n_in)
     numpy.testing.assert_almost_equal(reader.data["data"][0], input_data[0])
-    assert_equal(reader.data["sm"][0].shape, (sm_seq_lens1[0] * sm_seq_lens2[0],))
+    assert reader.data["sm"][0].shape == (sm_seq_lens1[0] * sm_seq_lens2[0],)
     numpy.testing.assert_equal(numpy.reshape(reader.data["sm"][0], sm_data[0].shape), sm_data[0])
 
 
@@ -12148,9 +12142,9 @@ def test_HDFDumpLayer_dump_whole_batch_extra_sm1():
     reader.read_all()
     assert reader.num_seqs == 1
     assert reader.seq_tags == ["seq-0"]
-    assert_equal(reader.data["data"][0].shape, (input_seq_lens[0], n_in))
+    assert reader.data["data"][0].shape == (input_seq_lens[0], n_in)
     numpy.testing.assert_almost_equal(reader.data["data"][0], input_data[0])
-    assert_equal(reader.data["sm"][0].shape, (sm_seq_lens1[0] * sm_seq_lens2[0],))
+    assert reader.data["sm"][0].shape == (sm_seq_lens1[0] * sm_seq_lens2[0],)
     sm_data_ = numpy.transpose(sm_data, (1, 0, 3, 2))
     numpy.testing.assert_equal(numpy.reshape(reader.data["sm"][0], sm_data_[0].shape), sm_data_[0])
 
@@ -12517,7 +12511,7 @@ def test_automatic_seq_lengths():
         session.run(tf_compat.v1.global_variables_initializer())
         in_data = net.extern_data.get_default_input_data()
         out_data = net.layers["output"].output.copy_as_batch_spatial_major()
-        assert_equal(out_data.shape, in_data.shape)
+        assert out_data.shape == in_data.shape
         n_batch = 3
         max_seq_len = 10
         feed = make_feed_dict([in_data], n_batch=n_batch, n_time=max_seq_len)
@@ -12525,8 +12519,8 @@ def test_automatic_seq_lengths():
         out_v, out_lens_v = session.run((out_data.placeholder, out_lens), feed_dict=feed)
         in_v = feed[in_data.placeholder]
         in_lens_v = feed[in_data.size_placeholder[0]]
-        assert_equal(in_v.shape, out_v.shape)
-        assert_equal(in_lens_v.tolist(), out_lens_v.tolist())
+        assert in_v.shape == out_v.shape
+        assert in_lens_v.tolist() == out_lens_v.tolist()
         # So far, everything should always be true, unless we have messed some op really up.
         # Now we want to do the main test, i.e. whether we get the same tensor.
         from returnn.tf.util.basic import print_graph_output
@@ -12564,7 +12558,7 @@ def test_automatic_seq_lengths2():
         session.run(tf_compat.v1.global_variables_initializer())
         in_data = net.extern_data.get_default_input_data()
         out_data = net.layers["output"].output.copy_as_batch_spatial_major()
-        assert_equal(out_data.shape, in_data.shape)
+        assert out_data.shape == in_data.shape
         n_batch = 3
         max_seq_len = 10
         feed = make_feed_dict([in_data], n_batch=n_batch, n_time=max_seq_len)
@@ -12572,8 +12566,8 @@ def test_automatic_seq_lengths2():
         out_v, out_lens_v = session.run((out_data.placeholder, out_lens), feed_dict=feed)
         in_v = feed[in_data.placeholder]
         in_lens_v = feed[in_data.size_placeholder[0]]
-        assert_equal(in_v.shape, out_v.shape)
-        assert_equal(in_lens_v.tolist(), out_lens_v.tolist())
+        assert in_v.shape == out_v.shape
+        assert in_lens_v.tolist() == out_lens_v.tolist()
         # So far, everything should always be true, unless we have messed some op really up.
         # Now we want to do the main test, i.e. whether we get the same tensor.
         from returnn.tf.util.basic import print_graph_output

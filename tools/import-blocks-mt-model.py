@@ -59,8 +59,7 @@ import sys
 import numpy
 import re
 from pprint import pprint
-from nose.tools import assert_equal, assert_is_instance
-from numpy.testing import assert_almost_equal, assert_allclose
+from numpy.testing import assert_almost_equal
 import tensorflow as tf
 import pickle
 
@@ -211,7 +210,7 @@ def main():
         if isinstance(blocks_param, str):
             blocks_param = load_blocks_var(blocks_param)
         assert isinstance(blocks_param, numpy.ndarray)
-        assert_equal(tuple(our_var.shape.as_list()), blocks_param.shape)
+        assert tuple(our_var.shape.as_list()) == blocks_param.shape
         our_loaded_params.add(our_var.name[:-2])
         our_var.load(blocks_param, session=rnn.engine.tf_session)
 
@@ -242,7 +241,7 @@ def main():
     expected_enc_entries = ["EncoderLookUp0.W"] + [
         "EncoderBidirectionalLSTM%i" % i for i in range(1, num_encoder_layers + 1)
     ]
-    assert_equal(set(expected_enc_entries), set(blocks_params_hierarchy[enc_name].keys()))
+    assert set(expected_enc_entries) == set(blocks_params_hierarchy[enc_name].keys())
 
     our_input_layer = find_our_input_embed_layer()
     assert our_input_layer.input_data.dim == blocks_input_dim
@@ -252,7 +251,7 @@ def main():
 
     dec_name = "decoder/sequencegenerator"
     dec_hierarchy_base = get_in_hierarchy(dec_name, blocks_params_hierarchy)
-    assert_equal(set(dec_hierarchy_base.keys()), {"att_trans", "readout"})
+    assert set(dec_hierarchy_base.keys()) == {"att_trans", "readout"}
     dec_embed_name = "readout/lookupfeedbackwmt15/lookuptable.W"
     get_in_hierarchy(dec_embed_name, dec_hierarchy_base)  # check
 
@@ -556,13 +555,12 @@ def main():
             ]
             assert blocks_energy_sum_tanh.shape == (seq_len, beam_size, energy_sum.shape[-1])
             assert_almost_equal(blocks_energy_sum_tanh[:, 0], numpy.tanh(energy_sum), decimal=5)
-            assert_equal(
-                our_dec_frame_outputs["weight_feedback.output"].shape,
-                (beam_size, seq_len if dec_step > 0 else 1, blocks_enc_ctx_out.shape[-1]),
+            assert our_dec_frame_outputs["weight_feedback.output"].shape == (
+                beam_size,
+                seq_len if dec_step > 0 else 1,
+                blocks_enc_ctx_out.shape[-1],
             )
-            assert_equal(
-                our_dec_frame_outputs["prev_s_transformed.output"].shape, (beam_size, blocks_enc_ctx_out.shape[-1])
-            )
+            assert our_dec_frame_outputs["prev_s_transformed.output"].shape == (beam_size, blocks_enc_ctx_out.shape[-1])
             our_energy_sum = our_dec_frame_outputs["energy_in.output"]
             assert our_energy_sum.shape == (beam_size, seq_len, blocks_enc_ctx_out.shape[-1])
             assert_almost_equal(our_energy_sum[0], energy_sum, decimal=4)

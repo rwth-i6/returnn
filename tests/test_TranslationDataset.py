@@ -9,11 +9,6 @@ import shutil
 import gzip
 import pickle
 
-from nose.tools import assert_equal
-from nose.tools import assert_not_equal
-from nose.tools import assert_raises
-from nose.tools import raises
-
 import _setup_test_env  # noqa
 from returnn.util import better_exchook
 from returnn.datasets.lm import TranslationDataset, TranslationFactorsDataset
@@ -108,17 +103,17 @@ def test_translation_dataset():
         translation_dataset.load_seqs(0, 10)
 
         num_seqs = len(dummy_source_text.splitlines())
-        assert_equal(translation_dataset.num_seqs, num_seqs)
+        assert translation_dataset.num_seqs == num_seqs
 
         # Reconstruct the sentences from the word ids and compare with input.
         for sequence_index in range(num_seqs):
             source_word_ids = translation_dataset.get_data(sequence_index, "data")
             source_sentence = word_ids_to_sentence(source_word_ids, inverse_source_vocabulary)
-            assert_equal(source_sentence, dummy_source_text.splitlines()[sequence_index] + postfix)
+            assert source_sentence == dummy_source_text.splitlines()[sequence_index] + postfix
 
             target_word_ids = translation_dataset.get_data(sequence_index, "classes")
             target_sentence = word_ids_to_sentence(target_word_ids, inverse_target_vocabulary)
-            assert_equal(target_sentence, dummy_target_text_with_unk.splitlines()[sequence_index] + postfix)
+            assert target_sentence == dummy_target_text_with_unk.splitlines()[sequence_index] + postfix
 
     shutil.rmtree(dummy_dataset)
 
@@ -189,7 +184,7 @@ def test_translation_factors_dataset():
         translation_dataset.load_seqs(0, 10)
 
         num_seqs = len(dummy_target_text_factored_format.splitlines())
-        assert_equal(translation_dataset.num_seqs, num_seqs)
+        assert translation_dataset.num_seqs == num_seqs
 
         # Reconstruct the sentences from the word ids for all factors and compare with input.
         data_keys = source_data_keys + target_data_keys
@@ -198,7 +193,7 @@ def test_translation_factors_dataset():
             for sequence_index in range(num_seqs):
                 word_ids = translation_dataset.get_data(sequence_index, data_keys[index])
                 sentence = word_ids_to_sentence(word_ids, inverse_vocabularies[index])
-                assert_equal(sentence, text.splitlines()[sequence_index] + postfix)
+                assert sentence == text.splitlines()[sequence_index] + postfix
 
     shutil.rmtree(dummy_dataset)
 

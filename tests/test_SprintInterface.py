@@ -4,7 +4,6 @@ import sys
 import os
 
 import _setup_test_env  # noqa
-from nose.tools import assert_equal
 import returnn.sprint.interface as SprintAPI
 from returnn.tf.engine import Engine
 from tempfile import mkdtemp
@@ -101,7 +100,7 @@ def test_forward():
     features = numpy.array([[0.1, 0.2], [0.2, 0.3], [0.3, 0.4], [0.4, 0.5]])
     seq_len = features.shape[0]
     posteriors = SprintAPI._forward("segment1", features.T).T
-    assert_equal(posteriors.shape, (seq_len, outputDim))
+    assert posteriors.shape == (seq_len, outputDim)
 
     SprintAPI.exit()
 

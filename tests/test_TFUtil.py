@@ -7,7 +7,6 @@ import tensorflow as tf
 from returnn.tf.util.basic import *
 from returnn.tf.util.data import SpatialDim, FeatureDim
 import returnn.tf.compat as tf_compat
-from nose.tools import assert_equal, assert_not_equal, assert_is_instance, assert_is, assert_in, assert_true
 from numpy.testing import assert_almost_equal, assert_allclose
 from pprint import pprint
 import contextlib
@@ -28,53 +27,53 @@ def test_tf_version_tuple():
 
 def test_Data():
     data = Data(name="my_data", shape=(None, 13))
-    assert_equal(data.name, "my_data")
-    assert_equal(data.dim, 13)
-    assert_equal(data.batch_dim_axis, 0)
-    assert_equal(data.time_dim_axis, 1)
-    assert_equal(data.feature_dim_axis, 2)
-    assert_equal(data.batch_ndim, 3)
-    assert_equal(data.batch_shape, (None, None, 13))
-    assert_equal(data.dtype, "float32")
-    assert_equal(data.sparse, False)
+    assert data.name == "my_data"
+    assert data.dim == 13
+    assert data.batch_dim_axis == 0
+    assert data.time_dim_axis == 1
+    assert data.feature_dim_axis == 2
+    assert data.batch_ndim == 3
+    assert data.batch_shape == (None, None, 13)
+    assert data.dtype == "float32"
+    assert data.sparse == False
 
 
 def test_Data_dim():
     data = Data(name="my_data", dim=13)
-    assert_equal(data.name, "my_data")
-    assert_equal(data.dim, 13)
-    assert_equal(data.batch_dim_axis, 0)
-    assert_equal(data.time_dim_axis, 1)
-    assert_equal(data.feature_dim_axis, 2)
-    assert_equal(data.batch_ndim, 3)
-    assert_equal(data.batch_shape, (None, None, 13))
-    assert_equal(data.dtype, "float32")
-    assert_equal(data.sparse, False)
+    assert data.name == "my_data"
+    assert data.dim == 13
+    assert data.batch_dim_axis == 0
+    assert data.time_dim_axis == 1
+    assert data.feature_dim_axis == 2
+    assert data.batch_ndim == 3
+    assert data.batch_shape == (None, None, 13)
+    assert data.dtype == "float32"
+    assert data.sparse == False
 
 
 def test_Data_dim_none():
     data = Data(name="my_data", dim=None)
-    assert_equal(data.dim, None)
-    assert_equal(data.batch_dim_axis, 0)
-    assert_equal(data.time_dim_axis, 1)
-    assert_equal(data.feature_dim_axis, 2)
-    assert_equal(data.batch_ndim, 3)
-    assert_equal(data.batch_shape, (None, None, None))
-    assert_equal(data.dtype, "float32")
-    assert_equal(data.sparse, False)
+    assert data.dim == None
+    assert data.batch_dim_axis == 0
+    assert data.time_dim_axis == 1
+    assert data.feature_dim_axis == 2
+    assert data.batch_ndim == 3
+    assert data.batch_shape == (None, None, None)
+    assert data.dtype == "float32"
+    assert data.sparse == False
 
 
 def test_Data_dim_none_auto_create_placeholders():
     data = Data(name="my_data", dim=None, auto_create_placeholders=True)
-    assert_equal(data.dim, None)
-    assert_equal(data.batch_dim_axis, 0)
-    assert_equal(data.time_dim_axis, 1)
-    assert_equal(data.feature_dim_axis, 2)
+    assert data.dim == None
+    assert data.batch_dim_axis == 0
+    assert data.time_dim_axis == 1
+    assert data.feature_dim_axis == 2
     data_ = Data(name="my_data", dim=None)
-    assert_equal(data.batch_ndim, 3)
-    assert_equal(data.batch_shape, (None, None, None))
-    assert_equal(data.dtype, "float32")
-    assert_equal(data.sparse, False)
+    assert data.batch_ndim == 3
+    assert data.batch_shape == (None, None, None)
+    assert data.dtype == "float32"
+    assert data.sparse == False
     assert (data.batch_dim_axis, data.time_dim_axis, data.feature_dim_axis) == (
         data_.batch_dim_axis,
         data_.time_dim_axis,
@@ -90,37 +89,37 @@ def test_Data_default_time_no_time():
 
 def test_Data_copy_time_major():
     data = Data(name="my_data", dim=13)
-    assert_equal(data.batch_dim_axis, 0)
-    assert_equal(data.time_dim_axis, 1)
-    assert_equal(data.feature_dim_axis, 2)
-    assert_equal(data.batch_ndim, 3)
+    assert data.batch_dim_axis == 0
+    assert data.time_dim_axis == 1
+    assert data.feature_dim_axis == 2
+    assert data.batch_ndim == 3
     data2 = data.copy_as_time_major()
-    assert_equal(data2.time_dim_axis, 0)
-    assert_equal(data2.batch_dim_axis, 1)
-    assert_equal(data2.feature_dim_axis, 2)
-    assert_equal(data2.batch_ndim, 3)
+    assert data2.time_dim_axis == 0
+    assert data2.batch_dim_axis == 1
+    assert data2.feature_dim_axis == 2
+    assert data2.batch_ndim == 3
 
 
 def test_Data_copy_batch_major():
     data = Data(name="my_data", dim=13, time_dim_axis=0, batch_dim_axis=1)
-    assert_equal(data.time_dim_axis, 0)
-    assert_equal(data.batch_dim_axis, 1)
-    assert_equal(data.feature_dim_axis, 2)
-    assert_equal(data.batch_ndim, 3)
+    assert data.time_dim_axis == 0
+    assert data.batch_dim_axis == 1
+    assert data.feature_dim_axis == 2
+    assert data.batch_ndim == 3
     data2 = data.copy_as_batch_major()
-    assert_equal(data2.batch_dim_axis, 0)
-    assert_equal(data2.time_dim_axis, 1)
-    assert_equal(data2.feature_dim_axis, 2)
-    assert_equal(data2.batch_ndim, 3)
+    assert data2.batch_dim_axis == 0
+    assert data2.time_dim_axis == 1
+    assert data2.feature_dim_axis == 2
+    assert data2.batch_ndim == 3
 
 
 def test_Data_copy_as_batch_major_no_extra_feat():
     data = Data(name="att_weights_output", shape=(None,), batch_dim_axis=1)
     print("data", data, "feat axis:", data.feature_dim_axis_or_unspecified, data.feature_dim_axis)
-    assert_equal(data.time_dim_axis, 0)
+    assert data.time_dim_axis == 0
     data2 = data.copy_as_batch_major()
-    assert_equal(data2.batch_dim_axis, 0)
-    assert_equal(data2.time_dim_axis, 1)
+    assert data2.batch_dim_axis == 0
+    assert data2.time_dim_axis == 1
     # No check for feature_dim_axis, as this behavior does not matter here.
 
 
@@ -129,41 +128,41 @@ def test_Data_spatial_batch_axes():
     d2 = Data(name="ff_out_output", shape=(None, 9001), dtype="float32")
     spatial_axes1 = d1.get_spatial_batch_axes()
     spatial_axes2 = d2.get_spatial_batch_axes()
-    assert_equal(len(spatial_axes1), len(spatial_axes2))
+    assert len(spatial_axes1) == len(spatial_axes2)
     spatial_axes1 = d1.get_spatial_axes()
     spatial_axes2 = d2.get_spatial_axes()
-    assert_equal(len(spatial_axes1), len(d1.get_spatial_batch_axes()))
-    assert_equal(spatial_axes1, spatial_axes2)
+    assert len(spatial_axes1) == len(d1.get_spatial_batch_axes())
+    assert spatial_axes1 == spatial_axes2
 
 
 def test_Data_spatial_batch_axes_2():
     d = Data(name="data", shape=(None, 9000))
-    assert_equal(d.get_spatial_batch_axes(), [1])
+    assert d.get_spatial_batch_axes() == [1]
     d = Data(name="data", shape=(13, 9000))
-    assert_equal(d.get_spatial_batch_axes(), [1])
+    assert d.get_spatial_batch_axes() == [1]
     d = Data(name="data", shape=(None, 13, 9000))
-    assert_equal(d.get_spatial_batch_axes(), [1, 2])
+    assert d.get_spatial_batch_axes() == [1, 2]
 
 
 def test_Data_get_bc_spatial_batch_shape():
     d = Data(name="data", shape=(None, 9000))
-    assert_equal(d.get_bc_spatial_batch_shape(), (1, 1, 9000))
+    assert d.get_bc_spatial_batch_shape() == (1, 1, 9000)
     d = Data(name="data", shape=(13, 9000))
-    assert_equal(d.get_bc_spatial_batch_shape(), (1, 1, 9000))
+    assert d.get_bc_spatial_batch_shape() == (1, 1, 9000)
     d = Data(name="data", shape=(None, 13, 9000))
-    assert_equal(d.get_bc_spatial_batch_shape(), (1, 1, 1, 9000))
+    assert d.get_bc_spatial_batch_shape() == (1, 1, 1, 9000)
 
 
 def test_Data_get_bc_shape():
     d = Data(name="data", shape=(None, 9000))
-    assert_equal(d.get_bc_shape(), (1, 1, 9000))
+    assert d.get_bc_shape() == (1, 1, 9000)
     d = Data(name="data", shape=(13, 9000))
-    assert_equal(d.get_bc_shape(), (1, 1, 9000))
+    assert d.get_bc_shape() == (1, 1, 9000)
     d = Data(name="data", shape=(None, 13, 9000))
-    assert_equal(d.get_bc_shape(), (1, 1, 1, 9000))
+    assert d.get_bc_shape() == (1, 1, 1, 9000)
     d = Data(name="data", shape=(None, 13, 9000))
-    assert_equal(d.get_bc_shape({"*": None}), (None, None, 13, 9000))
-    assert_equal(d.get_bc_shape({("B", "dim:13"): None}), (None, 1, 13, 9000))
+    assert d.get_bc_shape({"*": None}) == (None, None, 13, 9000)
+    assert d.get_bc_shape({("B", "dim:13"): None}) == (None, 1, 13, 9000)
 
 
 def test_Data_copy_template_adding_time_dim_no_feature():
@@ -380,17 +379,17 @@ def test_Data_find_matching_dim_map_different_static_dims():
 
     # without broadcast_matches=False should not match
     is_equal_opts = dict(allow_same_feature_dim=True, allow_same_spatial_dim=True, treat_feature_as_spatial=True)
-    assert_equal(d1.find_matching_dims(d2.get_dim_tag(0), is_equal_opts=is_equal_opts), [0, 1])
-    assert_equal(d1.find_matching_dims(d2.get_dim_tag(1), is_equal_opts=is_equal_opts), [])
-    assert_equal(d1.find_matching_dims(d2.get_dim_tag(2), is_equal_opts=is_equal_opts), [])
+    assert d1.find_matching_dims(d2.get_dim_tag(0), is_equal_opts=is_equal_opts) == [0, 1]
+    assert d1.find_matching_dims(d2.get_dim_tag(1), is_equal_opts=is_equal_opts) == []
+    assert d1.find_matching_dims(d2.get_dim_tag(2), is_equal_opts=is_equal_opts) == []
 
     # with broadcast_matches=True should match
     is_equal_opts = dict(
         allow_same_feature_dim=True, allow_same_spatial_dim=True, treat_feature_as_spatial=True, broadcast_matches=True
     )
-    assert_equal(d1.find_matching_dims(d2.get_dim_tag(0), is_equal_opts=is_equal_opts), [0, 1])
-    assert_equal(d1.find_matching_dims(d2.get_dim_tag(1), is_equal_opts=is_equal_opts), [0, 1, 2])
-    assert_equal(d1.find_matching_dims(d2.get_dim_tag(2), is_equal_opts=is_equal_opts), [0, 1, 2])
+    assert d1.find_matching_dims(d2.get_dim_tag(0), is_equal_opts=is_equal_opts) == [0, 1]
+    assert d1.find_matching_dims(d2.get_dim_tag(1), is_equal_opts=is_equal_opts) == [0, 1, 2]
+    assert d1.find_matching_dims(d2.get_dim_tag(2), is_equal_opts=is_equal_opts) == [0, 1, 2]
 
     mapping = d1.find_matching_dim_map(d2, list(range(d2.batch_ndim)))  # maps d2 -> d1
     assert len(mapping.values()) == d2.batch_ndim
@@ -410,15 +409,15 @@ def test_Data_find_matching_dim_map_broadcast_matches():
 
     # default should not match
     is_equal_opts = dict(allow_same_feature_dim=True, allow_same_spatial_dim=True, treat_feature_as_spatial=True)
-    assert_equal(d1.find_matching_dims(d2.get_dim_tag(0), is_equal_opts=is_equal_opts), [1])
-    assert_equal(d1.find_matching_dims(d2.get_dim_tag(1), is_equal_opts=is_equal_opts), [])
+    assert d1.find_matching_dims(d2.get_dim_tag(0), is_equal_opts=is_equal_opts) == [1]
+    assert d1.find_matching_dims(d2.get_dim_tag(1), is_equal_opts=is_equal_opts) == []
 
     # with broadcast_matches=True should match
     is_equal_opts_match = dict(
         allow_same_feature_dim=True, allow_same_spatial_dim=True, treat_feature_as_spatial=True, broadcast_matches=True
     )
-    assert_equal(d1.find_matching_dims(d2.get_dim_tag(0), is_equal_opts=is_equal_opts_match), [1])
-    assert_equal(d1.find_matching_dims(d2.get_dim_tag(1), is_equal_opts=is_equal_opts_match), [1, 2])
+    assert d1.find_matching_dims(d2.get_dim_tag(0), is_equal_opts=is_equal_opts_match) == [1]
+    assert d1.find_matching_dims(d2.get_dim_tag(1), is_equal_opts=is_equal_opts_match) == [1, 2]
 
     mapping = d1.find_matching_dim_map(d2, list(range(d2.batch_ndim)), is_equal_opts)  # maps d2 -> d1
     assert mapping[0] == 1 and mapping[1] == 2
@@ -702,14 +701,14 @@ def test_Data_copy_compatible_to_batch_feature_is_dynamic():
     start = Data(name="t_start_output", shape=(None,), dtype="int32", sparse=True, dim=None, batch_dim_axis=1)
     start.size_placeholder = {0: dec.size_placeholder[0]}
     print("start:", start)
-    assert_equal(start.get_time_dim_tag(), dec.get_time_dim_tag())
+    assert start.get_time_dim_tag() == dec.get_time_dim_tag()
     # energy: batch_shape_meta=[F|'time-with-postfix:0_data_target0',B,T|'time-with-postfix:encoder']
     energy = Data(name="energy2_output", shape=(None, None), batch_dim_axis=1, time_dim_axis=2, feature_dim_axis=0)
     energy.size_placeholder = {0: dec.size_placeholder[0], 1: enc.size_placeholder[0]}
     print("energy:", energy)
-    assert_equal(energy.get_size_dim_tag(0), dec.get_time_dim_tag())
-    assert_equal(energy.get_size_dim_tag(1), enc.get_time_dim_tag())
-    assert_equal(energy.get_time_dim_tag(), enc.get_time_dim_tag())
+    assert energy.get_size_dim_tag(0) == dec.get_time_dim_tag()
+    assert energy.get_size_dim_tag(1) == enc.get_time_dim_tag()
+    assert energy.get_time_dim_tag() == enc.get_time_dim_tag()
     t = start.copy_compatible_to(energy, check_sparse=False, check_dtype=False)
     print("t:", t)
     assert t.shape == (None, 1) and t.time_dim_axis == energy.time_dim_axis
@@ -717,7 +716,7 @@ def test_Data_copy_compatible_to_batch_feature_is_dynamic():
     assert t.sparse and t.feature_dim_axis is None  # because it is sparse
     assert set(t.size_placeholder.keys()) == {0}
     assert t.size_placeholder[0] is dec.size_placeholder[0]
-    assert_equal(t.get_size_dim_tag(0), dec.get_time_dim_tag())
+    assert t.get_size_dim_tag(0) == dec.get_time_dim_tag()
 
 
 def test_Data_copy_compatible_to_bias_to_batch_time_spatial_feature():
@@ -917,12 +916,12 @@ def test_Data_get_common_data_one_undefined_time():
     c.size_placeholder = b.size_placeholder.copy()
     print("c:", c)
     c.sanity_check()
-    assert_equal(b.get_time_dim_tag(), c.get_time_dim_tag())
+    assert b.get_time_dim_tag() == c.get_time_dim_tag()
 
     out = Data.get_common_data([a, b, c])
     print("out:", out)
     assert out.shape == (None, 1) and out.batch_dim_axis == 0
-    assert_equal(out.get_time_dim_tag(), b.get_time_dim_tag())
+    assert out.get_time_dim_tag() == b.get_time_dim_tag()
 
 
 def test_Data_get_common_data_copy_compatible_to_different_time_dim():
@@ -933,8 +932,8 @@ def test_Data_get_common_data_copy_compatible_to_different_time_dim():
     common_data = Data.get_common_data([a, b], allow_broadcast_all_sources=True)
     print("common:", common_data)
     assert common_data.shape == (None, None, 3, 5) and common_data.batch_dim_axis == 0
-    assert_equal(common_data.get_size_dim_tag(0), a.get_time_dim_tag())
-    assert_equal(common_data.get_size_dim_tag(1), b.get_time_dim_tag())
+    assert common_data.get_size_dim_tag(0) == a.get_time_dim_tag()
+    assert common_data.get_size_dim_tag(1) == b.get_time_dim_tag()
     aa = a.copy_compatible_to(common_data)
     bb = b.copy_compatible_to(common_data)
     print("aa:", aa)
@@ -946,9 +945,9 @@ def test_Data_get_common_data_copy_compatible_to_different_time_dim():
         if d1 == 1 or d2 == 1:
             continue  # it's fine, that will broadcast
         assert d1 == d2, "mismatch in axis %i" % i
-    assert_equal(aa.get_dim_tag(axis=1), a.get_time_dim_tag())
+    assert aa.get_dim_tag(axis=1) == a.get_time_dim_tag()
     assert aa.batch_shape[2] == 1
-    assert_equal(bb.get_dim_tag(axis=2), b.get_time_dim_tag())
+    assert bb.get_dim_tag(axis=2) == b.get_time_dim_tag()
     assert bb.batch_shape[1] == 1
     x = aa.placeholder + bb.placeholder
     session.run(
@@ -965,19 +964,19 @@ def test_Data_get_common_data_copy_compatible_to_different_time_dim_different_st
     b = Data(name="b", shape=(3, None, 5), auto_create_placeholders=True)
     print("a:", a)
     print("b:", b)
-    assert_not_equal(a.get_time_dim_tag(), b.get_time_dim_tag())
+    assert a.get_time_dim_tag() != b.get_time_dim_tag()
     common_data = Data.get_common_data([a, b], allow_broadcast_all_sources=True)
     print("common:", common_data)
     assert common_data.shape.count(None) == 2 and 3 in common_data.shape and 5 in common_data.shape
     assert common_data.batch_ndim == 5
-    assert_equal(common_data.get_size_dim_tag(0), a.get_time_dim_tag())
-    assert_equal(common_data.get_size_dim_tag(1), b.get_time_dim_tag())
+    assert common_data.get_size_dim_tag(0) == a.get_time_dim_tag()
+    assert common_data.get_size_dim_tag(1) == b.get_time_dim_tag()
     common_tags, _ = Dim.get_all_dimension_tags([common_data])
     print("common dim tags:")
     pprint(common_tags)
     assert len(common_tags) == common_data.batch_ndim  # all unique
-    assert_in(a.get_time_dim_tag(), common_tags)
-    assert_in(b.get_time_dim_tag(), common_tags)
+    assert a.get_time_dim_tag() in common_tags
+    assert b.get_time_dim_tag() in common_tags
     aa = a.copy_compatible_to(common_data)
     bb = b.copy_compatible_to(common_data)
     print("aa:", aa)
@@ -989,8 +988,8 @@ def test_Data_get_common_data_copy_compatible_to_different_time_dim_different_st
         if d1 == 1 or d2 == 1:
             continue  # it's fine, that will broadcast
         assert d1 == d2, "mismatch in axis %i" % i
-    assert_equal(aa.get_size_dim_tag(0), a.get_time_dim_tag())
-    assert_equal(bb.get_size_dim_tag(0), b.get_time_dim_tag())
+    assert aa.get_size_dim_tag(0) == a.get_time_dim_tag()
+    assert bb.get_size_dim_tag(0) == b.get_time_dim_tag()
     x = aa.placeholder + bb.placeholder
     session.run(
         x,
@@ -1106,11 +1105,11 @@ def test_Data_copy_compatible_to_move_spatial_axes():
     a = Data(name="a", shape=(3, None, 5))
     a.size_placeholder = {1: common.size_placeholder[0]}
     print("a:", a)
-    assert_equal(common.get_time_dim_tag(), a.get_time_dim_tag())
+    assert common.get_time_dim_tag() == a.get_time_dim_tag()
     b = a.copy_compatible_to(common)
     print("b:", b)
     assert b.shape == common.shape
-    assert_equal(b.get_time_dim_tag(), a.get_time_dim_tag())
+    assert b.get_time_dim_tag() == a.get_time_dim_tag()
 
 
 def test_Data_copy_add_spatial_dim_added_time_at_end():
@@ -1384,7 +1383,7 @@ def test_Data_copy_add_spatial_dim_most_right():
     print(d1, "spatial axes:", d1.get_spatial_batch_axes())
     d2 = d1.copy_add_spatial_dim(1)
     print(d2, "spatial axes:", d2.get_spatial_batch_axes())
-    assert_equal(d2.get_spatial_batch_axes(), [1])
+    assert d2.get_spatial_batch_axes() == [1]
 
 
 def test_Data_copy_add_spatial_dim_no_batch_end():
@@ -1520,7 +1519,7 @@ def test_Data_auto_create_placeholders_same_dim_tags_as_existing():
         assert seq_len is data.get_sequence_lengths() is classes.get_sequence_lengths()
         assert seq_len.op.type == "Placeholder"
         placeholder_ops = [op for op in graph.get_operations() if op.type == "Placeholder"]
-        assert_equal(set(placeholder_ops), {data.placeholder.op, classes.placeholder.op, time_tag.dyn_size.op})
+        assert set(placeholder_ops) == {data.placeholder.op, classes.placeholder.op, time_tag.dyn_size.op}
 
 
 def test_Data_copy_masked_0():
@@ -1586,7 +1585,7 @@ def test_Dim_MarkedDim_sorted():
     print(ls)
     print(sorted(ls))
     # Test current order, but the order itself doesn't really matter for anything.
-    assert_equal(sorted(ls), [a, b, a_implicit2, a_implicit, b_implicit])
+    assert sorted(ls) == [a, b, a_implicit2, a_implicit, b_implicit]
 
 
 def test_Dim_find_matching_dim_map_match_priority():
@@ -1598,7 +1597,7 @@ def test_Dim_find_matching_dim_map_match_priority():
     filter_feat_dim_map = filter_.find_matching_dim_map(
         other=Data("dummy", [filter_in_dim, out_dim], dtype="float32"), other_axes=[0, 1]
     )
-    assert_equal(filter_feat_dim_map, {0: 1, 1: 0})
+    assert filter_feat_dim_map == {0: 1, 1: 0}
 
 
 def test_ExternData_ext_Data_batch_info():
@@ -1965,9 +1964,9 @@ def test_sequence_mask_len_via_loop():
     mask = sequence_mask_time_major(seq_len)
     seq_len_v, mask_v = session.run((seq_len, mask))
     print(seq_len_v)
-    assert_equal(seq_len_v.tolist(), [2, 3])
+    assert seq_len_v.tolist() == [2, 3]
     print(mask_v)
-    assert_equal(mask_v.tolist(), [[True, True], [True, True], [False, True]])
+    assert mask_v.tolist() == [[True, True], [True, True], [False, True]]
 
 
 def test_get_initializer_zero():
@@ -2002,35 +2001,35 @@ def test_get_initializer_xavier():
     shape = (2, 3)
     initializer = get_initializer("xavier")
     v = initializer(shape)
-    assert_equal(session.run(v).shape, shape)  # returns some random matrix
+    assert session.run(v).shape == shape  # returns some random matrix
 
 
 def test_get_initializer_glorot_uniform():
     shape = (2, 3)
     initializer = get_initializer("glorot_uniform")
     v = initializer(shape)
-    assert_equal(session.run(v).shape, shape)  # returns some random matrix
+    assert session.run(v).shape == shape  # returns some random matrix
 
 
 def test_get_initializer_glorot_normal_with_scale():
     shape = (2, 3)
     initializer = get_initializer('VarianceScaling(scale=6.0, mode="fan_avg", distribution="normal")')
     v = initializer(shape)
-    assert_equal(session.run(v).shape, shape)  # returns some random matrix
+    assert session.run(v).shape == shape  # returns some random matrix
 
 
 def test_get_initializer_uniform():
     shape = (2, 3)
     initializer = get_initializer("RandomUniform(-0.01, 0.01)")
     v = initializer(shape)
-    assert_equal(session.run(v).shape, shape)  # returns some random matrix
+    assert session.run(v).shape == shape  # returns some random matrix
 
 
 def test_get_initializer_gauss():
     shape = (2, 3)
     initializer = get_initializer("RandomNormal(0.0, 0.01)")
     v = initializer(shape)
-    assert_equal(session.run(v).shape, shape)  # returns some random matrix
+    assert session.run(v).shape == shape  # returns some random matrix
 
 
 def test_wrap_distribution_non_zero():
@@ -2048,7 +2047,7 @@ def test_close_event_writer_thread():
 
     tmp_dir = tempfile.mkdtemp()
     writer = tf_compat.v1.summary.FileWriter(tmp_dir)
-    assert_equal(count_event_logger_threads(), 1)
+    assert count_event_logger_threads() == 1
     assert isinstance(writer.event_writer, EventFileWriter)
     assert isinstance(writer.event_writer._worker, _EventLoggerThread)
     writer.close()
@@ -2056,33 +2055,33 @@ def test_close_event_writer_thread():
     # https://github.com/tensorflow/tensorflow/issues/4820
     # The _EventLoggerThread is still running (at least in TF 1.1.0).
     stop_event_writer_thread(writer)
-    assert_equal(count_event_logger_threads(), 0)
+    assert count_event_logger_threads() == 0
 
 
 def test_single_strided_slice():
     x = tf.expand_dims(tf.range(10), axis=0)
-    assert_equal(list(tf.shape(x).eval()), [1, 10])
-    assert_equal(list(single_strided_slice(x, axis=1, begin=3, end=6, step=2)[0].eval()), [3, 5])
-    assert_equal(list(single_strided_slice(x, axis=1, begin=4)[0].eval()), list(range(4, 10)))
-    assert_equal(list(single_strided_slice(x, axis=1, end=3)[0].eval()), [0, 1, 2])
-    assert_equal(list(single_strided_slice(x, axis=tf.constant(1), end=3)[0].eval()), [0, 1, 2])
-    assert_equal(list(single_strided_slice(x, axis=tf.constant(-1), end=3)[0].eval()), [0, 1, 2])
+    assert list(tf.shape(x).eval()) == [1, 10]
+    assert list(single_strided_slice(x, axis=1, begin=3, end=6, step=2)[0].eval()) == [3, 5]
+    assert list(single_strided_slice(x, axis=1, begin=4)[0].eval()) == list(range(4, 10))
+    assert list(single_strided_slice(x, axis=1, end=3)[0].eval()) == [0, 1, 2]
+    assert list(single_strided_slice(x, axis=tf.constant(1), end=3)[0].eval()) == [0, 1, 2]
+    assert list(single_strided_slice(x, axis=tf.constant(-1), end=3)[0].eval()) == [0, 1, 2]
     x2 = tf.reshape(tf.range(9), (3, 3))
-    assert_equal(list(x2[0].eval()), [0, 1, 2])
-    assert_equal(list(tf.squeeze(single_strided_slice(x2, axis=tf.constant(0), end=1), axis=0).eval()), [0, 1, 2])
+    assert list(x2[0].eval()) == [0, 1, 2]
+    assert list(tf.squeeze(single_strided_slice(x2, axis=tf.constant(0), end=1), axis=0).eval()) == [0, 1, 2]
 
 
 def test_slice_pad_zeros():
     x = tf.constant([1, 2, 3, 4])
-    assert_equal(list(slice_pad_zeros(x, begin=1, end=3).eval()), [2, 3])
-    assert_equal(list(slice_pad_zeros(x, begin=-2, end=2).eval()), [0, 0, 1, 2])
-    assert_equal(list(slice_pad_zeros(x, begin=-2, end=6).eval()), [0, 0, 1, 2, 3, 4, 0, 0])
-    assert_equal(list(slice_pad_zeros(x, begin=2, end=6).eval()), [3, 4, 0, 0])
+    assert list(slice_pad_zeros(x, begin=1, end=3).eval()) == [2, 3]
+    assert list(slice_pad_zeros(x, begin=-2, end=2).eval()) == [0, 0, 1, 2]
+    assert list(slice_pad_zeros(x, begin=-2, end=6).eval()) == [0, 0, 1, 2, 3, 4, 0, 0]
+    assert list(slice_pad_zeros(x, begin=2, end=6).eval()) == [3, 4, 0, 0]
 
 
 def test_circular_pad():
     x = tf.reshape(tf.range(9), (3, 3))
-    assert_equal(list(x[0].eval()), [0, 1, 2])
+    assert list(x[0].eval()) == [0, 1, 2]
     x_ref = numpy.array([[0, 1, 2], [3, 4, 5], [6, 7, 8]])
     numpy.testing.assert_equal(x.eval(), x_ref)
     y = circular_pad(x, paddings=1)
@@ -2090,7 +2089,7 @@ def test_circular_pad():
     numpy.testing.assert_equal(y.eval(), y_ref)
 
     x = tf.expand_dims(tf.reshape(tf.range(9), (3, 3)), axis=2)
-    assert_equal(list(x[0, :, 0].eval()), [0, 1, 2])
+    assert list(x[0, :, 0].eval()) == [0, 1, 2]
     x_ref = numpy.array([[[0], [1], [2]], [[3], [4], [5]], [[6], [7], [8]]])
     numpy.testing.assert_equal(x.eval(), x_ref)
     y = circular_pad(x, paddings=1, axes=(0, 1))
@@ -2108,17 +2107,17 @@ def test_circular_pad():
 
 def test_reuse_name_scope_double():
     with reuse_name_scope("double"):
-        assert_equal(tf_compat.v1.get_default_graph()._name_stack, "double")
+        assert tf_compat.v1.get_default_graph()._name_stack == "double"
         with reuse_name_scope("sub"):
-            assert_equal(tf_compat.v1.get_default_graph()._name_stack, "double/sub")
-            assert_equal(get_current_name_scope(), "double/sub")
+            assert tf_compat.v1.get_default_graph()._name_stack == "double/sub"
+            assert get_current_name_scope() == "double/sub"
 
 
 def test_reuse_name_scope_mix1():
     with reuse_name_scope("mix1"):
-        assert_equal(tf_compat.v1.get_default_graph()._name_stack, "mix1")
+        assert tf_compat.v1.get_default_graph()._name_stack == "mix1"
         with tf.name_scope("sub"):
-            assert_equal(tf_compat.v1.get_default_graph()._name_stack, "mix1/sub")
+            assert tf_compat.v1.get_default_graph()._name_stack == "mix1/sub"
             # The following is not true because get_current_name_scope is only var-scope:
             # assert_equal(get_current_name_scope(), "mix1/sub")
 
@@ -2126,7 +2125,7 @@ def test_reuse_name_scope_mix1():
 def test_reuse_name_scope_mix2():
     with tf.name_scope("mix2"):
         with reuse_name_scope("sub"):
-            assert_equal(tf_compat.v1.get_default_graph()._name_stack, "mix2/sub")
+            assert tf_compat.v1.get_default_graph()._name_stack == "mix2/sub"
             # The following is not true because get_current_name_scope is only var-scope:
             # assert_equal(get_current_name_scope(), "mix2/sub")
 
@@ -2134,42 +2133,42 @@ def test_reuse_name_scope_mix2():
 def test_reuse_name_scope_mix3():
     with reuse_name_scope("mix3"):
         with tf_compat.v1.variable_scope("sub"):
-            assert_equal(get_current_name_scope(), "mix3/sub")
+            assert get_current_name_scope() == "mix3/sub"
 
 
 def test_reuse_name_scope_mix4():
     with tf_compat.v1.variable_scope("mix4"):
         with reuse_name_scope("sub"):
-            assert_equal(get_current_name_scope(), "mix4/sub")
+            assert get_current_name_scope() == "mix4/sub"
 
 
 def test_reuse_name_scope_2():
     with reuse_name_scope("lstm2"):
         with reuse_name_scope("rec") as scope:
-            assert_is_instance(scope, tf_compat.v1.VariableScope)
-            assert_equal(scope.name, "lstm2/rec")
-            assert_equal(get_current_name_scope(), "lstm2/rec")
+            assert isinstance(scope, tf_compat.v1.VariableScope)
+            assert scope.name == "lstm2/rec"
+            assert get_current_name_scope() == "lstm2/rec"
             with tf.name_scope("sub"):
-                assert_equal(get_current_name_scope(), "lstm2/rec/sub")
+                assert get_current_name_scope() == "lstm2/rec/sub"
 
 
 def test_reuse_name_scope():
     with reuse_name_scope("lstm0"):
         with tf_compat.v1.variable_scope("rec"):
             a = tf_compat.v1.get_variable("a", shape=(3, 4))
-            assert_is_instance(a, tf.Variable)
-            assert_equal(a.name, "lstm0/rec/a:0")
+            assert isinstance(a, tf.Variable)
+            assert a.name == "lstm0/rec/a:0"
 
             b = tf.Variable(name="b", initial_value=tf.zeros((2,)))
-            assert_equal(b.name, "lstm0/rec/b:0")
+            assert b.name == "lstm0/rec/b:0"
 
     with reuse_name_scope("lstm0"):
         with reuse_name_scope("rec"):
             c = tf.Variable(name="c", initial_value=tf.zeros((2,)))
-            assert_equal(c.name, "lstm0/rec/c:0")
+            assert c.name == "lstm0/rec/c:0"
 
             c2 = tf.Variable(name="c", initial_value=tf.zeros((2,)))
-            assert_equal(c2.name, "lstm0/rec/c_1:0")
+            assert c2.name == "lstm0/rec/c_1:0"
 
 
 def test_reuse_name_scope_root():
@@ -2179,56 +2178,56 @@ def test_reuse_name_scope_root():
 
 def test_reuse_var_scope():
     with tf_compat.v1.variable_scope("v1"):
-        assert_equal(get_current_var_scope_name(), "v1")
-        assert_equal(get_current_name_scope(), "v1")
+        assert get_current_var_scope_name() == "v1"
+        assert get_current_name_scope() == "v1"
         with tf_compat.v1.variable_scope("v2") as scope:
-            assert_equal(get_current_var_scope_name(), "v1/v2")
-            assert_equal(get_current_name_scope(), "v1/v2")
+            assert get_current_var_scope_name() == "v1/v2"
+            assert get_current_name_scope() == "v1/v2"
             with tf.name_scope("v3"):
-                assert_equal(get_current_name_scope(), "v1/v2/v3")
-                assert_equal(get_current_var_scope_name(), "v1/v2")
-                assert_equal(scope.name, "v1/v2")
+                assert get_current_name_scope() == "v1/v2/v3"
+                assert get_current_var_scope_name() == "v1/v2"
+                assert scope.name == "v1/v2"
                 # Note: tf.compat.v1.variable_scope(scope) is broken here.
                 with reuse_name_scope(scope):
-                    assert_equal(get_current_var_scope_name(), "v1/v2")
-                    assert_equal(get_current_name_scope(), "v1/v2")
+                    assert get_current_var_scope_name() == "v1/v2"
+                    assert get_current_name_scope() == "v1/v2"
 
 
 def test_name_var_scope_mixing():
     with tf_compat.v1.variable_scope("mv1"):
-        assert_equal(get_current_var_scope_name(), "mv1")
-        assert_equal(get_current_name_scope(), "mv1")
+        assert get_current_var_scope_name() == "mv1"
+        assert get_current_name_scope() == "mv1"
         with tf_compat.v1.variable_scope("v2") as scope:
-            assert_equal(get_current_var_scope_name(), "mv1/v2")
-            assert_equal(get_current_name_scope(), "mv1/v2")
+            assert get_current_var_scope_name() == "mv1/v2"
+            assert get_current_name_scope() == "mv1/v2"
             with tf.name_scope("v3"):
-                assert_equal(get_current_name_scope(), "mv1/v2/v3")
-                assert_equal(get_current_var_scope_name(), "mv1/v2")
-                assert_equal(scope.name, "mv1/v2")
+                assert get_current_name_scope() == "mv1/v2/v3"
+                assert get_current_var_scope_name() == "mv1/v2"
+                assert scope.name == "mv1/v2"
                 # Note: tf.compat.v1.variable_scope("v4") is broken here.
                 with reuse_name_scope("v4"):
-                    assert_equal(get_current_var_scope_name(), "mv1/v2/v3/v4")
-                    assert_equal(get_current_name_scope(), "mv1/v2/v3/v4")
+                    assert get_current_var_scope_name() == "mv1/v2/v3/v4"
+                    assert get_current_name_scope() == "mv1/v2/v3/v4"
                     with reuse_name_scope(scope):
-                        assert_equal(get_current_var_scope_name(), "mv1/v2")
-                        assert_equal(get_current_name_scope(), "mv1/v2")
+                        assert get_current_var_scope_name() == "mv1/v2"
+                        assert get_current_name_scope() == "mv1/v2"
 
 
 def test_reuse_name_scope_of_tensor():
     with tf.name_scope("scope1") as scope1:
         x = tf.constant(42)
     with tf.name_scope("scope2") as scope2:
-        assert_equal(get_current_name_scope() + "/", scope2)
+        assert get_current_name_scope() + "/" == scope2
         with reuse_name_scope_of_tensor(x):
-            assert_equal(get_current_name_scope() + "/", scope1)
+            assert get_current_name_scope() + "/" == scope1
 
 
 def test_reuse_name_scope_of_tensor_root():
     x = tf.constant(42)
     with tf.name_scope("scope2") as scope2:
-        assert_equal(get_current_name_scope() + "/", scope2)
+        assert get_current_name_scope() + "/" == scope2
         with reuse_name_scope_of_tensor(x):
-            assert_equal(get_current_name_scope(), "")
+            assert get_current_name_scope() == ""
 
 
 def test_loop_var_creation():
@@ -2296,7 +2295,7 @@ def test_gather_nd_grad():
     # Thus K == 2. gather_nd out will be idxs_exp.shape[:2] + params.shape[2:] = (beam,batch,n_in).
     gathered = tf.gather_nd(base, idxs_exp)  # (beam,batch,n_in)
     gathered_shape, _ = session.run([tf.shape(gathered), gathered])
-    assert_equal(list(gathered_shape), [n_beam, n_batch, n_in])
+    assert list(gathered_shape) == [n_beam, n_batch, n_in]
 
     base_grad = tf.gradients(gathered, base)
     assert base_grad is not None
@@ -2381,30 +2380,30 @@ def test_nd_indices_scatter_nd_time_major():
 
 def test_dimshuffle():
     x = tf.zeros((2, 3, 5))
-    assert_equal(list(session.run(tf.shape(x))), [2, 3, 5])
-    assert_equal(list(session.run(tf.shape(dimshuffle(x, (1, 2, 0))))), [3, 5, 2])
-    assert_equal(list(session.run(tf.shape(dimshuffle(x, ("x", 1, 2, 0))))), [1, 3, 5, 2])
-    assert_equal(list(session.run(tf.shape(dimshuffle(x, ("x", 1, "x", 2, "x", 0, "x"))))), [1, 3, 1, 5, 1, 2, 1])
+    assert list(session.run(tf.shape(x))) == [2, 3, 5]
+    assert list(session.run(tf.shape(dimshuffle(x, (1, 2, 0))))) == [3, 5, 2]
+    assert list(session.run(tf.shape(dimshuffle(x, ("x", 1, 2, 0))))) == [1, 3, 5, 2]
+    assert list(session.run(tf.shape(dimshuffle(x, ("x", 1, "x", 2, "x", 0, "x"))))) == [1, 3, 1, 5, 1, 2, 1]
     x = tf.zeros((2, 1, 3))
-    assert_equal(list(session.run(tf.shape(dimshuffle(x, (2, 0))))), [3, 2])
-    assert_equal(list(session.run(tf.shape(dimshuffle(x, (2, "x", "x", 0))))), [3, 1, 1, 2])
+    assert list(session.run(tf.shape(dimshuffle(x, (2, 0))))) == [3, 2]
+    assert list(session.run(tf.shape(dimshuffle(x, (2, "x", "x", 0))))) == [3, 1, 1, 2]
 
 
 def test_expand_multiple_dims():
     x = tf.zeros((2, 3, 5))
-    assert_equal(list(session.run(tf.shape(x))), [2, 3, 5])
-    assert_equal(list(session.run(tf.shape(expand_multiple_dims(x, (1, 2))))), [2, 1, 1, 3, 5])
-    assert_equal(list(session.run(tf.shape(expand_multiple_dims(x, (1, 4))))), [2, 1, 3, 5, 1])
-    assert_equal(list(session.run(tf.shape(expand_multiple_dims(x, (1, 3, 5))))), [2, 1, 3, 1, 5, 1])
+    assert list(session.run(tf.shape(x))) == [2, 3, 5]
+    assert list(session.run(tf.shape(expand_multiple_dims(x, (1, 2))))) == [2, 1, 1, 3, 5]
+    assert list(session.run(tf.shape(expand_multiple_dims(x, (1, 4))))) == [2, 1, 3, 5, 1]
+    assert list(session.run(tf.shape(expand_multiple_dims(x, (1, 3, 5))))) == [2, 1, 3, 1, 5, 1]
 
 
 def test_move_axis():
     x = tf.zeros((2, 3, 5))
-    assert_equal(list(session.run(tf.shape(x))), [2, 3, 5])
-    assert_equal(list(session.run(tf.shape(move_axis(x, old_axis=0, new_axis=1)))), [3, 2, 5])
-    assert_equal(list(session.run(tf.shape(move_axis(x, old_axis=0, new_axis=2)))), [3, 5, 2])
-    assert_equal(list(session.run(tf.shape(move_axis(x, old_axis=2, new_axis=0)))), [5, 2, 3])
-    assert_equal(list(session.run(tf.shape(move_axis(x, old_axis=2, new_axis=1)))), [2, 5, 3])
+    assert list(session.run(tf.shape(x))) == [2, 3, 5]
+    assert list(session.run(tf.shape(move_axis(x, old_axis=0, new_axis=1)))) == [3, 2, 5]
+    assert list(session.run(tf.shape(move_axis(x, old_axis=0, new_axis=2)))) == [3, 5, 2]
+    assert list(session.run(tf.shape(move_axis(x, old_axis=2, new_axis=0)))) == [5, 2, 3]
+    assert list(session.run(tf.shape(move_axis(x, old_axis=2, new_axis=1)))) == [2, 5, 3]
 
 
 def test_flatten_with_seq_len_mask():
@@ -2414,42 +2413,38 @@ def test_flatten_with_seq_len_mask():
     assert x.shape.ndims == 3
     print("x (time-major):", x.eval().tolist())
     print("x (batch-major):", x.eval().transpose(1, 0, 2).tolist())
-    assert_equal(x.eval()[0].tolist(), [[0, 1], [2, 3], [4, 5]])
-    assert_equal(x.eval()[:3, 0].tolist(), [[0, 1], [6, 7], [12, 13]])
+    assert x.eval()[0].tolist() == [[0, 1], [2, 3], [4, 5]]
+    assert x.eval()[:3, 0].tolist() == [[0, 1], [6, 7], [12, 13]]
     flat_bm = flatten_with_seq_len_mask(x, seq_lens=seq_lens, batch_dim_axis=1, time_dim_axis=0)
     assert flat_bm.shape.ndims == 2
     print("flat (batch-major):", flat_bm.eval().tolist())
-    assert_equal(
-        flat_bm.eval().tolist(), [[0, 1], [6, 7], [12, 13], [18, 19], [2, 3], [8, 9], [14, 15], [4, 5], [10, 11]]
-    )
+    assert flat_bm.eval().tolist() == [[0, 1], [6, 7], [12, 13], [18, 19], [2, 3], [8, 9], [14, 15], [4, 5], [10, 11]]
     flat_tm = flatten_with_seq_len_mask_time_major(x, seq_lens=seq_lens, batch_dim_axis=1, time_dim_axis=0)
     assert flat_tm.shape.ndims == 2
     print("flat (time-major):", flat_tm.eval().tolist())
-    assert_equal(
-        flat_tm.eval().tolist(), [[0, 1], [2, 3], [4, 5], [6, 7], [8, 9], [10, 11], [12, 13], [14, 15], [18, 19]]
-    )
+    assert flat_tm.eval().tolist() == [[0, 1], [2, 3], [4, 5], [6, 7], [8, 9], [10, 11], [12, 13], [14, 15], [18, 19]]
 
 
 def test_constant_with_shape():
     x = session.run(constant_with_shape(3, [2, 3]))
-    assert_equal(x.shape, (2, 3))
-    assert_equal(x.dtype, numpy.int32)
-    assert_equal(x.flatten().tolist(), [3] * 2 * 3)
+    assert x.shape == (2, 3)
+    assert x.dtype == numpy.int32
+    assert x.flatten().tolist() == [3] * 2 * 3
 
     x = session.run(constant_with_shape(7.0, [2, 3]))
-    assert_equal(x.shape, (2, 3))
-    assert_equal(x.dtype, numpy.float32)
-    assert_equal(x.flatten().tolist(), [7.0] * 2 * 3)
+    assert x.shape == (2, 3)
+    assert x.dtype == numpy.float32
+    assert x.flatten().tolist() == [7.0] * 2 * 3
 
     x = session.run(constant_with_shape(False, [2, 3]))
-    assert_equal(x.shape, (2, 3))
-    assert_equal(x.dtype, numpy.bool_)
-    assert_equal(x.flatten().tolist(), [False] * 2 * 3)
+    assert x.shape == (2, 3)
+    assert x.dtype == numpy.bool_
+    assert x.flatten().tolist() == [False] * 2 * 3
 
     x = session.run(constant_with_shape(True, [2, 3]))
-    assert_equal(x.shape, (2, 3))
-    assert_equal(x.dtype, numpy.bool_)
-    assert_equal(x.flatten().tolist(), [True] * 2 * 3)
+    assert x.shape == (2, 3)
+    assert x.dtype == numpy.bool_
+    assert x.flatten().tolist() == [True] * 2 * 3
 
 
 def naive_windowed_batch(source, window, padding="same"):
@@ -2607,7 +2602,7 @@ def test_CustomGradient_register_new_graph_generic_loss_and_error_signal():
                 y = custom_gradient.generic_loss_and_error_signal(loss=1.0, x=x, grad_x=3.0)
                 assert y.graph is graph
                 (grad_y,) = tf.gradients(y, x)
-                assert_equal(session.run([y, x, grad_y]), [1.0, 2.0, 3.0])
+                assert session.run([y, x, grad_y]) == [1.0, 2.0, 3.0]
 
     check()
     check()
@@ -2623,7 +2618,7 @@ def test_CustomGradient_generic_loss_and_error_signal_post_func():
             z = 2.0 * y
             assert y.graph is graph
             (grad_z,) = tf.gradients(z, x)
-            assert_equal(session.run([z, x, grad_z]), [4.0, 5.0, 6.0])
+            assert session.run([z, x, grad_z]) == [4.0, 5.0, 6.0]
 
 
 def test_global_tensor():
@@ -2637,21 +2632,21 @@ def test_global_tensor():
     x = global_tensor(f, name="hello")
     x2 = global_tensor(f, name="hello")
     x3 = global_tensor(f, name="hello")
-    assert_equal(C.i, 1)
-    assert_is(x, x2)
-    assert_is(x, x3)
-    assert_equal(x.eval(), 42)
+    assert C.i == 1
+    assert x is x2
+    assert x is x3
+    assert x.eval() == 42
 
 
 def test_encode_raw_direct():
     raw = tf_compat.v1.decode_raw(tf.constant("ABC"), tf.uint8)
-    assert_equal(list(raw.eval()), [65, 66, 67])
+    assert list(raw.eval()) == [65, 66, 67]
 
 
 def test_encode_raw_simple():
     raw = tf_compat.v1.decode_raw(tf.constant("hello"), tf.uint8)
     back = encode_raw(raw)
-    assert_equal(back.eval(), b"hello")
+    assert back.eval() == b"hello"
 
 
 def test_encode_raw_seq_lens():
@@ -2660,7 +2655,7 @@ def test_encode_raw_seq_lens():
     raw = tf_compat.v1.decode_raw(tf.constant(strs), tf.uint8)
     seq_lens = tf.constant([len(s) for s in strs_stripped])
     back = encode_raw(raw, seq_lens=seq_lens)
-    assert_equal(list(back.eval()), [s.encode("utf8") for s in strs_stripped])
+    assert list(back.eval()) == [s.encode("utf8") for s in strs_stripped]
 
 
 @unittest.skip("broken? https://github.com/tensorflow/tensorflow/issues/11240")
@@ -2670,7 +2665,7 @@ def test_sequential_control_dependencies():
         [lambda: v.initializer, lambda: tf_compat.v1.assign(v, 3), lambda: tf_compat.v1.assign(v, v.read_value() + 5)]
     ):
         x = v.read_value()
-    assert_equal(x.eval(), 3 + 5)
+    assert x.eval() == 3 + 5
 
 
 @unittest.skip("broken? https://github.com/tensorflow/tensorflow/issues/11240")
@@ -2679,7 +2674,7 @@ def test_var_init():
     v = tf.Variable(initial_value=2, trainable=False, name="test_var_init")
     with tf.control_dependencies([v.initializer]):
         x = v.read_value()
-    assert_equal(x.eval(), 2)
+    assert x.eval() == 2
 
 
 def test_resource_var_init():
@@ -2694,16 +2689,16 @@ def test_resource_var_init():
     )
     with tf.control_dependencies([v.initializer]):
         x = v.read_value()
-    assert_equal(x.eval(), 2)
+    assert x.eval() == 2
 
 
 @unittest.skip("broken? see also test_var_init")  # TODO...
 def test_true_once():
     x = true_once()
-    assert_equal(x.eval(), True)
-    assert_equal(x.eval(), False)
-    assert_equal(x.eval(), False)
-    assert_equal(x.eval(), False)
+    assert x.eval() == True
+    assert x.eval() == False
+    assert x.eval() == False
+    assert x.eval() == False
 
 
 @unittest.skip("broken?")  # TODO...
@@ -2731,7 +2726,7 @@ def test_enforce_copy():
             x = tf.add(0, [a, b, v.read_value()])
     x_eval = list(x.eval())
     assert len(x_eval) == 3
-    assert_equal(x_eval[1:], [2, 3])
+    assert x_eval[1:] == [2, 3]
     # x[0] might depend on the implementation, and TF version.
     # In TF 1, it is 3. In TF 2, it is 2. (2 is actually probably more correct...)
     assert x_eval[0] in [2, 3]
@@ -2754,21 +2749,21 @@ def test_TensorArray():
     f = 0
     f = session.run(write, feed_dict={index: 0, value: 1, flow: f})
     f = session.run(write, feed_dict={index: 1, value: 2, flow: f})
-    assert_equal(session.run(read, feed_dict={index: 0, flow: f}), 1)
-    assert_equal(session.run(read, feed_dict={index: 1, flow: f}), 2)
+    assert session.run(read, feed_dict={index: 0, flow: f}) == 1
+    assert session.run(read, feed_dict={index: 1, flow: f}) == 2
 
 
 def test_tfconv1d_evensize():
     filters = tf.constant([[[2.0]], [[3.0]]])  # [filter_width, in_channels, out_channels]
     assert isinstance(filters, tf.Tensor)
-    assert_equal(filters.get_shape().as_list(), [2, 1, 1])
+    assert filters.get_shape().as_list() == [2, 1, 1]
     value = tf.constant([[[5.0], [7.0]]])  # (batch, time, dim)
     assert isinstance(value, tf.Tensor)
-    assert_equal(value.get_shape().as_list(), [1, 2, 1])
+    assert value.get_shape().as_list() == [1, 2, 1]
     res = tf.nn.conv1d(value, filters=filters, stride=1, padding="SAME", data_format="NHWC")
     resv = res.eval()
     assert isinstance(resv, numpy.ndarray)
-    assert_equal(resv.shape, (1, 2, 1))  # (batch, time, dim)
+    assert resv.shape == (1, 2, 1)  # (batch, time, dim)
     # Tests that the kernel-size of 2 is applied on current-frame + right-frame.
     # Note that in the Dataset with context_window = 2, it will do the corresponding thing,
     # i.e. adds one right-frame and no left-frame, such that if you use padding="VALID",
@@ -2784,13 +2779,13 @@ def test_tf_tile():
     v2 = tf.tile(v, [beam_size])  # (beam*batch,)
     v2.set_shape((beam_size * batch_size,))
     print(v2.eval())
-    assert_equal(list(v2.eval()), [1, 2, 3] * 5)
+    assert list(v2.eval()) == [1, 2, 3] * 5
     v3 = tf.reshape(v2, [beam_size, batch_size])  # (beam,batch)
     r = v3.eval()
     print(r)
     assert isinstance(r, numpy.ndarray)
     for beam in range(beam_size):
-        assert_equal(list(r[beam]), [1, 2, 3])
+        assert list(r[beam]) == [1, 2, 3]
 
 
 def test_tile_transposed():
@@ -2801,13 +2796,13 @@ def test_tile_transposed():
     v2 = tile_transposed(v, axis=0, multiples=beam_size)  # (batch*beam,)
     v2.set_shape((batch_size * beam_size,))
     print(v2.eval())
-    assert_equal(list(v2.eval()), [1] * 5 + [2] * 5 + [3] * 5)
+    assert list(v2.eval()) == [1] * 5 + [2] * 5 + [3] * 5
     v3 = tf.reshape(v2, [batch_size, beam_size])  # (batch,beam)
     r = v3.eval()
     print(r)
     assert isinstance(r, numpy.ndarray)
     for beam in range(beam_size):
-        assert_equal(list(r[:, beam]), [1, 2, 3])
+        assert list(r[:, beam]) == [1, 2, 3]
 
 
 def test_expand_dims_unbroadcast_instead_of_tf_tile():
@@ -2821,7 +2816,7 @@ def test_expand_dims_unbroadcast_instead_of_tf_tile():
     print(r)
     assert isinstance(r, numpy.ndarray)
     for beam in range(beam_size):
-        assert_equal(list(r[:, beam]), [1, 2, 3])
+        assert list(r[:, beam]) == [1, 2, 3]
 
 
 def test_expand_dims_unbroadcast_negative_axis():
@@ -2834,7 +2829,7 @@ def test_expand_dims_unbroadcast_negative_axis():
     r = v2.eval()
     print(r)
     assert isinstance(r, numpy.ndarray)
-    assert_equal(r.shape, (batch_size, n_time, expand_dim, n_dim))  # (batch, time, dim)
+    assert r.shape == (batch_size, n_time, expand_dim, n_dim)  # (batch, time, dim)
 
 
 def test_where_nan():
@@ -2849,11 +2844,11 @@ def test_where_nan():
     # SelectOp, https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/kernels/cwise_op_select.cc
     # We later check for nan. assert_equal does not work as-is because (nan == nan) is False.
     # Thus, we resort to this check:
-    assert_equal(str(float("nan")), "nan")
+    assert str(float("nan")) == "nan"
 
     where_0_nan = tf.where(True, 0.0, float("nan"))
     print("where_0_nan:", where_0_nan.eval())
-    assert_equal(where_0_nan.eval(), 0.0)
+    assert where_0_nan.eval() == 0.0
 
     x = tf.constant(0.0)
     x_equal_0 = tf.equal(x, 0.0)
@@ -2862,19 +2857,19 @@ def test_where_nan():
     print("grad_x:", grad_x.eval())  # nan? or 0?
     # This is expected when you look at the resulting computation graph for the gradient.
     # You will have grad(1./x, x) * 0.0 in the graph in the back-propagation of the gradient, which is nan.
-    assert_equal(str(grad_x.eval()), "nan")
+    assert str(grad_x.eval()) == "nan"
 
     safe_x = tf.where(x_equal_0, 2.0, x)
     grad_safe_x = tf.where(x_equal_0, 0.0, 1.0 / safe_x)
     print("grad_safe_x:", grad_safe_x.eval())  # nan? ln(2)? 0?
     # This works, because at no time, there is nan in the back-propagation.
-    assert_equal(grad_safe_x.eval(), 0.0)
+    assert grad_safe_x.eval() == 0.0
 
     f = tf.cond(x_equal_0, lambda: 0.0, lambda: 1.0 / x)
     grad_cond_x = tf.gradients(f, x)[0]
     print("grad_cond_x:", grad_cond_x.eval())  # nan? or 0?
     # This is different than tf.where because really only one branch will go into the gradient.
-    assert_equal(grad_cond_x.eval(), 0.0)
+    assert grad_cond_x.eval() == 0.0
 
 
 def test_variable_summaries():
@@ -2897,10 +2892,10 @@ def test_get_variable_from_tensor():
 def test_VariableAssigner():
     v = tf.Variable(initial_value=1.0)
     session.run(v.initializer)
-    assert_equal(session.run(v), 1.0)
+    assert session.run(v) == 1.0
     assigner = VariableAssigner(v)
     assigner.assign(value=2.0, session=session)
-    assert_equal(session.run(v), 2.0)
+    assert session.run(v) == 2.0
 
 
 def test_VariableAssigner_ResourceVariable():
@@ -2911,17 +2906,17 @@ def test_VariableAssigner_ResourceVariable():
         use_resource=True,
     )
     session.run(v.initializer)
-    assert_equal(session.run(v), 1.0)
+    assert session.run(v) == 1.0
     assigner = VariableAssigner(v)
     assigner.assign(value=2.0, session=session)
-    assert_equal(session.run(v), 2.0)
+    assert session.run(v) == 2.0
 
 
 def test_map_labels():
     x = tf.constant([0, 1, 2, 3, 2, 1, 0])
     label_map = {0: 1, 1: 2, 2: 3, 3: 0}
     y = map_labels(x, label_map=label_map)
-    assert_equal(session.run(y).tolist(), [1, 2, 3, 0, 3, 2, 1])
+    assert session.run(y).tolist() == [1, 2, 3, 0, 3, 2, 1]
 
 
 def test_map_labels_SparseTensor():
@@ -2935,7 +2930,7 @@ def test_map_labels_SparseTensor():
     assert isinstance(y, tf.SparseTensor)
     y_eval = session.run(y)
     assert isinstance(y_eval, tf_compat.v1.SparseTensorValue)
-    assert_equal(y_eval.values.tolist(), [1, 2, 3, 0])
+    assert y_eval.values.tolist() == [1, 2, 3, 0]
 
 
 def test_sparse_labels():
@@ -2947,9 +2942,9 @@ def test_sparse_labels():
     assert isinstance(y_eval.indices, numpy.ndarray)
     assert isinstance(y_eval.values, numpy.ndarray)
     assert isinstance(y_eval.dense_shape, numpy.ndarray)
-    assert_equal(y_eval.indices.tolist(), [[0, 0], [0, 1], [0, 2], [0, 3], [1, 0], [1, 1]])
-    assert_equal(y_eval.values.tolist(), [0, 1, 2, 3, 4, 5])
-    assert_equal(y_eval.dense_shape.tolist(), [2, 4])
+    assert y_eval.indices.tolist() == [[0, 0], [0, 1], [0, 2], [0, 3], [1, 0], [1, 1]]
+    assert y_eval.values.tolist() == [0, 1, 2, 3, 4, 5]
+    assert y_eval.dense_shape.tolist() == [2, 4]
 
 
 def test_remove_labels():
@@ -2966,9 +2961,9 @@ def test_remove_labels():
     assert isinstance(y_eval.indices, numpy.ndarray)
     assert isinstance(y_eval.values, numpy.ndarray)
     assert isinstance(y_eval.dense_shape, numpy.ndarray)
-    assert_equal(y_eval.indices.tolist(), [[0, 0], [0, 1], [1, 0]])
-    assert_equal(y_eval.values.tolist(), [0, 2, 3])
-    assert_equal(y_eval.dense_shape.tolist(), [3, 2])
+    assert y_eval.indices.tolist() == [[0, 0], [0, 1], [1, 0]]
+    assert y_eval.values.tolist() == [0, 2, 3]
+    assert y_eval.dense_shape.tolist() == [3, 2]
 
 
 def test_ctc_greedy_decode():
@@ -3003,9 +2998,9 @@ def test_ctc_greedy_decode():
     assert isinstance(y1_eval.dense_shape, numpy.ndarray)
     print("y indices:", y1_eval.indices.tolist())
     print("y values:", y1_eval.values.tolist())
-    assert_equal(y2_eval.indices.tolist(), y1_eval.indices.tolist())
-    assert_equal(y2_eval.values.tolist(), y1_eval.values.tolist())
-    assert_equal(y2_eval.dense_shape.tolist(), y1_eval.dense_shape.tolist())
+    assert y2_eval.indices.tolist() == y1_eval.indices.tolist()
+    assert y2_eval.values.tolist() == y1_eval.values.tolist()
+    assert y2_eval.dense_shape.tolist() == y1_eval.dense_shape.tolist()
 
 
 def test_supported_devices_for_op():
@@ -3182,12 +3177,12 @@ def test_clip_by_value_with_identity_grad():
         x = numpy.array(x, dtype="float32")
         y, err_x, err2_x = session.run([y_t, err_x_t, err2_x_t], feed_dict={x_t: x})
         print("x:", x, "y:", y, "err_x:", err_x, "err2_x:", err2_x)
-        assert_equal(err_x, err_y)
+        assert err_x == err_y
         assert -limit <= y <= limit
         if abs(x) > limit:
-            assert_equal(err2_x, 0.0)
+            assert err2_x == 0.0
         if abs(x) < limit:
-            assert_equal(err2_x, err_y)
+            assert err2_x == err_y
 
 
 def test_safe_log_and_grad():
@@ -3315,7 +3310,7 @@ def test_string_merge():
     print(res)
     res = [s.decode("utf8") for s in res]
     print(res)
-    assert_equal(res, ["sub@@ word test", "hel@@ lo wo@@ r@@ ld", "foo"])
+    assert res == ["sub@@ word test", "hel@@ lo wo@@ r@@ ld", "foo"]
 
 
 def test_vocab_string_merge():
@@ -3331,7 +3326,7 @@ def test_vocab_string_merge():
     print(res)
     res = [s.decode("utf8") for s in res]
     print(res)
-    assert_equal(res, ["sub@@ word test </s>", "hel@@ lo wo@@ r@@ ld </s>", "foo </s>"])
+    assert res == ["sub@@ word test </s>", "hel@@ lo wo@@ r@@ ld </s>", "foo </s>"]
 
 
 def test_string_replace():
@@ -3346,7 +3341,7 @@ def test_string_replace():
     print(res)
     res = [s.decode("utf8") for s in res]
     print(res)
-    assert_equal(res, ["subword test", "hello world", "foo"])
+    assert res == ["subword test", "hello world", "foo"]
 
 
 def test_words_split_get_sparse_tensor_length():
@@ -3371,16 +3366,13 @@ def test_words_split_get_sparse_tensor_length():
     assert num_words.shape == (len(strings),)
     dense_words = dense_words.tolist()
     print(dense_words)
-    assert_equal(
-        dense_words,
-        [
-            [b"subword", b"test", b"", b""],
-            [b"a", b"b", b"c", b"d"],
-            [b"hello", b"world", b"", b""],
-            [b"foo", b"", b"", b""],
-        ],
-    )
-    assert_equal(num_words.tolist(), word_lens)
+    assert dense_words == [
+        [b"subword", b"test", b"", b""],
+        [b"a", b"b", b"c", b"d"],
+        [b"hello", b"world", b"", b""],
+        [b"foo", b"", b"", b""],
+    ]
+    assert num_words.tolist() == word_lens
 
 
 def test_string_words_calc_wer():
@@ -3393,8 +3385,8 @@ def test_string_words_calc_wer():
     print(wer, ref_num_words)
     assert isinstance(wer, numpy.ndarray)
     assert isinstance(ref_num_words, numpy.ndarray)
-    assert_equal(wer.tolist(), [1, 2, 1, 0])
-    assert_equal(ref_num_words.tolist(), [3, 4, 3, 1])
+    assert wer.tolist() == [1, 2, 1, 0]
+    assert ref_num_words.tolist() == [3, 4, 3, 1]
 
 
 def test_kenlm():
@@ -3440,10 +3432,10 @@ def test_kenlm_bpe():
     print("input strings:", input_strings)
     print("output scores:", output_scores)
     assert isinstance(output_scores, numpy.ndarray)
-    assert_equal(output_scores.shape, (len(input_strings),))
+    assert output_scores.shape == (len(input_strings),)
     assert_almost_equal(output_scores[0], -9.251298)  # example from above
-    assert_equal(output_scores[0], output_scores[1])
-    assert_equal(output_scores[2], output_scores[3])
+    assert output_scores[0] == output_scores[1]
+    assert output_scores[2] == output_scores[3]
     print("Scores are as expected.")
 
 
@@ -3506,11 +3498,11 @@ def test_openfst():
         next_states, out_labels, weights = transitions([state], [input])
         return next_states[0], out_labels[0], weights[0]
 
-    assert_equal(transition(0, "Mars "), (0, [output_symbols["Mars"]], 0.0))
-    assert_equal(transition(0, "Martian "), (0, [output_symbols["Martian"]], 0.0))
-    assert_equal(transition(0, "Mar"), (5, [], 0.0))
-    assert_equal(transition(5, "s"), (6, [output_symbols["Mars"]], 0.0))
-    assert_equal(transition(0, "Unknown "), (-1, [], float("-inf")))
+    assert transition(0, "Mars ") == (0, [output_symbols["Mars"]], 0.0)
+    assert transition(0, "Martian ") == (0, [output_symbols["Martian"]], 0.0)
+    assert transition(0, "Mar") == (5, [], 0.0)
+    assert transition(5, "s") == (6, [output_symbols["Mars"]], 0.0)
+    assert transition(0, "Unknown ") == (-1, [], float("-inf"))
 
 
 def test_layer_norms():
@@ -3563,29 +3555,29 @@ def test_layer_norms():
 
 
 def test_transform_param_axes_split_info_to_new_shape():
-    assert_equal(transform_param_axes_split_info_to_new_shape([[7], [7] * 4], [7 * 2, 7 * 8]), [[7 * 2], [7 * 2] * 4])
-    assert_equal(
-        transform_param_axes_split_info_to_new_shape([[3, 7], [7] * 4], [3 + 7 * 2, 7 * 8]), [[3, 7 * 2], [7 * 2] * 4]
-    )
-    assert_equal(
-        transform_param_axes_split_info_to_new_shape([[3, 7], [7] * 4], [1 + 7 * 2, 7 * 8]), [[1, 7 * 2], [7 * 2] * 4]
-    )
-    assert_equal(
-        transform_param_axes_split_info_to_new_shape([[7, 7], [7] * 4], [3 + 7 * 2, 7 * 8]), [[3, 7 * 2], [7 * 2] * 4]
-    )
-    assert_equal(
-        transform_param_axes_split_info_to_new_shape([[7, 7], [7] * 4], [7 * 2 + 7 * 2, 7 * 8]),
-        [[7 * 2, 7 * 2], [7 * 2] * 4],
-    )
-    assert_equal(transform_param_axes_split_info_to_new_shape([[7], [7] * 4], [7, 7 * 8]), [[7], [7 * 2] * 4])
-    assert_equal(
-        transform_param_axes_split_info_to_new_shape([[1000, 621, 1280], [1000]], (2645, 1000)),
-        [[1000, 621, 1024], [1000]],
-    )
-    assert_equal(
-        transform_param_axes_split_info_to_new_shape([[512, 128, 32], [544]], (512, 544)),
-        [[512, 0, 0], [544]],
-    )
+    assert transform_param_axes_split_info_to_new_shape([[7], [7] * 4], [7 * 2, 7 * 8]) == [[7 * 2], [7 * 2] * 4]
+    assert transform_param_axes_split_info_to_new_shape([[3, 7], [7] * 4], [3 + 7 * 2, 7 * 8]) == [
+        [3, 7 * 2],
+        [7 * 2] * 4,
+    ]
+    assert transform_param_axes_split_info_to_new_shape([[3, 7], [7] * 4], [1 + 7 * 2, 7 * 8]) == [
+        [1, 7 * 2],
+        [7 * 2] * 4,
+    ]
+    assert transform_param_axes_split_info_to_new_shape([[7, 7], [7] * 4], [3 + 7 * 2, 7 * 8]) == [
+        [3, 7 * 2],
+        [7 * 2] * 4,
+    ]
+    assert transform_param_axes_split_info_to_new_shape([[7, 7], [7] * 4], [7 * 2 + 7 * 2, 7 * 8]) == [
+        [7 * 2, 7 * 2],
+        [7 * 2] * 4,
+    ]
+    assert transform_param_axes_split_info_to_new_shape([[7], [7] * 4], [7, 7 * 8]) == [[7], [7 * 2] * 4]
+    assert transform_param_axes_split_info_to_new_shape([[1000, 621, 1280], [1000]], (2645, 1000)) == [
+        [1000, 621, 1024],
+        [1000],
+    ]
+    assert transform_param_axes_split_info_to_new_shape([[512, 128, 32], [544]], (512, 544)) == [[512, 0, 0], [544]]
 
 
 def test_get_op_attrib_keys():
@@ -3593,13 +3585,13 @@ def test_get_op_attrib_keys():
     assert isinstance(x, tf.Tensor)
     assert isinstance(x.op, tf.Operation)
     print("x op:", x.op.type)
-    assert_in(x.op.type, ["BatchMatMul", "BatchMatMulV2"])
-    assert_equal(x.get_shape().as_list(), [3, 4, 7])
+    assert x.op.type in ["BatchMatMul", "BatchMatMulV2"]
+    assert x.get_shape().as_list() == [3, 4, 7]
     attrib_keys = get_op_attrib_keys(x)
     print("matmul attrib keys:", attrib_keys)
-    assert_equal(sorted(attrib_keys), ["T", "adj_x", "adj_y"])
+    assert sorted(attrib_keys) == ["T", "adj_x", "adj_y"]
     dtype = x.op.get_attr("T")
-    assert_equal(dtype, tf.float32)
+    assert dtype == tf.float32
 
 
 def test_get_op_input_names_MatMul():
@@ -3607,10 +3599,10 @@ def test_get_op_input_names_MatMul():
     assert isinstance(x, tf.Tensor)
     assert isinstance(x.op, tf.Operation)
     print("x op:", x.op.type)
-    assert_in(x.op.type, ["BatchMatMul", "BatchMatMulV2"])
+    assert x.op.type in ["BatchMatMul", "BatchMatMulV2"]
     input_names = get_op_input_names(x.op)
     print("matmul input names:", input_names)
-    assert_equal(sorted(input_names), ["x", "y"])
+    assert sorted(input_names) == ["x", "y"]
 
 
 def test_get_op_input_names_Constant():
@@ -3618,10 +3610,10 @@ def test_get_op_input_names_Constant():
     assert isinstance(x, tf.Tensor)
     assert isinstance(x.op, tf.Operation)
     print("x op:", x.op.type)
-    assert_equal(x.op.type, "Const")
+    assert x.op.type == "Const"
     input_names = get_op_input_names(x.op)
     print("constant input names:", input_names)
-    assert_equal(sorted(input_names), [])
+    assert sorted(input_names) == []
 
 
 def test_get_op_attrib_keys__is_variable_initialized():
@@ -3647,7 +3639,7 @@ def test_print_graph_output():
 def test_get_var_ops():
     with tf_compat.v1.variable_scope("test_get_var_ops"):
         v = tf_compat.v1.get_variable("v", ())
-        assert_equal(find_ops_with_tensor_input(v), [v.initializer])
+        assert find_ops_with_tensor_input(v) == [v.initializer]
 
 
 def test_find_ops_with_tensor_input():
@@ -3659,11 +3651,11 @@ def test_find_ops_with_tensor_input():
         x1b = tf.add(x1a, v2, name="x1b")
         x2a = tf.multiply(v1, v2, name="x2a")
         x2b = tf.multiply(x2a, x0, name="x2b")
-        assert_equal(find_ops_with_tensor_input(x0), [x1a.op, x2b.op])
+        assert find_ops_with_tensor_input(x0) == [x1a.op, x2b.op]
         print("v1 usages:", find_ops_with_tensor_input(v1))
-        assert_equal(find_ops_with_tensor_input(v1), [v1.initializer, x1a.op, x2a.op])
-        assert_equal(find_ops_with_tensor_input(v2), [v2.initializer, x1b.op, x2a.op])
-        assert_equal(find_ops_with_tensor_input(v2, fetches=[x2b]), [x2a.op])
+        assert find_ops_with_tensor_input(v1) == [v1.initializer, x1a.op, x2a.op]
+        assert find_ops_with_tensor_input(v2) == [v2.initializer, x1b.op, x2a.op]
+        assert find_ops_with_tensor_input(v2, fetches=[x2b]) == [x2a.op]
 
 
 def test_get_var_update_ops():
@@ -3734,11 +3726,11 @@ def test_get_variable_grad_from_update_ops():
             print("update op inputs by name:", get_op_input_names(update_ops[0]))
             session.run(var.initializer)  # reset
             session.run(tf_compat.v1.global_variables_initializer())  # from Adam or so
-            assert_equal(session.run(var), 0.0)
+            assert session.run(var) == 0.0
             grad = get_variable_grad_from_update_ops(var, update_ops)
             print("grad:", grad)
             _, grad_np = session.run([minimize_op, grad])
-            assert_equal(grad_np, -2.0)
+            assert grad_np == -2.0
 
 
 def test_get_variable_grad_from_update_ops_mix_sparse_dense():
@@ -3806,29 +3798,29 @@ def test_mixed_dense_sparse_grad():
         var_np = session.run(var)
         print("var:")
         print(var_np)
-        assert_equal(var_np[0, 0], var_np[2, 0])
-        assert_not_equal(var_np[0, 0], var_np[1, 0])
+        assert var_np[0, 0] == var_np[2, 0]
+        assert var_np[0, 0] != var_np[1, 0]
 
 
 def test_tensor_array_is_dynamic_size():
     ta1 = tf.TensorArray(tf.float32, size=0, dynamic_size=True)
-    assert_equal(tensor_array_is_dynamic_size(ta1), True)
+    assert tensor_array_is_dynamic_size(ta1) == True
     ta2 = tf.TensorArray(tf.float32, size=0, dynamic_size=False)
-    assert_equal(tensor_array_is_dynamic_size(ta2), False)
+    assert tensor_array_is_dynamic_size(ta2) == False
 
 
 def test_tensor_array_like():
     ta1 = tf.TensorArray(tf.float32, size=0, dynamic_size=True)
     ta1 = tensor_array_like(ta1)
-    assert_equal(tensor_array_is_dynamic_size(ta1), True)
+    assert tensor_array_is_dynamic_size(ta1) == True
 
 
 def test_tensor_array_like_elem_shape():
     ta1 = tf.TensorArray(tf.float32, size=0, dynamic_size=True, element_shape=tf.TensorShape([None, 13]))
     ta2 = tensor_array_like(ta1)
-    assert_equal(tensor_array_is_dynamic_size(ta2), True)
-    assert_equal(tensor_array_element_shape(ta1).as_list(), [None, 13])
-    assert_equal(tensor_array_element_shape(ta2).as_list(), [None, 13])
+    assert tensor_array_is_dynamic_size(ta2) == True
+    assert tensor_array_element_shape(ta1).as_list() == [None, 13]
+    assert tensor_array_element_shape(ta2).as_list() == [None, 13]
 
 
 def test_copy_with_new_split_axes():
@@ -4648,28 +4640,18 @@ def test_get_linear_alignment_out_to_in_indices():
     #       * input_len=7, output_len=3, resulting indices [1,3,5].
     #       * input_len=3, output_len=3, resulting indices [0,1,2].
     #       * input_len=2, output_len=4, resulting indices [0,0,1,1].
-    assert_equal(
-        session.run(get_linear_alignment_out_to_in_indices(input_lens=[7], output_lens=[3])).tolist(), [[1, 3, 5]]
-    )
-    assert_equal(
-        session.run(get_linear_alignment_out_to_in_indices(input_lens=[3], output_lens=[3])).tolist(), [[0, 1, 2]]
-    )
-    assert_equal(
-        session.run(get_linear_alignment_out_to_in_indices(input_lens=[2], output_lens=[4])).tolist(), [[0, 0, 1, 1]]
-    )
-    assert_equal(
-        session.run(get_linear_alignment_out_to_in_indices(input_lens=[7, 3, 1], output_lens=[3, 3, 3])).tolist(),
-        [[1, 3, 5], [0, 1, 2], [0, 0, 0]],
-    )
-    assert_equal(
-        session.run(
-            get_linear_alignment_out_to_in_indices(input_lens=[7, 4, 2, 1], output_lens=[3, 4, 4, 2], pad_value=-1)
-        ).tolist(),
-        [[1, 3, 5, -1], [0, 1, 2, 3], [0, 0, 1, 1], [0, 0, -1, -1]],
-    )
-    assert_equal(
-        session.run(get_linear_alignment_out_to_in_indices(input_lens=[2], output_lens=[3])).tolist(), [[0, 1, 1]]
-    )
+    assert session.run(get_linear_alignment_out_to_in_indices(input_lens=[7], output_lens=[3])).tolist() == [[1, 3, 5]]
+    assert session.run(get_linear_alignment_out_to_in_indices(input_lens=[3], output_lens=[3])).tolist() == [[0, 1, 2]]
+    assert session.run(get_linear_alignment_out_to_in_indices(input_lens=[2], output_lens=[4])).tolist() == [
+        [0, 0, 1, 1]
+    ]
+    assert session.run(
+        get_linear_alignment_out_to_in_indices(input_lens=[7, 3, 1], output_lens=[3, 3, 3])
+    ).tolist() == [[1, 3, 5], [0, 1, 2], [0, 0, 0]]
+    assert session.run(
+        get_linear_alignment_out_to_in_indices(input_lens=[7, 4, 2, 1], output_lens=[3, 4, 4, 2], pad_value=-1)
+    ).tolist() == [[1, 3, 5, -1], [0, 1, 2, 3], [0, 0, 1, 1], [0, 0, -1, -1]]
+    assert session.run(get_linear_alignment_out_to_in_indices(input_lens=[2], output_lens=[3])).tolist() == [[0, 1, 1]]
 
 
 def test_get_rnnt_linear_aligned_output():
@@ -4678,74 +4660,47 @@ def test_get_rnnt_linear_aligned_output():
     #     * input_len=0, targets=[a,b,c] (len 3), output=[a,b,c] (len 3).
     #     * input_len=4, targets=[a] (len 1), output=[B,B,a,B,B] (len 5).
     #     * input_len=3, targets=[a,b] (len 2), output=[B,a,B,b,B] (len 5)
-    assert_equal(
-        session.run(
-            get_rnnt_linear_aligned_output(input_lens=[4], targets=[[1, 2, 3]], target_lens=[3], blank_label_idx=4)[0]
-        ).tolist(),
-        [[4, 1, 4, 2, 4, 3, 4]],
-    )
-    assert_equal(
-        session.run(
-            get_rnnt_linear_aligned_output(input_lens=[0], targets=[[1, 2, 3]], target_lens=[3], blank_label_idx=4)[0]
-        ).tolist(),
-        [[1, 2, 3]],
-    )
-    assert_equal(
-        session.run(
-            get_rnnt_linear_aligned_output(input_lens=[4], targets=[[1]], target_lens=[1], blank_label_idx=4)[0]
-        ).tolist(),
-        [[4, 4, 1, 4, 4]],
-    )
-    assert_equal(
-        session.run(
-            get_rnnt_linear_aligned_output(input_lens=[3], targets=[[1, 2]], target_lens=[2], blank_label_idx=4)[0]
-        ).tolist(),
-        [[4, 1, 4, 2, 4]],
-    )
-    assert_equal(
-        session.run(
-            get_rnnt_linear_aligned_output(
-                input_lens=[2], targets=tf.zeros((1, 0), dtype=tf.int32), target_lens=[0], blank_label_idx=4
-            )[0]
-        ).tolist(),
-        [[4, 4]],
-    )
-    assert_equal(
-        session.run(
-            get_rnnt_linear_aligned_output(
-                input_lens=[4, 3, 2, 0],
-                targets=[[1, 2, 3], [1, 2, -1], [-1, -1, -1], [1, 2, 3]],
-                target_lens=[3, 2, 0, 3],
-                blank_label_idx=4,
-            )[0]
-        ).tolist(),
-        [[4, 1, 4, 2, 4, 3, 4], [4, 1, 4, 2, 4, 0, 0], [4, 4, 0, 0, 0, 0, 0], [1, 2, 3, 0, 0, 0, 0]],
-    )
+    assert session.run(
+        get_rnnt_linear_aligned_output(input_lens=[4], targets=[[1, 2, 3]], target_lens=[3], blank_label_idx=4)[0]
+    ).tolist() == [[4, 1, 4, 2, 4, 3, 4]]
+    assert session.run(
+        get_rnnt_linear_aligned_output(input_lens=[0], targets=[[1, 2, 3]], target_lens=[3], blank_label_idx=4)[0]
+    ).tolist() == [[1, 2, 3]]
+    assert session.run(
+        get_rnnt_linear_aligned_output(input_lens=[4], targets=[[1]], target_lens=[1], blank_label_idx=4)[0]
+    ).tolist() == [[4, 4, 1, 4, 4]]
+    assert session.run(
+        get_rnnt_linear_aligned_output(input_lens=[3], targets=[[1, 2]], target_lens=[2], blank_label_idx=4)[0]
+    ).tolist() == [[4, 1, 4, 2, 4]]
+    assert session.run(
+        get_rnnt_linear_aligned_output(
+            input_lens=[2], targets=tf.zeros((1, 0), dtype=tf.int32), target_lens=[0], blank_label_idx=4
+        )[0]
+    ).tolist() == [[4, 4]]
+    assert session.run(
+        get_rnnt_linear_aligned_output(
+            input_lens=[4, 3, 2, 0],
+            targets=[[1, 2, 3], [1, 2, -1], [-1, -1, -1], [1, 2, 3]],
+            target_lens=[3, 2, 0, 3],
+            blank_label_idx=4,
+        )[0]
+    ).tolist() == [[4, 1, 4, 2, 4, 3, 4], [4, 1, 4, 2, 4, 0, 0], [4, 4, 0, 0, 0, 0, 0], [1, 2, 3, 0, 0, 0, 0]]
     # RNA test
-    assert_equal(
-        session.run(
-            get_rnnt_linear_aligned_output(
-                input_lens=[7], targets=[[1, 2, 3]], target_lens=[3], blank_label_idx=4, targets_consume_time=True
-            )[0]
-        ).tolist(),
-        [[4, 1, 4, 2, 4, 3, 4]],
-    )
-    assert_equal(
-        session.run(
-            get_rnnt_linear_aligned_output(
-                input_lens=[3], targets=[[1, 2, 3]], target_lens=[3], blank_label_idx=4, targets_consume_time=True
-            )[0]
-        ).tolist(),
-        [[1, 2, 3]],
-    )
-    assert_equal(
-        session.run(
-            get_rnnt_linear_aligned_output(
-                input_lens=[2], targets=[[1, 2, 3]], target_lens=[3], blank_label_idx=4, targets_consume_time=True
-            )[0]
-        ).tolist(),
-        [[1, 2]],
-    )
+    assert session.run(
+        get_rnnt_linear_aligned_output(
+            input_lens=[7], targets=[[1, 2, 3]], target_lens=[3], blank_label_idx=4, targets_consume_time=True
+        )[0]
+    ).tolist() == [[4, 1, 4, 2, 4, 3, 4]]
+    assert session.run(
+        get_rnnt_linear_aligned_output(
+            input_lens=[3], targets=[[1, 2, 3]], target_lens=[3], blank_label_idx=4, targets_consume_time=True
+        )[0]
+    ).tolist() == [[1, 2, 3]]
+    assert session.run(
+        get_rnnt_linear_aligned_output(
+            input_lens=[2], targets=[[1, 2, 3]], target_lens=[3], blank_label_idx=4, targets_consume_time=True
+        )[0]
+    ).tolist() == [[1, 2]]
 
 
 if __name__ == "__main__":

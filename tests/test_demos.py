@@ -8,7 +8,6 @@ import sys
 from glob import glob
 import shutil
 import unittest
-from nose.tools import assert_less, assert_in
 from returnn.util import better_exchook
 from returnn.util.basic import which_pip
 
@@ -147,7 +146,7 @@ def test_demo_tf_task12ax():
     # this seems not to be correct anymore, at least in the GitHub CI env.
     # On my local machine (Mac M1), I actually get it quite a bit lower, like 0.00127.
     # I'm not 100% sure that there is maybe sth wrong or not quite optimal...
-    assert_less(fer, 0.015)
+    assert fer < 0.015
 
 
 @unittest.skipIf(not tf, "no TF")
@@ -210,7 +209,7 @@ def test_demo_torch_task12ax():
     out = run(py, "rnn.py", "demos/demo-torch.config", print_stdout=True)
     # Also see test_demo_tf_task12ax above.
     fer = parse_last_fer(out)
-    assert_less(fer, 0.02)
+    assert fer < 0.02
 
 
 def _test_torch_export_to_onnx(cfg_filename: str) -> str:
@@ -300,7 +299,7 @@ def test_demo_rf_torch_task12ax():
     out = run(py, "rnn.py", "demos/demo-rf.config", print_stdout=True)
     # Also see test_demo_tf_task12ax above.
     fer = parse_last_fer(out)
-    assert_less(fer, 0.02)
+    assert fer < 0.02
 
 
 @unittest.skipIf(not tf, "no TF")
@@ -309,7 +308,7 @@ def test_demo_rf_tf_task12ax():
     out = run(py, "rnn.py", "demos/demo-rf.config", "++backend", "tensorflow-net-dict", print_stdout=True)
     # Also see test_demo_tf_task12ax above.
     fer = parse_last_fer(out)
-    assert_less(fer, 0.02)
+    assert fer < 0.02
 
 
 def test_demo_iter_dataset_task12ax():
@@ -317,7 +316,7 @@ def test_demo_iter_dataset_task12ax():
     cleanup_tmp_models("demos/demo-tf-vanilla-lstm.12ax.config")
     # pick any 12ax config for the dataset test
     out = run(py, "demos/demo-iter-dataset.py", "demos/demo-tf-vanilla-lstm.12ax.config")
-    assert_in("Epoch 5.", out.splitlines())
+    assert "Epoch 5." in out.splitlines()
 
 
 @unittest.skipIf(not tf, "no TF")
