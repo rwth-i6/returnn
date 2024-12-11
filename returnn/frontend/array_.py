@@ -367,6 +367,7 @@ def concat(
     *sources: Tuple[Tensor, Dim],
     allow_broadcast: bool = False,
     out_dim: Optional[Dim] = None,
+    handle_dynamic_dims: Optional[bool] = None,
 ) -> Tuple[Tensor, Dim]:
     """
     Concatenates multiple sources in the specified dimension.
@@ -376,6 +377,7 @@ def concat(
     :param sources: list of (tensor, dim) pairs. dim is the axis to concatenate on.
     :param allow_broadcast: if True, the sources can have different dims, and the result will be broadcasted.
     :param out_dim: reuse existing dim for the resulting concatenated dim, if given
+    :param handle_dynamic_dims:
     :return: concatenated tensor, out_dim
     """
     assert sources
@@ -385,8 +387,9 @@ def concat(
             assert src.dims_set - {dim} == dims, f"concat {sources}, need allow_broadcast=True"
     if not out_dim:
         out_dim = sum(d for _, d in sources)
-    for src, dim in sources[:-1]:
-        assert dim.is_static(), f"concat {sources}, dim {dim} is not static"
+    if handle_dynamic_dims is None or handle_dynamic_dims:
+        for src, dim in sources[:-1]:
+            assert dim.is_static(), f"concat {sources}, dim {dim} is not static, not yet implemented..."
     # noinspection PyProtectedMember
     return sources[0][0]._raw_backend.concat(*sources, allow_broadcast=allow_broadcast, out_dim=out_dim), out_dim
 
