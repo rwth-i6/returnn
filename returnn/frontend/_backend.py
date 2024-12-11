@@ -1095,6 +1095,15 @@ class Backend(Generic[T]):
         out.raw_tensor = source.raw_tensor
         return out
 
+    @staticmethod
+    def set_sparse_dim(source: Tensor, sparse_dim: Dim) -> Tensor:
+        """set sparse dim"""
+        # This default implementation works fine as long as the backend
+        # does not have special treatments of Tensor and dim tags itself (like TF net dict backend).
+        out = source.copy()
+        out.sparse_dim = sparse_dim
+        return out
+
     _AllowedReduceModes = {"sum", "max", "min", "mean", "logsumexp", "any", "all", "argmin", "argmax"}
 
     @staticmethod
