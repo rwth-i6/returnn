@@ -1,7 +1,6 @@
 numpy<2
 scipy
 h5py
-nose
 pytest
 dm-tree
 tensorflow==2.12.1

@@ -49,7 +49,6 @@ jobs:
         pip install --user typing  # needed for Python 2 in some cases
 
         pip install --user pytest
-        pip install --user nose
 
         pip install --user dm-tree h5py typing
         pip install --user --progress-bar=off "numpy<2"
@@ -138,9 +137,6 @@ jobs:
 
         pip install --user pytest
 
-        # Install nose anyway because we currently use some of its helper functions.
-        pip install --user nose
-
         pip install --user --progress-bar=off -r requirements.txt
 
     - name: Test Python/Numpy/TF versions.
@@ -225,9 +221,6 @@ jobs:
 
         pip install --user pytest
 
-        # Install nose anyway because we currently use some of its helper functions.
-        pip install --user nose
-
         if [[ "${{matrix.tf-version}}" == 2.[0123].* || "${{matrix.tf-version}}" == 1.* ]]; then
           # Older TF needs older NumPy version.
           # https://github.com/rwth-i6/returnn/pull/1160#issuecomment-1284537803
@@ -308,9 +301,6 @@ jobs:
         pip install --user typing  # needed for Python 2 in some cases
 
         pip install --user pytest
-
-        # Install nose anyway because we currently use some of its helper functions.
-        pip install --user nose
 
         pip install --user dm-tree h5py typing
         pip install --user --progress-bar=off "numpy<2"
@@ -399,9 +389,6 @@ jobs:
         pip install --user typing  # needed for Python 2 in some cases
 
         pip install --user pytest
-
-        # Install nose anyway because we currently use some of its helper functions.
-        pip install --user nose
 
         pip install --user dm-tree h5py typing
         pip install --user --progress-bar=off "numpy<2"
