@@ -775,6 +775,14 @@ class ReturnnLayersBackend(Backend[Layer]):
         )
 
     @staticmethod
+    def set_sparse_dim(source: Tensor, sparse_dim: Dim) -> Tensor:
+        """set sparse dim"""
+        return rfl.make_layer(
+            {"class": "reinterpret_data", "set_sparse": True, "set_sparse_dim": sparse_dim, "from": source},
+            name="set_sparse_dim",
+        )
+
+    @staticmethod
     def reduce(source: Tensor, *, mode: str, axis: Union[Dim, Sequence[Dim]], use_mask: bool = True) -> Tensor:
         """Reduce"""
         assert mode in Backend._AllowedReduceModes
