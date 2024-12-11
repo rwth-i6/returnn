@@ -3556,12 +3556,27 @@ def test_layer_norms():
 
 def test_transform_param_axes_split_info_to_new_shape():
     assert transform_param_axes_split_info_to_new_shape([[7], [7] * 4], [7 * 2, 7 * 8]) == [[7 * 2], [7 * 2] * 4]
-    assert transform_param_axes_split_info_to_new_shape([[3, 7], [7] * 4], [3 + 7 * 2, 7 * 8]) == [[3, 7 * 2], [7 * 2] * 4]
-    assert transform_param_axes_split_info_to_new_shape([[3, 7], [7] * 4], [1 + 7 * 2, 7 * 8]) == [[1, 7 * 2], [7 * 2] * 4]
-    assert transform_param_axes_split_info_to_new_shape([[7, 7], [7] * 4], [3 + 7 * 2, 7 * 8]) == [[3, 7 * 2], [7 * 2] * 4]
-    assert transform_param_axes_split_info_to_new_shape([[7, 7], [7] * 4], [7 * 2 + 7 * 2, 7 * 8]) == [[7 * 2, 7 * 2], [7 * 2] * 4]
+    assert transform_param_axes_split_info_to_new_shape([[3, 7], [7] * 4], [3 + 7 * 2, 7 * 8]) == [
+        [3, 7 * 2],
+        [7 * 2] * 4,
+    ]
+    assert transform_param_axes_split_info_to_new_shape([[3, 7], [7] * 4], [1 + 7 * 2, 7 * 8]) == [
+        [1, 7 * 2],
+        [7 * 2] * 4,
+    ]
+    assert transform_param_axes_split_info_to_new_shape([[7, 7], [7] * 4], [3 + 7 * 2, 7 * 8]) == [
+        [3, 7 * 2],
+        [7 * 2] * 4,
+    ]
+    assert transform_param_axes_split_info_to_new_shape([[7, 7], [7] * 4], [7 * 2 + 7 * 2, 7 * 8]) == [
+        [7 * 2, 7 * 2],
+        [7 * 2] * 4,
+    ]
     assert transform_param_axes_split_info_to_new_shape([[7], [7] * 4], [7, 7 * 8]) == [[7], [7 * 2] * 4]
-    assert transform_param_axes_split_info_to_new_shape([[1000, 621, 1280], [1000]], (2645, 1000)) == [[1000, 621, 1024], [1000]]
+    assert transform_param_axes_split_info_to_new_shape([[1000, 621, 1280], [1000]], (2645, 1000)) == [
+        [1000, 621, 1024],
+        [1000],
+    ]
     assert transform_param_axes_split_info_to_new_shape([[512, 128, 32], [544]], (512, 544)) == [[512, 0, 0], [544]]
 
 
@@ -4627,8 +4642,12 @@ def test_get_linear_alignment_out_to_in_indices():
     #       * input_len=2, output_len=4, resulting indices [0,0,1,1].
     assert session.run(get_linear_alignment_out_to_in_indices(input_lens=[7], output_lens=[3])).tolist() == [[1, 3, 5]]
     assert session.run(get_linear_alignment_out_to_in_indices(input_lens=[3], output_lens=[3])).tolist() == [[0, 1, 2]]
-    assert session.run(get_linear_alignment_out_to_in_indices(input_lens=[2], output_lens=[4])).tolist() == [[0, 0, 1, 1]]
-    assert session.run(get_linear_alignment_out_to_in_indices(input_lens=[7, 3, 1], output_lens=[3, 3, 3])).tolist() == [[1, 3, 5], [0, 1, 2], [0, 0, 0]]
+    assert session.run(get_linear_alignment_out_to_in_indices(input_lens=[2], output_lens=[4])).tolist() == [
+        [0, 0, 1, 1]
+    ]
+    assert session.run(
+        get_linear_alignment_out_to_in_indices(input_lens=[7, 3, 1], output_lens=[3, 3, 3])
+    ).tolist() == [[1, 3, 5], [0, 1, 2], [0, 0, 0]]
     assert session.run(
         get_linear_alignment_out_to_in_indices(input_lens=[7, 4, 2, 1], output_lens=[3, 4, 4, 2], pad_value=-1)
     ).tolist() == [[1, 3, 5, -1], [0, 1, 2, 3], [0, 0, 1, 1], [0, 0, -1, -1]]
