@@ -2,7 +2,6 @@ import _setup_test_env  # noqa
 import tensorflow as tf
 import sys
 import os
-from nose.tools import assert_equal, assert_is_instance
 import contextlib
 import unittest
 import numpy.testing

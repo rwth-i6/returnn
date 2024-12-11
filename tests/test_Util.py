@@ -1,7 +1,7 @@
 # -*- coding: utf8 -*-
 
 import _setup_test_env  # noqa
-from nose.tools import assert_equal, assert_not_equal, assert_raises, assert_true, assert_is
+from nose.tools import assert_not_equal, assert_raises, assert_is
 from numpy.testing import assert_almost_equal
 from returnn.util.basic import *
 import sys
@@ -55,7 +55,7 @@ def _get_tmp_dir() -> str:
 
 def test_cmd_true():
     r = sys_cmd_out_lines("true")
-    assert_equal(r, [])
+    assert r == []
 
 
 def test_cmd_false():
@@ -64,25 +64,25 @@ def test_cmd_false():
 
 def test_cmd_stdout():
     r = sys_cmd_out_lines("echo 1; echo 2;")
-    assert_equal(r, ["1", "2"])
+    assert r == ["1", "2"]
 
 
 def test_cmd_stderr():
     r = sys_cmd_out_lines("echo x >&2")
-    assert_equal(r, [], "cmd() output should only cover stdout")
+    assert r == [], "cmd() output should only cover stdout"
 
 
 def test_hms():
-    assert_equal(hms(5), "0:00:05")
-    assert_equal(hms(65), "0:01:05")
-    assert_equal(hms(65 + 60 * 60), "1:01:05")
+    assert hms(5) == "0:00:05"
+    assert hms(65) == "0:01:05"
+    assert hms(65 + 60 * 60) == "1:01:05"
 
 
 def test_hms_fraction():
-    assert_equal(hms_fraction(0, decimals=3), "0:00:00.000")
-    assert_equal(hms_fraction(5, decimals=3), "0:00:05.000")
-    assert_equal(hms_fraction(5.345, decimals=3), "0:00:05.345")
-    assert_equal(hms_fraction(65.345, decimals=3), "0:01:05.345")
+    assert hms_fraction(0, decimals=3) == "0:00:00.000"
+    assert hms_fraction(5, decimals=3) == "0:00:05.000"
+    assert hms_fraction(5.345, decimals=3) == "0:00:05.345"
+    assert hms_fraction(65.345, decimals=3) == "0:01:05.345"
 
 
 def test_uniq():
@@ -90,10 +90,10 @@ def test_uniq():
 
 
 def test_slice_pad_zeros():
-    assert_equal(list(slice_pad_zeros(np.array([1, 2, 3, 4]), begin=1, end=3)), [2, 3])
-    assert_equal(list(slice_pad_zeros(np.array([1, 2, 3, 4]), begin=-2, end=2)), [0, 0, 1, 2])
-    assert_equal(list(slice_pad_zeros(np.array([1, 2, 3, 4]), begin=-2, end=6)), [0, 0, 1, 2, 3, 4, 0, 0])
-    assert_equal(list(slice_pad_zeros(np.array([1, 2, 3, 4]), begin=2, end=6)), [3, 4, 0, 0])
+    assert list(slice_pad_zeros(np.array([1, 2, 3, 4]), begin=1, end=3)) == [2, 3]
+    assert list(slice_pad_zeros(np.array([1, 2, 3, 4]), begin=-2, end=2)) == [0, 0, 1, 2]
+    assert list(slice_pad_zeros(np.array([1, 2, 3, 4]), begin=-2, end=6)) == [0, 0, 1, 2, 3, 4, 0, 0]
+    assert list(slice_pad_zeros(np.array([1, 2, 3, 4]), begin=2, end=6)) == [3, 4, 0, 0]
 
 
 def test_math_PiecewiseLinear():
@@ -102,19 +102,19 @@ def test_math_PiecewiseLinear():
     eps = 1e-5
     f = PiecewiseLinear({1: 2, 3: 4, 5: 1})
     assert str(f) == "PiecewiseLinear({1: 2, 3: 4, 5: 1})"
-    assert_equal(f(0), 2)
-    assert_equal(f(1 - eps), 2)
-    assert_equal(f(1), 2)
+    assert f(0) == 2
+    assert f(1 - eps) == 2
+    assert f(1) == 2
     assert_almost_equal(f(1 + eps), 2, decimal=4)
-    assert_equal(f(2), 3)
+    assert f(2) == 3
     assert_almost_equal(f(3 - eps), 4, decimal=4)
-    assert_equal(f(3), 4)
+    assert f(3) == 4
     assert_almost_equal(f(3 + eps), 4, decimal=4)
-    assert_equal(f(4), 2.5)
+    assert f(4) == 2.5
     assert_almost_equal(f(5 - eps), 1, decimal=4)
-    assert_equal(f(5), 1)
-    assert_equal(f(5 + eps), 1)
-    assert_equal(f(6), 1)
+    assert f(5) == 1
+    assert f(5 + eps) == 1
+    assert f(6) == 1
 
 
 def test_math_PiecewiseLinear_kwargs():
@@ -159,14 +159,14 @@ def test_math_StepFunction_kwargs():
 
 
 def test_parse_orthography_into_symbols():
-    assert_equal(list("hi"), parse_orthography_into_symbols("hi"))
-    assert_equal(list(" hello "), parse_orthography_into_symbols(" hello "))
-    assert_equal(list("  "), parse_orthography_into_symbols("  "))
-    assert_equal(list("hello ") + ["[FOO]"] + list(" bar "), parse_orthography_into_symbols("hello [FOO] bar "))
+    assert list("hi") == parse_orthography_into_symbols("hi")
+    assert list(" hello ") == parse_orthography_into_symbols(" hello ")
+    assert list("  ") == parse_orthography_into_symbols("  ")
+    assert list("hello ") + ["[FOO]"] + list(" bar ") == parse_orthography_into_symbols("hello [FOO] bar ")
 
 
 def test_parse_orthography():
-    assert_equal(list("hi ") + ["[HES]"] + list(" there") + ["[END]"], parse_orthography("hi [HES] there "))
+    assert list("hi ") + ["[HES]"] + list(" there") + ["[END]"] == parse_orthography("hi [HES] there ")
 
 
 def test_NumbersDict_minus_1():
@@ -174,7 +174,7 @@ def test_NumbersDict_minus_1():
     b = NumbersDict(10)
     r = a - b
     print(a, b, r)
-    assert_equal(r, NumbersDict(numbers_dict={"classes": 1, "data": 1}, broadcast_value=-10))
+    assert r == NumbersDict(numbers_dict={"classes": 1, "data": 1}, broadcast_value=-10)
 
 
 def test_NumbersDict_eq_1():
@@ -186,16 +186,16 @@ def test_NumbersDict_eq_1():
     print(a, b, r1, r2, r2a)
     assert_is(all(r2.values()), r2a)
     assert_is(r1.value, None)
-    assert_equal(r1.dict, {"classes": True, "data": True})
-    assert_equal(r1, NumbersDict({"classes": True, "data": True}))
+    assert r1.dict == {"classes": True, "data": True}
+    assert r1 == NumbersDict({"classes": True, "data": True})
     assert_is(r2.value, None)
-    assert_equal(r2.dict, {"classes": True, "data": True})
-    assert_true(r2a)
+    assert r2.dict == {"classes": True, "data": True}
+    assert r2a is True
 
 
 def test_NumbersDict_eq_2():
     a = NumbersDict(10)
-    assert_equal(a, 10)
+    assert a == 10
     assert_not_equal(a, 5)
 
 
@@ -204,7 +204,7 @@ def test_NumbersDict_mul():
     b = a * 2
     assert isinstance(b, NumbersDict)
     assert b.value == 2
-    assert_equal(b.dict, {"data": 6, "classes": 4})
+    assert b.dict == {"data": 6, "classes": 4}
 
 
 def test_NumbersDict_float_div():
@@ -212,7 +212,7 @@ def test_NumbersDict_float_div():
     b = a / 2.0
     assert isinstance(b, NumbersDict)
     assert_almost_equal(b.value, 0.5)
-    assert_equal(list(sorted(b.dict.keys())), ["classes", "data"])
+    assert list(sorted(b.dict.keys())) == ["classes", "data"]
     assert_almost_equal(b.dict["data"], 1.5)
     assert_almost_equal(b.dict["classes"], 1.0)
 
@@ -221,10 +221,10 @@ def test_NumbersDict_int_floordiv():
     a = NumbersDict(numbers_dict={"data": 3, "classes": 2}, broadcast_value=1)
     b = a // 2
     assert isinstance(b, NumbersDict)
-    assert_equal(b.value, 0)
-    assert_equal(list(sorted(b.dict.keys())), ["classes", "data"])
-    assert_equal(b.dict["data"], 1)
-    assert_equal(b.dict["classes"], 1)
+    assert b.value == 0
+    assert list(sorted(b.dict.keys())) == ["classes", "data"]
+    assert b.dict["data"] == 1
+    assert b.dict["classes"] == 1
 
 
 def test_NumbersDict_to_dict():
@@ -252,7 +252,7 @@ def test_collect_class_init_kwargs():
 
     kwargs = collect_class_init_kwargs(C)
     print(kwargs)
-    assert_equal(sorted(kwargs), ["a", "b", "c"])
+    assert sorted(kwargs) == ["a", "b", "c"]
 
 
 def test_terminal_size():
@@ -263,11 +263,11 @@ def test_try_get_caller_name():
     def sub():
         return try_get_caller_name()
 
-    assert_equal(sub(), "test_try_get_caller_name")
+    assert sub() == "test_try_get_caller_name"
 
 
 def test_camel_case_to_snake_case():
-    assert_equal(camel_case_to_snake_case("CamelCaseOp"), "camel_case_op")
+    assert camel_case_to_snake_case("CamelCaseOp") == "camel_case_op"
 
 
 def test_NativeCodeCompiler():
@@ -291,9 +291,9 @@ def test_NativeCodeCompiler():
     lib.get_magic.restype = ctypes.c_int
     lib.get_magic.argtypes = ()
 
-    assert_equal(lib.get_magic(), 13)
+    assert lib.get_magic() == 13
     lib.set_magic(42)
-    assert_equal(lib.get_magic(), 42)
+    assert lib.get_magic() == 42
 
 
 def test_PyExtModCompiler():
@@ -341,10 +341,10 @@ def test_PyExtModCompiler():
     print("lib_filename:", lib_filename)
     mod = native.load_py_module()
 
-    assert_equal(mod.func(0), 42)
-    assert_equal(mod.func(1), 43)
-    assert_equal(mod.func(2), 44)
-    assert_equal(mod.func(-2), 40)
+    assert mod.func(0) == 42
+    assert mod.func(1) == 43
+    assert mod.func(2) == 44
+    assert mod.func(-2) == 40
 
 
 def test_Stats():
@@ -423,7 +423,7 @@ def test_get_func_kwargs():
     def dummy_func(net, var, update_ops):
         pass
 
-    assert_equal(list(getargspec(dummy_func).args), ["net", "var", "update_ops"])
+    assert list(getargspec(dummy_func).args) == ["net", "var", "update_ops"]
 
 
 def test_next_type_attrib_in_mro_chain():
@@ -438,9 +438,9 @@ def test_next_type_attrib_in_mro_chain():
     class Bar(Foo):
         pass
 
-    assert_equal(type_attrib_mro_chain(Foo, "method"), [Foo.method, Base.method])
-    assert_equal(type_attrib_mro_chain(Bar, "method"), [Foo.method, Base.method])
-    assert_equal(next_type_attrib_in_mro_chain(Bar, "method", Foo.method), Base.method)
+    assert type_attrib_mro_chain(Foo, "method") == [Foo.method, Base.method]
+    assert type_attrib_mro_chain(Bar, "method") == [Foo.method, Base.method]
+    assert next_type_attrib_in_mro_chain(Bar, "method", Foo.method) == Base.method
 
 
 def test_simple_obj_repr():
@@ -454,15 +454,15 @@ def test_simple_obj_repr():
     x = X(a=42)
     x_repr = repr(x)
 
-    assert_equal(x_repr, "X(a=42, b=13)")
+    assert x_repr == "X(a=42, b=13)"
 
 
 def test_obj_diff_str():
-    assert_equal(obj_diff_str({"a": 1, "b": 2}, {"a": 1, "b": 3}), "dict diff:\n['b'] self: 2 != other: 3")
+    assert obj_diff_str({"a": 1, "b": 2}, {"a": 1, "b": 3}) == "dict diff:\n['b'] self: 2 != other: 3"
 
 
 def test_obj_diff_str_non_str_key():
-    assert_equal(obj_diff_str({1: 1, 2: 2}, {1: 1, 2: 3}), "dict diff:\n[2] self: 2 != other: 3")
+    assert obj_diff_str({1: 1, 2: 2}, {1: 1, 2: 3}) == "dict diff:\n[2] self: 2 != other: 3"
 
 
 def test_obj_diff_list_allowed_mapping():
@@ -487,22 +487,19 @@ def test_obj_diff_list_allowed_mapping():
     assert ac_diff
     for line in ac_diff:
         print(line)
-    assert_equal(
-        ac_diff,
-        [
-            "dict diff:",
-            "['b'] dict diff:",
-            "['b']   key 'A:b' not in other",
-            "['b']   key 'B:b' not in self",
-        ],
-    )
+    assert ac_diff == [
+        "dict diff:",
+        "['b'] dict diff:",
+        "['b']   key 'A:b' not in other",
+        "['b']   key 'B:b' not in self",
+    ]
 
 
 @unittest.skipIf(PY3, "only for Python 2")
 def test_py2_utf8_str_to_unicode():
-    assert_equal(py2_utf8_str_to_unicode("a"), "a")
+    assert py2_utf8_str_to_unicode("a") == "a"
     assert_is(type(py2_utf8_str_to_unicode("a")), str)
-    assert_equal(py2_utf8_str_to_unicode("äöü"), "äöü")
+    assert py2_utf8_str_to_unicode("äöü") == "äöü"
     assert_is(type(py2_utf8_str_to_unicode("äöü")), unicode)
 
 
@@ -537,7 +534,7 @@ def test_import_():
 
     mod = import_("github.com/rwth-i6/returnn-experiments", "common/test.py", "20210302-01094bef2761")
     print("Loaded mod %s, name %s, file %s" % (mod, mod.__name__, mod.__file__))
-    assert_equal(mod.hello(), "hello world")
+    assert mod.hello() == "hello world"
 
 
 def test_import_root_repo_mod():
@@ -545,7 +542,7 @@ def test_import_root_repo_mod():
 
     mod = import_("github.com/rwth-i6/returnn_common", "test.py", "20210602-1bc6822")
     print("Loaded mod %s, name %s, file %s" % (mod, mod.__name__, mod.__file__))
-    assert_equal(mod.hello(), "hello world")
+    assert mod.hello() == "hello world"
 
 
 def test_import_root_repo_pkg():
@@ -555,7 +552,7 @@ def test_import_root_repo_pkg():
     print("Loaded mod %s, name %s, file %s" % (mod, mod.__name__, mod.__file__))
     from returnn_import.github_com.rwth_i6.returnn_common.v20210602162042_1bc6822b2fd1 import test
 
-    assert_equal(test.hello(), "hello world")
+    assert test.hello() == "hello world"
 
 
 def test_import_root_repo_sub_mod():
@@ -563,7 +560,7 @@ def test_import_root_repo_sub_mod():
 
     mod = import_("github.com/rwth-i6/returnn_common", "test/hello.py", "20210603-3752d77")
     print("Loaded mod %s, name %s, file %s" % (mod, mod.__name__, mod.__file__))
-    assert_equal(mod.hello(), "hello world")
+    assert mod.hello() == "hello world"
 
 
 def test_import_pkg_py_import():
@@ -624,7 +621,7 @@ def test_literal_py_to_pickle():
         print("check:", s)
         a = ast.literal_eval(s)
         b = literal_py_to_pickle.literal_eval(s)
-        assert_equal(a, b)
+        assert a == b
 
     checks = [
         "0",
@@ -701,7 +698,7 @@ def test_NonDaemonicSpawnProcess_hang_1514():
 def test_expand_env_vars():
     os.environ["TMPA"] = "/testA"
     os.environ["TMPB"] = "testB"
-    assert_equal(expand_env_vars("$TMPA/$TMPB/returnn/file_cache"), "/testA/testB/returnn/file_cache")
+    assert expand_env_vars("$TMPA/$TMPB/returnn/file_cache") == "/testA/testB/returnn/file_cache"
 
 
 def test_bpe_PrefixTree():
@@ -771,28 +768,28 @@ def test_bpe_DepthFirstSearch():
     tree.add("he@@")
 
     dfs = DepthFirstSearch(tree, "hello")
-    assert_equal(dfs.search(), ["he@@", "llo"])
+    assert dfs.search() == ["he@@", "llo"]
     dfs = DepthFirstSearch(tree, "helo")
-    assert_equal(dfs.search(), None)
+    assert dfs.search() == None
     dfs = DepthFirstSearch(tree, "x")
-    assert_equal(dfs.search(), None)
+    assert dfs.search() == None
     dfs = DepthFirstSearch(tree, "llo")
-    assert_equal(dfs.search(), ["llo"])
+    assert dfs.search() == ["llo"]
 
     tree.add("hello")
     dfs = DepthFirstSearch(tree, "hello")
-    assert_equal(dfs.search(), ["hello"])
+    assert dfs.search() == ["hello"]
     dfs = DepthFirstSearch(tree, "hello", sampler=lambda: True)
-    assert_equal(dfs.search(), ["he@@", "llo"])
+    assert dfs.search() == ["he@@", "llo"]
 
     tree.add("hel@@")
     tree.add("lo")
     dfs = DepthFirstSearch(tree, "hello")
-    assert_equal(dfs.search(), ["hello"])
+    assert dfs.search() == ["hello"]
     dfs = DepthFirstSearch(tree, "hello", sampler=lambda: True)
-    assert_equal(dfs.search(), ["he@@", "llo"])
+    assert dfs.search() == ["he@@", "llo"]
     dfs = DepthFirstSearch(tree, "hello", sampler=lambda _it=itertools.count(): next(_it) in {3})
-    assert_equal(dfs.search(), ["hel@@", "lo"])
+    assert dfs.search() == ["hel@@", "lo"]
 
 
 def test_bpe_DepthFirstSearch_word_prefix():
@@ -805,16 +802,16 @@ def test_bpe_DepthFirstSearch_word_prefix():
     tree.add("lo")
 
     search = DepthFirstSearch(tree, "hello")
-    assert_equal(search.search(), ["▁hello"])
+    assert search.search() == ["▁hello"]
     search = DepthFirstSearch(tree, "hello", sampler=lambda: True)
-    assert_equal(search.search(), ["▁hel", "lo"])
+    assert search.search() == ["▁hel", "lo"]
 
     tree.add("▁he")
     tree.add("llo")
     search = DepthFirstSearch(tree, "hello", sampler=lambda: True)
-    assert_equal(search.search(), ["▁he", "llo"])
+    assert search.search() == ["▁he", "llo"]
     search = DepthFirstSearch(tree, "hello", sampler=lambda _it=itertools.count(): next(_it) in {3})
-    assert_equal(search.search(), ["▁hel", "lo"])
+    assert search.search() == ["▁hel", "lo"]
 
 
 def test_bpe_CharSyncSearch():
@@ -826,17 +823,17 @@ def test_bpe_CharSyncSearch():
     tree.add("he@@")
 
     search = CharSyncSearch(tree, "hello")
-    assert_equal(search.search(), [["he@@", "llo"]])
+    assert search.search() == [["he@@", "llo"]]
     search = CharSyncSearch(tree, "helo")
-    assert_equal(search.search(), [])
+    assert search.search() == []
     search = CharSyncSearch(tree, "x")
-    assert_equal(search.search(), [])
+    assert search.search() == []
     search = CharSyncSearch(tree, "llo")
-    assert_equal(search.search(), [["llo"]])
+    assert search.search() == [["llo"]]
 
     tree.add("hello")
     search = CharSyncSearch(tree, "hello")
-    assert_equal(search.search(), [["he@@", "llo"], ["hello"]])
+    assert search.search() == [["he@@", "llo"], ["hello"]]
 
 
 def test_bpe_CharSyncSearch_word_prefix():
@@ -849,15 +846,15 @@ def test_bpe_CharSyncSearch_word_prefix():
     tree.add("▁hi")
 
     search = CharSyncSearch(tree, "hello")
-    assert_equal(search.search(), [["▁hel", "lo"], ["▁hello"]])
+    assert search.search() == [["▁hel", "lo"], ["▁hello"]]
     search = CharSyncSearch(tree, "helo")
-    assert_equal(search.search(), [])
+    assert search.search() == []
     search = CharSyncSearch(tree, "x")
-    assert_equal(search.search(), [])
+    assert search.search() == []
     search = CharSyncSearch(tree, "lo")
-    assert_equal(search.search(), [])
+    assert search.search() == []
     search = CharSyncSearch(tree, "hi")
-    assert_equal(search.search(), [["▁hi"]])
+    assert search.search() == [["▁hi"]]
 
 
 def test_file_cache():

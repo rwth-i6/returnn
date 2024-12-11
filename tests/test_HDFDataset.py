@@ -11,10 +11,7 @@ import _setup_test_env  # noqa
 
 from returnn.datasets import Dataset
 from returnn.datasets.hdf import *
-from nose.tools import assert_equal
 from nose.tools import assert_not_equal
-from nose.tools import assert_raises
-from nose.tools import raises
 import returnn.util.basic as util
 import h5py
 import numpy as np
@@ -31,9 +28,9 @@ def test_HDFDataset_init():
     This method tests initialization of the HDFDataset class
     """
     toy_dataset = HDFDataset()
-    assert_equal(toy_dataset.file_start, [0], "self.file_start init problem, should be [0]")
-    assert_equal(toy_dataset.files, [], "self.files init problem, should be []")
-    assert_equal(toy_dataset.file_seq_start, [], "self.file_seq_start init problem, should be []")
+    assert toy_dataset.file_start == [0], "self.file_start init problem, should be [0]"
+    assert toy_dataset.files == [], "self.files init problem, should be []"
+    assert toy_dataset.file_seq_start == [], "self.file_seq_start init problem, should be []"
     return toy_dataset
 
 
@@ -206,8 +203,8 @@ def test_hdf_dump_not_frame_synced():
         # Not synced, i.e. different lengths:
         assert_not_equal(orig_reader.seq_lens[seq_idx]["data"], orig_reader.seq_lens[seq_idx]["classes"])
         for key in orig_reader.data_keys:
-            assert_equal(hdf_reader.seq_lens[seq_idx][key], orig_reader.seq_lens[seq_idx][key])
-            assert_equal(hdf_reader.data[key][seq_idx].tolist(), orig_reader.data[key][seq_idx].tolist())
+            assert hdf_reader.seq_lens[seq_idx][key] == orig_reader.seq_lens[seq_idx][key]
+            assert hdf_reader.data[key][seq_idx].tolist() == orig_reader.data[key][seq_idx].tolist()
 
 
 def test_HDFDataset_partition_epoch():
@@ -229,8 +226,8 @@ def test_HDFDataset_partition_epoch():
         # Not synced, i.e. different lengths:
         assert_not_equal(orig_reader.seq_lens[seq_idx]["data"], orig_reader.seq_lens[seq_idx]["classes"])
         for key in orig_reader.data_keys:
-            assert_equal(hdf_reader.seq_lens[seq_idx][key], orig_reader.seq_lens[seq_idx][key])
-            assert_equal(hdf_reader.data[key][seq_idx].tolist(), orig_reader.data[key][seq_idx].tolist())
+            assert hdf_reader.seq_lens[seq_idx][key] == orig_reader.seq_lens[seq_idx][key]
+            assert hdf_reader.data[key][seq_idx].tolist() == orig_reader.data[key][seq_idx].tolist()
 
 
 def test_SimpleHDFWriter():
@@ -266,7 +263,7 @@ def test_SimpleHDFWriter():
     for i, seq_len in enumerate(seq_lens):
         assert reader.seq_lens[i]["data"] == seq_len
     print("tags:", reader.seq_tags)
-    assert_equal(reader.seq_tags, ["seq-%i" % i for i in range(reader.num_seqs)])
+    assert reader.seq_tags == ["seq-%i" % i for i in range(reader.num_seqs)]
     assert isinstance(reader.seq_tags[0], str)
 
 
@@ -353,7 +350,7 @@ def test_SimpleHDFWriter_empty_extra():
             b = reader.data["test-extra"][i][k]
             assert numpy.allclose(a, b), f"i={i}"
 
-    assert_equal(reader.seq_tags, ["seq-%i" % i for i in range(reader.num_seqs)])
+    assert reader.seq_tags == ["seq-%i" % i for i in range(reader.num_seqs)]
     assert isinstance(reader.seq_tags[0], str)
 
 
@@ -404,7 +401,7 @@ def test_read_simple_hdf():
     reader.read_all()
     print("tags:", reader.seq_tags)
     assert len(seq_lens) == reader.num_seqs
-    assert_equal(reader.seq_tags, ["seq-0", "seq-1"])
+    assert reader.seq_tags == ["seq-0", "seq-1"]
     for i, seq_len in enumerate(seq_lens):
         assert reader.seq_lens[i]["data"] == seq_len
     assert "data" in reader.data_keys  # "classes" might be in there as well, although not really correct/existing

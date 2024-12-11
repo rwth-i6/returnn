@@ -6,7 +6,7 @@ import _setup_test_env  # noqa
 import tensorflow as tf
 import sys
 import os
-from nose.tools import assert_equal, assert_not_equal, assert_is_instance
+from nose.tools import assert_not_equal
 from numpy.testing import assert_almost_equal, assert_allclose
 import unittest
 import numpy.testing
@@ -743,7 +743,7 @@ def test_RecLayer_get_cudnn_params_size():
         )
         cu_size = cudnn_rnn_params_size(T=T, S=S, **common_kwargs)[0]
         my_size = RecLayer._get_cudnn_param_size(**common_kwargs)
-        assert_equal(cu_size.eval(), my_size)
+        assert cu_size.eval() == my_size
 
     with tf_compat.v1.Session():
         check(rnn_mode="lstm", num_units=5, input_size=3)
@@ -840,7 +840,7 @@ def test_cudnn_save_restore():
                     network1.extern_data.data["data"].size_placeholder[0]: seq_lens,
                 },
             )
-            assert_equal(output_data1.shape, (seq_lens[0], 1, num_outputs))  # (time, batch, dim)
+            assert output_data1.shape == (seq_lens[0], 1, num_outputs)  # (time, batch, dim)
             print("Saveable params:")
             pprint(network1.get_saveable_params_list())
             network1.save_params_to_file(filename=model_filename, session=session)
@@ -861,7 +861,7 @@ def test_cudnn_save_restore():
                     print("  param %r: %r" % (param_name, param1))
                     param1old = params[layer_name][param_name]
                     param1new = param1.eval(session)
-                    assert_equal(param1old.shape, param1new.shape)
+                    assert param1old.shape == param1new.shape
                     # Unfortunately, this doesn't seem to be the case.
                     # Also, doesn't need to be, because they have two biases, so it's not unique.
                     # assert param1old.ndim == 1
@@ -944,7 +944,7 @@ def test_cudnn_rnn_params_to_canonical():
                 print("bias:", p, "shape:", tf.shape(p).eval())
             s2 = sum([tf.reduce_prod(tf.shape(p)).eval() for p in weights + biases])
             print("summed up size:", s2)
-            assert_equal(s1, s2)
+            assert s1 == s2
 
         check(num_layers=1, num_units=5, input_size=3, direction="unidirectional")
         check(num_layers=1, num_units=5, input_size=3, direction="bidirectional")  # fails in TF 1.2.0
@@ -997,7 +997,7 @@ def test_RecLayer_NativeLstm_Nan():
         network.initialize_params(session=session)
         print("Test run...")
         output_data1 = session.run(network.get_default_output_layer().output.placeholder, feed_dict=make_feed_dict(5))
-        assert_equal(output_data1.shape, (5, 1, num_outputs))  # (time, batch, dim)
+        assert output_data1.shape == (5, 1, num_outputs)  # (time, batch, dim)
 
         layer = network.layers["output"]
         loss_t = network.get_total_loss() * layer.loss.get_normalization_factor()
@@ -1447,7 +1447,7 @@ def test_rec_RecStepInfoLayer():
         )
         assert isinstance(out_v, numpy.ndarray)
         assert out_v.shape == (n_time,)
-        assert_equal(out_v.tolist(), [0, 1, 2])
+        assert out_v.tolist() == [0, 1, 2]
 
 
 def test_rec_RecStepInfoLayer_broadcast_moved_out():
@@ -1666,11 +1666,11 @@ def test_RecUnstackLayer_rec_no_input_explicit_axis():
         from returnn.tf.layers.rec import _SubnetworkRecCell
 
         assert isinstance(cell, _SubnetworkRecCell)
-        assert_equal(cell.input_layers_moved_out, ["input"])
-        assert_equal(cell.layers_in_loop, ["output"])
+        assert cell.input_layers_moved_out == ["input"]
+        assert cell.layers_in_loop == ["output"]
         in_data = net.extern_data.get_default_input_data()
         out_data = rec_layer.output
-        assert_equal(in_data.get_time_dim_tag(), out_data.get_time_dim_tag())
+        assert in_data.get_time_dim_tag() == out_data.get_time_dim_tag()
         from test_TFNetworkLayer import make_feed_dict
 
         session.run(out_data.placeholder, feed_dict=make_feed_dict([in_data]))
@@ -1701,11 +1701,11 @@ def test_RecUnstackLayer_rec_no_input_declare_rec_time():
         from returnn.tf.layers.rec import _SubnetworkRecCell
 
         assert isinstance(cell, _SubnetworkRecCell)
-        assert_equal(cell.input_layers_moved_out, ["input"])
-        assert_equal(cell.layers_in_loop, ["output"])
+        assert cell.input_layers_moved_out == ["input"]
+        assert cell.layers_in_loop == ["output"]
         in_data = net.extern_data.get_default_input_data()
         out_data = rec_layer.output
-        assert_equal(in_data.get_time_dim_tag(), out_data.get_time_dim_tag())
+        assert in_data.get_time_dim_tag() == out_data.get_time_dim_tag()
         from test_TFNetworkLayer import make_feed_dict
 
         session.run(out_data.placeholder, feed_dict=make_feed_dict([in_data]))
@@ -1733,10 +1733,10 @@ def test_search_no_rec_explicit():
     assert len(expected_final_seqs) == len(expected_debug_out) == beam_size
     n_time = 3
     n_classes = 4
-    assert_equal(logits.shape, (n_time, n_classes))
+    assert logits.shape == (n_time, n_classes)
     n_batch = 1
     logits = numpy.expand_dims(logits, axis=0)
-    assert_equal(logits.shape, (n_batch, n_time, n_classes))
+    assert logits.shape == (n_batch, n_time, n_classes)
     print("logits:")
     print(logits)
 
@@ -1764,27 +1764,27 @@ def test_search_no_rec_explicit():
     )
     net = TFNetwork(extern_data=extern_data, search_flag=True, train_flag=False, eval_flag=False)
     net.construct_from_dict(net_dict)
-    assert_equal(net.used_data_keys, {"data"})  # not classes
+    assert net.used_data_keys == {"data"}  # not classes
     rec_layer = net.layers["output"]
     assert isinstance(rec_layer, RecLayer)
     subnet = rec_layer.cell
     assert isinstance(subnet, _SubnetworkRecCell)
-    assert_equal(subnet.layers_in_loop, ["output"])
+    assert subnet.layers_in_loop == ["output"]
     sub_layer = subnet.net.layers["output"]
     assert isinstance(sub_layer, ChoiceLayer)
-    assert_equal(sub_layer.output.beam.beam_size, beam_size)
-    assert_equal(rec_layer.output.beam.beam_size, beam_size)
+    assert sub_layer.output.beam.beam_size == beam_size
+    assert rec_layer.output.beam.beam_size == beam_size
     input_search_choices = net.get_search_choices(sources=rec_layer.sources)
     assert not input_search_choices
     assert rec_layer.output.is_time_major
-    assert_equal(rec_layer.get_search_beam_size(), beam_size)
+    assert rec_layer.get_search_beam_size() == beam_size
     feed_dict = {
         net.extern_data.get_batch_info().dim: 1,
         net.extern_data.data["data"].placeholder: logits,
         net.extern_data.data["data"].size_placeholder[0]: [n_time],
     }
     with tf_compat.v1.Session() as session:
-        assert_equal(session.run(net.get_data_batch_dim(), feed_dict=feed_dict), n_batch)
+        assert session.run(net.get_data_batch_dim(), feed_dict=feed_dict) == n_batch
         out, out_sizes = session.run(
             (rec_layer.output.placeholder, rec_layer.output.get_sequence_lengths()), feed_dict=feed_dict
         )
@@ -1793,9 +1793,9 @@ def test_search_no_rec_explicit():
         print(out)
         assert isinstance(out_sizes, numpy.ndarray)
         assert isinstance(out, numpy.ndarray)
-        assert_equal(out_sizes.shape, (n_batch * beam_size,))
-        assert_equal(out.shape, (n_time, n_batch * beam_size))
-        assert_equal(out_sizes.tolist(), [n_time] * beam_size)
+        assert out_sizes.shape == (n_batch * beam_size,)
+        assert out.shape == (n_time, n_batch * beam_size)
+        assert out_sizes.tolist() == [n_time] * beam_size
         out = numpy.reshape(out, (n_time, n_batch, beam_size))
 
     print("Debug out:")
@@ -1808,7 +1808,7 @@ def test_search_no_rec_explicit():
         out_seq = out[:, 0, beam].tolist()
         expected_seq = expected_final_seqs[beam]
         print("beam %i, out seq %r, expected seq %r" % (beam, out_seq, expected_seq))
-        assert_equal(out_seq, expected_final_seqs[beam])
+        assert out_seq == expected_final_seqs[beam]
 
     assert len(debug_out) == n_time
     # Could be that it is not in order (because of parallel execution of the loop).
@@ -1821,12 +1821,12 @@ def test_search_no_rec_explicit():
             assert k in debug_t
             out_v = debug_t[k]
             if isinstance(v, int):
-                assert_equal(v, out_v)
+                assert v == out_v
             else:
                 assert isinstance(out_v, numpy.ndarray)
                 assert out_v.shape[0] == n_batch, "t %i, k %r, v %r" % (t, k, v)
                 out_v = out_v[0]
-                assert_equal(v, out_v.tolist(), "t %i, k %r" % (t, k))
+                assert v == out_v.tolist(), "t %i, k %r" % (t, k)
     print("Seems fine.")
 
 
@@ -1856,10 +1856,10 @@ def test_search_no_rec_explicit_dyn_len():
     assert len(expected_final_seqs) == len(expected_debug_out) == beam_size
     n_time = 3
     n_classes = 4
-    assert_equal(logits.shape, (n_time, n_classes))
+    assert logits.shape == (n_time, n_classes)
     n_batch = 1
     logits = numpy.expand_dims(logits, axis=0)
-    assert_equal(logits.shape, (n_batch, n_time, n_classes))
+    assert logits.shape == (n_batch, n_time, n_classes)
     print("logits:")
     print(logits)
 
@@ -1890,35 +1890,35 @@ def test_search_no_rec_explicit_dyn_len():
     )
     net = TFNetwork(extern_data=extern_data, search_flag=True, train_flag=False, eval_flag=False)
     net.construct_from_dict(net_dict)
-    assert_equal(net.used_data_keys, {"data"})  # not classes
+    assert net.used_data_keys == {"data"}  # not classes
     rec_layer = net.layers["output"]
     assert isinstance(rec_layer, RecLayer)
     subnet = rec_layer.cell
     assert isinstance(subnet, _SubnetworkRecCell)
-    assert_equal(set(subnet.layers_in_loop), {"output", "end"})
+    assert set(subnet.layers_in_loop) == {"output", "end"}
     sub_layer = subnet.net.layers["output"]
     assert isinstance(sub_layer, ChoiceLayer)
-    assert_equal(sub_layer.output.beam.beam_size, beam_size)
-    assert_equal(rec_layer.output.beam.beam_size, beam_size)
+    assert sub_layer.output.beam.beam_size == beam_size
+    assert rec_layer.output.beam.beam_size == beam_size
     input_search_choices = net.get_search_choices(sources=rec_layer.sources)
     assert not input_search_choices
     assert rec_layer.output.is_time_major
-    assert_equal(rec_layer.get_search_beam_size(), beam_size)
+    assert rec_layer.get_search_beam_size() == beam_size
     feed_dict = {
         net.extern_data.get_batch_info().dim: 1,
         net.extern_data.data["data"].placeholder: logits,
         net.extern_data.data["data"].size_placeholder[0]: [n_time],
     }
     with tf_compat.v1.Session() as session:
-        assert_equal(session.run(net.get_data_batch_dim(), feed_dict=feed_dict), n_batch)
+        assert session.run(net.get_data_batch_dim(), feed_dict=feed_dict) == n_batch
         out, out_sizes = session.run(
             (rec_layer.output.placeholder, rec_layer.output.get_sequence_lengths()), feed_dict=feed_dict
         )
         print("output seq lens:", out_sizes)
         assert isinstance(out_sizes, numpy.ndarray)
         assert isinstance(out, numpy.ndarray)
-        assert_equal(out_sizes.shape, (n_batch * beam_size,))
-        assert_equal(out.shape, (n_time, n_batch * beam_size))
+        assert out_sizes.shape == (n_batch * beam_size,)
+        assert out.shape == (n_time, n_batch * beam_size)
     out = numpy.reshape(out, (n_time, n_batch, beam_size))
     print("output:")
     print(out)
@@ -1928,14 +1928,14 @@ def test_search_no_rec_explicit_dyn_len():
     ChoiceLayer._debug_out = []
     pprint(debug_out)
 
-    assert_equal(out_sizes.tolist(), expected_final_seq_lens)
+    assert out_sizes.tolist() == expected_final_seq_lens
 
     # Assume that beams are sorted by score. See above.
     for beam in range(beam_size):
         out_seq = out[:, 0, beam].tolist()
         expected_seq = expected_final_seqs[beam]
         print("beam %i, out seq %r, expected seq %r" % (beam, out_seq, expected_seq))
-        assert_equal(out_seq, expected_final_seqs[beam])
+        assert out_seq == expected_final_seqs[beam]
 
     assert len(debug_out) == n_time
     # Could be that it is not in order (because of parallel execution of the loop).
@@ -1948,7 +1948,7 @@ def test_search_no_rec_explicit_dyn_len():
             assert k in debug_t
             out_v = debug_t[k]
             if isinstance(v, int):
-                assert_equal(v, out_v)
+                assert v == out_v
             else:
                 assert isinstance(out_v, numpy.ndarray)
                 assert out_v.shape[0] == n_batch, "t %i, k %r, v %r" % (t, k, v)
@@ -2202,8 +2202,8 @@ def test_search_multi_choice():
                         % (b, i, s[i][1][0], s[i][1][1], -s[i][0])
                     )
                     numpy.testing.assert_allclose(-s[i][0], raw_beam_scores[b, i], rtol=1e-5)
-                    assert_equal(s[i][1][0], raw_src_beams[b, i])
-                    assert_equal(s[i][1][1], raw_choices[b, i])
+                    assert s[i][1][0] == raw_src_beams[b, i]
+                    assert s[i][1][1] == raw_choices[b, i]
 
             # Select src beams.
             assert lin_values.shape == (n_batch, cur_beam_size, num_choices, n_time, n_hidden)
@@ -2213,12 +2213,12 @@ def test_search_multi_choice():
             choices_values = numpy.array([choices_values[b, raw_src_beams[b]] for b in range(n_batch)])
             assert choices_values.shape == (n_batch, beam_size, num_choices, n_time)
             for c in range(num_choices):
-                assert_equal(prob_values[c].shape, (n_batch, cur_beam_size, n_time, [dim1, dim2][c]))
+                assert prob_values[c].shape == (n_batch, cur_beam_size, n_time, [dim1, dim2][c])
             prob_values = [
                 numpy.array([prob_values[c][b, raw_src_beams[b]] for b in range(n_batch)]) for c in range(num_choices)
             ]
             for c in range(num_choices):
-                assert_equal(prob_values[c].shape, (n_batch, beam_size, n_time, [dim1, dim2][c]))
+                assert prob_values[c].shape == (n_batch, beam_size, n_time, [dim1, dim2][c])
 
             # Ok. Update the beam.
             scores_base = raw_beam_scores
@@ -2491,8 +2491,8 @@ def test_search_multi_choice_simple_keep_beams():
                         % (b, i, s[i][1][0], s[i][1][1], -s[i][0])
                     )
                     numpy.testing.assert_allclose(-s[i][0], raw_beam_scores[b, i], rtol=1e-5)
-                    assert_equal(s[i][1][0], raw_src_beams[b, i])
-                    assert_equal(s[i][1][1], raw_choices[b, i])
+                    assert s[i][1][0] == raw_src_beams[b, i]
+                    assert s[i][1][1] == raw_choices[b, i]
 
             # Select src beams.
             assert lin_values.shape == (n_batch, cur_beam_size, num_choices, n_time, n_hidden)
@@ -3496,8 +3496,8 @@ def test_rec_layer_move_out_of_loop():
     train_out_layer = train_net.layers["output"]
     assert isinstance(train_out_layer, RecLayer)
     assert isinstance(train_out_layer.cell, _SubnetworkRecCell)
-    assert_equal(set(train_out_layer.cell.input_layers_moved_out), {"output", "target_embed"})
-    assert_equal(set(train_out_layer.cell.output_layers_moved_out), {"output_prob", "readout_in", "readout"})
+    assert set(train_out_layer.cell.input_layers_moved_out) == {"output", "target_embed"}
+    assert set(train_out_layer.cell.output_layers_moved_out) == {"output_prob", "readout_in", "readout"}
     train(train_net)
     print("=" * 40)
 
@@ -3690,9 +3690,9 @@ def test_rec_layer_move_out_of_loop_keep_constraints():
     train_out_layer = train_net.layers["output"]
     assert isinstance(train_out_layer, RecLayer)
     assert isinstance(train_out_layer.cell, _SubnetworkRecCell)
-    assert_equal(set(train_out_layer.cell.input_layers_moved_out), {"output", "target_embed"})
-    assert_equal(set(train_out_layer.cell.output_layers_moved_out), {"output_prob", "readout_in", "readout"})
-    assert_equal(train_net.get_total_constraints(), 0)
+    assert set(train_out_layer.cell.input_layers_moved_out) == {"output", "target_embed"}
+    assert set(train_out_layer.cell.output_layers_moved_out) == {"output_prob", "readout_in", "readout"}
+    assert train_net.get_total_constraints() == 0
 
     print("Constructing train network with L2 norm on moved out input layer")
     tf_compat.v1.reset_default_graph()
@@ -3710,8 +3710,8 @@ def test_rec_layer_move_out_of_loop_keep_constraints():
     train_out_layer = train_net.layers["output"]
     assert isinstance(train_out_layer, RecLayer)
     assert isinstance(train_out_layer.cell, _SubnetworkRecCell)
-    assert_equal(set(train_out_layer.cell.input_layers_moved_out), {"output", "target_embed"})
-    assert_equal(set(train_out_layer.cell.output_layers_moved_out), {"output_prob", "readout_in", "readout"})
+    assert set(train_out_layer.cell.input_layers_moved_out) == {"output", "target_embed"}
+    assert set(train_out_layer.cell.output_layers_moved_out) == {"output_prob", "readout_in", "readout"}
     assert_not_equal(train_net.get_total_constraints(), 0)
 
     print("Constructing train network with L2 norm on moved out output layer")
@@ -3730,8 +3730,8 @@ def test_rec_layer_move_out_of_loop_keep_constraints():
     train_out_layer = train_net.layers["output"]
     assert isinstance(train_out_layer, RecLayer)
     assert isinstance(train_out_layer.cell, _SubnetworkRecCell)
-    assert_equal(set(train_out_layer.cell.input_layers_moved_out), {"output", "target_embed"})
-    assert_equal(set(train_out_layer.cell.output_layers_moved_out), {"output_prob", "readout_in", "readout"})
+    assert set(train_out_layer.cell.input_layers_moved_out) == {"output", "target_embed"}
+    assert set(train_out_layer.cell.output_layers_moved_out) == {"output_prob", "readout_in", "readout"}
     assert_not_equal(train_net.get_total_constraints(), 0)
 
 
@@ -3994,7 +3994,7 @@ def test_rec_layer_move_out_of_loop_ref_att_generic_att():
         train_out_layer = train_net.layers["output"]
         assert isinstance(train_out_layer, RecLayer)
         assert isinstance(train_out_layer.cell, _SubnetworkRecCell)
-        assert_equal(train_out_layer.cell.layers_in_loop, [])  # all moved out :)
+        assert train_out_layer.cell.layers_in_loop == []  # all moved out :)
         rec_subnet = train_out_layer.cell.output_layers_net
         assert isinstance(rec_subnet, TFNetwork)
         att_layer = rec_subnet.layers["att"]
@@ -4865,22 +4865,20 @@ def test_rec_layer_search_select_src():
         prev_loop_out_layer = loop_net.layers["prev:output"]
         assert prev_out_choice == prev_loop_out_layer.search_choices
         assert RecLayer.is_prev_step_layer(prev_out_choice.owner)
-        assert_equal(loop_net.layers["end"].get_search_choices(), cur_out_choice)
-        assert_equal(loop_net.layers["target_embed"].get_search_choices(), cur_out_choice)
-        assert_equal(loop_net.layers["prev:target_embed"].get_search_choices(), prev_out_choice)
-        assert_equal(loop_net.layers["accum_att_weights"].get_search_choices(), prev_out_choice)
-        assert_equal(
-            loop_net.layers["prev:accum_att_weights"].get_search_choices(), prev_out_choice
-        )  # will be transformed
-        assert_equal(loop_net.layers["weight_feedback"].get_search_choices(), prev_out_choice)
+        assert loop_net.layers["end"].get_search_choices() == cur_out_choice
+        assert loop_net.layers["target_embed"].get_search_choices() == cur_out_choice
+        assert loop_net.layers["prev:target_embed"].get_search_choices() == prev_out_choice
+        assert loop_net.layers["accum_att_weights"].get_search_choices() == prev_out_choice
+        assert loop_net.layers["prev:accum_att_weights"].get_search_choices() == prev_out_choice  # will be transformed
+        assert loop_net.layers["weight_feedback"].get_search_choices() == prev_out_choice
         loop_net.debug_search_choices(loop_net.layers["s"])
-        assert_equal(loop_net.layers["s"].get_search_choices(), cur_out_choice)
-        assert_equal(loop_net.layers["prev:s"].get_search_choices(), prev_out_choice)
-        assert_equal(loop_net.layers["prev_s_state"].get_search_choices(), prev_out_choice)
-        assert_equal(loop_net.layers["energy_in"].get_search_choices(), prev_out_choice)
-        assert_equal(loop_net.layers["att_weights"].get_search_choices(), prev_out_choice)
-        assert_equal(loop_net.layers["att"].get_search_choices(), prev_out_choice)
-        assert_equal(loop_net.layers["output_prob"].get_search_choices(), prev_out_choice)
+        assert loop_net.layers["s"].get_search_choices() == cur_out_choice
+        assert loop_net.layers["prev:s"].get_search_choices() == prev_out_choice
+        assert loop_net.layers["prev_s_state"].get_search_choices() == prev_out_choice
+        assert loop_net.layers["energy_in"].get_search_choices() == prev_out_choice
+        assert loop_net.layers["att_weights"].get_search_choices() == prev_out_choice
+        assert loop_net.layers["att"].get_search_choices() == prev_out_choice
+        assert loop_net.layers["output_prob"].get_search_choices() == prev_out_choice
 
         out = search_net.get_layer("decision").output
         search_net.initialize_params(session)
@@ -5210,7 +5208,7 @@ def test_RnnCellLayer_with_time():
             assert l2.output.batch_dim_axis == 1
             assert l2.output.dim == 10
             assert l2.output.shape == (None, 10)
-            assert_equal(set(l1.params.keys()), set(l2.params.keys()))
+            assert set(l1.params.keys()) == set(l2.params.keys())
             for key in l1.params.keys():
                 assert l1.params[key].shape == l2.params[key].shape
 
@@ -5256,7 +5254,7 @@ def test_rec_subnet_simple_rnn():
         assert cell_sub_layer_out.batch_shape == (None, n_out)
         network.initialize_params(session)
         weights_var = network.layers["output"].params["output/W"]
-        assert_equal(weights_var.get_shape().as_list(), [n_out + n_in, n_out])
+        assert weights_var.get_shape().as_list() == [n_out + n_in, n_out]
         weights_np = (numpy.arange(0, (n_out + n_in) * n_out) - (n_out + n_in) * n_out * 0.5) * 0.1
         weights_np = weights_np.reshape((n_out + n_in, n_out))
         network.get_var_assigner(weights_var).assign(value=weights_np, session=session)
@@ -5264,7 +5262,7 @@ def test_rec_subnet_simple_rnn():
         input_np = numpy.array(input_np, dtype="float32")
         input_seq_lens = [3, 2]
         n_batch = len(input_seq_lens)
-        assert_equal(input_np.shape, (n_batch, max(input_seq_lens), n_in))
+        assert input_np.shape == (n_batch, max(input_seq_lens), n_in)
         input_placeholder = network.extern_data.data["data"].placeholder
         input_seq_lens_placeholder = network.extern_data.data["data"].size_placeholder[0]
         output_np, output_seq_lens = session.run(
@@ -5275,15 +5273,15 @@ def test_rec_subnet_simple_rnn():
                 input_seq_lens_placeholder: input_seq_lens,
             },
         )
-        assert_equal(list(output_seq_lens), input_seq_lens)
-        assert_equal(output_np.shape, (n_batch, max(input_seq_lens), n_out))
+        assert list(output_seq_lens) == input_seq_lens
+        assert output_np.shape == (n_batch, max(input_seq_lens), n_out)
         output_last_np = numpy.zeros((n_batch, n_out), dtype="float32")
         output_calc_np = numpy.zeros((n_batch, max(input_seq_lens), n_out), dtype="float32")
         for t in range(max(input_seq_lens)):
             _in = numpy.concatenate([output_last_np, input_np[:, t]], axis=1)
-            assert_equal(_in.shape, (n_batch, n_out + n_in))
+            assert _in.shape == (n_batch, n_out + n_in)
             _out = numpy.dot(_in, weights_np)
-            assert_equal(_out.shape, (n_batch, n_out))
+            assert _out.shape == (n_batch, n_out)
             _out = numpy.maximum(_out, 0.0)  # relu
             output_last_np = _out
             output_calc_np[:, t] = _out
@@ -5333,7 +5331,7 @@ def test_rec_subnet_simple_rnn():
         network.initialize_params(session)
         output_layer = network.layers["output"]
         weights_var = output_layer.params["output/output/rec/basic_rnn_cell/kernel"]
-        assert_equal(weights_var.get_shape().as_list(), [n_out + n_in, n_out])
+        assert weights_var.get_shape().as_list() == [n_out + n_in, n_out]
         # BasicRNNCell expects it as [inputs, state], but we have it as [state, inputs].
         weights_conv_np = numpy.concatenate([weights_np[n_out:], weights_np[:n_out]])
         network.get_var_assigner(weights_var).assign(value=weights_conv_np, session=session)
@@ -5347,8 +5345,8 @@ def test_rec_subnet_simple_rnn():
                 input_seq_lens_placeholder: input_seq_lens,
             },
         )
-        assert_equal(list(output_seq_lens), input_seq_lens)
-        assert_equal(output_np.shape, (n_batch, max(input_seq_lens), n_out))
+        assert list(output_seq_lens) == input_seq_lens
+        assert output_np.shape == (n_batch, max(input_seq_lens), n_out)
         print("rnn_cell subnet output:")
         print(output_np)
         assert_almost_equal(output_np, output_calc_np)
@@ -5432,18 +5430,17 @@ def check_reclayer_optimize_out(
         assert isinstance(net2_reclayer, RecLayer)
         net2_subnet = net2_reclayer.cell
         assert isinstance(net2_subnet, _SubnetworkRecCell)
-        assert_equal(set(net1_subnet.input_layers_moved_out), set())
-        assert_equal(set(net2_subnet.input_layers_moved_out), set())
-        assert_equal(set(net1_subnet.output_layers_moved_out), set())
+        assert set(net1_subnet.input_layers_moved_out) == set()
+        assert set(net2_subnet.input_layers_moved_out) == set()
+        assert set(net1_subnet.output_layers_moved_out) == set()
         # output_layers_moved_out will contain sublayers if present
         output_root_layers_moved_out = [
             name for name in net2_subnet.output_layers_moved_out if "/" not in name and name != ":i"
         ]
-        assert_equal(set(output_root_layers_moved_out), {"output"}.union(set(other_subnet_layers or [])))
-        assert_equal(
-            [v.name.split("/")[1:] for v in net1.get_params_list()],
-            [v.name.split("/")[1:] for v in net2.get_params_list()],
-        )
+        assert set(output_root_layers_moved_out) == {"output"}.union(set(other_subnet_layers or []))
+        assert [v.name.split("/")[1:] for v in net1.get_params_list()] == [
+            v.name.split("/")[1:] for v in net2.get_params_list()
+        ]
         net1.initialize_params(session=session)
         net1_params = net1.layers["output_not_opt"].get_param_values_dict(session=session)
         print("params:", list(net1_params.keys()))
@@ -6680,9 +6677,9 @@ def test_reclayer_subnetwork_sublayer():
         assert isinstance(rec_layer, RecLayer)
         rec_cell = rec_layer.cell
         assert isinstance(rec_cell, _SubnetworkRecCell)
-        assert_equal(set(rec_cell.input_layers_moved_out), {"outside", "subnet/a", "subnet_a"})
-        assert_equal(set(rec_cell.layers_in_loop), {"inside", "subnet", "subnet/b", "subnet/output", "subnet_b"})
-        assert_equal(set(rec_cell.output_layers_moved_out), {"output"})
+        assert set(rec_cell.input_layers_moved_out) == {"outside", "subnet/a", "subnet_a"}
+        assert set(rec_cell.layers_in_loop) == {"inside", "subnet", "subnet/b", "subnet/output", "subnet_b"}
+        assert set(rec_cell.output_layers_moved_out) == {"output"}
 
         session.run(tf_compat.v1.global_variables_initializer())
         from test_TFNetworkLayer import make_feed_dict
@@ -7402,9 +7399,9 @@ def test_reclayer_optimize_out_transformer():
             assert isinstance(rec_layer, RecLayer)
             cell = rec_layer.cell
             assert isinstance(cell, _SubnetworkRecCell)
-            assert_equal(cell.input_layers_moved_out, [])
+            assert cell.input_layers_moved_out == []
             if optimize_out:
-                assert_equal(cell.layers_in_loop, [])  # all moved out
+                assert cell.layers_in_loop == []  # all moved out
             out = net.get_layer("output/output_prob").output.copy_as_batch_major()
             assert out.batch_ndim == 3 and out.shape == (None, n_tgt_dim)
             feed_dict = get_feed_dict(extern_data=net.extern_data)
@@ -7501,11 +7498,14 @@ def test_reclayer_move_out_input_train_and_search():
         assert isinstance(rec_layer, RecLayer)
         cell = rec_layer.cell
         assert isinstance(cell, _SubnetworkRecCell)
-        assert_equal(cell.input_layers_moved_out, [])
-        assert_equal(
-            cell.output_layers_moved_out,
-            ["output_prob", "target_embed_raw", "output", "encoder_reduced", "encoder_int"],
-        )
+        assert cell.input_layers_moved_out == []
+        assert cell.output_layers_moved_out == [
+            "output_prob",
+            "target_embed_raw",
+            "output",
+            "encoder_reduced",
+            "encoder_int",
+        ]
 
     print("Constructing search network.")
     with make_scope():
@@ -7676,7 +7676,7 @@ def test_subnet_load_on_init_rec():
         input_np = numpy.array(input_np, dtype="float32")
         input_seq_lens = [3, 2]
         n_batch = len(input_seq_lens)
-        assert_equal(input_np.shape, (n_batch, max(input_seq_lens), n_in))
+        assert input_np.shape == (n_batch, max(input_seq_lens), n_in)
         input_placeholder = network.extern_data.data["data"].placeholder
         input_seq_lens_placeholder = network.extern_data.data["data"].size_placeholder[0]
         output_layer = network.get_default_output_layer(must_exist=True)
@@ -7688,8 +7688,8 @@ def test_subnet_load_on_init_rec():
                 input_seq_lens_placeholder: input_seq_lens,
             },
         )
-        assert_equal(list(output_seq_lens), input_seq_lens)
-        assert_equal(output_orig_np.shape, (n_batch, max(input_seq_lens), n_out))
+        assert list(output_seq_lens) == input_seq_lens
+        assert output_orig_np.shape == (n_batch, max(input_seq_lens), n_out)
         for t in range(max(output_seq_lens)):
             for b in range(n_batch):
                 if t >= output_seq_lens[b]:
@@ -7777,8 +7777,8 @@ def test_subnet_load_on_init_rec():
                 input_seq_lens_placeholder: input_seq_lens,
             },
         )
-        assert_equal(list(output_seq_lens), input_seq_lens)
-        assert_equal(output_np.shape, (n_batch, max(input_seq_lens), n_out))
+        assert list(output_seq_lens) == input_seq_lens
+        assert output_np.shape == (n_batch, max(input_seq_lens), n_out)
         for t in range(max(output_seq_lens)):
             for b in range(n_batch):
                 if t >= output_seq_lens[b]:
@@ -8854,7 +8854,7 @@ def test_reclayer_time_sync_target_diff():
         assert isinstance(rec_layer, RecLayer)
         cell = rec_layer.cell
         assert isinstance(cell, _SubnetworkRecCell)
-        assert_equal(cell.layers_in_loop, [])
+        assert cell.layers_in_loop == []
         loss = net.get_total_loss()
         from test_TFNetworkLayer import make_feed_dict
 
@@ -8910,7 +8910,7 @@ def test_convert_lstm_params_save_load():
     input_np = numpy.array(input_np, dtype="float32")
     input_seq_lens = [3, 2]
     n_batch = len(input_seq_lens)
-    assert_equal(input_np.shape, (n_batch, max(input_seq_lens), n_in))
+    assert input_np.shape == (n_batch, max(input_seq_lens), n_in)
 
     def construct_load_save_forward(lstm_unit, prev_lstm_unit=None, output_ref=None):
         """
@@ -8941,8 +8941,8 @@ def test_convert_lstm_params_save_load():
                     input_seq_lens_placeholder: input_seq_lens,
                 },
             )
-            assert_equal(list(output_seq_lens), input_seq_lens)
-            assert_equal(output_np.shape, (n_batch, max(input_seq_lens), n_out))
+            assert list(output_seq_lens) == input_seq_lens
+            assert output_np.shape == (n_batch, max(input_seq_lens), n_out)
             for t in range(max(output_seq_lens)):
                 for b in range(n_batch):
                     if t >= output_seq_lens[b]:
@@ -9057,7 +9057,7 @@ def test_KenLmStateLayer():
                 word_seq_so_far = ["<unk>" if "@@" in w else w for w in word_seq_so_far]
                 res2 = session.run(tf_ref_score, feed_dict={ref_score_str_placeholder: " ".join(word_seq_so_far)})
                 print("  word seq so far: %r" % (word_seq_so_far,), "score:", res2)
-                assert_equal(res2, abs_score)
+                assert res2 == abs_score
 
             assert_almost_equal(abs_score, ref_score)
             print("Scores are as expected.")
@@ -9170,7 +9170,7 @@ def test_KenLmStateLayer_dense():
                 word_seq_so_far = ["<unk>" if "@@" in w else w for w in word_seq_so_far]
                 res2 = session.run(tf_ref_score, feed_dict={ref_score_str_placeholder: " ".join(word_seq_so_far)})
                 print("  word seq so far: %r" % (word_seq_so_far,), "score:", res2)
-                assert_equal(res2, abs_score)
+                assert res2 == abs_score
 
             assert_almost_equal(abs_score, ref_score)
             print("Scores are as expected.")
@@ -9453,21 +9453,19 @@ def test_rec_layer_search_select_src_reuse_layer():
         prev_loop_out_layer = loop_net.layers["prev:output"]
         assert prev_out_choice == prev_loop_out_layer.search_choices
         assert RecLayer.is_prev_step_layer(prev_out_choice.owner)
-        assert_equal(loop_net.layers["end"].get_search_choices(), cur_out_choice)
-        assert_equal(loop_net.layers["target_embed"].get_search_choices(), cur_out_choice)
-        assert_equal(loop_net.layers["prev:target_embed"].get_search_choices(), prev_out_choice)
-        assert_equal(loop_net.layers["accum_att_weights"].get_search_choices(), prev_out_choice)
-        assert_equal(
-            loop_net.layers["prev:accum_att_weights"].get_search_choices(), prev_out_choice
-        )  # will be transformed
-        assert_equal(loop_net.layers["weight_feedback"].get_search_choices(), prev_out_choice)
-        assert_equal(loop_net.layers["s"].get_search_choices(), cur_out_choice)
-        assert_equal(loop_net.layers["prev:s"].get_search_choices(), prev_out_choice)
-        assert_equal(loop_net.layers["prev_s_state"].get_search_choices(), prev_out_choice)
-        assert_equal(loop_net.layers["energy_in"].get_search_choices(), prev_out_choice)
-        assert_equal(loop_net.layers["att_weights"].get_search_choices(), prev_out_choice)
-        assert_equal(loop_net.layers["att"].get_search_choices(), prev_out_choice)
-        assert_equal(loop_net.layers["output_prob"].get_search_choices(), prev_out_choice)
+        assert loop_net.layers["end"].get_search_choices() == cur_out_choice
+        assert loop_net.layers["target_embed"].get_search_choices() == cur_out_choice
+        assert loop_net.layers["prev:target_embed"].get_search_choices() == prev_out_choice
+        assert loop_net.layers["accum_att_weights"].get_search_choices() == prev_out_choice
+        assert loop_net.layers["prev:accum_att_weights"].get_search_choices() == prev_out_choice  # will be transformed
+        assert loop_net.layers["weight_feedback"].get_search_choices() == prev_out_choice
+        assert loop_net.layers["s"].get_search_choices() == cur_out_choice
+        assert loop_net.layers["prev:s"].get_search_choices() == prev_out_choice
+        assert loop_net.layers["prev_s_state"].get_search_choices() == prev_out_choice
+        assert loop_net.layers["energy_in"].get_search_choices() == prev_out_choice
+        assert loop_net.layers["att_weights"].get_search_choices() == prev_out_choice
+        assert loop_net.layers["att"].get_search_choices() == prev_out_choice
+        assert loop_net.layers["output_prob"].get_search_choices() == prev_out_choice
 
 
 def test_onlineblstm():
@@ -9947,7 +9945,7 @@ def test_MaskedComputationLayer_UnmaskLayer_in_loop():
         in_v, out_v = session.run((in_data.placeholder, out_data.placeholder), feed_dict=feed_dict)
         print(in_v)
         print(out_v)
-        assert_equal(in_v.shape, out_v.shape)
+        assert in_v.shape == out_v.shape
         for b in range(in_v.shape[0]):
             x = 0.0
             for t in range(in_v.shape[1]):
@@ -10027,7 +10025,7 @@ def test_MaskedComputationLayer_UnmaskLayer_in_loop_opt():
         print(out_v)
         print("seq lens:", out_seq_lens_v)
         pprint(extra_v)
-        assert_equal(in_v.shape, out_v.shape)
+        assert in_v.shape == out_v.shape
         for b in range(in_v.shape[0]):
             x = 0.0
             for t in range(in_v.shape[1]):
@@ -10096,7 +10094,7 @@ def test_MaskedComputationLayer_in_loop_auto_unmask():
             print(in_v)
             print(out_v)
             print("seq lens:", out_seq_lens_v)
-            assert_equal(in_v.shape, out_v.shape)
+            assert in_v.shape == out_v.shape
             for b in range(in_v.shape[0]):
                 x = 1
                 for t in range(in_v.shape[1]):
@@ -10183,7 +10181,7 @@ def test_MaskedComputationLayer_sub_layers():
             print(in_v)
             print(out_v)
             print("seq lens:", out_seq_lens_v)
-            assert_equal(in_v.shape, out_v.shape)
+            assert in_v.shape == out_v.shape
             for b in range(in_v.shape[0]):
                 x = 0
                 for t in range(in_v.shape[1]):
@@ -10890,7 +10888,7 @@ def test_MaskedComputationLayer_UnmaskLayer_masked_outside():
         in_v, out_v = session.run((in_data.placeholder, out_data.placeholder), feed_dict=feed_dict)
         print(in_v)
         print(out_v)
-        assert_equal(in_v.shape, out_v.shape)
+        assert in_v.shape == out_v.shape
         for b in range(in_v.shape[0]):
             x = 0.0
             for t in range(in_v.shape[1]):
@@ -10963,9 +10961,9 @@ def test_MaskedComputationLayer_outside():
                     break
                 if not in_mask_v[b, t]:
                     continue
-                assert_equal(in_v[b, t], out_v[b, t_])
+                assert in_v[b, t] == out_v[b, t_]
                 t_ += 1
-            assert_equal(t_, out_lens[b])
+            assert t_ == out_lens[b]
         assert out_v.shape == (num_batch, max(out_lens))
 
 
@@ -11001,7 +10999,7 @@ def test_MaskedComputationLayer_name_scope():
         params = net.get_params_list()
         print(params)
         assert len(params) == 2
-        assert_equal(set(p.name for p in params), {"output/W:0", "output/b:0"})
+        assert set(p.name for p in params) == {"output/W:0", "output/b:0"}
 
 
 def test_MaskedComputationLayer_rec_name_scope():
@@ -11036,7 +11034,7 @@ def test_MaskedComputationLayer_rec_name_scope():
         params = net.get_params_list()
         print(params)
         assert len(params) == 3
-        assert_equal(set(p.name for p in params), {"output/rec/W:0", "output/rec/W_re:0", "output/rec/b:0"})
+        assert set(p.name for p in params) == {"output/rec/W:0", "output/rec/W_re:0", "output/rec/b:0"}
 
 
 def test_MaskedComputationLayer_subnet_name_scope():
@@ -11078,7 +11076,7 @@ def test_MaskedComputationLayer_subnet_name_scope():
         params = net.get_params_list()
         print(params)
         assert len(params) == 2
-        assert_equal(set(p.name for p in params), {"output/linear/W:0", "output/linear/b:0"})
+        assert set(p.name for p in params) == {"output/linear/W:0", "output/linear/b:0"}
 
 
 def test_MaskedComputationLayer_rec_subnet_name_scope():
@@ -11138,7 +11136,7 @@ def test_MaskedComputationLayer_rec_subnet_name_scope():
         params = net.get_params_list()
         print(params)
         assert len(params) == 2
-        assert_equal(set(p.name for p in params), {"linear/W:0", "linear/b:0"})
+        assert set(p.name for p in params) == {"linear/W:0", "linear/b:0"}
 
 
 def test_MaskedComputationLayer_dyn_size_none():
@@ -13955,11 +13953,11 @@ def test_CumConcatLayer_self_attention_equal_to_SelfAttentionLayer():
                 single_weights = single_layer.params["QKV"]
                 multi_weights = network.get_layer("multi_layer_qkv0").params["W"]
 
-            assert_equal(single_layer.output.batch_shape, (None, None, num_heads * value_dim))
-            assert_equal(multi_layer.output.batch_shape, (None, None, num_heads * value_dim))
+            assert single_layer.output.batch_shape == (None, None, num_heads * value_dim)
+            assert multi_layer.output.batch_shape == (None, None, num_heads * value_dim)
 
             # set weights equal.
-            assert_equal(single_weights.shape, multi_weights.shape)
+            assert single_weights.shape == multi_weights.shape
             weights = numpy.random.rand(*single_weights.shape)
             session.run(tf.compat.v1.assign(single_weights, weights))
             session.run(tf.compat.v1.assign(multi_weights, weights))

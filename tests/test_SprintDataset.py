@@ -1,5 +1,5 @@
 import _setup_test_env  # noqa
-from nose.tools import assert_equal, assert_true
+from nose.tools import assert_true
 from returnn.engine.batch import Batch
 from returnn.config import Config
 import returnn.util.basic as util
@@ -67,7 +67,7 @@ def test_assign_dev_data():
     recurrent = False
     batch_generator = dataset.generate_batches(recurrent_net=recurrent, batch_size=5)
     batches = batch_generator.peek_next_n(2)
-    assert_equal(len(batches), 2)
+    assert len(batches) == 2
 
 
 def test_window():
@@ -94,12 +94,12 @@ def test_window():
         dataset2.init_seq_order(epoch=1)
         dataset1.load_seqs(0, 1)
         dataset2.load_seqs(0, 1)
-        assert_equal(dataset1.get_data_dim("data"), input_dim)
-        assert_equal(dataset2.get_data_dim("data"), input_dim * window)
+        assert dataset1.get_data_dim("data") == input_dim
+        assert dataset2.get_data_dim("data") == input_dim * window
         data1 = dataset1.get_data(0, "data")
         data2 = dataset2.get_data(0, "data")
-        assert_equal(data1.shape, (seq_len, input_dim))
-        assert_equal(data2.shape, (seq_len, window * input_dim))
+        assert data1.shape == (seq_len, input_dim)
+        assert data2.shape == (seq_len, window * input_dim)
         data2a = data2.reshape(seq_len, window, input_dim)
         print("data1:")
         print(data1)
@@ -111,13 +111,13 @@ def test_window():
         print(data2[0])
         print("data2a[0,0]:")
         print(data2a[0, 0])
-        assert_equal(list(data2a[0, 0]), [0] * input_dim)  # zero-padded left
-        assert_equal(list(data2a[0, 1]), list(data1[0]))
-        assert_equal(list(data2a[0, 2]), list(data1[1]))
-        assert_equal(list(data2a[1, 0]), list(data1[0]))
-        assert_equal(list(data2a[1, 1]), list(data1[1]))
-        assert_equal(list(data2a[1, 2]), list(data1[2]))
-        assert_equal(list(data2a[-1, 2]), [0] * input_dim)  # zero-padded right
+        assert list(data2a[0, 0]) == [0] * input_dim  # zero-padded left
+        assert list(data2a[0, 1]) == list(data1[0])
+        assert list(data2a[0, 2]) == list(data1[1])
+        assert list(data2a[1, 0]) == list(data1[0])
+        assert list(data2a[1, 1]) == list(data1[1])
+        assert list(data2a[1, 2]) == list(data1[2])
+        assert list(data2a[-1, 2]) == [0] * input_dim  # zero-padded right
     finally:
         dataset1._exit_handler()
         dataset2._exit_handler()

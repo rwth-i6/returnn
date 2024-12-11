@@ -17,7 +17,6 @@ import returnn.util.basic as util
 import returnn.native_op as native_op
 from returnn.util.basic import unicode
 import unittest
-from nose.tools import assert_equal, assert_is_instance
 import numpy
 import numpy.testing
 from numpy.testing import assert_almost_equal, assert_allclose
@@ -277,9 +276,9 @@ def test_LstmLowMem_fwd_simple_1():
     print("vY:", vY)
     print("vC:", vC)
     print("vd:", vd)
-    assert_equal(vY.shape, (n_time, n_batch, n_cells))
-    assert_equal(vC.shape, (n_time, n_batch, n_cells))
-    assert_equal(d.shape, (n_batch, n_cells))
+    assert vY.shape == (n_time, n_batch, n_cells)
+    assert vC.shape == (n_time, n_batch, n_cells)
+    assert d.shape == (n_batch, n_cells)
     vintern = vX + vy0 + vb
     vcellIn = numpy.tanh(vintern)
     vgates = 1.0 / (1.0 + numpy.exp(-vintern))  # sigmoid
@@ -331,11 +330,11 @@ def test_LstmLowMem_bwd_simple_1():
     print("op vDb:", vDb)
     print("op vDh:", vDh)
     print("op vDc:", vDc)
-    assert_equal(vDX.shape, (n_time, n_batch, n_in))
-    assert_equal(vDW.shape, (n_in + n_cells, n_cells * 4))
-    assert_equal(vDb.shape, (n_cells * 4,))
-    assert_equal(vDh.shape, (n_batch, n_cells))
-    assert_equal(vDc.shape, (n_batch, n_cells))
+    assert vDX.shape == (n_time, n_batch, n_in)
+    assert vDW.shape == (n_in + n_cells, n_cells * 4)
+    assert vDb.shape == (n_cells * 4,)
+    assert vDh.shape == (n_batch, n_cells)
+    assert vDc.shape == (n_batch, n_cells)
     vDh1 = vDY
     vgc = numpy.tanh(vc)
     vDoutGate_in = (1.0 - vgates) * vgates * vgc * vDh1
@@ -345,10 +344,10 @@ def test_LstmLowMem_bwd_simple_1():
     vDfgtGate_in = (1.0 - vgates) * vgates * vc0 * vDc2
     vDintern = numpy.array([vDcellIn_in, vDinpGate_in, vDfgtGate_in, vDoutGate_in])
     vDb_ = vDintern
-    assert_equal(vDb_.shape, vDb.shape)
+    assert vDb_.shape == vDb.shape
     assert_allclose(vDb, vDb_)
     vDW_ = numpy.array([vX * vDintern, vy0 * vDintern])
-    assert_equal(vDW_.shape, vDW.shape)
+    assert vDW_.shape == vDW.shape
     assert_allclose(vDW, vDW_)
     vDx1 = numpy.sum(vDintern)
     assert_allclose(vDX, vDx1)
@@ -395,7 +394,7 @@ def test_NativeLstm2_shape_inference_normal():
         out, _, _, final_cell_state = op(inputs, weights, y0, c0, index, start, step)
         print("out:", out)
         assert isinstance(out, tf.Tensor)
-        assert_equal(out.shape.as_list(), [n_time, n_batch, n_hidden])
+        assert out.shape.as_list() == [n_time, n_batch, n_hidden]
 
 
 def test_NativeLstm2_shape_inference_unknown_batchnlen():
@@ -416,7 +415,7 @@ def test_NativeLstm2_shape_inference_unknown_batchnlen():
         out, _, _, final_cell_state = op(inputs, weights, y0, c0, index, start, step)
         print("out:", out)
         assert isinstance(out, tf.Tensor)
-        assert_equal(out.shape.as_list(), [None, None, n_hidden])
+        assert out.shape.as_list() == [None, None, n_hidden]
 
 
 def test_NativeLstm2_shape_inference_unknown_rank():
@@ -435,7 +434,7 @@ def test_NativeLstm2_shape_inference_unknown_rank():
         out, _, _, final_cell_state = op(inputs, weights, y0, c0, index, start, step)
         print("out:", out)
         assert isinstance(out, tf.Tensor)
-        assert_equal(out.shape.as_list(), [None, None, n_hidden])
+        assert out.shape.as_list() == [None, None, n_hidden]
 
 
 def test_NativeLstm2_0len_run():
@@ -1620,11 +1619,11 @@ def test_py_baum_welch():
     print("Done.")
     print("score:")
     print(repr(obs_scores))
-    assert_equal(obs_scores.shape, (seq_len, n_batch))
+    assert obs_scores.shape == (seq_len, n_batch)
     bw = numpy.exp(-fwdbwd)
     print("Baum-Welch soft alignment:")
     print(repr(bw))
-    assert_equal(bw.shape, (seq_len, n_batch, n_classes))
+    assert bw.shape == (seq_len, n_batch, n_classes)
     from numpy import array, float32
 
     if seq_len == n_classes:
@@ -1646,9 +1645,9 @@ def test_py_baum_welch():
             ],
             dtype=float32,
         )
-        assert_equal(ref_align.shape, (seq_len, 1, n_classes))
+        assert ref_align.shape == (seq_len, 1, n_classes)
         ref_align = numpy.tile(ref_align, (1, n_batch, 1))
-        assert_equal(ref_align.shape, bw.shape)
+        assert ref_align.shape == bw.shape
         # print("Reference alignment:")
         # print(repr(ref_align))
         print("mean square diff:", numpy.mean(numpy.square(ref_align - bw)))
@@ -1738,11 +1737,11 @@ def test_fast_bw_uniform():
     fwdbwd, score = session.run([fwdbwd, obs_scores])
     print("score:")
     print(repr(score))
-    assert_equal(score.shape, (seq_len, n_batch))
+    assert score.shape == (seq_len, n_batch)
     bw = numpy.exp(-fwdbwd)
     print("Baum-Welch soft alignment:")
     print(repr(bw))
-    assert_equal(bw.shape, (seq_len, n_batch, n_classes))
+    assert bw.shape == (seq_len, n_batch, n_classes)
     from numpy import array, float32
 
     if seq_len == n_classes:
@@ -1764,9 +1763,9 @@ def test_fast_bw_uniform():
             ],
             dtype=float32,
         )
-        assert_equal(ref_align.shape, (seq_len, 1, n_classes))
+        assert ref_align.shape == (seq_len, 1, n_classes)
         ref_align = numpy.tile(ref_align, (1, n_batch, 1))
-        assert_equal(ref_align.shape, bw.shape)
+        assert ref_align.shape == bw.shape
         # print("Reference alignment:")
         # print(repr(ref_align))
         print("mean square diff:", numpy.mean(numpy.square(ref_align - bw)))
@@ -2233,10 +2232,10 @@ def test_py_viterbi():
     print("Done.")
     print("score:")
     print(repr(obs_scores))
-    assert_equal(obs_scores.shape, (n_batch,))
+    assert obs_scores.shape == (n_batch,)
     print("Hard alignment:")
     print(repr(alignment))
-    assert_equal(alignment.shape, (seq_len, n_batch))
+    assert alignment.shape == (seq_len, n_batch)
     if seq_len == n_classes:
         print("Extra check identity...")
         for i in range(n_batch):
@@ -2246,7 +2245,7 @@ def test_py_viterbi():
         print("Extra check ref_align (7,5)...")
         assert_allclose(obs_scores, -1.6218603, rtol=1e-5)  # should be the same everywhere
         for i in range(n_batch):
-            assert_equal(alignment[:, i].tolist(), [0, 1, 1, 2, 3, 3, 4])
+            assert alignment[:, i].tolist() == [0, 1, 1, 2, 3, 3, 4]
     print("Done.")
 
 
@@ -2287,10 +2286,10 @@ def test_fast_viterbi():
     print("Done.")
     print("score:")
     print(repr(obs_scores))
-    assert_equal(obs_scores.shape, (n_batch,))
+    assert obs_scores.shape == (n_batch,)
     print("Hard alignment:")
     print(repr(alignment))
-    assert_equal(alignment.shape, (seq_len, n_batch))
+    assert alignment.shape == (seq_len, n_batch)
     if seq_len == n_classes:
         print("Extra check identity...")
         for i in range(n_batch):
@@ -2300,7 +2299,7 @@ def test_fast_viterbi():
         print("Extra check ref_align (7,5)...")
         assert_allclose(obs_scores, -1.6218603, rtol=1e-5)  # should be the same everywhere
         for i in range(n_batch):
-            assert_equal(alignment[:, i].tolist(), [0, 1, 1, 2, 3, 3, 4])
+            assert alignment[:, i].tolist() == [0, 1, 1, 2, 3, 3, 4]
     print("Done.")
 
 
@@ -2329,10 +2328,10 @@ def test_fast_viterbi_rnd():
     )
     print("ref score:")
     print(repr(ref_scores))
-    assert_equal(ref_scores.shape, (n_batch,))
+    assert ref_scores.shape == (n_batch,)
     print("ref hard alignment:")
     print(repr(ref_alignment))
-    assert_equal(ref_alignment.shape, (seq_len, n_batch))
+    assert ref_alignment.shape == (seq_len, n_batch)
     print("Construct fast_viterbi call...")
     alignment, scores = fast_viterbi(
         am_scores=tf.constant(am_scores),
@@ -2345,10 +2344,10 @@ def test_fast_viterbi_rnd():
     print("Done.")
     print("score:")
     print(repr(scores))
-    assert_equal(scores.shape, (n_batch,))
+    assert scores.shape == (n_batch,)
     print("Hard alignment:")
     print(repr(alignment))
-    assert_equal(alignment.shape, (seq_len, n_batch))
+    assert alignment.shape == (seq_len, n_batch)
     assert_allclose(scores, ref_scores, rtol=1e-5)
     assert_allclose(alignment, ref_alignment, rtol=1e-5)
     print("Done.")
@@ -2574,13 +2573,13 @@ def _wrap_tf_edit_distance(a, b):
 
 
 def test_wrap_tf_edit_distance():
-    assert_equal(_wrap_tf_edit_distance([1], []), 1)
-    assert_equal(_wrap_tf_edit_distance([1, 2], [1]), 1)
-    assert_equal(_wrap_tf_edit_distance([2, 2], [1]), 2)
-    assert_equal(_wrap_tf_edit_distance([2, 1], [1]), 1)
-    assert_equal(_wrap_tf_edit_distance([2, 1], [1, 1]), 1)
-    assert_equal(_wrap_tf_edit_distance([2, 1], [1, 1, 1]), 2)
-    assert_equal(_wrap_tf_edit_distance([2, 1], [2, 1, 1]), 1)
+    assert _wrap_tf_edit_distance([1], []) == 1
+    assert _wrap_tf_edit_distance([1, 2], [1]) == 1
+    assert _wrap_tf_edit_distance([2, 2], [1]) == 2
+    assert _wrap_tf_edit_distance([2, 1], [1]) == 1
+    assert _wrap_tf_edit_distance([2, 1], [1, 1]) == 1
+    assert _wrap_tf_edit_distance([2, 1], [1, 1, 1]) == 2
+    assert _wrap_tf_edit_distance([2, 1], [2, 1, 1]) == 1
 
 
 def _naive_optimal_completion_edit_distance(a, b):
@@ -3212,7 +3211,7 @@ def _run_rnnt(acts, labels, input_lengths, label_lengths, expected_costs, expect
 
     if not is_checked_out():
         raise unittest.SkipTest("HawkAaronWarpTransducer not checked out?")
-    assert_equal(acts.shape, expected_grads.shape)
+    assert acts.shape == expected_grads.shape
     acts_t = tf.constant(acts)
     labels_t = tf.constant(labels)
     input_lengths_t = tf.constant(input_lengths)

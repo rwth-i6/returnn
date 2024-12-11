@@ -12,7 +12,6 @@ from returnn.tf.updater import *
 from returnn.tf.layers.base import LayerBase, Loss
 import returnn.tf.compat as tf_compat
 from returnn.log import log
-from nose.tools import assert_equal, assert_is_instance, assert_is, assert_in
 from numpy.testing import assert_almost_equal
 import unittest
 import numpy.testing
@@ -118,9 +117,9 @@ def test_add_check_numerics_ops():
         check = add_check_numerics_ops([y])
         session.run(check)
         z1 = tf_compat.v1.log(x - 3, name="z1")
-        assert_equal(str(session.run(z1)), "-inf")
+        assert str(session.run(z1)) == "-inf"
         z2 = tf_compat.v1.log(x - 4, name="z2")
-        assert_equal(str(session.run(z2)), "nan")
+        assert str(session.run(z2)) == "nan"
         check1 = add_check_numerics_ops([z1])
         try:
             session.run(check1)
@@ -145,8 +144,8 @@ def test_grad_add_check_numerics_ops():
         y = 1.0 / x
         grad_x = tf.gradients(y, x)[0]
         print("grad_x:", grad_x.eval())
-        assert_equal(str(float("-inf")), "-inf")
-        assert_equal(str(grad_x.eval()), "-inf")
+        assert str(float("-inf")) == "-inf"
+        assert str(grad_x.eval()) == "-inf"
 
         session.run(x.assign(1.0))
         opt = tf_compat.v1.train.GradientDescentOptimizer(learning_rate=1.0)
@@ -316,7 +315,7 @@ def test_Updater_decouple_constraints_simple_graph():
         )
         network.initialize_params(session=session)
         var = network.get_layer("var").output.placeholder
-        assert_equal(session.run(var), 1.0)
+        assert session.run(var) == 1.0
 
         updater = Updater(config=config, network=network, initial_learning_rate=1.0)
         updater.set_learning_rate(1.0, session=session)
@@ -361,7 +360,7 @@ def test_Updater_decouple_constraints_simple_graph_grad_accum():
         )
         network.initialize_params(session=session)
         var = network.get_layer("var").output.placeholder
-        assert_equal(session.run(var), 1.0)
+        assert session.run(var) == 1.0
 
         updater = Updater(config=config, network=network, initial_learning_rate=1.0)
         updater.set_learning_rate(1.0, session=session)
@@ -372,7 +371,7 @@ def test_Updater_decouple_constraints_simple_graph_grad_accum():
 
         tf_util.print_graph_output(update_op)
 
-        assert_equal(session.run(updater.global_train_step), 0)
+        assert session.run(updater.global_train_step) == 0
         expected_var = 1.0
         for i in range(10):
             print("Run step", i)
@@ -380,7 +379,7 @@ def test_Updater_decouple_constraints_simple_graph_grad_accum():
                 update_op,
                 feed_dict={extern_data.data["data"].placeholder: [0.0, 0.0, 0.0], extern_data.get_batch_info().dim: 3},
             )
-            assert_equal(session.run(updater.global_train_step), i + 1)
+            assert session.run(updater.global_train_step) == i + 1
             var_value = session.run(var)
             print("var:", var_value)
             if i % 2 == 1:

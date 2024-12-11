@@ -4,7 +4,6 @@ import os
 import _setup_test_env  # noqa
 from returnn.config import Config
 from returnn.learning_rate_control import *
-from nose.tools import assert_equal
 import numpy
 import unittest
 
@@ -98,7 +97,7 @@ def test_init_error_old():
     assert "train_score" in error
     assert "dev_score" in error
     assert "dev_error" in error
-    assert_equal(lrc.get_error_key(1), "dev_score")
+    assert lrc.get_error_key(1) == "dev_score"
     lrc.get_learning_rate_for_epoch(2)
     lrc.set_epoch_error(2, {"train_score": 1.8})
     lrc.set_epoch_error(2, {"dev_score": 1.9, "dev_error": 0.5})
@@ -117,7 +116,7 @@ def test_init_error_new():
     assert "train_score" in error
     assert "dev_score" in error
     assert "dev_error" in error
-    assert_equal(lrc.get_error_key(1), "dev_score")
+    assert lrc.get_error_key(1) == "dev_score"
     lrc.get_learning_rate_for_epoch(2)
     lrc.set_epoch_error(2, {"train_score": {"cost:output": 1.8}})
     lrc.set_epoch_error(2, {"dev_score": {"cost:output": 1.9}, "dev_error": {"error:output": 0.5}})
@@ -142,7 +141,7 @@ def test_init_error_muliple_out():
     assert "dev_score_out2" in error
     assert "dev_error_output" in error
     assert "dev_error_out2" in error
-    assert_equal(lrc.get_error_key(1), "dev_score_output")
+    assert lrc.get_error_key(1) == "dev_score_output"
     lrc.get_learning_rate_for_epoch(2)
     lrc.set_epoch_error(2, {"train_score": {"cost:output": 1.8, "cost:out2": 2.8}})
     lrc.set_epoch_error(
@@ -157,15 +156,15 @@ def test_newbob():
     config.update({"learning_rate_control": "newbob", "learning_rate": lr})
     lrc = load_learning_rate_control_from_config(config)
     assert isinstance(lrc, NewbobRelative)
-    assert_equal(lrc.get_learning_rate_for_epoch(1), lr)
+    assert lrc.get_learning_rate_for_epoch(1) == lr
     lrc.set_epoch_error(1, {"train_score": {"cost:output": 1.9344199658230012}})
     lrc.set_epoch_error(1, {"dev_score": {"cost:output": 1.99}, "dev_error": {"error:output": 0.6}})
     error = lrc.get_epoch_error_dict(1)
     assert "train_score" in error
     assert "dev_score" in error
     assert "dev_error" in error
-    assert_equal(lrc.get_error_key(1), "dev_score")
-    assert_equal(lrc.get_learning_rate_for_epoch(2), lr)  # epoch 2 cannot be a different lr yet
+    assert lrc.get_error_key(1) == "dev_score"
+    assert lrc.get_learning_rate_for_epoch(2) == lr  # epoch 2 cannot be a different lr yet
     lrc.set_epoch_error(2, {"train_score": {"cost:output": 1.8}})
     lrc.set_epoch_error(2, {"dev_score": {"cost:output": 1.9}, "dev_error": {"error:output": 0.5}})
     lrc.get_learning_rate_for_epoch(3)
@@ -185,7 +184,7 @@ def test_newbob_multi_epoch():
     )
     lrc = load_learning_rate_control_from_config(config)
     assert isinstance(lrc, NewbobMultiEpoch)
-    assert_equal(lrc.get_learning_rate_for_epoch(1), lr)
+    assert lrc.get_learning_rate_for_epoch(1) == lr
     lrc.set_epoch_error(
         1,
         {
@@ -194,7 +193,7 @@ def test_newbob_multi_epoch():
             "train_score": 3.095824052426714,
         },
     )
-    assert_equal(lrc.get_learning_rate_for_epoch(2), lr)  # epoch 2 cannot be a different lr yet
+    assert lrc.get_learning_rate_for_epoch(2) == lr  # epoch 2 cannot be a different lr yet
 
 
 def test_later_default_lr():
