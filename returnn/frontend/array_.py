@@ -367,6 +367,7 @@ def concat(
     *sources: Tuple[Tensor, Dim],
     allow_broadcast: bool = False,
     out_dim: Optional[Dim] = None,
+    handle_dynamic_dims: Optional[bool] = None,
 ) -> Tuple[Tensor, Dim]:
     """
     Concatenates multiple sources in the specified dimension.
@@ -376,6 +377,7 @@ def concat(
     :param sources: list of (tensor, dim) pairs. dim is the axis to concatenate on.
     :param allow_broadcast: if True, the sources can have different dims, and the result will be broadcasted.
     :param out_dim: reuse existing dim for the resulting concatenated dim, if given
+    :param handle_dynamic_dims:
     :return: concatenated tensor, out_dim
     """
     assert sources
@@ -385,6 +387,9 @@ def concat(
             assert src.dims_set - {dim} == dims, f"concat {sources}, need allow_broadcast=True"
     if not out_dim:
         out_dim = sum(d for _, d in sources)
+    if handle_dynamic_dims is None or handle_dynamic_dims:
+        for src, dim in sources[:-1]:
+            assert dim.is_static(), f"concat {sources}, dim {dim} is not static, not yet implemented..."
     # noinspection PyProtectedMember
     return sources[0][0]._raw_backend.concat(*sources, allow_broadcast=allow_broadcast, out_dim=out_dim), out_dim
 
@@ -507,13 +512,18 @@ def cum_concat_step(
     :return: (accumulated, out_spatial_dim). accumulated shape {..., out_spatial_dim},
         same shape as prev_accum with axis replaced by out_spatial_dim.
     """
+    # Note: Before, we had a backend function just for this.
+    # In case of TF-layers, this was using CumConcatLayer.
+    # This would allow for automatic optimization when inside a RecLayer.
+    # However, we don't really need this for eager frameworks,
+    # and we want to simplify this for now,
+    # using pure RF code.
     if not out_spatial_dim:
         out_spatial_dim = axis + 1
-    # noinspection PyProtectedMember
-    return (
-        source._raw_backend.cum_concat_step(source, prev_accum=prev_accum, axis=axis, out_spatial_dim=out_spatial_dim),
-        out_spatial_dim,
+    out, (out_spatial_dim,) = rf.pad(
+        prev_accum, axes=[axis], padding=[(0, 1)], out_dims=[out_spatial_dim], value=source, handle_dynamic_dims=True
     )
+    return out, out_spatial_dim
 
 
 def stack(sources: Sequence[Tensor], *, out_dim: Optional[Dim] = None) -> Tuple[Tensor, Dim]:

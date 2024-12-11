@@ -497,21 +497,6 @@ class Backend(Generic[T]):
         raise NotImplementedError
 
     @staticmethod
-    def cum_concat_step(source: Tensor, *, prev_accum: Tensor, axis: Dim, out_spatial_dim: Dim) -> Tensor:
-        """
-        Concatenates all previous frames over a time-axis.
-        See RETURNN :class:`CumConcatLayer` for details.
-
-        :param source: same dims as prev_accum except for the accum axis
-        :param prev_accum: previous accumulated tensor, shape {..., axis}
-        :param axis: the axis to accumulate over
-        :param out_spatial_dim: the spatial dim of the output will be this dim. like axis+1.
-        :return: accumulated. accumulated shape {..., out_spatial_dim},
-            same shape as prev_accum with axis replaced by out_spatial_dim.
-        """
-        raise NotImplementedError
-
-    @staticmethod
     def stack(sources: Sequence[Tensor], *, out_dim: Dim) -> Tensor:
         """
         :param sources:
@@ -1093,6 +1078,15 @@ class Backend(Generic[T]):
             axis=source.get_axis_from_description(in_dim), new_dim_tag=out_dim, name="replace_dim"
         )
         out.raw_tensor = source.raw_tensor
+        return out
+
+    @staticmethod
+    def set_sparse_dim(source: Tensor, sparse_dim: Dim) -> Tensor:
+        """set sparse dim"""
+        # This default implementation works fine as long as the backend
+        # does not have special treatments of Tensor and dim tags itself (like TF net dict backend).
+        out = source.copy()
+        out.sparse_dim = sparse_dim
         return out
 
     _AllowedReduceModes = {"sum", "max", "min", "mean", "logsumexp", "any", "all", "argmin", "argmax"}

@@ -15,6 +15,7 @@ __all__ = [
     "range_over_dim_strided",
     "range_over_merged_dims",
     "replace_dim",
+    "set_sparse_dim",
     "dim_match_priority_when_needed",
     "num_elements_of_shape",
     "masked_fraction_of_shape",
@@ -92,6 +93,16 @@ def replace_dim(source: Tensor, *, in_dim: Dim, out_dim: Optional[Dim] = None) -
         out_dim = in_dim.copy(same_as_self=False, description="new-dim")
     # noinspection PyProtectedMember
     return source._raw_backend.replace_dim(source, in_dim=in_dim, out_dim=out_dim), out_dim
+
+
+def set_sparse_dim(source: Tensor, sparse_dim: Dim) -> Tensor:
+    """
+    :param source:
+    :param sparse_dim:
+    :return: source with sparse_dim set
+    """
+    # noinspection PyProtectedMember
+    return source._raw_backend.set_sparse_dim(source, sparse_dim)
 
 
 def dim_match_priority_when_needed(dim: Dim, *other_dims: Dim) -> Dim:

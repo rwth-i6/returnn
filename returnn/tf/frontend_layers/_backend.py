@@ -376,20 +376,6 @@ class ReturnnLayersBackend(Backend[Layer]):
         )
 
     @staticmethod
-    def cum_concat_step(source: Tensor, *, prev_accum: Tensor, axis: Dim, out_spatial_dim: Dim) -> Tensor:
-        """cum_concat_step"""
-        return rfl.make_layer(
-            {
-                "class": "cum_concat",
-                "from": source,
-                "state": {"state": prev_accum},
-                "out_spatial_dim": out_spatial_dim,
-                "axis": axis,
-            },
-            name="cum_concat",
-        )
-
-    @staticmethod
     def activation(tensor: Tensor, func: str) -> Tensor:
         """activation"""
         return rfl.make_layer({"class": "activation", "activation": func, "from": tensor}, name=func)
@@ -772,6 +758,14 @@ class ReturnnLayersBackend(Backend[Layer]):
         """
         return rfl.make_layer(
             {"class": "reinterpret_data", "set_dim_tags": {in_dim: out_dim}, "from": source}, name="new_dim"
+        )
+
+    @staticmethod
+    def set_sparse_dim(source: Tensor, sparse_dim: Dim) -> Tensor:
+        """set sparse dim"""
+        return rfl.make_layer(
+            {"class": "reinterpret_data", "set_sparse": True, "set_sparse_dim": sparse_dim, "from": source},
+            name="set_sparse_dim",
         )
 
     @staticmethod

@@ -497,18 +497,6 @@ class TorchBackend(Backend[torch.Tensor]):
         return out
 
     @staticmethod
-    def cum_concat_step(source: Tensor, *, prev_accum: Tensor, axis: Dim, out_spatial_dim: Dim) -> Tensor:
-        """cum concat step"""
-        out = prev_accum.copy_template_replace_dim_tag(
-            axis=prev_accum.get_axis_from_description(axis),
-            new_dim_tag=out_spatial_dim,
-            name=f"{source.name}/cum_concat_step",
-        )
-        source_raw = source.copy_compatible_to_dims_raw(prev_accum.dims)
-        out.raw_tensor = torch.cat((prev_accum.raw_tensor, source_raw), dim=prev_accum.get_axis_from_description(axis))
-        return out
-
-    @staticmethod
     def stack(sources: Sequence[Tensor], *, out_dim: Dim) -> Tensor:
         """stack"""
         out_dims = (out_dim,) + sources[0].dims
