@@ -385,6 +385,8 @@ def concat(
             assert src.dims_set - {dim} == dims, f"concat {sources}, need allow_broadcast=True"
     if not out_dim:
         out_dim = sum(d for _, d in sources)
+    for src, dim in sources[:-1]:
+        assert dim.is_static(), f"concat {sources}, dim {dim} is not static"
     # noinspection PyProtectedMember
     return sources[0][0]._raw_backend.concat(*sources, allow_broadcast=allow_broadcast, out_dim=out_dim), out_dim
 
