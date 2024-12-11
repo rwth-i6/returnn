@@ -869,6 +869,7 @@ def _make_indices(
         indices, out_spatial_dim = rf.concat(
             (q_pos_vec - query_spatial_dim_m1.get_dim_value_tensor(), query_spatial_dim_m1),
             (kv_pos_vec, key_value_spatial_dim),
+            handle_dynamic_dims=False,
         )
     if query_offset is not None:
         indices = indices - query_offset
