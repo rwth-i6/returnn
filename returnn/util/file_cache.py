@@ -10,7 +10,6 @@ Main class is :class:`FileCache`.
 """
 
 from typing import Any, Collection, Iterable, List, Optional, Tuple, Union
-import copy
 import errno
 import os
 import pathlib
