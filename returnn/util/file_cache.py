@@ -10,6 +10,7 @@ Main class is :class:`FileCache`.
 """
 
 from typing import Any, Collection, Iterable, List, Optional, Tuple, Union
+import copy
 import errno
 import os
 import pathlib
@@ -472,7 +473,7 @@ class _TouchFilesThread(Thread):
         """thread main loop"""
         while True:
             all_files = {}  # dict to have order deterministic
-            for filename in self.files:
+            for filename in self.files.copy():  # copy dict under GIL to avoid modifications during iteration
                 all_files[filename] = True
                 all_files.update({k: True for k in _all_parent_dirs(filename, base_dir=self.cache_base_dir)})
             for filename in all_files:
