@@ -174,21 +174,9 @@ jobs:
           - TEST=TFUtil
           - TEST=tools
         include:
-          - action: TEST=TFUtil
-            python-version: 3.8
-            tf-version: 1.15.3
-          - action: TEST=TFEngine
-            python-version: 3.8
-            tf-version: 1.15.3
           - action: TEST=TFEngine
             python-version: 3.8
             tf-version: 2.3.0
-          - action: TEST=TFNativeOp
-            python-version: 3.8
-            tf-version: 1.14.0
-          - action: TEST=TFNetworkSigProcLayer
-            python-version: 3.8
-            tf-version: 1.15.3
           - action: TEST=demos RETURNN_DISABLE_TORCH=1
             python-version: 3.8
             tf-version: 2.3.0
@@ -221,7 +209,7 @@ jobs:
 
         pip install --user pytest
 
-        if [[ "${{matrix.tf-version}}" == 2.[0123].* || "${{matrix.tf-version}}" == 1.* ]]; then
+        if [[ "${{matrix.tf-version}}" == 2.[0123].* ]]; then
           # Older TF needs older NumPy version.
           # https://github.com/rwth-i6/returnn/pull/1160#issuecomment-1284537803
           pip install --user numpy==1.19.5
