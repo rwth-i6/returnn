@@ -6,7 +6,9 @@ or any changes which could potentially break or change the behavior of existing 
 This is intentionally kept short. For a full change log, just see the Git log.
 
 
-## 2023-12-13: Bump min Python version from 3.7 to 3.8 ([issue #1326](https://github.com/rwth-i6/returnn/issues/1326))
+## 2024-12-13: Bump min Python version from 3.7 to 3.8 ([issue #1326](https://github.com/rwth-i6/returnn/issues/1326))
+
+This also drops support for TF 1.x.
 
 ## 2024-06-07: `VariableDataset`
 
