@@ -92,7 +92,7 @@ jobs:
       fail-fast: false
       matrix:
         python-version:
-          - 3.7
+          - 3.8
         action:
           - TEST=Dataset
           - TEST=fork_exec
@@ -158,7 +158,7 @@ jobs:
       fail-fast: false
       matrix:
         python-version:
-          - 3.7
+          - 3.8
         tf-version:
           - 2.10.0
         action:
@@ -175,22 +175,22 @@ jobs:
           - TEST=tools
         include:
           - action: TEST=TFUtil
-            python-version: 3.7
+            python-version: 3.8
             tf-version: 1.15.3
           - action: TEST=TFEngine
-            python-version: 3.7
+            python-version: 3.8
             tf-version: 1.15.3
           - action: TEST=TFEngine
-            python-version: 3.7
+            python-version: 3.8
             tf-version: 2.3.0
           - action: TEST=TFNativeOp
-            python-version: 3.7
+            python-version: 3.8
             tf-version: 1.14.0
           - action: TEST=TFNetworkSigProcLayer
-            python-version: 3.7
+            python-version: 3.8
             tf-version: 1.15.3
           - action: TEST=demos RETURNN_DISABLE_TORCH=1
-            python-version: 3.7
+            python-version: 3.8
             tf-version: 2.3.0
 
     steps:
@@ -358,7 +358,7 @@ jobs:
         include:
           # Some selected tests (but not all) with some other versions.
           - action: TEST=rf_base
-            python-version: 3.7
+            python-version: 3.8
             torch-version: 1.13.1
             tf-version: 2.10.0
 
