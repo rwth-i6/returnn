@@ -571,6 +571,7 @@ def test_rel_pos_self_attention():
             "data": Tensor("data", [batch_dim, time_dim, in_dim], dtype="float32"),
         }
     )
+    check_batching = False
 
     class _Net(rf.Module):
         def __init__(self):
@@ -586,6 +587,32 @@ def test_rel_pos_self_attention():
 
         def __call__(self, x: Tensor, *, axis: Dim) -> Tensor:
             """forward"""
+            nonlocal check_batching
+            if check_batching:
+                assert rf.is_executing_eagerly()
+                assert batch_dim in x.dims and axis != batch_dim
+                y = self.self_att(x, axis=axis)
+                for b in range(batch_dim.get_dim_value()):
+                    x_b = rf.gather(x, axis=batch_dim, indices=b)
+                    assert batch_dim in axis.dyn_size_ext.dims  # current assumption...
+                    seq_len = rf.gather(axis.dyn_size_ext, axis=batch_dim, indices=b)
+                    axis_b = Dim(seq_len)
+                    # Note: The current order (replace_dim and then slice) is somewhat dependent
+                    # on the current internal behavior of gather and replace_dim,
+                    # which might change at some point...
+                    x_b, _ = rf.replace_dim(x_b, in_dim=axis, out_dim=axis_b)
+                    x_b, _ = rf.slice(x_b, axis=axis_b, start=0, end=seq_len, out_dim=axis_b)
+                    y_b = self.self_att(x_b, axis=axis_b)
+                    y_b_ = rf.gather(y, axis=batch_dim, indices=b)
+                    y_b_, _ = rf.replace_dim(y_b_, in_dim=axis, out_dim=axis_b)
+                    y_b_, _ = rf.slice(y_b_, axis=axis_b, start=0, end=seq_len, out_dim=axis_b)
+                    y_b_ = y_b_.copy_transpose(y_b.dims)
+                    # Assuming PyTorch...
+                    np.testing.assert_almost_equal(
+                        y_b.raw_tensor.cpu().detach().numpy(), y_b_.raw_tensor.cpu().detach().numpy(), decimal=5
+                    )
+                return y
+
             return self.self_att(x, axis=axis)
 
     # noinspection PyShadowingNames
@@ -594,6 +621,8 @@ def test_rel_pos_self_attention():
         out.mark_as_default_output(shape=(batch_dim, time_dim, model.out_dim))
 
     run_model(extern_data, lambda *, epoch, step: _Net(), _forward_step)
+    check_batching = True
+    run_model(extern_data, lambda *, epoch, step: _Net(), _forward_step, test_tensorflow=False)
 
 
 def test_sinusoidal_positional_encoding():
