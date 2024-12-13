@@ -542,6 +542,27 @@ def test_relative_positional_encoding():
     run_model(extern_data, lambda *, epoch, step: _Net(), _forward_step)
 
 
+def test_relative_positional_encoding_cross():
+    enc_spatial_dim = Dim(Tensor("enc_spatial", [batch_dim], dtype="int32"))
+    dec_spatial_dim = Dim(Tensor("dec_spatial", [batch_dim], dtype="int32"))
+    in_dim = Dim(8, name="in")
+    extern_data = TensorDict(
+        {
+            "enc": Tensor("enc", [batch_dim, enc_spatial_dim, in_dim], dtype="float32"),
+            "dec": Tensor("dec", [batch_dim, dec_spatial_dim, in_dim], dtype="float32"),
+        }
+    )
+
+    # noinspection PyShadowingNames
+    def _forward_step(**_kwargs):
+        out, dim = rf.relative_positional_encoding(
+            key_value_spatial_dim=enc_spatial_dim, query_spatial_dim=dec_spatial_dim, feat_dim=in_dim
+        )
+        out.mark_as_default_output(shape=(dim, in_dim))
+
+    run_model(extern_data, lambda **_kwargs: rf.Module(), _forward_step)
+
+
 def test_rel_pos_self_attention():
     time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
     in_dim = Dim(8, name="in")
