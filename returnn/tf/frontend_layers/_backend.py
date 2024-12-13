@@ -342,7 +342,6 @@ class ReturnnLayersBackend(Backend[Layer]):
         opts = {}
         if allow_broadcast:
             opts["allow_broadcast"] = True
-        out_dim = sum(d for _, d in sources)
         return rfl.make_layer(
             {"class": "concat", "from": sources, "out_dim": out_dim, **opts},
             name="concat",
