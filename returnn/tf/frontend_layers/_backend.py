@@ -342,6 +342,20 @@ class ReturnnLayersBackend(Backend[Layer]):
         opts = {}
         if allow_broadcast:
             opts["allow_broadcast"] = True
+        dim_deps = rfl.get_dim_deps(out_dim)
+        sources_dims = set()
+        for source, _ in sources:
+            sources_dims.update(source.dims)
+        need_explicit_dim_deps = False
+        for dim in dim_deps:
+            if dim not in sources_dims:
+                need_explicit_dim_deps = True
+                break
+        if need_explicit_dim_deps:
+            source0 = rfl.make_layer(
+                {"class": "copy", "from": sources[0][0], "extra_deps": dim_deps}, name="concat_extra_dim_deps"
+            )
+            sources = ((source0, sources[0][1]),) + sources[1:]
         return rfl.make_layer(
             {"class": "concat", "from": sources, "out_dim": out_dim, **opts},
             name="concat",
