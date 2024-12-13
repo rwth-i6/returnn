@@ -452,9 +452,6 @@ class TorchBackend(Backend[torch.Tensor]):
     ) -> Tensor:
         """pad"""
         assert len(out_dims) == len(axes) == len(padding)
-        out = source.copy_template_new_dim_tags(
-            [out_dims[axes.index(dim)] if dim in axes else dim for dim in source.dim_tags], keep_special_axes=True
-        )
         remaining_dims = set(axes)
         raw_pad = []
         for dim in reversed(source.dims):
@@ -469,10 +466,24 @@ class TorchBackend(Backend[torch.Tensor]):
             ]
             if not remaining_dims:
                 break
-        if isinstance(value, Tensor):
-            assert value.dims == (), f"value {value} must be a scalar"
-            value = value.raw_tensor
-        out.raw_tensor = torch.nn.functional.pad(source.raw_tensor, pad=raw_pad, mode=mode, value=value)
+        # Use torch.nn.functional.pad if possible.
+        if (isinstance(value, Tensor) and value.dims == ()) or (not isinstance(value, Tensor)):
+            if isinstance(value, Tensor):
+                assert value.dims == ()
+                value = value.raw_tensor
+            out = source.copy_template_new_dim_tags(
+                [out_dims[axes.index(dim)] if dim in axes else dim for dim in source.dim_tags], keep_special_axes=True
+            )
+            out.raw_tensor = torch.nn.functional.pad(source.raw_tensor, pad=raw_pad, mode=mode, value=value)
+        else:  # Fallback to concat.
+            assert isinstance(value, Tensor)
+            assert all(dim in source.dims and dim not in axes for dim in value.dims)
+            assert len(axes) == 1  # not implemented otherwise currently...
+            ext_dim = Dim(1, name="ext")
+            value_ext = rf.expand_dim(value, ext_dim)
+            out = TorchBackend.concat(
+                (source, axes[0]), (value_ext, ext_dim), allow_broadcast=True, out_dim=out_dims[0]
+            )
         if any(dim.need_masking() for dim in out_dims) and handle_dynamic_dims:
             if all(right == 0 for right in raw_pad[1::2]) and mode != "circular":
                 pass  # no masking needed
@@ -490,9 +501,9 @@ class TorchBackend(Backend[torch.Tensor]):
                                 rf.copy_to_device((left + middle).dyn_size_ext, out.device),
                             )
                             out.raw_tensor = torch.where(
-                                mask.copy_compatible_to(out, check_dtype=False, check_sparse=False).raw_tensor,
+                                mask.copy_compatible_to_dims_raw(out.dims),
                                 out.raw_tensor,
-                                value,
+                                value.copy_compatible_to_dims_raw(out.dims) if isinstance(value, Tensor) else value,
                             )
         return out
 
