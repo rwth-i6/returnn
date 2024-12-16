@@ -5,14 +5,10 @@ RETURNN frontend (returnn.frontend) utils
 from __future__ import annotations
 from typing import Optional, Union, Any, Dict, Tuple
 import contextlib
+import os
 import re
 import numpy
 import numpy.testing
-
-try:
-    import tensorflow as tf
-except ImportError:
-    tf = globals().get("tf", None)  # type: ignore
 
 from returnn.config import Config, global_config_ctx
 from returnn.util.pprint import pprint
@@ -22,15 +18,26 @@ from returnn.tensor.utils import tensor_dict_fill_random_numpy_
 import returnn.torch.frontend as rft
 from returnn.torch.data.tensor_utils import tensor_dict_numpy_to_torch_, tensor_dict_torch_to_numpy_
 
+# noinspection PyProtectedMember
+from returnn.frontend._random_journal import RandomJournal
+
+
+disable_tf = "RETURNN_DISABLE_TF" in os.environ and int(os.environ["RETURNN_DISABLE_TF"]) == 1
+
+if disable_tf:
+    tf = None
+else:
+    try:
+        import tensorflow as tf
+    except ImportError:
+        tf = globals().get("tf", None)  # type: ignore
+
 if tf:
     import returnn.tf.compat as tf_compat
     import returnn.tf.frontend_layers as rfl
     from returnn.tf.network import TFNetwork
 else:
     tf_compat = rfl = TFNetwork = None
-
-# noinspection PyProtectedMember
-from returnn.frontend._random_journal import RandomJournal
 
 
 @contextlib.contextmanager
@@ -65,7 +72,11 @@ def run_model(
 
     if not test_tensorflow:
         return out_pt
+    if disable_tf:
+        print("** TensorFlow disabled (RETURNN_DISABLE_TF)")
+        return out_pt
 
+    assert tf, "TensorFlow not available"
     print("** run with TensorFlow-net-dict backend")
     with rfl.ReturnnLayersBackend.random_journal_replay(random_journal):
         out_tf = _run_model_net_dict_tf(extern_data, get_model, forward_step)
