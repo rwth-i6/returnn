@@ -55,6 +55,9 @@ def filter_out(ls):
         if any(f"{l} tensorflow/" in s for l in "IWE"):  # some TF warnings
             i += 1
             continue
+        elif "SyntaxWarning" in s:
+            i += 2
+            continue
         # RuntimeWarning|FutureWarning are warnings and they include the code-line in the next output line
         if i + 1 < len(ls) and ls[i + 1].startswith("  "):
             if re.match(".*:\\d+: RuntimeWarning: numpy.*", s) or re.match(".*:\\d+: FutureWarning: .*", s):
