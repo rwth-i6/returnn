@@ -76,6 +76,11 @@ Questions can also be asked on
 Dependencies
 ============
 
-pip dependencies are listed in ``requirements.txt`` and ``requirements-dev``, although some parts of the code may require additional dependencies (e.g. ``librosa``, ``resampy``) on-demand.
+pip dependencies are listed in ``requirements.txt`` and ``requirements-dev``,
+although some parts of the code may require additional dependencies (e.g. ``librosa``, ``resampy``) on-demand.
 
 RETURNN supports Python >= 3.8. Bumps to the minimum Python version are listed in `CHANGELOG.md <https://github.com/rwth-i6/returnn/blob/master/CHANGELOG.md>`__.
+
+TensorFlow-based setups require TensorFlow >= 2.2.
+
+PyTorch-based setups require Torch >= 1.0.
