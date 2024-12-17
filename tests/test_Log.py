@@ -52,8 +52,11 @@ def filter_out(ls):
     i = 0
     while i < len(ls):
         s = ls[i]
-        if "tensorflow/core/" in s or "tensorflow/stream_executor/" in s:  # some TF warnings
+        if any(f"{l} tensorflow/" in s for l in "IWE"):  # some TF warnings
             i += 1
+            continue
+        elif "SyntaxWarning" in s:
+            i += 2
             continue
         # RuntimeWarning|FutureWarning are warnings and they include the code-line in the next output line
         if i + 1 < len(ls) and ls[i + 1].startswith("  "):
