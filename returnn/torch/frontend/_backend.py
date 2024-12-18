@@ -1714,24 +1714,37 @@ class TorchBackend(Backend[torch.Tensor]):
         return out, out_dim
 
     @staticmethod
-    def masked_scatter(source: Tensor, *, mask: Tensor, dims: Sequence[Dim], in_dim: Dim) -> Tensor:
+    def masked_scatter(
+        source: Tensor, backup: Optional[Tensor] = None, *, mask: Tensor, dims: Sequence[Dim], in_dim: Dim
+    ) -> Tensor:
         """masked scatter"""
         assert mask.dtype == "bool"
         assert set(mask.dims) == set(dims)
         assert in_dim in source.dims
         remaining_dims = [d for d in source.dims if d not in mask.dims and d != in_dim]
         source_templ_dims = (in_dim,) + tuple(remaining_dims)
-        tensor_templ_dims = tuple(dims) + tuple(remaining_dims)
         source_raw = source.copy_compatible_to_dims_raw(source_templ_dims)
-        mask_raw = mask.copy_compatible_to_dims_raw(tensor_templ_dims)
-        out_shape = [d.get_dim_value() for d in tensor_templ_dims]
-        out_raw = torch.zeros(out_shape, dtype=source_raw.dtype, device=source_raw.device)
+
+        out_dims = tuple(dims) + tuple(remaining_dims)
+        if backup is None:
+            out_shape = [d.get_dim_value() for d in out_dims]
+            out_raw = torch.zeros(out_shape, dtype=source_raw.dtype, device=source_raw.device)
+        else:
+            assert set(backup.dims).issubset(out_dims), f"backup dims {backup.dims} not subset of out dims {out_dims}"
+            for d in out_dims:
+                if d not in backup.dims:
+                    backup = rf.expand_dim(backup, dim=d)
+            out_dims = backup.dims
+            out_raw = backup.raw_tensor.clone()  # we operate inplace below
+
+        mask_raw = mask.copy_compatible_to_dims_raw(out_dims)
         out_raw.masked_scatter_(mask_raw, source_raw)
         return Tensor(
             "masked_scatter",
-            dims=tensor_templ_dims,
-            dtype=source.dtype,
+            dims=out_dims,
+            dtype=TorchBackend.get_dtype_name_raw(out_raw),
             sparse_dim=source.sparse_dim,
+            feature_dim=source.feature_dim,
             raw_tensor=out_raw,
         )
 

@@ -1165,11 +1165,14 @@ class Backend(Generic[T]):
         raise NotImplementedError
 
     @staticmethod
-    def masked_scatter(source: Tensor, *, mask: Tensor, dims: Sequence[Dim], in_dim: Dim) -> Tensor:
+    def masked_scatter(
+        source: Tensor, backup: Optional[Tensor] = None, *, mask: Tensor, dims: Sequence[Dim], in_dim: Dim
+    ) -> Tensor:
         """
         The inverse of :func:`masked_select`.
 
         :param source: [in_dim, F...]
+        :param backup: [dims..., F...] (or subset of those dims). zero if not given.
         :param mask: [dims...] -> bool (e.g. [B,T])
         :param dims: the order of the dims defines the format. those dims should be exactly the dims of the mask.
         :param in_dim: the dim of the source which should be scattered into the mask.

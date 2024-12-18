@@ -598,18 +598,21 @@ def masked_select(
     return res, out_dim
 
 
-def masked_scatter(source: Tensor, *, mask: Tensor, dims: Sequence[Dim], in_dim: Dim) -> Tensor:
+def masked_scatter(
+    source: Tensor, backup: Optional[Tensor] = None, *, mask: Tensor, dims: Sequence[Dim], in_dim: Dim
+) -> Tensor:
     """
     The inverse of :func:`masked_select`.
 
     :param source: [in_dim, F...]
+    :param backup: [dims..., F...] (or subset of those dims). zero if not given.
     :param mask: [dims...] -> bool (e.g. [B,T])
     :param dims: the order of the dims defines the format. those dims should be exactly the dims of the mask.
     :param in_dim: the dim of the source which should be scattered into the mask.
     :return: [dims..., F...]
     """
     # noinspection PyProtectedMember
-    return source._raw_backend.masked_scatter(source, mask=mask, dims=dims, in_dim=in_dim)
+    return source._raw_backend.masked_scatter(source, backup=backup, mask=mask, dims=dims, in_dim=in_dim)
 
 
 def sequence_mask(dims: Union[Dim, Sequence[Dim]], *, device: Optional[str] = None) -> Tensor:
