@@ -444,7 +444,7 @@ class TorchBackend(Backend[torch.Tensor]):
         source: Tensor,
         *,
         axes: Sequence[Dim],
-        padding: Sequence[Tuple[Union[Dim, int], Union[Dim, int]]],
+        padding: Sequence[Tuple[Union[Dim, int, Tensor], Union[Dim, int, Tensor]]],
         out_dims: Sequence[Dim],
         handle_dynamic_dims: bool,
         mode: str = "constant",
@@ -459,14 +459,31 @@ class TorchBackend(Backend[torch.Tensor]):
                 raw_pad += [0, 0]
                 continue
             remaining_dims.remove(dim)
-            pad_ = padding[axes.index(dim)]
-            raw_pad += [
-                pad_[0].get_dim_value() if isinstance(pad_[0], Dim) else pad_[0],
-                pad_[1].get_dim_value() if isinstance(pad_[1], Dim) else pad_[1],
-            ]
+            left, right = padding[axes.index(dim)]
+            if isinstance(left, Dim):
+                if handle_dynamic_dims:
+                    assert not left.need_masking(), f"pad: left {left} needs masking, not supported currently"
+                left_ = left.get_dim_value()
+            elif isinstance(left, Tensor):
+                if handle_dynamic_dims:
+                    assert not left.dims, f"pad: left {left} needs masking, not supported currently"
+                left_ = torch.max(left.raw_tensor)
+            elif isinstance(left, int):
+                left_ = left
+            else:
+                raise TypeError(f"pad: invalid left {left!r}")
+            if isinstance(right, Dim):
+                right_ = right.get_dim_value()
+            elif isinstance(right, Tensor):
+                right_ = torch.max(right.raw_tensor)
+            elif isinstance(right, int):
+                right_ = right
+            else:
+                raise TypeError(f"pad: invalid right {right!r}")
+            raw_pad += [left_, right_]
             if not remaining_dims:
                 break
-        # Use torch.nn.functional.pad if possible.
+        # Use torch.nn.functional.pad if possible. It's possible for scalar `value` (or None).
         if (isinstance(value, Tensor) and value.dims == ()) or (not isinstance(value, Tensor)):
             if isinstance(value, Tensor):
                 assert value.dims == ()
@@ -476,7 +493,7 @@ class TorchBackend(Backend[torch.Tensor]):
             )
             out.raw_tensor = torch.nn.functional.pad(source.raw_tensor, pad=raw_pad, mode=mode, value=value)
         else:  # Fallback to concat.
-            assert isinstance(value, Tensor)
+            assert isinstance(value, Tensor) and value.dims  # non-scalar
             assert all(dim in source.dims and dim not in axes for dim in value.dims)
             assert len(axes) == 1  # not implemented otherwise currently...
             ext_dim = Dim(1, name="ext")
@@ -493,12 +510,23 @@ class TorchBackend(Backend[torch.Tensor]):
                         f"pad: mode {mode} not implemented with dynamic dims and handle_dynamic_dims=True"
                     )
                 for out_dim, middle, (left, right) in zip(out_dims, axes, padding):
-                    if middle.need_masking() or (isinstance(left, Dim) and left.need_masking()):
-                        if isinstance(right, Dim) or right > 0:
+                    if (
+                        middle.need_masking()
+                        or (isinstance(left, Dim) and left.need_masking())
+                        or (isinstance(left, Tensor) and left.dims)
+                    ):
+                        if isinstance(left, Dim):
+                            left = left.get_size_tensor(device=out.device)
+                        assert isinstance(left, Tensor)
+                        if (
+                            isinstance(right, Dim)
+                            or (isinstance(right, int) and right > 0)
+                            or isinstance(right, Tensor)
+                        ):
                             mask = rf.compare_bc(
                                 rf.range_over_dim(out_dim, device=out.device),
                                 "<",
-                                rf.copy_to_device((left + middle).dyn_size_ext, out.device),
+                                left + middle.get_size_tensor(device=out.device),
                             )
                             out.raw_tensor = torch.where(
                                 mask.copy_compatible_to_dims_raw(out.dims),

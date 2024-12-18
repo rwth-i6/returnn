@@ -412,7 +412,7 @@ def pad(
     source: Tensor,
     *,
     axes: Sequence[Dim],
-    padding: Sequence[Tuple[Union[Dim, int], Union[Dim, int]]],
+    padding: Sequence[Tuple[Union[Dim, int, Tensor], Union[Dim, int, Tensor]]],
     out_dims: Optional[Sequence[Dim]] = None,
     mode: str = "constant",
     value: Optional[Union[rf.RawTensorTypes, Tensor]] = None,
@@ -436,13 +436,6 @@ def pad(
     if handle_dynamic_dims is None:
         handle_dynamic_dims = _pad_handle_dynamic_dims_default(axes, padding, mode=mode)
     if not out_dims:
-        if handle_dynamic_dims:
-            for left, right in padding:
-                if isinstance(left, Dim):
-                    assert not left.need_masking(), f"padding {padding} does not support dynamic left padding"
-                if isinstance(right, Dim):
-                    assert not right.need_masking(), f"padding {padding} does not support dynamic right padding"
-                # Note that even dynamic middle dims is not exactly correct...
         out_dims = [left + middle + right for middle, (left, right) in zip(axes, padding)]
     # noinspection PyProtectedMember
     return (
@@ -480,10 +473,7 @@ def _pad_handle_dynamic_dims_default(
     global _pad_handle_dynamic_dims_shown_warning
     if not _pad_handle_dynamic_dims_shown_warning:
         for middle, (left, right) in zip(pad_axes, padding):
-            middle: Dim
-            if not middle.need_masking() and (isinstance(left, int) or not left.need_masking()):
-                continue
-            if mode != "circular" and isinstance(right, int) and right == 0:
+            if not _pad_need_dyn_dim_handling(middle, left, right, mode=mode):
                 continue
 
             logging.getLogger("returnn.frontend").warning(
@@ -496,6 +486,20 @@ def _pad_handle_dynamic_dims_default(
             _pad_handle_dynamic_dims_shown_warning = True
             break
     return False
+
+
+def _pad_need_dyn_dim_handling(
+    middle: Dim, left: Union[Dim, int, Tensor], right: Union[Dim, int, Tensor], *, mode: str
+) -> bool:
+    if (
+        not middle.need_masking()
+        and (isinstance(left, int) or (isinstance(left, Dim) and not left.need_masking()))
+        or (isinstance(left, Tensor) and not left.dims)
+    ):
+        return False
+    if mode != "circular" and isinstance(right, int) and right == 0:
+        return False
+    return True
 
 
 def cum_concat_step(

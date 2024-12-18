@@ -478,7 +478,7 @@ class Backend(Generic[T]):
         source: Tensor,
         *,
         axes: Sequence[Dim],
-        padding: Sequence[Tuple[Union[Dim, int], Union[Dim, int]]],
+        padding: Sequence[Tuple[Union[Dim, int, Tensor], Union[Dim, int, Tensor]]],
         out_dims: Sequence[Dim],
         handle_dynamic_dims: bool,
         mode: str = "constant",
