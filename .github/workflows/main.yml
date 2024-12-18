@@ -206,7 +206,7 @@ jobs:
 
         pip install --user --progress-bar=off pytest
 
-        pip install --user --progress-bar=off --upgrade dm-tree h5py
+        pip install --user --progress-bar=off dm-tree h5py
 
         if [[ "${{matrix.tf-version}}" == 2.[0123].* ]]; then
           # Older TF needs older NumPy version.
@@ -225,7 +225,7 @@ jobs:
         fi
 
         pip install --user --progress-bar=off -r requirements.txt
-        pip install --user --progress-bar=off scipy  # for some tests
+        pip install --user --progress-bar=off --upgrade scipy  # for some tests
         pip install --user --progress-bar=off --upgrade tensorflow==${{ matrix.tf-version }}
 
     - name: Test Python/Numpy/TF versions.
