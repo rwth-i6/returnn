@@ -45,16 +45,15 @@ jobs:
         echo "Python ${{matrix.python-version}}"
         echo "pip: $(type pip)"
 
-        pip install --user --upgrade pip setuptools wheel
-        pip install --user typing  # needed for Python 2 in some cases
+        pip install --user --progress-bar=off --upgrade pip setuptools wheel
 
-        pip install --user pytest
+        pip install --user --progress-bar=off pytest
 
-        pip install --user dm-tree h5py typing
+        pip install --user --progress-bar=off dm-tree h5py
         pip install --user --progress-bar=off "numpy<2"
         pip install --user --progress-bar=off scipy  # for some tests
 
-        pip install --user --upgrade --progress-bar=off torch==${{ matrix.torch-version }}
+        pip install --user --progress-bar=off --upgrade torch==${{ matrix.torch-version }}
 
         # Retry several times in case download breaks. https://github.com/pypa/pip/issues/4796
         for ((i=0; i<3; i++)); do
@@ -133,7 +132,6 @@ jobs:
         echo "pip: $(type pip)"
 
         pip install --user --upgrade pip setuptools wheel
-        pip install --user typing  # needed for Python 2 in some cases
 
         pip install --user pytest
 
@@ -204,10 +202,11 @@ jobs:
         echo "Python ${{matrix.python-version}}"
         echo "pip: $(type pip)"
 
-        pip install --user --upgrade pip setuptools wheel
-        pip install --user typing  # needed for Python 2 in some cases
+        pip install --user --progress-bar=off --upgrade pip setuptools wheel
 
-        pip install --user pytest
+        pip install --user --progress-bar=off pytest
+
+        pip install --user --progress-bar=off dm-tree h5py
 
         if [[ "${{matrix.tf-version}}" == 2.[0123].* ]]; then
           # Older TF needs older NumPy version.
@@ -227,7 +226,7 @@ jobs:
 
         pip install --user --progress-bar=off -r requirements.txt
         pip install --user --progress-bar=off scipy  # for some tests
-        pip install --user --upgrade --progress-bar=off tensorflow==${{ matrix.tf-version }}
+        pip install --user --progress-bar=off --upgrade tensorflow==${{ matrix.tf-version }}
 
     - name: Test Python/Numpy/TF versions.
       run: |
@@ -285,15 +284,14 @@ jobs:
         echo "Python ${{matrix.python-version}}"
         echo "pip: $(type pip)"
 
-        pip install --user --upgrade pip setuptools wheel
-        pip install --user typing  # needed for Python 2 in some cases
+        pip install --user --progress-bar=off --upgrade pip setuptools wheel
 
-        pip install --user pytest
+        pip install --user --progress-bar=off pytest
 
-        pip install --user dm-tree h5py typing
+        pip install --user --progress-bar=off dm-tree h5py
         pip install --user --progress-bar=off "numpy<2"
         pip install --user --progress-bar=off scipy  # for some tests
-        pip install --user --upgrade --progress-bar=off torch==${{ matrix.torch-version }}
+        pip install --user --progress-bar=off --upgrade torch==${{ matrix.torch-version }}
         pip install --user --progress-bar=off onnx onnxruntime
         pip install --user --progress-bar=off lovely_tensors
 
@@ -373,16 +371,15 @@ jobs:
         echo "Python ${{matrix.python-version}}"
         echo "pip: $(type pip)"
 
-        pip install --user --upgrade pip setuptools wheel
-        pip install --user typing  # needed for Python 2 in some cases
+        pip install --user --progress-bar=off --upgrade pip setuptools wheel
 
-        pip install --user pytest
+        pip install --user --progress-bar=off pytest
 
-        pip install --user dm-tree h5py typing
+        pip install --user --progress-bar=off dm-tree h5py
         pip install --user --progress-bar=off "numpy<2"
         pip install --user --progress-bar=off scipy  # for some tests
 
-        pip install --user --upgrade torch==${{ matrix.torch-version }}
+        pip install --user --progress-bar=off --upgrade torch==${{ matrix.torch-version }}
         pip install --user --progress-bar=off lovely_tensors
 
         if [[ "${{matrix.tf-version}}" == 2.10.* ]]; then
