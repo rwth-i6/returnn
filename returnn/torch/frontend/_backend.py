@@ -517,7 +517,7 @@ class TorchBackend(Backend[torch.Tensor]):
                     ):
                         if isinstance(left, Dim):
                             left = left.get_size_tensor(device=out.device)
-                        assert isinstance(left, Tensor)
+                        assert isinstance(left, (int, Tensor))
                         if (
                             isinstance(right, Dim)
                             or (isinstance(right, int) and right > 0)
