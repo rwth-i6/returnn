@@ -1169,15 +1169,20 @@ class Engine(EngineBase):
         self._maybe_reset_dev_memory_caches()
         self._reset_dev_memory_stats()
 
-        if dataset.supports_seq_order_sorting():
-            # We can sort it. Sort it in reverse to make sure that we have enough memory right at the beginning.
-            print("Dataset supports sorting, i.e. it will be sorted for optimal performance.", file=log.v3)
-            dataset.seq_ordering = "sorted_reverse"
-        else:
-            print(
-                "Dataset does not support sorting, i.e. it will not be sorted for optimal performance.",
-                file=log.v3,
-            )
+        if dataset_init_epoch:
+            if not self.config.bool("sort_dataset", True):
+                pass
+            elif dataset.seq_ordering == "sorted_reverse":
+                pass
+            elif dataset.supports_seq_order_sorting():
+                # We can sort it. Sort it in reverse to make sure that we have enough memory right at the beginning.
+                print("Dataset supports sorting, i.e. it will be sorted for optimal performance.", file=log.v3)
+                dataset.seq_ordering = "sorted_reverse"
+            else:
+                print(
+                    "Dataset does not support sorting, i.e. it will not be sorted for optimal performance.",
+                    file=log.v3,
+                )
 
         if allow_skipping_seqs:
             # Dangerous! If you enable this, you could lose sequences,
