@@ -347,8 +347,9 @@ class LmDataset(CachedDataset2):
                 last_print_time = time.time()
 
         # If a list of files is provided, concatenate all.
-        if not isinstance(corpus_file, list):
+        if isinstance(corpus_file, str):
             corpus_file = [corpus_file]
+        assert isinstance(corpus_file, (tuple, list))
         prev_orth_len = 0
         for file_name in corpus_file:
             if self._use_cache_manager:
