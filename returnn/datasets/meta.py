@@ -1905,14 +1905,6 @@ class VariableDataset(Dataset):
         """current seq order"""
         return self._dataset.get_current_seq_order()
 
-    def get_all_tags(self) -> List[str]:
-        """all tags"""
-        return self._dataset.get_all_tags()
-
-    def get_total_num_seqs(self, *, fast: bool = False) -> int:
-        """total num seqs"""
-        return self._dataset.get_total_num_seqs(fast=fast)
-
     def get_seq_length(self, sorted_seq_idx: int) -> NumbersDict:
         """seq len"""
         return self._dataset.get_seq_length(sorted_seq_idx)
