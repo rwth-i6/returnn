@@ -3,7 +3,7 @@ Datasets dealing with audio
 """
 
 from __future__ import annotations
-from typing import Optional, Union, Any, List, Tuple, Dict
+from typing import Optional, Union, Any, Sequence, List, Tuple, Dict
 import typing
 import os
 import numpy
@@ -41,10 +41,13 @@ class OggZipDataset(CachedDataset2):
     however, it does not have to match the real duration in any way.
     """
 
+    _getnewargs_remap = dict(content_name="_names", **CachedDataset2._getnewargs_remap)
+
     def __init__(
         self,
-        path: Union[str, List[str]],
+        path: Union[str, Sequence[str]],
         *,
+        content_name: Optional[Union[str, Sequence[str]]] = None,
         resolve_symlink_for_name: bool = False,
         audio: Optional[Dict[str, Any]],
         targets: Union[Vocabulary, Dict[str, Any], None],
@@ -59,8 +62,11 @@ class OggZipDataset(CachedDataset2):
     ):
         """
         :param path: filename to zip
+        :param content_name: internal name of the dataset, which is used for filenames inside the ZIP.
+            If not given, the internal name is determined as ``os.path.splitext(os.path.basename(path))[0]``.
         :param resolve_symlink_for_name: The internal name of the dataset, which is used for filenames inside the ZIP,
-            is determined as ``os.path.splitext(os.path.basename(path))[0]``.
+            is determined as ``os.path.splitext(os.path.basename(path))[0]``
+            (if ``content_name`` is not given).
             If this is True, we will resolve symlinks for the name first.
         :param audio: options for :class:`ExtractAudioFeatures`.
             use {} for default. None means to disable.
@@ -96,19 +102,29 @@ class OggZipDataset(CachedDataset2):
             and os.path.isdir(path)
             and os.path.isfile(path + ".txt")
         ):
+            assert content_name is None  # not implemented
+            assert not resolve_symlink_for_name  # not implemented
             # Special case (mostly for debugging) to directly access the filesystem, not via zip-file.
             self.paths = [os.path.dirname(path)]
             self._names = [os.path.basename(path)]
             self._use_zip_files = False
             assert not use_cache_manager, "cache manager only for zip file"
         else:
-            if not isinstance(path, (tuple, list)):
+            if isinstance(path, str):
                 path = [path]
+            assert isinstance(path, (tuple, list))
+            if content_name is not None:
+                if isinstance(content_name, str):
+                    content_name = [content_name] * len(path)
+                assert isinstance(content_name, (tuple, list))
+                assert len(content_name) == len(path)
             self.paths = []
             self._names = []
-            for path_ in path:
+            for i, path_ in enumerate(path):
                 assert isinstance(path_, str)
                 name, ext = _get_internal_ogg_zip_name_ext(path_, resolve_symlink=resolve_symlink_for_name)
+                if content_name is not None:
+                    name = content_name[i]
                 if use_cache_manager:
                     path_ = returnn.util.basic.cf(path_)
                 if ext == ".txt.gz":
