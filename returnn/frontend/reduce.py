@@ -21,6 +21,7 @@ __all__ = [
     "reduce_argmin",
     "reduce_argmax",
     "reduce_out",
+    "RunningMean",
     "top_k",
 ]
 
@@ -179,6 +180,57 @@ def reduce_out(
     out = reduce(out, mode=mode, axis=parts_dim)
     out.feature_dim = out_dim
     return out
+
+
+class RunningMean(rf.Module):
+    """
+    Running mean, using exponential moving average, using the formula::
+
+        # E.g. for some input [B,T,F], reduce to [F], when the mean vector is [F].
+        new_value = reduce_mean(new_value, axis=[d for d in x.dims if d not in mean.dims])
+
+        new_mean = alpha * new_value + (1 - alpha) * old_mean
+                 = old_mean + alpha * (new_value - old_mean)  # more numerically stable
+
+    (Like the TF :class:`AccumulateMeanLayer`.)
+    (Similar is also the running mean in :class:`BatchNorm`.)
+    """
+
+    def __init__(
+        self,
+        in_dim: Union[Dim, Sequence[Dim]],
+        *,
+        alpha: float,
+        dtype: Optional[str] = None,
+        is_prob_distribution: Optional[bool] = None,
+    ):
+        """
+        :param in_dim: the dim of the mean vector, or the shape.
+        :param alpha: factor for new_value. 0.0 means no update, 1.0 means always the new value.
+            Also called momentum. E.g. 0.1 is a common value, or less, like 0.001.
+        :param dtype: the dtype of the mean vector
+        :param is_prob_distribution: if True, will initialize the mean vector with 1/in_dim.
+        """
+        super().__init__()
+        self.in_dim = in_dim
+        self.shape = (in_dim,) if isinstance(in_dim, Dim) else in_dim
+        assert all(isinstance(d, Dim) for d in self.shape)
+        self.alpha = alpha
+        self.is_prob_distribution = is_prob_distribution
+        self.mean = rf.Parameter(self.shape, dtype=dtype, auxiliary=True)
+        if is_prob_distribution:
+            assert in_dim.dimension is not None
+            self.mean.initial = 1.0 / in_dim.dimension
+
+    def __call__(self, x: Tensor) -> Tensor:
+        """
+        :param x: shape [..., F]
+        :return: shape [F]
+        """
+        assert all(d in self.shape for d in x.dims)
+        x_ = rf.reduce_mean(x, axis=[d for d in x.dims if d not in self.shape])
+        self.mean.assign_add(self.alpha * (x_ - self.mean))
+        return self.mean
 
 
 # noinspection PyShadowingBuiltins
