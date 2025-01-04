@@ -133,10 +133,13 @@ def dim_match_priority_when_needed(dim: Dim, *other_dims: Dim) -> Dim:
     return dim
 
 
-def num_elements_of_shape(dims: Union[Dim, Sequence[Dim]], *, use_mask: bool = True) -> Union[int, Tensor]:
+def num_elements_of_shape(
+    dims: Union[Dim, Sequence[Dim]], *, use_mask: bool = True, device: Optional[str] = None
+) -> Union[int, Tensor]:
     """
     :param dims:
     :param use_mask:
+    :param device: only for the case when we return a Tensor. by default, this is CPU (just as the size tensor).
     :return: num elements of a tensor of shape dims, properly considering masking
     """
     if isinstance(dims, Dim):
@@ -149,10 +152,10 @@ def num_elements_of_shape(dims: Union[Dim, Sequence[Dim]], *, use_mask: bool = T
     if all(dim.is_static() for dim in dims):
         n = 1
         for dim in dims:
-            n *= dim.dimension
+            n *= dim.size
         return n
     if len(dims) == 1:
-        return dims[0].get_size_tensor()
+        return dims[0].get_size_tensor(device=device)
 
     n: Union[int, Tensor] = 1
     postponed_dims = []
@@ -166,9 +169,9 @@ def num_elements_of_shape(dims: Union[Dim, Sequence[Dim]], *, use_mask: bool = T
                 related_dims.append(dim_)
         if not related_dims:
             if dim.is_static():
-                n *= dim.dimension
+                n *= dim.size
             else:
-                n *= dim.dyn_size_ext
+                n *= dim.get_size_tensor(device=device)
         else:
             postponed_dims.append(dim)
     if postponed_dims:
