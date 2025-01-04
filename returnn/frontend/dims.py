@@ -151,6 +151,8 @@ def num_elements_of_shape(dims: Union[Dim, Sequence[Dim]], *, use_mask: bool = T
         for dim in dims:
             n *= dim.dimension
         return n
+    if len(dims) == 1:
+        return dims[0].get_size_tensor()
 
     n: Union[int, Tensor] = 1
     postponed_dims = []
