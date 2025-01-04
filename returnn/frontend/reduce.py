@@ -16,6 +16,7 @@ __all__ = [
     "reduce_min",
     "reduce_mean",
     "reduce_logsumexp",
+    "reduce_logmeanexp",
     "reduce_any",
     "reduce_all",
     "reduce_argmin",
@@ -104,6 +105,19 @@ def reduce_logsumexp(source: Tensor[T], *, axis: Union[Dim, Sequence[Dim]], use_
     :return: tensor with axis removed
     """
     return reduce(source=source, mode="logsumexp", axis=axis, use_mask=use_mask)
+
+
+def reduce_logmeanexp(source: Tensor[T], *, axis: Union[Dim, Sequence[Dim]], use_mask: bool = True) -> Tensor[T]:
+    """
+    Reduce the tensor along the given axis
+
+    :param source:
+    :param axis:
+    :param use_mask: if True (default), use the time mask (part of dim tag) to ignore padding frames
+    :return: tensor with axis removed
+    """
+    s = reduce_logsumexp(source, axis=axis, use_mask=use_mask)
+    return s - rf.safe_log(rf.cast(rf.num_elements_of_shape(axis, use_mask=use_mask, device=s.device), s.dtype))
 
 
 def reduce_any(source: Tensor[T], *, axis: Union[Dim, Sequence[Dim]], use_mask: bool = True) -> Tensor[T]:
