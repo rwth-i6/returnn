@@ -441,10 +441,15 @@ def log(a: Tensor) -> Tensor:
     return a._raw_backend.activation(a, "log")
 
 
+_SafeLogEps = {"float16": 6e-08, "bfloat16": 9.1835e-41, "float32": 1.4013e-45, "float64": 4.9407e-324}
+
+
 def safe_log(a: Tensor, *, eps: Optional[float] = None) -> Tensor:
     """safe_log"""
     if eps is None:
-        eps = {"float16": 6e-08, "bfloat16": 9.1835e-41, "float32": 1.4013e-45, "float64": 4.9407e-324}[a.dtype]
+        if a.dtype not in _SafeLogEps:
+            raise NotImplementedError(f"safe_log not implemented for dtype {a.dtype}")
+        eps = _SafeLogEps[a.dtype]
     # noinspection PyProtectedMember
     return a._raw_backend.safe_log(a, eps=eps)
 
