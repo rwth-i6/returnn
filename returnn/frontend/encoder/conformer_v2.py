@@ -46,7 +46,6 @@ class ConformerFrontend(ISeqDownsamplingEncoder):
         :param input_embedding_scale: applied after input_layer. 1.0 by default for historic reasons.
             In std Transformer, also ESPnet E-Branchformer and Conformer, this is sqrt(out_dim).
         :param input_dropout: applied after input_projection(input_layer(x))
-        :param dropout: the dropout value for the FF block
         """
         super().__init__()
 
