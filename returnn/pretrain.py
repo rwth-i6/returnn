@@ -30,35 +30,6 @@ class WrapEpochValue:
         return self.func(epoch=epoch)
 
 
-def find_pretrain_wrap_values(net_json):
-    """
-    See also :func:`Pretrain._resolve_wrapped_values`.
-    Recursively goes through dicts, tuples and lists.
-    This is a simple check to see if this is needed,
-    i.e. if there are any :class:`WrapEpochValue` used.
-
-    :param dict[str] net_json: network dict
-    :return: whether there is some :class:`WrapEpochValue` in it
-    :rtype: bool
-    """
-    assert isinstance(net_json, dict)
-
-    def _check(d):
-        if isinstance(d, WrapEpochValue):
-            return True
-        if isinstance(d, dict):
-            for k, v in sorted(d.items()):
-                if _check(v):
-                    return True
-        if isinstance(d, (tuple, list)):
-            for v in d:
-                if _check(v):
-                    return True
-        return False
-
-    return _check(net_json)
-
-
 class Pretrain:
     """
     Start with 1 hidden layers up to N hidden layers -> N pretrain steps -> N epochs (with repetitions == 1).
@@ -198,7 +169,6 @@ class Pretrain:
         """
         Resolves any :class:`WrapEpochValue` in the net dicts.
         Recursively goes through dicts, tuples and lists.
-        See also :func:`find_pretrain_wrap_values`.
         """
 
         # noinspection PyShadowingNames
