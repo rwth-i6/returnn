@@ -364,7 +364,7 @@ class DistributeFilesDataset(CachedDataset2):
         Distributes the files from files_order into ``num_bins`` while attempting
         to make every bin as evenly sized (based on ``file_sizes``) as possible.
         """
-        total_size = sum([file_sizes[_get_key_for_file_tree(f_tree)] for f_tree in files_order])
+        total_size = sum(file_sizes[_get_key_for_file_tree(f_tree)] for f_tree in files_order)
         avg_size_per_sub_epoch = total_size / num_bins
         # Now evenly distribute the files over the bins.
         # Note that many one-pass variants of algorithms to evenly distribute
