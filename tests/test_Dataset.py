@@ -905,8 +905,10 @@ def test_MapDatasetWrapper():
 def test_DistributeFilesDataset_distribute_evenly_by_size():
     from returnn.datasets.distrib_files import DistributeFilesDataset
 
-    def _test(sizes: List[int], partition_epoch: int, expected: List[List[int]]):
-        files = [f"file-{i}" for i in range(len(sizes))]
+    def _test(sizes: List[int], partition_epoch: int, expected: List[List[int]], files_order=None):
+        files = files_order
+        if files is None:
+            files = [f"file-{i}" for i in range(len(sizes))]
         file_sizes = {f: s for f, s in zip(files, sizes)}
         res = DistributeFilesDataset._distribute_evenly_by_size(
             num_bins=partition_epoch, file_sizes=file_sizes, files_order=files
@@ -926,6 +928,7 @@ def test_DistributeFilesDataset_distribute_evenly_by_size():
         8,
         [[1, 1, 1, 1], [1, 1, 1, 1], [1, 1, 1, 1], [1, 1, 1], [1, 1, 1], [1, 1, 1], [1, 1, 1, 1], [1, 1, 1, 1]],
     )
+    _test([1], 5, [[1, 1]] * 5, files_order=["file"] * 10)  # test duplicate files
 
     def _test_stddev(sizes: List[int], partition_epoch: int, max_stddev_percent: float):
         avg_per_bin = sum(sizes) / partition_epoch
