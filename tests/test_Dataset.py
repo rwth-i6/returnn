@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Iterator, List, Dict
+from typing import Any, Iterator, List, Dict, Optional
 import os
 import sys
 import _setup_test_env  # noqa
@@ -905,7 +905,9 @@ def test_MapDatasetWrapper():
 def test_DistributeFilesDataset_distribute_evenly_by_size():
     from returnn.datasets.distrib_files import DistributeFilesDataset
 
-    def _test(sizes: List[int], partition_epoch: int, expected: List[List[int]], files_order=None):
+    def _test(
+        sizes: List[int], partition_epoch: int, expected: List[List[int]], files_order: Optional[List[str]] = None
+    ):
         files = files_order
         if files is None:
             files = [f"file-{i}" for i in range(len(sizes))]
