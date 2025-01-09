@@ -227,23 +227,28 @@ def _causal_self_att_step(
     state: Optional[CausalSelfAttentionState],
     self: rf.Module,
 ) -> Tuple[Tensor, Tensor, Dim, CausalSelfAttentionState]:
+    new_state = CausalSelfAttentionState()
     if axis == single_step_dim:
         assert state, f"{self}: need state for single step"
         k, hist_dim = rf.cum_concat_step(k, prev_accum=state.k_accum, axis=state.accum_axis)
         v, _ = rf.cum_concat_step(v, prev_accum=state.v_accum, out_spatial_dim=hist_dim, axis=state.accum_axis)
+        new_state.k_accum = k
+        new_state.v_accum = v
+        new_state.accum_axis = hist_dim
     else:
         if state and state.accum_axis.dimension != 0:
             raise NotImplementedError(  # need to concat ...
                 f"{self}: on sequence over {axis} with initial state {state} not implemented yet"
             )
+        # For further state usage with single_step_dim, keep using the original axis, not hist_dim,
+        # because the masking via hist_dim is not necessary for future single steps.
+        new_state.k_accum = k
+        new_state.v_accum = v
+        new_state.accum_axis = axis
         # See CumConcatLayer and https://github.com/rwth-i6/returnn/issues/391 for the idea.
         hist_dim = Dim(rf.range_over_dim(axis, device="cpu") + 1, name=f"{axis.description}:kv")
         k, _ = rf.replace_dim(k, in_dim=axis, out_dim=hist_dim)
         v, _ = rf.replace_dim(v, in_dim=axis, out_dim=hist_dim)
-    new_state = CausalSelfAttentionState()
-    new_state.k_accum = k
-    new_state.v_accum = v
-    new_state.accum_axis = hist_dim
     return k, v, hist_dim, new_state
 
 
