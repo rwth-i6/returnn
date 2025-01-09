@@ -166,7 +166,6 @@ class Dataset:
         self._num_timesteps = 0
         self._num_seqs = 0
         self._estimated_num_seqs = estimated_num_seqs
-        self._last_cur_seq_idx: Optional[int] = None
         self.min_chunk_size = NumbersDict(min_chunk_size)
         self.chunking_variance = chunking_variance
         self._chunking = chunking
@@ -739,7 +738,6 @@ class Dataset:
         assert (
             self._num_shards == 1 or self.supports_sharding()
         ), f"{self}: does not support sharding, but got num_shards == {self._num_shards}"
-        self._last_cur_seq_idx = 0 if epoch is not None else None
         return False
 
     def finish_epoch(self, *, free_resources: bool = False):
@@ -801,7 +799,6 @@ class Dataset:
         :param str key: data-key, e.g. "data" or "classes"
         :return: features or targets: format 2d (time,feature) (float)
         """
-        self._last_cur_seq_idx = max(self._last_cur_seq_idx, seq_idx)
         # Fallback implementation for old-style subclasses.
         if key == "data":
             return self.get_input_data(seq_idx)
@@ -970,20 +967,24 @@ class Dataset:
         """
         raise NotImplementedError
 
-    def get_epoch_continuous(self) -> float:
+    def get_epoch_continuous(self, sorted_seq_idx: int) -> float:
         """
+        Calculates the position of ``sorted_seq_idx`` in the current epoch as relative value in [0, 1].
+        ``sorted_seq_idx`` cannot be less than the seq index of the previously loaded seq.
+
+        This value is used to calculate ``epoch_continuous`` for any dynamic learning rate scheduling.
+
+        :param sorted_seq_idx: sorted seq idx
         :return: continuous value in [0, 1] which represents the position in the current epoch
         """
         try:
             num_seqs = self.num_seqs
         except NotImplementedError as exc:
             raise OptionalNotImplementedError(f"{self}: get_epoch_continuous is not implemented") from exc
-        cur_idx = self._last_cur_seq_idx
-        assert cur_idx is not None, "seq order not initialized yet"
         assert (
-            0 <= cur_idx < num_seqs
-        ), f"{self}: invalid seq indices: 0 <= cur_seq_idx ({cur_idx}) < num_seqs ({num_seqs}) violated"
-        return cur_idx / num_seqs
+            0 <= sorted_seq_idx < num_seqs
+        ), f"{self}: invalid seq indices: 0 <= seq_idx ({sorted_seq_idx}) < num_seqs ({num_seqs}) violated"
+        return sorted_seq_idx / num_seqs
 
     @property
     def estimated_num_seqs(self):
@@ -1392,16 +1393,25 @@ class DatasetSeq:
     Encapsulates all data for one sequence.
     """
 
-    def __init__(self, seq_idx, features, targets=None, seq_tag=None):
+    def __init__(
+        self,
+        seq_idx: int,
+        features,
+        targets=None,
+        seq_tag: Optional[str] = None,
+        epoch_continuous: Optional[float] = None,
+    ):
         """
-        :param int seq_idx: sorted seq idx in the Dataset
+        :param seq_idx: sorted seq idx in the Dataset
         :param numpy.ndarray|dict[str,numpy.ndarray] features: format 2d (time,feature) (float)
         :param dict[str,numpy.ndarray]|numpy.ndarray|None targets: name -> format 1d (time) (idx of output-feature)
-        :param str seq_tag: sequence name / tag
+        :param seq_tag: sequence name / tag
+        :param epoch_continuous: continuous value in [0, 1] which represents the position in the current epoch
         """
         assert isinstance(seq_idx, (int, numpy.integer))
         self.seq_idx = int(seq_idx)
         self.seq_tag = seq_tag or ("seq-%i" % seq_idx)
+        self.epoch_continuous = epoch_continuous
         if not isinstance(features, dict):
             assert isinstance(features, numpy.ndarray)
             features = {"data": features}

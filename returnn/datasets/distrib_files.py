@@ -323,11 +323,6 @@ class DistributeFilesDataset(CachedDataset2):
         self._num_seqs = self._workers[epoch].get_num_seqs()
         return True
 
-    def get_epoch_continuous(self):
-        if self._num_seqs is not None:
-            return super().get_epoch_continuous()  # faster, does not need to communicate w/ worker proc
-        return self._workers[self.epoch].get_epoch_continuous()
-
     def _get_sub_dataset_dict(self, files: List[FileTree]) -> Dict[str, Any]:
         import tree
 
@@ -559,14 +554,6 @@ class _WorkerProcParent:
         assert msg == "data_seq"
         return data
 
-    def get_epoch_continuous(self) -> float:
-        """get epoch continuous"""
-        self._lazy_wait_for_init_seq_order()
-        self.parent_conn.send(("get_epoch_continuous", {}))
-        msg, data = self.parent_conn.recv()
-        assert msg == "epoch_continuous"
-        return data
-
     def exit(self, *, join: bool = True):
         """exit"""
         self._lazy_wait_for_init_seq_order()
@@ -615,7 +602,11 @@ def _worker_proc_loop(
         dataset.load_seqs(next_seq_idx, next_seq_idx + 1)
         seq_tag = dataset.get_tag(next_seq_idx)
         features = {data_key: dataset.get_data(next_seq_idx, data_key) for data_key in dataset.get_data_keys()}
-        res = DatasetSeq(seq_idx=next_seq_idx, seq_tag=seq_tag, features=features)
+        try:
+            epoch_continuous = dataset.get_epoch_continuous(next_seq_idx)
+        except NotImplementedError:
+            epoch_continuous = None
+        res = DatasetSeq(seq_idx=next_seq_idx, seq_tag=seq_tag, features=features, epoch_continuous=epoch_continuous)
         cache.append(res)
         next_seq_idx += 1
         return True
@@ -680,8 +671,6 @@ def _worker_proc_loop(
                 got_init_seq_order = True
                 next_seq_idx = 0
                 cache[:] = []
-            elif msg == "get_epoch_continuous":
-                parent_conn.send(("epoch_continuous", dataset.get_epoch_continuous()))
             else:
                 raise Exception(f"unknown msg {msg!r}")
     except KeyboardInterrupt:  # when parent dies
