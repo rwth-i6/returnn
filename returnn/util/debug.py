@@ -9,8 +9,6 @@ import os
 import sys
 import signal
 
-from returnn.util.basic import interrupt_main
-
 try:
     import thread
 except ImportError:
