@@ -203,6 +203,7 @@ class TransformerDecoder(rf.Module):
         state: rf.State,
         encoder: Optional[rf.State] = None,
         collected_outputs: Optional[Dict[str, Tensor]] = None,
+        output_only_last_frame: bool = False,
     ) -> Tuple[Tensor, rf.State]:
         """
         forward, single step or whole sequence.
@@ -212,6 +213,8 @@ class TransformerDecoder(rf.Module):
         :param state: e.g. via :func:`default_initial_state`
         :param encoder: via :func:`transform_encoder`
         :param collected_outputs:
+        :param output_only_last_frame: if True, and spatial_dim is not single_step_dim,
+            the returned logits will only be for the last frame
         :return: logits, new state
         """
         new_state = rf.State()
@@ -235,6 +238,9 @@ class TransformerDecoder(rf.Module):
             )
             if collected_outputs is not None:
                 collected_outputs[layer_name] = decoded
+
+        if output_only_last_frame and spatial_dim != single_step_dim:
+            decoded = rf.gather(decoded, axis=spatial_dim, indices=rf.last_frame_position_of_dim(spatial_dim))
 
         decoded = self.final_layer_norm(decoded)
         logits = self.logits(decoded)

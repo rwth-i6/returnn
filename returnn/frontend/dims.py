@@ -19,6 +19,7 @@ __all__ = [
     "dim_match_priority_when_needed",
     "num_elements_of_shape",
     "masked_fraction_of_shape",
+    "last_frame_position_of_dim",
 ]
 
 
@@ -195,3 +196,28 @@ def masked_fraction_of_shape(dims: Union[Dim, Sequence[Dim]], *, inverse: bool =
     for dim in dims:
         num_elems_total *= dim.get_dim_value_tensor()
     return (num_elems_masked / num_elems_total) if not inverse else (num_elems_total / num_elems_masked)
+
+
+def last_frame_position_of_dim(
+    dim: Dim, *, device: Optional[str] = None, allow_scalar_on_cpu: bool = True
+) -> Union[int, Tensor]:
+    """
+    :param dim:
+    :param device:
+    :param allow_scalar_on_cpu: if device is not given, we would use rf.get_default_device() for dynamic sizes.
+        If this is True, we would allow to return a scalar dynamic size on CPU.
+    :return: last frame position of dim
+    """
+    if dim.size is not None:
+        if dim.size > 0:
+            return dim.size - 1
+        return 0
+    if device is None:
+        if allow_scalar_on_cpu and not dim.dyn_size_ext.dims:
+            device = "cpu"
+        else:
+            device = rf.get_default_device()
+    pos = dim.get_dyn_size_ext_for_device(device) - 1
+    pos = rf.maximum(pos, 0)
+    pos.sparse_dim = dim
+    return pos
