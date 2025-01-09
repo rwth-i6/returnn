@@ -166,7 +166,7 @@ class Dataset:
         self._num_timesteps = 0
         self._num_seqs = 0
         self._estimated_num_seqs = estimated_num_seqs
-        self._max_seq_idx_returned: Optional[int] = None
+        self._last_cur_seq_idx: Optional[int] = None
         self.min_chunk_size = NumbersDict(min_chunk_size)
         self.chunking_variance = chunking_variance
         self._chunking = chunking
@@ -739,7 +739,7 @@ class Dataset:
         assert (
             self._num_shards == 1 or self.supports_sharding()
         ), f"{self}: does not support sharding, but got num_shards == {self._num_shards}"
-        self._max_seq_idx_returned = 0
+        self._last_cur_seq_idx = 0
         return False
 
     def finish_epoch(self, *, free_resources: bool = False):
@@ -801,7 +801,7 @@ class Dataset:
         :param str key: data-key, e.g. "data" or "classes"
         :return: features or targets: format 2d (time,feature) (float)
         """
-        self._max_seq_idx_returned = max(self._max_seq_idx_returned, seq_idx)
+        self._last_cur_seq_idx = max(self._last_cur_seq_idx, seq_idx)
         # Fallback implementation for old-style subclasses.
         if key == "data":
             return self.get_input_data(seq_idx)
@@ -972,20 +972,18 @@ class Dataset:
 
     def get_epoch_continuous(self) -> float:
         """
-        :return: continuous value in [0, 1] which represents the current epoch position
+        :return: continuous value in [0, 1] which represents the position in the current epoch
         """
         try:
             num_seqs = self.num_seqs
         except NotImplementedError as exc:
             raise OptionalNotImplementedError(f"{self}: get_epoch_continuous is not implemented") from exc
-        if num_seqs == 0:
-            raise Exception(f"{self}: num_seqs is 0, possibly not initialized yet")
-        max_idx = self._max_seq_idx_returned
-        assert max_idx is not None, "seq order not initialized yet"
+        cur_idx = self._last_cur_seq_idx
+        assert cur_idx is not None, "seq order not initialized yet"
         assert (
-            0 <= max_idx < num_seqs
-        ), f"{self}: invalid seq indices: 0 <= max_idx ({max_idx}) < num_seqs ({num_seqs}) violated"
-        return max_idx / num_seqs
+            0 <= cur_idx < num_seqs
+        ), f"{self}: invalid seq indices: 0 <= cur_seq_idx ({cur_idx}) < num_seqs ({num_seqs}) violated"
+        return cur_idx / num_seqs
 
     @property
     def estimated_num_seqs(self):
