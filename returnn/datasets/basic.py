@@ -739,7 +739,7 @@ class Dataset:
         assert (
             self._num_shards == 1 or self.supports_sharding()
         ), f"{self}: does not support sharding, but got num_shards == {self._num_shards}"
-        self._last_cur_seq_idx = 0
+        self._last_cur_seq_idx = 0 if epoch is not None else None
         return False
 
     def finish_epoch(self, *, free_resources: bool = False):
