@@ -209,6 +209,21 @@ class PostprocessingDataset(CachedDataset2):
         """:return: dtype of data entry `key`"""
         return self._out_tensor_dict_template.data[key].dtype
 
+    def get_epoch_continuous(self):
+        """
+        :return: continuous value in [0,1] which represents the current epoch position
+        """
+        assert self._dataset is not None
+        return self._dataset.get_epoch_continuous()
+
+    def get_total_num_seqs(self, *, fast=False):
+        if self._map_seq_stream is not None:
+            raise util.OptionalNotImplementedError(
+                f"{self}: get_total_num_seqs not allowed when map_seq_stream is set."
+            )
+        assert self._dataset is not None
+        return self._dataset.get_total_num_seqs(fast=fast)
+
     def supports_sharding(self) -> bool:
         """:return: whether this dataset supports sharding"""
         assert self._dataset is not None

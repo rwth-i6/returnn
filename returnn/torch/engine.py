@@ -367,6 +367,7 @@ class Engine(EngineBase):
         extern_data = None
         num_seqs = None
         last_seq_idx = 0
+        shuffle_batches = self.config.typed_value("online_shuffle_batches", None) is not None
 
         total_data_size_packed = NumbersDict()
         total_data_size_padded = NumbersDict()
@@ -398,22 +399,30 @@ class Engine(EngineBase):
                     {k: int(util.prod(extern_data_raw[k].shape[:2])) for k in keys_w_seq_len},
                 )
 
-                num_seqs_ = (
-                    int(extern_data_raw["num_seqs"]) if extern_data_raw.get("num_seqs", None) is not None else -1
-                )
-                # Note: The batches might have been shuffled,
-                # thus we cannot really assert that the seq_idx is always increasing.
-                last_seq_idx = max(int(extern_data_raw["seq_idx"].max()), last_seq_idx)
-                if step_idx == 0:
-                    if num_seqs_ >= 0:
-                        print(f"Epoch {self.epoch} num_seqs: {num_seqs_}", file=log.v5)
-                        num_seqs = num_seqs_
-                elif num_seqs_ >= 0:
-                    assert num_seqs_ == num_seqs
-                del num_seqs_
-                if num_seqs is not None:
-                    assert last_seq_idx < num_seqs
-                epoch_continuous = (self.epoch - 1 + (last_seq_idx + 1) / num_seqs) if num_seqs is not None else None
+                epoch_continuous_ = float(extern_data_raw["epoch_continuous"])
+                # Note: can only use epoch_continuous from data dict if batches are not shuffled,
+                # otherwise fall back to calculation via seq_idx and num_seqs.
+                if not shuffle_batches and epoch_continuous_ >= 0.0:
+                    epoch_continuous = self.epoch - 1 + epoch_continuous_
+                else:
+                    num_seqs_ = (
+                        int(extern_data_raw["num_seqs"]) if extern_data_raw.get("num_seqs", None) is not None else -1
+                    )
+                    # Note: The batches might have been shuffled,
+                    # thus we cannot really assert that the seq_idx is always increasing.
+                    last_seq_idx = max(int(extern_data_raw["seq_idx"].max()), last_seq_idx)
+                    if step_idx == 0:
+                        if num_seqs_ >= 0:
+                            print(f"Epoch {self.epoch} num_seqs: {num_seqs_}", file=log.v5)
+                            num_seqs = num_seqs_
+                    elif num_seqs_ >= 0:
+                        assert num_seqs_ == num_seqs
+                    del num_seqs_
+                    if num_seqs is not None:
+                        assert last_seq_idx < num_seqs
+                    epoch_continuous = (
+                        (self.epoch - 1 + (last_seq_idx + 1) / num_seqs) if num_seqs is not None else None
+                    )
 
                 # clear the gradients when every gradient accumulation loop starts
                 if zero_grad_next_step:
