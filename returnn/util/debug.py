@@ -9,6 +9,8 @@ import os
 import sys
 import signal
 
+from returnn.util.basic import interrupt_main
+
 try:
     import thread
 except ImportError:
@@ -181,6 +183,12 @@ def init_better_exchook():
         better_exchook(exc_type, exc_obj, exc_tb, file=file)
 
     sys.excepthook = excepthook
+
+    def threading_excepthook(args, /):
+        better_exchook(args["exc_type"], args["exc_value"], args["exc_traceback"], file=log.v1 or sys.stdout)
+        thread.interrupt_main()
+
+    threading.excepthook = threading_excepthook
 
     from returnn.util.basic import to_bool
 
