@@ -250,7 +250,9 @@ class MultiProcDataset(CachedDataset2):
                 epoch_continuous = dataset.get_epoch_continuous(next_seq_idx)
             except NotImplementedError:
                 epoch_continuous = None
-            res = DatasetSeq(seq_idx=next_seq_idx, seq_tag=seq_tag, features=features, epoch_continuous=epoch_continuous)
+            res = DatasetSeq(
+                seq_idx=next_seq_idx, seq_tag=seq_tag, features=features, epoch_continuous=epoch_continuous
+            )
             cache.append(res)
             next_seq_idx += 1
             return True
