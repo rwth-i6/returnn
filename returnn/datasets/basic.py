@@ -969,13 +969,13 @@ class Dataset:
 
     def get_epoch_continuous(self, sorted_seq_idx: int) -> float:
         """
-        Calculates the position of ``sorted_seq_idx`` in the current epoch as relative value in [0, 1].
+        Calculates the position of ``sorted_seq_idx`` in the current epoch as relative value in [0, 1).
         ``sorted_seq_idx`` cannot be less than the seq index of the previously loaded seq.
 
         This value is used to calculate ``epoch_continuous`` for any dynamic learning rate scheduling.
 
         :param sorted_seq_idx: sorted seq idx
-        :return: continuous value in [0, 1] which represents the position in the current epoch
+        :return: continuous value in [0, 1) which represents the position in the current epoch
         """
         try:
             num_seqs = self.num_seqs
