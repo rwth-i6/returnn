@@ -22,9 +22,9 @@ __all__ = ["PostprocessingDataset", "LaplaceOrdering", "Sequential"]
 
 class PostprocessingDataset(CachedDataset2):
     """
-    A dataset that allows for generic post-processing of data from another dataset
-    using a function on the segment level and on the level of multiple segments via
-    an iterator.
+    A dataset that allows for generic online post-processing of data from another
+    dataset using a function on the segment level and on the level of multiple
+    segments via an iterator.
 
     This allows integrating various data augmentation techniques like e.g. Mixup,
     SpecAugment or speed perturbation into the data loading pipeline.
