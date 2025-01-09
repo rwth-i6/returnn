@@ -146,7 +146,7 @@ class PostprocessingDataset(CachedDataset2):
             self._out_tensor_dict_template = self._in_tensor_dict_template.copy_template()
         # update only after _out_tensor_dict_template has been created from _in_tensor_dict_template
         self._in_tensor_dict_template.update(
-            {"epoch_continuous": {"dims": (), "dtype": "float32"}, "seq_tag": {"dims": (), "dtype": "string"}},
+            {"epoch_continuous": {"dims": (), "dtype": "float64"}, "seq_tag": {"dims": (), "dtype": "string"}},
             auto_convert=True,
         )
         self.num_outputs = {
@@ -214,6 +214,7 @@ class PostprocessingDataset(CachedDataset2):
         return self._out_tensor_dict_template.data[key].dtype
 
     def get_total_num_seqs(self, *, fast=False):
+        """:return: total num seqs excluding partition_epoch"""
         if self._map_seq_stream is not None:
             raise util.OptionalNotImplementedError(
                 f"{self}: get_total_num_seqs not allowed when map_seq_stream is set."
@@ -285,7 +286,7 @@ class PostprocessingDataset(CachedDataset2):
             for data_key in data_keys:
                 tensor_dict.data[data_key].raw_tensor = self._dataset.get_data(seq_index, data_key)
 
-            ep_cont_tensor = numpy.array(self._dataset.get_epoch_continuous(seq_index))
+            ep_cont_tensor = numpy.array(self._dataset.get_epoch_continuous(seq_index), dtype=numpy.float64)
             tensor_dict.data["epoch_continuous"].raw_tensor = ep_cont_tensor
             seq_tag_tensor = str_to_numpy_array(self._dataset.get_tag(seq_index))
             tensor_dict.data["seq_tag"].raw_tensor = seq_tag_tensor
