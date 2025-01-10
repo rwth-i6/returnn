@@ -1,5 +1,5 @@
 """
-test threading
+test threading-specific functionality
 """
 
 from __future__ import annotations
@@ -42,7 +42,7 @@ def run(args, input=None):
     return out.decode("utf8")
 
 
-def test_thread_exc_handlerr():
+def test_thread_exc_hook():
     config = textwrap.dedent(
         """
         #!rnn.py
