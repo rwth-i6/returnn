@@ -513,10 +513,9 @@ def finalize(error_occurred=False):
                 destroy_process_group()
 
 
-def need_data():
+def need_data() -> bool:
     """
     :return: whether we need to init the data (call :func:`init_data`) for the current task (:func:`execute_main_task`)
-    :rtype: bool
     """
     if config.has("need_data") and not config.bool("need_data", True):
         return False
