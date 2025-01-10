@@ -296,8 +296,8 @@ class PostprocessingDataset(CachedDataset2):
             except NotImplementedError:
                 # In case we cannot obtain a proper value for `epoch_continuous`, we
                 # pass a dummy value (-1). We do this instead of passing no value to
-                # be able to lint against accidentally dropping it from the tensor
-                # dicts, which may be undesired behavior.
+                # be able to lint against dropping it from the tensor dicts, which
+                # might have been undesired behavior.
                 #
                 # Once the postprocessing dataset receives the dummy value back, it
                 # removes it from the downstream data.
