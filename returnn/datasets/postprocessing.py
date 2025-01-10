@@ -236,13 +236,18 @@ class PostprocessingDataset(CachedDataset2):
             assert loaded_seq_idx <= seq_idx, "_collect_single_seq must be done monotonically"
             if loaded_seq_idx != seq_idx:
                 continue
+            epoch_continuous = float(tensor_dict.data["epoch_continuous"].raw_tensor)
+            if epoch_continuous == -1:
+                # See comment below on why we pass a dummy value instead of not
+                # adding the value to the tensor dict at all.
+                epoch_continuous = None
             seq = DatasetSeq(
+                epoch_continuous=epoch_continuous,
                 features={
                     k: t.raw_tensor for k, t in tensor_dict.data.items() if k not in ["epoch_continuous", "seq_tag"]
                 },
                 seq_idx=seq_idx,
                 seq_tag=str(tensor_dict["seq_tag"].raw_tensor),
-                epoch_continuous=float(tensor_dict["epoch_continuous"].raw_tensor),
             )
             return seq
 
@@ -286,7 +291,17 @@ class PostprocessingDataset(CachedDataset2):
             for data_key in data_keys:
                 tensor_dict.data[data_key].raw_tensor = self._dataset.get_data(seq_index, data_key)
 
-            ep_cont_tensor = numpy.array(self._dataset.get_epoch_continuous(seq_index), dtype=numpy.float64)
+            try:
+                ep_cont_tensor = numpy.array(self._dataset.get_epoch_continuous(seq_index), dtype=numpy.float64)
+            except NotImplementedError:
+                # In case we cannot obtain a proper value for `epoch_continuous`, we
+                # pass a dummy value (-1). We do this instead of passing no value to
+                # be able to lint against accidentally dropping it from the tensor
+                # dicts, which may be undesired behavior.
+                #
+                # Once the postprocessing dataset receives the dummy value back, it
+                # removes it from the downstream data.
+                ep_cont_tensor = numpy.array(-1)
             tensor_dict.data["epoch_continuous"].raw_tensor = ep_cont_tensor
             seq_tag_tensor = str_to_numpy_array(self._dataset.get_tag(seq_index))
             tensor_dict.data["seq_tag"].raw_tensor = seq_tag_tensor

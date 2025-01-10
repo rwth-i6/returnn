@@ -535,7 +535,10 @@ class MetaDataset(CachedDataset2):
         :rtype: DatasetSeq
         """
         seq_tag = self.seq_list_ordered[self.default_dataset_key][seq_idx]
-        epoch_continuous = self.datasets[self.default_dataset_key].get_epoch_continuous(seq_idx)
+        try:
+            epoch_continuous = self.datasets[self.default_dataset_key].get_epoch_continuous(seq_idx)
+        except NotImplementedError:
+            epoch_continuous = None
         features = {data_key: self._get_data(seq_idx, data_key) for data_key in self.data_keys}
         return DatasetSeq(seq_idx=seq_idx, seq_tag=seq_tag, features=features, epoch_continuous=epoch_continuous)
 
