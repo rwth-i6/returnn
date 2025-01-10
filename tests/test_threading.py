@@ -48,6 +48,7 @@ def test_thread_exc_hook():
         #!rnn.py
 
         backend = "torch"  # just require any backend
+        task = "nop"
         log_verbosity = 5
 
         import threading
