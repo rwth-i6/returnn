@@ -10,7 +10,7 @@ by GitHub Actions defined `here <https://github.com/rwth-i6/returnn/blob/master/
 
 The test cases are all in the `tests directory <https://github.com/rwth-i6/returnn/tree/master/tests>`__.
 
-We use nosetests but the tests can also be run manually like::
+We use pytests but the tests can also be run manually like::
 
   python3 tests/test_TFEngine.py
 

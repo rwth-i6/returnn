@@ -797,3 +797,52 @@ def test_audio_log_mel_filterbank_from_raw_bfloat16():
         dyn_dim_max_sizes={time_dim: 3000},
         test_tensorflow=False,
     )
+
+
+def test_copy_compatible_to_empty():
+    import torch
+
+    beam_dim = Dim(3, name="beam")
+    hist_dim = Dim(0, name="hist")
+    hist_bc_dim = Dim(1, name="hist_bc")
+    extern_data = TensorDict(
+        {
+            "data": Tensor("data", [batch_dim, beam_dim], dtype="int32"),
+        }
+    )
+    out_template = Tensor("out_template", [batch_dim, beam_dim, hist_dim], dtype="int32")
+
+    # noinspection PyShadowingNames
+    def _forward_step(*, extern_data: TensorDict, **_kwargs):
+        data = extern_data["data"]
+
+        out = data.copy_compatible_to(out_template)
+        print("out:", out)
+        assert (
+            len(out.dims) == 3
+            and out.dims[:2] == (batch_dim, beam_dim)
+            and out.dims[2] != hist_dim
+            and out.dims[2].dimension == 1
+        )
+        out, _ = rf.replace_dim(out, in_dim=out.dims[2], out_dim=hist_bc_dim)  # just that we have consistent output
+        out.mark_as_output("out", shape=out.dims)
+
+        out_unbroadcast = data.copy_compatible_to(out_template, unbroadcast=True)
+        print("out_unbroadcast:", out_unbroadcast)
+        assert out_unbroadcast.dims == out_template.dims
+        if isinstance(out_unbroadcast.raw_tensor, torch.Tensor):
+            print("out_unbroadcast.raw_tensor:", out_unbroadcast.raw_tensor)
+            assert out_unbroadcast.raw_tensor.shape == (
+                batch_dim.get_dim_value(),
+                beam_dim.dimension,
+                hist_dim.dimension,
+            )
+        out_unbroadcast.mark_as_output("out_unbroadcast", shape=out_unbroadcast.dims)
+
+        out_raw = data.copy_compatible_to_dims_raw(out_template.dims)
+        if isinstance(out_raw, torch.Tensor):
+            print("out raw:", out_raw)
+            assert out_raw.shape == out.raw_tensor.shape == (batch_dim.get_dim_value(), beam_dim.dimension, 1)
+            torch.testing.assert_close(out_raw, out.raw_tensor)
+
+    run_model(extern_data, lambda **_kwargs: rf.Module(), _forward_step, test_tensorflow=False)

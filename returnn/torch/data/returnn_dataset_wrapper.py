@@ -109,11 +109,18 @@ class ReturnnDatasetIterDataPipe(torch.utils.data.IterDataPipe):
                 data = {data_key: self._dataset.get_data(seq_index, data_key) for data_key in data_keys}
                 data["seq_tag"] = str_to_numpy_array(self._dataset.get_tag(seq_index))
                 data["seq_idx"] = numpy.array(seq_index)
-                # It's slightly redundant to have num_seqs in each entry,
+
+                # It's slightly redundant to have the following data in each entry,
                 # but it's difficult to pass this back to the main proc otherwise.
-                data["num_seqs"] = num_seqs
-                # epoch is also redundant, but that's the cleanest/simplest way to pass it on to BatchingIterDataPipe.
                 data["epoch"] = epoch
+                try:
+                    epoch_cont = self._dataset.get_epoch_continuous(seq_index)
+                    assert 0.0 <= epoch_cont <= 1.0
+                except NotImplementedError:
+                    epoch_cont = -1
+                data["epoch_continuous"] = numpy.array(epoch_cont)
+                data["num_seqs"] = num_seqs
+
                 yield data
                 seq_index += 1
 

@@ -964,7 +964,7 @@ class _TensorMixin(_TensorMixinBase):
         if self.placeholder is not None:
             backend = self._raw_backend
             placeholder = backend.expand_dims_raw(self.placeholder, axis)
-            if dim_tag.dimension is None or dim_tag.dimension > 1:
+            if dim_tag.dimension is None or dim_tag.dimension != 1:
                 placeholder = backend.expand_raw(placeholder, axis, dim_tag.get_dim_value())
             data_opts["placeholder"] = placeholder
         return _t.Tensor(**data_opts)

@@ -3,7 +3,7 @@ RETURNN frontend (returnn.frontend) tests
 """
 
 from __future__ import annotations
-from typing import Tuple
+from typing import Union, Tuple
 import numpy as np
 import numpy.testing
 import _setup_test_env  # noqa
@@ -440,6 +440,84 @@ def test_rope_causal_self_att():
     print("  all matched!")
 
 
+def test_causal_self_att_variants_single_step_vs_full_seq():
+    from returnn.tensor import single_step_dim
+
+    time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
+    in_dim = Dim(7 * 2, name="in")
+    extern_data = TensorDict(
+        {
+            "data": Tensor("data", [batch_dim, time_dim, in_dim], dtype="float32"),
+        }
+    )
+
+    # noinspection PyShadowingNames
+    def _forward_step(*, model: Union[rf.CausalSelfAttention], extern_data: TensorDict):
+        x = extern_data["data"]
+
+        out_seq_level, _ = model(x, axis=time_dim)
+        out_seq_level.mark_as_output("out_seq_level", shape=[batch_dim, time_dim, model.out_dim])
+
+        out_seq_level_explicit_initial_state, _ = model(
+            x, axis=time_dim, state=model.default_initial_state(batch_dims=[batch_dim])
+        )
+        out_seq_level_explicit_initial_state.mark_as_output(
+            "out_seq_level_explicit_initial_state", shape=[batch_dim, time_dim, model.out_dim]
+        )
+
+        def _body(
+            _x: Tensor, _state: Union[rf.CausalSelfAttentionState]
+        ) -> Tuple[Tensor, Union[rf.CausalSelfAttentionState]]:
+            return model(_x, axis=single_step_dim, state=_state)
+
+        out_single_steps, _, _ = rf.scan(
+            spatial_dim=time_dim,
+            xs=x,
+            body=_body,
+            ys=Tensor("y", dims=[batch_dim, model.out_dim], dtype="float32"),
+            initial=model.default_initial_state(batch_dims=[batch_dim]),
+        )
+        out_single_steps.mark_as_output("out_single_steps", shape=[batch_dim, time_dim, model.out_dim])
+
+    common_opts = dict(
+        in_dim=in_dim,
+        proj_dim=Dim(5, name="out"),
+        key_dim_total=Dim(21 * 2, name="key-dim-total"),
+        value_dim_total=Dim(33, name="value-dim-total"),
+        num_heads=3,
+    )
+
+    def _make_causal_self_att(**_kwargs):
+        return rf.CausalSelfAttention(**common_opts)
+
+    def _make_rope_causal_self_att(**_kwargs):
+        return rf.RotaryPosCausalSelfAttention(**common_opts)
+
+    def _make_rel_pos_causal_self_att(**_kwargs):
+        return rf.RelPosCausalSelfAttention(**common_opts)
+
+    models = [_make_causal_self_att, _make_rope_causal_self_att, _make_rel_pos_causal_self_att]
+
+    for get_model in models:
+        print("> Testing model:", get_model.__name__)
+        res = run_model(
+            extern_data,
+            get_model,
+            _forward_step,
+            # TF needs TensorArray unstack, not implemented yet
+            test_tensorflow=False,
+        )
+
+        # Check that the single-step and the seq-level output are the same.
+        res_seq_level = res.data["out_seq_level"].raw_tensor
+        for key in ["out_seq_level_explicit_initial_state", "out_single_steps"]:
+            res_other = res.data[key].raw_tensor
+            assert res_seq_level.shape == res_other.shape
+            numpy.testing.assert_allclose(
+                res_other, res_seq_level, atol=1e-5, rtol=1e-5, err_msg=f"output {key} differs"
+            )
+
+
 def test_relative_positional_encoding():
     time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
     in_dim = Dim(8, name="in")
@@ -464,6 +542,27 @@ def test_relative_positional_encoding():
     run_model(extern_data, lambda *, epoch, step: _Net(), _forward_step)
 
 
+def test_relative_positional_encoding_cross():
+    enc_spatial_dim = Dim(Tensor("enc_spatial", [batch_dim], dtype="int32"))
+    dec_spatial_dim = Dim(Tensor("dec_spatial", [batch_dim], dtype="int32"))
+    in_dim = Dim(8, name="in")
+    extern_data = TensorDict(
+        {
+            "enc": Tensor("enc", [batch_dim, enc_spatial_dim, in_dim], dtype="float32"),
+            "dec": Tensor("dec", [batch_dim, dec_spatial_dim, in_dim], dtype="float32"),
+        }
+    )
+
+    # noinspection PyShadowingNames
+    def _forward_step(**_kwargs):
+        out, dim = rf.relative_positional_encoding(
+            key_value_spatial_dim=enc_spatial_dim, query_spatial_dim=dec_spatial_dim, feat_dim=in_dim
+        )
+        out.mark_as_default_output(shape=(dim, in_dim))
+
+    run_model(extern_data, lambda **_kwargs: rf.Module(), _forward_step)
+
+
 def test_rel_pos_self_attention():
     time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
     in_dim = Dim(8, name="in")
@@ -472,6 +571,7 @@ def test_rel_pos_self_attention():
             "data": Tensor("data", [batch_dim, time_dim, in_dim], dtype="float32"),
         }
     )
+    check_batching = False
 
     class _Net(rf.Module):
         def __init__(self):
@@ -487,6 +587,32 @@ def test_rel_pos_self_attention():
 
         def __call__(self, x: Tensor, *, axis: Dim) -> Tensor:
             """forward"""
+            nonlocal check_batching
+            if check_batching:
+                assert rf.is_executing_eagerly()
+                assert batch_dim in x.dims and axis != batch_dim
+                y = self.self_att(x, axis=axis)
+                for b in range(batch_dim.get_dim_value()):
+                    x_b = rf.gather(x, axis=batch_dim, indices=b)
+                    assert batch_dim in axis.dyn_size_ext.dims  # current assumption...
+                    seq_len = rf.gather(axis.dyn_size_ext, axis=batch_dim, indices=b)
+                    axis_b = Dim(seq_len)
+                    # Note: The current order (replace_dim and then slice) is somewhat dependent
+                    # on the current internal behavior of gather and replace_dim,
+                    # which might change at some point...
+                    x_b, _ = rf.replace_dim(x_b, in_dim=axis, out_dim=axis_b)
+                    x_b, _ = rf.slice(x_b, axis=axis_b, start=0, end=seq_len, out_dim=axis_b)
+                    y_b = self.self_att(x_b, axis=axis_b)
+                    y_b_ = rf.gather(y, axis=batch_dim, indices=b)
+                    y_b_, _ = rf.replace_dim(y_b_, in_dim=axis, out_dim=axis_b)
+                    y_b_, _ = rf.slice(y_b_, axis=axis_b, start=0, end=seq_len, out_dim=axis_b)
+                    y_b_ = y_b_.copy_transpose(y_b.dims)
+                    # Assuming PyTorch...
+                    np.testing.assert_almost_equal(
+                        y_b.raw_tensor.cpu().detach().numpy(), y_b_.raw_tensor.cpu().detach().numpy(), decimal=5
+                    )
+                return y
+
             return self.self_att(x, axis=axis)
 
     # noinspection PyShadowingNames
@@ -495,6 +621,8 @@ def test_rel_pos_self_attention():
         out.mark_as_default_output(shape=(batch_dim, time_dim, model.out_dim))
 
     run_model(extern_data, lambda *, epoch, step: _Net(), _forward_step)
+    check_batching = True
+    run_model(extern_data, lambda *, epoch, step: _Net(), _forward_step, test_tensorflow=False)
 
 
 def test_sinusoidal_positional_encoding():

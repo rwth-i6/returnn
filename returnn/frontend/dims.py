@@ -15,6 +15,7 @@ __all__ = [
     "range_over_dim_strided",
     "range_over_merged_dims",
     "replace_dim",
+    "set_sparse_dim",
     "dim_match_priority_when_needed",
     "num_elements_of_shape",
     "masked_fraction_of_shape",
@@ -94,6 +95,16 @@ def replace_dim(source: Tensor, *, in_dim: Dim, out_dim: Optional[Dim] = None) -
     return source._raw_backend.replace_dim(source, in_dim=in_dim, out_dim=out_dim), out_dim
 
 
+def set_sparse_dim(source: Tensor, sparse_dim: Dim) -> Tensor:
+    """
+    :param source:
+    :param sparse_dim:
+    :return: source with sparse_dim set
+    """
+    # noinspection PyProtectedMember
+    return source._raw_backend.set_sparse_dim(source, sparse_dim)
+
+
 def dim_match_priority_when_needed(dim: Dim, *other_dims: Dim) -> Dim:
     """
     :return: maybe copy of dim with higher match_priority if needed to distinguish from other_dims
@@ -122,10 +133,13 @@ def dim_match_priority_when_needed(dim: Dim, *other_dims: Dim) -> Dim:
     return dim
 
 
-def num_elements_of_shape(dims: Union[Dim, Sequence[Dim]], *, use_mask: bool = True) -> Union[int, Tensor]:
+def num_elements_of_shape(
+    dims: Union[Dim, Sequence[Dim]], *, use_mask: bool = True, device: Optional[str] = None
+) -> Union[int, Tensor]:
     """
     :param dims:
     :param use_mask:
+    :param device: only for the case when we return a Tensor. by default, this is CPU (just as the size tensor).
     :return: num elements of a tensor of shape dims, properly considering masking
     """
     if isinstance(dims, Dim):
@@ -138,8 +152,10 @@ def num_elements_of_shape(dims: Union[Dim, Sequence[Dim]], *, use_mask: bool = T
     if all(dim.is_static() for dim in dims):
         n = 1
         for dim in dims:
-            n *= dim.dimension
+            n *= dim.size
         return n
+    if len(dims) == 1:
+        return dims[0].get_size_tensor(device=device)
 
     n: Union[int, Tensor] = 1
     postponed_dims = []
@@ -153,9 +169,9 @@ def num_elements_of_shape(dims: Union[Dim, Sequence[Dim]], *, use_mask: bool = T
                 related_dims.append(dim_)
         if not related_dims:
             if dim.is_static():
-                n *= dim.dimension
+                n *= dim.size
             else:
-                n *= dim.dyn_size_ext
+                n *= dim.get_size_tensor(device=device)
         else:
             postponed_dims.append(dim)
     if postponed_dims:

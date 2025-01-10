@@ -312,6 +312,7 @@ class ConformerEncoder(ISeqDownsamplingEncoder):
         sequential=rf.Sequential,
     ):
         """
+        :param in_dim: input features (e.g. MFCC)
         :param out_dim: the output feature dimension
         :param num_layers: the number of encoder layers
         :param input_layer: input/frontend/prenet with potential subsampling.

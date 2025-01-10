@@ -53,7 +53,9 @@ def dump_dataset(options):
         ", ".join(f"{k!r}: {v[:3]}... len {len(v)}" for k, v in dataset.labels.items()) or "None",
         file=log.v3,
     )
-    assert options.key in dataset.get_data_keys()
+    assert (
+        options.key in dataset.get_data_keys()
+    ), f"key {options.key!r} not in {dataset.get_data_keys()} (targets {dataset.get_target_list()})"
     max_seq_length = NumbersDict(options.max_seq_length)
     min_seq_length = NumbersDict(options.min_seq_length)
 

@@ -478,7 +478,7 @@ class Backend(Generic[T]):
         source: Tensor,
         *,
         axes: Sequence[Dim],
-        padding: Sequence[Tuple[Union[Dim, int], Union[Dim, int]]],
+        padding: Sequence[Tuple[Union[Dim, int, Tensor], Union[Dim, int, Tensor]]],
         out_dims: Sequence[Dim],
         handle_dynamic_dims: bool,
         mode: str = "constant",
@@ -493,21 +493,6 @@ class Backend(Generic[T]):
         :param mode:
         :param value:
         :return: padded tensor
-        """
-        raise NotImplementedError
-
-    @staticmethod
-    def cum_concat_step(source: Tensor, *, prev_accum: Tensor, axis: Dim, out_spatial_dim: Dim) -> Tensor:
-        """
-        Concatenates all previous frames over a time-axis.
-        See RETURNN :class:`CumConcatLayer` for details.
-
-        :param source: same dims as prev_accum except for the accum axis
-        :param prev_accum: previous accumulated tensor, shape {..., axis}
-        :param axis: the axis to accumulate over
-        :param out_spatial_dim: the spatial dim of the output will be this dim. like axis+1.
-        :return: accumulated. accumulated shape {..., out_spatial_dim},
-            same shape as prev_accum with axis replaced by out_spatial_dim.
         """
         raise NotImplementedError
 
@@ -1095,6 +1080,15 @@ class Backend(Generic[T]):
         out.raw_tensor = source.raw_tensor
         return out
 
+    @staticmethod
+    def set_sparse_dim(source: Tensor, sparse_dim: Dim) -> Tensor:
+        """set sparse dim"""
+        # This default implementation works fine as long as the backend
+        # does not have special treatments of Tensor and dim tags itself (like TF net dict backend).
+        out = source.copy()
+        out.sparse_dim = sparse_dim
+        return out
+
     _AllowedReduceModes = {"sum", "max", "min", "mean", "logsumexp", "any", "all", "argmin", "argmax"}
 
     @staticmethod
@@ -1171,11 +1165,14 @@ class Backend(Generic[T]):
         raise NotImplementedError
 
     @staticmethod
-    def masked_scatter(source: Tensor, *, mask: Tensor, dims: Sequence[Dim], in_dim: Dim) -> Tensor:
+    def masked_scatter(
+        source: Tensor, backup: Optional[Tensor] = None, *, mask: Tensor, dims: Sequence[Dim], in_dim: Dim
+    ) -> Tensor:
         """
         The inverse of :func:`masked_select`.
 
         :param source: [in_dim, F...]
+        :param backup: [dims..., F...] (or subset of those dims). zero if not given.
         :param mask: [dims...] -> bool (e.g. [B,T])
         :param dims: the order of the dims defines the format. those dims should be exactly the dims of the mask.
         :param in_dim: the dim of the source which should be scattered into the mask.

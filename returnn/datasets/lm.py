@@ -46,8 +46,10 @@ class LmDataset(CachedDataset2):
     def __init__(
         self,
         corpus_file,
+        *,
         use_cache_manager=False,
         skip_empty_lines=True,
+        seq_list_file=None,
         orth_vocab=None,
         orth_symbols_file=None,
         orth_symbols_map_file=None,
@@ -65,6 +67,7 @@ class LmDataset(CachedDataset2):
         error_on_invalid_seq=True,
         add_delayed_seq_data=False,
         delayed_seq_data_start_symbol="[START]",
+        dtype: Optional[str] = None,
         **kwargs,
     ):
         """
@@ -89,6 +92,8 @@ class LmDataset(CachedDataset2):
         :param str|()->str|list[str]|()->list[str] corpus_file: Bliss XML or line-based txt. optionally can be gzip.
         :param bool use_cache_manager: uses :func:`returnn.util.basic.cf`
         :param bool skip_empty_lines: for line-based txt
+        :param str|list[str]|None seq_list_file: optional custom seq tags to use instead of the "line-%i" seq tags.
+            Pickle (.pkl) or txt (line-based seq tags). Optionally gzipped (.gz).
         :param dict[str,typing.Any]|Vocabulary orth_vocab:
         :param str|()->str|None orth_symbols_file: a text file containing a list of orthography symbols
         :param str|()->str|None orth_symbols_map_file: either a list of orth symbols, each line: "<symbol> <index>",
@@ -113,12 +118,14 @@ class LmDataset(CachedDataset2):
         :param bool add_delayed_seq_data: will add another data-key "delayed" which will have the sequence.
           delayed_seq_data_start_symbol + original_sequence[:-1].
         :param str delayed_seq_data_start_symbol: used for add_delayed_seq_data.
+        :param dtype: explicit dtype. if not given, automatically determined based on the number of labels.
         """
         super(LmDataset, self).__init__(**kwargs)
 
         self._corpus_file = corpus_file
         self._use_cache_manager = use_cache_manager
         self._skip_empty_lines = skip_empty_lines
+        self._seq_list_file = seq_list_file
         self._orth_symbols_file = orth_symbols_file
         self._orth_symbols_map_file = orth_symbols_map_file
         self._orth_replace_map_file = orth_replace_map_file
@@ -240,7 +247,9 @@ class LmDataset(CachedDataset2):
             assert not orth_replace_map_file
 
         num_labels = len(self.labels["data"])
-        if num_labels <= 2**7:
+        if dtype:
+            self.dtype = dtype
+        elif num_labels <= 2**7:
             self.dtype = "int8"
         elif num_labels <= 2**8:
             self.dtype = "uint8"
@@ -274,6 +283,8 @@ class LmDataset(CachedDataset2):
         self._orth_files: Optional[List[BinaryIO]] = None
         self._orth_mmaps = None
         self._orths_offsets_and_lens: Optional[List[Tuple[int, int]]] = None  # will be loaded in _lazy_init
+        self._seq_list: Optional[List[str]] = None
+        self._seq_index_by_tag: Optional[dict[str, int]] = None
 
         self.next_orth_idx = 0
         self.next_seq_idx = 0
@@ -301,6 +312,7 @@ class LmDataset(CachedDataset2):
         total_bytes_read = 0
         orths = []
         self._orths_offsets_and_lens = orths
+        lens_per_corpus_file = []
         start_time = time.time()
         last_print_time = start_time
 
@@ -339,8 +351,10 @@ class LmDataset(CachedDataset2):
                 last_print_time = time.time()
 
         # If a list of files is provided, concatenate all.
-        if not isinstance(corpus_file, list):
+        if isinstance(corpus_file, str):
             corpus_file = [corpus_file]
+        assert isinstance(corpus_file, (tuple, list))
+        prev_orth_len = 0
         for file_name in corpus_file:
             if self._use_cache_manager:
                 file_name = cf(file_name)
@@ -376,9 +390,30 @@ class LmDataset(CachedDataset2):
                     pos = next_new_line + 1
                     _maybe_report_status()
 
+            lens_per_corpus_file.append(len(orths) - prev_orth_len)
+            prev_orth_len = len(orths)
+
         if tmp_file is not None:
             tmp_file.flush()
             self._orth_mmaps[tmp_file_orth_files_index] = mmap.mmap(tmp_file.fileno(), 0, flags=mmap.MAP_PRIVATE)
+
+        if self._seq_list_file:
+            if isinstance(self._seq_list_file, str):
+                seq_list: List[str] = self._load_seq_list_file(
+                    self._seq_list_file, use_cache_manager=self._use_cache_manager
+                )
+            elif isinstance(self._seq_list_file, list):
+                assert len(self._seq_list_file) == len(lens_per_corpus_file)
+                seq_list: List[str] = []
+                for i, fn in enumerate(self._seq_list_file):
+                    seq_list_: List[str] = self._load_seq_list_file(fn, use_cache_manager=self._use_cache_manager)
+                    assert len(seq_list_) == lens_per_corpus_file[i]
+                    seq_list.extend(seq_list_)
+            else:
+                raise TypeError(f"invalid seq_list_file type {type(self._seq_list_file).__name__}")
+            assert isinstance(seq_list, list)
+            assert len(self._orths_offsets_and_lens) == len(seq_list)
+            self._seq_list = seq_list
 
         print(
             f"  done, loaded {len(self._orths_offsets_and_lens)} sequences,"
@@ -445,8 +480,16 @@ class LmDataset(CachedDataset2):
         if seq_order is not None:
             self.seq_order = seq_order
         elif seq_list is not None:
-            assert all(s.startswith(self._tag_prefix) for s in seq_list)
-            self.seq_order = [int(s[len(self._tag_prefix) :]) for s in seq_list]
+            # Might not be initialized. Can even do without init. Thus check seq_list_file.
+            if self._seq_list_file is None:
+                assert all(s.startswith(self._tag_prefix) for s in seq_list)
+                self.seq_order = [int(s[len(self._tag_prefix) :]) for s in seq_list]
+            else:
+                # Need seq list for this. Just do the lazy init now.
+                self._lazy_init()
+                if self._seq_index_by_tag is None:
+                    self._seq_index_by_tag = {tag: i for (i, tag) in enumerate(self._seq_list)}
+                self.seq_order = [self._seq_index_by_tag[s] for s in seq_list]
         elif epoch is None:
             self.seq_order = []
         else:
@@ -486,6 +529,9 @@ class LmDataset(CachedDataset2):
 
     def get_all_tags(self) -> List[str]:
         """:return: all seq tags"""
+        self._lazy_init()
+        if self._seq_list is not None:
+            return self._seq_list
         num_seqs = self.get_total_num_seqs()
         return [self._tag_prefix + str(line_nr) for line_nr in range(num_seqs)]
 
@@ -525,10 +571,11 @@ class LmDataset(CachedDataset2):
             # get sequence for the next index given by seq_order
             idx, offset, len_ = self._orths_offsets_and_lens[true_idx]
             orth = self._orth_mmaps[idx][offset : offset + len_].decode("utf8").strip()
-            seq_tag = self._tag_prefix + str(true_idx)
+            if self._seq_list is None:
+                seq_tag = self._tag_prefix + str(true_idx)
+            else:
+                seq_tag = self._seq_list[true_idx]
             self.next_orth_idx += 1
-            if orth == "</s>":
-                continue  # special sentence end symbol. empty seq, ignore.
 
             if self.orth_vocab is not None:
                 data = numpy.array(self.orth_vocab.get_seq(orth), dtype=self.dtype)

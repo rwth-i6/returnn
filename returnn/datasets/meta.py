@@ -333,20 +333,24 @@ class MetaDataset(CachedDataset2):
                     file=log.v1,
                 )
                 other_tags = self.datasets[key].get_all_tags()
+                other_tags_set = set(other_tags)
                 for tag in seq_list:
-                    if tag not in other_tags:
+                    if tag not in other_tags_set:
                         print(
                             "Seq tag %r in dataset %r but not in dataset %r." % (tag, self.default_dataset_key, key),
                             file=log.v1,
                         )
                         break  # only print one
+                del other_tags_set
+                seq_list_set = set(seq_list)
                 for tag in other_tags:
-                    if tag not in seq_list:
+                    if tag not in seq_list_set:
                         print(
                             "Seq tag %r in dataset %r but not in dataset %r." % (tag, key, self.default_dataset_key),
                             file=log.v1,
                         )
                         break  # only print one
+                del seq_list_set
                 raise Exception("Dataset %r is missing seqs." % key)
         elif isinstance(seq_list_file, str):
             seq_list = Dataset._load_seq_list_file(seq_list_file, expect_list=False)
@@ -531,8 +535,12 @@ class MetaDataset(CachedDataset2):
         :rtype: DatasetSeq
         """
         seq_tag = self.seq_list_ordered[self.default_dataset_key][seq_idx]
+        try:
+            epoch_continuous = self.datasets[self.default_dataset_key].get_epoch_continuous(seq_idx)
+        except NotImplementedError:
+            epoch_continuous = None
         features = {data_key: self._get_data(seq_idx, data_key) for data_key in self.data_keys}
-        return DatasetSeq(seq_idx=seq_idx, seq_tag=seq_tag, features=features)
+        return DatasetSeq(seq_idx=seq_idx, seq_tag=seq_tag, features=features, epoch_continuous=epoch_continuous)
 
     def get_seq_length(self, sorted_seq_idx):
         """
@@ -1900,14 +1908,6 @@ class VariableDataset(Dataset):
     def get_current_seq_order(self) -> Sequence[int]:
         """current seq order"""
         return self._dataset.get_current_seq_order()
-
-    def get_all_tags(self) -> List[str]:
-        """all tags"""
-        return self._dataset.get_all_tags()
-
-    def get_total_num_seqs(self, *, fast: bool = False) -> int:
-        """total num seqs"""
-        return self._dataset.get_total_num_seqs(fast=fast)
 
     def get_seq_length(self, sorted_seq_idx: int) -> NumbersDict:
         """seq len"""

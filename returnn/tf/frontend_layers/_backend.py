@@ -342,7 +342,20 @@ class ReturnnLayersBackend(Backend[Layer]):
         opts = {}
         if allow_broadcast:
             opts["allow_broadcast"] = True
-        out_dim = sum(d for _, d in sources)
+        dim_deps = rfl.get_dim_deps(out_dim)
+        sources_dims = set()
+        for source, _ in sources:
+            sources_dims.update(source.dims)
+        need_explicit_dim_deps = False
+        for dim in dim_deps:
+            if dim not in sources_dims:
+                need_explicit_dim_deps = True
+                break
+        if need_explicit_dim_deps:
+            source0 = rfl.make_layer(
+                {"class": "copy", "from": sources[0][0], "extra_deps": dim_deps}, name="concat_extra_dim_deps"
+            )
+            sources = ((source0, sources[0][1]),) + sources[1:]
         return rfl.make_layer(
             {"class": "concat", "from": sources, "out_dim": out_dim, **opts},
             name="concat",
@@ -353,7 +366,7 @@ class ReturnnLayersBackend(Backend[Layer]):
         source: Tensor,
         *,
         axes: Sequence[Dim],
-        padding: Sequence[Tuple[Union[Dim, int], Union[Dim, int]]],
+        padding: Sequence[Tuple[Union[Dim, int, Tensor], Union[Dim, int, Tensor]]],
         out_dims: Sequence[Dim],
         handle_dynamic_dims: bool,
         mode: str = "constant",
@@ -373,20 +386,6 @@ class ReturnnLayersBackend(Backend[Layer]):
                 "value": value,
             },
             name="pad",
-        )
-
-    @staticmethod
-    def cum_concat_step(source: Tensor, *, prev_accum: Tensor, axis: Dim, out_spatial_dim: Dim) -> Tensor:
-        """cum_concat_step"""
-        return rfl.make_layer(
-            {
-                "class": "cum_concat",
-                "from": source,
-                "state": {"state": prev_accum},
-                "out_spatial_dim": out_spatial_dim,
-                "axis": axis,
-            },
-            name="cum_concat",
         )
 
     @staticmethod
@@ -772,6 +771,14 @@ class ReturnnLayersBackend(Backend[Layer]):
         """
         return rfl.make_layer(
             {"class": "reinterpret_data", "set_dim_tags": {in_dim: out_dim}, "from": source}, name="new_dim"
+        )
+
+    @staticmethod
+    def set_sparse_dim(source: Tensor, sparse_dim: Dim) -> Tensor:
+        """set sparse dim"""
+        return rfl.make_layer(
+            {"class": "reinterpret_data", "set_sparse": True, "set_sparse_dim": sparse_dim, "from": source},
+            name="set_sparse_dim",
         )
 
     @staticmethod

@@ -367,6 +367,7 @@ def concat(
     *sources: Tuple[Tensor, Dim],
     allow_broadcast: bool = False,
     out_dim: Optional[Dim] = None,
+    handle_dynamic_dims: Optional[bool] = None,
 ) -> Tuple[Tensor, Dim]:
     """
     Concatenates multiple sources in the specified dimension.
@@ -376,6 +377,7 @@ def concat(
     :param sources: list of (tensor, dim) pairs. dim is the axis to concatenate on.
     :param allow_broadcast: if True, the sources can have different dims, and the result will be broadcasted.
     :param out_dim: reuse existing dim for the resulting concatenated dim, if given
+    :param handle_dynamic_dims:
     :return: concatenated tensor, out_dim
     """
     assert sources
@@ -385,6 +387,9 @@ def concat(
             assert src.dims_set - {dim} == dims, f"concat {sources}, need allow_broadcast=True"
     if not out_dim:
         out_dim = sum(d for _, d in sources)
+    if handle_dynamic_dims is None or handle_dynamic_dims:
+        for src, dim in sources[:-1]:
+            assert dim.is_static(), f"concat {sources}, dim {dim} is not static, not yet implemented..."
     # noinspection PyProtectedMember
     return sources[0][0]._raw_backend.concat(*sources, allow_broadcast=allow_broadcast, out_dim=out_dim), out_dim
 
@@ -407,7 +412,7 @@ def pad(
     source: Tensor,
     *,
     axes: Sequence[Dim],
-    padding: Sequence[Tuple[Union[Dim, int], Union[Dim, int]]],
+    padding: Sequence[Tuple[Union[Dim, int, Tensor], Union[Dim, int, Tensor]]],
     out_dims: Optional[Sequence[Dim]] = None,
     mode: str = "constant",
     value: Optional[Union[rf.RawTensorTypes, Tensor]] = None,
@@ -431,13 +436,6 @@ def pad(
     if handle_dynamic_dims is None:
         handle_dynamic_dims = _pad_handle_dynamic_dims_default(axes, padding, mode=mode)
     if not out_dims:
-        if handle_dynamic_dims:
-            for left, right in padding:
-                if isinstance(left, Dim):
-                    assert not left.need_masking(), f"padding {padding} does not support dynamic left padding"
-                if isinstance(right, Dim):
-                    assert not right.need_masking(), f"padding {padding} does not support dynamic right padding"
-                # Note that even dynamic middle dims is not exactly correct...
         out_dims = [left + middle + right for middle, (left, right) in zip(axes, padding)]
     # noinspection PyProtectedMember
     return (
@@ -475,10 +473,7 @@ def _pad_handle_dynamic_dims_default(
     global _pad_handle_dynamic_dims_shown_warning
     if not _pad_handle_dynamic_dims_shown_warning:
         for middle, (left, right) in zip(pad_axes, padding):
-            middle: Dim
-            if not middle.need_masking() and (isinstance(left, int) or not left.need_masking()):
-                continue
-            if mode != "circular" and isinstance(right, int) and right == 0:
+            if not _pad_need_dyn_dim_handling(middle, left, right, mode=mode):
                 continue
 
             logging.getLogger("returnn.frontend").warning(
@@ -491,6 +486,20 @@ def _pad_handle_dynamic_dims_default(
             _pad_handle_dynamic_dims_shown_warning = True
             break
     return False
+
+
+def _pad_need_dyn_dim_handling(
+    middle: Dim, left: Union[Dim, int, Tensor], right: Union[Dim, int, Tensor], *, mode: str
+) -> bool:
+    if (
+        not middle.need_masking()
+        and (isinstance(left, int) or (isinstance(left, Dim) and not left.need_masking()))
+        or (isinstance(left, Tensor) and not left.dims)
+    ):
+        return False
+    if mode != "circular" and isinstance(right, int) and right == 0:
+        return False
+    return True
 
 
 def cum_concat_step(
@@ -507,13 +516,18 @@ def cum_concat_step(
     :return: (accumulated, out_spatial_dim). accumulated shape {..., out_spatial_dim},
         same shape as prev_accum with axis replaced by out_spatial_dim.
     """
+    # Note: Before, we had a backend function just for this.
+    # In case of TF-layers, this was using CumConcatLayer.
+    # This would allow for automatic optimization when inside a RecLayer.
+    # However, we don't really need this for eager frameworks,
+    # and we want to simplify this for now,
+    # using pure RF code.
     if not out_spatial_dim:
         out_spatial_dim = axis + 1
-    # noinspection PyProtectedMember
-    return (
-        source._raw_backend.cum_concat_step(source, prev_accum=prev_accum, axis=axis, out_spatial_dim=out_spatial_dim),
-        out_spatial_dim,
+    out, (out_spatial_dim,) = rf.pad(
+        prev_accum, axes=[axis], padding=[(0, 1)], out_dims=[out_spatial_dim], value=source, handle_dynamic_dims=True
     )
+    return out, out_spatial_dim
 
 
 def stack(sources: Sequence[Tensor], *, out_dim: Optional[Dim] = None) -> Tuple[Tensor, Dim]:
@@ -588,18 +602,21 @@ def masked_select(
     return res, out_dim
 
 
-def masked_scatter(source: Tensor, *, mask: Tensor, dims: Sequence[Dim], in_dim: Dim) -> Tensor:
+def masked_scatter(
+    source: Tensor, backup: Optional[Tensor] = None, *, mask: Tensor, dims: Sequence[Dim], in_dim: Dim
+) -> Tensor:
     """
     The inverse of :func:`masked_select`.
 
     :param source: [in_dim, F...]
+    :param backup: [dims..., F...] (or subset of those dims). zero if not given.
     :param mask: [dims...] -> bool (e.g. [B,T])
     :param dims: the order of the dims defines the format. those dims should be exactly the dims of the mask.
     :param in_dim: the dim of the source which should be scattered into the mask.
     :return: [dims..., F...]
     """
     # noinspection PyProtectedMember
-    return source._raw_backend.masked_scatter(source, mask=mask, dims=dims, in_dim=in_dim)
+    return source._raw_backend.masked_scatter(source, backup=backup, mask=mask, dims=dims, in_dim=in_dim)
 
 
 def sequence_mask(dims: Union[Dim, Sequence[Dim]], *, device: Optional[str] = None) -> Tensor:

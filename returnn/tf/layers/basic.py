@@ -517,11 +517,12 @@ class ConcatLayer(LayerBase):
             dimension = 0
             for tag in concat_dim_tags:
                 dimension += tag.dimension
+        sum_concat_dim_tags: Dim = sum(concat_dim_tags)
         if not out_dim:
-            out_dim = sum(concat_dim_tags)
+            out_dim = sum_concat_dim_tags
             assert isinstance(out_dim, Dim)
-        else:
-            sum(concat_dim_tags).declare_same_as(out_dim)
+        elif not out_dim.is_dim_known():
+            sum_concat_dim_tags.declare_same_as(out_dim)
         assert out_dim.dimension == dimension
 
         def _as_common(x, axis):

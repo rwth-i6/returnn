@@ -452,40 +452,41 @@ def init(config_filename=None, command_line_options=(), config_updates=None, ext
     :param dict[str]|None config_updates: see :func:`init_config`
     :param str|None extra_greeting:
     """
-    debug_util.init_better_exchook()
-    util.init_thread_join_hack()
-    init_config(
-        config_filename=config_filename, command_line_options=command_line_options, extra_updates=config_updates
-    )
-    if config.bool("use_train_proc_manager", False):
-        from returnn.util.train_proc_manager import maybe_start_train_proc_manager
+    with util.ReportImportedDevModules(description="RETURNN init"):
+        debug_util.init_better_exchook()
+        util.init_thread_join_hack()
+        init_config(
+            config_filename=config_filename, command_line_options=command_line_options, extra_updates=config_updates
+        )
+        if config.bool("use_train_proc_manager", False):
+            from returnn.util.train_proc_manager import maybe_start_train_proc_manager
 
-        maybe_start_train_proc_manager(config=config)
-    if config.bool("patch_atfork", False):
-        from returnn.util.basic import maybe_restart_returnn_with_atfork_patch
+            maybe_start_train_proc_manager(config=config)
+        if config.bool("patch_atfork", False):
+            from returnn.util.basic import maybe_restart_returnn_with_atfork_patch
 
-        maybe_restart_returnn_with_atfork_patch()
-    init_log()
-    if extra_greeting:
-        print(extra_greeting, file=log.v1)
-    returnn_greeting(config_filename=config_filename, command_line_options=command_line_options)
-    debug_util.init_faulthandler()
-    if config.bool("watch_memory", False):
-        from returnn.util.watch_memory import watch_memory
+            maybe_restart_returnn_with_atfork_patch()
+        init_log()
+        if extra_greeting:
+            print(extra_greeting, file=log.v1)
+        returnn_greeting(config_filename=config_filename, command_line_options=command_line_options)
+        debug_util.init_faulthandler()
+        if config.bool("watch_memory", False):
+            from returnn.util.watch_memory import watch_memory
 
-        watch_memory()
-    init_backend_engine()
-    if config.bool("ipython", False):
-        debug_util.init_ipython_kernel()
-    if config.typed_value("startup_callback"):
-        startup_callback = config.typed_value("startup_callback")
-        startup_callback(config=config)
-    if need_data():
-        if config.bool("use_dummy_datasets", False):
-            setup_dummy_datasets()
-        init_data()
-    print_task_properties()
-    init_engine()
+            watch_memory()
+        init_backend_engine()
+        if config.bool("ipython", False):
+            debug_util.init_ipython_kernel()
+        if config.typed_value("startup_callback"):
+            startup_callback = config.typed_value("startup_callback")
+            startup_callback(config=config)
+        if need_data():
+            if config.bool("use_dummy_datasets", False):
+                setup_dummy_datasets()
+            init_data()
+        print_task_properties()
+        init_engine()
 
 
 def finalize(error_occurred=False):
@@ -576,16 +577,16 @@ def execute_main_task():
                 assert data, "set forward_data"
             else:
                 data = init_dataset(config.opt_typed_value("forward_data"))
-            # engine.epoch is usually the epoch of the loaded checkpoint,
-            # or what EngineBase.get_epoch_model will return.
-            # You can have both load and load_epoch, where load points to the checkpoint,
-            # and load_epoch is some other epoch, which you will get here for the dataset.
-            data.init_seq_order(epoch=engine.epoch or 1)
             forward_callback = config.typed_value("forward_callback")
             assert forward_callback, "no forward_callback specified"
             if callable(forward_callback):
                 forward_callback = forward_callback()
             allow_skipping_seqs = config.bool("allow_skipping_seqs_in_forward", False)
+            # engine.epoch is usually the epoch of the loaded checkpoint,
+            # or what EngineBase.get_epoch_model will return.
+            # You can have both load and load_epoch, where load points to the checkpoint,
+            # and load_epoch is some other epoch, which you will get here for the dataset.
+            # data.init_seq_order will be called inside. (Maybe the dataset is first moved to a subproc.)
             engine.forward_with_callback(
                 dataset=data, callback=forward_callback, allow_skipping_seqs=allow_skipping_seqs
             )

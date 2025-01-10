@@ -330,6 +330,8 @@ class Dataset:
             assert chunk_step.max_value() > 0, "chunking step must be positive (for some key)"
         return chunk_size, chunk_step, None
 
+    _seq_list_file_cache: Dict[str, Union[List[str], Dict[str, List[str]]]] = {}
+
     @staticmethod
     def _load_seq_list_file(
         filename: str, *, use_cache_manager: bool = False, expect_list: bool = True
@@ -340,6 +342,12 @@ class Dataset:
         :param expect_list:
         :return: seq list file content. usually a list of seqs.
         """
+        if filename in Dataset._seq_list_file_cache:
+            seq_list = Dataset._seq_list_file_cache[filename]
+            if expect_list:
+                assert isinstance(seq_list, list)
+            return seq_list
+        _filename = filename
         if use_cache_manager:
             import returnn.util.basic
 
@@ -367,6 +375,7 @@ class Dataset:
                 assert isinstance(seq_list, list)
         else:
             seq_list = _open("rt").read().splitlines()
+        Dataset._seq_list_file_cache[_filename] = seq_list
         return seq_list
 
     def _sliding_window(self, xr):
@@ -958,6 +967,26 @@ class Dataset:
         """
         raise NotImplementedError
 
+    def get_epoch_continuous(self, sorted_seq_idx: int) -> float:
+        """
+        Calculates how much of the current epoch is completed when having processed seq ``sorted_seq_idx``.
+        ``sorted_seq_idx`` cannot be less than the seq index of the previously loaded seqs.
+
+        This value is used to calculate ``epoch_continuous`` for any dynamic learning rate scheduling.
+
+        :param sorted_seq_idx: sorted seq idx
+        :return: continuous value in (0, 1] which represents how much of the current epoch
+            is completed after ``sorted_seq_idx``
+        """
+        try:
+            num_seqs = self.num_seqs
+        except NotImplementedError as exc:
+            raise OptionalNotImplementedError(f"{self}: get_epoch_continuous is not implemented") from exc
+        assert (
+            0 <= sorted_seq_idx < num_seqs
+        ), f"{self}: invalid seq indices: 0 <= seq_idx ({sorted_seq_idx}) < num_seqs ({num_seqs}) violated"
+        return (sorted_seq_idx + 1) / num_seqs
+
     @property
     def estimated_num_seqs(self):
         """
@@ -1365,16 +1394,25 @@ class DatasetSeq:
     Encapsulates all data for one sequence.
     """
 
-    def __init__(self, seq_idx, features, targets=None, seq_tag=None):
+    def __init__(
+        self,
+        seq_idx: int,
+        features,
+        targets=None,
+        seq_tag: Optional[str] = None,
+        epoch_continuous: Optional[float] = None,
+    ):
         """
-        :param int seq_idx: sorted seq idx in the Dataset
+        :param seq_idx: sorted seq idx in the Dataset
         :param numpy.ndarray|dict[str,numpy.ndarray] features: format 2d (time,feature) (float)
         :param dict[str,numpy.ndarray]|numpy.ndarray|None targets: name -> format 1d (time) (idx of output-feature)
-        :param str seq_tag: sequence name / tag
+        :param seq_tag: sequence name / tag
+        :param epoch_continuous: continuous value in [0, 1] which represents the position in the current epoch
         """
         assert isinstance(seq_idx, (int, numpy.integer))
         self.seq_idx = int(seq_idx)
         self.seq_tag = seq_tag or ("seq-%i" % seq_idx)
+        self.epoch_continuous = epoch_continuous
         if not isinstance(features, dict):
             assert isinstance(features, numpy.ndarray)
             features = {"data": features}

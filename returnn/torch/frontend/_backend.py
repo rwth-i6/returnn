@@ -444,7 +444,7 @@ class TorchBackend(Backend[torch.Tensor]):
         source: Tensor,
         *,
         axes: Sequence[Dim],
-        padding: Sequence[Tuple[Union[Dim, int], Union[Dim, int]]],
+        padding: Sequence[Tuple[Union[Dim, int, Tensor], Union[Dim, int, Tensor]]],
         out_dims: Sequence[Dim],
         handle_dynamic_dims: bool,
         mode: str = "constant",
@@ -452,9 +452,6 @@ class TorchBackend(Backend[torch.Tensor]):
     ) -> Tensor:
         """pad"""
         assert len(out_dims) == len(axes) == len(padding)
-        out = source.copy_template_new_dim_tags(
-            [out_dims[axes.index(dim)] if dim in axes else dim for dim in source.dim_tags], keep_special_axes=True
-        )
         remaining_dims = set(axes)
         raw_pad = []
         for dim in reversed(source.dims):
@@ -462,17 +459,48 @@ class TorchBackend(Backend[torch.Tensor]):
                 raw_pad += [0, 0]
                 continue
             remaining_dims.remove(dim)
-            pad_ = padding[axes.index(dim)]
-            raw_pad += [
-                pad_[0].get_dim_value() if isinstance(pad_[0], Dim) else pad_[0],
-                pad_[1].get_dim_value() if isinstance(pad_[1], Dim) else pad_[1],
-            ]
+            left, right = padding[axes.index(dim)]
+            if isinstance(left, Dim):
+                if handle_dynamic_dims:
+                    assert not left.need_masking(), f"pad: left {left} needs masking, not supported currently"
+                left_ = left.get_dim_value()
+            elif isinstance(left, Tensor):
+                if handle_dynamic_dims:
+                    assert not left.dims, f"pad: left {left} needs masking, not supported currently"
+                left_ = torch.max(left.raw_tensor)
+            elif isinstance(left, int):
+                left_ = left
+            else:
+                raise TypeError(f"pad: invalid left {left!r}")
+            if isinstance(right, Dim):
+                right_ = right.get_dim_value()
+            elif isinstance(right, Tensor):
+                right_ = torch.max(right.raw_tensor)
+            elif isinstance(right, int):
+                right_ = right
+            else:
+                raise TypeError(f"pad: invalid right {right!r}")
+            raw_pad += [left_, right_]
             if not remaining_dims:
                 break
-        if isinstance(value, Tensor):
-            assert value.dims == (), f"value {value} must be a scalar"
-            value = value.raw_tensor
-        out.raw_tensor = torch.nn.functional.pad(source.raw_tensor, pad=raw_pad, mode=mode, value=value)
+        # Use torch.nn.functional.pad if possible. It's possible for scalar `value` (or None).
+        if (isinstance(value, Tensor) and value.dims == ()) or (not isinstance(value, Tensor)):
+            if isinstance(value, Tensor):
+                assert value.dims == ()
+                value = value.raw_tensor
+            out = source.copy_template_new_dim_tags(
+                [out_dims[axes.index(dim)] if dim in axes else dim for dim in source.dim_tags], keep_special_axes=True
+            )
+            out.raw_tensor = torch.nn.functional.pad(source.raw_tensor, pad=raw_pad, mode=mode, value=value)
+        else:  # Fallback to concat.
+            assert isinstance(value, Tensor) and value.dims  # non-scalar
+            assert all(dim in source.dims and dim not in axes for dim in value.dims)
+            assert len(axes) == 1  # not implemented otherwise currently...
+            ext_dim = Dim(1, name="ext")
+            value_ext = rf.expand_dim(value, ext_dim)
+            out = TorchBackend.concat(
+                (source, axes[0]), (value_ext, ext_dim), allow_broadcast=True, out_dim=out_dims[0]
+            )
         if any(dim.need_masking() for dim in out_dims) and handle_dynamic_dims:
             if all(right == 0 for right in raw_pad[1::2]) and mode != "circular":
                 pass  # no masking needed
@@ -482,30 +510,29 @@ class TorchBackend(Backend[torch.Tensor]):
                         f"pad: mode {mode} not implemented with dynamic dims and handle_dynamic_dims=True"
                     )
                 for out_dim, middle, (left, right) in zip(out_dims, axes, padding):
-                    if middle.need_masking() or (isinstance(left, Dim) and left.need_masking()):
-                        if isinstance(right, Dim) or right > 0:
+                    if (
+                        middle.need_masking()
+                        or (isinstance(left, Dim) and left.need_masking())
+                        or (isinstance(left, Tensor) and left.dims)
+                    ):
+                        if isinstance(left, Dim):
+                            left = left.get_size_tensor(device=out.device)
+                        assert isinstance(left, (int, Tensor))
+                        if (
+                            isinstance(right, Dim)
+                            or (isinstance(right, int) and right > 0)
+                            or isinstance(right, Tensor)
+                        ):
                             mask = rf.compare_bc(
                                 rf.range_over_dim(out_dim, device=out.device),
                                 "<",
-                                rf.copy_to_device((left + middle).dyn_size_ext, out.device),
+                                left + middle.get_size_tensor(device=out.device),
                             )
                             out.raw_tensor = torch.where(
-                                mask.copy_compatible_to(out, check_dtype=False, check_sparse=False).raw_tensor,
+                                mask.copy_compatible_to_dims_raw(out.dims),
                                 out.raw_tensor,
-                                value,
+                                value.copy_compatible_to_dims_raw(out.dims) if isinstance(value, Tensor) else value,
                             )
-        return out
-
-    @staticmethod
-    def cum_concat_step(source: Tensor, *, prev_accum: Tensor, axis: Dim, out_spatial_dim: Dim) -> Tensor:
-        """cum concat step"""
-        out = prev_accum.copy_template_replace_dim_tag(
-            axis=prev_accum.get_axis_from_description(axis),
-            new_dim_tag=out_spatial_dim,
-            name=f"{source.name}/cum_concat_step",
-        )
-        source_raw = source.copy_compatible_to_dims_raw(prev_accum.dims)
-        out.raw_tensor = torch.cat((prev_accum.raw_tensor, source_raw), dim=prev_accum.get_axis_from_description(axis))
         return out
 
     @staticmethod
@@ -1715,24 +1742,37 @@ class TorchBackend(Backend[torch.Tensor]):
         return out, out_dim
 
     @staticmethod
-    def masked_scatter(source: Tensor, *, mask: Tensor, dims: Sequence[Dim], in_dim: Dim) -> Tensor:
+    def masked_scatter(
+        source: Tensor, backup: Optional[Tensor] = None, *, mask: Tensor, dims: Sequence[Dim], in_dim: Dim
+    ) -> Tensor:
         """masked scatter"""
         assert mask.dtype == "bool"
         assert set(mask.dims) == set(dims)
         assert in_dim in source.dims
         remaining_dims = [d for d in source.dims if d not in mask.dims and d != in_dim]
         source_templ_dims = (in_dim,) + tuple(remaining_dims)
-        tensor_templ_dims = tuple(dims) + tuple(remaining_dims)
         source_raw = source.copy_compatible_to_dims_raw(source_templ_dims)
-        mask_raw = mask.copy_compatible_to_dims_raw(tensor_templ_dims)
-        out_shape = [d.get_dim_value() for d in tensor_templ_dims]
-        out_raw = torch.zeros(out_shape, dtype=source_raw.dtype, device=source_raw.device)
+
+        out_dims = tuple(dims) + tuple(remaining_dims)
+        if backup is None:
+            out_shape = [d.get_dim_value() for d in out_dims]
+            out_raw = torch.zeros(out_shape, dtype=source_raw.dtype, device=source_raw.device)
+        else:
+            assert set(backup.dims).issubset(out_dims), f"backup dims {backup.dims} not subset of out dims {out_dims}"
+            for d in out_dims:
+                if d not in backup.dims:
+                    backup = rf.expand_dim(backup, dim=d)
+            out_dims = backup.dims
+            out_raw = backup.raw_tensor.clone()  # we operate inplace below
+
+        mask_raw = mask.copy_compatible_to_dims_raw(out_dims)
         out_raw.masked_scatter_(mask_raw, source_raw)
         return Tensor(
             "masked_scatter",
-            dims=tensor_templ_dims,
-            dtype=source.dtype,
+            dims=out_dims,
+            dtype=TorchBackend.get_dtype_name_raw(out_raw),
             sparse_dim=source.sparse_dim,
+            feature_dim=source.feature_dim,
             raw_tensor=out_raw,
         )
 

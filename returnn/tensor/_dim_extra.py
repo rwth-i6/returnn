@@ -1910,6 +1910,7 @@ class _DimMixin:
 
     def get_size_tensor(self, *, device: Optional[str] = None) -> _t.Tensor:
         """
+        :param device: if None, will use CPU
         :return: size tensor, or dyn_size_ext if defined
         :rtype: _t.Tensor
         """

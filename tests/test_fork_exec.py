@@ -16,7 +16,6 @@ from __future__ import annotations
 import _setup_test_env  # noqa
 import os
 import sys
-from nose.tools import assert_equal, assert_is_instance
 from pprint import pprint
 
 
@@ -164,15 +163,12 @@ def test_demo_hello_from_fork():
     pprint(ls)
     ls = filter_demo_output(ls)
     pprint(ls)
-    assert_equal(
-        set(ls),
-        {
-            "Hello from child after fork.",
-            "Hello from child atfork, magic number 3.",
-            "Hello from atfork prepare, magic number 3.",
-            "Hello from parent after fork.",
-        },
-    )
+    assert set(ls) == {
+        "Hello from child after fork.",
+        "Hello from child atfork, magic number 3.",
+        "Hello from atfork prepare, magic number 3.",
+        "Hello from parent after fork.",
+    }
 
 
 def test_demo_start_subprocess():
@@ -205,7 +201,7 @@ def patched_check_demo_start_subprocess():
     """
     Just like test_demo_start_subprocess(), but here we assert that no atfork handlers are executed.
     """
-    assert_equal(os.environ.get("__RETURNN_ATFORK_PATCHED"), "1")
+    assert os.environ.get("__RETURNN_ATFORK_PATCHED") == "1"
     ls = run_demo_check_output("demo_start_subprocess")
     pprint(ls)
     ls = filter_demo_output(ls)
@@ -213,7 +209,7 @@ def patched_check_demo_start_subprocess():
     assert "Hello from subprocess." in ls
     ls = [l for l in ls if l not in ["Ignoring pthread_atfork call!", "Ignoring __register_atfork call!"]]
     pprint(ls)
-    assert_equal(ls, ["Hello from subprocess."])
+    assert ls == ["Hello from subprocess."]
 
 
 def test_demo_start_subprocess_patched():
