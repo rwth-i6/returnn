@@ -969,13 +969,14 @@ class Dataset:
 
     def get_epoch_continuous(self, sorted_seq_idx: int) -> float:
         """
-        Calculates the position of ``sorted_seq_idx`` in the current epoch as relative value in [0, 1].
-        ``sorted_seq_idx`` cannot be less than the seq index of the previously loaded seq.
+        Calculates how much of the current epoch is completed when having processed seq ``sorted_seq_idx``.
+        ``sorted_seq_idx`` cannot be less than the seq index of the previously loaded seqs.
 
         This value is used to calculate ``epoch_continuous`` for any dynamic learning rate scheduling.
 
         :param sorted_seq_idx: sorted seq idx
-        :return: continuous value in [0, 1] which represents the position in the current epoch
+        :return: continuous value in (0, 1] which represents how much of the current epoch
+            is completed after ``sorted_seq_idx``
         """
         try:
             num_seqs = self.num_seqs
