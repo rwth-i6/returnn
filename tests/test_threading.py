@@ -55,6 +55,7 @@ def test_thread_exc_hook():
 
         t = threading.Thread(target=lambda: 1/0)
         t.start()
+        t.wait()
         """
     )
     with tempfile.NamedTemporaryFile(mode="w") as f:
