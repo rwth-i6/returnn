@@ -1407,7 +1407,8 @@ class DatasetSeq:
         :param numpy.ndarray|dict[str,numpy.ndarray] features: format 2d (time,feature) (float)
         :param dict[str,numpy.ndarray]|numpy.ndarray|None targets: name -> format 1d (time) (idx of output-feature)
         :param seq_tag: sequence name / tag
-        :param epoch_continuous: continuous value in [0, 1] which represents the position in the current epoch
+        :param epoch_continuous: continuous value in (0, 1] which represents of much of the current epoch
+            is consumed when this seq is processed
         """
         assert isinstance(seq_idx, (int, numpy.integer))
         self.seq_idx = int(seq_idx)
