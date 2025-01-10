@@ -182,6 +182,19 @@ def init_better_exchook():
 
     sys.excepthook = excepthook
 
+    def threading_excepthook(args, /):
+        """
+        Thread-specific excepthook to ensure the main thread is killed on unhandled exceptions in sub threads.
+        """
+        log_out = log.v1 or sys.stdout
+        print(
+            f"Unhandled exception in thread {threading.current_thread()}, going to interrupt main thread:", file=log_out
+        )
+        better_exchook(args.exc_type, args.exc_value, args.exc_traceback, autodebugshell=False, file=log_out)
+        thread.interrupt_main()
+
+    threading.excepthook = threading_excepthook
+
     from returnn.util.basic import to_bool
 
     if os.environ.get("DEBUG_WARN_WITH_TRACEBACK") and to_bool(os.environ.get("DEBUG_WARN_WITH_TRACEBACK")):

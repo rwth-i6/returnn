@@ -260,6 +260,7 @@ jobs:
           - TEST=torch_frontend
           - TEST=torch_internal_frontend
           - TEST=torch_util
+          - TEST=threading
 
     steps:
     - uses: actions/checkout@v4
