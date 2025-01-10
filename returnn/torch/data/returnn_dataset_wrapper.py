@@ -12,7 +12,6 @@ import numpy
 import torch.utils.data
 from returnn.datasets.basic import Dataset as ReturnnDataset
 from returnn.datasets.util.strings import str_to_numpy_array
-from returnn.util.basic import OptionalNotImplementedError
 from returnn.util.better_exchook import better_exchook
 
 ResetCallbackT = Callable[[], None]
@@ -117,7 +116,7 @@ class ReturnnDatasetIterDataPipe(torch.utils.data.IterDataPipe):
                 try:
                     epoch_cont = self._dataset.get_epoch_continuous(seq_index)
                     assert 0.0 <= epoch_cont <= 1.0
-                except OptionalNotImplementedError:
+                except NotImplementedError:
                     epoch_cont = -1
                 data["epoch_continuous"] = numpy.array(epoch_cont)
                 data["num_seqs"] = num_seqs
