@@ -63,10 +63,11 @@ def test_thread_exc_handlerr():
         try:
             output = run([py, __main_entry__, f.name])
         except CalledProcessError as exc:
-            assert "ZeroDivisionError" in exc.output
-            assert "KeyboardInterrupt" in exc.output  # this happens when main thread is interrupted
+            out = exc.output.decode("utf8")
+            assert "ZeroDivisionError" in out
+            assert "KeyboardInterrupt" in out  # this is the result from the main thread being killed
         else:
-            assert False, f"Expected RETURNN to crash, but got {output}"
+            assert False, f"Expected RETURNN to crash, but got {output}."
 
 
 if __name__ == "__main__":
