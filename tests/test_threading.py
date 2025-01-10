@@ -47,7 +47,7 @@ def test_thread_exc_handlerr():
         """
         #!rnn.py
 
-        backend = "torch"
+        backend = "torch"  # just require any backend
         log_verbosity = 5
 
         import threading
