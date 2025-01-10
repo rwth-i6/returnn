@@ -358,6 +358,8 @@ class LaplaceOrdering(Callable[[Iterator[TensorDict]], Iterator[TensorDict]]):
 
         seq_buffer = list(islice(iterator, self.num_seqs_per_bin))
         while True:
+            # Make sure to not reorder the monotonically increasing values for epoch_continuous
+            # so that the trainer can calculate the appropriate learning rates.
             ep_cont_values = [tdict.data["epoch_continuous"].raw_tensor for tdict in seq_buffer]
             seq_buffer.sort(key=self._get_seq_len, reverse=is_down_phase)
             for sorted_item, ep_cont in zip(seq_buffer, ep_cont_values):
