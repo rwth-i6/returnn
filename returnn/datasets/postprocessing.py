@@ -62,9 +62,10 @@ class PostprocessingDataset(CachedDataset2):
     all data keys in the underlying dataset.
 
     There may also be additional "meta" entries in the tensor dicts, like ``epoch_continuous``
-    and ``seq_tag``. These may be modified, but not removed. Any other entries that
-    the postprocessor function does not modify must also be copied over in a wildcard
-    fashion to ensure forwards compatibility.
+    and ``seq_tag``.
+    These may be modified, but not removed.
+    Any other entries that the postprocessor function does not modify must also be copied over
+    in a wildcard fashion to ensure forwards compatibility.
 
     The dataset itself does not support its own seq ordering and relies on the wrapped
     dataset for seq ordering instead. Specifying a ``seq_ordering`` other than ``default``
