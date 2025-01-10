@@ -184,7 +184,7 @@ def init_better_exchook():
 
     def threading_excepthook(args, /):
         """threading-specific excepthook"""
-        better_exchook(args["exc_type"], args["exc_value"], args["exc_traceback"], file=log.v1 or sys.stdout)
+        better_exchook(args.exc_type, args.exc_value, args.exc_traceback, file=log.v1 or sys.stdout)
         thread.interrupt_main()
 
     threading.excepthook = threading_excepthook
