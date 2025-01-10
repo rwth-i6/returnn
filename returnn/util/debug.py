@@ -183,10 +183,12 @@ def init_better_exchook():
     sys.excepthook = excepthook
 
     def threading_excepthook(args, /):
-        """threading-specific excepthook"""
-        better_exchook(
-            args.exc_type, args.exc_value, args.exc_traceback, autodebugshell=False, file=log.v1 or sys.stdout
-        )
+        """
+        Thread-specific excepthook to ensure the main thread is killed on unhandled exceptions in sub threads.
+        """
+        log_out = log.v1 or sys.stdout
+        print(f"Unhandled exception in thread {threading.current_thread()}:", file=log_out)
+        better_exchook(args.exc_type, args.exc_value, args.exc_traceback, autodebugshell=False, file=log_out)
         thread.interrupt_main()
 
     threading.excepthook = threading_excepthook
