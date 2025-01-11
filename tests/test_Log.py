@@ -52,7 +52,10 @@ def filter_out(ls):
     i = 0
     while i < len(ls):
         s = ls[i]
-        if any(f"{l} tensorflow/" in s for l in "IWE"):  # some TF warnings
+        # Filter some TF warnings, like:
+        # 2025-01-10 12:09:34.206001: E external/local_xla/xla/stream_executor/cuda/cuda_dnn.cc:9261] Unable to ...
+        # 2025-01-10 12:09:34.212039: I tensorflow/core/platform/cpu_feature_guard.cc:182] This TensorFlow binary ...
+        if re.search(": [IWE] (tensorflow/|external/)", s):  # some TF warnings
             i += 1
             continue
         elif "SyntaxWarning" in s:
