@@ -1130,14 +1130,21 @@ def test_PostprocessingDataset():
         dataset.load_seqs(0, 6)
 
         prev_len = None
+        prev_ep_cont = None
         for i in range(3):
             classes = dataset.get_data(i, "classes")
+            ep_cont = dataset.get_epoch_continuous(i)
             assert prev_len is None or classes.shape[0] >= prev_len
+            assert prev_ep_cont is None or ep_cont >= prev_ep_cont
             prev_len = classes.shape[0]
+            prev_ep_cont = ep_cont
         for i in range(3, 6):
             classes = dataset.get_data(i, "classes")
-            assert prev_len is None or classes.shape[0] <= prev_len or i == 3
+            ep_cont = dataset.get_epoch_continuous(i)
+            assert classes.shape[0] <= prev_len or i == 3
+            assert ep_cont >= prev_ep_cont
             prev_len = classes.shape[0]
+            prev_ep_cont = ep_cont
 
     # test composition
     from returnn.datasets.postprocessing import Sequential
