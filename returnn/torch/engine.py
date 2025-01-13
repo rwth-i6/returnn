@@ -367,7 +367,7 @@ class Engine(EngineBase):
         extern_data = None
         num_seqs = None
         last_seq_idx = 0
-        shuffle_batches = self.config.typed_value("online_shuffle_batches", None) is not None
+        shuffle_batches = bool(self.config.typed_value("online_shuffle_batches", None))
 
         total_data_size_packed = NumbersDict()
         total_data_size_padded = NumbersDict()
