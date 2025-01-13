@@ -1,18 +1,8 @@
 """
 Cache, to store some data.
+See :class:`Cache`.
 
 One use case example is :func:`sinusoidal_positional_encoding` and :func:`relative_positional_encoding`.
-
-There are some specific properties we must take care of:
-
-- Lifetime of values: For graph-based backends, it can only stay alive for the current run ctx.
-  (For eager-based backends, there is no such restriction.)
-- Size: Put some limit, use LRU logic.
-- Dims: Use only weakrefs. Some Dim should not stay alive just because of the cache.
-- Scalar dynamic Dims in eager mode, or static dims: Instead of the Dim, use the dim value for the key
-  (and map the output to the Dim).
-- Tensor as keys: Use weakrefs. Also don't check by value but by identity.
-
 """
 
 from __future__ import annotations
@@ -26,6 +16,22 @@ from returnn.frontend._backend import global_backend, get_backend_by_raw_tensor_
 
 
 class Cache:
+    """
+    Cache, intended for internal use of RF functions.
+
+    One use case example is :func:`sinusoidal_positional_encoding` and :func:`relative_positional_encoding`.
+
+    There are some specific properties we must take care of:
+
+    - Lifetime of values: For graph-based backends, it can only stay alive for the current run ctx.
+      (For eager-based backends, there is no such restriction.)
+    - Size: Put some limit, use LRU logic.
+    - Dims: Use only weakrefs. Some Dim should not stay alive just because of the cache.
+    - Scalar dynamic Dims in eager mode, or static dims: Instead of the Dim, use the dim value for the key
+      (and map the output to the Dim).
+    - Tensor as keys: Use weakrefs. Also don't check by value but by identity.
+    """
+
     def __init__(self, max_size: int):
         # Use lru_cache here, but not via a decorator,
         # as we want custom set/get logic.
@@ -34,6 +40,11 @@ class Cache:
         self._lru_cache = lru_cache(max_size)(_lru_cache_dummy_func)
 
     def get(self, key, default=None):
+        """
+        :param key:
+        :param default:
+        :return: entry in cache or default
+        """
         key_transformed = _transform_key(key)
         key_transformed_orig, value = self._lru_cache.cache_peek(key_transformed, fallback=(None, None))
         if key_transformed_orig is None:
@@ -65,6 +76,11 @@ class Cache:
         return tree.map_structure(_map_output, value)
 
     def set(self, key, value):
+        """
+        :param key:
+        :param value:
+        """
+
         def _finalize_callback(*_args):
             self._lru_cache.cache_pop(key_transformed, fallback=None)
 
@@ -123,6 +139,13 @@ def _get_backend(*args) -> Type[Backend]:
 
 
 class TensorWrapper:
+    """
+    Wraps :class:`Tensor`.
+    Using weakref for the tensor, including also ``raw_tensor``.
+    Equality is given if the identity is the same, for the Tensor itself and the raw_tensor.
+    No value of the tensor is checked.
+    """
+
     def __init__(self, value: Tensor, *, finalize_callback):
         self.value_ref = ref(value, finalize_callback)
         self.raw_value_ref = ref(value.raw_tensor, finalize_callback)
@@ -138,6 +161,12 @@ class TensorWrapper:
 
 
 class DimWrapper:
+    """
+    Wraps :class:`Dim`.
+    Using weakref for the dim.
+    If the size is scalar and known, equality is given when the size is equal (and dim tag is ignored)
+    """
+
     def __init__(self, dim: Dim, *, finalize_callback):
         self.dim_value = _dim_value_for_key(dim)
         # finalize_callback only needed when we don't use the dim value.

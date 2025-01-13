@@ -53,10 +53,10 @@ def lru_cache(maxsize: int = 128, typed: bool = False):
         raise TypeError("Expected first argument to be an integer, a callable, or None")
 
     # noinspection PyShadowingNames
-    def decorating_function(user_function):
+    def _decorating_function(user_function):
         return _lru_cache_wrapper(user_function, maxsize, typed)
 
-    return decorating_function
+    return _decorating_function
 
 
 _CacheInfo = namedtuple("CacheInfo", ["hits", "misses", "maxsize", "currsize"])
@@ -80,6 +80,9 @@ def _lru_cache_wrapper(user_function, maxsize: int, typed: bool):
     assert maxsize >= 0
 
     def wrapper(*args, **kwds):
+        """
+        User-facing wrapper function.
+        """
         # Size limited caching that tracks accesses by recency
         nonlocal root, hits, misses, full
         key = make_key(args, kwds, typed)
@@ -157,15 +160,24 @@ def _lru_cache_wrapper(user_function, maxsize: int, typed: bool):
             full = False
 
     def cache_parameters():
+        """
+        :return: parameters (maxsize, typed) of the cache as dict
+        """
         return {"maxsize": maxsize, "typed": typed}
 
     def cache_set(*args, result, **kwargs):
+        """
+        Sets a value in the cache directly.
+        """
         nonlocal root, full
         if maxsize > 0:
             key = make_key(args, kwargs, typed)
             _cache_insert(key, result)
 
     def cache_peek(*args, update_statistics: bool = True, fallback=None, **kwargs):
+        """
+        Peeks the cache without ever calling the user function.
+        """
         nonlocal hits, misses
         key = make_key(args, kwargs, typed)
         with lock:
@@ -181,6 +193,9 @@ def _lru_cache_wrapper(user_function, maxsize: int, typed: bool):
     not_specified = object()
 
     def cache_pop(*args, fallback=not_specified, **kwargs):
+        """
+        Removes the entry from the cache.
+        """
         nonlocal hits, misses
         key = make_key(args, kwargs, typed)
         with lock:
@@ -199,6 +214,9 @@ def _lru_cache_wrapper(user_function, maxsize: int, typed: bool):
             return fallback
 
     def cache_pop_oldest(*, fallback=not_specified):
+        """
+        Removes the oldest entry from the cache.
+        """
         nonlocal root, full
         with lock:
             if not cache:
@@ -218,6 +236,10 @@ def _lru_cache_wrapper(user_function, maxsize: int, typed: bool):
             return oldvalue
 
     def cache_set_maxsize(new_maxsize: int):
+        """
+        Resets the maxsize.
+        If the new maxsize is smaller than the current cache size, the oldest entries are removed.
+        """
         nonlocal maxsize, full
         assert new_maxsize >= 0
         with lock:
