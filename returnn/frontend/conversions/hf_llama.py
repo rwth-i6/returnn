@@ -8,6 +8,7 @@ import returnn.frontend as rf
 from returnn.frontend.decoder.transformer import TransformerDecoder, TransformerDecoderLayer, FeedForwardGated
 
 if TYPE_CHECKING:
+    # noinspection PyUnresolvedReferences,PyPackageRequirements,PyProtectedMemberInspection
     from transformers.models.llama.modeling_llama import (
         LlamaModel,
         LlamaForCausalLM,
@@ -25,6 +26,8 @@ def import_params_hf_llama_to_rf_transformer_decoder(
     Import params from HF Llama model to RF :class:`TransformerDecoder`.
     """
     import torch
+
+    # noinspection PyUnresolvedReferences,PyPackageRequirements,PyProtectedMemberInspection
     from transformers.models.llama.modeling_llama import LlamaModel, LlamaForCausalLM, LlamaDecoderLayer
 
     print("HF Model:")
