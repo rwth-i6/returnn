@@ -4,10 +4,10 @@ Attention
 
 from __future__ import annotations
 from typing import Tuple, Union, Optional, Sequence
-import weakref
 import logging
 from returnn.tensor import Tensor, Dim, single_step_dim
 import returnn.frontend as rf
+from returnn.frontend._cache import Cache
 
 
 __all__ = [
@@ -892,7 +892,7 @@ def _make_indices(
     return indices, out_spatial_dim
 
 
-_relative_positional_encoding_cache = weakref.WeakKeyDictionary()  # run ctx -> (spatial_dim, feat_dim) -> enc
+_relative_positional_encoding_cache = Cache(128)
 
 
 def relative_positional_encoding(
@@ -924,10 +924,10 @@ def relative_positional_encoding(
     """
     if not dtype:
         dtype = rf.get_default_float_dtype()
-    cache = _relative_positional_encoding_cache.setdefault(rf.get_run_ctx(), {})
     cache_key = (query_spatial_dim, key_value_spatial_dim, feat_dim, query_offset, dtype)
-    if cache_key in cache:
-        return cache[cache_key]
+    cache_entry = _relative_positional_encoding_cache.get(cache_key)
+    if cache_entry is not None:
+        return cache_entry
     import math
 
     with rf.control_flow_ctx(None):
@@ -946,11 +946,11 @@ def relative_positional_encoding(
             allow_missing_implicit_dims=True,
         )
         emb.feature_dim = feat_dim
-        cache[cache_key] = emb, out_spatial_dim
+        _relative_positional_encoding_cache.set(cache_key, (emb, out_spatial_dim))
         return emb, out_spatial_dim
 
 
-_sinusoidal_positional_encoding_cache = weakref.WeakKeyDictionary()  # run ctx -> (spatial_dim, feat_dim) -> enc
+_sinusoidal_positional_encoding_cache = Cache(128)  # (spatial_dim, feat_dim) -> enc
 
 
 def sinusoidal_positional_encoding(
@@ -982,10 +982,10 @@ def sinusoidal_positional_encoding(
         dtype = rf.get_default_float_dtype()
     if not device:
         device = rf.get_default_device()
-    cache = _sinusoidal_positional_encoding_cache.setdefault(rf.get_run_ctx(), {})
     cache_key = (spatial_dim, feat_dim, offset, base, dtype, device)
-    if cache_key in cache:
-        return cache[cache_key]
+    cache_entry = _sinusoidal_positional_encoding_cache.get(cache_key)
+    if cache_entry is not None:
+        return cache_entry
     import math
 
     with rf.control_flow_ctx(None):
@@ -1012,7 +1012,7 @@ def sinusoidal_positional_encoding(
             {spatial_dim, feat_dim} if spatial_dim != single_step_dim else {feat_dim}, allow_missing_implicit_dims=True
         )
         emb.feature_dim = feat_dim
-        cache[cache_key] = emb
+        _sinusoidal_positional_encoding_cache.set(cache_key, emb)
         return emb
 
 
