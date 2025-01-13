@@ -284,9 +284,9 @@ def _make_key(args, kwds, typed, *, _kwd_mark=(object(),), _fasttypes=(int, str)
         for item in kwds.items():
             key += item
     if typed:
-        key += _tuple((_type(v) for v in args))
+        key += _tuple(_type(v) for v in args)  # noqa
         if kwds:
-            key += _tuple((_type(v) for v in kwds.values()))
+            key += _tuple(_type(v) for v in kwds.values())  # noqa
     elif _len(key) == 1 and _type(key[0]) in _fasttypes:
         return key[0]
     return _HashedSeq(key)
