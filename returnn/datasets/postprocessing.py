@@ -138,11 +138,13 @@ class PostprocessingDataset(CachedDataset2):
         self._in_tensor_dict_template = TensorDict(
             {name: self._make_tensor_template_from_input(name) for name in self._dataset.get_data_keys()}
         )
+        self.labels = {}
         if self._map_outputs is not None:
             self._out_tensor_dict_template = TensorDict()
             self._out_tensor_dict_template.update(self._map_outputs, auto_convert=True)
         else:
             self._out_tensor_dict_template = self._in_tensor_dict_template.copy_template()
+            self.labels = self._dataset.labels.copy()
         # update only after _out_tensor_dict_template has been created from _in_tensor_dict_template
         self._in_tensor_dict_template.update({"seq_tag": {"dims": (), "dtype": "string"}}, auto_convert=True)
         self.num_outputs = {
@@ -152,8 +154,9 @@ class PostprocessingDataset(CachedDataset2):
         self._default_input = "data" if "data" in self.num_outputs else next(iter(self.num_outputs.keys()))
         self.num_inputs = self.num_outputs[self._default_input][0]
 
-        self.labels = {}
         for k, t in self._out_tensor_dict_template.data.items():
+            if self.labels.get(k):
+                continue
             if t.vocab:
                 self.labels[k] = t.vocab.labels
             elif t.sparse_dim:  # sparse_dim but not vocab
