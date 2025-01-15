@@ -967,6 +967,26 @@ class Dataset:
         """
         raise NotImplementedError
 
+    def get_epoch_continuous(self, sorted_seq_idx: int) -> float:
+        """
+        Calculates how much of the current epoch is completed when having processed seq ``sorted_seq_idx``.
+        ``sorted_seq_idx`` cannot be less than the seq index of the previously loaded seqs.
+
+        This value is used to calculate ``epoch_continuous`` for any dynamic learning rate scheduling.
+
+        :param sorted_seq_idx: sorted seq idx
+        :return: continuous value in (0, 1] which represents how much of the current epoch
+            is completed after ``sorted_seq_idx``
+        """
+        try:
+            num_seqs = self.num_seqs
+        except NotImplementedError as exc:
+            raise OptionalNotImplementedError(f"{self}: get_epoch_continuous is not implemented") from exc
+        assert (
+            0 <= sorted_seq_idx < num_seqs
+        ), f"{self}: invalid seq indices: 0 <= seq_idx ({sorted_seq_idx}) < num_seqs ({num_seqs}) violated"
+        return (sorted_seq_idx + 1) / num_seqs
+
     @property
     def estimated_num_seqs(self):
         """
@@ -1375,16 +1395,26 @@ class DatasetSeq:
     Encapsulates all data for one sequence.
     """
 
-    def __init__(self, seq_idx, features, targets=None, seq_tag=None):
+    def __init__(
+        self,
+        seq_idx: int,
+        features,
+        targets=None,
+        seq_tag: Optional[str] = None,
+        epoch_continuous: Optional[float] = None,
+    ):
         """
-        :param int seq_idx: sorted seq idx in the Dataset
+        :param seq_idx: sorted seq idx in the Dataset
         :param numpy.ndarray|dict[str,numpy.ndarray] features: format 2d (time,feature) (float)
         :param dict[str,numpy.ndarray]|numpy.ndarray|None targets: name -> format 1d (time) (idx of output-feature)
-        :param str seq_tag: sequence name / tag
+        :param seq_tag: sequence name / tag
+        :param epoch_continuous: continuous value in (0, 1] which represents of much of the current epoch
+            is consumed when this seq is processed
         """
         assert isinstance(seq_idx, (int, numpy.integer))
         self.seq_idx = int(seq_idx)
         self.seq_tag = seq_tag or ("seq-%i" % seq_idx)
+        self.epoch_continuous = epoch_continuous
         if not isinstance(features, dict):
             assert isinstance(features, numpy.ndarray)
             features = {"data": features}

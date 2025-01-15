@@ -228,6 +228,15 @@ class CachedDataset2(Dataset):
             keys.remove("data")
         return keys
 
+    def get_epoch_continuous(self, sorted_seq_idx: int) -> float:
+        """
+        :return: epoch continuous value for the given seq_idx
+        """
+        seq = self._get_seq(sorted_seq_idx)
+        if seq.epoch_continuous is not None:
+            return seq.epoch_continuous
+        return super().get_epoch_continuous(sorted_seq_idx)
+
     def is_data_sparse(self, key):
         """
         :param str key: e.g. "data" or "classes"
