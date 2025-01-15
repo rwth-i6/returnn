@@ -91,7 +91,7 @@ def test_StaticDataset_utf8():
     assert raw.tolist() == [119, 195, 171, 114]
     data = StaticDataset([{"data": raw}], output_dim={"data": (255, 1)})
     if "data" not in data.labels:
-        data.labels["data"] = [chr(i) for i in range(255)]  # like in SprintDataset
+        data.labels["data"] = [chr(i) for i in range(256)]  # like in SprintDataset
     data.init_seq_order(epoch=1)
     data.load_seqs(0, 1)
     raw_ = data.get_data(seq_idx=0, key="data")
