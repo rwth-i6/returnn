@@ -1,17 +1,14 @@
-# -*- coding: utf8 -*-
+"""
+Tests for returnn.datasets.generating.
+"""
 
 from __future__ import annotations
 
 import _setup_test_env  # noqa
-import unittest
-from returnn.datasets.generating import *
-from returnn.datasets.basic import DatasetSeq
-from returnn.util.basic import PY3, unicode
 import os
 import unittest
-
+from returnn.datasets.generating import *
 from returnn.util import better_exchook
-from returnn.log import log
 
 
 my_dir = os.path.dirname(os.path.realpath(__file__))
@@ -86,12 +83,8 @@ def test_StaticDataset_utf8():
     s = "wër"
     print("some unicode str:", s, "repr:", repr(s), "type:", type(s), "len:", len(s))
     assert len(s) == 3
-    if PY3:
-        assert isinstance(s, str)
-        s_byte_list = list(s.encode("utf8"))
-    else:
-        assert isinstance(s, unicode)
-        s_byte_list = list(map(ord, s.encode("utf8")))
+    assert isinstance(s, str)
+    s_byte_list = list(s.encode("utf8"))
     print("utf8 byte list:", s_byte_list)
     assert len(s_byte_list) == 4 > 3
     raw = numpy.array(s_byte_list, dtype="uint8")
