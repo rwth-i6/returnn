@@ -310,7 +310,8 @@ class PostprocessingDataset(CachedDataset2):
         sparse_dim = None
         if self._dataset.is_data_sparse(data_key):
             sparse_dim = Dim(dimension=self._dataset.get_data_dim(data_key), name=f"{data_key}_sparse")
-            if data_key in self._dataset.labels:
+            labels = self._dataset.labels.get(data_key)
+            if labels and len(labels) == sparse_dim.dimension:
                 sparse_dim.vocab = Vocabulary.create_vocab_from_labels(self._dataset.labels[data_key])
         return Tensor(data_key, dims=dims, dtype=dtype, sparse_dim=sparse_dim)
 
