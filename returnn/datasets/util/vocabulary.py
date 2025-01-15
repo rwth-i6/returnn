@@ -180,7 +180,9 @@ class Vocabulary:
         kwargs.setdefault("unknown_label", None)
         if len(labels) < 1000 and all([len(label) == 1 for label in labels]):
             # are these actually ordered raw bytes? -> assume utf8
-            if all([ord(label) <= 255 and ord(label) == idx for idx, label in enumerate(labels)]):
+            if len(labels) == 256 and all(
+                [ord(label) <= 255 and ord(label) == idx for idx, label in enumerate(labels)]
+            ):
                 return Utf8ByteTargets()
             return CharacterTargets(vocab_file=None, labels=labels, **kwargs)
         return Vocabulary(vocab_file=None, labels=labels, **kwargs)
