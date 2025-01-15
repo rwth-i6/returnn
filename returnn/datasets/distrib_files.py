@@ -168,7 +168,7 @@ class DistributeFilesDataset(CachedDataset2):
 
         self.distrib_shard_files = distrib_shard_files
         if distrib_shard_files:
-            assert self._num_shards == 1 and self._shard_index == 0, (  # ensure defaults are set
+            assert self._num_shards is None and self._shard_index is None, (  # ensure defaults are set
                 f"{self}: Cannot use both dataset-sharding via properties _num_shards and _shard index "
                 f"and {self.__class__.__name__}'s own sharding implementation based on the trainings rank and size."
             )
@@ -179,8 +179,8 @@ class DistributeFilesDataset(CachedDataset2):
                 self._shard_index = _distrib_info["_shard_index"]
                 self._num_shards = _distrib_info["_num_shards"]
             else:
-                self._shard_index, self._num_shards = _get_rank_and_size()
-        assert 0 <= self._shard_index < self._num_shards
+                self._shard_index, self._num_shards = self._get_rank_and_size()
+        assert 0 <= self.shard_index < self.num_shards
 
         if _meta_info_cache:
             # This allows to skip the lazy init in self.initialize().
@@ -290,11 +290,11 @@ class DistributeFilesDataset(CachedDataset2):
             else:
                 raise ValueError(f"{self}: seq_ordering {self.seq_ordering!r} not supported")
             file_bins = self._distribute_evenly_by_size(
-                num_bins=self._num_shards * self.partition_epoch,
+                num_bins=self.num_shards * self.partition_epoch,
                 file_sizes=self._file_sizes,
                 files_order=files_order_flat,
             )
-            self_index_base = self.partition_epoch * self._shard_index
+            self_index_base = self.partition_epoch * self.shard_index
             self_index_end = self_index_base + self.partition_epoch
             self._files_order_cache[full_epoch_0idx_] = file_bins[self_index_base:self_index_end]
 
@@ -458,32 +458,6 @@ def _get_key_for_file_tree(t: FileTree) -> str:
     import tree
 
     return ":".join(tree.flatten(t))
-
-
-def _get_rank_and_size() -> Tuple[int, int]:
-    """
-    :return: tuple (rank, size): the global rank and size for distributed trainings
-    """
-
-    from returnn.config import get_global_config
-
-    config = get_global_config(raise_exception=False)
-    if not config:
-        return 0, 1
-    if config.typed_value("torch_distributed") is not None:
-        import returnn.torch.distributed
-
-        ctx = returnn.torch.distributed.get_ctx(config=config)
-        return ctx.rank(), ctx.size()
-    elif config.is_true("use_horovod"):
-        assert config.bool("use_tensorflow", False) or config.value("backend", "").startswith("tensorflow")
-
-        import returnn.tf.horovod
-
-        ctx = returnn.tf.horovod.get_ctx(config=config)
-        return ctx.rank(), ctx.size()
-    else:
-        return 0, 1
 
 
 class _WorkerProcParent:

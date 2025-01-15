@@ -19,7 +19,7 @@ import os
 import numpy
 import functools
 import typing
-from typing import TYPE_CHECKING, Optional, Any, Union, Type, Dict, Sequence, List, Callable
+from typing import TYPE_CHECKING, Optional, Any, Tuple, Union, Type, Dict, Sequence, List, Callable
 
 from returnn.log import log
 from returnn.engine.batch import Batch, BatchSetGenerator
@@ -111,8 +111,8 @@ class Dataset:
         min_chunk_size=0,
         chunking_variance=0,
         estimated_num_seqs=None,
-        _num_shards=1,
-        _shard_index=0,
+        _num_shards=None,
+        _shard_index=None,
     ):
         """
         :param str name: e.g. "train" or "eval"
@@ -136,8 +136,8 @@ class Dataset:
         :param str|None seq_order_seq_lens_file: for seq order, use the seq length given by this file
         :param int shuffle_frames_of_nseqs: shuffles the frames. not always supported
         :param None|int estimated_num_seqs: for progress reporting in case the real num_seqs is unknown
-        :param int _num_shards: number of shards the data is split into
-        :param int _shard_index: local shard index, when sharding is enabled
+        :param int|None _num_shards: number of shards the data is split into
+        :param int|None _shard_index: local shard index, when sharding is enabled
         """
         self.name = name or ("dataset_id%s" % id(self))
         self.lock = None  # type: Optional[RLock]  # Used when manipulating our data potentially from multiple threads.
@@ -248,6 +248,33 @@ class Dataset:
 
         state = {attr: getattr(self, attr) for attr in ["epoch", "zpad"]}
         return Dataset._create_from_reduce, (self.__class__, kwargs, state)
+
+    def _get_default_shard_config(self):
+        """
+        :return: default shard index and number of shards based on the global config
+        """
+        from returnn.config import get_global_config
+
+        config = get_global_config(raise_exception=False)
+        if not config:
+            return 0, 1
+        elif config.typed_value("dataset_distribution", "random_seed_offset") != "shard":
+            return 0, 1
+        return self._get_rank_and_size()
+
+    @property
+    def num_shards(self) -> int:
+        """:return: number of shards the data is split into"""
+        if self._num_shards is None:
+            self._shard_index, self._num_shards = self._get_default_shard_config()
+        return self._num_shards
+
+    @property
+    def shard_index(self) -> int:
+        """:return: local shard index, when sharding is enabled"""
+        if self._shard_index is None:
+            self._shard_index, self._shard_index = self._get_default_shard_config()
+        return self._shard_index
 
     @property
     def random_seed_offset(self) -> int:
@@ -642,9 +669,9 @@ class Dataset:
             seq_index = [
                 i for i in seq_index if (all_seq_tags[i] not in used_seq_tags, used_seq_tags.add(all_seq_tags[i]))[0]
             ]
-        if partition_epoch > 1 or self._num_shards > 1:
+        if partition_epoch > 1 or self.num_shards > 1:
             seq_index = self._apply_partition_epoch_and_sharding(
-                seq_index, partition_epoch, epoch, self._num_shards, self._shard_index
+                seq_index, partition_epoch, epoch, self.num_shards, self.shard_index
             )
         if repeat_epoch > 1:
             seq_index = list(seq_index) * repeat_epoch
@@ -1368,6 +1395,32 @@ class Dataset:
         for batch in batches:
             shape = [max(shape[0], batch.max_num_frames_per_slice[data_key]), shape[1] + batch.num_slices]
         return tuple(shape)
+
+    @classmethod
+    def _get_rank_and_size() -> Tuple[int, int]:
+        """
+        :return: tuple (rank, size): the global rank and size for distributed trainings
+        """
+
+        from returnn.config import get_global_config
+
+        config = get_global_config(raise_exception=False)
+        if not config:
+            return 0, 1
+        if config.typed_value("torch_distributed") is not None:
+            import returnn.torch.distributed
+
+            ctx = returnn.torch.distributed.get_ctx(config=config)
+            return ctx.rank(), ctx.size()
+        elif config.is_true("use_horovod"):
+            assert config.bool("use_tensorflow", False) or config.value("backend", "").startswith("tensorflow")
+
+            import returnn.tf.horovod
+
+            ctx = returnn.tf.horovod.get_ctx(config=config)
+            return ctx.rank(), ctx.size()
+        else:
+            return 0, 1
 
 
 class DatasetSeq:
