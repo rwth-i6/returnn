@@ -174,23 +174,17 @@ class _TensorMixin(_TensorMixinBase):
             This is deprecated. Rather, the placeholder should be created outside and passed in.
         :param str|dict[str]|returnn.datasets.util.vocabulary.Vocabulary|None vocab: vocab of the feature dim
             or sparse dim.
-            This is deprecated. Rather, the vocab is part of the :class:`Dim`.
         :param dict[int|str,Dim]|None same_dim_tags_as: will mark our dimension tags to be the same
         """
         assert isinstance(self, _t.Tensor)
         shape, sparse, dim, batch_dim_axis, dim_tags  # noqa  # unused here, handled in infer_dim_tags
 
         if vocab is not None:
-            from returnn.datasets.util.vocabulary import Vocabulary
-
-            if isinstance(vocab, str):
-                vocab = Vocabulary(vocab)
-            elif isinstance(vocab, dict):
-                vocab = Vocabulary.create_vocab(**vocab)
-            assert isinstance(vocab, Vocabulary)
             assert self.sparse, "%s should represent indices of %s" % (self, vocab)
-            assert self.dim == vocab.num_labels, "%s dims do not match with vocab %s" % (self, vocab)
-            self.sparse_dim.vocab = vocab
+            if not self.sparse_dim.vocab:  # might already have been set earlier
+                vocab = _get_vocab(vocab)
+                assert self.dim == vocab.num_labels, "%s dims do not match with vocab %s" % (self, vocab)
+                self.sparse_dim.vocab = vocab
 
         if kwargs:
             self._extra = _TensorExtra(tensor=self, **kwargs)
@@ -3421,39 +3415,42 @@ def infer_sparse_dim(
     *,
     name: str,
     sparse: Optional[bool] = None,
-    sparse_dim,
     dim=NotSpecified,
+    vocab=None,
     **_other_kwargs,
 ) -> Optional[Dim]:
     """
+    Called when sparse_dim is None,
+    but we assume it is sparse
+
     :param name:
     :param sparse:
-    :param sparse_dim:
     :param dim:
+    :param vocab:
     :return: sparse dim
     """
     if sparse is None:
-        sparse = sparse_dim not in (None, NotSpecified)
-    if sparse_dim in (None, NotSpecified):
-        if sparse:
-            assert dim is not NotSpecified, "need dim (num classes) if sparse"
-            assert dim is None or isinstance(dim, int)
-            sparse_dim = Dim(
-                kind=Dim.Types.Feature,
-                dimension=dim,
-                description="%s:sparse-dim" % name,
-                auto_generated=True,
-            )
+        if vocab is None:
+            return None
+        sparse = True
+    assert isinstance(sparse, bool)
+    if not sparse:
+        return None
+    vocab = _get_vocab(vocab) if vocab else None
+    if vocab:
+        if dim is NotSpecified or dim is None:
+            dim = vocab.num_labels
         else:
-            sparse_dim = None
-    if sparse_dim is not None:
-        assert isinstance(sparse_dim, Dim)
-        assert sparse_dim.can_be_used_as_dim()
-        assert sparse
-        if dim is not NotSpecified:
-            assert sparse_dim.dimension == dim
-    else:
-        assert not sparse
+            assert dim == vocab.num_labels
+    assert dim is not NotSpecified, "need dim (num classes) if sparse"
+    assert dim is None or isinstance(dim, int)
+    sparse_dim = Dim(
+        kind=Dim.Types.Feature,
+        dimension=dim,
+        description="%s:sparse-dim" % name,
+        auto_generated=True,
+        vocab=vocab,
+    )
     return sparse_dim
 
 
@@ -3533,6 +3530,17 @@ def infer_dim_tags(
             else:
                 assert dims[feature_dim_axis].dimension == dim
     return dims
+
+
+def _get_vocab(vocab):
+    from returnn.datasets.util.vocabulary import Vocabulary
+
+    if isinstance(vocab, str):
+        vocab = Vocabulary(vocab)
+    elif isinstance(vocab, dict):
+        vocab = Vocabulary.create_vocab(**vocab)
+    assert isinstance(vocab, Vocabulary)
+    return vocab
 
 
 class _SizePlaceholderProxy:
