@@ -123,8 +123,6 @@ class Vocabulary:
         Sets self.vocab, self.labels, self.num_labels.
         """
         filename = self.vocab_file
-        import pickle
-
         if self._labels is not None:
             self._vocab = {label: i for i, label in enumerate(self._labels)}
             self.num_labels = len(self._labels)
@@ -132,10 +130,17 @@ class Vocabulary:
             self._vocab, self._labels = self._cache[filename]
             self.num_labels = len(self._labels)
         else:
-            if filename[-4:] == ".pkl":
+            if filename.endswith(".pkl"):
+                import pickle
+
                 d = pickle.load(open(filename, "rb"))
             else:
-                file_content = open(filename, "r").read()
+                if filename.endswith(".gz"):
+                    import gzip
+
+                    file_content = gzip.open(filename, "rt").read()
+                else:
+                    file_content = open(filename, "r").read()
                 if file_content.startswith("{"):
                     d = eval(file_content)
                 else:
