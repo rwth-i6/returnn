@@ -6,6 +6,7 @@ from __future__ import annotations
 from typing import Optional, Union, Any, Sequence, Tuple, List, Dict
 import numpy as np
 
+from returnn.log import log
 from .basic import DatasetSeq
 from .cached2 import CachedDataset2
 from .util.vocabulary import Vocabulary
@@ -93,7 +94,13 @@ class TextDictDataset(CachedDataset2):
         # so it might break for some input.
         # We might want to put a simple fallback to eval here if needed.
         # Or maybe extend literal_py_to_pickle.literal_eval to support inf/nan literals.
-        data: Dict[str, Any] = literal_eval(txt)
+        try:
+            data: Dict[str, Any] = literal_eval(txt)
+        except Exception as exc:
+            print(f"{self}: Warning: literal_py_to_pickle.literal_eval failed:", file=log.v3)
+            print(f"  {type(exc).__name__}: {exc}", file=log.v3)
+            print("  Fallback to eval...", file=log.v3)
+            data: Dict[str, Any] = eval(txt)
         assert data is not None
         assert isinstance(data, dict)
         assert len(data) > 0
