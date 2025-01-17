@@ -88,7 +88,7 @@ class PostprocessingDataset(CachedDataset2):
         map_seq: Optional[Callable] = None,
         map_seq_stream: Optional[Callable] = None,
         map_outputs: Optional[Dict[str, Any]] = None,
-        iterator_preserves_sequences: Optional[bool] = None,
+        map_seq_stream_preserves_num_seqs: Optional[bool] = None,
         **kwargs,
     ):
         """
@@ -112,7 +112,7 @@ class PostprocessingDataset(CachedDataset2):
             To simplify the common case when no shapes change, this value can be left unspecified. The dataset then
             assumes the same data layout as returned by the wrapped dataset.
             Example: `map_outputs={"data": {"dim": 42}}`
-        :param iterator_preserves_sequences: whether the function in map_seq_stream preserves the number of sequences,
+        :param map_seq_stream_preserves_num_seqs: whether the function in map_seq_stream preserves the number of sequences,
             i.e. for every input sequence there is exactly one output sequence.
         :param kwargs: see :class:`CachedDataset2`, :class:`Dataset`
         """
@@ -124,22 +124,23 @@ class PostprocessingDataset(CachedDataset2):
             raise ValueError(f"{self}: need to either set map_seq or map_seq_stream")
         if map_seq and map_seq_stream:
             raise ValueError(f"{self}: cannot set both map_seq and map_seq_stream")
-        if map_seq and iterator_preserves_sequences is not None:
-            raise ValueError(f"{self}: iterator_preserves_sequences is only allowed with map_seq_stream")
+        if map_seq and map_seq_stream_preserves_num_seqs is not None:
+            raise ValueError(f"{self}: map_seq_stream_preserves_num_seqs is only allowed with map_seq_stream")
 
         self._dataset_def = dataset
         self._map_seq = map_seq
         self._map_seq_stream = map_seq_stream
-        self._iterator_preserves_sequences = iterator_preserves_sequences or False
+        self._map_seq_stream_preserves_num_seqs = map_seq_stream_preserves_num_seqs or False
         self._map_outputs = map_outputs
         self._rng = RandomState(self._get_random_seed_for_epoch(0))
         self._seq_list_for_validation: Optional[List[str]] = None
 
         self._dataset = init_dataset(self._dataset_def, parent_dataset=self)
-        if self._map_seq_stream is None:
+        if self._map_seq_stream is None or self._map_seq_stream_preserves_num_seqs:
             # if the stream mapper is set, the num_seqs may change and the estimation is less accurate
             self._estimated_num_seqs = self._dataset.estimated_num_seqs
         self._data_iter: Optional[Iterator[Tuple[int, TensorDict]]] = None
+        self._data_iter_produced_num_seqs = 0
 
         self._in_tensor_dict_template = TensorDict(
             {name: self._make_tensor_template_from_input(name) for name in self._dataset.get_data_keys()}
@@ -193,14 +194,18 @@ class PostprocessingDataset(CachedDataset2):
         assert self._dataset is not None
         self._dataset.init_seq_order(epoch=epoch, seq_list=seq_list, seq_order=seq_order)
         self._data_iter = enumerate(self._build_mapping_iter())
+        self._data_iter_produced_num_seqs = 0
         self._seq_list_for_validation = seq_list
-        if self._map_seq_stream is None or self._iterator_preserves_sequences:
-            # If we don't have an iterable mapper we know the number of segments exactly
-            # equals the number of segments in the wrapped dataset
+        if self._map_seq_stream is None or self._map_seq_stream_preserves_num_seqs:
+            # If we don't have an iterable mapper (or the user explicitly specifies this),
+            # we know the number of segments exactly equals the number of segments in the wrapped dataset
             try:
                 self._num_seqs = self._dataset.num_seqs
             except NotImplementedError:
-                pass  # some datasets don't know their num_seqs
+                # some datasets don't know their num_seqs
+                assert (
+                    not self._map_seq_stream_preserves_num_seqs
+                ), "_map_seq_stream_preserves_num_seqs is True, but wrapped dataset does not know its num_seqs"
         return True
 
     def get_current_seq_order(self):
@@ -227,7 +232,15 @@ class PostprocessingDataset(CachedDataset2):
         while True:
             try:
                 loaded_seq_idx, tensor_dict = next(self._data_iter)
+                self._data_iter_produced_num_seqs += 1
+                assert (
+                    not self._map_seq_stream_preserves_num_seqs or self._data_iter_produced_num_seqs <= self._num_seqs
+                ), f"_map_seq_stream_preserves_num_seqs is True, but map_seq_stream yielded more seqs than expected"
             except StopIteration:
+                if self._map_seq_stream_preserves_num_seqs:
+                    assert (
+                        self._data_iter_produced_num_seqs == self._num_seqs
+                    ), f"_map_seq_stream_preserves_num_seqs is True, but map_seq_stream yielded {self._data_iter_produced_num_seqs} seqs, while {self._num_seqs} were expected"
                 return None
             assert loaded_seq_idx <= seq_idx, "_collect_single_seq must be done monotonically"
             if loaded_seq_idx != seq_idx:
