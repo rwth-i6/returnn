@@ -48,11 +48,31 @@ def test_pack_padded_md():
         labels = extern_data["labels"]
         assert hyps_spatial_dim in labels.dims
         assert hyps_spatial_dim.dyn_size_ext.dims == (batch_dim, hyps_dim)
+        labels.mark_as_output("labels", shape=(batch_dim, hyps_dim, hyps_spatial_dim))
+        hyps_spatial_dim.dyn_size_ext.mark_as_output("hyps_spatial_size", shape=[batch_dim, hyps_dim])
         labels_, _ = rf.pack_padded(labels, dims=[hyps_dim, hyps_spatial_dim], out_dim=hyps_packed_spatial_dim)
         assert hyps_packed_spatial_dim.dyn_size_ext.dims == (batch_dim,)
+        hyps_packed_spatial_dim.dyn_size_ext.mark_as_output("packed_size", shape=[batch_dim])
         labels_.mark_as_default_output(shape=[batch_dim, hyps_packed_spatial_dim])
 
-    run_model(extern_data, lambda **_kwargs: rf.Module(), _forward_step, test_tensorflow=False)
+    out = run_model(extern_data, lambda **_kwargs: rf.Module(), _forward_step, test_tensorflow=False)
+    print("out:")
+    print(out["output"].raw_tensor.shape)
+    print(out["output"].raw_tensor)
+    batch_size = out["labels"].raw_tensor.shape[0]
+    for b in range(batch_size):
+        num_hyps = hyps_dim.dimension
+        hyps_spatial_sizes = out["hyps_spatial_size"].raw_tensor[b]  # [hyps]
+        hyps_packed_spatial_size = out["packed_size"].raw_tensor[b]  # []
+        print(f"batch {b}, hyps_spatial_size {hyps_spatial_sizes}, hyps_packed_spatial_size {hyps_packed_spatial_size}")
+        assert hyps_packed_spatial_size == sum(hyps_spatial_sizes)
+        labels = [out["labels"].raw_tensor[b, h, : hyps_spatial_sizes[h]] for h in range(num_hyps)]
+        labels_ = [seq.tolist() for seq in labels]
+        print("labels:", labels_)
+        packed = out["output"].raw_tensor[b, :hyps_packed_spatial_size]  # [hyps_packed_spatial]
+        packed_ = packed.tolist()
+        print("packed:", packed_)
+        assert sum(labels_, []) == packed_
 
 
 def test_masked_select():
@@ -123,6 +143,61 @@ def test_masked_select_single_dim():
                 assert (res["input"].raw_tensor[b, t] == res["output"].raw_tensor[b, t_]).all()
                 t_ += 1
     assert have_non_zero and have_less  # just that the test case covered all cases
+
+
+def test_pad_packed():
+    time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
+    in_dim = Dim(7, name="in")
+    extern_data = TensorDict(
+        {
+            "data": Tensor("data", [batch_dim, time_dim, in_dim], dtype="float32"),
+        }
+    )
+
+    # noinspection PyShadowingNames
+    def _forward_step(*, extern_data: TensorDict, **_kwargs):
+        x = extern_data["data"]
+        x.mark_as_output("in", shape=(batch_dim, time_dim, in_dim))
+        x_, batch_time_flat_dim = rf.pack_padded(x, dims=[batch_dim, time_dim])
+        assert x_.dims_set == {batch_time_flat_dim, in_dim}
+        # test [batch_fime_flat,feat], batch_fime_flat -> [batch, time]
+        x__ = rf.pad_packed(x_, in_dim=batch_time_flat_dim, dims=[batch_dim, time_dim])
+        assert x__.dims_set == {batch_dim, time_dim, in_dim}
+        x__.mark_as_output("out", shape=(batch_dim, time_dim, in_dim))
+
+    out_dict = run_model(extern_data, lambda **_kwargs: rf.Module(), _forward_step, test_tensorflow=False)
+    in_ = out_dict["in"]
+    out = out_dict["out"]
+    np.testing.assert_array_equal(in_.raw_tensor, out.raw_tensor)
+
+
+def test_pad_packed_batched():
+    batch_dim_ = Dim(3, name="batch")
+    in_dim = Dim(2, name="in")
+
+    # noinspection PyShadowingNames
+    def _forward_step(**_kwargs):
+        time1_dim = Dim(rf.convert_to_tensor(np.array([1, 3, 4]), name="time1", dims=[batch_dim_], dtype="int32"))
+        time2_dim = Dim(rf.convert_to_tensor(np.array([3, 2, 2]), name="time2", dims=[batch_dim_], dtype="int32"))
+        x = rf.random_uniform((batch_dim_, time1_dim, time2_dim, in_dim))
+        x.mark_as_output("in", shape=(batch_dim_, time1_dim, time2_dim, in_dim))
+        x_, time_flat_dim = rf.pack_padded(x, dims=[time1_dim, time2_dim])
+        assert x_.dims_set == {batch_dim_, time_flat_dim, in_dim}
+        x_.mark_as_output("flat", shape=(batch_dim_, time_flat_dim, in_dim))
+        # test [batch,mult_fime_flat,feat], mult_fime_flat -> [time1, time2]
+        x__ = rf.pad_packed(x_, in_dim=time_flat_dim, dims=[time1_dim, time2_dim])
+        assert x__.dims_set == {batch_dim_, time1_dim, time2_dim, in_dim}
+        x__.mark_as_output("out", shape=(batch_dim_, time1_dim, time2_dim, in_dim))
+
+    out_dict = run_model(TensorDict(), lambda **_kwargs: rf.Module(), _forward_step, test_tensorflow=False)
+    in_ = out_dict["in"]
+    flat = out_dict["flat"]
+    out = out_dict["out"]
+    print(in_.raw_tensor.shape, flat.raw_tensor.shape, out.raw_tensor.shape)
+    print(in_.raw_tensor)
+    print(flat.raw_tensor)
+    print(out.raw_tensor)
+    np.testing.assert_array_equal(in_.raw_tensor, out.raw_tensor)
 
 
 def test_reshape():

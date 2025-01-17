@@ -578,7 +578,7 @@ def masked_select(
         return tensor._raw_backend.masked_select(tensor, mask=mask, dims=dims, out_dim=out_dim)
     # Separate implementation for the case where we have a subset of the mask dims, specifically one single dim.
     # See https://github.com/rwth-i6/returnn/issues/1605 for discussion.
-    mask = mask.copy_masked(mask_value=False, dims=dims)
+    mask = mask.copy_masked(mask_value=False)
     if len(dims) > 1:
         # Flatten it, in the specified order.
         tensor, in_dim = rf.merge_dims(tensor, dims=dims)
@@ -615,8 +615,33 @@ def masked_scatter(
     :param in_dim: the dim of the source which should be scattered into the mask.
     :return: [dims..., F...]
     """
-    # noinspection PyProtectedMember
-    return source._raw_backend.masked_scatter(source, backup=backup, mask=mask, dims=dims, in_dim=in_dim)
+    mask_dims_set = set(mask.dims)
+    dims_set = set(dims)
+    if not dims_set.issubset(mask_dims_set):
+        raise ValueError(f"masked_scatter: dims {dims} not subset of mask dims {mask.dims}")
+    if not dims_set:
+        raise ValueError(f"masked_scatter: dims {dims} empty")
+    if dims_set == mask_dims_set:
+        # noinspection PyProtectedMember
+        return source._raw_backend.masked_scatter(source, backup=backup, mask=mask, dims=dims, in_dim=in_dim)
+    # Separate implementation for the case where we have a subset of the mask dims.
+    # Keep this consistent to masked_select above.
+    mask = mask.copy_masked(mask_value=False)
+    if len(dims) > 1:
+        # Flatten it, in the specified order.
+        mask_, dim_ = rf.merge_dims(mask, dims=dims)
+    else:
+        mask_ = mask
+        (dim_,) = dims
+    dim_: Dim
+    idxs = rf.cumsum(rf.cast(mask_, "int32"), spatial_dim=dim_)  # [dim_] -> idx in dim_/in_dim + 1
+    idxs = rf.split_dims(idxs, dims=dims, axis=dim_)  # [dims...]
+    idxs = rf.where(mask, idxs - 1, 0)  # [dim_] -> idx in in_dim
+    res = rf.gather(source, axis=in_dim, indices=idxs)
+    if backup is None:
+        backup = 0
+    res = rf.where(mask, res, backup)
+    return res
 
 
 def sequence_mask(dims: Union[Dim, Sequence[Dim]], *, device: Optional[str] = None) -> Tensor:
@@ -732,6 +757,8 @@ def scatter(
     (scatter_add in PyTorch)
     with mode=="sum",
     or otherwise it will take the max/min.
+
+    ``scatter`` is the inverse of :func:`gather`.
 
     (TF segment_sum can be implemented via this.)
 

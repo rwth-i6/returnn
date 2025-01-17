@@ -302,7 +302,6 @@ class TorchBackend(Backend[torch.Tensor]):
         pad_value: Union[None, int, float] = None,
     ) -> Tensor:
         """split dims"""
-        assert not axis.need_masking()  # not implemented
         assert pad_to_multiples in (None, False)  # not implemented
         axis_ = source.get_axis_from_description(axis)
         out_dims = source.dims[:axis_] + tuple(dims) + source.dims[axis_ + 1 :]
@@ -1747,6 +1746,11 @@ class TorchBackend(Backend[torch.Tensor]):
     ) -> Tensor:
         """masked scatter"""
         assert mask.dtype == "bool"
+        # Note: If mask.dims != dims, then sum(mask_raw.flatten()) could have less elements than source_raw
+        # (not counting remaining_dims), and then the out_raw.masked_scatter_ below fails silently!
+        # That's why we assert this here.
+        # Currently in the RF code, we have a generic fallback implementation,
+        # very similar to masked_select.
         assert set(mask.dims) == set(dims)
         assert in_dim in source.dims
         remaining_dims = [d for d in source.dims if d not in mask.dims and d != in_dim]
@@ -1765,6 +1769,7 @@ class TorchBackend(Backend[torch.Tensor]):
             out_dims = backup.dims
             out_raw = backup.raw_tensor.clone()  # we operate inplace below
 
+        mask = mask.copy_masked(mask_value=False)
         mask_raw = mask.copy_compatible_to_dims_raw(out_dims)
         out_raw.masked_scatter_(mask_raw, source_raw)
         return Tensor(
