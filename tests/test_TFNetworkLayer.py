@@ -9510,6 +9510,39 @@ def test_TimeChunkingLayer():
         print(out_v.shape)
 
 
+def test_TimeChunkingLayer_TimeUnchunkingLayer():
+    n_batch, n_time, n_in = 2, 11, 3
+    in_v = numpy.arange(0, n_batch * n_time * n_in).astype("float32").reshape((n_batch, n_time, n_in))
+    in_seq_lens = numpy.array([11, 9])
+    for b in range(n_batch):
+        in_v[b, in_seq_lens[b] :] = 0
+    config = Config({"extern_data": {"data": {"shape": (None, n_in)}}})
+    with make_scope() as session:
+        net = TFNetwork(config=config)
+        net.construct_from_dict(
+            {
+                "chunked": {"class": "time_chunking", "chunk_size": 5, "chunk_step": 5, "from": "data"},
+                "output": {"class": "time_unchunking", "chunking_layer": "chunked", "from": "chunked"},
+            }
+        )
+        in_ = net.get_layer("data").output
+        out = net.get_default_output_layer().output
+        print("out:", out)
+        out = out.copy_transpose(in_.dims).copy_masked(0.0)
+        out_v, out_lens = session.run(
+            (out.placeholder, out.get_sequence_lengths()),
+            feed_dict={
+                net.extern_data.get_batch_info().dim: n_batch,
+                net.extern_data.data["data"].placeholder: in_v,
+                net.extern_data.data["data"].get_sequence_lengths(): in_seq_lens,
+            },
+        )
+        assert isinstance(out_v, numpy.ndarray)
+        assert out_v.shape == in_v.shape
+        print(out_v)
+        numpy.testing.assert_equal(out_v, in_v)
+
+
 def test_DotLayer():
     with make_scope() as session:
         B = 2
