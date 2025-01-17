@@ -3313,18 +3313,25 @@ def test_out_shape():
 
 
 def _check_MergeDimsLayer(
-    session, in_data_opts, in_static_shape, opts, out_data_shape, out_static_shape, in_sizes=None, out_sizes=None
-):
+    session: tf.compat.v1.Session,
+    in_data_opts: Dict[str, Any],
+    in_static_shape: Tuple[int, ...],
+    opts: Dict[str, Any],
+    out_data_shape: Tuple[Optional[int], ...],
+    out_static_shape: Tuple[int, ...],
+    in_sizes: Optional[Dict[int, Tuple[int, ...]]] = None,
+    out_sizes: Optional[Dict[int, Tuple[int, ...]]] = None,
+) -> MergeDimsLayer:
     """
-    :param tf.compat.v1.Session session:
-    :param dict[str] in_data_opts:
-    :param tuple[int] in_static_shape:
-    :param dict[str] opts: for MergeDimsLayer
-    :param tuple[int|None] out_data_shape:
-    :param tuple[int] out_static_shape:
-    :param dict[int,tuple[int]]|None in_sizes:
-    :param dict[int,tuple[int]]|None out_sizes:
-    :rtype: MergeDimsLayer
+    :param session:
+    :param in_data_opts:
+    :param in_static_shape:
+    :param opts: for MergeDimsLayer
+    :param out_data_shape:
+    :param out_static_shape:
+    :param in_sizes:
+    :param out_sizes:
+    :return: layer
     """
     net = TFNetwork(extern_data=ExternData())
     rnd = numpy.random.RandomState(42)
