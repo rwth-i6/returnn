@@ -3,7 +3,7 @@ Defines the :class:`TFNetwork` and :class:`ExternData`.
 """
 
 from __future__ import annotations
-from typing import Optional, Any, List, Tuple, Dict
+from typing import Optional, Any, Protocol, List, Tuple, Dict
 import tensorflow as tf
 import sys
 import re
@@ -18,7 +18,6 @@ import returnn.tf.util.basic as tf_util
 from returnn.tensor import Tensor, Dim, TensorDict
 from returnn.tf.util.data import Data
 from returnn.util import basic as util
-from returnn.util.py_compat import Protocol
 
 
 class DataNotFound(Exception):
