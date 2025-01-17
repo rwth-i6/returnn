@@ -204,10 +204,7 @@ class PostprocessingDataset(CachedDataset2):
             try:
                 self._num_seqs = self._dataset.num_seqs
             except NotImplementedError:
-                # some datasets don't know their num_seqs
-                assert (
-                    not self._map_seq_stream_preserves_num_seqs
-                ), "_map_seq_stream_preserves_num_seqs is True, but wrapped dataset does not know its num_seqs"
+                pass  # some datasets don't know their num_seqs
         return True
 
     def get_current_seq_order(self):
