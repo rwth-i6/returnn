@@ -130,6 +130,8 @@ class PostprocessingDataset(CachedDataset2):
         self._dataset_def = dataset
         self._map_seq = map_seq
         self._map_seq_stream = map_seq_stream
+        if map_seq_stream_preserves_num_seqs is None and map_seq_stream is not None:
+            map_seq_stream_preserves_num_seqs = getattr(map_seq_stream, "preserves_num_seqs", None)
         self._map_seq_stream_preserves_num_seqs = map_seq_stream_preserves_num_seqs or False
         self._map_outputs = map_outputs
         self._rng = RandomState(self._get_random_seed_for_epoch(0))
@@ -348,6 +350,7 @@ class LaplaceOrdering(Callable[[Iterator[TensorDict]], Iterator[TensorDict]]):
         :param num_seqs_per_bin: number of segments in a single laplace bin.
         :param length_key: data key to determine the segment length from for ordering.
         """
+        self.preserves_num_seqs = True
         self.length_key = length_key
         assert num_seqs_per_bin > 0
         self.num_seqs_per_bin = num_seqs_per_bin
@@ -413,3 +416,8 @@ class Sequential:
         for func in self.funcs:
             arg = func(arg, **kwargs)
         return arg
+
+    @property
+    def preserves_num_seqs(self):
+        """:return: whether the composed functions all preserve the number of sequences"""
+        return all(getattr(f, "preserves_num_seqs", False) for f in self.funcs)
