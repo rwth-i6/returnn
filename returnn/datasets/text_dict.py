@@ -125,6 +125,7 @@ class TextDictDataset(CachedDataset2):
         self._seq_tags = list(data.keys())
 
     def init_seq_order(self, epoch=None, seq_list=None, seq_order=None):
+        """init seq order"""
         super().init_seq_order(epoch=epoch, seq_list=seq_list, seq_order=seq_order)
         if epoch is None and seq_list is None and seq_order is None:
             self._num_seqs = 0
