@@ -232,11 +232,12 @@ class PostprocessingDataset(CachedDataset2):
             try:
                 loaded_seq_idx, tensor_dict = next(self._data_iter)
                 self._data_iter_produced_num_seqs += 1
-                assert (
-                    not self._map_seq_stream_preserves_num_seqs or self._data_iter_produced_num_seqs <= self._num_seqs
-                ), f"_map_seq_stream_preserves_num_seqs is True, but map_seq_stream yielded more seqs than expected"
+                if self._map_seq_stream_preserves_num_seqs and self.num_seqs is not None:
+                    assert (
+                        self._data_iter_produced_num_seqs <= self._num_seqs
+                    ), f"_map_seq_stream_preserves_num_seqs is True, but map_seq_stream yielded more seqs than expected"
             except StopIteration:
-                if self._map_seq_stream_preserves_num_seqs:
+                if self._map_seq_stream_preserves_num_seqs and self.num_seqs is not None:
                     assert (
                         self._data_iter_produced_num_seqs == self._num_seqs
                     ), f"_map_seq_stream_preserves_num_seqs is True, but map_seq_stream yielded {self._data_iter_produced_num_seqs} seqs, while {self._num_seqs} were expected"
@@ -341,13 +342,13 @@ class LaplaceOrdering(Callable[[Iterator[TensorDict]], Iterator[TensorDict]]):
 
     To be composed with any custom data postprocessing logic via :class:`Sequential`.
     """
+    preserves_num_seqs = True
 
     def __init__(self, num_seqs_per_bin: int, length_key: str = "data"):
         """
         :param num_seqs_per_bin: number of segments in a single laplace bin.
         :param length_key: data key to determine the segment length from for ordering.
         """
-        self.preserves_num_seqs = True
         self.length_key = length_key
         assert num_seqs_per_bin > 0
         self.num_seqs_per_bin = num_seqs_per_bin
