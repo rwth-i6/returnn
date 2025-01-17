@@ -8,10 +8,11 @@ from typing import Optional, Union, Sequence, List, Tuple, Dict
 import typing
 import tensorflow as tf
 import contextlib
+from returnn.tensor import Tensor, Dim
 import returnn.tf.compat as tf_compat
 import returnn.tf.util.basic as tf_util
 from returnn.util.basic import unicode, NotSpecified
-from returnn.tf.util.data import Data, SearchBeam, Dim, FeatureDim, SpatialDim
+from returnn.tf.util.data import Data, SearchBeam, FeatureDim, SpatialDim
 from returnn.tf.util.basic import OutputWithActivation, dimshuffle, swapaxes
 from returnn.log import log
 from .base import LayerBase, Loss, InternalLayer, SearchChoices
@@ -8445,7 +8446,7 @@ class TimeChunkingLayer(_ConcatInputLayer):
         x = x.copy_with_batch_dim_axis(1)
         self.input_data = x
         in_dim = x.dim_tags[0]
-        x_t = x.placeholder
+        x_t = x.placeholder  # [T,B,...]
         if in_dim.dyn_size is not None:
             index = tf.cast(tf_util.sequence_mask_time_major(in_dim.dyn_size), tf.float32)
         else:
@@ -8458,13 +8459,14 @@ class TimeChunkingLayer(_ConcatInputLayer):
         from returnn.tf.native_op import chunk
 
         out, oindex = chunk(x_t, index=index, chunk_step=chunk_step, chunk_size=chunk_size)
+        # out shape (chunk_size, n_batch * n_chunks, n_dim), oindex shape (chunk_size, n_batch * n_chunks)
         if ext_rem_shape:
-            out = tf.reshape(out, tf.concat([tf.shape(oindex), ext_rem_shape], axis=0))
+            out = tf.reshape(out, tf.concat([tf.shape(oindex), ext_rem_shape], axis=0))  # [C_size,B*C,...]
         self.output.placeholder = out
         out.set_shape(self.output.batch_shape)
         out_dim = self.output.dim_tags[0]
         if out_dim.dimension is None and out_dim.dyn_size is None:
-            out_dim.dyn_size = tf.reduce_sum(tf.cast(oindex, tf.int32), axis=0)
+            out_dim.dyn_size = tf.reduce_sum(tf.cast(oindex, tf.int32), axis=0)  # [B*C]
 
     @classmethod
     def get_out_data_from_opts(cls, name, sources, axis="T", out_dim=None, **kwargs):
@@ -8480,8 +8482,20 @@ class TimeChunkingLayer(_ConcatInputLayer):
         in_dim = data.dim_tags[axis]
         data = data.copy_move_axis(old_axis=axis, new_axis=0)  # (T,...)
         data = data.copy_with_batch_dim_axis(1)  # (T,B,...)
+        old_batch_dim = data.get_batch_dim_tag()
+        new_batch_dim = Dim(
+            kind=old_batch_dim.kind,
+            description=f"{name}:chunked_batch",
+            dimension=Tensor(f"{name}:chunked_batch", [], "int32"),  # unknown here...
+        )
+        data = data.copy_template_replace_dim_tag(1, new_batch_dim)
         if not out_dim:
-            out_dim = Dim(kind=in_dim.kind, description="%s:chunking" % name, auto_generated=True, dimension=None)
+            out_dim = Dim(
+                Tensor(f"{name}:chunk_size", [new_batch_dim], "int32"),
+                kind=in_dim.kind,
+                description=f"{name}:chunking",
+                auto_generated=True,
+            )
         data = data.copy_template_replace_dim_tag(axis=0, new_dim_tag=out_dim)  # (T',B',...)
         data.time_dim_axis = 0
         return data
