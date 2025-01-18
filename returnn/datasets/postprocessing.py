@@ -342,6 +342,7 @@ class LaplaceOrdering(Callable[[Iterator[TensorDict]], Iterator[TensorDict]]):
 
     To be composed with any custom data postprocessing logic via :class:`Sequential`.
     """
+
     preserves_num_seqs = True
 
     def __init__(self, num_seqs_per_bin: int, length_key: str = "data"):
