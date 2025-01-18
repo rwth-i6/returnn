@@ -233,13 +233,14 @@ class PostprocessingDataset(CachedDataset2):
                 loaded_seq_idx, tensor_dict = next(self._data_iter)
                 self._data_iter_produced_num_seqs += 1
                 if self._map_seq_stream_preserves_num_seqs and self.num_seqs is not None:
-                    assert (
-                        self._data_iter_produced_num_seqs <= self._num_seqs
-                    ), f"_map_seq_stream_preserves_num_seqs is True, but map_seq_stream yielded more seqs than expected"
+                    assert self._data_iter_produced_num_seqs <= self._num_seqs, (
+                        f"{self}: _map_seq_stream_preserves_num_seqs is True, but map_seq_stream yielded more seqs "
+                        f" ({self._data_iter_produced_num_seqs}) than expected ({self._num_seqs})"
+                    )
             except StopIteration:
                 if self._map_seq_stream_preserves_num_seqs and self.num_seqs is not None:
                     assert self._data_iter_produced_num_seqs == self._num_seqs, (
-                        f"_map_seq_stream_preserves_num_seqs is True, but map_seq_stream "
+                        f"{self}: _map_seq_stream_preserves_num_seqs is True, but map_seq_stream "
                         f"yielded {self._data_iter_produced_num_seqs} seqs, while {self._num_seqs} were expected"
                     )
                 return None
