@@ -235,14 +235,14 @@ class PostprocessingDataset(CachedDataset2):
                 if self._num_seqs is not None:
                     assert self._data_iter_produced_num_seqs <= self._num_seqs, (
                         f"{self}: map_seq_stream yielded more seqs ({self._data_iter_produced_num_seqs}) "
-                        f"than expected ({self._num_seqs}). _map_seq_stream_preserves_num_seqs is set to "
+                        f"than expected ({self._num_seqs}). map_seq_stream_preserves_num_seqs is set to "
                         f"{self._map_seq_stream_preserves_num_seqs}"
                     )
             except StopIteration:
                 if self._num_seqs is not None:
                     assert self._data_iter_produced_num_seqs == self._num_seqs, (
                         f"{self}: map_seq_stream yielded {self._data_iter_produced_num_seqs} seqs, "
-                        f"while {self._num_seqs} were expected. _map_seq_stream_preserves_num_seqs is set to "
+                        f"while {self._num_seqs} were expected. map_seq_stream_preserves_num_seqs is set to "
                         f"{self._map_seq_stream_preserves_num_seqs}"
                     )
                 return None
