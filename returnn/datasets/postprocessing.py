@@ -112,8 +112,8 @@ class PostprocessingDataset(CachedDataset2):
             To simplify the common case when no shapes change, this value can be left unspecified. The dataset then
             assumes the same data layout as returned by the wrapped dataset.
             Example: `map_outputs={"data": {"dim": 42}}`
-        :param map_seq_stream_preserves_num_seqs: whether the function in map_seq_stream preserves the number of sequences,
-            i.e. for every input sequence there is exactly one output sequence.
+        :param map_seq_stream_preserves_num_seqs: whether the function in map_seq_stream preserves the number of
+            sequences, i.e. for every input sequence there is exactly one output sequence.
         :param kwargs: see :class:`CachedDataset2`, :class:`Dataset`
         """
         super().__init__(**kwargs)
@@ -238,9 +238,10 @@ class PostprocessingDataset(CachedDataset2):
                     ), f"_map_seq_stream_preserves_num_seqs is True, but map_seq_stream yielded more seqs than expected"
             except StopIteration:
                 if self._map_seq_stream_preserves_num_seqs and self.num_seqs is not None:
-                    assert (
-                        self._data_iter_produced_num_seqs == self._num_seqs
-                    ), f"_map_seq_stream_preserves_num_seqs is True, but map_seq_stream yielded {self._data_iter_produced_num_seqs} seqs, while {self._num_seqs} were expected"
+                    assert self._data_iter_produced_num_seqs == self._num_seqs, (
+                        f"_map_seq_stream_preserves_num_seqs is True, but map_seq_stream "
+                        f"yielded {self._data_iter_produced_num_seqs} seqs, while {self._num_seqs} were expected"
+                    )
                 return None
             assert loaded_seq_idx <= seq_idx, "_collect_single_seq must be done monotonically"
             if loaded_seq_idx != seq_idx:
