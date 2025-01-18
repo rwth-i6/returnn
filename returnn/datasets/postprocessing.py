@@ -232,16 +232,18 @@ class PostprocessingDataset(CachedDataset2):
             try:
                 loaded_seq_idx, tensor_dict = next(self._data_iter)
                 self._data_iter_produced_num_seqs += 1
-                if self._map_seq_stream_preserves_num_seqs and self.num_seqs is not None:
+                if self._num_seqs is not None:
                     assert self._data_iter_produced_num_seqs <= self._num_seqs, (
-                        f"{self}: _map_seq_stream_preserves_num_seqs is True, but map_seq_stream yielded more seqs "
-                        f" ({self._data_iter_produced_num_seqs}) than expected ({self._num_seqs})"
+                        f"{self}: map_seq_stream yielded more seqs ({self._data_iter_produced_num_seqs}) "
+                        f"than expected ({self._num_seqs}). _map_seq_stream_preserves_num_seqs is set to "
+                        f"{self._map_seq_stream_preserves_num_seqs}"
                     )
             except StopIteration:
-                if self._map_seq_stream_preserves_num_seqs and self.num_seqs is not None:
+                if self._num_seqs is not None:
                     assert self._data_iter_produced_num_seqs == self._num_seqs, (
-                        f"{self}: _map_seq_stream_preserves_num_seqs is True, but map_seq_stream "
-                        f"yielded {self._data_iter_produced_num_seqs} seqs, while {self._num_seqs} were expected"
+                        f"{self}: map_seq_stream yielded {self._data_iter_produced_num_seqs} seqs, "
+                        f"while {self._num_seqs} were expected. _map_seq_stream_preserves_num_seqs is set to "
+                        f"{self._map_seq_stream_preserves_num_seqs}"
                     )
                 return None
             assert loaded_seq_idx <= seq_idx, "_collect_single_seq must be done monotonically"
