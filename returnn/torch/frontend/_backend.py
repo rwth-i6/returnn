@@ -674,6 +674,12 @@ class TorchBackend(Backend[torch.Tensor]):
         assert targets.sparse_dim and targets.sparse_dim.dimension <= logits.feature_dim.dimension
         # PyTorch expects the logits to be of shape (T, B, C) where T is the input spatial dim.
         batch_dims = logits.remaining_dims((input_spatial_dim, logits.feature_dim))
+        batch_dims_targets = targets.remaining_dims(targets_spatial_dim)
+        if set(batch_dims) != set(batch_dims_targets):
+            # Need to broadcast.
+            logits = rf.expand_dims(logits, [d for d in batch_dims_targets if d not in batch_dims])
+            targets = rf.expand_dims(targets, [d for d in batch_dims if d not in batch_dims_targets])
+            batch_dims = logits.remaining_dims((input_spatial_dim, logits.feature_dim))
         batch_shape = [d.get_dim_value() for d in batch_dims]
         batch_n_elems = prod(batch_shape)
         logits = logits.copy_transpose([input_spatial_dim] + batch_dims + [logits.feature_dim])
