@@ -542,6 +542,26 @@ def test_slice():
     run_model(extern_data, lambda *, epoch, step: _Net(), _forward_step)
 
 
+def test_slice_dyn_size():
+    time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
+    in_dim = Dim(7, name="in")
+    extern_data = TensorDict(
+        {
+            "data": Tensor("data", [batch_dim, time_dim, in_dim], dtype="float32"),
+        }
+    )
+
+    # noinspection PyShadowingNames
+    def _forward_step(*, extern_data: TensorDict, **_kwargs):
+        x = extern_data["data"]
+        size = time_dim.get_size_tensor()
+        size = rf.reduce_min(size, axis=size.dims)  # do whatever, but get some scalar
+        pack, new_time = rf.slice(x, axis=time_dim, size=size)
+        pack.mark_as_default_output(shape=(batch_dim, new_time, in_dim))
+
+    run_model(extern_data, lambda **_kwargs: rf.Module(), _forward_step)
+
+
 def test_shift_right():
     time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
     in_dim = Dim(7, name="in")

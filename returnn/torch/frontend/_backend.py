@@ -1171,6 +1171,9 @@ class TorchBackend(Backend[torch.Tensor]):
             start = 0
         if isinstance(size, Dim):
             size = size.get_dim_value()
+        elif isinstance(size, Tensor):
+            assert size.dims == ()  # scalar
+            size = size.raw_tensor
         if size is not None:
             assert end is None
             out.raw_tensor = torch.narrow(source.raw_tensor, dim=axis_int, start=start, length=size)
