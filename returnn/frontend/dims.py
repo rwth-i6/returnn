@@ -166,7 +166,7 @@ def num_elements_of_shape(
         for j, dim_ in enumerate(dims):
             if i == j:
                 continue
-            if dim_.dyn_size_ext and dim in dim_.dyn_size_ext.dims:
+            if dim_.dyn_size_ext is not None and dim in dim_.dyn_size_ext.dims:
                 related_dims.append(dim_)
         if not related_dims:
             if dim.is_static():

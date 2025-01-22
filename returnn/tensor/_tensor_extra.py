@@ -330,7 +330,7 @@ class _TensorMixin(_TensorMixinBase):
                 if tag.is_batch_dim():
                     continue
                 if tag.is_dynamic():
-                    assert tag.dyn_size_ext, "%s sanity_check: dynamic dim %s undefined" % (self, tag)
+                    assert tag.dyn_size_ext is not None, "%s sanity_check: dynamic dim %s undefined" % (self, tag)
                     if not ignore_placeholder:
                         if tag.dyn_size_ext.placeholder is None:
                             tag.complete_dyn_size()
@@ -2519,7 +2519,7 @@ class _TensorMixin(_TensorMixinBase):
         dim_tag = self.dim_tags[axis]
         # It's possible that dim tags are not unique (https://github.com/rwth-i6/returnn/issues/632).
         matching_tags = [i for (i, tag) in enumerate(self.dim_tags) if tag == dim_tag]
-        if dim_tag.dyn_size_ext and len(matching_tags) == 1:
+        if dim_tag.dyn_size_ext is not None and len(matching_tags) == 1:
             return dim_tag
         if axis == self.time_dim_axis:
             return "T"  # this might change
@@ -2800,7 +2800,7 @@ class _TensorMixin(_TensorMixinBase):
         assert self.batch_dim_axis is not None
         batch_dim_ = self._dims[self.batch_dim_axis]
         assert isinstance(batch_dim_, Dim)
-        if batch_dim_.dyn_size_ext and batch_dim_.dyn_size_ext.raw_tensor is not None:
+        if batch_dim_.dyn_size_ext is not None and batch_dim_.dyn_size_ext.raw_tensor is not None:
             backend = batch_dim_.dyn_size_ext._raw_backend
             return backend.fill_raw([batch_dim_.dyn_size_ext.raw_tensor], dim.size)
         import tensorflow as tf
@@ -2847,7 +2847,7 @@ class _TensorMixin(_TensorMixinBase):
         assert 0 <= axis < self.batch_ndim
         assert axis != self.batch_dim_axis
         tag: Dim = self.dim_tags[axis]
-        assert tag.dyn_size_ext and tag.dyn_size_ext.raw_tensor is not None
+        assert tag.dyn_size_ext is not None and tag.dyn_size_ext.raw_tensor is not None
         backend = tag.dyn_size_ext._raw_backend
         assert set(tag.dyn_size_ext.dim_tags).issubset(self.dim_tags)  # https://github.com/rwth-i6/returnn/issues/721
         with backend.name_scope_raw("get_sequence_mask_broadcast"):
@@ -2900,7 +2900,7 @@ class _TensorMixin(_TensorMixinBase):
         assert 0 <= axis < self.batch_ndim
         assert axis != self.batch_dim_axis
         tag = self.dim_tags[axis]
-        assert tag.dyn_size_ext
+        assert tag.dyn_size_ext is not None
         return tag.dyn_size_ext.copy_compatible_to(self, check_dtype=False, check_sparse=False).placeholder
 
     def num_elements(self: Tensor) -> Union[int, Tensor]:

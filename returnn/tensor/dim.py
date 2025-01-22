@@ -70,7 +70,7 @@ class Dim(_DimMixin):
         if dimension is None:
             self.capacity = capacity
             self.size = None
-            self.dyn_size_ext = dyn_size_ext.copy() if dyn_size_ext else None
+            self.dyn_size_ext = dyn_size_ext.copy() if dyn_size_ext is not None else None
         elif isinstance(dimension, int):
             self.capacity = capacity or dimension
             self.size = dimension

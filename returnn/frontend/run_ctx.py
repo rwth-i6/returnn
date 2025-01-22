@@ -272,9 +272,9 @@ class RunCtx:
         assert dims is None or (
             isinstance(dims, (list, tuple)) and all(isinstance(dim, Dim) for dim in dims)
         ), f"dims should be a tuple of Dims, got {dims}"
-        if dims is None and expected_output:
+        if dims is None and expected_output is not None:
             dims = expected_output.dims
-        if dims is not None and expected_output:
+        if dims is not None and expected_output is not None:
             assert expected_output.dims == tuple(
                 dims
             ), f"mark_as_output: {name!r} dims mismatch from expected output, given {dims}, expected {expected_output}"
@@ -304,7 +304,7 @@ class RunCtx:
         assert name not in self.outputs.data
         self.outputs.data[name] = tensor
 
-        if expected_output:
+        if expected_output is not None:
             # Perform sanity checks using the expected output.
             # The expected output usually comes from `model_outputs` from the user config.
             # The dimensions of `expected_output` and `tensor` should match,
@@ -429,7 +429,7 @@ class Loss:
         """
         if self._mean_loss_cached is not None:
             return self._mean_loss_cached
-        if self.custom_inv_norm_factor:
+        if self.custom_inv_norm_factor is not None:
             loss = self.get_summed_loss()
             inv_norm = rf.reduce_sum(self.custom_inv_norm_factor, axis=self.custom_inv_norm_factor.dims)
             inv_norm = rf.cast(inv_norm, loss.dtype)
@@ -446,7 +446,7 @@ class Loss:
         """
         :return: inverse norm factor (scalar)
         """
-        if self.custom_inv_norm_factor:
+        if self.custom_inv_norm_factor is not None:
             if self.custom_inv_norm_factor.dims:
                 return rf.reduce_sum(self.custom_inv_norm_factor, axis=self.custom_inv_norm_factor.dims)
             return self.custom_inv_norm_factor
@@ -500,7 +500,7 @@ def _output_tensor_from_raw(raw_tensor, *, dims: Optional[Sequence[Dim]], name: 
     assert isinstance(raw_tensor, _backend.global_backend.RawTensorType)
     tensor = rf.convert_to_tensor(raw_tensor, dims=dims)
     for axis, dim in enumerate(tensor.dims):
-        if dim.dyn_size_ext and dim.dyn_size_ext.raw_tensor is None:
+        if dim.dyn_size_ext is not None and dim.dyn_size_ext.raw_tensor is None:
             # Only non-scalar dyn sizes matter.
             if dim.dyn_size_ext.dims:
                 raise Exception(

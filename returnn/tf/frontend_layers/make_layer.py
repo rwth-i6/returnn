@@ -313,7 +313,7 @@ def register_extern_data(data: Tensor[rfl.Layer]):
                 dtype=data.size_dtype,
                 batch=data.batch,
             )
-        if tag.is_batch_dim() and not tag.dyn_size_ext and tag.dimension is None:
+        if tag.is_batch_dim() and tag.dyn_size_ext is None and tag.dimension is None:
             # Undefined batch dim tag. Set default data template.
             batch_dim.dyn_size_ext = orig_tag.dyn_size_ext = tag.dyn_size_ext = Tensor(
                 name=f"batch_dim_default_dyn_size_ext",
