@@ -162,7 +162,7 @@ def _get_model_outputs_raw_keys() -> List[str]:
     for k, v in model_outputs.data.items():
         model_outputs_raw_keys.append(k)
         for i, dim in enumerate(v.dims):
-            if dim.dyn_size_ext and dim.dyn_size_ext.dims:
+            if dim.dyn_size_ext is not None and dim.dyn_size_ext.dims:
                 model_outputs_raw_keys.append(f"{k}:size{i}")
     return model_outputs_raw_keys
 
@@ -244,7 +244,7 @@ def main():
     for k, v in list(extern_data.data.items()) + list(model_outputs.data.items()):
         dynamic_axes[k] = {i: dim.name for i, dim in enumerate(v.dims) if dim.is_dynamic()}
         for i, dim in enumerate(v.dims):
-            if dim.dyn_size_ext and dim.dyn_size_ext.dims == ():
+            if dim.dyn_size_ext is not None and dim.dyn_size_ext.dims == ():
                 continue
             if dim.dyn_size_ext is not None:
                 dynamic_axes[f"{k}:size{i}"] = {

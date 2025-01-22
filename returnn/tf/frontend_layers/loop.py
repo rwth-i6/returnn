@@ -539,8 +539,8 @@ class _LoopState:
 
     def _map_name_ctx_to_last_tensor(self, name_ctx: rfl.Layer) -> Tensor:
         assert isinstance(name_ctx, rfl.Layer)
-        assert name_ctx.tensor, f"{self.loop} state {name_ctx} not assigned?"
-        assert self.loop.name_ctx.tensor, f"{self.loop} not yet exited?"
+        assert name_ctx.tensor is not None, f"{self.loop} state {name_ctx} not assigned?"
+        assert self.loop.name_ctx.tensor is not None, f"{self.loop} not yet exited?"
         return self.loop.last(name_ctx.tensor)
 
     def get_last(self):

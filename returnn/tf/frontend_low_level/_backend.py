@@ -353,7 +353,7 @@ class TFBackend(Backend[tf.Tensor]):
                         tf.Assert(tf.equal(shape[i], tensor.batch_shape[i]), data + ["-> invalid shape[%i]" % i])
                     ]
                 dyn_size_ext = tensor.dim_tags[i].dyn_size_ext
-                if dyn_size_ext and dyn_size_ext.placeholder is not None:
+                if dyn_size_ext is not None and dyn_size_ext.placeholder is not None:
                     dyn_size = dyn_size_ext.placeholder
                     if dyn_size_ext.have_batch_axis() and tensor.have_batch_axis():
                         checks += [

@@ -63,7 +63,7 @@ class ReturnnLayersBackend(Backend[Layer]):
         usages: List[Tensor] = []
         visited = set()
         for use in x.raw_tensor.usages:
-            if not use.tensor or use.tensor in visited:
+            if use.tensor is None or use.tensor in visited:
                 continue
             visited.add(use.tensor)
             usages.append(use.tensor)
@@ -878,7 +878,7 @@ class ReturnnLayersBackend(Backend[Layer]):
             out = rfl.make_layer(
                 {
                     "class": "eval",
-                    "from": [recent] if recent else [],  # use as control dependency
+                    "from": [recent] if recent is not None else [],  # use as control dependency
                     "eval": _random_replay_eval,
                     "eval_locals": {"idx": ReturnnLayersBackend._random_journal.get_graph_reader_idx()},
                     "out_type": {"dims": dims, "dtype": dtype, "sparse_dim": sparse_dim, "feature_dim": feature_dim},

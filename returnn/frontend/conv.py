@@ -649,7 +649,7 @@ def make_conv_out_spatial_dims(
             assert isinstance(out_spatial_dim, Dim)
             if description_prefix and out_spatial_dim != in_spatial_dim:
                 out_spatial_dim.name = f"{description_prefix}:spatial{i}"
-            if in_spatial_dim.dyn_size_ext and out_spatial_dim.dyn_size_ext is None:
+            if in_spatial_dim.dyn_size_ext is not None and out_spatial_dim.dyn_size_ext is None:
                 out_spatial_dim.dyn_size_ext = _calc_out_dim(
                     in_dim=in_spatial_dim.dyn_size_ext,
                     filter_size=filter_size[i],

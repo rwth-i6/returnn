@@ -176,7 +176,7 @@ class DimWrapper:
             # We need some ref to the dyn size, and finalize this key when it goes out of scope.
             # This is only needed when there is no info on the static size (or eager scalar dyn size).
             ref(dim.dyn_size_ext.raw_tensor, finalize_callback)
-            if self.dim_value is None and dim.dyn_size_ext and dim.dyn_size_ext.raw_tensor is not None
+            if self.dim_value is None and dim.dyn_size_ext is not None and dim.dyn_size_ext.raw_tensor is not None
             else None
         )
         self._hash = hash(dim) if self.dim_value is None else hash(self.dim_value)
@@ -195,7 +195,7 @@ class DimWrapper:
 def _dim_value_for_key(dim: Dim) -> Optional[int]:
     if dim.size is not None:
         return dim.size
-    if dim.dyn_size_ext and not dim.dyn_size_ext.dims:
+    if dim.dyn_size_ext is not None and not dim.dyn_size_ext.dims:
         if dim.dyn_size_ext.raw_tensor is not None:
             # noinspection PyProtectedMember
             if dim.dyn_size_ext._raw_backend.executing_eagerly():

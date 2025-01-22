@@ -100,7 +100,7 @@ class TensorDict:
                     continue
                 key_ = f"{key}:size{i}"
                 assert key_ not in out
-                if dim.is_batch_dim() and (not dim.dyn_size_ext or dim.dyn_size_ext.raw_tensor is None):
+                if dim.is_batch_dim() and (dim.dyn_size_ext is None or dim.dyn_size_ext.raw_tensor is None):
                     if include_scalar_dyn_sizes:
                         dim_value = dim.get_dim_value()
                         assert isinstance(

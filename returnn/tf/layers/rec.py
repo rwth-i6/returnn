@@ -182,7 +182,7 @@ class RecLayer(_ConcatInputLayer):
         assert isinstance(axis, Dim)
         if axis == single_step_dim:
             axis = None  # this indicates in the following that we do a single-step operation
-        if axis and self.input_data and self.input_data.have_dim_tag(axis):
+        if axis and self.input_data is not None and self.input_data.have_dim_tag(axis):
             axis_int = self.input_data.get_axis_from_description(axis)
             self.input_data.version = 1
             self.input_data.time_dim_axis = axis_int  # makes some of the following code easier
@@ -364,16 +364,16 @@ class RecLayer(_ConcatInputLayer):
         from returnn.tf.util.data import single_step_dim
 
         name = opts["_name"] if opts and "_name" in opts else "unknown"
-        if source_data and isinstance(axis, str):
+        if source_data is not None and isinstance(axis, str):
             axis = source_data.get_dim_tag_from_description(axis)
         if not axis:
             if opts and opts.get("state"):
                 axis = single_step_dim
-            elif source_data and not source_data.have_time_axis():  # expect to be inside other RecLayer
+            elif source_data is not None and not source_data.have_time_axis():  # expect to be inside other RecLayer
                 axis = single_step_dim
             else:
                 # We will output a time-dim.
-                if source_data and not have_dyn_seq_len_end:
+                if source_data is not None and not have_dyn_seq_len_end:
                     assert source_data.have_time_axis()
                     axis = source_data.get_time_dim_tag()
                 elif opts and opts.get("size_target"):  # if this is set, always use it
@@ -405,7 +405,7 @@ class RecLayer(_ConcatInputLayer):
         if axis == single_step_dim:
             if over_rec_time_dim and not inside_rec_time_dim:  # moved out of loop
                 axis = over_rec_time_dim
-        if source_data and source_data.have_dim_tag(axis):
+        if source_data is not None and source_data.have_dim_tag(axis):
             # Make sure it is marked as time dim. This will make it easier in the following.
             source_data.version = 1
             source_data.time_dim_axis = source_data.get_axis_from_description(axis)
@@ -514,7 +514,7 @@ class RecLayer(_ConcatInputLayer):
         from returnn.tf.util.data import single_step_dim
 
         assert isinstance(axis, Dim)
-        if source_data and source_data.have_dim_tag(axis):
+        if source_data is not None and source_data.have_dim_tag(axis):
             # This will make it easier in the following.
             source_data.version = 1
             source_data.time_dim_axis = source_data.get_axis_from_description(axis)
@@ -542,7 +542,7 @@ class RecLayer(_ConcatInputLayer):
             out = out.copy_template_set_ctx(network.get_control_flow_ctx())
             deps += subnet.get_parent_deps()
         elif out_type or n_out is not NotSpecified or out_dim or loss:
-            assert source_data
+            assert source_data is not None
             out = source_data.copy_template(name="%s_output" % name)
             if out.sparse:
                 out.dtype = "float32"
@@ -737,7 +737,7 @@ class RecLayer(_ConcatInputLayer):
 
         have_time_dim = self.time_dim_tag or add_time_dim
         expected_ndim = 3 if have_time_dim else 2
-        assert self.input_data
+        assert self.input_data is not None
         in_data = self.input_data.copy()
         in_data.version = 1  # to set time_dim_axis here
         if not self.time_dim_tag and add_time_dim:
@@ -973,7 +973,7 @@ class RecLayer(_ConcatInputLayer):
             from tensorflow.contrib import rnn as rnn_contrib
         except ImportError:
             pass
-        assert self.input_data
+        assert self.input_data is not None
         assert not self.input_data.sparse
         in_data, x, seq_len, initial_state = self._get_input(add_time_dim=False)
         if self._direction == -1:
@@ -1141,7 +1141,7 @@ class RecLayer(_ConcatInputLayer):
         from tensorflow.contrib.cudnn_rnn.python.ops import cudnn_rnn_ops
 
         assert self._max_seq_len is None
-        assert self.input_data
+        assert self.input_data is not None
         assert not self.input_data.sparse
         in_data, x, seq_len, initial_state = self._get_input()
         n_batch = tf.shape(seq_len)[0]
@@ -1221,7 +1221,7 @@ class RecLayer(_ConcatInputLayer):
                 )
 
         assert self._max_seq_len is None
-        assert self.input_data
+        assert self.input_data is not None
         in_data, x, seq_len, initial_state = self._get_input()
         if self._input_projection:
             if cell.does_input_projection:
@@ -1385,13 +1385,13 @@ class _SubnetworkRecCell:
         self.net.is_root_in_ctx = True
         self.net.layers_desc.update(self.net_dict)
         self.source_data = source_data
-        if source_data:
+        if source_data is not None:
             self.net.extern_data.data["source"] = source_data.copy_template_excluding_time_dim().copy_template_set_ctx(
                 control_flow_ctx
             )
         self.time_dim_tag = time_dim_tag
         self._time_dim_tags = {time_dim_tag}  # type: typing.Set[Dim]
-        if source_data:
+        if source_data is not None:
             # Maybe the input has a different time dim tag, but we still have new dynamic length here
             # because of custom endings ("end" layer).
             self._time_dim_tags.add(source_data.get_time_dim_tag())
@@ -1866,7 +1866,7 @@ class _SubnetworkRecCell:
                     if layer_.is_initialized:
                         if (
                             not layer_.output.size_placeholder
-                            and earlier_layer_output
+                            and earlier_layer_output is not None
                             and earlier_layer_output.size_placeholder
                         ):
                             # E.g. during reconstruct, but based on other partially finished / incomplete sources.
@@ -1889,7 +1889,7 @@ class _SubnetworkRecCell:
                                     new_dim: Dim
                                     old_dim: Dim
                                     assert old_dim.is_dynamic_seq_length() and new_dim.is_dynamic_seq_length()
-                                    if new_dim.dyn_size_ext and new_dim.dyn_size_ext.raw_tensor is not None:
+                                    if new_dim.dyn_size_ext is not None and new_dim.dyn_size_ext.raw_tensor is not None:
                                         continue
                                     if old_dim.dyn_size_ext is None:
                                         continue
@@ -2585,15 +2585,15 @@ class _SubnetworkRecCell:
             self.tf_scope_name = get_valid_scope_name_from_str(name.replace("/", "_"))
             self.data = data
             if dtype is None:
-                assert data
+                assert data is not None
                 dtype = data.dtype
             self.dtype = dtype
             if element_shape is None:
-                assert data
+                assert data is not None
                 element_shape = data.batch_shape
             self.element_shape = element_shape
             if same_shape_every_frame is None:
-                if data:
+                if data is not None:
                     same_shape_every_frame = not data.have_varying_shape_in_ctx()
                 else:
                     same_shape_every_frame = True
@@ -2620,7 +2620,7 @@ class _SubnetworkRecCell:
                 if isinstance(value, tf.Tensor):
                     pass
                 elif isinstance(value, Data):
-                    assert self.data
+                    assert self.data is not None
                     assert value.dtype == self.data.dtype
                     assert value.batch_shape == self.data.batch_shape
                     assert value.have_varying_shape_in_ctx() == self.data.have_varying_shape_in_ctx()
@@ -2652,7 +2652,7 @@ class _SubnetworkRecCell:
             assert not self.same_shape_every_frame
             # First get the max shape of each element. Then create a new TensorArray which can hold all elements.
             # Because we use clear_after_read in ta, even to get the max shape, we have to create a new TensorArray.
-            assert self.data
+            assert self.data is not None
             size = ta.size()
             buffer_ta = tf.TensorArray(
                 name="acc_ta_infer_max_shape_%s" % self.tf_scope_name,
@@ -2736,7 +2736,7 @@ class _SubnetworkRecCell:
         with tf.name_scope("subnet_base"):
             batch = rec_layer.get_batch_info()
             input_beam = None  # type: typing.Optional[SearchBeam]
-            if rec_layer.input_data:
+            if rec_layer.input_data is not None:
                 with tf.name_scope("source_tensor_array"):
                     # noinspection PyProtectedMember
                     source_data, source, input_seq_len, _ = rec_layer._get_input(strict=False)  # (time,batch,..,dim)
@@ -2773,11 +2773,11 @@ class _SubnetworkRecCell:
                     target=rec_layer.size_target, mark_data_key_as_used=True
                 ).get_time_dim_tag()
                 tag = tag.get_for_batch_ctx(batch, rec_layer.output.control_flow_ctx)
-                if tag.dyn_size_ext and tag.dyn_size_ext.placeholder is not None:
+                if tag.dyn_size_ext is not None and tag.dyn_size_ext.placeholder is not None:
                     fixed_seq_len = tag.dyn_size
             elif rec_layer.time_dim_tag:
                 tag = rec_layer.time_dim_tag.get_for_batch_ctx(batch, rec_layer.output.control_flow_ctx)
-                if tag.dyn_size_ext and tag.dyn_size_ext.placeholder is not None:
+                if tag.dyn_size_ext is not None and tag.dyn_size_ext.placeholder is not None:
                     fixed_seq_len = tag.dyn_size
             if fixed_seq_len is None and "end" not in self.layer_data_templates:
                 # If 'end' layer is not existing, the length must be defined.
@@ -3323,7 +3323,7 @@ class _SubnetworkRecCell:
                         # With include_eos=True, when "prev:end" layer is True <=> we are behind the last frame.
                         rel_end_layer = self.net.layers["prev:end"] if rec_layer.include_eos else self.net.layers["end"]
                     else:
-                        assert fixed_seq_len is not None and time_dim_tag and time_dim_tag.dyn_size_ext
+                        assert fixed_seq_len is not None and time_dim_tag and time_dim_tag.dyn_size_ext is not None
                         end_flag_data = time_dim_tag.dyn_size_ext.copy_template()
                         end_flag_data.dtype = "bool"
                         end_flag_data.placeholder = tf.greater_equal(
@@ -3781,7 +3781,7 @@ class _SubnetworkRecCell:
         time_dim_tag = self.time_dim_tag.get_for_batch_ctx(
             batch=latest_batch, ctx=rec_layer.network.get_control_flow_ctx()
         )
-        if time_dim_tag.dyn_size_ext and time_dim_tag.dyn_size_ext.placeholder is not None:
+        if time_dim_tag.dyn_size_ext is not None and time_dim_tag.dyn_size_ext.placeholder is not None:
             assert time_dim_tag.dyn_size_ext.batch == latest_batch
             seq_len = time_dim_tag.dyn_size_ext.placeholder
         elif end_layer:
@@ -3816,7 +3816,7 @@ class _SubnetworkRecCell:
                 )
                 seq_len._RETURNN_dyn_size_beam = choice_.output.batch.beam
 
-            assert time_dim_tag.dyn_size_ext
+            assert time_dim_tag.dyn_size_ext is not None
             time_dim_tag.dyn_size_ext.placeholder = seq_len
 
         else:  # not end_layer
@@ -4164,7 +4164,7 @@ class _SubnetworkRecCell:
         )
         self.input_layers_net.is_root_in_ctx = True
         self.input_layers_net.layers_desc.update(self.net_dict)
-        if self.parent_rec_layer.input_data:
+        if self.parent_rec_layer.input_data is not None:
             self.input_layers_net.extern_data.data["source"] = self.parent_rec_layer.input_data
         for key in self.parent_net.extern_data.data.keys():
             self.input_layers_net.extern_data.data[key] = self.parent_net.extern_data.data[key]
@@ -4259,7 +4259,7 @@ class _SubnetworkRecCell:
         )
         self.output_layers_net.is_root_in_ctx = True
         self.output_layers_net.layers_desc.update(self.net_dict)
-        if self.parent_rec_layer.input_data:
+        if self.parent_rec_layer.input_data is not None:
             self.output_layers_net.extern_data.data["source"] = self.parent_rec_layer.input_data
         for key in self.parent_net.extern_data.data.keys():
             self.output_layers_net.extern_data.data[key] = self.parent_net.extern_data.data[key]
@@ -5122,7 +5122,7 @@ class RnnCellLayer(_ConcatInputLayer):
                 x = self.input_data.placeholder
                 if isinstance(self.cell, BaseRNNCell):
                     x = self.cell.get_input_transformed(x)
-                assert not self.input_data or self.input_data.time_dim_axis is None, (
+                assert self.input_data is None or self.input_data.time_dim_axis is None, (
                     self,
                     self.input_data,
                     "A recurrent layer is not allowed to have input data with a remaining time axis.\n"
@@ -5134,7 +5134,7 @@ class RnnCellLayer(_ConcatInputLayer):
                 prev_state = self._rec_previous_layer.rec_vars_outputs["state"]
                 self.output.placeholder, state = self.cell(x, prev_state)
             else:
-                assert self.input_data and self.input_data.time_dim_axis is not None
+                assert self.input_data is not None and self.input_data.time_dim_axis is not None
                 x = self.input_data.get_placeholder_as_time_major()
                 if isinstance(self.cell, BaseRNNCell):
                     x = self.cell.get_input_transformed(x)
@@ -5203,10 +5203,12 @@ class RnnCellLayer(_ConcatInputLayer):
         :rtype: Data
         """
         sources_data = Data.get_common_data([src.output for src in sources if src], ignore_feature_dim=True)
-        batch_dim = sources_data.get_batch_dim_tag() if sources_data and sources_data.have_batch_axis() else None
+        batch_dim = (
+            sources_data.get_batch_dim_tag() if sources_data is not None and sources_data.have_batch_axis() else None
+        )
         time_dim_axis, batch_dim_axis = None, None
         dim_tags = []
-        if sources_data and sources_data.have_time_axis():
+        if sources_data is not None and sources_data.have_time_axis():
             time_dim_axis = len(dim_tags)
             dim_tags.append(sources_data.get_time_dim_tag())
         if batch_dim:
@@ -6938,7 +6940,7 @@ class DecideLayer(BaseChoiceLayer):
         search_choices = src.get_search_choices()
         if not search_choices:
             return src.output, None
-        if not output:
+        if output is None:
             output = src.output.copy_template(name="%s_output" % (name or src.name)).copy_as_batch_major()
         assert output.batch_dim_axis == 0
         batch_dim = src.network.get_data_batch_dim()
@@ -8294,7 +8296,7 @@ class PositionalEncodingLayer(_ConcatInputLayer):
             out_axis_int = self.output.get_axis_from_description(axis, allow_int=False)
             if use_constant:
                 position = constant * tf.ones([1] * output_templ_wo_feat.batch_ndim, tf.int32)
-                if offset_data:
+                if offset_data is not None:
                     position += offset_data.placeholder  # (batch, len)
                 # signal has shape (1, len) or (batch, len) or (1, 1) or more ones
                 signal = get_positional_encoding(num_channels=self.output.dim, position=position)
@@ -8305,7 +8307,7 @@ class PositionalEncodingLayer(_ConcatInputLayer):
                 position = tf.reshape(
                     position, [length if i == out_axis_int else 1 for i in range(output_templ_wo_feat.batch_ndim)]
                 )
-                if offset_data:
+                if offset_data is not None:
                     position += offset_data.placeholder
                 # signal has shape (1,len,n_out) or (batch,len,n_out)
                 signal = get_positional_encoding(num_channels=self.output.dim, position=position)
@@ -8316,7 +8318,7 @@ class PositionalEncodingLayer(_ConcatInputLayer):
             else:
                 position = self._rec_previous_layer.rec_vars_outputs["position"] + 1  # [B]
                 self.rec_vars_outputs["position"] = position
-            if offset_data:
+            if offset_data is not None:
                 position += offset_data.placeholder  # (batch,)
             signal = get_positional_encoding(num_channels=self.output.dim, position=position)  # (batch,n_out)
 
@@ -8740,7 +8742,7 @@ class EditDistanceTableLayer(LayerBase):
         assert source_data.dtype == "int32" and source_data.batch_ndim <= 2 and source_data.sparse
         assert self.target, "%s: 'target' must be set" % self
         target_data = self._get_target_value()
-        assert target_data, "%s: target %r not found?" % (self, self.target)
+        assert target_data is not None, "%s: target %r not found?" % (self, self.target)
         assert target_data.dtype == "int32" and target_data.batch_ndim == 2 and target_data.have_time_axis()
         dim = target_data.dim
         if blank_idx is not None:
@@ -8833,7 +8835,7 @@ class EditDistanceTableLayer(LayerBase):
         # expects inside rec layer
         assert target, "%s %r: 'target' must be set" % (cls.__name__, name)
         target_data = cls._static_get_target_value(target=target, network=network)
-        assert target_data, "target %r not found?" % target
+        assert target_data is not None, "target %r not found?" % target
         n_time = tf.shape(target_data.placeholder)[target_data.time_dim_axis]
         d = {"state": tf_util.expand_dims_unbroadcast(tf.range(n_time + 1), axis=0, dim=batch_dim)}
         if kwargs.get("blank_idx", None) is not None:
@@ -8876,7 +8878,7 @@ class EditDistanceTableLayer(LayerBase):
         source_data = sources[0].output
         assert target, "%s %r: 'target' must be set" % (cls.__name__, name)
         target_data = cls._static_get_target_value(target=target, _target_layers=_target_layers, network=network)
-        assert target_data, "target %r not found?" % target
+        assert target_data is not None, "target %r not found?" % target
         in_dim = target_data.get_time_dim_tag()
         if not out_dim:
             out_dim = in_dim + 1
@@ -8926,7 +8928,7 @@ class OptimalCompletionsLayer(LayerBase):
         last_row = source_data.placeholder
         assert self.target, "%s: 'target' must be set" % self
         target_data = self._get_target_value()
-        assert target_data, "%s: target %r not found?" % (self, self.target)
+        assert target_data is not None, "%s: target %r not found?" % (self, self.target)
         assert target_data.dtype == "int32" and target_data.batch_ndim == 2 and target_data.have_time_axis()
         from returnn.tf.native_op import next_edit_distance_reduce
 
@@ -9010,7 +9012,7 @@ class OptimalCompletionsLayer(LayerBase):
         source_data = sources[0].output
         assert target, "%s %r: 'target' must be set" % (cls.__name__, name)
         target_data = cls._static_get_target_value(target=target, _target_layers=_target_layers, network=network)
-        assert target_data, "target %r not found?" % target
+        assert target_data is not None, "target %r not found?" % target
         assert target_data.dtype == "int32" and target_data.batch_ndim == 2 and target_data.have_time_axis()
         assert target_data.sparse
         dim = target_data.dim

@@ -65,7 +65,7 @@ def raw_dict_to_extern_data(
         else:
             raise TypeError(f"Unexpected type {type(raw_tensor)} for {k} in extern_data_raw.")
 
-        if batch_dim.dyn_size_ext and batch_dim.dyn_size_ext.raw_tensor is None:
+        if batch_dim.dyn_size_ext is not None and batch_dim.dyn_size_ext.raw_tensor is None:
             batch_dim.dyn_size_ext.raw_tensor = torch.tensor(extern_data_raw[k].shape[0], dtype=torch.int32)
 
         # This has certain assumptions on the dataset, the data pipeline and collate_batch.
@@ -74,7 +74,7 @@ def raw_dict_to_extern_data(
         if (
             len(data.dims) >= 2
             and data.dims[1].size is None
-            and (not data.dims[1].dyn_size_ext or data.dims[1].dyn_size_ext.raw_tensor is None)
+            and (data.dims[1].dyn_size_ext is None or data.dims[1].dyn_size_ext.raw_tensor is None)
         ):
             assert k + ":seq_len" in extern_data_raw, (
                 f"extern_data {data}, dyn spatial dim, missing {k}:seq_len in raw dict, "

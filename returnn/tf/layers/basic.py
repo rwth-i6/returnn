@@ -826,7 +826,7 @@ class SelectSearchSourcesLayer(InternalLayer):
             self.__class__.__name__,
             self.name,
             self.search_choices_from_layer,
-            self.output.get_description(with_name=False) if self.output else None,
+            self.output.get_description(with_name=False) if self.output is not None else None,
         )
 
     def get_dep_layers(self):
@@ -1355,7 +1355,7 @@ class SliceNdLayer(_ConcatInputLayer):
                 else:
                     slice_tag = size
             else:
-                assert size.dyn_size_ext and size.dyn_size_ext.placeholder is not None
+                assert size.dyn_size_ext is not None and size.dyn_size_ext.placeholder is not None
                 size_t = size.dyn_size_ext.placeholder  # assume already >=0
                 if min_size:
                     size_t = tf.maximum(size_t, min_size)
@@ -1379,7 +1379,7 @@ class SliceNdLayer(_ConcatInputLayer):
                 if size_data is not None:
                     prefix_dims.update(size_data.dims)
                 slice_tag = self.output.dim_tags[len(prefix_dims)]
-            if size_data and (not slice_tag.dyn_size_ext or slice_tag.dyn_size_ext.placeholder is None):
+            if size_data is not None and (slice_tag.dyn_size_ext is None or slice_tag.dyn_size_ext.placeholder is None):
                 # in this case, size is not known before runtime and becomes dynamic and we need to set dyn_size
                 assert slice_tag.is_dynamic()
                 if size_data.batch:
@@ -1405,7 +1405,7 @@ class SliceNdLayer(_ConcatInputLayer):
             )
             # [start+0, start+1, ...]
             gather_positions = tf.expand_dims(start_t, -1) + tf.range(0, size)  # e.g. (B, size) or (B, T, size)
-            if seq_lens_data:
+            if seq_lens_data is not None:
                 seq_lens_t = tf_util.copy_compatible_reduce(seq_lens_data, gather_positions_data, "max").placeholder
                 pad_mask = tf.logical_or(  # shape like gather_positions
                     tf.greater(gather_positions, seq_lens_t - 1), tf.less(gather_positions, 0)
@@ -1416,7 +1416,7 @@ class SliceNdLayer(_ConcatInputLayer):
                     tf.greater(gather_positions, x.batch_shape[1] - 1), tf.less(gather_positions, 0)
                 )
                 gather_positions = tf.clip_by_value(gather_positions, 0, x.batch_shape[1] - 1)
-            if size_data:
+            if size_data is not None:
                 size_t = tf_util.copy_compatible_reduce(size_data, start_data, "max").placeholder
                 pad_mask = tf.logical_or(
                     tf.greater(gather_positions, tf.expand_dims(start_t + size_t - 1, -1)), pad_mask
@@ -1581,7 +1581,7 @@ class GatherLayer(_ConcatInputLayer):
         if clip_to_valid:
             dim = input_data.dim_tags[old_gather_axis]
             dyn_size_ext = dim.dyn_size_ext
-            if not dyn_size_ext:
+            if dyn_size_ext is None:
                 dyn_size_ext = Data.from_tensor(tf.shape(input_data.placeholder)[old_gather_axis])
             position_data = rf.clip_by_value(position_data, 0, dyn_size_ext - 1)
 
@@ -2375,7 +2375,9 @@ class LengthLayer(LayerBase):
                 dim = source.get_dim_tag_from_description(axis)
         if add_time_axis:
             # You anyway should not use this, so it's ok to have only a single case supported here.
-            assert dim.dyn_size_ext and dim.dyn_size_ext.have_batch_axis() and dim.dyn_size_ext.batch_ndim == 1  # [B]
+            assert (
+                dim.dyn_size_ext is not None and dim.dyn_size_ext.have_batch_axis() and dim.dyn_size_ext.batch_ndim == 1
+            )  # [B]
             return Data(
                 name="%s_length" % name,
                 shape=[1],
@@ -2638,11 +2640,11 @@ class SeqLenMaskLayer(_ConcatInputLayer):
         energy_shape = get_shape(energy)
         axis = x.get_axis_from_description(axis, allow_int=axis_allow_int)
         assert x.is_axis_dynamic(axis), "%s: use_time_mask True, dyn time axis expected" % x
-        if seq_len_source:
+        if seq_len_source is not None:
             energy_mask = seq_len_source.copy_compatible_to(x).get_sequence_mask_broadcast(axis=axis)
         else:
             energy_mask = x.get_sequence_mask_broadcast(axis=axis)
-        if start:
+        if start is not None:
             idxs_shape = [1] * x.batch_ndim  # type: typing.List[typing.Union[int,tf.Tensor]]
             idxs_shape[axis] = energy_shape[axis]
             idxs = tf.reshape(tf.range(energy_shape[axis]), idxs_shape)
@@ -4062,7 +4064,7 @@ class FoldLayer(LayerBase):
         if (
             not out_spatial_dim
             or not out_spatial_dim.is_dim_known()
-            or (out_spatial_dim.dyn_size_ext and out_spatial_dim.dyn_size_ext.raw_tensor is None)
+            or (out_spatial_dim.dyn_size_ext is not None and out_spatial_dim.dyn_size_ext.raw_tensor is None)
         ):
             # We are basically reverting ConvLayer.calc_out_dim.
             out_spatial_dim_: Dim = in_spatial_dim * stride
@@ -4515,7 +4517,7 @@ class MergeDimsLayer(_ConcatInputLayer):
                     continue
                 in_size = Data.from_tensor(tf.constant(in_tag.dimension, dtype=tf.int32))
             else:
-                assert in_tag.dyn_size_ext
+                assert in_tag.dyn_size_ext is not None
                 in_size = in_tag.dyn_size_ext
             if not out_size:
                 out_size = in_size
@@ -5690,7 +5692,7 @@ class RepeatLayer(_ConcatInputLayer):
             out_dim_.declare_same_as(out_dim)
         if data.batch:
             out_dim_ = out_dim_.get_for_batch_ctx(data.batch, data.control_flow_ctx)
-        if tag.dyn_size_ext and out_dim_.dyn_size_ext is None:
+        if tag.dyn_size_ext is not None and out_dim_.dyn_size_ext is None:
             out_dim_.dyn_size_ext = tag.dyn_size_ext.copy_template()
         return data.copy_template_replace_dim_tag(axis=data.get_batch_axis(0), new_dim_tag=out_dim_)
 
@@ -5996,13 +5998,13 @@ class ReinterpretDataLayer(_ConcatInputLayer):
                 if new_tag.is_batch_dim() or new_tag.dimension is not None:
                     continue
                 new_tag.complete_dyn_size()
-                if new_tag.dyn_size_ext and new_tag.dyn_size_ext.placeholder is not None:
+                if new_tag.dyn_size_ext is not None and new_tag.dyn_size_ext.placeholder is not None:
                     continue
                 # still undefined
                 if old_tag.is_batch_dim():
                     new_dyn_size_ext = Data.from_tensor(input_data.get_batch_dim())
                 else:
-                    assert old_tag.dyn_size_ext
+                    assert old_tag.dyn_size_ext is not None
                     new_dyn_size_ext = old_tag.dyn_size_ext.copy(name="%s_size" % (new_tag.description or "<unnamed>"))
                 # Need to create new size tensor as long as we have get_tag_from_size_tensor.
                 with tf_util.same_control_flow_ctx(new_dyn_size_ext.placeholder):
@@ -6138,7 +6140,7 @@ class ReinterpretDataLayer(_ConcatInputLayer):
                 old_tag = old_tag.get_for_batch_ctx(out.batch, out.control_flow_ctx)
                 new_tag = new_tag.get_for_batch_ctx(old_tag.batch, old_tag.control_flow_ctx)
                 if old_tag.is_dim_known() and not new_tag.is_dim_known():
-                    assert not new_tag.dyn_size_ext
+                    assert new_tag.dyn_size_ext is None
                     new_tag.derive_from(old_tag, set_derived_from_flag=False)
                 out = out.copy_template_replace_dim_tag(axis=axis_int, new_dim_tag=new_tag)
         if set_sparse is not None:
@@ -6346,7 +6348,7 @@ class ConvLayer(_ConcatInputLayer):
         if isinstance(filter_size[0], int):
             if not all(isinstance(s, int) for s in filter_size):
                 raise TypeError(f"filter_size {filter_size} types {[type(s) for s in filter_size]} inconsistent")
-            if filter_data:
+            if filter_data is not None:
                 assert filter_data.batch_ndim == len(filter_size) + 2
                 filter_dims = list(filter_data.dims)
                 filter_dims.remove(filter_in_dim)
@@ -6358,7 +6360,7 @@ class ConvLayer(_ConcatInputLayer):
         elif isinstance(filter_size[0], Dim):
             if not all(isinstance(s, Dim) for s in filter_size):
                 raise TypeError(f"filter_size {filter_size} types {[type(s) for s in filter_size]} inconsistent")
-            if filter_data:
+            if filter_data is not None:
                 assert all(d in filter_data.dims for d in filter_size)
         else:
             raise TypeError(
@@ -6367,7 +6369,7 @@ class ConvLayer(_ConcatInputLayer):
         filter_shape = list(filter_size) + [filter_in_dim, out_dim]
         from returnn.tf.util.basic import get_initializer
 
-        if filter_data:
+        if filter_data is not None:
             if filter_perm:
                 filter_data = TransposeLayer.transpose(filter_data, perm=filter_perm, name="filter_transposed")
             filter_data = filter_data.copy_transpose(filter_shape, allow_int=False)
@@ -10463,7 +10465,7 @@ class TopKLayer(LayerBase):
             k_data = k.output
             if k_data.batch:
                 k_dim = k_dim.get_for_batch_ctx(k_data.batch, k_data.control_flow_ctx)
-            if not k_dim.dyn_size_ext or k_dim.dyn_size_ext.placeholder is None:
+            if k_dim.dyn_size_ext is None or k_dim.dyn_size_ext.placeholder is None:
                 k_dim.dyn_size_ext = k_data.copy()
                 if k_dim.dyn_size_ext.placeholder is not None:
                     tag = Dim.get_tag_from_size_tensor(k_dim.dyn_size_ext.placeholder)
@@ -12364,7 +12366,7 @@ class BinaryCrossEntropyLoss(Loss):
         self._pos_weight = pos_weight
 
     def _check_init(self):
-        assert self.target
+        assert self.target is not None
         assert (
             self.target.batch_ndim == self.output.batch_ndim
         ), "Number of dimensions mismatch. Target: %s, output: %s" % (self.target, self.output)

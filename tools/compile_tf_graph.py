@@ -1276,8 +1276,8 @@ class RecStepByStepLayer(RecLayer):
         :rtype: RecStepByStepLayer.StateVar
         """
         assert name not in self.state_vars
-        assert data_shape or initial_value is not None
-        if data_shape:
+        assert data_shape is not None or initial_value is not None
+        if data_shape is not None:
             assert isinstance(data_shape, Data)
             if data_shape.have_batch_axis() and initial_value is not None:
                 assert initial_value.shape.dims[data_shape.batch_dim_axis].value is None
