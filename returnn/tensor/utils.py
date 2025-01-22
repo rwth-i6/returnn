@@ -51,11 +51,11 @@ def tensor_fill_random_numpy_(
         filled_this_round = False
 
         for dim in x.dims:
-            if dim.is_batch_dim() and not dim.dyn_size_ext:
+            if dim.is_batch_dim() and dim.dyn_size_ext is None:
                 dim.dyn_size_ext = Tensor("batch", [], dtype="int32")
-            if dim.is_dynamic() and not dim.dyn_size_ext:
+            if dim.is_dynamic() and dim.dyn_size_ext is None:
                 dim.dyn_size_ext = Tensor(dim.name or "time", dims=[batch_dim], dtype="int32")
-            if not dim.dyn_size_ext:
+            if dim.dyn_size_ext is None:
                 continue
             if tensor_fill_random_numpy_(
                 dim.dyn_size_ext,

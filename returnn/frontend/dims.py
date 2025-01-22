@@ -30,7 +30,7 @@ def range_over_dim(dim: Dim, *, dtype: Optional[str] = None, device: Optional[st
     :param device,
     :return: tensor with shape [dim]
     """
-    if dim.dyn_size_ext:
+    if dim.dyn_size_ext is not None:
         backend = get_backend_by_tensor(dim.dyn_size_ext, fallback=global_backend)
     else:
         backend = global_backend

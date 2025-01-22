@@ -1245,7 +1245,7 @@ class Engine(EngineBase):
             In the callback, we pass each sequence without the batch dim,
             so we must adapt the dim tags.
             """
-            if not dim.dyn_size_ext:
+            if dim.dyn_size_ext is None:
                 return dim
             if batch_dim not in dim.dyn_size_ext.dims:
                 return dim

@@ -247,7 +247,7 @@ class Loop:
         """
         assert not self.end_ref, f"{self}.end() can only be called once"
         assert source.dtype == "bool", f"{self}: end expects boolean condition, got {source}"
-        if not self.axis.dyn_size_ext:
+        if self.axis.dyn_size_ext is None:
             dyn_size_ext = source.copy_template()
             dyn_size_ext.dtype = "int32"
             if dyn_size_ext.control_flow_ctx:

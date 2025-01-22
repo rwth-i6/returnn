@@ -242,7 +242,7 @@ def test_zoneout_lstm_tf_layers_vs_rf_pt():
             for i, tag in enumerate(out.dim_tags):
                 if tag.is_batch_dim():
                     fetches[f"layer:{old_layer_name}:size{i}"] = tag.get_dim_value()
-                elif tag.dyn_size_ext:
+                elif tag.dyn_size_ext is not None:
                     old_model_outputs_data[f"{old_layer_name}:size{i}"] = tag.dyn_size_ext
                     fetches[f"layer:{old_layer_name}:size{i}"] = tag.dyn_size_ext.placeholder
         old_model_outputs_fetch = session.run(fetches, feed_dict=feed_dict)

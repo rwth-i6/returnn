@@ -1098,7 +1098,7 @@ class _NetDictBuilderCtx:
                     continue
                 # We need dyn_size_ext to know the implicit dims, to correctly set out_shape.
                 # If dyn_size_ext is not set yet, try to complete it.
-                if not dim.dyn_size_ext:
+                if dim.dyn_size_ext is None:
                     dim.complete_dyn_size()
                 assert (
                     dim.dyn_size_ext

@@ -746,7 +746,7 @@ class ReturnnLayersBackend(Backend[Layer]):
     @staticmethod
     def range_over_dim(dim: Dim, *, dtype: Optional[str] = None, device: Optional[str] = None) -> Tensor:
         """range over dim"""
-        if not dtype and dim.dyn_size_ext:
+        if not dtype and dim.dyn_size_ext is not None:
             dtype = dim.dyn_size_ext.dtype
         if not dtype:
             dtype = rf.get_default_array_index_dtype()

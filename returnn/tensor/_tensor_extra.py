@@ -300,7 +300,7 @@ class _TensorMixin(_TensorMixinBase):
             # Note: tag.kind (feature or spatial) is independent from self.feature_dim_axis.
             if tag.batch and self.batch:
                 assert tag.batch == self.batch or self.batch.is_broadcast()
-            if tag.dyn_size_ext:
+            if tag.dyn_size_ext is not None:
                 assert tag.dyn_size_ext.dtype in {"int32", "int64"}
                 if tag.dyn_size_ext.have_batch_axis():
                     assert tag.batch == tag.dyn_size_ext.batch
@@ -803,7 +803,7 @@ class _TensorMixin(_TensorMixinBase):
             if batch:
                 batch_dim_ = batch.dim
             elif dim_tag:
-                if dim_tag.dyn_size_ext:
+                if dim_tag.dyn_size_ext is not None:
                     assert dim_tag.dyn_size_ext.dims == ()
                     assert dim_tag.dyn_size_ext.raw_tensor is not None
                     batch_dim_ = dim_tag.dyn_size_ext.raw_tensor
@@ -1788,7 +1788,7 @@ class _TensorMixin(_TensorMixinBase):
         if self.sparse_dim and self.sparse_dim not in self_dim_tags:
             dims.add(_m.ImplicitSparseDim(self.sparse_dim))
         for dim in self.dim_tags:
-            if dim.dyn_size_ext:
+            if dim.dyn_size_ext is not None:
                 for dim_ in dim.dyn_size_ext.dim_tags:
                     if dim_ not in self_dim_tags:
                         dims.add(_m.ImplicitDynSizeDim(dim_))
@@ -2791,7 +2791,7 @@ class _TensorMixin(_TensorMixinBase):
         assert self.time_dim_axis is not None
         dim = self._dims[self.time_dim_axis]
         assert isinstance(dim, Dim)
-        if dim.dyn_size_ext:
+        if dim.dyn_size_ext is not None:
             if dim.dyn_size_ext.raw_tensor is None:
                 dim.complete_dyn_size()
             assert dim.dyn_size_ext.raw_tensor is not None
@@ -3699,7 +3699,7 @@ def _create_size_placeholder(name, axis_wo_b, tag, batch_dim):
 
     with reuse_name_scope("extern_data/placeholders/%s" % name, absolute=True):
         dyn_size_name = "%s_dim%i_size" % (name, axis_wo_b)
-        if not tag.dyn_size_ext:
+        if tag.dyn_size_ext is None:
             dyn_size_ext = _t.Tensor(
                 name=dyn_size_name,
                 dtype=_t.Tensor.size_dtype,

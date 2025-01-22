@@ -45,7 +45,7 @@ def help_on_torch_exception(
                 if dim in covered_dim_tags:
                     continue
                 covered_dim_tags.add(dim)
-                if not dim.dyn_size_ext:
+                if dim.dyn_size_ext is None:
                     continue
                 info, _ = _help_data_or_array(dim.dyn_size_ext.raw_tensor)
                 exc_ext.append(f"    dim {dim.short_repr()} size: {info}")

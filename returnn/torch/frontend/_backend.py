@@ -998,7 +998,7 @@ class TorchBackend(Backend[torch.Tensor]):
         else:
             raise TypeError(f"Unsupported type for indices: {type(indices)}")
         if clip_to_valid:
-            if axis.dyn_size_ext:
+            if axis.dyn_size_ext is not None:
                 indices = rf.clip_by_value(
                     indices, 0, axis.get_dyn_size_ext_for_device(indices.device) - 1, allow_broadcast_all_sources=True
                 )
@@ -1434,7 +1434,7 @@ class TorchBackend(Backend[torch.Tensor]):
         :param device:
         :return: tensor with shape [dim]
         """
-        if not dtype and dim.dyn_size_ext:
+        if not dtype and dim.dyn_size_ext is not None:
             dtype = dim.dyn_size_ext.dtype
         if not dtype:
             dtype = rf.get_default_array_index_dtype()
@@ -1736,7 +1736,7 @@ class TorchBackend(Backend[torch.Tensor]):
             out_raw = masked_select(in_raw, mask_raw, mask_len=known_mask_len)
         if not out_dim:
             out_dim = Dim(None, name="masked_select")
-        if not out_dim.dyn_size_ext:
+        if out_dim.dyn_size_ext is None:
             out_dim.dyn_size_ext = Tensor("masked_select_size", dims=(), dtype="int64")
         if out_dim.dyn_size_ext.raw_tensor is None:
             out_dim.dyn_size_ext.raw_tensor = torch.tensor(out_raw.shape[0], dtype=torch.int64)

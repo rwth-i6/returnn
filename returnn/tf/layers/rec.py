@@ -1891,9 +1891,9 @@ class _SubnetworkRecCell:
                                     assert old_dim.is_dynamic_seq_length() and new_dim.is_dynamic_seq_length()
                                     if new_dim.dyn_size_ext and new_dim.dyn_size_ext.raw_tensor is not None:
                                         continue
-                                    if not old_dim.dyn_size_ext:
+                                    if old_dim.dyn_size_ext is None:
                                         continue
-                                    if not new_dim.dyn_size_ext:
+                                    if new_dim.dyn_size_ext is None:
                                         out_dims[new_axis] = old_dim
                                         continue
                                     if old_dim.dyn_size_ext.raw_tensor is not None:
@@ -2488,7 +2488,7 @@ class _SubnetworkRecCell:
             with tf.name_scope(layer.tf_scope_name):
                 out = layer.output.copy_as_batch_major().copy_with_time_dim_axis(1)  # [B,T,...]
                 time_dim = out.dim_tags[1]
-                if time_dim.dyn_size_ext:
+                if time_dim.dyn_size_ext is not None:
                     indices = time_dim.dyn_size_ext.copy()
                 else:
                     indices = Data.from_tensor(tf_util.get_shape_dim(out.placeholder, 0))

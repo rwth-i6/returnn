@@ -83,7 +83,7 @@ class Dim(_DimMixin):
             self.dyn_size_ext = dimension.copy()
         else:
             raise TypeError(f"unexpected dimension type: {type(dimension)}")
-        if not name and not description and self.dyn_size_ext:
+        if not name and not description and self.dyn_size_ext is not None:
             name = self.dyn_size_ext.name
         self.name = name or description
         self._dyn_size_max_value = None

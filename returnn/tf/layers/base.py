@@ -829,7 +829,7 @@ class LayerBase:
                     assert not out_shape, "out_shape %r must be empty if not a set" % (out_shape,)
                 out_shape = set(out_shape)
                 out_shape.add(OptionalDim(over_rec_time_dim))
-                if over_rec_time_dim.dyn_size_ext:
+                if over_rec_time_dim.dyn_size_ext is not None:
                     for tag in over_rec_time_dim.dyn_size_ext.dim_tags:
                         if tag not in [d.tag if isinstance(d, _MarkedDim) else d for d in out_shape]:
                             out_shape.add(OptionalDim(tag))

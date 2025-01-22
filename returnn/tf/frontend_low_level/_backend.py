@@ -438,7 +438,7 @@ class TFBackend(Backend[tf.Tensor]):
         :param device:
         :return: range over dim
         """
-        if not dtype and dim.dyn_size_ext:
+        if not dtype and dim.dyn_size_ext is not None:
             dtype = dim.dyn_size_ext.dtype
         if not dtype:
             dtype = rf.get_default_array_index_dtype()

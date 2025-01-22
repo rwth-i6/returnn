@@ -271,7 +271,7 @@ def _dim_is_scalar_size(dim: Dim) -> bool:
     """dim is scalar size"""
     if dim.size is not None:
         return True
-    if dim.dyn_size_ext:
+    if dim.dyn_size_ext is not None:
         return dim.dyn_size_ext.dims == ()
     return False
 
@@ -280,7 +280,7 @@ def _dim_scalar_size(dim: Dim) -> int:
     """dim scalar size"""
     if dim.size is not None:
         return dim.size
-    if dim.dyn_size_ext:
+    if dim.dyn_size_ext is not None:
         assert dim.dyn_size_ext.dims == ()
         return dim.dyn_size_ext.raw_tensor
     raise Exception(f"dim {dim} has no known size")
@@ -293,7 +293,7 @@ def _pad_mask_zeros(x: Union[TensorDict, Tensor, Dim]):
         return
 
     if isinstance(x, Dim):
-        if x.dyn_size_ext:
+        if x.dyn_size_ext is not None:
             _pad_mask_zeros(x.dyn_size_ext)
         return
 

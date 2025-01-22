@@ -1647,7 +1647,7 @@ def test_ExternData_ext_Data_batch_info():
             x.batch == x.dim_tags[1].batch,
             x.dim_tags[1].dyn_size_ext,
         )
-        if not x.dim_tags[1].dyn_size_ext:
+        if not x.dim_tags[1].dyn_size_ext is not None:
             x.dim_tags[1].dyn_size_ext = Data(
                 name="x_default_dyn_size_ext_new", dim_tags=[batch_dim], dtype=Data.size_dtype, batch=x.batch
             )

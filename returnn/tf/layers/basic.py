@@ -2401,7 +2401,7 @@ class LengthLayer(LayerBase):
                 sparse=sparse,
                 dim=None if sparse else NotSpecified,
             )
-        if not dim.dyn_size_ext:  # yet undefined
+        if dim.dyn_size_ext is None:  # yet undefined
             return Data(
                 name="%s_length" % name,
                 shape=(),
@@ -4503,7 +4503,7 @@ class MergeDimsLayer(_ConcatInputLayer):
             return  # should be handled already
         if target_tag.dimension is not None:  # static
             return  # should be handled already
-        if target_tag.dyn_size_ext:
+        if target_tag.dyn_size_ext is not None:
             return  # handled already
 
         out_size = None
@@ -5690,7 +5690,7 @@ class RepeatLayer(_ConcatInputLayer):
             out_dim_.declare_same_as(out_dim)
         if data.batch:
             out_dim_ = out_dim_.get_for_batch_ctx(data.batch, data.control_flow_ctx)
-        if tag.dyn_size_ext and not out_dim_.dyn_size_ext:
+        if tag.dyn_size_ext and out_dim_.dyn_size_ext is None:
             out_dim_.dyn_size_ext = tag.dyn_size_ext.copy_template()
         return data.copy_template_replace_dim_tag(axis=data.get_batch_axis(0), new_dim_tag=out_dim_)
 
@@ -6009,7 +6009,7 @@ class ReinterpretDataLayer(_ConcatInputLayer):
                     new_dyn_size_ext.placeholder = tf.identity(
                         new_dyn_size_ext.placeholder, name=get_valid_scope_name_from_str(new_dyn_size_ext.name)
                     )
-                if new_tag.dyn_size_ext:
+                if new_tag.dyn_size_ext is not None:
                     assert new_dyn_size_ext.dim_tags == new_tag.dyn_size_ext.dim_tags
                 new_tag.dyn_size_ext = new_dyn_size_ext
                 new_tag.set_tag_on_size_tensor(new_dyn_size_ext.placeholder)

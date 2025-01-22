@@ -246,7 +246,7 @@ def main():
         for i, dim in enumerate(v.dims):
             if dim.dyn_size_ext and dim.dyn_size_ext.dims == ():
                 continue
-            if dim.dyn_size_ext:
+            if dim.dyn_size_ext is not None:
                 dynamic_axes[f"{k}:size{i}"] = {
                     j: dim_.name for j, dim_ in enumerate(dim.dyn_size_ext.dims) if dim_.is_dynamic()
                 }
