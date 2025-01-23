@@ -11630,8 +11630,6 @@ def test_subnetwork_unused_output():
 
 def test_subnetwork_deep_stack():
     # https://github.com/rwth-i6/returnn/issues/993
-    if not util.PY3:
-        raise unittest.SkipTest("test case needs python 3")  # __qualname__, __func__, etc
     with make_scope() as session:
         import better_exchook
         import traceback

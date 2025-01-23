@@ -253,7 +253,6 @@ def init(options):
     """
     global dataset
     rnn.init_better_exchook()
-    rnn.init_thread_join_hack()
     dataset_dict = None
     config_filename = None
     config_str = options.returnn_config

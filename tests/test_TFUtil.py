@@ -4133,8 +4133,6 @@ def test_softmax_cross_entropy_over_size_n_batch():
 
 
 def test_softmax_cross_entropy_over_size_n_batch_real():
-    if sys.version_info[0] <= 2:  # gzip.decompress is >=PY3
-        raise unittest.SkipTest
     import gzip
     import base64
 

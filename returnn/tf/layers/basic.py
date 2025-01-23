@@ -11,7 +11,7 @@ import contextlib
 from returnn.tensor import Tensor, Dim
 import returnn.tf.compat as tf_compat
 import returnn.tf.util.basic as tf_util
-from returnn.util.basic import unicode, NotSpecified
+from returnn.util.basic import NotSpecified
 from returnn.tf.util.data import Data, SearchBeam, FeatureDim, SpatialDim
 from returnn.tf.util.basic import OutputWithActivation, dimshuffle, swapaxes
 from returnn.log import log
@@ -13407,7 +13407,7 @@ class ViaLayerLoss(Loss):
                 error_signal = where_bc(seq_mask_bc, error_signal, 0.0)
             if self.loss_wrt_to_act_in:
                 assert self.output_with_activation, "activation unknown, via %r" % self.output
-                if isinstance(self.loss_wrt_to_act_in, (str, unicode)):
+                if isinstance(self.loss_wrt_to_act_in, str):
                     from returnn.tf.util.basic import get_activation_function
 
                     assert self.output_with_activation.act_func is get_activation_function(self.loss_wrt_to_act_in)

@@ -18,7 +18,6 @@ __my_dir__ = os.path.dirname(os.path.abspath(__file__))
 __base_dir__ = os.path.dirname(__my_dir__)
 __main_entry__ = __base_dir__ + "/rnn.py"
 py = sys.executable
-PY3 = sys.version_info[0] >= 3
 
 
 def build_env():
@@ -178,9 +177,7 @@ def test_StreamIO():
 
     buf.write("hello")
     print("buf: %r" % buf.getvalue())
-    if PY3:
-        # This behavior is not correct in Python 2.7. https://bugs.python.org/issue30250
-        assert buf.getvalue() == "\x00\x00\x00\x00\x00hello"  # zero-filled
+    assert buf.getvalue() == "\x00\x00\x00\x00\x00hello"  # zero-filled
     buf.truncate(0)
     buf.seek(0)
     print("buf: %r" % buf.getvalue())

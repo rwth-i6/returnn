@@ -62,7 +62,6 @@ def init(config_filename: str, checkpoint: str, log_verbosity: int, device: str)
     """
     assert os.path.exists(checkpoint), "The specified checkpoint doesn't exist."
     rnn.init_better_exchook()
-    rnn.init_thread_join_hack()
     assert os.path.exists(config_filename), "The specified config doesn't exist."
     print("Using config file %r." % config_filename)
     rnn.init_config(

@@ -36,6 +36,7 @@ from returnn.util.basic import BackendEngine, BehaviorVersion
 # noinspection PyUnresolvedReferences
 from returnn.util.debug import init_ipython_kernel, init_better_exchook, init_faulthandler, debug_shell
 
+# Some external scripts import those functions from here, thus keep this here.
 # noinspection PyUnresolvedReferences
 from returnn.util.basic import init_thread_join_hack, describe_returnn_version
 
@@ -454,7 +455,6 @@ def init(config_filename=None, command_line_options=(), config_updates=None, ext
     """
     with util.ReportImportedDevModules(description="RETURNN init"):
         debug_util.init_better_exchook()
-        util.init_thread_join_hack()
         init_config(
             config_filename=config_filename, command_line_options=command_line_options, extra_updates=config_updates
         )
