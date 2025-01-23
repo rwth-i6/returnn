@@ -26,6 +26,7 @@ class _TensorOpOverloadsMixin(_TensorMixinBase):
         log.print_deprecation_warning(
             f"{self} __bool__: Using a Tensor in a boolean context is deprecated.", behavior_version=22
         )
+        return True
 
     # --- comparisons
 
