@@ -798,6 +798,7 @@ class SubProcCopyGlobalConfigPreInitFunc:
 
     def __call__(self):
         from returnn.util import better_exchook
+        from returnn.log import log
         from returnn import __old_mod_loader__
 
         better_exchook.install()
@@ -805,3 +806,7 @@ class SubProcCopyGlobalConfigPreInitFunc:
 
         if self.global_config:
             set_global_config(self.global_config)
+            log.init_by_config(self.global_config)
+        else:
+            if not log.initialized:
+                log.initialize(verbosity=[5])
