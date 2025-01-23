@@ -1963,15 +1963,15 @@ def _py2_unicode_to_str_recursive(s):
         return s
 
 
-def load_json(filename=None, content=None):
+def load_json(filename: Optional[str] = None, content: Optional[str] = None) -> Dict[str, Any]:
     """
-    :param str|None filename:
-    :param str|None content:
-    :rtype: dict[str]
+    :param filename:
+    :param content:
     """
     if content:
         assert not filename
     else:
+        assert filename
         content = open(filename).read()
     import json
 
