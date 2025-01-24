@@ -15,6 +15,7 @@ __all__ = [
     "range_over_dim_strided",
     "range_over_merged_dims",
     "replace_dim",
+    "replace_dim_v2",
     "set_sparse_dim",
     "dim_match_priority_when_needed",
     "num_elements_of_shape",
@@ -82,18 +83,70 @@ def range_over_merged_dims(
 
 def replace_dim(source: Tensor, *, in_dim: Dim, out_dim: Optional[Dim] = None) -> Tuple[Tensor, Dim]:
     """
-    Also see: :func:`rf.merge_dims`, :func:`rf.split_dims`.
+    Also see: :func:`replace_dim_v2`, :func:`rf.merge_dims`, :func:`rf.split_dims`.
 
     :param source:
-    :param in_dim:
-    :param out_dim:
-    :return: source with in_dim replaced by out_dim, and new out_dim.
-        this does not work for the sparse_dim. see :func:`set_sparse_dim` for that case.
+    :param in_dim: should be in ``source.dims``, to be replaced.
+        If you want to replace the ``source.sparse_dim``, see :func:`set_sparse_dim`.
+    :param out_dim: If not given, will create a new dim with the same size as ``in_dim``.
+        Note: If the size of ``out_dim`` is different from ``in_dim``,
+        currently the dim tag is replaced and there is no error -- this is not checked.
+    :return: ``source`` with ``in_dim`` replaced by ``out_dim``, and ``out_dim``.
     """
     if not out_dim:
         out_dim = in_dim.copy(same_as_self=False, description="new-dim")
     # noinspection PyProtectedMember
     return source._raw_backend.replace_dim(source, in_dim=in_dim, out_dim=out_dim), out_dim
+
+
+def replace_dim_v2(
+    source: Tensor, *, in_dim: Dim, out_dim: Dim, allow_expand: bool = True, allow_shrink: bool = True
+) -> Tensor:
+    """
+    Extends :func:`replace_dim` by also allowing to expand or shrink the dim
+    (or rather, to not ignore this; when :func:`replace_dim` is used on a dim with different size,
+     it will ignore this and anyway accept the new dim tag (currently)).
+
+    :param source:
+    :param in_dim: should be in ``source.dims``, to be replaced.
+        If you want to replace the ``source.sparse_dim``, see :func:`set_sparse_dim`.
+    :param out_dim: should not be in ``source.dims``, to be replaced.
+        Note: In contrast to :func:`replace_dim`, you must provide this explicitly.
+    :param allow_expand: if True, allow to expand the dim, i.e. if ``out_dim.size > in_dim.size``.
+    :param allow_shrink: if True, allow to shrink the dim, i.e. if ``out_dim.size < in_dim.size``.
+    :return: ``source`` with ``in_dim`` replaced by ``out_dim``.
+    """
+    if not rf.is_executing_eagerly():
+        raise NotImplementedError  # just not implemented yet. we can do via :func:`cond`
+    if in_dim not in source.dims:
+        raise ValueError(f"replace_dim_v2: dim {in_dim} not in {source}")
+    if out_dim in source.dims:
+        raise ValueError(f"replace_dim_v2: dim {out_dim} already in {source}")
+    old_size = in_dim.get_dim_value()
+    new_size = out_dim.get_dim_value()
+    if new_size == old_size:
+        res, _ = rf.replace_dim(source, in_dim=in_dim, out_dim=out_dim)
+    elif new_size > old_size:
+        if not allow_expand:
+            raise ValueError(
+                f"replace_dim_v2: not allowed to expand: {old_size} -> {new_size},"
+                f" for {in_dim=} {out_dim=}, in {source=}"
+            )
+        res, _ = rf.pad(
+            source,
+            axes=[in_dim],
+            padding=[(0, out_dim.get_dim_value_tensor() - in_dim.get_dim_value_tensor())],
+            out_dims=[out_dim],
+            value=0,
+        )
+    else:
+        if not allow_shrink:
+            raise ValueError(
+                f"replace_dim_v2: not allowed to shrink: {old_size} -> {new_size},"
+                f" for {in_dim=} {out_dim=}, in {source=}"
+            )
+        res, _ = rf.slice(source, axis=in_dim, size=out_dim)
+    return res
 
 
 def set_sparse_dim(source: Tensor, sparse_dim: Dim) -> Tensor:
