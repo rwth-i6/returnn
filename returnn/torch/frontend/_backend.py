@@ -1780,6 +1780,12 @@ class TorchBackend(Backend[torch.Tensor]):
 
         mask = mask.copy_masked(mask_value=False)
         mask_raw = mask.copy_compatible_to_dims_raw(out_dims)
+        if torch.__version__ < (2, 1):
+            # There is a bug in older PyTorch where masked_scatter_ does not work correctly with non-contiguous tensors.
+            # https://github.com/pytorch/pytorch/issues/99638
+            out_raw = out_raw.contiguous()
+            mask_raw = mask_raw.contiguous()
+            source_raw = source_raw.contiguous()
         out_raw.masked_scatter_(mask_raw, source_raw)
         return Tensor(
             "masked_scatter",
