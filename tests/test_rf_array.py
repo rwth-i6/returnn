@@ -200,6 +200,145 @@ def test_pad_packed_batched():
     np.testing.assert_array_equal(in_.raw_tensor, out.raw_tensor)
 
 
+def test_masked_select_masked_scatter_vs_where_rev_dims():
+    """
+    Compare rf.where vs rf.masked_select+rf.masked_scatter.
+    Some op (e.g. LM update) could be done more efficiently on just the packed data (rf.masked_select),
+    that is why rf.masked_select+rf.masked_scatter can be useful over just using rf.where.
+    (In general, when computing the new ``a`` is expensive.)
+    The test does not cover this part on the computation (we just feed in some random ``a``),
+    but it checks that the results are the same,
+    as we had some problems with that in the past.
+    """
+    # noinspection PyShadowingNames
+    batch_dim = Dim(2, name="batch")
+    beam_dim = Dim(3, name="beam")
+
+    extern_data = TensorDict(
+        {
+            "mask": Tensor("mask", [beam_dim, batch_dim], dtype="bool"),
+            # Note: The dim order is relevant for this test. It passes when it is [batch_dim, beam_dim]...
+            "a": Tensor("a", [beam_dim, batch_dim], dtype="int32"),
+            "b": Tensor("b", [beam_dim, batch_dim], dtype="int32"),
+        }
+    )
+
+    # noinspection PyShadowingNames
+    def _forward_step(*, extern_data: TensorDict, **_kwargs):
+        mask = extern_data["mask"]
+        a = extern_data["a"]
+        b = extern_data["b"]
+        a.mark_as_output("a", shape=[beam_dim, batch_dim])
+        b.mark_as_output("b", shape=[beam_dim, batch_dim])
+        mask.mark_as_output("mask", shape=[beam_dim, batch_dim])
+
+        # Code via rf.where.
+        res_where = rf.where(mask, a, b)
+        assert res_where.dims_set == {beam_dim, batch_dim}
+        res_where.mark_as_output("res_where", shape=[beam_dim, batch_dim])
+
+        # Code via rf.masked_select and rf.masked_scatter.
+        a_packed, packed_dim = rf.masked_select(a, mask=mask, dims=[batch_dim, beam_dim])
+        assert a_packed.dims_set == {packed_dim}
+        res_packed = rf.masked_scatter(a_packed, b, mask=mask, dims=[batch_dim, beam_dim], in_dim=packed_dim)
+        assert res_packed.dims_set == {batch_dim, beam_dim}
+        res_packed.mark_as_output("res_packed", shape=[beam_dim, batch_dim])
+
+    out_dict = run_model(extern_data, lambda **_kwargs: rf.Module(), _forward_step, test_tensorflow=False)
+    res_where = out_dict["res_where"]
+    res_packed = out_dict["res_packed"]
+    assert res_where.raw_tensor.shape == res_packed.raw_tensor.shape
+    print("a:")
+    print(out_dict["a"].raw_tensor)
+    print("b:")
+    print(out_dict["b"].raw_tensor)
+    print("mask:")
+    print(out_dict["mask"].raw_tensor)
+    print("result with where:")
+    print(res_where.raw_tensor)
+    print("result with packing:")
+    print(res_packed.raw_tensor)
+    np.testing.assert_equal(res_where.raw_tensor, res_packed.raw_tensor)
+
+
+def test_masked_select_masked_scatter_vs_where_md_rev_dims():
+    """
+    Like :func:`test_masked_select_masked_scatter_vs_where_rev_dims`
+    but we add another spatial dim, which then needs some further handling.
+    """
+    # noinspection PyShadowingNames
+    batch_dim = Dim(2, name="batch")
+    beam_dim = Dim(3, name="beam")
+    hist_a_dim = Dim(Tensor("hist_a", [batch_dim, beam_dim], dtype="int32"))
+    hist_b_dim = Dim(Tensor("hist_b", [batch_dim, beam_dim], dtype="int32"))
+
+    extern_data = TensorDict(
+        {
+            "mask": Tensor("mask", [beam_dim, batch_dim], dtype="bool"),
+            "a": Tensor("a", [beam_dim, batch_dim, hist_a_dim], dtype="int32"),
+            "b": Tensor("b", [beam_dim, batch_dim, hist_b_dim], dtype="int32"),
+        }
+    )
+
+    # noinspection PyShadowingNames
+    def _forward_step(*, extern_data: TensorDict, **_kwargs):
+        mask = extern_data["mask"]
+        a = extern_data["a"]
+        b = extern_data["b"]
+        a.mark_as_output("a", shape=[beam_dim, batch_dim, hist_a_dim])
+        b.mark_as_output("b", shape=[beam_dim, batch_dim, hist_b_dim])
+        mask.mark_as_output("mask", shape=[beam_dim, batch_dim])
+        hist_a_size = hist_a_dim.get_size_tensor()
+        hist_b_size = hist_b_dim.get_size_tensor()
+
+        # Code via rf.where.
+        hist_comb_sizes = rf.where(mask, hist_a_size, hist_b_size)
+        hist_comb_dim = Dim(hist_comb_sizes, name="hist_comb")
+        a_ = rf.replace_dim_v2(a, in_dim=hist_a_dim, out_dim=hist_comb_dim)
+        b_ = rf.replace_dim_v2(b, in_dim=hist_b_dim, out_dim=hist_comb_dim)
+        res_where = rf.where(mask, a_, b_)
+        assert res_where.dims_set == {beam_dim, batch_dim, hist_comb_dim}
+        res_where.mark_as_output("res_where", shape=[beam_dim, batch_dim, hist_comb_dim])
+
+        # Code via rf.masked_select and rf.masked_scatter.
+        hist_a_packed_size, packed_dim = rf.masked_select(hist_a_size, mask=mask, dims=[batch_dim, beam_dim])
+        hist_a_packed_dim = Dim(hist_a_packed_size, name="hist_a_packed")
+        a_packed, _ = rf.masked_select(a, mask=mask, dims=[batch_dim, beam_dim], out_dim=packed_dim)
+        a_packed = rf.replace_dim_v2(a_packed, in_dim=hist_a_dim, out_dim=hist_a_packed_dim)
+        assert a_packed.dims_set == {packed_dim, hist_a_packed_dim}
+        hist_merged_size = rf.masked_scatter(
+            hist_a_packed_size, hist_b_size, mask=mask, dims=[batch_dim, beam_dim], in_dim=packed_dim
+        )
+        hist_merged_dim = Dim(hist_merged_size, name="hist_merged")
+        a_packed = rf.replace_dim_v2(a_packed, in_dim=hist_a_packed_dim, out_dim=hist_merged_dim)
+        b_packed = rf.replace_dim_v2(b, in_dim=hist_b_dim, out_dim=hist_merged_dim)
+        res_packed = rf.masked_scatter(a_packed, b_packed, mask=mask, dims=[batch_dim, beam_dim], in_dim=packed_dim)
+        assert res_packed.dims_set == {batch_dim, beam_dim, hist_merged_dim}
+        res_packed.mark_as_output("res_packed", shape=[beam_dim, batch_dim, hist_merged_dim])
+
+    out_dict = run_model(extern_data, lambda **_kwargs: rf.Module(), _forward_step, test_tensorflow=False)
+    res_where = out_dict["res_where"]
+    res_packed = out_dict["res_packed"]
+    hist_where_dim = res_where.dims[-1]
+    hist_packed_dim = res_packed.dims[-1]
+    assert hist_where_dim.dyn_size_ext.dims_set == hist_packed_dim.dyn_size_ext.dims_set == {batch_dim, beam_dim}
+    hist_where_size_raw = hist_where_dim.dyn_size_ext.copy_compatible_to_dims_raw((batch_dim, beam_dim))
+    hist_packed_size_raw = hist_packed_dim.dyn_size_ext.copy_compatible_to_dims_raw((batch_dim, beam_dim))
+    assert (hist_where_size_raw == hist_packed_size_raw).all()
+    assert res_where.raw_tensor.shape == res_packed.raw_tensor.shape
+    print("a:")
+    print(out_dict["a"].raw_tensor)
+    print("b:")
+    print(out_dict["b"].raw_tensor)
+    print("mask:")
+    print(out_dict["mask"].raw_tensor)
+    print("result with where:")
+    print(res_where.raw_tensor)
+    print("result with packing:")
+    print(res_packed.raw_tensor)
+    np.testing.assert_equal(res_where.raw_tensor, res_packed.raw_tensor)
+
+
 def test_reshape():
     time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
     in_dim = Dim(7, name="in")

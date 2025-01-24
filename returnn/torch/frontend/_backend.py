@@ -1767,15 +1767,15 @@ class TorchBackend(Backend[torch.Tensor]):
         source_raw = source.copy_compatible_to_dims_raw(source_templ_dims)
 
         out_dims = tuple(dims) + tuple(remaining_dims)
+        out_shape = [d.get_dim_value() for d in out_dims]
         if backup is None:
-            out_shape = [d.get_dim_value() for d in out_dims]
             out_raw = torch.zeros(out_shape, dtype=source_raw.dtype, device=source_raw.device)
         else:
             assert set(backup.dims).issubset(out_dims), f"backup dims {backup.dims} not subset of out dims {out_dims}"
             for d in out_dims:
                 if d not in backup.dims:
                     backup = rf.expand_dim(backup, dim=d)
-            out_dims = backup.dims
+            backup = backup.copy_transpose(out_dims)
             out_raw = backup.raw_tensor.clone()  # we operate inplace below
 
         mask = mask.copy_masked(mask_value=False)
