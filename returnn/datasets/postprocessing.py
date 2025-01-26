@@ -382,7 +382,7 @@ class LaplaceOrdering(Callable[[Iterator[TensorDict]], Iterator[TensorDict]]):
                     has_ended = True
 
             if len(seq_buffer) < self.num_seqs_per_bin:
-                assert has_ended and not next_seq_buffer
+                assert (len(seq_buffer) == 0 or has_ended) and not next_seq_buffer
                 break
 
             is_down_phase = not is_down_phase
