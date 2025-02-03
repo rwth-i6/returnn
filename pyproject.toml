@@ -14,4 +14,4 @@ extend-exclude = '''
 '''
 
 [build-system]
-requires = ["setuptools"]
+requires = ["setuptools", "numpy"]
