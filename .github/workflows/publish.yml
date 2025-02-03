@@ -31,11 +31,11 @@ jobs:
     - name: Install Python deps
       run: |
         echo "PATH=$PATH:$HOME/.local/bin" >> $GITHUB_ENV
-        pip3 install --user --upgrade pip setuptools wheel twine
+        pip3 install --user --upgrade pip build twine
         pip3 install --user typing  # needed for Python 2 in some cases
         pip3 install --user -r requirements.txt
 
-    - run: python3 setup.py sdist
+    - run: python3 -m build
 
     # https://github.com/marketplace/actions/pypi-publish
     - name: Publish to PyPI
