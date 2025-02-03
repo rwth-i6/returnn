@@ -84,7 +84,6 @@ def main():
         package_data={"returnn": package_data},  # filtered via MANIFEST.in
         install_requires=[
             "numpy",
-            "h5py",
         ],
         description="The RWTH extensible training framework for universal recurrent neural networks",
         author="Albert Zeyer",
