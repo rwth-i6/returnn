@@ -10,7 +10,6 @@ from typing import Optional, Union, Any, Generic, TypeVar, Iterable, Tuple, Dict
 import subprocess
 from subprocess import CalledProcessError
 
-import h5py
 from collections import deque
 import inspect
 import os
@@ -718,6 +717,8 @@ def hdf5_dimension(filename, dimension):
     :param str dimension:
     :rtype: numpy.ndarray|int
     """
+    import h5py
+
     fin = h5py.File(filename, "r")
     if "/" in dimension:
         res = fin["/".join(dimension.split("/")[:-1])].attrs[dimension.split("/")[-1]]
@@ -733,6 +734,8 @@ def hdf5_group(filename, dimension):
     :param str dimension:
     :rtype: dict[str]
     """
+    import h5py
+
     fin = h5py.File(filename, "r")
     res = {k: fin[dimension].attrs[k] for k in fin[dimension].attrs}
     fin.close()
@@ -745,6 +748,8 @@ def hdf5_shape(filename, dimension):
     :param dimension:
     :rtype: tuple[int]
     """
+    import h5py
+
     fin = h5py.File(filename, "r")
     res = fin[dimension].shape
     fin.close()
@@ -757,6 +762,8 @@ def hdf5_strings(handle, name, data):
     :param str name:
     :param numpy.ndarray|list[str] data:
     """
+    import h5py
+
     # noinspection PyBroadException
     try:
         s = max([len(d) for d in data])

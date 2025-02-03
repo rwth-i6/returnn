@@ -3,17 +3,19 @@ Provides :class:`HDFDataset`.
 """
 
 from __future__ import annotations
-from typing import Union
+from typing import TYPE_CHECKING, Union
 import typing
 import bisect
 import collections
 import gc
-import h5py
 import numpy
 from .cached import CachedDataset
 from .cached2 import CachedDataset2
 from .basic import Dataset, DatasetSeq
 from returnn.log import log
+
+if TYPE_CHECKING:
+    import h5py
 
 
 # Common attribute names for HDF dataset, which should be used in order to be proceed with HDFDataset class.
@@ -82,6 +84,8 @@ class HDFDataset(CachedDataset):
         Use load_seqs() to load the actual data.
         :type filename: str
         """
+        import h5py
+
         if self._use_cache_manager:
             from returnn.util.basic import cf
 
@@ -660,6 +664,8 @@ class NextGenHDFDataset(CachedDataset2):
         """
         :param str path:
         """
+        import h5py
+
         self.files.append(path)
         self.h5_files.append(h5py.File(path))
 
@@ -852,6 +858,8 @@ class SiameseHDFDataset(CachedDataset2):
 
         :param str path: path to single .hdf file
         """
+        import h5py
+
         self.files.append(path)
         self.h5_files.append(h5py.File(path, "r"))
         cur_file = self.h5_files[-1]
@@ -1092,6 +1100,7 @@ class SimpleHDFWriter:
         import tempfile
         import os
         import shutil
+        import h5py
 
         if ndim is None:
             if dim is None:
@@ -1170,6 +1179,7 @@ class SimpleHDFWriter:
         :rtype: bool
         """
         from returnn.util.basic import hdf5_strings
+        import h5py
 
         added_count = 0
         for data_key, (dim, ndim, dtype) in extra_type.items():
@@ -1405,6 +1415,8 @@ class HDFDatasetWriter:
         """
         :param str filename: for the HDF to write
         """
+        import h5py
+
         print("Creating HDF dataset file %s" % filename, file=log.v3)
         self.filename = filename
         self.file = h5py.File(filename, "w")
