@@ -165,7 +165,7 @@ def run_model_torch_train(
     assert isinstance(total_loss, Tensor) and not total_loss.dims and total_loss.raw_tensor.dtype.is_floating_point
     total_loss_v = total_loss.raw_tensor.detach().numpy().item()
     print("total loss (for backprop):", total_loss_v)
-    res = {"total_loss": total_loss}
+    res = {"total_loss": total_loss_v}
 
     total_loss.raw_tensor.backward()  # test backprop
 
@@ -271,7 +271,7 @@ def _dim_is_scalar_size(dim: Dim) -> bool:
     """dim is scalar size"""
     if dim.size is not None:
         return True
-    if dim.dyn_size_ext:
+    if dim.dyn_size_ext is not None:
         return dim.dyn_size_ext.dims == ()
     return False
 
@@ -280,7 +280,7 @@ def _dim_scalar_size(dim: Dim) -> int:
     """dim scalar size"""
     if dim.size is not None:
         return dim.size
-    if dim.dyn_size_ext:
+    if dim.dyn_size_ext is not None:
         assert dim.dyn_size_ext.dims == ()
         return dim.dyn_size_ext.raw_tensor
     raise Exception(f"dim {dim} has no known size")
@@ -293,7 +293,7 @@ def _pad_mask_zeros(x: Union[TensorDict, Tensor, Dim]):
         return
 
     if isinstance(x, Dim):
-        if x.dyn_size_ext:
+        if x.dyn_size_ext is not None:
             _pad_mask_zeros(x.dyn_size_ext)
         return
 
@@ -314,7 +314,7 @@ def _check_dim(d_pt: Dim, d_tf: Dim):
     assert d_pt.size == d_tf.size
     assert _dim_is_scalar_size(d_pt) == _dim_is_scalar_size(d_tf)
     if not _dim_is_scalar_size(d_pt):
-        assert d_pt.dyn_size_ext and d_tf.dyn_size_ext
+        assert d_pt.dyn_size_ext is not None and d_tf.dyn_size_ext is not None
         # There might be cases where the dims are maybe not equal
         # (same reasoning as above, or also different order),
         # although this would be quite exotic.

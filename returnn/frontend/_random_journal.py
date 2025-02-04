@@ -58,7 +58,7 @@ class RandomJournal:
         """read next"""
         assert self._cur_entry_idx < len(self._entries)
         entry = self._entries[self._cur_entry_idx]
-        if new_out_template:
+        if new_out_template is not None:
             assert new_out_template.dtype == entry.out.dtype, (
                 f"random journal entry dtype mismatch,"
                 f" expected {new_out_template}, got {entry.out} at index {self._cur_entry_idx}"

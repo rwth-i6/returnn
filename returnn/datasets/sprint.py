@@ -25,7 +25,7 @@ from returnn.datasets.basic import Dataset, DatasetSeq
 from .cached2 import CachedDataset2
 from returnn.log import log
 from returnn.util.task_system import numpy_copy_and_set_unused
-from returnn.util.basic import eval_shell_str, interrupt_main, unicode, PY3, close_all_fds_except
+from returnn.util.basic import eval_shell_str, interrupt_main, unicode, close_all_fds_except
 import returnn.util.basic as util
 
 
@@ -442,11 +442,8 @@ class SprintDatasetBase(Dataset):
             if isinstance(v, unicode):
                 v = v.encode("utf8")
             if isinstance(v, (str, bytes)):
-                if PY3:
-                    assert isinstance(v, bytes)
-                    v = list(v)
-                else:
-                    v = list(map(ord, v))
+                assert isinstance(v, bytes)
+                v = list(v)
                 v = numpy.array(v, dtype="uint8")
                 targets[key] = v
                 if self.str_add_final_zero:

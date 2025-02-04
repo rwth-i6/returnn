@@ -352,15 +352,16 @@ class OutputWithActivation:
         return safe_log(self.y)
 
 
-def variable_scalar_summaries_dict(x, name=None):
+def variable_scalar_summaries_dict(
+    x: Union[tf.Tensor, tf.Variable], name: Optional[str] = None
+) -> Dict[str, tf.Tensor]:
     """
     Collects all interesting information about `x`, such as min/max/mean, etc. (all scalars).
     This is used by :func:`variable_summaries`.
 
-    :param tf.Tensor|tf.Variable x:
-    :param str name:
-    :return: dicth with key -> scalar info, e.g. with "%s_mean" % name -> tf.reduce_mean(x)
-    :rtype: dict[str,tf.Tensor]
+    :param x:
+    :param name:
+    :return: dict with key -> scalar info, e.g. with "%s_mean" % name -> tf.reduce_mean(x)
     """
     if x.dtype == tf.string:
         return {}
@@ -1025,7 +1026,7 @@ def setup_tf_thread_pools(num_threads=None, log_file=None, tf_session_opts=None)
 
     :param int num_threads: used for both intra and inter parallelism thread pools
     :param stream|None log_file:
-    :param dict[str] tf_session_opts:
+    :param dict[str,typing.Any] tf_session_opts:
     """
     global _setup_tf_thread_pools_called_once
     if _setup_tf_thread_pools_called_once:
@@ -1056,12 +1057,12 @@ def setup_tf_thread_pools(num_threads=None, log_file=None, tf_session_opts=None)
         session.close()
 
 
-def check_initial_tf_thread_pool_init(tf_session_opts=None):
+def check_initial_tf_thread_pool_init(tf_session_opts: Dict[str, Any] = None):
     """
     Makes sure that the TF thread pools are initialized with the requested settings.
     You probably want to call this very early.
 
-    :param dict[str]|None tf_session_opts:
+    :param tf_session_opts:
     """
     if not _setup_tf_thread_pools_called_once:
         from returnn.util.basic import try_get_caller_name
@@ -1184,7 +1185,7 @@ def print_available_devices(tf_session_opts=None, file=None):
     Note that a call to this will trigger the internal TF thread pool inits,
     so you should call :func:`setup_tf_thread_pools` first.
 
-    :param dict[str]|None tf_session_opts: if given, will init a temp Session with these opts
+    :param dict[str,typing.Any]|None tf_session_opts: if given, will init a temp Session with these opts
     :param typing.TextIO|None file: file stream for print statements, defaults to sys.stdout
     """
     if file is None:

@@ -1,17 +1,14 @@
-# -*- coding: utf8 -*-
+"""
+Tests for returnn.datasets.generating.
+"""
 
 from __future__ import annotations
 
 import _setup_test_env  # noqa
-import unittest
-from returnn.datasets.generating import *
-from returnn.datasets.basic import DatasetSeq
-from returnn.util.basic import PY3, unicode
 import os
 import unittest
-
+from returnn.datasets.generating import *
 from returnn.util import better_exchook
-from returnn.log import log
 
 
 my_dir = os.path.dirname(os.path.realpath(__file__))
@@ -86,19 +83,15 @@ def test_StaticDataset_utf8():
     s = "wër"
     print("some unicode str:", s, "repr:", repr(s), "type:", type(s), "len:", len(s))
     assert len(s) == 3
-    if PY3:
-        assert isinstance(s, str)
-        s_byte_list = list(s.encode("utf8"))
-    else:
-        assert isinstance(s, unicode)
-        s_byte_list = list(map(ord, s.encode("utf8")))
+    assert isinstance(s, str)
+    s_byte_list = list(s.encode("utf8"))
     print("utf8 byte list:", s_byte_list)
     assert len(s_byte_list) == 4 > 3
     raw = numpy.array(s_byte_list, dtype="uint8")
     assert raw.tolist() == [119, 195, 171, 114]
     data = StaticDataset([{"data": raw}], output_dim={"data": (255, 1)})
     if "data" not in data.labels:
-        data.labels["data"] = [chr(i) for i in range(255)]  # like in SprintDataset
+        data.labels["data"] = [chr(i) for i in range(256)]  # like in SprintDataset
     data.init_seq_order(epoch=1)
     data.load_seqs(0, 1)
     raw_ = data.get_data(seq_idx=0, key="data")

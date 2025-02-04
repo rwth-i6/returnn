@@ -98,6 +98,7 @@ class PostprocessingDataset(CachedDataset2):
         map_seq: Optional[Callable] = None,
         map_seq_stream: Optional[Callable] = None,
         map_outputs: Optional[Dict[str, Any]] = None,
+        map_seq_stream_preserves_num_seqs: Optional[bool] = None,
         **kwargs,
     ):
         """
@@ -121,6 +122,8 @@ class PostprocessingDataset(CachedDataset2):
             To simplify the common case when no shapes change, this value can be left unspecified. The dataset then
             assumes the same data layout as returned by the wrapped dataset.
             Example: `map_outputs={"data": {"dim": 42}}`
+        :param map_seq_stream_preserves_num_seqs: whether the function in map_seq_stream preserves the number of
+            sequences, i.e. for every input sequence there is exactly one output sequence.
         :param kwargs: see :class:`CachedDataset2`, :class:`Dataset`
         """
         super().__init__(**kwargs)
@@ -131,28 +134,36 @@ class PostprocessingDataset(CachedDataset2):
             raise ValueError(f"{self}: need to either set map_seq or map_seq_stream")
         if map_seq and map_seq_stream:
             raise ValueError(f"{self}: cannot set both map_seq and map_seq_stream")
+        if map_seq and map_seq_stream_preserves_num_seqs is not None:
+            raise ValueError(f"{self}: map_seq_stream_preserves_num_seqs is only allowed with map_seq_stream")
 
         self._dataset_def = dataset
         self._map_seq = map_seq
         self._map_seq_stream = map_seq_stream
+        if map_seq_stream_preserves_num_seqs is None and map_seq_stream is not None:
+            map_seq_stream_preserves_num_seqs = getattr(map_seq_stream, "preserves_num_seqs", None)
+        self._map_seq_stream_preserves_num_seqs = map_seq_stream_preserves_num_seqs or False
         self._map_outputs = map_outputs
         self._rng = RandomState(self._get_random_seed_for_epoch(0))
         self._seq_list_for_validation: Optional[List[str]] = None
 
         self._dataset = init_dataset(self._dataset_def, parent_dataset=self)
-        if self._map_seq_stream is None:
+        if self._map_seq_stream is None or self._map_seq_stream_preserves_num_seqs:
             # if the stream mapper is set, the num_seqs may change and the estimation is less accurate
             self._estimated_num_seqs = self._dataset.estimated_num_seqs
         self._data_iter: Optional[Iterator[Tuple[int, TensorDict]]] = None
+        self._data_iter_produced_num_seqs = 0
 
         self._in_tensor_dict_template = TensorDict(
             {name: self._make_tensor_template_from_input(name) for name in self._dataset.get_data_keys()}
         )
+        self.labels = {}
         if self._map_outputs is not None:
             self._out_tensor_dict_template = TensorDict()
             self._out_tensor_dict_template.update(self._map_outputs, auto_convert=True)
         else:
             self._out_tensor_dict_template = self._in_tensor_dict_template.copy_template()
+            self.labels = self._dataset.labels.copy()
         # update only after _out_tensor_dict_template has been created from _in_tensor_dict_template
         self._in_tensor_dict_template.update(
             {"epoch_continuous": {"dims": (), "dtype": "float64"}, "seq_tag": {"dims": (), "dtype": "string"}},
@@ -165,8 +176,9 @@ class PostprocessingDataset(CachedDataset2):
         self._default_input = "data" if "data" in self.num_outputs else next(iter(self.num_outputs.keys()))
         self.num_inputs = self.num_outputs[self._default_input][0]
 
-        self.labels = {}
         for k, t in self._out_tensor_dict_template.data.items():
+            if self.labels.get(k):
+                continue
             if t.vocab:
                 self.labels[k] = t.vocab.labels
             elif t.sparse_dim:  # sparse_dim but not vocab
@@ -197,10 +209,11 @@ class PostprocessingDataset(CachedDataset2):
         assert self._dataset is not None
         self._dataset.init_seq_order(epoch=epoch, seq_list=seq_list, seq_order=seq_order)
         self._data_iter = enumerate(self._build_mapping_iter())
+        self._data_iter_produced_num_seqs = 0
         self._seq_list_for_validation = seq_list
-        if self._map_seq_stream is None:
-            # If we don't have an iterable mapper we know the number of segments exactly
-            # equals the number of segments in the wrapped dataset
+        if self._map_seq_stream is None or self._map_seq_stream_preserves_num_seqs:
+            # If we don't have an iterable mapper (or the user explicitly specifies this),
+            # we know the number of segments exactly equals the number of segments in the wrapped dataset
             try:
                 self._num_seqs = self._dataset.num_seqs
             except NotImplementedError:
@@ -240,7 +253,20 @@ class PostprocessingDataset(CachedDataset2):
         while True:
             try:
                 loaded_seq_idx, tensor_dict = next(self._data_iter)
+                self._data_iter_produced_num_seqs += 1
+                if self._num_seqs is not None:
+                    assert self._data_iter_produced_num_seqs <= self._num_seqs, (
+                        f"{self}: map_seq_stream yielded more seqs ({self._data_iter_produced_num_seqs}) "
+                        f"than expected ({self._num_seqs}). map_seq_stream_preserves_num_seqs is set to "
+                        f"{self._map_seq_stream_preserves_num_seqs}"
+                    )
             except StopIteration:
+                if self._num_seqs is not None:
+                    assert self._data_iter_produced_num_seqs == self._num_seqs, (
+                        f"{self}: map_seq_stream yielded {self._data_iter_produced_num_seqs} seqs, "
+                        f"while {self._num_seqs} were expected. map_seq_stream_preserves_num_seqs is set to "
+                        f"{self._map_seq_stream_preserves_num_seqs}"
+                    )
                 return None
             assert loaded_seq_idx <= seq_idx, "_collect_single_seq must be done monotonically"
             if loaded_seq_idx != seq_idx:
@@ -353,7 +379,8 @@ class PostprocessingDataset(CachedDataset2):
         sparse_dim = None
         if self._dataset.is_data_sparse(data_key):
             sparse_dim = Dim(dimension=self._dataset.get_data_dim(data_key), name=f"{data_key}_sparse")
-            if data_key in self._dataset.labels:
+            labels = self._dataset.labels.get(data_key)
+            if labels and len(labels) == sparse_dim.dimension:
                 sparse_dim.vocab = Vocabulary.create_vocab_from_labels(self._dataset.labels[data_key])
         return Tensor(data_key, dims=dims, dtype=dtype, sparse_dim=sparse_dim)
 
@@ -365,6 +392,8 @@ class LaplaceOrdering(Callable[[Iterator[TensorDict]], Iterator[TensorDict]]):
 
     To be composed with any custom data postprocessing logic via :class:`Sequential`.
     """
+
+    preserves_num_seqs = True
 
     def __init__(self, num_seqs_per_bin: int, length_key: str = "data"):
         """
@@ -381,6 +410,7 @@ class LaplaceOrdering(Callable[[Iterator[TensorDict]], Iterator[TensorDict]]):
         is_down_phase = False
 
         seq_buffer = list(islice(iterator, self.num_seqs_per_bin))
+        has_ended = False
         while True:
             # Make sure to not reorder the monotonically increasing values for epoch_continuous
             # so that the trainer can calculate the appropriate learning rates.
@@ -390,7 +420,6 @@ class LaplaceOrdering(Callable[[Iterator[TensorDict]], Iterator[TensorDict]]):
                 sorted_item.data["epoch_continuous"].raw_tensor = ep_cont
 
             next_seq_buffer = []
-            has_ended = False
 
             # Yield items to trainer while gradually pulling more data from PP function.
             # This optimizes CPU load when multiple workers are used.
@@ -441,3 +470,8 @@ class Sequential:
         for func in self.funcs:
             arg = func(arg, **kwargs)
         return arg
+
+    @property
+    def preserves_num_seqs(self):
+        """:return: whether the composed functions all preserve the number of sequences"""
+        return all(getattr(f, "preserves_num_seqs", False) for f in self.funcs)

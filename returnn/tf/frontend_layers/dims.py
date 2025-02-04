@@ -67,7 +67,7 @@ def _register_dim_deps_when_novel(dim: Dim, deps: List[Tensor]):
             return  # discard new list, keep old
     if _register_dim_via_dyn_layer(dim):
         return
-    if dim.dyn_size_ext and not isinstance(dim.dyn_size_ext.raw_tensor, rfl.Layer):
+    if dim.dyn_size_ext is not None and not isinstance(dim.dyn_size_ext.raw_tensor, rfl.Layer):
         # In the TF net dict backend, the dims dyn_size_ext are usually just templates.
         # The raw_tensor would not be set.
         # Once the net dict is created, and then only when the actual TFNetwork is created,
@@ -110,7 +110,7 @@ def _register_dim_via_dyn_layer(dim: Dim) -> bool:
         return False
     if dim in _dim_deps:
         return False
-    assert dim.dyn_size_ext
+    assert dim.dyn_size_ext is not None
     if dim.dyn_size_ext.raw_tensor is None:
         return False
     assert isinstance(dim.dyn_size_ext.raw_tensor, rfl.Layer)

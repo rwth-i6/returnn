@@ -1630,7 +1630,7 @@ def test_ExternData_ext_Data_batch_info():
         # x.sanity_check() might fail now. but this is not really relevant. x.copy() matters.
         y = x.copy()  # failed earlier due to dim tag batch info mismatch
         y.sanity_check()
-        assert data.dim_tags[1].dyn_size_ext
+        assert data.dim_tags[1].dyn_size_ext is not None
         x.dim_tags[1]._maybe_update()  # might trigger some error
 
         # In returnn_common, when get_network is called again,
@@ -1647,7 +1647,7 @@ def test_ExternData_ext_Data_batch_info():
             x.batch == x.dim_tags[1].batch,
             x.dim_tags[1].dyn_size_ext,
         )
-        if not x.dim_tags[1].dyn_size_ext:
+        if not x.dim_tags[1].dyn_size_ext is not None:
             x.dim_tags[1].dyn_size_ext = Data(
                 name="x_default_dyn_size_ext_new", dim_tags=[batch_dim], dtype=Data.size_dtype, batch=x.batch
             )
@@ -1657,7 +1657,7 @@ def test_ExternData_ext_Data_batch_info():
         # x.sanity_check() might fail now. but this is not really relevant. x.copy() matters.
         y = x.copy()  # failed earlier due to dim tag batch info mismatch
         y.sanity_check()
-        assert data.dim_tags[1].dyn_size_ext
+        assert data.dim_tags[1].dyn_size_ext is not None
 
 
 def test_dim_math_basics():
@@ -1924,7 +1924,7 @@ def test_dim_math_add_dyn_defined():
     print("y=", y)
     y = y.get_for_batch_ctx(batch=batch, ctx=None)
     print("y=", y)
-    assert y.dyn_size_ext and y.dyn_size_ext.dim_tags == (batch_dim,)
+    assert y.dyn_size_ext is not None and y.dyn_size_ext.dim_tags == (batch_dim,)
 
 
 def test_dim_math_feat_declare_same_as_circle():
@@ -4133,8 +4133,6 @@ def test_softmax_cross_entropy_over_size_n_batch():
 
 
 def test_softmax_cross_entropy_over_size_n_batch_real():
-    if sys.version_info[0] <= 2:  # gzip.decompress is >=PY3
-        raise unittest.SkipTest
     import gzip
     import base64
 

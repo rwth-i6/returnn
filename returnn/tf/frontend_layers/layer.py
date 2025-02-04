@@ -180,7 +180,7 @@ class Layer:
 
     def __repr__(self):
         parts = [self.get_abs_name_repr()]
-        if self.tensor:
+        if self.tensor is not None:
             parts.append("[%s]" % ",".join(self.tensor.get_batch_axes_short_description()))
         return f"<{self.__class__.__name__} {' '.join(parts)}>"
 
@@ -634,7 +634,7 @@ class Layer:
         Creates the child together with a layer ref if it does not exist yet.
         """
         child = self.get_child(name)
-        if not child.tensor:
+        if child.tensor is None:
             child.tensor = data
         assert child.tensor is data
         if data.raw_tensor is None:
@@ -718,7 +718,11 @@ class Layer:
             # However, we allow to use the name if it is the attrib itself.
             if self.module and name not in reserved_names and getattr(self.parent.module, name, None) is self.module:
                 return name
-            if self.tensor and name not in reserved_names and getattr(self.parent.module, name, None) is self.tensor:
+            if (
+                self.tensor is not None
+                and name not in reserved_names
+                and getattr(self.parent.module, name, None) is self.tensor
+            ):
                 return name
             # We might exclude all other attribs.
             # However, e.g. "dropout" is a common attrib storing the dropout rate (float),
@@ -761,7 +765,7 @@ class Layer:
             nest.map_structure(_maybe_add_dep, self.layer_dict)
         if self.children and "output" in self.children:
             _maybe_add_dep(self.children["output"].tensor)
-        if self.parent and self.parent.tensor:
+        if self.parent and self.parent.tensor is not None:
             _maybe_add_dep(self.parent.tensor)
         if self.layer_extra_dependencies:
             dep_list.extend(self.layer_extra_dependencies)
@@ -1098,10 +1102,10 @@ class _NetDictBuilderCtx:
                     continue
                 # We need dyn_size_ext to know the implicit dims, to correctly set out_shape.
                 # If dyn_size_ext is not set yet, try to complete it.
-                if not dim.dyn_size_ext:
+                if dim.dyn_size_ext is None:
                     dim.complete_dyn_size()
                 assert (
-                    dim.dyn_size_ext
+                    dim.dyn_size_ext is not None
                 ), f"{sub_name_ctx}: need {dim} to be defined to be able to know about implicit dims"
             dim_tags.extend(data_template.dim_tags_set_implicit_only_wrapped)
             assert len(dim_tags) == len(

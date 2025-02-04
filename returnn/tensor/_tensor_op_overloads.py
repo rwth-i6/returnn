@@ -17,6 +17,17 @@ class _TensorOpOverloadsMixin(_TensorMixinBase):
     # Note that all those ops have native implementations as well,
     # so keep the logic in sync.
 
+    def __bool__(self):
+        from returnn.log import log
+        from returnn.util.basic import BehaviorVersion
+
+        if BehaviorVersion.get() >= 22:
+            raise TypeError(f"{self} __bool__: Using a Tensor in a boolean context is not allowed.")
+        log.print_deprecation_warning(
+            f"{self} __bool__: Using a Tensor in a boolean context is deprecated.", behavior_version=22
+        )
+        return True
+
     # --- comparisons
 
     def __eq__(self: Tensor, other: Union[_rf_types.RawTensorTypes, Tensor]) -> Union[Tensor, bool]:

@@ -22,6 +22,14 @@ and not listing legacy/deprecated parameters.
 Version History
 ---------------
 
+Behavior version 22 (2025-01-22)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Using ``Tensor.__bool__`` is disallowed.
+This also means implicit casts to bool, like in ``if tensor: ...``.
+
+See issue `#1680 <https://github.com/rwth-i6/returnn/issues/1680>`__.
+
 Behavior version 21 (2024-04-25)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 

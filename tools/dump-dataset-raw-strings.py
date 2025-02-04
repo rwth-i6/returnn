@@ -91,7 +91,6 @@ def init(config_filename, log_verbosity):
     :param int log_verbosity:
     """
     rnn.init_better_exchook()
-    rnn.init_thread_join_hack()
     if config_filename:
         print("Using config file %r." % config_filename)
         assert os.path.exists(config_filename)

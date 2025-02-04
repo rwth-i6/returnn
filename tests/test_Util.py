@@ -496,14 +496,6 @@ def test_obj_diff_list_allowed_mapping():
     ]
 
 
-@unittest.skipIf(PY3, "only for Python 2")
-def test_py2_utf8_str_to_unicode():
-    assert py2_utf8_str_to_unicode("a") == "a"
-    assert type(py2_utf8_str_to_unicode("a")) is str
-    assert py2_utf8_str_to_unicode("äöü") == "äöü"
-    assert type(py2_utf8_str_to_unicode("äöü")) is unicode
-
-
 def test_CollectionReadCheckCovered():
     x = CollectionReadCheckCovered.from_bool_or_dict(True)
     assert x and x.truth_value

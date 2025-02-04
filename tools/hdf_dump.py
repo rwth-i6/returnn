@@ -55,7 +55,6 @@ def init(config_filename, cmd_line_opts, dataset_config_str):
     :param str dataset_config_str: dataset via init_dataset_via_str()
     """
     rnn.init_better_exchook()
-    rnn.init_thread_join_hack()
     if config_filename:
         rnn.init_config(config_filename, cmd_line_opts)
         rnn.init_log()

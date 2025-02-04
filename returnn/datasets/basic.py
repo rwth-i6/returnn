@@ -1104,20 +1104,21 @@ class Dataset:
         # in advance can handle this somehow.
         return n < self.num_seqs
 
-    def can_serialize_data(self, key):
+    def can_serialize_data(self, key: str) -> bool:
         """
-        :param str key: e.g. "classes"
-        :rtype: bool
+        :param key: e.g. "classes"
+        :return: whether :func:`serialize_data` is implemented for this key
         """
-        return key in self.labels
+        labels = self.labels.get(key)
+        return labels and len(labels) > 1
 
-    def serialize_data(self, key, data):
+    def serialize_data(self, key: str, data: numpy.ndarray) -> str:
         """
         In case you have a :class:`Vocabulary`, just use :func:`Vocabulary.get_seq_labels`.
 
-        :param str key: e.g. "classes". self.labels[key] should be set
+        :param key: e.g. "classes". self.labels[key] should be set
         :param numpy.ndarray data: 0D or 1D
-        :rtype: str
+        :return: serialized data
         """
         vocab = Vocabulary.create_vocab_from_labels(self.labels[key])
         if data.ndim == 0:
@@ -1485,6 +1486,7 @@ def get_dataset_class(name: Union[str, Type[Dataset]]) -> Optional[Type[Dataset]
         "multi_proc",
         "distrib_files",
         "postprocessing",
+        "text_dict",
     ]
     for mod_name in mod_names:
         mod = import_module("returnn.datasets.%s" % mod_name)

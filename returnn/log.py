@@ -14,8 +14,6 @@ import contextlib
 import string
 import typing
 
-PY3 = sys.version_info[0] >= 3
-
 
 class Stream:
     """

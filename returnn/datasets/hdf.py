@@ -3,16 +3,19 @@ Provides :class:`HDFDataset`.
 """
 
 from __future__ import annotations
-import bisect
+from typing import TYPE_CHECKING, Union
 import typing
+import bisect
 import collections
 import gc
-import h5py
 import numpy
 from .cached import CachedDataset
 from .cached2 import CachedDataset2
 from .basic import Dataset, DatasetSeq
 from returnn.log import log
+
+if TYPE_CHECKING:
+    import h5py
 
 
 # Common attribute names for HDF dataset, which should be used in order to be proceed with HDFDataset class.
@@ -67,17 +70,8 @@ class HDFDataset(CachedDataset):
         del self.file_seq_start[:]
 
     @staticmethod
-    def _decode(s):
-        """
-        :param str|bytes|unicode s:
-        :rtype: str
-        """
-        from returnn.util.basic import unicode, PY3
-
-        if not PY3 and isinstance(s, unicode):
-            s = s.encode("utf8")
-            assert isinstance(s, str)  # Python 2
-        if not isinstance(s, str):  # bytes (Python 3)
+    def _decode(s: Union[str, bytes]) -> str:
+        if isinstance(s, bytes):
             s = s.decode("utf-8")
         s = s.split("\0")[0]
         return s
@@ -90,6 +84,8 @@ class HDFDataset(CachedDataset):
         Use load_seqs() to load the actual data.
         :type filename: str
         """
+        import h5py
+
         if self._use_cache_manager:
             from returnn.util.basic import cf
 
@@ -668,6 +664,8 @@ class NextGenHDFDataset(CachedDataset2):
         """
         :param str path:
         """
+        import h5py
+
         self.files.append(path)
         self.h5_files.append(h5py.File(path))
 
@@ -860,6 +858,8 @@ class SiameseHDFDataset(CachedDataset2):
 
         :param str path: path to single .hdf file
         """
+        import h5py
+
         self.files.append(path)
         self.h5_files.append(h5py.File(path, "r"))
         cur_file = self.h5_files[-1]
@@ -1100,6 +1100,7 @@ class SimpleHDFWriter:
         import tempfile
         import os
         import shutil
+        import h5py
 
         if ndim is None:
             if dim is None:
@@ -1178,6 +1179,7 @@ class SimpleHDFWriter:
         :rtype: bool
         """
         from returnn.util.basic import hdf5_strings
+        import h5py
 
         added_count = 0
         for data_key, (dim, ndim, dtype) in extra_type.items():
@@ -1413,6 +1415,8 @@ class HDFDatasetWriter:
         """
         :param str filename: for the HDF to write
         """
+        import h5py
+
         print("Creating HDF dataset file %s" % filename, file=log.v3)
         self.filename = filename
         self.file = h5py.File(filename, "w")
@@ -1431,7 +1435,7 @@ class HDFDatasetWriter:
         :param int|float end_seq:
         :param bool use_progress_bar:
         """
-        from returnn.util.basic import NumbersDict, human_size, progress_bar_with_time, try_run, PY3
+        from returnn.util.basic import NumbersDict, human_size, progress_bar_with_time, try_run
 
         hdf_dataset = self.file
 
@@ -1544,8 +1548,7 @@ class HDFDatasetWriter:
                 hdf_dataset["targets/size"].attrs[hdf_data_key_map[data_key]] = dataset.num_outputs[data_key]
             if data_key in dataset.labels:
                 labels = dataset.labels[data_key]
-                if PY3:
-                    labels = [label.encode("utf8") for label in labels]
+                labels = [label.encode("utf8") for label in labels]
                 assert len(labels) == dataset.num_outputs[data_key][0]
             else:
                 labels = ["%s-class-%i" % (data_key, i) for i in range(dataset.get_data_dim(data_key))]
