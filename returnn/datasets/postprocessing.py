@@ -327,7 +327,7 @@ class PostprocessingDataset(CachedDataset2):
                 tensor_dict.data[data_key].raw_tensor = self._dataset.get_data(seq_index, data_key)
 
             try:
-                ep_cont_tensor = numpy.array(self._dataset.get_exact_complete_frac(seq_index), dtype=numpy.float64)
+                comp_frac_tensor = numpy.array(self._dataset.get_exact_complete_frac(seq_index), dtype=numpy.float64)
             except NotImplementedError:
                 # In case we cannot obtain a proper value for `complete_frac`, we
                 # pass a dummy value (-1). We do this instead of passing no value to
@@ -336,8 +336,8 @@ class PostprocessingDataset(CachedDataset2):
                 #
                 # Once the postprocessing dataset receives the dummy value back, it
                 # removes it from the downstream data.
-                ep_cont_tensor = numpy.array(-1)
-            tensor_dict.data["complete_frac"].raw_tensor = ep_cont_tensor
+                comp_frac_tensor = numpy.array(-1)
+            tensor_dict.data["complete_frac"].raw_tensor = comp_frac_tensor
             seq_tag_tensor = str_to_numpy_array(self._dataset.get_tag(seq_index))
             tensor_dict.data["seq_tag"].raw_tensor = seq_tag_tensor
 
@@ -352,7 +352,7 @@ class PostprocessingDataset(CachedDataset2):
                 # Re-adding the seq tag here causes no harm in case it's dropped since we don't
                 # add/drop any segments w/ the non-iterator postprocessing function.
                 if "complete_frac" not in tensor_dict.data:
-                    tensor_dict.data["complete_frac"].raw_tensor = ep_cont_tensor
+                    tensor_dict.data["complete_frac"].raw_tensor = comp_frac_tensor
                 if "seq_tag" not in tensor_dict.data:
                     tensor_dict.data["seq_tag"].raw_tensor = seq_tag_tensor
 
@@ -416,8 +416,8 @@ class LaplaceOrdering(Callable[[Iterator[TensorDict]], Iterator[TensorDict]]):
             # so that the trainer can calculate the appropriate learning rates.
             complete_frac_values = [tdict.data["complete_frac"].raw_tensor for tdict in seq_buffer]
             seq_buffer.sort(key=self._get_seq_len, reverse=is_down_phase)
-            for sorted_item, ep_cont in zip(seq_buffer, complete_frac_values):
-                sorted_item.data["complete_frac"].raw_tensor = ep_cont
+            for sorted_item, comp_frac in zip(seq_buffer, complete_frac_values):
+                sorted_item.data["complete_frac"].raw_tensor = comp_frac
 
             next_seq_buffer = []
 

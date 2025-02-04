@@ -451,9 +451,9 @@ class MultiProcDataset(CachedDataset2):
         # The complete_frac values from the subprocesses are not necessarily monotonic
         # due to rounding errors in the sharding and such.
         # We therefore fix them up here. This is valid due to monotonicity of `seq_idx`.
-        max_ep_cont = max(data.complete_frac, self._cur_max_complete_frac)
-        data.complete_frac = max_ep_cont
-        self._cur_max_complete_frac = max_ep_cont
+        max_comp_frac = max(data.complete_frac, self._cur_max_complete_frac)
+        data.complete_frac = max_comp_frac
+        self._cur_max_complete_frac = max_comp_frac
         data.seq_idx = seq_idx
         return data
 
