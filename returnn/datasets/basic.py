@@ -972,7 +972,7 @@ class Dataset:
         Calculates how much of the current epoch is completed when having processed seq ``sorted_seq_idx``.
         ``sorted_seq_idx`` cannot be less than the seq index of the previously loaded seqs.
 
-        This value is used to calculate ``complete_frac`` for any dynamic learning rate scheduling.
+        This value is used to calculate ``epoch_continuous`` for any dynamic learning rate scheduling.
 
         :param sorted_seq_idx: sorted seq idx
         :return: continuous value in (0, 1] which represents how much of the current epoch
