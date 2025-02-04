@@ -250,7 +250,7 @@ class MultiProcDataset(CachedDataset2):
             seq_tag = dataset.get_tag(next_seq_idx)
             features = {data_key: dataset.get_data(next_seq_idx, data_key) for data_key in dataset.get_data_keys()}
             try:
-                complete_frac = dataset.get_complete_frac(next_seq_idx)
+                complete_frac = dataset.get_exact_complete_frac(next_seq_idx)
             except NotImplementedError:
                 complete_frac = None
             res = DatasetSeq(seq_idx=next_seq_idx, seq_tag=seq_tag, features=features, complete_frac=complete_frac)

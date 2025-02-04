@@ -1135,21 +1135,21 @@ def test_PostprocessingDataset():
         dataset.load_seqs(0, 6)
 
         prev_len = None
-        prev_ep_cont = None
+        prev_complete_frac = None
         for i in range(3):
             classes = dataset.get_data(i, "classes")
-            ep_cont = dataset.get_complete_frac(i)
+            complete_frac = dataset.get_exact_complete_frac(i)
             assert prev_len is None or classes.shape[0] >= prev_len
-            assert prev_ep_cont is None or ep_cont > prev_ep_cont
+            assert prev_complete_frac is None or complete_frac > prev_complete_frac
             prev_len = classes.shape[0]
-            prev_ep_cont = ep_cont
+            prev_complete_frac = complete_frac
         for i in range(3, 6):
             classes = dataset.get_data(i, "classes")
-            ep_cont = dataset.get_complete_frac(i)
+            complete_frac = dataset.get_exact_complete_frac(i)
             assert classes.shape[0] <= prev_len or i == 3
-            assert ep_cont > prev_ep_cont
+            assert complete_frac > prev_complete_frac
             prev_len = classes.shape[0]
-            prev_ep_cont = ep_cont
+            prev_complete_frac = complete_frac
 
     # test composition
     from returnn.datasets.postprocessing import Sequential

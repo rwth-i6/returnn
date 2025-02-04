@@ -960,17 +960,13 @@ class Dataset:
                 num_seqs = None  # ignore
         return self.generic_complete_frac(seq_idx, num_seqs)
 
-    @property
-    def num_seqs(self) -> int:
+    def get_exact_complete_frac(self, sorted_seq_idx: int) -> float:
         """
-        :return: num seqs for current epoch
-        """
-        raise NotImplementedError
-
-    def get_complete_frac(self, sorted_seq_idx: int) -> float:
-        """
-        Calculates how much of the current epoch is completed when having processed seq ``sorted_seq_idx``.
+        Tries to calculate exactly how much of the current epoch is completed when
+        having processed seq ``sorted_seq_idx``.
         ``sorted_seq_idx`` cannot be less than the seq index of the previously loaded seqs.
+
+        Raises a ``NotImplementedError`` if the value cannot be calculated.
 
         This value is used to calculate ``epoch_continuous`` for any dynamic learning rate scheduling.
 
@@ -986,6 +982,13 @@ class Dataset:
             0 <= sorted_seq_idx < num_seqs
         ), f"{self}: invalid seq indices: 0 <= seq_idx ({sorted_seq_idx}) < num_seqs ({num_seqs}) violated"
         return (sorted_seq_idx + 1) / num_seqs
+
+    @property
+    def num_seqs(self) -> int:
+        """
+        :return: num seqs for current epoch
+        """
+        raise NotImplementedError
 
     @property
     def estimated_num_seqs(self):
