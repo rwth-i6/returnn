@@ -230,7 +230,7 @@ class CachedDataset2(Dataset):
 
     def get_exact_complete_frac(self, sorted_seq_idx: int) -> float:
         """
-        :return: epoch continuous value for the given seq_idx
+        :return: fractional completion value for the given seq_idx
         """
         seq = self._get_seq(sorted_seq_idx)
         if seq.complete_frac is not None:
