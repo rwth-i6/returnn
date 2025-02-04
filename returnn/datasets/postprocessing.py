@@ -61,7 +61,7 @@ class PostprocessingDataset(CachedDataset2):
     The postprocessor functions operate on ``TensorDict``s, which have entries for
     all data keys in the underlying dataset.
 
-    There may also be additional "meta" entries in the tensor dicts, like ``epoch_continuous``
+    There may also be additional "meta" entries in the tensor dicts, like ``complete_frac``
     and ``seq_tag``.
     These may be modified, but not removed.
     Any other entries that the postprocessor function does not modify must also be copied over
@@ -166,7 +166,7 @@ class PostprocessingDataset(CachedDataset2):
             self.labels = self._dataset.labels.copy()
         # update only after _out_tensor_dict_template has been created from _in_tensor_dict_template
         self._in_tensor_dict_template.update(
-            {"epoch_continuous": {"dims": (), "dtype": "float64"}, "seq_tag": {"dims": (), "dtype": "string"}},
+            {"complete_frac": {"dims": (), "dtype": "float64"}, "seq_tag": {"dims": (), "dtype": "string"}},
             auto_convert=True,
         )
         self.num_outputs = {
@@ -271,15 +271,15 @@ class PostprocessingDataset(CachedDataset2):
             assert loaded_seq_idx <= seq_idx, "_collect_single_seq must be done monotonically"
             if loaded_seq_idx != seq_idx:
                 continue
-            epoch_continuous = float(tensor_dict.data["epoch_continuous"].raw_tensor)
-            if epoch_continuous == -1:
+            complete_frac = float(tensor_dict.data["complete_frac"].raw_tensor)
+            if complete_frac == -1:
                 # See comment below on why we pass a dummy value instead of not
                 # adding the value to the tensor dict at all.
-                epoch_continuous = None
+                complete_frac = None
             seq = DatasetSeq(
-                epoch_continuous=epoch_continuous,
+                complete_frac=complete_frac,
                 features={
-                    k: t.raw_tensor for k, t in tensor_dict.data.items() if k not in ["epoch_continuous", "seq_tag"]
+                    k: t.raw_tensor for k, t in tensor_dict.data.items() if k not in ["complete_frac", "seq_tag"]
                 },
                 seq_idx=seq_idx,
                 seq_tag=str(tensor_dict["seq_tag"].raw_tensor),
@@ -293,7 +293,7 @@ class PostprocessingDataset(CachedDataset2):
 
         def _validate_tensor_dict_iter(inner: Iterator[TensorDict]) -> Iterator[TensorDict]:
             for t_dict in inner:
-                for k in ["epoch_continuous", "seq_tag"]:
+                for k in ["complete_frac", "seq_tag"]:
                     assert k in t_dict.data, f"{k} dropped from TensorDict in postprocessing pipeline"
                 for data_key, out_t in self._out_tensor_dict_template.data.items():
                     in_t = t_dict.data[data_key]
@@ -327,9 +327,9 @@ class PostprocessingDataset(CachedDataset2):
                 tensor_dict.data[data_key].raw_tensor = self._dataset.get_data(seq_index, data_key)
 
             try:
-                ep_cont_tensor = numpy.array(self._dataset.get_epoch_continuous(seq_index), dtype=numpy.float64)
+                ep_cont_tensor = numpy.array(self._dataset.get_complete_frac(seq_index), dtype=numpy.float64)
             except NotImplementedError:
-                # In case we cannot obtain a proper value for `epoch_continuous`, we
+                # In case we cannot obtain a proper value for `complete_frac`, we
                 # pass a dummy value (-1). We do this instead of passing no value to
                 # be able to lint against dropping it from the tensor dicts, which
                 # might have been undesired behavior.
@@ -337,7 +337,7 @@ class PostprocessingDataset(CachedDataset2):
                 # Once the postprocessing dataset receives the dummy value back, it
                 # removes it from the downstream data.
                 ep_cont_tensor = numpy.array(-1)
-            tensor_dict.data["epoch_continuous"].raw_tensor = ep_cont_tensor
+            tensor_dict.data["complete_frac"].raw_tensor = ep_cont_tensor
             seq_tag_tensor = str_to_numpy_array(self._dataset.get_tag(seq_index))
             tensor_dict.data["seq_tag"].raw_tensor = seq_tag_tensor
 
@@ -351,8 +351,8 @@ class PostprocessingDataset(CachedDataset2):
 
                 # Re-adding the seq tag here causes no harm in case it's dropped since we don't
                 # add/drop any segments w/ the non-iterator postprocessing function.
-                if "epoch_continuous" not in tensor_dict.data:
-                    tensor_dict.data["epoch_continuous"].raw_tensor = ep_cont_tensor
+                if "complete_frac" not in tensor_dict.data:
+                    tensor_dict.data["complete_frac"].raw_tensor = ep_cont_tensor
                 if "seq_tag" not in tensor_dict.data:
                     tensor_dict.data["seq_tag"].raw_tensor = seq_tag_tensor
 
@@ -412,12 +412,12 @@ class LaplaceOrdering(Callable[[Iterator[TensorDict]], Iterator[TensorDict]]):
         seq_buffer = list(islice(iterator, self.num_seqs_per_bin))
         has_ended = False
         while True:
-            # Make sure to not reorder the monotonically increasing values for epoch_continuous
+            # Make sure to not reorder the monotonically increasing values for complete_frac
             # so that the trainer can calculate the appropriate learning rates.
-            ep_cont_values = [tdict.data["epoch_continuous"].raw_tensor for tdict in seq_buffer]
+            ep_cont_values = [tdict.data["complete_frac"].raw_tensor for tdict in seq_buffer]
             seq_buffer.sort(key=self._get_seq_len, reverse=is_down_phase)
             for sorted_item, ep_cont in zip(seq_buffer, ep_cont_values):
-                sorted_item.data["epoch_continuous"].raw_tensor = ep_cont
+                sorted_item.data["complete_frac"].raw_tensor = ep_cont
 
             next_seq_buffer = []
 

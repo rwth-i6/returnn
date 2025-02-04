@@ -399,11 +399,11 @@ class Engine(EngineBase):
                     {k: int(util.prod(extern_data_raw[k].shape[:2])) for k in keys_w_seq_len},
                 )
 
-                epoch_continuous_ = float(extern_data_raw["epoch_continuous"])
-                # Note: can only use epoch_continuous from data dict if batches are not shuffled,
+                complete_frac = float(extern_data_raw["complete_frac"])
+                # Note: can only use complete_frac from data dict if batches are not shuffled,
                 # otherwise fall back to calculation via seq_idx and num_seqs.
-                if not shuffle_batches and epoch_continuous_ >= 0.0:
-                    epoch_continuous = self.epoch - 1 + epoch_continuous_
+                if not shuffle_batches and complete_frac >= 0.0:
+                    epoch_continuous = self.epoch - 1 + complete_frac
                 else:
                     num_seqs_ = (
                         int(extern_data_raw["num_seqs"]) if extern_data_raw.get("num_seqs", None) is not None else -1

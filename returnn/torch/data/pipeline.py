@@ -65,7 +65,7 @@ def collate_batch(batch: List[Dict[str, numpy.ndarray]]) -> Dict[str, Union[torc
         if key in ("num_seqs", "epoch"):
             res[key] = batch[0][key]  # it should always be the same
             continue
-        elif key == "epoch_continuous":
+        elif key == "complete_frac":
             res[key] = max(sample[key] for sample in batch)
             continue
         ls = [create_tensor(sample[key]) for sample in batch]
@@ -125,7 +125,7 @@ class ChunkingIterDataPipe(torch.utils.data.IterDataPipe):
 
             if not chunking_data_keys:
                 chunking_data_keys = list(data_dict.keys())  # use all if not configured separately
-                chunking_data_key_black_list = ["seq_tag", "seq_idx", "num_seqs", "epoch", "epoch_continuous"]
+                chunking_data_key_black_list = ["seq_tag", "seq_idx", "num_seqs", "epoch", "complete_frac"]
                 for key in chunking_data_key_black_list:
                     if key in chunking_data_keys:
                         chunking_data_keys.remove(key)
@@ -218,11 +218,11 @@ class BatchingIterDataPipe(torch.utils.data.IterDataPipe):
             in one batch (padding included).
             If given as a dict data_key -> value, sets different individual limits per data key.
             If None, no limit.
-            Can also be a callable with kwargs epoch, seq_idx, epoch_continuous, **_other_kwargs,
+            Can also be a callable with kwargs epoch, seq_idx, complete_frac, **_other_kwargs,
             returning the batch size.
         :param int|None|function max_seqs: maximum number of sequences in a batch,
             None means unlimited (also -1 to match TF backend).
-            Can also be a callable with kwargs epoch, seq_idx, epoch_continuous, **_other_kwargs,
+            Can also be a callable with kwargs epoch, seq_idx, complete_frac, **_other_kwargs,
             returning the max seqs.
         """
         super().__init__()
@@ -271,10 +271,10 @@ class BatchingIterDataPipe(torch.utils.data.IterDataPipe):
     def _get_user_func_kwargs_from_data_dict(data_dict: Dict[str, Any]) -> Dict[str, Any]:
         epoch = int(data_dict["epoch"])
         seq_idx = int(data_dict["seq_idx"])
-        epoch_continuous = float(data_dict["epoch_continuous"])  # >= 0 if known, otherwise -1
+        complete_frac = float(data_dict["complete_frac"])  # >= 0 if known, otherwise -1
         return {
             "epoch": epoch,
-            "epoch_continuous": epoch_continuous if epoch_continuous >= 0.0 else None,
+            "complete_frac": complete_frac if complete_frac >= 0.0 else None,
             "seq_idx": seq_idx,
             **get_fwd_compat_kwargs(),
         }
