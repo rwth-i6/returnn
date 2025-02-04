@@ -1,5 +1,4 @@
 import os
-import h5py
 import numpy as np
 
 from .bundle_file import BundleFile
@@ -90,6 +89,8 @@ class NormalizationData:
         :type dtype: numpy.dtype
         :param dtype: type of data to use during calculations.
         """
+        import h5py
+
         accumulatedSum = None
         accumulatedSumOfSqr = None
         totalFrames = long()
@@ -285,6 +286,8 @@ class NormalizationData:
         e.g. total number of time frames, mean of squares etc.
         However, this information is not read here.
         """
+        import h5py
+
         if not os.path.isfile(self._normalizationFilePath):
             raise IOError(self._normalizationFilePath + " does not exist")
         with h5py.File(self._normalizationFilePath, mode="r") as f:

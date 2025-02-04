@@ -13,7 +13,6 @@ from .cached2 import CachedDataset2
 from .util.feature_extraction import ExtractAudioFeatures
 from .util.vocabulary import Vocabulary
 from .util.strings import str_to_numpy_array
-from returnn.util.basic import PY3
 
 
 class OggZipDataset(CachedDataset2):
@@ -553,11 +552,8 @@ class OggZipDataset(CachedDataset2):
             features["classes"] = numpy.array(targets, dtype="int32")
         raw_txt = str_to_numpy_array(txt)
         orth = txt.encode("utf8")
-        if PY3:
-            assert isinstance(orth, bytes)
-            orth = list(orth)
-        else:
-            orth = list(map(ord, orth))
+        assert isinstance(orth, bytes)
+        orth = list(orth)
         orth = numpy.array(orth, dtype="uint8")
         return DatasetSeq(
             features={**features, "raw": raw_txt, "orth": orth},

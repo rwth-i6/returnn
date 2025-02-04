@@ -174,23 +174,17 @@ class _TensorMixin(_TensorMixinBase):
             This is deprecated. Rather, the placeholder should be created outside and passed in.
         :param str|dict[str]|returnn.datasets.util.vocabulary.Vocabulary|None vocab: vocab of the feature dim
             or sparse dim.
-            This is deprecated. Rather, the vocab is part of the :class:`Dim`.
         :param dict[int|str,Dim]|None same_dim_tags_as: will mark our dimension tags to be the same
         """
         assert isinstance(self, _t.Tensor)
         shape, sparse, dim, batch_dim_axis, dim_tags  # noqa  # unused here, handled in infer_dim_tags
 
         if vocab is not None:
-            from returnn.datasets.util.vocabulary import Vocabulary
-
-            if isinstance(vocab, str):
-                vocab = Vocabulary(vocab)
-            elif isinstance(vocab, dict):
-                vocab = Vocabulary.create_vocab(**vocab)
-            assert isinstance(vocab, Vocabulary)
             assert self.sparse, "%s should represent indices of %s" % (self, vocab)
-            assert self.dim == vocab.num_labels, "%s dims do not match with vocab %s" % (self, vocab)
-            self.sparse_dim.vocab = vocab
+            if not self.sparse_dim.vocab:  # might already have been set earlier
+                vocab = _get_vocab(vocab)
+                assert self.dim == vocab.num_labels, "%s dims do not match with vocab %s" % (self, vocab)
+                self.sparse_dim.vocab = vocab
 
         if kwargs:
             self._extra = _TensorExtra(tensor=self, **kwargs)
@@ -306,7 +300,7 @@ class _TensorMixin(_TensorMixinBase):
             # Note: tag.kind (feature or spatial) is independent from self.feature_dim_axis.
             if tag.batch and self.batch:
                 assert tag.batch == self.batch or self.batch.is_broadcast()
-            if tag.dyn_size_ext:
+            if tag.dyn_size_ext is not None:
                 assert tag.dyn_size_ext.dtype in {"int32", "int64"}
                 if tag.dyn_size_ext.have_batch_axis():
                     assert tag.batch == tag.dyn_size_ext.batch
@@ -336,7 +330,7 @@ class _TensorMixin(_TensorMixinBase):
                 if tag.is_batch_dim():
                     continue
                 if tag.is_dynamic():
-                    assert tag.dyn_size_ext, "%s sanity_check: dynamic dim %s undefined" % (self, tag)
+                    assert tag.dyn_size_ext is not None, "%s sanity_check: dynamic dim %s undefined" % (self, tag)
                     if not ignore_placeholder:
                         if tag.dyn_size_ext.placeholder is None:
                             tag.complete_dyn_size()
@@ -809,7 +803,7 @@ class _TensorMixin(_TensorMixinBase):
             if batch:
                 batch_dim_ = batch.dim
             elif dim_tag:
-                if dim_tag.dyn_size_ext:
+                if dim_tag.dyn_size_ext is not None:
                     assert dim_tag.dyn_size_ext.dims == ()
                     assert dim_tag.dyn_size_ext.raw_tensor is not None
                     batch_dim_ = dim_tag.dyn_size_ext.raw_tensor
@@ -1794,7 +1788,7 @@ class _TensorMixin(_TensorMixinBase):
         if self.sparse_dim and self.sparse_dim not in self_dim_tags:
             dims.add(_m.ImplicitSparseDim(self.sparse_dim))
         for dim in self.dim_tags:
-            if dim.dyn_size_ext:
+            if dim.dyn_size_ext is not None:
                 for dim_ in dim.dyn_size_ext.dim_tags:
                     if dim_ not in self_dim_tags:
                         dims.add(_m.ImplicitDynSizeDim(dim_))
@@ -2525,7 +2519,7 @@ class _TensorMixin(_TensorMixinBase):
         dim_tag = self.dim_tags[axis]
         # It's possible that dim tags are not unique (https://github.com/rwth-i6/returnn/issues/632).
         matching_tags = [i for (i, tag) in enumerate(self.dim_tags) if tag == dim_tag]
-        if dim_tag.dyn_size_ext and len(matching_tags) == 1:
+        if dim_tag.dyn_size_ext is not None and len(matching_tags) == 1:
             return dim_tag
         if axis == self.time_dim_axis:
             return "T"  # this might change
@@ -2797,7 +2791,7 @@ class _TensorMixin(_TensorMixinBase):
         assert self.time_dim_axis is not None
         dim = self._dims[self.time_dim_axis]
         assert isinstance(dim, Dim)
-        if dim.dyn_size_ext:
+        if dim.dyn_size_ext is not None:
             if dim.dyn_size_ext.raw_tensor is None:
                 dim.complete_dyn_size()
             assert dim.dyn_size_ext.raw_tensor is not None
@@ -2806,7 +2800,7 @@ class _TensorMixin(_TensorMixinBase):
         assert self.batch_dim_axis is not None
         batch_dim_ = self._dims[self.batch_dim_axis]
         assert isinstance(batch_dim_, Dim)
-        if batch_dim_.dyn_size_ext and batch_dim_.dyn_size_ext.raw_tensor is not None:
+        if batch_dim_.dyn_size_ext is not None and batch_dim_.dyn_size_ext.raw_tensor is not None:
             backend = batch_dim_.dyn_size_ext._raw_backend
             return backend.fill_raw([batch_dim_.dyn_size_ext.raw_tensor], dim.size)
         import tensorflow as tf
@@ -2853,7 +2847,7 @@ class _TensorMixin(_TensorMixinBase):
         assert 0 <= axis < self.batch_ndim
         assert axis != self.batch_dim_axis
         tag: Dim = self.dim_tags[axis]
-        assert tag.dyn_size_ext and tag.dyn_size_ext.raw_tensor is not None
+        assert tag.dyn_size_ext is not None and tag.dyn_size_ext.raw_tensor is not None
         backend = tag.dyn_size_ext._raw_backend
         assert set(tag.dyn_size_ext.dim_tags).issubset(self.dim_tags)  # https://github.com/rwth-i6/returnn/issues/721
         with backend.name_scope_raw("get_sequence_mask_broadcast"):
@@ -2906,7 +2900,7 @@ class _TensorMixin(_TensorMixinBase):
         assert 0 <= axis < self.batch_ndim
         assert axis != self.batch_dim_axis
         tag = self.dim_tags[axis]
-        assert tag.dyn_size_ext
+        assert tag.dyn_size_ext is not None
         return tag.dyn_size_ext.copy_compatible_to(self, check_dtype=False, check_sparse=False).placeholder
 
     def num_elements(self: Tensor) -> Union[int, Tensor]:
@@ -3421,39 +3415,42 @@ def infer_sparse_dim(
     *,
     name: str,
     sparse: Optional[bool] = None,
-    sparse_dim,
     dim=NotSpecified,
+    vocab=None,
     **_other_kwargs,
 ) -> Optional[Dim]:
     """
+    Called when sparse_dim is None,
+    but we assume it is sparse
+
     :param name:
     :param sparse:
-    :param sparse_dim:
     :param dim:
+    :param vocab:
     :return: sparse dim
     """
     if sparse is None:
-        sparse = sparse_dim not in (None, NotSpecified)
-    if sparse_dim in (None, NotSpecified):
-        if sparse:
-            assert dim is not NotSpecified, "need dim (num classes) if sparse"
-            assert dim is None or isinstance(dim, int)
-            sparse_dim = Dim(
-                kind=Dim.Types.Feature,
-                dimension=dim,
-                description="%s:sparse-dim" % name,
-                auto_generated=True,
-            )
+        if vocab is None:
+            return None
+        sparse = True
+    assert isinstance(sparse, bool)
+    if not sparse:
+        return None
+    vocab = _get_vocab(vocab) if vocab else None
+    if vocab:
+        if dim is NotSpecified or dim is None:
+            dim = vocab.num_labels
         else:
-            sparse_dim = None
-    if sparse_dim is not None:
-        assert isinstance(sparse_dim, Dim)
-        assert sparse_dim.can_be_used_as_dim()
-        assert sparse
-        if dim is not NotSpecified:
-            assert sparse_dim.dimension == dim
-    else:
-        assert not sparse
+            assert dim == vocab.num_labels
+    assert dim is not NotSpecified, "need dim (num classes) if sparse"
+    assert dim is None or isinstance(dim, int)
+    sparse_dim = Dim(
+        kind=Dim.Types.Feature,
+        dimension=dim,
+        description="%s:sparse-dim" % name,
+        auto_generated=True,
+        vocab=vocab,
+    )
     return sparse_dim
 
 
@@ -3533,6 +3530,17 @@ def infer_dim_tags(
             else:
                 assert dims[feature_dim_axis].dimension == dim
     return dims
+
+
+def _get_vocab(vocab):
+    from returnn.datasets.util.vocabulary import Vocabulary
+
+    if isinstance(vocab, str):
+        vocab = Vocabulary(vocab)
+    elif isinstance(vocab, dict):
+        vocab = Vocabulary.create_vocab(**vocab)
+    assert isinstance(vocab, Vocabulary)
+    return vocab
 
 
 class _SizePlaceholderProxy:
@@ -3691,7 +3699,7 @@ def _create_size_placeholder(name, axis_wo_b, tag, batch_dim):
 
     with reuse_name_scope("extern_data/placeholders/%s" % name, absolute=True):
         dyn_size_name = "%s_dim%i_size" % (name, axis_wo_b)
-        if not tag.dyn_size_ext:
+        if tag.dyn_size_ext is None:
             dyn_size_ext = _t.Tensor(
                 name=dyn_size_name,
                 dtype=_t.Tensor.size_dtype,

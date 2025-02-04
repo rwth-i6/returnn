@@ -4,7 +4,6 @@ This file is going to be imported by Debug.debug_shell() and available as intera
 
 import sys
 import numpy
-import h5py
 
 
 def find_obj_in_stack(cls, stack=None, all_threads=True):
@@ -58,6 +57,8 @@ class SimpleHdf:
     """
 
     def __init__(self, filename):
+        import h5py
+
         self.hdf = h5py.File(filename)
         self.seq_tag_to_idx = {name: i for (i, name) in enumerate(self.hdf["seqTags"])}
         self.num_seqs = len(self.hdf["seqTags"])

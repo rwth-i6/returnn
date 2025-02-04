@@ -476,7 +476,11 @@ class _TouchFilesThread(Thread):
                 all_files[filename] = True
                 all_files.update({k: True for k in _all_parent_dirs(filename, base_dir=self.cache_base_dir)})
             for filename in all_files:
-                os.utime(filename, None)
+                try:
+                    os.utime(filename, None)
+                except Exception as exc:
+                    print(f"FileCache: failed updating mtime of {filename}: {exc}")
+                    raise
             if self.stop.wait(self.interval):
                 return
 

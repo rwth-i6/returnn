@@ -13,8 +13,7 @@ __all__ = [
     "Utf8ByteTargets",
 ]
 
-from typing import Optional, Union, Type, List
-import typing
+from typing import Optional, Union, Type, Callable, List, Dict
 import sys
 import numpy
 
@@ -48,35 +47,71 @@ class Vocabulary:
 
     def __init__(
         self,
-        vocab_file,
-        seq_postfix=None,
-        unknown_label="UNK",
-        bos_label=None,
-        eos_label=None,
-        pad_label=None,
-        control_symbols=None,
-        user_defined_symbols=None,
-        num_labels=None,
-        labels=None,
+        vocab_file: Optional[str],
+        *,
+        special_symbols_via_file: Optional[str] = None,
+        unknown_label: Optional[Union[str, int]] = NotSpecified,
+        bos_label: Optional[Union[str, int]] = None,
+        eos_label: Optional[Union[str, int]] = None,
+        pad_label: Optional[Union[str, int]] = None,
+        control_symbols: Optional[Dict[str, Union[str, int]]] = None,
+        user_defined_symbols: Optional[Dict[str, Union[str, int]]] = None,
+        num_labels: Optional[int] = None,
+        seq_postfix: Optional[List[int]] = None,
+        labels: Optional[Union[List[str], Callable[[], List[str]]]] = None,
     ):
         """
-        :param str|None vocab_file:
-        :param str|int|None unknown_label: e.g. "UNK" or "<unk>"
-        :param str|int|None bos_label: e.g. "<s>"
-        :param str|int|None eos_label: e.g. "</s>"
-        :param str|int|None pad_label: e.g. "<pad>"
-        :param dict[str,str|int]|None control_symbols:
-          https://github.com/google/sentencepiece/blob/master/doc/special_symbols.md
-        :param dict[str,str|int]|None user_defined_symbols:
-          https://github.com/google/sentencepiece/blob/master/doc/special_symbols.md
-        :param int num_labels: just for verification
-        :param list[int]|None seq_postfix: labels will be added to the seq in self.get_seq
-        :param list[str]|(()->list[str])|None labels:
+        :param vocab_file:
+        :param special_symbols_via_file: if given, the file is supposed to contain a dict
+            with potential keys "unknown_label", "bos_label", "eos_label", "pad_label",
+            "control_symbols", "user_defined_symbols".
+            When label are specified directly as kwargs, those take precedence over any option in the file.
+        :param unknown_label: e.g. "UNK" or "<unk>"
+        :param bos_label: e.g. "<s>"
+        :param eos_label: e.g. "</s>"
+        :param pad_label: e.g. "<pad>"
+        :param control_symbols:
+            https://github.com/google/sentencepiece/blob/master/doc/special_symbols.md
+        :param user_defined_symbols:
+            https://github.com/google/sentencepiece/blob/master/doc/special_symbols.md
+        :param num_labels: just for verification
+        :param seq_postfix: labels will be added to the seq in self.get_seq
+        :param labels:
         """
         self.vocab_file = vocab_file
+
+        if special_symbols_via_file:
+            from ast import literal_eval
+
+            special_symbols = literal_eval(open(special_symbols_via_file).read())
+            assert isinstance(special_symbols, dict), f"expected dict, got {type(special_symbols).__name__}"
+            assert set(special_symbols.keys()).issubset(
+                {"unknown_label", "bos_label", "eos_label", "pad_label", "control_symbols", "user_defined_symbols"}
+            ), f"invalid special symbols {special_symbols}"
+            # When any of these opts is specified directly, that takes precedence over the file.
+            if unknown_label is NotSpecified:
+                unknown_label = special_symbols.get("unknown_label", NotSpecified)
+            if bos_label is None:
+                bos_label = special_symbols.get("bos_label", None)
+            if eos_label is None:
+                eos_label = special_symbols.get("eos_label", None)
+            if pad_label is None:
+                pad_label = special_symbols.get("pad_label", None)
+            if "control_symbols" in special_symbols:
+                control_symbols_ = control_symbols or {}
+                control_symbols: Dict[str, Union[str, int]] = special_symbols["control_symbols"].copy()
+                control_symbols.update(control_symbols_)
+            if "user_defined_symbols" in special_symbols:
+                user_defined_symbols_ = user_defined_symbols or {}
+                user_defined_symbols: Dict[str, Union[str, int]] = special_symbols["user_defined_symbols"].copy()
+                user_defined_symbols.update(user_defined_symbols_)
+
+        if unknown_label is NotSpecified:
+            # Unfortunately, this is the default, and we keep it for backward compatibility.
+            unknown_label = "UNK"
         self.unknown_label = unknown_label
-        self.num_labels = None  # type: typing.Optional[int]  # will be set by _parse_vocab
-        self._vocab = None  # type: typing.Optional[typing.Dict[str,int]]  # label->idx
+        self.num_labels: Optional[int] = None  # will be set by _parse_vocab
+        self._vocab: Optional[Dict[str, int]] = None  # label->idx
         if labels is not None and callable(labels):
             labels = labels()
         if labels is not None:
@@ -123,8 +158,6 @@ class Vocabulary:
         Sets self.vocab, self.labels, self.num_labels.
         """
         filename = self.vocab_file
-        import pickle
-
         if self._labels is not None:
             self._vocab = {label: i for i, label in enumerate(self._labels)}
             self.num_labels = len(self._labels)
@@ -132,10 +165,17 @@ class Vocabulary:
             self._vocab, self._labels = self._cache[filename]
             self.num_labels = len(self._labels)
         else:
-            if filename[-4:] == ".pkl":
+            if filename.endswith(".pkl"):
+                import pickle
+
                 d = pickle.load(open(filename, "rb"))
             else:
-                file_content = open(filename, "r").read()
+                if filename.endswith(".gz"):
+                    import gzip
+
+                    file_content = gzip.open(filename, "rt").read()
+                else:
+                    file_content = open(filename, "r").read()
                 if file_content.startswith("{"):
                     d = eval(file_content)
                 else:

@@ -141,7 +141,6 @@ def init(config_filename=None):
     :param str config_filename:
     """
     rnn.init_better_exchook()
-    rnn.init_thread_join_hack()
     if config_filename:
         rnn.init_config(config_filename, command_line_options=[])
         rnn.init_log()

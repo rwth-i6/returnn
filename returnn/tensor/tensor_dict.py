@@ -100,14 +100,14 @@ class TensorDict:
                     continue
                 key_ = f"{key}:size{i}"
                 assert key_ not in out
-                if dim.is_batch_dim() and (not dim.dyn_size_ext or dim.dyn_size_ext.raw_tensor is None):
+                if dim.is_batch_dim() and (dim.dyn_size_ext is None or dim.dyn_size_ext.raw_tensor is None):
                     if include_scalar_dyn_sizes:
                         dim_value = dim.get_dim_value()
                         assert isinstance(
                             dim_value, expected_value_type
                         ), f"key {key_} {dim}: unexpected {type(dim_value)}, expected {expected_value_type}"
                         out[key_] = dim_value
-                elif dim.dyn_size_ext:
+                elif dim.dyn_size_ext is not None:
                     if include_scalar_dyn_sizes or dim.dyn_size_ext.dims:
                         assert isinstance(dim.dyn_size_ext.raw_tensor, expected_value_type), (
                             f"key {key_} {dim} {dim.dyn_size_ext}:"
@@ -147,9 +147,9 @@ class TensorDict:
                     continue
                 key_ = f"{key}:size{i}"
                 dim.reset_raw(only_self=True)
-                if dim.is_batch_dim() and not dim.dyn_size_ext:
+                if dim.is_batch_dim() and dim.dyn_size_ext is None:
                     dim.dyn_size_ext = Tensor("batch", [], dtype="int32")
-                if dim.dyn_size_ext:
+                if dim.dyn_size_ext is not None:
                     if not with_scalar_dyn_sizes and not dim.dyn_size_ext.dims:
                         pass
                     else:

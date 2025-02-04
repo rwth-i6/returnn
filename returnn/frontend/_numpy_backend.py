@@ -166,7 +166,7 @@ class NumpyBackend(Backend[numpy.ndarray]):
         :param device:
         :return: tensor with shape [dim]
         """
-        if not dtype and dim.dyn_size_ext:
+        if not dtype and dim.dyn_size_ext is not None:
             dtype = dim.dyn_size_ext.dtype
         if not dtype:
             dtype = rf.get_default_array_index_dtype()

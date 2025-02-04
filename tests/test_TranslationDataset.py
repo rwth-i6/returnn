@@ -12,11 +12,6 @@ import pickle
 import _setup_test_env  # noqa
 from returnn.util import better_exchook
 from returnn.datasets.lm import TranslationDataset, TranslationFactorsDataset
-from returnn.util.basic import init_thread_join_hack
-
-better_exchook.install()
-better_exchook.replace_traceback_format_tb()
-init_thread_join_hack()
 
 
 dummy_source_text = (

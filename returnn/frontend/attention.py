@@ -1009,7 +1009,8 @@ def sinusoidal_positional_encoding(
         arg, feat_dim_ = rf.replace_dim(arg, in_dim=feat_dim_, out_dim=feat_dim)
         emb = rf.sin(arg)
         emb.verify_out_shape(
-            {spatial_dim, feat_dim} if spatial_dim != single_step_dim else {feat_dim}, allow_missing_implicit_dims=True
+            {feat_dim} | indices.dims_set | ({spatial_dim} if spatial_dim != single_step_dim else set()),
+            allow_missing_implicit_dims=True,
         )
         emb.feature_dim = feat_dim
         _sinusoidal_positional_encoding_cache.set(cache_key, emb)

@@ -47,7 +47,6 @@ print("RETURNN SprintControl[pid %i] Python module load" % os.getpid())
 
 rnn.init_better_exchook()
 debug.init_faulthandler(sigusr1_chain=True)  # Sprint also handles SIGUSR1.
-rnn.init_thread_join_hack()
 
 
 # Start Sprint PythonControl interface. {

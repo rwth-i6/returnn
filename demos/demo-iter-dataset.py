@@ -63,7 +63,6 @@ def init(config_filename, command_line_options):
     :param list[str] command_line_options:
     """
     rnn.init_better_exchook()
-    rnn.init_thread_join_hack()
     rnn.init_config(config_filename, command_line_options)
     global config
     config = rnn.config

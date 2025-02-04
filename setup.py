@@ -82,6 +82,9 @@ def main():
         packages=["returnn"],
         include_package_data=True,
         package_data={"returnn": package_data},  # filtered via MANIFEST.in
+        install_requires=[
+            "numpy",
+        ],
         description="The RWTH extensible training framework for universal recurrent neural networks",
         author="Albert Zeyer",
         author_email="albzey@gmail.com",

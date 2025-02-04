@@ -3313,18 +3313,25 @@ def test_out_shape():
 
 
 def _check_MergeDimsLayer(
-    session, in_data_opts, in_static_shape, opts, out_data_shape, out_static_shape, in_sizes=None, out_sizes=None
-):
+    session: tf.compat.v1.Session,
+    in_data_opts: Dict[str, Any],
+    in_static_shape: Tuple[int, ...],
+    opts: Dict[str, Any],
+    out_data_shape: Tuple[Optional[int], ...],
+    out_static_shape: Tuple[int, ...],
+    in_sizes: Optional[Dict[int, Tuple[int, ...]]] = None,
+    out_sizes: Optional[Dict[int, Tuple[int, ...]]] = None,
+) -> MergeDimsLayer:
     """
-    :param tf.compat.v1.Session session:
-    :param dict[str] in_data_opts:
-    :param tuple[int] in_static_shape:
-    :param dict[str] opts: for MergeDimsLayer
-    :param tuple[int|None] out_data_shape:
-    :param tuple[int] out_static_shape:
-    :param dict[int,tuple[int]]|None in_sizes:
-    :param dict[int,tuple[int]]|None out_sizes:
-    :rtype: MergeDimsLayer
+    :param session:
+    :param in_data_opts:
+    :param in_static_shape:
+    :param opts: for MergeDimsLayer
+    :param out_data_shape:
+    :param out_static_shape:
+    :param in_sizes:
+    :param out_sizes:
+    :return: layer
     """
     net = TFNetwork(extern_data=ExternData())
     rnd = numpy.random.RandomState(42)
@@ -9479,6 +9486,63 @@ def test_PostfixInTimeLayer():
                 assert out[0, src_seq_lens[0] + repeat - 1, 0] == -7
 
 
+def test_TimeChunkingLayer():
+    n_batch, n_time, n_in = 2, 11, 3
+    in_v = numpy.arange(0, n_batch * n_time * n_in).astype("float32").reshape((n_batch, n_time, n_in))
+    in_seq_lens = numpy.array([11, 9])
+    config = Config({"extern_data": {"data": {"shape": (None, n_in)}}})
+    with make_scope() as session:
+        net = TFNetwork(config=config)
+        net.construct_from_dict(
+            {"output": {"class": "time_chunking", "chunk_size": 5, "chunk_step": 5, "from": "data"}}
+        )
+        out = net.get_default_output_layer().output
+        print("out:", out)
+        out_v, out_lens = session.run(
+            (out.placeholder, out.get_sequence_lengths()),
+            feed_dict={
+                net.extern_data.get_batch_info().dim: n_batch,
+                net.extern_data.data["data"].placeholder: in_v,
+                net.extern_data.data["data"].get_sequence_lengths(): in_seq_lens,
+            },
+        )
+        assert isinstance(out_v, numpy.ndarray)
+        print(out_v.shape)
+
+
+def test_TimeChunkingLayer_TimeUnchunkingLayer():
+    n_batch, n_time, n_in = 2, 11, 3
+    in_v = numpy.arange(0, n_batch * n_time * n_in).astype("float32").reshape((n_batch, n_time, n_in))
+    in_seq_lens = numpy.array([11, 9])
+    for b in range(n_batch):
+        in_v[b, in_seq_lens[b] :] = 0
+    config = Config({"extern_data": {"data": {"shape": (None, n_in)}}})
+    with make_scope() as session:
+        net = TFNetwork(config=config)
+        net.construct_from_dict(
+            {
+                "chunked": {"class": "time_chunking", "chunk_size": 5, "chunk_step": 5, "from": "data"},
+                "output": {"class": "time_unchunking", "chunking_layer": "chunked", "from": "chunked"},
+            }
+        )
+        in_ = net.get_layer("data").output
+        out = net.get_default_output_layer().output
+        print("out:", out)
+        out = out.copy_transpose(in_.dims).copy_masked(0.0)
+        out_v, out_lens = session.run(
+            (out.placeholder, out.get_sequence_lengths()),
+            feed_dict={
+                net.extern_data.get_batch_info().dim: n_batch,
+                net.extern_data.data["data"].placeholder: in_v,
+                net.extern_data.data["data"].get_sequence_lengths(): in_seq_lens,
+            },
+        )
+        assert isinstance(out_v, numpy.ndarray)
+        assert out_v.shape == in_v.shape
+        print(out_v)
+        numpy.testing.assert_equal(out_v, in_v)
+
+
 def test_DotLayer():
     with make_scope() as session:
         B = 2
@@ -11566,8 +11630,6 @@ def test_subnetwork_unused_output():
 
 def test_subnetwork_deep_stack():
     # https://github.com/rwth-i6/returnn/issues/993
-    if not util.PY3:
-        raise unittest.SkipTest("test case needs python 3")  # __qualname__, __func__, etc
     with make_scope() as session:
         import better_exchook
         import traceback

@@ -247,7 +247,7 @@ class Loop:
         """
         assert not self.end_ref, f"{self}.end() can only be called once"
         assert source.dtype == "bool", f"{self}: end expects boolean condition, got {source}"
-        if not self.axis.dyn_size_ext:
+        if self.axis.dyn_size_ext is None:
             dyn_size_ext = source.copy_template()
             dyn_size_ext.dtype = "int32"
             if dyn_size_ext.control_flow_ctx:
@@ -539,8 +539,8 @@ class _LoopState:
 
     def _map_name_ctx_to_last_tensor(self, name_ctx: rfl.Layer) -> Tensor:
         assert isinstance(name_ctx, rfl.Layer)
-        assert name_ctx.tensor, f"{self.loop} state {name_ctx} not assigned?"
-        assert self.loop.name_ctx.tensor, f"{self.loop} not yet exited?"
+        assert name_ctx.tensor is not None, f"{self.loop} state {name_ctx} not assigned?"
+        assert self.loop.name_ctx.tensor is not None, f"{self.loop} not yet exited?"
         return self.loop.last(name_ctx.tensor)
 
     def get_last(self):

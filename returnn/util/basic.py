@@ -10,7 +10,6 @@ from typing import Optional, Union, Any, Generic, TypeVar, Iterable, Tuple, Dict
 import subprocess
 from subprocess import CalledProcessError
 
-import h5py
 from collections import deque
 import inspect
 import os
@@ -36,8 +35,6 @@ from returnn.log import log
 import builtins
 
 from .native_code_compiler import NativeCodeCompiler
-
-PY3 = sys.version_info[0] >= 3
 
 unicode = str
 long = int
@@ -222,7 +219,7 @@ class BehaviorVersion:
     See :ref:`behavior_version`.
     """
 
-    _latest_behavior_version = 21
+    _latest_behavior_version = 22
     _behavior_version = None  # type: typing.Optional[int]
     _min_behavior_version = 0  # type: int
 
@@ -392,8 +389,7 @@ def sys_cmd_out_lines(s):
         env=dict(os.environ, LANG="en_US.UTF-8", LC_ALL="en_US.UTF-8"),
     )
     stdout = p.communicate()[0]
-    if PY3:
-        stdout = stdout.decode("utf8")
+    stdout = stdout.decode("utf8")
     result = [line.strip() for line in stdout.split("\n")[:-1]]
     p.stdout.close()
     if p.returncode != 0:
@@ -721,6 +717,8 @@ def hdf5_dimension(filename, dimension):
     :param str dimension:
     :rtype: numpy.ndarray|int
     """
+    import h5py
+
     fin = h5py.File(filename, "r")
     if "/" in dimension:
         res = fin["/".join(dimension.split("/")[:-1])].attrs[dimension.split("/")[-1]]
@@ -736,6 +734,8 @@ def hdf5_group(filename, dimension):
     :param str dimension:
     :rtype: dict[str]
     """
+    import h5py
+
     fin = h5py.File(filename, "r")
     res = {k: fin[dimension].attrs[k] for k in fin[dimension].attrs}
     fin.close()
@@ -748,6 +748,8 @@ def hdf5_shape(filename, dimension):
     :param dimension:
     :rtype: tuple[int]
     """
+    import h5py
+
     fin = h5py.File(filename, "r")
     res = fin[dimension].shape
     fin.close()
@@ -760,6 +762,8 @@ def hdf5_strings(handle, name, data):
     :param str name:
     :param numpy.ndarray|list[str] data:
     """
+    import h5py
+
     # noinspection PyBroadException
     try:
         s = max([len(d) for d in data])
@@ -1416,113 +1420,10 @@ def init_thread_join_hack():
     if _thread_join_hack_installed:  # don't install twice
         return
     _thread_join_hack_installed = True
-    if PY3:
-        # These monkey patches are not necessary anymore. Nothing blocks signals anymore in Python 3.
-        # https://github.com/albertz/playground/blob/master/thread-join-block.py
-        # https://github.com/albertz/playground/blob/master/cond-wait-block.py
-        return
-    main_thread = threading.current_thread()
-    # noinspection PyUnresolvedReferences,PyProtectedMember
-    assert isinstance(main_thread, threading._MainThread)
-    main_thread_id = thread.get_ident()
-
-    # Patch Thread.join().
-    join_orig = threading.Thread.join
-
-    def join_hacked(thread_obj, timeout=None):
-        """
-        :type thread_obj: threading.Thread
-        :type timeout: float|None
-        :return: always None
-        """
-        if thread.get_ident() == main_thread_id and timeout is None:
-            # This is a HACK for Thread.join() if we are in the main thread.
-            # In that case, a Thread.join(timeout=None) would hang and even not respond to signals
-            # because signals will get delivered to other threads and Python would forward
-            # them for delayed handling to the main thread which hangs.
-            # See CPython signalmodule.c.
-            # Currently the best solution I can think of:
-            while thread_obj.is_alive():
-                join_orig(thread_obj, timeout=0.1)
-        elif thread.get_ident() == main_thread_id and timeout > 0.1:
-            # Limit the timeout. This should not matter for the underlying code.
-            join_orig(thread_obj, timeout=0.1)
-        else:
-            # In all other cases, we can use the original.
-            join_orig(thread_obj, timeout=timeout)
-
-    threading.Thread.join = join_hacked
-
-    # Mostly the same for Condition.wait().
-    if PY3:
-        # https://youtrack.jetbrains.com/issue/PY-34983
-        # noinspection PyPep8Naming
-        Condition = threading.Condition
-    else:
-        # noinspection PyUnresolvedReferences,PyPep8Naming,PyProtectedMember
-        Condition = threading._Condition
-    cond_wait_orig = Condition.wait
-
-    # noinspection PyUnusedLocal
-    def cond_wait_hacked(cond, timeout=None, *args):
-        """
-        :param Condition cond:
-        :param float|None timeout:
-        :param args:
-        :rtype: bool
-        """
-        if thread.get_ident() == main_thread_id:
-            if timeout is None:
-                # Use a timeout anyway. This should not matter for the underlying code.
-                return cond_wait_orig(cond, timeout=0.1)  # noqa  # https://youtrack.jetbrains.com/issue/PY-43915
-            # There is some code (e.g. multiprocessing.pool) which relies on that
-            # we respect the real specified timeout.
-            # However, we cannot do multiple repeated calls to cond_wait_orig as we might miss the condition notify.
-            # But in some Python versions, the underlying cond_wait_orig will anyway also use sleep.
-            return cond_wait_orig(cond, timeout=timeout)  # noqa
-        else:
-            return cond_wait_orig(cond, timeout=timeout)  # noqa
-
-    Condition.wait = cond_wait_hacked
-
-    # And the same for Lock.acquire, very similar to Condition.wait.
-    # However: can't set attributes of built-in/extension type 'thread.lock'.
-    # We could wrap the whole threading.Lock, but that is too annoying for me now...
-    # noinspection PyPep8Naming
-    Lock = None
-    if Lock:
-        lock_acquire_orig = Lock.acquire  # noqa
-
-        # Note: timeout argument was introduced in Python 3.
-        def lock_acquire_hacked(lock, blocking=True, timeout=-1):
-            """
-            :param threading.Lock lock:
-            :param bool blocking:
-            :param float timeout:
-            :rtype: bool
-            """
-            if not blocking:
-                return lock_acquire_orig(lock, blocking=False)  # no timeout if not blocking
-            # Everything is blocking now.
-            if thread.get_ident() == main_thread_id:
-                if timeout is None or timeout < 0:  # blocking without timeout
-                    if PY3:
-                        while not lock_acquire_orig(lock, blocking=True, timeout=0.1):
-                            pass
-                        return True
-                    else:  # Python 2. cannot use timeout
-                        while not lock_acquire_orig(lock, blocking=False):
-                            time.sleep(0.1)
-                        return True
-                else:  # timeout is set. (Can only be with Python 3.)
-                    # Use a capped timeout. This should not matter for the underlying code.
-                    return lock_acquire_orig(lock, blocking=True, timeout=min(timeout, 0.1))
-            # Fallback to default.
-            if PY3:
-                return lock_acquire_orig(lock, blocking=True, timeout=timeout)
-            return lock_acquire_orig(lock, blocking=True)
-
-        Lock.acquire = lock_acquire_hacked
+    # These monkey patches are not necessary anymore. Nothing blocks signals anymore in Python 3.
+    # https://github.com/albertz/playground/blob/master/thread-join-block.py
+    # https://github.com/albertz/playground/blob/master/cond-wait-block.py
+    log.print_deprecation_warning("init_thread_join_hack: not necessary anymore since Python 3 (does nothing)")
 
 
 def start_daemon_thread(target, args=()):
@@ -1944,34 +1845,15 @@ def json_remove_comments(string, strip_space=True):
     return "".join(new_str)
 
 
-def _py2_unicode_to_str_recursive(s):
+def load_json(filename: Optional[str] = None, content: Optional[str] = None) -> Dict[str, Any]:
     """
-    This is supposed to be run with Python 2.
-    Also see :func:`as_str` and :func:`py2_utf8_str_to_unicode`.
-
-    :param str|unicode s: or any recursive structure such as dict, list, tuple
-    :return: Python 2 str (is like Python 3 UTF-8 formatted bytes)
-    :rtype: str
-    """
-    if isinstance(s, dict):
-        return {_py2_unicode_to_str_recursive(key): _py2_unicode_to_str_recursive(value) for key, value in s.items()}
-    elif isinstance(s, (list, tuple)):
-        return make_seq_of_type(type(s), [_py2_unicode_to_str_recursive(element) for element in s])
-    elif isinstance(s, unicode):
-        return s.encode("utf-8")  # Python 2 str, Python 3 bytes
-    else:
-        return s
-
-
-def load_json(filename=None, content=None):
-    """
-    :param str|None filename:
-    :param str|None content:
-    :rtype: dict[str]
+    :param filename:
+    :param content:
     """
     if content:
         assert not filename
     else:
+        assert filename
         content = open(filename).read()
     import json
 
@@ -1980,8 +1862,6 @@ def load_json(filename=None, content=None):
         json_content = json.loads(content)
     except ValueError as e:
         raise Exception("config looks like JSON but invalid json content, %r" % e)
-    if not PY3:
-        json_content = _py2_unicode_to_str_recursive(json_content)
     return json_content
 
 
@@ -2425,11 +2305,7 @@ def getargspec(func):
     :param func:
     :return: FullArgSpec
     """
-    if PY3:
-        return inspect.getfullargspec(func)
-    else:
-        # noinspection PyDeprecation
-        return inspect.getargspec(func)
+    return inspect.getfullargspec(func)
 
 
 def collect_mandatory_class_init_kwargs(cls):
@@ -2685,28 +2561,6 @@ def as_str(s):
     assert False, "unknown type %s" % type(s)
 
 
-def py2_utf8_str_to_unicode(s):
-    """
-    :param str s: e.g. the string literal "äöü" in Python 3 is correct, but in Python 2 it should have been u"äöü",
-      but just using "äöü" will actually be the raw utf8 byte sequence.
-      This can happen when you eval() some string.
-      We assume that you are using Python 2, and got the string (not unicode object) "äöü", or maybe "abc".
-      Also see :func:`_py2_unicode_to_str_recursive` and :func:`as_str`.
-    :return: if it is indeed unicode, it will return the unicode object, otherwise it keeps the string
-    :rtype: str|unicode
-    """
-    assert not PY3
-    assert isinstance(s, str)
-    try:
-        # noinspection PyUnresolvedReferences
-        s.decode("ascii")
-        return s
-    except UnicodeDecodeError:
-        pass
-    # noinspection PyUnresolvedReferences
-    return s.decode("utf8")
-
-
 def unicode_to_str(s):
     """
     The behavior is different depending on Python 2 or Python 3. In all cases, the returned type is a str object.
@@ -2722,11 +2576,8 @@ def unicode_to_str(s):
     :param str|unicode|bytes s:
     :rtype: str
     """
-    if PY3 and isinstance(s, bytes):
+    if isinstance(s, bytes):
         s = s.decode("utf8")
-        assert isinstance(s, str)
-    if not PY3 and isinstance(s, unicode):
-        s = s.encode("utf8")
         assert isinstance(s, str)
     assert isinstance(s, str)
     return s

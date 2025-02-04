@@ -302,7 +302,6 @@ class TorchBackend(Backend[torch.Tensor]):
         pad_value: Union[None, int, float] = None,
     ) -> Tensor:
         """split dims"""
-        assert not axis.need_masking()  # not implemented
         assert pad_to_multiples in (None, False)  # not implemented
         axis_ = source.get_axis_from_description(axis)
         out_dims = source.dims[:axis_] + tuple(dims) + source.dims[axis_ + 1 :]
@@ -675,6 +674,12 @@ class TorchBackend(Backend[torch.Tensor]):
         assert targets.sparse_dim and targets.sparse_dim.dimension <= logits.feature_dim.dimension
         # PyTorch expects the logits to be of shape (T, B, C) where T is the input spatial dim.
         batch_dims = logits.remaining_dims((input_spatial_dim, logits.feature_dim))
+        batch_dims_targets = targets.remaining_dims(targets_spatial_dim)
+        if set(batch_dims) != set(batch_dims_targets):
+            # Need to broadcast.
+            logits = rf.expand_dims(logits, [d for d in batch_dims_targets if d not in batch_dims])
+            targets = rf.expand_dims(targets, [d for d in batch_dims if d not in batch_dims_targets])
+            batch_dims = logits.remaining_dims((input_spatial_dim, logits.feature_dim))
         batch_shape = [d.get_dim_value() for d in batch_dims]
         batch_n_elems = prod(batch_shape)
         logits = logits.copy_transpose([input_spatial_dim] + batch_dims + [logits.feature_dim])
@@ -993,7 +998,7 @@ class TorchBackend(Backend[torch.Tensor]):
         else:
             raise TypeError(f"Unsupported type for indices: {type(indices)}")
         if clip_to_valid:
-            if axis.dyn_size_ext:
+            if axis.dyn_size_ext is not None:
                 indices = rf.clip_by_value(
                     indices, 0, axis.get_dyn_size_ext_for_device(indices.device) - 1, allow_broadcast_all_sources=True
                 )
@@ -1166,6 +1171,9 @@ class TorchBackend(Backend[torch.Tensor]):
             start = 0
         if isinstance(size, Dim):
             size = size.get_dim_value()
+        elif isinstance(size, Tensor):
+            assert size.dims == ()  # scalar
+            size = size.raw_tensor
         if size is not None:
             assert end is None
             out.raw_tensor = torch.narrow(source.raw_tensor, dim=axis_int, start=start, length=size)
@@ -1426,7 +1434,7 @@ class TorchBackend(Backend[torch.Tensor]):
         :param device:
         :return: tensor with shape [dim]
         """
-        if not dtype and dim.dyn_size_ext:
+        if not dtype and dim.dyn_size_ext is not None:
             dtype = dim.dyn_size_ext.dtype
         if not dtype:
             dtype = rf.get_default_array_index_dtype()
@@ -1460,9 +1468,9 @@ class TorchBackend(Backend[torch.Tensor]):
         if use_mask and any(dim.need_masking() for dim in axis):
             source = source.copy()
             dtype = source.raw_tensor.dtype
-            if mode in ("max", "logsumexp"):
+            if mode in ("max", "logsumexp", "argmax"):
                 mask_value = torch.finfo(dtype).min if dtype.is_floating_point else torch.iinfo(dtype).min
-            elif mode == "min":
+            elif mode in ("min", "argmin"):
                 mask_value = torch.finfo(dtype).max if dtype.is_floating_point else torch.iinfo(dtype).max
             elif mode == "sum":
                 mask_value = 0
@@ -1728,7 +1736,7 @@ class TorchBackend(Backend[torch.Tensor]):
             out_raw = masked_select(in_raw, mask_raw, mask_len=known_mask_len)
         if not out_dim:
             out_dim = Dim(None, name="masked_select")
-        if not out_dim.dyn_size_ext:
+        if out_dim.dyn_size_ext is None:
             out_dim.dyn_size_ext = Tensor("masked_select_size", dims=(), dtype="int64")
         if out_dim.dyn_size_ext.raw_tensor is None:
             out_dim.dyn_size_ext.raw_tensor = torch.tensor(out_raw.shape[0], dtype=torch.int64)
@@ -1747,6 +1755,11 @@ class TorchBackend(Backend[torch.Tensor]):
     ) -> Tensor:
         """masked scatter"""
         assert mask.dtype == "bool"
+        # Note: If mask.dims != dims, then sum(mask_raw.flatten()) could have less elements than source_raw
+        # (not counting remaining_dims), and then the out_raw.masked_scatter_ below fails silently!
+        # That's why we assert this here.
+        # Currently in the RF code, we have a generic fallback implementation,
+        # very similar to masked_select.
         assert set(mask.dims) == set(dims)
         assert in_dim in source.dims
         remaining_dims = [d for d in source.dims if d not in mask.dims and d != in_dim]
@@ -1754,18 +1767,25 @@ class TorchBackend(Backend[torch.Tensor]):
         source_raw = source.copy_compatible_to_dims_raw(source_templ_dims)
 
         out_dims = tuple(dims) + tuple(remaining_dims)
+        out_shape = [d.get_dim_value() for d in out_dims]
         if backup is None:
-            out_shape = [d.get_dim_value() for d in out_dims]
             out_raw = torch.zeros(out_shape, dtype=source_raw.dtype, device=source_raw.device)
         else:
             assert set(backup.dims).issubset(out_dims), f"backup dims {backup.dims} not subset of out dims {out_dims}"
             for d in out_dims:
                 if d not in backup.dims:
                     backup = rf.expand_dim(backup, dim=d)
-            out_dims = backup.dims
+            backup = backup.copy_transpose(out_dims)
             out_raw = backup.raw_tensor.clone()  # we operate inplace below
 
+        mask = mask.copy_masked(mask_value=False)
         mask_raw = mask.copy_compatible_to_dims_raw(out_dims)
+        if torch.__version__ < (2, 1):
+            # There is a bug in older PyTorch where masked_scatter_ does not work correctly with non-contiguous tensors.
+            # https://github.com/pytorch/pytorch/issues/99638
+            out_raw = out_raw.contiguous()
+            mask_raw = mask_raw.contiguous()
+            source_raw = source_raw.contiguous()
         out_raw.masked_scatter_(mask_raw, source_raw)
         return Tensor(
             "masked_scatter",

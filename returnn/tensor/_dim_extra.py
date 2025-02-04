@@ -94,9 +94,9 @@ class _DimExtra:
         if derived_from_op and not derived_from_op.output:
             derived_from_op.output = dim
         self.match_priority = match_priority
-        if src_data:
+        if src_data is not None:
             assert isinstance(src_data, _t.Tensor) and isinstance(src_axis, int)
-        if not batch and dim.dyn_size_ext:
+        if not batch and dim.dyn_size_ext is not None:
             batch = dim.dyn_size_ext.batch
             if not control_flow_ctx:
                 control_flow_ctx = dim.dyn_size_ext.control_flow_ctx
@@ -197,7 +197,7 @@ class _DimMixin:
         :return: batch info (deprecated)
         """
         if not self._extra:
-            if self.dyn_size_ext:
+            if self.dyn_size_ext is not None:
                 return self.dyn_size_ext.batch
             return None
         return self._extra.batch
@@ -214,7 +214,7 @@ class _DimMixin:
         :return: control flow context (deprecated)
         """
         if not self._extra:
-            if self.dyn_size_ext:
+            if self.dyn_size_ext is not None:
                 return self.dyn_size_ext.control_flow_ctx
             return None
         return self._extra.control_flow_ctx
@@ -291,7 +291,7 @@ class _DimMixin:
         elif self.dimension is not None:
             desc += f"({self.dimension})"
         else:
-            if self.dyn_size_ext:
+            if self.dyn_size_ext is not None:
                 desc += "[%s]" % ",".join(self.dyn_size_ext.get_batch_axes_short_description(special_axes=False))
             else:
                 desc += "[?]"
@@ -383,7 +383,7 @@ class _DimMixin:
             visited.add(id(dim))
             dim.reset_batch_ctx()
             dim._dyn_size_max_value = None
-            if dim.dyn_size_ext:
+            if dim.dyn_size_ext is not None:
                 dim.dyn_size_ext.reset()
             # noinspection PyProtectedMember
             dim_extra = dim._extra
@@ -421,12 +421,12 @@ class _DimMixin:
 
         :param func: operates inplace
         """
-        dyn_size_ext = self.dyn_size_ext.copy() if self.dyn_size_ext else None
-        dyn_size_ext_max = self._dyn_size_max_value if self._dyn_size_max_value else None
+        dyn_size_ext = self.dyn_size_ext.copy() if self.dyn_size_ext is not None else None
+        dyn_size_ext_max = self._dyn_size_max_value if self._dyn_size_max_value is not None else None
         self.reset_raw(only_self=True)
-        if dyn_size_ext:
+        if dyn_size_ext is not None:
             func(dyn_size_ext)
-        if dyn_size_ext_max:
+        if dyn_size_ext_max is not None:
             func(dyn_size_ext_max)
         self.dyn_size_ext = dyn_size_ext
         self._dyn_size_max_value = dyn_size_ext_max
@@ -446,7 +446,7 @@ class _DimMixin:
         # E.g. ctx == loop(time_dim), when self.control_flow_ctx == None,
         # we can use self in ctx, iff time_dim not in self.dyn_size_ext.dim_tags.
         # We can only do this check if we know about dyn_size_ext.
-        if not self.dyn_size_ext:
+        if self.dyn_size_ext is None:
             return False
         parent_dims = ControlFlowContext.collect_parent_dims(ctx)
         for dim in self.dyn_size_ext.dim_tags:
@@ -458,8 +458,8 @@ class _DimMixin:
         """
         :rtype: bool
         """
-        if (self.dyn_size_ext and not self.dyn_size_ext.is_valid_in_current_graph()) or (
-            self._dyn_size_max_value and not self._dyn_size_max_value.is_valid_in_current_graph()
+        if (self.dyn_size_ext is not None and not self.dyn_size_ext.is_valid_in_current_graph()) or (
+            self._dyn_size_max_value is not None and not self._dyn_size_max_value.is_valid_in_current_graph()
         ):  # maybe from an earlier run which reuses the dim tag
             # Reset and cleanup.
             self.reset_batch_ctx()
@@ -474,7 +474,7 @@ class _DimMixin:
         if not self._extra:
             return
         if not self.batch:
-            if self.dyn_size_ext and self.dyn_size_ext.batch:
+            if self.dyn_size_ext is not None and self.dyn_size_ext.batch:
                 self.batch = self.dyn_size_ext.batch
             else:
                 return
@@ -482,21 +482,21 @@ class _DimMixin:
         if not extra:
             return
         key = (self.batch, self.control_flow_ctx)
-        if self.dyn_size_ext and key not in extra.same_for_batch_ctx:
+        if self.dyn_size_ext is not None and key not in extra.same_for_batch_ctx:
             extra.same_for_batch_ctx[key] = self
         # Check if we can find more
         if key in extra.same_for_batch_ctx:
             same = extra.same_for_batch_ctx[key]
             if same is not self:
-                if same.dyn_size_ext and not self.dyn_size_ext:
+                if same.dyn_size_ext is not None and self.dyn_size_ext is None:
                     self.dyn_size_ext = same.dyn_size_ext
-                if same.dyn_size_ext and same.dyn_size_ext.placeholder is not None:
+                if same.dyn_size_ext is not None and same.dyn_size_ext.placeholder is not None:
                     if self.dyn_size_ext.placeholder is None:
                         self.dyn_size_ext = same.dyn_size_ext
-                if self.dyn_size_ext and not same.dyn_size_ext:
+                if self.dyn_size_ext is not None and same.dyn_size_ext is None:
                     same.dyn_size_ext = self.dyn_size_ext
-                if self.dyn_size_ext and self.dyn_size_ext.placeholder is not None:
-                    if not same.dyn_size_ext or same.dyn_size_ext.placeholder is None:
+                if self.dyn_size_ext is not None and self.dyn_size_ext.placeholder is not None:
+                    if same.dyn_size_ext is None or same.dyn_size_ext.placeholder is None:
                         same.dyn_size_ext = self.dyn_size_ext
                 # noinspection PyProtectedMember
                 if self._dyn_size_max_value is None and same._dyn_size_max_value is not None:
@@ -521,10 +521,10 @@ class _DimMixin:
         from returnn.tensor import ControlFlowContext
 
         assert self.can_be_used_as_dim()
-        if self.batch == batch and self._can_use_in_ctx(ctx) and self.dyn_size_ext:
+        if self.batch == batch and self._can_use_in_ctx(ctx) and self.dyn_size_ext is not None:
             self._validate_in_current_graph()
             self._maybe_update()
-            if self.batch == batch and self._can_use_in_ctx(ctx) and self.dyn_size_ext:  # check again
+            if self.batch == batch and self._can_use_in_ctx(ctx) and self.dyn_size_ext is not None:  # check again
                 return self
         if self.is_batch_dim():
             # We ignore the ctx for the batch dim currently.
@@ -550,11 +550,11 @@ class _DimMixin:
                         assert (
                             tag.batch == batch
                         )  # some code updated batch directly (incorrectly) and could trigger this
-                        if tag.dyn_size_ext:
+                        if tag.dyn_size_ext is not None:
                             return tag
                         dim_tag = tag
                         break
-            if same_base.batch == batch and same_base._can_use_in_ctx(ctx) and same_base.dyn_size_ext:
+            if same_base.batch == batch and same_base._can_use_in_ctx(ctx) and same_base.dyn_size_ext is not None:
                 return same_base
         else:
             same_base = self
@@ -578,14 +578,14 @@ class _DimMixin:
                 else:
                     raise NotImplementedError("not yet implemented: multiple derived ctxs: %r" % (derived_ctxs,))
         if dim_tag:
-            assert not dim_tag.dyn_size_ext
+            assert dim_tag.dyn_size_ext is None
         dyn_size_ext = None
         # Maybe we have sth with the base batch without beam or padded batch which we can extend.
         if batch != batch.get_global_base():
             batch_base = batch.get_global_base()
             base_can_use_in_ctx = None  # type: Optional[_d.Dim]
             # noinspection PyProtectedMember
-            if same_base.batch == batch_base and same_base._can_use_in_ctx(ctx) and same_base.dyn_size_ext:
+            if same_base.batch == batch_base and same_base._can_use_in_ctx(ctx) and same_base.dyn_size_ext is not None:
                 base_can_use_in_ctx = same_base
             elif same_base._extra:
                 from returnn.tf.util.data import ControlFlowContext
@@ -593,10 +593,15 @@ class _DimMixin:
                 for ctx_ in ControlFlowContext.abs_ctx_stack_with_root(ctx):
                     # noinspection PyProtectedMember
                     tag = same_base._extra.same_for_batch_ctx.get((batch_base, ctx_), None)
-                    if tag and tag._can_use_in_ctx(ctx) and tag._validate_in_current_graph() and tag.dyn_size_ext:
+                    if (
+                        tag
+                        and tag._can_use_in_ctx(ctx)
+                        and tag._validate_in_current_graph()
+                        and tag.dyn_size_ext is not None
+                    ):
                         base_can_use_in_ctx = tag
                         break
-            if base_can_use_in_ctx and base_can_use_in_ctx.dyn_size_ext:
+            if base_can_use_in_ctx and base_can_use_in_ctx.dyn_size_ext is not None:
                 if base_can_use_in_ctx.dyn_size_ext.have_batch_axis():
                     # The same_base has some dyn size without any beam nor control flow context.
                     # We can expand it to the current beam, or extend by padded batch.
@@ -609,7 +614,7 @@ class _DimMixin:
                             dyn_size_ext.placeholder, "_RETURNN_beam_expanded_base_data", None
                         )
                         if batch.beam:
-                            assert beam_expanded_base_data
+                            assert beam_expanded_base_data is not None
                         # Note: The beam expansion used tiling, which can be cached.
                         # This means that we could end up with the same size tensor (placeholder)
                         # for multiple different beams,
@@ -629,17 +634,17 @@ class _DimMixin:
                         if batch.beam:
                             dyn_size_ext.placeholder._RETURNN_dyn_size_beam = batch.beam
                             dyn_size_ext.placeholder._RETURNN_beam_expanded_base_data = beam_expanded_base_data
-        if not dyn_size_ext:
+        if dyn_size_ext is None:
             # Maybe we can infer dyn_size_ext, even with different batch.
             # Keep logic in sync with is_dim_known_in_batch_ctx.
             candidates = [self, same_base] + list(same_base_extra.same_for_batch_ctx.values())
             for other in candidates:
-                if other.dyn_size_ext and ControlFlowContext.is_parent_or_same(other.control_flow_ctx, ctx):
+                if other.dyn_size_ext is not None and ControlFlowContext.is_parent_or_same(other.control_flow_ctx, ctx):
                     dyn_size_ext = other.dyn_size_ext.copy_template()
                     dyn_size_ext.beam = batch.beam
                     dyn_size_ext.batch = batch
                     break
-        if dyn_size_ext:
+        if dyn_size_ext is not None:
             ctx = dyn_size_ext.control_flow_ctx
         elif dim_tag:
             ctx = dim_tag.control_flow_ctx
@@ -653,14 +658,14 @@ class _DimMixin:
                 # or it is defined for the same batch and ctx.
                 # In any case, reuse it then.
                 candidate.batch = batch
-                if dyn_size_ext:
-                    if candidate.dyn_size_ext:
+                if dyn_size_ext is not None:
+                    if candidate.dyn_size_ext is not None:
                         candidate.dyn_size_ext.batch = batch
                         assert candidate.dyn_size_ext.dim_tags == dyn_size_ext.dim_tags
                     else:
                         candidate.dyn_size_ext = dyn_size_ext
                     assert not candidate.dyn_size_ext.control_flow_ctx
-                elif candidate.dyn_size_ext:
+                elif candidate.dyn_size_ext is not None:
                     candidate.dyn_size_ext.batch = batch
                 else:
                     candidate.complete_dyn_size(template_only=True)
@@ -679,16 +684,16 @@ class _DimMixin:
                 dyn_size_ext=dyn_size_ext,
             )
             dim_tag.same_as = same_base
-        if dyn_size_ext and dyn_size_ext.placeholder is not None:
+        if dyn_size_ext is not None and dyn_size_ext.placeholder is not None:
             if _d.Dim.get_tag_from_size_tensor(dyn_size_ext.placeholder) is None:
                 dim_tag.set_tag_on_size_tensor(dyn_size_ext.placeholder, batch=batch)
         same_base_extra.same_for_batch_ctx[(batch, ctx)] = dim_tag
-        if dyn_size_ext:
-            if not dim_tag.dyn_size_ext:
+        if dyn_size_ext is not None:
+            if dim_tag.dyn_size_ext is None:
                 dim_tag.dyn_size_ext = dyn_size_ext
             else:
                 assert dim_tag.dyn_size_ext.dims == dyn_size_ext.dims
-        elif dim_tag.dyn_size_ext:
+        elif dim_tag.dyn_size_ext is not None:
             pass
         else:
             dim_tag.complete_dyn_size(template_only=True)
@@ -704,7 +709,7 @@ class _DimMixin:
             self._extra.cache_dyn_size_ext_dev.clear()
         self.batch = None
         self.control_flow_ctx = None
-        if self.dyn_size_ext and self.dyn_size_ext.batch:
+        if self.dyn_size_ext is not None and self.dyn_size_ext.batch:
             self.dyn_size_ext = self.dyn_size_ext.copy_template()
             self.dyn_size_ext.batch = None
             self.dyn_size_ext.control_flow_ctx = None
@@ -719,7 +724,7 @@ class _DimMixin:
         assert self.can_be_used_as_dim()
         same = self.get_for_batch_ctx(batch, ctx)
         assert dyn_size_ext.batch == batch and dyn_size_ext.control_flow_ctx == ctx
-        if same.dyn_size_ext:
+        if same.dyn_size_ext is not None:
             assert same.dyn_size_ext.dim_tags == dyn_size_ext.dim_tags
             if dyn_size_ext.placeholder is not None:
                 same.dyn_size_ext.placeholder = dyn_size_ext.placeholder
@@ -755,7 +760,7 @@ class _DimMixin:
           If the dyn size can potentially be of a different shape, directly access dyn_size_ext.
         :rtype: tf.Tensor|None
         """
-        if self.dyn_size_ext:
+        if self.dyn_size_ext is not None:
             return self.dyn_size_ext.placeholder
         return None
 
@@ -766,7 +771,7 @@ class _DimMixin:
 
         :param tf.Tensor dyn_size:
         """
-        if self.dyn_size_ext and self.dyn_size_ext.placeholder is dyn_size:  # fast path check
+        if self.dyn_size_ext is not None and self.dyn_size_ext.placeholder is dyn_size:  # fast path check
             return
         assert self.can_be_used_as_dim()
         other = _d.Dim.get_tag_from_size_tensor(dyn_size)
@@ -782,13 +787,13 @@ class _DimMixin:
             return
         self._init_default_dyn_size_ext(dyn_size)
         self.set_tag_on_size_tensor(dyn_size)
-        assert self.dyn_size_ext.placeholder is dyn_size
+        assert self.dyn_size_ext is not None and self.dyn_size_ext.placeholder is dyn_size
 
     def _init_default_dyn_size_ext(self, dyn_size):
         """
         :param tf.Tensor dyn_size:
         """
-        if self.dyn_size_ext:
+        if self.dyn_size_ext is not None:
             if self.dyn_size_ext.placeholder is not None:
                 # Do not allow resetting it to sth different.
                 assert self.dyn_size_ext.placeholder is dyn_size
@@ -809,7 +814,7 @@ class _DimMixin:
         """
         :return: dyn_size_ext on the device
         """
-        assert self.dyn_size_ext
+        assert self.dyn_size_ext is not None
         if not device or device == "cpu":
             return self.dyn_size_ext
 
@@ -832,7 +837,7 @@ class _DimMixin:
         """
         import returnn.frontend as rf
 
-        assert self.dyn_size_ext and self.dyn_size_ext.raw_tensor is not None
+        assert self.dyn_size_ext is not None and self.dyn_size_ext.raw_tensor is not None
         # noinspection PyProtectedMember
         backend = self.dyn_size_ext._raw_backend
 
@@ -909,14 +914,14 @@ class _DimMixin:
         """
         if self.is_batch_dim():
             return True
-        if not self.dyn_size_ext and self.dimension is not None:
+        if self.dyn_size_ext is None and self.dimension is not None:
             return True
-        if self.dyn_size_ext:
+        if self.dyn_size_ext is not None:
             return True
         extra = self._get_same_base_extra()
         if extra:
             for _, other in extra.same_for_batch_ctx.items():
-                if other.dyn_size_ext:
+                if other.dyn_size_ext is not None:
                     return True
         return False
 
@@ -932,14 +937,14 @@ class _DimMixin:
             return True
         dim = self.get_for_batch_ctx(batch=batch, ctx=ctx, allow_none=True)
         if dim:
-            return bool(dim.dyn_size_ext)
+            return dim.dyn_size_ext is not None
         candidates = [self, self.get_same_base()]
         if self._extra:
             candidates += list(self._extra.same_for_batch_ctx.values())
         for dim in candidates:
             # By intention, ignore the batch, only check the ctx.
             # Keep logic in sync with get_for_batch_ctx.
-            if ControlFlowContext.is_parent_or_same(dim.control_flow_ctx, ctx) and dim.dyn_size_ext:
+            if ControlFlowContext.is_parent_or_same(dim.control_flow_ctx, ctx) and dim.dyn_size_ext is not None:
                 return True
         return False
 
@@ -948,7 +953,8 @@ class _DimMixin:
         :return: whether the dim is not static. usually means that it has seq lengths
         """
         return self.dimension is None and (
-            (self.dyn_size_ext and self.dyn_size_ext.dims) or (not self.dyn_size_ext and not self.is_batch_dim())
+            (self.dyn_size_ext is not None and self.dyn_size_ext.dims)
+            or (self.dyn_size_ext is None and not self.is_batch_dim())
         )
 
     def is_dynamic(self) -> bool:
@@ -973,7 +979,7 @@ class _DimMixin:
             return False
         if self.capacity is not None:
             return True
-        if not self.dyn_size_ext:  # unknown, so we can only guess
+        if self.dyn_size_ext is None:  # unknown, so we can only guess
             if self.is_batch_dim():
                 return False
             return True
@@ -992,7 +998,7 @@ class _DimMixin:
         :return: whether this dim tag for this specific batch (incl beam) is the same as the given size
         :rtype: bool
         """
-        if self.dyn_size_ext and x is self.dyn_size_ext.placeholder:
+        if self.dyn_size_ext is not None and x is self.dyn_size_ext.placeholder:
             return True
         tag = _DimMixin.get_tag_from_size_tensor(x)
         if tag and tag == self:
@@ -1079,7 +1085,7 @@ class _DimMixin:
             self.batch = batch  # overtake
         if not self.is_batch_dim() and self.is_dynamic():
             if same_as_before:
-                assert self.dyn_size_ext and self.dyn_size_ext.placeholder is not None
+                assert self.dyn_size_ext is not None and self.dyn_size_ext.placeholder is not None
                 # Do not overwrite it.
             else:
                 self._init_default_dyn_size_ext(x)
@@ -1104,7 +1110,7 @@ class _DimMixin:
         if self.is_static():
             return
         self._validate_in_current_graph()
-        if self.dyn_size_ext and (self.dyn_size_ext.placeholder is not None or template_only):
+        if self.dyn_size_ext is not None and (self.dyn_size_ext.placeholder is not None or template_only):
             return
         same_base = self.get_same_base()
         op = self.derived_from_op or same_base.derived_from_op
@@ -1121,7 +1127,7 @@ class _DimMixin:
             for x_dim in op.inputs:
                 if self.batch:
                     x_dim = x_dim.get_for_batch_ctx(self.batch, self.control_flow_ctx)
-                if x_dim.dyn_size_ext and x_dim.dyn_size_ext.raw_tensor is not None:
+                if x_dim.dyn_size_ext is not None and x_dim.dyn_size_ext.raw_tensor is not None:
                     # noinspection PyProtectedMember
                     backend = x_dim.dyn_size_ext._raw_backend
                     break
@@ -1130,7 +1136,7 @@ class _DimMixin:
         for x_dim in op.inputs:
             if self.batch:
                 x_dim = x_dim.get_for_batch_ctx(self.batch, self.control_flow_ctx)
-            if x_dim.dyn_size_ext:
+            if x_dim.dyn_size_ext is not None:
                 size_dtype = x_dim.dyn_size_ext.dtype
                 break
         if not size_dtype:
@@ -1269,13 +1275,13 @@ class _DimMixin:
             if self.batch:
                 x_dim = x_dim.get_for_batch_ctx(self.batch, self.control_flow_ctx)
             x_dim.complete_dyn_size(template_only=template_only, _backend=backend)
-            if not x_dim.dyn_size_ext and not x_dim.dimension:
+            if x_dim.dyn_size_ext is None and not x_dim.dimension:
                 return
             y = _bin_op(y, x_dim.dimension or x_dim.dyn_size_ext)
             if not template_only and y.raw_tensor is not None:
                 y_max_value = _bin_op(y_max_value, x_dim.get_dim_value_tensor())
-        assert y, f"op {op}?"
-        if self.dyn_size_ext:
+        assert y is not None, f"op {op}?"
+        if self.dyn_size_ext is not None:
             assert self.dyn_size_ext.dim_tags == y.dim_tags
         if y.batch:
             if self.batch:
@@ -1283,8 +1289,8 @@ class _DimMixin:
             else:
                 self.batch = y.batch
         self.dyn_size_ext = y
-        if not template_only and y_max_value:
-            assert y_max_value and y_max_value.raw_tensor is not None
+        if not template_only and y_max_value is not None:
+            assert y_max_value is not None and y_max_value.raw_tensor is not None
             self._dyn_size_max_value = y_max_value
         if tf and y.placeholder is not None:
             self.set_tag_on_size_tensor(y.placeholder)
@@ -1690,7 +1696,9 @@ class _DimMixin:
             assert isinstance(self._extra.src_axis, int)
             # Maybe it changed in the meanwhile, so check.
             tag = self._extra.src_data.get_dim_tag(self._extra.src_axis)
-            if tag.description == self.description and (not tag.dyn_size_ext or not tag._validate_in_current_graph()):
+            if tag.description == self.description and (
+                tag.dyn_size_ext is None or not tag._validate_in_current_graph()
+            ):
                 tag.dyn_size_ext = self.get_dyn_size_ext_for_batch_ctx(
                     tag.batch, tag.control_flow_ctx, template_only=True
                 )
@@ -1704,7 +1712,7 @@ class _DimMixin:
                     other_same_base.batch, other_same_base.control_flow_ctx, template_only=True
                 )
                 other_same_base._maybe_update()
-        if not self.dyn_size_ext or not self._validate_in_current_graph():
+        if self.dyn_size_ext is None or not self._validate_in_current_graph():
             self.dyn_size_ext = other_same_base.get_dyn_size_ext_for_batch_ctx(
                 self.batch, self.control_flow_ctx, template_only=True
             )
@@ -1715,7 +1723,7 @@ class _DimMixin:
             )
             other_same_base._maybe_update()
         if (
-            self.dyn_size_ext
+            self.dyn_size_ext is not None
             and self.dyn_size_ext.raw_tensor is None
             and other_same_base.dyn_size_ext.raw_tensor is not None
         ):
@@ -1787,9 +1795,9 @@ class _DimMixin:
                 if not dim._validate_in_current_graph():
                     continue
                 self_dim = self._make_extra().same_for_batch_ctx.get(key, None)
-                if self_dim and (self_dim.dyn_size_ext or not dim.dyn_size_ext):
+                if self_dim and (self_dim.dyn_size_ext is not None or dim.dyn_size_ext is None):
                     continue  # keep ours
-                if not dim.dyn_size_ext:
+                if dim.dyn_size_ext is None:
                     continue  # undefined, do not overtake
                 self._extra.same_for_batch_ctx[key] = dim
             # noinspection PyProtectedMember
@@ -1815,8 +1823,8 @@ class _DimMixin:
                 key = base.batch, base.control_flow_ctx
                 assert key not in self_base_extra.same_for_batch_ctx
                 self_base_extra.same_for_batch_ctx[key] = self
-            if not self.dyn_size_ext:
-                if base.dyn_size_ext:
+            if self.dyn_size_ext is None:
+                if base.dyn_size_ext is not None:
                     if base.batch and base.batch == self.batch and base.control_flow_ctx == self.control_flow_ctx:
                         self.dyn_size_ext = base.dyn_size_ext.copy_template(name="%s:size" % self_base.description)
                 elif base.is_batch_dim():
@@ -1914,7 +1922,7 @@ class _DimMixin:
         :return: size tensor, or dyn_size_ext if defined
         :rtype: _t.Tensor
         """
-        if self.dyn_size_ext:
+        if self.dyn_size_ext is not None:
             if not device or device == "cpu":
                 return self.dyn_size_ext
             return self.get_dyn_size_ext_for_device(device)
@@ -1977,7 +1985,7 @@ class _DimMixin:
         self.complete_dyn_size()
         if self._dyn_size_max_value is not None:
             return self._dyn_size_max_value
-        if self.dyn_size_ext and self.dyn_size_ext.placeholder is not None:
+        if self.dyn_size_ext is not None and self.dyn_size_ext.placeholder is not None:
             if self.dyn_size_ext.batch_ndim > 0:
                 res = rf.reduce_max(
                     self.dyn_size_ext,

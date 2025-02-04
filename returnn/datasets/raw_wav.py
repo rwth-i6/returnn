@@ -4,7 +4,6 @@ Provide :class:`RawWavDataset`.
 
 from __future__ import annotations
 
-import h5py
 from .cached2 import CachedDataset2
 from returnn.datasets.basic import DatasetSeq
 from returnn.log import log
@@ -180,6 +179,8 @@ class RawWavDataset(CachedDataset2):
         :rtype: (h5py._hl.file.File, string)
         :return: (hdf buffer file handler, path to tmp file)
         """
+        import h5py
+
         f_id, tmp_hdf_file_path = tempfile.mkstemp(suffix=".hdf")
         file_handler = h5py.File(tmp_hdf_file_path, "w")
         file_handler.create_group("timeSignal")
