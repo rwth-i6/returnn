@@ -627,6 +627,27 @@ def test_gather_time_static_clip_to_valid():
     run_model(extern_data_template, lambda *, epoch, step: rf.Module(), _forward_step)
 
 
+def test_gather_3d_embed():
+    time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
+    in_dim = Dim(7, name="in")
+    num_embeddings_dim = Dim(2, name="num_embeddings")
+    embed_dim = Dim(11, name="embed")
+    extern_data_template = TensorDict(
+        {
+            "data": Tensor("data", [batch_dim, time_dim], sparse_dim=in_dim, dtype="int32"),
+            "embed": Tensor("embed", [in_dim, num_embeddings_dim, embed_dim], dtype="float32"),
+        }
+    )
+
+    def _forward_step(*, extern_data: TensorDict, **_kwargs):
+        x, embed = extern_data["data"], extern_data["embed"]
+        out = rf.gather(embed, indices=x)
+        out.mark_as_default_output(shape=(batch_dim, time_dim, num_embeddings_dim, embed_dim))
+        rf.reduce_sum(out, axis=out.dims).mark_as_output("loss")
+
+    run_model(extern_data_template, lambda *, epoch, step: rf.Module(), _forward_step)
+
+
 def test_scatter_fill_inf():
     batch_dim_ = Dim(3, name="batch")
     states_dim = Dim(7, name="states")
