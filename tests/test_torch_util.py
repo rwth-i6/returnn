@@ -286,7 +286,7 @@ def test_debug_inf_nan():
 
     # Run directly, to just test that it goes through without exception.
     # For some reason, the detect_anomaly does not print the forward op?
-    debug_inf_nan(func, with_grad=True)
+    debug_inf_nan(func, with_grad=True, stop_reporting_after_first_inf_nan=False)
 
     from io import StringIO
 
