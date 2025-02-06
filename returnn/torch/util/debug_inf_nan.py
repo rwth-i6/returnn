@@ -79,10 +79,10 @@ def debug_inf_nan(
     )
 
     if with_grad:
-
         with torch.autograd.detect_anomaly():
             with trace_ops:  # currently only for forward (but we might want to trace the backward too)
                 loss = func()
+            file.flush()  # the backward detect_anomaly might screw up the output otherwise
             try:
                 loss.backward()
             except RuntimeError as exc:
