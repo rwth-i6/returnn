@@ -70,6 +70,9 @@ def run_model(
         # get the values now because dims might get overwritten
         out_pt_raw = out_pt.as_raw_tensor_dict(include_const_sizes=True)
 
+    for k, v in out_pt.data.items():
+        assert numpy.isfinite(v.raw_tensor).all(), f"output {k!r} has non-finite values: {v.raw_tensor}"
+
     if not test_tensorflow:
         return out_pt
     if disable_tf:
