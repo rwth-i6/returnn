@@ -526,6 +526,14 @@ class Engine(EngineBase):
 
                         print("Running debug_inf_nan...", file=log.v1)
                         debug_inf_nan(_debug_func, with_grad=True)
+                        if count_nan_inf_params > 0 and self.global_train_step == 1:
+                            print(
+                                "This was the second step, so likely the first step grad was broken."
+                                " Try again with reset model...",
+                                file=log.v1,
+                            )
+                            self._load_model()
+                            debug_inf_nan(_debug_func, with_grad=True)
                         raise Exception(f"Inf/nan score in step {step_idx}.")
 
                 step_idx += 1
