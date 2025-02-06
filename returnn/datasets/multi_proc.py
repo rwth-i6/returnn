@@ -183,8 +183,6 @@ class MultiProcDataset(CachedDataset2):
         msg, self.labels = self._seq_order_proc_parent_conn.recv()
         assert msg == "labels"
 
-        self._cur_max_complete_frac = 0.0
-
     def _lazy_init_data_keys(self):
         if self._data_keys is not None:
             return
@@ -410,6 +408,7 @@ class MultiProcDataset(CachedDataset2):
             return True
 
         self._lazy_init()
+        self._cur_max_complete_frac = 0.0
 
         if self._sharding_method == "dedicated":
             for worker_conn in self._worker_parent_conns:
