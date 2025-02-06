@@ -276,7 +276,9 @@ class BatchingIterDataPipe(torch.utils.data.IterDataPipe):
         epoch_continuous = (
             epoch - 1 + complete_frac
             if complete_frac >= 0.0
-            else (epoch - 1 + (seq_idx + 1) / num_seqs) if num_seqs > 0 else None
+            else (epoch - 1 + (seq_idx + 1) / num_seqs)
+            if num_seqs > 0
+            else None
         )
         return {"epoch": epoch, "epoch_continuous": epoch_continuous, "seq_idx": seq_idx, **get_fwd_compat_kwargs()}
 
