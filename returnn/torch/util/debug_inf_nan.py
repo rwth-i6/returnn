@@ -52,6 +52,7 @@ def debug_inf_nan(
     *,
     with_grad: bool = False,
     report_every_op_call: bool = True,
+    stop_reporting_after_first_inf_nan: bool = True,
     file: Optional[Union[TextIO, TextIOBase]] = None,
 ):
     """
@@ -61,6 +62,7 @@ def debug_inf_nan(
         and we will call `loss = func(); loss.backward()`.
     :param with_grad: whether to compute and debug gradients for inf/nan.
     :param report_every_op_call: whether to report every op call.
+    :param stop_reporting_after_first_inf_nan: whether to stop reporting after the first inf/nan.
     :param file: where to write the output to. Default is stdout.
     """
 
@@ -69,7 +71,12 @@ def debug_inf_nan(
 
     # noinspection PyUnresolvedReferences,PyProtectedMember
     cur_frame: FrameType = sys._getframe()
-    trace_ops = _TraceOps(root_frame=cur_frame, file=file, report_every_op_call=report_every_op_call)
+    trace_ops = _TraceOps(
+        root_frame=cur_frame,
+        file=file,
+        report_every_op_call=report_every_op_call,
+        stop_reporting_after_first_inf_nan=stop_reporting_after_first_inf_nan,
+    )
 
     if with_grad:
 
@@ -96,16 +103,25 @@ _TraceFuncNameBlacklist = {
 
 
 class _TraceOps(TorchDispatchMode):
-    def __init__(self, *, root_frame: FrameType, file: Union[TextIO, TextIOBase], report_every_op_call: bool = True):
+    def __init__(
+        self,
+        *,
+        root_frame: FrameType,
+        file: Union[TextIO, TextIOBase],
+        report_every_op_call: bool = True,
+        stop_reporting_after_first_inf_nan: bool = True,
+    ):
         super().__init__()
         self.root_frame = root_frame
         self.file = file
+        self.enabled = True
         self.report_every_op_call = report_every_op_call
+        self.stop_reporting_after_first_inf_nan = stop_reporting_after_first_inf_nan
 
     def __torch_dispatch__(self, func, types, args=(), kwargs=None):
         if kwargs is None:
             kwargs = {}
-        if func.name() in _TraceFuncNameBlacklist:
+        if not self.enabled or func.name() in _TraceFuncNameBlacklist:
             return func(*args, **kwargs)
         if self.report_every_op_call:
             print(f"--- op {func.name()}", file=self.file)
@@ -121,6 +137,8 @@ class _TraceOps(TorchDispatchMode):
                     traceback.print_list(
                         _extract_stack_up_to(skip_top_num_frames=1, root_frame=self.root_frame), file=self.file
                     )
+                    if self.stop_reporting_after_first_inf_nan:
+                        self.enabled = False
         return out
 
 
