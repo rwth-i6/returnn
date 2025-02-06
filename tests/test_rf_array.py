@@ -666,7 +666,13 @@ def test_scatter_fill_inf():
         )  # [S], per state
         scores.mark_as_default_output(shape=[states_dim])
 
-    res = run_model(TensorDict(), lambda *, epoch, step: rf.Module(), _forward_step, test_tensorflow=False)
+    res = run_model(
+        TensorDict(),
+        lambda *, epoch, step: rf.Module(),
+        _forward_step,
+        test_tensorflow=False,
+        allow_inf_nan_in_output=True,
+    )
     batch_size = res["batch_size"].raw_tensor.item()
     assert res["start_states"].raw_tensor.shape == (batch_size,)
     assert res["output"].raw_tensor.shape == (states_dim.dimension,)

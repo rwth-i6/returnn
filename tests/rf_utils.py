@@ -55,6 +55,7 @@ def run_model(
     dyn_dim_max_sizes: Optional[Dict[Dim, int]] = None,
     dyn_dim_min_sizes: Optional[Dict[Dim, int]] = None,
     test_tensorflow: bool = True,
+    allow_inf_nan_in_output: bool = False,
 ) -> TensorDict:
     """run"""
     print(f"* run_model with dyn_dim_max_sizes={dyn_dim_max_sizes!r}")
@@ -70,8 +71,9 @@ def run_model(
         # get the values now because dims might get overwritten
         out_pt_raw = out_pt.as_raw_tensor_dict(include_const_sizes=True)
 
-    for k, v in out_pt.data.items():
-        assert numpy.isfinite(v.raw_tensor).all(), f"output {k!r} has non-finite values: {v.raw_tensor}"
+    if not allow_inf_nan_in_output:
+        for k, v in out_pt.data.items():
+            assert numpy.isfinite(v.raw_tensor).all(), f"output {k!r} has non-finite values: {v.raw_tensor}"
 
     if not test_tensorflow:
         return out_pt
