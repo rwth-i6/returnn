@@ -218,11 +218,11 @@ class BatchingIterDataPipe(torch.utils.data.IterDataPipe):
             in one batch (padding included).
             If given as a dict data_key -> value, sets different individual limits per data key.
             If None, no limit.
-            Can also be a callable with kwargs epoch, seq_idx, complete_frac, **_other_kwargs,
+            Can also be a callable with kwargs epoch, seq_idx, epoch_continuous, **_other_kwargs,
             returning the batch size.
         :param int|None|function max_seqs: maximum number of sequences in a batch,
             None means unlimited (also -1 to match TF backend).
-            Can also be a callable with kwargs epoch, seq_idx, complete_frac, **_other_kwargs,
+            Can also be a callable with kwargs epoch, seq_idx, epoch_continuous, **_other_kwargs,
             returning the max seqs.
         """
         super().__init__()
@@ -271,13 +271,14 @@ class BatchingIterDataPipe(torch.utils.data.IterDataPipe):
     def _get_user_func_kwargs_from_data_dict(data_dict: Dict[str, Any]) -> Dict[str, Any]:
         epoch = int(data_dict["epoch"])
         seq_idx = int(data_dict["seq_idx"])
+        num_seqs = int(data_dict["num_seqs"])  # >=1 if known, otherwise -1
         complete_frac = float(data_dict["complete_frac"])  # >= 0 if known, otherwise -1
-        return {
-            "epoch": epoch,
-            "complete_frac": complete_frac if complete_frac >= 0.0 else None,
-            "seq_idx": seq_idx,
-            **get_fwd_compat_kwargs(),
-        }
+        epoch_continuous = (
+            epoch - 1 + complete_frac
+            if complete_frac >= 0.0
+            else (epoch - 1 + (seq_idx + 1) / num_seqs) if num_seqs > 0 else None
+        )
+        return {"epoch": epoch, "epoch_continuous": epoch_continuous, "seq_idx": seq_idx, **get_fwd_compat_kwargs()}
 
     def __iter__(self):
         """
