@@ -96,9 +96,23 @@ def debug_inf_nan(
 
 # For efficiency, and to be less spammy
 _TraceFuncNameBlacklist = {
-    "aten::detach",
     "aten::zeros_like",
     "aten::ones_like",
+    "aten::full",
+    "aten::scalar_tensor",  # when we deliberately create a scalar inf tensor
+    "aten::_local_scalar_dense",
+    "aten::where.self",  # when we intentionally mask with inf
+    "aten::detach",
+    "aten::_to_copy",
+    "aten::clone",
+    "aten::stack",
+    "aten::view",
+    "aten::_unsafe_view",
+    "aten::permute",
+    "aten::t",
+    "aten::split_with_sizes",
+    "aten::slice.Tensor",
+    "aten::select.int",
 }
 
 
