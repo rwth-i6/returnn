@@ -507,7 +507,9 @@ class Engine(EngineBase):
 
                         def _debug_func() -> torch.Tensor:
                             self._run_step(extern_data, train_flag=True, train_func=True)
-                            return rf.get_run_ctx().total_loss()
+                            loss = rf.get_run_ctx().total_loss()
+                            assert isinstance(loss, Tensor)
+                            return loss.raw_tensor
 
                         print("Running debug_inf_nan...", file=log.v1)
                         debug_inf_nan(_debug_func, with_grad=True)
