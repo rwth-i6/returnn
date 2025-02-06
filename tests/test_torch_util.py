@@ -291,7 +291,7 @@ def test_debug_inf_nan():
     from io import StringIO
 
     out = StringIO()
-    debug_inf_nan(func, file=out)
+    debug_inf_nan(func, file=out, stop_reporting_after_first_inf_nan=False)
     assert "inf in aten.exp" in out.getvalue()
     assert "nan in aten.div" in out.getvalue()
     assert "mod5" in out.getvalue()
