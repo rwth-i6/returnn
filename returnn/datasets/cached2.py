@@ -232,10 +232,13 @@ class CachedDataset2(Dataset):
         """
         :return: fractional completion value for the given seq_idx
         """
-        seq = self._get_seq(sorted_seq_idx)
-        if seq.complete_frac is not None:
-            return seq.complete_frac
-        return super().get_exact_complete_frac(sorted_seq_idx)
+        try:
+            return super().get_exact_complete_frac(sorted_seq_idx)
+        except NotImplementedError:
+            seq = self._get_seq(sorted_seq_idx)
+            if seq.complete_frac is not None:
+                return seq.complete_frac
+            raise
 
     def is_data_sparse(self, key):
         """
