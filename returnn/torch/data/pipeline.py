@@ -496,34 +496,39 @@ class ShufflingDataPipe(torch.utils.data.IterDataPipe):
 
         data_iter = iter(self._dataset)
 
-        seq_buffer: List[Dict[str, Any]] = list(itertools.islice(data_iter, self._buffer_size))
+        batch_buffer: List[List[Dict[str, Any]]] = list(itertools.islice(data_iter, self._buffer_size))
         has_ended = False
 
         while True:
             # Make sure to not reorder the monotonic values from self._monotonic_data_keys.
             # These can contain things like complete_frac, which should be kept in order.
-            ordered_data = {key: [data_dict[key] for data_dict in seq_buffer] for key in self._monotonic_data_keys}
-            self._rng.shuffle(seq_buffer)
+            ordered_data = {
+                key: [data_dict[key] for batch in batch_buffer for data_dict in batch]
+                for key in self._monotonic_data_keys
+            }
+            self._rng.shuffle(batch_buffer)
             for key in self._monotonic_data_keys:
-                for orig_value, data_dict in zip(ordered_data[key], seq_buffer):
-                    data_dict[key] = orig_value
+                data_dicts = [data_dict for batch in batch_buffer for data_dict in batch]
+                assert len(data_dicts) == len(ordered_data[key])
+                for ordered_value, data_dict in zip(ordered_data[key], data_dicts):
+                    data_dict[key] = ordered_value
 
-            next_seq_buffer = []
+            next_batch_buffer = []
 
-            for item in seq_buffer:
+            for item in batch_buffer:
                 yield item
 
                 try:
                     if not has_ended:
-                        next_seq_buffer.append(next(data_iter))
+                        next_batch_buffer.append(next(data_iter))
                 except StopIteration:
                     has_ended = True
 
-            if len(seq_buffer) < self._buffer_size:
-                assert has_ended and not next_seq_buffer
+            if len(batch_buffer) < self._buffer_size:
+                assert has_ended and not next_batch_buffer
                 break
 
-            seq_buffer = next_seq_buffer
+            batch_buffer = next_batch_buffer
 
 
 def create_data_loader_from_batches(
