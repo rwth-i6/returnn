@@ -530,6 +530,9 @@ class ShufflingDataPipe(torch.utils.data.IterDataPipe):
 
             batch_buffer = next_batch_buffer
 
+    def __getitem__(self, index):
+        raise Exception(f"{self.__class__.__name__}.__getitem__ not supported")
+
 
 def create_data_loader_from_batches(
     batches_dataset: torch.utils.data.Dataset, loader_opts: Optional[Dict[str, Any]] = None
