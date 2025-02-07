@@ -139,7 +139,7 @@ class TensorDict:
         """
         visited_dims = set()
         for key, value in self.data.items():
-            assert key in raw_tensor_dict
+            assert key in raw_tensor_dict, f"key {key} not in raw_tensor_dict {list(raw_tensor_dict.keys())}"
             value.raw_tensor = raw_tensor_dict[key]
             for i, dim in enumerate(value.dims):
                 dim: Dim
