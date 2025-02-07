@@ -467,7 +467,7 @@ class LenFilterDataPipe(torch.utils.data.IterDataPipe):
 
 
 class ShufflingDataPipe(torch.utils.data.IterDataPipe):
-    """Data pipe that shuffles elements while keeping certain data keys in order."""
+    """Data pipe that shuffles batches while keeping certain data keys in order."""
 
     def __init__(
         self,
@@ -478,7 +478,7 @@ class ShufflingDataPipe(torch.utils.data.IterDataPipe):
         seed: int = 19 * 1337,
     ):
         """
-        :param dataset: dataset to shuffle
+        :param dataset: batches dataset to shuffle
         :param buffer_size: buffer size for shuffling
         :param monotonic_data_keys: data keys that will be excluded from shuffling/keep their order
         :param seed: random seed
