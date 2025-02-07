@@ -78,6 +78,8 @@ class Vocabulary:
         :param seq_postfix: labels will be added to the seq in self.get_seq
         :param labels:
         """
+        if vocab_file and not isinstance(vocab_file, str):  # sometimes it is a Path
+            vocab_file = str(vocab_file)
         self.vocab_file = vocab_file
 
         if special_symbols_via_file:

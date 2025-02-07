@@ -55,6 +55,7 @@ def run_model(
     dyn_dim_max_sizes: Optional[Dict[Dim, int]] = None,
     dyn_dim_min_sizes: Optional[Dict[Dim, int]] = None,
     test_tensorflow: bool = True,
+    allow_inf_nan_in_output: bool = False,
 ) -> TensorDict:
     """run"""
     print(f"* run_model with dyn_dim_max_sizes={dyn_dim_max_sizes!r}")
@@ -69,6 +70,10 @@ def run_model(
         _pad_mask_zeros(out_pt)
         # get the values now because dims might get overwritten
         out_pt_raw = out_pt.as_raw_tensor_dict(include_const_sizes=True)
+
+    if not allow_inf_nan_in_output:
+        for k, v in out_pt.data.items():
+            assert numpy.isfinite(v.raw_tensor).all(), f"output {k!r} has non-finite values: {v.raw_tensor}"
 
     if not test_tensorflow:
         return out_pt
@@ -86,8 +91,10 @@ def run_model(
     random_journal: RandomJournal
     assert random_journal.reached_end()
 
-    print(out_pt, out_tf)
-    assert set(out_pt.data.keys()) == set(out_tf.data.keys())
+    print("Output PT/TF:", out_pt, out_tf)
+    assert set(out_pt.data.keys()) == set(
+        out_tf.data.keys()
+    ), f"PT output {list(out_pt.data.keys())} vs TF output {list(out_tf.data.keys())}"
     for k, v_pt in out_pt.data.items():
         v_tf = out_tf[k]
         # We cannot really check the dims directly for equality,
@@ -123,11 +130,31 @@ def _run_model_torch(extern_data: TensorDict, get_model: rf.GetModelFunc, forwar
     # We recover extern_data in the end.
     tensor_dict_numpy_to_torch_(extern_data)
 
+    for k, v in extern_data.data.items():
+        if v.raw_tensor.dtype.is_floating_point:
+            v.raw_tensor.requires_grad = True
+
     model = get_model(epoch=1, step=0)
     rf.init_forward_step_run_ctx(epoch=1, step=0)
     forward_step(model=model, extern_data=extern_data)
     outputs = rf.get_run_ctx().outputs
     assert outputs.data
+
+    if "loss" in outputs.data:
+        loss = outputs.data["loss"]
+        assert isinstance(loss, Tensor)
+        assert loss.raw_tensor.dtype.is_floating_point
+        loss = rf.reduce_sum(loss, axis=loss.dims)
+        print("loss:", loss.raw_tensor.detach().numpy().item())
+        loss.raw_tensor.backward()
+        for k, v in list(extern_data.data.items()):
+            if v.raw_tensor.dtype.is_floating_point:
+                assert v.raw_tensor.grad is not None, f"no grad for {k}"
+                v_grad = v.copy_template()
+                v_grad.raw_tensor = v.raw_tensor.grad
+                assert f"{k}_grad" not in outputs.data
+                outputs.data[f"{k}_grad"] = v_grad
+
     tensor_dict_torch_to_numpy_(outputs)
 
     extern_data.assign_from_raw_tensor_dict_(extern_data_raw)
@@ -241,6 +268,20 @@ def _run_model_net_dict_tf(
             layer_name = v.raw_tensor.get_abs_name()
             layer = net.get_layer(layer_name)
             outputs_tf.data[k] = layer.output.copy()
+
+        if "loss" in outputs_tf.data:
+            data_ = {name: data for name, data in net.extern_data.data.items() if data.dtype.startswith("float")}
+            loss = outputs_tf.data["loss"]
+            assert isinstance(loss, Tensor)
+            assert loss.dtype.startswith("float")
+            loss = rf.reduce_sum(loss, axis=loss.dims)
+            d_grads = tf.gradients(loss.raw_tensor, [d.raw_tensor for d in data_.values()])
+            for (name, data), d_grad_tf in zip(data_.items(), d_grads):
+                assert isinstance(data, Tensor)
+                assert isinstance(d_grad_tf, tf.Tensor)
+                d_grad = data.copy_template()
+                d_grad.raw_tensor = d_grad_tf
+                outputs_tf.data[f"{name}_grad"] = d_grad
 
         fetches = outputs_tf.as_raw_tensor_dict(expected_value_type=tf.Tensor)
         assert set(extern_data.data.keys()) == set(net.extern_data.data.keys())

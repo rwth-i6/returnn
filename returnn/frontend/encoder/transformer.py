@@ -35,6 +35,7 @@ class TransformerEncoder(rf.Module):
         layer: Optional[Union[TransformerEncoderLayer, rf.Module, type, Dict[str, Any], Any]] = None,
         layer_opts: Optional[Dict[str, Any]] = None,
         embed_dim: Optional[Dim] = None,
+        input_embedding: Union[None, rf.Module, type, Dict[str, Any]] = rf.Embedding,
         input_embedding_scale: float = None,
         input_dropout: float = None,
         sequential=rf.Sequential,
@@ -53,6 +54,7 @@ class TransformerEncoder(rf.Module):
         :param layer: an instance of :class:`TransformerEncoderLayer` or similar
         :param layer_opts: options for the encoder layer
         :param embed_dim: if given, will first have an embedding [vocab,embed] and then a linear [embed,model].
+        :param input_embedding:
         :param input_embedding_scale:
         :param input_dropout:
         :param sequential:
@@ -77,9 +79,15 @@ class TransformerEncoder(rf.Module):
         self.model_dim = model_dim
         self.embed_dim = embed_dim
 
-        # We could make this optional or configurable if we ever need to.
-        # Or maybe you would just have another separate implementation of this module then...
-        self.input_embedding = rf.Embedding(vocab_dim, embed_dim or model_dim)
+        if input_embedding is None or isinstance(input_embedding, rf.Module):
+            pass
+        elif isinstance(input_embedding, type):
+            input_embedding: rf.Embedding = input_embedding(vocab_dim, embed_dim or model_dim)
+        elif isinstance(input_embedding, dict):
+            input_embedding = rf.build_from_dict(input_embedding, vocab_dim, embed_dim or model_dim)
+        else:
+            raise TypeError(f"unexpected input_embedding {input_embedding!r} type {type(input_embedding)}")
+        self.input_embedding = input_embedding
 
         self.input_embedding_proj = None
         if embed_dim:
@@ -88,17 +96,13 @@ class TransformerEncoder(rf.Module):
         if pos_enc is None:
             pass
         elif isinstance(pos_enc, dict):
-            pos_enc = rf.build_from_dict(
-                pos_enc, feat_dim=embed_dim or model_dim, dtype=self.input_embedding.weight.dtype
-            )
+            pos_enc = rf.build_from_dict(pos_enc, feat_dim=embed_dim or model_dim, dtype=rf.get_default_float_dtype())
         elif isinstance(pos_enc, rf.Module):
             pass
         elif isinstance(pos_enc, FunctionType):
-            pos_enc = functools.partial(
-                pos_enc, feat_dim=embed_dim or model_dim, dtype=self.input_embedding.weight.dtype
-            )
+            pos_enc = functools.partial(pos_enc, feat_dim=embed_dim or model_dim, dtype=rf.get_default_float_dtype())
         else:
-            raise TypeError(f"unexpected pos_enc type {pos_enc!r}")
+            raise TypeError(f"unexpected pos_enc {pos_enc!r} type {type(pos_enc)}")
         self.pos_enc = pos_enc
         if input_embedding_scale is None:
             input_embedding_scale = model_dim.dimension**0.5
@@ -157,7 +161,11 @@ class TransformerEncoder(rf.Module):
         :param collected_outputs:
         :return: final encoder output, after final layer norm
         """
-        decoded = self.input_embedding(source) * self.input_embedding_scale
+        if self.input_embedding is not None:
+            decoded = self.input_embedding(source) * self.input_embedding_scale
+        else:
+            assert self.model_dim in source.dims
+            decoded = source
         if self.pos_enc is not None:
             decoded = decoded + self.pos_enc(spatial_dim=spatial_dim)
         decoded = rf.dropout(decoded, self.input_dropout)

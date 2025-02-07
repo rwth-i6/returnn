@@ -3,7 +3,7 @@ Main engine for PyTorch
 """
 
 from __future__ import annotations
-from typing import Optional, Any, Union, Callable, Dict, Set
+from typing import Optional, Any, Union, Callable, Dict, Set, Tuple
 from contextlib import nullcontext, ExitStack, contextmanager
 
 import gc
@@ -371,6 +371,7 @@ class Engine(EngineBase):
         total_data_size_packed = NumbersDict()
         total_data_size_padded = NumbersDict()
 
+        report_prefix = f"ep {self.epoch} train"
         try:
             while True:
                 with torch.no_grad():
@@ -399,27 +400,20 @@ class Engine(EngineBase):
                 )
 
                 complete_frac = float(extern_data_raw["complete_frac"])
-                if complete_frac >= 0.0:
-                    epoch_continuous = self.epoch - 1 + complete_frac
-                else:
-                    num_seqs_ = (
-                        int(extern_data_raw["num_seqs"]) if extern_data_raw.get("num_seqs", None) is not None else -1
-                    )
-                    next_seq_idx = int(extern_data_raw["seq_idx"].max())
-                    assert next_seq_idx >= last_seq_idx
-                    last_seq_idx = next_seq_idx
-                    if step_idx == 0:
-                        if num_seqs_ >= 0:
-                            print(f"Epoch {self.epoch} num_seqs: {num_seqs_}", file=log.v5)
-                            num_seqs = num_seqs_
-                    elif num_seqs_ >= 0:
-                        assert num_seqs_ == num_seqs
-                    del num_seqs_
-                    if num_seqs is not None:
-                        assert last_seq_idx < num_seqs
-                    epoch_continuous = (
-                        (self.epoch - 1 + (last_seq_idx + 1) / num_seqs) if num_seqs is not None else None
-                    )
+                num_seqs, last_seq_idx = _get_num_seqs_last_seq_idx(
+                    report_prefix=report_prefix,
+                    extern_data_raw=extern_data_raw,
+                    step_idx=step_idx,
+                    prev_num_seqs=num_seqs,
+                    prev_last_seq_idx=last_seq_idx,
+                )
+                epoch_continuous = (
+                    self.epoch - 1 + complete_frac
+                    if complete_frac >= 0.0
+                    else (self.epoch - 1 + (last_seq_idx + 1) / num_seqs)
+                    if num_seqs is not None
+                    else None
+                )
 
                 # clear the gradients when every gradient accumulation loop starts
                 if zero_grad_next_step:
@@ -491,7 +485,7 @@ class Engine(EngineBase):
                 accumulated_inv_norm_factors_dict += inv_norm_factors_dict
                 eval_info = self._maybe_extend_losses_info(losses_dict / inv_norm_factors_dict)
                 _print_process(
-                    f"ep {self.epoch} train",
+                    report_prefix,
                     step=step_idx,
                     eval_info=dict(eval_info),
                     step_duration=step_duration,
@@ -511,12 +505,35 @@ class Engine(EngineBase):
                             file=log.v1,
                         )
 
+                        print("Checking for inf/nan in model parameters...", file=log.v1)
+                        count_nan_inf_params = 0
+                        for name, param in self._pt_model.named_parameters():
+                            got_nan_inf_t = torch.stack([torch.isnan(param).any(), torch.isinf(param).any()]).cpu()
+                            got_nan = got_nan_inf_t[0].item()
+                            got_inf = got_nan_inf_t[1].item()
+                            if got_nan or got_inf:
+                                s = "/".join([s_ for s_, b in [("nan", got_nan), ("inf", got_inf)] if b])
+                                print(f"  {name} {param}: {s}", file=log.v1)
+                                count_nan_inf_params += 1
+                        if count_nan_inf_params == 0:
+                            print("(No inf/nan in model parameters.)", file=log.v1)
+
                         def _debug_func() -> torch.Tensor:
                             self._run_step(extern_data, train_flag=True, train_func=True)
-                            return rf.get_run_ctx().total_loss()
+                            loss = rf.get_run_ctx().total_loss()
+                            assert isinstance(loss, Tensor)
+                            return loss.raw_tensor
 
                         print("Running debug_inf_nan...", file=log.v1)
                         debug_inf_nan(_debug_func, with_grad=True)
+                        if count_nan_inf_params > 0 and self.global_train_step == 1:
+                            print(
+                                "This was the second step, so likely the first step grad was broken."
+                                " Try again with reset model...",
+                                file=log.v1,
+                            )
+                            self._load_model()
+                            debug_inf_nan(_debug_func, with_grad=True)
                         raise Exception(f"Inf/nan score in step {step_idx}.")
 
                 step_idx += 1
@@ -1261,6 +1278,8 @@ class Engine(EngineBase):
             new_dim.dyn_size_ext = _get_tensor_wo_batch_numpy(dim.dyn_size_ext)
             return new_dim
 
+        num_seqs = None
+        last_seq_idx = 0
         report_prefix = f"ep {self.epoch} {dataset.name} forward"
         with torch.no_grad():
             callback.init(model=self._orig_model)
@@ -1268,6 +1287,15 @@ class Engine(EngineBase):
             step_idx = 0
             for extern_data_raw in data_loader:
                 step_begin_time = time.monotonic()
+
+                num_seqs, last_seq_idx = _get_num_seqs_last_seq_idx(
+                    report_prefix=report_prefix,
+                    extern_data_raw=extern_data_raw,
+                    step_idx=step_idx,
+                    prev_num_seqs=num_seqs,
+                    prev_last_seq_idx=last_seq_idx,
+                )
+
                 if self._forward_step_expected_outputs:
                     # Also resets any dyn dims, which might have been set in the prev step.
                     self._forward_step_expected_outputs.reset_content()
@@ -1304,11 +1332,19 @@ class Engine(EngineBase):
                         model_outputs_per_batch.data[k] = _get_tensor_wo_batch_numpy(v)
                     callback.process_seq(seq_tag=seq_tag, outputs=model_outputs_per_batch)
 
-                elapsed_computation_time += time.monotonic() - step_begin_time
+                step_end_time = time.monotonic()
+                step_duration = step_end_time - step_begin_time
+                elapsed_computation_time += step_duration
+
                 _print_process(
                     report_prefix,
                     step=step_idx,
                     eval_info=None,
+                    step_duration=step_duration,
+                    start_elapsed=step_end_time - epoch_start_time,
+                    seq_idx=last_seq_idx,
+                    num_seqs=num_seqs,
+                    batch_size_info=_get_batch_size_info(extern_data) if self._log_batch_size else None,
                     log_memory_usage_device=self._device if self._log_memory_usage else None,
                 )
                 step_idx += 1
@@ -1586,3 +1622,27 @@ def _get_total_grad_norm(model: torch.nn.Module, p: float) -> float:
             p=p,
         ).item()
     )
+
+
+def _get_num_seqs_last_seq_idx(
+    *,
+    report_prefix: str,
+    extern_data_raw: Dict[str, Any],
+    step_idx: int,
+    prev_num_seqs: Optional[int],
+    prev_last_seq_idx: int,
+) -> Tuple[Optional[int], int]:
+    num_seqs = prev_num_seqs
+    num_seqs_ = int(extern_data_raw["num_seqs"]) if extern_data_raw.get("num_seqs", None) is not None else -1
+    # Note: The batches might have been shuffled,
+    # thus we cannot really assert that the seq_idx is always increasing.
+    last_seq_idx = max(int(extern_data_raw["seq_idx"].max()), prev_last_seq_idx)
+    if step_idx == 0:
+        if num_seqs_ >= 0:
+            print(f"{report_prefix} num_seqs: {num_seqs_}", file=log.v5)
+            num_seqs = num_seqs_
+    elif num_seqs_ >= 0:
+        assert num_seqs_ == num_seqs
+    if num_seqs is not None:
+        assert last_seq_idx < num_seqs
+    return num_seqs, last_seq_idx
