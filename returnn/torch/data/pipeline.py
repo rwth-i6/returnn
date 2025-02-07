@@ -21,6 +21,7 @@ other PyTorch datasets more directly, including also HuggingFace datasets.
 
 from __future__ import annotations
 import bisect
+import itertools
 from typing import Optional, Any, Sequence, Tuple, Union, List, Dict, Callable
 import sys
 from copy import deepcopy
@@ -463,6 +464,66 @@ class LenFilterDataPipe(torch.utils.data.IterDataPipe):
 
     def __getitem__(self, index):
         raise Exception(f"{self.__class__.__name__}.__getitem__ not supported")
+
+
+class ShufflingDataPipe(torch.utils.data.IterDataPipe):
+    """Data pipe that shuffles elements while keeping certain data keys in order."""
+
+    def __init__(
+        self,
+        dataset: torch.utils.data.IterableDataset,
+        *,
+        buffer_size: int,
+        monotonic_data_keys: Sequence[str],
+        seed: int = 19 * 1337,
+    ):
+        """
+        :param dataset: dataset to shuffle
+        :param buffer_size: buffer size for shuffling
+        :param monotonic_data_keys: data keys that will be excluded from shuffling/keep their order
+        :param seed: random seed
+        """
+        super().__init__()
+
+        self._dataset = dataset
+        assert buffer_size > 0
+        self._buffer_size = buffer_size
+        self._monotonic_data_keys = monotonic_data_keys
+        self._rng = numpy.random.RandomState(seed)
+
+    def __iter__(self):
+        # The implementation is very similar to the PostprocessingDataset's combinator LaplaceOrdering.
+
+        data_iter = iter(self._dataset)
+
+        seq_buffer: List[Dict[str, Any]] = list(itertools.islice(data_iter, self._buffer_size))
+        has_ended = False
+
+        while True:
+            # Make sure to not reorder the monotonic values from self._monotonic_data_keys.
+            # These can contain things like complete_frac, which should be kept in order.
+            ordered_data = {key: [data_dict[key] for data_dict in seq_buffer] for key in self._monotonic_data_keys}
+            self._rng.shuffle(seq_buffer)
+            for key in self._monotonic_data_keys:
+                for orig_value, data_dict in zip(ordered_data[key], seq_buffer):
+                    data_dict[key] = orig_value
+
+            next_seq_buffer = []
+
+            for item in seq_buffer:
+                yield item
+
+                try:
+                    if not has_ended:
+                        next_seq_buffer.append(next(data_iter))
+                except StopIteration:
+                    has_ended = True
+
+            if len(seq_buffer) < self._buffer_size:
+                assert has_ended and not next_seq_buffer
+                break
+
+            seq_buffer = next_seq_buffer
 
 
 def create_data_loader_from_batches(

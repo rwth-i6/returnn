@@ -367,7 +367,6 @@ class Engine(EngineBase):
         extern_data = None
         num_seqs = None
         last_seq_idx = 0
-        shuffle_batches = bool(self.config.typed_value("online_shuffle_batches", None))
 
         total_data_size_packed = NumbersDict()
         total_data_size_padded = NumbersDict()
@@ -400,17 +399,15 @@ class Engine(EngineBase):
                 )
 
                 complete_frac = float(extern_data_raw["complete_frac"])
-                # Note: can only use complete_frac from data dict if batches are not shuffled,
-                # otherwise fall back to calculation via seq_idx and num_seqs.
-                if not shuffle_batches and complete_frac >= 0.0:
+                if complete_frac >= 0.0:
                     epoch_continuous = self.epoch - 1 + complete_frac
                 else:
                     num_seqs_ = (
                         int(extern_data_raw["num_seqs"]) if extern_data_raw.get("num_seqs", None) is not None else -1
                     )
-                    # Note: The batches might have been shuffled,
-                    # thus we cannot really assert that the seq_idx is always increasing.
-                    last_seq_idx = max(int(extern_data_raw["seq_idx"].max()), last_seq_idx)
+                    next_seq_idx = int(extern_data_raw["seq_idx"].max())
+                    assert next_seq_idx >= last_seq_idx
+                    last_seq_idx = next_seq_idx
                     if step_idx == 0:
                         if num_seqs_ >= 0:
                             print(f"Epoch {self.epoch} num_seqs: {num_seqs_}", file=log.v5)
@@ -770,7 +767,9 @@ class Engine(EngineBase):
             # Also note that we are likely using persistent multiprocessing data loader workers,
             # so calling torch.utils.data.graph_settings.apply_random_seed here in the main proc
             # will not have an effect then.
-            batches_dataset = torch.utils.data.datapipes.iter.Shuffler(batches_dataset, **online_shuffle_batches)
+            batches_dataset = data_pipeline.ShufflingDataPipe(
+                batches_dataset, monotonic_data_keys=("complete_frac", "seq_idx"), **online_shuffle_batches
+            )
 
         loader_opts = self.config.typed_value("torch_dataloader_opts") or {}
         assert isinstance(loader_opts, dict), f"config torch_dataloader_opts, expected dict, got {type(loader_opts)}"
