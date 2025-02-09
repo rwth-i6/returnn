@@ -7,9 +7,10 @@ and some related helpers.
 
 from __future__ import annotations
 
-from typing import Optional, Union, Callable, Iterator, List, Tuple, BinaryIO, cast
+from typing import Optional, Union, Any, Callable, Iterator, List, Tuple, Set, BinaryIO, Dict, cast, Generator
 import typing
 import os
+from io import IOBase
 import sys
 import time
 import re
@@ -1043,17 +1044,17 @@ class Lexicon:
     Lexicon. Map of words to phoneme sequences (can have multiple pronunciations).
     """
 
-    def __init__(self, filename):
+    def __init__(self, filename: str):
         """
-        :param str filename:
+        :param filename:
         """
         print("Loading lexicon", filename, file=log.v4)
         lex_file = open(filename, "rb")
         if filename.endswith(".gz"):
             lex_file = gzip.GzipFile(fileobj=lex_file)
-        self.phoneme_list = []  # type: typing.List[str]
-        self.phonemes = {}  # type: typing.Dict[str,typing.Dict[str]]  # phone -> {index, symbol, variation}
-        self.lemmas = {}  # type: typing.Dict[str,typing.Dict[str]]  # orth -> {orth, phons}
+        self.phoneme_list: List[str] = []
+        self.phonemes: Dict[str, Dict[str, Any]] = {}  # phone -> {index, symbol, variation}
+        self.lemmas: Dict[str, Dict[str, Any]] = {}  # orth -> {orth, phons}
 
         context = iter(ElementTree.iterparse(lex_file, events=("start", "end")))
         _, root = next(context)  # get root element
@@ -1097,12 +1098,12 @@ class StateTying:
     Clustering of (allophone) states into classes.
     """
 
-    def __init__(self, state_tying_file):
+    def __init__(self, state_tying_file: str):
         """
-        :param str state_tying_file:
+        :param state_tying_file:
         """
-        self.allo_map = {}  # allophone-state-str -> class-idx
-        self.class_map = {}  # class-idx -> set(allophone-state-str)
+        self.allo_map: Dict[str, int] = {}  # allophone-state-str -> class-idx
+        self.class_map: Dict[int, Set[str]] = {}  # class-idx -> set(allophone-state-str)
         lines = open(state_tying_file).read().splitlines()
         for line in lines:
             allo_str, class_idx_str = line.split()
@@ -1124,29 +1125,45 @@ class PhoneSeqGenerator:
 
     def __init__(
         self,
-        lexicon_file,
-        allo_num_states=3,
-        allo_context_len=1,
-        state_tying_file=None,
-        add_silence_beginning=0.1,
-        add_silence_between_words=0.1,
-        add_silence_end=0.1,
-        repetition=0.9,
-        silence_repetition=0.95,
+        *,
+        lexicon_file: str,
+        phoneme_vocab_file: Optional[str] = None,
+        allo_num_states: int = 3,
+        allo_context_len: int = 1,
+        state_tying_file: Optional[str] = None,
+        add_silence_beginning: float = 0.1,
+        add_silence_between_words: float = 0.1,
+        add_silence_end: float = 0.1,
+        repetition: float = 0.9,
+        silence_repetition: float = 0.95,
+        silence_lemma_orth: str = "[SILENCE]",
+        extra_begin_lemma: Optional[Dict[str, Any]] = None,
+        add_extra_begin_lemma: float = 1.0,
+        extra_end_lemma: Optional[Dict[str, Any]] = None,
+        add_extra_end_lemma: float = 1.0,
     ):
         """
-        :param str lexicon_file: lexicon XML file
-        :param int allo_num_states: how much HMM states per allophone (all but silence)
-        :param int allo_context_len: how much context to store left and right. 1 -> triphone
-        :param str | None state_tying_file: for state-tying, if you want that
-        :param float add_silence_beginning: prob of adding silence at beginning
-        :param float add_silence_between_words: prob of adding silence between words
-        :param float add_silence_end: prob of adding silence at end
-        :param float repetition: prob of repeating an allophone
-        :param float silence_repetition: prob of repeating the silence allophone
+        :param lexicon_file: lexicon XML file
+        :param phoneme_vocab_file: defines the vocab, label indices.
+            If not given, automatically inferred via all (sorted) phonemes from the lexicon.
+        :param allo_num_states: how much HMM states per allophone (all but silence)
+        :param allo_context_len: how much context to store left and right. 1 -> triphone
+        :param state_tying_file: for state-tying, if you want that
+        :param add_silence_beginning: prob of adding silence at beginning
+        :param add_silence_between_words: prob of adding silence between words
+        :param add_silence_end: prob of adding silence at end
+        :param repetition: prob of repeating an allophone
+        :param silence_repetition: prob of repeating the silence allophone
+        :param silence_lemma_orth: silence orth in the lexicon
+        :param extra_begin_lemma: {"phons": [{"phon": "P1 P2 ...", ...}, ...], ...}.
+            If given, then with prob add_extra_begin_lemma, this will be added at the beginning.
+        :param add_extra_begin_lemma:
+        :param extra_end_lemma: just like ``extra_begin_lemma``, but for the end
+        :param add_extra_end_lemma:
         """
         self.lexicon = Lexicon(lexicon_file)
         self.phonemes = sorted(self.lexicon.phonemes.keys(), key=lambda s: self.lexicon.phonemes[s]["index"])
+        self.phoneme_vocab = Vocabulary(phoneme_vocab_file, unknown_label=None) if phoneme_vocab_file else None
         self.rnd = Random(0)
         self.allo_num_states = allo_num_states
         self.allo_context_len = allo_context_len
@@ -1155,40 +1172,42 @@ class PhoneSeqGenerator:
         self.add_silence_end = add_silence_end
         self.repetition = repetition
         self.silence_repetition = silence_repetition
-        self.si_lemma = self.lexicon.lemmas["[SILENCE]"]
-        self.si_phone = self.si_lemma["phons"][0]["phon"]
-        if state_tying_file:
-            self.state_tying = StateTying(state_tying_file)
-        else:
-            self.state_tying = None
+        self.si_lemma: Dict[str, Any] = self.lexicon.lemmas[silence_lemma_orth]
+        self.si_phone: str = self.si_lemma["phons"][0]["phon"]
+        self.state_tying = StateTying(state_tying_file) if state_tying_file else None
+        if self.phoneme_vocab:
+            assert not self.state_tying
+        self.extra_begin_lemma = extra_begin_lemma
+        self.add_extra_begin_lemma = add_extra_begin_lemma
+        self.extra_end_lemma = extra_end_lemma
+        self.add_extra_end_lemma = add_extra_end_lemma
 
-    def random_seed(self, seed):
-        """
-        :param int seed:
-        """
+    def random_seed(self, seed: int):
+        """Reset RNG via given seed"""
         self.rnd.seed(seed)
 
-    def get_class_labels(self):
-        """
-        :rtype: list[str]
-        """
-        if self.state_tying:
+    def get_class_labels(self) -> List[str]:
+        """:return: class labels"""
+        if self.phoneme_vocab:
+            return self.phoneme_vocab.labels
+        elif self.state_tying:
             # State tying labels. Represented by some allophone state str.
             return ["|".join(sorted(self.state_tying.class_map[i])) for i in range(self.state_tying.num_classes)]
         else:
             # The phonemes are the labels.
             return self.phonemes
 
-    def seq_to_class_idxs(self, phones, dtype=None):
+    def seq_to_class_idxs(self, phones: List[AllophoneState], dtype: Optional[str] = None) -> numpy.ndarray:
         """
-        :param list[AllophoneState] phones: list of allophone states
-        :param str dtype: eg "int32"
-        :rtype: numpy.ndarray
-        :returns 1D numpy array with the indices
+        :param phones: list of allophone states
+        :param dtype: eg "int32". "int32" by default
+        :returns: 1D numpy array with the indices
         """
         if dtype is None:
             dtype = "int32"
-        if self.state_tying:
+        if self.phoneme_vocab:
+            return numpy.array([self.phoneme_vocab.label_to_id(a.id) for a in phones], dtype=dtype)
+        elif self.state_tying:
             # State tying indices.
             return numpy.array([self.state_tying.allo_map[a.format()] for a in phones], dtype=dtype)
         else:
@@ -1196,11 +1215,9 @@ class PhoneSeqGenerator:
             # It should not happen that we don't have some phoneme. The lexicon should not be inconsistent.
             return numpy.array([self.lexicon.phonemes[p.id]["index"] for p in phones], dtype=dtype)
 
-    def _iter_orth(self, orth):
-        """
-        :param str orth:
-        :rtype: typing.Iterator[typing.Dict[str]]
-        """
+    def _iter_orth_lemmas(self, orth: str) -> Generator[Dict[str, Any], None, None]:
+        if self.extra_begin_lemma and self.rnd.random() < self.add_extra_begin_lemma:
+            yield self.extra_begin_lemma
         if self.rnd.random() < self.add_silence_beginning:
             yield self.si_lemma
         symbols = list(orth.split())
@@ -1224,26 +1241,25 @@ class PhoneSeqGenerator:
                     yield self.si_lemma
         if self.rnd.random() < self.add_silence_end:
             yield self.si_lemma
+        if self.extra_end_lemma and self.rnd.random() < self.add_extra_end_lemma:
+            yield self.extra_end_lemma
 
-    def orth_to_phones(self, orth):
-        """
-        :param str orth:
-        :rtype: str
-        """
+    def orth_to_phones(self, orth: str) -> str:
+        """:return: space-separated phones"""
         phones = []
-        for lemma in self._iter_orth(orth):
+        for lemma in self._iter_orth_lemmas(orth):
             phon = self.rnd.choice(lemma["phons"])
-            phones += [phon["phon"]]
+            phones.append(phon["phon"])
         return " ".join(phones)
 
     # noinspection PyMethodMayBeStatic
-    def _phones_to_allos(self, phones):
+    def _phones_to_allos(self, phones: Iterator[str]) -> Generator[AllophoneState, None, None]:
         for p in phones:
             a = AllophoneState()
             a.id = p
             yield a
 
-    def _random_allo_silence(self, phone=None):
+    def _random_allo_silence(self, phone: Optional[str] = None) -> Generator[AllophoneState, None, None]:
         if phone is None:
             phone = self.si_phone
         while True:
@@ -1256,7 +1272,7 @@ class PhoneSeqGenerator:
             if self.rnd.random() >= self.silence_repetition:
                 break
 
-    def _allos_add_states(self, allos):
+    def _allos_add_states(self, allos: Iterator[AllophoneState]) -> Generator[AllophoneState, None, None]:
         for _a in allos:
             if _a.id == self.si_phone:
                 for a in self._random_allo_silence(_a.id):
@@ -1274,9 +1290,9 @@ class PhoneSeqGenerator:
                         if self.rnd.random() >= self.repetition:
                             break
 
-    def _allos_set_context(self, allos):
+    def _allos_set_context(self, allos: List[AllophoneState]) -> None:
         """
-        :param list[AllophoneState] allos:
+        :param allos: modify inplace, ``context_history``, ``context_future``
         """
         if self.allo_context_len == 0:
             return
@@ -1297,15 +1313,14 @@ class PhoneSeqGenerator:
             else:
                 ctx = []
 
-    def generate_seq(self, orth):
+    def generate_seq(self, orth: str) -> List[AllophoneState]:
         """
-        :param str orth: orthography as a str. orth.split() should give words in the lexicon
-        :rtype: list[AllophoneState]
-        :returns allophone state list. those will have repetitions etc
+        :param orth: orthography as a str. orth.split() should give words in the lexicon
+        :returns: allophone state list. those will have repetitions etc
         """
-        allos = []  # type: typing.List[AllophoneState]
-        for lemma in self._iter_orth(orth):
-            phon = self.rnd.choice(lemma["phons"])
+        allos: List[AllophoneState] = []
+        for lemma in self._iter_orth_lemmas(orth):
+            phon = self.rnd.choice(lemma["phons"])  # space-separated phones in phon["phon"]
             l_allos = list(self._phones_to_allos(phon["phon"].split()))
             l_allos[0].mark_initial()
             l_allos[-1].mark_final()
@@ -1314,13 +1329,13 @@ class PhoneSeqGenerator:
         allos = list(self._allos_add_states(allos))
         return allos
 
-    def _random_phone_seq(self, prob_add=0.8):
+    def _random_phone_seq(self, prob_add: float = 0.8) -> Generator[str, None, None]:
         while True:
             yield self.rnd.choice(self.phonemes)
             if self.rnd.random() >= prob_add:
                 break
 
-    def _random_allo_seq(self, prob_word_add=0.8):
+    def _random_allo_seq(self, prob_word_add: float = 0.8) -> List[AllophoneState]:
         allos = []
         while True:
             phones = self._random_phone_seq()
@@ -1333,15 +1348,14 @@ class PhoneSeqGenerator:
         self._allos_set_context(allos)
         return list(self._allos_add_states(allos))
 
-    def generate_garbage_seq(self, target_len):
+    def generate_garbage_seq(self, target_len: int) -> List[AllophoneState]:
         """
-        :param int target_len: len of the returned seq
-        :rtype: list[AllophoneState]
-        :returns allophone state list. those will have repetitions etc.
-        It will randomly generate a sequence of phonemes and transform that
-        into a list of allophones in a similar way than generate_seq().
+        :param target_len: len of the returned seq
+        :returns: allophone state list. those will have repetitions etc.
+            It will randomly generate a sequence of phonemes and transform that
+            into a list of allophones in a similar way than generate_seq().
         """
-        allos = []
+        allos: List[AllophoneState] = []
         while True:
             allos += self._random_allo_seq()
             # Add some silence so that left/right context is correct for further allophones.
@@ -1435,7 +1449,9 @@ class TranslationDataset(CachedDataset2):
             for prefix in self._main_data_key_map.keys()
             if not (prefix == self.target_file_prefix and search_without_reference)
         ]
-        self._data_files = {prefix: self._get_data_file(prefix) for prefix in self._files_to_read}
+        self._data_files: Dict[str, Union[None, BinaryIO, IOBase]] = {
+            prefix: self._get_data_file(prefix) for prefix in self._files_to_read
+        }
 
         self._data_keys = self._source_data_keys + self._target_data_keys
         self._data = {data_key: [] for data_key in self._data_keys}  # type: typing.Dict[str,typing.List[numpy.ndarray]]
@@ -1541,11 +1557,10 @@ class TranslationDataset(CachedDataset2):
             filename = cf(filename)
         return filename
 
-    def _get_data_file(self, prefix):
+    def _get_data_file(self, prefix) -> Union[BinaryIO, IOBase]:
         """
         :param str prefix: e.g. "source" or "target"
         :return: full filename
-        :rtype: io.FileIO
         """
         import os
 
