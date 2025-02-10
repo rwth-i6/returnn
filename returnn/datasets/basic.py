@@ -962,7 +962,7 @@ class Dataset:
         # noinspection PyBroadException
         try:
             num_seqs = self.num_seqs
-        except Exception as exc:  # num_seqs not always available
+        except Exception:  # num_seqs not always available
             if not allow_approximation:
                 return None
 
