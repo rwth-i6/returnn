@@ -941,13 +941,12 @@ class Dataset:
 
             return max(1.0e-10, 1.0 - math.exp(-seq_idx * 1000))
 
-    def get_complete_frac(self, sorted_seq_idx: int, *, allow_approximation: bool = True) -> float:
+    def get_complete_frac(self, sorted_seq_idx: int, *, allow_approximation: bool = True) -> Optional[float]:
         """
         Tries to calculate exactly how much of the current epoch is completed when
         having processed seq ``sorted_seq_idx``.
 
-        If ``allow_approximation=False``, raises a ``NotImplementedError`` if the value cannot be
-        calculated exactly.
+        If ``allow_approximation=False``, returns ``None`` if the value cannot be calculated exactly.
 
         ``sorted_seq_idx`` cannot be less than the seq index of the previously loaded seqs.
 
@@ -966,10 +965,7 @@ class Dataset:
             num_seqs = self.num_seqs
         except Exception as exc:  # num_seqs not always available
             if not allow_approximation:
-                raise NotImplementedError(
-                    f"{self}: num_seqs unknown, get_complete_frac can only return an approximation "
-                    f"but is not allowed to due to allow_approximation={allow_approximation}"
-                ) from exc
+                return None
 
             # noinspection PyBroadException
             try:

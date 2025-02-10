@@ -601,10 +601,7 @@ def _worker_proc_loop(
         dataset.load_seqs(next_seq_idx, next_seq_idx + 1)
         seq_tag = dataset.get_tag(next_seq_idx)
         features = {data_key: dataset.get_data(next_seq_idx, data_key) for data_key in dataset.get_data_keys()}
-        try:
-            complete_frac = dataset.get_complete_frac(next_seq_idx, allow_approximation=False)
-        except NotImplementedError:
-            complete_frac = None
+        complete_frac = dataset.get_complete_frac(next_seq_idx, allow_approximation=False)
         res = DatasetSeq(seq_idx=next_seq_idx, seq_tag=seq_tag, features=features, complete_frac=complete_frac)
         cache.append(res)
         next_seq_idx += 1

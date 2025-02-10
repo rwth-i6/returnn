@@ -326,11 +326,8 @@ class PostprocessingDataset(CachedDataset2):
             for data_key in data_keys:
                 tensor_dict.data[data_key].raw_tensor = self._dataset.get_data(seq_index, data_key)
 
-            try:
-                comp_frac_tensor = numpy.array(
-                    self._dataset.get_complete_frac(seq_index, allow_approximation=False), dtype=numpy.float64
-                )
-            except NotImplementedError:
+            complete_frac = self._dataset.get_complete_frac(seq_index, allow_approximation=False)
+            if complete_frac is None:
                 # In case we cannot obtain a proper value for `complete_frac`, we
                 # pass a dummy value (-1). We do this instead of passing no value to
                 # be able to lint against dropping it from the tensor dicts, which
@@ -338,7 +335,8 @@ class PostprocessingDataset(CachedDataset2):
                 #
                 # Once the postprocessing dataset receives the dummy value back, it
                 # removes it from the downstream data.
-                comp_frac_tensor = numpy.array(-1)
+                complete_frac = -1
+            comp_frac_tensor = numpy.array(complete_frac, dtype=numpy.float64)
             tensor_dict.data["complete_frac"].raw_tensor = comp_frac_tensor
             seq_tag_tensor = str_to_numpy_array(self._dataset.get_tag(seq_index))
             tensor_dict.data["seq_tag"].raw_tensor = seq_tag_tensor

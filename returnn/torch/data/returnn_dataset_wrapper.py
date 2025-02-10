@@ -113,11 +113,11 @@ class ReturnnDatasetIterDataPipe(torch.utils.data.IterDataPipe):
                 # It's slightly redundant to have the following data in each entry,
                 # but it's difficult to pass this back to the main proc otherwise.
                 data["epoch"] = epoch
-                try:
-                    complete_frac = self._dataset.get_complete_frac(seq_index, allow_approximation=False)
-                    assert 0.0 <= complete_frac <= 1.0
-                except NotImplementedError:
+
+                complete_frac = self._dataset.get_complete_frac(seq_index, allow_approximation=False)
+                if complete_frac is None:
                     complete_frac = -1
+                assert complete_frac == -1 or 0.0 <= complete_frac <= 1.0
                 data["complete_frac"] = numpy.array(complete_frac)
                 data["num_seqs"] = num_seqs
 
