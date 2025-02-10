@@ -1077,7 +1077,7 @@ class Engine(EngineBase):
         get_model_func = self.config.typed_value("get_model")
         assert get_model_func, "get_model not defined in config"
         sentinel_kw = util.get_fwd_compat_kwargs()
-        model = get_model_func(epoch=epoch, step=step, **sentinel_kw)
+        model = get_model_func(epoch=epoch, step=step, device=self._device, **sentinel_kw)
         self._orig_model = model
         if isinstance(model, rf.Module):
             self._pt_model = rf_module_to_pt_module(model)
