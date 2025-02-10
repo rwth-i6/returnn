@@ -1624,7 +1624,7 @@ class TorchBackend(Backend[torch.Tensor]):
         assert isinstance(static, bool)
         if static:
             assert seed is not None
-            generator = torch.Generator()
+            generator = torch.Generator(device=out.raw_tensor.device)
             generator.manual_seed(seed)
         else:
             assert seed is None
