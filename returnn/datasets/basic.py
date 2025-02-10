@@ -941,7 +941,7 @@ class Dataset:
 
             return max(1.0e-10, 1.0 - math.exp(-seq_idx * 1000))
 
-    def get_complete_frac(self, sorted_seq_idx: int, *, allow_approximation=True):
+    def get_complete_frac(self, sorted_seq_idx: int, *, allow_approximation: bool = True) -> float:
         """
         Tries to calculate exactly how much of the current epoch is completed when
         having processed seq ``sorted_seq_idx``.
