@@ -142,8 +142,8 @@ class Dataset:
         :param str|None seq_order_seq_lens_file: for seq order, use the seq length given by this file
         :param int shuffle_frames_of_nseqs: shuffles the frames. not always supported
         :param None|int estimated_num_seqs: for progress reporting in case the real num_seqs is unknown
-        :param int|None _num_shards: number of shards the data is split into
-        :param int|None _shard_index: local shard index, when sharding is enabled
+        :param int _num_shards: number of shards the data is split into
+        :param int _shard_index: local shard index, when sharding is enabled
         """
         self.name = name or ("dataset_id%s" % id(self))
         self.lock = None  # type: Optional[RLock]  # Used when manipulating our data potentially from multiple threads.
@@ -177,7 +177,7 @@ class Dataset:
         self._chunking = chunking
         self.chunk_size, self.chunk_step, self.custom_chunking_func = self._parse_chunking(chunking)
         self._context_window = context_window
-        assert (_shard_index is None and _num_shards is None) or 0 <= _shard_index < _num_shards
+        assert 0 <= _shard_index < _num_shards
         self._num_shards = _num_shards
         self._shard_index = _shard_index
         if isinstance(context_window, (tuple, list)):
