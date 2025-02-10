@@ -143,7 +143,7 @@ class MultiProcDataset(CachedDataset2):
                     self._sharding_method,
                 )
             elif self._sharding_method == "dedicated":
-                sub_dataset = {**self.dataset, "_num_shards": self.num_workers, "_shard_index": i}
+                sub_dataset = {**self.dataset, "num_shards": self.num_workers, "shard_index": i}
                 args = (
                     i,
                     sub_dataset,

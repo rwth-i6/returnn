@@ -1224,7 +1224,7 @@ def test_dataset_sharding():
     from returnn.datasets.audio import OggZipDataset
 
     with create_ogg_zip_txt_only_dataset_mult_seqs_opts(num_seqs=10) as dataset_opts:
-        datasets = [init_dataset({**dataset_opts, "_num_shards": 2, "_shard_index": i}) for i in range(2)]
+        datasets = [init_dataset({**dataset_opts, "num_shards": 2, "shard_index": i}) for i in range(2)]
         for dataset in datasets:
             assert isinstance(dataset, OggZipDataset)
             dataset.init_seq_order(epoch=1)

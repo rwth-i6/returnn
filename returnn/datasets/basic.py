@@ -70,8 +70,8 @@ class Dataset:
         dd_cfg = config.typed_value("dataset_distribution", "random_seed_offset")
         assert dd_cfg in ["random_seed_offset", "shard"]
         shard_index, num_shards = Dataset._get_rank_and_size(config) if dd_cfg == "shard" else 0, 1
-        set_or_remove("_num_shards", num_shards)
-        set_or_remove("_shard_index", shard_index)
+        set_or_remove("num_shards", num_shards)
+        set_or_remove("shard_index", shard_index)
 
     @staticmethod
     def get_default_kwargs_eval(config: Config) -> Dict[str, Any]:
@@ -117,8 +117,8 @@ class Dataset:
         min_chunk_size=0,
         chunking_variance=0,
         estimated_num_seqs=None,
-        _num_shards=1,
-        _shard_index=0,
+        num_shards: int=1,
+        shard_index: int=0,
     ):
         """
         :param str name: e.g. "train" or "eval"
@@ -142,8 +142,8 @@ class Dataset:
         :param str|None seq_order_seq_lens_file: for seq order, use the seq length given by this file
         :param int shuffle_frames_of_nseqs: shuffles the frames. not always supported
         :param None|int estimated_num_seqs: for progress reporting in case the real num_seqs is unknown
-        :param int _num_shards: number of shards the data is split into
-        :param int _shard_index: local shard index, when sharding is enabled
+        :param num_shards: number of shards the data is split into
+        :param shard_index: local shard index, when sharding is enabled
         """
         self.name = name or ("dataset_id%s" % id(self))
         self.lock = None  # type: Optional[RLock]  # Used when manipulating our data potentially from multiple threads.
@@ -177,9 +177,9 @@ class Dataset:
         self._chunking = chunking
         self.chunk_size, self.chunk_step, self.custom_chunking_func = self._parse_chunking(chunking)
         self._context_window = context_window
-        assert 0 <= _shard_index < _num_shards
-        self._num_shards = _num_shards
-        self._shard_index = _shard_index
+        assert 0 <= shard_index < num_shards
+        self.num_shards = num_shards
+        self.shard_index = shard_index
         if isinstance(context_window, (tuple, list)):
             assert len(context_window) == 2
             for elem in context_window:
@@ -274,16 +274,6 @@ class Dataset:
             return ctx.rank(), ctx.size()
         else:
             return 0, 1
-
-    @property
-    def num_shards(self) -> int:
-        """:return: number of shards the data is split into"""
-        return self._num_shards
-
-    @property
-    def shard_index(self) -> int:
-        """:return: local shard index, when sharding is enabled"""
-        return self._shard_index
 
     @property
     def random_seed_offset(self) -> int:
@@ -1589,9 +1579,9 @@ def _dataset_extend_default_kwargs_from_parent_dataset(
     default_kwargs = default_kwargs.copy() if default_kwargs else {}
     default_kwargs.setdefault("random_seed_offset", parent_dataset.random_seed_offset)
     # noinspection PyProtectedMember
-    default_kwargs.setdefault("_num_shards", parent_dataset.num_shards)
+    default_kwargs.setdefault("num_shards", parent_dataset.num_shards)
     # noinspection PyProtectedMember
-    default_kwargs.setdefault("_shard_index", parent_dataset.shard_index)
+    default_kwargs.setdefault("shard_index", parent_dataset.shard_index)
     return default_kwargs
 
 

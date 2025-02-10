@@ -314,8 +314,8 @@ class DistributeFilesDataset(CachedDataset2):
         dataset_dict = extend_dataset_dict_from_parent_dataset(dataset_dict, parent_dataset=self)
         # We shard by splitting the files list into shards, the sub datasets must not shard any further by themselves
         if self.num_shards > 1:
-            dataset_dict["_num_shards"] = 1
-            dataset_dict["_shard_index"] = 0
+            dataset_dict["num_shards"] = 1
+            dataset_dict["shard_index"] = 0
 
         flat_sub_dset = tree.flatten_with_path(dataset_dict)
 
