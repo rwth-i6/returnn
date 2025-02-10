@@ -117,8 +117,8 @@ class Dataset:
         min_chunk_size=0,
         chunking_variance=0,
         estimated_num_seqs=None,
-        num_shards: int=1,
-        shard_index: int=0,
+        num_shards: int = 1,
+        shard_index: int = 0,
     ):
         """
         :param str name: e.g. "train" or "eval"
