@@ -941,48 +941,45 @@ class Dataset:
 
             return max(1.0e-10, 1.0 - math.exp(-seq_idx * 1000))
 
-    def get_complete_frac(self, seq_idx):
+    def get_complete_frac(self, sorted_seq_idx: int, *, allow_approximation=True):
         """
-        :param int seq_idx:
-        :return: Returns a fraction (float in [0,1], always > 0) of how far we have advanced
-          for this seq in the dataset.
-          This does not have to be exact. This is only for the user.
-        :rtype: float
+        Tries to calculate exactly how much of the current epoch is completed when
+        having processed seq ``sorted_seq_idx``.
+
+        If ``allow_approximation=False``, raises a ``NotImplementedError`` if the value cannot be
+        calculated exactly.
+
+        ``sorted_seq_idx`` cannot be less than the seq index of the previously loaded seqs.
+
+        :param sorted_seq_idx: sorted seq idx
+        :param allow_approximation: whether it is allowed to return an approximate value
+            if the exact value cannot be calculated (due to unknown ``num_seqs``).
+            Approximative values can be appropriate for e.g. progress bars but not for LR scheduling.
+        :return: continuous value in (0, 1] which represents how much of the current epoch
+            is completed after ``sorted_seq_idx``.
+            As ``sorted_seq_idx`` is monotonic, the return value is also guaranteed to be monotonic.
+            This non-approximative value is used to calculate ``epoch_continuous`` for any dynamic
+            learning rate scheduling.
         """
         # noinspection PyBroadException
         try:
             num_seqs = self.num_seqs
-        except Exception:  # num_seqs not always available
+        except Exception as exc:  # num_seqs not always available
+            if not allow_approximation:
+                raise NotImplementedError(
+                    f"{self}: num_seqs unknown, get_complete_frac can only return an approximation "
+                    f"but is not allowed to due to allow_approximation={allow_approximation}"
+                ) from exc
+
             # noinspection PyBroadException
             try:
                 num_seqs = self.estimated_num_seqs
             except Exception:  # also not always available
                 num_seqs = None  # ignore
-        return self.generic_complete_frac(seq_idx, num_seqs)
-
-    def get_exact_complete_frac(self, sorted_seq_idx: int) -> float:
-        """
-        Tries to calculate exactly how much of the current epoch is completed when
-        having processed seq ``sorted_seq_idx``.
-
-        Raises a ``NotImplementedError`` if the value cannot be calculated.
-
-        ``sorted_seq_idx`` cannot be less than the seq index of the previously loaded seqs
-        This value is used to calculate ``epoch_continuous`` for any dynamic learning rate scheduling.
-
-        :param sorted_seq_idx: sorted seq idx
-        :return: continuous value in (0, 1] which represents how much of the current epoch
-            is completed after ``sorted_seq_idx``.
-            As ``sorted_seq_idx`` is monotonic, the return value is also guaranteed to be monotonic.
-        """
-        try:
-            num_seqs = self.num_seqs
-        except NotImplementedError as exc:
-            raise OptionalNotImplementedError(f"{self}: get_complete_frac is not implemented") from exc
         assert (
-            0 <= sorted_seq_idx < num_seqs
+            num_seqs is None or 0 <= sorted_seq_idx < num_seqs
         ), f"{self}: invalid seq indices: 0 <= seq_idx ({sorted_seq_idx}) < num_seqs ({num_seqs}) violated"
-        return (sorted_seq_idx + 1) / num_seqs
+        return self.generic_complete_frac(sorted_seq_idx, num_seqs)
 
     @property
     def num_seqs(self) -> int:

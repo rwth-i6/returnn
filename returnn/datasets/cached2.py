@@ -228,17 +228,14 @@ class CachedDataset2(Dataset):
             keys.remove("data")
         return keys
 
-    def get_exact_complete_frac(self, sorted_seq_idx: int) -> float:
+    def get_complete_frac(self, sorted_seq_idx, *, allow_approximation=True):
         """
-        :return: fractional completion value for the given seq_idx
+        :return: fractional completion value for the given sorted_seq_idx
         """
-        try:
-            return super().get_exact_complete_frac(sorted_seq_idx)
-        except NotImplementedError:
-            seq = self._get_seq(sorted_seq_idx)
-            if seq.complete_frac is not None:
-                return seq.complete_frac
-            raise
+        seq = self._get_seq(sorted_seq_idx)
+        if seq.complete_frac is not None:
+            return seq.complete_frac
+        return super().get_complete_frac(sorted_seq_idx, allow_approximation=allow_approximation)
 
     def is_data_sparse(self, key):
         """

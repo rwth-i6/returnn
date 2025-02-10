@@ -588,7 +588,7 @@ class SprintDatasetBase(Dataset):
         """
         self._complete_frac = frac
 
-    def get_complete_frac(self, seq_idx):
+    def get_complete_frac(self, seq_idx, **kwargs):
         """
         :param int seq_idx:
         :rtype: float

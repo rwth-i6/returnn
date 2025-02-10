@@ -327,7 +327,9 @@ class PostprocessingDataset(CachedDataset2):
                 tensor_dict.data[data_key].raw_tensor = self._dataset.get_data(seq_index, data_key)
 
             try:
-                comp_frac_tensor = numpy.array(self._dataset.get_exact_complete_frac(seq_index), dtype=numpy.float64)
+                comp_frac_tensor = numpy.array(
+                    self._dataset.get_complete_frac(seq_index, allow_approximation=False), dtype=numpy.float64
+                )
             except NotImplementedError:
                 # In case we cannot obtain a proper value for `complete_frac`, we
                 # pass a dummy value (-1). We do this instead of passing no value to
