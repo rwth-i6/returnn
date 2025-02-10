@@ -67,6 +67,12 @@ class Dataset:
         set_or_remove("min_chunk_size", config.opt_typed_value("min_chunk_size", 0) or None)
         set_or_remove("chunking_variance", config.float("chunking_variance", 0))
 
+        dd_cfg = config.typed_value("dataset_distribution", "random_seed_offset")
+        assert dd_cfg in ["random_seed_offset", "shard"]
+        shard_index, num_shards = Dataset._get_rank_and_size(config) if dd_cfg == "shard" else 0, 1
+        set_or_remove("_num_shards", num_shards)
+        set_or_remove("_shard_index", shard_index)
+
     @staticmethod
     def get_default_kwargs_eval(config: Config) -> Dict[str, Any]:
         """
@@ -111,8 +117,8 @@ class Dataset:
         min_chunk_size=0,
         chunking_variance=0,
         estimated_num_seqs=None,
-        _num_shards=None,
-        _shard_index=None,
+        _num_shards=1,
+        _shard_index=0,
     ):
         """
         :param str name: e.g. "train" or "eval"
@@ -250,15 +256,10 @@ class Dataset:
         return Dataset._create_from_reduce, (self.__class__, kwargs, state)
 
     @staticmethod
-    def _get_rank_and_size() -> Tuple[int, int]:
+    def _get_rank_and_size(config: Config) -> Tuple[int, int]:
         """
         :return: tuple (rank, size): the global rank and size for distributed trainings
         """
-        from returnn.config import get_global_config
-
-        config = get_global_config(raise_exception=False)
-        if not config:
-            return 0, 1
         if config.typed_value("torch_distributed") is not None:
             import returnn.torch.distributed
 
@@ -274,32 +275,14 @@ class Dataset:
         else:
             return 0, 1
 
-    @staticmethod
-    def _get_default_shard_config():
-        """
-        :return: default shard index and number of shards based on the global config
-        """
-        from returnn.config import get_global_config
-
-        config = get_global_config(raise_exception=False)
-        if not config:
-            return 0, 1
-        dd_cfg = config.typed_value("dataset_distribution", "random_seed_offset")
-        assert dd_cfg in ["random_seed_offset", "shard"]
-        return Dataset._get_rank_and_size() if dd_cfg == "shard" else 0, 1
-
     @property
     def num_shards(self) -> int:
         """:return: number of shards the data is split into"""
-        if self._num_shards is None:
-            self._shard_index, self._num_shards = self._get_default_shard_config()
         return self._num_shards
 
     @property
     def shard_index(self) -> int:
         """:return: local shard index, when sharding is enabled"""
-        if self._shard_index is None:
-            self._shard_index, self._num_shards = self._get_default_shard_config()
         return self._shard_index
 
     @property
