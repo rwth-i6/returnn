@@ -946,8 +946,6 @@ class Dataset:
         Tries to calculate exactly how much of the current epoch is completed when
         having processed seq ``sorted_seq_idx``.
 
-        If ``allow_approximation=False``, returns ``None`` if the value cannot be calculated exactly.
-
         ``sorted_seq_idx`` cannot be less than the seq index of the previously loaded seqs.
 
         :param sorted_seq_idx: sorted seq idx
@@ -955,7 +953,8 @@ class Dataset:
             if the exact value cannot be calculated (due to unknown ``num_seqs``).
             Approximative values can be appropriate for e.g. progress bars but not for LR scheduling.
         :return: continuous value in (0, 1] which represents how much of the current epoch
-            is completed after ``sorted_seq_idx``.
+            is completed after ``sorted_seq_idx`
+            If ``allow_approximation=False``, returns ``None`` if the value cannot be calculated exactly.
             As ``sorted_seq_idx`` is monotonic, the return value is also guaranteed to be monotonic.
             This non-approximative value is used to calculate ``epoch_continuous`` for any dynamic
             learning rate scheduling.
