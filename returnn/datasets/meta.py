@@ -536,7 +536,9 @@ class MetaDataset(CachedDataset2):
         """
         seq_tag = self.seq_list_ordered[self.default_dataset_key][seq_idx]
         try:
-            complete_frac = self.datasets[self.default_dataset_key].get_complete_frac(seq_idx, allow_approximation=False)
+            complete_frac = self.datasets[self.default_dataset_key].get_complete_frac(
+                seq_idx, allow_approximation=False
+            )
         except NotImplementedError:
             complete_frac = None
         features = {data_key: self._get_data(seq_idx, data_key) for data_key in self.data_keys}
