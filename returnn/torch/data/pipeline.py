@@ -500,12 +500,6 @@ class ShufflingDataPipe(torch.utils.data.IterDataPipe):
     def __iter__(self):
         # The implementation is very similar to the PostprocessingDataset's combinator LaplaceOrdering.
 
-        if self._seed is None:
-            # torch uses a random seed when no other seed has been set via set_seed or via __init__
-            self._seed = numpy.random.randint(0, 2**32 - 1)
-        self._rng.seed(self._seed)
-        self._seed = None
-
         data_iter = iter(self._dataset)
 
         batch_buffer: List[List[Dict[str, Any]]] = list(itertools.islice(data_iter, self._buffer_size))
@@ -549,6 +543,35 @@ class ShufflingDataPipe(torch.utils.data.IterDataPipe):
         """
         self._seed = seed % (2**32)  # seed must be within [0, 2**32) for seeding RandomState
         return self
+
+    def reset(self) -> None:
+        if self._seed is None:
+            self._seed = int(torch.empty((), dtype=torch.int32).random_().item())
+        self._rng.seed(self._seed)
+        self._seed = None
+
+    def __getstate__(self):
+        state = (
+            self._dataset,
+            self._buffer_size,
+            self._monotonic_data_keys,
+            self._rng.get_state(),
+            self._seed,
+        )
+        if torch.utils.data.IterDataPipe.getstate_hook is not None:
+            return torch.utils.data.IterDataPipe.getstate_hook(state)
+        return state
+
+    def __setstate__(self, state):
+        (
+            self._dataset,
+            self._buffer_size,
+            self._monotonic_data_keys,
+            rng_state,
+            self._seed,
+        ) = state
+        self._rng = numpy.random.RandomState()
+        self._rng.set_state(rng_state)
 
     def __getitem__(self, index):
         raise Exception(f"{self.__class__.__name__}.__getitem__ not supported")
