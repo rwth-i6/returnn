@@ -980,6 +980,7 @@ class Engine(EngineBase):
                 missing_keys_preload, unexpected_keys_preload = self._pt_model.load_state_dict(
                     preload_model_state, strict=False
                 )
+                preload_model_state_keys = set(preload_model_state.keys())
                 loaded_state_keys.update(preload_model_state.keys())
                 missing_keys.difference_update(preload_model_state.keys())
                 del preload_model_state
@@ -1000,6 +1001,12 @@ class Engine(EngineBase):
                 unexpected_keys_preload = (
                     set(prefix_keys).intersection(set(unexpected_keys_preload)).difference(loaded_state_keys)
                 )
+                if not preload_model_state_keys.intersection(prefix_keys):
+                    raise Exception(
+                        f"No keys with prefix {opts.get('prefix', '')!r} found in preload model state.\n"
+                        f"Preload model state keys: {preload_model_state_keys}\n"
+                        f"Model state keys: {model_state_keys_set}"
+                    )
                 if missing_keys_preload and not opts.get("ignore_missing", False):
                     missing_keys.update(missing_keys_preload)
                 if missing_keys_preload:
