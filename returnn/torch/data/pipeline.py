@@ -502,7 +502,7 @@ class ShufflingDataPipe(torch.utils.data.IterDataPipe):
 
         if self._seed is None:
             # torch uses a random seed when no other seed has been set via set_seed or via __init__
-            self._seed = numpy.random.randint(0)
+            self._seed = numpy.random.randint(0, 2**32 - 1)
         self._rng.seed(self._seed)
         self._seed = None
 
