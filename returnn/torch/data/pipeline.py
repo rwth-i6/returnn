@@ -491,6 +491,8 @@ class ShufflingDataPipe(torch.utils.data.IterDataPipe):
         super().__init__()
 
         self._dataset = dataset
+        self._buffer: List[List[Dict[str, Any]]] = []
+        self._next_buffer: List[List[Dict[str, Any]]] = []
         assert buffer_size > 0
         self._buffer_size = buffer_size
         self._monotonic_data_keys = monotonic_data_keys
@@ -502,39 +504,38 @@ class ShufflingDataPipe(torch.utils.data.IterDataPipe):
 
         data_iter = iter(self._dataset)
 
-        batch_buffer: List[List[Dict[str, Any]]] = list(itertools.islice(data_iter, self._buffer_size))
+        self._buffer.extend(itertools.islice(data_iter, self._buffer_size))
         has_ended = False
 
         while True:
             # Make sure to not reorder the monotonic values from self._monotonic_data_keys.
             # These can contain things like complete_frac, which should be kept in order.
             ordered_data = {
-                key: [data_dict[key] for batch in batch_buffer for data_dict in batch]
+                key: [data_dict[key] for batch in self._buffer for data_dict in batch]
                 for key in self._monotonic_data_keys
             }
-            self._rng.shuffle(batch_buffer)
+            self._rng.shuffle(self._buffer)
             for key in self._monotonic_data_keys:
-                data_dicts = [data_dict for batch in batch_buffer for data_dict in batch]
+                data_dicts = [data_dict for batch in self._buffer for data_dict in batch]
                 assert len(data_dicts) == len(ordered_data[key])
                 for ordered_value, data_dict in zip(ordered_data[key], data_dicts):
                     data_dict[key] = ordered_value
 
-            next_batch_buffer = []
-
-            for item in batch_buffer:
+            for item in self._buffer:
                 yield item
 
                 try:
                     if not has_ended:
-                        next_batch_buffer.append(next(data_iter))
+                        self._next_buffer.append(next(data_iter))
                 except StopIteration:
                     has_ended = True
 
-            if len(batch_buffer) < self._buffer_size:
-                assert has_ended and not next_batch_buffer
+            if len(self._buffer) < self._buffer_size:
+                assert has_ended and not self._next_buffer
                 break
 
-            batch_buffer = next_batch_buffer
+            self._buffer.clear()
+            self._buffer, self._next_buffer = self._next_buffer, self._buffer
 
     def set_seed(self, seed: int) -> ShufflingDataPipe:
         """
@@ -553,6 +554,8 @@ class ShufflingDataPipe(torch.utils.data.IterDataPipe):
     def __getstate__(self):
         state = (
             self._dataset,
+            self._buffer,
+            self._next_buffer,
             self._buffer_size,
             self._monotonic_data_keys,
             self._rng.get_state(),
@@ -565,6 +568,8 @@ class ShufflingDataPipe(torch.utils.data.IterDataPipe):
     def __setstate__(self, state):
         (
             self._dataset,
+            self._buffer,
+            self._next_buffer,
             self._buffer_size,
             self._monotonic_data_keys,
             rng_state,
