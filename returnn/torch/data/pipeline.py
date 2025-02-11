@@ -547,7 +547,7 @@ class ShufflingDataPipe(torch.utils.data.IterDataPipe):
         Sets the seed for the next invocation of ``__iter__``, for compatibility with
         ``torch.utils.data.graph_settings.apply_random_seed``.
         """
-        self._seed = seed
+        self._seed = seed % (2**32)  # seed must be within [0, 2**32) for seeding RandomState
         return self
 
     def __getitem__(self, index):
