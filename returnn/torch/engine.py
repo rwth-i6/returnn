@@ -987,6 +987,11 @@ class Engine(EngineBase):
 
                 if opts.get("prefix", ""):
                     prefix_keys = [key for key in self._pt_model.state_dict() if key.startswith(opts.get("prefix", ""))]
+                    if not prefix_keys:
+                        raise Exception(
+                            "No keys with prefix %r found in model.\nModel params:\n%s"
+                            % (opts.get("prefix", ""), ", ".join(name for name, _ in self._pt_model.named_parameters()))
+                        )
                 else:
                     prefix_keys = model_state_keys_set
                 missing_keys_preload = (
