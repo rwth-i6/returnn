@@ -16,6 +16,7 @@ from threading import RLock
 from random import Random, random
 import sys
 import os
+import math
 import numpy
 import functools
 import typing
@@ -971,6 +972,12 @@ class Dataset:
                 num_seqs = self.estimated_num_seqs
             except Exception:  # also not always available
                 num_seqs = None  # ignore
+        if math.isinf(num_seqs):
+            if not allow_approximation:
+                # cannot compute meaningful complete_frac for infinite num_seqs
+                return None
+            else:
+                num_seqs = None
         assert (
             num_seqs is None or 0 <= sorted_seq_idx < num_seqs
         ), f"{self}: invalid seq indices: 0 <= seq_idx ({sorted_seq_idx}) < num_seqs ({num_seqs}) violated"
