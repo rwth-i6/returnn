@@ -467,7 +467,12 @@ class LenFilterDataPipe(torch.utils.data.IterDataPipe):
 
 
 class ShufflingDataPipe(torch.utils.data.IterDataPipe):
-    """Data pipe that shuffles batches while keeping certain data keys in order."""
+    """
+    Data pipe that is similar to ``torch.utils.data.datapipes.iter.Shuffler``,
+    but it will keep certain data keys of the batches in order while shuffling the rest.
+
+    Used for e.g. ``complete_frac`` and ``seq_idx``.
+    """
 
     def __init__(
         self,
