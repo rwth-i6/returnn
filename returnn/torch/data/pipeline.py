@@ -545,7 +545,8 @@ class ShufflingDataPipe(torch.utils.data.IterDataPipe):
         self._seed = seed % (2**32)  # seed must be within [0, 2**32) for seeding RandomState
         return self
 
-    def reset(self) -> None:
+    def reset(self):
+        """resets the internal state of the data pipe"""
         if self._seed is None:
             self._seed = int(torch.empty((), dtype=torch.int32).random_().item())
         self._rng.seed(self._seed)
