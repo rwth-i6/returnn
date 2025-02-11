@@ -480,7 +480,7 @@ class ShufflingDataPipe(torch.utils.data.IterDataPipe):
         *,
         buffer_size: int,
         monotonic_data_keys: Sequence[str],
-        seed: int = 19 * 1337,
+        seed: Optional[int] = None,
     ):
         """
         :param dataset: batches dataset to shuffle
@@ -494,10 +494,17 @@ class ShufflingDataPipe(torch.utils.data.IterDataPipe):
         assert buffer_size > 0
         self._buffer_size = buffer_size
         self._monotonic_data_keys = monotonic_data_keys
-        self._rng = numpy.random.RandomState(seed)
+        self._rng = numpy.random.RandomState()
+        self._seed = seed
 
     def __iter__(self):
         # The implementation is very similar to the PostprocessingDataset's combinator LaplaceOrdering.
+
+        if self._seed is None:
+            # torch uses a random seed when no other seed has been set via set_seed or via __init__
+            self._seed = numpy.random.randint(0)
+        self._rng.seed(self._seed)
+        self._seed = None
 
         data_iter = iter(self._dataset)
 
@@ -534,6 +541,14 @@ class ShufflingDataPipe(torch.utils.data.IterDataPipe):
                 break
 
             batch_buffer = next_batch_buffer
+
+    def set_seed(self, seed: int) -> ShufflingDataPipe:
+        """
+        Sets the seed for the next invocation of ``__iter__``, for compatibility with
+        ``torch.utils.data.graph_settings.apply_random_seed``.
+        """
+        self._seed = seed
+        return self
 
     def __getitem__(self, index):
         raise Exception(f"{self.__class__.__name__}.__getitem__ not supported")
