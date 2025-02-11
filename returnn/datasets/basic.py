@@ -942,7 +942,7 @@ class Dataset:
 
             return max(1.0e-10, 1.0 - math.exp(-seq_idx * 1000))
 
-    def get_complete_frac(self, sorted_seq_idx: int, *, allow_approximation: bool = True) -> Optional[float]:
+    def get_complete_frac(self, sorted_seq_idx: int, *, allow_only_exact: bool = False) -> Optional[float]:
         """
         Tries to calculate exactly how much of the current epoch is completed when
         having processed seq ``sorted_seq_idx``.
@@ -950,12 +950,12 @@ class Dataset:
         ``sorted_seq_idx`` cannot be less than the seq index of the previously loaded seqs.
 
         :param sorted_seq_idx: sorted seq idx
-        :param allow_approximation: whether it is allowed to return an approximate value
+        :param allow_only_exact: whether it is disallowed to return an approximate value
             if the exact value cannot be calculated (due to unknown ``num_seqs``).
             Approximative values can be appropriate for e.g. progress bars but not for LR scheduling.
         :return: continuous value in (0, 1] which represents how much of the current epoch
             is completed after ``sorted_seq_idx`
-            If ``allow_approximation=False``, returns ``None`` if the value cannot be calculated exactly.
+            If ``allow_only_exact=True``, returns ``None`` if the value cannot be calculated exactly.
             As ``sorted_seq_idx`` is monotonic, the return value is also guaranteed to be monotonic.
             This non-approximative value is used to calculate ``epoch_continuous`` for any dynamic
             learning rate scheduling.
@@ -964,7 +964,7 @@ class Dataset:
         try:
             num_seqs = self.num_seqs
         except Exception:  # num_seqs not always available
-            if not allow_approximation:
+            if allow_only_exact:
                 return None
 
             # noinspection PyBroadException
@@ -974,7 +974,7 @@ class Dataset:
                 num_seqs = None  # ignore
 
         if math.isinf(num_seqs):
-            if not allow_approximation:
+            if allow_only_exact:
                 # cannot compute meaningful complete_frac for infinite num_seqs
                 return None
             else:

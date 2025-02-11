@@ -535,7 +535,7 @@ class MetaDataset(CachedDataset2):
         :rtype: DatasetSeq
         """
         seq_tag = self.seq_list_ordered[self.default_dataset_key][seq_idx]
-        complete_frac = self.datasets[self.default_dataset_key].get_complete_frac(seq_idx, allow_approximation=False)
+        complete_frac = self.datasets[self.default_dataset_key].get_complete_frac(seq_idx, allow_only_exact=True)
         features = {data_key: self._get_data(seq_idx, data_key) for data_key in self.data_keys}
         return DatasetSeq(seq_idx=seq_idx, seq_tag=seq_tag, features=features, complete_frac=complete_frac)
 

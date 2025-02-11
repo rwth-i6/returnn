@@ -114,7 +114,7 @@ class ReturnnDatasetIterDataPipe(torch.utils.data.IterDataPipe):
                 # but it's difficult to pass this back to the main proc otherwise.
                 data["epoch"] = epoch
 
-                complete_frac = self._dataset.get_complete_frac(seq_index, allow_approximation=False)
+                complete_frac = self._dataset.get_complete_frac(seq_index, allow_only_exact=True)
                 if complete_frac is None:
                     complete_frac = -1
                 assert complete_frac == -1 or 0.0 <= complete_frac <= 1.0
