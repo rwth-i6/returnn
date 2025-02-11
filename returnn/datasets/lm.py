@@ -1087,8 +1087,17 @@ class Lexicon:
                             {"phon": e.text.strip(), "score": float(e.attrib.get("score", 0))}
                             for e in elem.findall("phon")
                         ]
-                        assert orth not in self.lemmas
-                        self.lemmas[orth] = {"orth": orth, "phons": phons}
+                        lemma = {"orth": orth, "phons": phons}
+                        if orth in self.lemmas:  # unexpected, already exists?
+                            if self.lemmas[orth] == lemma:
+                                print(f"Warning: lemma {lemma} duplicated in lexicon {filename}", file=log.v4)
+                            else:
+                                raise Exception(
+                                    f"orth {orth!r} lemma duplicated in lexicon {filename}."
+                                    f" old: {self.lemmas[orth]}, new: {lemma}"
+                                )
+                        else:  # lemma does not exist yet -- this is the expected case
+                            self.lemmas[orth] = lemma
                     root.clear()  # free memory
         print("Finished whole lexicon, %i lemmas" % len(self.lemmas), file=log.v4)
 
