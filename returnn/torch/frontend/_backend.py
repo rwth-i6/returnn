@@ -1477,6 +1477,10 @@ class TorchBackend(Backend[torch.Tensor]):
             elif mode == "mean":
                 mask_value = 0
                 correction_factor = rf.masked_fraction_of_shape(axis, inverse=True)
+            elif mode == "all":
+                mask_value = True
+            elif mode == "any":
+                mask_value = False
             else:
                 raise NotImplementedError(f"reduce_{mode} not implemented with masking on tensor {source!r}.")
             for dim in axis:
