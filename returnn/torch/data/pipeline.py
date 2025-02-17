@@ -21,6 +21,7 @@ other PyTorch datasets more directly, including also HuggingFace datasets.
 
 from __future__ import annotations
 import bisect
+import itertools
 from typing import Optional, Any, Sequence, Tuple, Union, List, Dict, Callable
 import sys
 from copy import deepcopy
@@ -64,6 +65,9 @@ def collate_batch(batch: List[Dict[str, numpy.ndarray]]) -> Dict[str, Union[torc
     for key in data_keys:
         if key in ("num_seqs", "epoch"):
             res[key] = batch[0][key]  # it should always be the same
+            continue
+        elif key == "complete_frac":
+            res[key] = max(sample[key] for sample in batch)
             continue
         ls = [create_tensor(sample[key]) for sample in batch]
         if not ls:
@@ -122,7 +126,7 @@ class ChunkingIterDataPipe(torch.utils.data.IterDataPipe):
 
             if not chunking_data_keys:
                 chunking_data_keys = list(data_dict.keys())  # use all if not configured separately
-                chunking_data_key_black_list = ["seq_tag", "seq_idx", "num_seqs", "epoch"]
+                chunking_data_key_black_list = ["seq_tag", "seq_idx", "num_seqs", "epoch", "complete_frac"]
                 for key in chunking_data_key_black_list:
                     if key in chunking_data_keys:
                         chunking_data_keys.remove(key)
@@ -269,8 +273,15 @@ class BatchingIterDataPipe(torch.utils.data.IterDataPipe):
         epoch = int(data_dict["epoch"])
         seq_idx = int(data_dict["seq_idx"])
         num_seqs = int(data_dict["num_seqs"])  # >=1 if known, otherwise -1
-        epoch_continuous = (epoch - 1 + (seq_idx + 1) / num_seqs) if num_seqs > 0 else None
-        return {"epoch": epoch, "seq_idx": seq_idx, "epoch_continuous": epoch_continuous, **get_fwd_compat_kwargs()}
+        complete_frac = float(data_dict["complete_frac"])  # >= 0 if known, otherwise -1
+        epoch_continuous = (
+            epoch - 1 + complete_frac
+            if complete_frac >= 0.0
+            else (epoch - 1 + (seq_idx + 1) / num_seqs)
+            if num_seqs > 0
+            else None
+        )
+        return {"epoch": epoch, "epoch_continuous": epoch_continuous, "seq_idx": seq_idx, **get_fwd_compat_kwargs()}
 
     def __iter__(self):
         """
@@ -450,6 +461,123 @@ class LenFilterDataPipe(torch.utils.data.IterDataPipe):
             if sequence_lengths.any_compare(self._max_seq_length, lambda a, b: a > b):
                 continue
             yield data_dict
+
+    def __getitem__(self, index):
+        raise Exception(f"{self.__class__.__name__}.__getitem__ not supported")
+
+
+class ShufflingDataPipe(torch.utils.data.IterDataPipe):
+    """
+    Data pipe that is similar to ``torch.utils.data.datapipes.iter.Shuffler``,
+    but it will keep certain data keys of the batches in order while shuffling the rest.
+
+    Used for e.g. ``complete_frac`` and ``seq_idx``.
+    """
+
+    def __init__(
+        self,
+        dataset: torch.utils.data.IterableDataset,
+        *,
+        buffer_size: int,
+        monotonic_data_keys: Sequence[str],
+        seed: Optional[int] = None,
+    ):
+        """
+        :param dataset: batches dataset to shuffle
+        :param buffer_size: buffer size for shuffling
+        :param monotonic_data_keys: data keys that will be excluded from shuffling/keep their order
+        :param seed: random seed
+        """
+        super().__init__()
+
+        self._dataset = dataset
+        self._buffer: List[List[Dict[str, Any]]] = []
+        self._next_buffer: List[List[Dict[str, Any]]] = []
+        assert buffer_size > 0
+        self._buffer_size = buffer_size
+        self._monotonic_data_keys = monotonic_data_keys
+        self._rng = numpy.random.RandomState()
+        self._seed = seed
+
+    def __iter__(self):
+        # The implementation is very similar to the PostprocessingDataset's combinator LaplaceOrdering.
+
+        data_iter = iter(self._dataset)
+
+        self._buffer.extend(itertools.islice(data_iter, self._buffer_size))
+        has_ended = False
+
+        while True:
+            # Make sure to not reorder the monotonic values from self._monotonic_data_keys.
+            # These can contain things like complete_frac, which should be kept in order.
+            ordered_data = {
+                key: [data_dict[key] for batch in self._buffer for data_dict in batch]
+                for key in self._monotonic_data_keys
+            }
+            self._rng.shuffle(self._buffer)
+            for key in self._monotonic_data_keys:
+                data_dicts = [data_dict for batch in self._buffer for data_dict in batch]
+                assert len(data_dicts) == len(ordered_data[key])
+                for ordered_value, data_dict in zip(ordered_data[key], data_dicts):
+                    data_dict[key] = ordered_value
+
+            for item in self._buffer:
+                yield item
+
+                try:
+                    if not has_ended:
+                        self._next_buffer.append(next(data_iter))
+                except StopIteration:
+                    has_ended = True
+
+            if len(self._buffer) < self._buffer_size:
+                assert has_ended and not self._next_buffer
+                break
+
+            self._buffer.clear()
+            self._buffer, self._next_buffer = self._next_buffer, self._buffer
+
+    def set_seed(self, seed: int) -> ShufflingDataPipe:
+        """
+        Sets the seed for the next invocation of ``__iter__``, for compatibility with
+        ``torch.utils.data.graph_settings.apply_random_seed``.
+        """
+        self._seed = seed % (2**32)  # seed must be within [0, 2**32) for seeding RandomState
+        return self
+
+    def reset(self):
+        """resets the internal state of the data pipe"""
+        if self._seed is None:
+            self._seed = int(torch.empty((), dtype=torch.int32).random_().item())
+        self._rng.seed(self._seed)
+        self._seed = None
+
+    def __getstate__(self):
+        state = (
+            self._dataset,
+            self._buffer,
+            self._next_buffer,
+            self._buffer_size,
+            self._monotonic_data_keys,
+            self._rng.get_state(),
+            self._seed,
+        )
+        if torch.utils.data.IterDataPipe.getstate_hook is not None:
+            return torch.utils.data.IterDataPipe.getstate_hook(state)
+        return state
+
+    def __setstate__(self, state):
+        (
+            self._dataset,
+            self._buffer,
+            self._next_buffer,
+            self._buffer_size,
+            self._monotonic_data_keys,
+            rng_state,
+            self._seed,
+        ) = state
+        self._rng = numpy.random.RandomState()
+        self._rng.set_state(rng_state)
 
     def __getitem__(self, index):
         raise Exception(f"{self.__class__.__name__}.__getitem__ not supported")

@@ -228,6 +228,15 @@ class CachedDataset2(Dataset):
             keys.remove("data")
         return keys
 
+    def get_complete_frac(self, sorted_seq_idx, **kwargs):
+        """
+        :return: fractional completion value for the given sorted_seq_idx
+        """
+        seq = self._get_seq(sorted_seq_idx)
+        if seq is not None and seq.complete_frac is not None:
+            return seq.complete_frac
+        return super().get_complete_frac(sorted_seq_idx, **kwargs)
+
     def is_data_sparse(self, key):
         """
         :param str key: e.g. "data" or "classes"

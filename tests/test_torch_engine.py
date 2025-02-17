@@ -816,6 +816,29 @@ def test_torch_engine_bf16():
             assert p.dtype == torch.bfloat16
 
 
+def test_torch_engine_train_shuffle_batches():
+    config = Config(
+        dict(
+            task="train",
+            device="cpu",
+            extern_data={"data": {"dim": 9}, "classes": {"dim": 2, "sparse": True}},
+            get_model=TrainTestModel,
+            train_step=TrainTestModel.train_step,
+            batch_size=100,
+            optimizer={"class": "adam"},
+            num_epochs=3,
+            online_shuffle_batches=10,
+        )
+    )
+    dataset = init_dataset({"class": "Task12AXDataset", "num_seqs": 100, "name": "train"})
+    dataset.init_seq_order(epoch=1)
+
+    with global_config_ctx(config):
+        engine = Engine(config=config)
+        engine.init_train_from_config(train_data=dataset)
+        engine.train()
+
+
 if __name__ == "__main__":
     better_exchook.install()
     if len(sys.argv) <= 1:
