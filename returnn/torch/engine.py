@@ -989,6 +989,7 @@ class Engine(EngineBase):
                 missing_keys_preload, unexpected_keys_preload = self._pt_model.load_state_dict(
                     preload_model_state, strict=False
                 )
+                preload_model_state_keys = set(preload_model_state.keys())
                 loaded_state_keys.update(preload_model_state.keys())
                 missing_keys.difference_update(preload_model_state.keys())
                 del preload_model_state
@@ -996,6 +997,11 @@ class Engine(EngineBase):
 
                 if opts.get("prefix", ""):
                     prefix_keys = [key for key in self._pt_model.state_dict() if key.startswith(opts.get("prefix", ""))]
+                    if not prefix_keys:
+                        raise Exception(
+                            "No keys with prefix %r found in model.\nModel params:\n%s"
+                            % (opts.get("prefix", ""), ", ".join(name for name, _ in self._pt_model.named_parameters()))
+                        )
                 else:
                     prefix_keys = model_state_keys_set
                 missing_keys_preload = (
@@ -1004,6 +1010,12 @@ class Engine(EngineBase):
                 unexpected_keys_preload = (
                     set(prefix_keys).intersection(set(unexpected_keys_preload)).difference(loaded_state_keys)
                 )
+                if not preload_model_state_keys.intersection(prefix_keys):
+                    raise Exception(
+                        f"No keys with prefix {opts.get('prefix', '')!r} found in preload model state.\n"
+                        f"Preload model state keys: {preload_model_state_keys}\n"
+                        f"Model state keys: {model_state_keys_set}"
+                    )
                 if missing_keys_preload and not opts.get("ignore_missing", False):
                     missing_keys.update(missing_keys_preload)
                 if missing_keys_preload:
@@ -1086,7 +1098,7 @@ class Engine(EngineBase):
         get_model_func = self.config.typed_value("get_model")
         assert get_model_func, "get_model not defined in config"
         sentinel_kw = util.get_fwd_compat_kwargs()
-        model = get_model_func(epoch=epoch, step=step, **sentinel_kw)
+        model = get_model_func(epoch=epoch, step=step, device=self._device, **sentinel_kw)
         self._orig_model = model
         if isinstance(model, rf.Module):
             self._pt_model = rf_module_to_pt_module(model)

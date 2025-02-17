@@ -109,18 +109,27 @@ class RFModuleAsPTModule(torch.nn.Module):
         self._aux_params_as_buffers = aux_params_as_buffers
         self._is_initializing = True
 
-        # recurse=False because param names cannot contain ".", will add submodules below recursively.
-        for name, rf_param in rf_module.named_parameters(recurse=False):
-            pt_param = rf_param.raw_tensor
-            assert isinstance(pt_param, torch.nn.Parameter)
-            if rf_param.auxiliary and aux_params_as_buffers:
-                self.register_buffer(name, pt_param)
-            else:
-                self.register_parameter(name, pt_param)
+        for name, value in vars(rf_module).items():
+            if isinstance(value, rf.Parameter):
+                pt_param = value.raw_tensor
+                assert isinstance(pt_param, torch.nn.Parameter)
+                if value.auxiliary and aux_params_as_buffers:
+                    self.register_buffer(name, pt_param)
+                else:
+                    self.register_parameter(name, pt_param)
 
-        for name, rf_mod in rf_module.named_children():
-            pt_mod = rf_module_to_pt_module(rf_mod, aux_params_as_buffers=aux_params_as_buffers)
-            self.add_module(name, pt_mod)
+            elif isinstance(value, rf.Module):
+                pt_mod = rf_module_to_pt_module(value, aux_params_as_buffers=aux_params_as_buffers)
+                self.add_module(name, pt_mod)
+
+            elif isinstance(value, torch.nn.Parameter):
+                self.register_parameter(name, value)
+
+            elif isinstance(value, torch.Tensor):  # make sure this check is after torch.nn.Parameter
+                self.register_buffer(name, value)
+
+            elif isinstance(value, torch.nn.Module):
+                self.add_module(name, value)
 
         self._is_initializing = False
 
