@@ -940,7 +940,7 @@ class Dataset:
             # Some monotonic increasing function in [0,1] which never reaches 1.
             return max(1.0e-10, (1 - 1 / ((seq_idx**0.5) / 100 + 1)) * 0.99)
 
-    def get_complete_frac(self, sorted_seq_idx: int, *, allow_only_exact: bool = False) -> Optional[float]:
+    def get_complete_frac(self, sorted_seq_idx: int, *, allow_only_lr_suitable: bool = False) -> Optional[float]:
         """
         Tries to calculate exactly how much of the current epoch is completed when
         having processed seq ``sorted_seq_idx``.
@@ -948,21 +948,22 @@ class Dataset:
         ``sorted_seq_idx`` cannot be less than the seq index of the previously loaded seqs.
 
         :param sorted_seq_idx: sorted seq idx
-        :param allow_only_exact: whether it is disallowed to return an approximate value
-            if the exact value cannot be calculated (due to unknown ``num_seqs``).
-            Approximative values can be appropriate for e.g. progress bars but not for LR scheduling.
+        :param allow_only_lr_suitable: only return a value when that value is suitable/accurate enough
+            to base LR scheduling on it. If false, this function will return an approximative value
+            when the exact value cannot be calculated (due to unknown ``num_seqs``).
+            Approximative values can be appropriate for e.g. progress bars.
         :return: continuous value in (0, 1] which represents how much of the current epoch
             is completed after ``sorted_seq_idx`
-            If ``allow_only_exact=True``, returns ``None`` if the value cannot be calculated exactly.
+            If ``allow_only_lr_suitable=True``, returns ``None`` if the value cannot be calculated such
+            that it is accurate enough for LR scheduling, and otherwises bases ``epoch_continuous`` on it
+            for any dynamic learning rate scheduling.
             As ``sorted_seq_idx`` is monotonic, the return value is also guaranteed to be monotonic.
-            This non-approximative value is used to calculate ``epoch_continuous`` for any dynamic
-            learning rate scheduling.
         """
         # noinspection PyBroadException
         try:
             num_seqs = self.num_seqs
         except Exception:  # num_seqs not always available
-            if allow_only_exact:
+            if allow_only_lr_suitable:
                 return None
 
             # noinspection PyBroadException
@@ -972,7 +973,7 @@ class Dataset:
                 num_seqs = None  # ignore
 
         if math.isinf(num_seqs):
-            if allow_only_exact:
+            if allow_only_lr_suitable:
                 # cannot compute meaningful complete_frac for infinite num_seqs
                 return None
             else:

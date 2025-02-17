@@ -247,7 +247,7 @@ class MultiProcDataset(CachedDataset2):
             dataset.load_seqs(next_seq_idx, next_seq_idx + 1)
             seq_tag = dataset.get_tag(next_seq_idx)
             features = {data_key: dataset.get_data(next_seq_idx, data_key) for data_key in dataset.get_data_keys()}
-            complete_frac = dataset.get_complete_frac(next_seq_idx, allow_only_exact=True)
+            complete_frac = dataset.get_complete_frac(next_seq_idx, allow_only_lr_suitable=True)
             res = DatasetSeq(seq_idx=next_seq_idx, seq_tag=seq_tag, features=features, complete_frac=complete_frac)
             cache.append(res)
             next_seq_idx += 1

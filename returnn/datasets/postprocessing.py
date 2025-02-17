@@ -326,7 +326,7 @@ class PostprocessingDataset(CachedDataset2):
             for data_key in data_keys:
                 tensor_dict.data[data_key].raw_tensor = self._dataset.get_data(seq_index, data_key)
 
-            complete_frac = self._dataset.get_complete_frac(seq_index, allow_only_exact=True)
+            complete_frac = self._dataset.get_complete_frac(seq_index, allow_only_lr_suitable=True)
             if complete_frac is None:
                 # In case we cannot obtain a proper value for `complete_frac`, we
                 # pass a dummy value (-1). We do this instead of passing no value to
