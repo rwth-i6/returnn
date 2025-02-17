@@ -938,9 +938,7 @@ class Dataset:
         else:
             # We don't know. So:
             # Some monotonic increasing function in [0,1] which never reaches 1.
-            import math
-
-            return max(1.0e-10, 1.0 - math.exp(-seq_idx * 1000))
+            return max(1.0e-10, (1 - 1 / ((seq_idx**0.5) / 100 + 1)) * 0.99)
 
     def get_complete_frac(self, sorted_seq_idx: int, *, allow_only_exact: bool = False) -> Optional[float]:
         """
