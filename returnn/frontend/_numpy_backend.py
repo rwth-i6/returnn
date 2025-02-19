@@ -83,6 +83,7 @@ class NumpyBackend(Backend[numpy.ndarray]):
         dims: Sequence[Dim],
         dtype: str,
         sparse_dim: Optional[Dim] = None,
+        feature_dim: Optional[Dim] = None,
         device: Optional[str] = None,
         name: Optional[str] = None,
     ) -> Tensor[numpy.ndarray]:
@@ -95,7 +96,7 @@ class NumpyBackend(Backend[numpy.ndarray]):
             name = name or "const"
             value = numpy.array(value, dtype=NumpyBackend.as_dtype_raw(dtype))
         assert isinstance(value, numpy.ndarray)
-        return Tensor(name, dims=dims, dtype=dtype, sparse_dim=sparse_dim, raw_tensor=value)
+        return Tensor(name, dims=dims, dtype=dtype, sparse_dim=sparse_dim, feature_dim=feature_dim, raw_tensor=value)
 
     @staticmethod
     def expand_dims_raw(raw_tensor: numpy.ndarray, axis: int) -> numpy.ndarray:

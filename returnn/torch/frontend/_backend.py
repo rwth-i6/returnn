@@ -895,18 +895,11 @@ class TorchBackend(Backend[torch.Tensor]):
         dims: Sequence[Dim],
         dtype: str,
         sparse_dim: Optional[Dim] = None,
+        feature_dim: Optional[Dim] = None,
         device: Optional[str] = None,
         name: Optional[str] = None,
     ) -> Tensor[torch.Tensor]:
-        """
-        :param value:
-        :param dims:
-        :param dtype:
-        :param sparse_dim:
-        :param device:
-        :param name:
-        :return: tensor
-        """
+        """convert to tensor"""
         if isinstance(value, Tensor):
             return value
         if isinstance(value, torch.Tensor):
@@ -926,7 +919,7 @@ class TorchBackend(Backend[torch.Tensor]):
                     device=device or rf.get_default_device(),
                 )
         assert isinstance(value, torch.Tensor)
-        return Tensor(name, dims=dims, dtype=dtype, sparse_dim=sparse_dim, raw_tensor=value)
+        return Tensor(name, dims=dims, dtype=dtype, sparse_dim=sparse_dim, feature_dim=feature_dim, raw_tensor=value)
 
     @staticmethod
     def full(

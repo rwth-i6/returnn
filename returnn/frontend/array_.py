@@ -57,6 +57,7 @@ def convert_to_tensor(
     dims: Sequence[Dim] = None,
     dtype: Optional[str] = None,
     sparse_dim: Optional[Dim] = None,
+    feature_dim: Optional[Dim] = None,
     shape: Sequence[Dim] = None,
     device: Optional[str] = None,
     keep_scalar_on_cpu: bool = False,
@@ -68,6 +69,7 @@ def convert_to_tensor(
     :param dims:
     :param dtype:
     :param sparse_dim:
+    :param feature_dim:
     :param shape: alias for dims, for some older code
     :param name:
     :param device:
@@ -121,7 +123,7 @@ def convert_to_tensor(
         if dtype is None:
             dtype = value_backend.get_dtype_name_raw(value)
     return _backend.convert_to_tensor(
-        value=value, dims=dims, dtype=dtype, sparse_dim=sparse_dim, device=device, name=name
+        value=value, dims=dims, dtype=dtype, sparse_dim=sparse_dim, feature_dim=feature_dim, device=device, name=name
     )
 
 
