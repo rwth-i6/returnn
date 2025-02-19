@@ -49,6 +49,8 @@ __all__ = [
     "search_sorted",
     "sparse_to_dense",
     "one_hot",
+    "top_k_mask",
+    "top_p_mask",
 ]
 
 
@@ -1068,3 +1070,49 @@ def one_hot(source: Tensor) -> Tensor:
     and much more efficiently than they would be with dense tensors.
     """
     return sparse_to_dense(source, label_value=1.0, other_value=0.0)
+
+
+def top_k_mask(values: Tensor, *, axis: Dim, k: Union[int, Tensor]) -> Tensor:
+    """
+    Top-k filtering.
+
+    :param values: {other_dims..., axis}
+    :param axis:
+    :param k: the number of top values to keep
+    :return: mask {other_dims..., axis} of the top-k values
+    """
+    _, indices, k_dim = rf.top_k(values, axis=axis, k=k)
+    mask = rf.scatter(rf.full(dims=indices.dims, fill_value=True), indices=indices, indices_dim=k_dim, fill_value=False)
+    return mask
+
+
+def top_p_mask(
+    probs: Tensor,
+    *,
+    axis: Dim,
+    p: Union[float, Tensor],
+    one_more: bool = True,
+) -> Tensor:
+    """
+    Top-p filtering, e.g. as used in Nucleus sampling (https://arxiv.org/abs/1904.09751).
+
+    :param probs: {probs_dims..., axis}
+    :param axis:
+    :param p: the probability mass to keep
+    :param one_more: if True (default), keep also the first token above the threshold.
+        (It's enabled by default to follow the behavior of the original implementation.)
+    :return: mask {probs_dims..., axis} of the top-p tokens.
+        ``sum(probs[mask]) <= p``, or slightly more if ``one_more`` is True.
+    """
+    assert 0.0 <= p <= 1.0
+    if isinstance(p, Tensor):
+        assert axis not in p.dims
+    # https://github.com/ari-holtzman/degen/blob/master/gen.py
+    sorted_probs, sorted_indices, sorted_dim = rf.sort(probs, axis=axis, descending=True)
+    cum_probs = rf.cumsum(sorted_probs, spatial_dim=sorted_dim)
+    mask = cum_probs <= p  # {probs_dims..., sorted_dim}
+    if one_more:
+        # keep also the first token above the threshold
+        mask = rf.shift_right(mask, axis=sorted_dim, pad_value=True)
+    mask = rf.scatter(mask, indices=sorted_indices, indices_dim=sorted_dim)
+    return mask
