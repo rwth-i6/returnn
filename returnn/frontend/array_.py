@@ -45,6 +45,7 @@ __all__ = [
     "shift_left",
     "reverse_sequence",
     "where",
+    "sort",
     "search_sorted",
     "sparse_to_dense",
     "one_hot",
@@ -996,6 +997,27 @@ def where(
         cond = rf.convert_to_tensor(cond, _backend=backend)
     # noinspection PyProtectedMember
     return cond._raw_backend.where(cond, true_, false_, allow_broadcast_all_sources=allow_broadcast_all_sources)
+
+
+def sort(source: Tensor, *, axis: Dim, descending: bool = False, stable: bool = True) -> Tuple[Tensor, Tensor, Dim]:
+    """
+    Sorts the source tensor along the given axis.
+
+    See also :func:`top_k`.
+    :func:`top_k` with ``k=axis.get_size_tensor()`` is equivalent to this function.
+
+    :param source: {other_dims..., axis}
+    :param axis: The axis to sort along.
+    :param descending: If True, sort in descending order, otherwise in ascending order.
+    :param stable: If True, use a stable sorting algorithm (not reordering equal elements).
+        Note that many frameworks (Torch, TensorFlow) have ``stable=False`` by default.
+        ``stable=False`` can be faster.
+    :return: sorted tensor, indices tensor, out_dim. both tensors have the shape {other_dims..., out_dim},
+        i.e. ``axis`` replaced by ``out_dim``.
+        indices tensor has sparse_dim set to ``axis``.
+    """
+    # noinspection PyProtectedMember
+    return source._raw_backend.sort(source, axis=axis, descending=descending, stable=stable)
 
 
 def search_sorted(

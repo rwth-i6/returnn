@@ -1217,6 +1217,18 @@ class TorchBackend(Backend[torch.Tensor]):
         return out
 
     @staticmethod
+    def sort(source: Tensor, *, axis: Dim, descending: bool, stable: bool) -> Tuple[Tensor, Tensor, Dim]:
+        """sort. return values and indices"""
+        axis_int = source.get_axis_from_description(axis, allow_int=False)
+        values_raw, indices_raw = torch.sort(source.raw_tensor, dim=axis_int, descending=descending, stable=stable)
+        out_dims = list(source.dims)
+        out_dim = axis.copy(same_as_self=False, description=f"{axis.description}:sorted")
+        out_dims[axis_int] = out_dim
+        values = rf.convert_to_tensor(values_raw, dims=out_dims, feature_dim={axis: out_dim}.get(source.feature_dim))
+        indices = rf.convert_to_tensor(indices_raw, dims=out_dims, sparse_dim=axis)
+        return values, indices, out_dim
+
+    @staticmethod
     def search_sorted(
         sorted_seq: Tensor, values: Tensor, *, axis: Dim, side: str = "left", out_dtype: str = "int32"
     ) -> Tensor:

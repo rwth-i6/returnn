@@ -950,6 +950,11 @@ class Backend(Generic[T]):
         raise NotImplementedError
 
     @staticmethod
+    def sort(source: Tensor, *, axis: Dim, descending: bool, stable: bool) -> Tuple[Tensor, Tensor, Dim]:
+        """sort. return values and indices"""
+        raise NotImplementedError
+
+    @staticmethod
     def search_sorted(
         sorted_seq: Tensor, values: Tensor, *, axis: Dim, side: str = "left", out_dtype: str = "int32"
     ) -> Tensor:
