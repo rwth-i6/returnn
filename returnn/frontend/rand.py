@@ -64,6 +64,7 @@ __all__ = [
     "random_uniform",
     "random_normal",
     "random_truncated_normal",
+    "random_choice_without_replacement",
 ]
 
 
@@ -349,3 +350,32 @@ def random_truncated_normal(
         static=static,
         out=out,
     )
+
+
+def random_choice_without_replacement(
+    *,
+    log_probs: Tensor,
+    axis: Union[Dim, Sequence[Dim]],
+    num_samples_dim: Dim,
+    noise_scale: Union[float, Tensor] = 1.0,
+) -> Union[Tensor, Sequence[Tensor]]:
+    """
+    Randomly sample without replacement.
+
+    :param log_probs: {log_probs_dims..., axis}
+    :param axis: same as in :func:`top_k`
+    :param num_samples_dim: how many samples to draw
+    :param noise_scale: scale the noise. with scale=0, you get :func:`top_k`.
+    :return: random indices shape {log_probs_dims..., num_samples_dim} -> axis.
+        if axis was a sequence, will return a sequence of tensors.
+    """
+    # https://github.com/tensorflow/tensorflow/issues/9260
+    # https://timvieira.github.io/blog/post/2014/08/01/gumbel-max-trick-and-weighted-reservoir-sampling/
+    scores_random_sample = -rf.log(
+        -rf.log(random_uniform(log_probs.dims, dtype=log_probs.dtype, device=log_probs.device))
+    )
+    if not isinstance(noise_scale, (int, float)) or noise_scale != 1.0:
+        scores_random_sample *= noise_scale
+    scores = log_probs + scores_random_sample
+    _, indices, _ = rf.top_k(scores, k_dim=num_samples_dim, axis=axis)
+    return indices
