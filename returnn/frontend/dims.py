@@ -14,6 +14,7 @@ __all__ = [
     "range_over_dim",
     "range_over_dim_strided",
     "range_over_merged_dims",
+    "linspace_over_dim",
     "replace_dim",
     "replace_dim_v2",
     "set_sparse_dim",
@@ -79,6 +80,36 @@ def range_over_merged_dims(
     if len(dims) > 1:
         indices = rf.split_dims(indices, axis=merged_dim, dims=dims)
     return indices
+
+
+def linspace_over_dim(
+    dim: Dim,
+    start: Union[float, Tensor] = 0.0,
+    end: Union[float, Tensor] = 1.0,
+    *,
+    dtype: Optional[str] = None,
+    device: Optional[str] = None,
+) -> Tensor:
+    """
+    Linearly spaced values over a dim.
+
+    :param dim: dim to range over
+    :param start: start value
+    :param end: end value
+    :param dtype: dtype of the output tensor
+    :param device: device of the output tensor
+    :return: tensor with shape [dim] containing linearly spaced values between start and end
+    """
+    if dtype is None:
+        dtype = rf.get_default_float_dtype()
+    indices = rf.range_over_dim(dim, dtype=dtype, device=device)
+    linspace = indices / rf.cast(rf.maximum(dim.get_size_tensor(device=indices.device), 1), dtype=indices.dtype)
+    space_len = end - start
+    if not isinstance(space_len, (int, float)) or space_len != 1:
+        linspace *= space_len
+    if not isinstance(start, (int, float)) or start != 0:
+        linspace += start
+    return linspace
 
 
 def replace_dim(source: Tensor, *, in_dim: Dim, out_dim: Optional[Dim] = None) -> Tuple[Tensor, Dim]:
