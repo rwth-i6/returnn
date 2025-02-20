@@ -1220,6 +1220,9 @@ class TorchBackend(Backend[torch.Tensor]):
     def sort(source: Tensor, *, axis: Dim, descending: bool, stable: bool) -> Tuple[Tensor, Tensor, Dim]:
         """sort. return values and indices"""
         axis_int = source.get_axis_from_description(axis, allow_int=False)
+        # Move to last axis. Should be more efficient.
+        source = source.copy_move_axis(axis_int, -1)
+        axis_int = source.batch_ndim - 1
         values_raw, indices_raw = torch.sort(source.raw_tensor, dim=axis_int, descending=descending, stable=stable)
         out_dims = list(source.dims)
         out_dim = axis.copy(same_as_self=False, description=f"{axis.description}:sorted")
@@ -1571,6 +1574,9 @@ class TorchBackend(Backend[torch.Tensor]):
             return values, indices_out, k_dim
         assert isinstance(axis, Dim)
         axis_int = source.get_axis_from_description(axis, allow_int=False)
+        # Move to last axis. Should be more efficient.
+        source = source.copy_move_axis(axis_int, -1)
+        axis_int = source.batch_ndim - 1
         values_raw, indices_raw = torch.topk(
             source.raw_tensor, k=k_dim.get_dim_value(), dim=axis_int, largest=True, sorted=sorted
         )
