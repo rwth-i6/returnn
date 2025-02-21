@@ -504,7 +504,7 @@ class SprintDatasetBase(Dataset):
                     assert seq_idx + 1 == self.next_seq_to_be_added
                     self.cond.wait()
 
-            self.added_data += [DatasetSeq(seq_idx, features, targets, seq_tag=segment_name)]
+            self.added_data += [DatasetSeq(seq_idx, features, targets=targets, seq_tag=segment_name)]
             self.cond.notify_all()
             return seq_idx
 
