@@ -118,7 +118,7 @@ class ReturnnDatasetIterDataPipe(torch.utils.data.IterDataPipe):
                 if complete_frac is None:
                     complete_frac = -1
                 assert complete_frac == -1 or 0.0 <= complete_frac <= 1.0
-                data["complete_frac"] = numpy.array(complete_frac)
+                data["complete_frac"] = numpy.array(complete_frac, dtype=numpy.float32)
                 data["num_seqs"] = num_seqs
 
                 yield data

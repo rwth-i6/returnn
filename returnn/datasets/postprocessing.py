@@ -166,7 +166,7 @@ class PostprocessingDataset(CachedDataset2):
             self.labels = self._dataset.labels.copy()
         # update only after _out_tensor_dict_template has been created from _in_tensor_dict_template
         self._in_tensor_dict_template.update(
-            {"complete_frac": {"dims": (), "dtype": "float64"}, "seq_tag": {"dims": (), "dtype": "string"}},
+            {"complete_frac": {"dims": (), "dtype": "float32"}, "seq_tag": {"dims": (), "dtype": "string"}},
             auto_convert=True,
         )
         self.num_outputs = {
@@ -336,7 +336,7 @@ class PostprocessingDataset(CachedDataset2):
                 # Once the postprocessing dataset receives the dummy value back, it
                 # removes it from the downstream data.
                 complete_frac = -1
-            comp_frac_tensor = numpy.array(complete_frac, dtype=numpy.float64)
+            comp_frac_tensor = numpy.array(complete_frac, dtype=numpy.float32)
             tensor_dict.data["complete_frac"].raw_tensor = comp_frac_tensor
             seq_tag_tensor = str_to_numpy_array(self._dataset.get_tag(seq_index))
             tensor_dict.data["seq_tag"].raw_tensor = seq_tag_tensor
