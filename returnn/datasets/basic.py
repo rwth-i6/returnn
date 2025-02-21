@@ -1404,6 +1404,7 @@ class DatasetSeq:
         seq_idx: int,
         features,
         targets=None,
+        *,
         seq_tag: Optional[str] = None,
         complete_frac: Optional[float] = None,
     ):
