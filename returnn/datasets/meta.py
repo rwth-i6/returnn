@@ -535,9 +535,8 @@ class MetaDataset(CachedDataset2):
         :rtype: DatasetSeq
         """
         seq_tag = self.seq_list_ordered[self.default_dataset_key][seq_idx]
-        complete_frac = self.datasets[self.default_dataset_key].get_complete_frac(seq_idx, allow_only_lr_suitable=True)
         features = {data_key: self._get_data(seq_idx, data_key) for data_key in self.data_keys}
-        return DatasetSeq(seq_idx=seq_idx, seq_tag=seq_tag, features=features, complete_frac=complete_frac)
+        return DatasetSeq(seq_idx=seq_idx, seq_tag=seq_tag, features=features)
 
     def get_seq_length(self, sorted_seq_idx):
         """
@@ -554,6 +553,12 @@ class MetaDataset(CachedDataset2):
         :rtype: str
         """
         return self.seq_list_ordered[self.default_dataset_key][sorted_seq_idx]
+
+    def get_complete_frac(self, sorted_seq_idx: int, **kwargs) -> Optional[float]:
+        """
+        :param sorted_seq_idx:
+        """
+        return self.datasets[self.default_dataset_key].get_complete_frac(sorted_seq_idx, **kwargs)
 
     def get_data_keys(self) -> List[str]:
         """data keys"""
