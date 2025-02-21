@@ -45,7 +45,7 @@ class DistributedContext:
             dist.init_process_group(backend=self._opts.get("backend", None))
             self._rank = dist.get_rank()
             self._size = dist.get_world_size()
-            os.environ[env_var_name] = str({"rank": self._rank, "size": self._size})
+            os.environ[env_var_name] = repr({"rank": self._rank, "size": self._size})
 
         self._local_rank = int(os.environ["LOCAL_RANK"])
         self._local_size = int(os.environ["LOCAL_WORLD_SIZE"])
