@@ -130,6 +130,8 @@ class DistributeFilesDataset(CachedDataset2):
     https://github.com/rwth-i6/returnn/issues/1524.
     """
 
+    _getnewargs_exclude_attrs = CachedDataset2._getnewargs_exclude_attrs.union(("_num_shards", "_shard_index"))
+
     def __init__(
         self,
         *,
