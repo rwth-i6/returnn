@@ -12,6 +12,7 @@ from typing import Optional, Any, Dict
 import torch
 from torch.nn.parallel import DistributedDataParallel
 
+from returnn.config import Config
 from returnn.util.basic import CollectionReadCheckCovered
 
 _logger = logging.getLogger("returnn.torch.distributed")
@@ -135,9 +136,9 @@ _is_set_up = False
 _ctx = None  # type: Optional[DistributedContext]
 
 
-def get_ctx(config=None) -> Optional[DistributedContext]:
+def get_ctx(config: Optional[Config] = None) -> Optional[DistributedContext]:
     """
-    :param Config|None config:
+    :param config:
     :returns: the global context if Torch distributed is enabled, or None otherwise.
       If we did not setup the context yet, it will automatically create it.
     """
