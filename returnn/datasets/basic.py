@@ -953,7 +953,7 @@ class Dataset:
             when the exact value cannot be calculated (due to unknown ``num_seqs``).
             Approximative values can be appropriate for e.g. progress bars.
         :return: continuous value in (0, 1] which represents how much of the current epoch
-            is completed after ``sorted_seq_idx`
+            is completed after ``sorted_seq_idx``.
             If ``allow_only_lr_suitable=True``, returns ``None`` if the value cannot be calculated such
             that it is accurate enough for LR scheduling, and otherwises bases ``epoch_continuous`` on it
             for any dynamic learning rate scheduling.
