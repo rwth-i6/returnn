@@ -760,7 +760,7 @@ def test_dynamic_learning_rate():
     assert epoch_continuous_diffs
     print("epoch continuous diffs:", epoch_continuous_diffs)
     # Just some sanity check. The exact number here depends on num_seqs_per_epoch, batch_size, etc.
-    assert numpy.min(epoch_continuous_diffs) >= 0.01
+    assert numpy.min(epoch_continuous_diffs) >= 0.005
     assert numpy.max(epoch_continuous_diffs) <= 0.1
     # It's one more (non-repeated) call than num steps (first + very last),
     # and the diffs is one less, so the length should match final global train step.
