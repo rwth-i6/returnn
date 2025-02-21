@@ -784,18 +784,11 @@ class Backend(Generic[T]):
         dims: Sequence[Dim],
         dtype: str,
         sparse_dim: Optional[Dim] = None,
+        feature_dim: Optional[Dim] = None,
         device: Optional[str] = None,
         name: Optional[str] = None,
     ) -> Tensor[T]:
-        """
-        :param value: tensor, or scalar raw tensor or some other scalar value
-        :param dims:
-        :param dtype:
-        :param sparse_dim:
-        :param device:
-        :param name:
-        :return: tensor
-        """
+        """convert (raw/any) tensor to tensor"""
         raise NotImplementedError
 
     @staticmethod
@@ -954,6 +947,11 @@ class Backend(Generic[T]):
         allow_broadcast_all_sources: bool = False,
     ) -> Tensor:
         """where"""
+        raise NotImplementedError
+
+    @staticmethod
+    def sort(source: Tensor, *, axis: Dim, descending: bool, stable: bool) -> Tuple[Tensor, Tensor, Dim]:
+        """sort. return values and indices"""
         raise NotImplementedError
 
     @staticmethod

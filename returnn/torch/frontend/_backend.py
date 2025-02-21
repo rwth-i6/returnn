@@ -895,18 +895,11 @@ class TorchBackend(Backend[torch.Tensor]):
         dims: Sequence[Dim],
         dtype: str,
         sparse_dim: Optional[Dim] = None,
+        feature_dim: Optional[Dim] = None,
         device: Optional[str] = None,
         name: Optional[str] = None,
     ) -> Tensor[torch.Tensor]:
-        """
-        :param value:
-        :param dims:
-        :param dtype:
-        :param sparse_dim:
-        :param device:
-        :param name:
-        :return: tensor
-        """
+        """convert to tensor"""
         if isinstance(value, Tensor):
             return value
         if isinstance(value, torch.Tensor):
@@ -926,7 +919,7 @@ class TorchBackend(Backend[torch.Tensor]):
                     device=device or rf.get_default_device(),
                 )
         assert isinstance(value, torch.Tensor)
-        return Tensor(name, dims=dims, dtype=dtype, sparse_dim=sparse_dim, raw_tensor=value)
+        return Tensor(name, dims=dims, dtype=dtype, sparse_dim=sparse_dim, feature_dim=feature_dim, raw_tensor=value)
 
     @staticmethod
     def full(
@@ -1222,6 +1215,21 @@ class TorchBackend(Backend[torch.Tensor]):
         false_bc_raw = false_.copy_compatible_to_dims_raw(out.dims)
         out.raw_tensor = torch.where(cond_bc_raw, true_bc_raw, false_bc_raw)
         return out
+
+    @staticmethod
+    def sort(source: Tensor, *, axis: Dim, descending: bool, stable: bool) -> Tuple[Tensor, Tensor, Dim]:
+        """sort. return values and indices"""
+        axis_int = source.get_axis_from_description(axis, allow_int=False)
+        # Move to last axis. Should be more efficient.
+        source = source.copy_move_axis(axis_int, -1)
+        axis_int = source.batch_ndim - 1
+        values_raw, indices_raw = torch.sort(source.raw_tensor, dim=axis_int, descending=descending, stable=stable)
+        out_dims = list(source.dims)
+        out_dim = axis.copy(same_as_self=False, description=f"{axis.description}:sorted")
+        out_dims[axis_int] = out_dim
+        values = rf.convert_to_tensor(values_raw, dims=out_dims, feature_dim={axis: out_dim}.get(source.feature_dim))
+        indices = rf.convert_to_tensor(indices_raw, dims=out_dims, sparse_dim=axis)
+        return values, indices, out_dim
 
     @staticmethod
     def search_sorted(
@@ -1566,6 +1574,9 @@ class TorchBackend(Backend[torch.Tensor]):
             return values, indices_out, k_dim
         assert isinstance(axis, Dim)
         axis_int = source.get_axis_from_description(axis, allow_int=False)
+        # Move to last axis. Should be more efficient.
+        source = source.copy_move_axis(axis_int, -1)
+        axis_int = source.batch_ndim - 1
         values_raw, indices_raw = torch.topk(
             source.raw_tensor, k=k_dim.get_dim_value(), dim=axis_int, largest=True, sorted=sorted
         )

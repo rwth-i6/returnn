@@ -45,9 +45,12 @@ __all__ = [
     "shift_left",
     "reverse_sequence",
     "where",
+    "sort",
     "search_sorted",
     "sparse_to_dense",
     "one_hot",
+    "top_k_mask",
+    "top_p_mask",
 ]
 
 
@@ -57,6 +60,7 @@ def convert_to_tensor(
     dims: Sequence[Dim] = None,
     dtype: Optional[str] = None,
     sparse_dim: Optional[Dim] = None,
+    feature_dim: Optional[Dim] = None,
     shape: Sequence[Dim] = None,
     device: Optional[str] = None,
     keep_scalar_on_cpu: bool = False,
@@ -68,6 +72,7 @@ def convert_to_tensor(
     :param dims:
     :param dtype:
     :param sparse_dim:
+    :param feature_dim:
     :param shape: alias for dims, for some older code
     :param name:
     :param device:
@@ -121,7 +126,7 @@ def convert_to_tensor(
         if dtype is None:
             dtype = value_backend.get_dtype_name_raw(value)
     return _backend.convert_to_tensor(
-        value=value, dims=dims, dtype=dtype, sparse_dim=sparse_dim, device=device, name=name
+        value=value, dims=dims, dtype=dtype, sparse_dim=sparse_dim, feature_dim=feature_dim, device=device, name=name
     )
 
 
@@ -996,6 +1001,27 @@ def where(
     return cond._raw_backend.where(cond, true_, false_, allow_broadcast_all_sources=allow_broadcast_all_sources)
 
 
+def sort(source: Tensor, *, axis: Dim, descending: bool = False, stable: bool = True) -> Tuple[Tensor, Tensor, Dim]:
+    """
+    Sorts the source tensor along the given axis.
+
+    See also :func:`top_k`.
+    :func:`top_k` with ``k=axis.get_size_tensor()`` is equivalent to this function.
+
+    :param source: {other_dims..., axis}
+    :param axis: The axis to sort along.
+    :param descending: If True, sort in descending order, otherwise in ascending order.
+    :param stable: If True, use a stable sorting algorithm (not reordering equal elements).
+        Note that many frameworks (Torch, TensorFlow) have ``stable=False`` by default.
+        ``stable=False`` can be faster.
+    :return: sorted tensor, indices tensor, out_dim. both tensors have the shape {other_dims..., out_dim},
+        i.e. ``axis`` replaced by ``out_dim``.
+        indices tensor has sparse_dim set to ``axis``.
+    """
+    # noinspection PyProtectedMember
+    return source._raw_backend.sort(source, axis=axis, descending=descending, stable=stable)
+
+
 def search_sorted(
     sorted_seq: Tensor, values: Tensor, *, axis: Dim, side: str = "left", out_dtype: str = "int32"
 ) -> Tensor:
@@ -1044,3 +1070,49 @@ def one_hot(source: Tensor) -> Tensor:
     and much more efficiently than they would be with dense tensors.
     """
     return sparse_to_dense(source, label_value=1.0, other_value=0.0)
+
+
+def top_k_mask(values: Tensor, *, axis: Dim, k: Union[int, Tensor]) -> Tensor:
+    """
+    Top-k filtering.
+
+    :param values: {other_dims..., axis}
+    :param axis:
+    :param k: the number of top values to keep
+    :return: mask {other_dims..., axis} of the top-k values
+    """
+    _, indices, k_dim = rf.top_k(values, axis=axis, k=k)
+    mask = rf.scatter(rf.full(dims=indices.dims, fill_value=True), indices=indices, indices_dim=k_dim, fill_value=False)
+    return mask
+
+
+def top_p_mask(
+    probs: Tensor,
+    *,
+    axis: Dim,
+    p: Union[float, Tensor],
+    one_more: bool = True,
+) -> Tensor:
+    """
+    Top-p filtering, e.g. as used in Nucleus sampling (https://arxiv.org/abs/1904.09751).
+
+    :param probs: {probs_dims..., axis}
+    :param axis:
+    :param p: the probability mass to keep
+    :param one_more: if True (default), keep also the first token above the threshold.
+        (It's enabled by default to follow the behavior of the original implementation.)
+    :return: mask {probs_dims..., axis} of the top-p tokens.
+        ``sum(probs[mask]) <= p``, or slightly more if ``one_more`` is True.
+    """
+    assert 0.0 <= p <= 1.0
+    if isinstance(p, Tensor):
+        assert axis not in p.dims
+    # https://github.com/ari-holtzman/degen/blob/master/gen.py
+    sorted_probs, sorted_indices, sorted_dim = rf.sort(probs, axis=axis, descending=True)
+    cum_probs = rf.cumsum(sorted_probs, spatial_dim=sorted_dim)
+    mask = cum_probs <= p  # {probs_dims..., sorted_dim}
+    if one_more:
+        # keep also the first token above the threshold
+        mask = rf.shift_right(mask, axis=sorted_dim, pad_value=True)
+    mask = rf.scatter(mask, indices=sorted_indices, indices_dim=sorted_dim)
+    return mask
