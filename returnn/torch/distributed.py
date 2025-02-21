@@ -3,10 +3,11 @@ torch.distributed utils
 """
 
 from __future__ import annotations
-from typing import Optional, Any, Dict
+import ast
+import logging
 import os
 import socket
-import logging
+from typing import Optional, Any, Dict
 
 import torch
 from torch.nn.parallel import DistributedDataParallel
@@ -23,19 +24,31 @@ class DistributedContext:
     """
 
     def __init__(self, options: Dict[str, Any]):
-        import torch.distributed as dist
-
         self._opts = CollectionReadCheckCovered(options)
 
-        # when no backend is specified, both gloo and nccl backends will be created
-        # the gloo backend will be used for collectives with CPU tensors and
-        # the nccl backend will be used for collectives with CUDA tensors
-        dist.init_process_group(backend=self._opts.get("backend", None))
+        # Subprocesses have issues initializing torch.distributed process groups.
+        #
+        # We therefore pass rank/size information of the process group via an env
+        # variable that is automatically inherited in any created subprocess.
+        env_var_name = "_RETURNN_TORCH_DISTRIBUTED_INIT_INFO"
+        prev_init_info = os.environ.get(env_var_name)
+        if prev_init_info:
+            self.prev_init_info = ast.literal_eval(prev_init_info)
+            self._rank = self.prev_init_info["rank"]
+            self._size = self.prev_init_info["size"]
+        else:
+            import torch.distributed as dist
+
+            # when no backend is specified, both gloo and nccl backends will be created
+            # the gloo backend will be used for collectives with CPU tensors and
+            # the nccl backend will be used for collectives with CUDA tensors
+            dist.init_process_group(backend=self._opts.get("backend", None))
+            self._rank = dist.get_rank()
+            self._size = dist.get_world_size()
+            os.environ[env_var_name] = repr({"rank": self._rank, "size": self._size})
 
         self._local_rank = int(os.environ["LOCAL_RANK"])
         self._local_size = int(os.environ["LOCAL_WORLD_SIZE"])
-        self._rank = dist.get_rank()
-        self._size = dist.get_world_size()
 
         _logger.info(
             "Torch distributed initialized. Hostname %s, pid %i, rank %i / size %i, local rank %s / local size %s."
@@ -123,9 +136,9 @@ _is_set_up = False
 _ctx = None  # type: Optional[DistributedContext]
 
 
-def get_ctx(config=None) -> Optional[DistributedContext]:
+def get_ctx(config: Optional[Config] = None) -> Optional[DistributedContext]:
     """
-    :param Config|None config:
+    :param config:
     :returns: the global context if Torch distributed is enabled, or None otherwise.
       If we did not setup the context yet, it will automatically create it.
     """

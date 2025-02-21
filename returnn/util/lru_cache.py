@@ -196,7 +196,7 @@ def _lru_cache_wrapper(user_function, maxsize: int, typed: bool):
         """
         Removes the entry from the cache.
         """
-        nonlocal hits, misses
+        nonlocal hits, misses, full
         key = make_key(args, kwargs, typed)
         with lock:
             link = cache_get(key)
@@ -208,6 +208,7 @@ def _lru_cache_wrapper(user_function, maxsize: int, typed: bool):
                 oldvalue = link[RESULT]
                 link.clear()
                 del cache[oldkey]
+                full = cache_len() >= maxsize
                 return oldvalue
             if fallback is not_specified:
                 raise KeyError("key not found")

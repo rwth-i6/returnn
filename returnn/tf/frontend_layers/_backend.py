@@ -559,6 +559,7 @@ class ReturnnLayersBackend(Backend[Layer]):
         dims: Sequence[Dim],
         dtype: str,
         sparse_dim: Optional[Dim] = None,
+        feature_dim: Optional[Dim] = None,
         device: Optional[str] = None,
         name: Optional[str] = None,
     ) -> Tensor[Layer]:
@@ -568,6 +569,8 @@ class ReturnnLayersBackend(Backend[Layer]):
         kwargs = {}
         if sparse_dim:
             kwargs["sparse_dim"] = sparse_dim
+        if feature_dim:
+            kwargs["feature_dim"] = feature_dim
         dim_deps = _dims.get_dim_deps(dims)
         if dim_deps:
             kwargs["shape_deps"] = dim_deps

@@ -3773,9 +3773,9 @@ def should_write_to_disk(config):
     if config.typed_value("torch_distributed") is not None:
         assert BackendEngine.is_torch_selected(), "torch_distributed assumes PyTorch"
 
-        import torch.distributed
+        import returnn.torch.distributed as torch_distributed
 
-        if torch.distributed.get_rank() != 0:
+        if torch_distributed.get_ctx(config).rank() != 0:
             return False
     elif config.is_true("use_horovod"):
         assert BackendEngine.is_tensorflow_selected(), "use_horovod currently assumes TensorFlow"

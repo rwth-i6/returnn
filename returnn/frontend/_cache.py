@@ -39,6 +39,9 @@ class Cache:
         # not shared over all instances of this class.
         self._lru_cache = lru_cache(max_size)(_lru_cache_dummy_func)
 
+    def __repr__(self):
+        return f"<{self.__class__.__module__}.{self.__class__.__qualname__} {self._lru_cache.cache_info()}>"
+
     def get(self, key, default=None):
         """
         :param key:
