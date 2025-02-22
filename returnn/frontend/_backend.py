@@ -351,6 +351,11 @@ class Backend(Generic[T]):
         raise NotImplementedError
 
     @staticmethod
+    def stop_gradient_scope() -> Any:
+        """stop gradient scope"""
+        raise NotImplementedError
+
+    @staticmethod
     def scaled_gradient(tensor: Tensor, scale: Union[float, Tensor]) -> Tensor:
         """
         :param tensor:

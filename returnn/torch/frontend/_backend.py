@@ -3,7 +3,7 @@ Backend for exposing PyTorch-specific functionality.
 """
 
 from __future__ import annotations
-from typing import Optional, Union, Sequence, Tuple, List, Dict, Generator
+from typing import Optional, Union, Any, Sequence, Tuple, List, Dict, Generator
 import contextlib
 import torch
 import numpy
@@ -211,6 +211,11 @@ class TorchBackend(Backend[torch.Tensor]):
         out = tensor.copy()
         out.raw_tensor = out.raw_tensor.detach()
         return out
+
+    @staticmethod
+    def stop_gradient_scope() -> Any:
+        """stop gradient scope"""
+        return torch.no_grad()
 
     @staticmethod
     def scaled_gradient(tensor: Tensor, scale: Union[float, Tensor]) -> Tensor:
