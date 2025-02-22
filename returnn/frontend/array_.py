@@ -40,6 +40,8 @@ __all__ = [
     "gather",
     "scatter",
     "scatter_argmax",
+    "scatter_logsumexp",
+    "scatter_logmeanexp",
     "slice",
     "shift_right",
     "shift_left",
@@ -758,19 +760,20 @@ def scatter(
 ) -> Tensor:
     """
     Scatters into new zero-tensor.
-    If entries in indices are duplicated, the corresponding values in source will be added together
-    (scatter_add in PyTorch)
-    with mode=="sum",
-    or otherwise it will take the max/min.
+    If entries in indices are duplicated, with ``mode=="sum"``,
+    the corresponding values in source will be added together
+    (``scatter_add`` in PyTorch),
+    or otherwise it will take the respective reduction.
 
     ``scatter`` is the inverse of :func:`gather`.
 
-    (TF segment_sum can be implemented via this.)
+    (segment_sum can be implemented via this.)
 
     :param source: [batch_dims..., indices_dim(s)..., feature_dims...]
     :param indices: [batch_dims..., indices_dim(s)...] -> out_dim
     :param indices_dim:
-    :param mode: "sum" or "max" or "min". also see :func:`scatter_argmax`.
+    :param mode: "sum", "max", "min", "logsumexp", "logmeanexp", "argmax".
+        (Note: If you ever need mean, argmin, etc, please open an issue/PR.)
     :param fill_value:
     :param out_dim: The indices target dim.
         If not given, will be automatically determined as the sparse_dim from indices.
@@ -778,6 +781,16 @@ def scatter(
         and then we use :func:`rf.split_dims` afterwards.
     :return: [batch_dims..., out_dim(s)..., feature_dims...]
     """
+    if mode == "logsumexp":
+        return scatter_logsumexp(
+            source, indices=indices, indices_dim=indices_dim, fill_value=fill_value, out_dim=out_dim
+        )
+    if mode == "logmeanexp":
+        return scatter_logmeanexp(
+            source, indices=indices, indices_dim=indices_dim, fill_value=fill_value, out_dim=out_dim
+        )
+    if mode == "argmax":
+        return scatter_argmax(source, indices=indices, indices_dim=indices_dim, invalid_idx=fill_value, out_dim=out_dim)
     if not out_dim:
         assert isinstance(indices, Tensor) and indices.sparse_dim
         out_dim = indices.sparse_dim
@@ -856,6 +869,76 @@ def scatter_argmax(
     if max_invalid_idx != invalid_idx:
         out = rf.where(out != max_invalid_idx, out, invalid_idx)  # [B,O,F] -> I or invalid_idx
     return out
+
+
+def scatter_logsumexp(
+    source: Tensor,
+    *,
+    indices: Tensor,
+    indices_dim: Union[Dim, Sequence[Dim]],
+    fill_value: Optional[Union[int, float]] = None,
+    out_dim: Optional[Union[Dim, Sequence[Dim]]] = None,
+) -> Tensor:
+    """
+    Scatters into new zero-tensor.
+    If entries in indices are duplicated, the corresponding values in source will be log-sum-exp'ed together.
+    This is like :func:`scatter` with ``mode="logsumexp"``.
+
+    :param source: [batch_dims..., indices_dim(s)..., feature_dims...]
+    :param indices: [batch_dims..., indices_dim(s)...] -> out_dim
+    :param indices_dim:
+    :param fill_value:
+    :param out_dim: The indices target dim.
+        If not given, will be automatically determined as the sparse_dim from indices.
+        If multiple out dims, use indices into the merged out dims,
+        and then we use :func:`rf.split_dims` afterwards.
+    :return: [batch_dims..., out_dim(s)..., feature_dims...]
+    """
+    if not out_dim:
+        assert isinstance(indices, Tensor) and indices.sparse_dim
+        out_dim = indices.sparse_dim
+    with rf.stop_gradient_scope():
+        max_x = rf.scatter(source, indices=indices, indices_dim=indices_dim, mode="max", out_dim=out_dim)  # [D_out,...]
+        max_x_ = rf.gather(max_x, indices=indices, axis=out_dim)  # [D_src,...]
+    src_ = rf.exp(source - max_x_)
+    if fill_value is not None:
+        fill_value = rf.exp(fill_value - max_x_)
+    tensor = rf.scatter(
+        src_, indices=indices, indices_dim=indices_dim, mode="sum", fill_value=fill_value, out_dim=out_dim
+    )
+    tensor = rf.log(tensor)
+    tensor = rf.where(rf.is_neg_infinite(max_x), rf.zeros((), dtype=source.dtype, device=source.device), tensor)
+    tensor += max_x
+    return tensor
+
+
+def scatter_logmeanexp(
+    source: Tensor,
+    *,
+    indices: Tensor,
+    indices_dim: Union[Dim, Sequence[Dim]],
+    fill_value: Optional[Union[int, float]] = None,
+    out_dim: Optional[Union[Dim, Sequence[Dim]]] = None,
+) -> Tensor:
+    """
+    Scatters into new zero-tensor.
+    If entries in indices are duplicated, the corresponding values in source will be log-mean-exp'ed together.
+    This is like :func:`scatter` with ``mode="logmeanexp"``.
+
+    :param source: [batch_dims..., indices_dim(s)..., feature_dims...]
+    :param indices: [batch_dims..., indices_dim(s)...] -> out_dim
+    :param indices_dim:
+    :param fill_value:
+    :param out_dim: The indices target dim.
+        If not given, will be automatically determined as the sparse_dim from indices.
+        If multiple out dims, use indices into the merged out dims,
+        and then we use :func:`rf.split_dims` afterwards.
+    :return: [batch_dims..., out_dim(s)..., feature_dims...]
+    """
+    ones = rf.ones(dims=indices.dims, dtype=source.dtype, device=source.device)
+    counts = rf.scatter(ones, indices=indices, indices_dim=indices_dim, fill_value=1, out_dim=out_dim)
+    y = scatter_logsumexp(source, indices=indices, indices_dim=indices_dim, fill_value=fill_value, out_dim=out_dim)
+    return y - rf.log(counts)
 
 
 # noinspection PyShadowingBuiltins

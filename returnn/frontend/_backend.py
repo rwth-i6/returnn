@@ -910,9 +910,9 @@ class Backend(Generic[T]):
     ) -> Tensor:
         """
         Scatters into new zero-tensor.
-        If entries in indices are duplicated, the corresponding values in source will be added together
-        (scatter_add in PyTorch).
-        (TF segment_sum can be implemented via this.)
+        If entries in indices are duplicated, with mode="sum", the corresponding values in source will be added together
+        (``scatter_add`` in PyTorch), otherwise min/max.
+        (segment_sum can be implemented via this.)
 
         :param source: [batch_dims..., indices_dim(s)..., feature_dims...]
         :param indices: [batch_dims..., indices_dim(s)...] -> out_dim
