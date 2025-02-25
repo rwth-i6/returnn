@@ -6,6 +6,7 @@ stft etc
 from __future__ import annotations
 from typing import Optional, Tuple
 from returnn.tensor import Tensor, Dim
+import returnn.frontend as rf
 
 
 __all__ = ["stft"]
@@ -23,6 +24,7 @@ def stft(
     window_enforce_even: bool = True,
     out_spatial_dim: Optional[Dim] = None,
     out_dim: Optional[Dim] = None,
+    use_mask: Optional[bool] = None,
 ) -> Tuple[Tensor, Dim, Dim]:
     """
     Calculate the short-time Fourier transform (STFT) of a signal.
@@ -65,8 +67,14 @@ def stft(
         but in most other frameworks, the behavior matches to window_enforce_even=False.
     :param out_spatial_dim:
     :param out_dim:
+    :param use_mask:
     :return: (stft, out_spatial_dim, out_dim)
     """
+    if in_spatial_dim.need_masking():
+        if use_mask is None:
+            use_mask = rf.use_mask_default(default=True, default_false_for_behavior_version_up_to=22)
+        if use_mask:
+            x = x.copy_masked(0, dims=[in_spatial_dim])
     fft_length = fft_length or frame_length
     if out_dim is None:
         out_dim = Dim(fft_length // 2 + 1, name="stft-freq")

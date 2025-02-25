@@ -325,6 +325,7 @@ def window(
     padding: str = "same",
     pad_value: Optional[Union[int, float]] = None,
     stride: int = 1,
+    use_mask: Optional[bool] = None,
 ) -> Tuple[Tensor, Dim]:
     """
     Follows the same idea as RETURNN tf_util.windowed,
@@ -338,8 +339,14 @@ def window(
     :param padding: "same" or "valid"
     :param pad_value:
     :param stride:
+    :param use_mask: whether we should mask to make sure the zero padding is correct
     :return: out, out_spatial_dim
     """
+    if spatial_dim.need_masking():
+        if use_mask is None:
+            use_mask = rf.use_mask_default(default=True, default_false_for_behavior_version_up_to=22)
+        if use_mask:
+            source = source.copy_masked(0, dims=[spatial_dim])
     assert window_dim.dimension is not None
     if padding == "same":
         out_spatial_dim = spatial_dim
