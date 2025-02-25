@@ -791,6 +791,7 @@ def scatter(
     mode: str = "sum",
     fill_value: Optional[Union[int, float]] = None,
     out_dim: Optional[Union[Dim, Sequence[Dim]]] = None,
+    use_mask: Optional[bool] = None,
 ) -> Tensor:
     """
     Scatters into new zero-tensor.
@@ -813,6 +814,7 @@ def scatter(
         If not given, will be automatically determined as the sparse_dim from indices.
         If multiple out dims, use indices into the merged out dims,
         and then we use :func:`rf.split_dims` afterwards.
+    :param use_mask:
     :return: [batch_dims..., out_dim(s)..., feature_dims...]
     """
     if mode == "logsumexp":
@@ -847,6 +849,12 @@ def scatter(
                 fill_value = float("inf")
         else:
             raise ValueError(f"scatter: invalid mode {mode!r}")
+    indices_dim = indices_dim if isinstance(indices_dim, (list, tuple)) else [indices_dim]
+    if any(dim.need_masking() for dim in indices_dim):
+        if use_mask is None:
+            use_mask = rf.use_mask_default(default=True, default_false_for_behavior_version_up_to=22)
+        if use_mask:
+            source = source.copy_masked(fill_value, dims=indices_dim)
     # noinspection PyProtectedMember
     return source._raw_backend.scatter(
         source, indices=indices, indices_dim=indices_dim, mode=mode, fill_value=fill_value, out_dim=out_dim
