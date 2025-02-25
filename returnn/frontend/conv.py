@@ -458,7 +458,7 @@ def pool(
         if use_mask is None:
             use_mask = rf.use_mask_default(default=True, default_false_for_behavior_version_up_to=22)
         if use_mask:
-            source = source.copy_masked(0, dims=in_spatial_dims)
+            source = source.copy_masked({"max": float("-inf"), "avg": 0}[mode], dims=in_spatial_dims)
 
     # noinspection PyProtectedMember
     out, out_spatial_dims = source._raw_backend.pool(
