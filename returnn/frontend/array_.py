@@ -176,6 +176,12 @@ def merge_dims(
     :param out_dim:
     :return: tensor, out_dim
     """
+    if not dims:
+        if out_dim:
+            assert out_dim.dimension == 1
+        else:
+            out_dim = Dim(1, name="ext")
+        return rf.expand_dim(source, out_dim), out_dim
     # noinspection PyProtectedMember
     return source._raw_backend.merge_dims(source, dims=dims, out_dim=out_dim)
 
