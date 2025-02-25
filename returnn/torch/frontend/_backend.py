@@ -1501,7 +1501,7 @@ class TorchBackend(Backend[torch.Tensor]):
                     mask = source.get_sequence_mask_broadcast(dim)
                     source.raw_tensor = torch.where(mask, source.raw_tensor, mask_value)
         func = getattr(torch, mode)
-        if not res_dims:
+        if not res_dims and mode != "logsumexp":  # logsumexp requires dim arg
             raw_result = func(source.raw_tensor)
         elif len(raw_dims) == 1:
             raw_result = func(source.raw_tensor, dim=raw_dims[0])
