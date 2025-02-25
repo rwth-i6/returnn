@@ -692,7 +692,7 @@ class ReturnnLayersBackend(Backend[Layer]):
         )
 
     @staticmethod
-    def flip(source: Tensor, *, axis: Dim) -> Tensor:
+    def flip_no_mask(source: Tensor, *, axis: Dim) -> Tensor:
         """flip"""
         return rfl.make_layer(
             {"class": "slice", "from": source, "axis": axis, "out_dim": axis, "slice_step": -1}, name="flip"

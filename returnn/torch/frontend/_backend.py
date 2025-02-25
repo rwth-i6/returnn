@@ -1185,8 +1185,8 @@ class TorchBackend(Backend[torch.Tensor]):
         return out
 
     @staticmethod
-    def flip(source: Tensor, *, axis: Dim) -> Tensor:
-        """flip"""
+    def flip_no_mask(source: Tensor, *, axis: Dim) -> Tensor:
+        """flip, ignoring masking"""
         axis_int = source.get_axis_from_description(axis, allow_int=False)
         out = source.copy_template("flip")
         out.raw_tensor = torch.flip(source.raw_tensor, [axis_int])
@@ -1224,6 +1224,8 @@ class TorchBackend(Backend[torch.Tensor]):
     @staticmethod
     def sort(source: Tensor, *, axis: Dim, descending: bool, stable: bool) -> Tuple[Tensor, Tensor, Dim]:
         """sort. return values and indices"""
+        if axis.need_masking():
+            raise NotImplementedError(f"sort: dynamic axis {axis} not supported")
         axis_int = source.get_axis_from_description(axis, allow_int=False)
         # Move to last axis. Should be more efficient.
         source = source.copy_move_axis(axis_int, -1)

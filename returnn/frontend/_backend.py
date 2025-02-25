@@ -939,8 +939,8 @@ class Backend(Generic[T]):
         raise NotImplementedError
 
     @staticmethod
-    def flip(source: Tensor, *, axis: Dim) -> Tensor:
-        """flip"""
+    def flip_no_mask(source: Tensor, *, axis: Dim) -> Tensor:
+        """flip, ignoring masking"""
         raise NotImplementedError
 
     @staticmethod

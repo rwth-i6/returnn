@@ -1066,7 +1066,7 @@ def reverse_sequence(tensor: Tensor, *, axis: Dim, handle_dynamic_dims: bool = T
     """
     if not handle_dynamic_dims or not axis.need_masking():
         # noinspection PyProtectedMember
-        return tensor._raw_backend.flip(tensor, axis=axis)
+        return tensor._raw_backend.flip_no_mask(tensor, axis=axis)
     indices = rf.combine_bc(axis.get_size_tensor(), "-", rf.range_over_dim(axis)) - 1
     return rf.gather(tensor, indices=indices, axis=axis, clip_to_valid=True)
 
