@@ -78,6 +78,7 @@ def test_e_branchformer():
     import torch
     import returnn.frontend as rf
     from returnn.util.debug import PyTracer, check_py_traces_rf_to_pt_equal
+    from returnn.config import global_config_ctx, Config
 
     rf.select_backend_torch()
     rf.set_random_seed(42)
@@ -300,7 +301,9 @@ def test_e_branchformer():
         ],
         Tensor,
     ) as trace_rf, torch.no_grad():
-        enc_out, _ = model_rf(enc_in, in_spatial_dim=enc_spatial_dim)
+        # ESPnet E-Branchformer does not use masking properly. Keep it disabled here as well.
+        with global_config_ctx(Config({"rf_use_mask": False})):
+            enc_out, _ = model_rf(enc_in, in_spatial_dim=enc_spatial_dim)
     enc_out = enc_out.copy_transpose((batch_dim, enc_spatial_dim, model_dim))
     enc_out = enc_out.copy_masked(0.0)
 

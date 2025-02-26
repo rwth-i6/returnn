@@ -22,6 +22,21 @@ and not listing legacy/deprecated parameters.
 Version History
 ---------------
 
+Behavior version 23 (2025-02-25)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+RF ``Conv1d.__init__`` and co, ``conv``,
+``TransposedConv1d.__init__`` an co, ``transposed_conv``,
+``pool``, ``max_pool``, ``pool1d`` and co,
+``stft``, ``window`` default changed:
+
+* ``use_mask``: False → True
+
+There is also the global config option ``rf_use_mask: bool`` to overwrite the global default
+for these and also additionally for ``BatchNorm.__init__``.
+
+See issue `#1691 <https://github.com/rwth-i6/returnn/issues/1691>`__.
+
 Behavior version 22 (2025-01-22)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 

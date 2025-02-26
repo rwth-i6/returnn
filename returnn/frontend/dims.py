@@ -22,6 +22,7 @@ __all__ = [
     "num_elements_of_shape",
     "masked_fraction_of_shape",
     "last_frame_position_of_dim",
+    "use_mask_default",
 ]
 
 
@@ -305,3 +306,42 @@ def last_frame_position_of_dim(
     pos = rf.maximum(pos, 0)
     pos.sparse_dim = dim
     return pos
+
+
+def use_mask_default(
+    *, default: Optional[bool] = None, default_false_for_behavior_version_up_to: Optional[int] = None
+) -> Optional[bool]:
+    """
+    Check the global RETURNN config for the ``rf_use_mask``
+    on what default we should use for the ``use_mask`` argument in various functions
+    (e.g. :func:`conv`, :func:`pool`, :func:`reduce`, :func:`matmul`, ...).
+
+    See issue `#1691 <https://github.com/rwth-i6/returnn/issues/1691>`__.
+
+    :param default: what to return if it is not defined in the config,
+        and ``default_false_for_behavior_version_up_to`` does not apply.
+    :param default_false_for_behavior_version_up_to: if it is not defined in the config,
+        and if this is set, and the behavior version is less or equal,
+        then return False by default, i.e. do not use the mask by default, if it is not defined in the config.
+        This takes precedence over `default`.
+    :return: what to use for the ``use_mask`` argument by default
+    """
+    from returnn.config import get_global_config
+
+    config = get_global_config(raise_exception=False)
+    config_value = None
+    if config:
+        if "rf_use_mask" in config.typed_dict:
+            config_value = config.typed_dict["rf_use_mask"]
+            assert config_value is None or isinstance(config_value, bool)
+        elif "rf_use_mask" in config.dict:
+            config_value = config.bool("rf_use_mask", None)
+    if config_value is not None:
+        return config_value
+
+    if default_false_for_behavior_version_up_to is not None:
+        from returnn.util.basic import BehaviorVersion
+
+        if BehaviorVersion.get() <= default_false_for_behavior_version_up_to:
+            return False
+    return default

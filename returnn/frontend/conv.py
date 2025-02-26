@@ -34,8 +34,8 @@ class _ConvOrTransposedConv(rf.Module):
     Base class for both convolution and transposed convolution.
     """
 
-    nd: Optional[int] = None
-    _transposed: bool
+    nd: Optional[int] = None  # set in the subclasses, e.g. 1 for Conv1d, etc
+    _transposed: bool  # set in the subclasses _Conv or _TransposedConv
     groups: Optional[int] = None
 
     def __init__(
@@ -187,8 +187,14 @@ def conv(
     dilation_rate: Optional[Union[int, Sequence[int]]] = None,
     groups: Optional[int] = None,
     bias: Optional[Tensor] = None,
+    use_mask: Optional[bool] = None,
 ) -> Tuple[Tensor, Sequence[Dim]]:
     """convolution"""
+    if any(in_spatial_dim.need_masking() for in_spatial_dim in in_spatial_dims):
+        if use_mask is None:
+            use_mask = rf.use_mask_default(default=True, default_false_for_behavior_version_up_to=22)
+        if use_mask:
+            source = source.copy_masked(0, dims=in_spatial_dims)
     for in_spatial_dim in in_spatial_dims:
         if in_spatial_dim not in source.dims:
             raise ValueError(f"conv: source {source} does not have spatial dim {in_spatial_dim}")
@@ -345,8 +351,14 @@ def transposed_conv(
     output_padding: Optional[Union[Sequence[Optional[int]], int]] = None,
     strides: Optional[Sequence[int]] = None,
     bias: Optional[Tensor] = None,
+    use_mask: Optional[bool] = None,
 ) -> Tuple[Tensor, Sequence[Dim]]:
     """transposed conv"""
+    if any(in_spatial_dim.need_masking() for in_spatial_dim in in_spatial_dims):
+        if use_mask is None:
+            use_mask = rf.use_mask_default(default=True, default_false_for_behavior_version_up_to=22)
+        if use_mask:
+            source = source.copy_masked(0, dims=in_spatial_dims)
     # noinspection PyProtectedMember
     out, out_spatial_dims = source._raw_backend.transposed_conv(
         source=source,
@@ -394,6 +406,7 @@ class TransposedConv3d(_TransposedConv):
 def pool(
     source: Tensor,
     *,
+    nd: Optional[int] = None,
     mode: str,
     pool_size: Union[Sequence[int], int],
     padding: str = "valid",
@@ -401,22 +414,23 @@ def pool(
     strides: Optional[Union[Sequence[int], int]] = None,
     in_spatial_dims: Union[Sequence[Dim], Dim],
     out_spatial_dims: Optional[Union[Sequence[Dim], Dim]] = None,
-    nd: Optional[int] = None,
+    use_mask: Optional[bool] = None,
 ) -> Tuple[Tensor, Sequence[Dim]]:
     """
     A generic N-D pooling layer.
     This would usually be done after a convolution for down-sampling.
 
-    :param Tensor source:
+    :param source:
     :param nd:
-    :param str mode: "max" or "avg"
-    :param tuple[int] pool_size: shape of the window of each reduce
-    :param str padding: "valid" or "same"
-    :param tuple[int]|int dilation_rate:
-    :param tuple[int]|int|None strides: in contrast to tf.nn.pool, the default (if it is None) will be set to pool_size
-    :param Sequence[Dim] in_spatial_dims:
-    :param Sequence[Dim]|None out_spatial_dims:
-    :return: layer, out_spatial_dims
+    :param mode: "max" or "avg"
+    :param pool_size: shape of the window of each reduce
+    :param padding: "valid" or "same"
+    :param dilation_rate:
+    :param strides: in contrast to tf.nn.pool, the default (if it is None) will be set to pool_size
+    :param in_spatial_dims:
+    :param out_spatial_dims:
+    :param use_mask:
+    :return: out, out_spatial_dims
     """
     if isinstance(in_spatial_dims, Dim):
         in_spatial_dims = [in_spatial_dims]
@@ -440,6 +454,14 @@ def pool(
     assert isinstance(strides, (list, tuple))
     assert len(strides) == nd
 
+    if any(in_spatial_dim.need_masking() for in_spatial_dim in in_spatial_dims):
+        if use_mask is None:
+            use_mask = rf.use_mask_default(default=True, default_false_for_behavior_version_up_to=22)
+        if use_mask:
+            source = source.copy_masked({"max": float("-inf"), "avg": 0}[mode], dims=in_spatial_dims)
+    else:
+        use_mask = False
+
     # noinspection PyProtectedMember
     out, out_spatial_dims = source._raw_backend.pool(
         source=source,
@@ -451,6 +473,10 @@ def pool(
         in_spatial_dims=in_spatial_dims,
         out_spatial_dims=out_spatial_dims,
     )
+    if use_mask and mode == "max":
+        # We masked with -inf for max-pooling to get correct pooling at the boundaries.
+        # However, the resulting tensor might have -inf in it, and it is better to mask it out.
+        out = out.copy_masked(0, dims=out_spatial_dims)
     return out, out_spatial_dims
 
 
