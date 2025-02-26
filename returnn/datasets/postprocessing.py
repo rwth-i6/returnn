@@ -63,9 +63,8 @@ class PostprocessingDataset(CachedDataset2):
 
     There may also be additional "meta" entries in the tensor dicts, like ``complete_frac``
     and ``seq_tag``.
-    These may be modified, but not removed.
-    Any other entries that the postprocessor function does not modify must also be copied over
-    in a wildcard fashion to ensure forwards compatibility.
+    These should be copied over in a manner that is reasonable for the use case at hand and
+    ensures forwards compatibility as well as reasonably possible.
 
     The dataset itself does not support its own seq ordering and relies on the wrapped
     dataset for seq ordering instead. Specifying a ``seq_ordering`` other than ``default``
@@ -271,19 +270,12 @@ class PostprocessingDataset(CachedDataset2):
             assert loaded_seq_idx <= seq_idx, "_collect_single_seq must be done monotonically"
             if loaded_seq_idx != seq_idx:
                 continue
-            complete_frac = float(tensor_dict.data["complete_frac"].raw_tensor)
-            if complete_frac == -1:
-                # See comment below on why we pass a dummy value instead of not
-                # adding the value to the tensor dict at all.
-                complete_frac = None
-            seq = DatasetSeq(
-                complete_frac=complete_frac,
-                features={
-                    k: t.raw_tensor for k, t in tensor_dict.data.items() if k not in ["complete_frac", "seq_tag"]
-                },
-                seq_idx=seq_idx,
-                seq_tag=str(tensor_dict["seq_tag"].raw_tensor),
+            complete_frac = (
+                float(tensor_dict.data["complete_frac"].raw_tensor) if "complete_frac" in tensor_dict.data else None
             )
+            seq_tag = str(tensor_dict.data["seq_tag"].raw_tensor) if "seq_tag" in tensor_dict.data else f"seq-{seq_idx}"
+            features = {k: t.raw_tensor for k, t in tensor_dict.data.items() if k not in ["complete_frac", "seq_tag"]}
+            seq = DatasetSeq(complete_frac=complete_frac, features=features, seq_idx=seq_idx, seq_tag=seq_tag)
             return seq
 
     def _build_mapping_iter(self) -> Iterator[TensorDict]:
@@ -292,9 +284,7 @@ class PostprocessingDataset(CachedDataset2):
         """
 
         def _validate_tensor_dict_iter(inner: Iterator[TensorDict]) -> Iterator[TensorDict]:
-            for t_dict in inner:
-                for k in ["complete_frac", "seq_tag"]:
-                    assert k in t_dict.data, f"{k} dropped from TensorDict in postprocessing pipeline"
+            for i, t_dict in enumerate(inner):
                 for data_key, out_t in self._out_tensor_dict_template.data.items():
                     in_t = t_dict.data[data_key]
                     assert (
@@ -327,17 +317,10 @@ class PostprocessingDataset(CachedDataset2):
                 tensor_dict.data[data_key].raw_tensor = self._dataset.get_data(seq_index, data_key)
 
             complete_frac = self._dataset.get_complete_frac(seq_index, allow_only_lr_suitable=True)
-            if complete_frac is None:
-                # In case we cannot obtain a proper value for `complete_frac`, we
-                # pass a dummy value (-1). We do this instead of passing no value to
-                # be able to lint against dropping it from the tensor dicts, which
-                # might have been undesired behavior.
-                #
-                # Once the postprocessing dataset receives the dummy value back, it
-                # removes it from the downstream data.
-                complete_frac = -1
-            comp_frac_tensor = numpy.array(complete_frac, dtype=numpy.float32)
-            tensor_dict.data["complete_frac"].raw_tensor = comp_frac_tensor
+            comp_frac_tensor = None
+            if complete_frac is not None:
+                comp_frac_tensor = numpy.array(complete_frac, dtype=numpy.float32)
+                tensor_dict.data["complete_frac"].raw_tensor = comp_frac_tensor
             seq_tag_tensor = str_to_numpy_array(self._dataset.get_tag(seq_index))
             tensor_dict.data["seq_tag"].raw_tensor = seq_tag_tensor
 
@@ -351,7 +334,7 @@ class PostprocessingDataset(CachedDataset2):
 
                 # Re-adding the seq tag here causes no harm in case it's dropped since we don't
                 # add/drop any segments w/ the non-iterator postprocessing function.
-                if "complete_frac" not in tensor_dict.data:
+                if "complete_frac" not in tensor_dict.data and comp_frac_tensor is not None:
                     tensor_dict.data["complete_frac"].raw_tensor = comp_frac_tensor
                 if "seq_tag" not in tensor_dict.data:
                     tensor_dict.data["seq_tag"].raw_tensor = seq_tag_tensor
