@@ -284,7 +284,7 @@ class PostprocessingDataset(CachedDataset2):
         """
 
         def _validate_tensor_dict_iter(inner: Iterator[TensorDict]) -> Iterator[TensorDict]:
-            for i, t_dict in enumerate(inner):
+            for t_dict in inner:
                 for data_key, out_t in self._out_tensor_dict_template.data.items():
                     in_t = t_dict.data[data_key]
                     assert (
