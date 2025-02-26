@@ -291,7 +291,7 @@ class PostprocessingDataset(CachedDataset2):
                     f"but got a {type(t_dict).__name__}"
                 )
                 if "complete_frac" in t_dict.data:  # sanity check complete_frac
-                    complete_frac = t_dict.data["complete_frac"].raw_tensor
+                    complete_frac = float(t_dict.data["complete_frac"].raw_tensor)
                     assert 0.0 <= complete_frac <= 1.0, f"complete_frac must be in [0, 1], but got {complete_frac}"
                     assert complete_frac >= last_complete_frac, (
                         f"complete_frac must be monotonically increasing, but got {complete_frac} "
