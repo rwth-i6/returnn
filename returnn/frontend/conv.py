@@ -459,6 +459,8 @@ def pool(
             use_mask = rf.use_mask_default(default=True, default_false_for_behavior_version_up_to=22)
         if use_mask:
             source = source.copy_masked({"max": float("-inf"), "avg": 0}[mode], dims=in_spatial_dims)
+    else:
+        use_mask = False
 
     # noinspection PyProtectedMember
     out, out_spatial_dims = source._raw_backend.pool(
@@ -471,6 +473,10 @@ def pool(
         in_spatial_dims=in_spatial_dims,
         out_spatial_dims=out_spatial_dims,
     )
+    if use_mask and mode == "max":
+        # We masked with -inf for max-pooling to get correct pooling at the boundaries.
+        # However, the resulting tensor might have -inf in it, and it is better to mask it out.
+        out = out.copy_masked(0, dims=out_spatial_dims)
     return out, out_spatial_dims
 
 
