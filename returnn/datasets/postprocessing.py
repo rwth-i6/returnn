@@ -284,11 +284,20 @@ class PostprocessingDataset(CachedDataset2):
         """
 
         def _validate_tensor_dict_iter(inner: Iterator[TensorDict]) -> Iterator[TensorDict]:
+            last_complete_frac = -1
             for t_dict in inner:
                 assert isinstance(t_dict, TensorDict), (
                     f"postprocessing mapper function must produce a {TensorDict.__name__}, "
                     f"but got a {type(t_dict).__name__}"
                 )
+                if "complete_frac" in t_dict.data:  # sanity check complete_frac
+                    complete_frac = t_dict.data["complete_frac"].raw_tensor
+                    assert 0.0 <= complete_frac <= 1.0, f"complete_frac must be in [0, 1], but got {complete_frac}"
+                    assert complete_frac >= last_complete_frac, (
+                        f"complete_frac must be monotonically increasing, but got {complete_frac} "
+                        f"after {last_complete_frac}"
+                    )
+                    last_complete_frac = complete_frac
                 for data_key, out_t in self._out_tensor_dict_template.data.items():
                     in_t = t_dict.data[data_key]
                     assert (
