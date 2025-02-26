@@ -97,6 +97,7 @@ def debug_inf_nan(
 
 # For efficiency, and to be less spammy
 _TraceFuncNameBlacklist = {
+    "aten::empty.memory_format",
     "aten::zeros_like",
     "aten::ones_like",
     "aten::full",
