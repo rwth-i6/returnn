@@ -115,6 +115,7 @@ _TraceFuncNameBlacklist = {
     "aten::split_with_sizes",
     "aten::slice.Tensor",
     "aten::select.int",
+    "aten::max_pool2d_with_indices",
 }
 
 
