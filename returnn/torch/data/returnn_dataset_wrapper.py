@@ -114,6 +114,7 @@ class ReturnnDatasetIterDataPipe(torch.utils.data.IterDataPipe):
                 # It's slightly redundant to have the following data in each entry,
                 # but it's difficult to pass this back to the main proc otherwise.
                 data["epoch"] = epoch
+                data["num_seqs"] = num_seqs
 
                 complete_frac = self._dataset.get_complete_frac(seq_index, allow_only_lr_suitable=True)
                 if complete_frac is None:
@@ -125,7 +126,6 @@ class ReturnnDatasetIterDataPipe(torch.utils.data.IterDataPipe):
                 )
                 last_complete_frac = complete_frac
                 data["complete_frac"] = numpy.array(complete_frac, dtype=numpy.float32)
-                data["num_seqs"] = num_seqs
 
                 yield data
                 seq_index += 1
