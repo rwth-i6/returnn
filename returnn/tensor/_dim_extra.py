@@ -422,14 +422,10 @@ class _DimMixin:
         :param func: operates inplace
         """
         dyn_size_ext = self.dyn_size_ext.copy() if self.dyn_size_ext is not None else None
-        dyn_size_ext_max = self._dyn_size_max_value if self._dyn_size_max_value is not None else None
         self.reset_raw(only_self=True)
         if dyn_size_ext is not None:
             func(dyn_size_ext)
-        if dyn_size_ext_max is not None:
-            func(dyn_size_ext_max)
         self.dyn_size_ext = dyn_size_ext
-        self._dyn_size_max_value = dyn_size_ext_max
 
     def _can_use_in_ctx(self, ctx):
         """

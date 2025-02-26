@@ -9,7 +9,7 @@ We also might have model_outputs in the user config.
 """
 
 from __future__ import annotations
-from typing import Optional, Union, Any, Type, Dict, Sequence
+from typing import Optional, Union, Any, Type, Dict, Sequence, List
 from .tensor import Tensor
 from .dim import Dim
 
@@ -159,6 +159,20 @@ class TensorDict:
                     if key_ in raw_tensor_dict:
                         assert dim.size == raw_tensor_dict[key_]
                 visited_dims.add(dim)
+
+    def all_dims(self) -> List[Dim]:
+        """
+        :return: list of dims
+        """
+        visited_dims = set()
+        out = []
+        for key, value in self.data.items():
+            for dim in value.dims:
+                if dim in visited_dims:
+                    continue
+                out.append(dim)
+                visited_dims.add(dim)
+        return out
 
 
 def _convert_to_tensor(opts: _TensorT, *, name: Optional[str] = None) -> Tensor:

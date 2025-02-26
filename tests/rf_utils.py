@@ -13,7 +13,7 @@ import numpy.testing
 from returnn.config import Config, global_config_ctx
 from returnn.util.pprint import pprint
 import returnn.frontend as rf
-from returnn.tensor import Tensor, Dim, TensorDict
+from returnn.tensor import Tensor, Dim, TensorDict, batch_dim
 from returnn.tensor.utils import tensor_dict_fill_random_numpy_
 import returnn.torch.frontend as rft
 from returnn.torch.data.tensor_utils import tensor_dict_numpy_to_torch_, tensor_dict_torch_to_numpy_
@@ -57,9 +57,11 @@ def run_model(
     dyn_dim_min_sizes: Optional[Dict[Dim, int]] = None,
     test_tensorflow: bool = True,
     allow_inf_nan_in_output: bool = False,
+    test_single_batch_entry: bool = False,  # can later enable this globally
 ) -> TensorDict:
     """run"""
     print(f"* run_model with dyn_dim_max_sizes={dyn_dim_max_sizes!r}")
+    extern_data_dims = extern_data.all_dims()
     extern_data.reset_content()
     tensor_dict_fill_random_numpy_(
         extern_data, dyn_dim_max_sizes=dyn_dim_max_sizes, dyn_dim_min_sizes=dyn_dim_min_sizes
@@ -84,6 +86,21 @@ def run_model(
                 stop_reporting_after_first_inf_nan=False,
             )
             raise Exception(f"Non-finite values in output: {non_finite_outputs}. See log above.")
+
+    if test_single_batch_entry and batch_dim in extern_data_dims:
+        dyn_dims = [
+            d
+            for d in extern_data_dims
+            if d.dyn_size_ext is not None
+            and d.dyn_size_ext.dims == (batch_dim,)
+            and d.dyn_size_ext.raw_tensor.min() != d.dyn_size_ext.raw_tensor.max()
+        ]
+        if dyn_dims:  # e.g. the typical time dim with dyn size shape [batch_dim]
+            batch_idx = dyn_dims[0].dyn_size_ext.raw_tensor.argmin().item()
+            print(f"** run with PyTorch backend with single batch entry for some smaller sequence {batch_idx=}")
+            for d in dyn_dims:
+                print(f"  {d}: {d.dyn_size_ext.raw_tensor}")
+            _run_model_torch_single_batch(extern_data, get_model, forward_step, batch_idx=batch_idx, ref_output=out_pt)
 
     if not test_tensorflow:
         return out_pt
@@ -220,6 +237,72 @@ def run_model_torch_train(
         res[f"{k}:inv_norm_factor"] = inv_norm_factor
 
     return res
+
+
+def _run_model_torch_single_batch(
+    extern_data: TensorDict,
+    get_model: rf.GetModelFunc,
+    forward_step: rf.StepFunc,
+    *,
+    batch_idx: int,
+    ref_output: TensorDict,
+):
+    """
+    Restrict batch_dim to batch_idx only.
+    This is somewhat hacky:
+    We want to keep the same dim tags.
+    Thus, we overwrite all the data by the sliced data.
+    We also want to keep the batch_dim for the forward_step as the user code probably expects it.
+    Afterward, we want to recover the original data.
+    """
+    # Store original data to be able to recover it later.
+    extern_data_raw = extern_data.as_raw_tensor_dict(expected_value_type=numpy.ndarray)
+
+    # noinspection PyShadowingNames
+    def _get_slices(x: Tensor) -> Tuple[slice, ...]:
+        slices = []
+        for dim in x.dims:
+            if dim == batch_dim:
+                slices.append(slice(batch_idx, batch_idx + 1))
+            elif dim.dyn_size_ext is not None and batch_dim in dim.dyn_size_ext.dims:
+                slices.append(slice(0, dim.dyn_size_ext.raw_tensor.max().item()))
+            else:
+                slices.append(slice(None))
+        return tuple(slices)
+
+    # inplace
+    # noinspection PyShadowingNames
+    def tensor_numpy_restrict_batch_dim_(x: Tensor[numpy.ndarray]):
+        if batch_dim not in x.dims:
+            return
+        if x.raw_tensor is not None:
+            assert isinstance(x.raw_tensor, numpy.ndarray)
+            x.raw_tensor = x.raw_tensor[_get_slices(x)]
+
+    batch_dim.reset_eager()
+    batch_dim.dyn_size_ext = Tensor("batch_size", dims=(), dtype="int32", raw_tensor=numpy.array(1, dtype="int32"))
+    for dim in extern_data.all_dims():
+        dim.transform_tensors(tensor_numpy_restrict_batch_dim_)
+    for v in extern_data.data.values():
+        tensor_numpy_restrict_batch_dim_(v)
+
+    output = _run_model_torch(extern_data, get_model, forward_step)
+    for key, ref_output_ in ref_output.data.items():
+        output_ = output.data[key]
+        if batch_dim not in ref_output_.dims:
+            continue
+        batch_axis = ref_output_.dims.index(batch_dim)
+        assert output_.dims[batch_axis] == batch_dim and len(output_.dims) == len(ref_output_.dims)
+        # Slice the raw ref output to be able to match it to the raw single output.
+        ref_output_raw = ref_output_.raw_tensor[_get_slices(output_)]
+        single_output_raw = output_.raw_tensor
+        numpy.testing.assert_allclose(
+            ref_output_raw, single_output_raw, atol=1e-5, rtol=1e-5, err_msg=f"output {key!r} differs"
+        )
+
+    # Recover original data.
+    extern_data.reset_content()
+    extern_data.assign_from_raw_tensor_dict_(extern_data_raw)
 
 
 def _run_model_net_dict_tf(
