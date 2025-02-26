@@ -102,6 +102,7 @@ class ReturnnDatasetIterDataPipe(torch.utils.data.IterDataPipe):
 
         try:
             data_keys = self._dataset.get_data_keys()
+            last_complete_frac = -1
 
             seq_index = 0
             while self._dataset.is_less_than_num_seqs(seq_index):
@@ -109,11 +110,24 @@ class ReturnnDatasetIterDataPipe(torch.utils.data.IterDataPipe):
                 data = {data_key: self._dataset.get_data(seq_index, data_key) for data_key in data_keys}
                 data["seq_tag"] = str_to_numpy_array(self._dataset.get_tag(seq_index))
                 data["seq_idx"] = numpy.array(seq_index)
-                # It's slightly redundant to have num_seqs in each entry,
+
+                # It's slightly redundant to have the following data in each entry,
                 # but it's difficult to pass this back to the main proc otherwise.
-                data["num_seqs"] = num_seqs
-                # epoch is also redundant, but that's the cleanest/simplest way to pass it on to BatchingIterDataPipe.
                 data["epoch"] = epoch
+                data["num_seqs"] = num_seqs
+
+                complete_frac = self._dataset.get_complete_frac(seq_index, allow_only_lr_suitable=True)
+                if complete_frac is not None:
+                    assert 0.0 <= complete_frac <= 1.0, f"complete_frac must be in [0, 1], but got {complete_frac}"
+                    assert complete_frac >= last_complete_frac, (
+                        "complete_frac must be monotonically increasing, "
+                        f"but got {complete_frac} after {last_complete_frac}"
+                    )
+                else:
+                    complete_frac = -1
+                data["complete_frac"] = numpy.array(complete_frac, dtype=numpy.float32)
+                last_complete_frac = complete_frac
+
                 yield data
                 seq_index += 1
 

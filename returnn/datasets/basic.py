@@ -16,6 +16,7 @@ from threading import RLock
 from random import Random, random
 import sys
 import os
+import math
 import numpy
 import functools
 import typing
@@ -937,28 +938,51 @@ class Dataset:
         else:
             # We don't know. So:
             # Some monotonic increasing function in [0,1] which never reaches 1.
-            import math
+            return max(1.0e-10, (1 - 1 / ((seq_idx**0.5) / 100 + 1)) * 0.99)
 
-            return max(1.0e-10, 1.0 - math.exp(-seq_idx * 1000))
-
-    def get_complete_frac(self, seq_idx):
+    def get_complete_frac(self, sorted_seq_idx: int, *, allow_only_lr_suitable: bool = False) -> Optional[float]:
         """
-        :param int seq_idx:
-        :return: Returns a fraction (float in [0,1], always > 0) of how far we have advanced
-          for this seq in the dataset.
-          This does not have to be exact. This is only for the user.
-        :rtype: float
+        Tries to calculate exactly how much of the current epoch is completed when
+        having processed seq ``sorted_seq_idx``.
+
+        ``sorted_seq_idx`` cannot be less than the seq index of the previously loaded seqs.
+
+        :param sorted_seq_idx: sorted seq idx
+        :param allow_only_lr_suitable: only return a value when that value is suitable/accurate enough
+            to base LR scheduling on it. If false, this function will return an approximative value
+            when the exact value cannot be calculated (due to unknown ``num_seqs``).
+            Approximative values can be appropriate for e.g. progress bars.
+        :return: continuous value in (0, 1] which represents how much of the current epoch
+            is completed after ``sorted_seq_idx``.
+            If ``allow_only_lr_suitable=True``, returns ``None`` if the value cannot be calculated such
+            that it is accurate enough for LR scheduling, and otherwises bases ``epoch_continuous`` on it
+            for any dynamic learning rate scheduling.
+            As ``sorted_seq_idx`` is monotonic, the return value is also guaranteed to be monotonic.
         """
         # noinspection PyBroadException
         try:
             num_seqs = self.num_seqs
         except Exception:  # num_seqs not always available
+            if allow_only_lr_suitable:
+                return None
+
             # noinspection PyBroadException
             try:
                 num_seqs = self.estimated_num_seqs
             except Exception:  # also not always available
                 num_seqs = None  # ignore
-        return self.generic_complete_frac(seq_idx, num_seqs)
+
+        if math.isinf(num_seqs):
+            if allow_only_lr_suitable:
+                # cannot compute meaningful complete_frac for infinite num_seqs
+                return None
+            else:
+                num_seqs = None
+
+        assert (
+            num_seqs is None or 0 <= sorted_seq_idx < num_seqs
+        ), f"{self}: invalid seq indices: 0 <= seq_idx ({sorted_seq_idx}) < num_seqs ({num_seqs}) violated"
+        return self.generic_complete_frac(sorted_seq_idx, num_seqs)
 
     @property
     def num_seqs(self) -> int:
@@ -1375,16 +1399,27 @@ class DatasetSeq:
     Encapsulates all data for one sequence.
     """
 
-    def __init__(self, seq_idx, features, targets=None, seq_tag=None):
+    def __init__(
+        self,
+        seq_idx: int,
+        features,
+        *,
+        targets=None,
+        seq_tag: Optional[str] = None,
+        complete_frac: Optional[float] = None,
+    ):
         """
-        :param int seq_idx: sorted seq idx in the Dataset
+        :param seq_idx: sorted seq idx in the Dataset
         :param numpy.ndarray|dict[str,numpy.ndarray] features: format 2d (time,feature) (float)
         :param dict[str,numpy.ndarray]|numpy.ndarray|None targets: name -> format 1d (time) (idx of output-feature)
-        :param str seq_tag: sequence name / tag
+        :param seq_tag: sequence name / tag
+        :param complete_frac: continuous value in (0, 1] which represents how much of the current epoch
+            has been consumed when this seq is processed
         """
         assert isinstance(seq_idx, (int, numpy.integer))
         self.seq_idx = int(seq_idx)
         self.seq_tag = seq_tag or ("seq-%i" % seq_idx)
+        self.complete_frac = complete_frac
         if not isinstance(features, dict):
             assert isinstance(features, numpy.ndarray)
             features = {"data": features}

@@ -554,6 +554,12 @@ class MetaDataset(CachedDataset2):
         """
         return self.seq_list_ordered[self.default_dataset_key][sorted_seq_idx]
 
+    def get_complete_frac(self, sorted_seq_idx: int, **kwargs) -> Optional[float]:
+        """
+        :param sorted_seq_idx:
+        """
+        return self.datasets[self.default_dataset_key].get_complete_frac(sorted_seq_idx, **kwargs)
+
     def get_data_keys(self) -> List[str]:
         """data keys"""
         return sorted(self.data_keys)

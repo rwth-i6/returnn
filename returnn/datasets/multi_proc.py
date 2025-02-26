@@ -75,6 +75,7 @@ class MultiProcDataset(CachedDataset2):
         self._seq_order_proc_parent_conn = None  # type: Optional[mpConnection]
         self._seq_order_proc = None  # type: Optional[mp.Process]
         self._worker_procs = None  # type: Optional[List[mp.Process]]
+        self._cur_max_complete_frac: Optional[float] = None
 
         if _meta_info_cache:
             # This allows to skip the lazy init in self.initialize().
@@ -246,7 +247,8 @@ class MultiProcDataset(CachedDataset2):
             dataset.load_seqs(next_seq_idx, next_seq_idx + 1)
             seq_tag = dataset.get_tag(next_seq_idx)
             features = {data_key: dataset.get_data(next_seq_idx, data_key) for data_key in dataset.get_data_keys()}
-            res = DatasetSeq(seq_idx=next_seq_idx, seq_tag=seq_tag, features=features)
+            complete_frac = dataset.get_complete_frac(next_seq_idx, allow_only_lr_suitable=True)
+            res = DatasetSeq(seq_idx=next_seq_idx, seq_tag=seq_tag, features=features, complete_frac=complete_frac)
             cache.append(res)
             next_seq_idx += 1
             return True
@@ -403,6 +405,7 @@ class MultiProcDataset(CachedDataset2):
             return True
 
         self._lazy_init()
+        self._cur_max_complete_frac = 0.0
 
         if self._sharding_method == "dedicated":
             for worker_conn in self._worker_parent_conns:
@@ -441,6 +444,12 @@ class MultiProcDataset(CachedDataset2):
         if data is None:
             return None
         assert isinstance(data, DatasetSeq)
+        # The complete_frac values from the subprocesses are not necessarily monotonic
+        # due to rounding errors in the sharding and such.
+        # We therefore fix them up here. This is valid due to monotonicity of `seq_idx`.
+        max_comp_frac = max(data.complete_frac, self._cur_max_complete_frac)
+        data.complete_frac = max_comp_frac
+        self._cur_max_complete_frac = max_comp_frac
         data.seq_idx = seq_idx
         return data
 

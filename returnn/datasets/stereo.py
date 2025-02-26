@@ -349,7 +349,7 @@ class StereoHdfDataset(StereoDataset):
         elif targets.shape[1] == 1:
             targets = np.reshape(targets.astype(np.int32), (targets.shape[0],))
 
-        return DatasetSeq(seq_idx, inputFeatures, targets)
+        return DatasetSeq(seq_idx, inputFeatures, targets=targets)
 
     @staticmethod
     def _normalizeVector(v, mean, variance):
@@ -438,4 +438,4 @@ class DatasetWithTimeContext(StereoHdfDataset):
         targets = None
         if "classes" in originalSeq.get_data_keys():
             targets = originalSeq.get_data("classes")
-        return DatasetSeq(seq_idx, inputFeatures, targets)
+        return DatasetSeq(seq_idx, inputFeatures, targets=targets)

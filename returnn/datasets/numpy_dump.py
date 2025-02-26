@@ -154,4 +154,4 @@ class NumpyDumpDataset(Dataset):
     def _add_cache_seq(self, seq_idx, features, targets):
         last_seq_idx = self._get_cache_last_seq_idx()
         assert seq_idx == last_seq_idx + 1
-        self.cached_seqs += [DatasetSeq(seq_idx, features, targets)]
+        self.cached_seqs += [DatasetSeq(seq_idx, features, targets=targets)]

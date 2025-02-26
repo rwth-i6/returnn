@@ -760,7 +760,8 @@ def test_dynamic_learning_rate():
     assert epoch_continuous_diffs
     print("epoch continuous diffs:", epoch_continuous_diffs)
     # Just some sanity check. The exact number here depends on num_seqs_per_epoch, batch_size, etc.
-    assert numpy.min(epoch_continuous_diffs) >= 0.01
+    eps = 0.001
+    assert numpy.min(epoch_continuous_diffs) >= (0.01 - eps)
     assert numpy.max(epoch_continuous_diffs) <= 0.1
     # It's one more (non-repeated) call than num steps (first + very last),
     # and the diffs is one less, so the length should match final global train step.
@@ -814,6 +815,29 @@ def test_torch_engine_bf16():
         assert params
         for p in params:
             assert p.dtype == torch.bfloat16
+
+
+def test_torch_engine_train_shuffle_batches():
+    config = Config(
+        dict(
+            task="train",
+            device="cpu",
+            extern_data={"data": {"dim": 9}, "classes": {"dim": 2, "sparse": True}},
+            get_model=TrainTestModel,
+            train_step=TrainTestModel.train_step,
+            batch_size=100,
+            optimizer={"class": "adam"},
+            num_epochs=3,
+            online_shuffle_batches=10,
+        )
+    )
+    dataset = init_dataset({"class": "Task12AXDataset", "num_seqs": 100, "name": "train"})
+    dataset.init_seq_order(epoch=1)
+
+    with global_config_ctx(config):
+        engine = Engine(config=config)
+        engine.init_train_from_config(train_data=dataset)
+        engine.train()
 
 
 if __name__ == "__main__":
