@@ -142,6 +142,7 @@ def run_model(
     assert set(out_pt_raw.keys()) == set(out_tf_raw.keys())
     for k, v_pt in out_pt_raw.items():
         v_tf = out_tf_raw[k]
+        print(f"  comparing {k!r} {_array_repr(v_pt)} PT vs TF")
         numpy.testing.assert_allclose(v_pt, v_tf, atol=1e-5, rtol=1e-5, err_msg=f"output {k!r} differs")
     return out_pt
 
@@ -480,3 +481,17 @@ def _walk_dims(start: Dim, *, func=print):
             for k, v in dim_extra.same_for_batch_ctx.items():
                 k: Any
                 queue.append((path + ("_extra.same_for_batch_ctx", k), v))
+
+
+def _array_repr(x: Union[numpy.ndarray, numpy.number]) -> str:
+    if not isinstance(x, numpy.ndarray):
+        return f"<{type(x).__name__} {x!r}>"
+
+    try:
+        import lovely_numpy
+
+        return f"<{lovely_numpy.lovely(x)}>"
+    except ImportError:
+        if x.size <= 10:
+            return repr(x)
+        return f"<array shape={x.shape} dtype={x.dtype} min={x.min()} max={x.max()}>"
