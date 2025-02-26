@@ -390,15 +390,15 @@ class _DimMixin:
             if dim_extra:
                 dim_extra.cache_dyn_size_ext_dev.clear()
                 dim_extra.cache_seq_mask.clear()
+                if dim.dyn_size_ext is not None or dim.dimension is None:
+                    dim_extra.cache_dim_math.clear()
+                else:
+                    dim_extra.cache_dim_math.clear_dynamic()
             if only_self:
                 return
             if dim_extra:
                 # Any dims via dim math could also contain raw tensors,
                 # so iterate through them.
-                if dim.dyn_size_ext is not None or dim.dimension is None:
-                    dim_extra.cache_dim_math.clear()
-                else:
-                    dim_extra.cache_dim_math.clear_dynamic()
                 queue += dim_extra.cache_dim_math.values()
                 if dim_extra.same_as:
                     queue.append(dim_extra.same_as)
