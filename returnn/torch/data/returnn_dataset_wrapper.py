@@ -119,7 +119,10 @@ class ReturnnDatasetIterDataPipe(torch.utils.data.IterDataPipe):
                 if complete_frac is None:
                     complete_frac = -1
                 assert complete_frac == -1 or 0.0 <= complete_frac <= 1.0
-                assert complete_frac >= last_complete_frac
+                assert complete_frac >= last_complete_frac, (
+                    "complete_frac must be monotonically increasing, "
+                    f"but got {complete_frac} after {last_complete_frac}"
+                )
                 last_complete_frac = complete_frac
                 data["complete_frac"] = numpy.array(complete_frac, dtype=numpy.float32)
                 data["num_seqs"] = num_seqs
