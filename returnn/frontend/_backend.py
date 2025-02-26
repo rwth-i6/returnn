@@ -391,17 +391,17 @@ class Backend(Generic[T]):
         source: Tensor,
         *,
         dims: Sequence[Dim],
-        out_dim: Optional[Dim] = None,
-    ) -> Tuple[Tensor, Dim]:
+        out_dim: Dim,
+    ) -> Tensor:
         """
         Merges a list of axes into a single one. (Flatten the dims.)
         E.g. input is (batch, width, height, dim) and dims=(width,height), then we get (batch, width*height, dim).
         Or input is (batch, time, height, dim) and axes=(height,dim), then we get (batch, time, height*dim).
 
         :param source:
-        :param dims:
-        :param out_dim:
-        :return: tensor, out_dim
+        :param dims: list of dims to merge. len(dims) >= 2
+        :param out_dim: resulting merged dim
+        :return: tensor
         """
         raise NotImplementedError
 
