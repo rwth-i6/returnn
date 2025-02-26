@@ -130,8 +130,14 @@ def test_functional_conv1d_stride_same_padding():
         out, dim = model(extern_data["data"])
         out.mark_as_default_output(shape=(batch_dim, dim, out_dim))
 
-    run_model(extern_data, lambda *, epoch, step: _Net(), _forward_step, dyn_dim_max_sizes={time_dim: 7})
-    run_model(extern_data, lambda *, epoch, step: _Net(), _forward_step, dyn_dim_max_sizes={time_dim: 9})
+    for t in [7, 9]:
+        run_model(
+            extern_data,
+            lambda *, epoch, step: _Net(),
+            _forward_step,
+            dyn_dim_max_sizes={time_dim: t},
+            test_single_batch_entry=True,
+        )
 
 
 def test_conv1d_stride_same_padding():
@@ -157,7 +163,14 @@ def test_conv1d_stride_same_padding():
         out, dim = model(extern_data["data"])
         out.mark_as_default_output(shape=(batch_dim, dim, out_dim))
 
-    run_model(extern_data, lambda *, epoch, step: _Net(), _forward_step, test_single_batch_entry=True)
+    for t in [7, 9]:
+        run_model(
+            extern_data,
+            lambda *, epoch, step: _Net(),
+            _forward_step,
+            dyn_dim_max_sizes={time_dim: t},
+            test_single_batch_entry=True,
+        )
 
 
 def test_conv1d_same_out():
