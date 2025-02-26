@@ -17,6 +17,7 @@ from returnn.tensor import Tensor, Dim, TensorDict
 from returnn.tensor.utils import tensor_dict_fill_random_numpy_
 import returnn.torch.frontend as rft
 from returnn.torch.data.tensor_utils import tensor_dict_numpy_to_torch_, tensor_dict_torch_to_numpy_
+from returnn.torch.util.debug_inf_nan import debug_inf_nan as torch_debug_inf_nan
 
 # noinspection PyProtectedMember
 from returnn.frontend._random_journal import RandomJournal
@@ -72,8 +73,17 @@ def run_model(
         out_pt_raw = out_pt.as_raw_tensor_dict(include_const_sizes=True)
 
     if not allow_inf_nan_in_output:
+        non_finite_outputs = {}
         for k, v in out_pt.data.items():
-            assert numpy.isfinite(v.raw_tensor).all(), f"output {k!r} has non-finite values: {v.raw_tensor}"
+            if not numpy.isfinite(v.raw_tensor).all():
+                non_finite_outputs[k] = v
+                print(f"ERROR: output {k!r} has non-finite values:\n{v.raw_tensor}")
+        if non_finite_outputs:
+            torch_debug_inf_nan(
+                lambda: (_run_model_torch(extern_data, get_model, forward_step), None)[-1],
+                stop_reporting_after_first_inf_nan=False,
+            )
+            raise Exception(f"Non-finite values in output: {non_finite_outputs}. See log above.")
 
     if not test_tensorflow:
         return out_pt
