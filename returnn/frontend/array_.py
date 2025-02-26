@@ -835,15 +835,11 @@ def scatter(
             fill_value = 0
         elif mode == "max":
             if "int" in source.dtype:
-                import numpy
-
                 fill_value = numpy.iinfo(source.raw_tensor.dtype).min
             else:
                 fill_value = float("-inf")
         elif mode == "min":
             if "int" in source.dtype:
-                import numpy
-
                 fill_value = numpy.iinfo(source.raw_tensor.dtype).max
             else:
                 fill_value = float("inf")
@@ -855,10 +851,16 @@ def scatter(
             use_mask = rf.use_mask_default(default=True, default_false_for_behavior_version_up_to=22)
         if use_mask:
             source = source.copy_masked(fill_value, dims=indices_dim)
+    else:
+        use_mask = False
     # noinspection PyProtectedMember
-    return source._raw_backend.scatter(
+    out = source._raw_backend.scatter(
         source, indices=indices, indices_dim=indices_dim, mode=mode, fill_value=fill_value, out_dim=out_dim
     )
+    if use_mask and mode != "sum":
+        # Make sure we don't leave any infinities in the output.
+        out = out.copy_masked(0, dims=[out_dim])
+    return out
 
 
 def scatter_argmax(
