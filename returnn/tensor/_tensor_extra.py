@@ -2966,7 +2966,7 @@ class _TensorMixin(_TensorMixinBase):
         mask = None
         for axis in axes:
             mask_ = self._dims[axis].get_mask(dim_order=self.dims, device=self.device)
-            mask = rf.logical_and(mask, mask_) if mask is not None else mask_
+            mask = rf.combine_bc(mask, "logical_and", mask_) if mask is not None else mask_
         assert isinstance(mask, _t.Tensor)
         res = rf.where(mask, self, mask_value)
         if use_padding_info:
