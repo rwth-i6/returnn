@@ -262,8 +262,8 @@ class TorchBackend(Backend[torch.Tensor]):
         source: Tensor,
         *,
         dims: Sequence[Dim],
-        out_dim: Optional[Dim] = None,
-    ) -> Tuple[Tensor, Dim]:
+        out_dim: Dim,
+    ) -> Tensor:
         """
         Merges a list of axes into a single one. (Flatten the dims.)
         E.g. input is (batch, width, height, dim) and dims=(width,height), then we get (batch, width*height, dim).
@@ -272,18 +272,12 @@ class TorchBackend(Backend[torch.Tensor]):
         :param source:
         :param dims:
         :param out_dim:
-        :return: tensor, out_dim
+        :return: tensor
         """
-        assert dims
-        if len(dims) == 1:
-            return source, dims[0]
+        assert len(dims) >= 2
         first_axis = min(source.dims.index(d) for d in dims)
         pre_dims = source.dims[:first_axis]
         post_dims = [d for d in source.dims if d not in dims and d not in pre_dims]
-        if out_dim is None:
-            out_dim = dims[0]
-            for d in dims[1:]:
-                out_dim = out_dim * d
         source = source.copy_transpose(tuple(pre_dims) + tuple(dims) + tuple(post_dims), allow_int=False)
         out = Tensor(
             "merge_dims",
@@ -295,7 +289,7 @@ class TorchBackend(Backend[torch.Tensor]):
         out.raw_tensor = torch.reshape(source.raw_tensor, out_shape)
         if source.feature_dim and source.feature_dim in dims:
             out.feature_dim = out_dim
-        return out, out_dim
+        return out
 
     @staticmethod
     def split_dims(
