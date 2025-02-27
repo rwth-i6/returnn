@@ -378,7 +378,7 @@ def test_avgpool1d_stride1_padding_same():
 
 
 def test_avgpool1d_stride_padding_same():
-    time_dim = Dim(10, name="time")
+    time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
     extern_data = TensorDict(
         {
             "data": Tensor("data", [batch_dim, time_dim], dtype="float32"),
@@ -391,7 +391,7 @@ def test_avgpool1d_stride_padding_same():
 
     # noinspection PyShadowingNames
     def _forward_step(*, model: _Net, extern_data: TensorDict):
-        out, _ = model(extern_data["data"], in_spatial_dim=time_dim)
-        out.mark_as_default_output(shape=[batch_dim, time_dim])
+        out, out_spatial_dim = model(extern_data["data"], in_spatial_dim=time_dim)
+        out.mark_as_default_output(shape=[batch_dim, out_spatial_dim])
 
     run_model(extern_data, lambda *, epoch, step: _Net(), _forward_step)
