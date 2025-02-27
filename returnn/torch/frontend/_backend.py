@@ -1925,15 +1925,19 @@ class TorchBackend(Backend[torch.Tensor]):
                     stride_ = strides[i] if isinstance(strides, (list, tuple)) else strides
                 else:
                     stride_ = 1
-                # What is the logic here? You might be aware, in case without striding,
+                # What is the logic here? Also see https://github.com/rwth-i6/returnn/issues/1693.
+                # You might be aware, in case without striding,
                 # we simply have pad_left = (s.dimension - 1) // 2,
-                # or the total amount of padding is s.dimension - 1.
+                # or the total amount of padding is s.dimension - 1
+                # (s.dimension is the filter size).
                 # So we add the same amount of padding on both sides (or one less on the left side if odd).
                 # The output seq length in case of "valid" padding is ⌈(in_len - s.dimension + 1) / stride⌉.
                 # The output seq length in case of "same" padding with no striding (stride = 1)
-                # is simply the same as the input length.
+                # is simply the same as the input length (that's why it's called "same").
                 # What is the output seq length in case of "same" padding with striding?
-                # It should be ⌈in_len / stride⌉.
+                # It should be out_len = ⌈in_len / stride⌉ (it should be independent of s.dimension).
+                # We can rewrite out_len as:
+                # out_len = ⌊(in_len + stride - 1) / stride⌋ = (in_len + stride - 1 - (in_len - 1) % stride) / stride
                 # So, then we need to add a total amount of padding of s.dimension - 1.
                 # However, doing it the same way as without striding is incorrect.
                 # Why? Because then the first window might have more padding than the final window.
@@ -1941,8 +1945,6 @@ class TorchBackend(Backend[torch.Tensor]):
                 # or maybe one less on the first window if odd.
                 # How many frames do the windows cover?
                 # in_len_covered = out_len * stride + (s.dimension - stride)
-                # We can rewrite out_len as:
-                # out_len = ⌊(in_len + stride - 1) / stride⌋ = (in_len + stride - 1 - (in_len - 1) % stride) / stride
                 # So we have:
                 # in_len_covered = (in_len + stride - 1 - (in_len - 1) % stride) + (s.dimension - stride)
                 #                = in_len + s.dimension - 1 - (in_len - 1) % stride
