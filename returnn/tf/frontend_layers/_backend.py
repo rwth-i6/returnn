@@ -241,8 +241,8 @@ class ReturnnLayersBackend(Backend[Layer]):
         source: Tensor,
         *,
         dims: Sequence[Dim],
-        out_dim: Optional[Dim] = None,
-    ) -> Tuple[Tensor, Dim]:
+        out_dim: Dim,
+    ) -> Tensor:
         """
         Merges a list of axes into a single one. (Flatten the dims.)
         E.g. input is (batch, width, height, dim) and dims=(width,height), then we get (batch, width*height, dim).
@@ -251,18 +251,14 @@ class ReturnnLayersBackend(Backend[Layer]):
         :param source:
         :param dims:
         :param out_dim:
-        :return: tensor, out_dim
+        :return: tensor
         """
         if not isinstance(source, Tensor):
             raise TypeError(f"merge_dims: unexpected type for source {source!r}, need tensor")
-        if out_dim is None:
-            out_dim = dims[0]
-            for d in dims[1:]:
-                out_dim = out_dim * d
         layer = rfl.make_layer(
             {"class": "merge_dims", "from": source, "axes": dims, "out_dim": out_dim}, name="merge_dims"
         )
-        return layer, out_dim
+        return layer
 
     @staticmethod
     def split_dims(
@@ -692,7 +688,7 @@ class ReturnnLayersBackend(Backend[Layer]):
         )
 
     @staticmethod
-    def flip(source: Tensor, *, axis: Dim) -> Tensor:
+    def flip_no_mask(source: Tensor, *, axis: Dim) -> Tensor:
         """flip"""
         return rfl.make_layer(
             {"class": "slice", "from": source, "axis": axis, "out_dim": axis, "slice_step": -1}, name="flip"

@@ -1129,7 +1129,7 @@ def test_PostprocessingDataset():
         assert count == 1
 
     # test laplace ordering
-    with create_ogg_zip_txt_only_dataset_mult_seqs() as sub_ds_opts:
+    with create_ogg_zip_txt_only_dataset_mult_seqs(num_seqs=6) as sub_ds_opts:
         from returnn.datasets.postprocessing import LaplaceOrdering
 
         ds_opts = {
@@ -1143,14 +1143,22 @@ def test_PostprocessingDataset():
         dataset.load_seqs(0, 6)
 
         prev_len = None
+        prev_complete_frac = None
         for i in range(3):
             classes = dataset.get_data(i, "classes")
+            complete_frac = dataset.get_complete_frac(i, allow_only_lr_suitable=True)
             assert prev_len is None or classes.shape[0] >= prev_len
+            assert prev_complete_frac is None or complete_frac >= prev_complete_frac
             prev_len = classes.shape[0]
+            prev_complete_frac = complete_frac
         for i in range(3, 6):
             classes = dataset.get_data(i, "classes")
-            assert prev_len is None or classes.shape[0] <= prev_len or i == 3
+            complete_frac = dataset.get_complete_frac(i, allow_only_lr_suitable=True)
+            assert classes.shape[0] <= prev_len or i == 3
+            assert complete_frac >= prev_complete_frac
             prev_len = classes.shape[0]
+            prev_complete_frac = complete_frac
+        assert prev_complete_frac == 1
 
     # test composition
     from returnn.datasets.postprocessing import Sequential

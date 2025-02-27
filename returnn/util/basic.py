@@ -219,7 +219,7 @@ class BehaviorVersion:
     See :ref:`behavior_version`.
     """
 
-    _latest_behavior_version = 22
+    _latest_behavior_version = 23
     _behavior_version = None  # type: typing.Optional[int]
     _min_behavior_version = 0  # type: int
 

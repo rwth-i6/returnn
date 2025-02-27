@@ -399,6 +399,7 @@ class Engine(EngineBase):
                     {k: int(util.prod(extern_data_raw[k].shape[:2])) for k in keys_w_seq_len},
                 )
 
+                complete_frac = float(extern_data_raw["complete_frac"])
                 num_seqs, last_seq_idx = _get_num_seqs_last_seq_idx(
                     report_prefix=report_prefix,
                     extern_data_raw=extern_data_raw,
@@ -406,7 +407,13 @@ class Engine(EngineBase):
                     prev_num_seqs=num_seqs,
                     prev_last_seq_idx=last_seq_idx,
                 )
-                epoch_continuous = (self.epoch - 1 + (last_seq_idx + 1) / num_seqs) if num_seqs is not None else None
+                epoch_continuous = (
+                    self.epoch - 1 + complete_frac
+                    if complete_frac >= 0.0
+                    else (self.epoch - 1 + (last_seq_idx + 1) / num_seqs)
+                    if num_seqs is not None
+                    else None
+                )
 
                 # clear the gradients when every gradient accumulation loop starts
                 if zero_grad_next_step:
@@ -777,7 +784,9 @@ class Engine(EngineBase):
             # Also note that we are likely using persistent multiprocessing data loader workers,
             # so calling torch.utils.data.graph_settings.apply_random_seed here in the main proc
             # will not have an effect then.
-            batches_dataset = torch.utils.data.datapipes.iter.Shuffler(batches_dataset, **online_shuffle_batches)
+            batches_dataset = data_pipeline.ShufflingDataPipe(
+                batches_dataset, monotonic_data_keys=("complete_frac", "seq_idx"), **online_shuffle_batches
+            )
 
         loader_opts = self.config.typed_value("torch_dataloader_opts") or {}
         assert isinstance(loader_opts, dict), f"config torch_dataloader_opts, expected dict, got {type(loader_opts)}"

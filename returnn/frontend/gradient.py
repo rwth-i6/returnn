@@ -11,6 +11,7 @@ __all__ = [
     "set_requires_gradient",
     "gradient",
     "stop_gradient",
+    "stop_gradient_scope",
     "scaled_gradient",
     "scaled_gradient_ext",
     "gradient_checkpoint_scope",
@@ -40,6 +41,28 @@ def stop_gradient(source: Tensor) -> Tensor:
     """wraps tf.stop_gradient or torch detach"""
     # noinspection PyProtectedMember
     return source._raw_backend.stop_gradient(source)
+
+
+def stop_gradient_scope():
+    """
+    Create a stop gradient scope.
+    All tensors created within this scope will have their gradient stopped.
+
+    Example::
+
+        a = ...
+        b = ...
+        with stop_gradient_scope():
+            x = a + b
+        y = x * c
+
+    In this example, the tensor ``x`` will have its gradient stopped,
+    i.e. the gradient of ``x`` w.r.t. ``a`` and ``b`` will be zero.
+
+    :return: context manager which enables stopping the gradient. It supports __enter__ and __exit__,
+        and the intended usage is with the `with` statement.
+    """
+    return global_backend.stop_gradient_scope()
 
 
 def scaled_gradient(source: Tensor, scale: Union[float, Tensor]) -> Tensor:

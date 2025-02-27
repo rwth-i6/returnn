@@ -39,6 +39,7 @@ from io import TextIOBase
 import traceback
 from types import FrameType
 import torch
+import tree
 
 # noinspection PyProtectedMember
 from torch.utils._python_dispatch import TorchDispatchMode
@@ -96,6 +97,7 @@ def debug_inf_nan(
 
 # For efficiency, and to be less spammy
 _TraceFuncNameBlacklist = {
+    "aten::empty.memory_format",
     "aten::zeros_like",
     "aten::ones_like",
     "aten::full",
@@ -113,6 +115,7 @@ _TraceFuncNameBlacklist = {
     "aten::split_with_sizes",
     "aten::slice.Tensor",
     "aten::select.int",
+    "aten::max_pool2d_with_indices",
 }
 
 
@@ -140,19 +143,20 @@ class _TraceOps(TorchDispatchMode):
         if self.report_every_op_call:
             print(f"--- op {func.name()}", file=self.file)
         out = func(*args, **kwargs)
-        if isinstance(out, torch.Tensor):
-            with no_python_dispatcher():
-                got_nan_inf_t = torch.stack([torch.isnan(out).any(), torch.isinf(out).any()]).cpu()
-                got_nan = got_nan_inf_t[0].item()
-                got_inf = got_nan_inf_t[1].item()
-                if got_nan or got_inf:
-                    s = "/".join([s_ for s_, b in [("nan", got_nan), ("inf", got_inf)] if b])
-                    print(f"--> {s} in {func}: {out}", file=self.file)
-                    traceback.print_list(
-                        _extract_stack_up_to(skip_top_num_frames=1, root_frame=self.root_frame), file=self.file
-                    )
-                    if self.stop_reporting_after_first_inf_nan:
-                        self.enabled = False
+        for out_ in tree.flatten(out):
+            if isinstance(out_, torch.Tensor):
+                with no_python_dispatcher():
+                    got_nan_inf_t = torch.stack([torch.isnan(out_).any(), torch.isinf(out_).any()]).cpu()
+                    got_nan = got_nan_inf_t[0].item()
+                    got_inf = got_nan_inf_t[1].item()
+                    if got_nan or got_inf:
+                        s = "/".join([s_ for s_, b in [("nan", got_nan), ("inf", got_inf)] if b])
+                        print(f"--> {s} in {func}: {out_}", file=self.file)
+                        traceback.print_list(
+                            _extract_stack_up_to(skip_top_num_frames=1, root_frame=self.root_frame), file=self.file
+                        )
+                        if self.stop_reporting_after_first_inf_nan:
+                            self.enabled = False
         return out
 
 

@@ -390,15 +390,15 @@ class _DimMixin:
             if dim_extra:
                 dim_extra.cache_dyn_size_ext_dev.clear()
                 dim_extra.cache_seq_mask.clear()
+                if dim.dyn_size_ext is not None or dim.dimension is None:
+                    dim_extra.cache_dim_math.clear()
+                else:
+                    dim_extra.cache_dim_math.clear_dynamic()
             if only_self:
                 return
             if dim_extra:
                 # Any dims via dim math could also contain raw tensors,
                 # so iterate through them.
-                if dim.dyn_size_ext is not None or dim.dimension is None:
-                    dim_extra.cache_dim_math.clear()
-                else:
-                    dim_extra.cache_dim_math.clear_dynamic()
                 queue += dim_extra.cache_dim_math.values()
                 if dim_extra.same_as:
                     queue.append(dim_extra.same_as)
@@ -422,14 +422,10 @@ class _DimMixin:
         :param func: operates inplace
         """
         dyn_size_ext = self.dyn_size_ext.copy() if self.dyn_size_ext is not None else None
-        dyn_size_ext_max = self._dyn_size_max_value if self._dyn_size_max_value is not None else None
         self.reset_raw(only_self=True)
         if dyn_size_ext is not None:
             func(dyn_size_ext)
-        if dyn_size_ext_max is not None:
-            func(dyn_size_ext_max)
         self.dyn_size_ext = dyn_size_ext
-        self._dyn_size_max_value = dyn_size_ext_max
 
     def _can_use_in_ctx(self, ctx):
         """

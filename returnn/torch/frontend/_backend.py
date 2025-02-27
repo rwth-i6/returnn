@@ -3,7 +3,7 @@ Backend for exposing PyTorch-specific functionality.
 """
 
 from __future__ import annotations
-from typing import Optional, Union, Sequence, Tuple, List, Dict, Generator
+from typing import Optional, Union, Any, Sequence, Tuple, List, Dict, Generator
 import contextlib
 import torch
 import numpy
@@ -213,6 +213,11 @@ class TorchBackend(Backend[torch.Tensor]):
         return out
 
     @staticmethod
+    def stop_gradient_scope() -> Any:
+        """stop gradient scope"""
+        return torch.no_grad()
+
+    @staticmethod
     def scaled_gradient(tensor: Tensor, scale: Union[float, Tensor]) -> Tensor:
         """scaled gradient"""
         from returnn.torch.util.scaled_gradient import scaled_gradient
@@ -257,8 +262,8 @@ class TorchBackend(Backend[torch.Tensor]):
         source: Tensor,
         *,
         dims: Sequence[Dim],
-        out_dim: Optional[Dim] = None,
-    ) -> Tuple[Tensor, Dim]:
+        out_dim: Dim,
+    ) -> Tensor:
         """
         Merges a list of axes into a single one. (Flatten the dims.)
         E.g. input is (batch, width, height, dim) and dims=(width,height), then we get (batch, width*height, dim).
@@ -267,18 +272,12 @@ class TorchBackend(Backend[torch.Tensor]):
         :param source:
         :param dims:
         :param out_dim:
-        :return: tensor, out_dim
+        :return: tensor
         """
-        assert dims
-        if len(dims) == 1:
-            return source, dims[0]
+        assert len(dims) >= 2
         first_axis = min(source.dims.index(d) for d in dims)
         pre_dims = source.dims[:first_axis]
         post_dims = [d for d in source.dims if d not in dims and d not in pre_dims]
-        if out_dim is None:
-            out_dim = dims[0]
-            for d in dims[1:]:
-                out_dim = out_dim * d
         source = source.copy_transpose(tuple(pre_dims) + tuple(dims) + tuple(post_dims), allow_int=False)
         out = Tensor(
             "merge_dims",
@@ -290,7 +289,7 @@ class TorchBackend(Backend[torch.Tensor]):
         out.raw_tensor = torch.reshape(source.raw_tensor, out_shape)
         if source.feature_dim and source.feature_dim in dims:
             out.feature_dim = out_dim
-        return out, out_dim
+        return out
 
     @staticmethod
     def split_dims(
@@ -1061,9 +1060,9 @@ class TorchBackend(Backend[torch.Tensor]):
     ) -> Tensor:
         """
         Scatters into new zero-tensor.
-        If entries in indices are duplicated, the corresponding values in source will be added together
-        (scatter_add in PyTorch).
-        (TF segment_sum can be implemented via this.)
+        If entries in indices are duplicated, with mode="sum", the corresponding values in source will be added together
+        (``scatter_add`` in PyTorch), otherwise min/max.
+        (segment_sum can be implemented via this.)
 
         :param source: [batch_dims..., indices_dim(s)..., feature_dims...]
         :param indices: [batch_dims..., indices_dim(s)...] -> out_dim
@@ -1180,8 +1179,8 @@ class TorchBackend(Backend[torch.Tensor]):
         return out
 
     @staticmethod
-    def flip(source: Tensor, *, axis: Dim) -> Tensor:
-        """flip"""
+    def flip_no_mask(source: Tensor, *, axis: Dim) -> Tensor:
+        """flip, ignoring masking"""
         axis_int = source.get_axis_from_description(axis, allow_int=False)
         out = source.copy_template("flip")
         out.raw_tensor = torch.flip(source.raw_tensor, [axis_int])
@@ -1219,6 +1218,8 @@ class TorchBackend(Backend[torch.Tensor]):
     @staticmethod
     def sort(source: Tensor, *, axis: Dim, descending: bool, stable: bool) -> Tuple[Tensor, Tensor, Dim]:
         """sort. return values and indices"""
+        if axis.need_masking():
+            raise NotImplementedError(f"sort: dynamic axis {axis} not supported")
         axis_int = source.get_axis_from_description(axis, allow_int=False)
         # Move to last axis. Should be more efficient.
         source = source.copy_move_axis(axis_int, -1)
@@ -1496,7 +1497,7 @@ class TorchBackend(Backend[torch.Tensor]):
                     mask = source.get_sequence_mask_broadcast(dim)
                     source.raw_tensor = torch.where(mask, source.raw_tensor, mask_value)
         func = getattr(torch, mode)
-        if not res_dims:
+        if not res_dims and mode != "logsumexp":  # logsumexp requires dim arg
             raw_result = func(source.raw_tensor)
         elif len(raw_dims) == 1:
             raw_result = func(source.raw_tensor, dim=raw_dims[0])

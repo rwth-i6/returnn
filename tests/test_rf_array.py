@@ -193,9 +193,16 @@ def test_pad_packed_batched():
     in_ = out_dict["in"]
     flat = out_dict["flat"]
     out = out_dict["out"]
-    print(in_.raw_tensor.shape, flat.raw_tensor.shape, out.raw_tensor.shape)
+    print("in:", in_, in_.raw_tensor.shape)
+    print("in time1:", in_.dims[1].dyn_size)
+    print("in time2:", in_.dims[2].dyn_size)
+    print("flat:", flat, flat.raw_tensor.shape)
+    print("out:", out, out.raw_tensor.shape)
+    print("in raw:")
     print(in_.raw_tensor)
+    print("flat raw:")
     print(flat.raw_tensor)
+    print("out raw:")
     print(out.raw_tensor)
     np.testing.assert_array_equal(in_.raw_tensor, out.raw_tensor)
 

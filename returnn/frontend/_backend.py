@@ -351,6 +351,11 @@ class Backend(Generic[T]):
         raise NotImplementedError
 
     @staticmethod
+    def stop_gradient_scope() -> Any:
+        """stop gradient scope"""
+        raise NotImplementedError
+
+    @staticmethod
     def scaled_gradient(tensor: Tensor, scale: Union[float, Tensor]) -> Tensor:
         """
         :param tensor:
@@ -386,17 +391,17 @@ class Backend(Generic[T]):
         source: Tensor,
         *,
         dims: Sequence[Dim],
-        out_dim: Optional[Dim] = None,
-    ) -> Tuple[Tensor, Dim]:
+        out_dim: Dim,
+    ) -> Tensor:
         """
         Merges a list of axes into a single one. (Flatten the dims.)
         E.g. input is (batch, width, height, dim) and dims=(width,height), then we get (batch, width*height, dim).
         Or input is (batch, time, height, dim) and axes=(height,dim), then we get (batch, time, height*dim).
 
         :param source:
-        :param dims:
-        :param out_dim:
-        :return: tensor, out_dim
+        :param dims: list of dims to merge. len(dims) >= 2
+        :param out_dim: resulting merged dim
+        :return: tensor
         """
         raise NotImplementedError
 
@@ -905,9 +910,9 @@ class Backend(Generic[T]):
     ) -> Tensor:
         """
         Scatters into new zero-tensor.
-        If entries in indices are duplicated, the corresponding values in source will be added together
-        (scatter_add in PyTorch).
-        (TF segment_sum can be implemented via this.)
+        If entries in indices are duplicated, with mode="sum", the corresponding values in source will be added together
+        (``scatter_add`` in PyTorch), otherwise min/max.
+        (segment_sum can be implemented via this.)
 
         :param source: [batch_dims..., indices_dim(s)..., feature_dims...]
         :param indices: [batch_dims..., indices_dim(s)...] -> out_dim
@@ -934,8 +939,8 @@ class Backend(Generic[T]):
         raise NotImplementedError
 
     @staticmethod
-    def flip(source: Tensor, *, axis: Dim) -> Tensor:
-        """flip"""
+    def flip_no_mask(source: Tensor, *, axis: Dim) -> Tensor:
+        """flip, ignoring masking"""
         raise NotImplementedError
 
     @staticmethod

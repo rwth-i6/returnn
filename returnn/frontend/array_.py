@@ -40,6 +40,8 @@ __all__ = [
     "gather",
     "scatter",
     "scatter_argmax",
+    "scatter_logsumexp",
+    "scatter_logmeanexp",
     "slice",
     "shift_right",
     "shift_left",
@@ -174,8 +176,35 @@ def merge_dims(
     :param out_dim:
     :return: tensor, out_dim
     """
+    if not dims:
+        if out_dim:
+            assert out_dim.dimension == 1
+        else:
+            out_dim = Dim(1, name="ext")
+        return rf.expand_dim(source, out_dim), out_dim
+    if len(dims) == 1:
+        if out_dim is None or out_dim == dims[0]:
+            return source, dims[0]
+        return rf.replace_dim(source, in_dim=dims[0], out_dim=out_dim)
+    if out_dim is None:
+        out_dim = dims[0]
+        reset_dyn_size = False
+        for d in dims[1:]:
+            reset_dyn_size |= d.need_masking() and out_dim.capacity != 1
+            out_dim = out_dim * d
+        if reset_dyn_size:
+            # The dynamic sizes as calculated via dim math would not correctly describe how the tensor looks like.
+            # This would then potentially discard some of the data in the tensor in subsequent operations,
+            # when masking is applied.
+            # Thus, discard the dynamic sizes, and just treat it as a flat dim with scalar dynamic size.
+            # https://github.com/rwth-i6/returnn/issues/1694
+            out_dim_size = dims[0].get_dim_value_tensor()
+            for d in dims[1:]:
+                out_dim_size *= d.get_dim_value_tensor()
+            assert isinstance(out_dim_size, Tensor) and out_dim_size.dims == ()  # scalar
+            out_dim.dyn_size_ext = out_dim_size
     # noinspection PyProtectedMember
-    return source._raw_backend.merge_dims(source, dims=dims, out_dim=out_dim)
+    return source._raw_backend.merge_dims(source, dims=dims, out_dim=out_dim), out_dim
 
 
 def split_dims(
@@ -296,6 +325,7 @@ def window(
     padding: str = "same",
     pad_value: Optional[Union[int, float]] = None,
     stride: int = 1,
+    use_mask: Optional[bool] = None,
 ) -> Tuple[Tensor, Dim]:
     """
     Follows the same idea as RETURNN tf_util.windowed,
@@ -309,8 +339,14 @@ def window(
     :param padding: "same" or "valid"
     :param pad_value:
     :param stride:
+    :param use_mask: whether we should mask to make sure the zero padding is correct
     :return: out, out_spatial_dim
     """
+    if spatial_dim.need_masking():
+        if use_mask is None:
+            use_mask = rf.use_mask_default(default=True, default_false_for_behavior_version_up_to=22)
+        if use_mask:
+            source = source.copy_masked(0, dims=[spatial_dim])
     assert window_dim.dimension is not None
     if padding == "same":
         out_spatial_dim = spatial_dim
@@ -755,29 +791,42 @@ def scatter(
     mode: str = "sum",
     fill_value: Optional[Union[int, float]] = None,
     out_dim: Optional[Union[Dim, Sequence[Dim]]] = None,
+    use_mask: Optional[bool] = None,
 ) -> Tensor:
     """
     Scatters into new zero-tensor.
-    If entries in indices are duplicated, the corresponding values in source will be added together
-    (scatter_add in PyTorch)
-    with mode=="sum",
-    or otherwise it will take the max/min.
+    If entries in indices are duplicated, with ``mode=="sum"``,
+    the corresponding values in source will be added together
+    (``scatter_add`` in PyTorch),
+    or otherwise it will take the respective reduction.
 
     ``scatter`` is the inverse of :func:`gather`.
 
-    (TF segment_sum can be implemented via this.)
+    (segment_sum can be implemented via this.)
 
     :param source: [batch_dims..., indices_dim(s)..., feature_dims...]
     :param indices: [batch_dims..., indices_dim(s)...] -> out_dim
     :param indices_dim:
-    :param mode: "sum" or "max" or "min". also see :func:`scatter_argmax`.
+    :param mode: "sum", "max", "min", "logsumexp", "logmeanexp", "argmax".
+        (Note: If you ever need mean, argmin, etc, please open an issue/PR.)
     :param fill_value:
     :param out_dim: The indices target dim.
         If not given, will be automatically determined as the sparse_dim from indices.
         If multiple out dims, use indices into the merged out dims,
         and then we use :func:`rf.split_dims` afterwards.
+    :param use_mask:
     :return: [batch_dims..., out_dim(s)..., feature_dims...]
     """
+    if mode == "logsumexp":
+        return scatter_logsumexp(
+            source, indices=indices, indices_dim=indices_dim, fill_value=fill_value, out_dim=out_dim
+        )
+    if mode == "logmeanexp":
+        return scatter_logmeanexp(
+            source, indices=indices, indices_dim=indices_dim, fill_value=fill_value, out_dim=out_dim
+        )
+    if mode == "argmax":
+        return scatter_argmax(source, indices=indices, indices_dim=indices_dim, invalid_idx=fill_value, out_dim=out_dim)
     if not out_dim:
         assert isinstance(indices, Tensor) and indices.sparse_dim
         out_dim = indices.sparse_dim
@@ -786,24 +835,32 @@ def scatter(
             fill_value = 0
         elif mode == "max":
             if "int" in source.dtype:
-                import numpy
-
                 fill_value = numpy.iinfo(source.raw_tensor.dtype).min
             else:
                 fill_value = float("-inf")
         elif mode == "min":
             if "int" in source.dtype:
-                import numpy
-
                 fill_value = numpy.iinfo(source.raw_tensor.dtype).max
             else:
                 fill_value = float("inf")
         else:
             raise ValueError(f"scatter: invalid mode {mode!r}")
+    indices_dim = indices_dim if isinstance(indices_dim, (list, tuple)) else [indices_dim]
+    if any(dim.need_masking() for dim in indices_dim):
+        if use_mask is None:
+            use_mask = rf.use_mask_default(default=True, default_false_for_behavior_version_up_to=22)
+        if use_mask:
+            source = source.copy_masked(fill_value, dims=indices_dim)
+    else:
+        use_mask = False
     # noinspection PyProtectedMember
-    return source._raw_backend.scatter(
+    out = source._raw_backend.scatter(
         source, indices=indices, indices_dim=indices_dim, mode=mode, fill_value=fill_value, out_dim=out_dim
     )
+    if use_mask and mode != "sum":
+        # Make sure we don't leave any infinities in the output.
+        out = out.copy_masked(0, dims=[out_dim])
+    return out
 
 
 def scatter_argmax(
@@ -856,6 +913,76 @@ def scatter_argmax(
     if max_invalid_idx != invalid_idx:
         out = rf.where(out != max_invalid_idx, out, invalid_idx)  # [B,O,F] -> I or invalid_idx
     return out
+
+
+def scatter_logsumexp(
+    source: Tensor,
+    *,
+    indices: Tensor,
+    indices_dim: Union[Dim, Sequence[Dim]],
+    fill_value: Optional[Union[int, float]] = None,
+    out_dim: Optional[Union[Dim, Sequence[Dim]]] = None,
+) -> Tensor:
+    """
+    Scatters into new zero-tensor.
+    If entries in indices are duplicated, the corresponding values in source will be log-sum-exp'ed together.
+    This is like :func:`scatter` with ``mode="logsumexp"``.
+
+    :param source: [batch_dims..., indices_dim(s)..., feature_dims...]
+    :param indices: [batch_dims..., indices_dim(s)...] -> out_dim
+    :param indices_dim:
+    :param fill_value:
+    :param out_dim: The indices target dim.
+        If not given, will be automatically determined as the sparse_dim from indices.
+        If multiple out dims, use indices into the merged out dims,
+        and then we use :func:`rf.split_dims` afterwards.
+    :return: [batch_dims..., out_dim(s)..., feature_dims...]
+    """
+    if not out_dim:
+        assert isinstance(indices, Tensor) and indices.sparse_dim
+        out_dim = indices.sparse_dim
+    with rf.stop_gradient_scope():
+        max_x = rf.scatter(source, indices=indices, indices_dim=indices_dim, mode="max", out_dim=out_dim)  # [D_out,...]
+        max_x_ = rf.gather(max_x, indices=indices, axis=out_dim)  # [D_src,...]
+    src_ = rf.exp(source - max_x_)
+    if fill_value is not None:
+        fill_value = rf.exp(fill_value - max_x_)
+    tensor = rf.scatter(
+        src_, indices=indices, indices_dim=indices_dim, mode="sum", fill_value=fill_value, out_dim=out_dim
+    )
+    tensor = rf.log(tensor)
+    tensor = rf.where(rf.is_neg_infinite(max_x), rf.zeros((), dtype=source.dtype, device=source.device), tensor)
+    tensor += max_x
+    return tensor
+
+
+def scatter_logmeanexp(
+    source: Tensor,
+    *,
+    indices: Tensor,
+    indices_dim: Union[Dim, Sequence[Dim]],
+    fill_value: Optional[Union[int, float]] = None,
+    out_dim: Optional[Union[Dim, Sequence[Dim]]] = None,
+) -> Tensor:
+    """
+    Scatters into new zero-tensor.
+    If entries in indices are duplicated, the corresponding values in source will be log-mean-exp'ed together.
+    This is like :func:`scatter` with ``mode="logmeanexp"``.
+
+    :param source: [batch_dims..., indices_dim(s)..., feature_dims...]
+    :param indices: [batch_dims..., indices_dim(s)...] -> out_dim
+    :param indices_dim:
+    :param fill_value:
+    :param out_dim: The indices target dim.
+        If not given, will be automatically determined as the sparse_dim from indices.
+        If multiple out dims, use indices into the merged out dims,
+        and then we use :func:`rf.split_dims` afterwards.
+    :return: [batch_dims..., out_dim(s)..., feature_dims...]
+    """
+    ones = rf.ones(dims=indices.dims, dtype=source.dtype, device=source.device)
+    counts = rf.scatter(ones, indices=indices, indices_dim=indices_dim, fill_value=1, out_dim=out_dim)
+    y = scatter_logsumexp(source, indices=indices, indices_dim=indices_dim, fill_value=fill_value, out_dim=out_dim)
+    return y - rf.log(counts)
 
 
 # noinspection PyShadowingBuiltins
@@ -977,7 +1104,7 @@ def reverse_sequence(tensor: Tensor, *, axis: Dim, handle_dynamic_dims: bool = T
     """
     if not handle_dynamic_dims or not axis.need_masking():
         # noinspection PyProtectedMember
-        return tensor._raw_backend.flip(tensor, axis=axis)
+        return tensor._raw_backend.flip_no_mask(tensor, axis=axis)
     indices = rf.combine_bc(axis.get_size_tensor(), "-", rf.range_over_dim(axis)) - 1
     return rf.gather(tensor, indices=indices, axis=axis, clip_to_valid=True)
 
