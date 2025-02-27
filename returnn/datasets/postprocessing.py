@@ -330,12 +330,12 @@ class PostprocessingDataset(CachedDataset2):
                 tensor_dict.data[data_key].raw_tensor = self._dataset.get_data(seq_index, data_key)
 
             complete_frac = self._dataset.get_complete_frac(seq_index, allow_only_lr_suitable=True)
-            comp_frac_tensor = None
+            comp_frac_raw_tensor = None
             if complete_frac is not None:
-                comp_frac_tensor = numpy.array(complete_frac, dtype=numpy.float32)
-                tensor_dict.data["complete_frac"].raw_tensor = comp_frac_tensor
-            seq_tag_tensor = str_to_numpy_array(self._dataset.get_tag(seq_index))
-            tensor_dict.data["seq_tag"].raw_tensor = seq_tag_tensor
+                comp_frac_raw_tensor = numpy.array(complete_frac, dtype=numpy.float32)
+                tensor_dict.data["complete_frac"].raw_tensor = comp_frac_raw_tensor
+            seq_tag_raw_tensor = str_to_numpy_array(self._dataset.get_tag(seq_index))
+            tensor_dict.data["seq_tag"].raw_tensor = seq_tag_raw_tensor
 
             if self._map_seq is not None:
                 tensor_dict = self._map_seq(
@@ -345,12 +345,16 @@ class PostprocessingDataset(CachedDataset2):
                     tensor_dict, TensorDict
                 ), f"map_seq must produce a {TensorDict.__name__}, but produced {type(tensor_dict).__name__}"
 
-                # Re-adding the seq tag here causes no harm in case it's dropped since we don't
-                # add/drop any segments w/ the non-iterator postprocessing function.
-                if "complete_frac" not in tensor_dict.data and comp_frac_tensor is not None:
-                    tensor_dict.data["complete_frac"].raw_tensor = comp_frac_tensor
+                # Re-adding the seq_tag/complete_frac here causes no harm in case they are dropped
+                # since we don't add/drop any segments w/ the non-iterator postprocessing function.
+                if "complete_frac" not in tensor_dict.data and comp_frac_raw_tensor is not None:
+                    tensor_dict.data["complete_frac"] = Tensor(
+                        "complete_frac", dims=(), dtype="float32", raw_tensor=comp_frac_raw_tensor
+                    )
                 if "seq_tag" not in tensor_dict.data:
-                    tensor_dict.data["seq_tag"].raw_tensor = seq_tag_tensor
+                    tensor_dict.data["seq_tag"] = Tensor(
+                        "seq_tag", dims=(), dtype="string", raw_tensor=seq_tag_raw_tensor
+                    )
 
                 if self._seq_list_for_validation is not None:
                     seq_tag = self._seq_list_for_validation[seq_index]
