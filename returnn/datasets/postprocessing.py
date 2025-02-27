@@ -284,7 +284,7 @@ class PostprocessingDataset(CachedDataset2):
         """
 
         def _validate_tensor_dict_iter(inner: Iterator[TensorDict]) -> Iterator[TensorDict]:
-            last_complete_frac = -1
+            last_complete_frac = 0.0
             for t_dict in inner:
                 assert isinstance(t_dict, TensorDict), (
                     f"postprocessing mapper function must produce a {TensorDict.__name__}, "
