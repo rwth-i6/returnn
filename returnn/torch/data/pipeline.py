@@ -343,6 +343,7 @@ class BucketOrderingIterDataPipe(torch.utils.data.IterDataPipe):
         buckets: Sequence[Tuple[int, int]],
         length_key: str,
         random_bucket_prob: float = 0.0,
+        seed: Optional[int] = None,
     ):
         """
         :param dataset: dataset to apply bucket batching to
@@ -352,14 +353,15 @@ class BucketOrderingIterDataPipe(torch.utils.data.IterDataPipe):
         :param length_key: data key to take as length measure
         :param random_bucket_prob: Probability of putting a segment not into the best-fitting bucket, but into
             a randomly chosen still-fitting bucket.
-
             This increases seq length variation within the buckets at the cost of slighly more padding.
+        :param seed: random seed
         """
         self._dataset = dataset
         self._length_key = length_key
         assert random_bucket_prob >= 0.0
         self._random_bucket_prob = random_bucket_prob
         self._rng = numpy.random.RandomState()
+        self._seed = seed % (2**32) if seed is not None else None
 
         assert buckets, "empty bucket batching configuration"
         if not all(size > 0 and max_seqs > 0 for size, max_seqs in buckets):
@@ -400,6 +402,21 @@ class BucketOrderingIterDataPipe(torch.utils.data.IterDataPipe):
 
     def __getitem__(self, index):
         raise Exception(f"{self.__class__.__name__}.__getitem__ is not supported")
+
+    def set_seed(self, seed: int) -> BucketOrderingIterDataPipe:
+        """
+        Sets the seed for the next invocation of ``__iter__``, for compatibility with
+        ``torch.utils.data.graph_settings.apply_random_seed``.
+        """
+        self._seed = seed % (2**32)  # seed must be within [0, 2**32) for seeding RandomState
+        return self
+
+    def reset(self):
+        """resets the internal state of the data pipe"""
+        if self._seed is None:
+            self._seed = int(torch.empty((), dtype=torch.int32).random_().item())
+        self._rng.seed(self._seed)
+        self._seed = None
 
 
 def get_batching_iterable_dataset_from_config(
@@ -515,7 +532,7 @@ class ShufflingDataPipe(torch.utils.data.IterDataPipe):
         self._buffer_size = buffer_size
         self._monotonic_data_keys = monotonic_data_keys
         self._rng = numpy.random.RandomState()
-        self._seed = seed
+        self._seed = seed % (2**32) if seed is not None else None
 
     def __iter__(self):
         # The implementation is very similar to the PostprocessingDataset's combinator LaplaceOrdering.
