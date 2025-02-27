@@ -1933,7 +1933,7 @@ class TorchBackend(Backend[torch.Tensor]):
                 # So we add the same amount of padding on both sides (or one less on the left side if odd).
                 # The output seq length in case of "valid" padding is ⌈(in_len - s.dimension + 1) / stride⌉.
                 # The output seq length in case of "same" padding with no striding (stride = 1)
-                # is simply the same as the input length.
+                # is simply the same as the input length (that's why it's called "same").
                 # What is the output seq length in case of "same" padding with striding?
                 # It should be out_len = ⌈in_len / stride⌉ (it should be independent of s.dimension).
                 # We can rewrite out_len as:
