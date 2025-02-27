@@ -414,7 +414,7 @@ class BucketOrderingIterDataPipe(torch.utils.data.IterDataPipe):
     def reset(self):
         """resets the internal state of the data pipe"""
         if self._seed is None:
-            self._seed = int(torch.empty((), dtype=torch.int32).random_().item())
+            self._seed = int(torch.empty((), dtype=torch.uint32).random_().item())
         self._rng.seed(self._seed)
         self._seed = None
 
