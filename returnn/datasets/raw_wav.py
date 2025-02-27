@@ -83,7 +83,7 @@ class RawWavDataset(CachedDataset2):
         inputFeatures = inputFeatures.astype(np.float32)
         if outputFeatures is not None:
             outputFeatures = outputFeatures.astype(np.float32)
-        return DatasetSeq(seq_idx, inputFeatures, outputFeatures)
+        return DatasetSeq(seq_idx, inputFeatures, targets=outputFeatures)
 
     def _get_num_outputs(self, num_outputs):
         """

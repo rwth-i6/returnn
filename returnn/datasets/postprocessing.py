@@ -5,6 +5,7 @@ Provides :class:`PostprocessingDataset`.
 from __future__ import annotations
 
 from itertools import islice
+import numpy
 from numpy.random import RandomState
 from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple, TypeVar
 
@@ -56,6 +57,14 @@ class PostprocessingDataset(CachedDataset2):
                 "data": {"dims": [time_dim, new_data_dim]},
             },
         }
+
+    The postprocessor functions operate on ``TensorDict``s, which have entries for
+    all data keys in the underlying dataset.
+
+    There may also be additional "meta" entries in the tensor dicts, like ``complete_frac``
+    and ``seq_tag``.
+    These should be copied over in a manner that is reasonable for the use case at hand and
+    ensures forwards compatibility as well as reasonably possible.
 
     The dataset itself does not support its own seq ordering and relies on the wrapped
     dataset for seq ordering instead. Specifying a ``seq_ordering`` other than ``default``
@@ -155,7 +164,10 @@ class PostprocessingDataset(CachedDataset2):
             self._out_tensor_dict_template = self._in_tensor_dict_template.copy_template()
             self.labels = self._dataset.labels.copy()
         # update only after _out_tensor_dict_template has been created from _in_tensor_dict_template
-        self._in_tensor_dict_template.update({"seq_tag": {"dims": (), "dtype": "string"}}, auto_convert=True)
+        self._in_tensor_dict_template.update(
+            {"complete_frac": {"dims": (), "dtype": "float32"}, "seq_tag": {"dims": (), "dtype": "string"}},
+            auto_convert=True,
+        )
         self.num_outputs = {
             k: (t.sparse_dim.size if t.sparse_dim else t.shape[-1] if len(t.shape) > 0 else 1, t.ndim)
             for k, t in self._out_tensor_dict_template.data.items()
@@ -222,6 +234,15 @@ class PostprocessingDataset(CachedDataset2):
         """:return: dtype of data entry `key`"""
         return self._out_tensor_dict_template.data[key].dtype
 
+    def get_total_num_seqs(self, *, fast=False):
+        """:return: total num seqs excluding partition_epoch"""
+        if self._map_seq_stream is not None:
+            raise util.OptionalNotImplementedError(
+                f"{self}: get_total_num_seqs not allowed when map_seq_stream is set."
+            )
+        assert self._dataset is not None
+        return self._dataset.get_total_num_seqs(fast=fast)
+
     def supports_sharding(self) -> bool:
         """:return: whether this dataset supports sharding"""
         assert self._dataset is not None
@@ -249,11 +270,12 @@ class PostprocessingDataset(CachedDataset2):
             assert loaded_seq_idx <= seq_idx, "_collect_single_seq must be done monotonically"
             if loaded_seq_idx != seq_idx:
                 continue
-            seq = DatasetSeq(
-                features={k: t.raw_tensor for k, t in tensor_dict.data.items() if k != "seq_tag"},
-                seq_idx=seq_idx,
-                seq_tag=str(tensor_dict["seq_tag"].raw_tensor),
+            complete_frac = (
+                float(tensor_dict.data["complete_frac"].raw_tensor) if "complete_frac" in tensor_dict.data else None
             )
+            seq_tag = str(tensor_dict.data["seq_tag"].raw_tensor) if "seq_tag" in tensor_dict.data else f"seq-{seq_idx}"
+            features = {k: t.raw_tensor for k, t in tensor_dict.data.items() if k not in ["complete_frac", "seq_tag"]}
+            seq = DatasetSeq(complete_frac=complete_frac, features=features, seq_idx=seq_idx, seq_tag=seq_tag)
             return seq
 
     def _build_mapping_iter(self) -> Iterator[TensorDict]:
@@ -262,8 +284,20 @@ class PostprocessingDataset(CachedDataset2):
         """
 
         def _validate_tensor_dict_iter(inner: Iterator[TensorDict]) -> Iterator[TensorDict]:
+            last_complete_frac = 0.0
             for t_dict in inner:
-                assert "seq_tag" in t_dict.data, "seq_tag dropped from TensorDict in postprocessing pipeline"
+                assert isinstance(t_dict, TensorDict), (
+                    f"postprocessing mapper function must produce a {TensorDict.__name__}, "
+                    f"but got a {type(t_dict).__name__}"
+                )
+                if "complete_frac" in t_dict.data:  # sanity check complete_frac
+                    complete_frac = float(t_dict.data["complete_frac"].raw_tensor)
+                    assert 0.0 <= complete_frac <= 1.0, f"complete_frac must be in [0, 1], but got {complete_frac}"
+                    assert complete_frac >= last_complete_frac, (
+                        "complete_frac must be monotonically increasing, "
+                        f"but got {complete_frac} after {last_complete_frac}"
+                    )
+                    last_complete_frac = complete_frac
                 for data_key, out_t in self._out_tensor_dict_template.data.items():
                     in_t = t_dict.data[data_key]
                     assert (
@@ -294,8 +328,14 @@ class PostprocessingDataset(CachedDataset2):
             tensor_dict = self._in_tensor_dict_template.copy_template()
             for data_key in data_keys:
                 tensor_dict.data[data_key].raw_tensor = self._dataset.get_data(seq_index, data_key)
-            seq_tag_tensor = str_to_numpy_array(self._dataset.get_tag(seq_index))
-            tensor_dict.data["seq_tag"].raw_tensor = seq_tag_tensor
+
+            complete_frac = self._dataset.get_complete_frac(seq_index, allow_only_lr_suitable=True)
+            comp_frac_raw_tensor = None
+            if complete_frac is not None:
+                comp_frac_raw_tensor = numpy.array(complete_frac, dtype=numpy.float32)
+                tensor_dict.data["complete_frac"].raw_tensor = comp_frac_raw_tensor
+            seq_tag_raw_tensor = str_to_numpy_array(self._dataset.get_tag(seq_index))
+            tensor_dict.data["seq_tag"].raw_tensor = seq_tag_raw_tensor
 
             if self._map_seq is not None:
                 tensor_dict = self._map_seq(
@@ -305,10 +345,16 @@ class PostprocessingDataset(CachedDataset2):
                     tensor_dict, TensorDict
                 ), f"map_seq must produce a {TensorDict.__name__}, but produced {type(tensor_dict).__name__}"
 
-                # Re-adding the seq tag here causes no harm in case it's dropped since we don't
-                # add/drop any segments w/ the non-iterator postprocessing function.
+                # Re-adding the seq_tag/complete_frac here causes no harm in case they are dropped
+                # since we don't add/drop any segments w/ the non-iterator postprocessing function.
+                if "complete_frac" not in tensor_dict.data and comp_frac_raw_tensor is not None:
+                    tensor_dict.data["complete_frac"] = Tensor(
+                        "complete_frac", dims=(), dtype="float32", raw_tensor=comp_frac_raw_tensor
+                    )
                 if "seq_tag" not in tensor_dict.data:
-                    tensor_dict.data["seq_tag"].raw_tensor = seq_tag_tensor
+                    tensor_dict.data["seq_tag"] = Tensor(
+                        "seq_tag", dims=(), dtype="string", raw_tensor=seq_tag_raw_tensor
+                    )
 
                 if self._seq_list_for_validation is not None:
                     seq_tag = self._seq_list_for_validation[seq_index]
@@ -366,7 +412,12 @@ class LaplaceOrdering(Callable[[Iterator[TensorDict]], Iterator[TensorDict]]):
         seq_buffer = list(islice(iterator, self.num_seqs_per_bin))
         has_ended = False
         while True:
+            # Make sure to not reorder the monotonically increasing values for complete_frac
+            # so that the trainer can calculate the appropriate learning rates.
+            complete_frac_values = [tdict.data["complete_frac"].raw_tensor for tdict in seq_buffer]
             seq_buffer.sort(key=self._get_seq_len, reverse=is_down_phase)
+            for sorted_item, comp_frac in zip(seq_buffer, complete_frac_values):
+                sorted_item.data["complete_frac"].raw_tensor = comp_frac
 
             next_seq_buffer = []
 
