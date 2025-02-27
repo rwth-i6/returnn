@@ -337,7 +337,12 @@ class BucketOrderingIterDataPipe(torch.utils.data.IterDataPipe):
     """
 
     def __init__(
-        self, dataset: torch.utils.data.IterableDataset, *, buckets: Sequence[Tuple[int, int]], length_key: str
+        self,
+        dataset: torch.utils.data.IterableDataset,
+        *,
+        buckets: Sequence[Tuple[int, int]],
+        length_key: str,
+        random_bucket_prob: float = 0.0,
     ):
         """
         :param dataset: dataset to apply bucket batching to
@@ -345,9 +350,16 @@ class BucketOrderingIterDataPipe(torch.utils.data.IterDataPipe):
             Segments longer than the largest size limit configured in the buckets are dropped. To avoid dropping
             any segments make sure your largest bucket allows segments larger than your longest training segment.
         :param length_key: data key to take as length measure
+        :param random_bucket_prob: Probability of putting a segment not into the best-fitting bucket, but into
+            a randomly chosen still-fitting bucket.
+
+            This increases seq length variation within the buckets at the cost of slighly more padding.
         """
         self._dataset = dataset
         self._length_key = length_key
+        assert random_bucket_prob >= 0.0
+        self._random_bucket_prob = random_bucket_prob
+        self._rng = numpy.random.RandomState()
 
         assert buckets, "empty bucket batching configuration"
         if not all(size > 0 and max_seqs > 0 for size, max_seqs in buckets):
@@ -367,6 +379,12 @@ class BucketOrderingIterDataPipe(torch.utils.data.IterDataPipe):
             if bucket_idx >= len(self._max_seq_lens):
                 # seg is too long, drop it
                 continue
+            if (
+                self._random_bucket_prob > 0.0
+                and bucket_idx < len(self._max_seq_lens) - 1
+                and self._rng.rand() < self._random_bucket_prob
+            ):
+                bucket_idx = self._rng.randint(bucket_idx, len(self._max_bucket_sizes))
             buckets[bucket_idx].append(data_dict)
             if len(buckets[bucket_idx]) >= self._max_bucket_sizes[bucket_idx]:
                 yield buckets[bucket_idx]
