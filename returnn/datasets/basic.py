@@ -20,7 +20,7 @@ import math
 import numpy
 import functools
 import typing
-from typing import TYPE_CHECKING, Optional, Any, Union, Type, Dict, Sequence, List, Callable
+from typing import TYPE_CHECKING, Optional, Any, Tuple, Union, Type, Dict, Sequence, List, Callable
 
 from returnn.log import log
 from returnn.engine.batch import Batch, BatchSetGenerator
@@ -68,6 +68,12 @@ class Dataset:
         set_or_remove("min_chunk_size", config.opt_typed_value("min_chunk_size", 0) or None)
         set_or_remove("chunking_variance", config.float("chunking_variance", 0))
 
+        dd_cfg = config.typed_value("dataset_distribution", "random_seed_offset")
+        assert dd_cfg in ["random_seed_offset", "shard"]
+        shard_index, num_shards = Dataset._get_rank_and_size(config) if dd_cfg == "shard" else 0, 1
+        set_or_remove("num_shards", num_shards)
+        set_or_remove("shard_index", shard_index)
+
     @staticmethod
     def get_default_kwargs_eval(config: Config) -> Dict[str, Any]:
         """
@@ -112,8 +118,8 @@ class Dataset:
         min_chunk_size=0,
         chunking_variance=0,
         estimated_num_seqs=None,
-        _num_shards=1,
-        _shard_index=0,
+        num_shards: int = 1,
+        shard_index: int = 0,
     ):
         """
         :param str name: e.g. "train" or "eval"
@@ -137,8 +143,8 @@ class Dataset:
         :param str|None seq_order_seq_lens_file: for seq order, use the seq length given by this file
         :param int shuffle_frames_of_nseqs: shuffles the frames. not always supported
         :param None|int estimated_num_seqs: for progress reporting in case the real num_seqs is unknown
-        :param int _num_shards: number of shards the data is split into
-        :param int _shard_index: local shard index, when sharding is enabled
+        :param num_shards: number of shards the data is split into
+        :param shard_index: local shard index, when sharding is enabled
         """
         self.name = name or ("dataset_id%s" % id(self))
         self.lock = None  # type: Optional[RLock]  # Used when manipulating our data potentially from multiple threads.
@@ -172,9 +178,9 @@ class Dataset:
         self._chunking = chunking
         self.chunk_size, self.chunk_step, self.custom_chunking_func = self._parse_chunking(chunking)
         self._context_window = context_window
-        assert 0 <= _shard_index < _num_shards
-        self._num_shards = _num_shards
-        self._shard_index = _shard_index
+        assert 0 <= shard_index < num_shards
+        self.num_shards = num_shards
+        self.shard_index = shard_index
         if isinstance(context_window, (tuple, list)):
             assert len(context_window) == 2
             for elem in context_window:
@@ -250,6 +256,26 @@ class Dataset:
         state = {attr: getattr(self, attr) for attr in ["epoch", "zpad"]}
         return Dataset._create_from_reduce, (self.__class__, kwargs, state)
 
+    @staticmethod
+    def _get_rank_and_size(config: Config) -> Tuple[int, int]:
+        """
+        :return: tuple (rank, size): the global rank and size for distributed trainings
+        """
+        if config.typed_value("torch_distributed") is not None:
+            import returnn.torch.distributed
+
+            ctx = returnn.torch.distributed.get_ctx(config=config)
+            return ctx.rank(), ctx.size()
+        elif config.is_true("use_horovod"):
+            assert config.bool("use_tensorflow", False) or config.value("backend", "").startswith("tensorflow")
+
+            import returnn.tf.horovod
+
+            ctx = returnn.tf.horovod.get_ctx(config=config)
+            return ctx.rank(), ctx.size()
+        else:
+            return 0, 1
+
     @property
     def random_seed_offset(self) -> int:
         """:return: random seed offset for shuffling"""
@@ -259,10 +285,10 @@ class Dataset:
 
     def _uses_custom_distributed_sharding(self) -> bool:
         """
-        :return: if dataset has its own data sharding logic independent of TF/PT.
+        :return: if the dataset has its own data sharding logic independent of TF/PT.
             Leads to a fixed random_seed_offset independent of the workers local rank.
         """
-        return False
+        return self.num_shards > 1
 
     def _get_default_random_seed_offset(self):
         """
@@ -643,9 +669,9 @@ class Dataset:
             seq_index = [
                 i for i in seq_index if (all_seq_tags[i] not in used_seq_tags, used_seq_tags.add(all_seq_tags[i]))[0]
             ]
-        if partition_epoch > 1 or self._num_shards > 1:
+        if partition_epoch > 1 or self.num_shards > 1:
             seq_index = self._apply_partition_epoch_and_sharding(
-                seq_index, partition_epoch, epoch, self._num_shards, self._shard_index
+                seq_index, partition_epoch, epoch, self.num_shards, self.shard_index
             )
         if repeat_epoch > 1:
             seq_index = list(seq_index) * repeat_epoch
@@ -737,8 +763,8 @@ class Dataset:
         self.epoch = epoch
         self.rnd_seq_drop = Random(self._get_random_seed_for_epoch(epoch=epoch))
         assert (
-            self._num_shards == 1 or self.supports_sharding()
-        ), f"{self}: does not support sharding, but got num_shards == {self._num_shards}"
+            self.num_shards == 1 or self.supports_sharding()
+        ), f"{self}: does not support sharding, but got num_shards == {self.num_shards}"
         return False
 
     def finish_epoch(self, *, free_resources: bool = False):
@@ -1588,9 +1614,9 @@ def _dataset_extend_default_kwargs_from_parent_dataset(
     default_kwargs = default_kwargs.copy() if default_kwargs else {}
     default_kwargs.setdefault("random_seed_offset", parent_dataset.random_seed_offset)
     # noinspection PyProtectedMember
-    default_kwargs.setdefault("_num_shards", parent_dataset._num_shards)
+    default_kwargs.setdefault("num_shards", parent_dataset.num_shards)
     # noinspection PyProtectedMember
-    default_kwargs.setdefault("_shard_index", parent_dataset._shard_index)
+    default_kwargs.setdefault("shard_index", parent_dataset.shard_index)
     return default_kwargs
 
 
