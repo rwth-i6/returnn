@@ -492,6 +492,7 @@ class Engine(EngineBase):
                     start_elapsed=step_end_time - epoch_start_time,
                     seq_idx=last_seq_idx,
                     num_seqs=num_seqs,
+                    complete_frac=complete_frac,
                     batch_size_info=_get_batch_size_info(extern_data) if self._log_batch_size else None,
                     log_memory_usage_device=self._device if self._log_memory_usage else None,
                 )
@@ -629,12 +630,24 @@ class Engine(EngineBase):
             accumulated_losses_dict = NumbersDict()
             accumulated_inv_norm_factors_dict = NumbersDict()
             step_idx = 0
+            num_seqs = None
+            last_seq_idx = 0
 
+            report_prefix = (f"ep {self.epoch} {dataset_name} eval",)
             with torch.no_grad():
                 for extern_data_raw in data_loader:
                     if self._torch_distributed_ctx and step_idx % 100 == 0:
                         _has_data = torch.tensor([True], device="cpu", dtype=torch.int8)
                         torch.distributed.broadcast(_has_data, src=0)
+
+                    complete_frac = float(extern_data_raw["complete_frac"])
+                    num_seqs, last_seq_idx = _get_num_seqs_last_seq_idx(
+                        report_prefix=report_prefix,
+                        extern_data_raw=extern_data_raw,
+                        step_idx=step_idx,
+                        prev_num_seqs=num_seqs,
+                        prev_last_seq_idx=last_seq_idx,
+                    )
 
                     extern_data = extern_data_util.raw_dict_to_extern_data(
                         extern_data_raw,
@@ -664,9 +677,12 @@ class Engine(EngineBase):
                     accumulated_inv_norm_factors_dict += inv_norm_factors_dict
                     eval_info = self._maybe_extend_losses_info(losses_dict / inv_norm_factors_dict)
                     _print_process(
-                        f"ep {self.epoch} {dataset_name} eval",
+                        report_prefix,
                         step=step_idx,
                         eval_info=dict(eval_info),
+                        num_seqs=num_seqs,
+                        seq_idx=last_seq_idx,
+                        complete_frac=complete_frac,
                         log_memory_usage_device=self._device if self._log_memory_usage else None,
                     )
                     step_idx += 1
@@ -1300,6 +1316,7 @@ class Engine(EngineBase):
             for extern_data_raw in data_loader:
                 step_begin_time = time.monotonic()
 
+                complete_frac = float(extern_data_raw["complete_frac"])
                 num_seqs, last_seq_idx = _get_num_seqs_last_seq_idx(
                     report_prefix=report_prefix,
                     extern_data_raw=extern_data_raw,
@@ -1356,6 +1373,7 @@ class Engine(EngineBase):
                     start_elapsed=step_end_time - epoch_start_time,
                     seq_idx=last_seq_idx,
                     num_seqs=num_seqs,
+                    complete_frac=complete_frac,
                     batch_size_info=_get_batch_size_info(extern_data) if self._log_batch_size else None,
                     log_memory_usage_device=self._device if self._log_memory_usage else None,
                 )
@@ -1444,6 +1462,7 @@ def _print_process(
     start_elapsed: Optional[float] = None,
     seq_idx: Optional[int] = None,
     num_seqs: Optional[int] = None,
+    complete_frac: Optional[float] = None,
     log_memory_usage_device: Optional[str] = None,
 ):
     """
@@ -1475,17 +1494,23 @@ def _print_process(
             info += ["%.3f sec/step" % step_duration]
         if start_elapsed is not None:
             info += ["elapsed %s" % hms(start_elapsed)]
-        if num_seqs is not None:
-            assert seq_idx is not None and start_elapsed is not None  # unexpected combination...
+        if complete_frac is not None:
+            complete = complete_frac
+        elif num_seqs is not None:
+            assert seq_idx is not None  # unexpected combination...
             complete = (seq_idx + 1) / num_seqs
-            assert 1 >= complete > 0, f"{step} step, {num_seqs} num_seqs"
+        else:
+            complete = None
+        if complete is not None:
+            assert 1 >= complete > 0, f"{step} step, {num_seqs} num_seqs, {complete_frac} complete_frac"
+            assert start_elapsed is not None
             total_time_estimated = start_elapsed / complete
             remaining_estimated = total_time_estimated - start_elapsed
             info += [
                 "exp. remaining %s" % hms(remaining_estimated),
                 "complete %.02f%%" % (complete * 100),
             ]
-        if start_elapsed is not None and num_seqs is None:
+        if start_elapsed is not None and complete is None:
             info += ["(unk epoch len)"]
         print(", ".join(filter(None, info)), file=log.v5)
 
