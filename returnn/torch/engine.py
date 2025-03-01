@@ -632,6 +632,7 @@ class Engine(EngineBase):
             step_idx = 0
             num_seqs = None
             last_seq_idx = 0
+            eval_start_time = time.monotonic()
 
             report_prefix = (f"ep {self.epoch} {dataset_name} eval",)
             with torch.no_grad():
@@ -657,6 +658,8 @@ class Engine(EngineBase):
                     )
 
                     self._run_step(extern_data, train_func=True)
+                    step_end_time = time.monotonic()
+
                     train_ctx = rf.get_run_ctx()
 
                     losses_dict = NumbersDict(
@@ -683,6 +686,7 @@ class Engine(EngineBase):
                         num_seqs=num_seqs,
                         seq_idx=last_seq_idx,
                         complete_frac=complete_frac,
+                        start_elapsed=step_end_time - eval_start_time,
                         log_memory_usage_device=self._device if self._log_memory_usage else None,
                     )
                     step_idx += 1
