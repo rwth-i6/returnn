@@ -1286,8 +1286,6 @@ class Engine(EngineBase):
             new_dim.dyn_size_ext = _get_tensor_wo_batch_numpy(dim.dyn_size_ext)
             return new_dim
 
-        num_seqs = None
-        last_seq_idx = 0
         report_prefix = f"ep {self.epoch} {dataset.name} forward"
         with torch.no_grad():
             callback.init(model=self._orig_model)
