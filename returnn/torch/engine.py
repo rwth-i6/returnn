@@ -3,7 +3,7 @@ Main engine for PyTorch
 """
 
 from __future__ import annotations
-from typing import Optional, Any, Union, Callable, Dict, Set, Tuple
+from typing import Optional, Any, Union, Callable, Dict, Set
 from contextlib import nullcontext, ExitStack, contextmanager
 
 import gc
