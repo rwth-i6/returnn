@@ -634,7 +634,7 @@ class Engine(EngineBase):
             last_seq_idx = 0
             eval_start_time = time.monotonic()
 
-            report_prefix = (f"ep {self.epoch} {dataset_name} eval",)
+            report_prefix = f"ep {self.epoch} {dataset_name} eval"
             with torch.no_grad():
                 for extern_data_raw in data_loader:
                     if self._torch_distributed_ctx and step_idx % 100 == 0:
