@@ -365,8 +365,6 @@ class Engine(EngineBase):
         zero_grad_next_step = True
         cur_count_grad_accum = 0
         extern_data = None
-        num_seqs = None
-        last_seq_idx = 0
 
         total_data_size_packed = NumbersDict()
         total_data_size_padded = NumbersDict()
@@ -400,20 +398,8 @@ class Engine(EngineBase):
                 )
 
                 complete_frac = float(extern_data_raw["complete_frac"])
-                num_seqs, last_seq_idx = _get_num_seqs_last_seq_idx(
-                    report_prefix=report_prefix,
-                    extern_data_raw=extern_data_raw,
-                    step_idx=step_idx,
-                    prev_num_seqs=num_seqs,
-                    prev_last_seq_idx=last_seq_idx,
-                )
-                epoch_continuous = (
-                    self.epoch - 1 + complete_frac
-                    if complete_frac >= 0.0
-                    else (self.epoch - 1 + (last_seq_idx + 1) / num_seqs)
-                    if num_seqs is not None
-                    else None
-                )
+                epoch_continuous = self.epoch - 1 + complete_frac if complete_frac >= 0.0 else None
+                num_seqs = int(extern_data_raw["num_seqs"])
 
                 # clear the gradients when every gradient accumulation loop starts
                 if zero_grad_next_step:
@@ -490,9 +476,8 @@ class Engine(EngineBase):
                     eval_info=dict(eval_info),
                     step_duration=step_duration,
                     start_elapsed=step_end_time - epoch_start_time,
-                    seq_idx=last_seq_idx,
-                    num_seqs=num_seqs,
                     complete_frac=complete_frac,
+                    num_seqs=num_seqs,
                     batch_size_info=_get_batch_size_info(extern_data) if self._log_batch_size else None,
                     log_memory_usage_device=self._device if self._log_memory_usage else None,
                 )
@@ -630,8 +615,6 @@ class Engine(EngineBase):
             accumulated_losses_dict = NumbersDict()
             accumulated_inv_norm_factors_dict = NumbersDict()
             step_idx = 0
-            num_seqs = None
-            last_seq_idx = 0
             eval_start_time = time.monotonic()
 
             report_prefix = f"ep {self.epoch} {dataset_name} eval"
@@ -642,13 +625,7 @@ class Engine(EngineBase):
                         torch.distributed.broadcast(_has_data, src=0)
 
                     complete_frac = float(extern_data_raw["complete_frac"])
-                    num_seqs, last_seq_idx = _get_num_seqs_last_seq_idx(
-                        report_prefix=report_prefix,
-                        extern_data_raw=extern_data_raw,
-                        step_idx=step_idx,
-                        prev_num_seqs=num_seqs,
-                        prev_last_seq_idx=last_seq_idx,
-                    )
+                    num_seqs = int(extern_data_raw["num_seqs"])
 
                     extern_data = extern_data_util.raw_dict_to_extern_data(
                         extern_data_raw,
@@ -683,9 +660,8 @@ class Engine(EngineBase):
                         report_prefix,
                         step=step_idx,
                         eval_info=dict(eval_info),
-                        num_seqs=num_seqs,
-                        seq_idx=last_seq_idx,
                         complete_frac=complete_frac,
+                        num_seqs=num_seqs,
                         start_elapsed=step_end_time - eval_start_time,
                         log_memory_usage_device=self._device if self._log_memory_usage else None,
                     )
@@ -1321,13 +1297,7 @@ class Engine(EngineBase):
                 step_begin_time = time.monotonic()
 
                 complete_frac = float(extern_data_raw["complete_frac"])
-                num_seqs, last_seq_idx = _get_num_seqs_last_seq_idx(
-                    report_prefix=report_prefix,
-                    extern_data_raw=extern_data_raw,
-                    step_idx=step_idx,
-                    prev_num_seqs=num_seqs,
-                    prev_last_seq_idx=last_seq_idx,
-                )
+                num_seqs = int(extern_data_raw["num_seqs"])
 
                 if self._forward_step_expected_outputs:
                     # Also resets any dyn dims, which might have been set in the prev step.
@@ -1375,9 +1345,8 @@ class Engine(EngineBase):
                     eval_info=None,
                     step_duration=step_duration,
                     start_elapsed=step_end_time - epoch_start_time,
-                    seq_idx=last_seq_idx,
-                    num_seqs=num_seqs,
                     complete_frac=complete_frac,
+                    num_seqs=num_seqs,
                     batch_size_info=_get_batch_size_info(extern_data) if self._log_batch_size else None,
                     log_memory_usage_device=self._device if self._log_memory_usage else None,
                 )
@@ -1464,9 +1433,8 @@ def _print_process(
     batch_size_info: Optional[Dict[str, Any]] = None,
     step_duration: Optional[float] = None,
     start_elapsed: Optional[float] = None,
-    seq_idx: Optional[int] = None,
-    num_seqs: Optional[int] = None,
     complete_frac: Optional[float] = None,
+    num_seqs: Optional[int] = None,
     log_memory_usage_device: Optional[str] = None,
 ):
     """
@@ -1478,11 +1446,14 @@ def _print_process(
     :param batch_size_info:
     :param step_duration: time elapsed for this step (secs)
     :param start_elapsed: time elapsed since epoch start (secs)
-    :param num_seqs: total number of sequences for this epoch
+    :param complete_frac: how much of the current epoch is already consumed
+    :param num_seqs: total number of seqs this epoch
     :param log_memory_usage_device: if given, will log memory usage (peak allocated memory)
     :return: nothing, will be printed to log
     """
     if log.verbose[5]:  # report every minibatch
+        if step == 0 and num_seqs is not None and num_seqs >= 0:
+            print(f"{report_prefix} num_seqs: {num_seqs}", file=log.v5)
         info = [report_prefix, "step %i" % step]
         if eval_info:  # Such as score.
             info += ["%s %s" % (k, _format_score_value(v)) for k, v in eval_info.items()]
@@ -1499,22 +1470,15 @@ def _print_process(
         if start_elapsed is not None:
             info += ["elapsed %s" % hms(start_elapsed)]
         if complete_frac is not None:
-            complete = complete_frac
-        elif num_seqs is not None:
-            assert seq_idx is not None  # unexpected combination...
-            complete = (seq_idx + 1) / num_seqs
-        else:
-            complete = None
-        if complete is not None:
-            assert 1 >= complete > 0, f"{step} step, {num_seqs} num_seqs, {complete_frac} complete_frac"
+            assert 1 >= complete_frac > 0, f"{step} step, {complete_frac} complete_frac"
             assert start_elapsed is not None
-            total_time_estimated = start_elapsed / complete
+            total_time_estimated = start_elapsed / complete_frac
             remaining_estimated = total_time_estimated - start_elapsed
             info += [
                 "exp. remaining %s" % hms(remaining_estimated),
-                "complete %.02f%%" % (complete * 100),
+                "complete %.02f%%" % (complete_frac * 100),
             ]
-        if start_elapsed is not None and complete is None:
+        if start_elapsed is not None and complete_frac is None:
             info += ["(unk epoch len)"]
         print(", ".join(filter(None, info)), file=log.v5)
 
@@ -1663,27 +1627,3 @@ def _get_total_grad_norm(model: torch.nn.Module, p: float) -> float:
             p=p,
         ).item()
     )
-
-
-def _get_num_seqs_last_seq_idx(
-    *,
-    report_prefix: str,
-    extern_data_raw: Dict[str, Any],
-    step_idx: int,
-    prev_num_seqs: Optional[int],
-    prev_last_seq_idx: int,
-) -> Tuple[Optional[int], int]:
-    num_seqs = prev_num_seqs
-    num_seqs_ = int(extern_data_raw["num_seqs"]) if extern_data_raw.get("num_seqs", None) is not None else -1
-    # Note: The batches might have been shuffled,
-    # thus we cannot really assert that the seq_idx is always increasing.
-    last_seq_idx = max(int(extern_data_raw["seq_idx"].max()), prev_last_seq_idx)
-    if step_idx == 0:
-        if num_seqs_ >= 0:
-            print(f"{report_prefix} num_seqs: {num_seqs_}", file=log.v5)
-            num_seqs = num_seqs_
-    elif num_seqs_ >= 0:
-        assert num_seqs_ == num_seqs
-    if num_seqs is not None:
-        assert last_seq_idx < num_seqs
-    return num_seqs, last_seq_idx
