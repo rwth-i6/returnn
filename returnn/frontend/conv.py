@@ -178,11 +178,11 @@ def conv(
     *,
     in_dim: Dim,
     out_dim: Dim,
-    in_spatial_dims: Sequence[Dim],
+    in_spatial_dims: Sequence[Dim],  # to have the order well-defined (in ``strides``, ``filter_size``, etc.)
     out_spatial_dims: Optional[Sequence[Dim]] = None,
     filter: Tensor,
-    filter_size: Sequence[Dim],  # to have the order well-defined
-    padding: str,
+    filter_size: Sequence[Dim],  # to have the order well-defined in ``filter``
+    padding: Union[str, int, Sequence[int]],
     strides: Optional[Union[int, Sequence[int]]] = None,
     dilation_rate: Optional[Union[int, Sequence[int]]] = None,
     groups: Optional[int] = None,
@@ -198,6 +198,10 @@ def conv(
     for in_spatial_dim in in_spatial_dims:
         if in_spatial_dim not in source.dims:
             raise ValueError(f"conv: source {source} does not have spatial dim {in_spatial_dim}")
+    if padding == "same" and _any_is_non_default(strides, default=1) and _should_use_consistent_same_padding():
+        source, in_spatial_dims, padding = _consistent_same_padding(
+            source, in_spatial_dims=in_spatial_dims, filter_size=filter_size, dilation_rate=dilation_rate, pad_value=0
+        )
     # noinspection PyProtectedMember
     out, out_spatial_dims = source._raw_backend.conv(
         source,
@@ -359,6 +363,9 @@ def transposed_conv(
             use_mask = rf.use_mask_default(default=True, default_false_for_behavior_version_up_to=22)
         if use_mask:
             source = source.copy_masked(0, dims=in_spatial_dims)
+    if padding == "same" and _any_is_non_default(strides, default=1) and _should_use_consistent_same_padding():
+        # I don't really know what this should mean here... Investigate this further...
+        raise NotImplementedError("consistent same padding not implemented for transposed conv")
     # noinspection PyProtectedMember
     out, out_spatial_dims = source._raw_backend.transposed_conv(
         source=source,
@@ -409,7 +416,7 @@ def pool(
     nd: Optional[int] = None,
     mode: str,
     pool_size: Union[Sequence[int], int],
-    padding: str = "valid",
+    padding: Union[str, int, Sequence[int]] = "valid",
     dilation_rate: Union[Sequence[int], int] = 1,
     strides: Optional[Union[Sequence[int], int]] = None,
     in_spatial_dims: Union[Sequence[Dim], Dim],
@@ -424,7 +431,7 @@ def pool(
     :param nd:
     :param mode: "max" or "avg"
     :param pool_size: shape of the window of each reduce
-    :param padding: "valid" or "same"
+    :param padding: "valid" or "same" or int
     :param dilation_rate:
     :param strides: in contrast to tf.nn.pool, the default (if it is None) will be set to pool_size
     :param in_spatial_dims:
@@ -451,8 +458,7 @@ def pool(
         strides = pool_size
     elif isinstance(strides, int):
         strides = [strides] * nd
-    assert isinstance(strides, (list, tuple))
-    assert len(strides) == nd
+    assert isinstance(strides, (list, tuple)) and len(strides) == nd and all(isinstance(s, int) for s in strides)
 
     if any(in_spatial_dim.need_masking() for in_spatial_dim in in_spatial_dims):
         if use_mask is None:
@@ -461,6 +467,15 @@ def pool(
             source = source.copy_masked({"max": float("-inf"), "avg": 0}[mode], dims=in_spatial_dims)
     else:
         use_mask = False
+
+    if padding == "same" and _any_is_non_default(strides, default=1) and _should_use_consistent_same_padding():
+        source, in_spatial_dims, padding = _consistent_same_padding(
+            source,
+            in_spatial_dims=in_spatial_dims,
+            filter_size=pool_size,
+            dilation_rate=dilation_rate,
+            pad_value={"max": float("-inf"), "avg": 0}[mode],
+        )
 
     # noinspection PyProtectedMember
     out, out_spatial_dims = source._raw_backend.pool(
@@ -642,7 +657,7 @@ def make_conv_out_spatial_dims(
     in_spatial_dims: Sequence[Dim],
     *,
     filter_size: Union[Sequence[Union[int, Dim]], int, Dim],
-    padding: str,
+    padding: Union[str, int, Sequence[int]],
     strides: Union[Sequence[int], int] = 1,
     dilation_rate: Union[Sequence[int], int] = 1,
     description_prefix: Optional[str] = None,
@@ -658,11 +673,15 @@ def make_conv_out_spatial_dims(
     if isinstance(dilation_rate, int):
         dilation_rate = [dilation_rate] * nd
     assert nd == len(in_spatial_dims) == len(filter_size) == len(strides) == len(dilation_rate)
-    assert padding.lower() in ("valid", "same")
+    if isinstance(padding, (int, str)):
+        padding = [padding] * nd
+    padding = [p.lower() if isinstance(p, str) else p for p in padding]
     out_spatial_dims = []
     for i in range(nd):
         in_spatial_dim = in_spatial_dims[i]
-        if filter_size[i] == strides[i] == 1 or (strides[i] == 1 and padding.lower() == "same"):
+        if (filter_size[i] == strides[i] == 1 and padding[i] in ("valid", "same", 0)) or (
+            strides[i] == 1 and padding[i] == "same"
+        ):
             out_spatial_dims.append(in_spatial_dim)
         else:
             out_spatial_dim = _calc_out_dim(
@@ -670,7 +689,7 @@ def make_conv_out_spatial_dims(
                 filter_size=filter_size[i],
                 stride=strides[i],
                 dilation_rate=dilation_rate[i],
-                padding=padding,
+                padding=padding[i],
             )
             assert isinstance(out_spatial_dim, Dim)
             if description_prefix and out_spatial_dim != in_spatial_dim:
@@ -681,7 +700,7 @@ def make_conv_out_spatial_dims(
                     filter_size=filter_size[i],
                     stride=strides[i],
                     dilation_rate=dilation_rate[i],
-                    padding=padding,
+                    padding=padding[i],
                 )
             out_spatial_dims.append(out_spatial_dim)
     return out_spatial_dims
@@ -695,7 +714,7 @@ def _calc_out_dim(in_dim, filter_size, stride, padding, dilation_rate=1):
     :param int filter_size: e.g. 2, for the corresponding axis
     :param int stride: e.g. 1, for the corresponding axis
     :param int dilation_rate: e.g. 1
-    :param str padding: "valid" or "same"
+    :param str|int padding: "valid" or "same" or int
     :return: the output dimension
     :rtype: T
     """
@@ -712,13 +731,16 @@ def _calc_out_dim(in_dim, filter_size, stride, padding, dilation_rate=1):
             return rf.ceil_divide(a, b)
         return -(-a // b)
 
-    padding = padding.upper()
+    padding = padding.lower() if isinstance(padding, str) else padding
     # See tf.compat.v1.nn.convolution() documentation for more.
-    if padding == "SAME":
+    if padding == "same":
         if isinstance(in_dim, Dim):
             return in_dim.ceildiv_right(stride)
         return ceildiv(in_dim, stride)
-    elif padding == "VALID":
+    elif padding == "valid" or isinstance(padding, int):
+        if isinstance(padding, int) and padding != 0:
+            assert padding > 0
+            in_dim = padding + in_dim + padding
         if isinstance(in_dim, Dim):
             filter_left_dilated = (filter_size - 1) * dilation_rate // 2
             filter_right_dilated = (filter_size - 1) * dilation_rate - filter_left_dilated
@@ -726,4 +748,78 @@ def _calc_out_dim(in_dim, filter_size, stride, padding, dilation_rate=1):
             return valid_part.ceildiv_right(stride)
         return ceildiv(in_dim - (filter_size - 1) * dilation_rate, stride)
     else:
-        raise Exception("invalid padding %r" % padding)
+        raise ValueError(f"invalid padding {padding!r} (type {type(padding).__name__})")
+
+
+def _should_use_consistent_same_padding() -> bool:
+    """
+    Check the global RETURNN config for the ``rf_use_consistent_same_padding``
+    on how we should handle the ``padding="same"`` case for convolution/pooling when there is striding.
+    If that is not specified, with behavior version >=24, we will use the new consistent same padding,
+    with behavior version <=23, we will not use it.
+
+    See issue `#1693 <https://github.com/rwth-i6/returnn/issues/1693>`__.
+
+    :return: whether to use the new consistent same padding
+    """
+    from returnn.config import get_global_config
+
+    config = get_global_config(raise_exception=False)
+    config_value = None
+    if config:
+        if "rf_use_consistent_same_padding" in config.typed_dict:
+            config_value = config.typed_dict["rf_use_consistent_same_padding"]
+            assert config_value is None or isinstance(config_value, bool)
+        elif "rf_use_consistent_same_padding" in config.dict:
+            config_value = config.bool("rf_use_consistent_same_padding", None)
+    if config_value is not None:
+        return config_value
+
+    from returnn.util.basic import BehaviorVersion
+
+    return BehaviorVersion.get() >= 24
+
+
+def _consistent_same_padding(
+    source: Tensor,
+    *,
+    in_spatial_dims: Sequence[Dim],
+    filter_size: Optional[Union[int, Dim, Sequence[int], Sequence[Dim]]],
+    dilation_rate: Optional[Union[int, Sequence[int]]] = None,
+    pad_value: Union[int, float],
+) -> Tuple[Tensor, Sequence[Dim], Union[int, Sequence[int]]]:
+    """
+    :return: source or padded source, in_spatial_dims or new in_spatial_dims, new padding on top of the output
+    """
+    filter_size = _make_sequence(filter_size or 1, nd=len(in_spatial_dims))
+    dilation_rate = _make_sequence(dilation_rate or 1, nd=len(in_spatial_dims))
+    filter_size_ints = [s.dimension if isinstance(s, Dim) else s for s in filter_size]
+    if all(s % 2 == 1 for s in filter_size_ints):
+        # In this case, we can pass padding as integer to the backend, so that it adds the same padding left/right.
+        return source, in_spatial_dims, [(s // 2) * d for s, d in zip(filter_size_ints, dilation_rate)]
+    # Need to use the custom padding here.
+    paddings = []
+    for s, d in zip(filter_size, dilation_rate):
+        pad_left = (s - 1) * d // 2
+        pad_right = (s - 1) * d - pad_left
+        paddings.append((pad_left, pad_right))
+    # We expect that masking was already done before (or we don't care about it), thus handle_dynamic_dims=False.
+    source, in_spatial_dims = rf.pad(
+        source, axes=in_spatial_dims, padding=paddings, value=pad_value, handle_dynamic_dims=False
+    )
+    return source, in_spatial_dims, 0
+
+
+def _make_sequence(value: Union[int, Sequence[int]], *, nd: int) -> Sequence[int]:
+    if isinstance(value, int):
+        return [value] * nd
+    assert len(value) == nd
+    return value
+
+
+def _any_is_non_default(single_or_seq: Optional[Union[int, Sequence[int]]], *, default: int) -> bool:
+    if single_or_seq is None:
+        return False
+    if isinstance(single_or_seq, int):
+        return single_or_seq != default
+    return any(i != default for i in single_or_seq)
