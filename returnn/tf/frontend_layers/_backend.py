@@ -998,7 +998,7 @@ class ReturnnLayersBackend(Backend[Layer]):
         out_spatial_dims: Optional[Sequence[Dim]] = None,
         filter: Tensor,
         filter_size: Sequence[Dim],  # to have the order well-defined
-        padding: str,
+        padding: Union[str, int, Sequence[int]],
         strides: Optional[Union[int, Sequence[int]]] = None,
         dilation_rate: Optional[Union[int, Sequence[int]]] = None,
         groups: Optional[int] = None,
@@ -1088,7 +1088,7 @@ class ReturnnLayersBackend(Backend[Layer]):
         *,
         mode: str,
         pool_size: Sequence[int],
-        padding: str = "valid",
+        padding: Union[str, int, Sequence[int]] = "valid",
         dilation_rate: Union[Sequence[int], int] = 1,
         strides: Sequence[int],
         in_spatial_dims: Sequence[Dim],
