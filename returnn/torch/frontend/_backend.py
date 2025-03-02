@@ -1950,9 +1950,15 @@ class TorchBackend(Backend[torch.Tensor]):
                 #                = in_len + s.dimension - 1 - (in_len - 1) % stride
                 # Now, the amount of padding which actually matters is:
                 # pad = in_len_covered - in_len = s.dimension - 1 - (in_len - 1) % stride.
-                pad = s.dimension - 1 - (src_raw.shape[2 + i] - 1) % stride_
+                # pad = s.dimension - 1 - (src_raw.shape[2 + i] - 1) % stride_
+                # pad_left = pad // 2
+                # pad_right = pad - pad_left
+                # TODO configurable.... see https://github.com/rwth-i6/returnn/issues/1693
+                # TODO this seems to fix the test with test_single_batch_entry.
+                #   but why does it not change anything when compared to the TF output?
+                pad = s.dimension - 1
                 pad_left = pad // 2
-                pad_right = pad - pad_left
+                pad_right = pad - pad_left - (src_raw.shape[2 + i] - 1) % stride_
                 pads.extend([pad_left, pad_right])
             src_raw = torch.nn.functional.pad(src_raw, pads)
         if padding == "valid":
@@ -2040,6 +2046,7 @@ class TorchBackend(Backend[torch.Tensor]):
             padding = []
             for i, s in enumerate(pool_size):
                 # See comment in conv.
+                # TODO check this...
                 pad = s - 1 - (src_raw.shape[2 + i] - 1) % strides[i]
                 padding.append(pad // 2)
             ceil_mode = True
