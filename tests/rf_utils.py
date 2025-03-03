@@ -143,7 +143,10 @@ def run_model(
     for k, v_pt in out_pt_raw.items():
         v_tf = out_tf_raw[k]
         print(f"  comparing {k!r} {_array_repr(v_pt)} PT vs TF")
-        numpy.testing.assert_allclose(v_pt, v_tf, atol=1e-5, rtol=1e-5, err_msg=f"output {k!r} differs")
+        if not numpy.allclose(v_pt, v_tf, atol=1e-5, rtol=1e-5):
+            print(f"  PT:\n{v_pt}")
+            print(f"  TF:\n{v_tf}")
+            raise Exception(f"output {k!r} differs")
     return out_pt
 
 
