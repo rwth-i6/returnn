@@ -6587,6 +6587,7 @@ class ConvLayer(_ConcatInputLayer):
         input_split_feature_dim=None,
         input_add_feature_dim=False,
         use_time_mask=False,
+        mask_value: float = 0.0,
     ):
         """
         :param Data input_data:
@@ -6697,7 +6698,7 @@ class ConvLayer(_ConcatInputLayer):
                     continue
                 axis = input_data.get_axis_from_description(dim)
                 mask = input_data.get_sequence_mask_broadcast(axis=axis)
-                x = tf_util.where_bc(mask, x, 0.0)
+                x = tf_util.where_bc(mask, x, mask_value)
 
             input_data.placeholder = x
 
@@ -7061,6 +7062,7 @@ class PoolLayer(_ConcatInputLayer):
             in_dim=in_dim,
             in_spatial_dims=in_spatial_dims,
             use_time_mask=use_time_mask,
+            mask_value={"MAX": float("-inf"), "AVG": 0}[mode],
         )
         # We want to prepare the input data such that the batch-dim(s) is the very first,
         # the feature-dim is the very last ("NHWC" format) or right after batch-dim ("NCHW"),
