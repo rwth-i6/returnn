@@ -335,9 +335,9 @@ class _TensorMixin(_TensorMixinBase):
                         if tag.dyn_size_ext.placeholder is None:
                             tag.complete_dyn_size()
                         if self.placeholder is not None:
-                            assert (
-                                tag.dyn_size_ext.placeholder is not None
-                            ), "%s sanity_check: dynamic dim %s value unknown" % (self, tag)
+                            if tag.dyn_size_ext.placeholder is None:
+                                tag.complete_dyn_size()
+                                raise Exception("%s sanity_check: dynamic dim %s value unknown" % (self, tag))
                 assert tag.is_dim_known()
 
     def get_runtime_sanity_check_op(self: Tensor):
