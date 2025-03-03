@@ -1271,9 +1271,9 @@ class _DimMixin:
             if self.batch:
                 x_dim = x_dim.get_for_batch_ctx(self.batch, self.control_flow_ctx)
             x_dim.complete_dyn_size(template_only=template_only, _backend=backend)
-            if x_dim.dyn_size_ext is None and not x_dim.dimension:
+            if x_dim.dyn_size_ext is None and x_dim.dimension is None:
                 return
-            y = _bin_op(y, x_dim.dimension or x_dim.dyn_size_ext)
+            y = _bin_op(y, x_dim.dimension if x_dim.dimension is not None else x_dim.dyn_size_ext)
             if not template_only and y.raw_tensor is not None:
                 y_max_value = _bin_op(y_max_value, x_dim.get_dim_value_tensor())
         assert y is not None, f"op {op}?"
