@@ -6601,6 +6601,7 @@ class ConvLayer(_ConcatInputLayer):
         :param bool input_add_feature_dim: will add a dim at the end and use input-feature-dim == 1,
           and use the original input feature-dim as a spatial dim.
         :param bool use_time_mask:
+        :param mask_value: when ``use_time_mask`` is used, what value to use for the mask
         :return: (transformed input, num batch dims). all batch dims are at the front
         :rtype: (Data, int)
         """
