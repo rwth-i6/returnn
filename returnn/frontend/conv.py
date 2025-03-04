@@ -178,10 +178,10 @@ def conv(
     *,
     in_dim: Dim,
     out_dim: Dim,
-    in_spatial_dims: Sequence[Dim],  # to have the order well-defined (in ``strides``, ``filter_size``, etc.)
+    in_spatial_dims: Sequence[Dim],
     out_spatial_dims: Optional[Sequence[Dim]] = None,
     filter: Tensor,
-    filter_size: Sequence[Dim],  # to have the order well-defined in ``filter``
+    filter_size: Sequence[Dim],
     padding: Union[str, int, Sequence[int]],
     strides: Optional[Union[int, Sequence[int]]] = None,
     dilation_rate: Optional[Union[int, Sequence[int]]] = None,
@@ -189,7 +189,38 @@ def conv(
     bias: Optional[Tensor] = None,
     use_mask: Optional[bool] = None,
 ) -> Tuple[Tensor, Sequence[Dim]]:
-    """convolution"""
+    """
+    Generic N-D convolution.
+
+    :param source:
+    :param in_dim: input channels
+    :param out_dim: output channels
+    :param in_spatial_dims: On what dimensions to operate on.
+        The number of specified dims (1, 2 or 3) specifies whether this is 1D, 2D or 3D convolution.
+        The order is consistent with the order of the ``filter_size``, ``strides``, etc.
+    :param out_spatial_dims:
+    :param filter:
+    :param filter_size: defines the order of dims in ``filter``
+        such that it matches the order of ``in_spatial_dims``.
+    :param padding: "valid" or "same" or int. "valid" is like padding=0.
+        padding="same" will pad such that the output has the same spatial dimensions as the input
+        (in case of stride=1), or otherwise ceildiv(input, stride).
+        The specific padding in padding="same" with stride>1 has changed with behavior version >=24
+        (or global config option ``rf_use_consistent_same_padding``)
+        and is now consistent independent of dimension size.
+        See :func:`_consistent_same_padding` for more details.
+    :param strides: the default (if it is None) is 1
+    :param dilation_rate:
+    :param groups:
+    :param bias:
+    :param use_mask: Whether to mask the input tensor based on seq lengths
+        such that the padding in the padded tensor is ignored
+        (it will mask with 0).
+        With behavior version >=23, this is enabled by default,
+        or configured with global config option ``rf_use_mask``.
+        (Also see :func:`use_mask_default`).
+    :return: out, out_spatial_dims
+    """
     if any(in_spatial_dim.need_masking() for in_spatial_dim in in_spatial_dims):
         if use_mask is None:
             use_mask = rf.use_mask_default(default=True, default_false_for_behavior_version_up_to=22)
@@ -424,19 +455,29 @@ def pool(
     use_mask: Optional[bool] = None,
 ) -> Tuple[Tensor, Sequence[Dim]]:
     """
-    A generic N-D pooling layer.
-    This would usually be done after a convolution for down-sampling.
+    Generic N-D pooling.
 
     :param source:
     :param nd:
     :param mode: "max" or "avg"
     :param pool_size: shape of the window of each reduce
-    :param padding: "valid" or "same" or int
+    :param padding: "valid" or "same" or int. "valid" is like padding=0.
+        padding="same" will pad such that the output has the same spatial dimensions as the input
+        (in case of stride=1), or otherwise ceildiv(input, stride).
+        The specific padding in padding="same" with stride>1 has changed with behavior version >=24
+        (or global config option ``rf_use_consistent_same_padding``)
+        and is now consistent independent of dimension size.
+        See :func:`_consistent_same_padding` for more details.
     :param dilation_rate:
-    :param strides: in contrast to tf.nn.pool, the default (if it is None) will be set to pool_size
+    :param strides: the default (if it is None) will be set to pool_size (in contrast to :func:`conv`)
     :param in_spatial_dims:
     :param out_spatial_dims:
-    :param use_mask:
+    :param use_mask: Whether to mask the input tensor based on seq lengths
+        such that the padding in the padded tensor is ignored
+        (for max-pooling, it will mask with -inf, for avg-pooling with 0).
+        With behavior version >=23, this is enabled by default,
+        or configured with global config option ``rf_use_mask``.
+        (Also see :func:`use_mask_default`).
     :return: out, out_spatial_dims
     """
     if isinstance(in_spatial_dims, Dim):
@@ -753,14 +794,17 @@ def _calc_out_dim(in_dim, filter_size, stride, padding, dilation_rate=1):
 
 def _should_use_consistent_same_padding() -> bool:
     """
+    :return: whether to use the new consistent same padding with :func:`_consistent_same_padding`.
+
+    This is only needed for the case when we have striding and padding="same".
+    See :func:`_consistent_same_padding` for more details.
+
     Check the global RETURNN config for the ``rf_use_consistent_same_padding``
     on how we should handle the ``padding="same"`` case for convolution/pooling when there is striding.
     If that is not specified, with behavior version >=24, we will use the new consistent same padding,
     with behavior version <=23, we will not use it.
 
     See issue `#1693 <https://github.com/rwth-i6/returnn/issues/1693>`__.
-
-    :return: whether to use the new consistent same padding
     """
     from returnn.config import get_global_config
 
@@ -789,6 +833,20 @@ def _consistent_same_padding(
     pad_value: Union[int, float],
 ) -> Tuple[Tensor, Sequence[Dim], Union[int, Sequence[int]]]:
     """
+    In case of striding and padding="same", the standard padding that we do (following TensorFlow)
+    depends on the current dimension size.
+    It adds padding left and right such that the first and last window
+    will have the same amount of padding (+-1).
+    With stride=1, this is the standard (filter_size-1)/2 left and right padding,
+    but with stride>1, this is not the case anymore.
+    (See also the explanation and calculation of padding in :func:`returnn.torch.frontend._backend.TorchBackend.conv`.)
+    However, the problem with this behavior is with batching:
+    The padding now depends on the longest sequence in the batch,
+    and thus is arbitrary for any of the other sequences.
+
+    The new consistent same padding adds padding independent of the current dimension size (largest seq in batch).
+    We just do the same as with stride=1, i.e. (filter_size-1)/2 left and right padding.
+
     :return: source or padded source, in_spatial_dims or new in_spatial_dims, new padding on top of the output
     """
     filter_size = _make_sequence(filter_size or 1, nd=len(in_spatial_dims))
