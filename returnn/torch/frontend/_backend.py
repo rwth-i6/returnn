@@ -1879,7 +1879,7 @@ class TorchBackend(Backend[torch.Tensor]):
         out_spatial_dims: Optional[Sequence[Dim]] = None,
         filter: Tensor,
         filter_size: Sequence[Dim],  # to have the order well-defined
-        padding: str,
+        padding: Union[str, int, Sequence[int]],
         strides: Optional[Union[int, Sequence[int]]] = None,
         dilation_rate: Optional[Union[int, Sequence[int]]] = None,
         groups: Optional[int] = None,
@@ -2008,7 +2008,7 @@ class TorchBackend(Backend[torch.Tensor]):
         *,
         mode: str,
         pool_size: Sequence[int],
-        padding: str = "valid",
+        padding: Union[str, int, Sequence[int]] = "valid",
         dilation_rate: Union[Sequence[int], int] = 1,
         strides: Sequence[int],
         in_spatial_dims: Sequence[Dim],
@@ -2035,19 +2035,22 @@ class TorchBackend(Backend[torch.Tensor]):
             [-1, batch_dims[-1].get_dim_value() if batch_dims else 1] + [d.get_dim_value() for d in in_spatial_dims],
         )
         assert isinstance(strides, (list, tuple)) and len(strides) == len(in_spatial_dims) == len(pool_size)
-        if padding.lower() == "same":
+        if isinstance(padding, str) and padding.lower() == "same":
             # padding='same' is not quite the same as ceil_mode=True, so we explicitly pad here.
             padding = []
             for i, s in enumerate(pool_size):
                 # See comment in conv.
+                # I'm a bit unsure here... https://github.com/pytorch/pytorch/issues/148123
                 pad = s - 1 - (src_raw.shape[2 + i] - 1) % strides[i]
                 padding.append(pad // 2)
             ceil_mode = True
-        elif padding.lower() == "valid":
+        elif isinstance(padding, str) and padding.lower() == "valid":
             padding = 0
             ceil_mode = False
+        elif isinstance(padding, (int, tuple, list)):
+            ceil_mode = False
         else:
-            raise ValueError(f"invalid padding {padding!r}")
+            raise ValueError(f"invalid padding {padding!r} (type {type(padding).__name__}")
         func_name = f"{mode}_pool{len(in_spatial_dims)}d"
         func = getattr(torch.nn.functional, func_name)  # e.g. torch.nn.functional.max_pool1d
         kwargs = {}

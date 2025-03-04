@@ -3733,13 +3733,14 @@ def single_strided_slice(x, axis, begin=None, end=None, step=None):
 def pad_replicate(x, axes, padding):
     """
     :param tf.Tensor x:
-    :param list[int] axes:
-    :param list[(int,int)] padding:
+    :param Sequence[int] axes:
+    :param Sequence[(int|Dim,int|Dim)] padding:
     :rtype: tf.Tensor
     """
     with tf.name_scope("pad_replicate"):
         assert len(padding) == 1, "Not implemented otherwise yet"
         assert len(axes) == 1, "Not implemented otherwise yet"
+        assert isinstance(padding[0][0], int) and isinstance(padding[0][1], int)  # not implemented otherwise yet
         pad_left = tf.gather(x, 0, axis=axes[0])
         pad_left = tf.expand_dims(pad_left, axis=axes[0])
         pad_left = tf.repeat(pad_left, padding[0][0], axis=axes[0])
