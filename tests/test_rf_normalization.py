@@ -36,6 +36,8 @@ def test_batch_norm():
         out = model(extern_data["data"])
         out.mark_as_default_output(shape=(batch_dim, time_dim, in_dim))
 
+    # Note: no test_single_batch_entry=False needed here because we currently don't check the running stats,
+    # and the output currently uses the initial running stats, i.e. should be the same for all batches.
     run_model(extern_data, lambda *, epoch, step: _Net(), _forward_step)
 
 
@@ -62,4 +64,11 @@ def test_batch_norm_masking():
         out = model(extern_data["data"])
         out.mark_as_default_output(shape=(batch_dim, time_dim, in_dim))
 
-    run_model(extern_data, lambda *, epoch, step: _Net(), _forward_step)
+    run_model(
+        extern_data,
+        lambda *, epoch, step: _Net(),
+        _forward_step,
+        # BatchNorm by definition uses the batch dim.
+        # Needed here because track_running_stats=False and thus use_current_batch_stats=True.
+        test_single_batch_entry=False,
+    )
