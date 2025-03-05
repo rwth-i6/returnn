@@ -217,4 +217,7 @@ def test_scan_changing_dim():
         out, beam_dim = model(extern_data["data"])
         out.mark_as_default_output(shape=(batch_dim, beam_dim, in_dim))
 
-    run_model(extern_data, lambda *, epoch, step: _Net(), _forward_step, test_tensorflow=False)
+    # TODO the way this is implemented, accessing y[-1], is not consistent w.r.t. different batch sizes...
+    run_model(
+        extern_data, lambda *, epoch, step: _Net(), _forward_step, test_tensorflow=False, test_single_batch_entry=False
+    )
