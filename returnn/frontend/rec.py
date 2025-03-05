@@ -70,6 +70,9 @@ class LSTM(rf.Module):
             out_dim=self.out_dim,
         )
         new_state = LstmState(h=new_state_h, c=new_state_c)
+        result.feature_dim = self.out_dim
+        new_state.h.feature_dim = self.out_dim
+        new_state.c.feature_dim = self.out_dim
 
         return result, new_state
 
