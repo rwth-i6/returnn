@@ -38,7 +38,7 @@ def test_cond():
         out = model(extern_data["data"])
         out.mark_as_default_output(shape=(batch_dim, time_dim, out_dim))
 
-    run_model(extern_data, lambda *, epoch, step: _Net(), _forward_step)
+    run_model(extern_data, lambda *, epoch, step: _Net(), _forward_step, test_single_batch_entry=False)
 
 
 def test_cond_via_time_even():
@@ -69,8 +69,20 @@ def test_cond_via_time_even():
         out = model(extern_data["data"])
         out.mark_as_default_output(shape=(batch_dim, time_dim, out_dim))
 
-    run_model(extern_data, lambda *, epoch, step: _Net(), _forward_step, dyn_dim_max_sizes={time_dim: 5})
-    run_model(extern_data, lambda *, epoch, step: _Net(), _forward_step, dyn_dim_max_sizes={time_dim: 6})
+    run_model(
+        extern_data,
+        lambda *, epoch, step: _Net(),
+        _forward_step,
+        dyn_dim_max_sizes={time_dim: 5},
+        test_single_batch_entry=False,
+    )
+    run_model(
+        extern_data,
+        lambda *, epoch, step: _Net(),
+        _forward_step,
+        dyn_dim_max_sizes={time_dim: 6},
+        test_single_batch_entry=False,
+    )
 
 
 def test_cond_shared_params():
@@ -100,8 +112,20 @@ def test_cond_shared_params():
         out = model(extern_data["data"])
         out.mark_as_default_output(shape=(batch_dim, time_dim, out_dim))
 
-    run_model(extern_data, lambda *, epoch, step: _Net(), _forward_step, dyn_dim_max_sizes={time_dim: 5})
-    run_model(extern_data, lambda *, epoch, step: _Net(), _forward_step, dyn_dim_max_sizes={time_dim: 6})
+    run_model(
+        extern_data,
+        lambda *, epoch, step: _Net(),
+        _forward_step,
+        dyn_dim_max_sizes={time_dim: 5},
+        test_single_batch_entry=False,
+    )
+    run_model(
+        extern_data,
+        lambda *, epoch, step: _Net(),
+        _forward_step,
+        dyn_dim_max_sizes={time_dim: 6},
+        test_single_batch_entry=False,
+    )
 
 
 def test_cond_twice_shared_params():
@@ -140,8 +164,20 @@ def test_cond_twice_shared_params():
         out = model(extern_data["data"])
         out.mark_as_default_output(shape=(batch_dim, time_dim, out_dim))
 
-    run_model(extern_data, lambda *, epoch, step: _Net(), _forward_step, dyn_dim_max_sizes={time_dim: 5})
-    run_model(extern_data, lambda *, epoch, step: _Net(), _forward_step, dyn_dim_max_sizes={time_dim: 6})
+    run_model(
+        extern_data,
+        lambda *, epoch, step: _Net(),
+        _forward_step,
+        dyn_dim_max_sizes={time_dim: 5},
+        test_single_batch_entry=False,
+    )
+    run_model(
+        extern_data,
+        lambda *, epoch, step: _Net(),
+        _forward_step,
+        dyn_dim_max_sizes={time_dim: 6},
+        test_single_batch_entry=False,
+    )
 
 
 def test_cond_param_assign():
@@ -173,8 +209,20 @@ def test_cond_param_assign():
         out = model(extern_data["data"])
         out.mark_as_default_output(shape=())
 
-    out1 = run_model(extern_data, lambda *, epoch, step: _Net(), _forward_step, dyn_dim_max_sizes={time_dim: 5})
-    out2 = run_model(extern_data, lambda *, epoch, step: _Net(), _forward_step, dyn_dim_max_sizes={time_dim: 6})
+    out1 = run_model(
+        extern_data,
+        lambda *, epoch, step: _Net(),
+        _forward_step,
+        dyn_dim_max_sizes={time_dim: 5},
+        test_single_batch_entry=False,
+    )
+    out2 = run_model(
+        extern_data,
+        lambda *, epoch, step: _Net(),
+        _forward_step,
+        dyn_dim_max_sizes={time_dim: 6},
+        test_single_batch_entry=False,
+    )
     assert out1["output"].raw_tensor == 2
     assert out2["output"].raw_tensor == 5
 
@@ -208,8 +256,20 @@ def test_cond_param_assign2():
         out = model(extern_data["data"])
         out.mark_as_default_output(shape=())
 
-    out1 = run_model(extern_data, lambda *, epoch, step: _Net(), _forward_step, dyn_dim_max_sizes={time_dim: 5})
-    out2 = run_model(extern_data, lambda *, epoch, step: _Net(), _forward_step, dyn_dim_max_sizes={time_dim: 6})
+    out1 = run_model(
+        extern_data,
+        lambda *, epoch, step: _Net(),
+        _forward_step,
+        dyn_dim_max_sizes={time_dim: 5},
+        test_single_batch_entry=False,
+    )
+    out2 = run_model(
+        extern_data,
+        lambda *, epoch, step: _Net(),
+        _forward_step,
+        dyn_dim_max_sizes={time_dim: 6},
+        test_single_batch_entry=False,
+    )
     assert out1["output"].raw_tensor == 9
     assert out2["output"].raw_tensor == 5
 
@@ -246,8 +306,20 @@ def test_cond_param_assign3():
         out.mark_as_default_output(shape=())
         param.mark_as_output(shape=(), name="param")
 
-    out1 = run_model(extern_data, lambda *, epoch, step: _Net(), _forward_step, dyn_dim_max_sizes={time_dim: 5})
-    out2 = run_model(extern_data, lambda *, epoch, step: _Net(), _forward_step, dyn_dim_max_sizes={time_dim: 6})
+    out1 = run_model(
+        extern_data,
+        lambda *, epoch, step: _Net(),
+        _forward_step,
+        dyn_dim_max_sizes={time_dim: 5},
+        test_single_batch_entry=False,
+    )
+    out2 = run_model(
+        extern_data,
+        lambda *, epoch, step: _Net(),
+        _forward_step,
+        dyn_dim_max_sizes={time_dim: 6},
+        test_single_batch_entry=False,
+    )
     assert out1["output"].raw_tensor == 6 and out1["param"].raw_tensor == 2
     assert out2["output"].raw_tensor == 42 and out2["param"].raw_tensor == 5
 
