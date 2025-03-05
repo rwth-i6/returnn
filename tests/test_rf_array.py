@@ -364,7 +364,8 @@ def test_reshape():
         out = model(extern_data["data"])
         out.mark_as_default_output(shape=(batch_dim, time_dim, in_dim))
 
-    run_model(extern_data, lambda *, epoch, step: _Net(), _forward_step)
+    # Note: The tested op here is a bit meaningless. It also is not consinstent for different batch sizes...
+    run_model(extern_data, lambda *, epoch, step: _Net(), _forward_step, test_single_batch_entry=False)
 
 
 def test_expand_dim():
@@ -791,7 +792,7 @@ def test_reverse_sequence_no_dyn():
         out = rf.reverse_sequence(extern_data["data"], axis=time_dim, handle_dynamic_dims=False)
         out.mark_as_default_output(shape=(batch_dim, time_dim, in_dim))
 
-    run_model(extern_data, lambda *, epoch, step: rf.Module(), _forward_step)
+    run_model(extern_data, lambda *, epoch, step: rf.Module(), _forward_step, test_single_batch_entry=False)
 
 
 def test_where():
@@ -877,7 +878,7 @@ def test_copy_masked():
         x, _ = rf.pool1d(x, mode="avg", pool_size=3, strides=1, padding="same", in_spatial_dim=time_dim)
         x.mark_as_default_output(shape=(batch_dim, time_dim, in_dim))
 
-    run_model(extern_data, lambda *, epoch, step: rf.Module(), _forward_step)
+    run_model(extern_data, lambda *, epoch, step: rf.Module(), _forward_step, test_single_batch_entry=False)
 
 
 def test_cast_sparse():
