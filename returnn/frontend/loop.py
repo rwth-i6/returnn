@@ -128,6 +128,16 @@ def scan(
         like selecting the right beam entries.
     :return: outputs ys, final state, and the new spatial_dim
     """
+    device = None
+    if initial is not None:
+        vs = [v for v in tree.flatten(initial) if isinstance(v, Tensor) and v.device not in (None, "cpu")]
+        if vs:
+            device = vs[0].device
+    if device is None and xs is not None:
+        vs = [v for v in tree.flatten(xs) if isinstance(v, Tensor) and v.device not in (None, "cpu")]
+        if vs:
+            device = vs[0].device
+
     if spatial_dim is None or not spatial_dim.is_dim_known():
         assert cond is not None, f"scan: spatial_dim {spatial_dim} is None/unknown, need to provide `cond`"
         assert cond_dims is not None, f"scan: spatial_dim {spatial_dim} is None/unknown, need to provide `cond_dims`"
@@ -145,12 +155,13 @@ def scan(
         def _body(_s: Tuple[Tensor, Tensor, Tensor, S, Y]) -> Tuple[Tensor, Tensor, Tensor, S, Y]:
             i, seq_len_, prev_cond, s, ys_ = _s
             seq_len_ = seq_len_ + rf.cast(prev_cond, dtype=seq_len_.dtype)
-            y, s = body(None, s)
+            y, s_ = body(None, s)
             tree.assert_same_structure(ys_, y)
             ys_ = tree.map_structure(lambda ys__, y_: ys__.push_back(y_) if ys__ is not None else None, ys_, y)
-            c = cond(None, s)
+            c = cond(None, s_)
             c = rf.logical_and(c, prev_cond)
-            return i + 1, seq_len_, c, s, ys_
+            s_ = rf.nested.mask_nested(s_, mask=c, mask_value=s, allow_dim_extension=False)
+            return i + 1, seq_len_, c, s_, ys_
 
         if cond_before_body:
             initial_cond = cond(None, initial)
@@ -187,10 +198,13 @@ def scan(
 
         def _body(_s: Tuple[Tensor, S, Y]) -> Tuple[Tensor, S, Y]:
             i, s, ys_ = _s
-            y, s = body(tree.map_structure(lambda x: x[i], xs), s)
+            y, s_ = body(tree.map_structure(lambda x: x[i], xs), s)
             tree.assert_same_structure(ys_, y)
             ys_ = tree.map_structure(lambda ys__, y_: ys__.push_back(y_) if ys__ is not None else None, ys_, y)
-            return i + 1, s, ys_
+            s_ = rf.nested.mask_nested(
+                s_, mask=i < spatial_dim.get_size_tensor(device=device), mask_value=s, allow_dim_extension=False
+            )
+            return i + 1, s_, ys_
 
         _, final_s, ys = while_loop(
             _cond,
