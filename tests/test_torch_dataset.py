@@ -202,6 +202,20 @@ def test_MultiProcDataset_HDFDataset():
         assert c == n
 
 
+def test_dataset_num_workers_sharding():
+    config = Config({"backend": "torch", "torch_dataloader_opts": {"num_workers": 2}})
+    with global_config_ctx(config):
+        datasets = [
+            init_dataset({"class": "Task12AXDataset", "num_seqs": 100, "num_shards": 2, "shard_index": i})
+            for i in range(2)
+        ]
+        for dataset in datasets:
+            assert isinstance(dataset, Task12AXDataset)
+            dataset.init_seq_order(epoch=1)
+            assert dataset.shard_index < dataset.num_shards == 4
+            assert dataset.num_seqs == 25
+
+
 if __name__ == "__main__":
     better_exchook.install()
     if len(sys.argv) <= 1:
