@@ -80,8 +80,8 @@ def test_zoneout_lstm():
     extern_data = TensorDict(
         {
             "data": Tensor("data", [batch_dim, time_dim, in_dim], dtype="float32"),
-            "state_h": Tensor("state_h", [batch_dim, out_dim], dtype="float32"),
-            "state_c": Tensor("state_c", [batch_dim, out_dim], dtype="float32"),
+            "state_h": Tensor("state_h", [batch_dim, out_dim], dtype="float32", feature_dim=out_dim),
+            "state_c": Tensor("state_c", [batch_dim, out_dim], dtype="float32", feature_dim=out_dim),
             "classes": Tensor("classes", [batch_dim, time_dim], dtype="int32", sparse_dim=out_dim),
         }
     )
