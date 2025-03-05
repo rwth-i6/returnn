@@ -68,6 +68,12 @@ class Dataset:
         set_or_remove("min_chunk_size", config.opt_typed_value("min_chunk_size", 0) or None)
         set_or_remove("chunking_variance", config.float("chunking_variance", 0))
 
+        dd_cfg = config.typed_value("dataset_distribution", "random_seed_offset")
+        assert dd_cfg in ["random_seed_offset", "shard"]
+        shard_index, num_shards = Dataset._get_sharding_rank_and_size(config) if dd_cfg == "shard" else 0, 1
+        set_or_remove("num_shards", num_shards)
+        set_or_remove("shard_index", shard_index)
+
     @staticmethod
     def get_default_kwargs_eval(config: Config) -> Dict[str, Any]:
         """
@@ -112,8 +118,8 @@ class Dataset:
         min_chunk_size=0,
         chunking_variance=0,
         estimated_num_seqs=None,
-        num_shards: Optional[int] = None,
-        shard_index: Optional[int] = None,
+        num_shards: int = 1,
+        shard_index: int = 0,
     ):
         """
         :param str name: e.g. "train" or "eval"
@@ -172,9 +178,9 @@ class Dataset:
         self._chunking = chunking
         self.chunk_size, self.chunk_step, self.custom_chunking_func = self._parse_chunking(chunking)
         self._context_window = context_window
-        assert (shard_index is None and num_shards is None) or 0 <= shard_index < num_shards
-        self._num_shards = num_shards
-        self._shard_index = shard_index
+        assert 0 <= shard_index < num_shards
+        self.num_shards = num_shards
+        self.shard_index = shard_index
         if isinstance(context_window, (tuple, list)):
             assert len(context_window) == 2
             for elem in context_window:
@@ -213,7 +219,7 @@ class Dataset:
             getattr(self, "epoch", "<unknown>"),
         )
 
-    _getnewargs_exclude_attrs = {"num_shards", "shard_index"}  # type: typing.Set[str]
+    _getnewargs_exclude_attrs = set()  # type: typing.Set[str]
     _getnewargs_remap = {}  # type: typing.Dict[str,str]
 
     @staticmethod
@@ -250,51 +256,36 @@ class Dataset:
         state = {attr: getattr(self, attr) for attr in ["epoch", "zpad"]}
         return Dataset._create_from_reduce, (self.__class__, kwargs, state)
 
-    @property
-    def num_shards(self) -> int:
-        if self._num_shards is None:
-            self._shard_index, self._num_shards = self._get_sharding_info()
-        return self._num_shards
-
-    @property
-    def shard_index(self) -> int:
-        if self._shard_index is None:
-            self._shard_index, self._num_shards = self._get_sharding_info()
-        return self._shard_index
+    def set_shard_idx_and_num_shards(self, shard_index: int, num_shards: int):
+        """set sharding config for the dataset"""
+        assert 0 <= shard_index < num_shards
+        assert num_shards == 1 or self.supports_sharding()
+        self.num_shards = num_shards
+        self.shard_index = shard_index
 
     @staticmethod
-    def _get_sharding_info(config: Optional[Config] = None) -> Tuple[int, int]:
+    def _get_sharding_rank_and_size(config: Optional[Config] = None) -> Tuple[int, int]:
         """
-        :param config: current RETURNN config, if not set, will fetch global
         :return: tuple (rank, size): the global rank and size for distributed trainings
         """
         if config is None:
             from returnn.config import get_global_config
 
             config = get_global_config(return_empty_if_none=True)
+        if config.typed_value("torch_distributed") is not None:
+            import returnn.torch.distributed
 
-        if config.is_true("use_horovod"):
+            ctx = returnn.torch.distributed.get_ctx(config=config)
+            return ctx.rank(), ctx.size()
+        elif config.is_true("use_horovod"):
             assert config.bool("use_tensorflow", False) or config.value("backend", "").startswith("tensorflow")
 
             import returnn.tf.horovod
 
             ctx = returnn.tf.horovod.get_ctx(config=config)
             return ctx.rank(), ctx.size()
-
-        rank, size = 0, 1
-        if config.typed_value("torch_distributed") is not None:
-            import returnn.torch.distributed
-
-            ctx = returnn.torch.distributed.get_ctx(config=config)
-            rank, size = ctx.rank(), ctx.size()
-        if config.typed_value("torch_dataloader_opts") is not None:
-            import torch.utils.data
-
-            worker_info = torch.utils.data.get_worker_info()
-            if worker_info is not None:
-                size *= worker_info.num_workers
-                rank += worker_info.id
-        return rank, size
+        else:
+            return 0, 1
 
     @property
     def random_seed_offset(self) -> int:
