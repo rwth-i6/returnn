@@ -1879,7 +1879,7 @@ class TorchBackend(Backend[torch.Tensor]):
         out_spatial_dims: Optional[Sequence[Dim]] = None,
         filter: Tensor,
         filter_size: Sequence[Dim],  # to have the order well-defined
-        padding: str,
+        padding: Union[str, int, Sequence[int]],
         strides: Optional[Union[int, Sequence[int]]] = None,
         dilation_rate: Optional[Union[int, Sequence[int]]] = None,
         groups: Optional[int] = None,
@@ -1925,15 +1925,19 @@ class TorchBackend(Backend[torch.Tensor]):
                     stride_ = strides[i] if isinstance(strides, (list, tuple)) else strides
                 else:
                     stride_ = 1
-                # What is the logic here? You might be aware, in case without striding,
+                # What is the logic here? Also see https://github.com/rwth-i6/returnn/issues/1693.
+                # You might be aware, in case without striding,
                 # we simply have pad_left = (s.dimension - 1) // 2,
-                # or the total amount of padding is s.dimension - 1.
+                # or the total amount of padding is s.dimension - 1
+                # (s.dimension is the filter size).
                 # So we add the same amount of padding on both sides (or one less on the left side if odd).
                 # The output seq length in case of "valid" padding is ⌈(in_len - s.dimension + 1) / stride⌉.
                 # The output seq length in case of "same" padding with no striding (stride = 1)
-                # is simply the same as the input length.
+                # is simply the same as the input length (that's why it's called "same").
                 # What is the output seq length in case of "same" padding with striding?
-                # It should be ⌈in_len / stride⌉.
+                # It should be out_len = ⌈in_len / stride⌉ (it should be independent of s.dimension).
+                # We can rewrite out_len as:
+                # out_len = ⌊(in_len + stride - 1) / stride⌋ = (in_len + stride - 1 - (in_len - 1) % stride) / stride
                 # So, then we need to add a total amount of padding of s.dimension - 1.
                 # However, doing it the same way as without striding is incorrect.
                 # Why? Because then the first window might have more padding than the final window.
@@ -1941,8 +1945,6 @@ class TorchBackend(Backend[torch.Tensor]):
                 # or maybe one less on the first window if odd.
                 # How many frames do the windows cover?
                 # in_len_covered = out_len * stride + (s.dimension - stride)
-                # We can rewrite out_len as:
-                # out_len = ⌊(in_len + stride - 1) / stride⌋ = (in_len + stride - 1 - (in_len - 1) % stride) / stride
                 # So we have:
                 # in_len_covered = (in_len + stride - 1 - (in_len - 1) % stride) + (s.dimension - stride)
                 #                = in_len + s.dimension - 1 - (in_len - 1) % stride
@@ -2006,7 +2008,7 @@ class TorchBackend(Backend[torch.Tensor]):
         *,
         mode: str,
         pool_size: Sequence[int],
-        padding: str = "valid",
+        padding: Union[str, int, Sequence[int]] = "valid",
         dilation_rate: Union[Sequence[int], int] = 1,
         strides: Sequence[int],
         in_spatial_dims: Sequence[Dim],
@@ -2033,19 +2035,22 @@ class TorchBackend(Backend[torch.Tensor]):
             [-1, batch_dims[-1].get_dim_value() if batch_dims else 1] + [d.get_dim_value() for d in in_spatial_dims],
         )
         assert isinstance(strides, (list, tuple)) and len(strides) == len(in_spatial_dims) == len(pool_size)
-        if padding.lower() == "same":
+        if isinstance(padding, str) and padding.lower() == "same":
             # padding='same' is not quite the same as ceil_mode=True, so we explicitly pad here.
             padding = []
             for i, s in enumerate(pool_size):
                 # See comment in conv.
+                # I'm a bit unsure here... https://github.com/pytorch/pytorch/issues/148123
                 pad = s - 1 - (src_raw.shape[2 + i] - 1) % strides[i]
                 padding.append(pad // 2)
             ceil_mode = True
-        elif padding.lower() == "valid":
+        elif isinstance(padding, str) and padding.lower() == "valid":
             padding = 0
             ceil_mode = False
+        elif isinstance(padding, (int, tuple, list)):
+            ceil_mode = False
         else:
-            raise ValueError(f"invalid padding {padding!r}")
+            raise ValueError(f"invalid padding {padding!r} (type {type(padding).__name__}")
         func_name = f"{mode}_pool{len(in_spatial_dims)}d"
         func = getattr(torch.nn.functional, func_name)  # e.g. torch.nn.functional.max_pool1d
         kwargs = {}

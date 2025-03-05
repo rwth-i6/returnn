@@ -22,6 +22,17 @@ and not listing legacy/deprecated parameters.
 Version History
 ---------------
 
+Behavior version 24 (2025-03-02)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+RF ``conv`` and ``pool`` ``padding="same"`` with striding:
+Now, will add padding left/right independent of dimension length,
+i.e. also independent of batching.
+
+There is also the global config option ``rf_use_consistent_same_padding: bool`` to overwrite this.
+
+See issue `#1693 <https://github.com/rwth-i6/returnn/issues/1693>`__.
+
 Behavior version 23 (2025-02-25)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
