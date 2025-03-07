@@ -171,7 +171,9 @@ class DistributeFilesDataset(CachedDataset2):
                 "Use global config option `dataset_distribution` instead "
                 "for the same behavior across more types of datasets."
             )
-            self._validate_global_shard_cfg(distrib_shard_files)
+            sharding_info = self._validate_global_config_and_get_sharding_info(distrib_shard_files)
+            if sharding_info is not None:
+                self.shard_index, self.num_shards = sharding_info
         self.distrib_shard_files = distrib_shard_files
 
         if _meta_info_cache:
@@ -442,7 +444,7 @@ class DistributeFilesDataset(CachedDataset2):
         return self._data_keys
 
     @classmethod
-    def _validate_global_shard_cfg(cls, distrib_shard_files: bool):
+    def _validate_global_config_and_get_sharding_info(cls, distrib_shard_files: bool) -> Optional[Tuple[int, int]]:
         from returnn.config import get_global_config
 
         config = get_global_config(raise_exception=False)
@@ -455,6 +457,12 @@ class DistributeFilesDataset(CachedDataset2):
                 f"{cls.__name__}: `distrib_shard_files` config ({distrib_shard_files}) mismatch "
                 f"with global config option `dataset_distribution` ({dd_cfg})."
             )
+
+        if distrib_shard_files and dd_cfg is None:
+            # RETURNN will set sharding info on the dataset if the global config is set.
+            # If it's not set, however, we need to respect the existing `distrib_shard_files` property
+            # for backwards compatibility and load the sharding info ourselves.
+            return CachedDataset2._get_sharding_rank_and_size(config)
 
 
 def _get_key_for_file_tree(t: FileTree) -> str:
