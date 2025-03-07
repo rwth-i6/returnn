@@ -172,6 +172,7 @@ class DistributeFilesDataset(CachedDataset2):
                 "for the same behavior across more types of datasets."
             )
             self._validate_global_shard_cfg(distrib_shard_files)
+        self.distrib_shard_files = distrib_shard_files
 
         if _meta_info_cache:
             # This allows to skip the lazy init in self.initialize().
