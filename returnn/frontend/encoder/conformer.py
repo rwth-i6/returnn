@@ -294,7 +294,7 @@ class ConformerEncoder(ISeqDownsamplingEncoder):
     def __init__(
         self,
         in_dim: Dim,
-        out_dim: Dim = Dim(512, name="conformer-enc-default-out-dim"),
+        out_dim: Union[Dim, int] = Dim(512, name="conformer-enc-default-out-dim"),
         *,
         num_layers: int,
         input_layer: Optional[Union[ConformerConvSubsample, ISeqDownsamplingEncoder, rf.Module, Any]],
@@ -332,6 +332,11 @@ class ConformerEncoder(ISeqDownsamplingEncoder):
         :param sequential:
         """
         super().__init__()
+
+        assert isinstance(in_dim, Dim)
+        if isinstance(out_dim, int):
+            out_dim = Dim(out_dim, name="conformer-enc-out-dim")
+        assert isinstance(out_dim, Dim)
 
         self.in_dim = in_dim
         self.out_dim = out_dim
