@@ -21,6 +21,7 @@ def mask_nested(
     s: T,
     *,
     mask: Tensor,
+    mask_cpu: Optional[Tensor] = None,
     mask_value: Union[T, Tensor, float, None],
     dim_map: Optional[Dict[Dim, Dim]] = None,
     allow_dim_extension: bool = True,
@@ -30,6 +31,7 @@ def mask_nested(
 
     :param s:
     :param mask:
+    :param mask_cpu: mask tensor for CPU. this is used e.g. for dyn dim sizes
     :param mask_value:
     :param dim_map:
     :param allow_dim_extension:
@@ -37,7 +39,7 @@ def mask_nested(
     """
     if dim_map is None:
         dim_map = {}
-    partial_kwargs = dict(mask=mask, dim_map=dim_map, allow_dim_extension=allow_dim_extension)
+    partial_kwargs = dict(mask=mask, mask_cpu=mask_cpu, dim_map=dim_map, allow_dim_extension=allow_dim_extension)
     structures = [s]
     if type(s) is type(mask_value):  # mask_value also same nested structure?
         tree.assert_same_structure(s, mask_value)
@@ -49,7 +51,13 @@ def mask_nested(
 
 
 def _mask_prepare_dims(
-    s: T, mask_value: Union[T, Tensor, float, None], *, mask: Tensor, dim_map: Dict[Dim, Dim], allow_dim_extension: bool
+    s: T,
+    mask_value: Union[T, Tensor, float, None],
+    *,
+    mask: Tensor,
+    mask_cpu: Optional[Tensor] = None,
+    dim_map: Dict[Dim, Dim],
+    allow_dim_extension: bool,
 ) -> T:
     if isinstance(s, Dim):
         if mask_value is None:
@@ -69,6 +77,7 @@ def _mask_prepare_dims(
         new_dyn_size = _mask(
             s.get_size_tensor(),
             mask=mask,
+            mask_cpu=mask_cpu,
             mask_value=mask_value.get_size_tensor(),
             dim_map=dim_map,
             allow_dim_extension=allow_dim_extension,
@@ -80,11 +89,19 @@ def _mask_prepare_dims(
 
 
 def _mask(
-    s: T, mask_value: Union[T, Tensor, float, None], *, mask: Tensor, dim_map: Dict[Dim, Dim], allow_dim_extension: bool
+    s: T,
+    mask_value: Union[T, Tensor, float, None],
+    *,
+    mask: Tensor,
+    mask_cpu: Optional[Tensor] = None,
+    dim_map: Dict[Dim, Dim],
+    allow_dim_extension: bool,
 ) -> T:
     if s is None:
         return s
     if isinstance(s, Tensor):
+        if s.device == "cpu" and mask_cpu is not None:
+            mask = mask_cpu
         if dim_map:
             for d in s.dims:
                 if d in dim_map:
