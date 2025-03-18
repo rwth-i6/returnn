@@ -66,7 +66,7 @@ except ImportError:
 
 try:
     from traceback import StackSummary, FrameSummary
-except ImportError:
+except ImportError:  # StackSummary, FrameSummary were added in Python 3.5
 
     class _Dummy:
         pass
@@ -1688,6 +1688,14 @@ class ExtendedFrameSummary(FrameSummary):
     def __init__(self, frame, **kwargs):
         super(ExtendedFrameSummary, self).__init__(**kwargs)
         self.tb_frame = frame
+
+    def __reduce__(self):
+        # We deliberately serialize this as just a FrameSummary,
+        # excluding the tb_frame, as this cannot be serialized (via pickle at least),
+        # and also we do not want this to be serialized.
+        # We also exclude _line and locals as it's not so easy to add them here,
+        # and also not so important.
+        return FrameSummary, (self.filename, self.lineno, self.name)
 
 
 class DummyFrame:
