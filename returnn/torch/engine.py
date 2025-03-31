@@ -878,6 +878,7 @@ class Engine(EngineBase):
             checkpoint_state = torch.load(filename, map_location=self._device)
             if epoch is None:
                 epoch = checkpoint_state.get("epoch", self._start_epoch or 1)
+            step = checkpoint_state.get("step", 1)
             print(f"  epoch {epoch}, global train step {step}", file=log.v4)
             # The checkpoint was saved when the step was already increased (but not the epoch yet).
             # Restore the last step.
