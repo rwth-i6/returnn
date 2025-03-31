@@ -590,7 +590,7 @@ class ReportImportedDevModules:
             if path not in self.ignore_sys_path:
                 print("New sys.path entry:", path, file=log.v3)
                 has_changes = True
-        for mod_name, mod in sys.modules.items():
+        for mod_name, mod in list(sys.modules.items()):
             if "." not in mod_name and mod_name not in self.ignore_sys_modules:
                 if hasattr(mod, "__file__") and mod.__file__:
                     # __file__ is e.g. ".../recipe/i6_experiments/__init__.py"
