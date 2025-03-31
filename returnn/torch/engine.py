@@ -430,7 +430,6 @@ class Engine(EngineBase):
                         for name, loss in train_ctx.losses.items()
                     }
                 )
-
                 inv_norm_factors_dict = NumbersDict(
                     {name: float(_to_raw(loss.get_inv_norm_factor())) for name, loss in train_ctx.losses.items()}
                 )
@@ -673,7 +672,6 @@ class Engine(EngineBase):
                         start_elapsed=step_end_time - eval_start_time,
                         log_memory_usage_device=self._device if self._log_memory_usage else None,
                     )
-
                     # write losses/errors to tensorboard
                     for key, val in eval_info.items():
                         self._tensorboard_writer.add_scalar(
@@ -880,10 +878,6 @@ class Engine(EngineBase):
             checkpoint_state = torch.load(filename, map_location=self._device)
             if epoch is None:
                 epoch = checkpoint_state.get("epoch", self._start_epoch or 1)
-            if epoch == 0 and self.config.bool("reset_steps", True):
-                step = 1
-            else:
-                step = checkpoint_state.get("step", 1)
             print(f"  epoch {epoch}, global train step {step}", file=log.v4)
             # The checkpoint was saved when the step was already increased (but not the epoch yet).
             # Restore the last step.
