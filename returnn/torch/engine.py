@@ -20,6 +20,7 @@ from torch.nn.parallel import DistributedDataParallel
 from torch.utils.data import DataLoader
 from torch import autocast
 from torch.cuda import amp
+from torch.utils.tensorboard import SummaryWriter
 import numpy as np
 
 import returnn
@@ -131,6 +132,7 @@ class Engine(EngineBase):
         self._reset_dev_memory_caches = config.bool("reset_dev_memory_caches", False)
         self._forward_auto_split_batch_on_oom = config.bool("forward_auto_split_batch_on_oom", False)
         self._stop_on_nonfinite_train_score = config.bool("stop_on_nonfinite_train_score", True)
+        self._tensorboard_writer = SummaryWriter()
 
         default_float_dtype = config.value("default_float_dtype", None)
         if default_float_dtype is not None:
@@ -254,6 +256,8 @@ class Engine(EngineBase):
             self.set_epoch(self.epoch + 1)
             self.init_train_epoch()
             self.train_epoch()
+
+        self._tensorboard_writer.close()
 
         print(f"Finished training at epoch {self.epoch}, global train step {self.global_train_step}", file=log.v3)
 
@@ -426,6 +430,7 @@ class Engine(EngineBase):
                         for name, loss in train_ctx.losses.items()
                     }
                 )
+
                 inv_norm_factors_dict = NumbersDict(
                     {name: float(_to_raw(loss.get_inv_norm_factor())) for name, loss in train_ctx.losses.items()}
                 )
@@ -481,6 +486,9 @@ class Engine(EngineBase):
                     batch_size_info=_get_batch_size_info(extern_data) if self._log_batch_size else None,
                     log_memory_usage_device=self._device if self._log_memory_usage else None,
                 )
+                # write losses/errors to tensorboard
+                for key, val in eval_info.items():
+                    self._tensorboard_writer.add_scalar(f"train/{key}", val, global_step=self.global_train_step)
 
                 if self._stop_on_nonfinite_train_score:
                     if any(np.isinf(v) or np.isnan(v) for v in accumulated_losses_dict.values()):
@@ -665,6 +673,15 @@ class Engine(EngineBase):
                         start_elapsed=step_end_time - eval_start_time,
                         log_memory_usage_device=self._device if self._log_memory_usage else None,
                     )
+
+                    # write losses/errors to tensorboard
+                    for key, val in eval_info.items():
+                        self._tensorboard_writer.add_scalar(
+                            f"{dataset_name}/{key}",
+                            val,
+                            global_step=self.global_train_step
+                        )
+
                     step_idx += 1
 
             assert step_idx > 0, f"No data in dataset {dataset_name!r}."
@@ -863,7 +880,10 @@ class Engine(EngineBase):
             checkpoint_state = torch.load(filename, map_location=self._device)
             if epoch is None:
                 epoch = checkpoint_state.get("epoch", self._start_epoch or 1)
-            step = checkpoint_state.get("step", 1)
+            if epoch == 0 and self.config.bool("reset_steps", True):
+                step = 1
+            else:
+                step = checkpoint_state.get("step", 1)
             print(f"  epoch {epoch}, global train step {step}", file=log.v4)
             # The checkpoint was saved when the step was already increased (but not the epoch yet).
             # Restore the last step.
