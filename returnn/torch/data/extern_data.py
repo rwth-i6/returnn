@@ -132,7 +132,7 @@ def raw_dict_split_batch(
             raise TypeError(f"got invalid value of type ({type(v).__name__}) for key {k!r}")
         offset = 0
         for i, split_size in enumerate(splits):
-            res[i][k] = v[offset : offset + split_size]
+            res[i][k] = v[offset : offset + split_size] if v.ndim > 0 else v
             offset += split_size
     for res_ in res:
         res_: Dict[str, Union[torch.Tensor, numpy.ndarray]]
