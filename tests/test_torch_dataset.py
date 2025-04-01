@@ -18,7 +18,12 @@ from returnn.util import better_exchook
 
 
 def get_loader_from_returnn_dataset(
-    dataset: Dataset, mp_manager: torch.multiprocessing.Manager, *, batch_size: int = 5, max_seqs: int = 2
+    dataset: Dataset,
+    mp_manager: torch.multiprocessing.Manager,
+    *,
+    batch_size: int = 5,
+    max_seqs: int = 2,
+    num_workers: int = 1,
 ) -> DataLoader:
     # Follow mostly similar logic as in the PT engine.
 
@@ -46,7 +51,7 @@ def get_loader_from_returnn_dataset(
 
     pickle.loads(pickle.dumps(batches_dataset))
 
-    return data_pipeline.create_data_loader_from_batches(batches_dataset, {"num_workers": 1})
+    return data_pipeline.create_data_loader_from_batches(batches_dataset, {"num_workers": num_workers})
 
 
 def test_pipeline_serialization():
@@ -200,6 +205,13 @@ def test_MultiProcDataset_HDFDataset():
                 break
 
         assert c == n
+
+
+def test_dataset_num_workers_sharding():
+    dataset = init_dataset({"class": "Task12AXDataset", "num_seqs": 10})
+    mp_manager = torch.multiprocessing.Manager()
+    loader = get_loader_from_returnn_dataset(dataset, mp_manager, max_seqs=1, num_workers=2)
+    assert len(list(iter(loader))) == 10
 
 
 if __name__ == "__main__":
