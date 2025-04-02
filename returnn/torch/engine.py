@@ -134,6 +134,7 @@ class Engine(EngineBase):
 
         if config.bool("use_tensorboard", False):
             from torch.utils.tensorboard import SummaryWriter
+
             self._tensorboard_writer = SummaryWriter()
         else:
             self._tensorboard_writer = None
