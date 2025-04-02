@@ -351,6 +351,11 @@ class Backend(Generic[T]):
         raise NotImplementedError
 
     @staticmethod
+    def stop_gradient_scope() -> Any:
+        """stop gradient scope"""
+        raise NotImplementedError
+
+    @staticmethod
     def scaled_gradient(tensor: Tensor, scale: Union[float, Tensor]) -> Tensor:
         """
         :param tensor:
@@ -386,17 +391,17 @@ class Backend(Generic[T]):
         source: Tensor,
         *,
         dims: Sequence[Dim],
-        out_dim: Optional[Dim] = None,
-    ) -> Tuple[Tensor, Dim]:
+        out_dim: Dim,
+    ) -> Tensor:
         """
         Merges a list of axes into a single one. (Flatten the dims.)
         E.g. input is (batch, width, height, dim) and dims=(width,height), then we get (batch, width*height, dim).
         Or input is (batch, time, height, dim) and axes=(height,dim), then we get (batch, time, height*dim).
 
         :param source:
-        :param dims:
-        :param out_dim:
-        :return: tensor, out_dim
+        :param dims: list of dims to merge. len(dims) >= 2
+        :param out_dim: resulting merged dim
+        :return: tensor
         """
         raise NotImplementedError
 
@@ -478,7 +483,7 @@ class Backend(Generic[T]):
         source: Tensor,
         *,
         axes: Sequence[Dim],
-        padding: Sequence[Tuple[Union[Dim, int], Union[Dim, int]]],
+        padding: Sequence[Tuple[Union[Dim, int, Tensor], Union[Dim, int, Tensor]]],
         out_dims: Sequence[Dim],
         handle_dynamic_dims: bool,
         mode: str = "constant",
@@ -493,21 +498,6 @@ class Backend(Generic[T]):
         :param mode:
         :param value:
         :return: padded tensor
-        """
-        raise NotImplementedError
-
-    @staticmethod
-    def cum_concat_step(source: Tensor, *, prev_accum: Tensor, axis: Dim, out_spatial_dim: Dim) -> Tensor:
-        """
-        Concatenates all previous frames over a time-axis.
-        See RETURNN :class:`CumConcatLayer` for details.
-
-        :param source: same dims as prev_accum except for the accum axis
-        :param prev_accum: previous accumulated tensor, shape {..., axis}
-        :param axis: the axis to accumulate over
-        :param out_spatial_dim: the spatial dim of the output will be this dim. like axis+1.
-        :return: accumulated. accumulated shape {..., out_spatial_dim},
-            same shape as prev_accum with axis replaced by out_spatial_dim.
         """
         raise NotImplementedError
 
@@ -799,18 +789,11 @@ class Backend(Generic[T]):
         dims: Sequence[Dim],
         dtype: str,
         sparse_dim: Optional[Dim] = None,
+        feature_dim: Optional[Dim] = None,
         device: Optional[str] = None,
         name: Optional[str] = None,
     ) -> Tensor[T]:
-        """
-        :param value: tensor, or scalar raw tensor or some other scalar value
-        :param dims:
-        :param dtype:
-        :param sparse_dim:
-        :param device:
-        :param name:
-        :return: tensor
-        """
+        """convert (raw/any) tensor to tensor"""
         raise NotImplementedError
 
     @staticmethod
@@ -921,17 +904,21 @@ class Backend(Generic[T]):
         *,
         indices: Tensor,
         indices_dim: Union[Dim, Sequence[Dim]],
+        mode: str,
+        fill_value: Union[int, float],
         out_dim: Union[Dim, Sequence[Dim]],
     ) -> Tensor:
         """
         Scatters into new zero-tensor.
-        If entries in indices are duplicated, the corresponding values in source will be added together
-        (scatter_add in PyTorch).
-        (TF segment_sum can be implemented via this.)
+        If entries in indices are duplicated, with mode="sum", the corresponding values in source will be added together
+        (``scatter_add`` in PyTorch), otherwise min/max.
+        (segment_sum can be implemented via this.)
 
         :param source: [batch_dims..., indices_dim(s)..., feature_dims...]
         :param indices: [batch_dims..., indices_dim(s)...] -> out_dim
         :param indices_dim:
+        :param mode: "sum" or "max" or "min"
+        :param fill_value:
         :param out_dim:
         :return: [batch_dims..., out_dim, feature_dims...]
         """
@@ -952,8 +939,8 @@ class Backend(Generic[T]):
         raise NotImplementedError
 
     @staticmethod
-    def flip(source: Tensor, *, axis: Dim) -> Tensor:
-        """flip"""
+    def flip_no_mask(source: Tensor, *, axis: Dim) -> Tensor:
+        """flip, ignoring masking"""
         raise NotImplementedError
 
     @staticmethod
@@ -965,6 +952,11 @@ class Backend(Generic[T]):
         allow_broadcast_all_sources: bool = False,
     ) -> Tensor:
         """where"""
+        raise NotImplementedError
+
+    @staticmethod
+    def sort(source: Tensor, *, axis: Dim, descending: bool, stable: bool) -> Tuple[Tensor, Tensor, Dim]:
+        """sort. return values and indices"""
         raise NotImplementedError
 
     @staticmethod
@@ -981,6 +973,21 @@ class Backend(Generic[T]):
             sorted_seq[i-1] < value <= sorted_seq[i] if side=="left",
             sorted_seq[i-1] <= value < sorted_seq[i] if side=="right".
         """
+        raise NotImplementedError
+
+    @staticmethod
+    def is_finite(x: Tensor) -> Tensor:
+        """is finite"""
+        raise NotImplementedError
+
+    @staticmethod
+    def is_infinite(x: Tensor) -> Tensor:
+        """is positive or negative infinite"""
+        raise NotImplementedError
+
+    @staticmethod
+    def is_neg_infinite(x: Tensor) -> Tensor:
+        """is negative infinite"""
         raise NotImplementedError
 
     @staticmethod
@@ -1076,6 +1083,15 @@ class Backend(Generic[T]):
         out.raw_tensor = source.raw_tensor
         return out
 
+    @staticmethod
+    def set_sparse_dim(source: Tensor, sparse_dim: Dim) -> Tensor:
+        """set sparse dim"""
+        # This default implementation works fine as long as the backend
+        # does not have special treatments of Tensor and dim tags itself (like TF net dict backend).
+        out = source.copy()
+        out.sparse_dim = sparse_dim
+        return out
+
     _AllowedReduceModes = {"sum", "max", "min", "mean", "logsumexp", "any", "all", "argmin", "argmax"}
 
     @staticmethod
@@ -1152,11 +1168,14 @@ class Backend(Generic[T]):
         raise NotImplementedError
 
     @staticmethod
-    def masked_scatter(source: Tensor, *, mask: Tensor, dims: Sequence[Dim], in_dim: Dim) -> Tensor:
+    def masked_scatter(
+        source: Tensor, backup: Optional[Tensor] = None, *, mask: Tensor, dims: Sequence[Dim], in_dim: Dim
+    ) -> Tensor:
         """
         The inverse of :func:`masked_select`.
 
         :param source: [in_dim, F...]
+        :param backup: [dims..., F...] (or subset of those dims). zero if not given.
         :param mask: [dims...] -> bool (e.g. [B,T])
         :param dims: the order of the dims defines the format. those dims should be exactly the dims of the mask.
         :param in_dim: the dim of the source which should be scattered into the mask.
@@ -1204,7 +1223,7 @@ class Backend(Generic[T]):
         out_spatial_dims: Optional[Sequence[Dim]] = None,
         filter: Tensor,
         filter_size: Sequence[Dim],  # to have the order well-defined
-        padding: str,
+        padding: Union[str, int, Sequence[int]],
         strides: Optional[Union[int, Sequence[int]]] = None,
         dilation_rate: Optional[Union[int, Sequence[int]]] = None,
         groups: Optional[int] = None,
@@ -1239,7 +1258,7 @@ class Backend(Generic[T]):
         *,
         mode: str,
         pool_size: Sequence[int],
-        padding: str = "valid",
+        padding: Union[str, int, Sequence[int]] = "valid",
         dilation_rate: Union[Sequence[int], int] = 1,
         strides: Sequence[int],
         in_spatial_dims: Sequence[Dim],

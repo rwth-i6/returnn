@@ -40,7 +40,9 @@ See these functions:
 - get_current_frame
 - dump_all_thread_tracebacks
 - install
+- setup_all
 - replace_traceback_format_tb
+- replace_traceback_print_tb
 
 Although there might be a few more useful functions, thus we export all of them.
 
@@ -64,7 +66,7 @@ except ImportError:
 
 try:
     from traceback import StackSummary, FrameSummary
-except ImportError:
+except ImportError:  # StackSummary, FrameSummary were added in Python 3.5
 
     class _Dummy:
         pass
@@ -237,8 +239,8 @@ def set_linecache(filename, source):
 # noinspection PyShadowingBuiltins
 def simple_debug_shell(globals, locals):
     """
-    :param dict[str] globals:
-    :param dict[str] locals:
+    :param dict[str,typing.Any] globals:
+    :param dict[str,typing.Any] locals:
     :return: nothing
     """
     try:
@@ -286,8 +288,8 @@ def debug_shell(user_ns, user_global_ns, traceback=None, execWrapper=None):
     Spawns some interactive shell. Tries to use IPython if available.
     Falls back to :func:`pdb.post_mortem` or :func:`simple_debug_shell`.
 
-    :param dict[str] user_ns:
-    :param dict[str] user_global_ns:
+    :param dict[str,typing.Any] user_ns:
+    :param dict[str,typing.Any] user_global_ns:
     :param traceback:
     :param execWrapper:
     :return: nothing
@@ -324,7 +326,7 @@ def debug_shell(user_ns, user_global_ns, traceback=None, execWrapper=None):
                 """
                 Run the IPython shell.
                 """
-                pdb_obj.interaction(None, traceback=traceback)
+                pdb_obj.interaction(None, traceback)
 
         except Exception:
             print("IPython Pdb exception:")
@@ -339,7 +341,7 @@ def debug_shell(user_ns, user_global_ns, traceback=None, execWrapper=None):
             # noinspection PyPackageRequirements,PyUnresolvedReferences
             import IPython.terminal.embed
 
-            class DummyMod(object):
+            class DummyMod:
                 """Dummy module"""
 
             module = DummyMod()
@@ -458,7 +460,7 @@ def get_source_code(filename, lineno, module_globals=None):
     """
     :param str filename:
     :param int lineno:
-    :param dict[str]|None module_globals:
+    :param dict[str,typing.Any]|None module_globals:
     :return: source code of that line (including newline)
     :rtype: str
     """
@@ -691,7 +693,8 @@ class Color:
         ops = ".,;:+-*/%&!=|(){}[]^<>"
         i = 0
         cur_token = ""
-        color_args = {0: {}, len(s): {}}  # type: typing.Dict[int,typing.Dict[str]]  # pos in s -> color kwargs
+        # pos in s -> color kwargs
+        color_args = {0: {}, len(s): {}}  # type: typing.Dict[int,typing.Dict[str,typing.Any]]
 
         def finish_identifier():
             """
@@ -927,31 +930,36 @@ class _OutputLinesCollector:
         self.lines = []
         self.dom_term = DomTerm() if DomTerm.is_domterm() else None
 
-    def __call__(self, s1, s2=None, **kwargs):
+    def __call__(self, s1, s2=None, merge_into_prev=True, **kwargs):
         """
         Adds to self.lines.
         This strange function signature is for historical reasons.
 
         :param str s1:
         :param str|None s2:
+        :param bool merge_into_prev: if True and existing self.lines, merge into prev line.
         :param kwargs: passed to self.color
         """
         if kwargs:
             s1 = self.color(s1, **kwargs)
         if s2 is not None:
             s1 = add_indent_lines(s1, s2)
-        self.lines.append(s1 + "\n")
+        if merge_into_prev and self.lines:
+            self.lines[-1] += s1 + "\n"
+        else:
+            self.lines.append(s1 + "\n")
 
     @contextlib.contextmanager
-    def fold_text_ctx(self, line):
+    def fold_text_ctx(self, line, merge_into_prev=True):
         """
         Folds text, via :class:`DomTerm`, if available.
         Notes that this temporarily overwrites self.lines.
 
         :param str line: always visible
+        :param bool merge_into_prev: if True and existing self.lines, merge into prev line.
         """
         if not self.dom_term:
-            self.__call__(line)
+            self.__call__(line, merge_into_prev=merge_into_prev)
             yield
             return
         self.lines, old_lines = [], self.lines  # overwrite self.lines
@@ -967,7 +975,10 @@ class _OutputLinesCollector:
             line = line[1:]
         self.dom_term.fold_text(line, hidden=hidden_text, file=output_buf, align=len(prefix))
         output_text = prefix[1:] + output_buf.getvalue()
-        self.lines.append(output_text)
+        if merge_into_prev and self.lines:
+            self.lines[-1] += output_text
+        else:
+            self.lines.append(output_text)
 
     def _pp_extra_info(self, obj, depth_limit=3):
         """
@@ -1006,7 +1017,7 @@ class _OutputLinesCollector:
 
     def pretty_print(self, obj):
         """
-        :param object obj:
+        :param typing.Any obj:
         :rtype: str
         """
         s = repr(obj)
@@ -1029,15 +1040,28 @@ class _OutputLinesCollector:
 
 # For compatibility, we keep non-PEP8 argument names.
 # noinspection PyPep8Naming
-def format_tb(tb=None, limit=None, allLocals=None, allGlobals=None, withTitle=False, with_color=None, with_vars=None):
+def format_tb(
+    tb=None,
+    limit=None,
+    allLocals=None,
+    allGlobals=None,
+    withTitle=False,
+    with_color=None,
+    with_vars=None,
+    clear_frames=True,
+):
     """
     :param types.TracebackType|types.FrameType|StackSummary tb: traceback. if None, will use sys._getframe
     :param int|None limit: limit the traceback to this number of frames. by default, will look at sys.tracebacklimit
-    :param dict[str]|None allLocals: if set, will update it with all locals from all frames
-    :param dict[str]|None allGlobals: if set, will update it with all globals from all frames
+    :param dict[str,typing.Any]|None allLocals: if set, will update it with all locals from all frames
+    :param dict[str,typing.Any]|None allGlobals: if set, will update it with all globals from all frames
     :param bool withTitle:
     :param bool|None with_color: output with ANSI escape codes for color
     :param bool with_vars: will print var content which are referenced in the source code line. by default enabled.
+    :param bool clear_frames: whether to call frame.clear() after processing it.
+        That will potentially fix some mem leaks regarding locals, so it can be important.
+        Also see https://github.com/python/cpython/issues/113939.
+        However, any further access to frame locals will not work (e.g. if you want to use a debugger afterwards).
     :return: list of strings (line-based)
     :rtype: list[str]
     """
@@ -1113,8 +1137,8 @@ def format_tb(tb=None, limit=None, allLocals=None, allGlobals=None, withTitle=Fa
 
         def _resolve_identifier(namespace, keys):
             """
-            :param dict[str] namespace:
-            :param tuple[str] keys:
+            :param dict[str,typing.Any] namespace:
+            :param typing.Sequence[str] keys:
             :return: namespace[name[0]][name[1]]...
             """
             if keys[0] not in namespace:
@@ -1181,7 +1205,7 @@ def format_tb(tb=None, limit=None, allLocals=None, allGlobals=None, withTitle=Fa
                     name,
                 ]
             )
-            with output.fold_text_ctx(file_descr):
+            with output.fold_text_ctx(file_descr, merge_into_prev=False):
                 source_code = get_source_code(filename, lineno, f.f_globals)
                 if source_code:
                     source_code = remove_indent_lines(replace_tab_indents(source_code)).rstrip()
@@ -1225,16 +1249,17 @@ def format_tb(tb=None, limit=None, allLocals=None, allGlobals=None, withTitle=Fa
                 else:
                     output(color("    -- code not available --", color.fg_colors[0]))
 
-            # Just like :func:`traceback.clear_frames`, but has an additional fix
-            # (https://github.com/python/cpython/issues/113939).
-            try:
-                f.clear()
-            except RuntimeError:
-                pass
-            else:
-                # Using this code triggers that the ref actually goes out of scope, otherwise it does not!
-                # https://github.com/python/cpython/issues/113939
-                f.f_locals  # noqa
+            if clear_frames:
+                # Just like :func:`traceback.clear_frames`, but has an additional fix
+                # (https://github.com/python/cpython/issues/113939).
+                try:
+                    f.clear()
+                except RuntimeError:
+                    pass
+                else:
+                    # Using this code triggers that the ref actually goes out of scope, otherwise it does not!
+                    # https://github.com/python/cpython/issues/113939
+                    f.f_locals  # noqa
 
             if isframe(_tb):
                 _tb = _tb.f_back
@@ -1258,6 +1283,8 @@ def format_tb(tb=None, limit=None, allLocals=None, allGlobals=None, withTitle=Fa
 
 def print_tb(tb, file=None, **kwargs):
     """
+    Replacement for traceback.print_tb.
+
     :param types.TracebackType|types.FrameType|StackSummary tb:
     :param io.TextIOBase|io.StringIO|typing.TextIO|None file: stderr by default
     :return: nothing, prints to ``file``
@@ -1269,8 +1296,43 @@ def print_tb(tb, file=None, **kwargs):
     file.flush()
 
 
+def print_exception(etype, value, tb, limit=None, file=None, chain=True):
+    """
+    Replacement for traceback.print_exception.
+
+    :param etype: exception type
+    :param value: exception value
+    :param tb: traceback
+    :param int|None limit:
+    :param io.TextIOBase|io.StringIO|typing.TextIO|None file: stderr by default
+    :param bool chain: whether to print the chain of exceptions
+    """
+    better_exchook(etype, value, tb, autodebugshell=False, file=file, limit=limit, chain=chain)
+
+
+def print_exc(limit=None, file=None, chain=True):
+    """
+    Replacement for traceback.print_exc.
+    Shorthand for 'print_exception(*sys.exc_info(), limit, file)'.
+
+    :param int|None limit:
+    :param io.TextIOBase|io.StringIO|typing.TextIO|None file: stderr by default
+    :param bool chain:
+    """
+    print_exception(*sys.exc_info(), limit=limit, file=file, chain=chain)
+
+
 def better_exchook(
-    etype, value, tb, debugshell=False, autodebugshell=True, file=None, with_color=None, with_preamble=True
+    etype,
+    value,
+    tb,
+    debugshell=False,
+    autodebugshell=True,
+    file=None,
+    with_color=None,
+    with_preamble=True,
+    limit=None,
+    chain=True,
 ):
     """
     Replacement for sys.excepthook.
@@ -1284,24 +1346,34 @@ def better_exchook(
         and exception information. stderr by default.
     :param bool|None with_color: whether to use ANSI escape codes for colored output
     :param bool with_preamble: print a short preamble for the exception
+    :param int|None limit:
+    :param bool chain: whether to print the chain of exceptions
     """
     if file is None:
         file = sys.stderr
+
+    if autodebugshell:
+        # noinspection PyBroadException
+        try:
+            debugshell = int(os.environ["DEBUG"]) != 0
+        except Exception:
+            pass
 
     color = Color(enable=with_color)
     output = _OutputLinesCollector(color=color)
 
     rec_args = dict(autodebugshell=False, file=file, with_color=with_color, with_preamble=with_preamble)
-    if getattr(value, "__cause__", None):
-        better_exchook(type(value.__cause__), value.__cause__, value.__cause__.__traceback__, **rec_args)
-        output("")
-        output("The above exception was the direct cause of the following exception:")
-        output("")
-    elif getattr(value, "__context__", None):
-        better_exchook(type(value.__context__), value.__context__, value.__context__.__traceback__, **rec_args)
-        output("")
-        output("During handling of the above exception, another exception occurred:")
-        output("")
+    if chain:
+        if getattr(value, "__cause__", None):
+            better_exchook(type(value.__cause__), value.__cause__, value.__cause__.__traceback__, **rec_args)
+            output("")
+            output("The above exception was the direct cause of the following exception:")
+            output("")
+        elif getattr(value, "__context__", None):
+            better_exchook(type(value.__context__), value.__context__, value.__context__.__traceback__, **rec_args)
+            output("")
+            output("During handling of the above exception, another exception occurred:")
+            output("")
 
     def format_filename(s):
         """
@@ -1320,7 +1392,15 @@ def better_exchook(
     all_locals, all_globals = {}, {}
     if tb is not None:
         output.lines.extend(
-            format_tb(tb=tb, allLocals=all_locals, allGlobals=all_globals, withTitle=True, with_color=color.enable)
+            format_tb(
+                tb=tb,
+                limit=limit,
+                allLocals=all_locals,
+                allGlobals=all_globals,
+                withTitle=True,
+                with_color=color.enable,
+                clear_frames=not debugshell,
+            )
         )
     else:
         output(color("better_exchook: traceback unknown", color.fg_colors[1]))
@@ -1402,14 +1482,9 @@ def better_exchook(
         file.write(line)
     file.flush()
 
-    if autodebugshell:
-        # noinspection PyBroadException
-        try:
-            debugshell = int(os.environ["DEBUG"]) != 0
-        except Exception:
-            pass
     if debugshell:
-        output("---------- DEBUG SHELL -----------")
+        file.write("---------- DEBUG SHELL -----------\n")
+        file.flush()
         debug_shell(user_ns=all_locals, user_global_ns=all_globals, traceback=tb)
 
 
@@ -1622,6 +1697,14 @@ class ExtendedFrameSummary(FrameSummary):
         super(ExtendedFrameSummary, self).__init__(**kwargs)
         self.tb_frame = frame
 
+    def __reduce__(self):
+        # We deliberately serialize this as just a FrameSummary,
+        # excluding the tb_frame, as this cannot be serialized (via pickle at least),
+        # and also we do not want this to be serialized.
+        # We also exclude _line and locals as it's not so easy to add them here,
+        # and also not so important.
+        return FrameSummary, (self.filename, self.lineno, self.name)
+
 
 class DummyFrame:
     """
@@ -1710,3 +1793,34 @@ def replace_traceback_format_tb():
     if hasattr(traceback, "StackSummary"):
         traceback.StackSummary.format = format_tb
         traceback.StackSummary.extract = _StackSummary_extract
+
+
+def replace_traceback_print_tb():
+    """
+    Replaces these functions from the traceback module by our own:
+
+    - traceback.print_tb
+    - traceback.print_exception
+    - traceback.print_exc
+
+    Note that this kind of monkey patching might not be safe under all circumstances
+    and is not officially supported by Python.
+    """
+    import traceback
+
+    traceback.print_tb = print_tb
+    traceback.print_exception = print_exception
+    traceback.print_exc = print_exc
+
+
+def setup_all():
+    """
+    Calls:
+
+    - :func:`install`
+    - :func:`replace_traceback_format_tb`
+    - :func:`replace_traceback_print_tb`
+    """
+    install()
+    replace_traceback_format_tb()
+    replace_traceback_print_tb()

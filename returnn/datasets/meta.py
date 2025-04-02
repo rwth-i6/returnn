@@ -202,7 +202,7 @@ class MetaDataset(CachedDataset2):
         self,
         datasets: Dict[str, Dict[str, Any]],
         data_map: Dict[str, Tuple[str, str]],
-        seq_list_file: Optional[str] = None,
+        seq_list_file: Optional[Union[str, Dict[str, str]]] = None,
         seq_order_control_dataset: Optional[str] = None,
         seq_lens_file: Optional[str] = None,
         data_dims: Optional[Dict[str, Tuple[int, int]]] = None,  # deprecated
@@ -214,7 +214,10 @@ class MetaDataset(CachedDataset2):
         :param datasets: dataset-key -> dataset-kwargs. including keyword 'class' and maybe 'files'
         :param data_map: self-data-key -> (dataset-key, dataset-data-key).
             Should contain 'data' as key. Also defines the target-list, which is all except 'data'.
-        :param seq_list_file: filename. pickle. dict[str,list[str]], dataset-key -> list of sequence tags.
+        :param seq_list_file: filename. pickle (.pkl) or txt (line-based seq tags). optionally gzipped (.gz).
+            If a single file, and pickled, it can directly contain the dict:
+                dict[str,list[str]]: dataset-key -> list of sequence tags.
+            If a dict, expect dataset-key -> filename.
             Can be None if tag format is the same for all datasets.
                 Then the sequence list will be default sequence order of default dataset (``data_map["data"][0]``),
                 or seq_order_control_dataset.
@@ -289,24 +292,12 @@ class MetaDataset(CachedDataset2):
         self.orig_seq_order_is_initialized = False
         self.seq_list_ordered = None  # type: typing.Optional[typing.Dict[str,typing.List[str]]]
 
-    def _is_same_seq_name_for_each_dataset(self) -> bool:
-        """
-        This should be fast.
-        """
-        main_list = self.seq_list_original[self.default_dataset_key]
-        for key, other_list in self.seq_list_original.items():
-            if main_list is not other_list:
-                return False
-        return True
-
-    def _load_seq_list(self, seq_list_file: Optional[str] = None) -> Dict[str, List[str]]:
+    def _load_seq_list(self, seq_list_file: Optional[Union[str, Dict[str, str]]] = None) -> Dict[str, List[str]]:
         """
         :param seq_list_file:
         :return: dict: dataset key -> seq list
         """
-        if seq_list_file:
-            seq_list = Dataset._load_seq_list_file(seq_list_file, expect_list=False)
-        else:
+        if not seq_list_file:
             # We create a sequence list from all the sequences of the default dataset
             # and hope that it also applies to the
             # other datasets.
@@ -342,25 +333,43 @@ class MetaDataset(CachedDataset2):
                     file=log.v1,
                 )
                 other_tags = self.datasets[key].get_all_tags()
+                other_tags_set = set(other_tags)
                 for tag in seq_list:
-                    if tag not in other_tags:
+                    if tag not in other_tags_set:
                         print(
                             "Seq tag %r in dataset %r but not in dataset %r." % (tag, self.default_dataset_key, key),
                             file=log.v1,
                         )
                         break  # only print one
+                del other_tags_set
+                seq_list_set = set(seq_list)
                 for tag in other_tags:
-                    if tag not in seq_list:
+                    if tag not in seq_list_set:
                         print(
                             "Seq tag %r in dataset %r but not in dataset %r." % (tag, key, self.default_dataset_key),
                             file=log.v1,
                         )
                         break  # only print one
+                del seq_list_set
                 raise Exception("Dataset %r is missing seqs." % key)
+        elif isinstance(seq_list_file, str):
+            seq_list = Dataset._load_seq_list_file(seq_list_file, expect_list=False)
+        elif isinstance(seq_list_file, dict):
+            for key in self.dataset_keys:
+                if key not in seq_list_file:
+                    raise ValueError(f"seq_list_file does not contain all datasets, missing {key}")
+            seq_list = {key: Dataset._load_seq_list_file(seq_list_file[key]) for key in self.dataset_keys}
+        else:
+            raise TypeError(f"unexpected seq_list_file type {type(seq_list_file)}")
 
-        assert isinstance(seq_list, (list, dict))
         if isinstance(seq_list, list):
             seq_list = {key: seq_list for key in self.dataset_keys}
+        elif isinstance(seq_list, dict):
+            for key in self.dataset_keys:
+                if key not in seq_list:
+                    raise ValueError(f"seq_list does not contain all datasets, missing {key}")
+        else:
+            raise TypeError(f"unexpected seq_list type {type(seq_list)}")
 
         return seq_list
 
@@ -444,6 +453,14 @@ class MetaDataset(CachedDataset2):
         if self._seq_lens or self._seq_order_seq_lens_file:
             return True
         return False
+
+    def supports_sharding(self) -> bool:
+        """:return: whether this dataset supports sharding"""
+        return (
+            self.datasets[self.seq_order_control_dataset].supports_sharding()
+            if self.seq_order_control_dataset is not None
+            else True
+        )
 
     def get_current_seq_order(self):
         """
@@ -536,6 +553,12 @@ class MetaDataset(CachedDataset2):
         :rtype: str
         """
         return self.seq_list_ordered[self.default_dataset_key][sorted_seq_idx]
+
+    def get_complete_frac(self, sorted_seq_idx: int, **kwargs) -> Optional[float]:
+        """
+        :param sorted_seq_idx:
+        """
+        return self.datasets[self.default_dataset_key].get_complete_frac(sorted_seq_idx, **kwargs)
 
     def get_data_keys(self) -> List[str]:
         """data keys"""
@@ -993,7 +1016,8 @@ class CombinedDataset(CachedDataset2):
         self.num_outputs = self.data_dims
 
         self.data_dtypes = {
-            data_key: _select_dtype(data_key, self.data_dims, data_dtypes) for data_key in self.data_keys
+            data_key: _select_dtype(data_key, dset_data_key, self.datasets[dset_key], data_dtypes)
+            for (dset_key, dset_data_key), data_key in data_map.items()
         }
 
         self.dataset_seq_idx_boundaries = None  # type: typing.Optional[typing.List[int]]
@@ -1141,8 +1165,10 @@ class CombinedDataset(CachedDataset2):
 
         assert sum(counters) == total_num_seqs
 
-        if self.partition_epoch:
-            seq_order = self._apply_partition_epoch(seq_order, self.partition_epoch, self.epoch)
+        if self.partition_epoch or self._num_shards > 1:
+            seq_order = self._apply_partition_epoch_and_sharding(
+                seq_order, self.partition_epoch, self.epoch, self._num_shards, self._shard_index
+            )
         if self.repeat_epoch:
             seq_order = seq_order * self.repeat_epoch
 
@@ -1832,29 +1858,39 @@ class VariableDataset(Dataset):
     based on a user-provided function.
     """
 
-    def __init__(self, *, get_dataset, **kwargs):
+    def __init__(self, *, get_dataset, dataset_lru_cache_size: int = 1, **kwargs):
         """
         :param get_dataset: function (*, epoch: int, **_) -> Dict[str,Any], will be called for every sub-epoch.
-            It will cache the dict from the prev call, and if the dict is the same, it will not recreate the dataset.
+            It will cache the dataset(s) from the prev call (dataset_lru_cache_size),
+            and if the dict is the same of those, it will not recreate the dataset.
+        :param dataset_lru_cache_size
         """
+        from functools import lru_cache
+
         super().__init__(**kwargs)
         self._get_dataset = get_dataset
         self._dataset_dict: Optional[Dict[str, Any]] = None
         self._dataset: Optional[Dataset] = None
+        self._dataset_lru_cache_size = dataset_lru_cache_size
+        self._make_dataset = lru_cache(maxsize=self._dataset_lru_cache_size)(
+            lambda dataset_dict: init_dataset(dataset_dict, parent_dataset=self)
+        )
         self._load_dataset(epoch=1)
         self.num_inputs = self._dataset.num_inputs
         self.num_outputs = self._dataset.num_outputs
         self.labels = self._dataset.labels
 
     def _load_dataset(self, epoch: int):
-        dataset_dict = self._get_dataset(epoch=epoch)
-        if dataset_dict != self._dataset_dict:
-            self._dataset_dict = dataset_dict
-            self._dataset = init_dataset(dataset_dict, parent_dataset=self)
+        from returnn.util.basic import get_fwd_compat_kwargs, make_hashable
+
+        dataset_dict = self._get_dataset(self=self, epoch=epoch, **get_fwd_compat_kwargs())
+        assert isinstance(dataset_dict, dict)
+        dataset_dict = make_hashable(dataset_dict)
+        self._dataset = self._make_dataset(dataset_dict)
 
     def init_seq_order(self, epoch=None, seq_list=None, seq_order=None):
         """init seq order"""
-        super().init_seq_order()
+        super().init_seq_order(epoch=epoch, seq_list=seq_list, seq_order=seq_order)
         if epoch is None:
             if seq_list is not None or seq_order is not None:
                 raise ValueError(f"{self}: epoch is None, but given seq_list or seq_order, not supported")
@@ -1874,14 +1910,6 @@ class VariableDataset(Dataset):
     def get_current_seq_order(self) -> Sequence[int]:
         """current seq order"""
         return self._dataset.get_current_seq_order()
-
-    def get_all_tags(self) -> List[str]:
-        """all tags"""
-        return self._dataset.get_all_tags()
-
-    def get_total_num_seqs(self, *, fast: bool = False) -> int:
-        """total num seqs"""
-        return self._dataset.get_total_num_seqs(fast=fast)
 
     def get_seq_length(self, sorted_seq_idx: int) -> NumbersDict:
         """seq len"""
@@ -1934,6 +1962,110 @@ class VariableDataset(Dataset):
     def get_targets(self, target: str, seq_idx: int) -> numpy.ndarray:
         """target data"""
         return self._dataset.get_targets(target, seq_idx)
+
+    def get_data_dim(self, key: str) -> int:
+        """data dim"""
+        return self._dataset.get_data_dim(key)
+
+    def get_data_shape(self, data_key: str) -> List[int]:
+        """data shape"""
+        return self._dataset.get_data_shape(data_key)
+
+    def get_data_dtype(self, key: str) -> str:
+        """data dtype"""
+        return self._dataset.get_data_dtype(key)
+
+    def is_data_sparse(self, key: str) -> bool:
+        """is data sparse"""
+        return self._dataset.is_data_sparse(key)
+
+
+class MultiEpochDataset(CachedDataset2):
+    """
+    It wraps some dataset, where one outer epoch corresponds to multiple epochs in the inner wrapped dataset.
+
+    This can be useful when the inner dataset uses partition_epoch, and we want to cover the whole full epoch.
+
+    One specific example when the data is distributed over multiple files,
+    and for reasonable performance, you want to have the data copied to the local disk,
+    but all data together is too large to fit on the local disk.
+    Then :class:`DistributeFilesDataset` is the logical choice,
+    which solves these issues.
+    However, you must use some partition_epoch in :class:`DistributeFilesDataset`
+    such that it will not load all data at once.
+    To cover all the data, you can use this :class:`MultiEpochDataset`
+    and set multi_epoch = partition_epoch of the inner dataset.
+    """
+
+    def __init__(self, *, dataset: Dict[str, Any], multi_epoch: int, **kwargs):
+        """
+        :param dataset: the inner wrapped dataset
+        :param multi_epoch: how much inner epochs correspond to one outer epoch
+        """
+        super().__init__(**kwargs)
+        self._dataset = init_dataset(dataset, parent_dataset=self)
+        assert self._dataset
+        self._multi_epoch = multi_epoch
+        self.num_inputs = self._dataset.num_inputs
+        self.num_outputs = self._dataset.num_outputs
+        self.labels = self._dataset.labels
+        self._cur_inner_start_epoch: Optional[int] = None
+        self._cur_inner_epoch_offset = 0
+        self._cur_inner_epoch_seq_idx_offset = 0
+        self._epoch_have_predefined_seq_order = False
+
+    def init_seq_order(self, epoch=None, seq_list=None, seq_order=None):
+        """init seq order"""
+        super().init_seq_order(epoch=epoch, seq_list=seq_list, seq_order=seq_order)
+        self._epoch_have_predefined_seq_order = bool(seq_list or seq_order)
+        # epoch is 1-based
+        self._cur_inner_start_epoch = ((epoch - 1) * self._multi_epoch + 1) if epoch is not None else None
+        self._cur_inner_epoch_offset = 0
+        self._cur_inner_epoch_seq_idx_offset = 0
+        self._dataset.init_seq_order(epoch=self._cur_inner_start_epoch, seq_list=seq_list, seq_order=seq_order)
+
+    def finish_epoch(self, *, free_resources: bool = False):
+        """finish epoch"""
+        super().finish_epoch(free_resources=free_resources)
+        self._dataset.finish_epoch(free_resources=free_resources)
+
+    def get_all_tags(self) -> List[str]:
+        """all tags"""
+        return self._dataset.get_all_tags()
+
+    def get_total_num_seqs(self, *, fast: bool = False) -> int:
+        """total num seqs"""
+        return self._dataset.get_total_num_seqs(fast=fast)
+
+    def get_data_keys(self) -> List[str]:
+        """data keys"""
+        return self._dataset.get_data_keys()
+
+    def get_target_list(self) -> List[str]:
+        """target list"""
+        return self._dataset.get_target_list()
+
+    def _collect_single_seq(self, seq_idx: int) -> Optional[DatasetSeq]:
+        assert seq_idx >= self._cur_inner_epoch_seq_idx_offset
+        sub_seq_idx = seq_idx - self._cur_inner_epoch_seq_idx_offset
+        if not self._dataset.is_less_than_num_seqs(sub_seq_idx):
+            if self._epoch_have_predefined_seq_order:
+                return None  # predefined seq order, so no multi-epoch handling
+            if self._cur_inner_start_epoch is None:
+                return None  # there was no epoch given, so no multi-epoch handling
+            self._cur_inner_epoch_offset += 1
+            if self._cur_inner_epoch_offset >= self._multi_epoch:
+                return None  # we are done
+            self._dataset.init_seq_order(epoch=self._cur_inner_start_epoch + self._cur_inner_epoch_offset)
+            self._cur_inner_epoch_seq_idx_offset = seq_idx
+            sub_seq_idx = 0
+            assert self._dataset.is_less_than_num_seqs(sub_seq_idx)  # expect that the sub epoch has some seqs
+        self._dataset.load_seqs(sub_seq_idx, sub_seq_idx + 1)
+        data = {}
+        for key in self.get_data_keys():
+            data[key] = self._dataset.get_data(sub_seq_idx, key)
+        seq_tag = self._dataset.get_tag(sub_seq_idx)
+        return DatasetSeq(seq_idx=seq_idx, seq_tag=seq_tag, features=data)
 
     def get_data_dim(self, key: str) -> int:
         """data dim"""
@@ -2066,13 +2198,16 @@ class AnythingDataset(Dataset):
         return self._data_keys[key].get("sparse", False)
 
 
-def _select_dtype(key, data_dims, data_dtypes):
-    if data_dtypes and key in data_dtypes:
-        v = data_dtypes[key]
+def _select_dtype(
+    data_key: str,
+    dataset_data_key: str,
+    dataset: Dataset,
+    existing_dtype_map: Optional[Dict[str, str]],
+):
+    if existing_dtype_map and data_key in existing_dtype_map:
+        v = existing_dtype_map[data_key]
         assert isinstance(v, str)  # e.g. "int32" or "float32"
         return v
-    assert key in data_dims
-    if data_dims[key][1] == 1:  # sparse
-        return "int32"  # standard for 1-of-k
-    else:
-        return "float32"  # standard otherwise
+    if dataset.is_data_sparse(dataset_data_key):
+        return "int32"  # standard 1-of-k
+    return "float32"  # default float32 otherwise

@@ -16,6 +16,7 @@ from threading import RLock
 from random import Random, random
 import sys
 import os
+import math
 import numpy
 import functools
 import typing
@@ -24,7 +25,7 @@ from typing import TYPE_CHECKING, Optional, Any, Union, Type, Dict, Sequence, Li
 from returnn.log import log
 from returnn.engine.batch import Batch, BatchSetGenerator
 from returnn.datasets.util.vocabulary import Vocabulary
-from returnn.util.basic import try_run, NumbersDict, OptionalNotImplementedError
+from returnn.util.basic import get_fwd_compat_kwargs, try_run, NumbersDict, OptionalNotImplementedError
 from returnn.util import file_cache
 from returnn.tensor import TensorDict
 
@@ -35,7 +36,7 @@ if TYPE_CHECKING:
 RANDOM_SEED_OFFSET_ENV_VAR = "RETURNN_RANDOM_SEED_OFFSET"
 
 
-class Dataset(object):
+class Dataset:
     """
     Base class for any dataset. This defines the dataset API.
     """
@@ -111,6 +112,8 @@ class Dataset(object):
         min_chunk_size=0,
         chunking_variance=0,
         estimated_num_seqs=None,
+        _num_shards=1,
+        _shard_index=0,
     ):
         """
         :param str name: e.g. "train" or "eval"
@@ -118,7 +121,7 @@ class Dataset(object):
             not all datasets support this option.
         :param None|int|dict|NumbersDict|(dict,dict) context_window: will add this context for each chunk
         :param None|str|int|(int,int)|dict|(dict,dict)|function chunking: "chunk_size:chunk_step"
-        :param str seq_ordering: "batching"-option in config. e.g. "default", "sorted" or "random".
+        :param str|function seq_ordering: "batching"-option in config. e.g. "default", "sorted" or "random".
             See self.get_seq_order_for_epoch() for more details.
         :param int|None fixed_random_seed: for the shuffling, e.g. for seq_ordering='random'.
             otherwise epoch will be used.
@@ -134,6 +137,8 @@ class Dataset(object):
         :param str|None seq_order_seq_lens_file: for seq order, use the seq length given by this file
         :param int shuffle_frames_of_nseqs: shuffles the frames. not always supported
         :param None|int estimated_num_seqs: for progress reporting in case the real num_seqs is unknown
+        :param int _num_shards: number of shards the data is split into
+        :param int _shard_index: local shard index, when sharding is enabled
         """
         self.name = name or ("dataset_id%s" % id(self))
         self.lock = None  # type: Optional[RLock]  # Used when manipulating our data potentially from multiple threads.
@@ -167,6 +172,9 @@ class Dataset(object):
         self._chunking = chunking
         self.chunk_size, self.chunk_step, self.custom_chunking_func = self._parse_chunking(chunking)
         self._context_window = context_window
+        assert 0 <= _shard_index < _num_shards
+        self._num_shards = _num_shards
+        self._shard_index = _shard_index
         if isinstance(context_window, (tuple, list)):
             assert len(context_window) == 2
             for elem in context_window:
@@ -323,30 +331,52 @@ class Dataset(object):
             assert chunk_step.max_value() > 0, "chunking step must be positive (for some key)"
         return chunk_size, chunk_step, None
 
+    _seq_list_file_cache: Dict[str, Union[List[str], Dict[str, List[str]]]] = {}
+
     @staticmethod
-    def _load_seq_list_file(filename, use_cache_manager=False, expect_list=True):
+    def _load_seq_list_file(
+        filename: str, *, use_cache_manager: bool = False, expect_list: bool = True
+    ) -> Union[List[str], Dict[str, List[str]]]:
         """
-        :param str filename:
-        :param bool use_cache_manager:
-        :param bool expect_list:
-        :rtype: list[str]|dict[str,list[str]]
+        :param filename:
+        :param use_cache_manager:
+        :param expect_list:
+        :return: seq list file content. usually a list of seqs.
         """
+        if filename in Dataset._seq_list_file_cache:
+            seq_list = Dataset._seq_list_file_cache[filename]
+            if expect_list:
+                assert isinstance(seq_list, list)
+            return seq_list
+        _filename = filename
         if use_cache_manager:
             import returnn.util.basic
 
             filename = returnn.util.basic.cf(filename)
-        if filename.endswith(".pkl"):
-            import pickle
 
-            seq_list = pickle.load(open(filename, "rb"))
-            if expect_list:
-                assert isinstance(seq_list, list)
-        elif filename.endswith(".gz"):
+        if filename.endswith(".gz"):
             import gzip
 
-            seq_list = gzip.open(filename, "rt").read().splitlines()
+            filename = filename[: -len(".gz")]
+
+            def _open(mode):
+                return gzip.open(filename + ".gz", mode)
+
         else:
-            seq_list = open(filename).read().splitlines()
+
+            def _open(mode):
+                return open(filename, mode)
+
+        if filename.endswith(".pkl"):
+            import gzip
+            import pickle
+
+            seq_list = pickle.load(_open("rb"))
+            if expect_list:
+                assert isinstance(seq_list, list)
+        else:
+            seq_list = _open("rt").read().splitlines()
+        Dataset._seq_list_file_cache[_filename] = seq_list
         return seq_list
 
     def _sliding_window(self, xr):
@@ -504,34 +534,50 @@ class Dataset(object):
         if self._seq_order_seq_lens_file:
             get_seq_len = self._get_seq_order_seq_lens_by_idx
 
-        if self.seq_ordering == "default":
+        seq_ordering_method = self.seq_ordering
+        if callable(seq_ordering_method):
+            seq_ordering_method_ = seq_ordering_method(epoch=epoch, **get_fwd_compat_kwargs())
+            if not isinstance(seq_ordering_method_, str):
+                raise TypeError(
+                    f"seq_ordering function {seq_ordering_method} should return a str,"
+                    f" got {seq_ordering_method_!r} (type {type(seq_ordering_method_).__name__})"
+                )
+            seq_ordering_method = seq_ordering_method_
+        elif isinstance(seq_ordering_method, str):
+            pass  # fine, checked below
+        else:
+            raise TypeError(
+                f"seq_ordering {seq_ordering_method!r} unexpected type {type(seq_ordering_method).__name__}"
+            )
+
+        if seq_ordering_method == "default":
             seq_index = range(num_seqs)
-        elif self.seq_ordering.startswith("default_every_n:"):
+        elif seq_ordering_method.startswith("default_every_n:"):
             # This order is useful if you have "initial_state": "keep_over_epoch",
             # where num == max_seqs, batch_size = inf, max_seq_len = inf, chunking = None.
-            _, num = self.seq_ordering.split(":")
+            _, num = seq_ordering_method.split(":")
             num = int(num)
             seq_index = numpy.arange(num_seqs // num, dtype="int64").repeat(num)
             for i in range(1, num):
                 seq_index[i::num] += i * (num_seqs // num)
-        elif self.seq_ordering == "reverse":
+        elif seq_ordering_method == "reverse":
             seq_index = range(num_seqs - 1, -1, -1)  # type: Union[range, typing.Sequence[int]]
-        elif self.seq_ordering in ["sorted", "sorted_reverse"]:
+        elif seq_ordering_method in ["sorted", "sorted_reverse"]:
             assert get_seq_len
-            reverse = -1 if self.seq_ordering == "sorted_reverse" else 1
+            reverse = -1 if seq_ordering_method == "sorted_reverse" else 1
             seq_lens = [reverse * get_seq_len(i) for i in range(num_seqs)]
             seq_index = numpy.argsort(seq_lens, kind="stable")
-        elif self.seq_ordering.startswith("random"):
-            tmp = self.seq_ordering.split(":")
+        elif seq_ordering_method.startswith("random"):
+            tmp = seq_ordering_method.split(":")
             nth = int(tmp[1]) if len(tmp) > 1 else 1
             # Keep this deterministic! Use fixed seed.
             rnd_seed = self._get_random_seed_for_epoch(epoch=epoch, num_epochs_fixed=nth)
             random_generator = numpy.random.RandomState(rnd_seed)
             seq_index = random_generator.permutation(num_seqs)
-        elif self.seq_ordering.startswith("sort_bin_shuffle"):
+        elif seq_ordering_method.startswith("sort_bin_shuffle"):
             # Shuffle seqs, sort by length, and shuffle bins (then shuffle seqs within each bin if sort_bin_shuffle_x2).
             assert get_seq_len
-            tmp = self.seq_ordering.split(":")[1:]
+            tmp = seq_ordering_method.split(":")[1:]
             # Keep this deterministic! Use fixed seed.
             if len(tmp) <= 1:
                 nth = 1
@@ -555,13 +601,13 @@ class Dataset(object):
                     part = seq_index[i * len(seq_index) // bins :][:]
                 else:
                     part = seq_index[i * len(seq_index) // bins : (i + 1) * len(seq_index) // bins][:]
-                if self.seq_ordering.startswith("sort_bin_shuffle_x2"):
+                if seq_ordering_method.startswith("sort_bin_shuffle_x2"):
                     random_generator.shuffle(part)  # Shuffle within the bin.
                 out_index.append(part)
             seq_index = numpy.concatenate(out_index)
-        elif self.seq_ordering.startswith("laplace"):
+        elif seq_ordering_method.startswith("laplace"):
             assert get_seq_len
-            tmp = self.seq_ordering.split(":")[1:]
+            tmp = seq_ordering_method.split(":")[1:]
             if len(tmp) == 0:
                 bins = 2
             else:
@@ -588,7 +634,7 @@ class Dataset(object):
                 out_index.append(part)
             seq_index = numpy.concatenate(out_index)
         else:
-            assert False, "invalid batching specified: " + self.seq_ordering
+            raise ValueError(f"invalid seq_ordering {seq_ordering_method!r}")
 
         if self.unique_seq_tags:
             # Note: This is as generic as possible, but requires that get_all_tags is implemented.
@@ -597,8 +643,10 @@ class Dataset(object):
             seq_index = [
                 i for i in seq_index if (all_seq_tags[i] not in used_seq_tags, used_seq_tags.add(all_seq_tags[i]))[0]
             ]
-        if partition_epoch > 1:
-            seq_index = self._apply_partition_epoch(seq_index, partition_epoch, epoch)
+        if partition_epoch > 1 or self._num_shards > 1:
+            seq_index = self._apply_partition_epoch_and_sharding(
+                seq_index, partition_epoch, epoch, self._num_shards, self._shard_index
+            )
         if repeat_epoch > 1:
             seq_index = list(seq_index) * repeat_epoch
         if self.seq_tags_filter is not None:
@@ -622,27 +670,41 @@ class Dataset(object):
         return seq_index
 
     @classmethod
-    def _apply_partition_epoch(cls, seq_index, partition_epoch, epoch):
+    def _apply_partition_epoch_and_sharding(
+        cls,
+        seq_index: Sequence[int],
+        partition_epoch: int,
+        epoch: Optional[int],
+        num_shards: int,
+        shard_index: int,
+    ) -> Sequence[int]:
         """
-        :param typing.Sequence[int] seq_index: full list of ordered sequence indices
-        :param int partition_epoch: number of partitions seq_index should be split into
-        :param int|None epoch: current epoch
+        :param seq_index: full list of ordered sequence indices
+        :param partition_epoch: number of partitions seq_index should be split into
+        :param epoch: current epoch
+        :param num_shards: how many shards the data is split into
+        :param shard_index: index of the current data shard
         :return: partition of seq_index for current epoch
-        :rtype: typing.Sequence[int]
         """
+        assert 0 <= shard_index < num_shards
         num_seqs = len(seq_index)
-        current_partition = ((epoch or 1) - 1) % partition_epoch
-        seqs_per_epoch = num_seqs // partition_epoch
-        partition_sizes = [seqs_per_epoch + 1] * (num_seqs % partition_epoch) + [seqs_per_epoch] * (
-            partition_epoch - num_seqs % partition_epoch
+        num_partitions = partition_epoch * num_shards
+        current_partition = (((epoch or 1) - 1) % partition_epoch) * num_shards + shard_index
+        seqs_per_epoch = num_seqs // num_partitions
+        partition_sizes = [seqs_per_epoch + 1] * (num_seqs % num_partitions) + [seqs_per_epoch] * (
+            num_partitions - num_seqs % num_partitions
         )
-        assert sum(partition_sizes) == num_seqs and len(partition_sizes) == partition_epoch
+        assert sum(partition_sizes) == num_seqs and len(partition_sizes) == num_partitions
         partitions = functools.reduce(lambda a, x: a + [a[-1] + x], partition_sizes, [0])  # cumulative sum
-        assert len(partitions) == partition_epoch + 1
+        assert len(partitions) == num_partitions + 1
         seq_index = seq_index[partitions[current_partition] : partitions[current_partition + 1]]
         assert len(seq_index) == partition_sizes[current_partition]
 
         return seq_index
+
+    def supports_sharding(self) -> bool:
+        """:return: whether the dataset supports sharding based on the seq_order"""
+        return False
 
     def _get_random_seed_for_epoch(self, epoch, num_epochs_fixed=1):
         """
@@ -674,6 +736,9 @@ class Dataset(object):
         """
         self.epoch = epoch
         self.rnd_seq_drop = Random(self._get_random_seed_for_epoch(epoch=epoch))
+        assert (
+            self._num_shards == 1 or self.supports_sharding()
+        ), f"{self}: does not support sharding, but got num_shards == {self._num_shards}"
         return False
 
     def finish_epoch(self, *, free_resources: bool = False):
@@ -873,28 +938,51 @@ class Dataset(object):
         else:
             # We don't know. So:
             # Some monotonic increasing function in [0,1] which never reaches 1.
-            import math
+            return max(1.0e-10, (1 - 1 / ((seq_idx**0.5) / 100 + 1)) * 0.99)
 
-            return max(1.0e-10, 1.0 - math.exp(-seq_idx * 1000))
-
-    def get_complete_frac(self, seq_idx):
+    def get_complete_frac(self, sorted_seq_idx: int, *, allow_only_lr_suitable: bool = False) -> Optional[float]:
         """
-        :param int seq_idx:
-        :return: Returns a fraction (float in [0,1], always > 0) of how far we have advanced
-          for this seq in the dataset.
-          This does not have to be exact. This is only for the user.
-        :rtype: float
+        Tries to calculate exactly how much of the current epoch is completed when
+        having processed seq ``sorted_seq_idx``.
+
+        ``sorted_seq_idx`` cannot be less than the seq index of the previously loaded seqs.
+
+        :param sorted_seq_idx: sorted seq idx
+        :param allow_only_lr_suitable: only return a value when that value is suitable/accurate enough
+            to base LR scheduling on it. If false, this function will return an approximative value
+            when the exact value cannot be calculated (due to unknown ``num_seqs``).
+            Approximative values can be appropriate for e.g. progress bars.
+        :return: continuous value in (0, 1] which represents how much of the current epoch
+            is completed after ``sorted_seq_idx``.
+            If ``allow_only_lr_suitable=True``, returns ``None`` if the value cannot be calculated such
+            that it is accurate enough for LR scheduling, and otherwises bases ``epoch_continuous`` on it
+            for any dynamic learning rate scheduling.
+            As ``sorted_seq_idx`` is monotonic, the return value is also guaranteed to be monotonic.
         """
         # noinspection PyBroadException
         try:
             num_seqs = self.num_seqs
         except Exception:  # num_seqs not always available
+            if allow_only_lr_suitable:
+                return None
+
             # noinspection PyBroadException
             try:
                 num_seqs = self.estimated_num_seqs
             except Exception:  # also not always available
                 num_seqs = None  # ignore
-        return self.generic_complete_frac(seq_idx, num_seqs)
+
+        if math.isinf(num_seqs):
+            if allow_only_lr_suitable:
+                # cannot compute meaningful complete_frac for infinite num_seqs
+                return None
+            else:
+                num_seqs = None
+
+        assert (
+            num_seqs is None or 0 <= sorted_seq_idx < num_seqs
+        ), f"{self}: invalid seq indices: 0 <= seq_idx ({sorted_seq_idx}) < num_seqs ({num_seqs}) violated"
+        return self.generic_complete_frac(sorted_seq_idx, num_seqs)
 
     @property
     def num_seqs(self) -> int:
@@ -1020,20 +1108,21 @@ class Dataset(object):
         # in advance can handle this somehow.
         return n < self.num_seqs
 
-    def can_serialize_data(self, key):
+    def can_serialize_data(self, key: str) -> bool:
         """
-        :param str key: e.g. "classes"
-        :rtype: bool
+        :param key: e.g. "classes"
+        :return: whether :func:`serialize_data` is implemented for this key
         """
-        return key in self.labels
+        labels = self.labels.get(key)
+        return labels and len(labels) > 1
 
-    def serialize_data(self, key, data):
+    def serialize_data(self, key: str, data: numpy.ndarray) -> str:
         """
         In case you have a :class:`Vocabulary`, just use :func:`Vocabulary.get_seq_labels`.
 
-        :param str key: e.g. "classes". self.labels[key] should be set
+        :param key: e.g. "classes". self.labels[key] should be set
         :param numpy.ndarray data: 0D or 1D
-        :rtype: str
+        :return: serialized data
         """
         vocab = Vocabulary.create_vocab_from_labels(self.labels[key])
         if data.ndim == 0:
@@ -1050,7 +1139,7 @@ class Dataset(object):
         :rtype: list[(int,NumbersDict,NumbersDict)]
         """
         if self.custom_chunking_func:
-            sentinel_kw = {"__fwd_compatible_random_arg_%i" % int(random() * 100): None}
+            sentinel_kw = get_fwd_compat_kwargs()
             for seq_idx, t_start, t_end in self.custom_chunking_func(
                 dataset=self, seq_idx_start=0, recurrent_net=recurrent_net, used_data_keys=used_data_keys, **sentinel_kw
             ):
@@ -1310,16 +1399,27 @@ class DatasetSeq:
     Encapsulates all data for one sequence.
     """
 
-    def __init__(self, seq_idx, features, targets=None, seq_tag=None):
+    def __init__(
+        self,
+        seq_idx: int,
+        features,
+        *,
+        targets=None,
+        seq_tag: Optional[str] = None,
+        complete_frac: Optional[float] = None,
+    ):
         """
-        :param int seq_idx: sorted seq idx in the Dataset
+        :param seq_idx: sorted seq idx in the Dataset
         :param numpy.ndarray|dict[str,numpy.ndarray] features: format 2d (time,feature) (float)
         :param dict[str,numpy.ndarray]|numpy.ndarray|None targets: name -> format 1d (time) (idx of output-feature)
-        :param str seq_tag: sequence name / tag
+        :param seq_tag: sequence name / tag
+        :param complete_frac: continuous value in (0, 1] which represents how much of the current epoch
+            has been consumed when this seq is processed
         """
         assert isinstance(seq_idx, (int, numpy.integer))
         self.seq_idx = int(seq_idx)
         self.seq_tag = seq_tag or ("seq-%i" % seq_idx)
+        self.complete_frac = complete_frac
         if not isinstance(features, dict):
             assert isinstance(features, numpy.ndarray)
             features = {"data": features}
@@ -1391,6 +1491,7 @@ def get_dataset_class(name: Union[str, Type[Dataset]]) -> Optional[Type[Dataset]
         "multi_proc",
         "distrib_files",
         "postprocessing",
+        "text_dict",
     ]
     for mod_name in mod_names:
         mod = import_module("returnn.datasets.%s" % mod_name)
@@ -1486,6 +1587,10 @@ def _dataset_extend_default_kwargs_from_parent_dataset(
         return default_kwargs
     default_kwargs = default_kwargs.copy() if default_kwargs else {}
     default_kwargs.setdefault("random_seed_offset", parent_dataset.random_seed_offset)
+    # noinspection PyProtectedMember
+    default_kwargs.setdefault("_num_shards", parent_dataset._num_shards)
+    # noinspection PyProtectedMember
+    default_kwargs.setdefault("_shard_index", parent_dataset._shard_index)
     return default_kwargs
 
 

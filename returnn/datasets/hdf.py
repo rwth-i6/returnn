@@ -3,16 +3,19 @@ Provides :class:`HDFDataset`.
 """
 
 from __future__ import annotations
-import bisect
+from typing import TYPE_CHECKING, Union
 import typing
+import bisect
 import collections
 import gc
-import h5py
 import numpy
 from .cached import CachedDataset
 from .cached2 import CachedDataset2
 from .basic import Dataset, DatasetSeq
 from returnn.log import log
+
+if TYPE_CHECKING:
+    import h5py
 
 
 # Common attribute names for HDF dataset, which should be used in order to be proceed with HDFDataset class.
@@ -67,17 +70,8 @@ class HDFDataset(CachedDataset):
         del self.file_seq_start[:]
 
     @staticmethod
-    def _decode(s):
-        """
-        :param str|bytes|unicode s:
-        :rtype: str
-        """
-        from returnn.util.basic import unicode, PY3
-
-        if not PY3 and isinstance(s, unicode):
-            s = s.encode("utf8")
-            assert isinstance(s, str)  # Python 2
-        if not isinstance(s, str):  # bytes (Python 3)
+    def _decode(s: Union[str, bytes]) -> str:
+        if isinstance(s, bytes):
             s = s.decode("utf-8")
         s = s.split("\0")[0]
         return s
@@ -90,27 +84,18 @@ class HDFDataset(CachedDataset):
         Use load_seqs() to load the actual data.
         :type filename: str
         """
+        import h5py
+
         if self._use_cache_manager:
             from returnn.util.basic import cf
 
             filename = cf(filename)
+        print("parsing file", filename, file=log.v5)
         fin = h5py.File(filename, "r")
-        if "targets" in fin:
-            self.labels = {
-                k: [self._decode(item) for item in fin["targets/labels"][k][...].tolist()]
-                for k in fin["targets/labels"]
-            }
-        if not self.labels and "labels" in fin:
-            labels = [item.split("\0")[0] for item in fin["labels"][...].tolist()]  # type: typing.List[str]
-            self.labels = {"classes": labels}
-            assert len(self.labels["classes"]) == len(labels), (
-                "expected " + str(len(self.labels["classes"])) + " got " + str(len(labels))
-            )
         self.files.append(filename)
         self.h5_files.append(fin)
         self.cached_h5_datasets.append({})
-        print("parsing file", filename, file=log.v5)
-        if "times" in fin:
+        if attr_times in fin:
             if self.timestamps is None:
                 self.timestamps = fin[attr_times][...]
             else:
@@ -119,9 +104,35 @@ class HDFDataset(CachedDataset):
         if len(self.files) >= 2:
             prev_target_keys = self.target_keys
         if "targets" in fin:
+            # Note: Earlier RETURNN versions used "targets/labels" to determine target_keys.
+            # https://github.com/rwth-i6/returnn/blob/c2d8fed877022d1ac1bf68b801604733db51223e/HDFDataset.py#L60
             self.target_keys = sorted(set(fin["targets/data"].keys()) | set(fin["targets/size"].attrs.keys()))
         else:
+            # Actually this "classes" target key is never used.
+            # Only if there are "targets" in the HDF file, we use the keys from there.
+            # HDFDataset.get_target_list() returns an empty list,
+            # and HDFDataset.get_data_keys() uses get_target_list() + optional ["data"].
+            # HDFDataset.get_target_list() returns self.targets.keys().
+            # self.targets is set below but only if "targets" in fin,
+            # which is not the case here.
+            # However, for historical reasons, the shape of seq_lengths (and seq_start)
+            # will count with this dummy target key,
+            # although the seq_lengths/seq_start values are never used.
+            # Thus, we cannot change this now, because then we couldn't handle old HDF files anymore.
             self.target_keys = ["classes"]
+
+        if "targets" in fin:
+            for k in fin["targets/labels"]:
+                if k not in self.labels:
+                    self.labels[k] = [self._decode(item) for item in fin["targets/labels"][k][...].tolist()]
+        # Note: "labels" in fin was not usd since quite a while in most HDFs
+        # (which I can tell because the code was broken and would have resulted in an exception,
+        # specifically self._decode was missing, and it used item.split("\0")[0] instead,
+        # which does not work because we get bytes since Python 3, thus the split would not work).
+        # However, SimpleHDFWriter might have written it if the provided data has it,
+        # thus those are the labels for "data", not for "classes", as we had it earlier.
+        if "labels" in fin and "data" not in self.labels and "inputs" in fin:
+            self.labels["data"] = [self._decode(item) for item in fin["labels"][...].tolist()]
 
         seq_lengths = fin[attr_seqLengths][...]  # shape (num_seqs,num_target_keys + 1)
         num_input_keys = 1 if "inputs" in fin else 0
@@ -461,7 +472,7 @@ class HDFDataset(CachedDataset):
 # ------------------------------------------------------------------------------
 
 
-class StreamParser(object):
+class StreamParser:
     """
     Stream parser.
     """
@@ -653,6 +664,8 @@ class NextGenHDFDataset(CachedDataset2):
         """
         :param str path:
         """
+        import h5py
+
         self.files.append(path)
         self.h5_files.append(h5py.File(path))
 
@@ -725,6 +738,10 @@ class NextGenHDFDataset(CachedDataset2):
 
     def supports_seq_order_sorting(self) -> bool:
         """supports sorting"""
+        return True
+
+    def supports_sharding(self) -> bool:
+        """:return: whether this dataset supports sharding"""
         return True
 
     def _get_seq_length(self, orig_seq_idx):
@@ -841,6 +858,8 @@ class SiameseHDFDataset(CachedDataset2):
 
         :param str path: path to single .hdf file
         """
+        import h5py
+
         self.files.append(path)
         self.h5_files.append(h5py.File(path, "r"))
         cur_file = self.h5_files[-1]
@@ -1056,7 +1075,17 @@ class SimpleHDFWriter:
     Note that we dump to a temp file first, and only at :func:`close` we move it over to the real destination.
     """
 
-    def __init__(self, filename, dim, labels=None, ndim=None, extra_type=None, swmr=False, extend_existing_file=False):
+    def __init__(
+        self,
+        filename,
+        dim,
+        labels=None,
+        ndim=None,
+        extra_type=None,
+        swmr=False,
+        extend_existing_file=False,
+        extra_labels=None,
+    ):
         """
         :param str filename: Create file, truncate if exists
         :param int|None dim:
@@ -1065,11 +1094,13 @@ class SimpleHDFWriter:
         :param dict[str,(int,int,str)]|None extra_type: key -> (dim,ndim,dtype)
         :param bool swmr: see https://docs.h5py.org/en/stable/swmr.html
         :param bool extend_existing_file: True also means we expect that it exists
+        :param dict[str,list[str]]|None extra_labels: key -> labels
         """
         from returnn.util.basic import hdf5_strings, unicode
         import tempfile
         import os
         import shutil
+        import h5py
 
         if ndim is None:
             if dim is None:
@@ -1110,7 +1141,8 @@ class SimpleHDFWriter:
         # seq_length idx represents (seq_idx,data_key_idx),
         # where data_key_idx == 0 is for the main input data,
         # and otherwise data_key_idx == 1 + sorted(self._prepared_extra).index(data_key).
-        # data_key_idx must allow for 2 entries by default, as HDFDataset assumes 'classes' by default.
+        # data_key_idx must allow for 2 entries by default,
+        # as HDFDataset assumes 'classes' by default, as long as there is no targets/data or targets/labels.
         if extend_existing_file:
             self._seq_lengths = self._file["seqLengths"]
         else:
@@ -1127,7 +1159,7 @@ class SimpleHDFWriter:
         self._extra_num_time_steps = {}  # type: typing.Dict[str,int]  # key -> num-steps
         self._prepared_extra = set()
         if extra_type:
-            self._prepare_extra(extra_type)
+            self._prepare_extra(extra_type, extra_labels if extra_labels else {})
 
         if swmr:
             assert not self._file.swmr_mode  # this also checks whether the attribute exists (right version)
@@ -1140,13 +1172,14 @@ class SimpleHDFWriter:
             self._file.close()
             self._file = None
 
-    def _prepare_extra(self, extra_type):
+    def _prepare_extra(self, extra_type, extra_labels):
         """
         :param dict[str,(int,int,str)] extra_type: key -> (dim,ndim,dtype)
         :return: whether we added a new entry
         :rtype: bool
         """
         from returnn.util.basic import hdf5_strings
+        import h5py
 
         added_count = 0
         for data_key, (dim, ndim, dtype) in extra_type.items():
@@ -1158,7 +1191,11 @@ class SimpleHDFWriter:
                 self._file.create_group("targets/data")
                 self._file.create_group("targets/size")
                 self._file.create_group("targets/labels")
-            hdf5_strings(self._file, "targets/labels/%s" % data_key, ["dummy-label"])
+            labels = ["dummy-label"]
+            if data_key in extra_labels:
+                labels = extra_labels[data_key]
+                assert len(labels) == dim
+            hdf5_strings(self._file, "targets/labels/%s" % data_key, labels)
             if ndim == 0:
                 ndim = 1  # we will automatically add a dummy-dim
             shape = [None] * ndim  # type: typing.List[typing.Optional[int]]
@@ -1222,7 +1259,7 @@ class SimpleHDFWriter:
         assert isinstance(raw_data, numpy.ndarray), "raw_data is %r of type %r" % (raw_data, type(raw_data))
         if add_time_dim or raw_data.ndim == 0:
             raw_data = numpy.expand_dims(raw_data, 0)
-        assert raw_data.ndim > 0 and raw_data.shape[0] > 0
+        assert raw_data.ndim > 0
         if dtype:
             raw_data = raw_data.astype(dtype)
         if dim is None:
@@ -1241,7 +1278,7 @@ class SimpleHDFWriter:
             dtype = "string"
         else:
             dtype = raw_data.dtype.name
-        if self._prepare_extra({data_key: (dim, raw_data.ndim, dtype)}):
+        if self._prepare_extra({data_key: (dim, raw_data.ndim, dtype)}, {}):
             # We added it now. Maybe other extra data keys were added before. The data_key_idx is different now.
             # Thus, seq_lengths might have become invalid. Reinit them.
             assert seq_idx == 0 or self.extend_existing_file  # We can only do that in the beginning.
@@ -1306,7 +1343,6 @@ class SimpleHDFWriter:
             # Thus, we flatten all together, and calculate the flattened seq len.
             # (Ignore this if there is only a single time dimension.)
             flat_seq_len = int(numpy.prod([seq_len[axis][i] for axis in range(ndim_with_seq_len)]))
-            assert flat_seq_len > 0
             flat_shape = [flat_seq_len]
             if self.dim and not sparse:
                 flat_shape.append(self.dim)
@@ -1379,6 +1415,8 @@ class HDFDatasetWriter:
         """
         :param str filename: for the HDF to write
         """
+        import h5py
+
         print("Creating HDF dataset file %s" % filename, file=log.v3)
         self.filename = filename
         self.file = h5py.File(filename, "w")
@@ -1397,7 +1435,7 @@ class HDFDatasetWriter:
         :param int|float end_seq:
         :param bool use_progress_bar:
         """
-        from returnn.util.basic import NumbersDict, human_size, progress_bar_with_time, try_run, PY3
+        from returnn.util.basic import NumbersDict, human_size, progress_bar_with_time, try_run
 
         hdf_dataset = self.file
 
@@ -1510,8 +1548,7 @@ class HDFDatasetWriter:
                 hdf_dataset["targets/size"].attrs[hdf_data_key_map[data_key]] = dataset.num_outputs[data_key]
             if data_key in dataset.labels:
                 labels = dataset.labels[data_key]
-                if PY3:
-                    labels = [label.encode("utf8") for label in labels]
+                labels = [label.encode("utf8") for label in labels]
                 assert len(labels) == dataset.num_outputs[data_key][0]
             else:
                 labels = ["%s-class-%i" % (data_key, i) for i in range(dataset.get_data_dim(data_key))]

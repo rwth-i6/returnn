@@ -1,4 +1,4 @@
-class BundleFile(object):
+class BundleFile:
     """Holds paths to HDF dataset files."""
 
     def __init__(self, filePath):

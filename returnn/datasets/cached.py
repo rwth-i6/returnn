@@ -134,6 +134,10 @@ class CachedDataset(Dataset):
         """supports sorting"""
         return True
 
+    def supports_sharding(self) -> bool:
+        """supports sharding"""
+        return True
+
     def get_current_seq_order(self):
         assert self.cache_byte_size_limit_at_start == 0  # not implemented otherwise, we ignore _index_map
         return self._seq_index
@@ -222,7 +226,7 @@ class CachedDataset(Dataset):
         assert start >= 0
         assert start <= end
 
-        if self.is_cached(start, end, blocking=True):
+        if self.is_cached(start, end, blocking=False):
             return
 
         if self.cache_byte_size_limit_at_start > 0:  # If the cache is enabled.

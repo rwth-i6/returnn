@@ -327,7 +327,7 @@ class FileCache:
         # Copy the file, while holding a lock. See comment on lock_timeout above.
         with LockFile(
             directory=dst_dir, name=os.path.basename(dst_filename) + ".lock", lock_timeout=self._lock_timeout
-        ) as lock:
+        ) as lock, self._touch_files_thread.files_added_context(lock.lockfile):
             # Maybe it was copied in the meantime, while waiting for the lock.
             if self._check_existing_copied_file_maybe_cleanup(src_filename, dst_filename):
                 print(f"FileCache: using existing file {dst_filename}")
@@ -349,7 +349,7 @@ class FileCache:
                     f" to be older than {self._lock_timeout * 0.8:.1f}s but it is {dst_tmp_file_age} seconds old"
                 )
 
-            with self._touch_files_thread.files_added_context([dst_dir, lock.lockfile]):
+            with self._touch_files_thread.files_added_context(dst_dir):
                 # save mtime before the copy process to have it pessimistic
                 orig_mtime_ns = os.stat(src_filename).st_mtime_ns
                 FileInfo(mtime_ns=orig_mtime_ns).save(self._get_info_filename(dst_filename))
@@ -472,11 +472,15 @@ class _TouchFilesThread(Thread):
         """thread main loop"""
         while True:
             all_files = {}  # dict to have order deterministic
-            for filename in self.files:
+            for filename in self.files.copy():  # copy dict under GIL to avoid modifications during iteration
                 all_files[filename] = True
                 all_files.update({k: True for k in _all_parent_dirs(filename, base_dir=self.cache_base_dir)})
             for filename in all_files:
-                os.utime(filename, None)
+                try:
+                    os.utime(filename, None)
+                except Exception as exc:
+                    print(f"FileCache: failed updating mtime of {filename}: {exc}")
+                    raise
             if self.stop.wait(self.interval):
                 return
 

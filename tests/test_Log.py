@@ -11,7 +11,6 @@ import os
 import sys
 from pprint import pprint
 import unittest
-from nose.tools import assert_less, assert_in, assert_equal
 from returnn.util import better_exchook
 
 
@@ -19,7 +18,6 @@ __my_dir__ = os.path.dirname(os.path.abspath(__file__))
 __base_dir__ = os.path.dirname(__my_dir__)
 __main_entry__ = __base_dir__ + "/rnn.py"
 py = sys.executable
-PY3 = sys.version_info[0] >= 3
 
 
 def build_env():
@@ -53,8 +51,14 @@ def filter_out(ls):
     i = 0
     while i < len(ls):
         s = ls[i]
-        if "tensorflow/core/" in s or "tensorflow/stream_executor/" in s:  # some TF warnings
+        # Filter some TF warnings, like:
+        # 2025-01-10 12:09:34.206001: E external/local_xla/xla/stream_executor/cuda/cuda_dnn.cc:9261] Unable to ...
+        # 2025-01-10 12:09:34.212039: I tensorflow/core/platform/cpu_feature_guard.cc:182] This TensorFlow binary ...
+        if re.search(": [IWE] (tensorflow/|external/)", s):  # some TF warnings
             i += 1
+            continue
+        elif "SyntaxWarning" in s:
+            i += 2
             continue
         # RuntimeWarning|FutureWarning are warnings and they include the code-line in the next output line
         if i + 1 < len(ls) and ls[i + 1].startswith("  "):
@@ -114,7 +118,7 @@ elapsed: 0:00:00.0001
     ls = filter(None, s.splitlines())
     ls = filter_out(ls)
     pprint(ls)
-    assert_equal(len(ls), 5)
+    assert len(ls) == 5
 
 
 def test_returnn_startup():
@@ -124,9 +128,9 @@ def test_returnn_startup():
     if not 3 <= len(ls) <= 10:  # not fixed because might change
         print("output:\n%s\n\nNum lines: %i" % ("\n".join(ls), len(ls)))
         raise Exception("unexpected output number of lines")
-    assert_equal(count_start_with(ls, "RETURNN starting up, version "), 1)
-    assert_equal(count_start_with(ls, "TensorFlow: "), 1)
-    assert_in("Task: No-operation", ls)
+    assert count_start_with(ls, "RETURNN starting up, version ") == 1
+    assert count_start_with(ls, "TensorFlow: ") == 1
+    assert "Task: No-operation" in ls
 
 
 def test_returnn_startup_verbose():
@@ -136,11 +140,11 @@ def test_returnn_startup_verbose():
     if not 3 <= len(ls) <= 15:  # not fixed because might change
         print("output:\n%s\n\nNum lines: %i" % ("\n".join(ls), len(ls)))
         raise Exception("unexpected output number of lines")
-    assert_equal(count_start_with(ls, "RETURNN starting up, version "), 1)
-    assert_equal(count_start_with(ls, "RETURNN command line options: "), 1)
-    assert_equal(count_start_with(ls, "TensorFlow: "), 1)
-    assert_in("Task: No-operation", ls)
-    assert_in("Quitting", ls)
+    assert count_start_with(ls, "RETURNN starting up, version ") == 1
+    assert count_start_with(ls, "RETURNN command line options: ") == 1
+    assert count_start_with(ls, "TensorFlow: ") == 1
+    assert "Task: No-operation" in ls
+    assert "Quitting" in ls
 
 
 def test_simple_log():
@@ -154,40 +158,38 @@ print("hello log 1", file=log.v3)
 print("hello log 2", file=log.v3)
   """
     out = run([py], input=code.encode("utf8"))
-    assert_equal(out.splitlines(), ["hello stdout 1", "hello stdout 2", "hello log 1", "hello log 2"])
+    assert out.splitlines() == ["hello stdout 1", "hello stdout 2", "hello log 1", "hello log 2"]
 
 
 def test_StreamIO():
     import io
 
     buf = io.StringIO()
-    assert_equal(buf.getvalue(), "")
+    assert buf.getvalue() == ""
     print("buf: %r" % buf.getvalue())
 
     buf.write("hello")
     print("buf: %r" % buf.getvalue())
-    assert_equal(buf.getvalue(), "hello")
+    assert buf.getvalue() == "hello"
     buf.truncate(0)  # should not change the position, thus the buffer is empty but position is len("hello")
     print("buf: %r" % buf.getvalue())
-    assert_equal(buf.getvalue(), "")
+    assert buf.getvalue() == ""
 
     buf.write("hello")
     print("buf: %r" % buf.getvalue())
-    if PY3:
-        # This behavior is not correct in Python 2.7. https://bugs.python.org/issue30250
-        assert_equal(buf.getvalue(), "\x00\x00\x00\x00\x00hello")  # zero-filled
+    assert buf.getvalue() == "\x00\x00\x00\x00\x00hello"  # zero-filled
     buf.truncate(0)
     buf.seek(0)
     print("buf: %r" % buf.getvalue())
-    assert_equal(buf.getvalue(), "")
+    assert buf.getvalue() == ""
 
     buf.write("hello")
     print("buf: %r" % buf.getvalue())
-    assert_equal(buf.getvalue(), "hello")
+    assert buf.getvalue() == "hello"
     buf.truncate(0)
     buf.seek(0)
     print("buf: %r" % buf.getvalue())
-    assert_equal(buf.getvalue(), "")
+    assert buf.getvalue() == ""
 
 
 if __name__ == "__main__":

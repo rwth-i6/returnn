@@ -128,7 +128,7 @@ def init_python_feature_scorer(config, **kwargs):
     return cls(sprint_opts=sprint_opts, **kwargs)
 
 
-class PythonFeatureScorer(object):
+class PythonFeatureScorer:
     """
     Sprint API.
     """
@@ -712,7 +712,6 @@ def _init_base(configfile=None, target_mode=None, epoch=None, sprint_opts=None):
         # Some subset of what we do in rnn.init().
 
         rnn.init_better_exchook()
-        rnn.init_thread_join_hack()
 
         if configfile is None:
             configfile = DefaultSprintCrnnConfig

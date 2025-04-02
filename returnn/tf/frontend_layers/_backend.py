@@ -63,7 +63,7 @@ class ReturnnLayersBackend(Backend[Layer]):
         usages: List[Tensor] = []
         visited = set()
         for use in x.raw_tensor.usages:
-            if not use.tensor or use.tensor in visited:
+            if use.tensor is None or use.tensor in visited:
                 continue
             visited.add(use.tensor)
             usages.append(use.tensor)
@@ -241,8 +241,8 @@ class ReturnnLayersBackend(Backend[Layer]):
         source: Tensor,
         *,
         dims: Sequence[Dim],
-        out_dim: Optional[Dim] = None,
-    ) -> Tuple[Tensor, Dim]:
+        out_dim: Dim,
+    ) -> Tensor:
         """
         Merges a list of axes into a single one. (Flatten the dims.)
         E.g. input is (batch, width, height, dim) and dims=(width,height), then we get (batch, width*height, dim).
@@ -251,18 +251,14 @@ class ReturnnLayersBackend(Backend[Layer]):
         :param source:
         :param dims:
         :param out_dim:
-        :return: tensor, out_dim
+        :return: tensor
         """
         if not isinstance(source, Tensor):
             raise TypeError(f"merge_dims: unexpected type for source {source!r}, need tensor")
-        if out_dim is None:
-            out_dim = dims[0]
-            for d in dims[1:]:
-                out_dim = out_dim * d
         layer = rfl.make_layer(
             {"class": "merge_dims", "from": source, "axes": dims, "out_dim": out_dim}, name="merge_dims"
         )
-        return layer, out_dim
+        return layer
 
     @staticmethod
     def split_dims(
@@ -342,7 +338,20 @@ class ReturnnLayersBackend(Backend[Layer]):
         opts = {}
         if allow_broadcast:
             opts["allow_broadcast"] = True
-        out_dim = sum(d for _, d in sources)
+        dim_deps = rfl.get_dim_deps(out_dim)
+        sources_dims = set()
+        for source, _ in sources:
+            sources_dims.update(source.dims)
+        need_explicit_dim_deps = False
+        for dim in dim_deps:
+            if dim not in sources_dims:
+                need_explicit_dim_deps = True
+                break
+        if need_explicit_dim_deps:
+            source0 = rfl.make_layer(
+                {"class": "copy", "from": sources[0][0], "extra_deps": dim_deps}, name="concat_extra_dim_deps"
+            )
+            sources = ((source0, sources[0][1]),) + sources[1:]
         return rfl.make_layer(
             {"class": "concat", "from": sources, "out_dim": out_dim, **opts},
             name="concat",
@@ -353,7 +362,7 @@ class ReturnnLayersBackend(Backend[Layer]):
         source: Tensor,
         *,
         axes: Sequence[Dim],
-        padding: Sequence[Tuple[Union[Dim, int], Union[Dim, int]]],
+        padding: Sequence[Tuple[Union[Dim, int, Tensor], Union[Dim, int, Tensor]]],
         out_dims: Sequence[Dim],
         handle_dynamic_dims: bool,
         mode: str = "constant",
@@ -373,20 +382,6 @@ class ReturnnLayersBackend(Backend[Layer]):
                 "value": value,
             },
             name="pad",
-        )
-
-    @staticmethod
-    def cum_concat_step(source: Tensor, *, prev_accum: Tensor, axis: Dim, out_spatial_dim: Dim) -> Tensor:
-        """cum_concat_step"""
-        return rfl.make_layer(
-            {
-                "class": "cum_concat",
-                "from": source,
-                "state": {"state": prev_accum},
-                "out_spatial_dim": out_spatial_dim,
-                "axis": axis,
-            },
-            name="cum_concat",
         )
 
     @staticmethod
@@ -560,6 +555,7 @@ class ReturnnLayersBackend(Backend[Layer]):
         dims: Sequence[Dim],
         dtype: str,
         sparse_dim: Optional[Dim] = None,
+        feature_dim: Optional[Dim] = None,
         device: Optional[str] = None,
         name: Optional[str] = None,
     ) -> Tensor[Layer]:
@@ -569,6 +565,8 @@ class ReturnnLayersBackend(Backend[Layer]):
         kwargs = {}
         if sparse_dim:
             kwargs["sparse_dim"] = sparse_dim
+        if feature_dim:
+            kwargs["feature_dim"] = feature_dim
         dim_deps = _dims.get_dim_deps(dims)
         if dim_deps:
             kwargs["shape_deps"] = dim_deps
@@ -690,7 +688,7 @@ class ReturnnLayersBackend(Backend[Layer]):
         )
 
     @staticmethod
-    def flip(source: Tensor, *, axis: Dim) -> Tensor:
+    def flip_no_mask(source: Tensor, *, axis: Dim) -> Tensor:
         """flip"""
         return rfl.make_layer(
             {"class": "slice", "from": source, "axis": axis, "out_dim": axis, "slice_step": -1}, name="flip"
@@ -747,7 +745,7 @@ class ReturnnLayersBackend(Backend[Layer]):
     @staticmethod
     def range_over_dim(dim: Dim, *, dtype: Optional[str] = None, device: Optional[str] = None) -> Tensor:
         """range over dim"""
-        if not dtype and dim.dyn_size_ext:
+        if not dtype and dim.dyn_size_ext is not None:
             dtype = dim.dyn_size_ext.dtype
         if not dtype:
             dtype = rf.get_default_array_index_dtype()
@@ -772,6 +770,14 @@ class ReturnnLayersBackend(Backend[Layer]):
         """
         return rfl.make_layer(
             {"class": "reinterpret_data", "set_dim_tags": {in_dim: out_dim}, "from": source}, name="new_dim"
+        )
+
+    @staticmethod
+    def set_sparse_dim(source: Tensor, sparse_dim: Dim) -> Tensor:
+        """set sparse dim"""
+        return rfl.make_layer(
+            {"class": "reinterpret_data", "set_sparse": True, "set_sparse_dim": sparse_dim, "from": source},
+            name="set_sparse_dim",
         )
 
     @staticmethod
@@ -871,7 +877,7 @@ class ReturnnLayersBackend(Backend[Layer]):
             out = rfl.make_layer(
                 {
                     "class": "eval",
-                    "from": [recent] if recent else [],  # use as control dependency
+                    "from": [recent] if recent is not None else [],  # use as control dependency
                     "eval": _random_replay_eval,
                     "eval_locals": {"idx": ReturnnLayersBackend._random_journal.get_graph_reader_idx()},
                     "out_type": {"dims": dims, "dtype": dtype, "sparse_dim": sparse_dim, "feature_dim": feature_dim},
@@ -992,7 +998,7 @@ class ReturnnLayersBackend(Backend[Layer]):
         out_spatial_dims: Optional[Sequence[Dim]] = None,
         filter: Tensor,
         filter_size: Sequence[Dim],  # to have the order well-defined
-        padding: str,
+        padding: Union[str, int, Sequence[int]],
         strides: Optional[Union[int, Sequence[int]]] = None,
         dilation_rate: Optional[Union[int, Sequence[int]]] = None,
         groups: Optional[int] = None,
@@ -1082,7 +1088,7 @@ class ReturnnLayersBackend(Backend[Layer]):
         *,
         mode: str,
         pool_size: Sequence[int],
-        padding: str = "valid",
+        padding: Union[str, int, Sequence[int]] = "valid",
         dilation_rate: Union[Sequence[int], int] = 1,
         strides: Sequence[int],
         in_spatial_dims: Sequence[Dim],

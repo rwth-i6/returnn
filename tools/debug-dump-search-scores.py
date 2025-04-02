@@ -37,7 +37,6 @@ def init(config_filename, log_verbosity, remaining_args=()):
     :param list[str] remaining_args:
     """
     rnn.init_better_exchook()
-    rnn.init_thread_join_hack()
     print("Using config file %r." % config_filename)
     assert os.path.exists(config_filename)
     rnn.init_config(

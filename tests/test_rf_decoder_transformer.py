@@ -10,7 +10,7 @@ import unittest
 import torch
 from returnn.util import better_exchook
 from returnn.util.debug import PyTracer, check_py_traces_rf_to_pt_equal
-from returnn.tensor import Tensor, Dim
+from returnn.tensor import Tensor, Dim, single_step_dim
 import returnn.frontend as rf
 
 
@@ -24,6 +24,44 @@ def _setup():
 
 
 _setup()
+
+
+def test_transformer_prefix_single_step():
+    # We have some prefix we want to feed and then only get the logits of the last step,
+    # and also continue step-wise (single_step_dim) from that state.
+
+    from returnn.frontend.decoder.transformer import TransformerDecoder
+
+    rf.select_backend_torch()
+
+    vocab_dim = Dim(11, name="vocab")
+    lm = TransformerDecoder(
+        encoder_dim=None, vocab_dim=vocab_dim, model_dim=Dim(32, name="model"), num_layers=2, num_heads=2
+    )
+
+    # We currently need this for the case without batch dim.
+    # We might want to extend the test case later in the future.
+    state = lm.default_initial_state(batch_dims=[])
+
+    # Not sure if a static dim is reasonable?
+    # But for the single seq case (no batch dim), and eager mode (PyTorch), we know the size.
+    spatial_dim = Dim(7, name="spatial")
+    prefix_seq = rf.convert_to_tensor([3, 4, 5, 6, 7, 2, 1], dims=[spatial_dim], sparse_dim=vocab_dim)
+    logits, state = lm(prefix_seq, spatial_dim=spatial_dim, state=state)
+    print(logits, state["0"].self_att)
+    assert state["0"].self_att.accum_axis == spatial_dim
+    assert state["0"].self_att.accum_axis in state["0"].self_att.k_accum.dims
+
+    # Now feed some other labels step by step.
+    step = 1
+    for label_idx in [8, 9, 10]:
+        label = rf.constant(label_idx, dims=[], sparse_dim=vocab_dim)
+        logits, state = lm(label, spatial_dim=single_step_dim, state=state)
+        print(logits, state["0"].self_att)
+        # This assumes it's a static dim.
+        assert state["0"].self_att.accum_axis.dimension == spatial_dim.dimension + step
+        assert state["0"].self_att.accum_axis in state["0"].self_att.k_accum.dims
+        step += 1
 
 
 def test_llama():

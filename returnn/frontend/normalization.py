@@ -218,10 +218,9 @@ class BatchNorm(rf.Module):
 
         if any(d.need_masking() for d in source.dims if d != self.in_dim):
             if self.use_mask is None:
-                raise ValueError(
-                    f"{self}: use_mask must be specified if the input {source} has any dynamic spatial dims"
-                )
-            use_mask = self.use_mask
+                use_mask = rf.use_mask_default(default=True)
+            else:
+                use_mask = self.use_mask
         else:
             use_mask = False  # not needed. False because this potentially enables an efficient fused op.
 

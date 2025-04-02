@@ -3,7 +3,7 @@ Backend for exposing PyTorch-specific functionality.
 """
 
 from __future__ import annotations
-from typing import Optional, Union, Sequence, Tuple, List, Dict, Generator
+from typing import Optional, Union, Any, Sequence, Tuple, List, Dict, Generator
 import contextlib
 import torch
 import numpy
@@ -213,6 +213,11 @@ class TorchBackend(Backend[torch.Tensor]):
         return out
 
     @staticmethod
+    def stop_gradient_scope() -> Any:
+        """stop gradient scope"""
+        return torch.no_grad()
+
+    @staticmethod
     def scaled_gradient(tensor: Tensor, scale: Union[float, Tensor]) -> Tensor:
         """scaled gradient"""
         from returnn.torch.util.scaled_gradient import scaled_gradient
@@ -257,8 +262,8 @@ class TorchBackend(Backend[torch.Tensor]):
         source: Tensor,
         *,
         dims: Sequence[Dim],
-        out_dim: Optional[Dim] = None,
-    ) -> Tuple[Tensor, Dim]:
+        out_dim: Dim,
+    ) -> Tensor:
         """
         Merges a list of axes into a single one. (Flatten the dims.)
         E.g. input is (batch, width, height, dim) and dims=(width,height), then we get (batch, width*height, dim).
@@ -267,18 +272,12 @@ class TorchBackend(Backend[torch.Tensor]):
         :param source:
         :param dims:
         :param out_dim:
-        :return: tensor, out_dim
+        :return: tensor
         """
-        assert dims
-        if len(dims) == 1:
-            return source, dims[0]
+        assert len(dims) >= 2
         first_axis = min(source.dims.index(d) for d in dims)
         pre_dims = source.dims[:first_axis]
         post_dims = [d for d in source.dims if d not in dims and d not in pre_dims]
-        if out_dim is None:
-            out_dim = dims[0]
-            for d in dims[1:]:
-                out_dim = out_dim * d
         source = source.copy_transpose(tuple(pre_dims) + tuple(dims) + tuple(post_dims), allow_int=False)
         out = Tensor(
             "merge_dims",
@@ -290,7 +289,7 @@ class TorchBackend(Backend[torch.Tensor]):
         out.raw_tensor = torch.reshape(source.raw_tensor, out_shape)
         if source.feature_dim and source.feature_dim in dims:
             out.feature_dim = out_dim
-        return out, out_dim
+        return out
 
     @staticmethod
     def split_dims(
@@ -302,7 +301,6 @@ class TorchBackend(Backend[torch.Tensor]):
         pad_value: Union[None, int, float] = None,
     ) -> Tensor:
         """split dims"""
-        assert not axis.need_masking()  # not implemented
         assert pad_to_multiples in (None, False)  # not implemented
         axis_ = source.get_axis_from_description(axis)
         out_dims = source.dims[:axis_] + tuple(dims) + source.dims[axis_ + 1 :]
@@ -444,7 +442,7 @@ class TorchBackend(Backend[torch.Tensor]):
         source: Tensor,
         *,
         axes: Sequence[Dim],
-        padding: Sequence[Tuple[Union[Dim, int], Union[Dim, int]]],
+        padding: Sequence[Tuple[Union[Dim, int, Tensor], Union[Dim, int, Tensor]]],
         out_dims: Sequence[Dim],
         handle_dynamic_dims: bool,
         mode: str = "constant",
@@ -452,9 +450,6 @@ class TorchBackend(Backend[torch.Tensor]):
     ) -> Tensor:
         """pad"""
         assert len(out_dims) == len(axes) == len(padding)
-        out = source.copy_template_new_dim_tags(
-            [out_dims[axes.index(dim)] if dim in axes else dim for dim in source.dim_tags], keep_special_axes=True
-        )
         remaining_dims = set(axes)
         raw_pad = []
         for dim in reversed(source.dims):
@@ -462,17 +457,48 @@ class TorchBackend(Backend[torch.Tensor]):
                 raw_pad += [0, 0]
                 continue
             remaining_dims.remove(dim)
-            pad_ = padding[axes.index(dim)]
-            raw_pad += [
-                pad_[0].get_dim_value() if isinstance(pad_[0], Dim) else pad_[0],
-                pad_[1].get_dim_value() if isinstance(pad_[1], Dim) else pad_[1],
-            ]
+            left, right = padding[axes.index(dim)]
+            if isinstance(left, Dim):
+                if handle_dynamic_dims:
+                    assert not left.need_masking(), f"pad: left {left} needs masking, not supported currently"
+                left_ = left.get_dim_value()
+            elif isinstance(left, Tensor):
+                if handle_dynamic_dims:
+                    assert not left.dims, f"pad: left {left} needs masking, not supported currently"
+                left_ = torch.max(left.raw_tensor)
+            elif isinstance(left, int):
+                left_ = left
+            else:
+                raise TypeError(f"pad: invalid left {left!r}")
+            if isinstance(right, Dim):
+                right_ = right.get_dim_value()
+            elif isinstance(right, Tensor):
+                right_ = torch.max(right.raw_tensor)
+            elif isinstance(right, int):
+                right_ = right
+            else:
+                raise TypeError(f"pad: invalid right {right!r}")
+            raw_pad += [left_, right_]
             if not remaining_dims:
                 break
-        if isinstance(value, Tensor):
-            assert value.dims == (), f"value {value} must be a scalar"
-            value = value.raw_tensor
-        out.raw_tensor = torch.nn.functional.pad(source.raw_tensor, pad=raw_pad, mode=mode, value=value)
+        # Use torch.nn.functional.pad if possible. It's possible for scalar `value` (or None).
+        if (isinstance(value, Tensor) and value.dims == ()) or (not isinstance(value, Tensor)):
+            if isinstance(value, Tensor):
+                assert value.dims == ()
+                value = value.raw_tensor
+            out = source.copy_template_new_dim_tags(
+                [out_dims[axes.index(dim)] if dim in axes else dim for dim in source.dim_tags], keep_special_axes=True
+            )
+            out.raw_tensor = torch.nn.functional.pad(source.raw_tensor, pad=raw_pad, mode=mode, value=value)
+        else:  # Fallback to concat.
+            assert isinstance(value, Tensor) and value.dims  # non-scalar
+            assert all(dim in source.dims and dim not in axes for dim in value.dims)
+            assert len(axes) == 1  # not implemented otherwise currently...
+            ext_dim = Dim(1, name="ext")
+            value_ext = rf.expand_dim(value, ext_dim)
+            out = TorchBackend.concat(
+                (source, axes[0]), (value_ext, ext_dim), allow_broadcast=True, out_dim=out_dims[0]
+            )
         if any(dim.need_masking() for dim in out_dims) and handle_dynamic_dims:
             if all(right == 0 for right in raw_pad[1::2]) and mode != "circular":
                 pass  # no masking needed
@@ -482,30 +508,29 @@ class TorchBackend(Backend[torch.Tensor]):
                         f"pad: mode {mode} not implemented with dynamic dims and handle_dynamic_dims=True"
                     )
                 for out_dim, middle, (left, right) in zip(out_dims, axes, padding):
-                    if middle.need_masking() or (isinstance(left, Dim) and left.need_masking()):
-                        if isinstance(right, Dim) or right > 0:
+                    if (
+                        middle.need_masking()
+                        or (isinstance(left, Dim) and left.need_masking())
+                        or (isinstance(left, Tensor) and left.dims)
+                    ):
+                        if isinstance(left, Dim):
+                            left = left.get_size_tensor(device=out.device)
+                        assert isinstance(left, (int, Tensor))
+                        if (
+                            isinstance(right, Dim)
+                            or (isinstance(right, int) and right > 0)
+                            or isinstance(right, Tensor)
+                        ):
                             mask = rf.compare_bc(
                                 rf.range_over_dim(out_dim, device=out.device),
                                 "<",
-                                rf.copy_to_device((left + middle).dyn_size_ext, out.device),
+                                left + middle.get_size_tensor(device=out.device),
                             )
                             out.raw_tensor = torch.where(
-                                mask.copy_compatible_to(out, check_dtype=False, check_sparse=False).raw_tensor,
+                                mask.copy_compatible_to_dims_raw(out.dims),
                                 out.raw_tensor,
-                                value,
+                                value.copy_compatible_to_dims_raw(out.dims) if isinstance(value, Tensor) else value,
                             )
-        return out
-
-    @staticmethod
-    def cum_concat_step(source: Tensor, *, prev_accum: Tensor, axis: Dim, out_spatial_dim: Dim) -> Tensor:
-        """cum concat step"""
-        out = prev_accum.copy_template_replace_dim_tag(
-            axis=prev_accum.get_axis_from_description(axis),
-            new_dim_tag=out_spatial_dim,
-            name=f"{source.name}/cum_concat_step",
-        )
-        source_raw = source.copy_compatible_to_dims_raw(prev_accum.dims)
-        out.raw_tensor = torch.cat((prev_accum.raw_tensor, source_raw), dim=prev_accum.get_axis_from_description(axis))
         return out
 
     @staticmethod
@@ -648,24 +673,43 @@ class TorchBackend(Backend[torch.Tensor]):
         assert targets.sparse_dim and targets.sparse_dim.dimension <= logits.feature_dim.dimension
         # PyTorch expects the logits to be of shape (T, B, C) where T is the input spatial dim.
         batch_dims = logits.remaining_dims((input_spatial_dim, logits.feature_dim))
+        batch_dims_targets = targets.remaining_dims(targets_spatial_dim)
+        if set(batch_dims) != set(batch_dims_targets):
+            # Need to broadcast.
+            logits = rf.expand_dims(logits, [d for d in batch_dims_targets if d not in batch_dims])
+            targets = rf.expand_dims(targets, [d for d in batch_dims if d not in batch_dims_targets])
+            batch_dims = logits.remaining_dims((input_spatial_dim, logits.feature_dim))
+        batch_shape = [d.get_dim_value() for d in batch_dims]
+        batch_n_elems = prod(batch_shape)
         logits = logits.copy_transpose([input_spatial_dim] + batch_dims + [logits.feature_dim])
         logits_raw: torch.Tensor = logits.raw_tensor
-        input_lengths = input_spatial_dim.dyn_size_ext.copy_transpose(batch_dims).raw_tensor
+        input_lengths: torch.Tensor = input_spatial_dim.dyn_size_ext.copy_compatible_to_dims_raw(batch_dims)
+        if input_lengths.numel() != batch_n_elems:
+            input_lengths = input_lengths.expand(batch_shape)
         logits_raw_shape = logits_raw.shape  # [T, B..., C]
         if len(batch_dims) != 1:
-            logits_raw = torch.reshape(logits_raw, logits_raw.shape[:1] + (-1,) + logits_raw.shape[-1:])  # [T, B', C]
-            input_lengths = torch.reshape(input_lengths, (-1,))  # [B']
+            logits_raw = torch.reshape(
+                logits_raw, logits_raw.shape[:1] + (batch_n_elems,) + logits_raw.shape[-1:]
+            )  # [T, B', C]
+            input_lengths = torch.reshape(input_lengths, (batch_n_elems,))  # [B']
         if logits_normalized:
             log_probs = logits_raw
         else:
             log_probs = torch.nn.functional.log_softmax(logits_raw, dim=-1)
         # PyTorch expects the targets to be of shape (B, S) where S is the targets spatial dim.
-        targets = targets.copy_transpose(batch_dims + [targets_spatial_dim])
-        targets_raw = targets.raw_tensor  # [B..., S]
-        targets_lengths = targets_spatial_dim.dyn_size_ext.copy_transpose(batch_dims).raw_tensor
+        targets_raw = targets.copy_compatible_to_dims_raw(batch_dims + [targets_spatial_dim])  # [B..., S]
+        targets_raw_shape = batch_shape + [targets_spatial_dim.get_dim_value()]
+        if targets_raw.numel() != prod(targets_raw_shape):
+            targets_raw = targets_raw.expand(targets_raw_shape)
+        targets_lengths = targets_spatial_dim.dyn_size_ext.copy_compatible_to_dims_raw(batch_dims)
+        if targets_lengths.numel() != batch_n_elems:
+            targets_lengths = targets_lengths.expand(batch_shape)
         if len(batch_dims) != 1:
-            targets_raw = torch.reshape(targets_raw, (-1, targets_raw.shape[-1]))  # [B', S]
-            targets_lengths = torch.reshape(targets_lengths, (-1,))  # [B']
+            targets_raw = torch.reshape(targets_raw, (batch_n_elems, targets_raw.shape[-1]))  # [B', S]
+            targets_lengths = torch.reshape(targets_lengths, (batch_n_elems,))  # [B']
+        if log_probs.dtype == torch.bfloat16:
+            # Currently (PyTorch 2.5), ctc_loss does not support bfloat16.
+            log_probs = log_probs.to(torch.float32)
         loss_raw = torch.nn.functional.ctc_loss(
             log_probs=log_probs,
             targets=targets_raw,
@@ -681,7 +725,7 @@ class TorchBackend(Backend[torch.Tensor]):
             name="ctc_loss",
             dims=batch_dims,
             raw_tensor=loss_raw,
-            dtype=logits.dtype,
+            dtype=TorchBackend.get_dtype_name_raw(loss_raw),
         )
         return loss
 
@@ -850,18 +894,11 @@ class TorchBackend(Backend[torch.Tensor]):
         dims: Sequence[Dim],
         dtype: str,
         sparse_dim: Optional[Dim] = None,
+        feature_dim: Optional[Dim] = None,
         device: Optional[str] = None,
         name: Optional[str] = None,
     ) -> Tensor[torch.Tensor]:
-        """
-        :param value:
-        :param dims:
-        :param dtype:
-        :param sparse_dim:
-        :param device:
-        :param name:
-        :return: tensor
-        """
+        """convert to tensor"""
         if isinstance(value, Tensor):
             return value
         if isinstance(value, torch.Tensor):
@@ -881,7 +918,7 @@ class TorchBackend(Backend[torch.Tensor]):
                     device=device or rf.get_default_device(),
                 )
         assert isinstance(value, torch.Tensor)
-        return Tensor(name, dims=dims, dtype=dtype, sparse_dim=sparse_dim, raw_tensor=value)
+        return Tensor(name, dims=dims, dtype=dtype, sparse_dim=sparse_dim, feature_dim=feature_dim, raw_tensor=value)
 
     @staticmethod
     def full(
@@ -953,8 +990,10 @@ class TorchBackend(Backend[torch.Tensor]):
         else:
             raise TypeError(f"Unsupported type for indices: {type(indices)}")
         if clip_to_valid:
-            if axis.dyn_size_ext:
-                indices = rf.clip_by_value(indices, 0, axis.get_dyn_size_ext_for_device(indices.device) - 1)
+            if axis.dyn_size_ext is not None:
+                indices = rf.clip_by_value(
+                    indices, 0, axis.get_dyn_size_ext_for_device(indices.device) - 1, allow_broadcast_all_sources=True
+                )
             else:
                 indices = indices.copy()
                 indices.raw_tensor = torch.clamp(indices.raw_tensor, 0, source.raw_tensor.shape[axis_int] - 1)
@@ -980,7 +1019,12 @@ class TorchBackend(Backend[torch.Tensor]):
             index_ext_dims = list(source.dims)
             index_ext_dims[axis_int] = index_own_dims_flat
             assert indices.dims == tuple(index_ext_dims)
-            out_raw = torch.gather(source.raw_tensor, dim=axis_int, index=indices.raw_tensor.type(torch.int64))
+            out_raw = torch.gather(
+                source.raw_tensor,
+                dim=axis_int,
+                # torch.gather wants indices as int64, and the indices should be the same device as the source.
+                index=indices.raw_tensor.type(torch.int64).to(source.raw_tensor.device),
+            )
             if len(index_own_dims) == 1:
                 pass  # nothing to do
             elif len(index_own_dims) == 0:
@@ -1010,17 +1054,21 @@ class TorchBackend(Backend[torch.Tensor]):
         *,
         indices: Tensor,
         indices_dim: Union[Dim, Sequence[Dim]],
+        mode: str,
+        fill_value: Union[int, float],
         out_dim: Union[Dim, Sequence[Dim]],
     ) -> Tensor:
         """
         Scatters into new zero-tensor.
-        If entries in indices are duplicated, the corresponding values in source will be added together
-        (scatter_add in PyTorch).
-        (TF segment_sum can be implemented via this.)
+        If entries in indices are duplicated, with mode="sum", the corresponding values in source will be added together
+        (``scatter_add`` in PyTorch), otherwise min/max.
+        (segment_sum can be implemented via this.)
 
         :param source: [batch_dims..., indices_dim(s)..., feature_dims...]
         :param indices: [batch_dims..., indices_dim(s)...] -> out_dim
         :param indices_dim:
+        :param mode: "sum", "max", "min"
+        :param fill_value:
         :param out_dim:
         :return: [batch_dims..., out_dim, feature_dims...]
         """
@@ -1060,8 +1108,29 @@ class TorchBackend(Backend[torch.Tensor]):
         )
         out_dims = batch_dims + [out_flat_dim] + feature_dims
         out_shape = [d.get_dim_value() for d in out_dims]
-        out_raw = torch.zeros(out_shape, dtype=source.raw_tensor.dtype, device=source.raw_tensor.device)
-        out_raw.scatter_add_(dim=len(batch_dims), index=indices.raw_tensor.to(torch.int64), src=source.raw_tensor)
+        if mode == "sum" and isinstance(fill_value, (int, float)) and fill_value == 0:
+            out_raw = torch.zeros(out_shape, dtype=source.raw_tensor.dtype, device=source.raw_tensor.device)
+            out_raw.scatter_add_(dim=len(batch_dims), index=indices.raw_tensor.to(torch.int64), src=source.raw_tensor)
+        elif mode == "sum":
+            out_raw = torch.full(out_shape, fill_value, dtype=source.raw_tensor.dtype, device=source.raw_tensor.device)
+            out_raw.scatter_reduce_(
+                dim=len(batch_dims),
+                index=indices.raw_tensor.to(torch.int64),
+                src=source.raw_tensor,
+                reduce="sum",
+                include_self=False,
+            )
+        elif mode in ("max", "min"):
+            out_raw = torch.full(out_shape, fill_value, dtype=source.raw_tensor.dtype, device=source.raw_tensor.device)
+            out_raw.scatter_reduce_(
+                dim=len(batch_dims),
+                index=indices.raw_tensor.to(torch.int64),
+                src=source.raw_tensor,
+                reduce="a" + mode,
+                include_self=False,
+            )
+        else:
+            raise ValueError(f"scatter: mode {mode!r} not supported")
         res = Tensor(
             "scatter",
             dims=out_dims,
@@ -1094,6 +1163,9 @@ class TorchBackend(Backend[torch.Tensor]):
             start = 0
         if isinstance(size, Dim):
             size = size.get_dim_value()
+        elif isinstance(size, Tensor):
+            assert size.dims == ()  # scalar
+            size = size.raw_tensor
         if size is not None:
             assert end is None
             out.raw_tensor = torch.narrow(source.raw_tensor, dim=axis_int, start=start, length=size)
@@ -1107,8 +1179,8 @@ class TorchBackend(Backend[torch.Tensor]):
         return out
 
     @staticmethod
-    def flip(source: Tensor, *, axis: Dim) -> Tensor:
-        """flip"""
+    def flip_no_mask(source: Tensor, *, axis: Dim) -> Tensor:
+        """flip, ignoring masking"""
         axis_int = source.get_axis_from_description(axis, allow_int=False)
         out = source.copy_template("flip")
         out.raw_tensor = torch.flip(source.raw_tensor, [axis_int])
@@ -1123,8 +1195,14 @@ class TorchBackend(Backend[torch.Tensor]):
         allow_broadcast_all_sources: bool = False,
     ) -> Tensor:
         """where"""
-        true_ = rf.convert_to_tensor(true_, _backend=TorchBackend, device=cond.device)
-        false_ = rf.convert_to_tensor(false_, _backend=TorchBackend, device=cond.device)
+        if isinstance(true_, Tensor):
+            dtype = true_.dtype
+        elif isinstance(false_, Tensor):
+            dtype = false_.dtype
+        else:
+            dtype = None
+        true_ = rf.convert_to_tensor(true_, _backend=TorchBackend, dtype=dtype, device=cond.device)
+        false_ = rf.convert_to_tensor(false_, _backend=TorchBackend, dtype=dtype, device=cond.device)
         out = Tensor.get_common_data(
             [true_, false_, cond], allow_broadcast_all_sources=allow_broadcast_all_sources, name="where"
         )
@@ -1136,6 +1214,23 @@ class TorchBackend(Backend[torch.Tensor]):
         false_bc_raw = false_.copy_compatible_to_dims_raw(out.dims)
         out.raw_tensor = torch.where(cond_bc_raw, true_bc_raw, false_bc_raw)
         return out
+
+    @staticmethod
+    def sort(source: Tensor, *, axis: Dim, descending: bool, stable: bool) -> Tuple[Tensor, Tensor, Dim]:
+        """sort. return values and indices"""
+        if axis.need_masking():
+            raise NotImplementedError(f"sort: dynamic axis {axis} not supported")
+        axis_int = source.get_axis_from_description(axis, allow_int=False)
+        # Move to last axis. Should be more efficient.
+        source = source.copy_move_axis(axis_int, -1)
+        axis_int = source.batch_ndim - 1
+        values_raw, indices_raw = torch.sort(source.raw_tensor, dim=axis_int, descending=descending, stable=stable)
+        out_dims = list(source.dims)
+        out_dim = axis.copy(same_as_self=False, description=f"{axis.description}:sorted")
+        out_dims[axis_int] = out_dim
+        values = rf.convert_to_tensor(values_raw, dims=out_dims, feature_dim={axis: out_dim}.get(source.feature_dim))
+        indices = rf.convert_to_tensor(indices_raw, dims=out_dims, sparse_dim=axis)
+        return values, indices, out_dim
 
     @staticmethod
     def search_sorted(
@@ -1167,6 +1262,27 @@ class TorchBackend(Backend[torch.Tensor]):
         if len(values_rem_dims) != 1:
             out_raw = out_raw.reshape([dim.get_dim_value() for dim in out.dims])
         out.raw_tensor = out_raw
+        return out
+
+    @staticmethod
+    def is_finite(x: Tensor) -> Tensor:
+        """is finite"""
+        out = x.copy_template("is_finite", dtype="bool")
+        out.raw_tensor = torch.isfinite(x.raw_tensor)
+        return out
+
+    @staticmethod
+    def is_infinite(x: Tensor) -> Tensor:
+        """is positive or negative infinite"""
+        out = x.copy_template("is_infinite", dtype="bool")
+        out.raw_tensor = torch.isinf(x.raw_tensor)
+        return out
+
+    @staticmethod
+    def is_neg_infinite(x: Tensor) -> Tensor:
+        """is negative infinite"""
+        out = x.copy_template("is_neg_infinite", dtype="bool")
+        out.raw_tensor = torch.isneginf(x.raw_tensor)
         return out
 
     @staticmethod
@@ -1327,7 +1443,7 @@ class TorchBackend(Backend[torch.Tensor]):
         :param device:
         :return: tensor with shape [dim]
         """
-        if not dtype and dim.dyn_size_ext:
+        if not dtype and dim.dyn_size_ext is not None:
             dtype = dim.dyn_size_ext.dtype
         if not dtype:
             dtype = rf.get_default_array_index_dtype()
@@ -1361,15 +1477,19 @@ class TorchBackend(Backend[torch.Tensor]):
         if use_mask and any(dim.need_masking() for dim in axis):
             source = source.copy()
             dtype = source.raw_tensor.dtype
-            if mode == "max":
+            if mode in ("max", "logsumexp", "argmax"):
                 mask_value = torch.finfo(dtype).min if dtype.is_floating_point else torch.iinfo(dtype).min
-            elif mode == "min":
+            elif mode in ("min", "argmin"):
                 mask_value = torch.finfo(dtype).max if dtype.is_floating_point else torch.iinfo(dtype).max
             elif mode == "sum":
                 mask_value = 0
             elif mode == "mean":
                 mask_value = 0
                 correction_factor = rf.masked_fraction_of_shape(axis, inverse=True)
+            elif mode == "all":
+                mask_value = True
+            elif mode == "any":
+                mask_value = False
             else:
                 raise NotImplementedError(f"reduce_{mode} not implemented with masking on tensor {source!r}.")
             for dim in axis:
@@ -1377,7 +1497,7 @@ class TorchBackend(Backend[torch.Tensor]):
                     mask = source.get_sequence_mask_broadcast(dim)
                     source.raw_tensor = torch.where(mask, source.raw_tensor, mask_value)
         func = getattr(torch, mode)
-        if not res_dims:
+        if not res_dims and mode != "logsumexp":  # logsumexp requires dim arg
             raw_result = func(source.raw_tensor)
         elif len(raw_dims) == 1:
             raw_result = func(source.raw_tensor, dim=raw_dims[0])
@@ -1455,6 +1575,9 @@ class TorchBackend(Backend[torch.Tensor]):
             return values, indices_out, k_dim
         assert isinstance(axis, Dim)
         axis_int = source.get_axis_from_description(axis, allow_int=False)
+        # Move to last axis. Should be more efficient.
+        source = source.copy_move_axis(axis_int, -1)
+        axis_int = source.batch_ndim - 1
         values_raw, indices_raw = torch.topk(
             source.raw_tensor, k=k_dim.get_dim_value(), dim=axis_int, largest=True, sorted=sorted
         )
@@ -1517,7 +1640,7 @@ class TorchBackend(Backend[torch.Tensor]):
         assert isinstance(static, bool)
         if static:
             assert seed is not None
-            generator = torch.Generator()
+            generator = torch.Generator(device=out.raw_tensor.device)
             generator.manual_seed(seed)
         else:
             assert seed is None
@@ -1629,7 +1752,7 @@ class TorchBackend(Backend[torch.Tensor]):
             out_raw = masked_select(in_raw, mask_raw, mask_len=known_mask_len)
         if not out_dim:
             out_dim = Dim(None, name="masked_select")
-        if not out_dim.dyn_size_ext:
+        if out_dim.dyn_size_ext is None:
             out_dim.dyn_size_ext = Tensor("masked_select_size", dims=(), dtype="int64")
         if out_dim.dyn_size_ext.raw_tensor is None:
             out_dim.dyn_size_ext.raw_tensor = torch.tensor(out_raw.shape[0], dtype=torch.int64)
@@ -1643,24 +1766,49 @@ class TorchBackend(Backend[torch.Tensor]):
         return out, out_dim
 
     @staticmethod
-    def masked_scatter(source: Tensor, *, mask: Tensor, dims: Sequence[Dim], in_dim: Dim) -> Tensor:
+    def masked_scatter(
+        source: Tensor, backup: Optional[Tensor] = None, *, mask: Tensor, dims: Sequence[Dim], in_dim: Dim
+    ) -> Tensor:
         """masked scatter"""
         assert mask.dtype == "bool"
+        # Note: If mask.dims != dims, then sum(mask_raw.flatten()) could have less elements than source_raw
+        # (not counting remaining_dims), and then the out_raw.masked_scatter_ below fails silently!
+        # That's why we assert this here.
+        # Currently in the RF code, we have a generic fallback implementation,
+        # very similar to masked_select.
         assert set(mask.dims) == set(dims)
         assert in_dim in source.dims
         remaining_dims = [d for d in source.dims if d not in mask.dims and d != in_dim]
         source_templ_dims = (in_dim,) + tuple(remaining_dims)
-        tensor_templ_dims = tuple(dims) + tuple(remaining_dims)
         source_raw = source.copy_compatible_to_dims_raw(source_templ_dims)
-        mask_raw = mask.copy_compatible_to_dims_raw(tensor_templ_dims)
-        out_shape = [d.get_dim_value() for d in tensor_templ_dims]
-        out_raw = torch.zeros(out_shape, dtype=source_raw.dtype, device=source_raw.device)
+
+        out_dims = tuple(dims) + tuple(remaining_dims)
+        out_shape = [d.get_dim_value() for d in out_dims]
+        if backup is None:
+            out_raw = torch.zeros(out_shape, dtype=source_raw.dtype, device=source_raw.device)
+        else:
+            assert set(backup.dims).issubset(out_dims), f"backup dims {backup.dims} not subset of out dims {out_dims}"
+            for d in out_dims:
+                if d not in backup.dims:
+                    backup = rf.expand_dim(backup, dim=d)
+            backup = backup.copy_transpose(out_dims)
+            out_raw = backup.raw_tensor.clone()  # we operate inplace below
+
+        mask = mask.copy_masked(mask_value=False)
+        mask_raw = mask.copy_compatible_to_dims_raw(out_dims)
+        if torch.__version__ < (2, 1):
+            # There is a bug in older PyTorch where masked_scatter_ does not work correctly with non-contiguous tensors.
+            # https://github.com/pytorch/pytorch/issues/99638
+            out_raw = out_raw.contiguous()
+            mask_raw = mask_raw.contiguous()
+            source_raw = source_raw.contiguous()
         out_raw.masked_scatter_(mask_raw, source_raw)
         return Tensor(
             "masked_scatter",
-            dims=tensor_templ_dims,
-            dtype=source.dtype,
+            dims=out_dims,
+            dtype=TorchBackend.get_dtype_name_raw(out_raw),
             sparse_dim=source.sparse_dim,
+            feature_dim=source.feature_dim,
             raw_tensor=out_raw,
         )
 
@@ -1731,7 +1879,7 @@ class TorchBackend(Backend[torch.Tensor]):
         out_spatial_dims: Optional[Sequence[Dim]] = None,
         filter: Tensor,
         filter_size: Sequence[Dim],  # to have the order well-defined
-        padding: str,
+        padding: Union[str, int, Sequence[int]],
         strides: Optional[Union[int, Sequence[int]]] = None,
         dilation_rate: Optional[Union[int, Sequence[int]]] = None,
         groups: Optional[int] = None,
@@ -1777,15 +1925,19 @@ class TorchBackend(Backend[torch.Tensor]):
                     stride_ = strides[i] if isinstance(strides, (list, tuple)) else strides
                 else:
                     stride_ = 1
-                # What is the logic here? You might be aware, in case without striding,
+                # What is the logic here? Also see https://github.com/rwth-i6/returnn/issues/1693.
+                # You might be aware, in case without striding,
                 # we simply have pad_left = (s.dimension - 1) // 2,
-                # or the total amount of padding is s.dimension - 1.
+                # or the total amount of padding is s.dimension - 1
+                # (s.dimension is the filter size).
                 # So we add the same amount of padding on both sides (or one less on the left side if odd).
                 # The output seq length in case of "valid" padding is ⌈(in_len - s.dimension + 1) / stride⌉.
                 # The output seq length in case of "same" padding with no striding (stride = 1)
-                # is simply the same as the input length.
+                # is simply the same as the input length (that's why it's called "same").
                 # What is the output seq length in case of "same" padding with striding?
-                # It should be ⌈in_len / stride⌉.
+                # It should be out_len = ⌈in_len / stride⌉ (it should be independent of s.dimension).
+                # We can rewrite out_len as:
+                # out_len = ⌊(in_len + stride - 1) / stride⌋ = (in_len + stride - 1 - (in_len - 1) % stride) / stride
                 # So, then we need to add a total amount of padding of s.dimension - 1.
                 # However, doing it the same way as without striding is incorrect.
                 # Why? Because then the first window might have more padding than the final window.
@@ -1793,8 +1945,6 @@ class TorchBackend(Backend[torch.Tensor]):
                 # or maybe one less on the first window if odd.
                 # How many frames do the windows cover?
                 # in_len_covered = out_len * stride + (s.dimension - stride)
-                # We can rewrite out_len as:
-                # out_len = ⌊(in_len + stride - 1) / stride⌋ = (in_len + stride - 1 - (in_len - 1) % stride) / stride
                 # So we have:
                 # in_len_covered = (in_len + stride - 1 - (in_len - 1) % stride) + (s.dimension - stride)
                 #                = in_len + s.dimension - 1 - (in_len - 1) % stride
@@ -1858,7 +2008,7 @@ class TorchBackend(Backend[torch.Tensor]):
         *,
         mode: str,
         pool_size: Sequence[int],
-        padding: str = "valid",
+        padding: Union[str, int, Sequence[int]] = "valid",
         dilation_rate: Union[Sequence[int], int] = 1,
         strides: Sequence[int],
         in_spatial_dims: Sequence[Dim],
@@ -1885,19 +2035,22 @@ class TorchBackend(Backend[torch.Tensor]):
             [-1, batch_dims[-1].get_dim_value() if batch_dims else 1] + [d.get_dim_value() for d in in_spatial_dims],
         )
         assert isinstance(strides, (list, tuple)) and len(strides) == len(in_spatial_dims) == len(pool_size)
-        if padding.lower() == "same":
+        if isinstance(padding, str) and padding.lower() == "same":
             # padding='same' is not quite the same as ceil_mode=True, so we explicitly pad here.
             padding = []
             for i, s in enumerate(pool_size):
                 # See comment in conv.
+                # I'm a bit unsure here... https://github.com/pytorch/pytorch/issues/148123
                 pad = s - 1 - (src_raw.shape[2 + i] - 1) % strides[i]
                 padding.append(pad // 2)
             ceil_mode = True
-        elif padding.lower() == "valid":
+        elif isinstance(padding, str) and padding.lower() == "valid":
             padding = 0
             ceil_mode = False
+        elif isinstance(padding, (int, tuple, list)):
+            ceil_mode = False
         else:
-            raise ValueError(f"invalid padding {padding!r}")
+            raise ValueError(f"invalid padding {padding!r} (type {type(padding).__name__}")
         func_name = f"{mode}_pool{len(in_spatial_dims)}d"
         func = getattr(torch.nn.functional, func_name)  # e.g. torch.nn.functional.max_pool1d
         kwargs = {}
@@ -1970,6 +2123,12 @@ class TorchBackend(Backend[torch.Tensor]):
                 pad_right = fft_length - frame_length - pad_left
                 window_pt = torch.nn.functional.pad(window_pt, (pad_left, pad_right))
 
+        orig_dtype = x_raw.dtype
+        if orig_dtype == torch.bfloat16:
+            # PyTorch stft does not support bfloat16 currently (PyTorch 2.5):
+            # https://github.com/pytorch/pytorch/issues/117844
+            # (Check back later here whether that's still the case...)
+            x_raw = x_raw.to(torch.float32)
         y_raw = torch.stft(
             x_raw,
             n_fft=fft_length,

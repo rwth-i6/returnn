@@ -24,6 +24,7 @@ __all__ = [
     "reshape",
     "split",
     "expand_dim",
+    "expand_dims",
     "squeeze",
     "window",
     "concat",
@@ -35,24 +36,33 @@ __all__ = [
     "masked_scatter",
     "sequence_mask",
     "pack_padded",
+    "pad_packed",
     "gather",
     "scatter",
+    "scatter_argmax",
+    "scatter_logsumexp",
+    "scatter_logmeanexp",
     "slice",
     "shift_right",
+    "shift_left",
     "reverse_sequence",
     "where",
+    "sort",
     "search_sorted",
     "sparse_to_dense",
     "one_hot",
+    "top_k_mask",
+    "top_p_mask",
 ]
 
 
 def convert_to_tensor(
-    value: Union[Tensor, T, RawTensorTypes],
+    value: Union[Tensor, T, RawTensorTypes, list, tuple],
     *,
     dims: Sequence[Dim] = None,
     dtype: Optional[str] = None,
     sparse_dim: Optional[Dim] = None,
+    feature_dim: Optional[Dim] = None,
     shape: Sequence[Dim] = None,
     device: Optional[str] = None,
     keep_scalar_on_cpu: bool = False,
@@ -64,6 +74,7 @@ def convert_to_tensor(
     :param dims:
     :param dtype:
     :param sparse_dim:
+    :param feature_dim:
     :param shape: alias for dims, for some older code
     :param name:
     :param device:
@@ -73,6 +84,8 @@ def convert_to_tensor(
     """
     if isinstance(value, Tensor):  # fast path
         return value
+    if isinstance(value, (tuple, list)):
+        value = numpy.array(value, dtype=dtype)
     if dims is None and shape is not None:
         dims = shape  # old code
     if isinstance(value, (int, float, complex, bool, str, numpy.number)):
@@ -115,7 +128,7 @@ def convert_to_tensor(
         if dtype is None:
             dtype = value_backend.get_dtype_name_raw(value)
     return _backend.convert_to_tensor(
-        value=value, dims=dims, dtype=dtype, sparse_dim=sparse_dim, device=device, name=name
+        value=value, dims=dims, dtype=dtype, sparse_dim=sparse_dim, feature_dim=feature_dim, device=device, name=name
     )
 
 
@@ -163,8 +176,35 @@ def merge_dims(
     :param out_dim:
     :return: tensor, out_dim
     """
+    if not dims:
+        if out_dim:
+            assert out_dim.dimension == 1
+        else:
+            out_dim = Dim(1, name="ext")
+        return rf.expand_dim(source, out_dim), out_dim
+    if len(dims) == 1:
+        if out_dim is None or out_dim == dims[0]:
+            return source, dims[0]
+        return rf.replace_dim(source, in_dim=dims[0], out_dim=out_dim)
+    if out_dim is None:
+        out_dim = dims[0]
+        reset_dyn_size = False
+        for d in dims[1:]:
+            reset_dyn_size |= d.need_masking() and out_dim.capacity != 1
+            out_dim = out_dim * d
+        if reset_dyn_size:
+            # The dynamic sizes as calculated via dim math would not correctly describe how the tensor looks like.
+            # This would then potentially discard some of the data in the tensor in subsequent operations,
+            # when masking is applied.
+            # Thus, discard the dynamic sizes, and just treat it as a flat dim with scalar dynamic size.
+            # https://github.com/rwth-i6/returnn/issues/1694
+            out_dim_size = dims[0].get_dim_value_tensor()
+            for d in dims[1:]:
+                out_dim_size *= d.get_dim_value_tensor()
+            assert isinstance(out_dim_size, Tensor) and out_dim_size.dims == ()  # scalar
+            out_dim.dyn_size_ext = out_dim_size
     # noinspection PyProtectedMember
-    return source._raw_backend.merge_dims(source, dims=dims, out_dim=out_dim)
+    return source._raw_backend.merge_dims(source, dims=dims, out_dim=out_dim), out_dim
 
 
 def split_dims(
@@ -257,6 +297,15 @@ def expand_dim(source: Tensor, dim: Dim) -> Tensor:
     return source._raw_backend.expand_dim(source, dim=dim)
 
 
+def expand_dims(source: Tensor, dims: Sequence[Dim]) -> Tensor:
+    """
+    Expand multiple dims, via :func:`expand_dim`.
+    """
+    for dim in dims:
+        source = expand_dim(source, dim)
+    return source
+
+
 def squeeze(source: Tensor, axis: Dim) -> Tensor:
     """
     Removes the axis with dimension of extend 1 from the source.
@@ -276,6 +325,7 @@ def window(
     padding: str = "same",
     pad_value: Optional[Union[int, float]] = None,
     stride: int = 1,
+    use_mask: Optional[bool] = None,
 ) -> Tuple[Tensor, Dim]:
     """
     Follows the same idea as RETURNN tf_util.windowed,
@@ -289,8 +339,14 @@ def window(
     :param padding: "same" or "valid"
     :param pad_value:
     :param stride:
+    :param use_mask: whether we should mask to make sure the zero padding is correct
     :return: out, out_spatial_dim
     """
+    if spatial_dim.need_masking():
+        if use_mask is None:
+            use_mask = rf.use_mask_default(default=True, default_false_for_behavior_version_up_to=22)
+        if use_mask:
+            source = source.copy_masked(0, dims=[spatial_dim])
     assert window_dim.dimension is not None
     if padding == "same":
         out_spatial_dim = spatial_dim
@@ -352,6 +408,7 @@ def concat(
     *sources: Tuple[Tensor, Dim],
     allow_broadcast: bool = False,
     out_dim: Optional[Dim] = None,
+    handle_dynamic_dims: Optional[bool] = None,
 ) -> Tuple[Tensor, Dim]:
     """
     Concatenates multiple sources in the specified dimension.
@@ -361,6 +418,7 @@ def concat(
     :param sources: list of (tensor, dim) pairs. dim is the axis to concatenate on.
     :param allow_broadcast: if True, the sources can have different dims, and the result will be broadcasted.
     :param out_dim: reuse existing dim for the resulting concatenated dim, if given
+    :param handle_dynamic_dims:
     :return: concatenated tensor, out_dim
     """
     assert sources
@@ -370,6 +428,9 @@ def concat(
             assert src.dims_set - {dim} == dims, f"concat {sources}, need allow_broadcast=True"
     if not out_dim:
         out_dim = sum(d for _, d in sources)
+    if handle_dynamic_dims is None or handle_dynamic_dims:
+        for src, dim in sources[:-1]:
+            assert dim.is_static(), f"concat {sources}, dim {dim} is not static, not yet implemented..."
     # noinspection PyProtectedMember
     return sources[0][0]._raw_backend.concat(*sources, allow_broadcast=allow_broadcast, out_dim=out_dim), out_dim
 
@@ -392,7 +453,7 @@ def pad(
     source: Tensor,
     *,
     axes: Sequence[Dim],
-    padding: Sequence[Tuple[Union[Dim, int], Union[Dim, int]]],
+    padding: Sequence[Tuple[Union[Dim, int, Tensor], Union[Dim, int, Tensor]]],
     out_dims: Optional[Sequence[Dim]] = None,
     mode: str = "constant",
     value: Optional[Union[rf.RawTensorTypes, Tensor]] = None,
@@ -416,13 +477,6 @@ def pad(
     if handle_dynamic_dims is None:
         handle_dynamic_dims = _pad_handle_dynamic_dims_default(axes, padding, mode=mode)
     if not out_dims:
-        if handle_dynamic_dims:
-            for left, right in padding:
-                if isinstance(left, Dim):
-                    assert not left.need_masking(), f"padding {padding} does not support dynamic left padding"
-                if isinstance(right, Dim):
-                    assert not right.need_masking(), f"padding {padding} does not support dynamic right padding"
-                # Note that even dynamic middle dims is not exactly correct...
         out_dims = [left + middle + right for middle, (left, right) in zip(axes, padding)]
     # noinspection PyProtectedMember
     return (
@@ -460,10 +514,7 @@ def _pad_handle_dynamic_dims_default(
     global _pad_handle_dynamic_dims_shown_warning
     if not _pad_handle_dynamic_dims_shown_warning:
         for middle, (left, right) in zip(pad_axes, padding):
-            middle: Dim
-            if not middle.need_masking() and (isinstance(left, int) or not left.need_masking()):
-                continue
-            if mode != "circular" and isinstance(right, int) and right == 0:
+            if not _pad_need_dyn_dim_handling(middle, left, right, mode=mode):
                 continue
 
             logging.getLogger("returnn.frontend").warning(
@@ -476,6 +527,20 @@ def _pad_handle_dynamic_dims_default(
             _pad_handle_dynamic_dims_shown_warning = True
             break
     return False
+
+
+def _pad_need_dyn_dim_handling(
+    middle: Dim, left: Union[Dim, int, Tensor], right: Union[Dim, int, Tensor], *, mode: str
+) -> bool:
+    if (
+        not middle.need_masking()
+        and (isinstance(left, int) or (isinstance(left, Dim) and not left.need_masking()))
+        or (isinstance(left, Tensor) and not left.dims)
+    ):
+        return False
+    if mode != "circular" and isinstance(right, int) and right == 0:
+        return False
+    return True
 
 
 def cum_concat_step(
@@ -492,13 +557,18 @@ def cum_concat_step(
     :return: (accumulated, out_spatial_dim). accumulated shape {..., out_spatial_dim},
         same shape as prev_accum with axis replaced by out_spatial_dim.
     """
+    # Note: Before, we had a backend function just for this.
+    # In case of TF-layers, this was using CumConcatLayer.
+    # This would allow for automatic optimization when inside a RecLayer.
+    # However, we don't really need this for eager frameworks,
+    # and we want to simplify this for now,
+    # using pure RF code.
     if not out_spatial_dim:
         out_spatial_dim = axis + 1
-    # noinspection PyProtectedMember
-    return (
-        source._raw_backend.cum_concat_step(source, prev_accum=prev_accum, axis=axis, out_spatial_dim=out_spatial_dim),
-        out_spatial_dim,
+    out, (out_spatial_dim,) = rf.pad(
+        prev_accum, axes=[axis], padding=[(0, 1)], out_dims=[out_spatial_dim], value=source, handle_dynamic_dims=True
     )
+    return out, out_spatial_dim
 
 
 def stack(sources: Sequence[Tensor], *, out_dim: Optional[Dim] = None) -> Tuple[Tensor, Dim]:
@@ -549,14 +619,16 @@ def masked_select(
         return tensor._raw_backend.masked_select(tensor, mask=mask, dims=dims, out_dim=out_dim)
     # Separate implementation for the case where we have a subset of the mask dims, specifically one single dim.
     # See https://github.com/rwth-i6/returnn/issues/1605 for discussion.
-    if len(dims) != 1:
-        # Please check https://github.com/rwth-i6/returnn/issues/1605 when you need this.
-        raise NotImplementedError(f"masked_select: dims {dims} len {len(dims)} > 1 not supported")
-    (in_dim,) = dims
+    mask = mask.copy_masked(mask_value=False)
+    if len(dims) > 1:
+        # Flatten it, in the specified order.
+        tensor, in_dim = rf.merge_dims(tensor, dims=dims)
+        mask, _ = rf.merge_dims(mask, dims=dims, out_dim=in_dim)
+    else:
+        (in_dim,) = dims
     in_dim: Dim
-    mask = mask.copy_masked(mask_value=False, dims=dims)
     idxs = rf.cumsum(rf.cast(mask, "int32"), spatial_dim=in_dim)  # [T,B] -> idx in T' + 1
-    new_size = rf.gather(idxs, indices=in_dim.get_size_tensor() - 1, axis=in_dim)  # [B]
+    new_size = rf.gather(idxs, indices=in_dim.get_dim_value_tensor() - 1, axis=in_dim)  # [B]
     if out_dim is None:
         out_dim = Dim(new_size, name="masked_select")
     elif out_dim.dyn_size_ext is None:
@@ -571,18 +643,46 @@ def masked_select(
     return res, out_dim
 
 
-def masked_scatter(source: Tensor, *, mask: Tensor, dims: Sequence[Dim], in_dim: Dim) -> Tensor:
+def masked_scatter(
+    source: Tensor, backup: Optional[Tensor] = None, *, mask: Tensor, dims: Sequence[Dim], in_dim: Dim
+) -> Tensor:
     """
     The inverse of :func:`masked_select`.
 
     :param source: [in_dim, F...]
+    :param backup: [dims..., F...] (or subset of those dims). zero if not given.
     :param mask: [dims...] -> bool (e.g. [B,T])
     :param dims: the order of the dims defines the format. those dims should be exactly the dims of the mask.
     :param in_dim: the dim of the source which should be scattered into the mask.
     :return: [dims..., F...]
     """
-    # noinspection PyProtectedMember
-    return source._raw_backend.masked_scatter(source, mask=mask, dims=dims, in_dim=in_dim)
+    mask_dims_set = set(mask.dims)
+    dims_set = set(dims)
+    if not dims_set.issubset(mask_dims_set):
+        raise ValueError(f"masked_scatter: dims {dims} not subset of mask dims {mask.dims}")
+    if not dims_set:
+        raise ValueError(f"masked_scatter: dims {dims} empty")
+    if dims_set == mask_dims_set:
+        # noinspection PyProtectedMember
+        return source._raw_backend.masked_scatter(source, backup=backup, mask=mask, dims=dims, in_dim=in_dim)
+    # Separate implementation for the case where we have a subset of the mask dims.
+    # Keep this consistent to masked_select above.
+    mask = mask.copy_masked(mask_value=False)
+    if len(dims) > 1:
+        # Flatten it, in the specified order.
+        mask_, dim_ = rf.merge_dims(mask, dims=dims)
+    else:
+        mask_ = mask
+        (dim_,) = dims
+    dim_: Dim
+    idxs = rf.cumsum(rf.cast(mask_, "int32"), spatial_dim=dim_)  # [dim_] -> idx in dim_/in_dim + 1
+    idxs = rf.split_dims(idxs, dims=dims, axis=dim_)  # [dims...]
+    idxs = rf.where(mask, idxs - 1, 0)  # [dim_] -> idx in in_dim
+    res = rf.gather(source, axis=in_dim, indices=idxs)
+    if backup is None:
+        backup = 0
+    res = rf.where(mask, res, backup)
+    return res
 
 
 def sequence_mask(dims: Union[Dim, Sequence[Dim]], *, device: Optional[str] = None) -> Tensor:
@@ -611,6 +711,8 @@ def pack_padded(
     Packing means to only store the non-padded frames.
     This uses :func:`masked_select` internally based on the mask of non-masked frames.
 
+    See :func:`pad_packed` for the inverse operation.
+
     :param source:
     :param dims: dims in source to pack. the order defines the format. first dim is major, etc.
         if there are no padded frames, e.g. dims=[B,T] would just result in the [B*T,...] reshaped tensor.
@@ -620,7 +722,6 @@ def pack_padded(
     """
     assert not enforce_sorted  # not implemented yet...
     mask = rf.sequence_mask(dims, device=source.device)
-    assert mask.dims_set == set(dims)
     # Note: We could already calculate out_dim here, as follows:
     #   out_dim = Dim(rf.num_elements_of_shape(dims), name="packed")
     # This could trigger a more efficient calculation path in masked_select,
@@ -631,6 +732,14 @@ def pack_padded(
     # This might change in the future when we have this:
     # https://github.com/pytorch/pytorch/issues/131256
     return rf.masked_select(source, mask=mask, dims=dims, out_dim=out_dim)
+
+
+def pad_packed(source: Tensor, *, in_dim: Dim, dims: Sequence[Dim]) -> Tensor:
+    """
+    Inverse of :func:`pack_padded`, i.e. unpack the sequence, i.e. pad it back to the original length.
+    """
+    mask = rf.sequence_mask(dims, device=source.device)
+    return rf.masked_scatter(source, mask=mask, in_dim=in_dim, dims=dims)
 
 
 # noinspection PyUnusedLocal
@@ -679,17 +788,150 @@ def scatter(
     *,
     indices: Tensor,
     indices_dim: Union[Dim, Sequence[Dim]],
+    mode: str = "sum",
+    fill_value: Optional[Union[int, float]] = None,
     out_dim: Optional[Union[Dim, Sequence[Dim]]] = None,
+    use_mask: Optional[bool] = None,
 ) -> Tensor:
     """
     Scatters into new zero-tensor.
-    If entries in indices are duplicated, the corresponding values in source will be added together
-    (scatter_add in PyTorch).
-    (TF segment_sum can be implemented via this.)
+    If entries in indices are duplicated, with ``mode=="sum"``,
+    the corresponding values in source will be added together
+    (``scatter_add`` in PyTorch),
+    or otherwise it will take the respective reduction.
+
+    ``scatter`` is the inverse of :func:`gather`.
+
+    (segment_sum can be implemented via this.)
 
     :param source: [batch_dims..., indices_dim(s)..., feature_dims...]
     :param indices: [batch_dims..., indices_dim(s)...] -> out_dim
     :param indices_dim:
+    :param mode: "sum", "max", "min", "logsumexp", "logmeanexp", "argmax".
+        (Note: If you ever need mean, argmin, etc, please open an issue/PR.)
+    :param fill_value:
+    :param out_dim: The indices target dim.
+        If not given, will be automatically determined as the sparse_dim from indices.
+        If multiple out dims, use indices into the merged out dims,
+        and then we use :func:`rf.split_dims` afterwards.
+    :param use_mask:
+    :return: [batch_dims..., out_dim(s)..., feature_dims...]
+    """
+    if mode == "logsumexp":
+        return scatter_logsumexp(
+            source, indices=indices, indices_dim=indices_dim, fill_value=fill_value, out_dim=out_dim
+        )
+    if mode == "logmeanexp":
+        return scatter_logmeanexp(
+            source, indices=indices, indices_dim=indices_dim, fill_value=fill_value, out_dim=out_dim
+        )
+    if mode == "argmax":
+        return scatter_argmax(source, indices=indices, indices_dim=indices_dim, invalid_idx=fill_value, out_dim=out_dim)
+    if not out_dim:
+        assert isinstance(indices, Tensor) and indices.sparse_dim
+        out_dim = indices.sparse_dim
+    if fill_value is None:
+        if mode == "sum":
+            fill_value = 0
+        elif mode == "max":
+            if "int" in source.dtype:
+                fill_value = numpy.iinfo(source.raw_tensor.dtype).min
+            else:
+                fill_value = float("-inf")
+        elif mode == "min":
+            if "int" in source.dtype:
+                fill_value = numpy.iinfo(source.raw_tensor.dtype).max
+            else:
+                fill_value = float("inf")
+        else:
+            raise ValueError(f"scatter: invalid mode {mode!r}")
+    indices_dim = indices_dim if isinstance(indices_dim, (list, tuple)) else [indices_dim]
+    if any(dim.need_masking() for dim in indices_dim):
+        if use_mask is None:
+            use_mask = rf.use_mask_default(default=True, default_false_for_behavior_version_up_to=22)
+        if use_mask:
+            source = source.copy_masked(fill_value, dims=indices_dim)
+    else:
+        use_mask = False
+    # noinspection PyProtectedMember
+    out = source._raw_backend.scatter(
+        source, indices=indices, indices_dim=indices_dim, mode=mode, fill_value=fill_value, out_dim=out_dim
+    )
+    if use_mask and mode != "sum":
+        # Make sure we don't leave any infinities in the output.
+        out = out.copy_masked(0, dims=[out_dim])
+    return out
+
+
+def scatter_argmax(
+    source: Tensor,
+    *,
+    indices: Tensor,
+    indices_dim: Union[Dim, Sequence[Dim]],
+    invalid_idx: int = -1,
+    out_dim: Optional[Union[Dim, Sequence[Dim]]] = None,
+) -> Tensor:
+    """
+    Get the index in src which has the max value for each index in index.
+
+    This is like :func:`scatter` with ``mode="argmax"``.
+
+    :param source: [batch_dims..., indices_dim(s)..., feature_dims...]
+    :param indices: [batch_dims..., indices_dim(s)...] -> out_dim
+    :param indices_dim:
+    :param invalid_idx: in case some of the output entries are never set (via ``indices``),
+        this will be used as the value.
+    :param out_dim: The indices target dim.
+    :return: [batch_dims..., out_dim(s)..., feature_dims...]
+    """
+    import numpy
+
+    if not out_dim:
+        assert isinstance(indices, Tensor) and indices.sparse_dim
+        out_dim = indices.sparse_dim
+
+    # For the shape comments, use [B,I,F] for shorter source, [B,O,F] for shorter output.
+    # use scatter to get the max value for each index
+    out_max = rf.scatter(source, indices=indices, indices_dim=indices_dim, mode="max", out_dim=out_dim)  # [B,O,F]
+    src_max = rf.gather(out_max, indices=indices, axis=out_dim)  # [B,I,F] -> max value or invalid_value
+
+    max_invalid_idx = numpy.iinfo(indices.dtype).max
+
+    # then use gather to get the max value back to src.
+    # then mask the src with the max value.
+    src_max_mask = src_max == source
+    src_max_mask = src_max_mask.copy_masked(False)
+    src_indices = rf.where(
+        src_max_mask, rf.range_over_dim(indices_dim, dtype=indices.dtype, device=source.device), max_invalid_idx
+    )  # [B,I,F] -> I
+
+    # now scatter the min of src_indices into tensor
+    out = rf.scatter(
+        src_indices, indices=indices, indices_dim=indices_dim, mode="min", fill_value=invalid_idx, out_dim=out_dim
+    )  # [B,O,F] -> I or invalid_idx or max_invalid_idx
+
+    if max_invalid_idx != invalid_idx:
+        out = rf.where(out != max_invalid_idx, out, invalid_idx)  # [B,O,F] -> I or invalid_idx
+    return out
+
+
+def scatter_logsumexp(
+    source: Tensor,
+    *,
+    indices: Tensor,
+    indices_dim: Union[Dim, Sequence[Dim]],
+    fill_value: Optional[Union[int, float]] = None,
+    out_dim: Optional[Union[Dim, Sequence[Dim]]] = None,
+) -> Tensor:
+    """
+    Scatters into new zero-tensor.
+    If entries in indices are duplicated, the corresponding values in source will be log-sum-exp'ed together.
+    This is like :func:`scatter` with ``mode="logsumexp"``.
+
+    :param source: [batch_dims..., indices_dim(s)..., feature_dims...]
+    :param indices: [batch_dims..., indices_dim(s)...] -> out_dim
+    :param indices_dim:
+    :param fill_value:
     :param out_dim: The indices target dim.
         If not given, will be automatically determined as the sparse_dim from indices.
         If multiple out dims, use indices into the merged out dims,
@@ -699,8 +941,48 @@ def scatter(
     if not out_dim:
         assert isinstance(indices, Tensor) and indices.sparse_dim
         out_dim = indices.sparse_dim
-    # noinspection PyProtectedMember
-    return source._raw_backend.scatter(source, indices=indices, indices_dim=indices_dim, out_dim=out_dim)
+    with rf.stop_gradient_scope():
+        max_x = rf.scatter(source, indices=indices, indices_dim=indices_dim, mode="max", out_dim=out_dim)  # [D_out,...]
+        max_x_ = rf.gather(max_x, indices=indices, axis=out_dim)  # [D_src,...]
+    src_ = rf.exp(source - max_x_)
+    if fill_value is not None:
+        fill_value = rf.exp(fill_value - max_x_)
+    tensor = rf.scatter(
+        src_, indices=indices, indices_dim=indices_dim, mode="sum", fill_value=fill_value, out_dim=out_dim
+    )
+    tensor = rf.log(tensor)
+    tensor = rf.where(rf.is_neg_infinite(max_x), rf.zeros((), dtype=source.dtype, device=source.device), tensor)
+    tensor += max_x
+    return tensor
+
+
+def scatter_logmeanexp(
+    source: Tensor,
+    *,
+    indices: Tensor,
+    indices_dim: Union[Dim, Sequence[Dim]],
+    fill_value: Optional[Union[int, float]] = None,
+    out_dim: Optional[Union[Dim, Sequence[Dim]]] = None,
+) -> Tensor:
+    """
+    Scatters into new zero-tensor.
+    If entries in indices are duplicated, the corresponding values in source will be log-mean-exp'ed together.
+    This is like :func:`scatter` with ``mode="logmeanexp"``.
+
+    :param source: [batch_dims..., indices_dim(s)..., feature_dims...]
+    :param indices: [batch_dims..., indices_dim(s)...] -> out_dim
+    :param indices_dim:
+    :param fill_value:
+    :param out_dim: The indices target dim.
+        If not given, will be automatically determined as the sparse_dim from indices.
+        If multiple out dims, use indices into the merged out dims,
+        and then we use :func:`rf.split_dims` afterwards.
+    :return: [batch_dims..., out_dim(s)..., feature_dims...]
+    """
+    ones = rf.ones(dims=indices.dims, dtype=source.dtype, device=source.device)
+    counts = rf.scatter(ones, indices=indices, indices_dim=indices_dim, fill_value=1, out_dim=out_dim)
+    y = scatter_logsumexp(source, indices=indices, indices_dim=indices_dim, fill_value=fill_value, out_dim=out_dim)
+    return y - rf.log(counts)
 
 
 # noinspection PyShadowingBuiltins
@@ -799,6 +1081,15 @@ def shift_right(source: Tensor, *, axis: Dim, pad_value: Union[rf.RawTensorTypes
     return padded_slice
 
 
+def shift_left(source: Tensor, *, axis: Dim, pad_value: Union[rf.RawTensorTypes, Tensor], amount: int = 1) -> Tensor:
+    """shift left by amount, pad right with right_pad"""
+    padded, (padded_dim,) = rf.pad(
+        source, axes=[axis], padding=[(0, amount)], mode="constant", value=pad_value, handle_dynamic_dims=True
+    )
+    padded_slice, _ = rf.slice(padded, axis=padded_dim, start=amount, size=axis)
+    return padded_slice
+
+
 def reverse_sequence(tensor: Tensor, *, axis: Dim, handle_dynamic_dims: bool = True) -> Tensor:
     """
     Similar as tf.reverse_sequence, or Torch flip (but taking seq lengths into account).
@@ -813,7 +1104,7 @@ def reverse_sequence(tensor: Tensor, *, axis: Dim, handle_dynamic_dims: bool = T
     """
     if not handle_dynamic_dims or not axis.need_masking():
         # noinspection PyProtectedMember
-        return tensor._raw_backend.flip(tensor, axis=axis)
+        return tensor._raw_backend.flip_no_mask(tensor, axis=axis)
     indices = rf.combine_bc(axis.get_size_tensor(), "-", rf.range_over_dim(axis)) - 1
     return rf.gather(tensor, indices=indices, axis=axis, clip_to_valid=True)
 
@@ -835,6 +1126,27 @@ def where(
         cond = rf.convert_to_tensor(cond, _backend=backend)
     # noinspection PyProtectedMember
     return cond._raw_backend.where(cond, true_, false_, allow_broadcast_all_sources=allow_broadcast_all_sources)
+
+
+def sort(source: Tensor, *, axis: Dim, descending: bool = False, stable: bool = True) -> Tuple[Tensor, Tensor, Dim]:
+    """
+    Sorts the source tensor along the given axis.
+
+    See also :func:`top_k`.
+    :func:`top_k` with ``k=axis.get_size_tensor()`` is equivalent to this function.
+
+    :param source: {other_dims..., axis}
+    :param axis: The axis to sort along.
+    :param descending: If True, sort in descending order, otherwise in ascending order.
+    :param stable: If True, use a stable sorting algorithm (not reordering equal elements).
+        Note that many frameworks (Torch, TensorFlow) have ``stable=False`` by default.
+        ``stable=False`` can be faster.
+    :return: sorted tensor, indices tensor, out_dim. both tensors have the shape {other_dims..., out_dim},
+        i.e. ``axis`` replaced by ``out_dim``.
+        indices tensor has sparse_dim set to ``axis``.
+    """
+    # noinspection PyProtectedMember
+    return source._raw_backend.sort(source, axis=axis, descending=descending, stable=stable)
 
 
 def search_sorted(
@@ -885,3 +1197,49 @@ def one_hot(source: Tensor) -> Tensor:
     and much more efficiently than they would be with dense tensors.
     """
     return sparse_to_dense(source, label_value=1.0, other_value=0.0)
+
+
+def top_k_mask(values: Tensor, *, axis: Dim, k: Union[int, Tensor]) -> Tensor:
+    """
+    Top-k filtering.
+
+    :param values: {other_dims..., axis}
+    :param axis:
+    :param k: the number of top values to keep
+    :return: mask {other_dims..., axis} of the top-k values
+    """
+    _, indices, k_dim = rf.top_k(values, axis=axis, k=k)
+    mask = rf.scatter(rf.full(dims=indices.dims, fill_value=True), indices=indices, indices_dim=k_dim, fill_value=False)
+    return mask
+
+
+def top_p_mask(
+    probs: Tensor,
+    *,
+    axis: Dim,
+    p: Union[float, Tensor],
+    one_more: bool = True,
+) -> Tensor:
+    """
+    Top-p filtering, e.g. as used in Nucleus sampling (https://arxiv.org/abs/1904.09751).
+
+    :param probs: {probs_dims..., axis}
+    :param axis:
+    :param p: the probability mass to keep
+    :param one_more: if True (default), keep also the first token above the threshold.
+        (It's enabled by default to follow the behavior of the original implementation.)
+    :return: mask {probs_dims..., axis} of the top-p tokens.
+        ``sum(probs[mask]) <= p``, or slightly more if ``one_more`` is True.
+    """
+    assert 0.0 <= p <= 1.0
+    if isinstance(p, Tensor):
+        assert axis not in p.dims
+    # https://github.com/ari-holtzman/degen/blob/master/gen.py
+    sorted_probs, sorted_indices, sorted_dim = rf.sort(probs, axis=axis, descending=True)
+    cum_probs = rf.cumsum(sorted_probs, spatial_dim=sorted_dim)
+    mask = cum_probs <= p  # {probs_dims..., sorted_dim}
+    if one_more:
+        # keep also the first token above the threshold
+        mask = rf.shift_right(mask, axis=sorted_dim, pad_value=True)
+    mask = rf.scatter(mask, indices=sorted_indices, indices_dim=sorted_dim)
+    return mask

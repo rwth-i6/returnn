@@ -69,7 +69,7 @@ class OpDescription(native_op.NativeOpBaseMixin):
         return OpDescription(**kwargs)
 
 
-class OpMaker(object):
+class OpMaker:
     """
     https://www.tensorflow.org/guide/extend/op
     """
@@ -730,7 +730,7 @@ def make_lstm_op(**kwargs):
     return make_op(native_op.LstmGenericBase, **kwargs)
 
 
-class RecSeqCellOp(object):
+class RecSeqCellOp:
     """
     In TF terminology, this is a "fused" cell, i.e. the op loops over the time.
     Similar is e.g. :class:`tf.contrib.rnnLSTMBlockFusedCell`.

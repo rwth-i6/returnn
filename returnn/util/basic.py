@@ -5,12 +5,11 @@ Various generic utilities, which are shared across different backend engines.
 """
 
 from __future__ import annotations
-from typing import Optional, Union, Any, Generic, TypeVar, Iterable, Tuple, Dict, List, Callable
+from typing import Optional, Union, Any, Generic, TypeVar, Iterable, Tuple, Dict, List, Set, Callable
 
 import subprocess
 from subprocess import CalledProcessError
 
-import h5py
 from collections import deque
 import inspect
 import os
@@ -37,8 +36,6 @@ import builtins
 
 from .native_code_compiler import NativeCodeCompiler
 
-PY3 = sys.version_info[0] >= 3
-
 unicode = str
 long = int
 # noinspection PyShadowingBuiltins
@@ -52,7 +49,7 @@ V = TypeVar("V")
 returnn_root_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
-class NotSpecified(object):
+class NotSpecified:
     """
     This is just a placeholder, to be used as default argument to mark that it is not specified.
     """
@@ -83,19 +80,38 @@ class Entity:
     This is more efficient than using just the string directly in an enum.
     """
 
-    def __init__(self, name=None):
+    def __init__(
+        self, name: Optional[str] = None, *, global_base: Optional[Any] = None, global_name: Optional[str] = None
+    ):
         """
         :param str|None name:
         """
         self.name = name
+        if global_name and not global_base:
+            frame = try_get_stack_frame(1)
+            global_base = sys.modules[frame.f_globals["__name__"]]
+        self.global_base = global_base
+        self.global_name = global_name
 
     def __str__(self):
-        return self.name
+        return self.name or self.global_name or "<unnamed Entity>"
 
     def __repr__(self):
-        return "<%s>" % self.name
+        return "<%s Entity>" % (self.name or self.global_name or "unnamed")
+
+    def __reduce__(self):
+        if self.global_name:
+            # Sanity check that the global ref is correct.
+            attrs = self.global_name.split(".")
+            assert attr_chain(self.global_base, attrs) is self
+            parent = attr_chain(self.global_base, attrs[:-1])
+            assert getattr(parent, attrs[-1]) is self
+            return getattr, (parent, attrs[-1])
+        raise Exception("Cannot pickle Entity object. (%r)" % self)
 
     def __getstate__(self):
+        if self.global_name:
+            raise Exception("We expect that __reduce__ is used, not __getstate__.")
         raise Exception("Cannot pickle Entity object. (%r)" % self)
 
 
@@ -203,7 +219,7 @@ class BehaviorVersion:
     See :ref:`behavior_version`.
     """
 
-    _latest_behavior_version = 21
+    _latest_behavior_version = 24
     _behavior_version = None  # type: typing.Optional[int]
     _min_behavior_version = 0  # type: int
 
@@ -373,8 +389,7 @@ def sys_cmd_out_lines(s):
         env=dict(os.environ, LANG="en_US.UTF-8", LC_ALL="en_US.UTF-8"),
     )
     stdout = p.communicate()[0]
-    if PY3:
-        stdout = stdout.decode("utf8")
+    stdout = stdout.decode("utf8")
     result = [line.strip() for line in stdout.split("\n")[:-1]]
     p.stdout.close()
     if p.returncode != 0:
@@ -535,15 +550,68 @@ def describe_torch_version() -> str:
     return "%s (%s in %s)" % (version, git_info, tdir)
 
 
-def get_tensorflow_version_tuple():
+def get_tensorflow_version_tuple() -> Tuple[int, ...]:
     """
     :return: tuple of ints, first entry is the major version
-    :rtype: tuple[int]
     """
-    import tensorflow as tf
+    import tensorflow as tf  # noqa
     import re
 
     return tuple([int(re.sub("(-rc[0-9]|-dev[0-9]*)", "", s)) for s in tf.__version__.split(".")])
+
+
+class ReportImportedDevModules:
+    """
+    This is supposed to be used as a context manager.
+    We track all additionally loaded modules during this context, and also extensions to sys.path.
+    We try to detect if such loaded module is inside a Git repository, and if so, report the Git commit.
+    """
+
+    def __init__(self, *, description: str):
+        self.description = description
+        self.ignore_sys_path: Optional[Set[str]] = None
+        self.ignore_sys_modules: Optional[Set[str]] = None
+
+    def __enter__(self):
+        self.ignore_sys_path = set(sys.path)
+        self.ignore_sys_modules = set(sys.modules)
+        self.ignore_sys_modules.add("__mp_main__")
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        if not log.verbose:  # it might have never been initialized due to some error, or forked proc
+            return
+        if not log.verbose[3]:
+            return
+        if exc_type:
+            return
+        print(f"Tracked changes to sys.path and sys.modules during {self.description}:", file=log.v4)
+        has_changes = False
+        for path in sys.path:
+            if path not in self.ignore_sys_path:
+                print("New sys.path entry:", path, file=log.v3)
+                has_changes = True
+        for mod_name, mod in list(sys.modules.items()):
+            if "." not in mod_name and mod_name not in self.ignore_sys_modules:
+                if hasattr(mod, "__file__") and mod.__file__:
+                    # __file__ is e.g. ".../recipe/i6_experiments/__init__.py"
+                    mod_dir = os.path.dirname(mod.__file__)  # e.g. ".../recipe/i6_experiments"
+                    if os.path.exists(mod_dir + "/.git"):
+                        git_dir = mod_dir
+                    elif os.path.exists(mod_dir + "/../.git"):
+                        # Use realpath because the mod dir might be a symlink.
+                        git_dir = os.path.dirname(os.path.realpath(mod_dir))
+                    else:
+                        git_dir = None
+                    if git_dir:
+                        try:
+                            git_info = git_describe_head_version(git_dir=git_dir)
+                        except Exception as e:
+                            git_info = f"<git-error: {e}>"
+                        mod_info = "(%s in %s)" % (git_info, mod_dir)
+                        print("New module:", mod_name, mod_info, file=log.v3)
+                        has_changes = True
+        if not has_changes:
+            print("(No changes to sys.modules or sys.path.)", file=log.v4)
 
 
 def eval_shell_env(token):
@@ -649,6 +717,8 @@ def hdf5_dimension(filename, dimension):
     :param str dimension:
     :rtype: numpy.ndarray|int
     """
+    import h5py
+
     fin = h5py.File(filename, "r")
     if "/" in dimension:
         res = fin["/".join(dimension.split("/")[:-1])].attrs[dimension.split("/")[-1]]
@@ -664,6 +734,8 @@ def hdf5_group(filename, dimension):
     :param str dimension:
     :rtype: dict[str]
     """
+    import h5py
+
     fin = h5py.File(filename, "r")
     res = {k: fin[dimension].attrs[k] for k in fin[dimension].attrs}
     fin.close()
@@ -676,6 +748,8 @@ def hdf5_shape(filename, dimension):
     :param dimension:
     :rtype: tuple[int]
     """
+    import h5py
+
     fin = h5py.File(filename, "r")
     res = fin[dimension].shape
     fin.close()
@@ -688,6 +762,8 @@ def hdf5_strings(handle, name, data):
     :param str name:
     :param numpy.ndarray|list[str] data:
     """
+    import h5py
+
     # noinspection PyBroadException
     try:
         s = max([len(d) for d in data])
@@ -1344,113 +1420,10 @@ def init_thread_join_hack():
     if _thread_join_hack_installed:  # don't install twice
         return
     _thread_join_hack_installed = True
-    if PY3:
-        # These monkey patches are not necessary anymore. Nothing blocks signals anymore in Python 3.
-        # https://github.com/albertz/playground/blob/master/thread-join-block.py
-        # https://github.com/albertz/playground/blob/master/cond-wait-block.py
-        return
-    main_thread = threading.current_thread()
-    # noinspection PyUnresolvedReferences,PyProtectedMember
-    assert isinstance(main_thread, threading._MainThread)
-    main_thread_id = thread.get_ident()
-
-    # Patch Thread.join().
-    join_orig = threading.Thread.join
-
-    def join_hacked(thread_obj, timeout=None):
-        """
-        :type thread_obj: threading.Thread
-        :type timeout: float|None
-        :return: always None
-        """
-        if thread.get_ident() == main_thread_id and timeout is None:
-            # This is a HACK for Thread.join() if we are in the main thread.
-            # In that case, a Thread.join(timeout=None) would hang and even not respond to signals
-            # because signals will get delivered to other threads and Python would forward
-            # them for delayed handling to the main thread which hangs.
-            # See CPython signalmodule.c.
-            # Currently the best solution I can think of:
-            while thread_obj.is_alive():
-                join_orig(thread_obj, timeout=0.1)
-        elif thread.get_ident() == main_thread_id and timeout > 0.1:
-            # Limit the timeout. This should not matter for the underlying code.
-            join_orig(thread_obj, timeout=0.1)
-        else:
-            # In all other cases, we can use the original.
-            join_orig(thread_obj, timeout=timeout)
-
-    threading.Thread.join = join_hacked
-
-    # Mostly the same for Condition.wait().
-    if PY3:
-        # https://youtrack.jetbrains.com/issue/PY-34983
-        # noinspection PyPep8Naming
-        Condition = threading.Condition
-    else:
-        # noinspection PyUnresolvedReferences,PyPep8Naming,PyProtectedMember
-        Condition = threading._Condition
-    cond_wait_orig = Condition.wait
-
-    # noinspection PyUnusedLocal
-    def cond_wait_hacked(cond, timeout=None, *args):
-        """
-        :param Condition cond:
-        :param float|None timeout:
-        :param args:
-        :rtype: bool
-        """
-        if thread.get_ident() == main_thread_id:
-            if timeout is None:
-                # Use a timeout anyway. This should not matter for the underlying code.
-                return cond_wait_orig(cond, timeout=0.1)  # noqa  # https://youtrack.jetbrains.com/issue/PY-43915
-            # There is some code (e.g. multiprocessing.pool) which relies on that
-            # we respect the real specified timeout.
-            # However, we cannot do multiple repeated calls to cond_wait_orig as we might miss the condition notify.
-            # But in some Python versions, the underlying cond_wait_orig will anyway also use sleep.
-            return cond_wait_orig(cond, timeout=timeout)  # noqa
-        else:
-            return cond_wait_orig(cond, timeout=timeout)  # noqa
-
-    Condition.wait = cond_wait_hacked
-
-    # And the same for Lock.acquire, very similar to Condition.wait.
-    # However: can't set attributes of built-in/extension type 'thread.lock'.
-    # We could wrap the whole threading.Lock, but that is too annoying for me now...
-    # noinspection PyPep8Naming
-    Lock = None
-    if Lock:
-        lock_acquire_orig = Lock.acquire  # noqa
-
-        # Note: timeout argument was introduced in Python 3.
-        def lock_acquire_hacked(lock, blocking=True, timeout=-1):
-            """
-            :param threading.Lock lock:
-            :param bool blocking:
-            :param float timeout:
-            :rtype: bool
-            """
-            if not blocking:
-                return lock_acquire_orig(lock, blocking=False)  # no timeout if not blocking
-            # Everything is blocking now.
-            if thread.get_ident() == main_thread_id:
-                if timeout is None or timeout < 0:  # blocking without timeout
-                    if PY3:
-                        while not lock_acquire_orig(lock, blocking=True, timeout=0.1):
-                            pass
-                        return True
-                    else:  # Python 2. cannot use timeout
-                        while not lock_acquire_orig(lock, blocking=False):
-                            time.sleep(0.1)
-                        return True
-                else:  # timeout is set. (Can only be with Python 3.)
-                    # Use a capped timeout. This should not matter for the underlying code.
-                    return lock_acquire_orig(lock, blocking=True, timeout=min(timeout, 0.1))
-            # Fallback to default.
-            if PY3:
-                return lock_acquire_orig(lock, blocking=True, timeout=timeout)
-            return lock_acquire_orig(lock, blocking=True)
-
-        Lock.acquire = lock_acquire_hacked
+    # These monkey patches are not necessary anymore. Nothing blocks signals anymore in Python 3.
+    # https://github.com/albertz/playground/blob/master/thread-join-block.py
+    # https://github.com/albertz/playground/blob/master/cond-wait-block.py
+    log.print_deprecation_warning("init_thread_join_hack: not necessary anymore since Python 3 (does nothing)")
 
 
 def start_daemon_thread(target, args=()):
@@ -1872,34 +1845,15 @@ def json_remove_comments(string, strip_space=True):
     return "".join(new_str)
 
 
-def _py2_unicode_to_str_recursive(s):
+def load_json(filename: Optional[str] = None, content: Optional[str] = None) -> Dict[str, Any]:
     """
-    This is supposed to be run with Python 2.
-    Also see :func:`as_str` and :func:`py2_utf8_str_to_unicode`.
-
-    :param str|unicode s: or any recursive structure such as dict, list, tuple
-    :return: Python 2 str (is like Python 3 UTF-8 formatted bytes)
-    :rtype: str
-    """
-    if isinstance(s, dict):
-        return {_py2_unicode_to_str_recursive(key): _py2_unicode_to_str_recursive(value) for key, value in s.items()}
-    elif isinstance(s, (list, tuple)):
-        return make_seq_of_type(type(s), [_py2_unicode_to_str_recursive(element) for element in s])
-    elif isinstance(s, unicode):
-        return s.encode("utf-8")  # Python 2 str, Python 3 bytes
-    else:
-        return s
-
-
-def load_json(filename=None, content=None):
-    """
-    :param str|None filename:
-    :param str|None content:
-    :rtype: dict[str]
+    :param filename:
+    :param content:
     """
     if content:
         assert not filename
     else:
+        assert filename
         content = open(filename).read()
     import json
 
@@ -1908,8 +1862,6 @@ def load_json(filename=None, content=None):
         json_content = json.loads(content)
     except ValueError as e:
         raise Exception("config looks like JSON but invalid json content, %r" % e)
-    if not PY3:
-        json_content = _py2_unicode_to_str_recursive(json_content)
     return json_content
 
 
@@ -1944,9 +1896,9 @@ class NumbersDict:
         self.value = broadcast_value
         self.max = self._max_error
 
-    def copy(self):
+    def copy(self) -> NumbersDict:
         """
-        :rtype: NumbersDict
+        :return: copy
         """
         return NumbersDict(self)
 
@@ -1963,11 +1915,10 @@ class NumbersDict:
             numbers_dict={k: const_number for k in numbers_dict.dict.keys()},
         )
 
-    def copy_like(self, numbers_dict):
+    def copy_like(self, numbers_dict: NumbersDict) -> NumbersDict:
         """
-        :param NumbersDict numbers_dict:
+        :param numbers_dict:
         :return: copy of self with same keys as numbers_dict as far as we have them
-        :rtype: NumbersDict
         """
         if self.value is not None:
             return NumbersDict(
@@ -1980,11 +1931,11 @@ class NumbersDict:
             )
 
     @property
-    def keys_set(self):
+    def keys_set(self) -> Set[str]:
         """
         Also see :func:`keys_union` if you want to have a deterministic order.
 
-        :rtype: set[str]
+        :return: set of keys
         """
         return set(self.dict.keys())
 
@@ -2001,29 +1952,32 @@ class NumbersDict:
                     res.append(key)
         return res
 
-    def __getitem__(self, key):
+    def __getitem__(self, key: str):
         if self.value is not None:
             return self.dict.get(key, self.value)
         return self.dict[key]
 
-    def __setitem__(self, key, value):
+    def __setitem__(self, key: str, value):
         self.dict[key] = value
 
-    def __delitem__(self, key):
+    def __delitem__(self, key: str):
         del self.dict[key]
 
-    def get(self, key, default=None):
+    def __contains__(self, item: str):
+        return item in self.dict
+
+    def get(self, key: str, default=None):
         """
-        :param str key:
+        :param key:
         :param T default:
         :rtype: object|T
         """
         # Keep consistent with self.__getitem__. If self.value is set, this will always be the default value.
         return self.dict.get(key, self.value if self.value is not None else default)
 
-    def pop(self, key, *args):
+    def pop(self, key: str, *args):
         """
-        :param str key:
+        :param key:
         :param T args: default, or not
         :rtype: object|T
         """
@@ -2036,22 +1990,21 @@ class NumbersDict:
         # which would only make sense for our values, not the dict keys.
         raise Exception("%s.__iter__ is undefined" % self.__class__.__name__)
 
-    def keys(self):
+    def keys(self) -> Iterable[str]:
         """
         :rtype: set[str]
         """
         return self.dict.keys()
 
-    def values(self):
+    def values(self) -> List[Any]:
         """
-        :rtype: list[object]
+        :return: values: dict values + self.value
         """
         return list(self.dict.values()) + ([self.value] if self.value is not None else [])
 
-    def items(self):
+    def items(self) -> Iterable[Tuple[str, Any]]:
         """
         :return: dict items. this excludes self.value
-        :rtype: str[(str,object)]
         """
         return self.dict.items()
 
@@ -2061,9 +2014,9 @@ class NumbersDict:
         """
         return self.value is not None or key in self.dict
 
-    def has_values(self):
+    def has_values(self) -> bool:
         """
-        :rtype: bool
+        :return: any values in self.dict or self.value
         """
         return bool(self.dict) or self.value is not None
 
@@ -2167,12 +2120,12 @@ class NumbersDict:
     def __neg__(self):
         return self.unary_op(op=lambda a: -a)
 
-    def __bool__(self):
+    def __bool__(self) -> bool:
         return any(self.values())
 
     __nonzero__ = __bool__  # Python 2
 
-    def elem_eq(self, other, result_with_default=True):
+    def elem_eq(self, other, result_with_default: bool = True) -> NumbersDict:
         """
         Element-wise equality check with other.
         Note about broadcast default value: Consider some key which is neither in self nor in other.
@@ -2183,8 +2136,8 @@ class NumbersDict:
           You can control the behavior via result_with_default.
 
         :param NumbersDict|T other:
-        :param bool result_with_default:
-        :rtype: NumbersDict
+        :param result_with_default:
+        :return: new NumbersDict with bool values
         """
 
         def op(a, b):
@@ -2204,19 +2157,17 @@ class NumbersDict:
             res.value = None
         return res
 
-    def __eq__(self, other):
+    def __eq__(self, other) -> bool:
         """
         :param NumbersDict|T other:
         :return: whether self == other elemwise. see self.elem_eq
-        :rtype: bool
         """
         return all(self.elem_eq(other).values())
 
-    def __ne__(self, other):
+    def __ne__(self, other) -> bool:
         """
         :param NumbersDict|T other:
         :return: not (self == other)
-        :rtype: bool
         """
         return not (self == other)
 
@@ -2225,11 +2176,10 @@ class NumbersDict:
         # and it would just confuse.
         raise Exception("%s.__cmp__ is undefined" % self.__class__.__name__)
 
-    def any_compare(self, other, cmp):
+    def any_compare(self, other, cmp) -> bool:
         """
         :param NumbersDict other:
         :param ((object,object)->True) cmp:
-        :rtype: True
         """
         for key in self.keys():
             if key in other.keys():
@@ -2262,11 +2212,11 @@ class NumbersDict:
         return min(*args)
 
     @classmethod
-    def max(cls, items):
+    def max(cls, items) -> NumbersDict:
         """
         Element-wise maximum for item in items.
+
         :param list[NumbersDict|int|float] items:
-        :rtype: NumbersDict
         """
         assert items
         if len(items) == 1:
@@ -2276,11 +2226,10 @@ class NumbersDict:
         return cls.max([items[0], cls.max(items[1:])])
 
     @classmethod
-    def min(cls, items):
+    def min(cls, items) -> NumbersDict:
         """
         Element-wise minimum for item in items.
         :param list[NumbersDict|int|float] items:
-        :rtype: NumbersDict
         """
         assert items
         if len(items) == 1:
@@ -2306,7 +2255,7 @@ class NumbersDict:
         """
         return min(self.values())
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         if self.value is None and not self.dict:
             return "%s()" % self.__class__.__name__
         if self.value is None and self.dict:
@@ -2356,11 +2305,7 @@ def getargspec(func):
     :param func:
     :return: FullArgSpec
     """
-    if PY3:
-        return inspect.getfullargspec(func)
-    else:
-        # noinspection PyDeprecation
-        return inspect.getargspec(func)
+    return inspect.getfullargspec(func)
 
 
 def collect_mandatory_class_init_kwargs(cls):
@@ -2469,7 +2414,12 @@ def make_hashable(obj):
 
         if isinstance(obj, tf.Tensor):
             return RefIdEq(obj)
-    assert False, "don't know how to make hashable: %r (%r)" % (obj, type(obj))
+    # Try if this is already hashable.
+    try:
+        hash(obj)
+    except Exception:
+        raise TypeError("don't know how to make hashable: %r (%r)" % (obj, type(obj)))
+    return obj
 
 
 class RefIdEq(Generic[T]):
@@ -2611,28 +2561,6 @@ def as_str(s):
     assert False, "unknown type %s" % type(s)
 
 
-def py2_utf8_str_to_unicode(s):
-    """
-    :param str s: e.g. the string literal "äöü" in Python 3 is correct, but in Python 2 it should have been u"äöü",
-      but just using "äöü" will actually be the raw utf8 byte sequence.
-      This can happen when you eval() some string.
-      We assume that you are using Python 2, and got the string (not unicode object) "äöü", or maybe "abc".
-      Also see :func:`_py2_unicode_to_str_recursive` and :func:`as_str`.
-    :return: if it is indeed unicode, it will return the unicode object, otherwise it keeps the string
-    :rtype: str|unicode
-    """
-    assert not PY3
-    assert isinstance(s, str)
-    try:
-        # noinspection PyUnresolvedReferences
-        s.decode("ascii")
-        return s
-    except UnicodeDecodeError:
-        pass
-    # noinspection PyUnresolvedReferences
-    return s.decode("utf8")
-
-
 def unicode_to_str(s):
     """
     The behavior is different depending on Python 2 or Python 3. In all cases, the returned type is a str object.
@@ -2648,11 +2576,8 @@ def unicode_to_str(s):
     :param str|unicode|bytes s:
     :rtype: str
     """
-    if PY3 and isinstance(s, bytes):
+    if isinstance(s, bytes):
         s = s.decode("utf8")
-        assert isinstance(s, str)
-    if not PY3 and isinstance(s, unicode):
-        s = s.encode("utf8")
         assert isinstance(s, str)
     assert isinstance(s, str)
     return s
@@ -3170,7 +3095,7 @@ def get_cache_dir():
     return get_temp_dir()
 
 
-class LockFile(object):
+class LockFile:
     """
     Simple lock file.
     """
@@ -3848,9 +3773,9 @@ def should_write_to_disk(config):
     if config.typed_value("torch_distributed") is not None:
         assert BackendEngine.is_torch_selected(), "torch_distributed assumes PyTorch"
 
-        import torch.distributed
+        import returnn.torch.distributed as torch_distributed
 
-        if torch.distributed.get_rank() != 0:
+        if torch_distributed.get_ctx(config).rank() != 0:
             return False
     elif config.is_true("use_horovod"):
         assert BackendEngine.is_tensorflow_selected(), "use_horovod currently assumes TensorFlow"
@@ -4586,3 +4511,14 @@ def override_env_var(var_name: str, value: str):
             os.environ[var_name] = cur_val
         else:
             os.environ.pop(var_name)
+
+
+fwd_compatibility_rng = np.random.default_rng()
+
+
+def get_fwd_compat_kwargs() -> Dict[str, Any]:
+    """
+    Get randomly named kwargs for ensuring forwards compatibility in user code.
+    """
+    i = fwd_compatibility_rng.integers(0, 100)
+    return {f"__fwd_compat_random_arg_{i:03}": None}

@@ -1,7 +1,6 @@
 import sys
 import _setup_test_env  # noqa
 import unittest
-from nose.tools import assert_equal, assert_is_instance, assert_in, assert_greater, assert_true, assert_false
 from pprint import pprint
 from returnn.config import *
 from returnn.util import better_exchook
@@ -21,16 +20,16 @@ def test_old_format():
         )
     )
 
-    assert_true(config.has("num_inputs"))
-    assert_true(config.has("hidden_type"))
-    assert_equal(config.int("num_inputs", -1), 3)
-    assert_equal(config.value("hidden_type", "x"), "forward,lstm")
-    assert_equal(config.value("hidden_type", "x", index=0), "forward")
-    assert_equal(config.value("hidden_type", "x", index=1), "lstm")
-    assert_equal(config.list("hidden_type", ["x"]), ["forward", "lstm"])
+    assert config.has("num_inputs") is True
+    assert config.has("hidden_type") is True
+    assert config.int("num_inputs", -1) == 3
+    assert config.value("hidden_type", "x") == "forward,lstm"
+    assert config.value("hidden_type", "x", index=0) == "forward"
+    assert config.value("hidden_type", "x", index=1) == "lstm"
+    assert config.list("hidden_type", ["x"]) == ["forward", "lstm"]
 
-    assert_false(config.is_typed("num_inputs"))
-    assert_false(config.is_typed("hidden_type"))
+    assert config.is_typed("num_inputs") is False
+    assert config.is_typed("hidden_type") is False
 
 
 def test_json_format():
@@ -47,19 +46,19 @@ def test_json_format():
         )
     )
 
-    assert_true(config.has("num_inputs"))
-    assert_true(config.has("hidden_type"))
-    assert_equal(config.int("num_inputs", -1), 3)
-    assert_equal(config.value("hidden_type", "x"), "forward,lstm")
-    assert_equal(config.value("hidden_type", "x", index=0), "forward")
-    assert_equal(config.value("hidden_type", "x", index=1), "lstm")
-    assert_equal(config.list("hidden_type", ["x"]), ["forward", "lstm"])
+    assert config.has("num_inputs") is True
+    assert config.has("hidden_type") is True
+    assert config.int("num_inputs", -1) == 3
+    assert config.value("hidden_type", "x") == "forward,lstm"
+    assert config.value("hidden_type", "x", index=0) == "forward"
+    assert config.value("hidden_type", "x", index=1) == "lstm"
+    assert config.list("hidden_type", ["x"]) == ["forward", "lstm"]
 
-    assert_true(config.is_typed("num_inputs"))
-    assert_true(config.is_typed("hidden_type"))
-    assert_is_instance(config.typed_value("num_inputs"), int)
-    assert_is_instance(config.typed_value("hidden_type"), list)
-    assert_equal(config.typed_value("hidden_type"), ["forward", "lstm"])
+    assert config.is_typed("num_inputs") is True
+    assert config.is_typed("hidden_type") is True
+    assert isinstance(config.typed_value("num_inputs"), int)
+    assert isinstance(config.typed_value("hidden_type"), list)
+    assert config.typed_value("hidden_type") == ["forward", "lstm"]
 
 
 def test_py_config():
@@ -74,19 +73,19 @@ hidden_type = ["forward", "lstm"]
         )
     )
 
-    assert_true(config.has("num_inputs"))
-    assert_true(config.has("hidden_type"))
-    assert_equal(config.int("num_inputs", -1), 3)
-    assert_equal(config.value("hidden_type", "x"), "forward,lstm")
-    assert_equal(config.value("hidden_type", "x", index=0), "forward")
-    assert_equal(config.value("hidden_type", "x", index=1), "lstm")
-    assert_equal(config.list("hidden_type", ["x"]), ["forward", "lstm"])
+    assert config.has("num_inputs") is True
+    assert config.has("hidden_type") is True
+    assert config.int("num_inputs", -1) == 3
+    assert config.value("hidden_type", "x") == "forward,lstm"
+    assert config.value("hidden_type", "x", index=0) == "forward"
+    assert config.value("hidden_type", "x", index=1) == "lstm"
+    assert config.list("hidden_type", ["x"]) == ["forward", "lstm"]
 
-    assert_true(config.is_typed("num_inputs"))
-    assert_true(config.is_typed("hidden_type"))
-    assert_is_instance(config.typed_value("num_inputs"), int)
-    assert_is_instance(config.typed_value("hidden_type"), list)
-    assert_equal(config.typed_value("hidden_type"), ["forward", "lstm"])
+    assert config.is_typed("num_inputs") is True
+    assert config.is_typed("hidden_type") is True
+    assert isinstance(config.typed_value("num_inputs"), int)
+    assert isinstance(config.typed_value("hidden_type"), list)
+    assert config.typed_value("hidden_type") == ["forward", "lstm"]
 
 
 def test_rnn_init_config_py_global_var():
@@ -115,9 +114,9 @@ def test_func():
     assert rnn.config.has("task")
     assert rnn.config.has("test_value")
     assert rnn.config.has("test_func")
-    assert_equal(rnn.config.value("task", None), "search")
+    assert rnn.config.value("task", None) == "search"
     assert rnn.config.is_typed("test_value")
-    assert_equal(rnn.config.typed_value("test_value"), 42)
+    assert rnn.config.typed_value("test_value") == 42
     assert rnn.config.is_typed("test_func")
     # So far it's fine.
     # Now something a bit strange.
@@ -125,7 +124,7 @@ def test_func():
     assert rnn.config.is_typed("task")
     test_func = rnn.config.typed_dict["test_func"]
     assert callable(test_func)
-    assert_equal(test_func(), "search")
+    assert test_func() == "search"
 
 
 def test_rnn_init_config_py_cmd_type():
@@ -152,7 +151,7 @@ def test_func():
     assert rnn.config.is_typed("test_func")
     test_func = rnn.config.typed_dict["test_func"]
     assert callable(test_func)
-    assert_equal(test_func(), 0)
+    assert test_func() == 0
 
 
 def test_config_py_ext():
@@ -176,9 +175,9 @@ def test_func():
     assert config.is_typed("test_func")
     test_func = config.typed_dict["test_func"]
     assert callable(test_func)
-    assert_equal(test_func(), "train")
+    assert test_func() == "train"
     config.set("task", "search")
-    assert_equal(test_func(), "search")
+    assert test_func() == "search"
 
 
 def test_config_py_old_returnn_imports():

@@ -9,7 +9,7 @@ We also might have model_outputs in the user config.
 """
 
 from __future__ import annotations
-from typing import Optional, Union, Any, Type, Dict, Sequence
+from typing import Optional, Union, Any, Type, Dict, Sequence, List
 from .tensor import Tensor
 from .dim import Dim
 
@@ -51,6 +51,9 @@ class TensorDict:
                 self.data[value.name] = value.copy()
         else:
             raise TypeError(f"invalid `data` type: {type(data)}")
+
+    def __contains__(self, item: str) -> bool:
+        return item in self.data
 
     def __getitem__(self, item: str) -> Tensor:
         return self.data[item]
@@ -97,14 +100,14 @@ class TensorDict:
                     continue
                 key_ = f"{key}:size{i}"
                 assert key_ not in out
-                if dim.is_batch_dim() and (not dim.dyn_size_ext or dim.dyn_size_ext.raw_tensor is None):
+                if dim.is_batch_dim() and (dim.dyn_size_ext is None or dim.dyn_size_ext.raw_tensor is None):
                     if include_scalar_dyn_sizes:
                         dim_value = dim.get_dim_value()
                         assert isinstance(
                             dim_value, expected_value_type
                         ), f"key {key_} {dim}: unexpected {type(dim_value)}, expected {expected_value_type}"
                         out[key_] = dim_value
-                elif dim.dyn_size_ext:
+                elif dim.dyn_size_ext is not None:
                     if include_scalar_dyn_sizes or dim.dyn_size_ext.dims:
                         assert isinstance(dim.dyn_size_ext.raw_tensor, expected_value_type), (
                             f"key {key_} {dim} {dim.dyn_size_ext}:"
@@ -136,7 +139,7 @@ class TensorDict:
         """
         visited_dims = set()
         for key, value in self.data.items():
-            assert key in raw_tensor_dict
+            assert key in raw_tensor_dict, f"key {key} not in raw_tensor_dict {list(raw_tensor_dict.keys())}"
             value.raw_tensor = raw_tensor_dict[key]
             for i, dim in enumerate(value.dims):
                 dim: Dim
@@ -144,9 +147,9 @@ class TensorDict:
                     continue
                 key_ = f"{key}:size{i}"
                 dim.reset_raw(only_self=True)
-                if dim.is_batch_dim() and not dim.dyn_size_ext:
+                if dim.is_batch_dim() and dim.dyn_size_ext is None:
                     dim.dyn_size_ext = Tensor("batch", [], dtype="int32")
-                if dim.dyn_size_ext:
+                if dim.dyn_size_ext is not None:
                     if not with_scalar_dyn_sizes and not dim.dyn_size_ext.dims:
                         pass
                     else:
@@ -156,6 +159,20 @@ class TensorDict:
                     if key_ in raw_tensor_dict:
                         assert dim.size == raw_tensor_dict[key_]
                 visited_dims.add(dim)
+
+    def all_dims(self) -> List[Dim]:
+        """
+        :return: list of dims
+        """
+        visited_dims = set()
+        out = []
+        for key, value in self.data.items():
+            for dim in value.dims:
+                if dim in visited_dims:
+                    continue
+                out.append(dim)
+                visited_dims.add(dim)
+        return out
 
 
 def _convert_to_tensor(opts: _TensorT, *, name: Optional[str] = None) -> Tensor:

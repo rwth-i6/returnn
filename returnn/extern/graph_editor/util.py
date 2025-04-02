@@ -62,7 +62,7 @@ def concatenate_unique(la, lb):
 
 
 # TODO(fkp): very generic code, it should be moved in a more generic place.
-class ListView(object):
+class ListView:
     """Immutable list wrapper.
 
     This class is strongly inspired by the one in tf.Operation.
@@ -333,7 +333,7 @@ def get_consuming_ops(ts):
     return ops
 
 
-class ControlOutputs(object):
+class ControlOutputs:
     """The control outputs topology."""
 
     def __init__(self, graph):

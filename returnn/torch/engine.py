@@ -4,7 +4,7 @@ Main engine for PyTorch
 
 from __future__ import annotations
 from typing import Optional, Any, Union, Callable, Dict, Set
-from contextlib import nullcontext
+from contextlib import nullcontext, ExitStack, contextmanager
 
 import gc
 import os
@@ -12,6 +12,7 @@ import time
 import socket
 import fnmatch
 import re
+import math
 
 import torch
 import torch.distributed
@@ -19,8 +20,7 @@ from torch.nn.parallel import DistributedDataParallel
 from torch.utils.data import DataLoader
 from torch import autocast
 from torch.cuda import amp
-from random import random
-import math
+import numpy as np
 
 import returnn
 from returnn.config import Config
@@ -34,6 +34,7 @@ from returnn.util import NumbersDict
 from returnn.util.basic import hms, NotSpecified
 from returnn.util.result_with_reason import ResultWithReason
 from returnn.util.debug import debug_shell
+from returnn.util.math import simplify_and_format_number, merge_random_seeds
 from returnn.forward_iface import ForwardCallbackIface
 
 from .updater import Updater
@@ -44,6 +45,8 @@ from .data.queued_data_iter import QueuedDataIter
 from .frontend.bridge import rf_module_to_pt_module
 from .util import diagnose_gpu
 from .util import module as util_module
+from .util.exception_helper import help_on_torch_exception
+from .util.debug_inf_nan import debug_inf_nan
 from .distributed import DistributedContext, get_ctx as dist_get_ctx
 
 
@@ -124,8 +127,17 @@ class Engine(EngineBase):
         self._log_memory_usage = config.bool("torch_log_memory_usage", False)
         self._log_batch_size = config.bool("log_batch_size", False) and log.verbose[5]
         self._calculate_exp_loss = config.bool("calculate_exp_loss", False)
+        self._log_grad_norm = _parse_log_grad_norm(config)
         self._reset_dev_memory_caches = config.bool("reset_dev_memory_caches", False)
         self._forward_auto_split_batch_on_oom = config.bool("forward_auto_split_batch_on_oom", False)
+        self._stop_on_nonfinite_train_score = config.bool("stop_on_nonfinite_train_score", True)
+
+        default_float_dtype = config.value("default_float_dtype", None)
+        if default_float_dtype is not None:
+            assert isinstance(default_float_dtype, str)
+            default_float_dtype = getattr(torch, default_float_dtype)
+            assert isinstance(default_float_dtype, torch.dtype)
+        self._default_float_dtype: Optional[torch.dtype] = default_float_dtype
 
         amp_options = self.config.opt_typed_value("torch_amp")
         grad_scaler_opts = self.config.typed_value("grad_scaler", NotSpecified)
@@ -216,6 +228,11 @@ class Engine(EngineBase):
         self._train_step_func = self.config.typed_value("train_step")
         assert self._train_step_func, "train_step not defined"
 
+    def set_epoch(self, epoch: int):
+        """set epoch"""
+        super().set_epoch(epoch)
+        self._epoch_mp_shared.value = epoch
+
     def train(self):
         """
         Main training loop.
@@ -232,49 +249,13 @@ class Engine(EngineBase):
         print(
             f"Starting training at epoch {self._start_epoch}, global train step {self.global_train_step}", file=log.v3
         )
-        self.epoch = self._start_epoch - 1
+        self.set_epoch(self._start_epoch - 1)
         while self.epoch + 1 <= self._final_epoch:
-            self.epoch += 1
-            self._epoch_mp_shared.value = self.epoch
-
+            self.set_epoch(self.epoch + 1)
             self.init_train_epoch()
-            try:
-                self.train_epoch()
-            except Exception as exc:
-                self._handle_run_exception(exc)
-                raise
+            self.train_epoch()
 
         print(f"Finished training at epoch {self.epoch}, global train step {self.global_train_step}", file=log.v3)
-
-    def _handle_run_exception(self, exc: Exception, *, always_direct_print: bool = False):
-        from returnn.util.better_exchook import get_func_from_code_object, iter_traceback
-
-        print(f"{type(exc).__name__}: {exc}", file=log.v1)
-
-        # Extend exception message by module call stack.
-        module_names_by_id = {}  # id -> name
-        for name, mod in self._orig_model.named_modules():
-            if id(mod) not in module_names_by_id:
-                module_names_by_id[id(mod)] = name or "(root)"
-        exc_ext = []
-        for frame in iter_traceback(exc.__traceback__):
-            if frame.f_code.co_nlocals == 0:
-                continue
-            frame_self = frame.f_locals.get("self")
-            if isinstance(frame_self, (torch.nn.Module, rf.Module)):
-                func = get_func_from_code_object(frame.f_code, frame=frame)
-                if func and func.__name__ and func.__name__.startswith("_") and not func.__name__.startswith("__"):
-                    continue
-                func_name = (func and func.__qualname__) or type(frame_self).__name__
-                exc_ext.append(f"({func_name}) {module_names_by_id.get(id(frame_self), '(unknown)')}")
-        if not exc_ext:
-            exc_ext.append("(No module call frames.)")
-        if len(exc.args) == 1 and isinstance(exc.args[0], str) and not always_direct_print:
-            exc.args = ("\n".join([exc.args[0], "", "Module call stack:"] + exc_ext),)
-        else:
-            print("Module call stack:", file=log.v3)
-            for msg in exc_ext:
-                print(msg, file=log.v3)
 
     def init_train_epoch(self):
         """
@@ -284,7 +265,9 @@ class Engine(EngineBase):
 
         # Update learning rate
         self._updater.set_learning_rate(self.learning_rate)
-        self._updater.set_current_train_step(global_train_step=self.global_train_step, epoch=self.epoch)
+        self._updater.set_current_train_step(
+            global_train_step=self.global_train_step, epoch=self.epoch, epoch_continuous=self.epoch - 1
+        )
 
         self.learning_rate_control.epoch_data[self.epoch].meta.update(
             {
@@ -299,6 +282,17 @@ class Engine(EngineBase):
                 "distributed": self._torch_distributed_ctx.__repr__() if self._torch_distributed_ctx else None,
             }
         )
+
+        # Note: The RF/Torch default random number generator influences many things during training,
+        # such as dropout and other random operations inside the model,
+        # but also some potential shuffling in the dataset iterator.
+        # Also see Dataset._get_default_random_seed_offset() and Dataset._get_random_seed_for_epoch().
+        random_seed = self.config.int("random_seed", 42)
+        seed_data = [self.epoch, self.global_train_step, random_seed]
+        if self._torch_distributed_ctx:
+            seed_data.append(self._torch_distributed_ctx.rank())
+        random_seed = merge_random_seeds(seed_data)  # Join all seeds into one int.
+        rf.set_random_seed(random_seed)
 
     def _maybe_reset_dev_memory_caches(self, *, force: bool = False):
         if not force and not self._reset_dev_memory_caches:
@@ -343,7 +337,7 @@ class Engine(EngineBase):
         accumulated_losses_dict = NumbersDict()
         accumulated_inv_norm_factors_dict = NumbersDict()
         step_idx = 0
-        epoch_start_time = time.time()
+        epoch_start_time = time.monotonic()
 
         data_iter = iter(self._train_dataloader)
         elapsed_computation_time = 0
@@ -370,94 +364,183 @@ class Engine(EngineBase):
 
         zero_grad_next_step = True
         cur_count_grad_accum = 0
-        while True:
-            with torch.no_grad():
-                extern_data_raw = next(data_iter, None)
+        extern_data = None
 
-            step_begin_time = time.time()
+        total_data_size_packed = NumbersDict()
+        total_data_size_padded = NumbersDict()
 
-            _has_data = torch.tensor([extern_data_raw is not None], dtype=torch.int8)
-            if self._torch_distributed_ctx:
-                # use all reduce to check if all workers have data, if at least one worker does not have data,
-                # all workers finish this epoch
-                torch.distributed.all_reduce(_has_data, op=torch.distributed.ReduceOp.MIN)
-            if not _has_data[0]:
-                break
+        report_prefix = f"ep {self.epoch} train"
+        try:
+            while True:
+                with torch.no_grad():
+                    extern_data_raw = next(data_iter, None)
 
-            # clear the gradients when every gradient accumulation loop starts
-            if zero_grad_next_step:
-                self._updater.get_optimizer().zero_grad()
-                cur_count_grad_accum = 0
+                step_begin_time = time.monotonic()
 
-            extern_data = extern_data_util.raw_dict_to_extern_data(
-                extern_data_raw, extern_data_template=self.extern_data, device=self._device
-            )
-            self._run_step(extern_data, train_flag=True, train_func=True)
+                if step_idx == 0 and log.verbose[5]:
+                    print("Time to get first batch data:", hms(step_begin_time - epoch_start_time), file=log.v5)
 
-            train_ctx = rf.get_run_ctx()
-            total_loss = train_ctx.total_loss()
-            losses_dict = NumbersDict(
-                {
-                    name: (
-                        float(loss.get_summed_loss().raw_tensor.detach().cpu().numpy())
-                        if self._device != "meta"
-                        else float("nan")
-                    )
-                    for name, loss in train_ctx.losses.items()
-                }
-            )
-            inv_norm_factors_dict = NumbersDict(
-                {name: float(_to_raw(loss.get_inv_norm_factor())) for name, loss in train_ctx.losses.items()}
-            )
+                _has_data = torch.tensor([extern_data_raw is not None], dtype=torch.int8)
+                if self._torch_distributed_ctx:
+                    # use all reduce to check if all workers have data, if at least one worker does not have data,
+                    # all workers finish this epoch
+                    torch.distributed.all_reduce(_has_data, op=torch.distributed.ReduceOp.MIN)
+                if not _has_data[0]:
+                    break
 
-            if accum_grad_multiple_step_dyn:
-                accum_grad_multiple_step = accum_grad_multiple_step_dyn(
-                    epoch=self.epoch, global_train_step=self.global_train_step
+                # convert values from torch int32 to Python ints to prevent overflow
+                keys_w_seq_len = [k for k in extern_data_raw if f"{k}:seq_len" in extern_data_raw]
+                total_data_size_packed += NumbersDict(
+                    {k: int(sum(extern_data_raw[f"{k}:seq_len"])) for k in keys_w_seq_len},
                 )
-            cur_count_grad_accum += 1
-            perform_update_step = cur_count_grad_accum >= accum_grad_multiple_step
-            with (
-                self._ddp_pt_model.no_sync()
-                if (self._ddp_pt_model is not None and not perform_update_step)
-                else nullcontext()
-            ):
-                if self._grad_scaler is not None:
-                    self._grad_scaler.scale(total_loss.raw_tensor).backward()
-                else:
-                    total_loss.raw_tensor.backward()
+                total_data_size_padded += NumbersDict(
+                    {k: int(util.prod(extern_data_raw[k].shape[:2])) for k in keys_w_seq_len},
+                )
 
-            # only update the weights when every gradient accumulation loop ends
-            if perform_update_step:
-                self._updater.step(grad_scaler=self._grad_scaler)
-            zero_grad_next_step = perform_update_step
+                complete_frac = float(extern_data_raw["complete_frac"])
+                epoch_continuous = self.epoch - 1 + complete_frac if complete_frac >= 0.0 else None
+                num_seqs = int(extern_data_raw["num_seqs"])
 
-            if self._torch_distributed_ctx:
-                self._torch_distributed_ctx.step_after_param_update(module=self._pt_model, epoch_step_idx=step_idx)
+                # clear the gradients when every gradient accumulation loop starts
+                if zero_grad_next_step:
+                    self._updater.get_optimizer().zero_grad()
+                    cur_count_grad_accum = 0
 
-            step_duration = time.time() - step_begin_time
-            elapsed_computation_time += step_duration
+                extern_data = extern_data_util.raw_dict_to_extern_data(
+                    extern_data_raw,
+                    extern_data_template=self.extern_data,
+                    device=self._device,
+                    float_dtype=self._default_float_dtype,
+                )
+                self._run_step(extern_data, train_flag=True, train_func=True)
 
-            accumulated_losses_dict += losses_dict
-            accumulated_inv_norm_factors_dict += inv_norm_factors_dict
-            eval_info = self._maybe_extend_losses_info(losses_dict / inv_norm_factors_dict)
-            _print_process(
-                f"ep {self.epoch} train",
-                step=step_idx,
-                eval_info=dict(eval_info),
-                step_duration=step_duration,
-                batch_size_info=_get_batch_size_info(extern_data) if self._log_batch_size else None,
-                log_memory_usage_device=self._device if self._log_memory_usage else None,
-            )
+                train_ctx = rf.get_run_ctx()
+                total_loss = train_ctx.total_loss()
+                losses_dict = NumbersDict(
+                    {
+                        name: (
+                            float(loss.get_summed_loss().raw_tensor.detach().cpu().item())
+                            if self._device != "meta"
+                            else float("nan")
+                        )
+                        for name, loss in train_ctx.losses.items()
+                    }
+                )
+                inv_norm_factors_dict = NumbersDict(
+                    {name: float(_to_raw(loss.get_inv_norm_factor())) for name, loss in train_ctx.losses.items()}
+                )
 
-            step_idx += 1
-            self.global_train_step += 1
-            self._updater.set_current_train_step(global_train_step=self.global_train_step, epoch=self.epoch)
+                if accum_grad_multiple_step_dyn:
+                    accum_grad_multiple_step = accum_grad_multiple_step_dyn(
+                        epoch=self.epoch,
+                        epoch_continuous=epoch_continuous,
+                        global_train_step=self.global_train_step,
+                        **util.get_fwd_compat_kwargs(),
+                    )
+                cur_count_grad_accum += 1
+                perform_update_step = cur_count_grad_accum >= accum_grad_multiple_step
+                with (
+                    self._ddp_pt_model.no_sync()
+                    if (self._ddp_pt_model is not None and not perform_update_step)
+                    else nullcontext()
+                ):
+                    if self._grad_scaler is not None:
+                        self._grad_scaler.scale(total_loss.raw_tensor).backward()
+                    else:
+                        total_loss.raw_tensor.backward()
 
-        elapsed = time.time() - epoch_start_time
+                if self._log_grad_norm and perform_update_step:
+                    key = f"grad_norm:p{simplify_and_format_number(self._log_grad_norm)}"
+                    assert key not in losses_dict
+                    inv_norm_factors_dict[key] = 1.0  # once per update step
+                    losses_dict[key] = _get_total_grad_norm(self._pt_model, p=self._log_grad_norm)
+
+                # only update the weights when every gradient accumulation loop ends
+                if perform_update_step:
+                    self._updater.step(grad_scaler=self._grad_scaler)
+                zero_grad_next_step = perform_update_step
+
+                if self._torch_distributed_ctx:
+                    self._torch_distributed_ctx.step_after_param_update(module=self._pt_model, epoch_step_idx=step_idx)
+
+                step_end_time = time.monotonic()
+                step_duration = step_end_time - step_begin_time
+                elapsed_computation_time += step_duration
+
+                accumulated_losses_dict += losses_dict
+                accumulated_inv_norm_factors_dict += inv_norm_factors_dict
+                eval_info = self._maybe_extend_losses_info(losses_dict / inv_norm_factors_dict)
+                _print_process(
+                    report_prefix,
+                    step=step_idx,
+                    eval_info=dict(eval_info),
+                    step_duration=step_duration,
+                    start_elapsed=step_end_time - epoch_start_time,
+                    complete_frac=complete_frac,
+                    num_seqs=num_seqs,
+                    batch_size_info=_get_batch_size_info(extern_data) if self._log_batch_size else None,
+                    log_memory_usage_device=self._device if self._log_memory_usage else None,
+                )
+
+                if self._stop_on_nonfinite_train_score:
+                    if any(np.isinf(v) or np.isnan(v) for v in accumulated_losses_dict.values()):
+                        print("Model seems broken, got inf or nan score.", file=log.v1)
+                        print(
+                            "Accumulated scores:",
+                            accumulated_losses_dict / accumulated_inv_norm_factors_dict,
+                            file=log.v1,
+                        )
+
+                        print("Checking for inf/nan in model parameters...", file=log.v1)
+                        count_nan_inf_params = 0
+                        for name, param in self._pt_model.named_parameters():
+                            got_nan_inf_t = torch.stack([torch.isnan(param).any(), torch.isinf(param).any()]).cpu()
+                            got_nan = got_nan_inf_t[0].item()
+                            got_inf = got_nan_inf_t[1].item()
+                            if got_nan or got_inf:
+                                s = "/".join([s_ for s_, b in [("nan", got_nan), ("inf", got_inf)] if b])
+                                print(f"  {name} {param}: {s}", file=log.v1)
+                                count_nan_inf_params += 1
+                        if count_nan_inf_params == 0:
+                            print("(No inf/nan in model parameters.)", file=log.v1)
+
+                        def _debug_func() -> torch.Tensor:
+                            self._run_step(extern_data, train_flag=True, train_func=True)
+                            loss = rf.get_run_ctx().total_loss()
+                            assert isinstance(loss, Tensor)
+                            return loss.raw_tensor
+
+                        print("Running debug_inf_nan...", file=log.v1)
+                        debug_inf_nan(_debug_func, with_grad=True)
+                        if count_nan_inf_params > 0 and self.global_train_step == 1:
+                            print(
+                                "This was the second step, so likely the first step grad was broken."
+                                " Try again with reset model...",
+                                file=log.v1,
+                            )
+                            self._load_model()
+                            debug_inf_nan(_debug_func, with_grad=True)
+                        raise Exception(f"Inf/nan score in step {step_idx}.")
+
+                step_idx += 1
+                self.global_train_step += 1
+                self._updater.set_current_train_step(
+                    global_train_step=self.global_train_step, epoch=self.epoch, epoch_continuous=epoch_continuous
+                )
+        except Exception as exc:
+            help_on_torch_exception(exc, step_idx=step_idx, model=self._orig_model, extern_data=extern_data)
+            raise
+
+        elapsed = time.monotonic() - epoch_start_time
         elapsed_computation_percentage = elapsed_computation_time / elapsed
+        total_padding_ratio = NumbersDict.constant_like(1.0, total_data_size_packed) - (
+            total_data_size_packed / total_data_size_padded
+        )
+        assert 0.0 <= total_padding_ratio.min_value() <= total_padding_ratio.max_value() <= 1.0
+        pad_str = ", ".join(f"{k}: {v:.1%}" for k, v in total_padding_ratio.items())
         print(
-            "Trained %i steps, %s elapsed (%.1f%% computing time)"
-            % (step_idx, hms(elapsed), (elapsed_computation_percentage * 100.0)),
+            f"Epoch {self.epoch}: Trained {step_idx} steps, {hms(elapsed)} elapsed "
+            f"({elapsed_computation_percentage:.1%} computing time, {pad_str} padding)",
             file=log.v3,
         )
 
@@ -477,7 +560,7 @@ class Engine(EngineBase):
         if self._do_save():
             self.learning_rate_control.save()
 
-        print(f"Total train loss:", _format_score(dict(accumulated_losses_dict)), file=log.v3)
+        print(f"Epoch {self.epoch}: Total train loss:", _format_score(dict(accumulated_losses_dict)), file=log.v3)
 
         self._maybe_report_dev_memory_stats()
 
@@ -508,8 +591,6 @@ class Engine(EngineBase):
         self._reset_dev_memory_stats()
 
         eval_dump_str = []
-        score_keys = None
-        error_keys = None
 
         for dataset_name, dataset in self.eval_datasets.items():
             if skip_already_evaluated and self._is_dataset_evaluated(name=dataset_name):
@@ -519,32 +600,49 @@ class Engine(EngineBase):
 
             if self._torch_distributed_ctx and self._torch_distributed_ctx.rank() != 0:
                 # We need to make sure the data loader iterator was created for proper synchronization.
-                # However, now we only want to do evaluation on rank 0 for simplicity.
+                # However, we only want to do evaluation on rank 0 for simplicity.
                 iter(data_loader)
+                # We wait here until rank 0 is done w/ the eval.
+                # Regularly synchronizing should fix potential timeout issues, like
+                # https://github.com/rwth-i6/returnn/issues/1621.
+                _has_data = torch.tensor([True], device="cpu", dtype=torch.int8)
+                while _has_data:
+                    torch.distributed.broadcast(_has_data, src=0)
                 continue
+
             print(f"Evaluating dataset {dataset_name!r}", file=log.v3)
 
             accumulated_losses_dict = NumbersDict()
             accumulated_inv_norm_factors_dict = NumbersDict()
             step_idx = 0
+            eval_start_time = time.monotonic()
 
+            report_prefix = f"ep {self.epoch} {dataset_name} eval"
             with torch.no_grad():
                 for extern_data_raw in data_loader:
+                    if self._torch_distributed_ctx and step_idx % 100 == 0:
+                        _has_data = torch.tensor([True], device="cpu", dtype=torch.int8)
+                        torch.distributed.broadcast(_has_data, src=0)
+
+                    complete_frac = float(extern_data_raw["complete_frac"])
+                    num_seqs = int(extern_data_raw["num_seqs"])
+
                     extern_data = extern_data_util.raw_dict_to_extern_data(
-                        extern_data_raw, extern_data_template=self.extern_data, device=self._device
+                        extern_data_raw,
+                        extern_data_template=self.extern_data,
+                        device=self._device,
+                        float_dtype=self._default_float_dtype,
                     )
 
                     self._run_step(extern_data, train_func=True)
-                    train_ctx = rf.get_run_ctx()
+                    step_end_time = time.monotonic()
 
-                    if score_keys is None:
-                        score_keys = set(name for name, loss in train_ctx.losses.items() if not loss.as_error)
-                        error_keys = set(name for name, loss in train_ctx.losses.items() if loss.as_error)
+                    train_ctx = rf.get_run_ctx()
 
                     losses_dict = NumbersDict(
                         {
                             name: (
-                                float(loss.get_summed_loss().raw_tensor.detach().cpu().numpy())
+                                float(loss.get_summed_loss().raw_tensor.detach().cpu().item())
                                 if self._device != "meta"
                                 else float("nan")
                             )
@@ -559,9 +657,12 @@ class Engine(EngineBase):
                     accumulated_inv_norm_factors_dict += inv_norm_factors_dict
                     eval_info = self._maybe_extend_losses_info(losses_dict / inv_norm_factors_dict)
                     _print_process(
-                        f"ep {self.epoch} {dataset_name} eval",
+                        report_prefix,
                         step=step_idx,
                         eval_info=dict(eval_info),
+                        complete_frac=complete_frac,
+                        num_seqs=num_seqs,
+                        start_elapsed=step_end_time - eval_start_time,
                         log_memory_usage_device=self._device if self._log_memory_usage else None,
                     )
                     step_idx += 1
@@ -577,17 +678,19 @@ class Engine(EngineBase):
                 self.learning_rate_control.save()
 
             # Same format as the TF engine.
-            eval_dump_str += [
-                "%s: score %s error %s"
-                % (
-                    dataset_name,
-                    _format_score({name: accumulated_losses_dict[name] for name in score_keys}),
-                    _format_score({name: accumulated_losses_dict[name] for name in error_keys}),
-                )
-            ]
+            eval_dump_str += ["%s: %s" % (dataset_name, _format_score(dict(accumulated_losses_dict)))]
+
+            if self._torch_distributed_ctx:
+                assert self._torch_distributed_ctx.rank() == 0
+                _has_data = torch.tensor([False], device="cpu", dtype=torch.int8)
+                torch.distributed.broadcast(_has_data, src=0)
 
         if not self._torch_distributed_ctx or self._torch_distributed_ctx.rank() == 0:
-            print(" ".join(eval_dump_str) if eval_dump_str else "(No evaluations.)", file=log.v1)
+            print(
+                f"Epoch {self.epoch} evaluation:",
+                " ".join(eval_dump_str) if eval_dump_str else "(No evaluations.)",
+                file=log.v1,
+            )
 
         self._maybe_report_dev_memory_stats()
 
@@ -611,20 +714,31 @@ class Engine(EngineBase):
             for key, value in losses.items():
                 losses_[key] = value
                 if key in score_keys:
-                    losses_[f"{key}:exp"] = math.exp(value)
+                    try:
+                        losses_[f"{key}:exp"] = math.exp(value)
+                    except OverflowError:
+                        losses_[f"{key}:exp"] = float("inf")
             losses = NumbersDict(losses_)
         return losses
 
-    def _create_data_loader(self, dataset: Dataset, *, train: bool = False) -> DataLoader:
+    def _create_data_loader(
+        self, dataset: Dataset, *, train: bool = False, dataset_init_epoch: bool = True
+    ) -> DataLoader:
         """
         :param dataset: RETURNN dataset
+        :param train: Train might use a separate batch size in the config (batch_size_train vs batch_size_dev).
+            Also online_shuffle_batches is only used in training.
+        :param dataset_init_epoch: Whether to call dataset.init_seq_order(epoch=self.epoch) or not.
         :return: PyTorch data loader created from given RETURNN dataset
         """
         # Make sure that _dataset_reset does not keep a ref to `self`,
         # otherwise it would trigger to pickle `self` and all its members.
-        dataset_reset = returnn_dataset_wrapper.ReturnnDatasetResetMpSharedEpochCallback(
-            dataset=dataset, epoch_mp_shared=self._epoch_mp_shared
-        )
+        if dataset_init_epoch:
+            dataset_reset = returnn_dataset_wrapper.ReturnnDatasetResetMpSharedEpochCallback(
+                dataset=dataset, epoch_mp_shared=self._epoch_mp_shared
+            )
+        else:
+            dataset_reset = returnn_dataset_wrapper.ReturnnDatasetResetNoOpCallback()
 
         wrapped_dataset = returnn_dataset_wrapper.ReturnnDatasetIterDataPipe(dataset, reset_callback=dataset_reset)
         if (self._min_seq_length is not None) or (self._max_seq_length is not None):
@@ -638,14 +752,47 @@ class Engine(EngineBase):
                 wrapped_dataset, chunking, min_chunk_size=min_chunk_size
             )
 
-        batch_size = self.config.typed_value("batch_size", -1)
-        batch_size = self.config.typed_value(f"batch_size_{'train' if train else 'dev'}", batch_size)
-        assert batch_size != -1, f"batch_size or batch_size_{'train' if train else 'dev'} not defined in config"
-        max_seqs = self.config.int("max_seqs", -1)
-        batches_dataset = data_pipeline.BatchingIterDataPipe(wrapped_dataset, batch_size=batch_size, max_seqs=max_seqs)
+        batches_dataset = data_pipeline.get_batching_iterable_dataset_from_config(
+            dataset=wrapped_dataset, config=self.config, train=train
+        )
+
+        online_shuffle_batches = self.config.typed_value("online_shuffle_batches", None)
+        if train and online_shuffle_batches:
+            if isinstance(online_shuffle_batches, int):
+                online_shuffle_batches = {"buffer_size": online_shuffle_batches}
+            elif isinstance(online_shuffle_batches, dict):
+                if "buffer_size" not in online_shuffle_batches:
+                    raise ValueError(
+                        f"config online_shuffle_batches, buffer_size not defined, got {online_shuffle_batches}"
+                    )
+            else:
+                raise TypeError(
+                    f"config online_shuffle_batches, expected int or dict, got {type(online_shuffle_batches)}"
+                )
+            # Note on random seed: This is handled by the PyTorch DataLoader iterator logic and IterDataPipe reset.
+            # Specifically, when we create a new DataLoader iterator,
+            # this will get fetch a new random number (from current Torch RNG state),
+            # use that as seed for the shuffle buffer.
+            # Note: In case of distributed training, it will broadcast the seed from rank 0 to all others.
+            # This is maybe not really what we want?
+            # https://discuss.pytorch.org/t/shuffleriterdatapipe-but-different-random-seed-per-distributed-rank/212612
+            # I currently don't really see a good way to override this behavior.
+            # Also note that we are likely using persistent multiprocessing data loader workers,
+            # so calling torch.utils.data.graph_settings.apply_random_seed here in the main proc
+            # will not have an effect then.
+            batches_dataset = data_pipeline.ShufflingDataPipe(
+                batches_dataset, monotonic_data_keys=("complete_frac", "seq_idx"), **online_shuffle_batches
+            )
 
         loader_opts = self.config.typed_value("torch_dataloader_opts") or {}
         assert isinstance(loader_opts, dict), f"config torch_dataloader_opts, expected dict, got {type(loader_opts)}"
+
+        if not dataset_init_epoch:
+            loader_opts = loader_opts.copy()
+            # We want to keep the current initialized seq order of the dataset.
+            # Multiprocessing does not quite work with this
+            # (the serialization of the dataset state does not cover the current seq order).
+            loader_opts["num_workers"] = 0
 
         data_loader = data_pipeline.create_data_loader_from_batches(batches_dataset, loader_opts)
 
@@ -658,6 +805,17 @@ class Engine(EngineBase):
             dataset.finish_epoch(free_resources=True)
 
         return data_loader
+
+    @contextmanager
+    def _run_ctx_mgr(self):
+        with ExitStack() as stack:
+            if self._use_autocast:
+                stack.enter_context(autocast(device_type=self._device.split(":")[0], dtype=self._autocast_dtype))
+            stack.enter_context(rf.set_default_device_ctx(self._device))
+            if self._default_float_dtype:
+                stack.enter_context(rf.set_default_float_dtype_ctx(str(self._default_float_dtype).split(".")[-1]))
+                stack.enter_context(_set_torch_default_dtype_ctx_mgr(self._default_float_dtype))
+            yield
 
     def _run_step(
         self, extern_data: TensorDict, *, train_flag: bool = False, train_func: bool, _inside_wrapped: bool = False
@@ -679,12 +837,8 @@ class Engine(EngineBase):
                 expected_outputs=self._forward_step_expected_outputs, step=self.global_train_step, epoch=self.epoch
             )
 
-        with (
-            autocast(device_type=self._device.split(":")[0], dtype=self._autocast_dtype)
-            if self._use_autocast
-            else nullcontext()
-        ), rf.set_default_device_ctx(self._device):
-            sentinel_kw = {"__fwd_compatible_random_arg_%i" % int(random() * 100): None}
+        with self._run_ctx_mgr():
+            sentinel_kw = util.get_fwd_compat_kwargs()
             if train_func:
                 self._train_step_func(model=self._orig_model, extern_data=extern_data, **sentinel_kw)
             else:
@@ -724,6 +878,13 @@ class Engine(EngineBase):
             epoch = self._start_epoch or 1
 
         self._create_model(epoch=epoch, step=step)
+
+        non_critical_for_restore_set = set()
+        if isinstance(self._orig_model, rf.Module):
+            for key, param in self._orig_model.named_parameters():
+                assert isinstance(param, rf.Parameter)
+                if param.non_critical_for_restore:
+                    non_critical_for_restore_set.add(key)
 
         self._ignore_param_set.clear()
         loaded_state_keys = set()
@@ -824,6 +985,7 @@ class Engine(EngineBase):
                 missing_keys_preload, unexpected_keys_preload = self._pt_model.load_state_dict(
                     preload_model_state, strict=False
                 )
+                preload_model_state_keys = set(preload_model_state.keys())
                 loaded_state_keys.update(preload_model_state.keys())
                 missing_keys.difference_update(preload_model_state.keys())
                 del preload_model_state
@@ -831,6 +993,11 @@ class Engine(EngineBase):
 
                 if opts.get("prefix", ""):
                     prefix_keys = [key for key in self._pt_model.state_dict() if key.startswith(opts.get("prefix", ""))]
+                    if not prefix_keys:
+                        raise Exception(
+                            "No keys with prefix %r found in model.\nModel params:\n%s"
+                            % (opts.get("prefix", ""), ", ".join(name for name, _ in self._pt_model.named_parameters()))
+                        )
                 else:
                     prefix_keys = model_state_keys_set
                 missing_keys_preload = (
@@ -839,6 +1006,12 @@ class Engine(EngineBase):
                 unexpected_keys_preload = (
                     set(prefix_keys).intersection(set(unexpected_keys_preload)).difference(loaded_state_keys)
                 )
+                if not preload_model_state_keys.intersection(prefix_keys):
+                    raise Exception(
+                        f"No keys with prefix {opts.get('prefix', '')!r} found in preload model state.\n"
+                        f"Preload model state keys: {preload_model_state_keys}\n"
+                        f"Model state keys: {model_state_keys_set}"
+                    )
                 if missing_keys_preload and not opts.get("ignore_missing", False):
                     missing_keys.update(missing_keys_preload)
                 if missing_keys_preload:
@@ -854,6 +1027,14 @@ class Engine(EngineBase):
         if self._ignore_param_set:
             util_module.convert_parameters_to_buffers(self._pt_model, self._ignore_param_set, persistent=False)
 
+        if missing_keys.intersection(non_critical_for_restore_set):
+            # We ignore missing keys which are non-critical for restore.
+            print(
+                "Ignoring missing keys which are non-critical for restore:",
+                missing_keys.intersection(non_critical_for_restore_set),
+                file=log.v4,
+            )
+            missing_keys.difference_update(non_critical_for_restore_set)
         if missing_keys:
             raise Exception(
                 "\n".join(
@@ -866,6 +1047,8 @@ class Engine(EngineBase):
                 )
             )
 
+        if self._default_float_dtype:
+            self._pt_model.to(dtype=self._default_float_dtype)
         self._pt_model.to(self._device)
 
         if model_epoch_filename and is_training:
@@ -874,17 +1057,13 @@ class Engine(EngineBase):
             # We decremented the step above.
             epoch += 1
             step += 1
-        self.epoch = epoch  # in training, this will be reset to start_epoch
+        self.set_epoch(epoch)  # in training, this will be reset to start_epoch
         self.global_train_step = step
 
         load_model_post_hooks = self.config.typed_value("load_model_post_hooks")
         if load_model_post_hooks:
-            with (
-                autocast(device_type=self._device.split(":")[0], dtype=self._autocast_dtype)
-                if self._use_autocast
-                else nullcontext()
-            ), rf.set_default_device_ctx(self._device):
-                sentinel_kw = {"__fwd_compatible_random_arg_%i" % int(random() * 100): None}
+            with self._run_ctx_mgr():
+                sentinel_kw = util.get_fwd_compat_kwargs()
                 for hook in load_model_post_hooks:
                     hook(model=self._orig_model, **sentinel_kw)
 
@@ -914,8 +1093,8 @@ class Engine(EngineBase):
 
         get_model_func = self.config.typed_value("get_model")
         assert get_model_func, "get_model not defined in config"
-        sentinel_kw = {"__fwd_compatible_random_arg_%i" % int(random() * 100): None}
-        model = get_model_func(epoch=epoch, step=step, **sentinel_kw)
+        sentinel_kw = util.get_fwd_compat_kwargs()
+        model = get_model_func(epoch=epoch, step=step, device=self._device, **sentinel_kw)
         self._orig_model = model
         if isinstance(model, rf.Module):
             self._pt_model = rf_module_to_pt_module(model)
@@ -1004,34 +1183,56 @@ class Engine(EngineBase):
             if os.path.isfile(filename):
                 os.unlink(filename)
 
-    def forward_with_callback(self, *, dataset: Dataset, callback: ForwardCallbackIface):
+    def forward_with_callback(
+        self,
+        *,
+        dataset: Dataset,
+        callback: ForwardCallbackIface,
+        dataset_init_epoch: bool = True,
+        allow_skipping_seqs: bool = False,
+    ):
         """forward"""
         assert isinstance(dataset, Dataset)
         assert isinstance(callback, ForwardCallbackIface)
 
-        epoch_start_time = time.time()
+        epoch_start_time = time.monotonic()
         elapsed_computation_time = 0.0
 
         self._pt_model.eval()
         self._maybe_reset_dev_memory_caches()
         self._reset_dev_memory_stats()
 
-        if dataset.supports_seq_order_sorting():
-            # We can sort it. Sort it in reverse to make sure that we have enough memory right at the beginning.
-            print("Dataset supports sorting, i.e. it will be sorted for optimal performance.", file=log.v3)
-            dataset.seq_ordering = "sorted_reverse"
-        else:
+        if dataset_init_epoch:
+            if not self.config.bool("sort_dataset", True):
+                pass
+            elif dataset.seq_ordering == "sorted_reverse":
+                pass
+            elif dataset.supports_seq_order_sorting():
+                # We can sort it. Sort it in reverse to make sure that we have enough memory right at the beginning.
+                print("Dataset supports sorting, i.e. it will be sorted for optimal performance.", file=log.v3)
+                dataset.seq_ordering = "sorted_reverse"
+            else:
+                print(
+                    "Dataset does not support sorting, i.e. it will not be sorted for optimal performance.",
+                    file=log.v3,
+                )
+
+        if allow_skipping_seqs:
+            # Dangerous! If you enable this, you could lose sequences,
+            # and your evaluation pipeline may silently produce incorrect results!
             print(
-                "Dataset does not support sorting, i.e. it will not be sorted for optimal performance.",
-                file=log.v3,
+                f"Note: allow_skipping_seqs is enabled (with min_seq_length {self._min_seq_length},"
+                f" max_seq_length {self._max_seq_length}),"
+                f" this may lead to incorrect evaluation results!",
+                file=log.v2,
+            )
+        else:
+            assert (self._min_seq_length is None) and (self._max_seq_length is None), (
+                f"min_seq_length {self._min_seq_length}, max_seq_length {self._max_seq_length} not allowed,"
+                f" we want to keep all source sentences."
             )
 
-        assert (self._min_seq_length is None) and (self._max_seq_length is None), (
-            f"min_seq_length {self._min_seq_length}, max_seq_length {self._max_seq_length} not allowed,"
-            f" we want to keep all source sentences."
-        )
-
-        data_loader = self._create_data_loader(dataset)
+        data_loader = self._create_data_loader(dataset, dataset_init_epoch=dataset_init_epoch)
         if self._forward_auto_split_batch_on_oom:
             data_loader = QueuedDataIter(data_loader)
 
@@ -1052,6 +1253,9 @@ class Engine(EngineBase):
             else:
                 # Keep it as ndarray.
                 raw = x.raw_tensor[batch_idx : batch_idx + 1].reshape(())
+            if any(d is not d_ for d, d_ in zip(x.dims[1:], y.dims)):  # replaced any dims?
+                # Cut off any padding.
+                raw = raw[tuple(slice(None, dim.get_dim_value()) for dim in y.dims)]
             # Convert it to Numpy array.
             # Note that users might also want to get the PyTorch tensors instead.
             # They might even want to get the whole batched tensor.
@@ -1060,7 +1264,10 @@ class Engine(EngineBase):
             # Currently, this callback interface is intended to also be used by other backends,
             # and then the user can always assume Numpy arrays.
             if isinstance(raw, torch.Tensor):  # might already be numpy array
-                raw = raw.detach().cpu().numpy()
+                raw = raw.detach().cpu()
+                if raw.dtype == torch.bfloat16:
+                    raw = raw.float()
+                raw = raw.numpy()
             y.raw_tensor = raw
             return y
 
@@ -1071,7 +1278,7 @@ class Engine(EngineBase):
             In the callback, we pass each sequence without the batch dim,
             so we must adapt the dim tags.
             """
-            if not dim.dyn_size_ext:
+            if dim.dyn_size_ext is None:
                 return dim
             if batch_dim not in dim.dyn_size_ext.dims:
                 return dim
@@ -1085,9 +1292,19 @@ class Engine(EngineBase):
 
             step_idx = 0
             for extern_data_raw in data_loader:
-                step_begin_time = time.time()
+                step_begin_time = time.monotonic()
+
+                complete_frac = float(extern_data_raw["complete_frac"])
+                num_seqs = int(extern_data_raw["num_seqs"])
+
+                if self._forward_step_expected_outputs:
+                    # Also resets any dyn dims, which might have been set in the prev step.
+                    self._forward_step_expected_outputs.reset_content()
                 extern_data = extern_data_util.raw_dict_to_extern_data(
-                    extern_data_raw, extern_data_template=self.extern_data, device=self._device
+                    extern_data_raw,
+                    extern_data_template=self.extern_data,
+                    device=self._device,
+                    float_dtype=self._default_float_dtype,
                 )
                 try:
                     self._run_step(extern_data, train_func=False)
@@ -1097,13 +1314,13 @@ class Engine(EngineBase):
                         and self._forward_auto_split_batch_on_oom
                         and extern_data_util.raw_dict_can_split_batch(extern_data_raw)
                     ):
-                        self._handle_run_exception(exc, always_direct_print=True)
+                        help_on_torch_exception(exc, model=self._orig_model, always_direct_print=True)
                         util.traceback_clear_frames(exc.__traceback__)
                         diagnose_gpu.garbage_collect()
                         print(f"{report_prefix}, split step {step_idx} batch and try again...", file=log.v3)
                         data_loader.extend(extern_data_util.raw_dict_split_batch(extern_data_raw, splits=2))
                         continue
-                    self._handle_run_exception(exc)
+                    help_on_torch_exception(exc, model=self._orig_model)
                     raise
                 ctx = rf.get_run_ctx()
                 ctx.check_outputs_complete()
@@ -1116,18 +1333,26 @@ class Engine(EngineBase):
                         model_outputs_per_batch.data[k] = _get_tensor_wo_batch_numpy(v)
                     callback.process_seq(seq_tag=seq_tag, outputs=model_outputs_per_batch)
 
-                elapsed_computation_time += time.time() - step_begin_time
+                step_end_time = time.monotonic()
+                step_duration = step_end_time - step_begin_time
+                elapsed_computation_time += step_duration
+
                 _print_process(
                     report_prefix,
                     step=step_idx,
                     eval_info=None,
+                    step_duration=step_duration,
+                    start_elapsed=step_end_time - epoch_start_time,
+                    complete_frac=complete_frac,
+                    num_seqs=num_seqs,
+                    batch_size_info=_get_batch_size_info(extern_data) if self._log_batch_size else None,
                     log_memory_usage_device=self._device if self._log_memory_usage else None,
                 )
                 step_idx += 1
 
             callback.finish()
 
-        elapsed = time.time() - epoch_start_time
+        elapsed = time.monotonic() - epoch_start_time
         elapsed_computation_percentage = elapsed_computation_time / elapsed
         print(
             "Forward %i steps, %s elapsed (%.1f%% computing time)"
@@ -1176,7 +1401,7 @@ class Engine(EngineBase):
                 if not self._is_dataset_evaluated(name=name, epoch=epoch):
                     raise Exception(f"Scores of epoch {epoch} for {name} are missing.")
 
-        self.epoch = self._start_epoch - 1
+        self.set_epoch(self._start_epoch - 1)
         if not self._is_dataset_evaluated(name="train"):
             raise Exception(f"Scores of last train epoch {self.epoch} are missing.")
         for name in self.eval_datasets.keys():
@@ -1191,35 +1416,47 @@ def _to_raw(n: Union[int, float, Tensor]):
     if isinstance(n, (int, float)):
         return n
     if isinstance(n, Tensor):
-        return n.raw_tensor.detach().cpu().numpy()
+        x = n.raw_tensor.detach().cpu()
+        if x.dtype == torch.bfloat16:
+            x = x.float()
+        return x.numpy()
     raise TypeError(f"Unexpected {n} of type {type(n)}")
 
 
 def _print_process(
     report_prefix: str,
+    *,
     step: int,
     eval_info: Optional[Dict[str, Any]] = None,
     batch_size_info: Optional[Dict[str, Any]] = None,
     step_duration: Optional[float] = None,
+    start_elapsed: Optional[float] = None,
+    complete_frac: Optional[float] = None,
+    num_seqs: Optional[int] = None,
     log_memory_usage_device: Optional[str] = None,
 ):
     """
     Similar but simplified from TF engine _print_process.
 
     :param report_prefix:
-    :param step:
+    :param step: for this epoch
     :param eval_info:
     :param batch_size_info:
-    :param step_duration:
+    :param step_duration: time elapsed for this step (secs)
+    :param start_elapsed: time elapsed since epoch start (secs)
+    :param complete_frac: how much of the current epoch is already consumed
+    :param num_seqs: total number of seqs this epoch
     :param log_memory_usage_device: if given, will log memory usage (peak allocated memory)
     :return: nothing, will be printed to log
     """
     if log.verbose[5]:  # report every minibatch
+        if step == 0 and num_seqs is not None and num_seqs >= 0:
+            print(f"{report_prefix} num_seqs: {num_seqs}", file=log.v5)
         info = [report_prefix, "step %i" % step]
         if eval_info:  # Such as score.
-            info += ["%s %s" % (k, _format_value(v)) for k, v in eval_info.items()]
+            info += ["%s %s" % (k, _format_score_value(v)) for k, v in eval_info.items()]
         if batch_size_info:
-            info += ["%s %s" % (k, _format_value(v)) for k, v in batch_size_info.items()]
+            info += ["%s %s" % (k, _format_score_value(v)) for k, v in batch_size_info.items()]
         if log_memory_usage_device:
             dev = torch.device(log_memory_usage_device)
             if dev.type == "cuda":
@@ -1228,6 +1465,19 @@ def _print_process(
                 ]
         if step_duration is not None:
             info += ["%.3f sec/step" % step_duration]
+        if start_elapsed is not None:
+            info += ["elapsed %s" % hms(start_elapsed)]
+        if complete_frac is not None:
+            assert 1 >= complete_frac > 0, f"{step} step, {complete_frac} complete_frac"
+            assert start_elapsed is not None
+            total_time_estimated = start_elapsed / complete_frac
+            remaining_estimated = total_time_estimated - start_elapsed
+            info += [
+                "exp. remaining %s" % hms(remaining_estimated),
+                "complete %.02f%%" % (complete_frac * 100),
+            ]
+        if start_elapsed is not None and complete_frac is None:
+            info += ["(unk epoch len)"]
         print(", ".join(filter(None, info)), file=log.v5)
 
 
@@ -1241,11 +1491,11 @@ def _format_score(score: Dict[str, float]) -> str:
     if not score:
         return "None"
     if len(score) == 1:
-        return _format_value(list(score.values())[0])
-    return " ".join(["%s %s" % (key.split(":", 2)[-1], _format_value(score[key])) for key in score.keys()])
+        return _format_score_value(list(score.values())[0])
+    return " ".join(["%s %s" % (k, _format_score_value(v)) for k, v in score.items()])
 
 
-def _format_value(v: Any) -> str:
+def _format_score_value(v: Any) -> str:
     if isinstance(v, float):
         if abs(v) > 1.0e3 or abs(v) < 1.0e-3:
             return f"{v:.3e}"
@@ -1329,3 +1579,49 @@ class _WrappedModuleRunStep(torch.nn.Module):
         for name, loss in ctx.losses.items():
             res["loss/" + name] = loss.loss.raw_tensor
         return res
+
+
+@contextmanager
+def _set_torch_default_dtype_ctx_mgr(dtype: torch.dtype):
+    old_dtype = torch.get_default_dtype()
+    try:
+        torch.set_default_dtype(dtype)
+        yield
+    finally:
+        torch.set_default_dtype(old_dtype)
+
+
+def _parse_log_grad_norm(config: Config) -> Optional[Union[int, float]]:
+    log_grad_norm = config.opt_typed_value("log_grad_norm", False)
+    if isinstance(log_grad_norm, str):
+        if log_grad_norm.lower() in ["true", "false", "none"]:
+            log_grad_norm = {"true": True, "false": False, "none": None}[log_grad_norm.lower()]
+        else:
+            raise ValueError(f"Invalid value for log_grad_norm: {log_grad_norm!r}")
+    if log_grad_norm is None:
+        pass
+    elif isinstance(log_grad_norm, bool):
+        if log_grad_norm:
+            log_grad_norm = 2
+        else:
+            log_grad_norm = None
+    elif isinstance(log_grad_norm, (int, float)):
+        assert log_grad_norm > 0, f"log_grad_norm {log_grad_norm} > 0 expected"  # otherwise fine...
+    else:
+        raise TypeError(f"Invalid type for log_grad_norm: {log_grad_norm!r} type {type(log_grad_norm)}")
+    return log_grad_norm
+
+
+def _get_total_grad_norm(model: torch.nn.Module, p: float) -> float:
+    return float(
+        torch.norm(
+            torch.stack(
+                [
+                    param.grad.norm(p=p).detach().cpu()
+                    for param in model.parameters()
+                    if param.requires_grad and param.grad is not None
+                ]
+            ),
+            p=p,
+        ).item()
+    )

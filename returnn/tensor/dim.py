@@ -70,7 +70,7 @@ class Dim(_DimMixin):
         if dimension is None:
             self.capacity = capacity
             self.size = None
-            self.dyn_size_ext = dyn_size_ext.copy() if dyn_size_ext else None
+            self.dyn_size_ext = dyn_size_ext.copy() if dyn_size_ext is not None else None
         elif isinstance(dimension, int):
             self.capacity = capacity or dimension
             self.size = dimension
@@ -83,7 +83,7 @@ class Dim(_DimMixin):
             self.dyn_size_ext = dimension.copy()
         else:
             raise TypeError(f"unexpected dimension type: {type(dimension)}")
-        if not name and not description and self.dyn_size_ext:
+        if not name and not description and self.dyn_size_ext is not None:
             name = self.dyn_size_ext.name
         self.name = name or description
         self._dyn_size_max_value = None

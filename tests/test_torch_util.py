@@ -247,6 +247,57 @@ def test_saved_tensors_hooks_gc_segfault():
             x.sum().backward()
 
 
+def test_debug_inf_nan():
+    param = torch.nn.Parameter(torch.tensor([0.5349, 0.8094, -100, 0, -0.9890, 1, 1.3221, 0.8172, -0.7658, -0.7506]))
+
+    def func():
+        x = torch.tensor([0.5349, 0, 1.1103, -1.6898, -0.9890, 1, 1.3221, 0.8172, -0.7658, -0.7506])
+        x = mod1(x)
+        x = mod2(x)
+        x = mod3(x) * param
+        x = mod4(x)
+        x = mod1(x)
+        x = mod2(x)
+        x = mod2(x)
+        x = mod5(x)
+        return x.sum()
+
+    def mod1(x: torch.Tensor) -> torch.Tensor:
+        return x * 2
+
+    def mod2(x: torch.Tensor) -> torch.Tensor:
+        return x.exp()
+
+    def mod3(x: torch.Tensor) -> torch.Tensor:
+        return x - 2
+
+    def mod4(x: torch.Tensor) -> torch.Tensor:
+        x.subtract_(-3.5)
+        return x
+
+    def mod5(x: torch.Tensor) -> torch.Tensor:
+        return x / x
+
+    x = func()
+    print(x)
+    print("inf/nan:", torch.isinf(x).any().item(), torch.isnan(x).any().item())
+
+    from returnn.torch.util.debug_inf_nan import debug_inf_nan
+
+    # Run directly, to just test that it goes through without exception.
+    # For some reason, the detect_anomaly does not print the forward op?
+    debug_inf_nan(func, with_grad=True, stop_reporting_after_first_inf_nan=False)
+
+    from io import StringIO
+
+    out = StringIO()
+    debug_inf_nan(func, file=out, stop_reporting_after_first_inf_nan=False)
+    assert "inf in aten.exp" in out.getvalue()
+    assert "nan in aten.div" in out.getvalue()
+    assert "mod5" in out.getvalue()
+    assert os.path.basename(__file__) in out.getvalue()
+
+
 if __name__ == "__main__":
     better_exchook.install()
     if len(sys.argv) <= 1:

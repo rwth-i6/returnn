@@ -56,8 +56,8 @@ def mel_filterbank(
         filter_bank_matrix_np = _mel_filter_bank_matrix_np(
             f_min=f_min, f_max=f_max, sampling_rate=sampling_rate, fft_size=fft_length, nr_of_filters=out_dim.dimension
         )
-        filter_bank_matrix_np = filter_bank_matrix_np.astype(x.dtype)
         filter_bank_matrix = rf.convert_to_tensor(filter_bank_matrix_np, dims=(in_dim, out_dim), _backend=backend)
+        filter_bank_matrix = rf.cast(filter_bank_matrix, dtype=x.dtype)
         filter_bank_matrix = rf.copy_to_device(filter_bank_matrix, x.device)
         if backend.executing_eagerly():
             if len(_mel_filter_bank_matrix_cache) > 100:
@@ -191,6 +191,9 @@ def log_mel_filterbank_from_raw(
         fft_length=n_fft,
     )
     power_spectrogram = rf.abs(spectrogram) ** 2.0
+    # stft might have upcasted this to float32 because some PyTorch versions don't support stft on bfloat16.
+    # https://github.com/pytorch/pytorch/issues/117844
+    power_spectrogram = rf.cast(power_spectrogram, dtype=raw_audio.dtype)
     mel_fbank = mel_filterbank(power_spectrogram, in_dim=in_dim_, out_dim=out_dim, sampling_rate=sampling_rate)
     log_mel_fbank = rf.safe_log(mel_fbank, eps=1e-10)
     if log_base != math.e:

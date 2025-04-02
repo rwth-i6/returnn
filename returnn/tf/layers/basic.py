@@ -8,10 +8,11 @@ from typing import Optional, Union, Sequence, List, Tuple, Dict
 import typing
 import tensorflow as tf
 import contextlib
+from returnn.tensor import Tensor, Dim
 import returnn.tf.compat as tf_compat
 import returnn.tf.util.basic as tf_util
-from returnn.util.basic import unicode, NotSpecified
-from returnn.tf.util.data import Data, SearchBeam, Dim, FeatureDim, SpatialDim
+from returnn.util.basic import NotSpecified
+from returnn.tf.util.data import Data, SearchBeam, FeatureDim, SpatialDim
 from returnn.tf.util.basic import OutputWithActivation, dimshuffle, swapaxes
 from returnn.log import log
 from .base import LayerBase, Loss, InternalLayer, SearchChoices
@@ -517,11 +518,12 @@ class ConcatLayer(LayerBase):
             dimension = 0
             for tag in concat_dim_tags:
                 dimension += tag.dimension
+        sum_concat_dim_tags: Dim = sum(concat_dim_tags)
         if not out_dim:
-            out_dim = sum(concat_dim_tags)
+            out_dim = sum_concat_dim_tags
             assert isinstance(out_dim, Dim)
-        else:
-            sum(concat_dim_tags).declare_same_as(out_dim)
+        elif not out_dim.is_dim_known():
+            sum_concat_dim_tags.declare_same_as(out_dim)
         assert out_dim.dimension == dimension
 
         def _as_common(x, axis):
@@ -824,7 +826,7 @@ class SelectSearchSourcesLayer(InternalLayer):
             self.__class__.__name__,
             self.name,
             self.search_choices_from_layer,
-            self.output.get_description(with_name=False) if self.output else None,
+            self.output.get_description(with_name=False) if self.output is not None else None,
         )
 
     def get_dep_layers(self):
@@ -1353,7 +1355,7 @@ class SliceNdLayer(_ConcatInputLayer):
                 else:
                     slice_tag = size
             else:
-                assert size.dyn_size_ext and size.dyn_size_ext.placeholder is not None
+                assert size.dyn_size_ext is not None and size.dyn_size_ext.placeholder is not None
                 size_t = size.dyn_size_ext.placeholder  # assume already >=0
                 if min_size:
                     size_t = tf.maximum(size_t, min_size)
@@ -1377,7 +1379,7 @@ class SliceNdLayer(_ConcatInputLayer):
                 if size_data is not None:
                     prefix_dims.update(size_data.dims)
                 slice_tag = self.output.dim_tags[len(prefix_dims)]
-            if size_data and (not slice_tag.dyn_size_ext or slice_tag.dyn_size_ext.placeholder is None):
+            if size_data is not None and (slice_tag.dyn_size_ext is None or slice_tag.dyn_size_ext.placeholder is None):
                 # in this case, size is not known before runtime and becomes dynamic and we need to set dyn_size
                 assert slice_tag.is_dynamic()
                 if size_data.batch:
@@ -1403,7 +1405,7 @@ class SliceNdLayer(_ConcatInputLayer):
             )
             # [start+0, start+1, ...]
             gather_positions = tf.expand_dims(start_t, -1) + tf.range(0, size)  # e.g. (B, size) or (B, T, size)
-            if seq_lens_data:
+            if seq_lens_data is not None:
                 seq_lens_t = tf_util.copy_compatible_reduce(seq_lens_data, gather_positions_data, "max").placeholder
                 pad_mask = tf.logical_or(  # shape like gather_positions
                     tf.greater(gather_positions, seq_lens_t - 1), tf.less(gather_positions, 0)
@@ -1414,7 +1416,7 @@ class SliceNdLayer(_ConcatInputLayer):
                     tf.greater(gather_positions, x.batch_shape[1] - 1), tf.less(gather_positions, 0)
                 )
                 gather_positions = tf.clip_by_value(gather_positions, 0, x.batch_shape[1] - 1)
-            if size_data:
+            if size_data is not None:
                 size_t = tf_util.copy_compatible_reduce(size_data, start_data, "max").placeholder
                 pad_mask = tf.logical_or(
                     tf.greater(gather_positions, tf.expand_dims(start_t + size_t - 1, -1)), pad_mask
@@ -1579,7 +1581,7 @@ class GatherLayer(_ConcatInputLayer):
         if clip_to_valid:
             dim = input_data.dim_tags[old_gather_axis]
             dyn_size_ext = dim.dyn_size_ext
-            if not dyn_size_ext:
+            if dyn_size_ext is None:
                 dyn_size_ext = Data.from_tensor(tf.shape(input_data.placeholder)[old_gather_axis])
             position_data = rf.clip_by_value(position_data, 0, dyn_size_ext - 1)
 
@@ -2373,7 +2375,9 @@ class LengthLayer(LayerBase):
                 dim = source.get_dim_tag_from_description(axis)
         if add_time_axis:
             # You anyway should not use this, so it's ok to have only a single case supported here.
-            assert dim.dyn_size_ext and dim.dyn_size_ext.have_batch_axis() and dim.dyn_size_ext.batch_ndim == 1  # [B]
+            assert (
+                dim.dyn_size_ext is not None and dim.dyn_size_ext.have_batch_axis() and dim.dyn_size_ext.batch_ndim == 1
+            )  # [B]
             return Data(
                 name="%s_length" % name,
                 shape=[1],
@@ -2399,7 +2403,7 @@ class LengthLayer(LayerBase):
                 sparse=sparse,
                 dim=None if sparse else NotSpecified,
             )
-        if not dim.dyn_size_ext:  # yet undefined
+        if dim.dyn_size_ext is None:  # yet undefined
             return Data(
                 name="%s_length" % name,
                 shape=(),
@@ -2636,11 +2640,11 @@ class SeqLenMaskLayer(_ConcatInputLayer):
         energy_shape = get_shape(energy)
         axis = x.get_axis_from_description(axis, allow_int=axis_allow_int)
         assert x.is_axis_dynamic(axis), "%s: use_time_mask True, dyn time axis expected" % x
-        if seq_len_source:
+        if seq_len_source is not None:
             energy_mask = seq_len_source.copy_compatible_to(x).get_sequence_mask_broadcast(axis=axis)
         else:
             energy_mask = x.get_sequence_mask_broadcast(axis=axis)
-        if start:
+        if start is not None:
             idxs_shape = [1] * x.batch_ndim  # type: typing.List[typing.Union[int,tf.Tensor]]
             idxs_shape[axis] = energy_shape[axis]
             idxs = tf.reshape(tf.range(energy_shape[axis]), idxs_shape)
@@ -4060,7 +4064,7 @@ class FoldLayer(LayerBase):
         if (
             not out_spatial_dim
             or not out_spatial_dim.is_dim_known()
-            or (out_spatial_dim.dyn_size_ext and out_spatial_dim.dyn_size_ext.raw_tensor is None)
+            or (out_spatial_dim.dyn_size_ext is not None and out_spatial_dim.dyn_size_ext.raw_tensor is None)
         ):
             # We are basically reverting ConvLayer.calc_out_dim.
             out_spatial_dim_: Dim = in_spatial_dim * stride
@@ -4180,7 +4184,9 @@ class PadLayer(_ConcatInputLayer):
         self,
         *,
         axes: Union[Dim, str, Sequence[Union[Dim, str]]],
-        padding: Union[int, Tuple[int, int], Sequence[Tuple[int, int]]],
+        padding: Union[
+            int, Dim, Tuple[Union[int, Dim], Union[int, Dim]], Sequence[Tuple[Union[int, Dim], Union[int, Dim]]]
+        ],
         out_dims: Optional[Union[Dim, Sequence[Dim]]] = None,
         handle_dynamic_dims: Optional[bool] = None,
         value: Union[int, float] = 0,
@@ -4207,7 +4213,10 @@ class PadLayer(_ConcatInputLayer):
         padding = self._transform_padding(padding=padding, axes=axes)
         paddings = [(0, 0)] * len(range(self.input_data.batch_ndim))
         for i, a in enumerate(axes):
-            paddings[a] = padding[i]
+            pad_left, pad_right = padding[i]
+            pad_left = pad_left.dimension if isinstance(pad_left, Dim) else pad_left
+            pad_right = pad_right.dimension if isinstance(pad_right, Dim) else pad_right
+            paddings[a] = (pad_left, pad_right)
         mode = mode.lower()
         if handle_dynamic_dims is None:
             handle_dynamic_dims = self._handle_dynamic_dims_default(
@@ -4215,7 +4224,7 @@ class PadLayer(_ConcatInputLayer):
                 padding=padding,
                 mode=mode,
             )
-        if all(sum(p) == 0 for p in padding):
+        if all(left == right == 0 for left, right in paddings):
             self.output.placeholder = self.input_data.placeholder
         elif mode == "replication":
             self.output.placeholder = tf_util.pad_replicate(self.input_data.placeholder, axes, padding)
@@ -4223,7 +4232,7 @@ class PadLayer(_ConcatInputLayer):
             self.output.placeholder = tf.pad(
                 self.input_data.placeholder, paddings=paddings, mode=mode, constant_values=value
             )
-        if all(right == 0 for left, right in padding) and mode != "circular":
+        if all(right == 0 for left, right in paddings) and mode != "circular":
             pass  # no masking needed
         else:
             import returnn.frontend as rf
@@ -4253,9 +4262,9 @@ class PadLayer(_ConcatInputLayer):
     @classmethod
     def _transform_padding(cls, padding, axes):
         """
-        :param list[(int,int)]|(int,int)|int padding:
+        :param Sequence[(int|Dim,int|Dim)]|(int|Dim,int|Dim)|int|Dim padding:
         :param list[int] axes:
-        :rtype: list[(int,int)]
+        :rtype: Sequence[(int|Dim,int|Dim)]
         """
         if isinstance(padding, (list, tuple)):
             if isinstance(padding[0], (list, tuple)):
@@ -4312,9 +4321,9 @@ class PadLayer(_ConcatInputLayer):
         """
         :param str name:
         :param list[LayerBase] sources:
-        :param Dim|str|list[Dim|str] axes:
-        :param list[(int,int)]|(int,int)|int padding:
-        :param Dim|list[Dim]|None out_dims:
+        :param Dim|str|Sequence[Dim|str] axes:
+        :param Sequence[(int|Dim,int|Dim)]|(int|Dim,int|Dim)|int|Dim padding:
+        :param Dim|Sequence[Dim]|None out_dims:
         :rtype: Data
         """
         from ..util.data import Dim
@@ -4501,7 +4510,7 @@ class MergeDimsLayer(_ConcatInputLayer):
             return  # should be handled already
         if target_tag.dimension is not None:  # static
             return  # should be handled already
-        if target_tag.dyn_size_ext:
+        if target_tag.dyn_size_ext is not None:
             return  # handled already
 
         out_size = None
@@ -4513,7 +4522,7 @@ class MergeDimsLayer(_ConcatInputLayer):
                     continue
                 in_size = Data.from_tensor(tf.constant(in_tag.dimension, dtype=tf.int32))
             else:
-                assert in_tag.dyn_size_ext
+                assert in_tag.dyn_size_ext is not None
                 in_size = in_tag.dyn_size_ext
             if not out_size:
                 out_size = in_size
@@ -4589,7 +4598,6 @@ class MergeDimsLayer(_ConcatInputLayer):
             or input_data.feature_dim_axis_or_unspecified is not NotSpecified
         ):
             data.feature_dim_axis = new_feature_dim_axis  # explicitly set
-            data.dim = data.batch_shape[data.feature_dim_axis] if data.feature_dim_axis is not None else None
 
         if input_data.batch_dim_axis in axes and data.batch:
             for axis in axes:
@@ -5689,7 +5697,7 @@ class RepeatLayer(_ConcatInputLayer):
             out_dim_.declare_same_as(out_dim)
         if data.batch:
             out_dim_ = out_dim_.get_for_batch_ctx(data.batch, data.control_flow_ctx)
-        if tag.dyn_size_ext and not out_dim_.dyn_size_ext:
+        if tag.dyn_size_ext is not None and out_dim_.dyn_size_ext is None:
             out_dim_.dyn_size_ext = tag.dyn_size_ext.copy_template()
         return data.copy_template_replace_dim_tag(axis=data.get_batch_axis(0), new_dim_tag=out_dim_)
 
@@ -5995,20 +6003,20 @@ class ReinterpretDataLayer(_ConcatInputLayer):
                 if new_tag.is_batch_dim() or new_tag.dimension is not None:
                     continue
                 new_tag.complete_dyn_size()
-                if new_tag.dyn_size_ext and new_tag.dyn_size_ext.placeholder is not None:
+                if new_tag.dyn_size_ext is not None and new_tag.dyn_size_ext.placeholder is not None:
                     continue
                 # still undefined
                 if old_tag.is_batch_dim():
                     new_dyn_size_ext = Data.from_tensor(input_data.get_batch_dim())
                 else:
-                    assert old_tag.dyn_size_ext
+                    assert old_tag.dyn_size_ext is not None
                     new_dyn_size_ext = old_tag.dyn_size_ext.copy(name="%s_size" % (new_tag.description or "<unnamed>"))
                 # Need to create new size tensor as long as we have get_tag_from_size_tensor.
                 with tf_util.same_control_flow_ctx(new_dyn_size_ext.placeholder):
                     new_dyn_size_ext.placeholder = tf.identity(
                         new_dyn_size_ext.placeholder, name=get_valid_scope_name_from_str(new_dyn_size_ext.name)
                     )
-                if new_tag.dyn_size_ext:
+                if new_tag.dyn_size_ext is not None:
                     assert new_dyn_size_ext.dim_tags == new_tag.dyn_size_ext.dim_tags
                 new_tag.dyn_size_ext = new_dyn_size_ext
                 new_tag.set_tag_on_size_tensor(new_dyn_size_ext.placeholder)
@@ -6137,7 +6145,7 @@ class ReinterpretDataLayer(_ConcatInputLayer):
                 old_tag = old_tag.get_for_batch_ctx(out.batch, out.control_flow_ctx)
                 new_tag = new_tag.get_for_batch_ctx(old_tag.batch, old_tag.control_flow_ctx)
                 if old_tag.is_dim_known() and not new_tag.is_dim_known():
-                    assert not new_tag.dyn_size_ext
+                    assert new_tag.dyn_size_ext is None
                     new_tag.derive_from(old_tag, set_derived_from_flag=False)
                 out = out.copy_template_replace_dim_tag(axis=axis_int, new_dim_tag=new_tag)
         if set_sparse is not None:
@@ -6220,7 +6228,7 @@ class ConvLayer(_ConcatInputLayer):
             for 1D/2D/3D conv.
             The input data ndim must match, or you can add dimensions via input_expand_dims or input_add_feature_dim.
             It will automatically swap the batch-dim to the first axis of the input data.
-        :param str padding: "same", "valid" or "same_static".
+        :param str|int|Sequence[int] padding: "same", "valid" or "same_static".
             "same_static" is calculated differently depending on whether an axis is static or dynamic.
             For static axes, "same_static" padding is the same as "same" padding,
             i.e. filter_size - 1 - (T + strides - 1) % strides.
@@ -6258,8 +6266,10 @@ class ConvLayer(_ConcatInputLayer):
         """
         from returnn.util import BehaviorVersion
 
-        padding = padding.upper()
-        assert padding in ["SAME", "VALID", "SAME_STATIC"], "no other padding supported at the moment"
+        padding = padding.upper() if isinstance(padding, str) else padding
+        assert padding in ["SAME", "VALID", "SAME_STATIC"] or isinstance(
+            padding, (int, tuple, list)
+        ), f"{self}: got unsupported padding {padding}"
         assert "out_type" not in kwargs, "don't set out_type explicitly for this layer"
         assert len(filter_size) in (1, 2, 3), "only 1D conv, 2D conv or 3D conv supported"
         super(ConvLayer, self).__init__(in_dim=in_dim, out_dim=out_dim, **kwargs)
@@ -6345,7 +6355,7 @@ class ConvLayer(_ConcatInputLayer):
         if isinstance(filter_size[0], int):
             if not all(isinstance(s, int) for s in filter_size):
                 raise TypeError(f"filter_size {filter_size} types {[type(s) for s in filter_size]} inconsistent")
-            if filter_data:
+            if filter_data is not None:
                 assert filter_data.batch_ndim == len(filter_size) + 2
                 filter_dims = list(filter_data.dims)
                 filter_dims.remove(filter_in_dim)
@@ -6357,7 +6367,7 @@ class ConvLayer(_ConcatInputLayer):
         elif isinstance(filter_size[0], Dim):
             if not all(isinstance(s, Dim) for s in filter_size):
                 raise TypeError(f"filter_size {filter_size} types {[type(s) for s in filter_size]} inconsistent")
-            if filter_data:
+            if filter_data is not None:
                 assert all(d in filter_data.dims for d in filter_size)
         else:
             raise TypeError(
@@ -6366,7 +6376,7 @@ class ConvLayer(_ConcatInputLayer):
         filter_shape = list(filter_size) + [filter_in_dim, out_dim]
         from returnn.tf.util.basic import get_initializer
 
-        if filter_data:
+        if filter_data is not None:
             if filter_perm:
                 filter_data = TransposeLayer.transpose(filter_data, perm=filter_perm, name="filter_transposed")
             filter_data = filter_data.copy_transpose(filter_shape, allow_int=False)
@@ -6395,6 +6405,17 @@ class ConvLayer(_ConcatInputLayer):
                 out_batch_feature_major=out_batch_feature_major,
             )
             padding = "VALID"  # input is now already "same" padded, therefore use "valid" padding from here
+        elif isinstance(padding, int) and padding == 0:
+            x = input_data.placeholder
+            padding = "VALID"
+        elif isinstance(padding, (int, list, tuple)):
+            x = self.get_input_placeholder_with_int_padding(
+                input_data=input_data,
+                num_batch_dims=num_batch_dims,
+                out_batch_feature_major=out_batch_feature_major,
+                padding=padding,
+            )
+            padding = "VALID"
         else:
             x = input_data.placeholder
 
@@ -6536,7 +6557,7 @@ class ConvLayer(_ConcatInputLayer):
         :param Sequence[int|Dim] filter_size:
         :param Sequence[int] strides:
         :param Sequence[int] dilation_rate:
-        :param str padding:
+        :param str|int|Sequence[int] padding:
         """
         if output.feature_dim_axis == num_batch_dims:
             out_spatial_dims_ = output.dim_tags[num_batch_dims + 1 :]
@@ -6555,7 +6576,7 @@ class ConvLayer(_ConcatInputLayer):
                 filter_size=filter_size[i],
                 stride=strides[i],
                 dilation_rate=dilation_rate[i],
-                padding=padding,
+                padding=padding if isinstance(padding, (str, int)) else padding[i],
             )
             assert isinstance(out_tag_calc, Dim)
             out_tag_calc.declare_same_as(out_tag)
@@ -6584,6 +6605,7 @@ class ConvLayer(_ConcatInputLayer):
         input_split_feature_dim=None,
         input_add_feature_dim=False,
         use_time_mask=False,
+        mask_value: float = 0.0,
     ):
         """
         :param Data input_data:
@@ -6597,6 +6619,7 @@ class ConvLayer(_ConcatInputLayer):
         :param bool input_add_feature_dim: will add a dim at the end and use input-feature-dim == 1,
           and use the original input feature-dim as a spatial dim.
         :param bool use_time_mask:
+        :param mask_value: when ``use_time_mask`` is used, what value to use for the mask
         :return: (transformed input, num batch dims). all batch dims are at the front
         :rtype: (Data, int)
         """
@@ -6694,7 +6717,7 @@ class ConvLayer(_ConcatInputLayer):
                     continue
                 axis = input_data.get_axis_from_description(dim)
                 mask = input_data.get_sequence_mask_broadcast(axis=axis)
-                x = tf_util.where_bc(mask, x, 0.0)
+                x = tf_util.where_bc(mask, x, mask_value)
 
             input_data.placeholder = x
 
@@ -6712,7 +6735,7 @@ class ConvLayer(_ConcatInputLayer):
         """
         Returns the placeholder of input_data with same_static padding applied to it.
 
-        :param input_data:
+        :param input_data: [Batch..., Spatial..., Feature] or [Batch..., Feature, Spatial...]
         :param num_batch_dims:
         :param filter_size:
         :param strides:
@@ -6753,13 +6776,51 @@ class ConvLayer(_ConcatInputLayer):
         return x
 
     @classmethod
+    def get_input_placeholder_with_int_padding(
+        cls,
+        input_data: Data,
+        *,
+        num_batch_dims: int,
+        out_batch_feature_major: bool,
+        padding: Union[int, Sequence[int]],
+        pad_value: float = 0.0,
+    ) -> tf.Tensor:
+        """
+        Returns the placeholder of input_data with same_static padding applied to it.
+
+        :param input_data: [Batch..., Spatial..., Feature] or [Batch..., Feature, Spatial...]
+        :param num_batch_dims:
+        :param out_batch_feature_major:
+        :param padding:
+        :param pad_value:
+        """
+        num_spatial_dims = input_data.batch_ndim - num_batch_dims - 1
+        if isinstance(padding, int):
+            padding = [padding] * num_spatial_dims
+        paddings = [[0, 0] for _ in range(input_data.batch_ndim)]
+        for axis, dim in enumerate(input_data.dims):
+            if axis < num_batch_dims:
+                continue
+            if axis == num_batch_dims and out_batch_feature_major:
+                # input_data has dimensions [batch] * num_batch_dims + [channels] + [spatial] * num_spatial_dims
+                continue
+            if axis >= num_batch_dims + num_spatial_dims and not out_batch_feature_major:
+                # input_data has dimensions [batch] * num_batch_dims + [spatial] * num_spatial_dims + [channels]
+                break
+
+            padding_ = padding[axis - num_batch_dims - out_batch_feature_major]
+            paddings[axis] = [padding_, padding_]
+        x = tf.pad(input_data.placeholder, paddings, constant_values=pad_value)
+        return x
+
+    @classmethod
     def calc_out_dim(cls, in_dim, filter_size, stride, padding, dilation_rate=1):
         """
         :param T|int|tf.Tensor|Dim in_dim: dimension in some axis
         :param int|Dim filter_size: e.g. 2, for the corresponding axis
         :param int stride: e.g. 1, for the corresponding axis
         :param int dilation_rate: e.g. 1
-        :param str padding: "valid" or "same"
+        :param str|int padding: "valid" or "same"
         :return: the output dimension
         :rtype: T
         """
@@ -6774,13 +6835,16 @@ class ConvLayer(_ConcatInputLayer):
                 return a
             return -(-a // b)
 
-        padding = padding.upper()
+        padding = padding.upper() if isinstance(padding, str) else padding
         # See tf.compat.v1.nn.convolution() documentation for more.
         if padding == "SAME":
             if isinstance(in_dim, Dim):
                 return in_dim.ceildiv_right(stride)
             return ceildiv(in_dim, stride)
-        elif padding == "VALID":
+        elif padding == "VALID" or isinstance(padding, int):
+            if isinstance(padding, int) and padding != 0:
+                assert padding > 0
+                in_dim = padding + in_dim + padding
             if isinstance(in_dim, Dim):
                 filter_left_dilated = (filter_size - 1) * dilation_rate // 2
                 filter_right_dilated = (filter_size - 1) * dilation_rate - filter_left_dilated
@@ -6821,7 +6885,7 @@ class ConvLayer(_ConcatInputLayer):
         :param Sequence[LayerBase] sources:
         :param returnn.tf.network.TFNetwork network:
         :param Sequence[int|Dim] filter_size:
-        :param str padding:
+        :param str|int|Sequence[int] padding:
         :param int|Sequence[int] strides:
         :param int|Sequence[int] dilation_rate:
         :param int input_expand_dims: number of dynamic dims to add to the input
@@ -6834,6 +6898,7 @@ class ConvLayer(_ConcatInputLayer):
         :param Sequence[Dim]|None out_spatial_dims:
         :param int input_expand_dims: number of spatial dims to add to the input
         :param bool|NotSpecified auto_use_channel_first:
+        :rtype: Data
         """
         from returnn.util import BehaviorVersion
 
@@ -6852,7 +6917,8 @@ class ConvLayer(_ConcatInputLayer):
         assert len(dilation_rate) == len(filter_size)
         if in_spatial_dims:
             assert len(in_spatial_dims) == len(filter_size)
-        padding = padding.upper()
+        if isinstance(padding, str):
+            padding = padding.upper()
         # Be relaxed about incorrect input data. Throw errors later. This can also work during template construction.
         if not input_data.have_batch_axis():
             input_data = input_data.copy_add_batch_dim(batch_dim_axis=0)
@@ -6884,7 +6950,11 @@ class ConvLayer(_ConcatInputLayer):
             for i in range(len(filter_size)):
                 old_tag = old_spatial_dim_tags[i] if i < len(old_spatial_dim_tags) else None
                 filter_size_ = filter_size[i].dimension if isinstance(filter_size[i], Dim) else filter_size[i]
-                if old_tag and (filter_size_ == strides[i] == 1 or (strides[i] == 1 and padding == "SAME")):
+                padding_ = padding if isinstance(padding, (str, int)) else padding[i]
+                if old_tag and (
+                    (filter_size_ == strides[i] == 1 and padding_ in ("SAME", "VALID", 0))
+                    or (strides[i] == 1 and padding_ == "SAME")
+                ):
                     dim_tags.append(old_tag)  # identity in this axis
                     continue
                 new_dim = None
@@ -6894,7 +6964,7 @@ class ConvLayer(_ConcatInputLayer):
                         filter_size=filter_size[i],
                         stride=strides[i],
                         dilation_rate=dilation_rate[i],
-                        padding=padding,
+                        padding=padding_,
                     )
                 dim_tags.append(
                     Dim(
@@ -7004,8 +7074,8 @@ class PoolLayer(_ConcatInputLayer):
     ):
         """
         :param str mode: "max" or "avg"
-        :param tuple[int] pool_size: shape of the window of each reduce
-        :param str padding: "same", "valid" or "same_static".
+        :param Sequence[int] pool_size: shape of the window of each reduce
+        :param str|int|Sequence[int] padding: "same", "valid" or "same_static".
             "same_static" is calculated differently depending on whether an axis is static or dynamic.
             For static axes, "same_static" padding is the same as "same" padding,
             i.e. filter_size - 1 - (T + strides - 1) % strides.
@@ -7013,13 +7083,13 @@ class PoolLayer(_ConcatInputLayer):
             filter_size - 1, i.e. it is independent of the length T of the axis and the striding.
             For dynamic axes, to avoid skipping any frames on the right,
             we set left_padding = (filter_size - strides) // 2.
-        :param tuple[int]|int dilation_rate:
-        :param tuple[int]|int|None strides: in contrast to tf.nn.pool, the default (if it is None)
+        :param Sequence[int]|int dilation_rate:
+        :param Sequence[int]|int|None strides: in contrast to tf.nn.pool, the default (if it is None)
             will be set to pool_size
         :param Dim|None in_dim:
-        :param list[Dim|str]|None in_spatial_dims:
+        :param Sequence[Dim|str]|None in_spatial_dims:
         :param Dim|None out_dim:
-        :param list[Dim]|None out_spatial_dims:
+        :param Sequence[Dim]|None out_spatial_dims:
         :param bool|NotSpecified use_channel_first: if set, will transform input to NCHW format
         :param bool use_time_mask:
         """
@@ -7027,8 +7097,15 @@ class PoolLayer(_ConcatInputLayer):
         assert "out_type" not in kwargs
         mode = mode.upper()
         assert mode in ["MAX", "AVG"]
-        padding = padding.upper()
-        assert padding in ["VALID", "SAME", "SAME_STATIC"]
+        if isinstance(padding, str):
+            padding = padding.upper()
+            assert padding in ["VALID", "SAME", "SAME_STATIC"]
+        elif isinstance(padding, int) or (
+            isinstance(padding, (list, tuple)) and all(isinstance(p, int) for p in padding)
+        ):
+            pass
+        else:
+            raise TypeError(f"invalid type ({type(padding).__name__}) for padding: {padding}")
         if isinstance(dilation_rate, int):
             dilation_rate = [dilation_rate] * len(pool_size)
         assert len(dilation_rate) == len(pool_size)
@@ -7058,6 +7135,7 @@ class PoolLayer(_ConcatInputLayer):
             in_dim=in_dim,
             in_spatial_dims=in_spatial_dims,
             use_time_mask=use_time_mask,
+            mask_value={"MAX": float("-inf"), "AVG": 0}[mode],
         )
         # We want to prepare the input data such that the batch-dim(s) is the very first,
         # the feature-dim is the very last ("NHWC" format) or right after batch-dim ("NCHW"),
@@ -7096,6 +7174,18 @@ class PoolLayer(_ConcatInputLayer):
                 out_batch_feature_major=out_batch_feature_major,
             )
             padding = "VALID"  # input is now already "same" padded, therefore use "valid" padding from here
+        elif isinstance(padding, int) and padding == 0:
+            x = input_data.placeholder
+            padding = "VALID"
+        elif isinstance(padding, (int, list, tuple)):
+            x = ConvLayer.get_input_placeholder_with_int_padding(
+                input_data=input_data,
+                num_batch_dims=num_batch_dims,
+                out_batch_feature_major=out_batch_feature_major,
+                padding=padding,
+                pad_value={"MAX": float("-inf"), "AVG": 0}[mode],
+            )
+            padding = "VALID"
         else:
             x = input_data.placeholder
 
@@ -7139,14 +7229,14 @@ class PoolLayer(_ConcatInputLayer):
         :param str name:
         :param list[LayerBase] sources:
         :param returnn.tf.network.TFNetwork network:
-        :param tuple[int]|list[int] pool_size:
-        :param tuple[int]|list[int]|int strides:
-        :param int|tuple[int]|list[int] dilation_rate:
-        :param str padding:
+        :param Sequence[int] pool_size:
+        :param Sequence[int]|int strides:
+        :param int|Sequence[int] dilation_rate:
+        :param str|int|Sequence[int] padding:
         :param Dim|None in_dim:
-        :param list[Dim|str]|None in_spatial_dims:
+        :param Sequence[Dim|str]|None in_spatial_dims:
         :param Dim|None out_dim:
-        :param list[Dim]|None out_spatial_dims:
+        :param Sequence[Dim]|None out_spatial_dims:
         :param bool|NotSpecified use_channel_first:
         :rtype: Data
         """
@@ -8445,7 +8535,7 @@ class TimeChunkingLayer(_ConcatInputLayer):
         x = x.copy_with_batch_dim_axis(1)
         self.input_data = x
         in_dim = x.dim_tags[0]
-        x_t = x.placeholder
+        x_t = x.placeholder  # [T,B,...]
         if in_dim.dyn_size is not None:
             index = tf.cast(tf_util.sequence_mask_time_major(in_dim.dyn_size), tf.float32)
         else:
@@ -8458,13 +8548,14 @@ class TimeChunkingLayer(_ConcatInputLayer):
         from returnn.tf.native_op import chunk
 
         out, oindex = chunk(x_t, index=index, chunk_step=chunk_step, chunk_size=chunk_size)
+        # out shape (chunk_size, n_batch * n_chunks, n_dim), oindex shape (chunk_size, n_batch * n_chunks)
         if ext_rem_shape:
-            out = tf.reshape(out, tf.concat([tf.shape(oindex), ext_rem_shape], axis=0))
+            out = tf.reshape(out, tf.concat([tf.shape(oindex), ext_rem_shape], axis=0))  # [C_size,B*C,...]
         self.output.placeholder = out
         out.set_shape(self.output.batch_shape)
         out_dim = self.output.dim_tags[0]
         if out_dim.dimension is None and out_dim.dyn_size is None:
-            out_dim.dyn_size = tf.reduce_sum(tf.cast(oindex, tf.int32), axis=0)
+            out_dim.dyn_size = tf.reduce_sum(tf.cast(oindex, tf.int32), axis=0)  # [B*C]
 
     @classmethod
     def get_out_data_from_opts(cls, name, sources, axis="T", out_dim=None, **kwargs):
@@ -8480,8 +8571,20 @@ class TimeChunkingLayer(_ConcatInputLayer):
         in_dim = data.dim_tags[axis]
         data = data.copy_move_axis(old_axis=axis, new_axis=0)  # (T,...)
         data = data.copy_with_batch_dim_axis(1)  # (T,B,...)
+        old_batch_dim = data.get_batch_dim_tag()
+        new_batch_dim = Dim(
+            kind=old_batch_dim.kind,
+            description=f"{name}:chunked_batch",
+            dimension=Tensor(f"{name}:chunked_batch", [], "int32"),  # unknown here...
+        )
+        data = data.copy_template_replace_dim_tag(1, new_batch_dim)
         if not out_dim:
-            out_dim = Dim(kind=in_dim.kind, description="%s:chunking" % name, auto_generated=True, dimension=None)
+            out_dim = Dim(
+                Tensor(f"{name}:chunk_size", [new_batch_dim], "int32"),
+                kind=in_dim.kind,
+                description=f"{name}:chunking",
+                auto_generated=True,
+            )
         data = data.copy_template_replace_dim_tag(axis=0, new_dim_tag=out_dim)  # (T',B',...)
         data.time_dim_axis = 0
         return data
@@ -10449,7 +10552,7 @@ class TopKLayer(LayerBase):
             k_data = k.output
             if k_data.batch:
                 k_dim = k_dim.get_for_batch_ctx(k_data.batch, k_data.control_flow_ctx)
-            if not k_dim.dyn_size_ext or k_dim.dyn_size_ext.placeholder is None:
+            if k_dim.dyn_size_ext is None or k_dim.dyn_size_ext.placeholder is None:
                 k_dim.dyn_size_ext = k_data.copy()
                 if k_dim.dyn_size_ext.placeholder is not None:
                     tag = Dim.get_tag_from_size_tensor(k_dim.dyn_size_ext.placeholder)
@@ -12350,7 +12453,7 @@ class BinaryCrossEntropyLoss(Loss):
         self._pos_weight = pos_weight
 
     def _check_init(self):
-        assert self.target
+        assert self.target is not None
         assert (
             self.target.batch_ndim == self.output.batch_ndim
         ), "Number of dimensions mismatch. Target: %s, output: %s" % (self.target, self.output)
@@ -13391,7 +13494,7 @@ class ViaLayerLoss(Loss):
                 error_signal = where_bc(seq_mask_bc, error_signal, 0.0)
             if self.loss_wrt_to_act_in:
                 assert self.output_with_activation, "activation unknown, via %r" % self.output
-                if isinstance(self.loss_wrt_to_act_in, (str, unicode)):
+                if isinstance(self.loss_wrt_to_act_in, str):
                     from returnn.tf.util.basic import get_activation_function
 
                     assert self.output_with_activation.act_func is get_activation_function(self.loss_wrt_to_act_in)

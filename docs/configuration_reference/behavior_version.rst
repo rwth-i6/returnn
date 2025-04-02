@@ -22,6 +22,40 @@ and not listing legacy/deprecated parameters.
 Version History
 ---------------
 
+Behavior version 24 (2025-03-02)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+RF ``conv`` and ``pool`` ``padding="same"`` with striding:
+Now, will add padding left/right independent of dimension length,
+i.e. also independent of batching.
+
+There is also the global config option ``rf_use_consistent_same_padding: bool`` to overwrite this.
+
+See issue `#1693 <https://github.com/rwth-i6/returnn/issues/1693>`__.
+
+Behavior version 23 (2025-02-25)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+RF ``Conv1d.__init__`` and co, ``conv``,
+``TransposedConv1d.__init__`` an co, ``transposed_conv``,
+``pool``, ``max_pool``, ``pool1d`` and co,
+``stft``, ``window`` default changed:
+
+* ``use_mask``: False → True
+
+There is also the global config option ``rf_use_mask: bool`` to overwrite the global default
+for these and also additionally for ``BatchNorm.__init__``.
+
+See issue `#1691 <https://github.com/rwth-i6/returnn/issues/1691>`__.
+
+Behavior version 22 (2025-01-22)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Using ``Tensor.__bool__`` is disallowed.
+This also means implicit casts to bool, like in ``if tensor: ...``.
+
+See issue `#1680 <https://github.com/rwth-i6/returnn/issues/1680>`__.
+
 Behavior version 21 (2024-04-25)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 

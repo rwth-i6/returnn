@@ -11,7 +11,7 @@ import sys
 from . import basic as util
 
 
-class NativeCodeCompiler(object):
+class NativeCodeCompiler:
     """
     Helper class to compile native C/C++ code on-the-fly.
     """

@@ -83,6 +83,7 @@ class NumpyBackend(Backend[numpy.ndarray]):
         dims: Sequence[Dim],
         dtype: str,
         sparse_dim: Optional[Dim] = None,
+        feature_dim: Optional[Dim] = None,
         device: Optional[str] = None,
         name: Optional[str] = None,
     ) -> Tensor[numpy.ndarray]:
@@ -95,7 +96,7 @@ class NumpyBackend(Backend[numpy.ndarray]):
             name = name or "const"
             value = numpy.array(value, dtype=NumpyBackend.as_dtype_raw(dtype))
         assert isinstance(value, numpy.ndarray)
-        return Tensor(name, dims=dims, dtype=dtype, sparse_dim=sparse_dim, raw_tensor=value)
+        return Tensor(name, dims=dims, dtype=dtype, sparse_dim=sparse_dim, feature_dim=feature_dim, raw_tensor=value)
 
     @staticmethod
     def expand_dims_raw(raw_tensor: numpy.ndarray, axis: int) -> numpy.ndarray:
@@ -159,6 +160,35 @@ class NumpyBackend(Backend[numpy.ndarray]):
         return res
 
     @staticmethod
+    def where(
+        cond: Tensor,
+        true_: Union[Tensor, rf.RawTensorTypes],
+        false_: Union[Tensor, rf.RawTensorTypes],
+        *,
+        allow_broadcast_all_sources: bool = False,
+    ) -> Tensor:
+        """where"""
+        if isinstance(true_, Tensor):
+            dtype = true_.dtype
+        elif isinstance(false_, Tensor):
+            dtype = false_.dtype
+        else:
+            dtype = None
+        true_ = rf.convert_to_tensor(true_, _backend=NumpyBackend, dtype=dtype)
+        false_ = rf.convert_to_tensor(false_, _backend=NumpyBackend, dtype=dtype)
+        out = Tensor.get_common_data(
+            [true_, false_, cond], allow_broadcast_all_sources=allow_broadcast_all_sources, name="where"
+        )
+        out.dtype = true_.dtype
+        out.sparse_dim = true_.sparse_dim or false_.sparse_dim
+        out.feature_dim = true_.feature_dim or false_.feature_dim
+        cond_bc_raw = cond.copy_compatible_to_dims_raw(out.dims)
+        true_bc_raw = true_.copy_compatible_to_dims_raw(out.dims)
+        false_bc_raw = false_.copy_compatible_to_dims_raw(out.dims)
+        out.raw_tensor = numpy.where(cond_bc_raw, true_bc_raw, false_bc_raw)
+        return out
+
+    @staticmethod
     def range_over_dim(dim: Dim, *, dtype: Optional[str] = None, device: Optional[str] = None) -> Tensor[numpy.ndarray]:
         """
         :param dim:
@@ -166,7 +196,7 @@ class NumpyBackend(Backend[numpy.ndarray]):
         :param device:
         :return: tensor with shape [dim]
         """
-        if not dtype and dim.dyn_size_ext:
+        if not dtype and dim.dyn_size_ext is not None:
             dtype = dim.dyn_size_ext.dtype
         if not dtype:
             dtype = rf.get_default_array_index_dtype()

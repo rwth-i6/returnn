@@ -13,11 +13,11 @@ from returnn.tf.engine import *
 from returnn.tf.util.data import SpatialDim
 from returnn.tf.network import ExternData
 from returnn.config import Config
-from nose.tools import assert_equal, assert_not_equal, assert_is_instance, assert_raises
 import unittest
 import numpy
 import numpy.testing
 from pprint import pprint
+import pytest
 import contextlib
 from returnn.util import better_exchook
 
@@ -122,7 +122,7 @@ def test_FeedDictDataProvider():
     for seq_idx in range(num_seqs):
         feed_dict, meta = data_provider.get_feed_dict(single_threaded=True)
         print(feed_dict, meta)
-        assert_is_instance(feed_dict, dict)
+        assert isinstance(feed_dict, dict)
         assert extern_data.data["data"].placeholder in feed_dict
         assert extern_data.data["data"].size_placeholder[0] in feed_dict
         assert extern_data.data["classes"].placeholder in feed_dict
@@ -131,21 +131,21 @@ def test_FeedDictDataProvider():
         data_size = feed_dict[extern_data.data["data"].size_placeholder[0]]
         classes = feed_dict[extern_data.data["classes"].placeholder]
         classes_size = feed_dict[extern_data.data["classes"].size_placeholder[0]]
-        assert_is_instance(data, numpy.ndarray)
-        assert_is_instance(data_size, numpy.ndarray)
-        assert_is_instance(classes, numpy.ndarray)
-        assert_is_instance(classes_size, numpy.ndarray)
-        assert_equal(data.shape, (n_batch, seq_len, n_data_dim))
-        assert_equal(data_size.shape, (n_batch,))
-        assert_equal(classes.shape, (n_batch, seq_len))
-        assert_equal(classes_size.shape, (n_batch,))
-        assert_equal(list(data_size), [seq_len])
-        assert_equal(list(classes_size), [seq_len])
+        assert isinstance(data, numpy.ndarray)
+        assert isinstance(data_size, numpy.ndarray)
+        assert isinstance(classes, numpy.ndarray)
+        assert isinstance(classes_size, numpy.ndarray)
+        assert data.shape == (n_batch, seq_len, n_data_dim)
+        assert data_size.shape == (n_batch,)
+        assert classes.shape == (n_batch, seq_len)
+        assert classes_size.shape == (n_batch,)
+        assert list(data_size) == [seq_len]
+        assert list(classes_size) == [seq_len]
         numpy.testing.assert_almost_equal(list(data[0, 0]), expected_first_data[seq_idx])
         numpy.testing.assert_almost_equal(list(data[0, -1]), expected_last_data[seq_idx])
-        assert_equal(classes.tolist(), [expected_classes[seq_idx]])
+        assert classes.tolist() == [expected_classes[seq_idx]]
 
-    with assert_raises(AssertionError):  # assert that there are batches left should fail
+    with pytest.raises(AssertionError):  # assert that there are batches left should fail
         feed_dict, meta = data_provider.get_feed_dict(single_threaded=True)
 
 
@@ -190,19 +190,19 @@ def test_DatasetDataProvider():
             ]
         )
 
-        assert_is_instance(data, numpy.ndarray)
-        assert_is_instance(data_size, numpy.ndarray)
-        assert_is_instance(classes, numpy.ndarray)
-        assert_is_instance(classes_size, numpy.ndarray)
-        assert_equal(data.shape, (n_batch, seq_len, n_data_dim))
-        assert_equal(data_size.shape, (n_batch,))
-        assert_equal(classes.shape, (n_batch, seq_len))
-        assert_equal(classes_size.shape, (n_batch,))
-        assert_equal(list(data_size), [seq_len] * n_batch)
-        assert_equal(list(classes_size), [seq_len] * n_batch)
+        assert isinstance(data, numpy.ndarray)
+        assert isinstance(data_size, numpy.ndarray)
+        assert isinstance(classes, numpy.ndarray)
+        assert isinstance(classes_size, numpy.ndarray)
+        assert data.shape == (n_batch, seq_len, n_data_dim)
+        assert data_size.shape == (n_batch,)
+        assert classes.shape == (n_batch, seq_len)
+        assert classes_size.shape == (n_batch,)
+        assert list(data_size) == [seq_len] * n_batch
+        assert list(classes_size) == [seq_len] * n_batch
         numpy.testing.assert_almost_equal(list(data[0, 0]), [-0.5, -0.4])
         numpy.testing.assert_almost_equal(list(data[0, -1]), [0.3, 0.4])
-        assert_equal(classes[0].tolist(), [1, 2, 0, 1, 2])
+        assert classes[0].tolist() == [1, 2, 0, 1, 2]
 
         step = 1  # step 0 was above
         while True:
@@ -889,9 +889,9 @@ def test_engine_forward_to_hdf():
     ds = HDFDataset()
     ds.add_file(output_file)
 
-    assert_equal(ds.num_inputs, n_classes_dim)  # forwarded input is network output
-    assert_equal(ds.get_num_timesteps(), seq_len * num_seqs)
-    assert_equal(ds.get_total_num_seqs(), num_seqs)
+    assert ds.num_inputs == n_classes_dim  # forwarded input is network output
+    assert ds.get_num_timesteps() == seq_len * num_seqs
+    assert ds.get_total_num_seqs() == num_seqs
 
     os.remove(output_file)
 
@@ -1297,9 +1297,9 @@ def test_engine_rec_subnet_count():
     engine.init_train_from_config(config=config, train_data=dataset, dev_data=None, eval_data=None)
 
     out = engine.forward_single(dataset=dataset, seq_idx=0)
-    assert_equal(out.shape, (seq_len,))
-    assert_equal(out.dtype, numpy.int32)
-    assert_equal(list(out[:]), list(range(1, seq_len + 1)))
+    assert out.shape == (seq_len,)
+    assert out.dtype == numpy.int32
+    assert list(out[:]) == list(range(1, seq_len + 1))
 
     engine.finalize()
 
@@ -1383,9 +1383,9 @@ def test_engine_end_layer(extra_rec_kwargs=None):
     rec_layer = engine.network.layers["output"]
     assert isinstance(rec_layer, RecLayer)
     assert isinstance(rec_layer.cell, _SubnetworkRecCell)
-    assert_equal(set(rec_layer.cell.input_layers_moved_out), set())
-    assert_equal(set(rec_layer.cell.output_layers_moved_out), {"stop_token"})
-    assert_equal(set(rec_layer.cell.layers_in_loop), {"output"})
+    assert set(rec_layer.cell.input_layers_moved_out) == set()
+    assert set(rec_layer.cell.output_layers_moved_out) == {"stop_token"}
+    assert set(rec_layer.cell.layers_in_loop) == {"output"}
 
     # Now reinit for search.
     assert not engine.use_search_flag
@@ -1476,13 +1476,11 @@ def check_engine_search(extra_rec_kwargs=None):
     assert isinstance(rec_layer, RecLayer)
     assert isinstance(rec_layer.cell, _SubnetworkRecCell)
     if rec_layer._optimize_move_layers_out:
-        assert_equal(set(rec_layer.cell.input_layers_moved_out), set())
-        assert_equal(set(rec_layer.cell.output_layers_moved_out), {"output", "embed", "prob"})
-        assert_equal(set(rec_layer.cell.layers_in_loop), set())
+        assert set(rec_layer.cell.input_layers_moved_out) == set()
+        assert set(rec_layer.cell.output_layers_moved_out) == {"output", "embed", "prob"}
+        assert set(rec_layer.cell.layers_in_loop) == set()
     else:
-        assert_equal(
-            set(rec_layer.cell.layers_in_loop).difference({"data:classes"}), {"embed", "prob", "output", "end"}
-        )
+        assert set(rec_layer.cell.layers_in_loop).difference({"data:classes"}) == {"embed", "prob", "output", "end"}
 
     # Now reinit for search.
     assert not engine.use_search_flag
@@ -1593,17 +1591,13 @@ def check_engine_search_attention(extra_rec_kwargs=None):
     assert isinstance(rec_layer, RecLayer)
     assert isinstance(rec_layer.cell, _SubnetworkRecCell)
     if rec_layer._optimize_move_layers_out:
-        assert_equal(set(rec_layer.cell.input_layers_moved_out), set())
-        assert_equal(set(rec_layer.cell.output_layers_moved_out), set())
-        assert_equal(
-            set(rec_layer.cell.layers_in_loop), {"end", "output", "output_prob", "c", "c_in", "orth_embed", "s"}
-        )
+        assert set(rec_layer.cell.input_layers_moved_out) == set()
+        assert set(rec_layer.cell.output_layers_moved_out) == set()
+        assert set(rec_layer.cell.layers_in_loop) == {"end", "output", "output_prob", "c", "c_in", "orth_embed", "s"}
     else:
         assert not rec_layer.cell.input_layers_moved_out
         assert not rec_layer.cell.output_layers_moved_out
-        assert_equal(
-            set(rec_layer.cell.layers_in_loop), {"end", "output", "output_prob", "c", "c_in", "orth_embed", "s"}
-        )
+        assert set(rec_layer.cell.layers_in_loop) == {"end", "output", "output_prob", "c", "c_in", "orth_embed", "s"}
 
     print("Search...")
     engine.search(dataset=dataset)
@@ -2815,9 +2809,9 @@ def test_rec_optim_all_out():
     assert isinstance(rec_layer.cell, _SubnetworkRecCell)
     assert rec_layer._optimize_move_layers_out
     # Now it was initialized and optimized for training.
-    assert_equal(set(rec_layer.cell.input_layers_moved_out), set())
-    assert_equal(set(rec_layer.cell.output_layers_moved_out), {"output", "prob", "embed"})
-    assert_equal(set(rec_layer.cell.layers_in_loop), set())
+    assert set(rec_layer.cell.input_layers_moved_out) == set()
+    assert set(rec_layer.cell.output_layers_moved_out) == {"output", "prob", "embed"}
+    assert set(rec_layer.cell.layers_in_loop) == set()
 
     # Now reinit for search.
     assert not engine.use_search_flag
@@ -2831,9 +2825,9 @@ def test_rec_optim_all_out():
     assert isinstance(rec_layer.cell, _SubnetworkRecCell)
     assert rec_layer._optimize_move_layers_out
     # Now it was initialized and optimized for search.
-    assert_equal(set(rec_layer.cell.input_layers_moved_out), set())
-    assert_equal(set(rec_layer.cell.output_layers_moved_out), set())
-    assert_equal(set(rec_layer.cell.layers_in_loop), {"prob", "output", "end", "embed"})
+    assert set(rec_layer.cell.input_layers_moved_out) == set()
+    assert set(rec_layer.cell.output_layers_moved_out) == set()
+    assert set(rec_layer.cell.layers_in_loop) == {"prob", "output", "end", "embed"}
 
     engine.search(dataset=dataset)
     print("error keys:")
@@ -3348,8 +3342,8 @@ def test_rec_subnet_auto_optimize():
         assert isinstance(rec_layer, RecLayer)
         assert isinstance(rec_layer.cell, _SubnetworkRecCell)
         if optimize_move_layers_out:
-            assert_equal(set(rec_layer.cell.input_layers_moved_out), {"output", "orth_embed"})
-            assert_equal(set(rec_layer.cell.output_layers_moved_out), {"output_prob", "att"})
+            assert set(rec_layer.cell.input_layers_moved_out) == {"output", "orth_embed"}
+            assert set(rec_layer.cell.output_layers_moved_out) == {"output_prob", "att"}
         else:
             assert not rec_layer.cell.input_layers_moved_out
             assert not rec_layer.cell.output_layers_moved_out
@@ -3658,8 +3652,8 @@ def test_rec_subnet_construct_2():
 
         assert isinstance(rec_layer, RecLayer)
         assert isinstance(rec_layer.cell, _SubnetworkRecCell)
-        assert_equal(set(rec_layer.cell.input_layers_moved_out), {"output", "target_embed"})
-        assert_equal(set(rec_layer.cell.output_layers_moved_out), {"output_prob", "readout", "readout_in", "s2"})
+        assert set(rec_layer.cell.input_layers_moved_out) == {"output", "target_embed"}
+        assert set(rec_layer.cell.output_layers_moved_out) == {"output_prob", "readout", "readout_in", "s2"}
         print("Construct search net")
         search_net = TFNetwork(extern_data=extern_data, train_flag=False, eval_flag=True, search_flag=True)
         search_net.construct_from_dict(net_dict)
@@ -3797,8 +3791,8 @@ def test_rec_subnet_construct_3():
 
         assert isinstance(rec_layer, RecLayer)
         assert isinstance(rec_layer.cell, _SubnetworkRecCell)
-        assert_equal(set(rec_layer.cell.input_layers_moved_out), {"output", "target_embed"})
-        assert_equal(set(rec_layer.cell.output_layers_moved_out), {"output_prob", "readout", "readout_in", "s2"})
+        assert set(rec_layer.cell.input_layers_moved_out) == {"output", "target_embed"}
+        assert set(rec_layer.cell.output_layers_moved_out) == {"output_prob", "readout", "readout_in", "s2"}
         print("Construct search net")
         search_net = TFNetwork(extern_data=extern_data, train_flag=False, eval_flag=True, search_flag=True)
         search_net.construct_from_dict(net_dict)
@@ -4674,7 +4668,7 @@ def test_preload_from_files():
             numpy.testing.assert_array_equal(param_orig, param_clone_main)
 
         main = engine.network.layers["main_" + layer_name]
-        assert_equal(set(main.params.keys()), {"W", "b"})
+        assert set(main.params.keys()) == {"W", "b"}
 
     engine.finalize()
 
@@ -4799,8 +4793,8 @@ def test_preload_from_files_with_reuse():
 
         main = engine.network.layers["main_" + layer_name]
         clone = engine.network.layers["clone_" + layer_name]
-        assert_equal(set(main.params.keys()), {"W", "b"})
-        assert_equal(set(clone.params.keys()), set())
+        assert set(main.params.keys()) == {"W", "b"}
+        assert set(clone.params.keys()) == set()
 
     engine.finalize()
 
@@ -4890,7 +4884,7 @@ def test_preload_from_files_ignore_missing():
             numpy.testing.assert_array_equal(param_orig, param_clone_main)
 
         main = engine.network.layers[layer_name]
-        assert_equal(set(main.params.keys()), {"W", "b"})
+        assert set(main.params.keys()) == {"W", "b"}
 
     engine.finalize()
 
@@ -5927,8 +5921,8 @@ def test_net_dict_diff():
         dim = FeatureDim("out", dim)
         return {"output": {"class": "linear", "activation": "sigmoid", "out_dim": dim}}
 
-    assert_equal(Engine._net_dict_diff(make_net_dict(13), make_net_dict(13)), [])
-    assert_not_equal(Engine._net_dict_diff(make_net_dict(13), make_net_dict(17)), [])
+    assert Engine._net_dict_diff(make_net_dict(13), make_net_dict(13)) == []
+    assert Engine._net_dict_diff(make_net_dict(13), make_net_dict(17)) != []
 
 
 if __name__ == "__main__":

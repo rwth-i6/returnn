@@ -144,7 +144,6 @@ def init(config_str, config_dataset, use_pretrain, epoch, verbosity):
     :param int verbosity:
     """
     rnn.init_better_exchook()
-    rnn.init_thread_join_hack()
     dataset_opts = None
     config_filename = None
     if config_str.strip().startswith("{"):

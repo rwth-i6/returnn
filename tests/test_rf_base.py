@@ -263,6 +263,30 @@ def test_dim_value():
     run_model(extern_data, lambda *, epoch, step: _Net(), _forward_step)
 
 
+def test_dim_size_after_declare_same_as():
+    time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
+    extern_data = TensorDict(
+        {
+            "data": Tensor("data", [batch_dim, time_dim], dtype="float32"),
+        }
+    )
+    out_spatial_dim = Dim(None, name="out_spatial")
+
+    # noinspection PyShadowingNames
+    def _forward_step(**_kwargs):
+        assert time_dim.dyn_size_ext.raw_tensor is not None
+        enc_spatial_dim = time_dim * 2
+        assert enc_spatial_dim.dyn_size_ext.raw_tensor is not None
+        out_spatial_dim.declare_same_as(enc_spatial_dim)
+        assert enc_spatial_dim.dyn_size_ext.raw_tensor is not None
+        assert out_spatial_dim.dyn_size_ext.raw_tensor is not None
+        out_spatial_dim.dyn_size_ext.mark_as_default_output(shape=[batch_dim])
+
+    # Running it twice can trigger some weird behavior in Dim.declare_same_as.
+    run_model(extern_data, lambda **_kwargs: rf.Module(), _forward_step, test_tensorflow=False)
+    run_model(extern_data, lambda **_kwargs: rf.Module(), _forward_step, test_tensorflow=False)
+
+
 def test_dim_mask():
     time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
     in_dim = Dim(7, name="in")
@@ -562,6 +586,76 @@ def test_weight_noise():
     conv(rf.random_normal([time_dim, in_dim]), in_spatial_dim=time_dim)
 
 
+def test_ctc_loss():
+    time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
+    target_time_dim = Dim(Tensor("target_time", [batch_dim], dtype="int32"))
+    out_dim = Dim(11, name="classes")
+    out_wb_dim = out_dim + 1
+    extern_data = TensorDict(
+        {
+            "data": Tensor("data", [batch_dim, time_dim, out_wb_dim], dtype="float32", feature_dim=out_wb_dim),
+            "classes": Tensor("classes", [batch_dim, target_time_dim], dtype="int32", sparse_dim=out_dim),
+        }
+    )
+
+    def _forward_step(*, extern_data: TensorDict, **_kwargs):
+        logits = extern_data["data"]
+        targets = extern_data["classes"]
+        loss = rf.ctc_loss(
+            logits=logits,
+            targets=targets,
+            input_spatial_dim=time_dim,
+            targets_spatial_dim=target_time_dim,
+            blank_index=out_wb_dim.dimension - 1,
+        )
+        loss.mark_as_default_output()
+
+    run_model(
+        extern_data,
+        lambda **_kwargs: rf.Module(),
+        _forward_step,
+        dyn_dim_min_sizes={time_dim: 4, target_time_dim: 2},
+        dyn_dim_max_sizes={time_dim: 11, target_time_dim: 5},
+    )
+
+
+def test_ctc_loss_broadcast():
+    branch_dim = Dim(3, name="branch")
+    time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
+    target_time_dim = Dim(Tensor("target_time", [batch_dim], dtype="int32"))
+    out_dim = Dim(11, name="classes")
+    out_wb_dim = out_dim + 1
+    extern_data = TensorDict(
+        {
+            "data": Tensor(
+                "data", [batch_dim, branch_dim, time_dim, out_wb_dim], dtype="float32", feature_dim=out_wb_dim
+            ),
+            "classes": Tensor("classes", [batch_dim, target_time_dim], dtype="int32", sparse_dim=out_dim),
+        }
+    )
+
+    def _forward_step(*, extern_data: TensorDict, **_kwargs):
+        logits = extern_data["data"]
+        targets = extern_data["classes"]
+        loss = rf.ctc_loss(
+            logits=logits,
+            targets=targets,
+            input_spatial_dim=time_dim,
+            targets_spatial_dim=target_time_dim,
+            blank_index=out_wb_dim.dimension - 1,
+        )
+        loss.mark_as_default_output()
+
+    run_model(
+        extern_data,
+        lambda **_kwargs: rf.Module(),
+        _forward_step,
+        test_tensorflow=False,
+        dyn_dim_min_sizes={time_dim: 4, target_time_dim: 2},
+        dyn_dim_max_sizes={time_dim: 11, target_time_dim: 5},
+    )
+
+
 def test_edit_distance():
     import numpy
     import torch
@@ -675,3 +769,80 @@ def test_edit_distance():
         a_ = Tensor("a", [batch_dim, a_spatial_dim], dtype="int64", raw_tensor=torch.tensor(a_values))
         b_ = Tensor("b", [batch_dim, b_spatial_dim], dtype="int64", raw_tensor=torch.tensor(b_values))
         _check_edit_distance(a_, a_spatial_dim, b_, b_spatial_dim)
+
+
+def test_audio_log_mel_filterbank_from_raw_bfloat16():
+    time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
+    out_dim = Dim(80, name="freq")
+    extern_data = TensorDict(
+        {
+            "data": Tensor("data", [batch_dim, time_dim], dtype="float32"),
+        }
+    )
+
+    # noinspection PyShadowingNames
+    def _forward_step(*, extern_data: TensorDict, **_kwargs):
+        audio = extern_data["data"]
+        audio = rf.cast(audio, "bfloat16")
+        out, out_spatial_dim = rf.audio.log_mel_filterbank_from_raw(audio, in_spatial_dim=time_dim, out_dim=out_dim)
+        assert out.dtype == "bfloat16"
+        out = rf.cast(out, "float32")  # the test framework doesn't support bfloat16 currently due to Numpy...
+        out.mark_as_default_output(shape=(batch_dim, out_spatial_dim, out_dim))
+
+    run_model(
+        extern_data,
+        lambda **_kwargs: rf.Module(),
+        _forward_step,
+        dyn_dim_min_sizes={time_dim: 2000},
+        dyn_dim_max_sizes={time_dim: 3000},
+        test_tensorflow=False,
+    )
+
+
+def test_copy_compatible_to_empty():
+    import torch
+
+    beam_dim = Dim(3, name="beam")
+    hist_dim = Dim(0, name="hist")
+    hist_bc_dim = Dim(1, name="hist_bc")
+    extern_data = TensorDict(
+        {
+            "data": Tensor("data", [batch_dim, beam_dim], dtype="int32"),
+        }
+    )
+    out_template = Tensor("out_template", [batch_dim, beam_dim, hist_dim], dtype="int32")
+
+    # noinspection PyShadowingNames
+    def _forward_step(*, extern_data: TensorDict, **_kwargs):
+        data = extern_data["data"]
+
+        out = data.copy_compatible_to(out_template)
+        print("out:", out)
+        assert (
+            len(out.dims) == 3
+            and out.dims[:2] == (batch_dim, beam_dim)
+            and out.dims[2] != hist_dim
+            and out.dims[2].dimension == 1
+        )
+        out, _ = rf.replace_dim(out, in_dim=out.dims[2], out_dim=hist_bc_dim)  # just that we have consistent output
+        out.mark_as_output("out", shape=out.dims)
+
+        out_unbroadcast = data.copy_compatible_to(out_template, unbroadcast=True)
+        print("out_unbroadcast:", out_unbroadcast)
+        assert out_unbroadcast.dims == out_template.dims
+        if isinstance(out_unbroadcast.raw_tensor, torch.Tensor):
+            print("out_unbroadcast.raw_tensor:", out_unbroadcast.raw_tensor)
+            assert out_unbroadcast.raw_tensor.shape == (
+                batch_dim.get_dim_value(),
+                beam_dim.dimension,
+                hist_dim.dimension,
+            )
+        out_unbroadcast.mark_as_output("out_unbroadcast", shape=out_unbroadcast.dims)
+
+        out_raw = data.copy_compatible_to_dims_raw(out_template.dims)
+        if isinstance(out_raw, torch.Tensor):
+            print("out raw:", out_raw)
+            assert out_raw.shape == out.raw_tensor.shape == (batch_dim.get_dim_value(), beam_dim.dimension, 1)
+            torch.testing.assert_close(out_raw, out.raw_tensor)
+
+    run_model(extern_data, lambda **_kwargs: rf.Module(), _forward_step, test_tensorflow=False)

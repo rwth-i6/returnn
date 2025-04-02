@@ -112,6 +112,8 @@ def setup():
     for name, cur_func in _TensorOpOverloadsMixin.__dict__.items():  # just all of them
         if not callable(cur_func):
             continue
+        if name in {"__bool__"}:  # some exceptions
+            continue
         assert name.startswith("__") and name.endswith("__")
         native_func = getattr(mod, "_tensor_" + name[2:-2] + "_instancemethod")
         assert callable(native_func)

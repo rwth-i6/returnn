@@ -134,7 +134,7 @@ import returnn.tf.horovod as tf_horovod
 from returnn.log import log
 
 
-class DataProviderBase(object):
+class DataProviderBase:
     """
     Base class which wraps up the logic in this class. See derived classes.
     """
@@ -507,7 +507,7 @@ class FeedDictDataProvider(DataProviderBase):
         return self.batches.completed_frac()
 
 
-class InputContext(object):
+class InputContext:
     """
     This object will be passed to the dataset pipeline function
     (``dataset_pipeline`` in the config)

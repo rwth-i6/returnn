@@ -35,7 +35,6 @@ import torch
 from typing import Callable, Optional, Dict, List
 import argparse
 import os
-from random import random
 
 import _setup_returnn_env  # noqa
 from returnn.config import Config
@@ -63,7 +62,6 @@ def init(config_filename: str, checkpoint: str, log_verbosity: int, device: str)
     """
     assert os.path.exists(checkpoint), "The specified checkpoint doesn't exist."
     rnn.init_better_exchook()
-    rnn.init_thread_join_hack()
     assert os.path.exists(config_filename), "The specified config doesn't exist."
     print("Using config file %r." % config_filename)
     rnn.init_config(
@@ -163,7 +161,7 @@ def _get_model_outputs_raw_keys() -> List[str]:
     for k, v in model_outputs.data.items():
         model_outputs_raw_keys.append(k)
         for i, dim in enumerate(v.dims):
-            if dim.dyn_size_ext and dim.dyn_size_ext.dims:
+            if dim.dyn_size_ext is not None and dim.dyn_size_ext.dims:
                 model_outputs_raw_keys.append(f"{k}:size{i}")
     return model_outputs_raw_keys
 
@@ -204,7 +202,7 @@ def main():
 
     get_model_func = config.typed_value("get_model")
     assert get_model_func, "get_model() isn't specified in the config passed as a parameter."
-    sentinel_kw = {"__fwd_compatible_random_arg_%i" % int(random() * 100): None}
+    sentinel_kw = util.get_fwd_compat_kwargs()
     model = get_model_func(epoch=epoch, step=step, **sentinel_kw)
 
     is_rf_module = isinstance(model, rf.Module)
@@ -245,9 +243,9 @@ def main():
     for k, v in list(extern_data.data.items()) + list(model_outputs.data.items()):
         dynamic_axes[k] = {i: dim.name for i, dim in enumerate(v.dims) if dim.is_dynamic()}
         for i, dim in enumerate(v.dims):
-            if dim.dyn_size_ext and dim.dyn_size_ext.dims == ():
+            if dim.dyn_size_ext is not None and dim.dyn_size_ext.dims == ():
                 continue
-            if dim.dyn_size_ext:
+            if dim.dyn_size_ext is not None:
                 dynamic_axes[f"{k}:size{i}"] = {
                     j: dim_.name for j, dim_ in enumerate(dim.dyn_size_ext.dims) if dim_.is_dynamic()
                 }

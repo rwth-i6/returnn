@@ -99,6 +99,12 @@ def prepare_gradient_checkpointing():
             while copy_op_queue:
                 op = copy_op_queue[-1]
 
+                # Maybe got copied in the meantime.
+                if (id(op.graph), op.name) in copied_ops:
+                    copy_op_queue.pop(-1)
+                    new_op = copied_ops[(id(op.graph), op.name)]
+                    continue
+
                 try:
                     new_inputs = []
                     for x in op.inputs:
@@ -111,8 +117,8 @@ def prepare_gradient_checkpointing():
 
                 with tf_util.same_control_flow_ctx(op.outputs[0]), tf.name_scope(""):
                     new_op = tf_util.copy_op(op, inputs=new_inputs, name=op.name)
-                _set_wrapped_grad_func(new_op)
                 copied_ops[(id(op.graph), op.name)] = new_op
+                _set_wrapped_grad_func(new_op)
 
                 assert op is copy_op_queue[-1]
                 copy_op_queue.pop(-1)

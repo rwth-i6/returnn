@@ -48,7 +48,14 @@ def dump_dataset(options):
     dataset.init_seq_order(epoch=options.epoch, seq_list=seq_list)
     print("Dataset keys:", dataset.get_data_keys(), file=log.v3)
     print("Dataset target keys:", dataset.get_target_list(), file=log.v3)
-    assert options.key in dataset.get_data_keys()
+    print(
+        "Dataset labels:",
+        ", ".join(f"{k!r}: {v[:3]}... len {len(v)}" for k, v in dataset.labels.items()) or "None",
+        file=log.v3,
+    )
+    assert (
+        options.key in dataset.get_data_keys()
+    ), f"key {options.key!r} not in {dataset.get_data_keys()} (targets {dataset.get_target_list()})"
     max_seq_length = NumbersDict(options.max_seq_length)
     min_seq_length = NumbersDict(options.min_seq_length)
 
@@ -184,7 +191,11 @@ def dump_dataset(options):
                 numpy.savetxt("%s%i.data%s" % (options.dump_prefix, seq_idx, options.dump_postfix), data)
             elif options.type == "stdout":
                 print("seq %s tag:" % progress, dataset.get_tag(seq_idx))
-                print("seq %s data:" % progress, pretty_print(data))
+                extra = ""
+                if "data" in dataset.labels and len(dataset.labels["data"]) > 1:
+                    assert dataset.can_serialize_data("data")
+                    extra += " (%r)" % dataset.serialize_data(key="data", data=data)
+                print("seq %s data: %s%s" % (progress, pretty_print(data), extra))
             elif options.type == "print_shape":
                 print("seq %s data shape:" % progress, data.shape)
             elif options.type == "plot":
@@ -242,7 +253,6 @@ def init(options):
     """
     global dataset
     rnn.init_better_exchook()
-    rnn.init_thread_join_hack()
     dataset_dict = None
     config_filename = None
     config_str = options.returnn_config

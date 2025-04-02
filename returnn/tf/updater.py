@@ -112,7 +112,7 @@ def get_optimizer_class(class_name):
     return _OptimizerClassesDict[class_name.lower()]
 
 
-class Updater(object):
+class Updater:
     """
     This will create the :class:`tf.compat.v1.train.Optimizer` instance given the config
     and the update-op for all trainable vars.

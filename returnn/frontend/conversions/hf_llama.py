@@ -8,6 +8,7 @@ import returnn.frontend as rf
 from returnn.frontend.decoder.transformer import TransformerDecoder, TransformerDecoderLayer, FeedForwardGated
 
 if TYPE_CHECKING:
+    # noinspection PyUnresolvedReferences,PyPackageRequirements,PyProtectedMember
     from transformers.models.llama.modeling_llama import (
         LlamaModel,
         LlamaForCausalLM,
@@ -25,6 +26,8 @@ def import_params_hf_llama_to_rf_transformer_decoder(
     Import params from HF Llama model to RF :class:`TransformerDecoder`.
     """
     import torch
+
+    # noinspection PyUnresolvedReferences,PyPackageRequirements,PyProtectedMember
     from transformers.models.llama.modeling_llama import LlamaModel, LlamaForCausalLM, LlamaDecoderLayer
 
     print("HF Model:")
@@ -206,10 +209,10 @@ def import_params_hf_llama_att_to_rf_rotary_att(model_hf: LlamaAttention, model_
     """
     import torch
 
-    assert model_hf.num_heads == model_rf.num_heads.dimension
-    assert model_hf.hidden_size == model_rf.in_dim.dimension
-    dim = model_hf.hidden_size
-    nh = model_hf.num_heads
+    assert model_hf.config.num_attention_heads == model_rf.num_heads.dimension
+    assert model_hf.config.hidden_size == model_rf.in_dim.dimension
+    dim = model_hf.config.hidden_size
+    nh = model_hf.config.num_attention_heads
     hdim = dim // nh
 
     print("HF Model:")

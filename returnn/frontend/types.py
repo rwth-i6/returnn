@@ -3,19 +3,10 @@ Types
 """
 
 from __future__ import annotations
-from typing import Union, Type, TYPE_CHECKING, Sequence
+from typing import Union, Type, TYPE_CHECKING, Protocol, Sequence
 import numpy
 from returnn.tensor import Tensor, Dim, TensorDict
 import returnn.frontend as rf
-
-
-try:
-    from typing import Protocol
-except ImportError:
-    try:
-        from typing_extensions import Protocol
-    except ImportError:
-        Protocol = object
 
 
 __all__ = ["RawTensorTypes", "ItemKeyType", "Tensor", "Dim", "get_raw_tensor_type", "GetModelFunc", "StepFunc"]

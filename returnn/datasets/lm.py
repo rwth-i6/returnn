@@ -7,9 +7,10 @@ and some related helpers.
 
 from __future__ import annotations
 
-from typing import Optional, Union, Callable, List, Tuple, BinaryIO, cast
+from typing import Optional, Union, Any, Callable, Iterator, List, Tuple, Set, BinaryIO, Dict, cast, Generator
 import typing
 import os
+from io import IOBase
 import sys
 import time
 import re
@@ -46,8 +47,10 @@ class LmDataset(CachedDataset2):
     def __init__(
         self,
         corpus_file,
+        *,
         use_cache_manager=False,
         skip_empty_lines=True,
+        seq_list_file=None,
         orth_vocab=None,
         orth_symbols_file=None,
         orth_symbols_map_file=None,
@@ -65,6 +68,7 @@ class LmDataset(CachedDataset2):
         error_on_invalid_seq=True,
         add_delayed_seq_data=False,
         delayed_seq_data_start_symbol="[START]",
+        dtype: Optional[str] = None,
         **kwargs,
     ):
         """
@@ -89,6 +93,8 @@ class LmDataset(CachedDataset2):
         :param str|()->str|list[str]|()->list[str] corpus_file: Bliss XML or line-based txt. optionally can be gzip.
         :param bool use_cache_manager: uses :func:`returnn.util.basic.cf`
         :param bool skip_empty_lines: for line-based txt
+        :param str|list[str]|None seq_list_file: optional custom seq tags to use instead of the "line-%i" seq tags.
+            Pickle (.pkl) or txt (line-based seq tags). Optionally gzipped (.gz).
         :param dict[str,typing.Any]|Vocabulary orth_vocab:
         :param str|()->str|None orth_symbols_file: a text file containing a list of orthography symbols
         :param str|()->str|None orth_symbols_map_file: either a list of orth symbols, each line: "<symbol> <index>",
@@ -113,12 +119,14 @@ class LmDataset(CachedDataset2):
         :param bool add_delayed_seq_data: will add another data-key "delayed" which will have the sequence.
           delayed_seq_data_start_symbol + original_sequence[:-1].
         :param str delayed_seq_data_start_symbol: used for add_delayed_seq_data.
+        :param dtype: explicit dtype. if not given, automatically determined based on the number of labels.
         """
         super(LmDataset, self).__init__(**kwargs)
 
         self._corpus_file = corpus_file
         self._use_cache_manager = use_cache_manager
         self._skip_empty_lines = skip_empty_lines
+        self._seq_list_file = seq_list_file
         self._orth_symbols_file = orth_symbols_file
         self._orth_symbols_map_file = orth_symbols_map_file
         self._orth_replace_map_file = orth_replace_map_file
@@ -240,7 +248,9 @@ class LmDataset(CachedDataset2):
             assert not orth_replace_map_file
 
         num_labels = len(self.labels["data"])
-        if num_labels <= 2**7:
+        if dtype:
+            self.dtype = dtype
+        elif num_labels <= 2**7:
             self.dtype = "int8"
         elif num_labels <= 2**8:
             self.dtype = "uint8"
@@ -274,6 +284,8 @@ class LmDataset(CachedDataset2):
         self._orth_files: Optional[List[BinaryIO]] = None
         self._orth_mmaps = None
         self._orths_offsets_and_lens: Optional[List[Tuple[int, int]]] = None  # will be loaded in _lazy_init
+        self._seq_list: Optional[List[str]] = None
+        self._seq_index_by_tag: Optional[dict[str, int]] = None
 
         self.next_orth_idx = 0
         self.next_seq_idx = 0
@@ -301,6 +313,7 @@ class LmDataset(CachedDataset2):
         total_bytes_read = 0
         orths = []
         self._orths_offsets_and_lens = orths
+        lens_per_corpus_file = []
         start_time = time.time()
         last_print_time = start_time
 
@@ -339,8 +352,10 @@ class LmDataset(CachedDataset2):
                 last_print_time = time.time()
 
         # If a list of files is provided, concatenate all.
-        if not isinstance(corpus_file, list):
+        if isinstance(corpus_file, str):
             corpus_file = [corpus_file]
+        assert isinstance(corpus_file, (tuple, list))
+        prev_orth_len = 0
         for file_name in corpus_file:
             if self._use_cache_manager:
                 file_name = cf(file_name)
@@ -376,9 +391,30 @@ class LmDataset(CachedDataset2):
                     pos = next_new_line + 1
                     _maybe_report_status()
 
+            lens_per_corpus_file.append(len(orths) - prev_orth_len)
+            prev_orth_len = len(orths)
+
         if tmp_file is not None:
             tmp_file.flush()
             self._orth_mmaps[tmp_file_orth_files_index] = mmap.mmap(tmp_file.fileno(), 0, flags=mmap.MAP_PRIVATE)
+
+        if self._seq_list_file:
+            if isinstance(self._seq_list_file, str):
+                seq_list: List[str] = self._load_seq_list_file(
+                    self._seq_list_file, use_cache_manager=self._use_cache_manager
+                )
+            elif isinstance(self._seq_list_file, list):
+                assert len(self._seq_list_file) == len(lens_per_corpus_file)
+                seq_list: List[str] = []
+                for i, fn in enumerate(self._seq_list_file):
+                    seq_list_: List[str] = self._load_seq_list_file(fn, use_cache_manager=self._use_cache_manager)
+                    assert len(seq_list_) == lens_per_corpus_file[i]
+                    seq_list.extend(seq_list_)
+            else:
+                raise TypeError(f"invalid seq_list_file type {type(self._seq_list_file).__name__}")
+            assert isinstance(seq_list, list)
+            assert len(self._orths_offsets_and_lens) == len(seq_list)
+            self._seq_list = seq_list
 
         print(
             f"  done, loaded {len(self._orths_offsets_and_lens)} sequences,"
@@ -394,7 +430,16 @@ class LmDataset(CachedDataset2):
         """
         :rtype: list[str]
         """
-        return sorted(self.num_outputs.keys())
+
+        def _data_keys() -> Iterator[str]:
+            # return keys in alphabetically sorted
+            if self.add_delayed_seq_data:
+                yield "delayed"
+            yield "data"
+            for i in range(self.add_random_phone_seqs):
+                yield f"random{i}"
+
+        return list(_data_keys())
 
     def get_target_list(self):
         """
@@ -436,7 +481,16 @@ class LmDataset(CachedDataset2):
         if seq_order is not None:
             self.seq_order = seq_order
         elif seq_list is not None:
-            self.seq_order = [int(s[len(self._tag_prefix) :]) for s in seq_list]
+            # Might not be initialized. Can even do without init. Thus check seq_list_file.
+            if self._seq_list_file is None:
+                assert all(s.startswith(self._tag_prefix) for s in seq_list)
+                self.seq_order = [int(s[len(self._tag_prefix) :]) for s in seq_list]
+            else:
+                # Need seq list for this. Just do the lazy init now.
+                self._lazy_init()
+                if self._seq_index_by_tag is None:
+                    self._seq_index_by_tag = {tag: i for (i, tag) in enumerate(self._seq_list)}
+                self.seq_order = [self._seq_index_by_tag[s] for s in seq_list]
         elif epoch is None:
             self.seq_order = []
         else:
@@ -446,6 +500,7 @@ class LmDataset(CachedDataset2):
                 num_seqs=len(self._orths_offsets_and_lens),
                 get_seq_len=lambda i: self._orths_offsets_and_lens[i][2],
             )
+        self._num_seqs = len(self.seq_order)
         self.next_orth_idx = 0
         self.next_seq_idx = 0
         self.num_skipped = 0
@@ -454,8 +509,16 @@ class LmDataset(CachedDataset2):
             self.seq_gen.random_seed(self._get_random_seed_for_epoch(epoch))
         return True
 
+    def get_current_seq_order(self) -> List[int]:
+        """:return: seq order of current epoch"""
+        return self.seq_order
+
     def supports_seq_order_sorting(self) -> bool:
         """supports sorting"""
+        return True
+
+    def supports_sharding(self) -> bool:
+        """:return: whether this dataset supports sharding"""
         return True
 
     def get_total_num_seqs(self, *, fast: bool = False) -> int:
@@ -464,6 +527,14 @@ class LmDataset(CachedDataset2):
             raise Exception(f"{self} not initialized")
         self._lazy_init()
         return len(self._orths_offsets_and_lens)
+
+    def get_all_tags(self) -> List[str]:
+        """:return: all seq tags"""
+        self._lazy_init()
+        if self._seq_list is not None:
+            return self._seq_list
+        num_seqs = self.get_total_num_seqs()
+        return [self._tag_prefix + str(line_nr) for line_nr in range(num_seqs)]
 
     def _reduce_log_skipped_seqs(self):
         if isinstance(self.log_skipped_seqs, bool):
@@ -501,10 +572,11 @@ class LmDataset(CachedDataset2):
             # get sequence for the next index given by seq_order
             idx, offset, len_ = self._orths_offsets_and_lens[true_idx]
             orth = self._orth_mmaps[idx][offset : offset + len_].decode("utf8").strip()
-            seq_tag = self._tag_prefix + str(true_idx)
+            if self._seq_list is None:
+                seq_tag = self._tag_prefix + str(true_idx)
+            else:
+                seq_tag = self._seq_list[true_idx]
             self.next_orth_idx += 1
-            if orth == "</s>":
-                continue  # special sentence end symbol. empty seq, ignore.
 
             if self.orth_vocab is not None:
                 data = numpy.array(self.orth_vocab.get_seq(orth), dtype=self.dtype)
@@ -972,17 +1044,17 @@ class Lexicon:
     Lexicon. Map of words to phoneme sequences (can have multiple pronunciations).
     """
 
-    def __init__(self, filename):
+    def __init__(self, filename: str):
         """
-        :param str filename:
+        :param filename:
         """
         print("Loading lexicon", filename, file=log.v4)
         lex_file = open(filename, "rb")
         if filename.endswith(".gz"):
             lex_file = gzip.GzipFile(fileobj=lex_file)
-        self.phoneme_list = []  # type: typing.List[str]
-        self.phonemes = {}  # type: typing.Dict[str,typing.Dict[str]]  # phone -> {index, symbol, variation}
-        self.lemmas = {}  # type: typing.Dict[str,typing.Dict[str]]  # orth -> {orth, phons}
+        self.phoneme_list: List[str] = []
+        self.phonemes: Dict[str, Dict[str, Any]] = {}  # phone -> {index, symbol, variation}
+        self.lemmas: Dict[str, Dict[str, Any]] = {}  # orth -> {orth, phons}
 
         context = iter(ElementTree.iterparse(lex_file, events=("start", "end")))
         _, root = next(context)  # get root element
@@ -1015,8 +1087,17 @@ class Lexicon:
                             {"phon": e.text.strip(), "score": float(e.attrib.get("score", 0))}
                             for e in elem.findall("phon")
                         ]
-                        assert orth not in self.lemmas
-                        self.lemmas[orth] = {"orth": orth, "phons": phons}
+                        lemma = {"orth": orth, "phons": phons}
+                        if orth in self.lemmas:  # unexpected, already exists?
+                            if self.lemmas[orth] == lemma:
+                                print(f"Warning: lemma {lemma} duplicated in lexicon {filename}", file=log.v4)
+                            else:
+                                raise Exception(
+                                    f"orth {orth!r} lemma duplicated in lexicon {filename}."
+                                    f" old: {self.lemmas[orth]}, new: {lemma}"
+                                )
+                        else:  # lemma does not exist yet -- this is the expected case
+                            self.lemmas[orth] = lemma
                     root.clear()  # free memory
         print("Finished whole lexicon, %i lemmas" % len(self.lemmas), file=log.v4)
 
@@ -1026,12 +1107,12 @@ class StateTying:
     Clustering of (allophone) states into classes.
     """
 
-    def __init__(self, state_tying_file):
+    def __init__(self, state_tying_file: str):
         """
-        :param str state_tying_file:
+        :param state_tying_file:
         """
-        self.allo_map = {}  # allophone-state-str -> class-idx
-        self.class_map = {}  # class-idx -> set(allophone-state-str)
+        self.allo_map: Dict[str, int] = {}  # allophone-state-str -> class-idx
+        self.class_map: Dict[int, Set[str]] = {}  # class-idx -> set(allophone-state-str)
         lines = open(state_tying_file).read().splitlines()
         for line in lines:
             allo_str, class_idx_str = line.split()
@@ -1053,29 +1134,45 @@ class PhoneSeqGenerator:
 
     def __init__(
         self,
-        lexicon_file,
-        allo_num_states=3,
-        allo_context_len=1,
-        state_tying_file=None,
-        add_silence_beginning=0.1,
-        add_silence_between_words=0.1,
-        add_silence_end=0.1,
-        repetition=0.9,
-        silence_repetition=0.95,
+        *,
+        lexicon_file: str,
+        phoneme_vocab_file: Optional[str] = None,
+        allo_num_states: int = 3,
+        allo_context_len: int = 1,
+        state_tying_file: Optional[str] = None,
+        add_silence_beginning: float = 0.1,
+        add_silence_between_words: float = 0.1,
+        add_silence_end: float = 0.1,
+        repetition: float = 0.9,
+        silence_repetition: float = 0.95,
+        silence_lemma_orth: str = "[SILENCE]",
+        extra_begin_lemma: Optional[Dict[str, Any]] = None,
+        add_extra_begin_lemma: float = 1.0,
+        extra_end_lemma: Optional[Dict[str, Any]] = None,
+        add_extra_end_lemma: float = 1.0,
     ):
         """
-        :param str lexicon_file: lexicon XML file
-        :param int allo_num_states: how much HMM states per allophone (all but silence)
-        :param int allo_context_len: how much context to store left and right. 1 -> triphone
-        :param str | None state_tying_file: for state-tying, if you want that
-        :param float add_silence_beginning: prob of adding silence at beginning
-        :param float add_silence_between_words: prob of adding silence between words
-        :param float add_silence_end: prob of adding silence at end
-        :param float repetition: prob of repeating an allophone
-        :param float silence_repetition: prob of repeating the silence allophone
+        :param lexicon_file: lexicon XML file
+        :param phoneme_vocab_file: defines the vocab, label indices.
+            If not given, automatically inferred via all (sorted) phonemes from the lexicon.
+        :param allo_num_states: how much HMM states per allophone (all but silence)
+        :param allo_context_len: how much context to store left and right. 1 -> triphone
+        :param state_tying_file: for state-tying, if you want that
+        :param add_silence_beginning: prob of adding silence at beginning
+        :param add_silence_between_words: prob of adding silence between words
+        :param add_silence_end: prob of adding silence at end
+        :param repetition: prob of repeating an allophone
+        :param silence_repetition: prob of repeating the silence allophone
+        :param silence_lemma_orth: silence orth in the lexicon
+        :param extra_begin_lemma: {"phons": [{"phon": "P1 P2 ...", ...}, ...], ...}.
+            If given, then with prob add_extra_begin_lemma, this will be added at the beginning.
+        :param add_extra_begin_lemma:
+        :param extra_end_lemma: just like ``extra_begin_lemma``, but for the end
+        :param add_extra_end_lemma:
         """
         self.lexicon = Lexicon(lexicon_file)
         self.phonemes = sorted(self.lexicon.phonemes.keys(), key=lambda s: self.lexicon.phonemes[s]["index"])
+        self.phoneme_vocab = Vocabulary(phoneme_vocab_file, unknown_label=None) if phoneme_vocab_file else None
         self.rnd = Random(0)
         self.allo_num_states = allo_num_states
         self.allo_context_len = allo_context_len
@@ -1084,40 +1181,42 @@ class PhoneSeqGenerator:
         self.add_silence_end = add_silence_end
         self.repetition = repetition
         self.silence_repetition = silence_repetition
-        self.si_lemma = self.lexicon.lemmas["[SILENCE]"]
-        self.si_phone = self.si_lemma["phons"][0]["phon"]
-        if state_tying_file:
-            self.state_tying = StateTying(state_tying_file)
-        else:
-            self.state_tying = None
+        self.si_lemma: Dict[str, Any] = self.lexicon.lemmas[silence_lemma_orth]
+        self.si_phone: str = self.si_lemma["phons"][0]["phon"]
+        self.state_tying = StateTying(state_tying_file) if state_tying_file else None
+        if self.phoneme_vocab:
+            assert not self.state_tying
+        self.extra_begin_lemma = extra_begin_lemma
+        self.add_extra_begin_lemma = add_extra_begin_lemma
+        self.extra_end_lemma = extra_end_lemma
+        self.add_extra_end_lemma = add_extra_end_lemma
 
-    def random_seed(self, seed):
-        """
-        :param int seed:
-        """
+    def random_seed(self, seed: int):
+        """Reset RNG via given seed"""
         self.rnd.seed(seed)
 
-    def get_class_labels(self):
-        """
-        :rtype: list[str]
-        """
-        if self.state_tying:
+    def get_class_labels(self) -> List[str]:
+        """:return: class labels"""
+        if self.phoneme_vocab:
+            return self.phoneme_vocab.labels
+        elif self.state_tying:
             # State tying labels. Represented by some allophone state str.
             return ["|".join(sorted(self.state_tying.class_map[i])) for i in range(self.state_tying.num_classes)]
         else:
             # The phonemes are the labels.
             return self.phonemes
 
-    def seq_to_class_idxs(self, phones, dtype=None):
+    def seq_to_class_idxs(self, phones: List[AllophoneState], dtype: Optional[str] = None) -> numpy.ndarray:
         """
-        :param list[AllophoneState] phones: list of allophone states
-        :param str dtype: eg "int32"
-        :rtype: numpy.ndarray
-        :returns 1D numpy array with the indices
+        :param phones: list of allophone states
+        :param dtype: eg "int32". "int32" by default
+        :returns: 1D numpy array with the indices
         """
         if dtype is None:
             dtype = "int32"
-        if self.state_tying:
+        if self.phoneme_vocab:
+            return numpy.array([self.phoneme_vocab.label_to_id(a.id) for a in phones], dtype=dtype)
+        elif self.state_tying:
             # State tying indices.
             return numpy.array([self.state_tying.allo_map[a.format()] for a in phones], dtype=dtype)
         else:
@@ -1125,11 +1224,9 @@ class PhoneSeqGenerator:
             # It should not happen that we don't have some phoneme. The lexicon should not be inconsistent.
             return numpy.array([self.lexicon.phonemes[p.id]["index"] for p in phones], dtype=dtype)
 
-    def _iter_orth(self, orth):
-        """
-        :param str orth:
-        :rtype: typing.Iterator[typing.Dict[str]]
-        """
+    def _iter_orth_lemmas(self, orth: str) -> Generator[Dict[str, Any], None, None]:
+        if self.extra_begin_lemma and self.rnd.random() < self.add_extra_begin_lemma:
+            yield self.extra_begin_lemma
         if self.rnd.random() < self.add_silence_beginning:
             yield self.si_lemma
         symbols = list(orth.split())
@@ -1153,26 +1250,25 @@ class PhoneSeqGenerator:
                     yield self.si_lemma
         if self.rnd.random() < self.add_silence_end:
             yield self.si_lemma
+        if self.extra_end_lemma and self.rnd.random() < self.add_extra_end_lemma:
+            yield self.extra_end_lemma
 
-    def orth_to_phones(self, orth):
-        """
-        :param str orth:
-        :rtype: str
-        """
+    def orth_to_phones(self, orth: str) -> str:
+        """:return: space-separated phones"""
         phones = []
-        for lemma in self._iter_orth(orth):
+        for lemma in self._iter_orth_lemmas(orth):
             phon = self.rnd.choice(lemma["phons"])
-            phones += [phon["phon"]]
+            phones.append(phon["phon"])
         return " ".join(phones)
 
     # noinspection PyMethodMayBeStatic
-    def _phones_to_allos(self, phones):
+    def _phones_to_allos(self, phones: Iterator[str]) -> Generator[AllophoneState, None, None]:
         for p in phones:
             a = AllophoneState()
             a.id = p
             yield a
 
-    def _random_allo_silence(self, phone=None):
+    def _random_allo_silence(self, phone: Optional[str] = None) -> Generator[AllophoneState, None, None]:
         if phone is None:
             phone = self.si_phone
         while True:
@@ -1185,7 +1281,7 @@ class PhoneSeqGenerator:
             if self.rnd.random() >= self.silence_repetition:
                 break
 
-    def _allos_add_states(self, allos):
+    def _allos_add_states(self, allos: Iterator[AllophoneState]) -> Generator[AllophoneState, None, None]:
         for _a in allos:
             if _a.id == self.si_phone:
                 for a in self._random_allo_silence(_a.id):
@@ -1203,9 +1299,9 @@ class PhoneSeqGenerator:
                         if self.rnd.random() >= self.repetition:
                             break
 
-    def _allos_set_context(self, allos):
+    def _allos_set_context(self, allos: List[AllophoneState]) -> None:
         """
-        :param list[AllophoneState] allos:
+        :param allos: modify inplace, ``context_history``, ``context_future``
         """
         if self.allo_context_len == 0:
             return
@@ -1226,15 +1322,14 @@ class PhoneSeqGenerator:
             else:
                 ctx = []
 
-    def generate_seq(self, orth):
+    def generate_seq(self, orth: str) -> List[AllophoneState]:
         """
-        :param str orth: orthography as a str. orth.split() should give words in the lexicon
-        :rtype: list[AllophoneState]
-        :returns allophone state list. those will have repetitions etc
+        :param orth: orthography as a str. orth.split() should give words in the lexicon
+        :returns: allophone state list. those will have repetitions etc
         """
-        allos = []  # type: typing.List[AllophoneState]
-        for lemma in self._iter_orth(orth):
-            phon = self.rnd.choice(lemma["phons"])
+        allos: List[AllophoneState] = []
+        for lemma in self._iter_orth_lemmas(orth):
+            phon = self.rnd.choice(lemma["phons"])  # space-separated phones in phon["phon"]
             l_allos = list(self._phones_to_allos(phon["phon"].split()))
             l_allos[0].mark_initial()
             l_allos[-1].mark_final()
@@ -1243,13 +1338,13 @@ class PhoneSeqGenerator:
         allos = list(self._allos_add_states(allos))
         return allos
 
-    def _random_phone_seq(self, prob_add=0.8):
+    def _random_phone_seq(self, prob_add: float = 0.8) -> Generator[str, None, None]:
         while True:
             yield self.rnd.choice(self.phonemes)
             if self.rnd.random() >= prob_add:
                 break
 
-    def _random_allo_seq(self, prob_word_add=0.8):
+    def _random_allo_seq(self, prob_word_add: float = 0.8) -> List[AllophoneState]:
         allos = []
         while True:
             phones = self._random_phone_seq()
@@ -1262,15 +1357,14 @@ class PhoneSeqGenerator:
         self._allos_set_context(allos)
         return list(self._allos_add_states(allos))
 
-    def generate_garbage_seq(self, target_len):
+    def generate_garbage_seq(self, target_len: int) -> List[AllophoneState]:
         """
-        :param int target_len: len of the returned seq
-        :rtype: list[AllophoneState]
-        :returns allophone state list. those will have repetitions etc.
-        It will randomly generate a sequence of phonemes and transform that
-        into a list of allophones in a similar way than generate_seq().
+        :param target_len: len of the returned seq
+        :returns: allophone state list. those will have repetitions etc.
+            It will randomly generate a sequence of phonemes and transform that
+            into a list of allophones in a similar way than generate_seq().
         """
-        allos = []
+        allos: List[AllophoneState] = []
         while True:
             allos += self._random_allo_seq()
             # Add some silence so that left/right context is correct for further allophones.
@@ -1364,7 +1458,9 @@ class TranslationDataset(CachedDataset2):
             for prefix in self._main_data_key_map.keys()
             if not (prefix == self.target_file_prefix and search_without_reference)
         ]
-        self._data_files = {prefix: self._get_data_file(prefix) for prefix in self._files_to_read}
+        self._data_files: Dict[str, Union[None, BinaryIO, IOBase]] = {
+            prefix: self._get_data_file(prefix) for prefix in self._files_to_read
+        }
 
         self._data_keys = self._source_data_keys + self._target_data_keys
         self._data = {data_key: [] for data_key in self._data_keys}  # type: typing.Dict[str,typing.List[numpy.ndarray]]
@@ -1470,11 +1566,10 @@ class TranslationDataset(CachedDataset2):
             filename = cf(filename)
         return filename
 
-    def _get_data_file(self, prefix):
+    def _get_data_file(self, prefix) -> Union[BinaryIO, IOBase]:
         """
         :param str prefix: e.g. "source" or "target"
         :return: full filename
-        :rtype: io.FileIO
         """
         import os
 
@@ -1621,6 +1716,12 @@ class TranslationDataset(CachedDataset2):
         :rtype: bool
         """
         return True  # all is sparse
+
+    def get_data_dim(self, _key: str) -> int:
+        """
+        :return: the data dim of data entry `_key`
+        """
+        return self.num_inputs  # same dim for all keys
 
     def get_data_dtype(self, key):
         """

@@ -1,6 +1,6 @@
 [tool.black]
 line-length = 120
-target-version = ["py37"]  # https://github.com/rwth-i6/returnn/issues/487
+target-version = ["py38"]  # https://github.com/rwth-i6/returnn/issues/1326
 extend-exclude = '''
 /(
     # All Git submodules, see .gitmodules.
@@ -14,4 +14,4 @@ extend-exclude = '''
 '''
 
 [build-system]
-requires = ["setuptools", "numpy", "h5py"]
+requires = ["setuptools", "numpy"]

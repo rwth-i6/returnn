@@ -4,10 +4,10 @@ Attention
 
 from __future__ import annotations
 from typing import Tuple, Union, Optional, Sequence
-import weakref
 import logging
 from returnn.tensor import Tensor, Dim, single_step_dim
 import returnn.frontend as rf
+from returnn.frontend._cache import Cache
 
 
 __all__ = [
@@ -227,23 +227,28 @@ def _causal_self_att_step(
     state: Optional[CausalSelfAttentionState],
     self: rf.Module,
 ) -> Tuple[Tensor, Tensor, Dim, CausalSelfAttentionState]:
+    new_state = CausalSelfAttentionState()
     if axis == single_step_dim:
         assert state, f"{self}: need state for single step"
         k, hist_dim = rf.cum_concat_step(k, prev_accum=state.k_accum, axis=state.accum_axis)
         v, _ = rf.cum_concat_step(v, prev_accum=state.v_accum, out_spatial_dim=hist_dim, axis=state.accum_axis)
+        new_state.k_accum = k
+        new_state.v_accum = v
+        new_state.accum_axis = hist_dim
     else:
         if state and state.accum_axis.dimension != 0:
             raise NotImplementedError(  # need to concat ...
                 f"{self}: on sequence over {axis} with initial state {state} not implemented yet"
             )
+        # For further state usage with single_step_dim, keep using the original axis, not hist_dim,
+        # because the masking via hist_dim is not necessary for future single steps.
+        new_state.k_accum = k
+        new_state.v_accum = v
+        new_state.accum_axis = axis
         # See CumConcatLayer and https://github.com/rwth-i6/returnn/issues/391 for the idea.
         hist_dim = Dim(rf.range_over_dim(axis, device="cpu") + 1, name=f"{axis.description}:kv")
         k, _ = rf.replace_dim(k, in_dim=axis, out_dim=hist_dim)
         v, _ = rf.replace_dim(v, in_dim=axis, out_dim=hist_dim)
-    new_state = CausalSelfAttentionState()
-    new_state.k_accum = k
-    new_state.v_accum = v
-    new_state.accum_axis = hist_dim
     return k, v, hist_dim, new_state
 
 
@@ -325,7 +330,7 @@ class RotaryPosCausalSelfAttention(CausalSelfAttention):
         q = _apply_rope(
             q,
             (
-                rf.gather(pos_enc, axis=hist_dim, indices=hist_dim.dyn_size_ext - 1)
+                rf.gather(pos_enc, axis=hist_dim, indices=rf.last_frame_position_of_dim(hist_dim))
                 if axis == single_step_dim
                 else rf.replace_dim(pos_enc, in_dim=hist_dim, out_dim=axis)[0]
             ),
@@ -503,6 +508,8 @@ def _rel_pos_enc_shift(x: Tensor, axis: Dim, pos_emb_spatial_dim: Dim, hist_dim:
     :param hist_dim: T' (equal to T but separate dim)
     :return: [B,H,T,T']
     """
+    if pos_emb_spatial_dim == hist_dim:  # happens for single_step_dim
+        return x  # no shift needed
     batch_dims = x.remaining_dims((axis, pos_emb_spatial_dim))
     x_padded, (pos_emb_spatial_dim_,) = rf.pad(
         x, axes=[pos_emb_spatial_dim], padding=[(1, 0)], value=0.0
@@ -604,6 +611,7 @@ class RelPosCausalSelfAttention(CausalSelfAttention):
             pos_emb, pos_emb_spatial_dim = relative_positional_encoding(
                 query_spatial_dim=axis, key_value_spatial_dim=hist_dim, feat_dim=self.pos_emb_feat_dim
             )
+        # pos_emb_spatial_dim is 2*time1-1 if axis!=single_step_dim, else time1
         if self.pos_emb_dropout:
             pos_emb = rf.dropout(pos_emb, self.pos_emb_dropout)
         if self.linear_pos is not None:
@@ -850,7 +858,8 @@ def _make_indices(
     if query_spatial_dim == single_step_dim:
         indices = kv_pos_vec
         out_spatial_dim = key_value_spatial_dim
-        assert query_offset is None  # not sure if any custom query offset makes sense?
+        # not sure if any custom query offset makes sense?
+        assert query_offset is None or (isinstance(query_offset, int) and query_offset == 0)
         # Assume the kv are the accumulated history, and query is cur frame of it,
         # corresponding to the last frame of the kv.
         query_offset = key_value_spatial_dim.get_size_tensor() - 1
@@ -858,13 +867,24 @@ def _make_indices(
         query_spatial_dim_m1 = query_spatial_dim - 1
         q_pos_vec = rf.range_over_dim(query_spatial_dim_m1)  # [q_len-1]
 
+        # The masking in the output is quite custom (left+right masking), so our seq lens don't make sense,
+        # and might even cause to fail some tests (that e.g. max(q_seq_len+k_seq_len-1) == shape).
+        out_spatial_dim = Dim(
+            query_spatial_dim_m1.get_dim_value_tensor() + key_value_spatial_dim.get_dim_value_tensor(),
+            name=f"2*{query_spatial_dim.description}-1"
+            if (query_spatial_dim == key_value_spatial_dim)
+            else f"{query_spatial_dim.description}+{key_value_spatial_dim.description}-1",
+        )
+
         # We want to have all distances as in rf.combine_bc(kv_pos_vec, "-", q_pos_vec) with shape [q_len,kv_len].
         # We want to store only non-duplicates.
         # The min value is with kv_pos=0, q_pos=q_len-1: -(q_len-1)
         # The max value is with kv_pos=kv_len-1, q_pos=0: k_len-1
-        indices, out_spatial_dim = rf.concat(
+        indices, _ = rf.concat(
             (q_pos_vec - query_spatial_dim_m1.get_dim_value_tensor(), query_spatial_dim_m1),
             (kv_pos_vec, key_value_spatial_dim),
+            out_dim=out_spatial_dim,
+            handle_dynamic_dims=False,
         )
     if query_offset is not None:
         indices = indices - query_offset
@@ -872,7 +892,7 @@ def _make_indices(
     return indices, out_spatial_dim
 
 
-_relative_positional_encoding_cache = weakref.WeakKeyDictionary()  # run ctx -> (spatial_dim, feat_dim) -> enc
+_relative_positional_encoding_cache = Cache(128)
 
 
 def relative_positional_encoding(
@@ -904,10 +924,10 @@ def relative_positional_encoding(
     """
     if not dtype:
         dtype = rf.get_default_float_dtype()
-    cache = _relative_positional_encoding_cache.setdefault(rf.get_run_ctx(), {})
     cache_key = (query_spatial_dim, key_value_spatial_dim, feat_dim, query_offset, dtype)
-    if cache_key in cache:
-        return cache[cache_key]
+    cache_entry = _relative_positional_encoding_cache.get(cache_key)
+    if cache_entry is not None:
+        return cache_entry
     import math
 
     with rf.control_flow_ctx(None):
@@ -926,11 +946,11 @@ def relative_positional_encoding(
             allow_missing_implicit_dims=True,
         )
         emb.feature_dim = feat_dim
-        cache[cache_key] = emb, out_spatial_dim
+        _relative_positional_encoding_cache.set(cache_key, (emb, out_spatial_dim))
         return emb, out_spatial_dim
 
 
-_sinusoidal_positional_encoding_cache = weakref.WeakKeyDictionary()  # run ctx -> (spatial_dim, feat_dim) -> enc
+_sinusoidal_positional_encoding_cache = Cache(128)  # (spatial_dim, feat_dim) -> enc
 
 
 def sinusoidal_positional_encoding(
@@ -962,10 +982,10 @@ def sinusoidal_positional_encoding(
         dtype = rf.get_default_float_dtype()
     if not device:
         device = rf.get_default_device()
-    cache = _sinusoidal_positional_encoding_cache.setdefault(rf.get_run_ctx(), {})
     cache_key = (spatial_dim, feat_dim, offset, base, dtype, device)
-    if cache_key in cache:
-        return cache[cache_key]
+    cache_entry = _sinusoidal_positional_encoding_cache.get(cache_key)
+    if cache_entry is not None:
+        return cache_entry
     import math
 
     with rf.control_flow_ctx(None):
@@ -989,10 +1009,11 @@ def sinusoidal_positional_encoding(
         arg, feat_dim_ = rf.replace_dim(arg, in_dim=feat_dim_, out_dim=feat_dim)
         emb = rf.sin(arg)
         emb.verify_out_shape(
-            {spatial_dim, feat_dim} if spatial_dim != single_step_dim else {feat_dim}, allow_missing_implicit_dims=True
+            {feat_dim} | indices.dims_set | ({spatial_dim} if spatial_dim != single_step_dim else set()),
+            allow_missing_implicit_dims=True,
         )
         emb.feature_dim = feat_dim
-        cache[cache_key] = emb
+        _sinusoidal_positional_encoding_cache.set(cache_key, emb)
         return emb
 
 

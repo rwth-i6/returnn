@@ -23,14 +23,14 @@ jobs:
           - 2.10.0
 
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@v4
 
-    - uses: actions/setup-python@v4
+    - uses: actions/setup-python@v5
       with:
         python-version: ${{ matrix.python-version }}
 
     - name: Cache dependencies
-      uses: actions/cache@v2
+      uses: actions/cache@v4
       with:
         path: |
           ~/.cache
@@ -45,17 +45,15 @@ jobs:
         echo "Python ${{matrix.python-version}}"
         echo "pip: $(type pip)"
 
-        pip install --user --upgrade pip setuptools wheel
-        pip install --user typing  # needed for Python 2 in some cases
+        pip install --user --progress-bar=off --upgrade pip setuptools wheel
 
-        pip install --user pytest
-        pip install --user nose
+        pip install --user --progress-bar=off pytest
 
-        pip install --user dm-tree h5py typing
+        pip install --user --progress-bar=off dm-tree h5py
         pip install --user --progress-bar=off "numpy<2"
         pip install --user --progress-bar=off scipy  # for some tests
 
-        pip install --user --upgrade --progress-bar=off torch==${{ matrix.torch-version }}
+        pip install --user --progress-bar=off --upgrade torch==${{ matrix.torch-version }}
 
         # Retry several times in case download breaks. https://github.com/pypa/pip/issues/4796
         for ((i=0; i<3; i++)); do
@@ -77,7 +75,7 @@ jobs:
         python -c "import tensorflow as tf; assert tf.__version__ == '${{ matrix.tf-version }}'"
 
     - name: Cache PyCharm
-      uses: actions/cache@v2
+      uses: actions/cache@v4
       with:
         path: |
           ~/.cache/JetBrains
@@ -93,7 +91,7 @@ jobs:
       fail-fast: false
       matrix:
         python-version:
-          - 3.7
+          - 3.8
         action:
           - TEST=Dataset
           - TEST=fork_exec
@@ -111,14 +109,14 @@ jobs:
           - TEST=Util
 
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@v4
 
-    - uses: actions/setup-python@v4
+    - uses: actions/setup-python@v5
       with:
         python-version: ${{ matrix.python-version }}
 
     - name: Cache dependencies
-      uses: actions/cache@v2
+      uses: actions/cache@v4
       with:
         path: |
           ~/.cache
@@ -134,12 +132,8 @@ jobs:
         echo "pip: $(type pip)"
 
         pip install --user --upgrade pip setuptools wheel
-        pip install --user typing  # needed for Python 2 in some cases
 
         pip install --user pytest
-
-        # Install nose anyway because we currently use some of its helper functions.
-        pip install --user nose
 
         pip install --user --progress-bar=off -r requirements.txt
 
@@ -162,7 +156,7 @@ jobs:
       fail-fast: false
       matrix:
         python-version:
-          - 3.7
+          - 3.8
         tf-version:
           - 2.10.0
         action:
@@ -178,34 +172,22 @@ jobs:
           - TEST=TFUtil
           - TEST=tools
         include:
-          - action: TEST=TFUtil
-            python-version: 3.7
-            tf-version: 1.15.3
           - action: TEST=TFEngine
-            python-version: 3.7
-            tf-version: 1.15.3
-          - action: TEST=TFEngine
-            python-version: 3.7
+            python-version: 3.8
             tf-version: 2.3.0
-          - action: TEST=TFNativeOp
-            python-version: 3.7
-            tf-version: 1.14.0
-          - action: TEST=TFNetworkSigProcLayer
-            python-version: 3.7
-            tf-version: 1.15.3
-          - action: TEST=demos
-            python-version: 3.7
+          - action: TEST=demos RETURNN_DISABLE_TORCH=1
+            python-version: 3.8
             tf-version: 2.3.0
 
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@v4
 
-    - uses: actions/setup-python@v4
+    - uses: actions/setup-python@v5
       with:
         python-version: ${{ matrix.python-version }}
 
     - name: Cache dependencies
-      uses: actions/cache@v2
+      uses: actions/cache@v4
       with:
         path: |
           ~/.cache
@@ -220,15 +202,13 @@ jobs:
         echo "Python ${{matrix.python-version}}"
         echo "pip: $(type pip)"
 
-        pip install --user --upgrade pip setuptools wheel
-        pip install --user typing  # needed for Python 2 in some cases
+        pip install --user --progress-bar=off --upgrade pip setuptools wheel
 
-        pip install --user pytest
+        pip install --user --progress-bar=off pytest
 
-        # Install nose anyway because we currently use some of its helper functions.
-        pip install --user nose
+        pip install --user --progress-bar=off --upgrade dm-tree h5py
 
-        if [[ "${{matrix.tf-version}}" == 2.[0123].* || "${{matrix.tf-version}}" == 1.* ]]; then
+        if [[ "${{matrix.tf-version}}" == 2.[0123].* ]]; then
           # Older TF needs older NumPy version.
           # https://github.com/rwth-i6/returnn/pull/1160#issuecomment-1284537803
           pip install --user numpy==1.19.5
@@ -245,8 +225,8 @@ jobs:
         fi
 
         pip install --user --progress-bar=off -r requirements.txt
-        pip install --user --progress-bar=off scipy  # for some tests
-        pip install --user --upgrade --progress-bar=off tensorflow==${{ matrix.tf-version }}
+        pip install --user --progress-bar=off --upgrade scipy  # for some tests
+        pip install --user --progress-bar=off --upgrade tensorflow==${{ matrix.tf-version }}
 
     - name: Test Python/Numpy/TF versions.
       run: |
@@ -280,16 +260,17 @@ jobs:
           - TEST=torch_frontend
           - TEST=torch_internal_frontend
           - TEST=torch_util
+          - TEST=threading
 
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@v4
 
-    - uses: actions/setup-python@v4
+    - uses: actions/setup-python@v5
       with:
         python-version: ${{ matrix.python-version }}
 
     - name: Cache dependencies
-      uses: actions/cache@v2
+      uses: actions/cache@v4
       with:
         path: |
           ~/.cache
@@ -304,18 +285,14 @@ jobs:
         echo "Python ${{matrix.python-version}}"
         echo "pip: $(type pip)"
 
-        pip install --user --upgrade pip setuptools wheel
-        pip install --user typing  # needed for Python 2 in some cases
+        pip install --user --progress-bar=off --upgrade pip setuptools wheel
 
-        pip install --user pytest
+        pip install --user --progress-bar=off pytest
 
-        # Install nose anyway because we currently use some of its helper functions.
-        pip install --user nose
-
-        pip install --user dm-tree h5py typing
+        pip install --user --progress-bar=off dm-tree h5py
         pip install --user --progress-bar=off "numpy<2"
         pip install --user --progress-bar=off scipy  # for some tests
-        pip install --user --upgrade --progress-bar=off torch==${{ matrix.torch-version }}
+        pip install --user --progress-bar=off --upgrade torch==${{ matrix.torch-version }}
         pip install --user --progress-bar=off onnx onnxruntime
         pip install --user --progress-bar=off lovely_tensors
 
@@ -368,19 +345,19 @@ jobs:
         include:
           # Some selected tests (but not all) with some other versions.
           - action: TEST=rf_base
-            python-version: 3.7
+            python-version: 3.8
             torch-version: 1.13.1
             tf-version: 2.10.0
 
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@v4
 
-    - uses: actions/setup-python@v4
+    - uses: actions/setup-python@v5
       with:
         python-version: ${{ matrix.python-version }}
 
     - name: Cache dependencies
-      uses: actions/cache@v2
+      uses: actions/cache@v4
       with:
         path: |
           ~/.cache
@@ -395,19 +372,15 @@ jobs:
         echo "Python ${{matrix.python-version}}"
         echo "pip: $(type pip)"
 
-        pip install --user --upgrade pip setuptools wheel
-        pip install --user typing  # needed for Python 2 in some cases
+        pip install --user --progress-bar=off --upgrade pip setuptools wheel
 
-        pip install --user pytest
+        pip install --user --progress-bar=off pytest
 
-        # Install nose anyway because we currently use some of its helper functions.
-        pip install --user nose
-
-        pip install --user dm-tree h5py typing
+        pip install --user --progress-bar=off dm-tree h5py
         pip install --user --progress-bar=off "numpy<2"
         pip install --user --progress-bar=off scipy  # for some tests
 
-        pip install --user --upgrade torch==${{ matrix.torch-version }}
+        pip install --user --progress-bar=off --upgrade torch==${{ matrix.torch-version }}
         pip install --user --progress-bar=off lovely_tensors
 
         if [[ "${{matrix.tf-version}}" == 2.10.* ]]; then

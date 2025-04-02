@@ -45,8 +45,17 @@ class ReturnnDatasetResetMpSharedEpochCallback:
     def __call__(self):
         # dataset is likely a copy of the original dataset, either in the main process or in a worker process
         # Use epoch_mp_shared to get the current epoch correctly in worked processes
-        epoch = self.epoch_mp_shared.value
+        epoch = self.epoch_mp_shared.value or None
         self.dataset.init_seq_order(epoch=epoch)
+
+
+class ReturnnDatasetResetNoOpCallback:
+    """
+    Can be used as reset_callback.
+    """
+
+    def __call__(self):
+        pass
 
 
 class ReturnnDatasetIterDataPipe(torch.utils.data.IterDataPipe):
@@ -67,7 +76,14 @@ class ReturnnDatasetIterDataPipe(torch.utils.data.IterDataPipe):
 
     def reset(self):
         """
-        :return:
+        This is called by PyTorch DataLoader mechanism once we create a new iterator over the DataLoader.
+        This happens at the beginning of each epoch.
+
+        (Note: The mechanism where ``reset()`` is actually called is very obfuscated in PyTorch.
+        As I understand it, there is a IterDataPipe metaclass (_IterDataPipeMeta)
+        which automatically registers a hook on ``__iter__`` via ``hook_iterator``.
+        Deep inside the complex logic of this hook, it calls ``_set_datapipe_valid_iterator_id``
+        which then calls ``reset()``.)
         """
         self._reset_callback()
 
@@ -75,14 +91,43 @@ class ReturnnDatasetIterDataPipe(torch.utils.data.IterDataPipe):
         """
         :return: generator providing data samples in the form of a dict data_key -> data
         """
+        # noinspection PyBroadException
+        try:
+            num_seqs = self._dataset.num_seqs
+        except Exception:  # might not work for all datasets
+            num_seqs = -1
+        num_seqs = numpy.array(num_seqs)
+        assert self._dataset.epoch is not None
+        epoch = numpy.array(self._dataset.epoch)
+
         try:
             data_keys = self._dataset.get_data_keys()
+            last_complete_frac = -1
 
             seq_index = 0
             while self._dataset.is_less_than_num_seqs(seq_index):
                 self._dataset.load_seqs(seq_index, seq_index + 1)
                 data = {data_key: self._dataset.get_data(seq_index, data_key) for data_key in data_keys}
                 data["seq_tag"] = str_to_numpy_array(self._dataset.get_tag(seq_index))
+                data["seq_idx"] = numpy.array(seq_index)
+
+                # It's slightly redundant to have the following data in each entry,
+                # but it's difficult to pass this back to the main proc otherwise.
+                data["epoch"] = epoch
+                data["num_seqs"] = num_seqs
+
+                complete_frac = self._dataset.get_complete_frac(seq_index, allow_only_lr_suitable=True)
+                if complete_frac is not None:
+                    assert 0.0 <= complete_frac <= 1.0, f"complete_frac must be in [0, 1], but got {complete_frac}"
+                    assert complete_frac >= last_complete_frac, (
+                        "complete_frac must be monotonically increasing, "
+                        f"but got {complete_frac} after {last_complete_frac}"
+                    )
+                else:
+                    complete_frac = -1
+                data["complete_frac"] = numpy.array(complete_frac, dtype=numpy.float32)
+                last_complete_frac = complete_frac
+
                 yield data
                 seq_index += 1
 

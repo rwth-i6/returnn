@@ -10,7 +10,6 @@ __author__ = "menne"
 
 import os
 import numpy as np
-import h5py
 from collections import deque
 from .cached2 import CachedDataset2
 from returnn.datasets.basic import DatasetSeq
@@ -181,6 +180,8 @@ class StereoHdfDataset(StereoDataset):
                         which should contain one path to an HDF file per line
                         :see: BundleFile.BundleFile
         """
+        import h5py
+
         self._filePaths = []
         self._fileHandlers = []
         if hdfFile.endswith(".bundle"):  # a bundle file containing a list of hdf files is given
@@ -348,7 +349,7 @@ class StereoHdfDataset(StereoDataset):
         elif targets.shape[1] == 1:
             targets = np.reshape(targets.astype(np.int32), (targets.shape[0],))
 
-        return DatasetSeq(seq_idx, inputFeatures, targets)
+        return DatasetSeq(seq_idx, inputFeatures, targets=targets)
 
     @staticmethod
     def _normalizeVector(v, mean, variance):
@@ -437,4 +438,4 @@ class DatasetWithTimeContext(StereoHdfDataset):
         targets = None
         if "classes" in originalSeq.get_data_keys():
             targets = originalSeq.get_data("classes")
-        return DatasetSeq(seq_idx, inputFeatures, targets)
+        return DatasetSeq(seq_idx, inputFeatures, targets=targets)

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Iterator, List, Dict
+from typing import Any, Iterator, List, Dict, Optional
 import os
 import sys
 import _setup_test_env  # noqa
@@ -10,7 +10,6 @@ import unittest
 import numpy
 import tempfile
 import contextlib
-from nose.tools import assert_equal, assert_is_instance, assert_in, assert_not_in, assert_true, assert_false
 from returnn.datasets.generating import Task12AXDataset, DummyDataset, DummyDatasetMultipleSequenceLength
 from returnn.engine.batch import Batch
 from returnn.datasets.basic import Dataset, DatasetSeq, init_dataset
@@ -18,12 +17,12 @@ from returnn.util.basic import NumbersDict
 from returnn.util import better_exchook
 
 
-def dummy_iter_dataset(dataset: Dataset) -> List[DatasetSeq]:
+def dummy_iter_dataset(dataset: Dataset, *, epoch: int = 1) -> List[DatasetSeq]:
     """
     :param Dataset dataset:
     :return: seqs
     """
-    dataset.init_seq_order(epoch=1)
+    dataset.init_seq_order(epoch=epoch)
     data_keys = dataset.get_data_keys()
     seq_idx = 0
     seqs = []
@@ -116,9 +115,9 @@ def test_iterate_seqs_no_chunking_1():
     dataset.chunk_size = 0
     dataset.init_seq_order(1)
     seqs = list(dataset.iterate_seqs())
-    assert_equal(len(seqs), 2)
-    assert_equal(seqs[0], (0, 0, 11))  # seq-idx, start-frame, end-frame
-    assert_equal(seqs[1], (1, 0, 11))
+    assert len(seqs) == 2
+    assert seqs[0] == (0, 0, 11)  # seq-idx, start-frame, end-frame
+    assert seqs[1] == (1, 0, 11)
 
 
 def test_iterate_seqs_chunking_1():
@@ -129,13 +128,13 @@ def test_iterate_seqs_chunking_1():
     seqs = list(dataset.iterate_seqs())
     for s in seqs:
         print(s)
-    assert_equal(len(seqs), 6)
-    assert_equal(seqs[0], (0, 0, 10))  # seq-idx, start-frame, end-frame
-    assert_equal(seqs[1], (0, 5, 11))
-    assert_equal(seqs[2], (0, 10, 11))
-    assert_equal(seqs[3], (1, 0, 10))
-    assert_equal(seqs[4], (1, 5, 11))
-    assert_equal(seqs[5], (1, 10, 11))
+    assert len(seqs) == 6
+    assert seqs[0] == (0, 0, 10)  # seq-idx, start-frame, end-frame
+    assert seqs[1] == (0, 5, 11)
+    assert seqs[2] == (0, 10, 11)
+    assert seqs[3] == (1, 0, 10)
+    assert seqs[4] == (1, 5, 11)
+    assert seqs[5] == (1, 10, 11)
 
 
 def test_iterate_seqs_chunking_varying_sequence_length():
@@ -148,15 +147,15 @@ def test_iterate_seqs_chunking_varying_sequence_length():
     seqs = list(dataset.iterate_seqs())
     for s in seqs:
         print(s)
-    assert_equal(len(seqs), 8)
-    assert_equal(seqs[0], (0, NumbersDict({"data": 0, "classes": 0}), NumbersDict({"data": 12, "classes": 6})))
-    assert_equal(seqs[1], (0, NumbersDict({"data": 6, "classes": 3}), NumbersDict({"data": 18, "classes": 9})))
-    assert_equal(seqs[2], (0, NumbersDict({"data": 12, "classes": 6}), NumbersDict({"data": 24, "classes": 12})))
-    assert_equal(seqs[3], (0, NumbersDict({"data": 18, "classes": 9}), NumbersDict({"data": 24, "classes": 12})))
-    assert_equal(seqs[4], (1, NumbersDict({"data": 0, "classes": 0}), NumbersDict({"data": 12, "classes": 6})))
-    assert_equal(seqs[5], (1, NumbersDict({"data": 6, "classes": 3}), NumbersDict({"data": 18, "classes": 9})))
-    assert_equal(seqs[6], (1, NumbersDict({"data": 12, "classes": 6}), NumbersDict({"data": 24, "classes": 12})))
-    assert_equal(seqs[7], (1, NumbersDict({"data": 18, "classes": 9}), NumbersDict({"data": 24, "classes": 12})))
+    assert len(seqs) == 8
+    assert seqs[0] == (0, NumbersDict({"data": 0, "classes": 0}), NumbersDict({"data": 12, "classes": 6}))
+    assert seqs[1] == (0, NumbersDict({"data": 6, "classes": 3}), NumbersDict({"data": 18, "classes": 9}))
+    assert seqs[2] == (0, NumbersDict({"data": 12, "classes": 6}), NumbersDict({"data": 24, "classes": 12}))
+    assert seqs[3] == (0, NumbersDict({"data": 18, "classes": 9}), NumbersDict({"data": 24, "classes": 12}))
+    assert seqs[4] == (1, NumbersDict({"data": 0, "classes": 0}), NumbersDict({"data": 12, "classes": 6}))
+    assert seqs[5] == (1, NumbersDict({"data": 6, "classes": 3}), NumbersDict({"data": 18, "classes": 9}))
+    assert seqs[6] == (1, NumbersDict({"data": 12, "classes": 6}), NumbersDict({"data": 24, "classes": 12}))
+    assert seqs[7] == (1, NumbersDict({"data": 18, "classes": 9}), NumbersDict({"data": 24, "classes": 12}))
 
 
 def test_iterate_seqs_custom_chunking():
@@ -183,13 +182,13 @@ def test_iterate_seqs_custom_chunking():
     seqs = list(dataset.iterate_seqs())
     for s in seqs:
         print(s)
-    assert_equal(len(seqs), 6)
-    assert_equal(seqs[0], (0, 0, 10))  # seq-idx, start-frame, end-frame
-    assert_equal(seqs[1], (0, 5, 11))
-    assert_equal(seqs[2], (0, 10, 11))
-    assert_equal(seqs[3], (1, 0, 10))
-    assert_equal(seqs[4], (1, 5, 11))
-    assert_equal(seqs[5], (1, 10, 11))
+    assert len(seqs) == 6
+    assert seqs[0] == (0, 0, 10)  # seq-idx, start-frame, end-frame
+    assert seqs[1] == (0, 5, 11)
+    assert seqs[2] == (0, 10, 11)
+    assert seqs[3] == (1, 0, 10)
+    assert seqs[4] == (1, 5, 11)
+    assert seqs[5] == (1, 10, 11)
 
 
 def test_batches_recurrent_1():
@@ -202,7 +201,7 @@ def test_batches_recurrent_1():
     " :type: list[Batch] "
     while batch_gen.has_more():
         (batch,) = batch_gen.peek_next_n(1)
-        assert_is_instance(batch, Batch)
+        assert isinstance(batch, Batch)
         print("batch:", batch)
         print("batch seqs:", batch.seqs)
         all_batches.append(batch)
@@ -211,47 +210,47 @@ def test_batches_recurrent_1():
     # Each batch will have 1 batch-slice (max_seqs) and up to 10 frames (chunk_size).
     # For each seq, we get 3 chunks (chunk_step 5 for 11 frames).
     # Thus, 6 batches.
-    assert_equal(len(all_batches), 6)
+    assert len(all_batches) == 6
 
-    assert_equal(all_batches[0].start_seq, 0)
-    assert_equal(all_batches[0].end_seq, 1)  # exclusive
-    assert_equal(len(all_batches[0].seqs), 1)  # 1 BatchSeqCopyPart
-    assert_equal(all_batches[0].seqs[0].seq_idx, 0)
-    assert_equal(all_batches[0].seqs[0].seq_start_frame, 0)
-    assert_equal(all_batches[0].seqs[0].seq_end_frame, 10)
-    assert_equal(all_batches[0].seqs[0].frame_length, 10)
-    assert_equal(all_batches[0].seqs[0].batch_slice, 0)
-    assert_equal(all_batches[0].seqs[0].batch_frame_offset, 0)
+    assert all_batches[0].start_seq == 0
+    assert all_batches[0].end_seq == 1  # exclusive
+    assert len(all_batches[0].seqs) == 1  # 1 BatchSeqCopyPart
+    assert all_batches[0].seqs[0].seq_idx == 0
+    assert all_batches[0].seqs[0].seq_start_frame == 0
+    assert all_batches[0].seqs[0].seq_end_frame == 10
+    assert all_batches[0].seqs[0].frame_length == 10
+    assert all_batches[0].seqs[0].batch_slice == 0
+    assert all_batches[0].seqs[0].batch_frame_offset == 0
 
-    assert_equal(all_batches[1].start_seq, 0)
-    assert_equal(all_batches[1].end_seq, 1)  # exclusive
-    assert_equal(len(all_batches[1].seqs), 1)  # 1 BatchSeqCopyPart
-    assert_equal(all_batches[1].seqs[0].seq_idx, 0)
-    assert_equal(all_batches[1].seqs[0].seq_start_frame, 5)
-    assert_equal(all_batches[1].seqs[0].seq_end_frame, 11)
-    assert_equal(all_batches[1].seqs[0].frame_length, 6)
-    assert_equal(all_batches[1].seqs[0].batch_slice, 0)
-    assert_equal(all_batches[1].seqs[0].batch_frame_offset, 0)
+    assert all_batches[1].start_seq == 0
+    assert all_batches[1].end_seq == 1  # exclusive
+    assert len(all_batches[1].seqs) == 1  # 1 BatchSeqCopyPart
+    assert all_batches[1].seqs[0].seq_idx == 0
+    assert all_batches[1].seqs[0].seq_start_frame == 5
+    assert all_batches[1].seqs[0].seq_end_frame == 11
+    assert all_batches[1].seqs[0].frame_length == 6
+    assert all_batches[1].seqs[0].batch_slice == 0
+    assert all_batches[1].seqs[0].batch_frame_offset == 0
 
-    assert_equal(all_batches[2].start_seq, 0)
-    assert_equal(all_batches[2].end_seq, 1)  # exclusive
-    assert_equal(len(all_batches[2].seqs), 1)  # 1 BatchSeqCopyPart
-    assert_equal(all_batches[2].seqs[0].seq_idx, 0)
-    assert_equal(all_batches[2].seqs[0].seq_start_frame, 10)
-    assert_equal(all_batches[2].seqs[0].seq_end_frame, 11)
-    assert_equal(all_batches[2].seqs[0].frame_length, 1)
-    assert_equal(all_batches[2].seqs[0].batch_slice, 0)
-    assert_equal(all_batches[2].seqs[0].batch_frame_offset, 0)
+    assert all_batches[2].start_seq == 0
+    assert all_batches[2].end_seq == 1  # exclusive
+    assert len(all_batches[2].seqs) == 1  # 1 BatchSeqCopyPart
+    assert all_batches[2].seqs[0].seq_idx == 0
+    assert all_batches[2].seqs[0].seq_start_frame == 10
+    assert all_batches[2].seqs[0].seq_end_frame == 11
+    assert all_batches[2].seqs[0].frame_length == 1
+    assert all_batches[2].seqs[0].batch_slice == 0
+    assert all_batches[2].seqs[0].batch_frame_offset == 0
 
-    assert_equal(all_batches[3].start_seq, 1)
-    assert_equal(all_batches[3].end_seq, 2)  # exclusive
-    assert_equal(len(all_batches[3].seqs), 1)  # 1 BatchSeqCopyPart
-    assert_equal(all_batches[3].seqs[0].seq_idx, 1)
-    assert_equal(all_batches[3].seqs[0].seq_start_frame, 0)
-    assert_equal(all_batches[3].seqs[0].seq_end_frame, 10)
-    assert_equal(all_batches[3].seqs[0].frame_length, 10)
-    assert_equal(all_batches[3].seqs[0].batch_slice, 0)
-    assert_equal(all_batches[3].seqs[0].batch_frame_offset, 0)
+    assert all_batches[3].start_seq == 1
+    assert all_batches[3].end_seq == 2  # exclusive
+    assert len(all_batches[3].seqs) == 1  # 1 BatchSeqCopyPart
+    assert all_batches[3].seqs[0].seq_idx == 1
+    assert all_batches[3].seqs[0].seq_start_frame == 0
+    assert all_batches[3].seqs[0].seq_end_frame == 10
+    assert all_batches[3].seqs[0].frame_length == 10
+    assert all_batches[3].seqs[0].batch_slice == 0
+    assert all_batches[3].seqs[0].batch_frame_offset == 0
 
     # ...
 
@@ -263,7 +262,7 @@ def test_batches_non_recurrent_1():
     all_batches = []  # type: list[Batch]
     while batch_gen.has_more():
         (batch,) = batch_gen.peek_next_n(1)
-        assert_is_instance(batch, Batch)
+        assert isinstance(batch, Batch)
         print("batch:", batch)
         print("batch seqs:", batch.seqs)
         all_batches.append(batch)
@@ -271,63 +270,63 @@ def test_batches_non_recurrent_1():
 
     # Each batch will have 5 frames (batch_size), not more, i.e. a single seq.
     # There are 2 * 11 frames in total, so 5 batches, because we concat the 2 seqs, in the non-recurrent case.
-    assert_equal(len(all_batches), 5)
+    assert len(all_batches) == 5
 
-    assert_equal(all_batches[0].start_seq, 0)
-    assert_equal(all_batches[0].end_seq, 1)  # exclusive
-    assert_equal(len(all_batches[0].seqs), 1)  # 1 BatchSeqCopyPart
-    assert_equal(all_batches[0].seqs[0].seq_idx, 0)
-    assert_equal(all_batches[0].seqs[0].seq_start_frame, 0)
-    assert_equal(all_batches[0].seqs[0].seq_end_frame, 5)
-    assert_equal(all_batches[0].seqs[0].frame_length, 5)
-    assert_equal(all_batches[0].seqs[0].batch_slice, 0)
-    assert_equal(all_batches[0].seqs[0].batch_frame_offset, 0)
+    assert all_batches[0].start_seq == 0
+    assert all_batches[0].end_seq == 1  # exclusive
+    assert len(all_batches[0].seqs) == 1  # 1 BatchSeqCopyPart
+    assert all_batches[0].seqs[0].seq_idx == 0
+    assert all_batches[0].seqs[0].seq_start_frame == 0
+    assert all_batches[0].seqs[0].seq_end_frame == 5
+    assert all_batches[0].seqs[0].frame_length == 5
+    assert all_batches[0].seqs[0].batch_slice == 0
+    assert all_batches[0].seqs[0].batch_frame_offset == 0
 
-    assert_equal(all_batches[1].start_seq, 0)
-    assert_equal(all_batches[1].end_seq, 1)  # exclusive
-    assert_equal(len(all_batches[1].seqs), 1)  # 1 BatchSeqCopyPart
-    assert_equal(all_batches[1].seqs[0].seq_idx, 0)
-    assert_equal(all_batches[1].seqs[0].seq_start_frame, 5)
-    assert_equal(all_batches[1].seqs[0].seq_end_frame, 10)
-    assert_equal(all_batches[1].seqs[0].frame_length, 5)
-    assert_equal(all_batches[1].seqs[0].batch_slice, 0)
-    assert_equal(all_batches[1].seqs[0].batch_frame_offset, 0)
+    assert all_batches[1].start_seq == 0
+    assert all_batches[1].end_seq == 1  # exclusive
+    assert len(all_batches[1].seqs) == 1  # 1 BatchSeqCopyPart
+    assert all_batches[1].seqs[0].seq_idx == 0
+    assert all_batches[1].seqs[0].seq_start_frame == 5
+    assert all_batches[1].seqs[0].seq_end_frame == 10
+    assert all_batches[1].seqs[0].frame_length == 5
+    assert all_batches[1].seqs[0].batch_slice == 0
+    assert all_batches[1].seqs[0].batch_frame_offset == 0
 
-    assert_equal(all_batches[2].start_seq, 0)
-    assert_equal(all_batches[2].end_seq, 2)  # exclusive. now both seq 0 and 1
-    assert_equal(len(all_batches[2].seqs), 2)  # two copies, BatchSeqCopyPart
-    assert_equal(all_batches[2].seqs[0].seq_idx, 0)
-    assert_equal(all_batches[2].seqs[0].seq_start_frame, 10)
-    assert_equal(all_batches[2].seqs[0].seq_end_frame, 11)
-    assert_equal(all_batches[2].seqs[0].frame_length, 1)
-    assert_equal(all_batches[2].seqs[0].batch_slice, 0)
-    assert_equal(all_batches[2].seqs[0].batch_frame_offset, 0)
-    assert_equal(all_batches[2].seqs[1].seq_idx, 1)
-    assert_equal(all_batches[2].seqs[1].seq_start_frame, 0)
-    assert_equal(all_batches[2].seqs[1].seq_end_frame, 4)
-    assert_equal(all_batches[2].seqs[1].frame_length, 4)
-    assert_equal(all_batches[2].seqs[1].batch_slice, 0)
-    assert_equal(all_batches[2].seqs[1].batch_frame_offset, 1)
+    assert all_batches[2].start_seq == 0
+    assert all_batches[2].end_seq == 2  # exclusive. now both seq 0 and 1
+    assert len(all_batches[2].seqs) == 2  # two copies, BatchSeqCopyPart
+    assert all_batches[2].seqs[0].seq_idx == 0
+    assert all_batches[2].seqs[0].seq_start_frame == 10
+    assert all_batches[2].seqs[0].seq_end_frame == 11
+    assert all_batches[2].seqs[0].frame_length == 1
+    assert all_batches[2].seqs[0].batch_slice == 0
+    assert all_batches[2].seqs[0].batch_frame_offset == 0
+    assert all_batches[2].seqs[1].seq_idx == 1
+    assert all_batches[2].seqs[1].seq_start_frame == 0
+    assert all_batches[2].seqs[1].seq_end_frame == 4
+    assert all_batches[2].seqs[1].frame_length == 4
+    assert all_batches[2].seqs[1].batch_slice == 0
+    assert all_batches[2].seqs[1].batch_frame_offset == 1
 
-    assert_equal(all_batches[3].start_seq, 1)
-    assert_equal(all_batches[3].end_seq, 2)  # exclusive
-    assert_equal(len(all_batches[3].seqs), 1)  # 1 BatchSeqCopyPart
-    assert_equal(all_batches[3].seqs[0].seq_idx, 1)
-    assert_equal(all_batches[3].seqs[0].seq_start_frame, 4)
-    assert_equal(all_batches[3].seqs[0].seq_end_frame, 9)
-    assert_equal(all_batches[3].seqs[0].frame_length, 5)
-    assert_equal(all_batches[3].seqs[0].batch_slice, 0)
-    assert_equal(all_batches[3].seqs[0].batch_frame_offset, 0)
+    assert all_batches[3].start_seq == 1
+    assert all_batches[3].end_seq == 2  # exclusive
+    assert len(all_batches[3].seqs) == 1  # 1 BatchSeqCopyPart
+    assert all_batches[3].seqs[0].seq_idx == 1
+    assert all_batches[3].seqs[0].seq_start_frame == 4
+    assert all_batches[3].seqs[0].seq_end_frame == 9
+    assert all_batches[3].seqs[0].frame_length == 5
+    assert all_batches[3].seqs[0].batch_slice == 0
+    assert all_batches[3].seqs[0].batch_frame_offset == 0
 
-    assert_equal(all_batches[4].start_seq, 1)
-    assert_equal(all_batches[4].end_seq, 2)  # exclusive
-    assert_equal(len(all_batches[4].seqs), 1)  # 1 BatchSeqCopyPart
-    assert_equal(all_batches[4].seqs[0].seq_idx, 1)
-    assert_equal(all_batches[4].seqs[0].seq_start_frame, 9)
-    assert_equal(all_batches[4].seqs[0].seq_end_frame, 11)
-    assert_equal(all_batches[4].seqs[0].frame_length, 2)
-    assert_equal(all_batches[4].seqs[0].batch_slice, 0)
-    assert_equal(all_batches[4].seqs[0].batch_frame_offset, 0)
+    assert all_batches[4].start_seq == 1
+    assert all_batches[4].end_seq == 2  # exclusive
+    assert len(all_batches[4].seqs) == 1  # 1 BatchSeqCopyPart
+    assert all_batches[4].seqs[0].seq_idx == 1
+    assert all_batches[4].seqs[0].seq_start_frame == 9
+    assert all_batches[4].seqs[0].seq_end_frame == 11
+    assert all_batches[4].seqs[0].frame_length == 2
+    assert all_batches[4].seqs[0].batch_slice == 0
+    assert all_batches[4].seqs[0].batch_frame_offset == 0
 
 
 def test_batches_context_window():
@@ -344,7 +343,7 @@ def test_batches_context_window():
     all_batches = []  # type: list[Batch]
     while batch_gen.has_more():
         (batch,) = batch_gen.peek_next_n(1)
-        assert_is_instance(batch, Batch)
+        assert isinstance(batch, Batch)
         print("batch:", batch)
         print("batch seqs:", batch.seqs)
         all_batches.append(batch)
@@ -353,50 +352,50 @@ def test_batches_context_window():
     # Each batch will have 1 batch-slice (max_seqs) and up to 10 frames (chunk_size).
     # For each seq, we get 3 chunks (chunk_step 5 for 11 frames).
     # Thus, 3 batches.
-    assert_equal(len(all_batches), 3)
+    assert len(all_batches) == 3
     b0, b1, b2 = all_batches
     assert isinstance(b0, Batch)
     assert isinstance(b1, Batch)
     assert isinstance(b2, Batch)
 
-    assert_equal(b0.start_seq, 0)
-    assert_equal(b0.end_seq, 1)  # exclusive
-    assert_equal(len(b0.seqs), 1)  # 1 BatchSeqCopyPart
-    assert_equal(b0.seqs[0].seq_idx, 0)
-    assert_equal(b0.seqs[0].seq_start_frame["classes"], 0)
-    assert_equal(b0.seqs[0].seq_end_frame["classes"], 5)
-    assert_equal(b0.seqs[0].frame_length["classes"], 5)
-    assert_equal(b0.seqs[0].seq_start_frame["data"], 0 - ctx_left)
-    assert_equal(b0.seqs[0].seq_end_frame["data"], 5 + ctx_right)
-    assert_equal(b0.seqs[0].frame_length["data"], 5 + ctx_lr)
-    assert_equal(b0.seqs[0].batch_slice, 0)
-    assert_equal(b0.seqs[0].batch_frame_offset, 0)
+    assert b0.start_seq == 0
+    assert b0.end_seq == 1  # exclusive
+    assert len(b0.seqs) == 1  # 1 BatchSeqCopyPart
+    assert b0.seqs[0].seq_idx == 0
+    assert b0.seqs[0].seq_start_frame["classes"] == 0
+    assert b0.seqs[0].seq_end_frame["classes"] == 5
+    assert b0.seqs[0].frame_length["classes"] == 5
+    assert b0.seqs[0].seq_start_frame["data"] == 0 - ctx_left
+    assert b0.seqs[0].seq_end_frame["data"] == 5 + ctx_right
+    assert b0.seqs[0].frame_length["data"] == 5 + ctx_lr
+    assert b0.seqs[0].batch_slice == 0
+    assert b0.seqs[0].batch_frame_offset == 0
 
-    assert_equal(b1.start_seq, 0)
-    assert_equal(b1.end_seq, 1)  # exclusive
-    assert_equal(len(b1.seqs), 1)  # 1 BatchSeqCopyPart
-    assert_equal(b1.seqs[0].seq_idx, 0)
-    assert_equal(b1.seqs[0].seq_start_frame["classes"], 5)
-    assert_equal(b1.seqs[0].seq_end_frame["classes"], 10)
-    assert_equal(b1.seqs[0].frame_length["classes"], 5)
-    assert_equal(b1.seqs[0].seq_start_frame["data"], 5 - ctx_left)
-    assert_equal(b1.seqs[0].seq_end_frame["data"], 10 + ctx_right)
-    assert_equal(b1.seqs[0].frame_length["data"], 5 + ctx_lr)
-    assert_equal(b1.seqs[0].batch_slice, 0)
-    assert_equal(b1.seqs[0].batch_frame_offset, 0)
+    assert b1.start_seq == 0
+    assert b1.end_seq == 1  # exclusive
+    assert len(b1.seqs) == 1  # 1 BatchSeqCopyPart
+    assert b1.seqs[0].seq_idx == 0
+    assert b1.seqs[0].seq_start_frame["classes"] == 5
+    assert b1.seqs[0].seq_end_frame["classes"] == 10
+    assert b1.seqs[0].frame_length["classes"] == 5
+    assert b1.seqs[0].seq_start_frame["data"] == 5 - ctx_left
+    assert b1.seqs[0].seq_end_frame["data"] == 10 + ctx_right
+    assert b1.seqs[0].frame_length["data"] == 5 + ctx_lr
+    assert b1.seqs[0].batch_slice == 0
+    assert b1.seqs[0].batch_frame_offset == 0
 
-    assert_equal(b2.start_seq, 0)
-    assert_equal(b2.end_seq, 1)  # exclusive
-    assert_equal(len(b2.seqs), 1)  # 1 BatchSeqCopyPart
-    assert_equal(b2.seqs[0].seq_idx, 0)
-    assert_equal(b2.seqs[0].seq_start_frame["classes"], 10)
-    assert_equal(b2.seqs[0].seq_end_frame["classes"], 11)
-    assert_equal(b2.seqs[0].frame_length["classes"], 1)
-    assert_equal(b2.seqs[0].seq_start_frame["data"], 10 - ctx_left)
-    assert_equal(b2.seqs[0].seq_end_frame["data"], 11 + ctx_right)
-    assert_equal(b2.seqs[0].frame_length["data"], 1 + ctx_lr)
-    assert_equal(b2.seqs[0].batch_slice, 0)
-    assert_equal(b2.seqs[0].batch_frame_offset, 0)
+    assert b2.start_seq == 0
+    assert b2.end_seq == 1  # exclusive
+    assert len(b2.seqs) == 1  # 1 BatchSeqCopyPart
+    assert b2.seqs[0].seq_idx == 0
+    assert b2.seqs[0].seq_start_frame["classes"] == 10
+    assert b2.seqs[0].seq_end_frame["classes"] == 11
+    assert b2.seqs[0].frame_length["classes"] == 1
+    assert b2.seqs[0].seq_start_frame["data"] == 10 - ctx_left
+    assert b2.seqs[0].seq_end_frame["data"] == 11 + ctx_right
+    assert b2.seqs[0].frame_length["data"] == 1 + ctx_lr
+    assert b2.seqs[0].batch_slice == 0
+    assert b2.seqs[0].batch_frame_offset == 0
 
 
 def test_task12ax_window():
@@ -413,13 +412,13 @@ def test_task12ax_window():
     dataset2.init_seq_order(epoch=1)
     dataset1.load_seqs(0, 1)
     dataset2.load_seqs(0, 1)
-    assert_equal(dataset1.get_data_dim("data"), input_dim)
-    assert_equal(dataset2.get_data_dim("data"), input_dim * window)
+    assert dataset1.get_data_dim("data") == input_dim
+    assert dataset2.get_data_dim("data") == input_dim * window
     data1 = dataset1.get_data(0, "data")
     data2 = dataset2.get_data(0, "data")
     seq_len = data1.shape[0]
-    assert_equal(data1.shape, (seq_len, input_dim))
-    assert_equal(data2.shape, (seq_len, window * input_dim))
+    assert data1.shape == (seq_len, input_dim)
+    assert data2.shape == (seq_len, window * input_dim)
     data2a = data2.reshape(seq_len, window, input_dim)
     print("data1:")
     print(data1)
@@ -431,13 +430,13 @@ def test_task12ax_window():
     print(data2[0])
     print("data2a[0,0]:")
     print(data2a[0, 0])
-    assert_equal(list(data2a[0, 0]), [0] * input_dim)  # zero-padded left
-    assert_equal(list(data2a[0, 1]), list(data1[0]))
-    assert_equal(list(data2a[0, 2]), list(data1[1]))
-    assert_equal(list(data2a[1, 0]), list(data1[0]))
-    assert_equal(list(data2a[1, 1]), list(data1[1]))
-    assert_equal(list(data2a[1, 2]), list(data1[2]))
-    assert_equal(list(data2a[-1, 2]), [0] * input_dim)  # zero-padded right
+    assert list(data2a[0, 0]) == [0] * input_dim  # zero-padded left
+    assert list(data2a[0, 1]) == list(data1[0])
+    assert list(data2a[0, 2]) == list(data1[1])
+    assert list(data2a[1, 0]) == list(data1[0])
+    assert list(data2a[1, 1]) == list(data1[1])
+    assert list(data2a[1, 2]) == list(data1[2])
+    assert list(data2a[-1, 2]) == [0] * input_dim  # zero-padded right
 
 
 def test_get_seq_order():
@@ -906,8 +905,12 @@ def test_MapDatasetWrapper():
 def test_DistributeFilesDataset_distribute_evenly_by_size():
     from returnn.datasets.distrib_files import DistributeFilesDataset
 
-    def _test(sizes: List[int], partition_epoch: int, expected: List[List[int]]):
-        files = [f"file-{i}" for i in range(len(sizes))]
+    def _test(
+        sizes: List[int], partition_epoch: int, expected: List[List[int]], files_order: Optional[List[str]] = None
+    ):
+        files = files_order
+        if files is None:
+            files = [f"file-{i}" for i in range(len(sizes))]
         file_sizes = {f: s for f, s in zip(files, sizes)}
         res = DistributeFilesDataset._distribute_evenly_by_size(
             num_bins=partition_epoch, file_sizes=file_sizes, files_order=files
@@ -927,6 +930,7 @@ def test_DistributeFilesDataset_distribute_evenly_by_size():
         8,
         [[1, 1, 1, 1], [1, 1, 1, 1], [1, 1, 1, 1], [1, 1, 1], [1, 1, 1], [1, 1, 1], [1, 1, 1, 1], [1, 1, 1, 1]],
     )
+    _test([1], 5, [[1, 1]] * 5, files_order=["file"] * 10)  # test duplicate files
 
     def _test_stddev(sizes: List[int], partition_epoch: int, max_stddev_percent: float):
         avg_per_bin = sum(sizes) / partition_epoch
@@ -1117,7 +1121,7 @@ def test_PostprocessingDataset():
         assert count == 1
 
     # test laplace ordering
-    with create_ogg_zip_txt_only_dataset_mult_seqs() as sub_ds_opts:
+    with create_ogg_zip_txt_only_dataset_mult_seqs(num_seqs=6) as sub_ds_opts:
         from returnn.datasets.postprocessing import LaplaceOrdering
 
         ds_opts = {
@@ -1131,20 +1135,89 @@ def test_PostprocessingDataset():
         dataset.load_seqs(0, 6)
 
         prev_len = None
+        prev_complete_frac = None
         for i in range(3):
             classes = dataset.get_data(i, "classes")
+            complete_frac = dataset.get_complete_frac(i, allow_only_lr_suitable=True)
             assert prev_len is None or classes.shape[0] >= prev_len
+            assert prev_complete_frac is None or complete_frac >= prev_complete_frac
             prev_len = classes.shape[0]
+            prev_complete_frac = complete_frac
         for i in range(3, 6):
             classes = dataset.get_data(i, "classes")
-            assert prev_len is None or classes.shape[0] <= prev_len or i == 3
+            complete_frac = dataset.get_complete_frac(i, allow_only_lr_suitable=True)
+            assert classes.shape[0] <= prev_len or i == 3
+            assert complete_frac >= prev_complete_frac
             prev_len = classes.shape[0]
+            prev_complete_frac = complete_frac
+        assert prev_complete_frac == 1
 
     # test composition
     from returnn.datasets.postprocessing import Sequential
 
     func = Sequential(lambda x: x * 10, lambda y: y + 1)
     assert func(2) == 21
+
+
+def test_MultiEpochDataset():
+    from returnn.datasets.meta import MultiEpochDataset
+    from returnn.datasets.cached2 import CachedDataset2
+
+    in_dim, out_dim = 11, 7
+    seq_len = 5
+    inner_num_seqs = 10
+
+    class _MyDataset(CachedDataset2):
+        def __init__(self):
+            super().__init__()
+            self.num_inputs = in_dim
+            self.num_outputs = {"classes": out_dim}
+
+        # noinspection PyShadowingNames
+        def init_seq_order(self, epoch=None, seq_list=None, seq_order=None):
+            """init seq order"""
+            super().init_seq_order(epoch=epoch, seq_list=seq_list, seq_order=seq_order)
+            self._num_seqs = inner_num_seqs
+
+        def _collect_single_seq(self, seq_idx: int) -> Optional[DatasetSeq]:
+            if seq_idx >= self._num_seqs:
+                return None
+            return DatasetSeq(
+                seq_idx=seq_idx,
+                seq_tag=repr({"epoch": self.epoch, "seq_idx": seq_idx}),
+                features=numpy.zeros((seq_len, in_dim)),
+                targets={"classes": numpy.zeros((seq_len,), dtype=numpy.int32)},
+            )
+
+    inner_dataset = _MyDataset()
+    inner_dataset.initialize()
+
+    multi_epoch = 3
+    dataset = MultiEpochDataset(dataset=inner_dataset, multi_epoch=multi_epoch)
+    for outer_epoch in [1, 7]:
+        seqs = dummy_iter_dataset(dataset, epoch=outer_epoch)
+        assert len(seqs) == inner_num_seqs * multi_epoch
+        outer_seq_idx = 0
+        sub_ep = (outer_epoch - 1) * multi_epoch + 1  # 1-based
+        sub_seq_idx = 0
+        for seq in seqs:
+            assert outer_seq_idx == seq.seq_idx
+            assert seq.features["data"].shape == (seq_len, in_dim)
+            assert seq.features["classes"].shape == (seq_len,)
+            print("seq:", seq.seq_tag)
+            d = eval(seq.seq_tag)  # seq tag is dict repr
+            assert isinstance(d, dict)
+            assert d["epoch"] == sub_ep
+            assert d["seq_idx"] == sub_seq_idx
+            # Calc next expected values.
+            if sub_seq_idx >= inner_num_seqs - 1:
+                sub_seq_idx = 0
+                sub_ep += 1
+            else:
+                sub_seq_idx += 1
+            outer_seq_idx += 1
+        assert outer_seq_idx == len(seqs)
+        assert sub_ep == outer_epoch * multi_epoch + 1 and sub_seq_idx == 0
 
 
 if __name__ == "__main__":

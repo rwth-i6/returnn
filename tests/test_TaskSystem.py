@@ -6,7 +6,6 @@ from io import BytesIO
 from returnn.util.task_system import *
 import inspect
 import unittest
-from nose.tools import assert_equal, assert_is_instance
 from returnn.util import better_exchook
 
 better_exchook.replace_traceback_format_tb()
@@ -101,11 +100,11 @@ def test_pickle():
     obj = DemoClass()
     s = pickle_dumps(obj.method)
     inst = pickle_loads(s)
-    assert_equal(inst(), 42)
+    assert inst() == 42
 
 
 def test_pickle_unicode_str():
-    assert_equal(pickle_loads(pickle_dumps("â")), "â")
+    assert pickle_loads(pickle_dumps("â")) == "â"
 
 
 if __name__ == "__main__":

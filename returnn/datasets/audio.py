@@ -3,16 +3,16 @@ Datasets dealing with audio
 """
 
 from __future__ import annotations
-from typing import Optional, Any, List, Tuple, Dict
-import numpy
+from typing import Optional, Union, Any, Sequence, List, Tuple, Dict
 import typing
+import os
+import numpy
 
 from .basic import DatasetSeq
 from .cached2 import CachedDataset2
 from .util.feature_extraction import ExtractAudioFeatures
 from .util.vocabulary import Vocabulary
 from .util.strings import str_to_numpy_array
-from returnn.util.basic import PY3
 
 
 class OggZipDataset(CachedDataset2):
@@ -40,46 +40,59 @@ class OggZipDataset(CachedDataset2):
     however, it does not have to match the real duration in any way.
     """
 
+    _getnewargs_remap = dict(content_name="_names", **CachedDataset2._getnewargs_remap)
+
     def __init__(
         self,
-        path,
-        audio,
-        targets,
+        path: Union[str, Sequence[str]],
+        *,
+        content_name: Optional[Union[str, Sequence[str]]] = None,
+        resolve_symlink_for_name: bool = False,
+        audio: Optional[Dict[str, Any]],
+        targets: Union[Vocabulary, Dict[str, Any], None],
         targets_post_process=None,
-        use_cache_manager=False,
-        segment_file=None,
-        zip_audio_files_have_name_as_prefix=True,
-        fixed_random_subset=None,
-        fixed_random_subset_seed=42,
-        epoch_wise_filter=None,
+        use_cache_manager: bool = False,
+        segment_file: Optional[str] = None,
+        zip_audio_files_have_name_as_prefix: bool = True,
+        fixed_random_subset: Union[float, int, None] = None,
+        fixed_random_subset_seed: int = 42,
+        epoch_wise_filter: Optional[dict] = None,
         **kwargs,
     ):
         """
-        :param str|list[str] path: filename to zip
-        :param dict[str]|None audio: options for :class:`ExtractAudioFeatures`.
+        :param path: filename to zip
+        :param content_name: internal name of the dataset, which is used for filenames inside the ZIP.
+            If not given, the internal name is determined as ``os.path.splitext(os.path.basename(path))[0]``.
+        :param resolve_symlink_for_name: The internal name of the dataset, which is used for filenames inside the ZIP,
+            is determined as ``os.path.splitext(os.path.basename(path))[0]``
+            (if ``content_name`` is not given).
+            If this is True, we will resolve symlinks for the name first.
+        :param audio: options for :class:`ExtractAudioFeatures`.
             use {} for default. None means to disable.
-        :param Vocabulary|dict[str]|None targets: options for :func:`Vocabulary.create_vocab`
+        :param targets: options for :func:`Vocabulary.create_vocab`
             (e.g. :class:`BytePairEncoding`)
         :param str|list[str]|((str)->str)|None targets_post_process: :func:`get_post_processor_function`,
             applied on orth
-        :param bool use_cache_manager: uses :func:`returnn.util.basic.cf`
-        :param str|None segment_file: .txt or .gz text file containing sequence tags that will be used as whitelist
-        :param bool zip_audio_files_have_name_as_prefix:
-        :param float|int|None fixed_random_subset:
+        :param use_cache_manager: uses :func:`returnn.util.basic.cf`
+        :param segment_file: .txt or .gz text file containing sequence tags that will be used as whitelist.
+            Note: This is somewhat deprecated, as we also support ``seq_list_filter_file`` (via the base class),
+            which does the same but more universally.
+        :param zip_audio_files_have_name_as_prefix:
+        :param fixed_random_subset:
           Value in [0,1] to specify the fraction, or integer >=1 which specifies number of seqs.
           If given, will use this random subset. This will be applied initially at loading time,
           i.e. not dependent on the epoch.
           It uses the fixed fixed_random_subset_seed as seed, i.e. it's deterministic.
-        :param int fixed_random_subset_seed: Seed for drawing the fixed random subset, default 42
-        :param dict|None epoch_wise_filter: see init_seq_order
+        :param fixed_random_subset_seed: Seed for drawing the fixed random subset, default 42
+        :param epoch_wise_filter: see init_seq_order
         """
-        import os
         import zipfile
         import returnn.util.basic
         from .meta import EpochWiseFilter
 
         self._separate_txt_files = {}  # name -> filename
         self._path = path
+        self._resolve_symlink_for_name = resolve_symlink_for_name
         self._use_cache_manager = use_cache_manager
         self._zip_files: Optional[List[zipfile.ZipFile]] = None  # lazily loaded
         if (
@@ -88,21 +101,29 @@ class OggZipDataset(CachedDataset2):
             and os.path.isdir(path)
             and os.path.isfile(path + ".txt")
         ):
+            assert content_name is None  # not implemented
+            assert not resolve_symlink_for_name  # not implemented
             # Special case (mostly for debugging) to directly access the filesystem, not via zip-file.
             self.paths = [os.path.dirname(path)]
             self._names = [os.path.basename(path)]
             self._use_zip_files = False
             assert not use_cache_manager, "cache manager only for zip file"
         else:
-            if not isinstance(path, (tuple, list)):
+            if isinstance(path, str):
                 path = [path]
+            assert isinstance(path, (tuple, list))
+            if content_name is not None:
+                if isinstance(content_name, str):
+                    content_name = [content_name] * len(path)
+                assert isinstance(content_name, (tuple, list))
+                assert len(content_name) == len(path)
             self.paths = []
             self._names = []
-            for path_ in path:
+            for i, path_ in enumerate(path):
                 assert isinstance(path_, str)
-                name, ext = os.path.splitext(os.path.basename(path_))
-                if "." in name and ext == ".gz":
-                    name, ext = name[: name.rindex(".")], name[name.rindex(".") :] + ext
+                name, ext = _get_internal_ogg_zip_name_ext(path_, resolve_symlink=resolve_symlink_for_name)
+                if content_name is not None:
+                    name = content_name[i]
                 if use_cache_manager:
                     path_ = returnn.util.basic.cf(path_)
                 if ext == ".txt.gz":
@@ -146,7 +167,7 @@ class OggZipDataset(CachedDataset2):
         # However, some other code might expect that the labels are all strings, not bytes,
         # and the API requires the labels to be strings.
         # The code in Dataset.serialize_data tries to decode this case as utf8 (if possible).
-        self.labels["orth"] = [chr(i) for i in range(255)]
+        self.labels["orth"] = [chr(i) for i in range(256)]
         if self.targets:
             self.num_outputs["classes"] = [self.targets.num_labels, 1]
         if self.feature_extractor:
@@ -161,6 +182,7 @@ class OggZipDataset(CachedDataset2):
         else:
             assert isinstance(epoch_wise_filter, EpochWiseFilter)
             self.epoch_wise_filter = epoch_wise_filter
+        self._seq_index_by_tag: Optional[Dict[str, int]] = None
         self._seq_order = None  # type: typing.Optional[typing.Sequence[int]]
 
     def _read(self, filename, zip_index):
@@ -282,6 +304,11 @@ class OggZipDataset(CachedDataset2):
             segment_file_handle = open(segment_file)
             self.segments = set(segment_file_handle.read().splitlines())
 
+    def _lazy_init_seq_index_by_tag(self):
+        if self._seq_index_by_tag is not None:
+            return
+        self._seq_index_by_tag = {self._get_tag_from_info_dict(seq): i for i, seq in enumerate(self._data)}
+
     def init_seq_order(self, epoch=None, seq_list=None, seq_order=None):
         """
         If random_shuffle_epoch1, for epoch 1 with "random" ordering, we leave the given order as is.
@@ -321,12 +348,12 @@ class OggZipDataset(CachedDataset2):
         if seq_order is not None:
             self._seq_order = seq_order
         elif seq_list is not None:
-            seqs = {self._get_tag_from_info_dict(seq): i for i, seq in enumerate(self._data)}
+            self._lazy_init_seq_index_by_tag()
             for seq_tag in seq_list:
-                assert seq_tag in seqs, "Did not find all requested seqs. We have eg: %s" % (
+                assert seq_tag in self._seq_index_by_tag, "Did not find all requested seqs. We have eg: %s" % (
                     self._get_tag_from_info_dict(self._data[0]),
                 )
-            self._seq_order = [seqs[seq_tag] for seq_tag in seq_list]
+            self._seq_order = [self._seq_index_by_tag[seq_tag] for seq_tag in seq_list]
         else:
             num_seqs = len(self._data)
             self._seq_order = self.get_seq_order_for_epoch(epoch=epoch, num_seqs=num_seqs, get_seq_len=get_seq_len)
@@ -337,6 +364,10 @@ class OggZipDataset(CachedDataset2):
                 )
         self._num_seqs = len(self._seq_order)
 
+        return True
+
+    def supports_sharding(self) -> bool:
+        """:return: whether this dataset supports sharding"""
         return True
 
     def supports_seq_order_sorting(self) -> bool:
@@ -400,6 +431,21 @@ class OggZipDataset(CachedDataset2):
         self._lazy_init()
         return len(self._data)
 
+    def get_data_dim(self, key: str) -> int:
+        """:return: dim of data entry with `key`"""
+        if key == "data":
+            assert self.feature_extractor is not None
+            return self.feature_extractor.get_feature_dimension()
+        elif key == "classes":
+            assert self.targets is not None
+            return self.targets.num_labels
+        elif key == "raw":
+            return 0
+        elif key == "orth":
+            return 256
+        else:
+            raise ValueError(f"{self}: unknown data key: {key}")
+
     def get_data_dtype(self, key: str) -> str:
         """:return: dtype of data entry with `key`"""
         if key == "data":
@@ -439,7 +485,7 @@ class OggZipDataset(CachedDataset2):
 
     def is_data_sparse(self, key: str) -> bool:
         """:return: whether data entry with `key` is sparse"""
-        return key == "classes"
+        return key == "classes" or key == "orth"
 
     def _get_transcription(self, corpus_seq_idx: int):
         """
@@ -506,14 +552,20 @@ class OggZipDataset(CachedDataset2):
             features["classes"] = numpy.array(targets, dtype="int32")
         raw_txt = str_to_numpy_array(txt)
         orth = txt.encode("utf8")
-        if PY3:
-            assert isinstance(orth, bytes)
-            orth = list(orth)
-        else:
-            orth = list(map(ord, orth))
+        assert isinstance(orth, bytes)
+        orth = list(orth)
         orth = numpy.array(orth, dtype="uint8")
         return DatasetSeq(
             features={**features, "raw": raw_txt, "orth": orth},
             seq_idx=corpus_seq_idx,
             seq_tag=seq_tag,
         )
+
+
+def _get_internal_ogg_zip_name_ext(path: str, *, resolve_symlink: bool = False) -> Tuple[str, str]:
+    if resolve_symlink:
+        path = os.path.realpath(path)
+    name, ext = os.path.splitext(os.path.basename(path))
+    if "." in name and ext == ".gz":
+        name, ext = name[: name.rindex(".")], name[name.rindex(".") :] + ext
+    return name, ext

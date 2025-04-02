@@ -35,7 +35,7 @@ def test_conv1d():
         out, dim = model(extern_data["data"])
         out.mark_as_default_output(shape=(batch_dim, dim, out_dim))
 
-    run_model(extern_data, lambda *, epoch, step: _Net(), _forward_step)
+    run_model(extern_data, lambda *, epoch, step: _Net(), _forward_step, test_single_batch_entry=True)
 
 
 def test_functional_conv1d_same_padding():
@@ -69,7 +69,7 @@ def test_functional_conv1d_same_padding():
         out, dim = model(extern_data["data"])
         out.mark_as_default_output(shape=(batch_dim, dim, out_dim))
 
-    run_model(extern_data, lambda *, epoch, step: _Net(), _forward_step)
+    run_model(extern_data, lambda *, epoch, step: _Net(), _forward_step, test_single_batch_entry=True)
 
 
 def test_conv1d_same_padding():
@@ -95,7 +95,7 @@ def test_conv1d_same_padding():
         out, dim = model(extern_data["data"])
         out.mark_as_default_output(shape=(batch_dim, dim, out_dim))
 
-    run_model(extern_data, lambda *, epoch, step: _Net(), _forward_step)
+    run_model(extern_data, lambda *, epoch, step: _Net(), _forward_step, test_single_batch_entry=True)
 
 
 def test_functional_conv1d_stride_same_padding():
@@ -130,8 +130,14 @@ def test_functional_conv1d_stride_same_padding():
         out, dim = model(extern_data["data"])
         out.mark_as_default_output(shape=(batch_dim, dim, out_dim))
 
-    run_model(extern_data, lambda *, epoch, step: _Net(), _forward_step, dyn_dim_max_sizes={time_dim: 7})
-    run_model(extern_data, lambda *, epoch, step: _Net(), _forward_step, dyn_dim_max_sizes={time_dim: 9})
+    for t in [7, 8, 9]:
+        run_model(
+            extern_data,
+            lambda *, epoch, step: _Net(),
+            _forward_step,
+            dyn_dim_max_sizes={time_dim: t},
+            test_single_batch_entry=True,
+        )
 
 
 def test_conv1d_stride_same_padding():
@@ -157,7 +163,14 @@ def test_conv1d_stride_same_padding():
         out, dim = model(extern_data["data"])
         out.mark_as_default_output(shape=(batch_dim, dim, out_dim))
 
-    run_model(extern_data, lambda *, epoch, step: _Net(), _forward_step)
+    for t in [7, 9]:
+        run_model(
+            extern_data,
+            lambda *, epoch, step: _Net(),
+            _forward_step,
+            dyn_dim_max_sizes={time_dim: t},
+            test_single_batch_entry=True,
+        )
 
 
 def test_conv1d_same_out():
@@ -183,7 +196,7 @@ def test_conv1d_same_out():
         out = model(extern_data["data"])
         out.mark_as_default_output(shape=(batch_dim, time_dim, in_dim))
 
-    run_model(extern_data, lambda *, epoch, step: _Net(), _forward_step)
+    run_model(extern_data, lambda *, epoch, step: _Net(), _forward_step, test_single_batch_entry=True)
 
 
 def test_conv1d_depthwise():
@@ -217,7 +230,7 @@ def test_conv1d_depthwise():
         out, spatial_dim = model(extern_data["data"])
         out.mark_as_default_output(shape=(batch_dim, spatial_dim, out_dim))
 
-    run_model(extern_data, lambda *, epoch, step: _Net(), _forward_step)
+    run_model(extern_data, lambda *, epoch, step: _Net(), _forward_step, test_single_batch_entry=True)
 
 
 def test_maxpool1d_padding_valid():
@@ -238,7 +251,7 @@ def test_maxpool1d_padding_valid():
         out, out_spatial_dim = model(extern_data["data"], in_spatial_dim=time_dim)
         out.mark_as_default_output(shape=(batch_dim, out_spatial_dim, in_dim))
 
-    run_model(extern_data, lambda *, epoch, step: _Net(), _forward_step)
+    run_model(extern_data, lambda *, epoch, step: _Net(), _forward_step, test_single_batch_entry=True)
 
 
 def test_maxpool1d_padding_same():
@@ -259,30 +272,44 @@ def test_maxpool1d_padding_same():
         out, out_spatial_dim = model(extern_data["data"], in_spatial_dim=time_dim)
         out.mark_as_default_output(shape=(batch_dim, out_spatial_dim, in_dim))
 
-    run_model(extern_data, lambda *, epoch, step: _Net(), _forward_step, dyn_dim_max_sizes={time_dim: 7})
-    run_model(extern_data, lambda *, epoch, step: _Net(), _forward_step, dyn_dim_max_sizes={time_dim: 9})
+    for t in [7, 8, 9]:
+        run_model(
+            extern_data,
+            lambda *, epoch, step: _Net(),
+            _forward_step,
+            dyn_dim_max_sizes={time_dim: t},
+            test_single_batch_entry=True,
+        )
 
 
 def test_maxpool1d_stride_padding_same():
+    from returnn.util.math import ceil_div
+
     time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
     in_dim = Dim(7, name="in")
-    extern_data = TensorDict(
-        {
-            "data": Tensor("data", [batch_dim, time_dim, in_dim], dtype="float32"),
-        }
-    )
-
-    class _Net(rf.Module):
-        def __call__(self, x: rf.Tensor, *, in_spatial_dim: Dim) -> Tuple[Tensor, Dim]:
-            return rf.max_pool1d(x, pool_size=4, strides=3, padding="same", in_spatial_dim=in_spatial_dim)
+    pool_size = 4
+    strides = 3
+    extern_data = TensorDict({"data": Tensor("data", [batch_dim, time_dim, in_dim], dtype="float32")})
 
     # noinspection PyShadowingNames
-    def _forward_step(*, model: _Net, extern_data: TensorDict):
-        out, out_spatial_dim = model(extern_data["data"], in_spatial_dim=time_dim)
+    def _forward_step(*, extern_data: TensorDict, **_kwargs):
+        x = extern_data["data"]
+        out, out_spatial_dim = rf.max_pool1d(
+            x, pool_size=pool_size, strides=strides, padding="same", in_spatial_dim=time_dim
+        )
         out.mark_as_default_output(shape=(batch_dim, out_spatial_dim, in_dim))
 
-    run_model(extern_data, lambda *, epoch, step: _Net(), _forward_step, dyn_dim_max_sizes={time_dim: 7})
-    run_model(extern_data, lambda *, epoch, step: _Net(), _forward_step, dyn_dim_max_sizes={time_dim: 9})
+    for t in [7, 8, 9]:
+        out_d = run_model(
+            extern_data,
+            lambda **_kwargs: rf.Module(),
+            _forward_step,
+            dyn_dim_max_sizes={time_dim: t},
+            test_single_batch_entry=True,
+        )
+        out = out_d["output"]
+        out_spatial_dim = out.dims[1]
+        assert out_spatial_dim.get_dim_value() == ceil_div(t, strides)
 
 
 def test_maxpool1d_stride_border_cond():
@@ -311,6 +338,10 @@ def test_maxpool1d_stride_border_cond():
         # 2 means we get: ceildiv(2 - 6 + 1, 3) == -1.
         # So this checks that there is correctly a relu on the size.
         dyn_dim_min_sizes={time_dim: 2},
+        # Note: Currently not the single batch test because there is another problem with RF PT pool,
+        # which does not correctly handle this case. We get:
+        #   RuntimeError: max_pool1d() Invalid computed output size: -1
+        test_single_batch_entry=False,
     )
     out = out["output"]
     (out_spatial_dim,) = out.get_dyn_size_tags()
@@ -340,8 +371,14 @@ def test_maxpool1d_stride1_padding_same():
         out, out_spatial_dim = model(extern_data["data"], in_spatial_dim=time_dim)
         out.mark_as_default_output(shape=(batch_dim, out_spatial_dim, in_dim))
 
-    run_model(extern_data, lambda *, epoch, step: _Net(), _forward_step, dyn_dim_max_sizes={time_dim: 7})
-    run_model(extern_data, lambda *, epoch, step: _Net(), _forward_step, dyn_dim_max_sizes={time_dim: 9})
+    for t in [7, 8, 9]:
+        run_model(
+            extern_data,
+            lambda *, epoch, step: _Net(),
+            _forward_step,
+            dyn_dim_max_sizes={time_dim: t},
+            test_single_batch_entry=True,
+        )
 
 
 def test_avgpool1d_stride1_padding_same():
@@ -361,4 +398,31 @@ def test_avgpool1d_stride1_padding_same():
         out, _ = model(extern_data["data"], in_spatial_dim=time_dim)
         out.mark_as_default_output(shape=[batch_dim, time_dim])
 
-    run_model(extern_data, lambda *, epoch, step: _Net(), _forward_step)
+    run_model(extern_data, lambda *, epoch, step: _Net(), _forward_step, test_single_batch_entry=True)
+
+
+def test_avgpool1d_stride_padding_same():
+    time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
+    extern_data = TensorDict(
+        {
+            "data": Tensor("data", [batch_dim, time_dim], dtype="float32"),
+        }
+    )
+
+    class _Net(rf.Module):
+        def __call__(self, x: rf.Tensor, *, in_spatial_dim: Dim) -> Tuple[Tensor, Dim]:
+            return rf.pool1d(x, mode="avg", pool_size=4, strides=3, padding="same", in_spatial_dim=in_spatial_dim)
+
+    # noinspection PyShadowingNames
+    def _forward_step(*, model: _Net, extern_data: TensorDict):
+        out, out_spatial_dim = model(extern_data["data"], in_spatial_dim=time_dim)
+        out.mark_as_default_output(shape=[batch_dim, out_spatial_dim])
+
+    for t in [7, 8, 9]:
+        run_model(
+            extern_data,
+            lambda *, epoch, step: _Net(),
+            _forward_step,
+            dyn_dim_max_sizes={time_dim: t},
+            test_single_batch_entry=True,
+        )

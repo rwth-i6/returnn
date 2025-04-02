@@ -18,7 +18,7 @@ from returnn.tf.util.basic import OutputWithActivation, CustomUpdate, reuse_name
 from returnn.log import log
 
 
-class LayerBase(object):
+class LayerBase:
     """
     This is the base class for all layers.
     Every layer by default has a list of source layers `sources`
@@ -345,7 +345,7 @@ class LayerBase(object):
             self.__class__.__name__,
             self.network.get_absolute_name_prefix(),
             self.name,
-            self.output.get_description(with_name=False) if self.output else None,
+            self.output.get_description(with_name=False) if self.output is not None else None,
         )
 
     @classmethod
@@ -452,13 +452,13 @@ class LayerBase(object):
             if sources_data_list
             else None
         )
-        if sources_data and not sources_data.sparse and not out_type.get("sparse", False):
+        if sources_data is not None and not sources_data.sparse and not out_type.get("sparse", False):
             out_type.setdefault("dtype", sources_data.dtype)
         # You are supposed to set self.output.{batch_dim_axis,time_dim_axis} explicitly,
         # as well as check the inputs if they are as you would suggest.
         # However, a good default is often to use the same as the input.
         if all([k not in out_type for k in Data.SpecialAxesNames + ("dim_tags", "dims", "shape")]):
-            if sources_data:
+            if sources_data is not None:
                 out_type.setdefault("batch_dim_axis", sources_data.batch_dim_axis)
                 out_type.setdefault("time_dim_axis", sources_data.time_dim_axis)
                 if (
@@ -474,7 +474,7 @@ class LayerBase(object):
             elif network.is_inside_rec_layer() and None not in out_type.get("shape", ()):
                 out_type.setdefault("time_dim_axis", None)
         if "shape" not in out_type and "dim_tags" not in out_type and "dims" not in out_type:
-            if sources_data:
+            if sources_data is not None:
                 out_type.setdefault("version", sources_data.version)
                 if out_type.get("sparse", False) or out_type.get("sparse_dim", None):
                     out_type["dims"] = sources_data.dim_tags_sparse
@@ -499,14 +499,19 @@ class LayerBase(object):
                 else:
                     out_type.setdefault("shape", (out_type.get("dim", None),))
         # Note: No special handling for feature_dim_axis here for now...
-        if sources_data and sources_data.batch:
+        if sources_data is not None and sources_data.batch:
             out_type.setdefault("batch", sources_data.batch)
-        if sources_data and sources_data.beam:
+        if sources_data is not None and sources_data.beam:
             out_type.setdefault("beam", sources_data.beam)
         if out_dim:
             out_type.setdefault("dim", out_dim.dimension)  # e.g. needed when sparse
         output = Data(**out_type)
-        if not out_dim and sources_data and sources_data.feature_dim_or_sparse_dim and sources_data.dim == output.dim:
+        if (
+            not out_dim
+            and sources_data is not None
+            and sources_data.feature_dim_or_sparse_dim
+            and sources_data.dim == output.dim
+        ):
             if output.feature_dim_or_sparse_dim and output.feature_dim_or_sparse_dim.auto_generated:
                 # Special case: Input feature or sparse dim looks the same, so overtake it.
                 out_dim = sources_data.feature_dim_or_sparse_dim
@@ -643,7 +648,7 @@ class LayerBase(object):
             dyn_dim_tags_with_batch = [
                 dim_tag
                 for dim_tag in output.dim_tags
-                if dim_tag.dyn_size_ext
+                if dim_tag.dyn_size_ext is not None
                 and dim_tag.dyn_size_ext.have_batch_axis()
                 and dim_tag.dyn_size_ext.placeholder is not None
             ]
@@ -829,7 +834,7 @@ class LayerBase(object):
                     assert not out_shape, "out_shape %r must be empty if not a set" % (out_shape,)
                 out_shape = set(out_shape)
                 out_shape.add(OptionalDim(over_rec_time_dim))
-                if over_rec_time_dim.dyn_size_ext:
+                if over_rec_time_dim.dyn_size_ext is not None:
                     for tag in over_rec_time_dim.dyn_size_ext.dim_tags:
                         if tag not in [d.tag if isinstance(d, _MarkedDim) else d for d in out_shape]:
                             out_shape.add(OptionalDim(tag))
@@ -891,7 +896,7 @@ class LayerBase(object):
                 get_layer=get_layer,
                 _target_layers=target_layers,
             )
-            if not target_data:
+            if target_data is None:
                 # dummy value during template construction. this would be corrected later
                 return FeatureDim("dummy-unk-target-out", 1)
         out_dim = target_data.feature_dim_or_sparse_dim
@@ -2170,7 +2175,7 @@ class InternalLayer(LayerBase):
             f"({self.debug_type_name})" if self.debug_type_name else "",
             self.network.get_absolute_name_prefix(),
             self.name,
-            self.output.get_description(with_name=False) if self.output else None,
+            self.output.get_description(with_name=False) if self.output is not None else None,
         )
 
     @classmethod
@@ -2248,7 +2253,7 @@ class WrappedInternalLayer(InternalLayer):
             f"({self.debug_type_name})" if self.debug_type_name else "",
             self.network.get_absolute_name_prefix(),
             self.name,
-            self.output.get_description(with_name=False) if self.output else None,
+            self.output.get_description(with_name=False) if self.output is not None else None,
         )
 
     def get_base_absolute_name_scope_prefix(self):
@@ -2437,7 +2442,7 @@ class ReuseParams:
                                 output = output.copy_template_adding_time_dim().copy_template_set_ctx(
                                     network.get_control_flow_ctx()
                                 )
-                if not output:
+                if output is None:
                     layer_desc_ = net.layers_desc[layer_name].copy()
                     class_name_ = layer_desc_.pop("class")
                     layer_class_ = get_layer_class(class_name_)
@@ -2585,7 +2590,7 @@ class ReuseParams:
         return getter(name=name, shape=shape, dtype=dtype, **kwargs)
 
 
-class SearchChoices(object):
+class SearchChoices:
     """
     In beam search, after expanding the beam and then selecting the N best (beam) (see :class:`ChoiceLayer`),
     when doing this multiple times, we need to keep reference where each beam came from,
@@ -2824,7 +2829,7 @@ class SearchChoices(object):
         return common_choices.translate_to_this_search_beam(layer_desc)
 
 
-class Loss(object):
+class Loss:
     """
     Base class for all losses.
     """
@@ -2984,7 +2989,11 @@ class Loss(object):
         :param LayerBase|None layer:
         :param Data|None layer_output_template: maybe alternative template
         """
-        if layer_output_template and layer_output_template.have_time_axis() and not layer.output.have_time_axis():
+        if (
+            layer_output_template is not None
+            and layer_output_template.have_time_axis()
+            and not layer.output.have_time_axis()
+        ):
             # It could be that the layer is from inside a RecLayer loop, and does not have a time dim.
             # In that case, use our template instead.
             layer_output = layer_output_template
@@ -3020,14 +3029,14 @@ class Loss(object):
         """
         :param Data output: generated output
         :param OutputWithActivation|None output_with_activation:
-        :param Data target: reference target from dataset
+        :param Data|None target: reference target from dataset
         :param LayerBase|None layer:
         """
         if not self._check_output_before_softmax:
             output_with_activation = None
         with tf.name_scope("loss_init"):
             self.layer = layer
-            if target:
+            if target is not None:
                 if output.beam:
                     if target.beam != output.beam:
                         target = target.copy_extend_with_beam(output.beam)
@@ -3067,7 +3076,7 @@ class Loss(object):
                 else:
                     self.output_flat = self._flatten_or_merge(output)
                     self.output_flat.set_shape(tf.TensorShape((None,) + output.shape[1:]))
-                if target:
+                if target is not None:
                     assert target.have_time_axis()
                     self.target_seq_lens = target.get_sequence_lengths()
                     self.target_flat = self._flatten_or_merge(target)
@@ -3093,7 +3102,7 @@ class Loss(object):
                     )
                 else:
                     self.loss_norm_factor = 1.0
-                if target:
+                if target is not None:
                     assert not self.target.have_time_axis()
                     self.target_flat = target.placeholder
             if self.custom_norm_factor is not None:
@@ -3102,7 +3111,7 @@ class Loss(object):
                 else:
                     assert isinstance(self.custom_norm_factor, float)
                     self.loss_norm_factor = self.custom_norm_factor
-            if self.custom_inv_norm_factor:
+            if self.custom_inv_norm_factor is not None:
                 self.loss_norm_factor = 1.0 / tf.cast(
                     tf.reduce_sum(self.custom_inv_norm_factor.output.placeholder), tf.float32
                 )
@@ -3113,7 +3122,7 @@ class Loss(object):
         Does some checks on self.target and self.output, e.g. if the dense shapes matches.
         You can overwrite this if those checks don't make sense for your derived loss class.
         """
-        if not self.target:
+        if self.target is None:
             assert not self.need_target, "%s: did not get target" % self
             return
         assert self.target.placeholder is not None

@@ -25,7 +25,7 @@ from returnn.datasets.basic import Dataset, DatasetSeq
 from .cached2 import CachedDataset2
 from returnn.log import log
 from returnn.util.task_system import numpy_copy_and_set_unused
-from returnn.util.basic import eval_shell_str, interrupt_main, unicode, PY3, close_all_fds_except
+from returnn.util.basic import eval_shell_str, interrupt_main, unicode, close_all_fds_except
 import returnn.util.basic as util
 
 
@@ -442,11 +442,8 @@ class SprintDatasetBase(Dataset):
             if isinstance(v, unicode):
                 v = v.encode("utf8")
             if isinstance(v, (str, bytes)):
-                if PY3:
-                    assert isinstance(v, bytes)
-                    v = list(v)
-                else:
-                    v = list(map(ord, v))
+                assert isinstance(v, bytes)
+                v = list(v)
                 v = numpy.array(v, dtype="uint8")
                 targets[key] = v
                 if self.str_add_final_zero:
@@ -507,7 +504,7 @@ class SprintDatasetBase(Dataset):
                     assert seq_idx + 1 == self.next_seq_to_be_added
                     self.cond.wait()
 
-            self.added_data += [DatasetSeq(seq_idx, features, targets, seq_tag=segment_name)]
+            self.added_data += [DatasetSeq(seq_idx, features, targets=targets, seq_tag=segment_name)]
             self.cond.notify_all()
             return seq_idx
 
@@ -591,7 +588,7 @@ class SprintDatasetBase(Dataset):
         """
         self._complete_frac = frac
 
-    def get_complete_frac(self, seq_idx):
+    def get_complete_frac(self, seq_idx, **kwargs):
         """
         :param int seq_idx:
         :rtype: float
@@ -1064,7 +1061,7 @@ class SprintCacheDataset(CachedDataset2):
     For alignments, you need to provide all options for the AllophoneLabeling class, such as allophone file, etc.
     """
 
-    class SprintCacheReader(object):
+    class SprintCacheReader:
         """
         Helper class to read a Sprint cache directly.
         """
@@ -1233,6 +1230,10 @@ class SprintCacheDataset(CachedDataset2):
 
     def supports_seq_order_sorting(self) -> bool:
         """supports sorting"""
+        return True
+
+    def supports_sharding(self) -> bool:
+        """:return: whether this dataset supports sharding"""
         return True
 
     def get_dataset_seq_for_name(self, name, seq_idx=-1):

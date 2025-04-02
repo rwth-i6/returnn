@@ -28,6 +28,12 @@ class EngineBase:
         """
         if config is None:
             config = get_global_config(auto_create=True)
+        # In case the Engine is used directly by some user script,
+        # make sure that we are properly initialized.
+        if not log.initialized:
+            log.init_by_config(config)
+        if not util.BehaviorVersion.is_set():
+            util.BehaviorVersion.set(config.int("behavior_version", None))
         self.config = config
         self.epoch = 0
         self.global_train_step = None  # type: Optional[int]
@@ -266,11 +272,25 @@ class EngineBase:
         """
         return self.pretrain and self.epoch == self.pretrain.get_train_num_epochs() + 1
 
-    def forward_with_callback(self, *, dataset: Dataset, callback: ForwardCallbackIface):
+    def set_epoch(self, epoch: int):
+        """
+        Set the current epoch.
+        """
+        self.epoch = epoch
+
+    def forward_with_callback(
+        self, *, dataset: Dataset, callback: ForwardCallbackIface, dataset_init_epoch: bool = True
+    ):
         """
         Iterate through the dataset, calling `forward_step` from user config,
         collecting outputs in `rf.get_run_ctx()` via `mark_as_output` calls,
         and then calling `callback` for each entry.
+
+        :param dataset:
+        :param callback: see :class:`ForwardCallbackIface`
+        :param dataset_init_epoch: whether the engine will call ``dataset.init_seq_order`` at the beginning,
+            using the current epoch.
+            If False, it assumes that ``dataset.init_seq_order`` was already called.
         """
         raise NotImplementedError
 
@@ -364,7 +384,11 @@ class EngineBase:
                 score_values[key].append(epoch_scores[key])
         for key in list(score_keys):
             scores = score_values[key]
-            if min(scores) == max(scores):
+            if len(scores) == 0:
+                print("Ignoring score key %r because all saved epochs dont have the score." % key, file=log.v3)
+                score_keys.remove(key)
+                score_values.pop(key)
+            elif min(scores) == max(scores):
                 print(
                     "Ignoring score key %r because all epochs have the same value %r." % (key, scores[0]), file=log.v3
                 )

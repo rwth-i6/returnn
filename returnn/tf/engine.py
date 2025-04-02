@@ -35,7 +35,7 @@ from returnn.tf.updater import Updater
 from returnn.tf.data_pipeline import FeedDictDataProvider, DatasetDataProvider
 import returnn.tf.horovod as tf_horovod
 import returnn.util.basic as util
-from returnn.util.basic import hms, NumbersDict, BackendEngine, BehaviorVersion
+from returnn.util.basic import hms, NumbersDict, BackendEngine
 from returnn.forward_iface import ForwardCallbackIface
 from pprint import pprint
 
@@ -46,7 +46,7 @@ class CancelTrainingException(Exception):
     """
 
 
-class Runner(object):
+class Runner:
     """
     This encapsulates the logic around TF ``session.run``, i.e. iterating over the dataset.
     """
@@ -877,10 +877,6 @@ class Engine(EngineBase):
         :param returnn.config.Config|None config:
         """
         super(Engine, self).__init__(config=config)
-        if not log.initialized:
-            log.init_by_config(self.config)
-        if not BehaviorVersion.is_set():
-            BehaviorVersion.set(self.config.int("behavior_version", None))
         if BackendEngine.selected_engine is None:
             # This is only the case if the Engine is initialized directly in a custom script.
             # Otherwise, the RETURNN main entry point would already have selected the engine.
@@ -2356,7 +2352,9 @@ class Engine(EngineBase):
 
         writer.close()
 
-    def forward_with_callback(self, *, dataset: Dataset, callback: ForwardCallbackIface):
+    def forward_with_callback(
+        self, *, dataset: Dataset, callback: ForwardCallbackIface, dataset_init_epoch: bool = True
+    ):
         """forward"""
         # https://github.com/rwth-i6/returnn/issues/1336
         raise NotImplementedError("TF engine does not support the generic forward func yet...")
@@ -2838,7 +2836,7 @@ class Engine(EngineBase):
         assert not os.path.exists(output_file), "Already existing output file %r." % output_file
         print("Compute priors, using output layer %r, writing to %r." % (output_layer, output_file), file=log.v2)
 
-        class Accumulator(object):
+        class Accumulator:
             """
             Also see PriorEstimationTaskThread for reference.
             """

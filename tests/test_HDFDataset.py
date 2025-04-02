@@ -4,17 +4,13 @@ tests for HDF dataset
 
 from __future__ import annotations
 
-from typing import Dict, Any
+from typing import Dict, Any, List, Tuple, Optional
 import os
 import sys
 import _setup_test_env  # noqa
 
 from returnn.datasets import Dataset
 from returnn.datasets.hdf import *
-from nose.tools import assert_equal
-from nose.tools import assert_not_equal
-from nose.tools import assert_raises
-from nose.tools import raises
 import returnn.util.basic as util
 import h5py
 import numpy as np
@@ -31,9 +27,9 @@ def test_HDFDataset_init():
     This method tests initialization of the HDFDataset class
     """
     toy_dataset = HDFDataset()
-    assert_equal(toy_dataset.file_start, [0], "self.file_start init problem, should be [0]")
-    assert_equal(toy_dataset.files, [], "self.files init problem, should be []")
-    assert_equal(toy_dataset.file_seq_start, [], "self.file_seq_start init problem, should be []")
+    assert toy_dataset.file_start == [0], "self.file_start init problem, should be [0]"
+    assert toy_dataset.files == [], "self.files init problem, should be []"
+    assert toy_dataset.file_seq_start == [], "self.file_seq_start init problem, should be []"
     return toy_dataset
 
 
@@ -204,10 +200,10 @@ def test_hdf_dump_not_frame_synced():
     assert hdf_reader.num_seqs == orig_reader.num_seqs == num_seqs
     for seq_idx in range(num_seqs):
         # Not synced, i.e. different lengths:
-        assert_not_equal(orig_reader.seq_lens[seq_idx]["data"], orig_reader.seq_lens[seq_idx]["classes"])
+        assert orig_reader.seq_lens[seq_idx]["data"] != orig_reader.seq_lens[seq_idx]["classes"]
         for key in orig_reader.data_keys:
-            assert_equal(hdf_reader.seq_lens[seq_idx][key], orig_reader.seq_lens[seq_idx][key])
-            assert_equal(hdf_reader.data[key][seq_idx].tolist(), orig_reader.data[key][seq_idx].tolist())
+            assert hdf_reader.seq_lens[seq_idx][key] == orig_reader.seq_lens[seq_idx][key]
+            assert hdf_reader.data[key][seq_idx].tolist() == orig_reader.data[key][seq_idx].tolist()
 
 
 def test_HDFDataset_partition_epoch():
@@ -227,10 +223,10 @@ def test_HDFDataset_partition_epoch():
     assert hdf_reader.num_seqs == orig_reader.num_seqs == num_seqs
     for seq_idx in range(num_seqs):
         # Not synced, i.e. different lengths:
-        assert_not_equal(orig_reader.seq_lens[seq_idx]["data"], orig_reader.seq_lens[seq_idx]["classes"])
+        assert orig_reader.seq_lens[seq_idx]["data"] != orig_reader.seq_lens[seq_idx]["classes"]
         for key in orig_reader.data_keys:
-            assert_equal(hdf_reader.seq_lens[seq_idx][key], orig_reader.seq_lens[seq_idx][key])
-            assert_equal(hdf_reader.data[key][seq_idx].tolist(), orig_reader.data[key][seq_idx].tolist())
+            assert hdf_reader.seq_lens[seq_idx][key] == orig_reader.seq_lens[seq_idx][key]
+            assert hdf_reader.data[key][seq_idx].tolist() == orig_reader.data[key][seq_idx].tolist()
 
 
 def test_SimpleHDFWriter():
@@ -254,6 +250,8 @@ def test_SimpleHDFWriter():
     seq_lens = seq_lens1 + seq_lens2
 
     dataset = HDFDataset(files=[fn])
+    assert dataset.get_data_keys() == ["data"]
+    assert dataset.get_target_list() == []
     reader = DatasetTestReader(dataset=dataset)
     reader.read_all()
     assert "data" in reader.data_keys  # "classes" might be in there as well, although not really correct/existing
@@ -264,7 +262,7 @@ def test_SimpleHDFWriter():
     for i, seq_len in enumerate(seq_lens):
         assert reader.seq_lens[i]["data"] == seq_len
     print("tags:", reader.seq_tags)
-    assert_equal(reader.seq_tags, ["seq-%i" % i for i in range(reader.num_seqs)])
+    assert reader.seq_tags == ["seq-%i" % i for i in range(reader.num_seqs)]
     assert isinstance(reader.seq_tags[0], str)
 
 
@@ -292,16 +290,69 @@ def test_SimpleHDFWriter_small():
     for i, seq_len in enumerate(seq_lens):
         assert reader.seq_lens[i]["data"] == seq_len
 
-    if sys.version_info[0] >= 3:  # gzip.compress is >=PY3
-        print("raw content (gzipped):")
-        import gzip
+    print("raw content (gzipped):")
+    import gzip
 
-        print(repr(gzip.compress(open(fn, "rb").read())))
+    print(repr(gzip.compress(open(fn, "rb").read())))
+
+
+def test_SimpleHDFWriter_empty_extra():
+    # This tests whether adding empty data in extra works
+    fn = get_test_tmp_file(suffix=".hdf")
+    os.remove(fn)  # SimpleHDFWriter expects that the file does not exist
+    n_dim = 2
+    writer = SimpleHDFWriter(filename=fn, dim=n_dim, labels=None)
+
+    j = 0
+    all_seq_lens = []
+    # seed
+    numpy.random.seed(42)
+    while j < 1000:
+        batch_size = numpy.random.randint(1, 10)
+        seq_lens = numpy.random.randint(0, 8, size=batch_size)
+        main_input = numpy.random.normal(size=(len(seq_lens), max(seq_lens), n_dim)).astype("float32")
+
+        extra_input = main_input.copy() + 4.2
+        assert main_input.shape == extra_input.shape
+
+        writer.insert_batch(
+            inputs=main_input,
+            seq_len=seq_lens,
+            seq_tag=["seq-%i" % (j + i) for i in range(len(seq_lens))],
+            extra={"test-extra": extra_input},
+        )
+        j += len(seq_lens)
+        all_seq_lens += seq_lens.tolist()
+
+    assert 0 in all_seq_lens, "please update random seed, we expect to test empty seqs"
+
+    writer.close()
+
+    dataset = HDFDataset(files=[fn])
+    assert dataset.get_data_keys() == ["data", "test-extra"], dataset.get_data_keys()
+    assert dataset.get_target_list() == ["test-extra"]
+    reader = DatasetTestReader(dataset=dataset)
+    reader.read_all()
+    assert "data" in reader.data_keys
+    assert "test-extra" in reader.data_keys
+    assert reader.data_sparse["data"] is False
+    assert list(reader.data_shape["data"]) == [n_dim]
+    assert reader.data_dtype["data"] == "float32"
+    assert j == reader.num_seqs
+    assert j == len(reader.seq_lens)
+
+    for i, seq_len in enumerate(all_seq_lens):
+        assert reader.seq_lens[i]["data"] == seq_len
+        for k in range(0, seq_len):  # only test the first seq_len elements
+            a = reader.data["data"][i][k] + 4.2
+            b = reader.data["test-extra"][i][k]
+            assert numpy.allclose(a, b), f"i={i}"
+
+    assert reader.seq_tags == ["seq-%i" % i for i in range(reader.num_seqs)]
+    assert isinstance(reader.seq_tags[0], str)
 
 
 def test_read_simple_hdf():
-    if sys.version_info[0] <= 2:  # gzip.decompress is >=PY3
-        raise unittest.SkipTest
     # n_dim, seq_lens, raw_gzipped is via test_SimpleHDFWriter_small
     n_dim = 3
     seq_lens = [2, 3]
@@ -346,7 +397,7 @@ def test_read_simple_hdf():
     reader.read_all()
     print("tags:", reader.seq_tags)
     assert len(seq_lens) == reader.num_seqs
-    assert_equal(reader.seq_tags, ["seq-0", "seq-1"])
+    assert reader.seq_tags == ["seq-0", "seq-1"]
     for i, seq_len in enumerate(seq_lens):
         assert reader.seq_lens[i]["data"] == seq_len
     assert "data" in reader.data_keys  # "classes" might be in there as well, although not really correct/existing
@@ -478,6 +529,248 @@ def test_SimpleHDFWriter_swmr():
             # TODO read and check whether it is correct
 
     writer.close()  # Should not matter.
+
+
+def test_SimpleHDFWriter_labels():
+    fn = get_test_tmp_file(suffix=".hdf")
+    os.remove(fn)  # SimpleHDFWriter expects that the file does not exist
+    n_dim = 3
+    writer = SimpleHDFWriter(filename=fn, dim=n_dim, labels=[" ", "a", "b"])
+    seq_lens = [2, 3]
+    writer.insert_batch(
+        inputs=numpy.random.normal(size=(len(seq_lens), max(seq_lens), n_dim)).astype("float32"),
+        seq_len=seq_lens,
+        seq_tag=["seq-%i" % i for i in range(len(seq_lens))],
+    )
+    writer.close()
+
+    old_dataset = Old2018HDFDataset()
+    old_dataset.add_file(fn)
+    old_dataset.initialize()
+    print("Old dataset:", old_dataset)
+    print("Old dataset outputs:", old_dataset.num_outputs)
+    print("Old dataset target keys:", old_dataset.target_keys)
+    old_dataset.init_seq_order(epoch=1)
+    old_dataset.load_seqs(0, 1)
+
+    dataset = HDFDataset(files=[fn])
+    print("Dataset:")
+    print("  input:", dataset.num_inputs, "x", dataset.window)
+    print("  output:", dataset.num_outputs)
+    print(" ", dataset.len_info(fast=True) or "no info")
+    print("Dataset keys:", dataset.get_data_keys())
+    print("Dataset target keys:", dataset.get_target_list())
+    print("Dataset labels:", ", ".join(f"{k!r}: {v[:3]}... len {len(v)}" for k, v in dataset.labels.items()) or "None")
+    assert dataset.get_data_keys() == ["data"]
+    assert dataset.get_target_list() == []
+
+    assert dataset.labels["data"] == [" ", "a", "b"]
+    reader = DatasetTestReader(dataset=dataset)
+    reader.read_all()
+    assert reader.data_keys == ["data"]
+    assert reader.data_sparse["data"] is False
+    assert list(reader.data_shape["data"]) == [n_dim]
+    assert reader.data_dtype["data"] == "float32"
+    assert len(seq_lens) == reader.num_seqs
+    for i, seq_len in enumerate(seq_lens):
+        assert reader.seq_lens[i]["data"] == seq_len
+
+
+class Old2018HDFDataset(CachedDataset):
+    """
+    Copied and adapted from an early RETURNN version:
+    2018-03-09: https://github.com/rwth-i6/returnn/blob/c2d8fed877022d1ac1bf68b801604733db51223e/HDFDataset.py
+
+    (Not really fully functional here though... we just use it to test whether loading works.)
+
+    Some version history:
+    2015-01-05: https://github.com/rwth-i6/returnn/blob/3be0fe0906212d1ffdd93807c0a3854a38842eb8/Dataset.py
+    2015-08-04: https://github.com/rwth-i6/returnn/blob/995e87184abc6e07256417cb533163ac0a7d7dd8/HDFDataset.py
+    2018-03-09: https://github.com/rwth-i6/returnn/blob/c2d8fed877022d1ac1bf68b801604733db51223e/HDFDataset.py
+    """
+
+    def __init__(self, **kwargs):
+        super(Old2018HDFDataset, self).__init__(cache_byte_size=100, **kwargs)
+        self.files: List[str] = []
+        self.file_start = [0]
+        self.file_seq_start: List[List[int]] = []
+        self.file_index: List[int] = []
+        self.data_dtype: Dict[str, str] = {}
+        self.data_sparse: Dict[str, bool] = {}
+
+        # Copied from old base CachedDataset
+        self._seq_lengths: List[Tuple[int, int]] = []  # uses real seq idx
+        self.tags: List[str] = []  # uses real seq idx
+        self.tag_idx: Dict[str, int] = {}  # map of tag -> real-seq-idx
+        self.targets = {}
+        self.target_keys = []
+
+        # Copied from old base Dataset
+        self._num_codesteps: Optional[int] = None  # Num output frames, could be different from input, seq2seq, ctc.
+
+    def add_file(self, filename):
+        """
+        Setups data:
+          self.seq_lengths
+          self.file_index
+          self.file_start
+          self.file_seq_start
+        Use load_seqs() to load the actual data.
+        :type filename: str
+        """
+        fin = h5py.File(filename, "r")
+        decode = lambda s: s if isinstance(s, str) else s.decode("utf-8")
+        if "targets" in fin:
+            self.labels = {
+                k: [decode(item).split("\0")[0] for item in fin["targets/labels"][k][...].tolist()]
+                for k in fin["targets/labels"]
+            }
+        if not self.labels:
+            labels = [decode(item).split("\0")[0] for item in fin["labels"][...].tolist()]
+            """:type: list[str]"""
+            self.labels = {"classes": labels}
+            assert len(self.labels["classes"]) == len(labels), (
+                "expected " + str(len(self.labels["classes"])) + " got " + str(len(labels))
+            )
+        tags = [decode(item).split("\0")[0] for item in fin["seqTags"][...].tolist()]
+        """ :type: list[str] """
+        self.files.append(filename)
+        if "times" in fin:
+            if self.timestamps is None:
+                self.timestamps = fin[attr_times][...]
+            else:
+                self.timestamps = numpy.concatenate(
+                    [self.timestamps, fin[attr_times][...]], axis=0
+                )  # .extend(fin[attr_times][...].tolist())
+        seq_lengths = fin[attr_seqLengths][...]
+        if "targets" in fin:
+            self.target_keys = sorted(fin["targets/labels"].keys())
+        else:
+            self.target_keys = ["classes"]
+
+        if len(seq_lengths.shape) == 1:
+            seq_lengths = numpy.array(zip(*[seq_lengths.tolist() for i in range(len(self.target_keys) + 1)]))
+
+        seq_start = [numpy.zeros((seq_lengths.shape[1],), "int64")]
+        if not self._seq_start:
+            self._seq_start = [numpy.zeros((seq_lengths.shape[1],), "int64")]
+        for l in seq_lengths:
+            self._seq_lengths.append(numpy.array(l))
+            seq_start.append(seq_start[-1] + l)
+        self.tags += tags
+        self.file_seq_start.append(seq_start)
+        nseqs = len(seq_start) - 1
+        for i in range(nseqs):
+            self.tag_idx[tags[i]] = i + self._num_seqs
+        self._num_seqs += nseqs
+        self.file_index.extend([len(self.files) - 1] * nseqs)
+        self.file_start.append(self.file_start[-1] + nseqs)
+        self._num_timesteps += sum([s[0] for s in seq_lengths])
+        if self._num_codesteps is None:
+            self._num_codesteps = [0 for i in range(1, len(seq_lengths[0]))]
+        for i in range(1, len(seq_lengths[0])):
+            self._num_codesteps[i - 1] += sum([s[i] for s in seq_lengths])
+        if len(fin["inputs"].shape) == 1:  # sparse
+            num_inputs = [fin.attrs[attr_inputPattSize], 1]
+        else:
+            num_inputs = [fin["inputs"].shape[1], len(fin["inputs"].shape)]  # fin.attrs[attr_inputPattSize]
+        if self.num_inputs == 0:
+            self.num_inputs = num_inputs[0]
+        assert self.num_inputs == num_inputs[0], "wrong input dimension in file %s (expected %s got %s)" % (
+            filename,
+            self.num_inputs,
+            num_inputs[0],
+        )
+        if "targets/size" in fin:
+            num_outputs = {
+                k: [fin["targets/size"].attrs[k], len(fin["targets/data"][k].shape)] for k in fin["targets/size"].attrs
+            }
+        else:
+            num_outputs = {"classes": fin.attrs["numLabels"]}
+        num_outputs["data"] = num_inputs
+        if not self.num_outputs:
+            self.num_outputs = num_outputs
+        assert self.num_outputs == num_outputs, "wrong dimensions in file %s (expected %s got %s)" % (
+            filename,
+            self.num_outputs,
+            num_outputs,
+        )
+        if "targets" in fin:
+            for name in fin["targets/data"]:
+                tdim = 1 if len(fin["targets/data"][name].shape) == 1 else fin["targets/data"][name].shape[1]
+                self.data_dtype[name] = str(fin["targets/data"][name].dtype) if tdim > 1 else "int32"
+                self.targets[name] = None
+        else:
+            self.targets = {"classes": numpy.zeros((self._num_timesteps,))}
+            self.data_dtype["classes"] = "int32"
+        self.data_dtype["data"] = fin["inputs"].dtype
+        assert len(self.target_keys) == len(self._seq_lengths[0]) - 1
+        fin.close()
+
+    def _load_seqs(self, start, end):
+        """
+        Load data sequences.
+        As a side effect, will modify / fill-up:
+          self.alloc_intervals
+          self.targets
+          self.chars
+
+        :param int start: start sorted seq idx
+        :param int end: end sorted seq idx
+        """
+        assert start < self.num_seqs
+        assert end <= self.num_seqs
+        selection = self.insert_alloc_interval(start, end)
+        assert len(selection) <= end - start, (
+            "DEBUG: more sequences requested (" + str(len(selection)) + ") as required (" + str(end - start) + ")"
+        )
+        file_info: List[List[int]] = [[] for l in range(len(self.files))]
+        # file_info[i] is (sorted seq idx from selection, real seq idx)
+        for idc in selection:
+            ids = self._seq_index[idc]
+            file_info[self.file_index[ids]].append((idc, ids))
+            self.preload_set.add(ids)
+        for i in range(len(self.files)):
+            if len(file_info[i]) == 0:
+                continue
+            print("loading file %d/%d" % (i + 1, len(self.files)), self.files[i], file=log.v4)
+            fin = h5py.File(self.files[i], "r")
+            for idc, ids in file_info[i]:
+                s = ids - self.file_start[i]
+                p = self.file_seq_start[i][s]
+                l = self._seq_lengths[ids]
+                if "targets" in fin:
+                    for k in fin["targets/data"]:
+                        if self.targets[k] is None:
+                            self.targets[k] = numpy.zeros((self._num_codesteps[self.target_keys.index(k)],)) - 1
+                        ldx = self.target_keys.index(k) + 1
+                        self.targets[k][self.get_seq_start(idc)[ldx] : self.get_seq_start(idc)[ldx] + l[ldx]] = fin[
+                            "targets/data/" + k
+                        ][p[ldx] : p[ldx] + l[ldx]]
+                self._set_alloc_intervals_data(idc, data=fin["inputs"][p[0] : p[0] + l[0]][...])
+            fin.close()
+        gc.collect()
+        assert self.is_cached(start, end)
+
+    def _get_seq_length_by_real_idx(self, real_seq_idx):
+        return self._seq_lengths[real_seq_idx]
+
+    def get_tag(self, sorted_seq_idx):
+        ids = self._seq_index[self._index_map[sorted_seq_idx]]
+        return self.tags[ids]
+
+    def is_data_sparse(self, key):
+        if key in self.num_outputs:
+            return self.num_outputs[key][1] == 1
+        if self.get_data_dtype(key).startswith("int"):
+            return True
+        return False
+
+    def get_data_dtype(self, key):
+        return self.data_dtype[key]
+
+    def len_info(self):
+        return ", ".join(["HDF dataset", "sequences: %i" % self.num_seqs, "frames: %i" % self.get_num_timesteps()])
 
 
 def dummy_iter_dataset(dataset: Dataset) -> int:

@@ -22,7 +22,7 @@ class PrevTensorRef(Tensor):
         """
         parent_name_ctx = cur_layer_name_ctx.parent
         prev_tensor_name_ctx = parent_name_ctx.get_child(f"prev:{cur_layer_name_ctx.name}")
-        if prev_tensor_name_ctx.tensor:
+        if prev_tensor_name_ctx.tensor is not None:
             prev_tensor_ref = prev_tensor_name_ctx.tensor
             assert isinstance(prev_tensor_ref, PrevTensorRef)
             assert prev_tensor_ref.cur_layer_name_ctx is cur_layer_name_ctx

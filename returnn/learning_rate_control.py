@@ -5,16 +5,16 @@ The base class is :class:`LearningRateControl`.
 
 from __future__ import annotations
 
-from typing import Optional, Any, Dict
+from typing import Optional, Union, Any, Dict
 import typing
 import os
 import returnn.util.basic as util
-from returnn.util.basic import better_repr, simple_obj_repr, ObjAsDict, unicode
+from returnn.util.basic import better_repr, simple_obj_repr, unicode
 from returnn.log import log
 import numpy
 
 
-class LearningRateControl(object):
+class LearningRateControl:
     """
     Base class for learning rate control / scheduling.
     """
@@ -350,7 +350,7 @@ class LearningRateControl(object):
                 relative_error /= learning_rate / self.default_learning_rate
         return relative_error
 
-    def set_epoch_error(self, epoch, error):
+    def set_epoch_error(self, epoch: int, error: Dict[str, Union[float, Dict[str, float]]]):
         """
         :type epoch: int
         :type error: dict[str,float|dict[str,float]]
@@ -531,7 +531,7 @@ class LearningRateControl(object):
         Loads the saved epoch data from file (self.filename).
         """
         s = open(self.filename).read()
-        self.epoch_data = eval(s, {"nan": float("nan"), "inf": float("inf")}, ObjAsDict(self))
+        self.epoch_data = eval(s, {"EpochData": self.EpochData, "nan": float("nan"), "inf": float("inf"), "np": numpy})
 
 
 class ConstantLearningRate(LearningRateControl):

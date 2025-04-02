@@ -353,7 +353,7 @@ class TFBackend(Backend[tf.Tensor]):
                         tf.Assert(tf.equal(shape[i], tensor.batch_shape[i]), data + ["-> invalid shape[%i]" % i])
                     ]
                 dyn_size_ext = tensor.dim_tags[i].dyn_size_ext
-                if dyn_size_ext and dyn_size_ext.placeholder is not None:
+                if dyn_size_ext is not None and dyn_size_ext.placeholder is not None:
                     dyn_size = dyn_size_ext.placeholder
                     if dyn_size_ext.have_batch_axis() and tensor.have_batch_axis():
                         checks += [
@@ -411,24 +411,19 @@ class TFBackend(Backend[tf.Tensor]):
         dims: Sequence[Dim],
         dtype: str,
         sparse_dim: Optional[Dim] = None,
+        feature_dim: Optional[Dim] = None,
         device: Optional[str] = None,
         name: Optional[str] = None,
     ) -> _TT:
-        """
-        :param value:
-        :param dims:
-        :param dtype:
-        :param sparse_dim:
-        :param device:
-        :param name:
-        :return: tensor
-        """
+        """convert to tensor"""
         if isinstance(value, Tensor):
             return value
         with tf.control_dependencies(None):
             value = tf.convert_to_tensor(value, dtype=dtype)
         assert isinstance(value, tf.Tensor)
-        return Tensor(name or "const", raw_tensor=value, dims=dims, dtype=dtype, sparse_dim=sparse_dim)
+        return Tensor(
+            name or "const", raw_tensor=value, dims=dims, dtype=dtype, sparse_dim=sparse_dim, feature_dim=feature_dim
+        )
 
     @staticmethod
     def range_over_dim(dim: Dim, *, dtype: Optional[str] = None, device: Optional[str] = None) -> _TT:
@@ -438,7 +433,7 @@ class TFBackend(Backend[tf.Tensor]):
         :param device:
         :return: range over dim
         """
-        if not dtype and dim.dyn_size_ext:
+        if not dtype and dim.dyn_size_ext is not None:
             dtype = dim.dyn_size_ext.dtype
         if not dtype:
             dtype = rf.get_default_array_index_dtype()
@@ -553,6 +548,14 @@ class TFBackend(Backend[tf.Tensor]):
                 y = tf_util.optional_mul(y, correction_factor)
             out_data.raw_tensor = y
             return out_data
+
+    @staticmethod
+    def is_finite(x: Tensor) -> Tensor:
+        """is finite"""
+        out = x.copy_template("is_finite", dtype="bool")
+        with tf_util.same_control_flow_ctx(x):
+            out.raw_tensor = tf.math.is_finite(x.raw_tensor)
+        return out
 
     @staticmethod
     def clip_by_value(

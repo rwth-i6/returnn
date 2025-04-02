@@ -1033,7 +1033,7 @@ class ParametricWienerFilterLayer(LayerBase):
 
         super(ParametricWienerFilterLayer, self).__init__(**kwargs)
 
-        class _NoiseEstimator(object):
+        class _NoiseEstimator:
             """
             Noise estimator. For details, see tfSi6Proc.audioProcessing.enhancement.singleChannel
             """

@@ -37,6 +37,9 @@ __all__ = [
     "logical_not",
     "opt_logical_or",
     "opt_logical_and",
+    "is_finite",
+    "is_infinite",
+    "is_neg_infinite",
     "maximum",
     "minimum",
     "clip_by_value",
@@ -361,6 +364,24 @@ def opt_logical_and(a: Union[Tensor, bool], b: Union[Tensor, bool]) -> Union[Ten
     return combine(a, "logical_and", b)
 
 
+def is_finite(a: Tensor) -> Tensor:
+    """is finite"""
+    # noinspection PyProtectedMember
+    return a._raw_backend.is_finite(a)
+
+
+def is_infinite(a: Tensor) -> Tensor:
+    """is positive or negative infinite"""
+    # noinspection PyProtectedMember
+    return a._raw_backend.is_infinite(a)
+
+
+def is_neg_infinite(a: Tensor) -> Tensor:
+    """is negative infinite"""
+    # noinspection PyProtectedMember
+    return a._raw_backend.is_neg_infinite(a)
+
+
 def maximum(a: Tensor, b: Union[Tensor, _RawTensorTypes], *other_tensors) -> Tensor:
     """maximum"""
     if not other_tensors:
@@ -420,10 +441,15 @@ def log(a: Tensor) -> Tensor:
     return a._raw_backend.activation(a, "log")
 
 
+_SafeLogEps = {"float16": 6e-08, "bfloat16": 9.1835e-41, "float32": 1.4013e-45, "float64": 4.9407e-324}
+
+
 def safe_log(a: Tensor, *, eps: Optional[float] = None) -> Tensor:
     """safe_log"""
     if eps is None:
-        eps = {"float16": 6e-08, "bfloat16": 9.1835e-41, "float32": 1.4013e-45, "float64": 4.9407e-324}[a.dtype]
+        if a.dtype not in _SafeLogEps:
+            raise NotImplementedError(f"safe_log not implemented for dtype {a.dtype}")
+        eps = _SafeLogEps[a.dtype]
     # noinspection PyProtectedMember
     return a._raw_backend.safe_log(a, eps=eps)
 

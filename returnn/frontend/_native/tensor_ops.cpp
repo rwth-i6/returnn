@@ -1368,6 +1368,14 @@ static PyObject* compareOrCombineViaCached(
         case TOp_FloorDiv:
         case TOp_Mod:
         case TOp_Pow:
+        case TOp_Maximum:
+        case TOp_Minimum:
+        case TOp_Eq:
+        case TOp_Ne:
+        case TOp_Lt:
+        case TOp_Le:
+        case TOp_Gt:
+        case TOp_Ge:
             needConvertToTensor = false;
         default:
             break;

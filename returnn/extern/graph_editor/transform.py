@@ -161,7 +161,7 @@ def copy_op_handler(info, op, new_inputs):
     return op_, op_.outputs
 
 
-class TransformerInfo(object):
+class TransformerInfo:
     """ "Contains information about the result of a transform operation."""
 
     def __init__(self, info):
@@ -282,7 +282,7 @@ class TransformerInfo(object):
         return res.getvalue()
 
 
-class _TmpInfo(object):
+class _TmpInfo:
     """Transformer temporary data.
 
     An instance of this class holds all the information relevant to a call
@@ -333,7 +333,7 @@ class _TmpInfo(object):
         return name_
 
 
-class Transformer(object):
+class Transformer:
     """Transform a subgraph into another one.
 
     By default, the constructor create a transform which copy a subgraph and
@@ -614,6 +614,7 @@ def copy_with_input_replacements(
         raise TypeError("Expected a tf.Graph, got: {}".format(type(dst_graph)))
 
     copier = Transformer()
+
     # Replace tensor if possible.
     def replace_t_with_replacement_handler(info, t):
         if t in replacement_ts:

@@ -52,7 +52,7 @@ class LSTM(rf.Module):
         :return: output of shape {...,out_dim} if spatial_dim is single_step_dim else {...,spatial_dim,out_dim},
             and new state of the LSTM.
         """
-        if not state.h or not state.c:
+        if state.h is None or state.c is None:
             raise ValueError(f"{self}: state {state} needs attributes ``h`` (hidden) and ``c`` (cell).")
         if self.in_dim not in source.dims:
             raise ValueError(f"{self}: input {source} does not have in_dim {self.in_dim}")
@@ -70,6 +70,9 @@ class LSTM(rf.Module):
             out_dim=self.out_dim,
         )
         new_state = LstmState(h=new_state_h, c=new_state_c)
+        result.feature_dim = self.out_dim
+        new_state.h.feature_dim = self.out_dim
+        new_state.c.feature_dim = self.out_dim
 
         return result, new_state
 
@@ -188,7 +191,7 @@ class ZoneoutLSTM(LSTM):
         :return: output of shape {...,out_dim} if spatial_dim is single_step_dim else {...,spatial_dim,out_dim},
             and new state of the LSTM.
         """
-        if not state.h or not state.c:
+        if state.h is None or state.c is None:
             raise ValueError(f"{self}: state {state} needs attributes ``h`` (hidden) and ``c`` (cell).")
         if self.in_dim not in source.dims:
             raise ValueError(f"{self}: input {source} does not have in_dim {self.in_dim}")

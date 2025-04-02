@@ -452,7 +452,7 @@ def block_layer(
     return tf.identity(inputs, name)
 
 
-class Model(object):
+class Model:
     """Base class for building the Resnet Model."""
 
     def __init__(

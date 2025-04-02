@@ -72,7 +72,7 @@ def have_min_tf_version(version):
     return tf_version >= version
 
 
-class CustomUpdate(object):
+class CustomUpdate:
     """
     Custom updates will be handled by :class:`TFUpdater`.
     """
@@ -295,7 +295,7 @@ def copy_compatible_reduce(source, target, reduce_type):
     return source.copy_compatible_to(target, check_sparse=False, check_dtype=False)
 
 
-class OutputWithActivation(object):
+class OutputWithActivation:
     """
     Stores some tensor before and after some activation function,
     and also the activation function itself.
@@ -352,15 +352,16 @@ class OutputWithActivation(object):
         return safe_log(self.y)
 
 
-def variable_scalar_summaries_dict(x, name=None):
+def variable_scalar_summaries_dict(
+    x: Union[tf.Tensor, tf.Variable], name: Optional[str] = None
+) -> Dict[str, tf.Tensor]:
     """
     Collects all interesting information about `x`, such as min/max/mean, etc. (all scalars).
     This is used by :func:`variable_summaries`.
 
-    :param tf.Tensor|tf.Variable x:
-    :param str name:
-    :return: dicth with key -> scalar info, e.g. with "%s_mean" % name -> tf.reduce_mean(x)
-    :rtype: dict[str,tf.Tensor]
+    :param x:
+    :param name:
+    :return: dict with key -> scalar info, e.g. with "%s_mean" % name -> tf.reduce_mean(x)
     """
     if x.dtype == tf.string:
         return {}
@@ -645,7 +646,7 @@ def get_root_graph(graph=None):
     return graph
 
 
-class _ScaledGradientBuilder(object):
+class _ScaledGradientBuilder:
     """
     Use the ``scaled_gradient`` instance.
     tf.identity in forward pass, but scales the gradient in backprop.
@@ -1025,7 +1026,7 @@ def setup_tf_thread_pools(num_threads=None, log_file=None, tf_session_opts=None)
 
     :param int num_threads: used for both intra and inter parallelism thread pools
     :param stream|None log_file:
-    :param dict[str] tf_session_opts:
+    :param dict[str,typing.Any] tf_session_opts:
     """
     global _setup_tf_thread_pools_called_once
     if _setup_tf_thread_pools_called_once:
@@ -1056,12 +1057,12 @@ def setup_tf_thread_pools(num_threads=None, log_file=None, tf_session_opts=None)
         session.close()
 
 
-def check_initial_tf_thread_pool_init(tf_session_opts=None):
+def check_initial_tf_thread_pool_init(tf_session_opts: Dict[str, Any] = None):
     """
     Makes sure that the TF thread pools are initialized with the requested settings.
     You probably want to call this very early.
 
-    :param dict[str]|None tf_session_opts:
+    :param tf_session_opts:
     """
     if not _setup_tf_thread_pools_called_once:
         from returnn.util.basic import try_get_caller_name
@@ -1184,7 +1185,7 @@ def print_available_devices(tf_session_opts=None, file=None):
     Note that a call to this will trigger the internal TF thread pool inits,
     so you should call :func:`setup_tf_thread_pools` first.
 
-    :param dict[str]|None tf_session_opts: if given, will init a temp Session with these opts
+    :param dict[str,typing.Any]|None tf_session_opts: if given, will init a temp Session with these opts
     :param typing.TextIO|None file: file stream for print statements, defaults to sys.stdout
     """
     if file is None:
@@ -2633,7 +2634,7 @@ def matrix_triangular(shape, dtype=tf.float32, lower=False, upper=False):
     return tf_compat.v1.matrix_band_part(x, num_lower=-1 if lower else 0, num_upper=-1 if upper else 0)
 
 
-class VariableAssigner(object):
+class VariableAssigner:
     """
     Object helper to assign some var.
     (This is mostly obsolete now.)
@@ -2766,7 +2767,7 @@ def get_tf_gpp_path():
     return _tf_gpp_path
 
 
-class CudaEnv(object):
+class CudaEnv:
     """
     Information about the Nvidia CUDA environment, and library.
     Also path to ``nvcc``, the CUDA compiler.
@@ -3224,7 +3225,7 @@ def add_scaled_noise_to_gradients(grads_and_vars, gradient_noise_scale, sparse_g
     return list(zip(noisy_gradients, variables))
 
 
-class CustomGradient(object):
+class CustomGradient:
     """
     Utility functions to specify a custom gradient for a given function,
     which will be wrapped around via TF :func:`Defun`.
@@ -3333,7 +3334,7 @@ class CustomGradient(object):
 custom_gradient = CustomGradient()
 
 
-class MetaLosses(object):
+class MetaLosses:
     """
     This provides a way to use an alternative gradient,
     or to use the original gradient (error signal) and do something with it.
@@ -3361,7 +3362,7 @@ class MetaLosses(object):
             self.name = name
             self.source = source
 
-    class Scope(object):
+    class Scope:
         """
         Defines the scope for a synthetic gradient.
         Create this object via :func:`MetaLosses.enter_gradient_scope`.
@@ -3732,13 +3733,14 @@ def single_strided_slice(x, axis, begin=None, end=None, step=None):
 def pad_replicate(x, axes, padding):
     """
     :param tf.Tensor x:
-    :param list[int] axes:
-    :param list[(int,int)] padding:
+    :param Sequence[int] axes:
+    :param Sequence[(int|Dim,int|Dim)] padding:
     :rtype: tf.Tensor
     """
     with tf.name_scope("pad_replicate"):
         assert len(padding) == 1, "Not implemented otherwise yet"
         assert len(axes) == 1, "Not implemented otherwise yet"
+        assert isinstance(padding[0][0], int) and isinstance(padding[0][1], int)  # not implemented otherwise yet
         pad_left = tf.gather(x, 0, axis=axes[0])
         pad_left = tf.expand_dims(pad_left, axis=axes[0])
         pad_left = tf.repeat(pad_left, padding[0][0], axis=axes[0])

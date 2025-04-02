@@ -273,6 +273,7 @@ def main():
     arg_parser.add_argument("--feat_sample_rate", help="sample rate of features for sync", type=int, default=100)
     arg_parser.add_argument("--ffmpeg_loglevel", help="loglevel for ffmpeg calls", type=str, default="info")
     arg_parser.add_argument("--ffmpeg_acodec", help="force audio codec for ffmpeg calls", type=str)
+    arg_parser.add_argument("--ffmpeg_resample", help="resample audio to this sample rate", type=int, default=0)
     arg_parser.add_argument(
         "--number_of_channels", help="force number of channels for output audio", type=int, default=0
     )
@@ -404,6 +405,8 @@ def main():
                 cmd += ["-i", source_filename]
                 if args.number_of_channels > 0:
                     cmd += ["-ac", str(args.number_of_channels)]
+                if args.ffmpeg_resample > 0:
+                    cmd += ["-ar", str(args.ffmpeg_resample)]
                 if start_time:
                     cmd += ["-ss", str(start_time)]
                 if limit_duration:

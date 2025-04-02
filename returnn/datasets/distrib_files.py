@@ -11,6 +11,7 @@ import os
 import sys
 import numpy
 from returnn.log import log
+from returnn.util import better_exchook
 from returnn.util.basic import override_env_var, try_run
 from returnn.util.multi_proc_non_daemonic_spawn import NonDaemonicSpawnContext
 from returnn.config import SubProcCopyGlobalConfigPreInitFunc
@@ -167,17 +168,19 @@ class DistributeFilesDataset(CachedDataset2):
 
         self.distrib_shard_files = distrib_shard_files
         if distrib_shard_files:
+            assert self._num_shards == 1 and self._shard_index == 0, (  # ensure defaults are set
+                f"{self}: Cannot use both dataset-sharding via properties _num_shards and _shard index "
+                f"and {self.__class__.__name__}'s own sharding implementation based on the trainings rank and size."
+            )
             if _distrib_info:
                 # If we're in a child process `_get_rank_and_size()` no longer works,
                 # so we pass the info about the shards via a pickled property.
                 # See also Dataset.__reduce__.
-                self._shard_index = _distrib_info["shard_index"]
-                self._num_shards = _distrib_info["num_shards"]
+                self._shard_index = _distrib_info["_shard_index"]
+                self._num_shards = _distrib_info["_num_shards"]
             else:
                 self._shard_index, self._num_shards = _get_rank_and_size()
-        else:
-            self._shard_index = 0
-            self._num_shards = 1
+        assert 0 <= self._shard_index < self._num_shards
 
         if _meta_info_cache:
             # This allows to skip the lazy init in self.initialize().
@@ -197,9 +200,13 @@ class DistributeFilesDataset(CachedDataset2):
         self._lazy_init_num_outputs()
         super().initialize()
 
+    def supports_sharding(self) -> bool:
+        """:return: whether the dataset supports sharding based on the seq_order"""
+        return True
+
     @property
     def _distrib_info(self):
-        return {"num_shards": self._num_shards, "shard_index": self._shard_index}
+        return {"_num_shards": self._num_shards, "_shard_index": self._shard_index}
 
     @property
     def _meta_info_cache(self):
@@ -357,8 +364,7 @@ class DistributeFilesDataset(CachedDataset2):
         Distributes the files from files_order into ``num_bins`` while attempting
         to make every bin as evenly sized (based on ``file_sizes``) as possible.
         """
-
-        total_size = sum(file_sizes.values())
+        total_size = sum(file_sizes[_get_key_for_file_tree(f_tree)] for f_tree in files_order)
         avg_size_per_sub_epoch = total_size / num_bins
         # Now evenly distribute the files over the bins.
         # Note that many one-pass variants of algorithms to evenly distribute
@@ -573,6 +579,7 @@ def _worker_proc_loop(
     if sys.platform == "linux":
         with open("/proc/self/comm", "w") as f:
             f.write(f"CFD worker {epoch}")
+    better_exchook.setup_all()
 
     assert isinstance(epoch, int) and isinstance(buffer_size, int)
     assert isinstance(dataset_dict, dict)
@@ -594,7 +601,8 @@ def _worker_proc_loop(
         dataset.load_seqs(next_seq_idx, next_seq_idx + 1)
         seq_tag = dataset.get_tag(next_seq_idx)
         features = {data_key: dataset.get_data(next_seq_idx, data_key) for data_key in dataset.get_data_keys()}
-        res = DatasetSeq(seq_idx=next_seq_idx, seq_tag=seq_tag, features=features)
+        complete_frac = dataset.get_complete_frac(next_seq_idx, allow_only_lr_suitable=True)
+        res = DatasetSeq(seq_idx=next_seq_idx, seq_tag=seq_tag, features=features, complete_frac=complete_frac)
         cache.append(res)
         next_seq_idx += 1
         return True
@@ -662,4 +670,6 @@ def _worker_proc_loop(
             else:
                 raise Exception(f"unknown msg {msg!r}")
     except KeyboardInterrupt:  # when parent dies
+        pass
+    except EOFError:  # when parent dies
         pass

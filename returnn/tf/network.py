@@ -3,7 +3,7 @@ Defines the :class:`TFNetwork` and :class:`ExternData`.
 """
 
 from __future__ import annotations
-from typing import Optional, Any, List, Tuple, Dict
+from typing import Optional, Any, Protocol, List, Tuple, Dict
 import tensorflow as tf
 import sys
 import re
@@ -18,7 +18,6 @@ import returnn.tf.util.basic as tf_util
 from returnn.tensor import Tensor, Dim, TensorDict
 from returnn.tf.util.data import Data
 from returnn.util import basic as util
-from returnn.util.py_compat import Protocol
 
 
 class DataNotFound(Exception):
@@ -160,7 +159,7 @@ class ExternData(TensorDict):
                 # https://github.com/rwth-i6/returnn/issues/1121
                 with tf_util.reuse_name_scope_of_tensor(data.placeholder):
                     for dim in data.dims:
-                        if dim.dyn_size_ext and global_batch_dim_tag in dim.dyn_size_ext.dims:
+                        if dim.dyn_size_ext is not None and global_batch_dim_tag in dim.dyn_size_ext.dims:
                             if dim.dyn_size_ext.raw_tensor is not None:
                                 batch_dim_value = tf_util.get_shape_dim(
                                     dim.dyn_size_ext.raw_tensor,
@@ -206,7 +205,7 @@ class ExternData(TensorDict):
                 tag._maybe_update()
                 if (
                     # We want to set the batch info when this was newly created via _create_size_placeholder.
-                    tag.dyn_size_ext
+                    tag.dyn_size_ext is not None
                     and tag.dyn_size_ext.placeholder is not None
                     and not tag.batch
                     and not tag.dyn_size_ext.batch
@@ -539,7 +538,7 @@ class _NetworkConstructionStack:
         assert False, "we should not get here"
 
 
-class TFNetwork(object):
+class TFNetwork:
     """
     The main neural network, i.e. collection of interconnected layers, i.e. computation graph with trainable params.
     """
@@ -1356,7 +1355,7 @@ class TFNetwork(object):
                 layer.output.placeholder = identity_with_check_numerics(
                     layer.output.placeholder, name="%s_identity_with_check_numerics_output" % layer.tf_scope_name
                 )
-        assert layer.output
+        assert layer.output is not None
         if layer.output.placeholder is not None:
             layer.output.placeholder.set_shape(layer.output.batch_shape)
         return layer
@@ -3679,7 +3678,7 @@ class Subnetwork:
             raise new_exc
 
 
-class TFNetworkParamsSerialized(object):
+class TFNetworkParamsSerialized:
     """
     Holds all the params as numpy arrays, including auxiliary params.
     """

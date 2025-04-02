@@ -5,7 +5,7 @@ and model param update logic in general.
 
 from __future__ import annotations
 
-from typing import Optional, Union, Any, Type, Sequence, Iterable, Set, Dict, List, Tuple
+from typing import Optional, Union, Any, Type, Callable, Sequence, Iterable, Iterator, Set, Dict, List, Tuple
 import os
 import gc
 import torch
@@ -13,7 +13,7 @@ import typing
 
 import returnn
 from returnn.log import log
-from returnn.util.basic import RefIdEq
+from returnn.util.basic import RefIdEq, get_fwd_compat_kwargs
 import returnn.frontend as rf
 from returnn.torch.frontend.bridge import wrapped_pt_module_to_rf_module
 
@@ -38,28 +38,40 @@ def _init_optimizer_classes_dict():
         _OptimizerClassesDict[name.lower()] = cls
 
 
-def get_optimizer_class(class_name) -> Type[torch.optim.Optimizer]:
+def get_optimizer_class(
+    class_name: Union[str, Type[torch.optim.Optimizer], Callable[[], Type[torch.optim.Optimizer]]]
+) -> Type[torch.optim.Optimizer]:
     """
-    :param str|()->torch.optim.Optimizer|type[torch.optim.Optimizer] class_name:
-        Optimizer data, e.g. "adam", torch.optim.Adam...
-    :return: Optimizer class
+    :param class_name: Optimizer class, either as str (e.g. "adam"), as type (torch.optim.Adam) or callable.
+        If str, we support all torch.optim optimizers (ignoring case) (e.g. "adam"),
+        or class names with full module path (e.g. "returnn.torch.optim.lion.Lion").
+    :return: Optimizer class, e.g. torch.optim.Adam
     """
     _init_optimizer_classes_dict()
     if isinstance(class_name, type):
         assert issubclass(class_name, torch.optim.Optimizer)
+        return class_name
     elif callable(class_name):
-        class_name = class_name()
-    else:
-        assert isinstance(class_name, str)
-        assert (
-            class_name.lower() in _OptimizerClassesDict
-        ), "%s not found in the available torch optimizers list: %s." % (
-            class_name.lower(),
-            ", ".join("'%s'" % key for key in _OptimizerClassesDict),
-        )
-        class_name = _OptimizerClassesDict[class_name.lower()]
+        return class_name()
+    elif isinstance(class_name, str):
+        if "." in class_name:
+            import importlib
 
-    return class_name
+            mod_name, class_name_ = class_name.rsplit(".", 1)
+            mod = importlib.import_module(mod_name)
+            return getattr(mod, class_name_)
+
+        if class_name.lower() not in _OptimizerClassesDict:
+            raise ValueError(
+                "Optimizer %r not found in the available torch optimizers list: %s."
+                % (
+                    class_name.lower(),
+                    ", ".join("'%s'" % key for key in _OptimizerClassesDict),
+                )
+            )
+        return _OptimizerClassesDict[class_name.lower()]
+    else:
+        raise TypeError(f"Invalid optimizer class_name {class_name!r} type {type(class_name).__name__}")
 
 
 def _get_class_init_kwargs(optim_class):
@@ -92,12 +104,15 @@ class Updater:
         :param float initial_learning_rate:
         """
         self.config = config
-        self.learning_rate = initial_learning_rate
+        self.learning_rate = float(initial_learning_rate)
         self._effective_learning_rate = self.learning_rate
         self.network = network
         self._device = device
+        # Just set the very first step as initial values here.
+        # They will be overwritten via set_current_train_step() below.
         self._current_train_step = 0
-        self._current_epoch = 0
+        self._current_epoch = 1
+        self._current_epoch_continuous = 0.0
 
         self.learning_rate_function = self.config.typed_value("dynamic_learning_rate", None)
         if self.learning_rate_function is not None:
@@ -150,7 +165,7 @@ class Updater:
 
         :param float value: New learning rate.
         """
-        self.learning_rate = value
+        self.learning_rate = float(value)
         self._update_effective_learning_rate()
 
     def get_effective_learning_rate(self) -> float:
@@ -162,19 +177,39 @@ class Updater:
     def _update_effective_learning_rate(self):
         self._effective_learning_rate = self.learning_rate
         if self.learning_rate_function is not None:
-            self._effective_learning_rate = self.learning_rate_function(
-                global_train_step=self._current_train_step, epoch=self._current_epoch, learning_rate=self.learning_rate
+            lr = self.learning_rate_function(
+                global_train_step=self._current_train_step,
+                epoch=self._current_epoch,
+                epoch_continuous=self._current_epoch_continuous,
+                learning_rate=self.learning_rate,
+                **get_fwd_compat_kwargs(),
             )
+            self._effective_learning_rate = float(lr)
         if self.optimizer:
             for param_group in self.optimizer.param_groups:
                 param_group["lr"] = self._effective_learning_rate
 
-    def set_current_train_step(self, *, global_train_step: int, epoch: int):
+    def set_current_train_step(self, *, global_train_step: int, epoch: int, epoch_continuous: Optional[float] = None):
         """
         Obtains an updated learning rate for the current training step inside a (sub)epoch.
+
+        :param global_train_step: Current global training step over the whole training process.
+            In the first epoch, this starts at 0.
+        :param epoch: Current epoch. (First epoch is 1 by RETURNN convention.)
+        :param epoch_continuous: How much of the epoch is finished.
+            In the first step of the first epoch, this starts at 0.0,
+            and when the fist epoch is finished, this reaches 1.0,
+            and the values in between are the fraction of the epoch that is finished.
+            The second epoch (epoch=2) starts at 1.0,
+            and when the second epoch is finished, this reaches 2.0, and so on.
+            We usually calculate this based on ``epoch-1+(last_seq_idx+1)/num_seqs``,
+            if the dataset can provide ``num_seqs``.
+            Other schemes based on the step_idx might be used as well to calculate this,
+            if the number of steps per epoch is known in advance.
         """
         self._current_train_step = global_train_step
         self._current_epoch = epoch
+        self._current_epoch_continuous = epoch_continuous
         self._update_effective_learning_rate()
 
     def step(self, *, grad_scaler: Optional[torch.cuda.amp.GradScaler] = None):
@@ -388,13 +423,13 @@ class Updater:
         # If the user specified it as epsilon, parse it as eps for the optimizer
         if "eps" in optim_class_init_kwargs and "epsilon" in opt_kwargs:
             opt_kwargs["eps"] = opt_kwargs.pop("epsilon")
-        if "learning_rate" in opt_kwargs:
+        if "learning_rate" in opt_kwargs or "lr" in opt_kwargs:
             raise ValueError("'learning_rate' should be set outside of the 'optimizer' dict.")
         lr = lr * opt_kwargs.pop("learning_rate_multiplier", 1.0)
         opt_kwargs["lr"] = lr
 
-        param_groups = self._get_optimizer_param_groups(optim_class, opt_kwargs)
-        optimizer = optim_class(param_groups, **opt_kwargs)
+        params_or_param_groups = self._get_optimizer_param_groups(optim_class, opt_kwargs)
+        optimizer = optim_class(params_or_param_groups, **opt_kwargs)
         print("Optimizer: %s" % optimizer, file=log.v1)
         assert isinstance(optimizer, torch.optim.Optimizer)
 
@@ -412,7 +447,7 @@ class Updater:
 
     def _get_optimizer_param_groups(
         self, optim_class: Type[torch.optim.Optimizer], optimizer_opts: Dict[str, Any]
-    ) -> List[Dict[str, Any]]:
+    ) -> Union[List[Dict[str, Any]], Iterator[torch.nn.Parameter]]:
         """
         The weight_decay parameter from AdamW affects the weights of layers such as LayerNorm and Embedding.
         This function creates a blacklist of network modules and splits the optimizer groups in two:
@@ -467,11 +502,11 @@ class Updater:
             ), "weight_decay not accepted by the chosen optimizer. Accepted values: %s" % ", ".join(
                 "%s" % optim_name for optim_name in cls_init_kwargs
             )
-            return [{"params": network_params}]
+            return network_params
 
         weight_decay = optimizer_opts.get("weight_decay", 0.0)
         if not weight_decay:
-            return [{"params": network_params}]
+            return network_params
 
         # Distinguish between parameters with and without weight_decay/L2 regularization.
         # Parameters without weight decay: biases + LayerNorm/Embedding layers.

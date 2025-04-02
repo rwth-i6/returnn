@@ -100,7 +100,7 @@ class ConformerConvSubsample(ISeqDownsamplingEncoder):
         self,
         in_dim: Dim,
         *,
-        out_dims: List[Dim],
+        out_dims: List[Union[Dim, int]],
         filter_sizes: List[Union[int, Tuple[int, int]]],
         strides: Optional[List[Union[int, Tuple[int, int]]]] = None,
         pool_sizes: Optional[List[Tuple[int, int]]] = None,
@@ -123,11 +123,14 @@ class ConformerConvSubsample(ISeqDownsamplingEncoder):
         if strides is None:
             strides = [1] * len(out_dims)
         assert len(out_dims) == len(filter_sizes) == len(strides) > 0
-        self._dummy_in_dim = Dim(1, name="dummy-input-feature-dim")
+        self._dummy_in_dim = Dim(1, name="conv_dummy_in")
         self.in_dim = in_dim
         prev_out_dim = self._dummy_in_dim
         second_spatial_dim = in_dim
         for i, (filter_size, stride, out_dim) in enumerate(zip(filter_sizes, strides, out_dims)):
+            if isinstance(out_dim, int):
+                out_dim = Dim(out_dim, name=f"conv_out_{i}")
+            assert isinstance(out_dim, Dim)
             conv = rf.Conv2d(prev_out_dim, out_dim, filter_size=filter_size, strides=stride, padding=padding)
             self.conv_layers.append(conv)
             (second_spatial_dim,) = rf.make_conv_out_spatial_dims(
@@ -291,7 +294,7 @@ class ConformerEncoder(ISeqDownsamplingEncoder):
     def __init__(
         self,
         in_dim: Dim,
-        out_dim: Dim = Dim(512, name="conformer-enc-default-out-dim"),
+        out_dim: Union[Dim, int] = Dim(512, name="conformer-enc-default-out-dim"),
         *,
         num_layers: int,
         input_layer: Optional[Union[ConformerConvSubsample, ISeqDownsamplingEncoder, rf.Module, Any]],
@@ -309,6 +312,7 @@ class ConformerEncoder(ISeqDownsamplingEncoder):
         sequential=rf.Sequential,
     ):
         """
+        :param in_dim: input features (e.g. MFCC)
         :param out_dim: the output feature dimension
         :param num_layers: the number of encoder layers
         :param input_layer: input/frontend/prenet with potential subsampling.
@@ -329,12 +333,24 @@ class ConformerEncoder(ISeqDownsamplingEncoder):
         """
         super().__init__()
 
+        assert isinstance(in_dim, Dim)
+        if isinstance(out_dim, int):
+            out_dim = Dim(out_dim, name="conformer-enc-out-dim")
+        assert isinstance(out_dim, Dim)
+
         self.in_dim = in_dim
         self.out_dim = out_dim
         self.dropout = dropout
         self.dropout_broadcast = rf.dropout_broadcast_default()
 
         # TODO once we figured out good defaults, we would create ConformerConvSubsample here when not given
+        if callable(input_layer) or input_layer is None:
+            pass  # leave it as is
+        elif isinstance(input_layer, dict):
+            input_layer = rf.build_from_dict(input_layer, in_dim)
+            input_layer: ConformerConvSubsample  # maybe not true, but assume for some attribs
+        else:
+            raise TypeError(f"unexpected input_layer {input_layer!r}")
         self.input_layer = input_layer
         self.input_projection = (
             rf.Linear(self.input_layer.out_dim if self.input_layer else self.in_dim, self.out_dim, with_bias=False)

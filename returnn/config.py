@@ -7,11 +7,14 @@ from __future__ import annotations
 __author__ = "Patrick Doetsch"
 __credits__ = ["Patrick Doetsch", "Paul Voigtlaender"]
 
-from typing import Optional, Any, Dict, List
+from typing import TypeVar, Type, Optional, Union, Any, Dict, List, Sequence, Tuple
 import contextlib
 import sys
 import os
 import types as _types
+
+
+T = TypeVar("T")
 
 
 class Config:
@@ -140,11 +143,10 @@ class Config:
             self.add_line(key=line[0], value=line[1])
 
     @classmethod
-    def get_config_file_type(cls, f):
+    def get_config_file_type(cls, f: str) -> str:
         """
-        :param str f: file path
+        :param f: file path
         :return: "py", "js" or "txt"
-        :rtype: str
         """
         with open(f, "r") as f:
             start = f.read(3)
@@ -154,9 +156,9 @@ class Config:
             return "js"
         return "txt"
 
-    def parse_cmd_args(self, args):
+    def parse_cmd_args(self, args: Sequence[str]):
         """
-        :param list[str]|tuple[str] args:
+        :param args:
         """
         from optparse import OptionParser
 
@@ -262,11 +264,12 @@ class Config:
                 value = value[1:]  # otherwise we never could specify things like "++threshold -0.1"
             self.add_line(key=key[2:], value=value)
 
-    def add_line(self, key, value):
+    def add_line(self, key: str, value: str):
         """
         Adds one specific configuration (key,value) pair to the inner set of parameters
-        :type key: str
-        :type value: str
+
+        :param key:
+        :param value:
         """
         if key in self.typed_dict:
             # This is a special case. We overwrite a config value which was typed before.
@@ -300,69 +303,65 @@ class Config:
         else:
             self.dict[key] = value
 
-    def has(self, key):
+    def has(self, key: str) -> bool:
         """
         Returns whether the given key is present in the inner set of parameters
-        :type key: string
-        :rtype: boolean
-        :returns True if and only if the given key is in the inner set of parameters
+
+        :param key:
+        :returns: True if and only if the given key is in the inner set of parameters
         """
         if key in self.typed_dict:
             return True
         return key in self.dict
 
-    def is_typed(self, key):
+    def is_typed(self, key: str) -> bool:
         """
-        :type key: string
-        :rtype: boolean
-        :returns True if and only if the value of the given key has a specified data type
+        :param key:
+        :returns: True if and only if the value of the given key has a specified data type
         """
         return key in self.typed_dict
 
-    def is_true(self, key, default=False):
+    def is_true(self, key: str, default: bool = False) -> bool:
         """
-        :param str key:
-        :param bool default:
+        :param key:
+        :param default:
         :return: bool(value) if it is set or default
-        :rtype: bool
         """
         if self.is_typed(key):
             return bool(self.typed_dict[key])
         return self.bool(key, default=default)
 
-    def is_of_type(self, key, types):
+    def is_of_type(self, key: str, types: Union[type, Tuple[type, ...]]) -> bool:
         """
-        :param str key:
-        :param type|tuple[type] types: for isinstance() check
+        :param key:
+        :param types: for isinstance() check
         :return: whether is_typed(key) is True and isinstance(value, types) is True
-        :rtype: bool
         """
         if key in self.typed_dict:
             return isinstance(self.typed_dict[key], types)
         return False
 
-    def get_of_type(self, key, types, default=None):
+    def get_of_type(self, key: str, types: Union[type, Tuple[type, ...], Type[T]], default: Optional[T] = None) -> T:
         """
         :param str key:
-        :param type|list[type]|T types: for isinstance() check
-        :param T|None default:
+        :param types: for isinstance() check
+        :param default:
         :return: if is_of_type(key, types) is True, returns the value, otherwise default
-        :rtype: T
         """
         if self.is_of_type(key, types):
             return self.typed_dict[key]
         return default
 
-    def set(self, key, value):
+    def set(self, key: str, value: Any):
         """
-        :type key: str
-        :type value: list[str] | str | int | float | bool | dict | None
+        :param key:
+        :param value:
         """
         self.typed_dict[key] = value
 
-    def update(self, dikt):
+    def update(self, dikt: Dict[str, Any]):
         """
-        :type dikt: dict
+        :param dikt: dict
         """
         for key, value in dikt.items():
             self.set(key, value)
@@ -383,13 +382,12 @@ class Config:
 
         setattr(self, "value", wrapped_value_func)
 
-    def value(self, key, default, index=None, list_join_str=","):
+    def value(self, key: str, default: T, index: Optional[int] = None, list_join_str: str = ",") -> Union[T, str]:
         """
-        :type key: str
-        :type default: T
-        :type index: int | None
-        :param str list_join_str:
-        :rtype: str | T
+        :param key:
+        :param default:
+        :param index:
+        :param list_join_str:
         """
         if key in self.typed_dict:
             ls = self.typed_dict[key]
@@ -410,12 +408,11 @@ class Config:
                 return ls[index]
         return default
 
-    def typed_value(self, key, default=None, index=None):
+    def typed_value(self, key: str, default: Optional[T] = None, index: Optional[int] = None) -> Union[T, Any]:
         """
-        :type key: str
-        :type default: T
-        :type index: int | None
-        :rtype: T | typing.Any
+        :param key:
+        :param default:
+        :param index:
         """
         value = self.typed_dict.get(key, default)
         if index is not None:
@@ -426,23 +423,22 @@ class Config:
                 assert index == 0
         return value
 
-    def opt_typed_value(self, key, default=None):
+    def opt_typed_value(self, key: str, default: Optional[T] = None) -> Union[T, Any, str]:
         """
-        :param str key:
-        :param T|None default:
-        :rtype: T|object|str|None
+        :param key:
+        :param default:
         """
         if key in self.typed_dict:
             return self.typed_dict[key]
         return self.value(key, default)
 
-    def int(self, key, default, index=0):
+    def int(self, key: str, default: T, index: int = 0) -> Union[int, T]:
         """
         Parses the value of the given key as integer, returning default if not existent
-        :type key: str
-        :type default: T
-        :type index: int
-        :rtype: int | T
+
+        :param key:
+        :param default:
+        :param index:
         """
         if key in self.typed_dict:
             value = self.typed_value(key, default=default, index=index)
@@ -453,13 +449,13 @@ class Config:
             return int(self.value(key, default, index))
         return default
 
-    def bool(self, key, default, index=0):
+    def bool(self, key: str, default: T, index: int = 0) -> Union[bool, T]:
         """
         Parses the value of the given key as boolean, returning default if not existent
-        :type key: str
-        :type default: T
-        :type index: int
-        :rtype: bool | T
+
+        :param key:
+        :param default:
+        :param index:
         """
         if key in self.typed_dict:
             value = self.typed_value(key, default=default, index=index)
@@ -477,13 +473,12 @@ class Config:
 
         return to_bool(v)
 
-    def bool_or_other(self, key, default=None, index=0):
+    def bool_or_other(self, key: str, default: Optional[T] = None, index: int = 0) -> Union[bool, T, Any]:
         """
-        :param str key:
-        :param T default:
-        :param int index:
+        :param key:
+        :param default:
+        :param index:
         :return: if we have typed value, just as-is. otherwise try to convert to bool. or default if not there.
-        :rtype: bool|T|object
         """
         if key in self.typed_dict:
             return self.typed_value(key, default=default, index=index)
@@ -499,13 +494,13 @@ class Config:
         except ValueError:
             return v
 
-    def float(self, key, default, index=0):
+    def float(self, key: str, default: T, index: int = 0) -> Union[float, T]:
         """
         Parses the value of the given key as float, returning default if not existent
-        :type key: str
-        :type default: T
-        :type index: int
-        :rtype: float | T
+
+        :param key:
+        :param default:
+        :param index:
         """
         if key in self.typed_dict:
             value = self.typed_value(key, default=default, index=index)
@@ -519,11 +514,10 @@ class Config:
             assert isinstance(value, (int, float))
         return value
 
-    def list(self, key, default=None):
+    def list(self, key: str, default: Optional[T] = None) -> Union[List[str], T]:
         """
-        :type key: str
-        :type default: T
-        :rtype: list[str] | T
+        :param key:
+        :param default:
         """
         if default is None:
             default = []
@@ -538,11 +532,10 @@ class Config:
             return default
         return self.dict[key]
 
-    def int_list(self, key, default=None):
+    def int_list(self, key: str, default: Optional[T] = None) -> Union[List[int], T]:
         """
-        :type key: str
-        :type default: T
-        :rtype: list[int] | T
+        :param key:
+        :param default:
         """
         if default is None:
             default = []
@@ -557,11 +550,10 @@ class Config:
             return list(value)
         return [int(x) for x in self.list(key, default)]
 
-    def float_list(self, key, default=None):
+    def float_list(self, key: str, default: Optional[T] = None) -> Union[List[float], T]:
         """
-        :type key: str
-        :type default: T
-        :rtype: list[float] | T
+        :param key:
+        :param default:
         """
         if default is None:
             default = []
@@ -576,11 +568,10 @@ class Config:
             return list(value)
         return [float(x) for x in self.list(key, default)]
 
-    def int_pair(self, key, default=None):
+    def int_pair(self, key: str, default: Optional[Tuple[int, int]] = None) -> Tuple[int, int]:
         """
-        :param str key:
-        :param (int,int)|None default:
-        :rtype: (int,int)
+        :param key:
+        :param default:
         """
         if default is None:
             default = (0, 0)
@@ -807,6 +798,7 @@ class SubProcCopyGlobalConfigPreInitFunc:
 
     def __call__(self):
         from returnn.util import better_exchook
+        from returnn.log import log
         from returnn import __old_mod_loader__
 
         better_exchook.install()
@@ -814,3 +806,7 @@ class SubProcCopyGlobalConfigPreInitFunc:
 
         if self.global_config:
             set_global_config(self.global_config)
+            log.init_by_config(self.global_config)
+        else:
+            if not log.initialized:
+                log.initialize(verbosity=[5])

@@ -9,10 +9,9 @@ https://github.com/rwth-i6/returnn/issues/1518
 """
 
 from __future__ import annotations
-from typing import Optional, Union
+from typing import Optional, Union, Protocol
 import copyreg
 import weakref
-from returnn.util.py_compat import Protocol
 import returnn.frontend as rf
 from returnn.tensor import Tensor
 

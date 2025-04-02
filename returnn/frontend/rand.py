@@ -64,18 +64,20 @@ __all__ = [
     "random_uniform",
     "random_normal",
     "random_truncated_normal",
+    "random_choice_without_replacement",
 ]
 
 
 def set_random_seed(seed: int):
     """
+    This initializes the random state of the backend
+    and also the step-based random state
+    (see :func:`get_static_step_based_seed`, only used when ``static=True`` in :func:`random`).
+
     Call this at the beginning of the program
     (after the RF backend was selected),
-    or when the model and computation graph is supposed to be reinitialized.
-
-    This initializes the random state of the backend and also the step-based random state.
-
-    This is *not* expected to be called after each epoch or step.
+    or when the model and computation graph is supposed to be reinitialized
+    or at the beginning of each epoch.
 
     :param seed: should depend on epoch or step
     """
@@ -124,6 +126,8 @@ def reset_step_random_state():
 
 def get_static_step_based_seed(*, size=None) -> Union[int, numpy.ndarray]:
     """
+    This is intended as a static seed for :func:`random` when ``static=True`` is used.
+
     :return: from the static step-based random state, get a seed
     """
     return _step_rnd.randint(2**31, size=size)
@@ -178,20 +182,22 @@ def random(
     :param int|float|Tensor|None mean:
     :param int|float|Tensor|None stddev:
     :param int|float|Tensor|None bound: for uniform, defining the range [-bound, bound)
-    :param int|float|Tensor|None minval: for uniform
-    :param int|float|Tensor|None maxval: for uniform
-    :param int|list[int]|numpy.ndarray|None seed: If not given, uses self.network.random.randint,
-      i.e. then it is controlled by the global seed setting, and every layer would get its own seed.
-      If you specify it explicitly, make sure every :class:`RandomLayer` uses a different seed,
-      otherwise you would get the same random numbers everywhere.
+    :param int|float|Tensor|None minval: for uniform, inclusive
+    :param int|float|Tensor|None maxval: for uniform, exclusive
+    :param int|list[int]|numpy.ndarray|None seed:
+        Only for the case ``static=True``.
+        If not given, uses self.network.random.randint,
+        i.e. then it is controlled by the global seed setting, and every layer would get its own seed.
+        If you specify it explicitly, make sure every :class:`RandomLayer` uses a different seed,
+        otherwise you would get the same random numbers everywhere.
     :param str|tf.random.Algorithm|None algorithm: see :class:`RandomStateInitLayer`
     :param Tensor|None explicit_state: You can pass the state explicitly here.
-      If not given, will be created automatically, and updated automatically.
-      You could pass a :class:`VariableLayer` with initial value via :class:`RandomStateInitLayer`,
-      or directly a :class:`RandomStateInitLayer`.
-      If auto_update_state is True, it must be a variable,
-      and every time a new random number is created, this variable is updated.
-      Otherwise (default), it will not be updated automatically.
+        If not given, will be created automatically, and updated automatically.
+        You could pass a :class:`VariableLayer` with initial value via :class:`RandomStateInitLayer`,
+        or directly a :class:`RandomStateInitLayer`.
+        If auto_update_state is True, it must be a variable,
+        and every time a new random number is created, this variable is updated.
+        Otherwise (default), it will not be updated automatically.
     :param bool|None auto_update_state: only used when you pass an explicit state
     :param bool|None static: if no state at all should be used. it just relies on the seed then.
     :param out: if given, will directly write into it, if possible by backend
@@ -248,6 +254,7 @@ def random_uniform(
 ):
     """
     See :func:`random`. :func:`random` with ``distribution="uniform"``.
+    ``maxval`` is exclusive.
     """
     return random(
         dims=dims,
@@ -343,3 +350,32 @@ def random_truncated_normal(
         static=static,
         out=out,
     )
+
+
+def random_choice_without_replacement(
+    *,
+    log_probs: Tensor,
+    axis: Union[Dim, Sequence[Dim]],
+    num_samples_dim: Dim,
+    noise_scale: Union[float, Tensor] = 1.0,
+) -> Union[Tensor, Sequence[Tensor]]:
+    """
+    Randomly sample without replacement.
+
+    :param log_probs: {log_probs_dims..., axis}
+    :param axis: same as in :func:`top_k`
+    :param num_samples_dim: how many samples to draw
+    :param noise_scale: scale the noise. with scale=0, you get :func:`top_k`.
+    :return: random indices shape {log_probs_dims..., num_samples_dim} -> axis.
+        if axis was a sequence, will return a sequence of tensors.
+    """
+    # https://github.com/tensorflow/tensorflow/issues/9260
+    # https://timvieira.github.io/blog/post/2014/08/01/gumbel-max-trick-and-weighted-reservoir-sampling/
+    scores_random_sample = -rf.log(
+        -rf.log(random_uniform(log_probs.dims, dtype=log_probs.dtype, device=log_probs.device))
+    )
+    if not isinstance(noise_scale, (int, float)) or noise_scale != 1.0:
+        scores_random_sample *= noise_scale
+    scores = log_probs + scores_random_sample
+    _, indices, _ = rf.top_k(scores, k_dim=num_samples_dim, axis=axis)
+    return indices

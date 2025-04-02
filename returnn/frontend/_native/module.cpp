@@ -312,8 +312,9 @@ bool PyModuleState::_cachedOpInitTorch() {
     AddOp(TOp_FloorDiv, "floor_divide");
     AddOp(TOp_Mod, "remainder");
     AddOp(TOp_Pow, "pow");
-    AddOp(TOp_Maximum, "maximum");
-    AddOp(TOp_Minimum, "minimum");
+    // Use clamp_min/clamp_max instead of maximum/minimum because the former allow number arguments.
+    AddOp(TOp_Maximum, "clamp_min");
+    AddOp(TOp_Minimum, "clamp_max");
     AddOpAlt(TOp_SquaredDifference, "squared_difference");
     AddOp(TOp_And, "logical_and");
     AddOp(TOp_Or, "logical_or");
