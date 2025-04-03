@@ -398,7 +398,12 @@ jobs:
         # Needed for some tests.
         # transformers 4.50 requires PyTorch >2.0, so stick to transformers 4.49 for now.
         # (https://github.com/rwth-i6/returnn/issues/1706)
-        pip install --user --progress-bar=off transformers==4.49.0
+        if [[ "${{matrix.python-version}}" == 3.8 ]]; then
+          # Need older version for Python 3.8. Install whatever is available.
+          pip install --user --progress-bar=off transformers
+        else
+          pip install --user --progress-bar=off transformers==4.49.0
+        fi
         pip install --user --progress-bar=off espnet
         # TorchAudio needed by ESPnet.
         # https://pytorch.org/audio/stable/installation.html#compatibility-matrix
