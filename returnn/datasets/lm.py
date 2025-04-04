@@ -55,6 +55,7 @@ class LmDataset(CachedDataset2):
         orth_symbols_file=None,
         orth_symbols_map_file=None,
         orth_replace_map_file=None,
+        orth_post_process=None,
         word_based=False,
         word_end_symbol=None,
         seq_end_symbol="[END]",
@@ -101,6 +102,7 @@ class LmDataset(CachedDataset2):
                                                        a python dict with {"<symbol>": <index>, ...}
                                                        or a pickled dictionary
         :param str|()->str|None orth_replace_map_file: JSON file with replacement dict for orth symbols.
+        :param str|list[str]|function|None orth_post_process: :func:`get_post_processor_function`, applied on orth
         :param bool word_based: whether to parse single words, or otherwise will be character based.
         :param str|None word_end_symbol: If provided and if word_based is False (character based modeling),
             token to be used to represent word ends.
@@ -246,6 +248,10 @@ class LmDataset(CachedDataset2):
                 self.orth_replace_map[" "] = [word_end_symbol]  # Replace all spaces by word_end_symbol.
         else:
             assert not orth_replace_map_file
+
+        self.orth_post_process = None
+        if orth_post_process:
+            self.orth_post_process = get_post_processor_function(orth_post_process)
 
         num_labels = len(self.labels["data"])
         if dtype:
@@ -577,6 +583,9 @@ class LmDataset(CachedDataset2):
             else:
                 seq_tag = self._seq_list[true_idx]
             self.next_orth_idx += 1
+
+            if self.orth_post_process:
+                orth = self.orth_post_process(orth)
 
             if self.orth_vocab is not None:
                 data = numpy.array(self.orth_vocab.get_seq(orth), dtype=self.dtype)
@@ -2421,7 +2430,7 @@ def get_post_processor_function(opts):
     for some normalization / cleanup.
     This function can be used to get such functions.
 
-    :param str|list[str] opts: e.g. "english_cleaners", or "get_remove_chars(',/')"
+    :param str|list[str]|function opts: e.g. "english_cleaners", or "get_remove_chars(',/')"
     :return: function
     :rtype: (str)->str
     """
