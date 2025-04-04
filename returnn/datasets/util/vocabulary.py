@@ -157,7 +157,7 @@ class Vocabulary:
 
     def _parse_vocab(self):
         """
-        Sets self.vocab, self.labels, self.num_labels.
+        Sets self._vocab, self._labels, self.num_labels.
         """
         filename = self.vocab_file
         if self._labels is not None:
@@ -167,10 +167,11 @@ class Vocabulary:
             self._vocab, self._labels = self._cache[filename]
             self.num_labels = len(self._labels)
         else:
+            labels_from_idx = None
             if filename.endswith(".pkl"):
                 import pickle
 
-                d = pickle.load(open(filename, "rb"))
+                labels_to_idx = pickle.load(open(filename, "rb"))
             else:
                 if filename.endswith(".gz"):
                     import gzip
@@ -179,24 +180,28 @@ class Vocabulary:
                 else:
                     file_content = open(filename, "r", encoding="utf8").read()
                 if file_content.startswith("{"):
-                    d = eval(file_content)
+                    labels_to_idx = eval(file_content)
                 else:
                     # Do line-based parsing.
-                    lines = file_content.splitlines()
-                    d = {line: i for (i, line) in enumerate(lines)}
-            assert isinstance(d, dict), f"{self}: expected dict, got {type(d).__name__} in {filename}"
-            labels = {idx: label for (label, idx) in sorted(d.items())}
-            min_label, max_label, num_labels = min(labels), max(labels), len(labels)
+                    labels = file_content.splitlines()
+                    labels_from_idx = {i: line for (i, line) in enumerate(labels)}
+                    labels_to_idx = {line: i for (i, line) in enumerate(labels)}
+            assert isinstance(
+                labels_to_idx, dict
+            ), f"{self}: expected dict, got {type(labels_to_idx).__name__} in {filename}"
+            if labels_from_idx is None:
+                labels_from_idx = {idx: label for (label, idx) in sorted(labels_to_idx.items())}
+            min_label, max_label, num_labels = min(labels_from_idx), max(labels_from_idx), len(labels_from_idx)
             if 0 != min_label or num_labels - 1 != max_label:
                 raise Exception(
                     f"Vocab error: not all indices used? min label idx {min_label}, max label idx {max_label},"
                     f" num labels {num_labels}, "
-                    f" unused labels: {[i for i in range(max_label + 1) if i not in labels]}."
+                    f" unused labels: {[i for i in range(max_label + 1) if i not in labels_from_idx]}."
                     "There are duplicates in the vocab."
                 )
-            self.num_labels = len(labels)
-            self._vocab = d
-            self._labels = [label for (idx, label) in sorted(labels.items())]
+            self.num_labels = len(labels_from_idx)
+            self._vocab = labels_to_idx
+            self._labels = [label for (idx, label) in sorted(labels_from_idx.items())]
             self._cache[filename] = (self._vocab, self._labels)
 
     @classmethod
