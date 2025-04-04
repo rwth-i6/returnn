@@ -187,11 +187,13 @@ class Vocabulary:
             assert isinstance(d, dict), f"{self}: expected dict, got {type(d).__name__} in {filename}"
             labels = {idx: label for (label, idx) in sorted(d.items())}
             min_label, max_label, num_labels = min(labels), max(labels), len(labels)
-            assert 0 == min_label
-            if num_labels - 1 < max_label:
-                print("Vocab error: not all indices used? max label: %i" % max_label, file=log.v1)
-                print("unused labels: %r" % ([i for i in range(max_label + 1) if i not in labels],), file=log.v2)
-            assert num_labels - 1 == max_label
+            if 0 != min_label or num_labels - 1 != max_label:
+                raise Exception(
+                    f"Vocab error: not all indices used? min label idx {min_label}, max label idx {max_label},"
+                    f" num labels {num_labels}, "
+                    f" unused labels: {[i for i in range(max_label + 1) if i not in labels]}."
+                    "There are duplicates in the vocab."
+                )
             self.num_labels = len(labels)
             self._vocab = d
             self._labels = [label for (idx, label) in sorted(labels.items())]
