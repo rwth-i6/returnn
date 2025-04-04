@@ -2037,7 +2037,7 @@ class LibriSpeechCorpus(CachedDataset2):
         """
         :param str path: dir, should contain "train-*/*/*/{*.flac,*.trans.txt}", or "train-*.zip"
         :param str prefix: "train", "dev", "test", "dev-clean", "dev-other", ...
-        :param str|list[str]|None orth_post_process: :func:`get_post_processor_function`, applied on orth
+        :param str|list[str]|function|None orth_post_process: :func:`get_post_processor_function`, applied on orth
         :param str|dict[str]|None targets: "bpe" or "chars" or None or dict for :func:`Vocabulary.create_vocab`
         :param dict[str]|None audio: options for :class:`ExtractAudioFeatures`
         :param dict[str]|None bpe: options for :class:`BytePairEncoding`
