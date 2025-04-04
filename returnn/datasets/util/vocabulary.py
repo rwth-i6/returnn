@@ -17,7 +17,6 @@ from typing import Optional, Union, Type, Callable, List, Dict
 import sys
 import numpy
 
-from returnn.log import log
 from returnn.util.basic import NotSpecified
 
 
