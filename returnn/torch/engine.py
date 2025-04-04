@@ -942,8 +942,13 @@ class Engine(EngineBase):
                         continue
                 if opts["filename"] is None:
                     print(f"Pre-load (initialize) weights for key '{preload_key}'", file=log.v3)
-                    pattern = opts["pattern"]
-                    match = re.compile(fnmatch.translate(pattern)).match
+                    if opts.get("pattern", None) is not None:
+                        pattern = opts["pattern"]
+                        match = re.compile(fnmatch.translate(pattern)).match
+                    elif opts.get("prefix", None) is not None:
+                        match = re.compile(re.escape(opts["prefix"]) + ".*").fullmatch
+                    else:
+                        raise ValueError(f"preload key {preload_key} without file {opts}: no pattern or prefix given")
                     remove = []
                     for name in self._pt_model.state_dict().keys():
                         if match(name) and name in missing_keys:
