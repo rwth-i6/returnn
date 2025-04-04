@@ -175,9 +175,9 @@ class Vocabulary:
                 if filename.endswith(".gz"):
                     import gzip
 
-                    file_content = gzip.open(filename, "rt").read()
+                    file_content = gzip.open(filename, "rt", encoding="utf8").read()
                 else:
-                    file_content = open(filename, "r").read()
+                    file_content = open(filename, "r", encoding="utf8").read()
                 if file_content.startswith("{"):
                     d = eval(file_content)
                 else:
