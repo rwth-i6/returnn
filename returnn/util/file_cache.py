@@ -328,15 +328,22 @@ class FileCache:
         with LockFile(
             directory=dst_dir, name=os.path.basename(dst_filename) + ".lock", lock_timeout=self._lock_timeout
         ) as lock, self._touch_files_thread.files_added_context(lock.lockfile):
+            # Make sure we have enough disk space.
+            #
+            # Aquire cleanup lock (and potentially cleanup) before checking if the file exists
+            # to synchronize with other processes.
+            with LockFile(
+                directory=self.cache_directory, name="cleanup.lock", lock_timeout=self._lock_timeout
+            ) as lock_cleanup, self._touch_files_thread.files_added_context(lock_cleanup.lockfile):
+                # st_size +1 due to _copy_with_prealloc
+                self.cleanup(need_at_least_free_space_size=os.stat(src_filename).st_size + 1)
+
             # Maybe it was copied in the meantime, while waiting for the lock.
             if self._check_existing_copied_file_maybe_cleanup(src_filename, dst_filename):
                 print(f"FileCache: using existing file {dst_filename}")
                 return
 
             print(f"FileCache: Copy file {src_filename} to cache")
-
-            # Make sure we have enough disk space, st_size +1 due to _copy_with_prealloc
-            self.cleanup(need_at_least_free_space_size=os.stat(src_filename).st_size + 1)
 
             dst_tmp_filename = dst_filename + ".copy"
             if os.path.exists(dst_tmp_filename):
