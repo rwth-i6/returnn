@@ -338,10 +338,11 @@ class FileCache:
                 # st_size +1 due to _copy_with_prealloc
                 self.cleanup(need_at_least_free_space_size=os.stat(src_filename).st_size + 1)
 
-            # Maybe it was copied in the meantime, while waiting for the lock.
-            if self._check_existing_copied_file_maybe_cleanup(src_filename, dst_filename):
-                print(f"FileCache: using existing file {dst_filename}")
-                return
+                # Maybe it was copied in the meantime, while waiting for any of the locks.
+                if self._check_existing_copied_file_maybe_cleanup(src_filename, dst_filename):
+                    print(f"FileCache: using existing file {dst_filename}")
+                    os.utime(dst_filename, None)  # update mtime while holding lock
+                    return
 
             print(f"FileCache: Copy file {src_filename} to cache")
 
