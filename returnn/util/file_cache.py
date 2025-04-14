@@ -332,6 +332,8 @@ class FileCache:
             #
             # Aquire cleanup lock (and potentially cleanup) before checking if the file exists
             # to synchronize with other processes.
+            #
+            # See https://github.com/rwth-i6/returnn/issues/1675 for discussion.
             with LockFile(
                 directory=self.cache_directory, name="cleanup.lock", lock_timeout=self._lock_timeout
             ) as lock_cleanup, self._touch_files_thread.files_added_context(lock_cleanup.lockfile):
