@@ -208,14 +208,17 @@ class FileCache:
                 else nullcontext()  # lock already held and cannot reenter
             )
             with lock:
-                if os.stat(fn).st_mtime > cur_time:  # re-check mtime with lock
-                    # We do not update the `mtime` variable here, because the code
-                    # assumes that the list of files is sorted by mtime to abort
-                    # early when enough space has been made.
-                    #
-                    # Instead, we treat the case where the mtime was updated during
-                    # cleanup as an outlier and continue as if no other mtimes had
-                    # changed.
+                # Re-check mtime with lock, could have been updated by another
+                # process in the meantime.
+                #
+                # We do not update the `mtime` variable here, because the code
+                # assumes that the list of files is sorted by mtime to abort
+                # early when enough space has been made.
+                #
+                # Instead, we treat the case where the mtime was updated during
+                # cleanup as an outlier and continue as if no other mtimes had
+                # changed.
+                if os.stat(fn).st_mtime > cur_time:
                     print(f"FileCache: {fn} has been updated during cleanup, skipping.")
                     continue
                 if cur_time - mtime > self._cleanup_files_always_older_than_days * 60 * 60 * 24:
