@@ -3185,7 +3185,7 @@ class LockFile:
             # Check if it is a really old one.
             self.maybe_remove_old_lockfile()
             # Wait a bit, and then retry.
-            time.sleep(1)
+            time.sleep(min(wait_count * 0.1, 1.0))
             wait_count += 1
             if wait_count == 10:
                 print("Waiting for lock-file: %s" % self.lockfile)
