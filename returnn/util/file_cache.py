@@ -218,7 +218,7 @@ class FileCache:
                 # Instead, we treat the case where the mtime was updated during
                 # cleanup as an outlier and continue as if no other mtimes had
                 # changed.
-                if os.stat(fn).st_mtime > cur_time:
+                if os.stat(fn).st_mtime > mtime:
                     print(f"FileCache: {fn} has been updated during cleanup, skipping.")
                     continue
                 if cur_time - mtime > self._cleanup_files_always_older_than_days * 60 * 60 * 24:
