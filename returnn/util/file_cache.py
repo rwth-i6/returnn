@@ -209,7 +209,14 @@ class FileCache:
             )
             with lock:
                 if os.stat(fn).st_mtime > cur_time:  # re-check mtime with lock
-                    print(f"FileCache: {fn} has been updated in the meantime, skipping.")
+                    # We do not update the `mtime` variable here, because the code
+                    # assumes that the list of files is sorted by mtime to abort
+                    # early when enough space has been made.
+                    #
+                    # Instead, we treat the case where the mtime was updated during
+                    # cleanup as an outlier and continue as if no other mtimes had
+                    # changed.
+                    print(f"FileCache: {fn} has been updated during cleanup, skipping.")
                     continue
                 if cur_time - mtime > self._cleanup_files_always_older_than_days * 60 * 60 * 24:
                     delete_reason = f"File is {(cur_time - mtime) / 60 / 60 / 24:.1f} days old"
