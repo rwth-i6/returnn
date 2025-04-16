@@ -364,7 +364,7 @@ class FileCache:
             print(f"FileCache: Copy file {src_filename} to cache")
 
             # Make sure we have enough disk space, st_size +1 due to _copy_with_prealloc
-            self.cleanup(lock_held_for=lock, need_at_least_free_space_size=os.stat(src_filename).st_size + 1)
+            self.cleanup(need_at_least_free_space_size=os.stat(src_filename).st_size + 1)
 
             dst_tmp_filename = dst_filename + ".copy"
             if os.path.exists(dst_tmp_filename):
