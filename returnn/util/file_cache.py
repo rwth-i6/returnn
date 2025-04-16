@@ -18,7 +18,7 @@ import shutil
 import dataclasses
 from dataclasses import dataclass
 from collections import defaultdict
-from contextlib import contextmanager, nullcontext
+from contextlib import contextmanager
 import json
 from threading import Thread, Event
 from returnn.config import Config, get_global_config
@@ -143,7 +143,7 @@ class FileCache:
             filenames = [filenames]
         self._touch_files_thread.files_remove(fn_ for fn in filenames for fn_ in [fn, self._get_info_filename(fn)])
 
-    def cleanup(self, *, lock_held_for: Optional[LockFile] = None, need_at_least_free_space_size: int = 0):
+    def cleanup(self, *, need_at_least_free_space_size: int = 0):
         """
         Cleanup cache directory.
         """
@@ -202,12 +202,7 @@ class FileCache:
             delete_reason = None
 
             lock_dir, lock_file = self._get_lock_filename(fn)
-            lock = (
-                LockFile(directory=lock_dir, name=lock_file, lock_timeout=self._lock_timeout)
-                if lock_held_for is None or lock_held_for.lockfile != fn
-                else nullcontext()  # lock already held and cannot reenter
-            )
-            with lock:
+            with LockFile(directory=lock_dir, name=lock_file, lock_timeout=self._lock_timeout):
                 # Re-check mtime with lock, could have been updated by another
                 # process in the meantime.
                 #
