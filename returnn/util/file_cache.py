@@ -178,6 +178,9 @@ class FileCache:
                 elif self._is_info_filename(fn):
                     # skip keepalive files, they are processed together with the file they guard
                     continue
+                elif self._is_lock_filename(fn):
+                    # skip lock files, removing them would accidentally release locks
+                    continue
                 try:
                     f_stat = os.stat(fn)
                 except Exception as exc:
@@ -329,7 +332,13 @@ class FileCache:
 
     @staticmethod
     def _get_lock_filename(filename: str) -> Tuple[str, str]:
-        return os.path.dirname(filename), os.path.basename(filename) + ".lock"
+        """:return: lock file target directory and lock file name"""
+        return os.path.dirname(filename), os.path.basename(filename) + ".returnn-lock"
+
+    @staticmethod
+    def _is_lock_filename(filename: str) -> bool:
+        """:return: whether `filename` points to a lock file."""
+        return filename.endswith(".returnn-lock")
 
     @staticmethod
     def _is_info_filename(filename: str) -> bool:
