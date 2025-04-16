@@ -355,8 +355,9 @@ class FileCache:
             if self._check_existing_copied_file_maybe_cleanup(src_filename, dst_filename):
                 print(f"FileCache: using existing file {dst_filename}")
                 # Update mtime while holding lock, to synchronize with any concurrent cleanup.
-                #
-                # See https://github.com/rwth-i6/returnn/issues/1675 for discussion.
+                # See for discussion:
+                #   - https://github.com/rwth-i6/returnn/issues/1675
+                #   - https://github.com/rwth-i6/returnn/pull/1709
                 os.utime(dst_filename, None)
                 os.utime(info_file_name, None)
                 return
