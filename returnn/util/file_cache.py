@@ -208,14 +208,15 @@ class FileCache:
             with LockFile(directory=lock_dir, name=lock_file, lock_timeout=self._lock_timeout):
                 # Re-check mtime with lock, could have been updated by another
                 # process in the meantime.
-                #
                 # We do not update the `mtime` variable here, because the code
                 # assumes that the list of files is sorted by mtime to abort
                 # early when enough space has been made.
-                #
                 # Instead, we treat the case where the mtime was updated during
                 # cleanup as an outlier and continue as if no other mtimes had
                 # changed.
+                # See for discussion:
+                #   - https://github.com/rwth-i6/returnn/issues/1675
+                #   - https://github.com/rwth-i6/returnn/pull/1709
                 cur_mtime = os.stat(fn).st_mtime
                 if cur_mtime > mtime and (time.time() - cur_mtime) <= cur_used_time_threshold:
                     print(f"FileCache: {fn} has been updated during cleanup, skipping.")
