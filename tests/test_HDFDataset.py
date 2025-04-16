@@ -576,6 +576,81 @@ def test_SimpleHDFWriter_labels():
         assert reader.seq_lens[i]["data"] == seq_len
 
 
+def test_SimpleHDFWriter_extra_with_feat():
+    from returnn.tensor import TensorDict, Dim, batch_dim
+    from returnn.tensor.utils import tensor_dict_fill_random_numpy_
+
+    fn = get_test_tmp_file(suffix=".hdf")
+    os.remove(fn)  # SimpleHDFWriter expects that the file does not exist
+
+    # See i6_experiments.users.zeyer.forward_to_hdf._returnn_get_forward_callback.
+    # (Maybe also somewhat similar: HDFDumpLayer)
+    spatial_dim = Dim(None, name="spatial")
+    k_dim = Dim(5, name="k")
+    vocab_dim = Dim(11, name="vocab")
+    expected_outputs = TensorDict()
+    expected_outputs.update(
+        {
+            "output": {"dims": [batch_dim, spatial_dim, k_dim], "dtype": "int32", "sparse_dim": vocab_dim},
+            "k_log_probs": {"dims": [batch_dim, spatial_dim, k_dim], "dtype": "float32"},
+        },
+        auto_convert=True,
+    )
+    output = expected_outputs["output"]
+
+    writer = SimpleHDFWriter(
+        filename=fn,
+        dim=output.dim,
+        ndim=output.ndim,
+        labels=output.vocab and output.vocab.labels,
+        # Note: in HDFDumpLayer, we use ndim=min(v.ndim - len(v.size_placeholder) + 1, 2) instead of just v.ndim...
+        extra_type={k: (v.shape[-1], v.ndim, v.dtype) for k, v in expected_outputs.data.items() if k != "output"},
+        extra_labels={k: v.vocab.labels for k, v in expected_outputs.data.items() if k != "output" and v.vocab},
+    )
+
+    expected_outputs.reset_content()
+    tensor_dict_fill_random_numpy_(expected_outputs)
+
+    # Note: HDFDumpLayer does a lot of extra stuff for the extra data...
+    # We are following i6_experiments.users.zeyer.forward_to_hdf here.
+    # We iterate over the batch dim, to insert each seq separately,
+    # which is important that the extra data seq lens are correct
+    # (insert_batch would not know this otherwise).
+    batch_size = output.raw_tensor.shape[0]
+    for b in range(batch_size):
+        writer.insert_batch(
+            inputs=output.raw_tensor[b : b + 1, : spatial_dim.dyn_size[b]],
+            # We are following i6_experiments.users.zeyer.forward_to_hdf here.
+            # This logic then in turn will flatten the dims internally.
+            seq_len={0: spatial_dim.dyn_size[b : b + 1], 1: [k_dim.dimension]},
+            seq_tag=[f"seq-{b}"],
+            extra={
+                k: v.raw_tensor[b : b + 1, : spatial_dim.dyn_size[b]]
+                for k, v in expected_outputs.data.items()
+                if k != "output"
+            },
+        )
+
+    writer.close()
+
+    dataset = HDFDataset(files=[fn])
+    reader = DatasetTestReader(dataset=dataset)
+    reader.read_all()
+    assert reader.num_seqs > 0
+    assert set(reader.data.keys()) == {"data", "k_log_probs", "sizes"}
+    for i in range(reader.num_seqs):
+        # data dims will be flattened.
+        data0 = reader.data["data"][i]
+        print(f"** seq_idx {i} data key 'data' shape {data0.shape}")
+        assert data0.ndim == 1 and data0.shape[0] % k_dim.dimension == 0
+        time0 = data0.shape[0] // k_dim.dimension
+        sizes0 = reader.data["sizes"][i]
+        assert sizes0.shape == (2,)
+        assert sizes0.tolist() == [time0, k_dim.dimension]
+        probs0 = reader.data["k_log_probs"][i]
+        assert probs0.shape == (time0, k_dim.dimension)
+
+
 class Old2018HDFDataset(CachedDataset):
     """
     Copied and adapted from an early RETURNN version:
