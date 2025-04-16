@@ -217,7 +217,17 @@ class FileCache:
                 # See for discussion:
                 #   - https://github.com/rwth-i6/returnn/issues/1675
                 #   - https://github.com/rwth-i6/returnn/pull/1709
-                cur_mtime = os.stat(fn).st_mtime
+                try:
+                    cur_mtime = os.stat(fn).st_mtime
+                except FileNotFoundError:
+                    # File was deleted while waiting for the lock, or because it was
+                    # a temporary copy file and was renamed to its final location.
+                    # Since we don't know whether it was actually deleted or just
+                    # renamed, we leave cur_expected_free unchanged.
+                    continue
+                except Exception as exc:
+                    print(f"FileCache: Error refreshing mtime of {fn}: {type(exc).__name__}: {exc}")
+                    continue
                 if cur_mtime > mtime and (time.time() - cur_mtime) <= cur_used_time_threshold:
                     print(f"FileCache: {fn} has been updated during cleanup, skipping.")
                     continue
@@ -254,7 +264,11 @@ class FileCache:
                     try:
                         os.remove(fn)
                     except Exception as exc:
-                        print(f"FileCache: Error while removing {fn}: {type(exc).__name__}: {exc}")
+                        if not isinstance(exc, FileNotFoundError):
+                            print(f"FileCache: Error while removing {fn}: {type(exc).__name__}: {exc}")
+
+                        # We don't know whether the file was just renamed or actually deleted, so
+                        # we do as if its space has not been freed.
                         cur_expected_free -= size
                     try:
                         os.remove(self._get_info_filename(fn))
