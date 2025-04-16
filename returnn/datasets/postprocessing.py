@@ -243,6 +243,13 @@ class PostprocessingDataset(CachedDataset2):
         assert self._dataset is not None
         return self._dataset.get_total_num_seqs(fast=fast)
 
+    def get_all_tags(self) -> List[str]:
+        """:return: all tags"""
+        if self._map_seq_stream is not None:
+            raise util.OptionalNotImplementedError(f"{self}: get_all_tags not allowed when map_seq_stream is set.")
+        assert self._dataset is not None
+        return self._dataset.get_all_tags()
+
     def supports_sharding(self) -> bool:
         """:return: whether this dataset supports sharding"""
         assert self._dataset is not None

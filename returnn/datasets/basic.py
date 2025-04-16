@@ -864,18 +864,16 @@ class Dataset:
             data = self.get_data(seq_idx, key)
             return data[s0_start:s0_end]
 
-    def get_tag(self, sorted_seq_idx):
+    def get_tag(self, sorted_seq_idx: int) -> str:
         """
-        :param int sorted_seq_idx:
-        :rtype: str
+        :param sorted_seq_idx:
         """
         return "seq-%i" % sorted_seq_idx
 
-    def get_all_tags(self):
+    def get_all_tags(self) -> List[str]:
         """
         :return: list of all seq tags, of the whole dataset, without partition epoch.
           Note that this is not possible with all datasets.
-        :rtype: list[str]
         """
         raise OptionalNotImplementedError(f"{self} get_all_tags not implemented")
 
