@@ -476,7 +476,7 @@ class Engine(EngineBase):
                     eval_info=dict(eval_info),
                     step_duration=step_duration,
                     start_elapsed=step_end_time - epoch_start_time,
-                    complete_frac=(complete_frac if complete_frac >= 0.0 else None),
+                    complete_frac=complete_frac,
                     num_seqs=num_seqs,
                     batch_size_info=_get_batch_size_info(extern_data) if self._log_batch_size else None,
                     log_memory_usage_device=self._device if self._log_memory_usage else None,
@@ -660,7 +660,7 @@ class Engine(EngineBase):
                         report_prefix,
                         step=step_idx,
                         eval_info=dict(eval_info),
-                        complete_frac=(complete_frac if complete_frac >= 0.0 else None),
+                        complete_frac=complete_frac,
                         num_seqs=num_seqs,
                         start_elapsed=step_end_time - eval_start_time,
                         log_memory_usage_device=self._device if self._log_memory_usage else None,
@@ -1348,7 +1348,7 @@ class Engine(EngineBase):
                     eval_info=None,
                     step_duration=step_duration,
                     start_elapsed=step_end_time - epoch_start_time,
-                    complete_frac=(complete_frac if complete_frac >= 0.0 else None),
+                    complete_frac=complete_frac,
                     num_seqs=num_seqs,
                     batch_size_info=_get_batch_size_info(extern_data) if self._log_batch_size else None,
                     log_memory_usage_device=self._device if self._log_memory_usage else None,
@@ -1472,8 +1472,7 @@ def _print_process(
             info += ["%.3f sec/step" % step_duration]
         if start_elapsed is not None:
             info += ["elapsed %s" % hms(start_elapsed)]
-        if complete_frac is not None:
-            assert 1 >= complete_frac > 0, f"{step} step, {complete_frac} complete_frac"
+        if complete_frac is not None and 1 >= complete_frac > 0:
             assert start_elapsed is not None
             total_time_estimated = start_elapsed / complete_frac
             remaining_estimated = total_time_estimated - start_elapsed
