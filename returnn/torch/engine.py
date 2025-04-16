@@ -1493,7 +1493,7 @@ def _print_process(
             info += ["%.3f sec/step" % step_duration]
         if start_elapsed is not None:
             info += ["elapsed %s" % hms(start_elapsed)]
-        if complete_frac is not None:
+        if complete_frac not in (-1, None):
             assert 1 >= complete_frac > 0, f"{step} step, {complete_frac} complete_frac"
             assert start_elapsed is not None
             total_time_estimated = start_elapsed / complete_frac
