@@ -7,7 +7,8 @@ or forwarding loop.
 """
 
 from __future__ import annotations
-from typing import Optional, Union, Any, Sequence, Dict
+from typing import Optional, Union, Any, Sequence, Dict, List
+from types import FunctionType
 from dataclasses import dataclass
 from contextlib import contextmanager
 from returnn.tensor import Tensor, Dim, TensorDict, batch_dim
@@ -101,7 +102,7 @@ class RunCtx:
             - "forward_step", for mark_as_output
         """
         self._stage = stage
-        self._train_flag = train_flag
+        self._train_flags_stack: List[Dict[Optional[FunctionType], Union[Tensor, bool]]] = [{None: train_flag}]
         self._step = step
         self._epoch = epoch
         self.losses = {}  # type: Dict[str, Loss]
@@ -123,12 +124,16 @@ class RunCtx:
         """
         :return: whether we are in training mode, i.e. the model is updated,
             and we are supposed to use dropout and similar mechanisms.
-            In a graph-based backend, this can be dynamic.
+            In a graph-based backend, this can be dynamic (scalar Tensor, not just bool).
+            This is checking for the global fallback train flag.
+            See also :func:`is_train_flag_enabled` if you want to check this per function.
         """
-        return self._train_flag
+        return self.is_train_flag_enabled()
 
     @contextmanager
-    def train_flag_ctx(self, train_flag: Union[bool, Tensor]):
+    def train_flag_ctx(
+        self, train_flag: Union[bool, Tensor], *, func: Optional[Union[Sequence[FunctionType], FunctionType]] = None
+    ):
         """
         Context manager to temporarily set the train_flag.
 
@@ -137,14 +142,42 @@ class RunCtx:
             with rf.get_run_ctx().train_flag_ctx(False):
                 ...
 
-        :param train_flag: whether we are in training mode
+        :param train_flag: whether we are in training mode.
+            In a graph-based backend, this can be dynamic (scalar Tensor, not just bool).
+        :param func: if given, the train flag is only enabled/disabled for this specific function(s).
+            (See https://github.com/rwth-i6/returnn/issues/1712 for some discussion.)
         """
-        old_train_flag = self.train_flag
-        self._train_flag = train_flag
+        old_train_flags = self._train_flags_stack[-1]
+        new_train_flags = old_train_flags.copy()
+        if func is None:
+            new_train_flags[None] = train_flag
+        elif isinstance(func, FunctionType):
+            new_train_flags[func] = train_flag
+        elif isinstance(func, (list, tuple)):
+            for f in func:
+                if not isinstance(f, FunctionType):
+                    raise TypeError(f"Expected function, got {type(f)}")
+                new_train_flags[f] = train_flag
+        else:
+            raise TypeError(f"Expected function or sequence of functions, got {type(func)}")
+        self._train_flags_stack.append(new_train_flags)
         try:
             yield
         finally:
-            self._train_flag = old_train_flag
+            last = self._train_flags_stack.pop(-1)
+            assert last is new_train_flags
+            assert len(self._train_flags_stack) >= 1
+
+    def is_train_flag_enabled(self, *, func: Optional[FunctionType] = None) -> Union[bool, Tensor]:
+        """
+        :return: Whether the train flag is enabled, either for the specific function, or globally.
+            (See https://github.com/rwth-i6/returnn/issues/1712 for some discussion.)
+        """
+        train_flags = self._train_flags_stack[-1]
+        if func in train_flags:
+            return train_flags[func]
+        assert isinstance(func, FunctionType)
+        return train_flags[None]  # global fallback. this should always be defined, see __init__
 
     @property
     def step(self) -> Union[int, Tensor]:
