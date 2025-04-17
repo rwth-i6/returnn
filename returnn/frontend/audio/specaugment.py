@@ -67,7 +67,9 @@ def specaugment(
             )
         return x_masked
 
-    return rf.cond(rf.get_run_ctx().train_flag | (not only_on_train), _mask_branch, lambda: x)
+    return rf.cond(
+        rf.get_run_ctx().is_train_flag_enabled(func=specaugment) | (not only_on_train), _mask_branch, lambda: x
+    )
 
 
 def random_mask(

@@ -251,7 +251,11 @@ class RunningMean(rf.Module):
             x_ = rf.reduce_mean(x, axis=[d for d in x.dims if d not in self.shape])
             self.mean.assign_add(self.alpha * (x_ - self.mean))
 
-        rf.cond((not self.update_only_in_train) or rf.get_run_ctx().train_flag, _update_running_stats, lambda: None)
+        rf.cond(
+            (not self.update_only_in_train) or rf.get_run_ctx().is_train_flag_enabled(func=RunningMean.__call__),
+            _update_running_stats,
+            lambda: None,
+        )
         return self.mean
 
 
