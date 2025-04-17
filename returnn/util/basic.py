@@ -3196,7 +3196,7 @@ class LockFile:
             except OSError as exc:
                 if exc.errno not in [errno.ENOENT, errno.EEXIST]:
                     raise  # raise any other error
-                # Lock is held or directory does not exist.
+                # We did not get the lock.
                 # Remove potential stale lockfile before retrying.
                 self.maybe_remove_old_lockfile()
         return False
