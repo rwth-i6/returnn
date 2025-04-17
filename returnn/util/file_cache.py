@@ -205,7 +205,11 @@ class FileCache:
             delete_reason = None
 
             lock_dir, lock_file = self._get_lock_filename(fn)
-            with LockFile(directory=lock_dir, name=lock_file, lock_timeout=self._lock_timeout):
+            lock_file = LockFile(directory=lock_dir, name=lock_file, lock_timeout=self._lock_timeout)
+            if not lock_file.try_lock():
+                print(f"FileCache: lock for {fn} is currently held, skipping.")
+                continue
+            try:
                 # Re-check mtime with lock, could have been updated by another
                 # process in the meantime.
                 # We do not update the `mtime` variable here, because the code
@@ -276,6 +280,8 @@ class FileCache:
                         pass
                     except Exception as exc:
                         print(f"FileCache: Ignoring error file removing info file of {fn}: {type(exc).__name__}: {exc}")
+            finally:
+                lock_file.unlock()
 
             if reached_more_recent_files and want_free_space_size <= cur_expected_free:
                 # Have enough free space now.
