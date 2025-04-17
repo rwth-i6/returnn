@@ -3187,16 +3187,19 @@ class LockFile:
                 # EACCES (Permission denied)
                 raise
             # Ignore those errors.
-        # Remove potential stale lockfile before acquiring
-        self.maybe_remove_old_lockfile()
-        # Now try to create the lock.
-        try:
-            self.fd = os.open(self.lockfile, os.O_CREAT | os.O_EXCL | os.O_RDWR)
-            return True
-        except OSError as exc:
-            if exc.errno in [errno.ENOENT, errno.EEXIST]:
-                return False  # lock is held or directory does not exist
-            raise  # Other error, so reraise.
+
+        for _ in range(2):
+            # Now try to create the lock.
+            try:
+                self.fd = os.open(self.lockfile, os.O_CREAT | os.O_EXCL | os.O_RDWR)
+                return True
+            except OSError as exc:
+                if exc.errno not in [errno.ENOENT, errno.EEXIST]:
+                    raise  # raise any other error
+                # Lock is held or directory does not exist.
+                # Remove potential stale lockfile before retrying.
+                self.maybe_remove_old_lockfile()
+        return False
 
     def unlock(self):
         """
