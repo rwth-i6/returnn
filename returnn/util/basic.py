@@ -3153,42 +3153,53 @@ class LockFile:
         Acquires the lock.
         """
         import time
-        import errno
 
         wait_count = 0
         while True:
-            # Try to create directory if it does not exist.
-            try:
-                os.makedirs(self.directory)
-            except OSError as exc:
-                # Possible errors:
-                # ENOENT (No such file or directory), e.g. if some parent directory was deleted.
-                # EEXIST (File exists), if the dir already exists.
-                if exc.errno not in [errno.ENOENT, errno.EEXIST]:
-                    # Other error, so reraise.
-                    # Common ones are e.g.:
-                    # ENOSPC (No space left on device)
-                    # EACCES (Permission denied)
-                    raise
-                # Ignore those errors.
-            # Now try to create the lock.
-            try:
-                self.fd = os.open(self.lockfile, os.O_CREAT | os.O_EXCL | os.O_RDWR)
-                return
-            except OSError as exc:
-                # Possible errors:
-                # ENOENT (No such file or directory), e.g. if the directory was deleted.
-                # EEXIST (File exists), if the lock already exists.
-                if exc.errno not in [errno.ENOENT, errno.EEXIST]:
-                    raise  # Other error, so reraise.
-            # We did not get the lock.
-            # Check if it is a really old one.
-            self.maybe_remove_old_lockfile()
-            # Wait a bit, and then retry.
-            time.sleep(1)
+            if self.try_lock():
+                break
+            # We did not get the lock. Wait a bit, and then retry.
+            time.sleep(min(wait_count * 0.1, 1.0))
             wait_count += 1
             if wait_count == 10:
                 print("Waiting for lock-file: %s" % self.lockfile)
+
+    def try_lock(self) -> bool:
+        """
+        Tries to acquire the lock.
+
+        :return: whether the lock was acquired
+        """
+
+        import errno
+
+        # Try to create directory if it does not exist.
+        try:
+            os.makedirs(self.directory)
+        except OSError as exc:
+            # Possible errors:
+            # ENOENT (No such file or directory), e.g. if some parent directory was deleted.
+            # EEXIST (File exists), if the dir already exists.
+            if exc.errno not in [errno.ENOENT, errno.EEXIST]:
+                # Other error, so reraise.
+                # Common ones are e.g.:
+                # ENOSPC (No space left on device)
+                # EACCES (Permission denied)
+                raise
+            # Ignore those errors.
+
+        for _ in range(2):
+            # Now try to create the lock.
+            try:
+                self.fd = os.open(self.lockfile, os.O_CREAT | os.O_EXCL | os.O_RDWR)
+                return True
+            except OSError as exc:
+                if exc.errno not in [errno.ENOENT, errno.EEXIST]:
+                    raise  # raise any other error
+                # We did not get the lock.
+                # Remove potential stale lockfile before retrying.
+                self.maybe_remove_old_lockfile()
+        return False
 
     def unlock(self):
         """
