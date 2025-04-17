@@ -226,8 +226,9 @@ class BatchNorm(rf.Module):
 
         if use_mask:
             # Generic implementation which supports masking.
-            use_current_batch_stats = self.running_mean is None or rf.get_run_ctx().train_flag
-            update_running_stats = self.running_mean is not None and rf.get_run_ctx().train_flag
+            train_flag = rf.get_run_ctx().is_train_flag_enabled(func=BatchNorm.__call__)
+            use_current_batch_stats = self.running_mean is None or train_flag
+            update_running_stats = self.running_mean is not None and train_flag
             need_current_batch_stats = rf.opt_logical_or(use_current_batch_stats, update_running_stats)
 
             mean_cur_batch, variance_cur_batch = rf.cond(

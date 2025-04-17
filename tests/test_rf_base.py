@@ -68,6 +68,21 @@ def test_linear():
 # Now come some tests for some base functionality.
 
 
+def test_train_flag():
+    rf.init_train_step_run_ctx(train_flag=False)
+    assert rf.get_run_ctx().train_flag is False
+    assert rf.get_run_ctx().is_train_flag_enabled(func=rf.dropout) is False
+    with rf.get_run_ctx().train_flag_ctx(True):
+        assert rf.get_run_ctx().train_flag is True
+        assert rf.get_run_ctx().is_train_flag_enabled(func=rf.dropout) is True
+        with rf.get_run_ctx().train_flag_ctx(False):
+            assert rf.get_run_ctx().train_flag is False
+            assert rf.get_run_ctx().is_train_flag_enabled(func=rf.dropout) is False
+            with rf.get_run_ctx().train_flag_ctx(True, func=rf.dropout):
+                assert rf.get_run_ctx().train_flag is False
+                assert rf.get_run_ctx().is_train_flag_enabled(func=rf.dropout) is True
+
+
 def test_state():
     # https://github.com/rwth-i6/returnn/issues/1329
     import tree
