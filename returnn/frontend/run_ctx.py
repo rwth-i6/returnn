@@ -122,13 +122,9 @@ class RunCtx:
     @property
     def train_flag(self) -> Union[bool, Tensor]:
         """
-        :return: whether we are in training mode, i.e. the model is updated,
-            and we are supposed to use dropout and similar mechanisms.
-            In a graph-based backend, this can be dynamic (scalar Tensor, not just bool).
-            This is checking for the global fallback train flag.
-            See also :func:`is_train_flag_enabled` if you want to check this per function.
+        :return: ``is_train_flag_enabled(func=None)``. See :func:`is_train_flag_enabled`.
         """
-        return self.is_train_flag_enabled()
+        return self.is_train_flag_enabled(func=None)
 
     @contextmanager
     def train_flag_ctx(
@@ -147,7 +143,8 @@ class RunCtx:
 
         :param train_flag: whether we are in training mode.
             In a graph-based backend, this can be dynamic (scalar Tensor, not just bool).
-        :param func: if given, the train flag is only enabled/disabled for this specific function(s).
+        :param func: if given, the train flag is only enabled/disabled for this specific function(s)
+            (e.g. ``rf.dropout`` or ``rf.BatchNorm.__call__``).
             (See https://github.com/rwth-i6/returnn/issues/1712 for some discussion.)
             (Note: We expect a Python function, not just any general Callable. But typing seems to get this wrong.)
         """
@@ -172,10 +169,17 @@ class RunCtx:
             assert last is new_train_flags
             assert len(self._train_flags_stack) >= 1
 
-    def is_train_flag_enabled(self, *, func: Optional[Union[FunctionType, Callable]] = None) -> Union[bool, Tensor]:
+    def is_train_flag_enabled(self, *, func: Optional[Union[FunctionType, Callable]]) -> Union[bool, Tensor]:
         """
-        :return: Whether the train flag is enabled, either for the specific function, or globally.
+        :param func: function for which we want to check the train flag
+            (e.g. ``rf.dropout`` or ``rf.BatchNorm.__call__``),
+            or None for the global fallback.
             (See https://github.com/rwth-i6/returnn/issues/1712 for some discussion.)
+        :return: Whether the train flag is enabled, either for the specific function, or globally.
+            Training is usually when the model is updated,
+            and we are supposed to use dropout and similar mechanisms.
+            This is either for the specified function, or globally.
+            In a graph-based backend, this can also be dynamic (scalar Tensor, not just bool).
         """
         train_flags = self._train_flags_stack[-1]
         if func in train_flags:
