@@ -7,7 +7,7 @@ or forwarding loop.
 """
 
 from __future__ import annotations
-from typing import Optional, Union, Any, Sequence, Dict, List
+from typing import Optional, Union, Any, Callable, Sequence, Dict, List
 from types import FunctionType
 from dataclasses import dataclass
 from contextlib import contextmanager
@@ -132,7 +132,10 @@ class RunCtx:
 
     @contextmanager
     def train_flag_ctx(
-        self, train_flag: Union[bool, Tensor], *, func: Optional[Union[Sequence[FunctionType], FunctionType]] = None
+        self,
+        train_flag: Union[bool, Tensor],
+        *,
+        func: Optional[Union[Sequence[Union[FunctionType, Callable]], FunctionType, Callable]] = None,
     ):
         """
         Context manager to temporarily set the train_flag.
@@ -146,6 +149,7 @@ class RunCtx:
             In a graph-based backend, this can be dynamic (scalar Tensor, not just bool).
         :param func: if given, the train flag is only enabled/disabled for this specific function(s).
             (See https://github.com/rwth-i6/returnn/issues/1712 for some discussion.)
+            (Note: We expect a Python function, not just any general Callable. But typing seems to get this wrong.)
         """
         old_train_flags = self._train_flags_stack[-1]
         new_train_flags = old_train_flags.copy()
@@ -168,7 +172,7 @@ class RunCtx:
             assert last is new_train_flags
             assert len(self._train_flags_stack) >= 1
 
-    def is_train_flag_enabled(self, *, func: Optional[FunctionType] = None) -> Union[bool, Tensor]:
+    def is_train_flag_enabled(self, *, func: Optional[Union[FunctionType, Callable]] = None) -> Union[bool, Tensor]:
         """
         :return: Whether the train flag is enabled, either for the specific function, or globally.
             (See https://github.com/rwth-i6/returnn/issues/1712 for some discussion.)
