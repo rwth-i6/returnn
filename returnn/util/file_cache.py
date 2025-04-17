@@ -204,8 +204,8 @@ class FileCache:
             size = -neg_size
             delete_reason = None
 
-            lock_dir, lock_file = self._get_lock_filename(fn)
-            lock_file = LockFile(directory=lock_dir, name=lock_file, lock_timeout=self._lock_timeout)
+            lock_dir, lock_file_name = self._get_lock_filename(fn)
+            lock_file = LockFile(directory=lock_dir, name=lock_file_name, lock_timeout=self._lock_timeout)
             if not lock_file.try_lock():
                 print(f"FileCache: lock for {fn} is currently held, skipping.")
                 continue
