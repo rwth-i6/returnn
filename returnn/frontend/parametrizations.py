@@ -48,7 +48,7 @@ class WeightDropout:
                 # on_forward=True because we already checked for train_flag
                 return rf.dropout(param, drop_prob=self.drop_prob, on_forward=True)
 
-        return rf.cond(rf.get_run_ctx().train_flag, _on_train, lambda: param)
+        return rf.cond(rf.get_run_ctx().is_train_flag_enabled(func=WeightDropout.__call__), _on_train, lambda: param)
 
 
 def weight_noise(module: rf.Module, param_name: str, *, std: float) -> rf.Module:
@@ -84,4 +84,4 @@ class WeightNoise:
                 noise = rf.random_normal(param.dims, dtype=param.dtype, stddev=self.std)
                 return param + noise
 
-        return rf.cond(rf.get_run_ctx().train_flag, _on_train, lambda: param)
+        return rf.cond(rf.get_run_ctx().is_train_flag_enabled(func=WeightNoise.__call__), _on_train, lambda: param)
