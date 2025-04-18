@@ -4289,7 +4289,7 @@ def cf(filename):
         return filename  # for debugging
     try:
         cached_fn = check_output(["cf", filename]).strip().decode("utf8")
-    except CalledProcessError:
+    except (CalledProcessError, OSError):
         if not _cf_msg_printed:
             print("Cache manager: Error occurred, using local file")
             _cf_msg_printed = True
