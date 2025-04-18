@@ -792,10 +792,10 @@ class DummyDataset(GeneratingDataset):
         i1 = seq_idx
         i2 = i1 + seq_len * self.num_inputs
         features = numpy.array(
-            [((i % self.input_max_value) + self.input_shift) * self.input_scale for i in range(i1, i2)]
+            [((i % self.input_max_value) + self.input_shift) * self.input_scale for i in range(i1, i2)], dtype="float32"
         ).reshape((seq_len, self.num_inputs))
         i1, i2 = i2, i2 + seq_len
-        targets = numpy.array([i % self.num_outputs["classes"][0] for i in range(i1, i2)])
+        targets = numpy.array([i % self.num_outputs["classes"][0] for i in range(i1, i2)], dtype="int32")
         return DatasetSeq(seq_idx=seq_idx, features=features, targets=targets)
 
 
