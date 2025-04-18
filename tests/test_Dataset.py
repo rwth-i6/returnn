@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Iterator, List, Dict, Optional
+from typing import Any, Iterator, TYPE_CHECKING, List, Dict, Optional
 import os
 import sys
 import _setup_test_env  # noqa
@@ -16,10 +16,14 @@ from returnn.datasets.basic import Dataset, DatasetSeq, init_dataset
 from returnn.util.basic import NumbersDict
 from returnn.util import better_exchook
 
+if TYPE_CHECKING:
+    from returnn.tensor import TensorDict
+
 
 def dummy_iter_dataset(dataset: Dataset, *, epoch: int = 1) -> List[DatasetSeq]:
     """
-    :param Dataset dataset:
+    :param dataset:
+    :param epoch:
     :return: seqs
     """
     dataset.init_seq_order(epoch=epoch)
@@ -1157,6 +1161,36 @@ def test_PostprocessingDataset():
 
     func = Sequential(lambda x: x * 10, lambda y: y + 1)
     assert func(2) == 21
+
+
+def _post_process_map_seq_no_op(tdict: TensorDict, **_other) -> TensorDict:
+    return tdict
+
+
+def test_PostprocessingDataset_pickle():
+    from returnn.datasets.postprocessing import PostprocessingDataset
+    import pickle
+
+    ds0_opts = {"class": "DummyDataset", "input_dim": 2, "output_dim": 3, "num_seqs": 20}
+    ds0 = init_dataset(ds0_opts)
+    ds0_seqs = dummy_iter_dataset(ds0)
+
+    ds_opts = {
+        "class": "PostprocessingDataset",
+        "dataset": ds0_opts,
+        "map_seq": _post_process_map_seq_no_op,
+    }
+    ds = init_dataset(ds_opts)
+    assert isinstance(ds, PostprocessingDataset)
+    ds_seqs = dummy_iter_dataset(ds)
+    compare_dataset_seqs(ds0_seqs, ds_seqs)
+
+    s = pickle.dumps(ds)
+    ds2 = pickle.loads(s)
+    assert isinstance(ds2, PostprocessingDataset)
+    assert ds2 is not ds
+    ds2_seqs = dummy_iter_dataset(ds2)
+    compare_dataset_seqs(ds0_seqs, ds2_seqs)
 
 
 def test_MultiEpochDataset():
