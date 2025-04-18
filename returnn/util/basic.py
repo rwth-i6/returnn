@@ -3673,10 +3673,14 @@ def get_hostname():
 
 def is_running_on_cluster():
     """
-    :return: i6 specific. Whether we run on some of the cluster nodes.
+    :return: i6 / Slurm specific. Whether we run on some of the cluster nodes.
     :rtype: bool
     """
-    return get_hostname().startswith("cluster-cn-") or get_hostname().startswith("cn-")
+    return (
+        get_hostname().startswith("cluster-cn-")
+        or get_hostname().startswith("cn-")
+        or os.environ.get("SLURM_JOB_ID", None)
+    )
 
 
 start_time = time.time()
