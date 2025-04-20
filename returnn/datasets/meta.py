@@ -312,10 +312,7 @@ class MetaDataset(CachedDataset2):
             try:
                 seq_list = default_dataset.get_all_tags()
             except NotImplementedError:
-                raise NotImplementedError(
-                    "Unsupported %s used as default in MetaDataset."
-                    " Only datasets with known and tagged sequences can be used." % type(default_dataset)
-                )
+                raise NotImplementedError(f"{default_dataset}.get_all_tags() required by {self}, but not implemented.")
 
             # Catch index out of bounds errors.
             # Whether the tags are actually valid will be checked in _check_dataset_seq().
