@@ -339,6 +339,26 @@ class Vocabulary:
         labels = self.labels
         return " ".join(map(labels.__getitem__, seq))
 
+    def serialize_labels(self, data: numpy.ndarray) -> str:
+        """
+        Like :func:`get_seq_labels` but a bit more generic, to not just work on sequences,
+        but any shape.
+
+        Also like :func:`Dataset.serialize_data` but even slightly more generic.
+        """
+        if data.ndim == 0:
+            return self.id_to_label(data.item())
+        if data.ndim == 1:
+            return self.get_seq_labels(data)
+
+        def _s(d_: numpy.ndarray) -> str:
+            assert d_.ndim >= 1
+            if d_.ndim == 1:
+                return ",".join(self._labels[i] for i in d_)
+            return ",".join(f"[{_s(d_[t])}]" for t in range(d_.shape[0]))
+
+        return _s(data)
+
 
 class BytePairEncoding(Vocabulary):
     """

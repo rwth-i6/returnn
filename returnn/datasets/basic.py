@@ -1116,7 +1116,9 @@ class Dataset:
 
     def serialize_data(self, key: str, data: numpy.ndarray) -> str:
         """
-        In case you have a :class:`Vocabulary`, just use :func:`Vocabulary.get_seq_labels`.
+        This is deprecated, as this is slow!
+        In case you have a :class:`Vocabulary`, just use :func:`Vocabulary.get_seq_labels`
+        or :func:`Vocabulary.serialize_labels`.
 
         :param key: e.g. "classes". self.labels[key] should be set
         :param numpy.ndarray data: 0D or 1D
