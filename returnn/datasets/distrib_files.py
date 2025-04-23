@@ -245,7 +245,7 @@ class DistributeFilesDataset(CachedDataset2):
             if ext == ".txt":
                 with open(self.files, "rt") as f:
                     stripped_lines = (line.strip() for line in f.readlines())
-                    self._files = [line for line in stripped_lines if not line.startswith("#")]
+                    self._files = [line for line in stripped_lines if line and not line.startswith("#")]
             elif ext == ".json":
                 import json
 
