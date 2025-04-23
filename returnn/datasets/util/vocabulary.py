@@ -505,7 +505,13 @@ class SentencePieces(Vocabulary):
         """
         import sentencepiece as spm  # noqa
 
+        opts = opts.copy()
+        for k in ["model_file", "model_proto"]:
+            if k in opts:
+                # Make sure it is a string. (Could be e.g. Sis Path.)
+                opts[k] = str(opts[k])
         self._opts = opts
+        opts = opts.copy()
         self._cache_key = opts.get("model_file", None)
         control_symbols = opts.pop("control_symbols", None)
         user_defined_symbols = opts.pop("user_defined_symbols", None)
