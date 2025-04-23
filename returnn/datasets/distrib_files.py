@@ -242,7 +242,6 @@ class DistributeFilesDataset(CachedDataset2):
         elif isinstance(self.files, (str, os.PathLike)):
             _, ext = os.path.splitext(self.files)
             assert ext, f"{self}: no file extension on file list file {self.files}"
-            assert ext in (".txt", ".json", ".py"), f"{self}: type {ext} not supported as file list file"
             if ext == ".txt":
                 with open(self.files, "rt") as f:
                     stripped_lines = (line.strip() for line in f.readlines())
@@ -255,6 +254,8 @@ class DistributeFilesDataset(CachedDataset2):
             elif ext == ".py":
                 with open(self.files, "rb") as f:
                     self._files = literal_eval(f.read())
+            else:
+                raise ValueError(f"{self}: type {ext} not supported as file list file")
             assert isinstance(self._files, list)
         else:
             raise ValueError(f"{self}: unsupported file list ({type(self.files)}: {self.files})")
