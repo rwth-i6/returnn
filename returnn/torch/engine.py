@@ -82,15 +82,17 @@ class Engine(EngineBase):
         )  # type: Union[int,float,Dict[str,int],NumbersDict]
         self._orig_model = None  # type: Optional[Union[rf.Module, torch.nn.Module]]
         self._pt_model = None  # type: Optional[torch.nn.Module]
-        self._train_step_func = None  # type: Optional[Callable]
-        self._forward_step_func = self.config.typed_value("forward_step")  # type: Optional[Callable]
-        self._forward_step_expected_outputs = None  # type: Optional[TensorDict]
+        self._epoch_start_func: Optional[Callable] = self.config.typed_value("epoch_start")
+        self._epoch_end_func: Optional[Callable] = self.config.typed_value("epoch_end")
+        self._train_step_func: Optional[Callable] = None
+        self._forward_step_func: Optional[Callable] = self.config.typed_value("forward_step")
+        self._forward_step_expected_outputs: Optional[TensorDict] = None
         if self.config.typed_value("model_outputs") is not None:
             self._forward_step_expected_outputs = TensorDict()
             self._forward_step_expected_outputs.update(self.config.typed_value("model_outputs"), auto_convert=True)
         self._save_model_epoch_interval = 1
         self._ignore_param_set: Set[str] = set()  # for the updater and for saving the model checkpoint
-        self._updater = None  # type: Optional[Updater]
+        self._updater: Optional[Updater] = None
 
         self._use_autocast = False
         self._autocast_dtype = None  # type: Optional[str]
@@ -319,6 +321,26 @@ class Engine(EngineBase):
             ]
             print(f"Memory usage ({self._device}):", " ".join(stats), file=log.v1)
 
+    def _on_epoch_start(self, *, dataset_name: str):
+        if self._epoch_start_func:
+            self._epoch_start_func(
+                epoch=self.epoch,
+                step=self.global_train_step,
+                model=self._orig_model,
+                dataset_name=dataset_name,
+                **util.get_fwd_compat_kwargs(),
+            )
+
+    def _on_epoch_end(self, *, dataset_name: str):
+        if self._epoch_end_func:
+            self._epoch_end_func(
+                epoch=self.epoch,
+                step=self.global_train_step,
+                model=self._orig_model,
+                dataset_name=dataset_name,
+                **util.get_fwd_compat_kwargs(),
+            )
+
     def train_epoch(self):
         """
         train one (sub)epoch
@@ -345,6 +367,8 @@ class Engine(EngineBase):
         self._pt_model.train()
         self._maybe_reset_dev_memory_caches()
         self._reset_dev_memory_stats()
+
+        self._on_epoch_start(dataset_name="train")
 
         if self.config.bool("debug_shell_before_train_loop", False):
             print("debug_shell_before_train_loop", file=log.v1)
@@ -564,6 +588,8 @@ class Engine(EngineBase):
 
         self._maybe_report_dev_memory_stats()
 
+        self._on_epoch_end(dataset_name="train")
+
         if self.epoch % self._save_model_epoch_interval == 0 or self.epoch == self._final_epoch:
             if self.model_filename:
                 self._save_model()
@@ -611,6 +637,8 @@ class Engine(EngineBase):
                 continue
 
             print(f"Evaluating dataset {dataset_name!r}", file=log.v3)
+
+            self._on_epoch_start(dataset_name=dataset_name)
 
             accumulated_losses_dict = NumbersDict()
             accumulated_inv_norm_factors_dict = NumbersDict()
@@ -684,6 +712,8 @@ class Engine(EngineBase):
                 assert self._torch_distributed_ctx.rank() == 0
                 _has_data = torch.tensor([False], device="cpu", dtype=torch.int8)
                 torch.distributed.broadcast(_has_data, src=0)
+
+            self._on_epoch_end(dataset_name=dataset_name)
 
         if not self._torch_distributed_ctx or self._torch_distributed_ctx.rank() == 0:
             print(
