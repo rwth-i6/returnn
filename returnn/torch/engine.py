@@ -445,6 +445,7 @@ class Engine(EngineBase):
                     extern_data_template=self.extern_data,
                     device=self._device,
                     float_dtype=self._default_float_dtype,
+                    with_eval_targets=True,
                 )
                 self._run_step(extern_data, train_flag=True, train_func=True)
 
@@ -674,6 +675,7 @@ class Engine(EngineBase):
                         extern_data_template=self.extern_data,
                         device=self._device,
                         float_dtype=self._default_float_dtype,
+                        with_eval_targets=True,
                     )
 
                     self._run_step(extern_data, train_func=True)

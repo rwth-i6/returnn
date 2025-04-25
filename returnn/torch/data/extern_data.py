@@ -28,12 +28,14 @@ def raw_dict_to_extern_data(
     extern_data_template: TensorDict,
     device: Union[str, torch.device],
     float_dtype: Optional[Union[str, torch.dtype]] = None,
+    with_eval_targets: bool = False,
 ) -> TensorDict:
     """
     :param extern_data_raw: This comes out of the DataLoader, via our collate_batch.
     :param extern_data_template: Specified via `extern_data` in the config.
     :param device: E.g. the GPU.
     :param float_dtype:
+    :param with_eval_targets: if False, we skip all tensors with ``available_for_inference=False``.
     :return: tensor dict, like extern_data_template, but with raw tensors set to Torch tensors, on the right device.
     """
     if isinstance(float_dtype, str):
@@ -47,6 +49,8 @@ def raw_dict_to_extern_data(
         batch_dim.dyn_size_ext = Tensor(batch_dim.name or "batch", dims=[], dtype="int32")
     extern_data = TensorDict()
     for k, data in extern_data_template.data.items():
+        if not with_eval_targets and not data.available_for_inference:
+            continue
         data = data.copy_template()
         raw_tensor = extern_data_raw[k]
         assert len(raw_tensor.shape) == data.batch_ndim, f"ndim mismatch for {k}: {raw_tensor.shape} vs {data}"
