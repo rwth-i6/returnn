@@ -1073,6 +1073,8 @@ class SimpleHDFWriter:
     which can be read later by :class:`HDFDataset`.
 
     Note that we dump to a temp file first, and only at :func:`close` we move it over to the real destination.
+
+    Can be used as a context manager, i.e. the `with` statement.
     """
 
     def __init__(
@@ -1412,6 +1414,12 @@ class SimpleHDFWriter:
             shutil.move(tmp_dest_filename, self.filename)
             os.remove(self.tmp_filename)
             self.tmp_filename = None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()
 
 
 class HDFDatasetWriter:
