@@ -1074,7 +1074,7 @@ class SimpleHDFWriter:
 
     Note that we dump to a temp file first, and only at :func:`close` we move it over to the real destination.
 
-    Can be used as a context manager, i.e. the `with` statement.
+    Can be used as a context manager, i.e. with the `with` statement.
     """
 
     def __init__(
