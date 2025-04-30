@@ -39,6 +39,7 @@ __all__ = [
     "pad_packed",
     "gather",
     "scatter",
+    "scatter_mean",
     "scatter_argmax",
     "scatter_logsumexp",
     "scatter_logmeanexp",
@@ -807,8 +808,8 @@ def scatter(
     :param source: [batch_dims..., indices_dim(s)..., feature_dims...]
     :param indices: [batch_dims..., indices_dim(s)...] -> out_dim
     :param indices_dim:
-    :param mode: "sum", "max", "min", "logsumexp", "logmeanexp", "argmax".
-        (Note: If you ever need mean, argmin, etc, please open an issue/PR.)
+    :param mode: "sum", "max", "min", "mean", "logsumexp", "logmeanexp", "argmax".
+        (Note: If you ever need another mode, please open an issue/PR.)
     :param fill_value:
     :param out_dim: The indices target dim.
         If not given, will be automatically determined as the sparse_dim from indices.
@@ -817,6 +818,8 @@ def scatter(
     :param use_mask:
     :return: [batch_dims..., out_dim(s)..., feature_dims...]
     """
+    if mode == "mean":
+        return scatter_mean(source, indices=indices, indices_dim=indices_dim, fill_value=fill_value, out_dim=out_dim)
     if mode == "logsumexp":
         return scatter_logsumexp(
             source, indices=indices, indices_dim=indices_dim, fill_value=fill_value, out_dim=out_dim
@@ -861,6 +864,35 @@ def scatter(
         # Make sure we don't leave any infinities in the output.
         out = out.copy_masked(0, dims=[out_dim])
     return out
+
+
+def scatter_mean(
+    source: Tensor,
+    *,
+    indices: Tensor,
+    indices_dim: Union[Dim, Sequence[Dim]],
+    fill_value: Optional[Union[int, float]] = None,
+    out_dim: Optional[Union[Dim, Sequence[Dim]]] = None,
+) -> Tensor:
+    """
+    Scatters into new zero-tensor.
+    If entries in indices are duplicated, the corresponding values in source will be mean'ed together.
+    This is like :func:`scatter` with ``mode="mean"``.
+
+    :param source: [batch_dims..., indices_dim(s)..., feature_dims...]
+    :param indices: [batch_dims..., indices_dim(s)...] -> out_dim
+    :param indices_dim:
+    :param fill_value:
+    :param out_dim: The indices target dim.
+        If not given, will be automatically determined as the sparse_dim from indices.
+        If multiple out dims, use indices into the merged out dims,
+        and then we use :func:`rf.split_dims` afterwards.
+    :return: [batch_dims..., out_dim(s)..., feature_dims...]
+    """
+    ones = rf.ones(dims=indices.dims, dtype=source.dtype, device=source.device)
+    counts = rf.scatter(ones, indices=indices, indices_dim=indices_dim, fill_value=1, out_dim=out_dim)
+    y = scatter(source, indices=indices, indices_dim=indices_dim, fill_value=fill_value, out_dim=out_dim)
+    return y / counts
 
 
 def scatter_argmax(
