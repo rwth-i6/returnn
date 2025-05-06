@@ -141,13 +141,14 @@ class PostprocessingDataset(CachedDataset2):
         self._map_seq_stream = map_seq_stream
         if map_seq_stream_preserves_num_seqs is None and map_seq_stream is not None:
             map_seq_stream_preserves_num_seqs = getattr(map_seq_stream, "preserves_num_seqs", None)
-        self._map_seq_stream_preserves_num_seqs = map_seq_stream_preserves_num_seqs or False
+        assert map_seq_stream_preserves_num_seqs is None or isinstance(map_seq_stream_preserves_num_seqs, bool)
+        self._map_seq_stream_preserves_num_seqs = map_seq_stream_preserves_num_seqs
         self._map_outputs = map_outputs
         self._rng = RandomState(self._get_random_seed_for_epoch(0))
         self._seq_list_for_validation: Optional[List[str]] = None
 
         self._dataset = init_dataset(self._dataset_def, parent_dataset=self)
-        if self._map_seq_stream is None or self._map_seq_stream_preserves_num_seqs:
+        if self._map_seq_stream is None or self._map_seq_stream_preserves_num_seqs is True:
             # if the stream mapper is set, the num_seqs may change and the estimation is less accurate
             self._estimated_num_seqs = self._dataset.estimated_num_seqs
         self._data_iter: Optional[Iterator[Tuple[int, TensorDict]]] = None
@@ -210,7 +211,7 @@ class PostprocessingDataset(CachedDataset2):
         self._data_iter = enumerate(self._build_mapping_iter())
         self._data_iter_produced_num_seqs = 0
         self._seq_list_for_validation = seq_list
-        if self._map_seq_stream is None or self._map_seq_stream_preserves_num_seqs:
+        if self._map_seq_stream is None or self._map_seq_stream_preserves_num_seqs is True:
             # If we don't have an iterable mapper (or the user explicitly specifies this),
             # we know the number of segments exactly equals the number of segments in the wrapped dataset
             try:
@@ -242,6 +243,13 @@ class PostprocessingDataset(CachedDataset2):
             )
         assert self._dataset is not None
         return self._dataset.get_total_num_seqs(fast=fast)
+
+    def get_all_tags(self) -> List[str]:
+        """:return: all tags"""
+        if self._map_seq_stream is not None:
+            raise util.OptionalNotImplementedError(f"{self}: get_all_tags not allowed when map_seq_stream is set.")
+        assert self._dataset is not None
+        return self._dataset.get_all_tags()
 
     def supports_sharding(self) -> bool:
         """:return: whether this dataset supports sharding"""

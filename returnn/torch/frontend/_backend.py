@@ -1859,7 +1859,7 @@ class TorchBackend(Backend[torch.Tensor]):
             bias=beta.raw_tensor if affine else None,
             # training: means whether we should use the current batch statistics
             #   + update the running statistics (if given)
-            training=rf.get_run_ctx().train_flag or (running_mean is None),
+            training=rf.get_run_ctx().is_train_flag_enabled(func=rf.BatchNorm.__call__) or (running_mean is None),
             momentum=momentum,
             eps=epsilon,
         )
@@ -2236,7 +2236,7 @@ class TorchBackend(Backend[torch.Tensor]):
             has_biases=has_biases,
             num_layers=1,
             dropout=0.0,
-            train=rf.get_run_ctx().train_flag,
+            train=rf.get_run_ctx().is_train_flag_enabled(func=rf.LSTM.__call__),
             bidirectional=False,
         )
 

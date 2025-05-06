@@ -70,6 +70,9 @@ class LSTM(rf.Module):
             out_dim=self.out_dim,
         )
         new_state = LstmState(h=new_state_h, c=new_state_c)
+        result.feature_dim = self.out_dim
+        new_state.h.feature_dim = self.out_dim
+        new_state.c.feature_dim = self.out_dim
 
         return result, new_state
 
@@ -215,7 +218,7 @@ def _zoneout(*, prev: Tensor, cur: Tensor, factor: float, out_dim: Dim, dropout_
     if factor == 0.0:
         return cur
     return rf.cond(
-        rf.get_run_ctx().train_flag,
+        rf.get_run_ctx().is_train_flag_enabled(func=ZoneoutLSTM.__call__),
         lambda: (1 - factor) * rf.dropout(cur - prev, factor, axis=dropout_broadcast and out_dim) + prev,
         lambda: (1 - factor) * cur + factor * prev,
     )

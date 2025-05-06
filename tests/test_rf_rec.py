@@ -16,6 +16,8 @@ def test_lstm():
     extern_data = TensorDict(
         {
             "data": Tensor("data", [batch_dim, time_dim, in_dim], dtype="float32"),
+            "state_h": Tensor("state_h", [batch_dim, out_dim], dtype="float32"),
+            "state_c": Tensor("state_c", [batch_dim, out_dim], dtype="float32"),
             "classes": Tensor("classes", [batch_dim, time_dim], dtype="int32", sparse_dim=out_dim),
         }
     )
@@ -32,10 +34,7 @@ def test_lstm():
 
     # noinspection PyShadowingNames
     def _forward_step(*, model: _Net, extern_data: TensorDict):
-        state = rf.LstmState(
-            h=rf.random_normal(dims=[batch_dim, out_dim], dtype="float32"),
-            c=rf.random_normal(dims=[batch_dim, out_dim], dtype="float32"),
-        )
+        state = rf.LstmState(h=extern_data["state_h"], c=extern_data["state_c"])
         out, new_state = model(extern_data["data"], state=state, spatial_dim=time_dim)
         out.mark_as_output("out", shape=(batch_dim, time_dim, out_dim))
         new_state.h.mark_as_output("h", shape=(batch_dim, out_dim))
@@ -49,6 +48,8 @@ def test_lstm_single_step():
     extern_data = TensorDict(
         {
             "data": Tensor("data", [batch_dim, in_dim], dtype="float32"),
+            "state_h": Tensor("state_h", [batch_dim, out_dim], dtype="float32"),
+            "state_c": Tensor("state_c", [batch_dim, out_dim], dtype="float32"),
         }
     )
 
@@ -64,10 +65,7 @@ def test_lstm_single_step():
 
     # noinspection PyShadowingNames
     def _forward_step(*, model: _Net, extern_data: TensorDict):
-        state = rf.LstmState(
-            h=rf.random_normal(dims=[batch_dim, out_dim], dtype="float32"),
-            c=rf.random_normal(dims=[batch_dim, out_dim], dtype="float32"),
-        )
+        state = rf.LstmState(h=extern_data["state_h"], c=extern_data["state_c"])
         out, new_state = model(extern_data["data"], state=state, spatial_dim=single_step_dim)
         out.mark_as_output("out", shape=(batch_dim, out_dim))
         new_state.h.mark_as_output("h", shape=(batch_dim, out_dim))
@@ -82,6 +80,8 @@ def test_zoneout_lstm():
     extern_data = TensorDict(
         {
             "data": Tensor("data", [batch_dim, time_dim, in_dim], dtype="float32"),
+            "state_h": Tensor("state_h", [batch_dim, out_dim], dtype="float32", feature_dim=out_dim),
+            "state_c": Tensor("state_c", [batch_dim, out_dim], dtype="float32", feature_dim=out_dim),
             "classes": Tensor("classes", [batch_dim, time_dim], dtype="int32", sparse_dim=out_dim),
         }
     )
@@ -103,10 +103,7 @@ def test_zoneout_lstm():
 
     # noinspection PyShadowingNames
     def _forward_step(*, model: _Net, extern_data: TensorDict):
-        state = rf.LstmState(
-            h=rf.random_normal(dims=[batch_dim, out_dim], dtype="float32", feature_dim=out_dim),
-            c=rf.random_normal(dims=[batch_dim, out_dim], dtype="float32", feature_dim=out_dim),
-        )
+        state = rf.LstmState(h=extern_data["state_h"], c=extern_data["state_c"])
         out, new_state = model(extern_data["data"], state=state, spatial_dim=time_dim)
         out.mark_as_output("out", shape=(batch_dim, time_dim, out_dim))
         new_state.h.mark_as_output("h", shape=(batch_dim, out_dim))
@@ -121,6 +118,8 @@ def test_zoneout_lstm_single_step():
     extern_data = TensorDict(
         {
             "data": Tensor("data", [batch_dim, in_dim], dtype="float32"),
+            "state_h": Tensor("state_h", [batch_dim, out_dim], dtype="float32"),
+            "state_c": Tensor("state_c", [batch_dim, out_dim], dtype="float32"),
         }
     )
 
@@ -141,10 +140,7 @@ def test_zoneout_lstm_single_step():
 
     # noinspection PyShadowingNames
     def _forward_step(*, model: _Net, extern_data: TensorDict):
-        state = rf.LstmState(
-            h=rf.random_normal(dims=[batch_dim, out_dim], dtype="float32", feature_dim=out_dim),
-            c=rf.random_normal(dims=[batch_dim, out_dim], dtype="float32", feature_dim=out_dim),
-        )
+        state = rf.LstmState(h=extern_data["state_h"], c=extern_data["state_c"])
         out, new_state = model(extern_data["data"], state=state, spatial_dim=single_step_dim)
         out.mark_as_output("out", shape=(batch_dim, out_dim))
         new_state.h.mark_as_output("h", shape=(batch_dim, out_dim))

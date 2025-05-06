@@ -66,7 +66,7 @@ except ImportError:
 
 try:
     from traceback import StackSummary, FrameSummary
-except ImportError:
+except ImportError:  # StackSummary, FrameSummary were added in Python 3.5
 
     class _Dummy:
         pass
@@ -930,31 +930,36 @@ class _OutputLinesCollector:
         self.lines = []
         self.dom_term = DomTerm() if DomTerm.is_domterm() else None
 
-    def __call__(self, s1, s2=None, **kwargs):
+    def __call__(self, s1, s2=None, merge_into_prev=True, **kwargs):
         """
         Adds to self.lines.
         This strange function signature is for historical reasons.
 
         :param str s1:
         :param str|None s2:
+        :param bool merge_into_prev: if True and existing self.lines, merge into prev line.
         :param kwargs: passed to self.color
         """
         if kwargs:
             s1 = self.color(s1, **kwargs)
         if s2 is not None:
             s1 = add_indent_lines(s1, s2)
-        self.lines.append(s1 + "\n")
+        if merge_into_prev and self.lines:
+            self.lines[-1] += s1 + "\n"
+        else:
+            self.lines.append(s1 + "\n")
 
     @contextlib.contextmanager
-    def fold_text_ctx(self, line):
+    def fold_text_ctx(self, line, merge_into_prev=True):
         """
         Folds text, via :class:`DomTerm`, if available.
         Notes that this temporarily overwrites self.lines.
 
         :param str line: always visible
+        :param bool merge_into_prev: if True and existing self.lines, merge into prev line.
         """
         if not self.dom_term:
-            self.__call__(line)
+            self.__call__(line, merge_into_prev=merge_into_prev)
             yield
             return
         self.lines, old_lines = [], self.lines  # overwrite self.lines
@@ -970,7 +975,10 @@ class _OutputLinesCollector:
             line = line[1:]
         self.dom_term.fold_text(line, hidden=hidden_text, file=output_buf, align=len(prefix))
         output_text = prefix[1:] + output_buf.getvalue()
-        self.lines.append(output_text)
+        if merge_into_prev and self.lines:
+            self.lines[-1] += output_text
+        else:
+            self.lines.append(output_text)
 
     def _pp_extra_info(self, obj, depth_limit=3):
         """
@@ -1197,7 +1205,7 @@ def format_tb(
                     name,
                 ]
             )
-            with output.fold_text_ctx(file_descr):
+            with output.fold_text_ctx(file_descr, merge_into_prev=False):
                 source_code = get_source_code(filename, lineno, f.f_globals)
                 if source_code:
                     source_code = remove_indent_lines(replace_tab_indents(source_code)).rstrip()
@@ -1688,6 +1696,14 @@ class ExtendedFrameSummary(FrameSummary):
     def __init__(self, frame, **kwargs):
         super(ExtendedFrameSummary, self).__init__(**kwargs)
         self.tb_frame = frame
+
+    def __reduce__(self):
+        # We deliberately serialize this as just a FrameSummary,
+        # excluding the tb_frame, as this cannot be serialized (via pickle at least),
+        # and also we do not want this to be serialized.
+        # We also exclude _line and locals as it's not so easy to add them here,
+        # and also not so important.
+        return FrameSummary, (self.filename, self.lineno, self.name)
 
 
 class DummyFrame:

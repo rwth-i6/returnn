@@ -66,20 +66,28 @@ def test_while_loop():
 
     class _Net(rf.Module):
         def __call__(self, x: Tensor) -> Tensor:
-            def _cond(s: Tuple[Tensor, Tensor]):
-                t, s_ = s
+            def _cond(s: Tuple[Tensor, Tensor, Tensor]) -> Tensor:
+                t, ended, s_ = s
                 if t.raw_tensor.__class__.__module__.startswith("torch"):
-                    print("**", t.raw_tensor, rf.reduce_sum(s_, axis=s_.dims).raw_tensor)
-                return rf.logical_and(rf.reduce_sum(s_, axis=s_.dims) < 50, t < time_dim.get_dim_value_tensor())
+                    print("**", t.raw_tensor, ended.raw_tensor, rf.reduce_sum(s_, axis=in_dim).raw_tensor)
+                return rf.logical_not(rf.reduce_all(ended, axis=[batch_dim]))
 
             def _body(s):
-                t, s_ = s
-                return t + 1, s_ + rf.abs(rf.gather(x, indices=t, axis=time_dim))
+                t, ended, s_ = s
+                cont = rf.logical_and(rf.reduce_sum(s_, axis=in_dim) < 50, t < time_dim.get_size_tensor())
+                ended = rf.logical_or(ended, rf.logical_not(cont))
+                s__ = s_ + rf.abs(rf.gather(x, indices=t, axis=time_dim, clip_to_valid=True))
+                s__ = rf.where(ended, s_, s__)
+                return t + 1, ended, s__
 
-            _, final_s = rf.while_loop(
+            _, _, final_s = rf.while_loop(
                 _cond,
                 _body,
-                initial=(rf.zeros((), dtype=rf.get_default_array_index_dtype()), rf.zeros((batch_dim, in_dim))),
+                initial=(
+                    rf.zeros((), dtype=rf.get_default_array_index_dtype()),  # t
+                    rf.zeros((batch_dim,), dtype="bool"),  # ended
+                    rf.zeros((batch_dim, in_dim)),  # s
+                ),
             )
             return final_s
 
@@ -209,4 +217,7 @@ def test_scan_changing_dim():
         out, beam_dim = model(extern_data["data"])
         out.mark_as_default_output(shape=(batch_dim, beam_dim, in_dim))
 
-    run_model(extern_data, lambda *, epoch, step: _Net(), _forward_step, test_tensorflow=False)
+    # TODO the way this is implemented, accessing y[-1], is not consistent w.r.t. different batch sizes...
+    run_model(
+        extern_data, lambda *, epoch, step: _Net(), _forward_step, test_tensorflow=False, test_single_batch_entry=False
+    )

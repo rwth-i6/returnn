@@ -3,7 +3,7 @@ Some utility functions on nested structures.
 """
 
 from __future__ import annotations
-from typing import TypeVar, Optional, Sequence, Tuple, Dict
+from typing import TypeVar, Optional, Union, Sequence, Tuple, Dict
 import functools
 import re
 import tree
@@ -11,10 +11,123 @@ from returnn.tensor import Tensor, Dim
 import returnn.frontend as rf
 
 
-__all__ = ["gather_nested", "masked_select_nested", "masked_scatter_nested"]
+__all__ = ["mask_nested", "gather_nested", "masked_select_nested", "masked_scatter_nested"]
 
 
 T = TypeVar("T")
+
+
+def mask_nested(
+    s: T,
+    *,
+    mask: Tensor,
+    mask_cpu: Optional[Tensor] = None,
+    mask_value: Union[T, Tensor, float, None],
+    dim_map: Optional[Dict[Dim, Dim]] = None,
+    allow_dim_extension: bool = True,
+) -> T:
+    """
+    Applies where(mask, s, mask_value) for nested structures.
+
+    :param s:
+    :param mask:
+    :param mask_cpu: mask tensor for CPU. this is used e.g. for dyn dim sizes
+    :param mask_value:
+    :param dim_map:
+    :param allow_dim_extension:
+    :return: s with masked values
+    """
+    if dim_map is None:
+        dim_map = {}
+    partial_kwargs = dict(mask=mask, mask_cpu=mask_cpu, dim_map=dim_map, allow_dim_extension=allow_dim_extension)
+    structures = [s]
+    if type(s) is type(mask_value):  # mask_value also same nested structure?
+        tree.assert_same_structure(s, mask_value)
+        structures.append(mask_value)
+    else:
+        partial_kwargs["mask_value"] = mask_value
+    tree.map_structure(functools.partial(_mask_prepare_dims, **partial_kwargs), *structures)
+    return tree.map_structure(functools.partial(_mask, **partial_kwargs), *structures)
+
+
+def _mask_prepare_dims(
+    s: T,
+    mask_value: Union[T, Tensor, float, None],
+    *,
+    mask: Tensor,
+    mask_cpu: Optional[Tensor] = None,
+    dim_map: Dict[Dim, Dim],
+    allow_dim_extension: bool,
+) -> T:
+    if isinstance(s, Dim):
+        if mask_value is None:
+            return s  # not sure if always correct...
+        assert isinstance(mask_value, Dim)
+        if s == mask_value:
+            return s
+        if not allow_dim_extension:
+            dim_size_dims = set()
+            if s.dyn_size_ext is not None:
+                dim_size_dims.update(s.dyn_size_ext.dims_set)
+            if mask_value.dyn_size_ext is not None:
+                dim_size_dims.update(mask_value.dyn_size_ext.dims_set)
+            if not mask.dims_set.issubset(dim_size_dims):
+                assert not mask.dims_set.intersection(dim_size_dims)  # not sure...
+                return s
+        new_dyn_size = _mask(
+            s.get_size_tensor(),
+            mask=mask,
+            mask_cpu=mask_cpu,
+            mask_value=mask_value.get_size_tensor(),
+            dim_map=dim_map,
+            allow_dim_extension=allow_dim_extension,
+        )
+        new_dim = Dim(new_dyn_size, name=_extend_dim_name(s.name))
+        dim_map[s] = dim_map[mask_value] = new_dim
+        return new_dim
+    return s
+
+
+def _mask(
+    s: T,
+    mask_value: Union[T, Tensor, float, None],
+    *,
+    mask: Tensor,
+    mask_cpu: Optional[Tensor] = None,
+    dim_map: Dict[Dim, Dim],
+    allow_dim_extension: bool,
+) -> T:
+    if s is None:
+        return s
+    if isinstance(s, Tensor):
+        if s.device == "cpu" and mask_cpu is not None:
+            mask = mask_cpu
+        if dim_map:
+            for d in s.dims:
+                if d in dim_map:
+                    s = rf.replace_dim_v2(s, in_dim=d, out_dim=dim_map[d])
+            if isinstance(mask_value, Tensor):
+                for d in mask_value.dims:
+                    if d in dim_map:
+                        mask_value = rf.replace_dim_v2(mask_value, in_dim=d, out_dim=dim_map[d])
+        if not allow_dim_extension and isinstance(mask_value, Tensor):
+            if not s.dims_set.issuperset(mask_value.dims_set):
+                return s
+        if not allow_dim_extension or mask_value is None or (isinstance(mask_value, (int, float)) and mask_value == 0):
+            if mask.dims_set.issubset(s.dims_set):
+                return rf.where(mask, s, mask_value)
+            assert not mask.dims_set.intersection(s.dims_set)  # not sure...
+            return s
+        assert isinstance(mask_value, (int, float, Tensor))
+        return rf.where(mask, s, mask_value, allow_broadcast_all_sources=True)
+    if isinstance(s, Dim):
+        if mask_value is None:
+            return s
+        assert isinstance(mask_value, Dim)
+        if s == mask_value:
+            return s
+        return dim_map.get(s, s)
+    raise TypeError(f"_mask: unexpected {s!r} type {type(s).__name__}")
 
 
 def gather_nested(s: T, *, indices: Tensor, dim_map: Optional[Dict[Dim, Dim]] = None) -> T:

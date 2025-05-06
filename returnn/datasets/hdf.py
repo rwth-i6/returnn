@@ -1073,6 +1073,8 @@ class SimpleHDFWriter:
     which can be read later by :class:`HDFDataset`.
 
     Note that we dump to a temp file first, and only at :func:`close` we move it over to the real destination.
+
+    Can be used as a context manager, i.e. with the `with` statement.
     """
 
     def __init__(
@@ -1201,6 +1203,7 @@ class SimpleHDFWriter:
             shape = [None] * ndim  # type: typing.List[typing.Optional[int]]
             if ndim >= 2:
                 shape[-1] = dim
+            assert all(shape[1:]), f"{self} extra {data_key!r} supports only dyn dim in first axis, got shape {shape!r}"
             if dtype == "string":
                 # noinspection PyUnresolvedReferences
                 dtype = h5py.special_dtype(vlen=str)
@@ -1237,10 +1240,15 @@ class SimpleHDFWriter:
             self._datasets[name] = self._file.create_dataset(
                 name, raw_data.shape, raw_data.dtype, maxshape=tuple(None for _ in raw_data.shape)
             )
+            expected_shape = (raw_data.shape[0],) + self._datasets[name].shape[1:]
         else:
             old_shape = self._datasets[name].shape
             self._datasets[name].resize(old_shape[0] + raw_data.shape[0], axis=0)
+            expected_shape = (raw_data.shape[0],) + old_shape[1:]
         # append raw data to dataset
+        assert (
+            expected_shape == raw_data.shape
+        ), f"{self} insert: shape mismatch: expected {expected_shape}, got {raw_data.shape}"
         self._datasets[name][self._file.attrs["numTimesteps"] :] = raw_data
         self._file.attrs["numTimesteps"] += raw_data.shape[0]
         self._file.attrs["numSeqs"] += 1
@@ -1286,13 +1294,17 @@ class SimpleHDFWriter:
                 self._seq_lengths[seq_idx, data_key_idx_0 + 1] = self._extra_num_time_steps[data_key_]
 
         self._extra_num_time_steps[data_key] += raw_data.shape[0]
-        self._datasets[data_key].resize(self._extra_num_time_steps[data_key], axis=0)
+        hdf_data = self._datasets[data_key]
+        hdf_data.resize(self._extra_num_time_steps[data_key], axis=0)
 
         data_key_idx = sorted(self._prepared_extra).index(data_key) + 1
         self._seq_lengths[seq_idx, data_key_idx] = raw_data.shape[0]
 
         offset = self._extra_num_time_steps[data_key] - raw_data.shape[0]
-        hdf_data = self._datasets[data_key]
+        expected_shape = (raw_data.shape[0],) + hdf_data.shape[1:]
+        assert (
+            expected_shape == raw_data.shape
+        ), f"{self} insert other {data_key!r}: shape mismatch: expected {expected_shape}, got {raw_data.shape}"
         hdf_data[offset:] = raw_data
 
     def insert_batch(self, inputs, seq_len, seq_tag, extra=None):
@@ -1402,6 +1414,12 @@ class SimpleHDFWriter:
             shutil.move(tmp_dest_filename, self.filename)
             os.remove(self.tmp_filename)
             self.tmp_filename = None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()
 
 
 class HDFDatasetWriter:

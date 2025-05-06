@@ -300,7 +300,7 @@ class _HashedSeq(list):
     the key multiple times on a cache miss.
     """
 
-    __slots__ = "hashvalue"
+    __slots__ = ("hashvalue",)
 
     def __init__(self, tup, *, _hash=hash):
         super().__init__(tup)

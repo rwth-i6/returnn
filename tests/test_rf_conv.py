@@ -341,7 +341,7 @@ def test_maxpool1d_stride_border_cond():
         # Note: Currently not the single batch test because there is another problem with RF PT pool,
         # which does not correctly handle this case. We get:
         #   RuntimeError: max_pool1d() Invalid computed output size: -1
-        # test_single_batch_entry=True,
+        test_single_batch_entry=False,
     )
     out = out["output"]
     (out_spatial_dim,) = out.get_dyn_size_tags()

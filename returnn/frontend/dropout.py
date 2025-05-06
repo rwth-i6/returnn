@@ -60,7 +60,7 @@ def dropout(
         return _dropout(source, keep_prob, noise_dims=noise_dims)
 
     return rf.cond(
-        pred=rf.get_run_ctx().train_flag,
+        pred=rf.get_run_ctx().is_train_flag_enabled(func=dropout),
         true_fn=lambda: _dropout(source, keep_prob, noise_dims=noise_dims),
         false_fn=lambda: source,
     )

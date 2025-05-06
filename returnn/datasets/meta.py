@@ -312,10 +312,7 @@ class MetaDataset(CachedDataset2):
             try:
                 seq_list = default_dataset.get_all_tags()
             except NotImplementedError:
-                raise NotImplementedError(
-                    "Unsupported %s used as default in MetaDataset."
-                    " Only datasets with known and tagged sequences can be used." % type(default_dataset)
-                )
+                raise NotImplementedError(f"{default_dataset}.get_all_tags() required by {self}, but not implemented.")
 
             # Catch index out of bounds errors.
             # Whether the tags are actually valid will be checked in _check_dataset_seq().
@@ -1858,12 +1855,14 @@ class VariableDataset(Dataset):
     based on a user-provided function.
     """
 
-    def __init__(self, *, get_dataset, dataset_lru_cache_size: int = 1, **kwargs):
+    def __init__(self, *, get_dataset, dataset_lru_cache_size: int = 1, always_same_tags: bool = False, **kwargs):
         """
         :param get_dataset: function (*, epoch: int, **_) -> Dict[str,Any], will be called for every sub-epoch.
             It will cache the dataset(s) from the prev call (dataset_lru_cache_size),
             and if the dict is the same of those, it will not recreate the dataset.
-        :param dataset_lru_cache_size
+        :param dataset_lru_cache_size:
+        :param always_same_tags: whether all the datasets returned by ``get_dataset`` will have the same tags
+            (same :func:`get_all_tags`).
         """
         from functools import lru_cache
 
@@ -1872,6 +1871,7 @@ class VariableDataset(Dataset):
         self._dataset_dict: Optional[Dict[str, Any]] = None
         self._dataset: Optional[Dataset] = None
         self._dataset_lru_cache_size = dataset_lru_cache_size
+        self._always_same_tags = always_same_tags
         self._make_dataset = lru_cache(maxsize=self._dataset_lru_cache_size)(
             lambda dataset_dict: init_dataset(dataset_dict, parent_dataset=self)
         )
@@ -1978,6 +1978,12 @@ class VariableDataset(Dataset):
     def is_data_sparse(self, key: str) -> bool:
         """is data sparse"""
         return self._dataset.is_data_sparse(key)
+
+    def get_all_tags(self) -> List[str]:
+        """all tags"""
+        if self._always_same_tags:
+            return self._dataset.get_all_tags()
+        raise OptionalNotImplementedError(f"{self}.get_all_tags(): always_same_tags=False, thus could be inconsistent")
 
 
 class MultiEpochDataset(CachedDataset2):

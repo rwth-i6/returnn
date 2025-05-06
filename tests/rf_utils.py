@@ -57,7 +57,7 @@ def run_model(
     dyn_dim_min_sizes: Optional[Dict[Dim, int]] = None,
     test_tensorflow: bool = True,
     allow_inf_nan_in_output: bool = False,
-    test_single_batch_entry: bool = False,  # can later enable this globally
+    test_single_batch_entry: bool = True,
 ) -> TensorDict:
     """run"""
     print(f"* run_model with dyn_dim_max_sizes={dyn_dim_max_sizes!r}")

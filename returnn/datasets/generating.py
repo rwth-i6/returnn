@@ -792,10 +792,10 @@ class DummyDataset(GeneratingDataset):
         i1 = seq_idx
         i2 = i1 + seq_len * self.num_inputs
         features = numpy.array(
-            [((i % self.input_max_value) + self.input_shift) * self.input_scale for i in range(i1, i2)]
+            [((i % self.input_max_value) + self.input_shift) * self.input_scale for i in range(i1, i2)], dtype="float32"
         ).reshape((seq_len, self.num_inputs))
         i1, i2 = i2, i2 + seq_len
-        targets = numpy.array([i % self.num_outputs["classes"][0] for i in range(i1, i2)])
+        targets = numpy.array([i % self.num_outputs["classes"][0] for i in range(i1, i2)], dtype="int32")
         return DatasetSeq(seq_idx=seq_idx, features=features, targets=targets)
 
 
@@ -2037,7 +2037,7 @@ class LibriSpeechCorpus(CachedDataset2):
         """
         :param str path: dir, should contain "train-*/*/*/{*.flac,*.trans.txt}", or "train-*.zip"
         :param str prefix: "train", "dev", "test", "dev-clean", "dev-other", ...
-        :param str|list[str]|None orth_post_process: :func:`get_post_processor_function`, applied on orth
+        :param str|list[str]|function|None orth_post_process: :func:`get_post_processor_function`, applied on orth
         :param str|dict[str]|None targets: "bpe" or "chars" or None or dict for :func:`Vocabulary.create_vocab`
         :param dict[str]|None audio: options for :class:`ExtractAudioFeatures`
         :param dict[str]|None bpe: options for :class:`BytePairEncoding`

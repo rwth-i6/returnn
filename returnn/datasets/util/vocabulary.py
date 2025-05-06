@@ -17,7 +17,6 @@ from typing import Optional, Union, Type, Callable, List, Dict
 import sys
 import numpy
 
-from returnn.log import log
 from returnn.util.basic import NotSpecified
 
 
@@ -157,7 +156,7 @@ class Vocabulary:
 
     def _parse_vocab(self):
         """
-        Sets self.vocab, self.labels, self.num_labels.
+        Sets self._vocab, self._labels, self.num_labels.
         """
         filename = self.vocab_file
         if self._labels is not None:
@@ -167,34 +166,41 @@ class Vocabulary:
             self._vocab, self._labels = self._cache[filename]
             self.num_labels = len(self._labels)
         else:
+            labels_from_idx = None
             if filename.endswith(".pkl"):
                 import pickle
 
-                d = pickle.load(open(filename, "rb"))
+                labels_to_idx = pickle.load(open(filename, "rb"))
             else:
                 if filename.endswith(".gz"):
                     import gzip
 
-                    file_content = gzip.open(filename, "rt").read()
+                    file_content = gzip.open(filename, "rt", encoding="utf8").read()
                 else:
-                    file_content = open(filename, "r").read()
+                    file_content = open(filename, "r", encoding="utf8").read()
                 if file_content.startswith("{"):
-                    d = eval(file_content)
+                    labels_to_idx = eval(file_content)
                 else:
                     # Do line-based parsing.
-                    lines = file_content.splitlines()
-                    d = {line: i for (i, line) in enumerate(lines)}
-            assert isinstance(d, dict), f"{self}: expected dict, got {type(d).__name__} in {filename}"
-            labels = {idx: label for (label, idx) in sorted(d.items())}
-            min_label, max_label, num_labels = min(labels), max(labels), len(labels)
-            assert 0 == min_label
-            if num_labels - 1 < max_label:
-                print("Vocab error: not all indices used? max label: %i" % max_label, file=log.v1)
-                print("unused labels: %r" % ([i for i in range(max_label + 1) if i not in labels],), file=log.v2)
-            assert num_labels - 1 == max_label
-            self.num_labels = len(labels)
-            self._vocab = d
-            self._labels = [label for (idx, label) in sorted(labels.items())]
+                    labels = file_content.splitlines()
+                    labels_from_idx = {i: line for (i, line) in enumerate(labels)}
+                    labels_to_idx = {line: i for (i, line) in enumerate(labels)}
+            assert isinstance(
+                labels_to_idx, dict
+            ), f"{self}: expected dict, got {type(labels_to_idx).__name__} in {filename}"
+            if labels_from_idx is None:
+                labels_from_idx = {idx: label for (label, idx) in sorted(labels_to_idx.items())}
+            min_label, max_label, num_labels = min(labels_from_idx), max(labels_from_idx), len(labels_from_idx)
+            if 0 != min_label or num_labels - 1 != max_label:
+                raise Exception(
+                    f"Vocab error: not all indices used? min label idx {min_label}, max label idx {max_label},"
+                    f" num labels {num_labels}, "
+                    f" unused labels: {[i for i in range(max_label + 1) if i not in labels_from_idx]}."
+                    "There are duplicates in the vocab."
+                )
+            self.num_labels = len(labels_from_idx)
+            self._vocab = labels_to_idx
+            self._labels = [label for (idx, label) in sorted(labels_from_idx.items())]
             self._cache[filename] = (self._vocab, self._labels)
 
     @classmethod
@@ -332,6 +338,26 @@ class Vocabulary:
         """
         labels = self.labels
         return " ".join(map(labels.__getitem__, seq))
+
+    def serialize_labels(self, data: numpy.ndarray) -> str:
+        """
+        Like :func:`get_seq_labels` but a bit more generic, to not just work on sequences,
+        but any shape.
+
+        Also like :func:`Dataset.serialize_data` but even slightly more generic.
+        """
+        if data.ndim == 0:
+            return self.id_to_label(data.item())
+        if data.ndim == 1:
+            return self.get_seq_labels(data)
+
+        def _s(d_: numpy.ndarray) -> str:
+            assert d_.ndim >= 1
+            if d_.ndim == 1:
+                return ",".join(self._labels[i] for i in d_)
+            return ",".join(f"[{_s(d_[t])}]" for t in range(d_.shape[0]))
+
+        return _s(data)
 
 
 class BytePairEncoding(Vocabulary):
@@ -479,7 +505,13 @@ class SentencePieces(Vocabulary):
         """
         import sentencepiece as spm  # noqa
 
+        opts = opts.copy()
+        for k in ["model_file", "model_proto"]:
+            if k in opts:
+                # Make sure it is a string. (Could be e.g. Sis Path.)
+                opts[k] = str(opts[k])
         self._opts = opts
+        opts = opts.copy()
         self._cache_key = opts.get("model_file", None)
         control_symbols = opts.pop("control_symbols", None)
         user_defined_symbols = opts.pop("user_defined_symbols", None)

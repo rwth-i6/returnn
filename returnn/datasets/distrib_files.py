@@ -13,6 +13,7 @@ import numpy
 from returnn.log import log
 from returnn.util import better_exchook
 from returnn.util.basic import override_env_var, try_run
+from returnn.util.literal_py_to_pickle import literal_eval
 from returnn.util.multi_proc_non_daemonic_spawn import NonDaemonicSpawnContext
 from returnn.config import SubProcCopyGlobalConfigPreInitFunc
 from .basic import init_dataset, extend_dataset_dict_from_parent_dataset, DatasetSeq, RANDOM_SEED_OFFSET_ENV_VAR
@@ -133,7 +134,7 @@ class DistributeFilesDataset(CachedDataset2):
     def __init__(
         self,
         *,
-        files: List[FileTree],
+        files: Union[List[FileTree], os.PathLike],
         get_sub_epoch_dataset: Callable[[List[FileTree]], Dict[str, Any]],
         preload_next_n_sub_epochs: int = 1,
         buffer_size: int = 1,
@@ -143,7 +144,11 @@ class DistributeFilesDataset(CachedDataset2):
     ):
         """
         :param files: the files to shuffle over, can also be a list of arbitrarily nested python objects
-            to keep associated heterogeneous data together
+            to keep associated heterogeneous data together.
+            When the list grows too large to be serialized into a RETURNN config, the list of files
+            can also be specified as a path to a .txt file containing one file per line,
+            or a python file containing the repr of a list of arbitrarily nested python objects,
+            or a JSON file containing a list of arbitarily nested (JSON) objects.
         :param get_sub_epoch_dataset: callable which returns a dataset dict for a given subset of files
         :param preload_next_n_sub_epochs: how many sub epoch datasets to preload
         :param buffer_size: buffer size for each worker, amount of seqs to prefetch
@@ -162,6 +167,7 @@ class DistributeFilesDataset(CachedDataset2):
         self._data_keys: Optional[List[str]] = None
         self._num_seqs: Optional[int] = None
 
+        self._files: Optional[List[FileTree]] = None  # files to use for this dataset
         self._workers: Dict[int, _WorkerProcParent] = {}  # epoch -> worker
         self._files_order_cache: Dict[int, List[List[FileTree]]] = {}  # full epoch (0-indexed) -> files order
 
@@ -185,9 +191,7 @@ class DistributeFilesDataset(CachedDataset2):
             self.labels = _meta_info_cache["labels"]
             self._data_keys = _meta_info_cache["data_keys"]
             self._file_sizes = _meta_info_cache["file_sizes"]
-
-        if len(files) < self.partition_epoch:
-            raise ValueError(f"{self}: len(files) {len(files)} < partition_epoch {self.partition_epoch}")
+            self._files = _meta_info_cache["files"]
 
     def initialize(self):
         """init"""
@@ -208,14 +212,50 @@ class DistributeFilesDataset(CachedDataset2):
             "labels": self.labels,
             "data_keys": self._data_keys,
             "file_sizes": self._file_sizes,
+            "files": self._files,
         }
+
+    def _lazy_init_file_list(self):
+        """
+        The list of data files can either be provided as python list, or, if that grows
+        too large, as path to a file containing the list.
+
+        This function initializes the list of files from whatever was given as input.
+        """
+        if self._files is not None:
+            return
+        if isinstance(self.files, list):
+            self._files = self.files
+        elif isinstance(self.files, (str, os.PathLike)):
+            _, ext = os.path.splitext(self.files)
+            assert ext, f"{self}: no file extension on file list file {self.files}"
+            if ext == ".txt":
+                with open(self.files, "rt") as f:
+                    stripped_lines = (line.strip() for line in f.readlines())
+                    self._files = [line for line in stripped_lines if line and not line.startswith("#")]
+            elif ext == ".json":
+                import json
+
+                with open(self.files, "rt") as f:
+                    self._files = json.load(f)
+            elif ext == ".py":
+                with open(self.files, "rb") as f:
+                    self._files = literal_eval(f.read())
+            else:
+                raise ValueError(f"{self}: type {ext} not supported as file list file")
+            assert isinstance(self._files, list)
+        else:
+            raise ValueError(f"{self}: unsupported file list ({type(self.files)}: {self.files})")
+        if len(self._files) < self.partition_epoch:
+            raise ValueError(f"{self}: len(files) {len(self._files)} < partition_epoch {self.partition_epoch}")
 
     def _lazy_init_num_outputs(self):
         if self.num_outputs:
             return
+        self._lazy_init_file_list()
         # First, we need to know the num_inputs, num_outputs, total_num_seqs, labels.
         # Init the dataset with the first file.
-        dataset_dict = self._get_sub_dataset_dict(files=[self.files[0]])
+        dataset_dict = self._get_sub_dataset_dict(files=[self._files[0]])
         dataset = init_dataset(dataset_dict, extra_kwargs={"seq_ordering": "default"}, parent_dataset=self)
         self.num_inputs = dataset.num_inputs
         self.num_outputs = dataset.num_outputs
@@ -227,8 +267,9 @@ class DistributeFilesDataset(CachedDataset2):
 
         if self._file_sizes:
             return
+        self._lazy_init_file_list()
         self._file_sizes = {
-            _get_key_for_file_tree(t): sum((os.path.getsize(fn) for fn in tree.flatten(t)), 0) for t in self.files
+            _get_key_for_file_tree(t): sum((os.path.getsize(fn) for fn in tree.flatten(t)), 0) for t in self._files
         }
 
     def __del__(self):
@@ -253,6 +294,7 @@ class DistributeFilesDataset(CachedDataset2):
             self._num_seqs = 0
             return True
 
+        self._lazy_init_file_list()
         self._lazy_init_file_sizes()
 
         full_epoch_0idx = (epoch - 1) // self.partition_epoch
@@ -266,13 +308,13 @@ class DistributeFilesDataset(CachedDataset2):
             if full_epoch_0idx_ in self._files_order_cache:
                 continue
             if self.seq_ordering == "default":
-                files_order_flat = self.files
+                files_order_flat = self._files
             elif self.seq_ordering == "random":
                 # when sharding, _get_random_seed_for_epoch makes sure to use a fixed
                 # random_seed_offset
                 rnd_seed = self._get_random_seed_for_epoch(full_epoch_0idx_ * self.partition_epoch + 1)
                 random_generator = numpy.random.RandomState(rnd_seed)
-                files_order_flat = list(self.files)
+                files_order_flat = list(self._files)
                 random_generator.shuffle(files_order_flat)
             else:
                 raise ValueError(f"{self}: seq_ordering {self.seq_ordering!r} not supported")
@@ -400,8 +442,7 @@ class DistributeFilesDataset(CachedDataset2):
             # We need to decide where to add this file, to the current or the next sub epoch.
             if not files_per_bin[bin_idx] or (
                 # Better to add this file to the current sub epoch?
-                abs((size_taken + size) - avg_size_per_sub_epoch)
-                <= abs(size_taken - avg_size_per_sub_epoch)
+                abs((size_taken + size) - avg_size_per_sub_epoch) <= abs(size_taken - avg_size_per_sub_epoch)
             ):
                 files_per_bin[bin_idx].append(f_tree)
                 size_taken = 0
@@ -422,7 +463,8 @@ class DistributeFilesDataset(CachedDataset2):
 
     def have_seqs(self) -> bool:
         """have seqs"""
-        return bool(self.files)
+        self._lazy_init_file_list()
+        return bool(self._files)
 
     def finish_epoch(self, *, free_resources: bool = False):
         """finish epoch"""
