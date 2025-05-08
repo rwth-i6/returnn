@@ -1504,7 +1504,7 @@ class TranslationDataset(CachedDataset2):
             unknown_label.setdefault(data_key, None)
         self._unknown_label = unknown_label
 
-        self._seq_order: Optional[Sequence[int]]  = None # seq_idx -> line_nr
+        self._seq_order: Optional[Sequence[int]] = None  # seq_idx -> line_nr
         self._tag_prefix = "line-"  # sequence tag is "line-n", where n is the line number
         self._thread = Thread(name="%r reader" % self, target=self._thread_main)
         self._thread.daemon = True
