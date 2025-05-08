@@ -66,18 +66,22 @@ class Engine(EngineBase):
         self.model_filename = self.config.value("model", None)
         self._mp_manager = torch.multiprocessing.Manager()
         self._epoch_mp_shared = self._mp_manager.Value("i", 0)
-        self.train_dataset = None  # type: Optional[Dataset]
+        self.train_dataset: Optional[Dataset] = None
         self.eval_datasets = {}
-        self.extern_data = None  # type: Optional[TensorDict]
-        self._train_dataloader = None  # type: Optional[DataLoader]
-        self._eval_dataloaders = {}  # type: Dict[str, DataLoader]
+        self.extern_data: Optional[TensorDict] = None
+        self._train_dataloader: Optional[DataLoader] = None
+        self._eval_dataloaders: Dict[str, DataLoader] = {}
 
-        self._start_epoch = None  # type: Optional[int]
-        self._final_epoch = None  # type: Optional[int]
-        self._min_seq_length = config.typed_value("min_seq_length", None) or config.int("min_seq_length", None)  # type: Union[int,float,Dict[str,int],NumbersDict]
-        self._max_seq_length = config.typed_value("max_seq_length", None) or config.int("max_seq_length", None)  # type: Union[int,float,Dict[str,int],NumbersDict]
-        self._orig_model = None  # type: Optional[Union[rf.Module, torch.nn.Module]]
-        self._pt_model = None  # type: Optional[torch.nn.Module]
+        self._start_epoch: Optional[int] = None
+        self._final_epoch: Optional[int] = None
+        self._min_seq_length: Union[int, float, Dict[str, int], NumbersDict] = config.typed_value(
+            "min_seq_length", None
+        ) or config.int("min_seq_length", None)
+        self._max_seq_length: Union[int, float, Dict[str, int], NumbersDict] = config.typed_value(
+            "max_seq_length", None
+        ) or config.int("max_seq_length", None)
+        self._orig_model: Optional[Union[rf.Module, torch.nn.Module]] = None
+        self._pt_model: Optional[torch.nn.Module] = None
         self._epoch_start_func: Optional[Callable] = self.config.typed_value("epoch_start")
         self._epoch_end_func: Optional[Callable] = self.config.typed_value("epoch_end")
         self._train_step_func: Optional[Callable] = None
@@ -91,15 +95,15 @@ class Engine(EngineBase):
         self._updater: Optional[Updater] = None
 
         self._use_autocast = False
-        self._autocast_dtype = None  # type: Optional[str]
-        self._grad_scaler = None  # type: Optional[amp.GradScaler]
+        self._autocast_dtype: Optional[str] = None
+        self._grad_scaler: Optional[amp.GradScaler] = None
 
         dev_ = get_device_from_config_opt(config.value("device", None))
         self._device = dev_.result
         print("Using device:", self._device, f"({dev_.reason or '?'})", file=log.v2)
 
-        self._torch_distributed_ctx = None  # type: Optional[DistributedContext]
-        self._ddp_pt_model = None  # type: Optional[DistributedDataParallel]
+        self._torch_distributed_ctx: Optional[DistributedContext] = None
+        self._ddp_pt_model: Optional[DistributedDataParallel] = None
 
         if config.typed_value("torch_distributed") is not None:
             self._torch_distributed_ctx = dist_get_ctx(config=config)

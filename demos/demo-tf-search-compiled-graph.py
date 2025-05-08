@@ -26,7 +26,7 @@ class Hyp:
         :param int idx: hyp idx (to identify it in a beam)
         """
         self.idx = idx
-        self.source_idx = None  # type: typing.Optional[int]  # source hyp idx
+        self.source_idx: typing.Optional[int]  # source hyp idx = None
         self.score = 0.0
         self.seq = []  # label seq
 
@@ -107,7 +107,9 @@ def main():
                 # TODO: length norm here?
 
                 # Select new hypotheses.
-                best_possibilities = sorted(all_possibilities)[: args.beam_size]  # type: typing.List[typing.Tuple[float,int,Hyp]]
+                best_possibilities: typing.List[typing.Tuple[float, int, Hyp]] = sorted(all_possibilities)[
+                    : args.beam_size
+                ]
                 assert len(best_possibilities) == args.beam_size
                 hyps = [
                     hyp.expand(idx=i, label=label, score=score)

@@ -260,8 +260,8 @@ class MetaDataset(CachedDataset2):
 
         self.tag_idx = {tag: idx for (idx, tag) in enumerate(self.seq_list_original[self.default_dataset_key])}
 
-        self._seq_lens = None  # type: typing.Optional[typing.Dict[str,NumbersDict]]
-        self._num_timesteps = None  # type: typing.Optional[NumbersDict]
+        self._seq_lens: typing.Optional[typing.Dict[str, NumbersDict]] = None
+        self._num_timesteps: typing.Optional[NumbersDict] = None
         self._seq_lens_file = seq_lens_file
         if seq_lens_file:
             seq_lens = load_json(filename=seq_lens_file)
@@ -290,7 +290,7 @@ class MetaDataset(CachedDataset2):
         self.num_outputs = self.data_dims
 
         self.orig_seq_order_is_initialized = False
-        self.seq_list_ordered = None  # type: typing.Optional[typing.Dict[str,typing.List[str]]]
+        self.seq_list_ordered: typing.Optional[typing.Dict[str, typing.List[str]]] = None
 
     def _load_seq_list(self, seq_list_file: Optional[Union[str, Dict[str, str]]] = None) -> Dict[str, List[str]]:
         """
@@ -771,7 +771,7 @@ class ConcatDataset(CachedDataset2):
         for ds in self.datasets[1:]:
             assert ds.num_inputs == self.num_inputs
             assert ds.num_outputs == self.num_outputs
-        self.dataset_seq_idx_offsets = None  # type: typing.Optional[typing.List[int]]
+        self.dataset_seq_idx_offsets: typing.Optional[typing.List[int]] = None
 
     def init_seq_order(self, epoch=None, seq_list=None, seq_order=None):
         """
@@ -1017,9 +1017,9 @@ class CombinedDataset(CachedDataset2):
             for (dset_key, dset_data_key), data_key in data_map.items()
         }
 
-        self.dataset_seq_idx_boundaries = None  # type: typing.Optional[typing.List[int]]
-        self.dataset_sorted_seq_idx_list = None  # type: typing.Optional[typing.List[typing.Tuple[int,int]]]
-        self.used_num_seqs_per_subset = None  # type: typing.Optional[typing.List[int]]
+        self.dataset_seq_idx_boundaries: typing.Optional[typing.List[int]] = None
+        self.dataset_sorted_seq_idx_list: typing.Optional[typing.List[typing.Tuple[int, int]]] = None
+        self.used_num_seqs_per_subset: typing.Optional[typing.List[int]] = None
 
     def init_seq_order(self, epoch=None, seq_list=None, seq_order=None):
         """
@@ -1445,7 +1445,7 @@ class ConcatSeqsDataset(CachedDataset2):
         self.repeat_in_between_last_frame_up_to_multiple_of = repeat_in_between_last_frame_up_to_multiple_of or {}
         self.pad_narrow_data_to_multiple_of_target_len = pad_narrow_data_to_multiple_of_target_len or {}
         if epoch_wise_filter is None:
-            self.epoch_wise_filter = None  # type: Optional[EpochWiseFilter]
+            self.epoch_wise_filter: Optional[EpochWiseFilter] = None
         elif isinstance(epoch_wise_filter, dict):
             self.epoch_wise_filter = EpochWiseFilter(epoch_wise_filter)
         else:
@@ -1471,8 +1471,8 @@ class ConcatSeqsDataset(CachedDataset2):
         self.seq_lens = eval(open(seq_len_file).read())
         assert isinstance(self.seq_lens, dict)
         self.full_seq_len_list = self._get_full_seq_lens_list()
-        self.cur_seq_list = None  # type: typing.Optional[typing.List[str]]  # list of seq tags
-        self.cur_sub_seq_idxs = None  # type: typing.Optional[typing.List[typing.List[int]]]  # list of list of sub seq idxs
+        self.cur_seq_list: typing.Optional[typing.List[str]]  # list of seq tags = None
+        self.cur_sub_seq_idxs: typing.Optional[typing.List[typing.List[int]]]  # list of list of sub seq idxs = None
 
     def _get_full_seq_lens_list(self):
         """

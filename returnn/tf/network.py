@@ -39,8 +39,8 @@ class ExternData(TensorDict):
         :param None|dict[str,dict[str]] data: optional init kwargs for Data
         """
         super().__init__()
-        self._config = None  # type: typing.Optional["returnn.config.Config"]
-        self._batch_info = None  # type: typing.Optional["returnn.tf.util.data.BatchInfo"]
+        self._config: typing.Optional["returnn.config.Config"] = None
+        self._batch_info: typing.Optional["returnn.tf.util.data.BatchInfo"] = None
         self.default_input = default_input
         self.default_target = default_target
         self.extra_added_keys = set()  # set[str]
@@ -501,7 +501,7 @@ class _NetworkConstructionStack:
     """
 
     def __init__(self):
-        self.layers = []  # type: typing.List[str]
+        self.layers: typing.List[str] = []
         self.in_flat_construct_count = 0
 
     def append(self, layer_name):
@@ -644,31 +644,33 @@ class TFNetwork:
         self.extra_deps_in_extra = False
         self.extra_only_template = False
         self.is_root_in_ctx = not parent_net  # default. might be overwritten
-        self.extra_nets = {}  # type: typing.Dict[str,TFNetwork]
-        self.subnets = {}  # type: typing.Dict[str,Subnetwork]
+        self.extra_nets: typing.Dict[str, TFNetwork] = {}
+        self.subnets: typing.Dict[str, Subnetwork] = {}
         self._selected_train_layers = None
         self._construction_stack = _NetworkConstructionStack()
         self.layers_desc: Dict[str, Dict[str, Any]] = {}
         self.layers: Dict[str, LayerBase] = {}
-        self.losses_dict = {}  # type: typing.Dict[str,LossHolder]
-        self.total_loss = None  # type: typing.Optional[tf.Tensor]
-        self.total_constraints = None  # type: typing.Optional[tf.Tensor]
-        self.total_objective = None  # type: typing.Optional[tf.Tensor]
-        self._global_train_step = None  # type: typing.Optional[tf.Tensor]
-        self._global_train_step_var = None  # type: typing.Optional[tf.Variable]
+        self.losses_dict: typing.Dict[str, LossHolder] = {}
+        self.total_loss: typing.Optional[tf.Tensor] = None
+        self.total_constraints: typing.Optional[tf.Tensor] = None
+        self.total_objective: typing.Optional[tf.Tensor] = None
+        self._global_train_step: typing.Optional[tf.Tensor] = None
+        self._global_train_step_var: typing.Optional[tf.Variable] = None
         self.epoch_step = None
-        self.saver = None  # type: typing.Optional[tf.compat.v1.train.Saver]
-        self.extra_vars_to_save = []  # type: typing.List[tf.Variable]
+        self.saver: typing.Optional[tf.compat.v1.train.Saver] = None
+        self.extra_vars_to_save: typing.List[tf.Variable] = []
         self.recurrent = False
-        self._assigner_cache = {}  # type: typing.Dict[tf.Variable,tf_util.VariableAssigner]
+        self._assigner_cache: typing.Dict[tf.Variable, tf_util.VariableAssigner] = {}
         self.concat_sources_dropout_cache: Dict[
             Tuple[Tuple[LayerBase, ...], Dim, float, Optional[Tuple[Optional[int], ...]]], Data
         ] = {}
-        self._merge_all_summaries = None  # type: typing.Optional[tf.Tensor]
-        self._graph_reset_callbacks = []  # type: typing.List[typing.Callable]
-        self._run_opts = {}  # type: typing.Dict[str, typing.Any]
-        self._run_finished_callbacks = []  # type: typing.List[typing.Callable]
-        self._map_search_beam_to_search_choices = {}  # type: typing.Dict[tf_util.SearchBeam,"returnn.tf.layers.base.SearchChoices"]
+        self._merge_all_summaries: typing.Optional[tf.Tensor] = None
+        self._graph_reset_callbacks: typing.List[typing.Callable] = []
+        self._run_opts: typing.Dict[str, typing.Any] = {}
+        self._run_finished_callbacks: typing.List[typing.Callable] = []
+        self._map_search_beam_to_search_choices: typing.Dict[
+            tf_util.SearchBeam, "returnn.tf.layers.base.SearchChoices"
+        ] = {}
 
     def __repr__(self):
         s = "TFNetwork %r" % self.name
@@ -4514,8 +4516,8 @@ class CustomCheckpointLoader:
         # All variables of the model to be loaded:
         self.var_net_names = {self._get_param_name(v): v for v in self.saveable_params}  # type: typing.Dict[str,typing.Union[tf.Variable,typing.Any]]
         # Model variables missing in the checkpoint:
-        self.missing_var_names = []  # type: typing.List[str]
-        self.missing_non_critical_var_names = []  # type: typing.List[str]
+        self.missing_var_names: typing.List[str] = []
+        self.missing_non_critical_var_names: typing.List[str] = []
         for name, v in sorted(self.var_net_names.items()):
             if name in self.var_ckpt_names:
                 continue
@@ -4872,7 +4874,7 @@ class CustomCheckpointLoader:
                 self.target = target
                 self.keys = [target + "bias", target + "kernel"]
                 self.prefix = prefix
-                self.data = None  # type: typing.Optional[typing.Dict[str,numpy.ndarray]]
+                self.data: typing.Optional[typing.Dict[str, numpy.ndarray]] = None
 
             # noinspection PyMethodParameters
             def _load(sself):

@@ -1473,7 +1473,7 @@ class TranslationDataset(CachedDataset2):
 
         self._data_keys = self._source_data_keys + self._target_data_keys
         self._data = {data_key: [] for data_key in self._data_keys}  # type: typing.Dict[str,typing.List[numpy.ndarray]]
-        self._data_len = None  # type: typing.Optional[int]
+        self._data_len: typing.Optional[int] = None
 
         self._vocabs = self._get_vocabs()
         self.num_outputs = {k: [max(self._vocabs[k].values()) + 1, 1] for k in self._vocabs.keys()}  # all sparse
@@ -1489,7 +1489,7 @@ class TranslationDataset(CachedDataset2):
             unknown_label.setdefault(data_key, None)
         self._unknown_label = unknown_label
 
-        self._seq_order = None  # type: typing.Optional[typing.Sequence[int]]  # seq_idx -> line_nr
+        self._seq_order: typing.Optional[typing.Sequence[int]]  # seq_idx -> line_nr = None
         self._tag_prefix = "line-"  # sequence tag is "line-n", where n is the line number
         self._thread = Thread(name="%r reader" % self, target=self._thread_main)
         self._thread.daemon = True
@@ -1878,10 +1878,10 @@ class TranslationFactorsDataset(TranslationDataset):
             assert file_prefix == self.target_file_prefix
             data_keys = self._target_data_keys
 
-        data = [
+        data: typing.List[typing.List[numpy.ndarray]] = [
             self._factored_words_to_numpy(data_keys, s.decode("utf8").strip().split(), self._add_postfix[file_prefix])
             for s in data_strs
-        ]  # type: typing.List[typing.List[numpy.ndarray]] # shape: (len(data_strs), len(data_keys))
+        ]  # shape: (len(data_strs), len(data_keys))
 
         data = zip(*data)  # type: typing.Iterable[typing.Tuple[numpy.ndarray]] # shape: (len(data_keys), len(data_strs))
 

@@ -108,22 +108,22 @@ class Runner:
         self.cancel_flag = False
         self.run_exception = None
         self.num_steps = None
-        self.device_crash_batch = None  # type: typing.Optional[int]
+        self.device_crash_batch: typing.Optional[int] = None
         self.start_time = None
         self.elapsed = None
-        self.report_prefix = None  # type: typing.Optional[str]
+        self.report_prefix: typing.Optional[str] = None
         self._results_accumulated = NumbersDict()  # entries like "cost:output" or "loss"
         self._inv_norm_accumulated = NumbersDict()  # entries like "output"
         self.num_frames_accumulated = NumbersDict()  # for each data key (eg. "classes"), corresponding number of frames
-        self.results = {}  # type: typing.Dict[str,float]  # entries like "cost:output" or "loss"
-        self.score = {}  # type: typing.Dict[str,float]  # entries like "cost:output"
-        self.error = {}  # type: typing.Dict[str,float]  # entries like "error:output"
-        self.stats = {}  # type: typing.Dict[str,typing.Union[float,numpy.ndarray,'Util.Stats']]  # entries like "stats:..."
+        self.results: typing.Dict[str, float]  # entries like "cost:output" or "loss" = {}
+        self.score: typing.Dict[str, float]  # entries like "cost:output" = {}
+        self.error: typing.Dict[str, float]  # entries like "error:output" = {}
+        self.stats: typing.Dict[str, typing.Union[float, numpy.ndarray, "util.Stats"]]  # entries like "stats:..." = {}
         self.extra_fetches = extra_fetches
         if extra_fetches is not None:
             assert extra_fetches_callback
         self.extra_fetches_callback = extra_fetches_callback
-        self._step_start_time = None  # type: typing.Optional[float]
+        self._step_start_time: typing.Optional[float] = None
         self._horovod_last_param_sync_time = time.time()  # we assume it is synced right now
         self._horovod_stopped_runner = False
         self._horovod_finish_all = False
@@ -131,7 +131,7 @@ class Runner:
             self._horovod_finish_all = True
         # With Horovod, during the main session.run, if reduce_type != grad or not training,
         # the following tensors are enough to ensure that we are in sync.
-        self._horovod_collected_reduce_inputs = {}  # type: typing.Dict[str,(tf.Tensor,tf.Tensor)]  # name -> (input,output)
+        self._horovod_collected_reduce_inputs: typing.Dict[str, (tf.Tensor, tf.Tensor)]  # name -> (input,output) = {}
 
         from returnn.util.basic import terminal_size
 
@@ -883,27 +883,27 @@ class Engine(EngineBase):
             BackendEngine.select_engine(default_fallback_engine=default_fallback_engine, config=self.config)
         assert BackendEngine.is_tensorflow_selected()
         self.orig_config = {}  # see _maybe_update_config
-        self.custom_get_net_dict = None  # type: typing.Optional[typing.Callable]
+        self.custom_get_net_dict: typing.Optional[typing.Callable] = None
         self._have_rf_get_model_func = False
         self._check_devices()
-        self.tf_session = None  # type: typing.Optional[tf.compat.v1.Session]
-        self.network = None  # type: typing.Optional[TFNetwork]
-        self.updater = None  # type: typing.Optional[Updater]
+        self.tf_session: typing.Optional[tf.compat.v1.Session] = None
+        self.network: typing.Optional[TFNetwork] = None
+        self.updater: typing.Optional[Updater] = None
         self._checked_uninitialized_vars = False
         self._merge_all_summaries = None
-        self.dataset_batches = {}  # type: typing.Dict[str,BatchSetGenerator]
-        self.dataset_provider = None  # type: typing.Optional[DatasetDataProvider]
-        self.train_data = None  # type: typing.Optional[Dataset]
-        self.eval_datasets = {}  # type: typing.Dict[str,Dataset]
-        self.start_epoch = None  # type: typing.Optional[int]
-        self._num_trained_epochs = 0  # type: int  # just a counter
-        self._num_net_reinit = 0  # type: int
+        self.dataset_batches: typing.Dict[str, BatchSetGenerator] = {}
+        self.dataset_provider: typing.Optional[DatasetDataProvider] = None
+        self.train_data: typing.Optional[Dataset] = None
+        self.eval_datasets: typing.Dict[str, Dataset] = {}
+        self.start_epoch: typing.Optional[int] = None
+        self._num_trained_epochs: int  # just a counter = 0
+        self._num_net_reinit: int = 0
         self.use_dynamic_train_flag = False
         self.use_search_flag = self.config.value("task", None) == "search"
         self.use_eval_flag = self.config.value("task", None) != "forward"
-        self._const_cache = {}  # type: typing.Dict[str,tf.Tensor]
-        self.preload_from_files = None  # type: typing.Optional[typing.Dict[str,typing.Dict[str]]]
-        self.max_seqs = None  # type: typing.Optional[int]
+        self._const_cache: typing.Dict[str, tf.Tensor] = {}
+        self.preload_from_files: typing.Optional[typing.Dict[str, typing.Dict[str]]] = None
+        self.max_seqs: typing.Optional[int] = None
 
     def finalize(self, error_occurred=False):
         """
@@ -1622,7 +1622,7 @@ class Engine(EngineBase):
         assert isinstance(self.start_epoch, int)
         epoch = self.start_epoch  # Epochs start at 1.
         while epoch <= final_epoch:
-            self.epoch = epoch  # type: int
+            self.epoch: int = epoch
             if isinstance(self.max_seq_length, int) and self.max_seq_length != sys.maxsize:
                 if int(self.max_seq_length + self.inc_seq_length) != int(self.max_seq_length):
                     print("increasing sequence lengths to", int(self.max_seq_length + self.inc_seq_length), file=log.v3)
