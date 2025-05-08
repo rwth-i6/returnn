@@ -187,9 +187,9 @@ def main():
     init(config_filename=args.config, checkpoint=args.checkpoint, log_verbosity=args.verbosity, device=args.device)
 
     model_outputs_dict = config.typed_value("model_outputs")
-    assert (
-        model_outputs_dict is not None
-    ), "The specified config needs to have explicit model outputs. Please define `model_outputs` in your config."
+    assert model_outputs_dict is not None, (
+        "The specified config needs to have explicit model outputs. Please define `model_outputs` in your config."
+    )
     model_outputs = TensorDict()
     model_outputs.update(model_outputs_dict, auto_convert=True)
 
@@ -207,9 +207,9 @@ def main():
 
     is_rf_module = isinstance(model, rf.Module)
     is_pt_module = isinstance(model, torch.nn.Module)
-    assert (
-        is_rf_module or is_pt_module
-    ), "The module returned by get_model() isn't a returnn.frontend.Module or a torch.nn.Module."
+    assert is_rf_module or is_pt_module, (
+        "The module returned by get_model() isn't a returnn.frontend.Module or a torch.nn.Module."
+    )
 
     export_func = config.typed_value("export") or torch.onnx.export
     forward_step_func = config.typed_value("forward_step")
@@ -252,16 +252,16 @@ def main():
 
     if args.input_names:
         input_names = args.input_names.split(",")
-        assert set(extern_data_raw.keys()) == set(
-            input_names
-        ), f"missmatch between input_names {input_names} and extern_data keys {list(extern_data_raw.keys())}"
+        assert set(extern_data_raw.keys()) == set(input_names), (
+            f"missmatch between input_names {input_names} and extern_data keys {list(extern_data_raw.keys())}"
+        )
     else:
         input_names = list(extern_data_raw.keys())
     if args.output_names:
         output_names = args.output_names.split(",")
-        assert set(model_outputs_raw_keys) == set(
-            output_names
-        ), f"missmatch between output_names {output_names} and model_outputs keys {model_outputs_raw_keys}"
+        assert set(model_outputs_raw_keys) == set(output_names), (
+            f"missmatch between output_names {output_names} and model_outputs keys {model_outputs_raw_keys}"
+        )
     else:
         output_names = model_outputs_raw_keys
 

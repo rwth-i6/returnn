@@ -335,9 +335,9 @@ class _TensorMixin(_TensorMixinBase):
                         if tag.dyn_size_ext.placeholder is None:
                             tag.complete_dyn_size()
                         if self.placeholder is not None:
-                            assert (
-                                tag.dyn_size_ext.placeholder is not None
-                            ), "%s sanity_check: dynamic dim %s value unknown" % (self, tag)
+                            assert tag.dyn_size_ext.placeholder is not None, (
+                                "%s sanity_check: dynamic dim %s value unknown" % (self, tag)
+                            )
                 assert tag.is_dim_known()
 
     def get_runtime_sanity_check_op(self: Tensor):
@@ -2494,8 +2494,7 @@ class _TensorMixin(_TensorMixinBase):
                     if res_tag.match_priority > tag.match_priority:
                         continue
                     raise Exception(
-                        f"{self}: get_axis_from_description({axis}) not unique."
-                        f" use match_priority to resolve ambiguity"
+                        f"{self}: get_axis_from_description({axis}) not unique. use match_priority to resolve ambiguity"
                     )
             if res_idx is None:
                 raise Exception(f"{self}: get_axis_from_description({axis}) not found")
@@ -2646,12 +2645,13 @@ class _TensorMixin(_TensorMixinBase):
             return self.batch_shape[self.time_dim_axis_excluding_batch] is None
         if self.time_dim_axis_excluding_batch in self.size_placeholder:
             return True
-        assert isinstance(
-            self.shape[self.time_dim_axis_excluding_batch], int
-        ), "%s: dynamic time axis dim (None) (axis %i) but size_placeholder %r misses information" % (
-            self,
-            self.time_dim_axis,
-            self.size_placeholder,
+        assert isinstance(self.shape[self.time_dim_axis_excluding_batch], int), (
+            "%s: dynamic time axis dim (None) (axis %i) but size_placeholder %r misses information"
+            % (
+                self,
+                self.time_dim_axis,
+                self.size_placeholder,
+            )
         )
         return False
 
@@ -3307,14 +3307,15 @@ class _TensorMixin(_TensorMixinBase):
                     if self_axis not in taken_self_axes
                 ]
                 if opt == "unknown_spatial_matches":
-                    assert (
-                        len(matching) <= 1
-                    ), "cannot match axes %s from %s to %s, failed at other %s, not unique after %s" % (
-                        other_axes,
-                        other,
-                        self,
-                        other_axis,
-                        opt,
+                    assert len(matching) <= 1, (
+                        "cannot match axes %s from %s to %s, failed at other %s, not unique after %s"
+                        % (
+                            other_axes,
+                            other,
+                            self,
+                            other_axis,
+                            opt,
+                        )
                     )
                 if matching:
                     break

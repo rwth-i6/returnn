@@ -318,9 +318,9 @@ class PostprocessingDataset(CachedDataset2):
         data_iter = self._iterate_dataset()
         if self._map_seq_stream is not None:
             data_iter = self._map_seq_stream(data_iter, epoch=self.epoch, rng=self._rng, **util.get_fwd_compat_kwargs())
-            assert isinstance(
-                data_iter, Iterator
-            ), f"map_seq_stream must produce an {Iterator.__name__}, but produced {type(data_iter).__name__}"
+            assert isinstance(data_iter, Iterator), (
+                f"map_seq_stream must produce an {Iterator.__name__}, but produced {type(data_iter).__name__}"
+            )
         return _validate_tensor_dict_iter(data_iter)
 
     def _iterate_dataset(self) -> Iterator[TensorDict]:
@@ -349,9 +349,9 @@ class PostprocessingDataset(CachedDataset2):
                 tensor_dict = self._map_seq(
                     tensor_dict, epoch=self.epoch, seq_idx=seq_index, rng=self._rng, **util.get_fwd_compat_kwargs()
                 )
-                assert isinstance(
-                    tensor_dict, TensorDict
-                ), f"map_seq must produce a {TensorDict.__name__}, but produced {type(tensor_dict).__name__}"
+                assert isinstance(tensor_dict, TensorDict), (
+                    f"map_seq must produce a {TensorDict.__name__}, but produced {type(tensor_dict).__name__}"
+                )
 
                 # Re-adding the seq_tag/complete_frac here causes no harm in case they are dropped
                 # since we don't add/drop any segments w/ the non-iterator postprocessing function.
@@ -367,9 +367,9 @@ class PostprocessingDataset(CachedDataset2):
                 if self._seq_list_for_validation is not None:
                     seq_tag = self._seq_list_for_validation[seq_index]
                     tag_of_seq = tensor_dict.data["seq_tag"].raw_tensor.item()
-                    assert (
-                        tag_of_seq == seq_tag
-                    ), f"seq tag mismath: {tag_of_seq} != {seq_tag} for seq index {seq_index} when seq list is given"
+                    assert tag_of_seq == seq_tag, (
+                        f"seq tag mismath: {tag_of_seq} != {seq_tag} for seq index {seq_index} when seq list is given"
+                    )
 
             yield tensor_dict
             seq_index += 1

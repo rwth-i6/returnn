@@ -2,7 +2,6 @@
 stft etc
 """
 
-
 from __future__ import annotations
 from typing import Optional, Tuple
 from returnn.tensor import Tensor, Dim

@@ -264,9 +264,7 @@ class HDFTranslationDatasetCreator(object):
             target_sequence_lengths[data_key] = target_lengths
 
         # Now sort by key.
-        key_lengths_tuples_sorted = sorted(
-            target_sequence_lengths.items(), key=lambda x: x[0]
-        )  # type: typing.List[typing.Tuple[str,typing.List[int]]]  # nopep8
+        key_lengths_tuples_sorted = sorted(target_sequence_lengths.items(), key=lambda x: x[0])  # type: typing.List[typing.Tuple[str,typing.List[int]]]  # nopep8
         target_lengths_sorted = [key_length_tuple[1] for key_length_tuple in key_lengths_tuples_sorted]
 
         # Finally, add one time the source lengths for the input ("data") and convert to numpy.
@@ -320,10 +318,10 @@ class HDFTranslationDatasetCreator(object):
         """
         # Make sure the number of lines given by the user was correct.
         # Otherwise lengths and labels would have trailing zeros.
-        assert (
-            self.number_of_lines == self._number_of_processed_lines
-        ), "Fewer lines ({}) in the corpus files " "than specified ({}).".format(
-            self._number_of_processed_lines, self.number_of_lines
+        assert self.number_of_lines == self._number_of_processed_lines, (
+            "Fewer lines ({}) in the corpus files than specified ({}).".format(
+                self._number_of_processed_lines, self.number_of_lines
+            )
         )
 
         # Trim datasets to actually occupied length, i.e. remove unused reserved space.
@@ -349,9 +347,9 @@ class HDFTranslationDatasetCreator(object):
         else:
             if words:
                 words_split_into_factors = [word.split(self.factor_separator) for word in words]
-                assert all(
-                    len(factors) == len(data_keys) for factors in words_split_into_factors
-                ), "All words must have all factors. Expected: " + self.factor_separator.join(data_keys)
+                assert all(len(factors) == len(data_keys) for factors in words_split_into_factors), (
+                    "All words must have all factors. Expected: " + self.factor_separator.join(data_keys)
+                )
                 word_list_per_factor = zip(*words_split_into_factors)
             else:
                 word_list_per_factor = [[]] * len(data_keys)
@@ -431,7 +429,7 @@ def parse_args():
         "-d",
         "--data_buffer_size",
         type=int,
-        help="How much space to reserve in the HDF dataset " "at once (in number of integers).",
+        help="How much space to reserve in the HDF dataset at once (in number of integers).",
         default=5000000,
     )
 

@@ -14,7 +14,6 @@ https://github.com/janfreyberg/pytorch-revgrad/blob/449fa763a76d/src/pytorch_rev
 https://github.com/tadeephuy/GradientReversal/blob/5d9857d63/gradient_reversal/functional.py
 """
 
-
 from __future__ import annotations
 from typing import Optional, Union
 import torch

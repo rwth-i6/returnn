@@ -263,7 +263,7 @@ def _slice_find_sparse_dim(v: Union[Tensor, slice, Any]) -> Optional[Dim]:
 
 
 def _map_slice_value_raw(
-    v: Union[None, slice, int, numpy.number, numpy.ndarray, Tensor[T]]
+    v: Union[None, slice, int, numpy.number, numpy.ndarray, Tensor[T]],
 ) -> Union[None, slice, int, numpy.number, T]:
     if v is None:
         return None

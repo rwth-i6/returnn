@@ -12,8 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
-"""Class to transform an subgraph into another.
-"""
+"""Class to transform an subgraph into another."""
 
 from __future__ import annotations
 

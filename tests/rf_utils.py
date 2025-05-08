@@ -119,9 +119,9 @@ def run_model(
     assert random_journal.reached_end()
 
     print("Output PT/TF:", out_pt, out_tf)
-    assert set(out_pt.data.keys()) == set(
-        out_tf.data.keys()
-    ), f"PT output {list(out_pt.data.keys())} vs TF output {list(out_tf.data.keys())}"
+    assert set(out_pt.data.keys()) == set(out_tf.data.keys()), (
+        f"PT output {list(out_pt.data.keys())} vs TF output {list(out_tf.data.keys())}"
+    )
     for k, v_pt in out_pt.data.items():
         v_tf = out_tf[k]
         # We cannot really check the dims directly for equality,

@@ -12,7 +12,7 @@ See :ref:`tech_overview` for an overview how it fits all together.
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Callable, Dict, List, Optional, Union
 import typing
 import os
 import sys
@@ -101,31 +101,29 @@ class Runner:
         self.store_tf_profile = engine.config.bool("store_tf_profile", False)
         self.store_metadata_mod_step = engine.config.int("store_metadata_mod_step", 0)
         self.reset_updater_vars_mod_step = engine.config.int("reset_updater_vars_mod_step", 0)
-        assert not (
-            self.store_tf_profile and self.store_metadata_mod_step
-        ), "Cannot use store_tf_profile and store_metadata_mod_step at the same time"
+        assert not (self.store_tf_profile and self.store_metadata_mod_step), (
+            "Cannot use store_tf_profile and store_metadata_mod_step at the same time"
+        )
         self.finalized = False
         self.cancel_flag = False
         self.run_exception = None
         self.num_steps = None
-        self.device_crash_batch = None  # type: typing.Optional[int]
+        self.device_crash_batch: Optional[int] = None
         self.start_time = None
         self.elapsed = None
-        self.report_prefix = None  # type: typing.Optional[str]
+        self.report_prefix: Optional[str] = None
         self._results_accumulated = NumbersDict()  # entries like "cost:output" or "loss"
         self._inv_norm_accumulated = NumbersDict()  # entries like "output"
         self.num_frames_accumulated = NumbersDict()  # for each data key (eg. "classes"), corresponding number of frames
-        self.results = {}  # type: typing.Dict[str,float]  # entries like "cost:output" or "loss"
-        self.score = {}  # type: typing.Dict[str,float]  # entries like "cost:output"
-        self.error = {}  # type: typing.Dict[str,float]  # entries like "error:output"
-        self.stats = (
-            {}
-        )  # type: typing.Dict[str,typing.Union[float,numpy.ndarray,'Util.Stats']]  # entries like "stats:..."
+        self.results: Dict[str, float] = {}  # entries like "cost:output" or "loss"
+        self.score: Dict[str, float] = {}  # entries like "cost:output"
+        self.error: Dict[str, float] = {}  # entries like "error:output"
+        self.stats: Dict[str, Union[float, numpy.ndarray, "util.Stats"]] = {}  # entries like "stats:..."
         self.extra_fetches = extra_fetches
         if extra_fetches is not None:
             assert extra_fetches_callback
         self.extra_fetches_callback = extra_fetches_callback
-        self._step_start_time = None  # type: typing.Optional[float]
+        self._step_start_time: Optional[float] = None
         self._horovod_last_param_sync_time = time.time()  # we assume it is synced right now
         self._horovod_stopped_runner = False
         self._horovod_finish_all = False
@@ -133,9 +131,7 @@ class Runner:
             self._horovod_finish_all = True
         # With Horovod, during the main session.run, if reduce_type != grad or not training,
         # the following tensors are enough to ensure that we are in sync.
-        self._horovod_collected_reduce_inputs = (
-            {}
-        )  # type: typing.Dict[str,(tf.Tensor,tf.Tensor)]  # name -> (input,output)
+        self._horovod_collected_reduce_inputs: Dict[str, (tf.Tensor, tf.Tensor)] = {}  # name -> (input,output)
 
         from returnn.util.basic import terminal_size
 
@@ -196,9 +192,9 @@ class Runner:
                     d["extra:%s" % k] = v
                     continue
                 assert isinstance(v, Data)
-                d[
-                    "extra:%s" % k
-                ] = v.placeholder  # see _maybe_handle_extra_fetches, it will transform to batch-major there
+                d["extra:%s" % k] = (
+                    v.placeholder
+                )  # see _maybe_handle_extra_fetches, it will transform to batch-major there
                 for i, s in v.size_placeholder.items():
                     d["extra:%s:size_%i" % (k, i)] = s
 
@@ -732,9 +728,9 @@ class Runner:
                             run_options_.MergeFrom(run_options)
                         # We could use tfdbg.add_debug_tensor_watch here.
                         session_run_start_time = time.time()
-                        fetches_results = sess.run(
+                        fetches_results: Dict[str, Union[numpy.ndarray, str]] = sess.run(
                             fetches_dict, feed_dict=feed_dict, options=run_options_, run_metadata=run_metadata
-                        )  # type: typing.Dict[str,typing.Union[numpy.ndarray,str]]
+                        )
                         elapsed_time_tf += time.time() - session_run_start_time
                         writer.add_summary(fetches_results["summary"], step + step_offset)
                         writer.add_run_metadata(run_metadata, "step_{:04d}".format(step + step_offset))
@@ -746,13 +742,13 @@ class Runner:
                         session_run_start_time = time.time()
                         if self.store_tf_profile:
                             with tf.profiler.experimental.Trace(name=report_prefix, step_num=step + step_offset):
-                                fetches_results = sess.run(
+                                fetches_results: Dict[str, Union[numpy.ndarray, str]] = sess.run(
                                     fetches_dict, feed_dict=feed_dict, options=run_options
-                                )  # type: typing.Dict[str,typing.Union[numpy.ndarray,str]]
+                                )
                         else:
-                            fetches_results = sess.run(
+                            fetches_results: Dict[str, Union[numpy.ndarray, str]] = sess.run(
                                 fetches_dict, feed_dict=feed_dict, options=run_options
-                            )  # type: typing.Dict[str,typing.Union[numpy.ndarray,str]]
+                            )
                         elapsed_time_tf += time.time() - session_run_start_time
                         if writer and "summary" in fetches_results:
                             writer.add_summary(fetches_results["summary"], step + step_offset)
@@ -891,27 +887,27 @@ class Engine(EngineBase):
             BackendEngine.select_engine(default_fallback_engine=default_fallback_engine, config=self.config)
         assert BackendEngine.is_tensorflow_selected()
         self.orig_config = {}  # see _maybe_update_config
-        self.custom_get_net_dict = None  # type: typing.Optional[typing.Callable]
+        self.custom_get_net_dict: Optional[Callable] = None
         self._have_rf_get_model_func = False
         self._check_devices()
-        self.tf_session = None  # type: typing.Optional[tf.compat.v1.Session]
-        self.network = None  # type: typing.Optional[TFNetwork]
-        self.updater = None  # type: typing.Optional[Updater]
+        self.tf_session: Optional[tf.compat.v1.Session] = None
+        self.network: Optional[TFNetwork] = None
+        self.updater: Optional[Updater] = None
         self._checked_uninitialized_vars = False
         self._merge_all_summaries = None
-        self.dataset_batches = {}  # type: typing.Dict[str,BatchSetGenerator]
-        self.dataset_provider = None  # type: typing.Optional[DatasetDataProvider]
-        self.train_data = None  # type: typing.Optional[Dataset]
-        self.eval_datasets = {}  # type: typing.Dict[str,Dataset]
-        self.start_epoch = None  # type: typing.Optional[int]
-        self._num_trained_epochs = 0  # type: int  # just a counter
-        self._num_net_reinit = 0  # type: int
+        self.dataset_batches: Dict[str, BatchSetGenerator] = {}
+        self.dataset_provider: Optional[DatasetDataProvider] = None
+        self.train_data: Optional[Dataset] = None
+        self.eval_datasets: Dict[str, Dataset] = {}
+        self.start_epoch: Optional[int] = None
+        self._num_trained_epochs: int = 0  # just a counter
+        self._num_net_reinit: int = 0
         self.use_dynamic_train_flag = False
         self.use_search_flag = self.config.value("task", None) == "search"
         self.use_eval_flag = self.config.value("task", None) != "forward"
-        self._const_cache = {}  # type: typing.Dict[str,tf.Tensor]
-        self.preload_from_files = None  # type: typing.Optional[typing.Dict[str,typing.Dict[str]]]
-        self.max_seqs = None  # type: typing.Optional[int]
+        self._const_cache: Dict[str, tf.Tensor] = {}
+        self.preload_from_files: Optional[Dict[str, Dict[str]]] = None
+        self.max_seqs: Optional[int] = None
 
     def finalize(self, error_occurred=False):
         """
@@ -1140,7 +1136,7 @@ class Engine(EngineBase):
         self.min_seq_length = config.typed_value("min_seq_length", None) or config.float("min_seq_length", 0)
         self.inc_seq_length = config.float("inc_seq_length", 0)
         if not self.max_seq_length:
-            self.max_seq_length = sys.maxsize  # type: typing.Union[int,float,typing.Dict[str,int],NumbersDict]
+            self.max_seq_length: Union[int, float, Dict[str, int], NumbersDict] = sys.maxsize
         if isinstance(self.max_seq_length, dict):
             self.max_seq_length = NumbersDict(self.max_seq_length)
         assert isinstance(self.max_seq_length, (int, float, NumbersDict))
@@ -1630,7 +1626,7 @@ class Engine(EngineBase):
         assert isinstance(self.start_epoch, int)
         epoch = self.start_epoch  # Epochs start at 1.
         while epoch <= final_epoch:
-            self.epoch = epoch  # type: int
+            self.epoch: int = epoch
             if isinstance(self.max_seq_length, int) and self.max_seq_length != sys.maxsize:
                 if int(self.max_seq_length + self.inc_seq_length) != int(self.max_seq_length):
                     print("increasing sequence lengths to", int(self.max_seq_length + self.inc_seq_length), file=log.v3)
@@ -1878,9 +1874,9 @@ class Engine(EngineBase):
         # We update the model params in-place.
         # In training, we don't want that, because it should not use the validation data.
         # We could reset it later when continuing the training, but it's not implemented.
-        assert (
-            self.config.value("task", "train") != "train"
-        ), "task %r should be just 'eval' or so. training will break." % self.config.value("task", None)
+        assert self.config.value("task", "train") != "train", (
+            "task %r should be just 'eval' or so. training will break." % self.config.value("task", None)
+        )
         if not self.updater:
             self.updater = Updater(
                 config=self.config, network=self.network, initial_learning_rate=self.initial_learning_rate
@@ -1928,11 +1924,12 @@ class Engine(EngineBase):
             allowed_outputs = {"seq_tag", "seq_len", "score", "error", "pos_score", "pos_error"}
 
             assert isinstance(output_per_seq_format, (tuple, list)), "provide output_per_seq_format"
-            assert (
-                set(output_per_seq_format) - allowed_outputs == set()
-            ), "Only %r are allowed in function eval_model as output_per_seq_format, but got: %r " % (
-                allowed_outputs,
-                output_per_seq_format,
+            assert set(output_per_seq_format) - allowed_outputs == set(), (
+                "Only %r are allowed in function eval_model as output_per_seq_format, but got: %r "
+                % (
+                    allowed_outputs,
+                    output_per_seq_format,
+                )
             )
 
             # always fetch seq_tag to map loss values to the corresponding line
@@ -1968,12 +1965,10 @@ class Engine(EngineBase):
             if "pos_error" in output_per_seq_format:
                 extra_fetches["pos_error"] = loss_holder.get_error_value_per_pos()
 
-        seq_idx_to_tag = (
-            {}
-        )  # type: typing.Dict[int,str]  # we need this in order to write the results in the correct order later  # nopep8
-        results_per_seq = (
-            {}
-        )  # type: typing.Dict[str,typing.Dict[str,typing.Union[float,str,int]]]  # seq_tag -> dict. Results of fetches will be written in this dict  # nopep8
+        seq_idx_to_tag: Dict[int, str] = {}  # we need this in order to write the results in the correct order later
+        results_per_seq: Dict[
+            str, Dict[str, Union[float, str, int]]
+        ] = {}  # seq_tag -> dict. Results of fetches will be written in this dict
 
         # function to save the return values of each callback to the dict `results_per_seq`
         # noinspection PyShadowingNames
@@ -2012,7 +2007,7 @@ class Engine(EngineBase):
 
         if output_per_seq_file:
             assert len(self.get_eval_datasets()) == 1, (
-                "output per sequence is only supported for one dataset (dev or eval)," "provided datasets are %r"
+                "output per sequence is only supported for one dataset (dev or eval),provided datasets are %r"
             ) % list(self.get_eval_datasets().keys())
             # try to sort dataset to minimize zero-padding
             dataset = list(self.get_eval_datasets().values())[0]
@@ -2453,9 +2448,9 @@ class Engine(EngineBase):
                 )
 
         max_seq_length = self.config.typed_value("max_seq_length", None) or self.config.float("max_seq_length", 0)
-        assert (
-            not max_seq_length
-        ), "Set max_seq_length = 0 for search (i.e. no maximal length). We want to keep all source sentences."
+        assert not max_seq_length, (
+            "Set max_seq_length = 0 for search (i.e. no maximal length). We want to keep all source sentences."
+        )
 
         dataset.init_seq_order(epoch=self.epoch)
         batches = dataset.generate_batches(
@@ -2552,8 +2547,8 @@ class Engine(EngineBase):
                     outputs[output_layer_idx] = bytearray(outputs[output_layer_idx]).decode("utf8")
 
             # Create lists with serialized data. All of length num_output_layers.
-            serialized_outputs = []  # type: typing.List[typing.Optional[typing.Union[str,numpy.ndarray]]]
-            serialized_targets = []  # type: typing.List[typing.Optional[typing.Union[str,numpy.ndarray]]]
+            serialized_outputs: List[Optional[Union[str, numpy.ndarray]]] = []
+            serialized_targets: List[Optional[Union[str, numpy.ndarray]]] = []
             # noinspection PyShadowingNames
             for output_layer_idx in range(num_output_layers):
                 if output_layers[output_layer_idx].output.sparse:
@@ -2572,8 +2567,8 @@ class Engine(EngineBase):
                         ]
                     else:
                         serialized_output = None
-                        assert not output_file, "Unable to serialize sparse output of layer '%s'." % (
-                            output_layer_names[output_layer_idx]
+                        assert not output_file, (
+                            "Unable to serialize sparse output of layer '%s'." % (output_layer_names[output_layer_idx])
                         )
                 else:
                     # Output dense layers as-is
@@ -2594,8 +2589,8 @@ class Engine(EngineBase):
                             ]
                         else:
                             serialized_target = None
-                            assert not output_file, "Unable to serialize sparse target '%s'." % (
-                                target_keys[output_layer_idx]
+                            assert not output_file, (
+                                "Unable to serialize sparse target '%s'." % (target_keys[output_layer_idx])
                             )
                     else:
                         serialized_target = targets[output_layer_idx]

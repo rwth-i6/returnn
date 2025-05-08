@@ -268,7 +268,7 @@ class Merge(rf.Module):
 
 
 def _make_activation(
-    activation: Union[Callable[[Tensor], Tensor], Dict[str, Any], rf.Module]
+    activation: Union[Callable[[Tensor], Tensor], Dict[str, Any], rf.Module],
 ) -> Union[Callable[[Tensor], Tensor], rf.Module]:
     if isinstance(activation, dict):
         activation = rf.build_from_dict(activation)
