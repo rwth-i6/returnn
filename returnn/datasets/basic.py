@@ -970,7 +970,7 @@ class Dataset:
             except Exception:  # also not always available
                 num_seqs = None  # ignore
 
-        if math.isinf(num_seqs):
+        if num_seqs is not None and math.isinf(num_seqs):
             if allow_only_lr_suitable:
                 # cannot compute meaningful complete_frac for infinite num_seqs
                 return None
