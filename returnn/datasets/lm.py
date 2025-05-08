@@ -7,7 +7,22 @@ and some related helpers.
 
 from __future__ import annotations
 
-from typing import Optional, Union, Any, Callable, Iterator, List, Tuple, Set, BinaryIO, Dict, cast, Generator
+from typing import (
+    Iterable,
+    Optional,
+    Sequence,
+    Union,
+    Any,
+    Callable,
+    Iterator,
+    List,
+    Tuple,
+    Set,
+    BinaryIO,
+    Dict,
+    cast,
+    Generator,
+)
 import typing
 import os
 from io import IOBase
@@ -1472,8 +1487,8 @@ class TranslationDataset(CachedDataset2):
         }
 
         self._data_keys = self._source_data_keys + self._target_data_keys
-        self._data = {data_key: [] for data_key in self._data_keys}  # type: typing.Dict[str,typing.List[numpy.ndarray]]
-        self._data_len = None  # type: typing.Optional[int]
+        self._data: Dict[str, List[numpy.ndarray]] = {data_key: [] for data_key in self._data_keys}
+        self._data_len: Optional[int] = None
 
         self._vocabs = self._get_vocabs()
         self.num_outputs = {k: [max(self._vocabs[k].values()) + 1, 1] for k in self._vocabs.keys()}  # all sparse
@@ -1489,7 +1504,7 @@ class TranslationDataset(CachedDataset2):
             unknown_label.setdefault(data_key, None)
         self._unknown_label = unknown_label
 
-        self._seq_order = None  # type: typing.Optional[typing.Sequence[int]]  # seq_idx -> line_nr
+        self._seq_order: Optional[Sequence[int]] = None  # seq_idx -> line_nr
         self._tag_prefix = "line-"  # sequence tag is "line-n", where n is the line number
         self._thread = Thread(name="%r reader" % self, target=self._thread_main)
         self._thread.daemon = True
@@ -1878,14 +1893,11 @@ class TranslationFactorsDataset(TranslationDataset):
             assert file_prefix == self.target_file_prefix
             data_keys = self._target_data_keys
 
-        data = [
+        data: List[List[numpy.ndarray]] = [
             self._factored_words_to_numpy(data_keys, s.decode("utf8").strip().split(), self._add_postfix[file_prefix])
             for s in data_strs
-        ]  # type: typing.List[typing.List[numpy.ndarray]] # shape: (len(data_strs), len(data_keys))
-
-        data = zip(
-            *data
-        )  # type: typing.Iterable[typing.Tuple[numpy.ndarray]] # shape: (len(data_keys), len(data_strs))
+        ]  # shape: (len(data_strs), len(data_keys))
+        data: Iterable[Tuple[numpy.ndarray]] = zip(*data)  # shape: (len(data_keys), len(data_strs))
 
         with self._lock:
             for i, data_ in enumerate(data):
@@ -1908,9 +1920,9 @@ class TranslationFactorsDataset(TranslationDataset):
             words_per_factor = [[]] * len(data_keys)
         elif len(data_keys) > 1:
             factored_words = [word.split(self._factor_separator) for word in words]
-            assert all(
-                len(factors) == len(data_keys) for factors in factored_words
-            ), "All words must have all factors. Expected: " + self._factor_separator.join(data_keys)
+            assert all(len(factors) == len(data_keys) for factors in factored_words), (
+                "All words must have all factors. Expected: " + self._factor_separator.join(data_keys)
+            )
             words_per_factor = zip(*factored_words)
             words_per_factor = [list(w) for w in words_per_factor]
         else:

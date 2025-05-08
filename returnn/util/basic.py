@@ -705,7 +705,7 @@ def expand_env_vars(s: str) -> str:
             return delim
         if mo.group("invalid") is not None:
             i = mo.start("invalid")
-            raise ValueError(f"Invalid placeholder in string: {s[i:i+2]!r}...")
+            raise ValueError(f"Invalid placeholder in string: {s[i : i + 2]!r}...")
         raise ValueError(f"Unrecognized named group in pattern {pattern}")
 
     return pattern_.sub(_convert, s)
@@ -1811,7 +1811,6 @@ def json_remove_comments(string, strip_space=True):
     index = 0
 
     for match in re.finditer(tokenizer, string):
-
         if not (in_multi or in_single):
             tmp = string[index : match.start()]
             if not in_string and strip_space:

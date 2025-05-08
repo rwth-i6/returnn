@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import contextlib
 import typing
+from typing import Dict, Optional, Tuple, Union
 import tensorflow as tf
 import returnn.tf.compat as tf_compat
 
@@ -1037,7 +1038,8 @@ class RecLayer(_ConcatInputLayer):
                     scope=tf_compat.v1.get_variable_scope(),
                 )
         elif rnn_contrib and isinstance(
-            cell, (rnn_contrib.FusedRNNCell, rnn_contrib.LSTMBlockWrapper)  # noqa # e.g. LSTMBlockFusedCell
+            cell,
+            (rnn_contrib.FusedRNNCell, rnn_contrib.LSTMBlockWrapper),  # noqa # e.g. LSTMBlockFusedCell
         ):
             # Will get (time,batch,ydim).
             assert self._max_seq_len is None
@@ -1280,9 +1282,9 @@ class RecLayer(_ConcatInputLayer):
         :param str|int|None key:
         :rtype: tf.Tensor
         """
-        assert (
-            self._last_hidden_state is not None
-        ), "last-hidden-state not implemented/supported for this layer-type. try another unit. see the code."
+        assert self._last_hidden_state is not None, (
+            "last-hidden-state not implemented/supported for this layer-type. try another unit. see the code."
+        )
         return RnnCellLayer.get_state_by_key(self._last_hidden_state, key=key)
 
     @classmethod
@@ -1431,9 +1433,7 @@ class _SubnetworkRecCell:
             )
         self._last_frames = {}  # type: typing.Dict[str,Data]
         self._initial_outputs = None  # type: typing.Optional[typing.Dict[str,tf.Tensor]]
-        self._initial_extra_outputs = (
-            None
-        )  # type: typing.Optional[typing.Dict[str,typing.Dict[str,typing.Union[tf.Tensor,typing.Tuple[tf.Tensor,...]]]]]  # nopep8
+        self._initial_extra_outputs: Optional[Dict[str, Dict[str, Union[tf.Tensor, Tuple[tf.Tensor, ...]]]]] = None
 
         # input_layers_moved_out, output_layers_moved_out and layers_in_loop include (used) sub-layers as separate
         # entries, this way in- and outputting them to the loop via TensorArrays will be handled just as for normal
@@ -1608,14 +1608,9 @@ class _SubnetworkRecCell:
                 while parent and parent.parent:
                     parent_names.insert(0, parent.parent_name or "?")
                     parent = parent.parent
-                return (
-                    "<RecLayer construct template GetLayer>("
-                    "allow_uninitialized_template %r, "
-                    "parents %r)"
-                    % (
-                        lself.allow_uninitialized_template,
-                        " <- ".join(parent_names) or None,
-                    )
+                return "<RecLayer construct template GetLayer>(allow_uninitialized_template %r, parents %r)" % (
+                    lself.allow_uninitialized_template,
+                    " <- ".join(parent_names) or None,
                 )
 
             def _add_uninitialized_count(self):
@@ -2141,16 +2136,17 @@ class _SubnetworkRecCell:
             layer = self.input_layers_net.layers[layer_name]
             assert isinstance(layer, LayerBase)
             if layer_name not in inputs_moved_out_tas:
-                assert not layer.output.mark_same_time(
-                    self._time_dim_tags
-                ), "%s does not expect to have matching time dim to %s" % (layer, self.parent_rec_layer)
-                assert (
-                    name != "output" and not prev
-                ), "Time dim does not match: RecLayer %s (%r) vs sub layer %s (%r)." % (
-                    self.parent_rec_layer,
-                    self.parent_rec_layer.output.get_time_dim_tag(),
-                    layer,
-                    layer.output.get_time_dim_tag(),
+                assert not layer.output.mark_same_time(self._time_dim_tags), (
+                    "%s does not expect to have matching time dim to %s" % (layer, self.parent_rec_layer)
+                )
+                assert name != "output" and not prev, (
+                    "Time dim does not match: RecLayer %s (%r) vs sub layer %s (%r)."
+                    % (
+                        self.parent_rec_layer,
+                        self.parent_rec_layer.output.get_time_dim_tag(),
+                        layer,
+                        layer.output.get_time_dim_tag(),
+                    )
                 )
                 return layer
             output = layer.output.copy_template_excluding_time_dim().copy_template_set_ctx(self.net.control_flow_ctx)
@@ -2376,9 +2372,9 @@ class _SubnetworkRecCell:
         assert output_template.output.dim == self.parent_rec_layer.output.dim
         assert self.parent_rec_layer.output.time_dim_axis == 0
         assert not output_template.output.has_axis(self.time_dim_tag)
-        assert (
-            output_template.output.batch_shape == self.parent_rec_layer.output.batch_shape[1:]
-        ), "see RecLayer.get_out_data_from_opts()"
+        assert output_template.output.batch_shape == self.parent_rec_layer.output.batch_shape[1:], (
+            "see RecLayer.get_out_data_from_opts()"
+        )
 
     def get_init_loop_vars(self):
         """
@@ -3014,9 +3010,9 @@ class _SubnetworkRecCell:
                 needed_outputs.add("end")
                 assert tf.as_dtype(end_template.output.dtype) is tf.bool
             else:
-                assert (
-                    have_known_seq_len
-                ), "You need to have an 'end' layer in your rec subnet if the generated seq len is unknown."
+                assert have_known_seq_len, (
+                    "You need to have an 'end' layer in your rec subnet if the generated seq len is unknown."
+                )
 
             # noinspection PyProtectedMember
             if self.parent_rec_layer._optimize_move_layers_out:
@@ -3358,11 +3354,12 @@ class _SubnetworkRecCell:
                         from .basic import SelectSearchSourcesLayer
 
                         prev_end_layer = choices.translate_to_this_search_beam(prev_end_layer)
-                        assert isinstance(
-                            prev_end_layer, SelectSearchSourcesLayer
-                        ), "unexpected search choices: cur end %r, prev end %r" % (
-                            choices,
-                            prev_end_layer.get_search_choices(),
+                        assert isinstance(prev_end_layer, SelectSearchSourcesLayer), (
+                            "unexpected search choices: cur end %r, prev end %r"
+                            % (
+                                choices,
+                                prev_end_layer.get_search_choices(),
+                            )
                         )
                         prev_end_flag = prev_end_layer.output.placeholder
                         with tf.name_scope("dyn_seq_len"):
@@ -3475,14 +3472,15 @@ class _SubnetworkRecCell:
                 assert fixed_seq_len is not None
                 seq_len = fixed_seq_len
                 if output_beam:
-                    assert (
-                        not input_beam or input_beam == output_beam
-                    ), "%s: input beam %r, output beam %r, sources %r, target %r" % (
-                        self.parent_rec_layer,
-                        input_beam,
-                        output_beam,
-                        self.parent_rec_layer.sources,
-                        self.parent_rec_layer.target,
+                    assert not input_beam or input_beam == output_beam, (
+                        "%s: input beam %r, output beam %r, sources %r, target %r"
+                        % (
+                            self.parent_rec_layer,
+                            input_beam,
+                            output_beam,
+                            self.parent_rec_layer.sources,
+                            self.parent_rec_layer.target,
+                        )
                     )
                     assert output_template.output.batch.beam == output_beam
                     time_dim_tag = time_dim_tag.get_for_batch_ctx(
@@ -3791,9 +3789,9 @@ class _SubnetworkRecCell:
             if end_layer_choice.name.startswith("prev:"):
                 # Logic from maybe_transform. It would be translated to the current beam.
                 end_layer_choice = self.net.layers[end_layer_choice.name[len("prev:") :]]
-            assert (
-                end_layer_choice in choice_seq_in_frame
-            ), "End layer must not have a beam independent from output layer '{}'.".format(layer_name)
+            assert end_layer_choice in choice_seq_in_frame, (
+                "End layer must not have a beam independent from output layer '{}'.".format(layer_name)
+            )
 
             end_layer_choice_index = choice_seq_in_frame.index(end_layer_choice)
             choices_seq_until_end_layer = choice_seq_in_frame[:end_layer_choice_index]
@@ -5856,12 +5854,13 @@ class RecUnstackLayer(LayerBase):
                 if out_dim.is_dim_known():  # usually the case except at template construction
                     assert out_dim != rec_time_dim  # rec_time_dim is unknown, so it cannot be the same
                 if out_dim != rec_time_dim:
-                    assert (
-                        declare_rec_time
-                    ), "%s %r: must either set known axis on rec %s or enable declare_rec_time" % (
-                        cls.__name__,
-                        name,
-                        rec_time_dim,
+                    assert declare_rec_time, (
+                        "%s %r: must either set known axis on rec %s or enable declare_rec_time"
+                        % (
+                            cls.__name__,
+                            name,
+                            rec_time_dim,
+                        )
                     )
                     rec_time_dim.declare_same_as(out_dim)
             out.mark_same_time(out_dim, must_match=True)
@@ -6132,12 +6131,13 @@ class ChoiceLayer(BaseChoiceLayer):
                 base_beam_in = tf.shape(scores_base)[1]  # 1 in first frame, then beam_in
                 scores_beam_in = tf.shape(scores_in)[0] // net_batch_dim
                 beam_in = self.sources[0].output.beam.beam_size
-                assert (
-                    beam_in == base_search_choices.beam_size
-                ), "%r: source %r beam-size unexpected from base choice %r" % (
-                    self,
-                    self.sources[0],
-                    base_search_choices,
+                assert beam_in == base_search_choices.beam_size, (
+                    "%r: source %r beam-size unexpected from base choice %r"
+                    % (
+                        self,
+                        self.sources[0],
+                        base_search_choices,
+                    )
                 )
                 # About incoming beam size:
                 #   base_beam_in  - 1 in first frame, then beam_in
@@ -7510,9 +7510,9 @@ class GenericAttentionLayer(AttentionBaseLayer):
         base_rem_axes = base.get_axes(exclude_batch=True, exclude_time=True)
         base_rem_axes.remove(base.feature_dim_axis)
         weights_rem_axes = weights.get_axes(exclude_batch=True)
-        assert (
-            weights.time_dim_axis is not None
-        ), f"{exception_prefix}: base {base}, weights {weights}, need time_dim_axis in weights"
+        assert weights.time_dim_axis is not None, (
+            f"{exception_prefix}: base {base}, weights {weights}, need time_dim_axis in weights"
+        )
         weights_axis_to_reduce = cls._weights_time_axis_to_reduce(weights=weights, base=base)
         assert weights.batch_shape[weights_axis_to_reduce] == base.batch_shape[base.time_dim_axis]
         weights_rem_axes.remove(weights_axis_to_reduce)
@@ -9088,13 +9088,13 @@ class MaskedComputationLayer(LayerBase):
         new_size, new_time, idxs = None, None, None
         if mask:
             if self.network.is_inside_rec_layer():
-                assert (
-                    mask.output.shape == () and mask.output.dtype == "bool"
-                ), "%s: invalid mask %s (inside rec loop)" % (self, mask)
+                assert mask.output.shape == () and mask.output.dtype == "bool", (
+                    "%s: invalid mask %s (inside rec loop)" % (self, mask)
+                )
             else:
-                assert (
-                    mask.output.have_time_axis() and mask.output.shape == (None,) and mask.output.dtype == "bool"
-                ), "%s: invalid mask %s (outside rec loop)" % (self, mask)
+                assert mask.output.have_time_axis() and mask.output.shape == (None,) and mask.output.dtype == "bool", (
+                    "%s: invalid mask %s (outside rec loop)" % (self, mask)
+                )
                 assert in_spatial_dim and out_spatial_dim
                 mask_data = mask.output.copy_as_time_major()
                 mask_t = where_bc(mask_data.placeholder, mask_data.get_sequence_mask(), tf.convert_to_tensor(False))
@@ -9785,9 +9785,9 @@ class UnmaskLayer(LayerBase):
                 with same_control_flow_ctx(src_layer.output.placeholder):
                     src = src_layer.output.copy_as_bt_or_tb_major()
                 mask_out = self.mask.output
-                assert (
-                    mask_out.shape == () and mask_out.batch_shape == (None,) and mask_out.dtype == "bool"
-                ), "%s: invalid mask %s (inside rec loop)" % (self, self.mask)
+                assert mask_out.shape == () and mask_out.batch_shape == (None,) and mask_out.dtype == "bool", (
+                    "%s: invalid mask %s (inside rec loop)" % (self, self.mask)
+                )
                 prev_t = self._rec_previous_layer.rec_vars_outputs["t"]  # [B]
                 t = prev_t + tf.cast(mask_out.placeholder, tf.int32)  # [B]
                 self.rec_vars_outputs["t"] = t
@@ -11192,9 +11192,9 @@ class RelativePositionalEncodingLayer(_ConcatInputLayer):
             and is_axis_from_description_recurrent(key_value_spatial_dim, network=self.network, data=self.input_data)
         ):
             length = self.network.get_rec_step_index() + 1
-            assert (
-                key_value_spatial_dim_.dimension is None
-            ), f"{self}: unexpected kv spatial dim {key_value_spatial_dim_}"
+            assert key_value_spatial_dim_.dimension is None, (
+                f"{self}: unexpected kv spatial dim {key_value_spatial_dim_}"
+            )
             assert key_value_spatial_dim_.dyn_size_ext is not None
             # See CumConcatLayer for similar logic
             if key_value_spatial_dim_.dyn_size_ext.placeholder is None:

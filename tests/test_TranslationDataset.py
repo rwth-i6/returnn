@@ -15,9 +15,7 @@ from returnn.datasets.lm import TranslationDataset, TranslationFactorsDataset
 
 
 dummy_source_text = (
-    "This is some example text.\n"
-    "It is used to test the translation dataset.\n"
-    "We will write it into a temporary file.\n"
+    "This is some example text.\nIt is used to test the translation dataset.\nWe will write it into a temporary file.\n"
 )
 
 dummy_target_text = (
@@ -67,7 +65,6 @@ def test_translation_dataset():
         target_file.write(dummy_target_text.encode("utf-8"))
 
     for postfix in ["", " </S>"]:  # test with and without postfix
-
         # Replace one word by <UNK>.
         # This way it will not appear in the vocabulary (and <UNK> is added to the vocabulary).
         # We will test below whether this word is assigned the unknown id by checking whether the reconstruction also
@@ -114,18 +111,18 @@ def test_translation_dataset():
 
 
 num_source_factors = 2
-dummy_source_text_factor_0 = "This is some example text.\n" "The factors here have no meaning\n"
-dummy_source_text_factor_1 = "a b c d e\n" "a b c d e f\n"
+dummy_source_text_factor_0 = "This is some example text.\nThe factors here have no meaning\n"
+dummy_source_text_factor_1 = "a b c d e\na b c d e f\n"
 dummy_source_text_factored_format = (
-    "This|a is|b some|c example|d text.|e\n" "The|a factors|b here|c have|d no|e meaning|f\n"
+    "This|a is|b some|c example|d text.|e\nThe|a factors|b here|c have|d no|e meaning|f\n"
 )
 
 num_target_factors = 3
-dummy_target_text_factor_0 = "Das ist ein Beispieltext.\n" "Die Factors hier haben keinen Sinn.\n"
-dummy_target_text_factor_1 = "a b c d\n" "a b c d e f\n"
-dummy_target_text_factor_2 = "1 2 3 4\n" "1 2 3 4 5 6\n"
+dummy_target_text_factor_0 = "Das ist ein Beispieltext.\nDie Factors hier haben keinen Sinn.\n"
+dummy_target_text_factor_1 = "a b c d\na b c d e f\n"
+dummy_target_text_factor_2 = "1 2 3 4\n1 2 3 4 5 6\n"
 dummy_target_text_factored_format = (
-    "Das|a|1 ist|b|2 ein|c|3 Beispieltext.|d|4\n" "Die|a|1 Factors|b|2 hier|c|3 haben|d|4 keinen|e|5 Sinn.|f|6\n"
+    "Das|a|1 ist|b|2 ein|c|3 Beispieltext.|d|4\nDie|a|1 Factors|b|2 hier|c|3 haben|d|4 keinen|e|5 Sinn.|f|6\n"
 )
 
 

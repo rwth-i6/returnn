@@ -56,9 +56,9 @@ def raw_dict_to_extern_data(
         assert len(raw_tensor.shape) == data.batch_ndim, f"ndim mismatch for {k}: {raw_tensor.shape} vs {data}"
         for i, dim in enumerate(data.dims):
             if dim.dimension is not None:
-                assert (
-                    dim.dimension == raw_tensor.shape[i]
-                ), f"shape mismatch for {k}: {raw_tensor.shape} vs {data.batch_shape}"
+                assert dim.dimension == raw_tensor.shape[i], (
+                    f"shape mismatch for {k}: {raw_tensor.shape} vs {data.batch_shape}"
+                )
         if isinstance(raw_tensor, torch.Tensor):
             if raw_tensor.dtype.is_floating_point and float_dtype:
                 raw_tensor = raw_tensor.to(dtype=float_dtype)
@@ -81,8 +81,7 @@ def raw_dict_to_extern_data(
             and (data.dims[1].dyn_size_ext is None or data.dims[1].dyn_size_ext.raw_tensor is None)
         ):
             assert k + ":seq_len" in extern_data_raw, (
-                f"extern_data {data}, dyn spatial dim, missing {k}:seq_len in raw dict, "
-                f"check dataset or collate_batch"
+                f"extern_data {data}, dyn spatial dim, missing {k}:seq_len in raw dict, check dataset or collate_batch"
             )
             size = extern_data_raw[k + ":seq_len"]
             # Sequence lengths have to be on CPU for the later call to rnn.pack_padded_sequence

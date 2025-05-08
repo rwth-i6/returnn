@@ -95,7 +95,7 @@ def main(_):
         tf_compat.v1.logging.info("%s ", c)
     var_list = tf.train.list_variables(checkpoints[0])
     var_values, var_dtypes = {}, {}
-    for (name, shape) in var_list:
+    for name, shape in var_list:
         var_values[name] = numpy.zeros(shape)
     for checkpoint in checkpoints:
         reader = tf.train.load_checkpoint(checkpoint)

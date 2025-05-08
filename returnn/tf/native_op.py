@@ -283,9 +283,7 @@ class OpMaker:
           //   otherwise it will trigger an assertion.
           if (IsRefType(context->input_dtype({in_idx})))
             context->forward_ref_input_to_ref_output({in_idx}, {out_idx});
-          """.format(
-                    in_idx=in_idx, out_idx=out_idx
-                )
+          """.format(in_idx=in_idx, out_idx=out_idx)
         code_set_io = ""
         for in_idx, v in enumerate(in_info):
             ndim = len(v["shape"])

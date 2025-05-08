@@ -13524,8 +13524,7 @@ def test_rel_pos_self_attention_left_ctx_explicit_vs_layer():
         "conformer_block_01_self_att_ln_rel_pos_enc": {
             "class": "relative_positional_encoding",
             "clipping": 16,
-            "forward_weights_init": "variance_scaling_initializer(mode='fan_avg', distribution='uniform', "
-            "scale=1.0)",
+            "forward_weights_init": "variance_scaling_initializer(mode='fan_avg', distribution='uniform', scale=1.0)",
             "from": "conformer_block_01_self_att_ln_concat",  # [B*C, 2*W, D]
             "n_out": n_total_dim // n_head,
         },
@@ -13621,8 +13620,7 @@ def test_rel_pos_self_attention_left_ctx_explicit_vs_layer():
         "conformer_block_01_self_att_ln_rel_pos_enc": {
             "class": "relative_positional_encoding",
             "clipping": 16,
-            "forward_weights_init": "variance_scaling_initializer(mode='fan_avg', distribution='uniform', "
-            "scale=1.0)",
+            "forward_weights_init": "variance_scaling_initializer(mode='fan_avg', distribution='uniform', scale=1.0)",
             "from": "conformer_block_01_self_att_ln_concat",
             "key_value_spatial_dim": concat_window_dim,
             "out_dim": enc_dim_per_head_dim,
@@ -13903,9 +13901,9 @@ def test_CumConcatLayer_self_attention_equal_to_SelfAttentionLayer():
                     value_dim=value_dim,
                 )
                 net_dict["output"]["unit"]["multi_layer_att"]["is_output_layer"] = True
-                net_dict["output"]["unit"]["multi_layer_qkv0"][
-                    "is_output_layer"
-                ] = True  # we need to set the matrix here
+                net_dict["output"]["unit"]["multi_layer_qkv0"]["is_output_layer"] = (
+                    True  # we need to set the matrix here
+                )
             else:
                 net_dict = {
                     "single_layer_att": {

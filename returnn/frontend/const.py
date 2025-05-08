@@ -54,9 +54,9 @@ def full(
             "Use rf.convert_to_tensor to convert an arbitrary array to a tensor."
         )
     if isinstance(fill_value, Tensor):
-        assert (
-            fill_value.dims == ()
-        ), f"full/fill/constant: expect scalar fill_value, got tensor with shape {fill_value.dims}."
+        assert fill_value.dims == (), (
+            f"full/fill/constant: expect scalar fill_value, got tensor with shape {fill_value.dims}."
+        )
     return global_backend.full(
         dims, fill_value, dtype=dtype, device=device, sparse_dim=sparse_dim, feature_dim=feature_dim
     )

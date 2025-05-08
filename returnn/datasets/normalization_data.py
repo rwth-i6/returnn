@@ -169,7 +169,7 @@ class NormalizationData:
         sumErr = np.sum(np.abs(newSum - oldSum - intermediateSum))
         if sumErr > NormalizationData.SUMMATION_PRECISION:
             raise FloatingPointError(
-                "sums have very different orders of magnitude." " summation error = {}".format(sumErr)
+                "sums have very different orders of magnitude. summation error = {}".format(sumErr)
             )
         return newSum
 

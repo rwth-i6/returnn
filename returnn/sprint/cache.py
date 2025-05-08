@@ -7,7 +7,7 @@ This module is about reading (maybe later also writing) the Sprint archive forma
 """
 
 from __future__ import annotations
-from typing import List
+from typing import List, Optional, Tuple
 import sys
 import os
 import typing
@@ -904,9 +904,7 @@ class MixtureSet:
             self.densities[n, 1] = cov_idx
 
         self.num_mixtures = self.read_u32()
-        self.mixtures = [
-            None
-        ] * self.num_mixtures  # type: typing.List[typing.Optional[typing.Tuple[typing.List[int],typing.List[float]]]]  # nopep8
+        self.mixtures: List[Optional[Tuple[List[int], List[float]]]] = [None] * self.num_mixtures
         for n in range(self.num_mixtures):
             num_densities = self.read_u32()
             dns_idx = []

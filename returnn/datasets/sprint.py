@@ -393,13 +393,14 @@ class SprintDatasetBase(Dataset):
             targets = {"classes": targets}
         if "classes" in targets:
             # 'classes' is always the alignment
-            assert targets["classes"].shape == (
-                reduce_num_frames,
-            ), "Number of targets %s does not match number of features %s (reduce factor %d)" % (
-                # is in format (time,)
-                targets["classes"].shape,
-                (num_frames,),
-                self.reduce_target_factor,
+            assert targets["classes"].shape == (reduce_num_frames,), (
+                "Number of targets %s does not match number of features %s (reduce factor %d)"
+                % (
+                    # is in format (time,)
+                    targets["classes"].shape,
+                    (num_frames,),
+                    self.reduce_target_factor,
+                )
             )
         if "speaker_name" in targets:
             targets["speaker_name"] = targets["speaker_name"].strip()

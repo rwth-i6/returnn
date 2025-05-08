@@ -461,7 +461,6 @@ def test_get_seq_order():
         "sort_bin_shuffle:3",
         "sort_bin_shuffle_x2:.10",
     ]:
-
         dataset.seq_ordering = seq_ordering
 
         # test full epoch

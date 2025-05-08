@@ -185,9 +185,9 @@ class Vocabulary:
                     labels = file_content.splitlines()
                     labels_from_idx = {i: line for (i, line) in enumerate(labels)}
                     labels_to_idx = {line: i for (i, line) in enumerate(labels)}
-            assert isinstance(
-                labels_to_idx, dict
-            ), f"{self}: expected dict, got {type(labels_to_idx).__name__} in {filename}"
+            assert isinstance(labels_to_idx, dict), (
+                f"{self}: expected dict, got {type(labels_to_idx).__name__} in {filename}"
+            )
             if labels_from_idx is None:
                 labels_from_idx = {idx: label for (label, idx) in sorted(labels_to_idx.items())}
             min_label, max_label, num_labels = min(labels_from_idx), max(labels_from_idx), len(labels_from_idx)

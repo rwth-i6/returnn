@@ -1799,7 +1799,7 @@ def dropout(
         x = tf.convert_to_tensor(x, name="x")
         assert isinstance(x, tf.Tensor)
         if isinstance(keep_prob, (float, int)) and not 0 < keep_prob <= 1:
-            raise ValueError("keep_prob must be a scalar tensor or a float in the " "range (0, 1], got %g" % keep_prob)
+            raise ValueError("keep_prob must be a scalar tensor or a float in the range (0, 1], got %g" % keep_prob)
         # Do nothing if we know keep_prob == 1
         if isinstance(keep_prob, (float, int)) and keep_prob == 1:
             return x
@@ -2492,9 +2492,9 @@ def get_common_shape(values, ignore_axes=(), allow_broadcast_all_sources=NotSpec
     import numpy
 
     assert len(values) > 0
-    assert all(
-        [isinstance(value, (tf.Tensor, tf.Variable, float, int, numpy.number)) for value in values]
-    ), "types %r" % ([type(v) for v in values])
+    assert all([isinstance(value, (tf.Tensor, tf.Variable, float, int, numpy.number)) for value in values]), (
+        "types %r" % ([type(v) for v in values])
+    )
     # Filter out scalars.
     values = [value for value in values if isinstance(value, (tf.Tensor, tf.Variable))]
     assert all([value.shape.ndims is not None for value in values]), "some unknown ndim"
@@ -2523,14 +2523,15 @@ def get_common_shape(values, ignore_axes=(), allow_broadcast_all_sources=NotSpec
                         common_shape[axis] = static_dim
                     else:  # common_shape is int
                         assert isinstance(common_shape[axis], int)
-                        assert (
-                            common_shape[axis] == static_dim
-                        ), "non matching dim %r vs %r in axis %i, value %r of values %r" % (
-                            common_shape[axis],
-                            static_dim,
-                            axis,
-                            value,
-                            values,
+                        assert common_shape[axis] == static_dim, (
+                            "non matching dim %r vs %r in axis %i, value %r of values %r"
+                            % (
+                                common_shape[axis],
+                                static_dim,
+                                axis,
+                                value,
+                                values,
+                            )
                         )
         # Check validate_broadcast_all_sources
         need_broadcast = {id(value): False for value in values}
@@ -2576,9 +2577,9 @@ def unbroadcast_to_common_shape(value, common_shape, ignore_axes=(), allow_only_
     for axis in ignore_axes:
         assert 0 <= axis < ndim
         tile_multiples[axis] = 1
-    assert all(
-        [m is not None for m in tile_multiples]
-    ), "ignore_axes %r probably missing some axis for common shape %r" % (ignore_axes, common_shape)
+    assert all([m is not None for m in tile_multiples]), (
+        "ignore_axes %r probably missing some axis for common shape %r" % (ignore_axes, common_shape)
+    )
     if all([isinstance(m, int) and m == 1 for m in tile_multiples]):
         # We have a no-op.
         return value
@@ -6611,7 +6612,6 @@ def find_unsupported_devices_in_graph(graph, dev_name, ignore=None):
 
 
 class _DeviceAttrMod:
-
     _tf_mod = None
 
     @classmethod
@@ -7680,13 +7680,14 @@ class FetchHelper:
         _, info = copier(sgv, dst_graph=sgv.graph, dst_scope="", reuse_dst_scope=True)
         assert isinstance(info, graph_editor.TransformerInfo)
         target_op_transformed = info.transformed(target_op)
-        assert isinstance(
-            target_op_transformed, tf.Operation
-        ), "\ntarget_op\n%r,\nfetches\n%r,\nstop_at_ts\n%s,\nops\n%s" % (
-            target_op,
-            fetches,
-            pformat(stop_at_ts),
-            pformat(ops),
+        assert isinstance(target_op_transformed, tf.Operation), (
+            "\ntarget_op\n%r,\nfetches\n%r,\nstop_at_ts\n%s,\nops\n%s"
+            % (
+                target_op,
+                fetches,
+                pformat(stop_at_ts),
+                pformat(ops),
+            )
         )
         fetch_helpers = []
         for x in fetch_helper_tensors:
