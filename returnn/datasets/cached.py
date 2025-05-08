@@ -46,7 +46,10 @@ class CachedDataset(Dataset):
         self._index_map = range(len(self._seq_index))  # sorted seq idx -> seq_index idx
         self._tag_idx = {}  # type: typing.Dict[str,int]  # map of tag -> real-seq-idx. call _update_tag_idx
         self.targets = {}
-        self.target_keys = []  # the keys for which we provide data; we may have labels for additional keys in self.labels
+        # the keys for which we provide data;
+        # we may have labels for additional keys in self.labels
+        self.target_keys = []
+
         self.timestamps = None
 
     def initialize(self):

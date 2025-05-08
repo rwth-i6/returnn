@@ -4,7 +4,7 @@ This module contains the layer base class :class:`LayerBase`.
 
 from __future__ import annotations
 
-from typing import Optional, Dict, List
+from typing import Optional, Dict, List, Union
 import typing
 import contextlib
 import numpy
@@ -188,7 +188,7 @@ class LayerBase:
         self.name = name
         self.network = network
         self._register_layer()
-        self.kwargs: typing.Optional[typing.Dict[str]] = None  # set via self.post_init
+        self.kwargs: Optional[Dict[str]] = None  # set via self.post_init
         self.target = None
         self.targets = None
         if target:
@@ -219,12 +219,12 @@ class LayerBase:
                 "%s: out_dim handling not implemented correctly for this layer" % self
             )
         out_shape  # noqa  # not used here but in fixup_out_data
-        self.output_before_activation: typing.Optional[OutputWithActivation] = None
-        self.output_loss: typing.Optional[tf.Tensor] = None
+        self.output_before_activation: Optional[OutputWithActivation] = None
+        self.output_loss: Optional[tf.Tensor] = None
         if copy_output_loss_from_source_idx is not None:
             self.output_loss = sources[copy_output_loss_from_source_idx].output_loss
-        self.rec_vars_outputs: typing.Dict[str, tf.Tensor] = {}
-        self.search_choices: typing.Optional[SearchChoices] = None
+        self.rec_vars_outputs: Dict[str, tf.Tensor] = {}
+        self.search_choices: Optional[SearchChoices] = None
         self._src_common_search_choices = _src_common_search_choices
         self._initial_output = initial_output
         self.need_last = need_last
@@ -241,9 +241,9 @@ class LayerBase:
                 "%s: in_dim %s not found or unique in input %s" % (self, in_dim, sources[0])
             )
         self.have_params = False
-        self.params: typing.Dict[str, tf.Variable] = {}
-        self.saveable_param_replace: typing.Dict[
-            tf.Variable, typing.Union["tensorflow.python.training.saver.BaseSaverBuilder.SaveableObject", None]
+        self.params: Dict[str, tf.Variable] = {}
+        self.saveable_param_replace: Dict[
+            tf.Variable, Union["tensorflow.python.training.saver.BaseSaverBuilder.SaveableObject", None]
         ] = {}  # see get_saveable_params_dict()
         self.reuse_params = reuse_params
         self.name_scope = name_scope
@@ -264,7 +264,7 @@ class LayerBase:
         self.control_dependencies_on_output = control_dependencies_on_output
         self.register_as_extern_data = register_as_extern_data
         # Stats will be collected by the engine.
-        self.stats: typing.Dict[str, tf.Tensor] = {}
+        self.stats: Dict[str, tf.Tensor] = {}
         self._set_prev_state(state)
 
     def _set_prev_state(self, state):
@@ -2099,7 +2099,9 @@ class LayerBase:
                 src_output = src.output.copy()
                 if src_output.placeholder is not None:
                     zeroed_src_shape = tf_util.get_shape(src_output.placeholder)
-                    zeroed_src_shape = [zeroed_src_shape[i] for i in range(src_output.batch_ndim)]  # type: typing.List[typing.Union[tf.Tensor,int]]
+                    zeroed_src_shape: List[Union[tf.Tensor, int]] = [
+                        zeroed_src_shape[i] for i in range(src_output.batch_ndim)
+                    ]
                 else:
                     zeroed_src_shape = []
                     for i, d in enumerate(src_output.batch_shape):
@@ -2607,10 +2609,10 @@ class SearchChoices:
         assert beam_size is not None
         self.owner = owner
         self._done_src_layer = False
-        self._src_layer: typing.Optional[LayerBase] = None
-        self.src_beams: typing.Optional[tf.Tensor] = None  # src beam index, (batch, beam)
+        self._src_layer: Optional[LayerBase] = None
+        self.src_beams: Optional[tf.Tensor] = None  # src beam index, (batch, beam)
         self.beam_size = beam_size
-        self.beam_scores: typing.Optional[tf.Tensor] = None  # (batch, beam)
+        self.beam_scores: Optional[tf.Tensor] = None  # (batch, beam)
         self.is_decided = is_decided
         self.keep_raw = keep_raw
         if not owner.output.beam:
@@ -2870,22 +2872,22 @@ class Loss:
         """
         self.base_network = base_network
         self.use_flatten_frames = use_flatten_frames
-        self.layer: typing.Optional[LayerBase] = None
+        self.layer: Optional[LayerBase] = None
         # All are initialized in self.init().
-        self.output: typing.Optional[Data] = None
-        self.output_with_activation: typing.Optional[OutputWithActivation] = None
-        self.output_seq_lens: typing.Optional[tf.Tensor] = None
-        self.target: typing.Optional[Data] = None
-        self.target_seq_lens: typing.Optional[tf.Tensor] = None
-        self.output_flat: typing.Optional[tf.Tensor] = None
-        self.output_before_softmax_flat: typing.Optional[tf.Tensor] = None
+        self.output: Optional[Data] = None
+        self.output_with_activation: Optional[OutputWithActivation] = None
+        self.output_seq_lens: Optional[tf.Tensor] = None
+        self.target: Optional[Data] = None
+        self.target_seq_lens: Optional[tf.Tensor] = None
+        self.output_flat: Optional[tf.Tensor] = None
+        self.output_before_softmax_flat: Optional[tf.Tensor] = None
         if _check_output_before_softmax is not None:
             self._check_output_before_softmax = _check_output_before_softmax
-        self.target_flat: typing.Optional[tf.Tensor] = None
+        self.target_flat: Optional[tf.Tensor] = None
         # Maybe make configurable. For now, same as in our Theano behavior.
         # The loss_norm_factor is used by Runner._normalize_loss both for normalization per epoch and per batch.
         # It is e.g. set to 1/sum(target_seq_len), and logic of accumulation is handled in the Runner.
-        self.loss_norm_factor: typing.Optional[tf.Tensor] = None
+        self.loss_norm_factor: Optional[tf.Tensor] = None
         self.use_normalized_loss = use_normalized_loss  # for the optimizer, per batch
         self.custom_norm_factor = custom_norm_factor
         self.custom_inv_norm_factor = custom_inv_norm_factor

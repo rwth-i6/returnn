@@ -20,7 +20,7 @@ import math
 import numpy
 import functools
 import typing
-from typing import TYPE_CHECKING, Optional, Any, Union, Type, Dict, Sequence, List, Callable
+from typing import TYPE_CHECKING, Optional, Any, Set, Tuple, Union, Type, Dict, Sequence, List, Callable
 
 from returnn.log import log
 from returnn.engine.batch import Batch, BatchSetGenerator
@@ -144,7 +144,7 @@ class Dataset:
         self.lock: Optional[RLock] = None  # Used when manipulating our data potentially from multiple threads.
         self.rnd_seq_drop: Optional[Random] = None
         self.num_inputs = 0  # usually not used, but num_outputs instead, which is more generic
-        self.num_outputs: Optional[typing.Dict[str, typing.Tuple[int, int]]] = (
+        self.num_outputs: Optional[Dict[str, Tuple[int, int]]] = (
             None  # tuple is num-classes, len(shape).  # nopep8
         )
         self.window = window
@@ -162,7 +162,7 @@ class Dataset:
         assert self.partition_epoch == 1 or self.repeat_epoch == 1, (
             "Combining partition_epoch and repeat_epoch is prohibited."
         )
-        self.labels: typing.Dict[str, typing.List[str]] = {}
+        self.labels: Dict[str, List[str]] = {}
         self.weights = {}
         self._num_timesteps = 0
         self._num_seqs = 0
@@ -213,8 +213,8 @@ class Dataset:
             getattr(self, "epoch", "<unknown>"),
         )
 
-    _getnewargs_exclude_attrs = set()  # type: typing.Set[str]
-    _getnewargs_remap = {}  # type: typing.Dict[str,str]
+    _getnewargs_exclude_attrs: Set[str] = set()
+    _getnewargs_remap: Dict[str, str] = {}
 
     @staticmethod
     def _create_from_reduce(cls, kwargs, state) -> Dataset:

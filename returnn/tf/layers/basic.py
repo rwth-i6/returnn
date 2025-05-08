@@ -4,7 +4,7 @@ Many canonical basic layers.
 
 from __future__ import annotations
 
-from typing import Optional, Union, Sequence, List, Tuple, Dict
+from typing import Callable, Optional, Union, Sequence, List, Tuple, Dict
 import typing
 import tensorflow as tf
 import contextlib
@@ -126,7 +126,7 @@ def concat_sources(src_layers, out_dim=None, allow_broadcast_all_sources=NotSpec
         data.placeholder = tf.concat(
             axis=data.feature_dim_axis, values=[layer_data.placeholder for layer_data in layers_data]
         )
-        axes_split_info = [None] * data.batch_ndim  # type: typing.List[typing.Optional[typing.List[int]]]
+        axes_split_info: List[Optional[List[int]]] = [None] * data.batch_ndim
         axes_split_info[data.feature_dim_axis] = [layer_data.dim for layer_data in layers_data]
         tf_util.set_param_axes_split_info(data.placeholder, axes_split_info)
         # Note: We will loose this info for any further op (e.g. dropout, activation, etc). Should be better...
@@ -294,7 +294,7 @@ class _ConcatInputLayer(LayerBase):
         elif mask == "dropout":
             assert dropout > 0
         self.dropout = dropout
-        self.input_data: typing.Optional[Data] = None
+        self.input_data: Optional[Data] = None
         if self.sources:
             self.input_data = concat_sources_with_opt_dropout(
                 self.sources,
@@ -705,8 +705,8 @@ class SelectSearchSourcesLayer(InternalLayer):
         self.output = src.output.copy_as_batch_major()
         self.rec_vars_outputs = src.rec_vars_outputs.copy()
         src_search_choices = src.get_search_choices()
-        self.transform_func: typing.Optional[typing.Callable[[tf.Tensor], tf.Tensor]] = None
-        self.search_choices_seq: typing.Optional[typing.List[SearchChoices]] = None
+        self.transform_func: Optional[Callable[[tf.Tensor], tf.Tensor]] = None
+        self.search_choices_seq: Optional[List[SearchChoices]] = None
         if not search_choices:
             assert not src_search_choices
             assert not self.output.beam
@@ -10173,9 +10173,9 @@ class CondLayer(LayerBase):
         self.condition_desc = condition
         self.condition_layer = self._make_layer("condition", self.condition_desc)
         self.true_layer_desc = true_layer
-        self.true_layer: typing.Optional[LayerBase] = None
+        self.true_layer: Optional[LayerBase] = None
         self.false_layer_desc = false_layer
-        self.false_layer: typing.Optional[LayerBase] = None
+        self.false_layer: Optional[LayerBase] = None
         assert self.condition_layer.output.batch_ndim == 0 and self.condition_layer.output.dtype == "bool"
         self._extra_out_templates = {k: v[0] for k, v in _extra_out.items()}
         x, extra_out, sizes = tf_util.cond(
@@ -12065,7 +12065,7 @@ class HDFDumpLayer(LayerBase):
             for (key, output) in extra.items()
         }
         extra = {key: output.copy_as_batch_spatial_major() for (key, output) in extra.items()}
-        self.extra: typing.Dict[str, Data] = extra
+        self.extra: Dict[str, Data] = extra
         self.dump_whole_batches = dump_whole_batches
         self.num_seqs_written = 0
         ndim = data.ndim
@@ -13015,7 +13015,7 @@ class ExpectedLoss(Loss):
         self.divide_beam_size = divide_beam_size
         self.subtract_average_loss = subtract_average_loss
         self.loss_correction_grad_only = loss_correction_grad_only
-        self.search_choices: typing.Optional[SearchChoices] = None
+        self.search_choices: Optional[SearchChoices] = None
 
     @classmethod
     def transform_config_dict(cls, d, network, get_layer):

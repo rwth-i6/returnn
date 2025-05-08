@@ -247,10 +247,10 @@ class MetaDataset(CachedDataset2):
         self.seq_order_control_dataset = seq_order_control_dataset
 
         # This will only initialize datasets needed for features occuring in data_map
-        self.datasets = {
+        self.datasets: Dict[str, Dataset] = {
             key: init_dataset(datasets[key], extra_kwargs={"name": "%s_%s" % (self.name, key)}, parent_dataset=self)
             for key in self.dataset_keys
-        }  # type: typing.Dict[str,Dataset]
+        }
 
         self._seq_list_file = seq_list_file
         self.seq_list_original = self._load_seq_list(seq_list_file)
@@ -260,8 +260,8 @@ class MetaDataset(CachedDataset2):
 
         self.tag_idx = {tag: idx for (idx, tag) in enumerate(self.seq_list_original[self.default_dataset_key])}
 
-        self._seq_lens: typing.Optional[typing.Dict[str, NumbersDict]] = None
-        self._num_timesteps: typing.Optional[NumbersDict] = None
+        self._seq_lens: Optional[Dict[str, NumbersDict]] = None
+        self._num_timesteps: Optional[NumbersDict] = None
         self._seq_lens_file = seq_lens_file
         if seq_lens_file:
             seq_lens = load_json(filename=seq_lens_file)
@@ -290,7 +290,7 @@ class MetaDataset(CachedDataset2):
         self.num_outputs = self.data_dims
 
         self.orig_seq_order_is_initialized = False
-        self.seq_list_ordered: typing.Optional[typing.Dict[str, typing.List[str]]] = None
+        self.seq_list_ordered: Optional[Dict[str, List[str]]] = None
 
     def _load_seq_list(self, seq_list_file: Optional[Union[str, Dict[str, str]]] = None) -> Dict[str, List[str]]:
         """
@@ -771,7 +771,7 @@ class ConcatDataset(CachedDataset2):
         for ds in self.datasets[1:]:
             assert ds.num_inputs == self.num_inputs
             assert ds.num_outputs == self.num_outputs
-        self.dataset_seq_idx_offsets: typing.Optional[typing.List[int]] = None
+        self.dataset_seq_idx_offsets: Optional[List[int]] = None
 
     def init_seq_order(self, epoch=None, seq_list=None, seq_order=None):
         """
@@ -1017,9 +1017,9 @@ class CombinedDataset(CachedDataset2):
             for (dset_key, dset_data_key), data_key in data_map.items()
         }
 
-        self.dataset_seq_idx_boundaries: typing.Optional[typing.List[int]] = None
-        self.dataset_sorted_seq_idx_list: typing.Optional[typing.List[typing.Tuple[int, int]]] = None
-        self.used_num_seqs_per_subset: typing.Optional[typing.List[int]] = None
+        self.dataset_seq_idx_boundaries: Optional[List[int]] = None
+        self.dataset_sorted_seq_idx_list: Optional[List[Tuple[int, int]]] = None
+        self.used_num_seqs_per_subset: Optional[List[int]] = None
 
     def init_seq_order(self, epoch=None, seq_list=None, seq_order=None):
         """

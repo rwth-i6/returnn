@@ -51,7 +51,7 @@ class GeneratingDataset(Dataset):
         self._total_num_seqs = num_seqs
         self.random = numpy.random.RandomState(1)
         self.reached_final_seq = False
-        self.added_data: typing.List[DatasetSeq] = []
+        self.added_data: List[DatasetSeq] = []
         if self.seq_ordering in ("sorted", "sorted_reverse"):
             # For the dev/eval dataset, RETURNN automatically tries to sort them.
             # As this is not supported, just ignore it and reset it to the default order.
@@ -2136,9 +2136,7 @@ class LibriSpeechCorpus(CachedDataset2):
         import os
         import zipfile
 
-        transs: typing.Dict[
-            typing.Tuple[str, int, int, int], str
-        ] = {}  # (subdir, speaker-id, chapter-id, seq-id) -> transcription
+        transs: Dict[Tuple[str, int, int, int], str] = {}  # (subdir, speaker-id, chapter-id, seq-id) -> transcription
         if self.use_zip:
             for name, zip_file in self._zip_files.items():
                 assert isinstance(zip_file, zipfile.ZipFile)
