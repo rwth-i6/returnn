@@ -5106,14 +5106,11 @@ class RnnCellLayer(_ConcatInputLayer):
         from returnn.tf.util.basic import get_initializer
 
         scope = "rec" if self.name_scope is None else tf_compat.v1.get_variable_scope()
-        with (
-            reuse_name_scope(scope),
-            self.var_creation_scope(
-                initializer=get_initializer(
-                    weights_init, seed=self.network.random.randint(2**31), eval_local_ns={"layer": self}
-                )
-            ) as scope,
-        ):
+        with reuse_name_scope(scope), self.var_creation_scope(
+            initializer=get_initializer(
+                weights_init, seed=self.network.random.randint(2**31), eval_local_ns={"layer": self}
+            )
+        ) as scope:
             assert isinstance(scope, tf_compat.v1.VariableScope)
             scope_name_prefix = scope.name + "/"  # e.g. "layer1/rec/"
             self.cell = self._get_cell(n_out=n_out, unit=unit, unit_opts=unit_opts)

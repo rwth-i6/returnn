@@ -531,10 +531,9 @@ def create_ogg_zip_txt_only_dataset_opts(*, text: str = "hello world", seq_tag: 
     """create OggZipDataset dict using temp data, consisting of a single sequence with text only"""
     import zipfile
 
-    with (
-        tempfile.NamedTemporaryFile(suffix=".zip") as tmp_zip_file,
-        tempfile.NamedTemporaryFile(suffix=".txt") as tmp_vocab_file,
-    ):
+    with tempfile.NamedTemporaryFile(suffix=".zip") as tmp_zip_file, tempfile.NamedTemporaryFile(
+        suffix=".txt"
+    ) as tmp_vocab_file:
         with zipfile.ZipFile(tmp_zip_file.name, "w") as zip_file:
             zip_file.writestr(
                 os.path.basename(tmp_zip_file.name)[:-4] + ".txt",
@@ -572,10 +571,9 @@ def create_ogg_zip_txt_only_dataset_mult_seqs(*, seed: int = 1, num_seqs: int = 
 
     rnd = numpy.random.RandomState(seed)
 
-    with (
-        tempfile.NamedTemporaryFile(suffix=".zip") as tmp_zip_file,
-        tempfile.NamedTemporaryFile(suffix=".txt") as tmp_vocab_file,
-    ):
+    with tempfile.NamedTemporaryFile(suffix=".zip") as tmp_zip_file, tempfile.NamedTemporaryFile(
+        suffix=".txt"
+    ) as tmp_vocab_file:
         vocab = {"@": 2, " ": 1, ".": 0}
         vocab.update({chr(i): i - ord("a") + 3 for i in range(ord("a"), ord("z") + 1)})
         tmp_vocab_file.write(repr(vocab).encode("utf8"))
@@ -633,10 +631,9 @@ def test_OggZipDataset():
 def test_LmDataset_char_based():
     from returnn.datasets.lm import LmDataset
 
-    with (
-        tempfile.NamedTemporaryFile("wt", suffix=".txt") as txt_file,
-        tempfile.NamedTemporaryFile("wt", suffix=".syms") as orth_syms_file,
-    ):
+    with tempfile.NamedTemporaryFile("wt", suffix=".txt") as txt_file, tempfile.NamedTemporaryFile(
+        "wt", suffix=".syms"
+    ) as orth_syms_file:
         txt_file.write("Hello world\n")
         txt_file.write("Next line\n")
         txt_file.flush()
@@ -668,10 +665,9 @@ def test_LmDataset_char_based():
 def test_LmDataset_word_based():
     from returnn.datasets.lm import LmDataset
 
-    with (
-        tempfile.NamedTemporaryFile("wt", suffix=".txt") as txt_file,
-        tempfile.NamedTemporaryFile("wt", suffix=".syms") as orth_syms_file,
-    ):
+    with tempfile.NamedTemporaryFile("wt", suffix=".txt") as txt_file, tempfile.NamedTemporaryFile(
+        "wt", suffix=".syms"
+    ) as orth_syms_file:
         txt_file.write("Hello world\n")
         txt_file.write("Next line\n")
         txt_file.flush()
@@ -703,10 +699,9 @@ def test_LmDataset_word_based():
 def test_LmDataset_vocab_based():
     from returnn.datasets.lm import LmDataset
 
-    with (
-        tempfile.NamedTemporaryFile("wt", suffix=".txt") as txt_file,
-        tempfile.NamedTemporaryFile("wt", suffix=".syms") as orth_syms_file,
-    ):
+    with tempfile.NamedTemporaryFile("wt", suffix=".txt") as txt_file, tempfile.NamedTemporaryFile(
+        "wt", suffix=".syms"
+    ) as orth_syms_file:
         txt_file.write("Hello world\n")
         txt_file.write("Next line\n")
         txt_file.flush()
@@ -750,10 +745,9 @@ def test_LmDataset_pickle():
     import pickle
     from returnn.datasets.lm import LmDataset
 
-    with (
-        tempfile.NamedTemporaryFile("wt", suffix=".txt") as txt_file,
-        tempfile.NamedTemporaryFile("wt", suffix=".syms") as orth_syms_file,
-    ):
+    with tempfile.NamedTemporaryFile("wt", suffix=".txt") as txt_file, tempfile.NamedTemporaryFile(
+        "wt", suffix=".syms"
+    ) as orth_syms_file:
         txt_file.write("Hello world\n")
         txt_file.write("Next line\n")
         txt_file.flush()
@@ -794,12 +788,11 @@ def test_LmDataset_multiple_and_gzipped():
     import gzip
     from returnn.datasets.lm import LmDataset
 
-    with (
-        tempfile.NamedTemporaryFile("wb", suffix=".txt.gz") as gz_txt_file,
-        tempfile.NamedTemporaryFile("wb", suffix=".txt.gz") as gz_txt_file2,
-        tempfile.NamedTemporaryFile("wt", suffix=".txt") as txt_file3,
-        tempfile.NamedTemporaryFile("wt", suffix=".syms") as orth_syms_file,
-    ):
+    with tempfile.NamedTemporaryFile("wb", suffix=".txt.gz") as gz_txt_file, tempfile.NamedTemporaryFile(
+        "wb", suffix=".txt.gz"
+    ) as gz_txt_file2, tempfile.NamedTemporaryFile("wt", suffix=".txt") as txt_file3, tempfile.NamedTemporaryFile(
+        "wt", suffix=".syms"
+    ) as orth_syms_file:
         with gzip.GzipFile(gz_txt_file.name, "wb") as txt_file:
             txt_file.write(b"Hello world\n")
             txt_file.write(b"Next line\n")

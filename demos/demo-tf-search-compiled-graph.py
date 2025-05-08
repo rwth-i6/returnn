@@ -91,7 +91,6 @@ def main():
         # Now loop over decoder steps.
         max_dec_len = 100  # TODO better default... depending on input len. or configurable...
         for i in range(max_dec_len):
-
             # Loop over all stochastic variables.
             for stochastic_var in info["stochastic_var_order"]:
                 assert isinstance(stochastic_var, str)
@@ -108,9 +107,7 @@ def main():
                 # TODO: length norm here?
 
                 # Select new hypotheses.
-                best_possibilities = sorted(all_possibilities)[
-                    : args.beam_size
-                ]  # type: typing.List[typing.Tuple[float,int,Hyp]]
+                best_possibilities = sorted(all_possibilities)[: args.beam_size]  # type: typing.List[typing.Tuple[float,int,Hyp]]
                 assert len(best_possibilities) == args.beam_size
                 hyps = [
                     hyp.expand(idx=i, label=label, score=score)
@@ -121,8 +118,9 @@ def main():
                 session.run(
                     info["state_vars"]["stochastic_var_scores_%s" % stochastic_var] + "/Assign...?",  # TODO...
                     feed_dict={
-                        info["state_vars"]["stochastic_var_scores_%s" % stochastic_var]
-                        + "/Initial...?": [[hyp.seq[-1] for hyp in hyps]]  # TODO...
+                        info["state_vars"]["stochastic_var_scores_%s" % stochastic_var] + "/Initial...?": [
+                            [hyp.seq[-1] for hyp in hyps]
+                        ]  # TODO...
                     },
                 )
 

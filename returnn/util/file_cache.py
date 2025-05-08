@@ -378,10 +378,9 @@ class FileCache:
         info_file_name = self._get_info_filename(dst_filename)
 
         # Copy the file, while holding a lock. See comment on lock_timeout above.
-        with (
-            LockFile(directory=lock_dir, name=lock_file, lock_timeout=self._lock_timeout) as lock,
-            self._touch_files_thread.files_added_context(lock.lockfile),
-        ):
+        with LockFile(
+            directory=lock_dir, name=lock_file, lock_timeout=self._lock_timeout
+        ) as lock, self._touch_files_thread.files_added_context(lock.lockfile):
             # Maybe it was copied in the meantime, while waiting for the lock.
             if self._check_existing_copied_file_maybe_cleanup(src_filename, dst_filename):
                 print(f"FileCache: using existing file {dst_filename}")

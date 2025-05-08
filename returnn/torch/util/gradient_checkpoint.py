@@ -353,9 +353,8 @@ class _Graph:
         """
         if not self.ops_to_be_recomputed:
             return
-        with (
-            _reset_rng_states_scope(self.stored_device_rng_states),
-            _reset_amp_states_scope(self.stored_device_amp_states),
+        with _reset_rng_states_scope(self.stored_device_rng_states), _reset_amp_states_scope(
+            self.stored_device_amp_states
         ):
             ops_reversed_queue = list(self.ops_to_be_recomputed)
             ops_reversed_queue.reverse()
