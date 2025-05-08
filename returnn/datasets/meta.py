@@ -1471,8 +1471,8 @@ class ConcatSeqsDataset(CachedDataset2):
         self.seq_lens = eval(open(seq_len_file).read())
         assert isinstance(self.seq_lens, dict)
         self.full_seq_len_list = self._get_full_seq_lens_list()
-        self.cur_seq_list: typing.Optional[typing.List[str]]  # list of seq tags = None
-        self.cur_sub_seq_idxs: typing.Optional[typing.List[typing.List[int]]]  # list of list of sub seq idxs = None
+        self.cur_seq_list: typing.Optional[typing.List[str]] = None  # list of seq tags
+        self.cur_sub_seq_idxs: typing.Optional[typing.List[typing.List[int]]] = None  # list of list of sub seq idxs
 
     def _get_full_seq_lens_list(self):
         """

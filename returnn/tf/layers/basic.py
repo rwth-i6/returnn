@@ -509,7 +509,7 @@ class ConcatLayer(LayerBase):
         assert sources
         sources, axes = zip(*sources)  # unzip
         axes_int = [layer.output.get_axis_from_description(axis) for (layer, axis) in zip(sources, axes)]
-        concat_dim_tags = [layer.output.dim_tags[axis] for (layer, axis) in zip(sources, axes_int)]  # type: typing.List[Dim]
+        concat_dim_tags: List[Dim] = [layer.output.dim_tags[axis] for (layer, axis) in zip(sources, axes_int)]
         if any(tag.dimension is None for tag in concat_dim_tags):
             dimension = None
         else:
@@ -724,7 +724,7 @@ class SelectSearchSourcesLayer(InternalLayer):
             assert src_search_choices in search_choices_seq, self.network.debug_search_choices(
                 self.search_choices_layer
             ) or (
-                ("%s: No common search base:\nfrom layer %s\nsearch choices %s,\nto layer %s\nsearch choices\n%s.")
+                "%s: No common search base:\nfrom layer %s\nsearch choices %s,\nto layer %s\nsearch choices\n%s."
                 % (self, src, src_search_choices, self.search_choices_layer, pformat(search_choices_seq))
             )
             search_choices_seq = search_choices_seq[: search_choices_seq.index(src_search_choices)]

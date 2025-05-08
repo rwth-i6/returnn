@@ -6,6 +6,7 @@ from __future__ import annotations
 
 from typing import Optional, Dict, List, Union
 import typing
+from typing import TYPE_CHECKING
 import contextlib
 import numpy
 import tensorflow as tf
@@ -16,6 +17,9 @@ import returnn.tf.util.basic as tf_util
 from returnn.tf.util.data import Data, FeatureDim, Dim
 from returnn.tf.util.basic import OutputWithActivation, CustomUpdate, reuse_name_scope
 from returnn.log import log
+
+if TYPE_CHECKING:
+    from tensorflow.python.training.saver import BaseSaverBuilder
 
 
 class LayerBase:
@@ -243,7 +247,7 @@ class LayerBase:
         self.have_params = False
         self.params: Dict[str, tf.Variable] = {}
         self.saveable_param_replace: Dict[
-            tf.Variable, Union["tensorflow.python.training.saver.BaseSaverBuilder.SaveableObject", None]
+            tf.Variable, Union["BaseSaverBuilder.SaveableObject", None]
         ] = {}  # see get_saveable_params_dict()
         self.reuse_params = reuse_params
         self.name_scope = name_scope
