@@ -26,7 +26,7 @@ class Hyp:
         :param int idx: hyp idx (to identify it in a beam)
         """
         self.idx = idx
-        self.source_idx: typing.Optional[int]  # source hyp idx = None
+        self.source_idx: typing.Optional[int] = None  # source hyp idx
         self.score = 0.0
         self.seq = []  # label seq
 

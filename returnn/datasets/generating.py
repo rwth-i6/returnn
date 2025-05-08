@@ -46,12 +46,12 @@ class GeneratingDataset(Dataset):
             output_dim["data"] = (input_dim * self.window, 2)  # not sparse
         self.num_outputs = output_dim
         self.expected_load_seq_start = 0
-        self._seq_order = None  # type: Optional[Sequence[int]]
+        self._seq_order: Optional[Sequence[int]] = None
         self._num_seqs = num_seqs
         self._total_num_seqs = num_seqs
         self.random = numpy.random.RandomState(1)
         self.reached_final_seq = False
-        self.added_data = []  # type: typing.List[DatasetSeq]
+        self.added_data: typing.List[DatasetSeq] = []
         if self.seq_ordering in ("sorted", "sorted_reverse"):
             # For the dev/eval dataset, RETURNN automatically tries to sort them.
             # As this is not supported, just ignore it and reset it to the default order.
@@ -2136,7 +2136,9 @@ class LibriSpeechCorpus(CachedDataset2):
         import os
         import zipfile
 
-        transs = {}  # type: typing.Dict[typing.Tuple[str,int,int,int],str]  # (subdir, speaker-id, chapter-id, seq-id) -> transcription  # nopep8
+        transs: typing.Dict[
+            typing.Tuple[str, int, int, int], str
+        ] = {}  # (subdir, speaker-id, chapter-id, seq-id) -> transcription
         if self.use_zip:
             for name, zip_file in self._zip_files.items():
                 assert isinstance(zip_file, zipfile.ZipFile)

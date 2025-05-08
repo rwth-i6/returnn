@@ -1432,7 +1432,9 @@ class _SubnetworkRecCell:
             )
         self._last_frames = {}  # type: typing.Dict[str,Data]
         self._initial_outputs = None  # type: typing.Optional[typing.Dict[str,tf.Tensor]]
-        self._initial_extra_outputs = None  # type: typing.Optional[typing.Dict[str,typing.Dict[str,typing.Union[tf.Tensor,typing.Tuple[tf.Tensor,...]]]]]  # nopep8
+        self._initial_extra_outputs: typing.Optional[
+            typing.Dict[str, typing.Dict[str, typing.Union[tf.Tensor, typing.Tuple[tf.Tensor, ...]]]]
+        ] = None
 
         # input_layers_moved_out, output_layers_moved_out and layers_in_loop include (used) sub-layers as separate
         # entries, this way in- and outputting them to the loop via TensorArrays will be handled just as for normal

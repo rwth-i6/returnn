@@ -141,10 +141,12 @@ class Dataset:
         :param int _shard_index: local shard index, when sharding is enabled
         """
         self.name = name or ("dataset_id%s" % id(self))
-        self.lock = None  # type: Optional[RLock]  # Used when manipulating our data potentially from multiple threads.
-        self.rnd_seq_drop = None  # type: typing.Optional[Random]
+        self.lock: Optional[RLock] = None  # Used when manipulating our data potentially from multiple threads.
+        self.rnd_seq_drop: Optional[Random] = None
         self.num_inputs = 0  # usually not used, but num_outputs instead, which is more generic
-        self.num_outputs = None  # type: typing.Optional[typing.Dict[str,typing.Tuple[int,int]]]  # tuple is num-classes, len(shape).  # nopep8
+        self.num_outputs: Optional[typing.Dict[str, typing.Tuple[int, int]]] = (
+            None  # tuple is num-classes, len(shape).  # nopep8
+        )
         self.window = window
         self.seq_ordering = seq_ordering  # "default", "sorted" or "random". See self.get_seq_order_for_epoch().
         self.fixed_random_seed = fixed_random_seed
@@ -160,7 +162,7 @@ class Dataset:
         assert self.partition_epoch == 1 or self.repeat_epoch == 1, (
             "Combining partition_epoch and repeat_epoch is prohibited."
         )
-        self.labels = {}  # type: typing.Dict[str,typing.List[str]]
+        self.labels: typing.Dict[str, typing.List[str]] = {}
         self.weights = {}
         self._num_timesteps = 0
         self._num_seqs = 0

@@ -1882,8 +1882,7 @@ class TranslationFactorsDataset(TranslationDataset):
             self._factored_words_to_numpy(data_keys, s.decode("utf8").strip().split(), self._add_postfix[file_prefix])
             for s in data_strs
         ]  # shape: (len(data_strs), len(data_keys))
-
-        data = zip(*data)  # type: typing.Iterable[typing.Tuple[numpy.ndarray]] # shape: (len(data_keys), len(data_strs))
+        data: typing.Iterable[typing.Tuple[numpy.ndarray]] = zip(*data)  # shape: (len(data_keys), len(data_strs))
 
         with self._lock:
             for i, data_ in enumerate(data):

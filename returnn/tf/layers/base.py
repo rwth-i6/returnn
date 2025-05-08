@@ -188,7 +188,7 @@ class LayerBase:
         self.name = name
         self.network = network
         self._register_layer()
-        self.kwargs: typing.Optional[typing.Dict[str]]  # set via self.post_init = None
+        self.kwargs: typing.Optional[typing.Dict[str]] = None  # set via self.post_init
         self.target = None
         self.targets = None
         if target:
@@ -244,7 +244,7 @@ class LayerBase:
         self.params: typing.Dict[str, tf.Variable] = {}
         self.saveable_param_replace: typing.Dict[
             tf.Variable, typing.Union["tensorflow.python.training.saver.BaseSaverBuilder.SaveableObject", None]
-        ] = {}  # see get_saveable_params_dict()  # nopep8
+        ] = {}  # see get_saveable_params_dict()
         self.reuse_params = reuse_params
         self.name_scope = name_scope
         self.param_device = param_device
@@ -2608,9 +2608,9 @@ class SearchChoices:
         self.owner = owner
         self._done_src_layer = False
         self._src_layer: typing.Optional[LayerBase] = None
-        self.src_beams: typing.Optional[tf.Tensor]  # src beam index, (batch, beam) = None
+        self.src_beams: typing.Optional[tf.Tensor] = None  # src beam index, (batch, beam)
         self.beam_size = beam_size
-        self.beam_scores: typing.Optional[tf.Tensor]  # (batch, beam) = None
+        self.beam_scores: typing.Optional[tf.Tensor] = None  # (batch, beam)
         self.is_decided = is_decided
         self.keep_raw = keep_raw
         if not owner.output.beam:

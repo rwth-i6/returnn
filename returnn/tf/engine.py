@@ -115,10 +115,10 @@ class Runner:
         self._results_accumulated = NumbersDict()  # entries like "cost:output" or "loss"
         self._inv_norm_accumulated = NumbersDict()  # entries like "output"
         self.num_frames_accumulated = NumbersDict()  # for each data key (eg. "classes"), corresponding number of frames
-        self.results: typing.Dict[str, float]  # entries like "cost:output" or "loss" = {}
-        self.score: typing.Dict[str, float]  # entries like "cost:output" = {}
-        self.error: typing.Dict[str, float]  # entries like "error:output" = {}
-        self.stats: typing.Dict[str, typing.Union[float, numpy.ndarray, "util.Stats"]]  # entries like "stats:..." = {}
+        self.results: typing.Dict[str, float] = {}  # entries like "cost:output" or "loss"
+        self.score: typing.Dict[str, float] = {}  # entries like "cost:output"
+        self.error: typing.Dict[str, float] = {}  # entries like "error:output"
+        self.stats: typing.Dict[str, typing.Union[float, numpy.ndarray, "util.Stats"]] = {}  # entries like "stats:..."
         self.extra_fetches = extra_fetches
         if extra_fetches is not None:
             assert extra_fetches_callback
@@ -728,9 +728,9 @@ class Runner:
                             run_options_.MergeFrom(run_options)
                         # We could use tfdbg.add_debug_tensor_watch here.
                         session_run_start_time = time.time()
-                        fetches_results = sess.run(
+                        fetches_results: typing.Dict[str, typing.Union[numpy.ndarray, str]] = sess.run(
                             fetches_dict, feed_dict=feed_dict, options=run_options_, run_metadata=run_metadata
-                        )  # type: typing.Dict[str,typing.Union[numpy.ndarray,str]]
+                        )
                         elapsed_time_tf += time.time() - session_run_start_time
                         writer.add_summary(fetches_results["summary"], step + step_offset)
                         writer.add_run_metadata(run_metadata, "step_{:04d}".format(step + step_offset))
@@ -742,9 +742,13 @@ class Runner:
                         session_run_start_time = time.time()
                         if self.store_tf_profile:
                             with tf.profiler.experimental.Trace(name=report_prefix, step_num=step + step_offset):
-                                fetches_results = sess.run(fetches_dict, feed_dict=feed_dict, options=run_options)  # type: typing.Dict[str,typing.Union[numpy.ndarray,str]]
+                                fetches_results: typing.Dict[str, typing.Union[numpy.ndarray, str]] = sess.run(
+                                    fetches_dict, feed_dict=feed_dict, options=run_options
+                                )
                         else:
-                            fetches_results = sess.run(fetches_dict, feed_dict=feed_dict, options=run_options)  # type: typing.Dict[str,typing.Union[numpy.ndarray,str]]
+                            fetches_results: typing.Dict[str, typing.Union[numpy.ndarray, str]] = sess.run(
+                                fetches_dict, feed_dict=feed_dict, options=run_options
+                            )
                         elapsed_time_tf += time.time() - session_run_start_time
                         if writer and "summary" in fetches_results:
                             writer.add_summary(fetches_results["summary"], step + step_offset)
@@ -896,7 +900,7 @@ class Engine(EngineBase):
         self.train_data: typing.Optional[Dataset] = None
         self.eval_datasets: typing.Dict[str, Dataset] = {}
         self.start_epoch: typing.Optional[int] = None
-        self._num_trained_epochs: int  # just a counter = 0
+        self._num_trained_epochs: int = 0  # just a counter
         self._num_net_reinit: int = 0
         self.use_dynamic_train_flag = False
         self.use_search_flag = self.config.value("task", None) == "search"
@@ -1961,8 +1965,12 @@ class Engine(EngineBase):
             if "pos_error" in output_per_seq_format:
                 extra_fetches["pos_error"] = loss_holder.get_error_value_per_pos()
 
-        seq_idx_to_tag = {}  # type: typing.Dict[int,str]  # we need this in order to write the results in the correct order later  # nopep8
-        results_per_seq = {}  # type: typing.Dict[str,typing.Dict[str,typing.Union[float,str,int]]]  # seq_tag -> dict. Results of fetches will be written in this dict  # nopep8
+        seq_idx_to_tag: typing.Dict[
+            int, str
+        ] = {}  # we need this in order to write the results in the correct order later
+        results_per_seq: typing.Dict[
+            str, typing.Dict[str, typing.Union[float, str, int]]
+        ] = {}  # seq_tag -> dict. Results of fetches will be written in this dict
 
         # function to save the return values of each callback to the dict `results_per_seq`
         # noinspection PyShadowingNames
