@@ -705,7 +705,7 @@ class SelectSearchSourcesLayer(InternalLayer):
         self.output = src.output.copy_as_batch_major()
         self.rec_vars_outputs = src.rec_vars_outputs.copy()
         src_search_choices = src.get_search_choices()
-        self.transform_func: typing.Optional[typing.Callable[[tf.Tensor],tf.Tensor]] = None
+        self.transform_func: typing.Optional[typing.Callable[[tf.Tensor], tf.Tensor]] = None
         self.search_choices_seq: typing.Optional[typing.List[SearchChoices]] = None
         if not search_choices:
             assert not src_search_choices
@@ -12065,7 +12065,7 @@ class HDFDumpLayer(LayerBase):
             for (key, output) in extra.items()
         }
         extra = {key: output.copy_as_batch_spatial_major() for (key, output) in extra.items()}
-        self.extra: typing.Dict[str,Data] = extra
+        self.extra: typing.Dict[str, Data] = extra
         self.dump_whole_batches = dump_whole_batches
         self.num_seqs_written = 0
         ndim = data.ndim
