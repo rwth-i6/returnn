@@ -131,7 +131,7 @@ class Runner:
             self._horovod_finish_all = True
         # With Horovod, during the main session.run, if reduce_type != grad or not training,
         # the following tensors are enough to ensure that we are in sync.
-        self._horovod_collected_reduce_inputs: Dict[str, (tf.Tensor, tf.Tensor)]  # name -> (input,output) = {}
+        self._horovod_collected_reduce_inputs: Dict[str, (tf.Tensor, tf.Tensor)] = {}  # name -> (input,output)
 
         from returnn.util.basic import terminal_size
 
