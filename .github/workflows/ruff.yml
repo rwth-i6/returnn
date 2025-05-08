@@ -22,4 +22,3 @@ jobs:
         cache-dependency-path: '.github/workflows/ruff.yml'
     - run: pip install ruff==0.11.8
     - run: ruff format --diff .
-    - run: ruff format --check .
