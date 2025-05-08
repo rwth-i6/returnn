@@ -144,9 +144,7 @@ class Dataset:
         self.lock: Optional[RLock] = None  # Used when manipulating our data potentially from multiple threads.
         self.rnd_seq_drop: Optional[Random] = None
         self.num_inputs = 0  # usually not used, but num_outputs instead, which is more generic
-        self.num_outputs: Optional[Dict[str, Tuple[int, int]]] = (
-            None  # tuple is num-classes, len(shape).  # nopep8
-        )
+        self.num_outputs: Optional[Dict[str, Tuple[int, int]]] = None  # tuple is num-classes, len(shape).  # nopep8
         self.window = window
         self.seq_ordering = seq_ordering  # "default", "sorted" or "random". See self.get_seq_order_for_epoch().
         self.fixed_random_seed = fixed_random_seed
