@@ -181,9 +181,9 @@ class Cond(Generic[T]):
         After this, self.result is available.
         """
         assert self._entered, f"{self} you need to be in the context scope"
-        assert (
-            self._entered_state is False
-        ), f"{self} you need to be in the False branch, have assigned :func:`true` before"
+        assert self._entered_state is False, (
+            f"{self} you need to be in the False branch, have assigned :func:`true` before"
+        )
         assert not self._false_value_set
         nest.assert_same_structure(self._true_value, false_value)
         # This needs to match the true() setter logic.
@@ -198,9 +198,9 @@ class Cond(Generic[T]):
                 if false_v is None:  # see above
                     false_v = rf.zeros((), dtype="int32")  # dummy value
                 else:
-                    assert isinstance(
-                        false_v, Tensor
-                    ), f"unexpected {false_value!r}, only expects tensors, got {type(false_v)}"
+                    assert isinstance(false_v, Tensor), (
+                        f"unexpected {false_value!r}, only expects tensors, got {type(false_v)}"
+                    )
                 assert true_v.raw_tensor.parent is self.true_branch_name_ctx
                 name = true_v.raw_tensor.name
                 assert name not in self.false_branch_name_ctx.children

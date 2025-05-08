@@ -1519,9 +1519,9 @@ def test_cnn_building_block():
         seq_len = 10
         seq_lens = numpy.array([10, 10, 10, 10, 10], dtype=numpy.int32)
         feed = {
-            network.extern_data.get_default_input_data()
-            .placeholder: numpy.random.rand(n_batch, seq_len, num_inputs)
-            .astype("f"),
+            network.extern_data.get_default_input_data().placeholder: numpy.random.rand(
+                n_batch, seq_len, num_inputs
+            ).astype("f"),
             network.extern_data.get_default_input_data().size_placeholder[0]: seq_lens,
         }
         v = session.run(out, feed_dict=feed)

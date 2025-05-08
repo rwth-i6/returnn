@@ -137,7 +137,6 @@ def edit_distance(a: Tensor, a_spatial_dim: Dim, b: Tensor, b_spatial_dim: Dim, 
     # We are going diagonal over (Ta+1) and (Tb+1). (Similar as RETURNN native EditDistanceOp.)
     # You need to draw the grid on paper to understand all the index math...
     for u in range(1, n_a_max_len + n_b_max_len + 1):
-
         prev2_dist, _ = rf.slice(
             buffer, axis=buffer_dim, start=buffer_offsets[u % 3], size=b_spatial_dim1, out_dim=b_spatial_dim1
         )  # [Tb+1,B]

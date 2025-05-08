@@ -219,9 +219,9 @@ class Updater:
 
             learning_rate_function = self.config.typed_dict.get("dynamic_learning_rate")
             signature = inspect.signature(learning_rate_function)
-            assert any(
-                [arg.kind == inspect.Parameter.VAR_KEYWORD for arg in signature.parameters.values()]
-            ), "please specify **kwargs in dynamic_learning_rate for future compatibility"
+            assert any([arg.kind == inspect.Parameter.VAR_KEYWORD for arg in signature.parameters.values()]), (
+                "please specify **kwargs in dynamic_learning_rate for future compatibility"
+            )
             if "epoch" in signature.parameters:
                 raise NotImplementedError("TF updater: dynamic_learning_rate with epoch not supported currently")
             lr = learning_rate_function(

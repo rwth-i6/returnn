@@ -369,8 +369,7 @@ def _extern_data_types_from_config(config):
             print("Warning: Using extern_data and will ignore num_inputs/num_outputs in config.", file=log.v2)
     else:
         log.print_deprecation_warning(
-            "Using num_inputs/num_outputs instead of extern_data is deprecated"
-            " and might be removed in future versions"
+            "Using num_inputs/num_outputs instead of extern_data is deprecated and might be removed in future versions"
         )
         num_inputs, num_outputs = _num_inputs_outputs_from_config(config)
         data_dims = num_outputs.copy()
@@ -669,9 +668,7 @@ class TFNetwork:
         self._graph_reset_callbacks = []  # type: typing.List[typing.Callable]
         self._run_opts = {}  # type: typing.Dict[str, typing.Any]
         self._run_finished_callbacks = []  # type: typing.List[typing.Callable]
-        self._map_search_beam_to_search_choices = (
-            {}
-        )  # type: typing.Dict[tf_util.SearchBeam,"returnn.tf.layers.base.SearchChoices"]
+        self._map_search_beam_to_search_choices = {}  # type: typing.Dict[tf_util.SearchBeam,"returnn.tf.layers.base.SearchChoices"]
 
     def __repr__(self):
         s = "TFNetwork %r" % self.name
@@ -1308,15 +1305,16 @@ class TFNetwork:
                 layer.output.sanity_check()
                 # The axes should not have moved now.
                 output_special_axes = layer.output.get_special_axes_dict()
-                assert (
-                    output_template_special_axes == output_special_axes
-                ), "%s %r: not equal: %r == %r, from data %r -> %r" % (
-                    layer_class.__name__,
-                    name,
-                    output_template_special_axes,
-                    output_special_axes,
-                    output_template,
-                    layer.output,
+                assert output_template_special_axes == output_special_axes, (
+                    "%s %r: not equal: %r == %r, from data %r -> %r"
+                    % (
+                        layer_class.__name__,
+                        name,
+                        output_template_special_axes,
+                        output_special_axes,
+                        output_template,
+                        layer.output,
+                    )
                 )
             except TypeError:
                 help_on_type_error_wrong_args(cls=layer_class, kwargs=list(layer_desc.keys()))
@@ -1869,14 +1867,15 @@ class TFNetwork:
 
         # All end points must be mapped now.
         for layer in end_points:
-            assert (
-                layer in mapped_layers
-            ), "end point %r not mapped.\n end points:\n%s\n mapped:\n%s\n blacklist:\n%s\n starting points:\n%s" % (
-                layer,
-                pformat(end_points),
-                pformat(mapped_layers),
-                pformat(blacklist),
-                pformat(starting_points),
+            assert layer in mapped_layers, (
+                "end point %r not mapped.\n end points:\n%s\n mapped:\n%s\n blacklist:\n%s\n starting points:\n%s"
+                % (
+                    layer,
+                    pformat(end_points),
+                    pformat(mapped_layers),
+                    pformat(blacklist),
+                    pformat(starting_points),
+                )
             )
         # Assign flatten_with_seq_len_mask cache to mapped layers.
         for layer, new_layer in mapped_layers.items():
@@ -2402,9 +2401,7 @@ class TFNetwork:
 
         Note that this excludes auxiliary params.
         """
-        layers = {
-            layer.get_absolute_name(): layer for layer in self.get_all_layers_deep()
-        }  # type: typing.Dict[str,LayerBase]
+        layers = {layer.get_absolute_name(): layer for layer in self.get_all_layers_deep()}  # type: typing.Dict[str,LayerBase]
         for layer_name, layer_values_dict in values_dict.items():
             if layer_values_dict:
                 if ignore_non_existing and layer_name not in layers:
@@ -4091,9 +4088,9 @@ class LossHolder:
                     self._error_value = self._layer._cond_only_on_eval_opt(self.loss.get_error, default_value=0.0)
                 else:
                     self._error_value = self.loss.get_error()
-            assert (
-                self._loss_value is not None or self._error_value is not None
-            ), "layer %r loss %r return None for loss and error" % (self._layer, self.loss)
+            assert self._loss_value is not None or self._error_value is not None, (
+                "layer %r loss %r return None for loss and error" % (self._layer, self.loss)
+            )
         if self._norm_factor is None:
             self._norm_factor = self.loss.get_normalization_factor()
         loss_value = self._loss_value
@@ -4515,9 +4512,7 @@ class CustomCheckpointLoader:
         # All variables in the checkpoint:
         self.var_ckpt_names = set(self.reader.get_variable_to_shape_map())  # type: typing.Set[str]
         # All variables of the model to be loaded:
-        self.var_net_names = {
-            self._get_param_name(v): v for v in self.saveable_params
-        }  # type: typing.Dict[str,typing.Union[tf.Variable,typing.Any]]
+        self.var_net_names = {self._get_param_name(v): v for v in self.saveable_params}  # type: typing.Dict[str,typing.Union[tf.Variable,typing.Any]]
         # Model variables missing in the checkpoint:
         self.missing_var_names = []  # type: typing.List[str]
         self.missing_non_critical_var_names = []  # type: typing.List[str]
@@ -4702,10 +4697,10 @@ class CustomCheckpointLoader:
             "rnn/lstm_cell/bias": "lstm_cell/bias",
             "rnn/lstm_cell/kernel": "lstm_cell/kernel",
             (
-                "cudnn/params_canonical/rnn/multi_rnn_cell/cell_0/" "cudnn_compatible_lstm_cell/bias"
+                "cudnn/params_canonical/rnn/multi_rnn_cell/cell_0/cudnn_compatible_lstm_cell/bias"
             ): "lstm_fused_cell/bias",
             (
-                "cudnn/params_canonical/rnn/multi_rnn_cell/cell_0/" "cudnn_compatible_lstm_cell/kernel"
+                "cudnn/params_canonical/rnn/multi_rnn_cell/cell_0/cudnn_compatible_lstm_cell/kernel"
             ): "lstm_fused_cell/kernel",
         }
 
@@ -5140,8 +5135,7 @@ class CustomLoadParamFunc(Protocol):
 
     def __call__(
         self, *, name: str, shape: Tuple[int], reader: tf.compat.v1.train.NewCheckpointReader
-    ) -> Optional[numpy.ndarray]:
-        ...
+    ) -> Optional[numpy.ndarray]: ...
 
 
 def set_custom_post_init(var, func):

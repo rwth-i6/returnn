@@ -237,14 +237,12 @@ class LayerBase:
             # Note that this check is somewhat incomplete
             # (does not check multiple sources, see _ConcatInputLayer)
             # and there is no guarantee that a specific layer really uses this correctly.
-            assert sources[0].output.have_dim_tag(
-                in_dim, unique=True
-            ), "%s: in_dim %s not found or unique in input %s" % (self, in_dim, sources[0])
+            assert sources[0].output.have_dim_tag(in_dim, unique=True), (
+                "%s: in_dim %s not found or unique in input %s" % (self, in_dim, sources[0])
+            )
         self.have_params = False
         self.params = {}  # type: typing.Dict[str,tf.Variable]
-        self.saveable_param_replace = (
-            {}
-        )  # type:  typing.Dict[tf.Variable,typing.Union['tensorflow.python.training.saver.BaseSaverBuilder.SaveableObject',None]]  # see get_saveable_params_dict()  # nopep8
+        self.saveable_param_replace = {}  # type:  typing.Dict[tf.Variable,typing.Union['tensorflow.python.training.saver.BaseSaverBuilder.SaveableObject',None]]  # see get_saveable_params_dict()  # nopep8
         self.reuse_params = reuse_params
         self.name_scope = name_scope
         self.param_device = param_device
@@ -516,9 +514,9 @@ class LayerBase:
                 # Special case: Input feature or sparse dim looks the same, so overtake it.
                 out_dim = sources_data.feature_dim_or_sparse_dim
         if out_dim:
-            assert (
-                out_dim.dimension == output.dim
-            ), f"Layer {name!r} out_dim {out_dim} does not match Data {output} via out_type {out_type}"
+            assert out_dim.dimension == output.dim, (
+                f"Layer {name!r} out_dim {out_dim} does not match Data {output} via out_type {out_type}"
+            )
             if output.sparse:
                 output.sparse_dim = out_dim
             else:
@@ -850,9 +848,9 @@ class LayerBase:
             loss_scale = d.pop("loss_scale", 1.0)
             if loss_scale != 1.0:
                 if "scale" in loss_opts:
-                    assert (
-                        loss_opts["scale"] == loss_scale
-                    ), "do not use loss_scale and loss with 'scale' option together"
+                    assert loss_opts["scale"] == loss_scale, (
+                        "do not use loss_scale and loss with 'scale' option together"
+                    )
                 loss_opts["scale"] = loss_scale
             d["loss"] = cls._make_loss(
                 class_name=d.pop("loss", None), opts=loss_opts, network=network, get_layer=get_layer
@@ -2099,9 +2097,7 @@ class LayerBase:
                 src_output = src.output.copy()
                 if src_output.placeholder is not None:
                     zeroed_src_shape = tf_util.get_shape(src_output.placeholder)
-                    zeroed_src_shape = [
-                        zeroed_src_shape[i] for i in range(src_output.batch_ndim)
-                    ]  # type: typing.List[typing.Union[tf.Tensor,int]]
+                    zeroed_src_shape = [zeroed_src_shape[i] for i in range(src_output.batch_ndim)]  # type: typing.List[typing.Union[tf.Tensor,int]]
                 else:
                     zeroed_src_shape = []
                     for i, d in enumerate(src_output.batch_shape):
@@ -2550,9 +2546,9 @@ class ReuseParams:
         :rtype: tf.Variable|tf.Tensor
         """
         if self.shape is not None:
-            assert tuple(shape) == tuple(
-                d.dimension for d in self.shape
-            ), "%s: unexpected shape %r for param %r, expected %r" % (self, shape, name, self.shape)
+            assert tuple(shape) == tuple(d.dimension for d in self.shape), (
+                "%s: unexpected shape %r for param %r, expected %r" % (self, shape, name, self.shape)
+            )
         abs_scope_prefix = base_layer.get_absolute_name_scope_prefix()
         assert not abs_scope_prefix or abs_scope_prefix.endswith("/")
         assert name.startswith(abs_scope_prefix)
@@ -3132,18 +3128,21 @@ class Loss:
                 self.output,
                 self.target,
             )
-        assert (
-            self.target.ndim_dense == self.output.ndim_dense
-        ), "Number of dimensions mismatch. Target: %s, output: %s" % (self.target, self.output)
+        assert self.target.ndim_dense == self.output.ndim_dense, (
+            "Number of dimensions mismatch. Target: %s, output: %s" % (self.target, self.output)
+        )
         expected_output_dim = self.get_auto_output_layer_dim(self.target.feature_dim_or_sparse_dim)
-        assert (
-            expected_output_dim.dimension == self.output.dim
-        ), "Expected output dim is %r but the output has dim %r. " % (
-            expected_output_dim,
-            self.output.feature_dim_or_sparse_dim,
-        ) + "Target: %s, output: %s" % (
-            self.target,
-            self.output,
+        assert expected_output_dim.dimension == self.output.dim, (
+            "Expected output dim is %r but the output has dim %r. "
+            % (
+                expected_output_dim,
+                self.output.feature_dim_or_sparse_dim,
+            )
+            + "Target: %s, output: %s"
+            % (
+                self.target,
+                self.output,
+            )
         )
         if self.base_network.get_config().bool("debug_runtime_sanity_checks", False):
             with tf.name_scope("Loss_debug_runtime_sanity_checks"):

@@ -101,9 +101,9 @@ class Runner:
         self.store_tf_profile = engine.config.bool("store_tf_profile", False)
         self.store_metadata_mod_step = engine.config.int("store_metadata_mod_step", 0)
         self.reset_updater_vars_mod_step = engine.config.int("reset_updater_vars_mod_step", 0)
-        assert not (
-            self.store_tf_profile and self.store_metadata_mod_step
-        ), "Cannot use store_tf_profile and store_metadata_mod_step at the same time"
+        assert not (self.store_tf_profile and self.store_metadata_mod_step), (
+            "Cannot use store_tf_profile and store_metadata_mod_step at the same time"
+        )
         self.finalized = False
         self.cancel_flag = False
         self.run_exception = None
@@ -118,9 +118,7 @@ class Runner:
         self.results = {}  # type: typing.Dict[str,float]  # entries like "cost:output" or "loss"
         self.score = {}  # type: typing.Dict[str,float]  # entries like "cost:output"
         self.error = {}  # type: typing.Dict[str,float]  # entries like "error:output"
-        self.stats = (
-            {}
-        )  # type: typing.Dict[str,typing.Union[float,numpy.ndarray,'Util.Stats']]  # entries like "stats:..."
+        self.stats = {}  # type: typing.Dict[str,typing.Union[float,numpy.ndarray,'Util.Stats']]  # entries like "stats:..."
         self.extra_fetches = extra_fetches
         if extra_fetches is not None:
             assert extra_fetches_callback
@@ -133,9 +131,7 @@ class Runner:
             self._horovod_finish_all = True
         # With Horovod, during the main session.run, if reduce_type != grad or not training,
         # the following tensors are enough to ensure that we are in sync.
-        self._horovod_collected_reduce_inputs = (
-            {}
-        )  # type: typing.Dict[str,(tf.Tensor,tf.Tensor)]  # name -> (input,output)
+        self._horovod_collected_reduce_inputs = {}  # type: typing.Dict[str,(tf.Tensor,tf.Tensor)]  # name -> (input,output)
 
         from returnn.util.basic import terminal_size
 
@@ -196,9 +192,9 @@ class Runner:
                     d["extra:%s" % k] = v
                     continue
                 assert isinstance(v, Data)
-                d[
-                    "extra:%s" % k
-                ] = v.placeholder  # see _maybe_handle_extra_fetches, it will transform to batch-major there
+                d["extra:%s" % k] = (
+                    v.placeholder
+                )  # see _maybe_handle_extra_fetches, it will transform to batch-major there
                 for i, s in v.size_placeholder.items():
                     d["extra:%s:size_%i" % (k, i)] = s
 
@@ -746,13 +742,9 @@ class Runner:
                         session_run_start_time = time.time()
                         if self.store_tf_profile:
                             with tf.profiler.experimental.Trace(name=report_prefix, step_num=step + step_offset):
-                                fetches_results = sess.run(
-                                    fetches_dict, feed_dict=feed_dict, options=run_options
-                                )  # type: typing.Dict[str,typing.Union[numpy.ndarray,str]]
+                                fetches_results = sess.run(fetches_dict, feed_dict=feed_dict, options=run_options)  # type: typing.Dict[str,typing.Union[numpy.ndarray,str]]
                         else:
-                            fetches_results = sess.run(
-                                fetches_dict, feed_dict=feed_dict, options=run_options
-                            )  # type: typing.Dict[str,typing.Union[numpy.ndarray,str]]
+                            fetches_results = sess.run(fetches_dict, feed_dict=feed_dict, options=run_options)  # type: typing.Dict[str,typing.Union[numpy.ndarray,str]]
                         elapsed_time_tf += time.time() - session_run_start_time
                         if writer and "summary" in fetches_results:
                             writer.add_summary(fetches_results["summary"], step + step_offset)
@@ -1878,9 +1870,9 @@ class Engine(EngineBase):
         # We update the model params in-place.
         # In training, we don't want that, because it should not use the validation data.
         # We could reset it later when continuing the training, but it's not implemented.
-        assert (
-            self.config.value("task", "train") != "train"
-        ), "task %r should be just 'eval' or so. training will break." % self.config.value("task", None)
+        assert self.config.value("task", "train") != "train", (
+            "task %r should be just 'eval' or so. training will break." % self.config.value("task", None)
+        )
         if not self.updater:
             self.updater = Updater(
                 config=self.config, network=self.network, initial_learning_rate=self.initial_learning_rate
@@ -1928,11 +1920,12 @@ class Engine(EngineBase):
             allowed_outputs = {"seq_tag", "seq_len", "score", "error", "pos_score", "pos_error"}
 
             assert isinstance(output_per_seq_format, (tuple, list)), "provide output_per_seq_format"
-            assert (
-                set(output_per_seq_format) - allowed_outputs == set()
-            ), "Only %r are allowed in function eval_model as output_per_seq_format, but got: %r " % (
-                allowed_outputs,
-                output_per_seq_format,
+            assert set(output_per_seq_format) - allowed_outputs == set(), (
+                "Only %r are allowed in function eval_model as output_per_seq_format, but got: %r "
+                % (
+                    allowed_outputs,
+                    output_per_seq_format,
+                )
             )
 
             # always fetch seq_tag to map loss values to the corresponding line
@@ -1968,12 +1961,8 @@ class Engine(EngineBase):
             if "pos_error" in output_per_seq_format:
                 extra_fetches["pos_error"] = loss_holder.get_error_value_per_pos()
 
-        seq_idx_to_tag = (
-            {}
-        )  # type: typing.Dict[int,str]  # we need this in order to write the results in the correct order later  # nopep8
-        results_per_seq = (
-            {}
-        )  # type: typing.Dict[str,typing.Dict[str,typing.Union[float,str,int]]]  # seq_tag -> dict. Results of fetches will be written in this dict  # nopep8
+        seq_idx_to_tag = {}  # type: typing.Dict[int,str]  # we need this in order to write the results in the correct order later  # nopep8
+        results_per_seq = {}  # type: typing.Dict[str,typing.Dict[str,typing.Union[float,str,int]]]  # seq_tag -> dict. Results of fetches will be written in this dict  # nopep8
 
         # function to save the return values of each callback to the dict `results_per_seq`
         # noinspection PyShadowingNames
@@ -2012,7 +2001,7 @@ class Engine(EngineBase):
 
         if output_per_seq_file:
             assert len(self.get_eval_datasets()) == 1, (
-                "output per sequence is only supported for one dataset (dev or eval)," "provided datasets are %r"
+                "output per sequence is only supported for one dataset (dev or eval),provided datasets are %r"
             ) % list(self.get_eval_datasets().keys())
             # try to sort dataset to minimize zero-padding
             dataset = list(self.get_eval_datasets().values())[0]
@@ -2453,9 +2442,9 @@ class Engine(EngineBase):
                 )
 
         max_seq_length = self.config.typed_value("max_seq_length", None) or self.config.float("max_seq_length", 0)
-        assert (
-            not max_seq_length
-        ), "Set max_seq_length = 0 for search (i.e. no maximal length). We want to keep all source sentences."
+        assert not max_seq_length, (
+            "Set max_seq_length = 0 for search (i.e. no maximal length). We want to keep all source sentences."
+        )
 
         dataset.init_seq_order(epoch=self.epoch)
         batches = dataset.generate_batches(
@@ -2572,8 +2561,8 @@ class Engine(EngineBase):
                         ]
                     else:
                         serialized_output = None
-                        assert not output_file, "Unable to serialize sparse output of layer '%s'." % (
-                            output_layer_names[output_layer_idx]
+                        assert not output_file, (
+                            "Unable to serialize sparse output of layer '%s'." % (output_layer_names[output_layer_idx])
                         )
                 else:
                     # Output dense layers as-is
@@ -2594,8 +2583,8 @@ class Engine(EngineBase):
                             ]
                         else:
                             serialized_target = None
-                            assert not output_file, "Unable to serialize sparse target '%s'." % (
-                                target_keys[output_layer_idx]
+                            assert not output_file, (
+                                "Unable to serialize sparse target '%s'." % (target_keys[output_layer_idx])
                             )
                     else:
                         serialized_target = targets[output_layer_idx]

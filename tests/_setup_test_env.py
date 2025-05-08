@@ -8,7 +8,6 @@ Also see :mod:`_setup_returnn_env`.
 See :func:`setup` below for details.
 """
 
-
 from __future__ import annotations
 
 

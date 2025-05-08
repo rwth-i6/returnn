@@ -19,15 +19,13 @@ ItemKeyType = Union[RawTensorTypes, Tensor, slice, Sequence[Union[RawTensorTypes
 class GetModelFunc(Protocol):
     """get model func"""
 
-    def __call__(self, *, epoch: int, step: int) -> rf.Module:
-        ...
+    def __call__(self, *, epoch: int, step: int) -> rf.Module: ...
 
 
 class StepFunc(Protocol):
     """step func"""
 
-    def __call__(self, *, model: rf.Module, extern_data: TensorDict) -> None:
-        ...
+    def __call__(self, *, model: rf.Module, extern_data: TensorDict) -> None: ...
 
 
 def get_raw_tensor_type() -> Type:

@@ -904,22 +904,24 @@ class DummyDatasetMultipleDataKeys(DummyDataset):
             seq_len = {}
             for key in self.data_keys:
                 seq_len[key] = _seq_len
-        assert set(data_keys) == set(
-            seq_len.keys()
-        ), "%s: the keys of seq_len (%s) must match the keys in data_keys=%s." % (
-            self,
-            str(seq_len.keys()),
-            str(data_keys),
+        assert set(data_keys) == set(seq_len.keys()), (
+            "%s: the keys of seq_len (%s) must match the keys in data_keys=%s."
+            % (
+                self,
+                str(seq_len.keys()),
+                str(data_keys),
+            )
         )
-        assert isinstance(
-            output_dim, dict
-        ), "%s: output_dim %r must be a dict containing a definition for each key in data_keys." % (self, output_dim)
-        assert set(data_keys) == set(
-            output_dim.keys()
-        ), "%s: the keys of output_dim (%s) must match the keys in data_keys=%s." % (
-            self,
-            str(output_dim.keys()),
-            str(data_keys),
+        assert isinstance(output_dim, dict), (
+            "%s: output_dim %r must be a dict containing a definition for each key in data_keys." % (self, output_dim)
+        )
+        assert set(data_keys) == set(output_dim.keys()), (
+            "%s: the keys of output_dim (%s) must match the keys in data_keys=%s."
+            % (
+                self,
+                str(output_dim.keys()),
+                str(data_keys),
+            )
         )
 
         super(DummyDatasetMultipleDataKeys, self).__init__(
@@ -2134,9 +2136,7 @@ class LibriSpeechCorpus(CachedDataset2):
         import os
         import zipfile
 
-        transs = (
-            {}
-        )  # type: typing.Dict[typing.Tuple[str,int,int,int],str]  # (subdir, speaker-id, chapter-id, seq-id) -> transcription  # nopep8
+        transs = {}  # type: typing.Dict[typing.Tuple[str,int,int,int],str]  # (subdir, speaker-id, chapter-id, seq-id) -> transcription  # nopep8
         if self.use_zip:
             for name, zip_file in self._zip_files.items():
                 assert isinstance(zip_file, zipfile.ZipFile)

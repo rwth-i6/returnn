@@ -1,4 +1,4 @@
-name: black
+name: ruff
 
 on:
   push:
@@ -11,7 +11,7 @@ on:
       - master
 
 jobs:
-  check-black-formatting:
+  check-ruff-formatting:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
@@ -19,7 +19,7 @@ jobs:
       with:
         python-version: 3.8
         cache: 'pip'
-        cache-dependency-path: '.github/workflows/black.yml'
-    - run: pip install black==22.3.0
-    - run: black --diff .
-    - run: black --check .
+        cache-dependency-path: '.github/workflows/ruff.yml'
+    - run: pip install ruff==0.11.8
+    - run: ruff format --diff .
+    - run: ruff format --check .

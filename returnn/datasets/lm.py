@@ -1883,9 +1883,7 @@ class TranslationFactorsDataset(TranslationDataset):
             for s in data_strs
         ]  # type: typing.List[typing.List[numpy.ndarray]] # shape: (len(data_strs), len(data_keys))
 
-        data = zip(
-            *data
-        )  # type: typing.Iterable[typing.Tuple[numpy.ndarray]] # shape: (len(data_keys), len(data_strs))
+        data = zip(*data)  # type: typing.Iterable[typing.Tuple[numpy.ndarray]] # shape: (len(data_keys), len(data_strs))
 
         with self._lock:
             for i, data_ in enumerate(data):
@@ -1908,9 +1906,9 @@ class TranslationFactorsDataset(TranslationDataset):
             words_per_factor = [[]] * len(data_keys)
         elif len(data_keys) > 1:
             factored_words = [word.split(self._factor_separator) for word in words]
-            assert all(
-                len(factors) == len(data_keys) for factors in factored_words
-            ), "All words must have all factors. Expected: " + self._factor_separator.join(data_keys)
+            assert all(len(factors) == len(data_keys) for factors in factored_words), (
+                "All words must have all factors. Expected: " + self._factor_separator.join(data_keys)
+            )
             words_per_factor = zip(*factored_words)
             words_per_factor = [list(w) for w in words_per_factor]
         else:

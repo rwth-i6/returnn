@@ -509,9 +509,7 @@ class ConcatLayer(LayerBase):
         assert sources
         sources, axes = zip(*sources)  # unzip
         axes_int = [layer.output.get_axis_from_description(axis) for (layer, axis) in zip(sources, axes)]
-        concat_dim_tags = [
-            layer.output.dim_tags[axis] for (layer, axis) in zip(sources, axes_int)
-        ]  # type: typing.List[Dim]
+        concat_dim_tags = [layer.output.dim_tags[axis] for (layer, axis) in zip(sources, axes_int)]  # type: typing.List[Dim]
         if any(tag.dimension is None for tag in concat_dim_tags):
             dimension = None
         else:
@@ -726,13 +724,7 @@ class SelectSearchSourcesLayer(InternalLayer):
             assert src_search_choices in search_choices_seq, self.network.debug_search_choices(
                 self.search_choices_layer
             ) or (
-                (
-                    "%s: No common search base:\n"
-                    "from layer %s\n"
-                    "search choices %s,\n"
-                    "to layer %s\n"
-                    "search choices\n%s."
-                )
+                ("%s: No common search base:\nfrom layer %s\nsearch choices %s,\nto layer %s\nsearch choices\n%s.")
                 % (self, src, src_search_choices, self.search_choices_layer, pformat(search_choices_seq))
             )
             search_choices_seq = search_choices_seq[: search_choices_seq.index(src_search_choices)]
@@ -4436,12 +4428,13 @@ class MergeDimsLayer(_ConcatInputLayer):
         :rtype: list[int]
         """
         if keep_order:
-            assert isinstance(axes, (tuple, list, typing.Sequence)) and not isinstance(
-                axes, str
-            ), "%s: axes %r must be a list or tuple, to have a well defined order in input %s" % (
-                name,
-                axes,
-                input_data,
+            assert isinstance(axes, (tuple, list, typing.Sequence)) and not isinstance(axes, str), (
+                "%s: axes %r must be a list or tuple, to have a well defined order in input %s"
+                % (
+                    name,
+                    axes,
+                    input_data,
+                )
             )
             axes_ = []
             for axis in axes:
@@ -5562,11 +5555,12 @@ class RepeatLayer(_ConcatInputLayer):
             repetitions_data = repetitions_data.copy_add_dim_by_tag(axis_dim_tag, unbroadcast=True)
         repetitions_axis = repetitions_data.get_axis_from_description(axis, allow_int=False)
         assert repetitions_data.ndim == 1, "Repetitions %r must only have at most one non-batch axis" % repetitions
-        assert (
-            repetitions_data.batch_shape[repetitions_axis] == self.input_data.batch_shape[input_axis]
-        ), "Axis mismatch between input (%i) and repetitions (%i)" % (
-            self.input_data.batch_shape[input_axis],
-            repetitions_data.batch_shape[repetitions_axis],
+        assert repetitions_data.batch_shape[repetitions_axis] == self.input_data.batch_shape[input_axis], (
+            "Axis mismatch between input (%i) and repetitions (%i)"
+            % (
+                self.input_data.batch_shape[input_axis],
+                repetitions_data.batch_shape[repetitions_axis],
+            )
         )
 
         assert self.output.have_batch_axis() == (
@@ -6267,9 +6261,9 @@ class ConvLayer(_ConcatInputLayer):
         from returnn.util import BehaviorVersion
 
         padding = padding.upper() if isinstance(padding, str) else padding
-        assert padding in ["SAME", "VALID", "SAME_STATIC"] or isinstance(
-            padding, (int, tuple, list)
-        ), f"{self}: got unsupported padding {padding}"
+        assert padding in ["SAME", "VALID", "SAME_STATIC"] or isinstance(padding, (int, tuple, list)), (
+            f"{self}: got unsupported padding {padding}"
+        )
         assert "out_type" not in kwargs, "don't set out_type explicitly for this layer"
         assert len(filter_size) in (1, 2, 3), "only 1D conv, 2D conv or 3D conv supported"
         super(ConvLayer, self).__init__(in_dim=in_dim, out_dim=out_dim, **kwargs)
@@ -6285,9 +6279,9 @@ class ConvLayer(_ConcatInputLayer):
         assert len(dilation_rate) == len(filter_size)
         assert not self.input_data.sparse
         assert self.input_data.have_batch_axis()
-        assert (
-            self.input_data.have_feature_axis()
-        ), "this should be our single input feature dim now. otherwise use input_add_feature_dim"
+        assert self.input_data.have_feature_axis(), (
+            "this should be our single input feature dim now. otherwise use input_add_feature_dim"
+        )
         input_data, num_batch_dims = self.transform_input(
             self.input_data,
             network=self.network,
@@ -7117,9 +7111,9 @@ class PoolLayer(_ConcatInputLayer):
         super(PoolLayer, self).__init__(in_dim=in_dim, out_dim=out_dim, **kwargs)
         assert not self.input_data.sparse
         assert self.input_data.have_batch_axis()
-        assert (
-            self.input_data.have_feature_axis()
-        ), "this should be our single input feature dim now. otherwise use input_add_feature_dim"
+        assert self.input_data.have_feature_axis(), (
+            "this should be our single input feature dim now. otherwise use input_add_feature_dim"
+        )
         if in_dim and out_dim:
             assert in_dim == out_dim
         elif in_dim:
@@ -7381,9 +7375,9 @@ class TransposedConvLayer(_ConcatInputLayer):
         out_dim  # noqa  # via get_out_data_from_opts
         assert not self.input_data.sparse
         assert self.input_data.have_batch_axis()
-        assert (
-            self.input_data.have_feature_axis()
-        ), "this should be our single input feature dim now. otherwise use input_add_feature_dim"
+        assert self.input_data.have_feature_axis(), (
+            "this should be our single input feature dim now. otherwise use input_add_feature_dim"
+        )
         input_data, num_batch_dims = ConvLayer.transform_input(
             self.input_data,
             network=self.network,
@@ -7404,14 +7398,15 @@ class TransposedConvLayer(_ConcatInputLayer):
             remove_padding = [remove_padding] * len(spatial_axes)
         if not isinstance(output_padding, (list, tuple)):
             output_padding = [output_padding] * len(spatial_axes)
-        assert (
-            len(spatial_axes) == len(filter_size) == len(strides) == len(remove_padding) == len(output_padding)
-        ), "%s: expected %i-D transposed-conv for input %r but got filter %r and strides %r" % (
-            self,
-            len(spatial_axes),
-            input_data,
-            filter_size,
-            strides,
+        assert len(spatial_axes) == len(filter_size) == len(strides) == len(remove_padding) == len(output_padding), (
+            "%s: expected %i-D transposed-conv for input %r but got filter %r and strides %r"
+            % (
+                self,
+                len(spatial_axes),
+                input_data,
+                filter_size,
+                strides,
+            )
         )
         assert len(spatial_axes) in [1, 2], "%s: %i-D not yet implemented..." % (self, len(spatial_axes))
         x = input_data.placeholder
@@ -8775,9 +8770,9 @@ class DotLayer(LayerBase):
                 red1,
                 red2,
             )
-            assert len(a_reduce_axes) == len(
-                b_reduce_axes
-            ), "%s: sources %r, red1 %r, red2 %r, reduce axes must match in count" % (self, self.sources, red1, red2)
+            assert len(a_reduce_axes) == len(b_reduce_axes), (
+                "%s: sources %r, red1 %r, red2 %r, reduce axes must match in count" % (self, self.sources, red1, red2)
+            )
         if (
             (BehaviorVersion.get() >= 3 and (var1 is NotSpecified or var2 is NotSpecified))
             or var1 == "auto"
@@ -9150,9 +9145,9 @@ class DotLayer(LayerBase):
                 raise Exception(
                     "%s %r: " % (cls.__name__, name) + "%s not found in sources %r" % (red_axis_desc, sources)
                 )
-            assert len(a_reduce_axes) == len(
-                b_reduce_axes
-            ), "%s: sources %r, red1 %r, red2 %r, reduce axes must match in count" % (name, sources, red1, red2)
+            assert len(a_reduce_axes) == len(b_reduce_axes), (
+                "%s: sources %r, red1 %r, red2 %r, reduce axes must match in count" % (name, sources, red1, red2)
+            )
         if (
             (BehaviorVersion.get() >= 3 and (var1 is NotSpecified or var2 is NotSpecified))
             or var1 == "auto"
@@ -12454,9 +12449,9 @@ class BinaryCrossEntropyLoss(Loss):
 
     def _check_init(self):
         assert self.target is not None
-        assert (
-            self.target.batch_ndim == self.output.batch_ndim
-        ), "Number of dimensions mismatch. Target: %s, output: %s" % (self.target, self.output)
+        assert self.target.batch_ndim == self.output.batch_ndim, (
+            "Number of dimensions mismatch. Target: %s, output: %s" % (self.target, self.output)
+        )
 
     def get_value(self):
         """
@@ -13120,9 +13115,9 @@ class DeepClusteringLoss(Loss):
         Does some checks on self.target and self.output, e.g. if the dense shapes matches.
         You can overwrite this if those checks don't make sense for your derived loss class.
         """
-        assert (
-            self.target.ndim_dense == self.output.ndim_dense
-        ), "Number of dimensions mismatch. Target: %s, output: %s" % (self.target, self.output)
+        assert self.target.ndim_dense == self.output.ndim_dense, (
+            "Number of dimensions mismatch. Target: %s, output: %s" % (self.target, self.output)
+        )
         expected_output_dim = self._embedding_dimension * (self.target.shape[1] // self._nr_of_sources)
         assert expected_output_dim == self.output.dim, "Expected output dim is %i but the output has dim %r. " % (
             expected_output_dim,
@@ -13822,9 +13817,9 @@ class SamplingBasedLoss(Loss):
                     else:
                         loss_fn = tf.nn.sampled_softmax_loss
 
-                    assert (
-                        self.layer.params["W"].shape[0] == self.target.dim
-                    ), "Expect weight matrix of shape [num_classes, dim]"
+                    assert self.layer.params["W"].shape[0] == self.target.dim, (
+                        "Expect weight matrix of shape [num_classes, dim]"
+                    )
                     out = loss_fn(
                         weights=self.layer.params["W"].read_value(),  # (num_classes,D).
                         biases=self.layer.params["b"].read_value(),  # (num_classes).

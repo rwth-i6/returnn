@@ -291,6 +291,7 @@ class LstmGenericBase(NativeOpGenBase):
       :param H: gates and cell state. 3d (time,batch,dim*4)
       :param d: final cell state. 2d (batch,dim)
     """
+
     in_info = (
         {
             "name": "Z",
@@ -542,6 +543,7 @@ class LstmLowMem(NativeOpGenBase):
       :param C: cell states. 3d (time,batch,dim). gradient ignored!
       :param d: final cell state. 2d (batch,dim)
     """
+
     in_info = (
         {"name": "X", "ndim": 3, "shape": (None, None, None), "need_contiguous": True},
         {"name": "W", "ndim": 2, "shape": (None, None), "need_contiguous": True},
@@ -994,6 +996,7 @@ class NativeLstm2(NativeOpGenBase):
       :param H: cell-in + gates. 3d (time,batch,dim*4). gradient ignored!
       :param d: final cell state. 2d (batch,dim)
     """
+
     in_info = (
         {"name": "X", "ndim": 3, "shape": (None, None, None), "need_contiguous": True},
         {"name": "W", "ndim": 2, "shape": (None, None), "need_contiguous": True},
@@ -1423,6 +1426,7 @@ class TwoDLSTM(NativeOpGenBase):
       :param H: gates and cell state. 4d (timeS,timeT,batch,dim*5) ?
       :param d: final cell state. 3d (timeT,batch,dim)
     """
+
     in_info = (
         {
             "name": "X",
@@ -3198,6 +3202,7 @@ class FastBaumWelchOp(NativeOpGenBase):
     outputs:
       :param output: Baum-Welch alignment, scores in -log space. 3d (time,batch,dim), like am_scores
     """
+
     in_info = (
         {
             "name": "am_scores",
@@ -3620,6 +3625,7 @@ class MultiEndFastBaumWelchOp(NativeOpGenBase):
     outputs:
       :param output: Baum-Welch alignment, scores in -log space. 3d (time,batch,dim), like am_scores
     """
+
     in_info = (
         {
             "name": "am_scores",
@@ -4497,6 +4503,7 @@ class FastViterbiOp(NativeOpGenBase):
       :param output: Viterbi (hard) alignment, scores in +log space. 2d (time,batch)
       :param scores: (batch,)
     """
+
     in_info = (
         {
             "name": "am_scores",
@@ -4865,6 +4872,7 @@ class GetCtcFsaFastBwOp(NativeOpGenBase):
     `num_edges` should be `n_batch * (5 * (n_time - 1) + 10)`
       (see construction in kernel why that number).
     """
+
     in_info = (
         {
             "name": "targets",
@@ -5229,6 +5237,7 @@ class EditDistanceOp(NativeOpGenBase):
     outputs:
       :param output: 1d (batch,), int32, unnormalized edit distance
     """
+
     in_info = (
         {
             "name": "a",
@@ -5414,6 +5423,7 @@ class OptimalCompletionEditDistanceOp(NativeOpGenBase):
     outputs:
       :param output: 1d (batch,), int32, unnormalized edit distance
     """
+
     in_info = (
         {
             "name": "a",
@@ -5610,6 +5620,7 @@ class OptimalCompletionEditDistancePerSuccessorOp(NativeOpGenBase):
     outputs:
       :param output: 2d (batch,num_labels), int32, unnormalized edit distance
     """
+
     in_info = (
         {
             "name": "a",
@@ -5880,6 +5891,7 @@ class NextEditDistanceRowOp(NativeOpGenBase):
     outputs:
       :param output: 2d (batch,b_time + 1), int32, next (unnormalized) edit distance row
     """
+
     in_info = (
         {
             "name": "last_row",
@@ -6039,6 +6051,7 @@ class NextEditDistanceReduceOp(NativeOpGenBase):
     outputs:
       :param output: 2d (batch,n_labels), int32, next (unnormalized) (maybe optional) edit distance
     """
+
     in_info = (
         {
             "name": "last_row",

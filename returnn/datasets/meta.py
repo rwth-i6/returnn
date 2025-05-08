@@ -1180,9 +1180,9 @@ class CombinedDataset(CachedDataset2):
         :rtype: list[int]
         """
         assert self.partition_epoch in [None, 1], "partition_epoch not supported in combination with sampling_sizes."
-        assert (
-            self._seq_order_seq_lens_file is None
-        ), "seq_order_seq_lens_file not supported in combination with sampling_sizes."
+        assert self._seq_order_seq_lens_file is None, (
+            "seq_order_seq_lens_file not supported in combination with sampling_sizes."
+        )
         assert not self.unique_seq_tags, "unique_seq_tags not supported in combination with sampling_sizes."
         assert self.seq_tags_filter is None, "seq_order_seq_lens_file in combination with sampling_sizes."
 
@@ -1472,9 +1472,7 @@ class ConcatSeqsDataset(CachedDataset2):
         assert isinstance(self.seq_lens, dict)
         self.full_seq_len_list = self._get_full_seq_lens_list()
         self.cur_seq_list = None  # type: typing.Optional[typing.List[str]]  # list of seq tags
-        self.cur_sub_seq_idxs = (
-            None
-        )  # type: typing.Optional[typing.List[typing.List[int]]]  # list of list of sub seq idxs
+        self.cur_sub_seq_idxs = None  # type: typing.Optional[typing.List[typing.List[int]]]  # list of list of sub seq idxs
 
     def _get_full_seq_lens_list(self):
         """
@@ -1564,20 +1562,22 @@ class ConcatSeqsDataset(CachedDataset2):
         if seq_idx == 0:  # some extra check, but enough to do for first seq only
             sub_dataset_keys = self.dataset.get_data_keys()
             for key in self.remove_in_between_postfix:
-                assert (
-                    key in sub_dataset_keys
-                ), "%s: remove_in_between_postfix key %r not in sub dataset data-keys %r" % (
-                    self,
-                    key,
-                    sub_dataset_keys,
+                assert key in sub_dataset_keys, (
+                    "%s: remove_in_between_postfix key %r not in sub dataset data-keys %r"
+                    % (
+                        self,
+                        key,
+                        sub_dataset_keys,
+                    )
                 )
             for key in self.repeat_in_between_last_frame_up_to_multiple_of:
-                assert (
-                    key in sub_dataset_keys
-                ), "%s: repeat_in_between_last_frame_up_to_multiple_of key %r not in sub dataset data-keys %r" % (
-                    self,
-                    key,
-                    sub_dataset_keys,
+                assert key in sub_dataset_keys, (
+                    "%s: repeat_in_between_last_frame_up_to_multiple_of key %r not in sub dataset data-keys %r"
+                    % (
+                        self,
+                        key,
+                        sub_dataset_keys,
+                    )
                 )
             for key in self.pad_narrow_data_to_multiple_of_target_len:
                 assert key in sub_dataset_keys, (
@@ -1587,15 +1587,16 @@ class ConcatSeqsDataset(CachedDataset2):
         for sub_seq_idx, sub_seq_tag in zip(sub_seq_idxs, sub_seq_tags):
             self.dataset.load_seqs(sub_seq_idx, sub_seq_idx + 1)
             sub_dataset_tag = self.dataset.get_tag(sub_seq_idx)
-            assert (
-                sub_dataset_tag == sub_seq_tag
-            ), "%s: expected tag %r for sub seq idx %i but got %r, part of seq %i %r" % (
-                self,
-                sub_seq_tag,
-                sub_seq_idx,
-                sub_dataset_tag,
-                seq_idx,
-                seq_tag,
+            assert sub_dataset_tag == sub_seq_tag, (
+                "%s: expected tag %r for sub seq idx %i but got %r, part of seq %i %r"
+                % (
+                    self,
+                    sub_seq_tag,
+                    sub_seq_idx,
+                    sub_dataset_tag,
+                    seq_idx,
+                    seq_tag,
+                )
             )
             for key in self.get_data_keys():
                 data = self.dataset.get_data(sub_seq_idx, key)

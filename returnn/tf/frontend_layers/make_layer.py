@@ -74,7 +74,6 @@ def make_layer(
             raise TypeError(f"{layer}: unexpected type {type(value)} in layer_dict: {layer_dict}")
 
     try:
-
         if out is not None:
             assert isinstance(out, Tensor)
         elif predefined_out_data is not None:

@@ -12,8 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
-"""SubGraphView: a subgraph view on an existing tf.Graph.
-"""
+"""SubGraphView: a subgraph view on an existing tf.Graph."""
 
 from __future__ import annotations
 

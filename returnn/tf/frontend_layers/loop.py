@@ -415,9 +415,9 @@ class _LoopState:
             tensor.raw_tensor.make_all_sub_networks_and_optimize()
 
             layer_ctx_list = tensor.raw_tensor.get_abs_name_ctx_list()
-            assert (
-                self.loop.name_ctx in layer_ctx_list
-            ), f"Loop state {name_ctx} should get a value inside the loop but got {tensor}"
+            assert self.loop.name_ctx in layer_ctx_list, (
+                f"Loop state {name_ctx} should get a value inside the loop but got {tensor}"
+            )
             # We need some special logic for MaskedComputation but maybe also for others later.
             # This is currently not nice, but I'm not sure about better solutions.
             for i in range(layer_ctx_list.index(self.loop.name_ctx) + 1, len(layer_ctx_list) - 1):

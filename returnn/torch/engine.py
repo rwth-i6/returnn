@@ -74,12 +74,8 @@ class Engine(EngineBase):
 
         self._start_epoch = None  # type: Optional[int]
         self._final_epoch = None  # type: Optional[int]
-        self._min_seq_length = config.typed_value("min_seq_length", None) or config.int(
-            "min_seq_length", None
-        )  # type: Union[int,float,Dict[str,int],NumbersDict]
-        self._max_seq_length = config.typed_value("max_seq_length", None) or config.int(
-            "max_seq_length", None
-        )  # type: Union[int,float,Dict[str,int],NumbersDict]
+        self._min_seq_length = config.typed_value("min_seq_length", None) or config.int("min_seq_length", None)  # type: Union[int,float,Dict[str,int],NumbersDict]
+        self._max_seq_length = config.typed_value("max_seq_length", None) or config.int("max_seq_length", None)  # type: Union[int,float,Dict[str,int],NumbersDict]
         self._orig_model = None  # type: Optional[Union[rf.Module, torch.nn.Module]]
         self._pt_model = None  # type: Optional[torch.nn.Module]
         self._epoch_start_func: Optional[Callable] = self.config.typed_value("epoch_start")

@@ -190,8 +190,9 @@ class SubnetworkRecCellSingleStep(_SubnetworkRecCell):
             initial_value=dim_tag.dyn_size,
         )
         dim_tag_dyn_size_ext = dim_tag.dyn_size_ext.copy()
-        with tf_util.same_control_flow_ctx(dim_tag_dyn_size_ext.placeholder), tf_util.reuse_name_scope(
-            "", absolute=True
+        with (
+            tf_util.same_control_flow_ctx(dim_tag_dyn_size_ext.placeholder),
+            tf_util.reuse_name_scope("", absolute=True),
         ):
             # Need to create new tensor currently for the set_tag_on_size_tensor logic.
             # (set_tag_on_size_tensor is going to be removed at some point but currently we need it.)
