@@ -306,19 +306,19 @@ class RunCtx:
         assert self.stage == "forward_step"
 
         if self.expected_outputs is not None:
-            assert (
-                name in self.expected_outputs.data
-            ), f"mark_as_output: unexpected output {name!r}, we expect outputs: {self.expected_outputs}"
+            assert name in self.expected_outputs.data, (
+                f"mark_as_output: unexpected output {name!r}, we expect outputs: {self.expected_outputs}"
+            )
         expected_output = self.expected_outputs.data[name] if self.expected_outputs else None
-        assert dims is None or (
-            isinstance(dims, (list, tuple)) and all(isinstance(dim, Dim) for dim in dims)
-        ), f"dims should be a tuple of Dims, got {dims}"
+        assert dims is None or (isinstance(dims, (list, tuple)) and all(isinstance(dim, Dim) for dim in dims)), (
+            f"dims should be a tuple of Dims, got {dims}"
+        )
         if dims is None and expected_output is not None:
             dims = expected_output.dims
         if dims is not None and expected_output is not None:
-            assert expected_output.dims == tuple(
-                dims
-            ), f"mark_as_output: {name!r} dims mismatch from expected output, given {dims}, expected {expected_output}"
+            assert expected_output.dims == tuple(dims), (
+                f"mark_as_output: {name!r} dims mismatch from expected output, given {dims}, expected {expected_output}"
+            )
 
         if not isinstance(tensor, Tensor):
             assert isinstance(tensor, _backend.global_backend.RawTensorType)

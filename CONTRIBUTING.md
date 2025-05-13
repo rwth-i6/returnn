@@ -18,7 +18,7 @@ General rules when contributing to the code of RETURNN:
   Our code style uses most common Python conventions.
   If you are not an expert in Python, use PyCharm,
   and follow [our PyCharm configuration guide](https://github.com/rwth-i6/returnn/wiki/PyCharm-Configuration).
-  Apply [black](https://black.readthedocs.io/).
+  Apply [ruff](https://github.com/astral-sh/ruff).
 * Make sure all [tests](https://returnn.readthedocs.io/en/latest/advanced/test_suite.html) pass.
 * At the time being, we want to support earlier versions of TF 1
   (consider at least TF 1.8, but maybe even TF 1.4)

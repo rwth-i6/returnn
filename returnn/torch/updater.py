@@ -39,7 +39,7 @@ def _init_optimizer_classes_dict():
 
 
 def get_optimizer_class(
-    class_name: Union[str, Type[torch.optim.Optimizer], Callable[[], Type[torch.optim.Optimizer]]]
+    class_name: Union[str, Type[torch.optim.Optimizer], Callable[[], Type[torch.optim.Optimizer]]],
 ) -> Type[torch.optim.Optimizer]:
     """
     :param class_name: Optimizer class, either as str (e.g. "adam"), as type (torch.optim.Adam) or callable.
@@ -121,9 +121,9 @@ class Updater:
                 import inspect
 
                 signature = inspect.signature(self.learning_rate_function)
-                assert any(
-                    [arg.kind == inspect.Parameter.VAR_KEYWORD for arg in signature.parameters.values()]
-                ), "please specify **kwargs in dynamic_learning_rate for future compatibility"
+                assert any([arg.kind == inspect.Parameter.VAR_KEYWORD for arg in signature.parameters.values()]), (
+                    "please specify **kwargs in dynamic_learning_rate for future compatibility"
+                )
                 if "network" in signature.parameters:
                     raise ValueError("Torch updater: dynamic_learning_rate network is TF specific")
             else:
@@ -497,10 +497,9 @@ class Updater:
         # Split in parameter groups only if decouple_constraints is set and the optimizer accepts weight_decay.
         cls_init_kwargs = _get_class_init_kwargs(optim_class)
         if "weight_decay" not in cls_init_kwargs:
-            assert (
-                "weight_decay" not in optimizer_opts
-            ), "weight_decay not accepted by the chosen optimizer. Accepted values: %s" % ", ".join(
-                "%s" % optim_name for optim_name in cls_init_kwargs
+            assert "weight_decay" not in optimizer_opts, (
+                "weight_decay not accepted by the chosen optimizer. Accepted values: %s"
+                % ", ".join("%s" % optim_name for optim_name in cls_init_kwargs)
             )
             return network_params
 
@@ -564,7 +563,7 @@ class Updater:
 
 
 def _wrap_user_blacklist_wd_modules(
-    mods: Sequence[Union[str, Type[rf.Module], Type[torch.nn.Module]]]
+    mods: Sequence[Union[str, Type[rf.Module], Type[torch.nn.Module]]],
 ) -> Tuple[type, ...]:
     assert isinstance(mods, (list, tuple)), f"invalid blacklist_weight_decay_modules {mods!r}"
     res = []

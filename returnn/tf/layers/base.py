@@ -4,8 +4,9 @@ This module contains the layer base class :class:`LayerBase`.
 
 from __future__ import annotations
 
-from typing import Optional, Dict, List
+from typing import Optional, Dict, List, Union
 import typing
+from typing import TYPE_CHECKING
 import contextlib
 import numpy
 import tensorflow as tf
@@ -16,6 +17,9 @@ import returnn.tf.util.basic as tf_util
 from returnn.tf.util.data import Data, FeatureDim, Dim
 from returnn.tf.util.basic import OutputWithActivation, CustomUpdate, reuse_name_scope
 from returnn.log import log
+
+if TYPE_CHECKING:
+    from tensorflow.python.training.saver import BaseSaverBuilder
 
 
 class LayerBase:
@@ -188,7 +192,7 @@ class LayerBase:
         self.name = name
         self.network = network
         self._register_layer()
-        self.kwargs = None  # type: typing.Optional[typing.Dict[str]] # set via self.post_init
+        self.kwargs: Optional[Dict[str]] = None  # set via self.post_init
         self.target = None
         self.targets = None
         if target:
@@ -219,12 +223,12 @@ class LayerBase:
                 "%s: out_dim handling not implemented correctly for this layer" % self
             )
         out_shape  # noqa  # not used here but in fixup_out_data
-        self.output_before_activation = None  # type: typing.Optional[OutputWithActivation]
-        self.output_loss = None  # type: typing.Optional[tf.Tensor]
+        self.output_before_activation: Optional[OutputWithActivation] = None
+        self.output_loss: Optional[tf.Tensor] = None
         if copy_output_loss_from_source_idx is not None:
             self.output_loss = sources[copy_output_loss_from_source_idx].output_loss
-        self.rec_vars_outputs = {}  # type: typing.Dict[str,tf.Tensor]
-        self.search_choices = None  # type: typing.Optional[SearchChoices]
+        self.rec_vars_outputs: Dict[str, tf.Tensor] = {}
+        self.search_choices: Optional[SearchChoices] = None
         self._src_common_search_choices = _src_common_search_choices
         self._initial_output = initial_output
         self.need_last = need_last
@@ -237,14 +241,14 @@ class LayerBase:
             # Note that this check is somewhat incomplete
             # (does not check multiple sources, see _ConcatInputLayer)
             # and there is no guarantee that a specific layer really uses this correctly.
-            assert sources[0].output.have_dim_tag(
-                in_dim, unique=True
-            ), "%s: in_dim %s not found or unique in input %s" % (self, in_dim, sources[0])
+            assert sources[0].output.have_dim_tag(in_dim, unique=True), (
+                "%s: in_dim %s not found or unique in input %s" % (self, in_dim, sources[0])
+            )
         self.have_params = False
-        self.params = {}  # type: typing.Dict[str,tf.Variable]
-        self.saveable_param_replace = (
-            {}
-        )  # type:  typing.Dict[tf.Variable,typing.Union['tensorflow.python.training.saver.BaseSaverBuilder.SaveableObject',None]]  # see get_saveable_params_dict()  # nopep8
+        self.params: Dict[str, tf.Variable] = {}
+        self.saveable_param_replace: Dict[
+            tf.Variable, Union["BaseSaverBuilder.SaveableObject", None]
+        ] = {}  # see get_saveable_params_dict()
         self.reuse_params = reuse_params
         self.name_scope = name_scope
         self.param_device = param_device
@@ -264,7 +268,7 @@ class LayerBase:
         self.control_dependencies_on_output = control_dependencies_on_output
         self.register_as_extern_data = register_as_extern_data
         # Stats will be collected by the engine.
-        self.stats = {}  # type: typing.Dict[str,tf.Tensor]
+        self.stats: Dict[str, tf.Tensor] = {}
         self._set_prev_state(state)
 
     def _set_prev_state(self, state):
@@ -516,9 +520,9 @@ class LayerBase:
                 # Special case: Input feature or sparse dim looks the same, so overtake it.
                 out_dim = sources_data.feature_dim_or_sparse_dim
         if out_dim:
-            assert (
-                out_dim.dimension == output.dim
-            ), f"Layer {name!r} out_dim {out_dim} does not match Data {output} via out_type {out_type}"
+            assert out_dim.dimension == output.dim, (
+                f"Layer {name!r} out_dim {out_dim} does not match Data {output} via out_type {out_type}"
+            )
             if output.sparse:
                 output.sparse_dim = out_dim
             else:
@@ -850,9 +854,9 @@ class LayerBase:
             loss_scale = d.pop("loss_scale", 1.0)
             if loss_scale != 1.0:
                 if "scale" in loss_opts:
-                    assert (
-                        loss_opts["scale"] == loss_scale
-                    ), "do not use loss_scale and loss with 'scale' option together"
+                    assert loss_opts["scale"] == loss_scale, (
+                        "do not use loss_scale and loss with 'scale' option together"
+                    )
                 loss_opts["scale"] = loss_scale
             d["loss"] = cls._make_loss(
                 class_name=d.pop("loss", None), opts=loss_opts, network=network, get_layer=get_layer
@@ -2099,9 +2103,9 @@ class LayerBase:
                 src_output = src.output.copy()
                 if src_output.placeholder is not None:
                     zeroed_src_shape = tf_util.get_shape(src_output.placeholder)
-                    zeroed_src_shape = [
+                    zeroed_src_shape: List[Union[tf.Tensor, int]] = [
                         zeroed_src_shape[i] for i in range(src_output.batch_ndim)
-                    ]  # type: typing.List[typing.Union[tf.Tensor,int]]
+                    ]
                 else:
                     zeroed_src_shape = []
                     for i, d in enumerate(src_output.batch_shape):
@@ -2550,9 +2554,9 @@ class ReuseParams:
         :rtype: tf.Variable|tf.Tensor
         """
         if self.shape is not None:
-            assert tuple(shape) == tuple(
-                d.dimension for d in self.shape
-            ), "%s: unexpected shape %r for param %r, expected %r" % (self, shape, name, self.shape)
+            assert tuple(shape) == tuple(d.dimension for d in self.shape), (
+                "%s: unexpected shape %r for param %r, expected %r" % (self, shape, name, self.shape)
+            )
         abs_scope_prefix = base_layer.get_absolute_name_scope_prefix()
         assert not abs_scope_prefix or abs_scope_prefix.endswith("/")
         assert name.startswith(abs_scope_prefix)
@@ -2609,10 +2613,10 @@ class SearchChoices:
         assert beam_size is not None
         self.owner = owner
         self._done_src_layer = False
-        self._src_layer = None  # type: typing.Optional[LayerBase]
-        self.src_beams = None  # type: typing.Optional[tf.Tensor]  # src beam index, (batch, beam)
+        self._src_layer: Optional[LayerBase] = None
+        self.src_beams: Optional[tf.Tensor] = None  # src beam index, (batch, beam)
         self.beam_size = beam_size
-        self.beam_scores = None  # type: typing.Optional[tf.Tensor]  # (batch, beam)
+        self.beam_scores: Optional[tf.Tensor] = None  # (batch, beam)
         self.is_decided = is_decided
         self.keep_raw = keep_raw
         if not owner.output.beam:
@@ -2872,22 +2876,22 @@ class Loss:
         """
         self.base_network = base_network
         self.use_flatten_frames = use_flatten_frames
-        self.layer = None  # type: typing.Optional[LayerBase]
+        self.layer: Optional[LayerBase] = None
         # All are initialized in self.init().
-        self.output = None  # type: typing.Optional[Data]
-        self.output_with_activation = None  # type: typing.Optional[OutputWithActivation]
-        self.output_seq_lens = None  # type: typing.Optional[tf.Tensor]
-        self.target = None  # type: typing.Optional[Data]
-        self.target_seq_lens = None  # type: typing.Optional[tf.Tensor]
-        self.output_flat = None  # type: typing.Optional[tf.Tensor]
-        self.output_before_softmax_flat = None  # type: typing.Optional[tf.Tensor]
+        self.output: Optional[Data] = None
+        self.output_with_activation: Optional[OutputWithActivation] = None
+        self.output_seq_lens: Optional[tf.Tensor] = None
+        self.target: Optional[Data] = None
+        self.target_seq_lens: Optional[tf.Tensor] = None
+        self.output_flat: Optional[tf.Tensor] = None
+        self.output_before_softmax_flat: Optional[tf.Tensor] = None
         if _check_output_before_softmax is not None:
             self._check_output_before_softmax = _check_output_before_softmax
-        self.target_flat = None  # type: typing.Optional[tf.Tensor]
+        self.target_flat: Optional[tf.Tensor] = None
         # Maybe make configurable. For now, same as in our Theano behavior.
         # The loss_norm_factor is used by Runner._normalize_loss both for normalization per epoch and per batch.
         # It is e.g. set to 1/sum(target_seq_len), and logic of accumulation is handled in the Runner.
-        self.loss_norm_factor = None  # type: typing.Optional[tf.Tensor]
+        self.loss_norm_factor: Optional[tf.Tensor] = None
         self.use_normalized_loss = use_normalized_loss  # for the optimizer, per batch
         self.custom_norm_factor = custom_norm_factor
         self.custom_inv_norm_factor = custom_inv_norm_factor
@@ -3132,18 +3136,21 @@ class Loss:
                 self.output,
                 self.target,
             )
-        assert (
-            self.target.ndim_dense == self.output.ndim_dense
-        ), "Number of dimensions mismatch. Target: %s, output: %s" % (self.target, self.output)
+        assert self.target.ndim_dense == self.output.ndim_dense, (
+            "Number of dimensions mismatch. Target: %s, output: %s" % (self.target, self.output)
+        )
         expected_output_dim = self.get_auto_output_layer_dim(self.target.feature_dim_or_sparse_dim)
-        assert (
-            expected_output_dim.dimension == self.output.dim
-        ), "Expected output dim is %r but the output has dim %r. " % (
-            expected_output_dim,
-            self.output.feature_dim_or_sparse_dim,
-        ) + "Target: %s, output: %s" % (
-            self.target,
-            self.output,
+        assert expected_output_dim.dimension == self.output.dim, (
+            "Expected output dim is %r but the output has dim %r. "
+            % (
+                expected_output_dim,
+                self.output.feature_dim_or_sparse_dim,
+            )
+            + "Target: %s, output: %s"
+            % (
+                self.target,
+                self.output,
+            )
         )
         if self.base_network.get_config().bool("debug_runtime_sanity_checks", False):
             with tf.name_scope("Loss_debug_runtime_sanity_checks"):

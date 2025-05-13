@@ -178,9 +178,9 @@ class RFModuleAsPTModule(torch.nn.Module):
         rf_param = getattr(self._rf_module, name, None)
         if not isinstance(rf_param, rf.Parameter):
             return  # just ignore
-        assert isinstance(
-            param, torch.nn.Parameter
-        ), f"{self} register_parameter {name}: did not get a Parameter but {type(param).__name__}"
+        assert isinstance(param, torch.nn.Parameter), (
+            f"{self} register_parameter {name}: did not get a Parameter but {type(param).__name__}"
+        )
         rf_param.raw_tensor = param
 
     def register_buffer(self, name: str, tensor: Optional[torch.Tensor], persistent: bool = True) -> None:

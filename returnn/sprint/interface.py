@@ -820,9 +820,9 @@ def _prepare_forwarding():
     assert engine
     assert config
     # Should already be set via setTargetMode().
-    assert config.list("extract") == [
-        "posteriors"
-    ], "You need to have extract = posteriors in your RETURNN config. You have: %s" % config.list("extract")
+    assert config.list("extract") == ["posteriors"], (
+        "You need to have extract = posteriors in your RETURNN config. You have: %s" % config.list("extract")
+    )
 
     # Load network.
     engine.init_network_from_config(config)
@@ -870,7 +870,6 @@ def _train(segment_name, features, targets=None):
     # The CRNN train thread started via start() will do the actual training.
 
     if TargetMode == "criterion-by-sprint":
-
         # TODO...
         make_criterion_class()
 

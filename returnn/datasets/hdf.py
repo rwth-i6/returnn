@@ -37,9 +37,9 @@ class HDFDataset(CachedDataset):
         :param bool use_cache_manager: uses :func:`Util.cf` for files
         """
         super(HDFDataset, self).__init__(**kwargs)
-        assert (
-            self.partition_epoch == 1 or self.cache_byte_size_total_limit == 0
-        ), "To use partition_epoch in HDFDatasets, disable caching by setting cache_byte_size=0"
+        assert self.partition_epoch == 1 or self.cache_byte_size_total_limit == 0, (
+            "To use partition_epoch in HDFDatasets, disable caching by setting cache_byte_size=0"
+        )
         self._use_cache_manager = use_cache_manager
         self.files = []  # type: typing.List[str]  # file names
         self.h5_files = []  # type: typing.List[h5py.File]
@@ -1246,9 +1246,9 @@ class SimpleHDFWriter:
             self._datasets[name].resize(old_shape[0] + raw_data.shape[0], axis=0)
             expected_shape = (raw_data.shape[0],) + old_shape[1:]
         # append raw data to dataset
-        assert (
-            expected_shape == raw_data.shape
-        ), f"{self} insert: shape mismatch: expected {expected_shape}, got {raw_data.shape}"
+        assert expected_shape == raw_data.shape, (
+            f"{self} insert: shape mismatch: expected {expected_shape}, got {raw_data.shape}"
+        )
         self._datasets[name][self._file.attrs["numTimesteps"] :] = raw_data
         self._file.attrs["numTimesteps"] += raw_data.shape[0]
         self._file.attrs["numSeqs"] += 1
@@ -1302,9 +1302,9 @@ class SimpleHDFWriter:
 
         offset = self._extra_num_time_steps[data_key] - raw_data.shape[0]
         expected_shape = (raw_data.shape[0],) + hdf_data.shape[1:]
-        assert (
-            expected_shape == raw_data.shape
-        ), f"{self} insert other {data_key!r}: shape mismatch: expected {expected_shape}, got {raw_data.shape}"
+        assert expected_shape == raw_data.shape, (
+            f"{self} insert other {data_key!r}: shape mismatch: expected {expected_shape}, got {raw_data.shape}"
+        )
         hdf_data[offset:] = raw_data
 
     def insert_batch(self, inputs, seq_len, seq_tag, extra=None):

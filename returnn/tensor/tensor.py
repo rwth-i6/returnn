@@ -187,7 +187,7 @@ class Tensor(_TensorMixin, _TensorOpOverloadsMixin, Generic[RawTensorType]):
             if not backend.executing_eagerly():
                 backend.set_known_shape_raw(value, self.batch_shape)
             assert backend.get_dtype_name_raw(value) == self.dtype, (
-                f"{self} dtype {self.dtype} does not match " f"raw tensor dtype {backend.get_dtype_name_raw(value)}"
+                f"{self} dtype {self.dtype} does not match raw tensor dtype {backend.get_dtype_name_raw(value)}"
             )
         self._raw_tensor = value
 

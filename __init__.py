@@ -7,7 +7,6 @@ This was used for the old flat code file structure, for usage like::
 We want to support the same code.
 """
 
-
 from __future__ import annotations
 import os
 import sys

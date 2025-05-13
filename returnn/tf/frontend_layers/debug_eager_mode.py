@@ -2,7 +2,6 @@
 Debug eager mode
 """
 
-
 _debug_eager_mode_enabled = False
 
 

@@ -50,7 +50,7 @@ def dropout(
         raise ValueError(f"dropout axis {axis} not in source {source}")
 
     if isinstance(keep_prob, (float, int)) and not 0 < keep_prob <= 1:
-        raise ValueError("keep_prob must be a scalar tensor or a float in the " "range (0, 1], got %g" % keep_prob)
+        raise ValueError("keep_prob must be a scalar tensor or a float in the range (0, 1], got %g" % keep_prob)
 
     # Do nothing if we know keep_prob == 1
     if isinstance(keep_prob, (float, int)) and keep_prob == 1:

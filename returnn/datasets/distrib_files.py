@@ -442,8 +442,7 @@ class DistributeFilesDataset(CachedDataset2):
             # We need to decide where to add this file, to the current or the next sub epoch.
             if not files_per_bin[bin_idx] or (
                 # Better to add this file to the current sub epoch?
-                abs((size_taken + size) - avg_size_per_sub_epoch)
-                <= abs(size_taken - avg_size_per_sub_epoch)
+                abs((size_taken + size) - avg_size_per_sub_epoch) <= abs(size_taken - avg_size_per_sub_epoch)
             ):
                 files_per_bin[bin_idx].append(f_tree)
                 size_taken = 0

@@ -273,9 +273,9 @@ def _check_matching_loop_var_templates(loop_var_templates: S, loop_vars: S):
             x._push_back_delayed_check()
 
         else:  # other cases: just check same type
-            assert type(template) is type(
-                x
-            ), f"loop var {path} template type {type(template)} does not match var type {type(x)}"
+            assert type(template) is type(x), (
+                f"loop var {path} template type {type(template)} does not match var type {type(x)}"
+            )
             assert not isinstance(x, Tensor), f"loop var {path} is a Tensor but should not be"
 
     tree.map_structure_with_path(_check, loop_var_templates, loop_vars)

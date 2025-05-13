@@ -135,7 +135,7 @@ def main(unused_argv):
     Main entry:
     """
     if not FLAGS.file_name:
-        print("Usage: inspect_checkpoint --file_name=checkpoint_file_name " "[--tensor_name=tensor_to_print]")
+        print("Usage: inspect_checkpoint --file_name=checkpoint_file_name [--tensor_name=tensor_to_print]")
         sys.exit(1)
     else:
         print_tensors_in_checkpoint_file(FLAGS.file_name, FLAGS.tensor_name, FLAGS.all_tensors)

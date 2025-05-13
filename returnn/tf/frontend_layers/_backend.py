@@ -510,9 +510,9 @@ class ReturnnLayersBackend(Backend[Layer]):
                 # We could also maybe move out all the dependencies.
                 # However, it's not clear whether this is always safe.
                 for dep in value.raw_tensor.get_tensor_dependencies():
-                    assert (
-                        dep.parent.can_access_children_from_root
-                    ), f"dep {dep} of moved value {value} is not accessible"
+                    assert dep.parent.can_access_children_from_root, (
+                        f"dep {dep} of moved value {value} is not accessible"
+                    )
             param.raw_tensor.layer_dict["init_by_layer"] = value
         else:
             param.raw_tensor.layer_dict.pop("init_by_layer", None)

@@ -79,7 +79,7 @@ def help_on_torch_exception(
 
 
 def _help_data_or_array(
-    value: Union[torch.Tensor, np.ndarray, bool, object]
+    value: Union[torch.Tensor, np.ndarray, bool, object],
 ) -> Tuple[str, Tuple[Union[int, float], Union[int, float]]]:
     """
     :param value:
