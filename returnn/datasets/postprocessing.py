@@ -308,11 +308,18 @@ class PostprocessingDataset(CachedDataset2):
                     last_complete_frac = complete_frac
                 for data_key, out_t in self._out_tensor_dict_template.data.items():
                     in_t = t_dict.data[data_key]
-                    assert (
-                        in_t.ndim == out_t.batch_ndim
-                        and in_t.dtype == out_t.dtype
-                        and all(d.dimension in (d_, None) for (d, d_) in zip(in_t.dims, out_t.shape))
+                    assert in_t.ndim == out_t.batch_ndim, (
+                        f"Dim number mismatch for {data_key}: {in_t.ndim} != {out_t.batch_ndim}. "
+                        "Postprocessing data tensors must not have a batch dimension."
                     )
+                    assert in_t.dtype == out_t.dtype, (
+                        f"dtype mismatch for {data_key}: '{in_t.dtype}' != '{out_t.dtype}'"
+                    )
+                    for i, (in_dim, out_shape) in enumerate(zip(in_t.dims, out_t.shape)):
+                        assert in_dim.dimension is None or in_dim.dimension == out_shape, (
+                            f"Dim {i} mismatch on {data_key}: "
+                            f"{in_dim.dimension} must either be `None` or equal {out_shape}"
+                        )
                 yield t_dict
 
         data_iter = self._iterate_dataset()
