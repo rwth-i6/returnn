@@ -709,18 +709,19 @@ class Engine(EngineBase):
                         start_elapsed=step_end_time - eval_start_time,
                         log_memory_usage_device=self._device if self._log_memory_usage else None,
                     )
-                    if self._tensorboard_writer:
-                        # write losses/errors to tensorboard
-                        for key, val in eval_info.items():
-                            self._tensorboard_writer.add_scalar(
-                                f"{dataset_name}/{key}", val, global_step=self.global_train_step
-                            )
 
                     step_idx += 1
 
             assert step_idx > 0, f"No data in dataset {dataset_name!r}."
             accumulated_losses_dict = accumulated_losses_dict / accumulated_inv_norm_factors_dict
             accumulated_losses_dict = self._maybe_extend_losses_info(accumulated_losses_dict)
+
+            if self._tensorboard_writer:
+                # write losses/errors to tensorboard
+                for key, val in accumulated_losses_dict.items():
+                    self._tensorboard_writer.add_scalar(
+                        f"{dataset_name}/{key}", val, global_step=self.epoch
+                    )
 
             self.learning_rate_control.set_epoch_error(
                 self.epoch, {f"{dataset_name}_loss_{k}": v for k, v in accumulated_losses_dict.items()}
