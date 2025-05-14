@@ -140,7 +140,7 @@ class Vocabulary:
         self.seq_postfix = seq_postfix or []
         # To be used with findall in get_seq.
         self.decode_seq_token_re = (
-            re.compile("(%s|\S+)(?: |$)" % "|".join(re.escape(v) for v in self.labels))
+            re.compile("(%s|\\S+)(?: |$)" % "|".join(re.escape(v) for v in self.labels))
             if single_whitespace_split
             else None
         )
