@@ -85,6 +85,7 @@ class LmDataset(CachedDataset2):
         add_delayed_seq_data=False,
         delayed_seq_data_start_symbol="[START]",
         dtype: Optional[str] = None,
+        tag_prefix: Optional[str] = None,
         **kwargs,
     ):
         """
@@ -288,7 +289,9 @@ class LmDataset(CachedDataset2):
         self.num_outputs = {"data": [num_labels, 1]}
         self.num_inputs = num_labels
         self.seq_order = None
-        self._tag_prefix = "line-"  # sequence tag is "line-n", where n is the line number (to be compatible with translation)  # nopep8
+
+        # sequence tag is "line-n", where n is the line number (to be compatible with translation)
+        self.tag_prefix = tag_prefix or "line-"
         self.auto_replace_unknown_symbol = auto_replace_unknown_symbol
         self.log_auto_replace_unknown_symbols = log_auto_replace_unknown_symbols
         self.log_skipped_seqs = log_skipped_seqs
@@ -504,8 +507,8 @@ class LmDataset(CachedDataset2):
         elif seq_list is not None:
             # Might not be initialized. Can even do without init. Thus check seq_list_file.
             if self._seq_list_file is None:
-                assert all(s.startswith(self._tag_prefix) for s in seq_list)
-                self.seq_order = [int(s[len(self._tag_prefix) :]) for s in seq_list]
+                assert all(s.startswith(self.tag_prefix) for s in seq_list)
+                self.seq_order = [int(s[len(self.tag_prefix) :]) for s in seq_list]
             else:
                 # Need seq list for this. Just do the lazy init now.
                 self._lazy_init()
@@ -555,7 +558,7 @@ class LmDataset(CachedDataset2):
         if self._seq_list is not None:
             return self._seq_list
         num_seqs = self.get_total_num_seqs()
-        return [self._tag_prefix + str(line_nr) for line_nr in range(num_seqs)]
+        return [self.tag_prefix + str(line_nr) for line_nr in range(num_seqs)]
 
     def _reduce_log_skipped_seqs(self):
         if isinstance(self.log_skipped_seqs, bool):
@@ -594,7 +597,7 @@ class LmDataset(CachedDataset2):
             idx, offset, len_ = self._orths_offsets_and_lens[true_idx]
             orth = self._orth_mmaps[idx][offset : offset + len_].decode("utf8").strip()
             if self._seq_list is None:
-                seq_tag = self._tag_prefix + str(true_idx)
+                seq_tag = self.tag_prefix + str(true_idx)
             else:
                 seq_tag = self._seq_list[true_idx]
             self.next_orth_idx += 1
