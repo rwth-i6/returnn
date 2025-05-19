@@ -91,9 +91,9 @@ class TensorDict:
         out = {}
         for key, value in self.data.items():
             assert key not in out
-            assert isinstance(
-                value.raw_tensor, expected_value_type
-            ), f"key {key} {value}: unexpected {type(value.raw_tensor)}, expected {expected_value_type}"
+            assert isinstance(value.raw_tensor, expected_value_type), (
+                f"key {key} {value}: unexpected {type(value.raw_tensor)}, expected {expected_value_type}"
+            )
             out[key] = value.raw_tensor
             for i, dim in enumerate(value.dims):
                 if exclude_duplicate_dims and dim in visited_dims:
@@ -103,9 +103,9 @@ class TensorDict:
                 if dim.is_batch_dim() and (dim.dyn_size_ext is None or dim.dyn_size_ext.raw_tensor is None):
                     if include_scalar_dyn_sizes:
                         dim_value = dim.get_dim_value()
-                        assert isinstance(
-                            dim_value, expected_value_type
-                        ), f"key {key_} {dim}: unexpected {type(dim_value)}, expected {expected_value_type}"
+                        assert isinstance(dim_value, expected_value_type), (
+                            f"key {key_} {dim}: unexpected {type(dim_value)}, expected {expected_value_type}"
+                        )
                         out[key_] = dim_value
                 elif dim.dyn_size_ext is not None:
                     if include_scalar_dyn_sizes or dim.dyn_size_ext.dims:
@@ -116,9 +116,9 @@ class TensorDict:
                         out[key_] = dim.dyn_size_ext.raw_tensor
                 elif dim.size is not None:
                     if include_scalar_dyn_sizes and include_const_sizes:
-                        assert isinstance(
-                            dim.size, expected_value_type
-                        ), f"key {key_} {dim}: unexpected {type(dim.size)}, expected {expected_value_type}"
+                        assert isinstance(dim.size, expected_value_type), (
+                            f"key {key_} {dim}: unexpected {type(dim.size)}, expected {expected_value_type}"
+                        )
                         out[key_] = dim.size
                 else:
                     raise Exception(f"cannot handle dim: {dim}")

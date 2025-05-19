@@ -30,7 +30,6 @@ Also, there might be inf/nan values which are ok, expected, and not a problem
 So we don't stop on the first occurrence but just report all of them.
 """
 
-
 from __future__ import annotations
 
 import sys
@@ -90,7 +89,6 @@ def debug_inf_nan(
                 print(f"Caught RuntimeError in backward: {exc}", file=file)
 
     else:  # without grad
-
         with trace_ops:
             func()
 

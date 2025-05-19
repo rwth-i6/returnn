@@ -123,7 +123,6 @@ class ChunkingIterDataPipe(torch.utils.data.IterDataPipe):
         chunking_data_keys = list(self._chunk_size.keys())
 
         for data_dict in self._dataset:
-
             if not chunking_data_keys:
                 chunking_data_keys = list(data_dict.keys())  # use all if not configured separately
                 chunking_data_key_black_list = ["seq_tag", "seq_idx", "num_seqs", "epoch", "complete_frac"]
@@ -150,9 +149,9 @@ class ChunkingIterDataPipe(torch.utils.data.IterDataPipe):
                 if num_chunks is None:
                     num_chunks = len(chunks)
                 else:
-                    assert num_chunks == len(
-                        chunks
-                    ), "Chunking resulted in different number of chunks for different data keys."
+                    assert num_chunks == len(chunks), (
+                        "Chunking resulted in different number of chunks for different data keys."
+                    )
 
                 data_chunks[data_key] = chunks
 

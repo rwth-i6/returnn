@@ -66,42 +66,44 @@ class Engine(EngineBase):
         self.model_filename = self.config.value("model", None)
         self._mp_manager = torch.multiprocessing.Manager()
         self._epoch_mp_shared = self._mp_manager.Value("i", 0)
-        self.train_dataset = None  # type: Optional[Dataset]
+        self.train_dataset: Optional[Dataset] = None
         self.eval_datasets = {}
-        self.extern_data = None  # type: Optional[TensorDict]
-        self._train_dataloader = None  # type: Optional[DataLoader]
-        self._eval_dataloaders = {}  # type: Dict[str, DataLoader]
+        self.extern_data: Optional[TensorDict] = None
+        self._train_dataloader: Optional[DataLoader] = None
+        self._eval_dataloaders: Dict[str, DataLoader] = {}
 
-        self._start_epoch = None  # type: Optional[int]
-        self._final_epoch = None  # type: Optional[int]
-        self._min_seq_length = config.typed_value("min_seq_length", None) or config.int(
+        self._start_epoch: Optional[int] = None
+        self._final_epoch: Optional[int] = None
+        self._min_seq_length: Union[int, float, Dict[str, int], NumbersDict] = config.typed_value(
             "min_seq_length", None
-        )  # type: Union[int,float,Dict[str,int],NumbersDict]
-        self._max_seq_length = config.typed_value("max_seq_length", None) or config.int(
+        ) or config.int("min_seq_length", None)
+        self._max_seq_length: Union[int, float, Dict[str, int], NumbersDict] = config.typed_value(
             "max_seq_length", None
-        )  # type: Union[int,float,Dict[str,int],NumbersDict]
-        self._orig_model = None  # type: Optional[Union[rf.Module, torch.nn.Module]]
-        self._pt_model = None  # type: Optional[torch.nn.Module]
-        self._train_step_func = None  # type: Optional[Callable]
-        self._forward_step_func = self.config.typed_value("forward_step")  # type: Optional[Callable]
-        self._forward_step_expected_outputs = None  # type: Optional[TensorDict]
+        ) or config.int("max_seq_length", None)
+        self._orig_model: Optional[Union[rf.Module, torch.nn.Module]] = None
+        self._pt_model: Optional[torch.nn.Module] = None
+        self._epoch_start_func: Optional[Callable] = self.config.typed_value("epoch_start")
+        self._epoch_end_func: Optional[Callable] = self.config.typed_value("epoch_end")
+        self._train_step_func: Optional[Callable] = None
+        self._forward_step_func: Optional[Callable] = self.config.typed_value("forward_step")
+        self._forward_step_expected_outputs: Optional[TensorDict] = None
         if self.config.typed_value("model_outputs") is not None:
             self._forward_step_expected_outputs = TensorDict()
             self._forward_step_expected_outputs.update(self.config.typed_value("model_outputs"), auto_convert=True)
         self._save_model_epoch_interval = 1
         self._ignore_param_set: Set[str] = set()  # for the updater and for saving the model checkpoint
-        self._updater = None  # type: Optional[Updater]
+        self._updater: Optional[Updater] = None
 
         self._use_autocast = False
-        self._autocast_dtype = None  # type: Optional[str]
-        self._grad_scaler = None  # type: Optional[amp.GradScaler]
+        self._autocast_dtype: Optional[str] = None
+        self._grad_scaler: Optional[amp.GradScaler] = None
 
         dev_ = get_device_from_config_opt(config.value("device", None))
         self._device = dev_.result
         print("Using device:", self._device, f"({dev_.reason or '?'})", file=log.v2)
 
-        self._torch_distributed_ctx = None  # type: Optional[DistributedContext]
-        self._ddp_pt_model = None  # type: Optional[DistributedDataParallel]
+        self._torch_distributed_ctx: Optional[DistributedContext] = None
+        self._ddp_pt_model: Optional[DistributedDataParallel] = None
 
         if config.typed_value("torch_distributed") is not None:
             self._torch_distributed_ctx = dist_get_ctx(config=config)
@@ -319,6 +321,26 @@ class Engine(EngineBase):
             ]
             print(f"Memory usage ({self._device}):", " ".join(stats), file=log.v1)
 
+    def _on_epoch_start(self, *, dataset_name: str):
+        if self._epoch_start_func:
+            self._epoch_start_func(
+                epoch=self.epoch,
+                step=self.global_train_step,
+                model=self._orig_model,
+                dataset_name=dataset_name,
+                **util.get_fwd_compat_kwargs(),
+            )
+
+    def _on_epoch_end(self, *, dataset_name: str):
+        if self._epoch_end_func:
+            self._epoch_end_func(
+                epoch=self.epoch,
+                step=self.global_train_step,
+                model=self._orig_model,
+                dataset_name=dataset_name,
+                **util.get_fwd_compat_kwargs(),
+            )
+
     def train_epoch(self):
         """
         train one (sub)epoch
@@ -345,6 +367,8 @@ class Engine(EngineBase):
         self._pt_model.train()
         self._maybe_reset_dev_memory_caches()
         self._reset_dev_memory_stats()
+
+        self._on_epoch_start(dataset_name="train")
 
         if self.config.bool("debug_shell_before_train_loop", False):
             print("debug_shell_before_train_loop", file=log.v1)
@@ -411,6 +435,7 @@ class Engine(EngineBase):
                     extern_data_template=self.extern_data,
                     device=self._device,
                     float_dtype=self._default_float_dtype,
+                    with_eval_targets=True,
                 )
                 self._run_step(extern_data, train_flag=True, train_func=True)
 
@@ -564,6 +589,8 @@ class Engine(EngineBase):
 
         self._maybe_report_dev_memory_stats()
 
+        self._on_epoch_end(dataset_name="train")
+
         if self.epoch % self._save_model_epoch_interval == 0 or self.epoch == self._final_epoch:
             if self.model_filename:
                 self._save_model()
@@ -612,6 +639,8 @@ class Engine(EngineBase):
 
             print(f"Evaluating dataset {dataset_name!r}", file=log.v3)
 
+            self._on_epoch_start(dataset_name=dataset_name)
+
             accumulated_losses_dict = NumbersDict()
             accumulated_inv_norm_factors_dict = NumbersDict()
             step_idx = 0
@@ -632,6 +661,7 @@ class Engine(EngineBase):
                         extern_data_template=self.extern_data,
                         device=self._device,
                         float_dtype=self._default_float_dtype,
+                        with_eval_targets=True,
                     )
 
                     self._run_step(extern_data, train_func=True)
@@ -684,6 +714,8 @@ class Engine(EngineBase):
                 assert self._torch_distributed_ctx.rank() == 0
                 _has_data = torch.tensor([False], device="cpu", dtype=torch.int8)
                 torch.distributed.broadcast(_has_data, src=0)
+
+            self._on_epoch_end(dataset_name=dataset_name)
 
         if not self._torch_distributed_ctx or self._torch_distributed_ctx.rank() == 0:
             print(
@@ -942,8 +974,13 @@ class Engine(EngineBase):
                         continue
                 if opts["filename"] is None:
                     print(f"Pre-load (initialize) weights for key '{preload_key}'", file=log.v3)
-                    pattern = opts["pattern"]
-                    match = re.compile(fnmatch.translate(pattern)).match
+                    if opts.get("pattern", None) is not None:
+                        pattern = opts["pattern"]
+                        match = re.compile(fnmatch.translate(pattern)).match
+                    elif opts.get("prefix", None) is not None:
+                        match = re.compile(re.escape(opts["prefix"]) + ".*").fullmatch
+                    else:
+                        raise ValueError(f"preload key {preload_key} without file {opts}: no pattern or prefix given")
                     remove = []
                     for name in self._pt_model.state_dict().keys():
                         if match(name) and name in missing_keys:
@@ -1467,7 +1504,7 @@ def _print_process(
             info += ["%.3f sec/step" % step_duration]
         if start_elapsed is not None:
             info += ["elapsed %s" % hms(start_elapsed)]
-        if complete_frac is not None:
+        if complete_frac not in (-1, None):
             assert 1 >= complete_frac > 0, f"{step} step, {complete_frac} complete_frac"
             assert start_elapsed is not None
             total_time_estimated = start_elapsed / complete_frac

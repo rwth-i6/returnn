@@ -1104,13 +1104,13 @@ class _NetDictBuilderCtx:
                 # If dyn_size_ext is not set yet, try to complete it.
                 if dim.dyn_size_ext is None:
                     dim.complete_dyn_size()
-                assert (
-                    dim.dyn_size_ext is not None
-                ), f"{sub_name_ctx}: need {dim} to be defined to be able to know about implicit dims"
+                assert dim.dyn_size_ext is not None, (
+                    f"{sub_name_ctx}: need {dim} to be defined to be able to know about implicit dims"
+                )
             dim_tags.extend(data_template.dim_tags_set_implicit_only_wrapped)
-            assert len(dim_tags) == len(
-                set((d, d.match_priority if isinstance(d, Dim) else 0) for d in dim_tags)
-            ), f"duplicate dims in {sub_name_ctx} {sub_name_ctx.tensor}"
+            assert len(dim_tags) == len(set((d, d.match_priority if isinstance(d, Dim) else 0) for d in dim_tags)), (
+                f"duplicate dims in {sub_name_ctx} {sub_name_ctx.tensor}"
+            )
             if len(dim_tags) == len(set(dim_tags)):  # might not be unique without match_priority
                 # For some layer classes, the out_shape would be redundant.
                 if layer_dict["class"] not in {"constant", "variable", "random", "subnetwork", "transpose"}:
@@ -1135,9 +1135,9 @@ class _NetDictBuilderCtx:
 
                 sub_layer_abs_name_scope = self._expected_layer_abs_name_scope(sub_name_ctx)
                 if sub_name_ctx.layer_dict["class"] == "variable":
-                    assert (
-                        sub_layer_abs_name_scope
-                    ), f"VariableLayer {sub_name_ctx} must have a unique name in {self.root_module}"
+                    assert sub_layer_abs_name_scope, (
+                        f"VariableLayer {sub_name_ctx} must have a unique name in {self.root_module}"
+                    )
                 if sub_layer_abs_name_scope is not None:
                     if (
                         layer_abs_name_scope_default != sub_layer_abs_name_scope
@@ -1153,9 +1153,9 @@ class _NetDictBuilderCtx:
 
             def _map_elem_resolve(obj: Any) -> Any:
                 if isinstance(obj, Tensor):
-                    assert isinstance(
-                        obj.raw_tensor, rfl.Layer
-                    ), f"unexpected tensor {obj} with raw tensor type {type(obj.raw_tensor)}, expected rfl.Layer"
+                    assert isinstance(obj.raw_tensor, rfl.Layer), (
+                        f"unexpected tensor {obj} with raw tensor type {type(obj.raw_tensor)}, expected rfl.Layer"
+                    )
                     obj: Tensor[rfl.Layer]
                     assert obj.raw_tensor.parent or net.name_ctx == obj.raw_tensor
                     return obj.raw_tensor.get_name_in_ctx(ctx=net.name_ctx)

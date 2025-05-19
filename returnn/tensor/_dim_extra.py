@@ -1067,13 +1067,14 @@ class _DimMixin:
                     )
                 )
         if batch and getattr(x, "_RETURNN_dyn_size_beam", None):
-            assert batch.beam == getattr(
-                x, "_RETURNN_dyn_size_beam"
-            ), "%s: dyn size %s has unexpected batch %s, expected %s" % (
-                self,
-                x,
-                batch,
-                getattr(x, "_RETURNN_dyn_size_beam"),
+            assert batch.beam == getattr(x, "_RETURNN_dyn_size_beam"), (
+                "%s: dyn size %s has unexpected batch %s, expected %s"
+                % (
+                    self,
+                    x,
+                    batch,
+                    getattr(x, "_RETURNN_dyn_size_beam"),
+                )
             )
         if self.batch and batch:
             assert self.batch == batch
@@ -1359,8 +1360,7 @@ class _DimMixin:
                 # Only auto-generated dim tags are allowed to be treated as broadcastable.
                 # This was another suggestion from here: https://github.com/rwth-i6/returnn/issues/666
                 # It was not implemented like this because the auto_generated flag was only introduced later.
-                (self.dimension == 1 and self.auto_generated)
-                or (other.dimension == 1 and other.auto_generated)
+                (self.dimension == 1 and self.auto_generated) or (other.dimension == 1 and other.auto_generated)
             ):
                 pass  # pass on
             else:

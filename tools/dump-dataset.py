@@ -18,6 +18,7 @@ from returnn.log import log
 import argparse
 import numpy
 from returnn.datasets import init_dataset, Dataset
+from returnn.datasets.util.vocabulary import Vocabulary
 from returnn.util.basic import Stats, hms, hms_fraction, pretty_print, NumbersDict
 from returnn.util import basic as util
 
@@ -53,9 +54,9 @@ def dump_dataset(options):
         ", ".join(f"{k!r}: {v[:3]}... len {len(v)}" for k, v in dataset.labels.items()) or "None",
         file=log.v3,
     )
-    assert (
-        options.key in dataset.get_data_keys()
-    ), f"key {options.key!r} not in {dataset.get_data_keys()} (targets {dataset.get_target_list()})"
+    assert options.key in dataset.get_data_keys(), (
+        f"key {options.key!r} not in {dataset.get_data_keys()} (targets {dataset.get_target_list()})"
+    )
     max_seq_length = NumbersDict(options.max_seq_length)
     min_seq_length = NumbersDict(options.min_seq_length)
 
@@ -86,6 +87,13 @@ def dump_dataset(options):
             print("accumulated num seqs: %i" % seq_idx)
         print("Done.")
         return
+
+    # Inlined and cached can_serialize_data / serialize_data.
+    vocabs = {}
+    for key in dataset.get_data_keys():
+        labels = dataset.labels.get(key)
+        if labels and len(labels) > 1:
+            vocabs[key] = Vocabulary.create_vocab_from_labels(labels)
 
     dump_file = None
     if options.type == "numpy":
@@ -192,9 +200,8 @@ def dump_dataset(options):
             elif options.type == "stdout":
                 print("seq %s tag:" % progress, dataset.get_tag(seq_idx))
                 extra = ""
-                if "data" in dataset.labels and len(dataset.labels["data"]) > 1:
-                    assert dataset.can_serialize_data("data")
-                    extra += " (%r)" % dataset.serialize_data(key="data", data=data)
+                if "data" in vocabs:
+                    extra += " (%r)" % vocabs["data"].serialize_labels(data)
                 print("seq %s data: %s%s" % (progress, pretty_print(data), extra))
             elif options.type == "print_shape":
                 print("seq %s data shape:" % progress, data.shape)
@@ -210,9 +217,8 @@ def dump_dataset(options):
                     )
                 elif options.type == "stdout":
                     extra = ""
-                    if target in dataset.labels and len(dataset.labels[target]) > 1:
-                        assert dataset.can_serialize_data(target)
-                        extra += " (%r)" % dataset.serialize_data(key=target, data=targets)
+                    if target in vocabs:
+                        extra += " (%r)" % vocabs[target].serialize_labels(targets)
                     print("seq %i target %r: %s%s" % (seq_idx, target, pretty_print(targets), extra))
                 elif options.type == "print_shape":
                     print("seq %i target %r shape:" % (seq_idx, target), targets.shape)

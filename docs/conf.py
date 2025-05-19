@@ -77,7 +77,7 @@ extensions = [
 ]
 
 # See https://github.com/rtfd/readthedocs.org/issues/283
-mathjax_path = "https://cdn.mathjax.org/mathjax/latest/MathJax.js?" "config=TeX-AMS-MML_HTMLorMML"
+mathjax_path = "https://cdn.mathjax.org/mathjax/latest/MathJax.js?config=TeX-AMS-MML_HTMLorMML"
 
 # see https://stackoverflow.com/q/12206334/562769
 numpydoc_show_class_members = False
@@ -150,6 +150,7 @@ pygments_style = "sphinx"
 
 # If true, keep warnings as "system message" paragraphs in the built documents.
 # keep_warnings = False
+
 
 # Resolve function for the linkcode extension.
 def linkcode_resolve(domain, info):

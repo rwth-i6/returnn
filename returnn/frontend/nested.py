@@ -160,6 +160,7 @@ def _gather_prepare_dims(s: T, *, indices: Tensor, dim_map: Dict[Dim, Dim]) -> T
             return new_dim
         return s
     # everything else ignored at this stage
+    return s
 
 
 def _gather(s: T, *, indices: Tensor, dim_map: Optional[Dict[Dim, Dim]] = None) -> T:
@@ -243,6 +244,7 @@ def _masked_select_prepare_dims(s, *, mask: Tensor, dims: Sequence[Dim], out_dim
         dim_map[s] = new_dim
         return new_dim
     # everything else ignored at this stage
+    return s
 
 
 def _masked_select(
@@ -370,6 +372,7 @@ def _masked_scatter_merge_dims(
         merged_dim_map[backup] = new_dim
         return new_dim
     # everything else ignored at this stage
+    return s
 
 
 def _masked_scatter(

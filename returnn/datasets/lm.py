@@ -7,7 +7,22 @@ and some related helpers.
 
 from __future__ import annotations
 
-from typing import Optional, Union, Any, Callable, Iterator, List, Tuple, Set, BinaryIO, Dict, cast, Generator
+from typing import (
+    Iterable,
+    Optional,
+    Sequence,
+    Union,
+    Any,
+    Callable,
+    Iterator,
+    List,
+    Tuple,
+    Set,
+    BinaryIO,
+    Dict,
+    cast,
+    Generator,
+)
 import typing
 import os
 from io import IOBase
@@ -55,6 +70,7 @@ class LmDataset(CachedDataset2):
         orth_symbols_file=None,
         orth_symbols_map_file=None,
         orth_replace_map_file=None,
+        orth_post_process=None,
         word_based=False,
         word_end_symbol=None,
         seq_end_symbol="[END]",
@@ -69,6 +85,7 @@ class LmDataset(CachedDataset2):
         add_delayed_seq_data=False,
         delayed_seq_data_start_symbol="[START]",
         dtype: Optional[str] = None,
+        tag_prefix: Optional[str] = None,
         **kwargs,
     ):
         """
@@ -101,6 +118,7 @@ class LmDataset(CachedDataset2):
                                                        a python dict with {"<symbol>": <index>, ...}
                                                        or a pickled dictionary
         :param str|()->str|None orth_replace_map_file: JSON file with replacement dict for orth symbols.
+        :param str|list[str]|function|None orth_post_process: :func:`get_post_processor_function`, applied on orth
         :param bool word_based: whether to parse single words, or otherwise will be character based.
         :param str|None word_end_symbol: If provided and if word_based is False (character based modeling),
             token to be used to represent word ends.
@@ -247,6 +265,10 @@ class LmDataset(CachedDataset2):
         else:
             assert not orth_replace_map_file
 
+        self.orth_post_process = None
+        if orth_post_process:
+            self.orth_post_process = get_post_processor_function(orth_post_process)
+
         num_labels = len(self.labels["data"])
         if dtype:
             self.dtype = dtype
@@ -267,7 +289,9 @@ class LmDataset(CachedDataset2):
         self.num_outputs = {"data": [num_labels, 1]}
         self.num_inputs = num_labels
         self.seq_order = None
-        self._tag_prefix = "line-"  # sequence tag is "line-n", where n is the line number (to be compatible with translation)  # nopep8
+
+        # sequence tag is "line-n", where n is the line number (to be compatible with translation)
+        self.tag_prefix = tag_prefix or "line-"
         self.auto_replace_unknown_symbol = auto_replace_unknown_symbol
         self.log_auto_replace_unknown_symbols = log_auto_replace_unknown_symbols
         self.log_skipped_seqs = log_skipped_seqs
@@ -483,8 +507,8 @@ class LmDataset(CachedDataset2):
         elif seq_list is not None:
             # Might not be initialized. Can even do without init. Thus check seq_list_file.
             if self._seq_list_file is None:
-                assert all(s.startswith(self._tag_prefix) for s in seq_list)
-                self.seq_order = [int(s[len(self._tag_prefix) :]) for s in seq_list]
+                assert all(s.startswith(self.tag_prefix) for s in seq_list)
+                self.seq_order = [int(s[len(self.tag_prefix) :]) for s in seq_list]
             else:
                 # Need seq list for this. Just do the lazy init now.
                 self._lazy_init()
@@ -534,7 +558,7 @@ class LmDataset(CachedDataset2):
         if self._seq_list is not None:
             return self._seq_list
         num_seqs = self.get_total_num_seqs()
-        return [self._tag_prefix + str(line_nr) for line_nr in range(num_seqs)]
+        return [self.tag_prefix + str(line_nr) for line_nr in range(num_seqs)]
 
     def _reduce_log_skipped_seqs(self):
         if isinstance(self.log_skipped_seqs, bool):
@@ -573,10 +597,13 @@ class LmDataset(CachedDataset2):
             idx, offset, len_ = self._orths_offsets_and_lens[true_idx]
             orth = self._orth_mmaps[idx][offset : offset + len_].decode("utf8").strip()
             if self._seq_list is None:
-                seq_tag = self._tag_prefix + str(true_idx)
+                seq_tag = self.tag_prefix + str(true_idx)
             else:
                 seq_tag = self._seq_list[true_idx]
             self.next_orth_idx += 1
+
+            if self.orth_post_process:
+                orth = self.orth_post_process(orth)
 
             if self.orth_vocab is not None:
                 data = numpy.array(self.orth_vocab.get_seq(orth), dtype=self.dtype)
@@ -1463,8 +1490,8 @@ class TranslationDataset(CachedDataset2):
         }
 
         self._data_keys = self._source_data_keys + self._target_data_keys
-        self._data = {data_key: [] for data_key in self._data_keys}  # type: typing.Dict[str,typing.List[numpy.ndarray]]
-        self._data_len = None  # type: typing.Optional[int]
+        self._data: Dict[str, List[numpy.ndarray]] = {data_key: [] for data_key in self._data_keys}
+        self._data_len: Optional[int] = None
 
         self._vocabs = self._get_vocabs()
         self.num_outputs = {k: [max(self._vocabs[k].values()) + 1, 1] for k in self._vocabs.keys()}  # all sparse
@@ -1480,7 +1507,7 @@ class TranslationDataset(CachedDataset2):
             unknown_label.setdefault(data_key, None)
         self._unknown_label = unknown_label
 
-        self._seq_order = None  # type: typing.Optional[typing.Sequence[int]]  # seq_idx -> line_nr
+        self._seq_order: Optional[Sequence[int]] = None  # seq_idx -> line_nr
         self._tag_prefix = "line-"  # sequence tag is "line-n", where n is the line number
         self._thread = Thread(name="%r reader" % self, target=self._thread_main)
         self._thread.daemon = True
@@ -1869,14 +1896,11 @@ class TranslationFactorsDataset(TranslationDataset):
             assert file_prefix == self.target_file_prefix
             data_keys = self._target_data_keys
 
-        data = [
+        data: List[List[numpy.ndarray]] = [
             self._factored_words_to_numpy(data_keys, s.decode("utf8").strip().split(), self._add_postfix[file_prefix])
             for s in data_strs
-        ]  # type: typing.List[typing.List[numpy.ndarray]] # shape: (len(data_strs), len(data_keys))
-
-        data = zip(
-            *data
-        )  # type: typing.Iterable[typing.Tuple[numpy.ndarray]] # shape: (len(data_keys), len(data_strs))
+        ]  # shape: (len(data_strs), len(data_keys))
+        data: Iterable[Tuple[numpy.ndarray]] = zip(*data)  # shape: (len(data_keys), len(data_strs))
 
         with self._lock:
             for i, data_ in enumerate(data):
@@ -1899,9 +1923,9 @@ class TranslationFactorsDataset(TranslationDataset):
             words_per_factor = [[]] * len(data_keys)
         elif len(data_keys) > 1:
             factored_words = [word.split(self._factor_separator) for word in words]
-            assert all(
-                len(factors) == len(data_keys) for factors in factored_words
-            ), "All words must have all factors. Expected: " + self._factor_separator.join(data_keys)
+            assert all(len(factors) == len(data_keys) for factors in factored_words), (
+                "All words must have all factors. Expected: " + self._factor_separator.join(data_keys)
+            )
             words_per_factor = zip(*factored_words)
             words_per_factor = [list(w) for w in words_per_factor]
         else:
@@ -2421,7 +2445,7 @@ def get_post_processor_function(opts):
     for some normalization / cleanup.
     This function can be used to get such functions.
 
-    :param str|list[str] opts: e.g. "english_cleaners", or "get_remove_chars(',/')"
+    :param str|list[str]|function opts: e.g. "english_cleaners", or "get_remove_chars(',/')"
     :return: function
     :rtype: (str)->str
     """

@@ -58,6 +58,7 @@ import threading
 import keyword
 import inspect
 import contextlib
+from weakref import WeakKeyDictionary
 
 try:
     import typing
@@ -1564,6 +1565,9 @@ def get_func_str_from_code_object(co, frame=None):
     return co.co_name
 
 
+_func_from_code_object_cache = WeakKeyDictionary()  # code object -> function
+
+
 def get_func_from_code_object(co, frame=None):
     """
     :param types.CodeType co:
@@ -1580,6 +1584,11 @@ def get_func_from_code_object(co, frame=None):
     import types
 
     assert isinstance(co, (types.CodeType, DummyFrame))
+    co_is_code_object = isinstance(co, types.CodeType)
+    if co_is_code_object:
+        candidate = _func_from_code_object_cache.get(co)
+        if candidate:
+            return candidate
     _attr_name = "__code__" if PY3 else "func_code"
     if frame and frame.f_code.co_nlocals > 0:
         func_name = frame.f_code.co_name
@@ -1587,18 +1596,23 @@ def get_func_from_code_object(co, frame=None):
         if frame_self is not None:
             candidate = getattr(frame_self.__class__, func_name, None)
             if candidate and (getattr(candidate, _attr_name, None) is co or isinstance(co, DummyFrame)):
+                if co_is_code_object:
+                    _func_from_code_object_cache[co] = candidate
                 return candidate
     try:
         candidate = getattr(_get_loaded_module_from_filename(co.co_filename), co.co_name, None)
     except ImportError:  # some modules have lazy loaders, but those might fail here
         candidate = None
     if candidate and (getattr(candidate, _attr_name, None) is co or isinstance(co, DummyFrame)):
+        if co_is_code_object:
+            _func_from_code_object_cache[co] = candidate
         return candidate
     if isinstance(co, DummyFrame):
         return None
     candidates = gc.get_referrers(co)
     candidates = [f for f in candidates if getattr(f, _attr_name, None) is co]
     if candidates:
+        _func_from_code_object_cache[co] = candidates[0]
         return candidates[0]
     return None
 

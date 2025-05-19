@@ -400,7 +400,6 @@ def test_pack_padded_wrong_grad():
     prev_bias_grad = None
 
     for loss_fn in [_loss_pt_packed, _loss_rf_padded, _loss_rf_packed]:
-
         torch.manual_seed(42)
 
         batch_dim = Dim(dimension=3, name="batch")
@@ -564,8 +563,7 @@ def test_pack_padded_memory():
     print("Naive:", allocs_naive)
     assert len(allocs_rf) == len(allocs_naive) == 1
     assert (
-        list(allocs_rf.values())[0]["size"]
-        == list(allocs_naive.values())[0]["size"]
+        list(allocs_rf.values())[0]["size"] == list(allocs_naive.values())[0]["size"]
         # On CPU, it should match, but on GPU, it will allocate more.
         # == rf_pack_padded_res.numel() * sizeof_float
     )

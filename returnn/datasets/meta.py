@@ -247,10 +247,10 @@ class MetaDataset(CachedDataset2):
         self.seq_order_control_dataset = seq_order_control_dataset
 
         # This will only initialize datasets needed for features occuring in data_map
-        self.datasets = {
+        self.datasets: Dict[str, Dataset] = {
             key: init_dataset(datasets[key], extra_kwargs={"name": "%s_%s" % (self.name, key)}, parent_dataset=self)
             for key in self.dataset_keys
-        }  # type: typing.Dict[str,Dataset]
+        }
 
         self._seq_list_file = seq_list_file
         self.seq_list_original = self._load_seq_list(seq_list_file)
@@ -260,8 +260,8 @@ class MetaDataset(CachedDataset2):
 
         self.tag_idx = {tag: idx for (idx, tag) in enumerate(self.seq_list_original[self.default_dataset_key])}
 
-        self._seq_lens = None  # type: typing.Optional[typing.Dict[str,NumbersDict]]
-        self._num_timesteps = None  # type: typing.Optional[NumbersDict]
+        self._seq_lens: Optional[Dict[str, NumbersDict]] = None
+        self._num_timesteps: Optional[NumbersDict] = None
         self._seq_lens_file = seq_lens_file
         if seq_lens_file:
             seq_lens = load_json(filename=seq_lens_file)
@@ -290,7 +290,7 @@ class MetaDataset(CachedDataset2):
         self.num_outputs = self.data_dims
 
         self.orig_seq_order_is_initialized = False
-        self.seq_list_ordered = None  # type: typing.Optional[typing.Dict[str,typing.List[str]]]
+        self.seq_list_ordered: Optional[Dict[str, List[str]]] = None
 
     def _load_seq_list(self, seq_list_file: Optional[Union[str, Dict[str, str]]] = None) -> Dict[str, List[str]]:
         """
@@ -312,10 +312,7 @@ class MetaDataset(CachedDataset2):
             try:
                 seq_list = default_dataset.get_all_tags()
             except NotImplementedError:
-                raise NotImplementedError(
-                    "Unsupported %s used as default in MetaDataset."
-                    " Only datasets with known and tagged sequences can be used." % type(default_dataset)
-                )
+                raise NotImplementedError(f"{default_dataset}.get_all_tags() required by {self}, but not implemented.")
 
             # Catch index out of bounds errors.
             # Whether the tags are actually valid will be checked in _check_dataset_seq().
@@ -774,7 +771,7 @@ class ConcatDataset(CachedDataset2):
         for ds in self.datasets[1:]:
             assert ds.num_inputs == self.num_inputs
             assert ds.num_outputs == self.num_outputs
-        self.dataset_seq_idx_offsets = None  # type: typing.Optional[typing.List[int]]
+        self.dataset_seq_idx_offsets: Optional[List[int]] = None
 
     def init_seq_order(self, epoch=None, seq_list=None, seq_order=None):
         """
@@ -1020,9 +1017,9 @@ class CombinedDataset(CachedDataset2):
             for (dset_key, dset_data_key), data_key in data_map.items()
         }
 
-        self.dataset_seq_idx_boundaries = None  # type: typing.Optional[typing.List[int]]
-        self.dataset_sorted_seq_idx_list = None  # type: typing.Optional[typing.List[typing.Tuple[int,int]]]
-        self.used_num_seqs_per_subset = None  # type: typing.Optional[typing.List[int]]
+        self.dataset_seq_idx_boundaries: Optional[List[int]] = None
+        self.dataset_sorted_seq_idx_list: Optional[List[Tuple[int, int]]] = None
+        self.used_num_seqs_per_subset: Optional[List[int]] = None
 
     def init_seq_order(self, epoch=None, seq_list=None, seq_order=None):
         """
@@ -1183,9 +1180,9 @@ class CombinedDataset(CachedDataset2):
         :rtype: list[int]
         """
         assert self.partition_epoch in [None, 1], "partition_epoch not supported in combination with sampling_sizes."
-        assert (
-            self._seq_order_seq_lens_file is None
-        ), "seq_order_seq_lens_file not supported in combination with sampling_sizes."
+        assert self._seq_order_seq_lens_file is None, (
+            "seq_order_seq_lens_file not supported in combination with sampling_sizes."
+        )
         assert not self.unique_seq_tags, "unique_seq_tags not supported in combination with sampling_sizes."
         assert self.seq_tags_filter is None, "seq_order_seq_lens_file in combination with sampling_sizes."
 
@@ -1448,7 +1445,7 @@ class ConcatSeqsDataset(CachedDataset2):
         self.repeat_in_between_last_frame_up_to_multiple_of = repeat_in_between_last_frame_up_to_multiple_of or {}
         self.pad_narrow_data_to_multiple_of_target_len = pad_narrow_data_to_multiple_of_target_len or {}
         if epoch_wise_filter is None:
-            self.epoch_wise_filter = None  # type: Optional[EpochWiseFilter]
+            self.epoch_wise_filter: Optional[EpochWiseFilter] = None
         elif isinstance(epoch_wise_filter, dict):
             self.epoch_wise_filter = EpochWiseFilter(epoch_wise_filter)
         else:
@@ -1474,10 +1471,8 @@ class ConcatSeqsDataset(CachedDataset2):
         self.seq_lens = eval(open(seq_len_file).read())
         assert isinstance(self.seq_lens, dict)
         self.full_seq_len_list = self._get_full_seq_lens_list()
-        self.cur_seq_list = None  # type: typing.Optional[typing.List[str]]  # list of seq tags
-        self.cur_sub_seq_idxs = (
-            None
-        )  # type: typing.Optional[typing.List[typing.List[int]]]  # list of list of sub seq idxs
+        self.cur_seq_list: typing.Optional[typing.List[str]] = None  # list of seq tags
+        self.cur_sub_seq_idxs: typing.Optional[typing.List[typing.List[int]]] = None  # list of list of sub seq idxs
 
     def _get_full_seq_lens_list(self):
         """
@@ -1567,20 +1562,22 @@ class ConcatSeqsDataset(CachedDataset2):
         if seq_idx == 0:  # some extra check, but enough to do for first seq only
             sub_dataset_keys = self.dataset.get_data_keys()
             for key in self.remove_in_between_postfix:
-                assert (
-                    key in sub_dataset_keys
-                ), "%s: remove_in_between_postfix key %r not in sub dataset data-keys %r" % (
-                    self,
-                    key,
-                    sub_dataset_keys,
+                assert key in sub_dataset_keys, (
+                    "%s: remove_in_between_postfix key %r not in sub dataset data-keys %r"
+                    % (
+                        self,
+                        key,
+                        sub_dataset_keys,
+                    )
                 )
             for key in self.repeat_in_between_last_frame_up_to_multiple_of:
-                assert (
-                    key in sub_dataset_keys
-                ), "%s: repeat_in_between_last_frame_up_to_multiple_of key %r not in sub dataset data-keys %r" % (
-                    self,
-                    key,
-                    sub_dataset_keys,
+                assert key in sub_dataset_keys, (
+                    "%s: repeat_in_between_last_frame_up_to_multiple_of key %r not in sub dataset data-keys %r"
+                    % (
+                        self,
+                        key,
+                        sub_dataset_keys,
+                    )
                 )
             for key in self.pad_narrow_data_to_multiple_of_target_len:
                 assert key in sub_dataset_keys, (
@@ -1590,15 +1587,16 @@ class ConcatSeqsDataset(CachedDataset2):
         for sub_seq_idx, sub_seq_tag in zip(sub_seq_idxs, sub_seq_tags):
             self.dataset.load_seqs(sub_seq_idx, sub_seq_idx + 1)
             sub_dataset_tag = self.dataset.get_tag(sub_seq_idx)
-            assert (
-                sub_dataset_tag == sub_seq_tag
-            ), "%s: expected tag %r for sub seq idx %i but got %r, part of seq %i %r" % (
-                self,
-                sub_seq_tag,
-                sub_seq_idx,
-                sub_dataset_tag,
-                seq_idx,
-                seq_tag,
+            assert sub_dataset_tag == sub_seq_tag, (
+                "%s: expected tag %r for sub seq idx %i but got %r, part of seq %i %r"
+                % (
+                    self,
+                    sub_seq_tag,
+                    sub_seq_idx,
+                    sub_dataset_tag,
+                    seq_idx,
+                    seq_tag,
+                )
             )
             for key in self.get_data_keys():
                 data = self.dataset.get_data(sub_seq_idx, key)
@@ -1858,12 +1856,14 @@ class VariableDataset(Dataset):
     based on a user-provided function.
     """
 
-    def __init__(self, *, get_dataset, dataset_lru_cache_size: int = 1, **kwargs):
+    def __init__(self, *, get_dataset, dataset_lru_cache_size: int = 1, always_same_tags: bool = False, **kwargs):
         """
         :param get_dataset: function (*, epoch: int, **_) -> Dict[str,Any], will be called for every sub-epoch.
             It will cache the dataset(s) from the prev call (dataset_lru_cache_size),
             and if the dict is the same of those, it will not recreate the dataset.
-        :param dataset_lru_cache_size
+        :param dataset_lru_cache_size:
+        :param always_same_tags: whether all the datasets returned by ``get_dataset`` will have the same tags
+            (same :func:`get_all_tags`).
         """
         from functools import lru_cache
 
@@ -1872,6 +1872,7 @@ class VariableDataset(Dataset):
         self._dataset_dict: Optional[Dict[str, Any]] = None
         self._dataset: Optional[Dataset] = None
         self._dataset_lru_cache_size = dataset_lru_cache_size
+        self._always_same_tags = always_same_tags
         self._make_dataset = lru_cache(maxsize=self._dataset_lru_cache_size)(
             lambda dataset_dict: init_dataset(dataset_dict, parent_dataset=self)
         )
@@ -1978,6 +1979,12 @@ class VariableDataset(Dataset):
     def is_data_sparse(self, key: str) -> bool:
         """is data sparse"""
         return self._dataset.is_data_sparse(key)
+
+    def get_all_tags(self) -> List[str]:
+        """all tags"""
+        if self._always_same_tags:
+            return self._dataset.get_all_tags()
+        raise OptionalNotImplementedError(f"{self}.get_all_tags(): always_same_tags=False, thus could be inconsistent")
 
 
 class MultiEpochDataset(CachedDataset2):

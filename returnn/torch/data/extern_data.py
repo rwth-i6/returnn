@@ -28,12 +28,14 @@ def raw_dict_to_extern_data(
     extern_data_template: TensorDict,
     device: Union[str, torch.device],
     float_dtype: Optional[Union[str, torch.dtype]] = None,
+    with_eval_targets: bool = False,
 ) -> TensorDict:
     """
     :param extern_data_raw: This comes out of the DataLoader, via our collate_batch.
     :param extern_data_template: Specified via `extern_data` in the config.
     :param device: E.g. the GPU.
     :param float_dtype:
+    :param with_eval_targets: if False, we skip all tensors with ``available_for_inference=False``.
     :return: tensor dict, like extern_data_template, but with raw tensors set to Torch tensors, on the right device.
     """
     if isinstance(float_dtype, str):
@@ -47,14 +49,16 @@ def raw_dict_to_extern_data(
         batch_dim.dyn_size_ext = Tensor(batch_dim.name or "batch", dims=[], dtype="int32")
     extern_data = TensorDict()
     for k, data in extern_data_template.data.items():
+        if not with_eval_targets and not data.available_for_inference:
+            continue
         data = data.copy_template()
         raw_tensor = extern_data_raw[k]
         assert len(raw_tensor.shape) == data.batch_ndim, f"ndim mismatch for {k}: {raw_tensor.shape} vs {data}"
         for i, dim in enumerate(data.dims):
             if dim.dimension is not None:
-                assert (
-                    dim.dimension == raw_tensor.shape[i]
-                ), f"shape mismatch for {k}: {raw_tensor.shape} vs {data.batch_shape}"
+                assert dim.dimension == raw_tensor.shape[i], (
+                    f"shape mismatch for {k}: {raw_tensor.shape} vs {data.batch_shape}"
+                )
         if isinstance(raw_tensor, torch.Tensor):
             if raw_tensor.dtype.is_floating_point and float_dtype:
                 raw_tensor = raw_tensor.to(dtype=float_dtype)
@@ -77,8 +81,7 @@ def raw_dict_to_extern_data(
             and (data.dims[1].dyn_size_ext is None or data.dims[1].dyn_size_ext.raw_tensor is None)
         ):
             assert k + ":seq_len" in extern_data_raw, (
-                f"extern_data {data}, dyn spatial dim, missing {k}:seq_len in raw dict, "
-                f"check dataset or collate_batch"
+                f"extern_data {data}, dyn spatial dim, missing {k}:seq_len in raw dict, check dataset or collate_batch"
             )
             size = extern_data_raw[k + ":seq_len"]
             # Sequence lengths have to be on CPU for the later call to rnn.pack_padded_sequence

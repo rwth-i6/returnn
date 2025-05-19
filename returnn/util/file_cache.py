@@ -126,11 +126,8 @@ class FileCache:
                     raise e
         if last_error is not None:
             raise last_error
-        info_file = self._get_info_filename(dst_filename)
-        os.utime(dst_filename, None)
-        os.utime(info_file, None)
         # protect info file from tempreaper, which looks at the mtime
-        self._touch_files_thread.files_extend([dst_filename, info_file])
+        self._touch_files_thread.files_extend([dst_filename, self._get_info_filename(dst_filename)])
         return dst_filename
 
     def release_files(self, filenames: Union[str, Iterable[str]]):
@@ -181,6 +178,9 @@ class FileCache:
                 elif self._is_info_filename(fn):
                     # skip keepalive files, they are processed together with the file they guard
                     continue
+                elif self._is_lock_filename(fn):
+                    # skip lock files, removing them would accidentally release locks
+                    continue
                 try:
                     f_stat = os.stat(fn)
                 except Exception as exc:
@@ -203,45 +203,85 @@ class FileCache:
         for mtime, neg_size, fn in all_files:
             size = -neg_size
             delete_reason = None
-            if cur_time - mtime > self._cleanup_files_always_older_than_days * 60 * 60 * 24:
-                delete_reason = f"File is {(cur_time - mtime) / 60 / 60 / 24:.1f} days old"
-            else:
-                reached_more_recent_files = True
-            if not delete_reason and need_at_least_free_space_size > cur_expected_free:
-                # Still must delete some files.
-                if cur_time - mtime > cur_used_time_threshold:
-                    delete_reason = f"Still need more space, file is {(cur_time - mtime) / 60 / 60:.1f} hours old"
-                else:
-                    raise Exception(
-                        f"We cannot free enough space on {self.cache_directory}.\n"
-                        f"Needed: {human_bytes_size(need_at_least_free_space_size)},\n"
-                        f"currently available: {human_bytes_size(cur_expected_free)},\n"
-                        f"oldest file is still too recent: {fn}.\n"
-                        f"{report_size_str}"
-                    )
-            if not delete_reason and want_free_space_size > cur_expected_free:
-                if cur_time - mtime > self._cleanup_files_wanted_older_than_days * 60 * 60 * 24:
-                    delete_reason = f"Still want more space, file is {(cur_time - mtime) / 60 / 60:.1f} hours old"
-                else:
-                    # All further files are even more recent, so we would neither cleanup them,
-                    # so we can also just stop now.
-                    break
 
-            if delete_reason:
-                cur_expected_free += size
-                print(
-                    f"FileCache: Delete file {fn}, size {human_bytes_size(size)}. {delete_reason}."
-                    f" After deletion, have {human_bytes_size(cur_expected_free)} free space."
-                )
+            lock_dir, lock_file_name = self._get_lock_filename(fn)
+            lock_file = LockFile(directory=lock_dir, name=lock_file_name, lock_timeout=self._lock_timeout)
+            if not lock_file.try_lock():
+                print(f"FileCache: lock for {fn} is currently held, skipping.")
+                continue
+            try:
+                # Re-check mtime with lock, could have been updated by another
+                # process in the meantime.
+                # We do not update the `mtime` variable here, because the code
+                # assumes that the list of files is sorted by mtime to abort
+                # early when enough space has been made.
+                # Instead, we treat the case where the mtime was updated during
+                # cleanup as an outlier and continue as if no other mtimes had
+                # changed.
+                # See for discussion:
+                #   - https://github.com/rwth-i6/returnn/issues/1675
+                #   - https://github.com/rwth-i6/returnn/pull/1709
                 try:
-                    os.remove(fn)
+                    cur_mtime = os.stat(fn).st_mtime
+                except FileNotFoundError:
+                    # File was deleted while waiting for the lock, or because it was
+                    # a temporary copy file and was renamed to its final location.
+                    # Since we don't know whether it was actually deleted or just
+                    # renamed, we leave cur_expected_free unchanged.
+                    continue
                 except Exception as exc:
-                    print(f"FileCache: Error while removing {fn}: {type(exc).__name__}: {exc}")
-                    cur_expected_free -= size
-                try:
-                    os.remove(self._get_info_filename(fn))
-                except Exception as exc:
-                    print(f"FileCache: Ignoring error file removing info file of {fn}: {type(exc).__name__}: {exc}")
+                    print(f"FileCache: Error refreshing mtime of {fn}: {type(exc).__name__}: {exc}")
+                    continue
+                if cur_mtime > mtime and (time.time() - cur_mtime) <= cur_used_time_threshold:
+                    print(f"FileCache: {fn} has been updated during cleanup, skipping.")
+                    continue
+                if cur_time - mtime > self._cleanup_files_always_older_than_days * 60 * 60 * 24:
+                    delete_reason = f"File is {(cur_time - mtime) / 60 / 60 / 24:.1f} days old"
+                else:
+                    reached_more_recent_files = True
+                if not delete_reason and need_at_least_free_space_size > cur_expected_free:
+                    # Still must delete some files.
+                    if cur_time - mtime > cur_used_time_threshold:
+                        delete_reason = f"Still need more space, file is {(cur_time - mtime) / 60 / 60:.1f} hours old"
+                    else:
+                        raise Exception(
+                            f"We cannot free enough space on {self.cache_directory}.\n"
+                            f"Needed: {human_bytes_size(need_at_least_free_space_size)},\n"
+                            f"currently available: {human_bytes_size(cur_expected_free)},\n"
+                            f"oldest file is still too recent: {fn}.\n"
+                            f"{report_size_str}"
+                        )
+                if not delete_reason and want_free_space_size > cur_expected_free:
+                    if cur_time - mtime > self._cleanup_files_wanted_older_than_days * 60 * 60 * 24:
+                        delete_reason = f"Still want more space, file is {(cur_time - mtime) / 60 / 60:.1f} hours old"
+                    else:
+                        # All further files are even more recent, so we would neither cleanup them,
+                        # so we can also just stop now.
+                        break
+
+                if delete_reason:
+                    cur_expected_free += size
+                    print(
+                        f"FileCache: Delete file {fn}, size {human_bytes_size(size)}. {delete_reason}."
+                        f" After deletion, have {human_bytes_size(cur_expected_free)} free space."
+                    )
+                    try:
+                        os.remove(fn)
+                    except Exception as exc:
+                        if not isinstance(exc, FileNotFoundError):
+                            print(f"FileCache: Error while removing {fn}: {type(exc).__name__}: {exc}")
+
+                        # We don't know whether the file was just renamed or actually deleted, so
+                        # we do as if its space has not been freed.
+                        cur_expected_free -= size
+                    try:
+                        os.remove(self._get_info_filename(fn))
+                    except FileNotFoundError:
+                        pass
+                    except Exception as exc:
+                        print(f"FileCache: Ignoring error file removing info file of {fn}: {type(exc).__name__}: {exc}")
+            finally:
+                lock_file.unlock()
 
             if reached_more_recent_files and want_free_space_size <= cur_expected_free:
                 # Have enough free space now.
@@ -312,6 +352,16 @@ class FileCache:
         return f"{filename}.returnn-info"
 
     @staticmethod
+    def _get_lock_filename(filename: str) -> Tuple[str, str]:
+        """:return: lock file target directory and lock file name"""
+        return os.path.dirname(filename), os.path.basename(filename) + ".returnn-lock"
+
+    @staticmethod
+    def _is_lock_filename(filename: str) -> bool:
+        """:return: whether `filename` points to a lock file."""
+        return filename.endswith(".returnn-lock")
+
+    @staticmethod
     def _is_info_filename(filename: str) -> bool:
         """:return: whether `filename` points to a info file."""
         return filename.endswith(".returnn-info")
@@ -324,13 +374,22 @@ class FileCache:
         dst_dir = os.path.dirname(dst_filename)
         os.makedirs(dst_dir, exist_ok=True)
 
+        lock_dir, lock_file = self._get_lock_filename(dst_filename)
+        info_file_name = self._get_info_filename(dst_filename)
+
         # Copy the file, while holding a lock. See comment on lock_timeout above.
         with LockFile(
-            directory=dst_dir, name=os.path.basename(dst_filename) + ".lock", lock_timeout=self._lock_timeout
+            directory=lock_dir, name=lock_file, lock_timeout=self._lock_timeout
         ) as lock, self._touch_files_thread.files_added_context(lock.lockfile):
             # Maybe it was copied in the meantime, while waiting for the lock.
             if self._check_existing_copied_file_maybe_cleanup(src_filename, dst_filename):
                 print(f"FileCache: using existing file {dst_filename}")
+                # Update mtime while holding lock, to synchronize with any concurrent cleanup.
+                # See for discussion:
+                #   - https://github.com/rwth-i6/returnn/issues/1675
+                #   - https://github.com/rwth-i6/returnn/pull/1709
+                os.utime(dst_filename, None)
+                os.utime(info_file_name, None)
                 return
 
             print(f"FileCache: Copy file {src_filename} to cache")
@@ -352,7 +411,7 @@ class FileCache:
             with self._touch_files_thread.files_added_context(dst_dir):
                 # save mtime before the copy process to have it pessimistic
                 orig_mtime_ns = os.stat(src_filename).st_mtime_ns
-                FileInfo(mtime_ns=orig_mtime_ns).save(self._get_info_filename(dst_filename))
+                FileInfo(mtime_ns=orig_mtime_ns).save(info_file_name)
 
                 _copy_with_prealloc(src_filename, dst_tmp_filename)
                 os.rename(dst_tmp_filename, dst_filename)

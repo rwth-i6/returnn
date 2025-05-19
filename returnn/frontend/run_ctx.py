@@ -7,7 +7,8 @@ or forwarding loop.
 """
 
 from __future__ import annotations
-from typing import Optional, Union, Any, Sequence, Dict
+from typing import Optional, Union, Any, Callable, Sequence, Dict, List
+from types import FunctionType
 from dataclasses import dataclass
 from contextlib import contextmanager
 from returnn.tensor import Tensor, Dim, TensorDict, batch_dim
@@ -101,7 +102,7 @@ class RunCtx:
             - "forward_step", for mark_as_output
         """
         self._stage = stage
-        self._train_flag = train_flag
+        self._train_flags_stack: List[Dict[Optional[FunctionType], Union[Tensor, bool]]] = [{None: train_flag}]
         self._step = step
         self._epoch = epoch
         self.losses = {}  # type: Dict[str, Loss]
@@ -121,14 +122,17 @@ class RunCtx:
     @property
     def train_flag(self) -> Union[bool, Tensor]:
         """
-        :return: whether we are in training mode, i.e. the model is updated,
-            and we are supposed to use dropout and similar mechanisms.
-            In a graph-based backend, this can be dynamic.
+        :return: ``is_train_flag_enabled(func=None)``. See :func:`is_train_flag_enabled`.
         """
-        return self._train_flag
+        return self.is_train_flag_enabled(func=None)
 
     @contextmanager
-    def train_flag_ctx(self, train_flag: Union[bool, Tensor]):
+    def train_flag_ctx(
+        self,
+        train_flag: Union[bool, Tensor],
+        *,
+        func: Optional[Union[Sequence[Union[FunctionType, Callable]], FunctionType, Callable]] = None,
+    ):
         """
         Context manager to temporarily set the train_flag.
 
@@ -137,14 +141,51 @@ class RunCtx:
             with rf.get_run_ctx().train_flag_ctx(False):
                 ...
 
-        :param train_flag: whether we are in training mode
+        :param train_flag: whether we are in training mode.
+            In a graph-based backend, this can be dynamic (scalar Tensor, not just bool).
+        :param func: if given, the train flag is only enabled/disabled for this specific function(s)
+            (e.g. ``rf.dropout`` or ``rf.BatchNorm.__call__``).
+            (See https://github.com/rwth-i6/returnn/issues/1712 for some discussion.)
+            (Note: We expect a Python function, not just any general Callable. But typing seems to get this wrong.)
         """
-        old_train_flag = self.train_flag
-        self._train_flag = train_flag
+        old_train_flags = self._train_flags_stack[-1]
+        new_train_flags = old_train_flags.copy()
+        if func is None:
+            new_train_flags[None] = train_flag
+        elif isinstance(func, FunctionType):
+            new_train_flags[func] = train_flag
+        elif isinstance(func, (list, tuple)):
+            for f in func:
+                if not isinstance(f, FunctionType):
+                    raise TypeError(f"Expected function, got {type(f)}")
+                new_train_flags[f] = train_flag
+        else:
+            raise TypeError(f"Expected function or sequence of functions, got {type(func)}")
+        self._train_flags_stack.append(new_train_flags)
         try:
             yield
         finally:
-            self._train_flag = old_train_flag
+            last = self._train_flags_stack.pop(-1)
+            assert last is new_train_flags
+            assert len(self._train_flags_stack) >= 1
+
+    def is_train_flag_enabled(self, *, func: Optional[Union[FunctionType, Callable]]) -> Union[bool, Tensor]:
+        """
+        :param func: function for which we want to check the train flag
+            (e.g. ``rf.dropout`` or ``rf.BatchNorm.__call__``),
+            or None for the global fallback.
+            (See https://github.com/rwth-i6/returnn/issues/1712 for some discussion.)
+        :return: Whether the train flag is enabled, either for the specific function, or globally.
+            Training is usually when the model is updated,
+            and we are supposed to use dropout and similar mechanisms.
+            This is either for the specified function, or globally.
+            In a graph-based backend, this can also be dynamic (scalar Tensor, not just bool).
+        """
+        train_flags = self._train_flags_stack[-1]
+        if func in train_flags:
+            return train_flags[func]
+        assert isinstance(func, FunctionType)
+        return train_flags[None]  # global fallback. this should always be defined, see __init__
 
     @property
     def step(self) -> Union[int, Tensor]:
@@ -265,19 +306,19 @@ class RunCtx:
         assert self.stage == "forward_step"
 
         if self.expected_outputs is not None:
-            assert (
-                name in self.expected_outputs.data
-            ), f"mark_as_output: unexpected output {name!r}, we expect outputs: {self.expected_outputs}"
+            assert name in self.expected_outputs.data, (
+                f"mark_as_output: unexpected output {name!r}, we expect outputs: {self.expected_outputs}"
+            )
         expected_output = self.expected_outputs.data[name] if self.expected_outputs else None
-        assert dims is None or (
-            isinstance(dims, (list, tuple)) and all(isinstance(dim, Dim) for dim in dims)
-        ), f"dims should be a tuple of Dims, got {dims}"
+        assert dims is None or (isinstance(dims, (list, tuple)) and all(isinstance(dim, Dim) for dim in dims)), (
+            f"dims should be a tuple of Dims, got {dims}"
+        )
         if dims is None and expected_output is not None:
             dims = expected_output.dims
         if dims is not None and expected_output is not None:
-            assert expected_output.dims == tuple(
-                dims
-            ), f"mark_as_output: {name!r} dims mismatch from expected output, given {dims}, expected {expected_output}"
+            assert expected_output.dims == tuple(dims), (
+                f"mark_as_output: {name!r} dims mismatch from expected output, given {dims}, expected {expected_output}"
+            )
 
         if not isinstance(tensor, Tensor):
             assert isinstance(tensor, _backend.global_backend.RawTensorType)

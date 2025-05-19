@@ -141,13 +141,14 @@ class PostprocessingDataset(CachedDataset2):
         self._map_seq_stream = map_seq_stream
         if map_seq_stream_preserves_num_seqs is None and map_seq_stream is not None:
             map_seq_stream_preserves_num_seqs = getattr(map_seq_stream, "preserves_num_seqs", None)
-        self._map_seq_stream_preserves_num_seqs = map_seq_stream_preserves_num_seqs or False
+        assert map_seq_stream_preserves_num_seqs is None or isinstance(map_seq_stream_preserves_num_seqs, bool)
+        self._map_seq_stream_preserves_num_seqs = map_seq_stream_preserves_num_seqs
         self._map_outputs = map_outputs
         self._rng = RandomState(self._get_random_seed_for_epoch(0))
         self._seq_list_for_validation: Optional[List[str]] = None
 
         self._dataset = init_dataset(self._dataset_def, parent_dataset=self)
-        if self._map_seq_stream is None or self._map_seq_stream_preserves_num_seqs:
+        if self._map_seq_stream is None or self._map_seq_stream_preserves_num_seqs is True:
             # if the stream mapper is set, the num_seqs may change and the estimation is less accurate
             self._estimated_num_seqs = self._dataset.estimated_num_seqs
         self._data_iter: Optional[Iterator[Tuple[int, TensorDict]]] = None
@@ -210,7 +211,7 @@ class PostprocessingDataset(CachedDataset2):
         self._data_iter = enumerate(self._build_mapping_iter())
         self._data_iter_produced_num_seqs = 0
         self._seq_list_for_validation = seq_list
-        if self._map_seq_stream is None or self._map_seq_stream_preserves_num_seqs:
+        if self._map_seq_stream is None or self._map_seq_stream_preserves_num_seqs is True:
             # If we don't have an iterable mapper (or the user explicitly specifies this),
             # we know the number of segments exactly equals the number of segments in the wrapped dataset
             try:
@@ -242,6 +243,13 @@ class PostprocessingDataset(CachedDataset2):
             )
         assert self._dataset is not None
         return self._dataset.get_total_num_seqs(fast=fast)
+
+    def get_all_tags(self) -> List[str]:
+        """:return: all tags"""
+        if self._map_seq_stream is not None:
+            raise util.OptionalNotImplementedError(f"{self}: get_all_tags not allowed when map_seq_stream is set.")
+        assert self._dataset is not None
+        return self._dataset.get_all_tags()
 
     def supports_sharding(self) -> bool:
         """:return: whether this dataset supports sharding"""
@@ -300,19 +308,26 @@ class PostprocessingDataset(CachedDataset2):
                     last_complete_frac = complete_frac
                 for data_key, out_t in self._out_tensor_dict_template.data.items():
                     in_t = t_dict.data[data_key]
-                    assert (
-                        in_t.ndim == out_t.batch_ndim
-                        and in_t.dtype == out_t.dtype
-                        and all(d.dimension in (d_, None) for (d, d_) in zip(in_t.dims, out_t.shape))
+                    assert in_t.ndim == out_t.batch_ndim, (
+                        f"Dim number mismatch for {data_key}: {in_t.ndim} != {out_t.batch_ndim}. "
+                        "Postprocessing data tensors must not have a batch dimension."
                     )
+                    assert in_t.dtype == out_t.dtype, (
+                        f"dtype mismatch for {data_key}: '{in_t.dtype}' != '{out_t.dtype}'"
+                    )
+                    for i, (in_dim, out_shape) in enumerate(zip(in_t.dims, out_t.shape)):
+                        assert in_dim.dimension is None or in_dim.dimension == out_shape, (
+                            f"Dim {i} mismatch on {data_key}: "
+                            f"{in_dim.dimension} must either be `None` or equal {out_shape}"
+                        )
                 yield t_dict
 
         data_iter = self._iterate_dataset()
         if self._map_seq_stream is not None:
             data_iter = self._map_seq_stream(data_iter, epoch=self.epoch, rng=self._rng, **util.get_fwd_compat_kwargs())
-            assert isinstance(
-                data_iter, Iterator
-            ), f"map_seq_stream must produce an {Iterator.__name__}, but produced {type(data_iter).__name__}"
+            assert isinstance(data_iter, Iterator), (
+                f"map_seq_stream must produce an {Iterator.__name__}, but produced {type(data_iter).__name__}"
+            )
         return _validate_tensor_dict_iter(data_iter)
 
     def _iterate_dataset(self) -> Iterator[TensorDict]:
@@ -341,9 +356,9 @@ class PostprocessingDataset(CachedDataset2):
                 tensor_dict = self._map_seq(
                     tensor_dict, epoch=self.epoch, seq_idx=seq_index, rng=self._rng, **util.get_fwd_compat_kwargs()
                 )
-                assert isinstance(
-                    tensor_dict, TensorDict
-                ), f"map_seq must produce a {TensorDict.__name__}, but produced {type(tensor_dict).__name__}"
+                assert isinstance(tensor_dict, TensorDict), (
+                    f"map_seq must produce a {TensorDict.__name__}, but produced {type(tensor_dict).__name__}"
+                )
 
                 # Re-adding the seq_tag/complete_frac here causes no harm in case they are dropped
                 # since we don't add/drop any segments w/ the non-iterator postprocessing function.
@@ -359,9 +374,9 @@ class PostprocessingDataset(CachedDataset2):
                 if self._seq_list_for_validation is not None:
                     seq_tag = self._seq_list_for_validation[seq_index]
                     tag_of_seq = tensor_dict.data["seq_tag"].raw_tensor.item()
-                    assert (
-                        tag_of_seq == seq_tag
-                    ), f"seq tag mismath: {tag_of_seq} != {seq_tag} for seq index {seq_index} when seq list is given"
+                    assert tag_of_seq == seq_tag, (
+                        f"seq tag mismath: {tag_of_seq} != {seq_tag} for seq index {seq_index} when seq list is given"
+                    )
 
             yield tensor_dict
             seq_index += 1

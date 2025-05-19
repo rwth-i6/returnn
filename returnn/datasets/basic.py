@@ -20,7 +20,7 @@ import math
 import numpy
 import functools
 import typing
-from typing import TYPE_CHECKING, Optional, Any, Union, Type, Dict, Sequence, List, Callable
+from typing import TYPE_CHECKING, Optional, Any, Set, Tuple, Union, Type, Dict, Sequence, List, Callable
 
 from returnn.log import log
 from returnn.engine.batch import Batch, BatchSetGenerator
@@ -141,12 +141,10 @@ class Dataset:
         :param int _shard_index: local shard index, when sharding is enabled
         """
         self.name = name or ("dataset_id%s" % id(self))
-        self.lock = None  # type: Optional[RLock]  # Used when manipulating our data potentially from multiple threads.
-        self.rnd_seq_drop = None  # type: typing.Optional[Random]
+        self.lock: Optional[RLock] = None  # Used when manipulating our data potentially from multiple threads.
+        self.rnd_seq_drop: Optional[Random] = None
         self.num_inputs = 0  # usually not used, but num_outputs instead, which is more generic
-        self.num_outputs = (
-            None
-        )  # type: typing.Optional[typing.Dict[str,typing.Tuple[int,int]]]  # tuple is num-classes, len(shape).  # nopep8
+        self.num_outputs: Optional[Dict[str, Tuple[int, int]]] = None  # tuple is num-classes, len(shape).
         self.window = window
         self.seq_ordering = seq_ordering  # "default", "sorted" or "random". See self.get_seq_order_for_epoch().
         self.fixed_random_seed = fixed_random_seed
@@ -159,10 +157,10 @@ class Dataset:
         self._seq_order_seq_lens_file = seq_order_seq_lens_file
         self._seq_order_seq_lens_by_idx = None
         # There is probably no use case for combining the two, so avoid potential misconfiguration.
-        assert (
-            self.partition_epoch == 1 or self.repeat_epoch == 1
-        ), "Combining partition_epoch and repeat_epoch is prohibited."
-        self.labels = {}  # type: typing.Dict[str,typing.List[str]]
+        assert self.partition_epoch == 1 or self.repeat_epoch == 1, (
+            "Combining partition_epoch and repeat_epoch is prohibited."
+        )
+        self.labels: Dict[str, List[str]] = {}
         self.weights = {}
         self._num_timesteps = 0
         self._num_seqs = 0
@@ -213,8 +211,8 @@ class Dataset:
             getattr(self, "epoch", "<unknown>"),
         )
 
-    _getnewargs_exclude_attrs = set()  # type: typing.Set[str]
-    _getnewargs_remap = {}  # type: typing.Dict[str,str]
+    _getnewargs_exclude_attrs: Set[str] = set()
+    _getnewargs_remap: Dict[str, str] = {}
 
     @staticmethod
     def _create_from_reduce(cls, kwargs, state) -> Dataset:
@@ -660,12 +658,13 @@ class Dataset:
             )
             old_seq_index = seq_index
             seq_index = [i for i in seq_index if all_seq_tags[i] in self.seq_tags_filter]
-            assert (
-                seq_index
-            ), "%s: empty after applying seq_list_filter_file. Example filter tags: %r, used tags: %r" % (
-                self,
-                sorted(self.seq_tags_filter)[:3],
-                [all_seq_tags[i] for i in old_seq_index[:3]],
+            assert seq_index, (
+                "%s: empty after applying seq_list_filter_file. Example filter tags: %r, used tags: %r"
+                % (
+                    self,
+                    sorted(self.seq_tags_filter)[:3],
+                    [all_seq_tags[i] for i in old_seq_index[:3]],
+                )
             )
         return seq_index
 
@@ -736,9 +735,9 @@ class Dataset:
         """
         self.epoch = epoch
         self.rnd_seq_drop = Random(self._get_random_seed_for_epoch(epoch=epoch))
-        assert (
-            self._num_shards == 1 or self.supports_sharding()
-        ), f"{self}: does not support sharding, but got num_shards == {self._num_shards}"
+        assert self._num_shards == 1 or self.supports_sharding(), (
+            f"{self}: does not support sharding, but got num_shards == {self._num_shards}"
+        )
         return False
 
     def finish_epoch(self, *, free_resources: bool = False):
@@ -864,18 +863,16 @@ class Dataset:
             data = self.get_data(seq_idx, key)
             return data[s0_start:s0_end]
 
-    def get_tag(self, sorted_seq_idx):
+    def get_tag(self, sorted_seq_idx: int) -> str:
         """
-        :param int sorted_seq_idx:
-        :rtype: str
+        :param sorted_seq_idx:
         """
         return "seq-%i" % sorted_seq_idx
 
-    def get_all_tags(self):
+    def get_all_tags(self) -> List[str]:
         """
         :return: list of all seq tags, of the whole dataset, without partition epoch.
           Note that this is not possible with all datasets.
-        :rtype: list[str]
         """
         raise OptionalNotImplementedError(f"{self} get_all_tags not implemented")
 
@@ -972,16 +969,16 @@ class Dataset:
             except Exception:  # also not always available
                 num_seqs = None  # ignore
 
-        if math.isinf(num_seqs):
+        if num_seqs is not None and math.isinf(num_seqs):
             if allow_only_lr_suitable:
                 # cannot compute meaningful complete_frac for infinite num_seqs
                 return None
             else:
                 num_seqs = None
 
-        assert (
-            num_seqs is None or 0 <= sorted_seq_idx < num_seqs
-        ), f"{self}: invalid seq indices: 0 <= seq_idx ({sorted_seq_idx}) < num_seqs ({num_seqs}) violated"
+        assert num_seqs is None or 0 <= sorted_seq_idx < num_seqs, (
+            f"{self}: invalid seq indices: 0 <= seq_idx ({sorted_seq_idx}) < num_seqs ({num_seqs}) violated"
+        )
         return self.generic_complete_frac(sorted_seq_idx, num_seqs)
 
     @property
@@ -1118,7 +1115,9 @@ class Dataset:
 
     def serialize_data(self, key: str, data: numpy.ndarray) -> str:
         """
-        In case you have a :class:`Vocabulary`, just use :func:`Vocabulary.get_seq_labels`.
+        This is deprecated, as this is slow!
+        In case you have a :class:`Vocabulary`, just use :func:`Vocabulary.get_seq_labels`
+        or :func:`Vocabulary.serialize_labels`.
 
         :param key: e.g. "classes". self.labels[key] should be set
         :param numpy.ndarray data: 0D or 1D

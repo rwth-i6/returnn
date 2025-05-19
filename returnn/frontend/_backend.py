@@ -1509,9 +1509,10 @@ def get_backend_by_raw_tensor_type(tensor_type: Type[T]) -> Union[Type[Backend[T
         else:
             continue
 
-        assert any(
-            issubclass(base_type, type_) for type_ in tensor_types
-        ), f"tensor type {tensor_type} base_type {base_type} not in {tensor_types}, expected for backend {backend_type}"
+        assert any(issubclass(base_type, type_) for type_ in tensor_types), (
+            f"tensor type {tensor_type} base_type {base_type} not in {tensor_types}, "
+            f"expected for backend {backend_type}"
+        )
         for base_type_ in tensor_types:
             register_backend_by_tensor_type(base_type_, backend_type)
         return backend_type

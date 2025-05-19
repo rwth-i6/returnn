@@ -421,9 +421,9 @@ class TorchBackend(Backend[torch.Tensor]):
         else:  # not allow_broadcast
             for source, dim in sources:
                 templ_dims = other_dims[:axis] + [dim] + other_dims[axis:]
-                assert set(templ_dims) == set(
-                    source.dims
-                ), f"concat {source} {dim} not allowed with allow_broadcast=False"
+                assert set(templ_dims) == set(source.dims), (
+                    f"concat {source} {dim} not allowed with allow_broadcast=False"
+                )
                 source_ = source.copy_transpose(templ_dims)
                 sources_raw.append(source_.raw_tensor)
         out = Tensor(
@@ -612,9 +612,9 @@ class TorchBackend(Backend[torch.Tensor]):
         assert axis in logits.dims, "Specified axis not present in logits."
 
         if axis == targets.sparse_dim:
-            assert (
-                logits.dims_set - {axis} == targets.dims_set
-            ), "logits Dims and target Dims have to match (except for implicit sparse_dim)."
+            assert logits.dims_set - {axis} == targets.dims_set, (
+                "logits Dims and target Dims have to match (except for implicit sparse_dim)."
+            )
 
             logits_dim_order = list(targets.dims)
             if len(logits_dim_order) > 0:
@@ -629,9 +629,9 @@ class TorchBackend(Backend[torch.Tensor]):
                 targets.raw_tensor = targets.raw_tensor.long()
 
         else:
-            assert (
-                not targets.sparse_dim
-            ), "We expect that cross entropy would always be calculated along the sparse dim, if there is one."
+            assert not targets.sparse_dim, (
+                "We expect that cross entropy would always be calculated along the sparse dim, if there is one."
+            )
             assert logits.dims_set == targets.dims_set, "logits Dims and target Dims have to match."
             assert axis in targets.dims, "Specified axis not present in targets."
 
@@ -1348,12 +1348,12 @@ class TorchBackend(Backend[torch.Tensor]):
         a_dims = a.dims
         b_dims = b.dims
 
-        assert all(
-            dim in a_dims for dim in reduce
-        ), f"'a' does not have the specified reduce dim(s) {reduce} (a dims: {a_dims})"
-        assert all(
-            dim in b_dims for dim in reduce
-        ), f"'b' does not have the specified reduce dim(s) {reduce} (b dims: {b_dims})"
+        assert all(dim in a_dims for dim in reduce), (
+            f"'a' does not have the specified reduce dim(s) {reduce} (a dims: {a_dims})"
+        )
+        assert all(dim in b_dims for dim in reduce), (
+            f"'b' does not have the specified reduce dim(s) {reduce} (b dims: {b_dims})"
+        )
 
         if len(reduce) > 1:
             reduce = list(reduce)
@@ -1859,7 +1859,7 @@ class TorchBackend(Backend[torch.Tensor]):
             bias=beta.raw_tensor if affine else None,
             # training: means whether we should use the current batch statistics
             #   + update the running statistics (if given)
-            training=rf.get_run_ctx().train_flag or (running_mean is None),
+            training=rf.get_run_ctx().is_train_flag_enabled(func=rf.BatchNorm.__call__) or (running_mean is None),
             momentum=momentum,
             eps=epsilon,
         )
@@ -2236,7 +2236,7 @@ class TorchBackend(Backend[torch.Tensor]):
             has_biases=has_biases,
             num_layers=1,
             dropout=0.0,
-            train=rf.get_run_ctx().train_flag,
+            train=rf.get_run_ctx().is_train_flag_enabled(func=rf.LSTM.__call__),
             bidirectional=False,
         )
 

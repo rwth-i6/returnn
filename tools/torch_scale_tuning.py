@@ -176,7 +176,7 @@ def main():
     for i in range(0, len(seq_list_ordered_by_len), args.batch_size):
         print(
             f"Batch {len(batches)}, seqs {i} - {min(i + args.batch_size, len(seq_list_ordered_by_len))}"
-            f" / {len(seq_list_ordered_by_len)}, {i/len(seq_list_ordered_by_len)*100:.1f}%"
+            f" / {len(seq_list_ordered_by_len)}, {i / len(seq_list_ordered_by_len) * 100:.1f}%"
         )
         batch_seq_tag_list: List[str] = seq_list_ordered_by_len[i : i + args.batch_size]
 

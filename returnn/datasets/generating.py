@@ -46,12 +46,12 @@ class GeneratingDataset(Dataset):
             output_dim["data"] = (input_dim * self.window, 2)  # not sparse
         self.num_outputs = output_dim
         self.expected_load_seq_start = 0
-        self._seq_order = None  # type: Optional[Sequence[int]]
+        self._seq_order: Optional[Sequence[int]] = None
         self._num_seqs = num_seqs
         self._total_num_seqs = num_seqs
         self.random = numpy.random.RandomState(1)
         self.reached_final_seq = False
-        self.added_data = []  # type: typing.List[DatasetSeq]
+        self.added_data: List[DatasetSeq] = []
         if self.seq_ordering in ("sorted", "sorted_reverse"):
             # For the dev/eval dataset, RETURNN automatically tries to sort them.
             # As this is not supported, just ignore it and reset it to the default order.
@@ -792,10 +792,10 @@ class DummyDataset(GeneratingDataset):
         i1 = seq_idx
         i2 = i1 + seq_len * self.num_inputs
         features = numpy.array(
-            [((i % self.input_max_value) + self.input_shift) * self.input_scale for i in range(i1, i2)]
+            [((i % self.input_max_value) + self.input_shift) * self.input_scale for i in range(i1, i2)], dtype="float32"
         ).reshape((seq_len, self.num_inputs))
         i1, i2 = i2, i2 + seq_len
-        targets = numpy.array([i % self.num_outputs["classes"][0] for i in range(i1, i2)])
+        targets = numpy.array([i % self.num_outputs["classes"][0] for i in range(i1, i2)], dtype="int32")
         return DatasetSeq(seq_idx=seq_idx, features=features, targets=targets)
 
 
@@ -904,22 +904,24 @@ class DummyDatasetMultipleDataKeys(DummyDataset):
             seq_len = {}
             for key in self.data_keys:
                 seq_len[key] = _seq_len
-        assert set(data_keys) == set(
-            seq_len.keys()
-        ), "%s: the keys of seq_len (%s) must match the keys in data_keys=%s." % (
-            self,
-            str(seq_len.keys()),
-            str(data_keys),
+        assert set(data_keys) == set(seq_len.keys()), (
+            "%s: the keys of seq_len (%s) must match the keys in data_keys=%s."
+            % (
+                self,
+                str(seq_len.keys()),
+                str(data_keys),
+            )
         )
-        assert isinstance(
-            output_dim, dict
-        ), "%s: output_dim %r must be a dict containing a definition for each key in data_keys." % (self, output_dim)
-        assert set(data_keys) == set(
-            output_dim.keys()
-        ), "%s: the keys of output_dim (%s) must match the keys in data_keys=%s." % (
-            self,
-            str(output_dim.keys()),
-            str(data_keys),
+        assert isinstance(output_dim, dict), (
+            "%s: output_dim %r must be a dict containing a definition for each key in data_keys." % (self, output_dim)
+        )
+        assert set(data_keys) == set(output_dim.keys()), (
+            "%s: the keys of output_dim (%s) must match the keys in data_keys=%s."
+            % (
+                self,
+                str(output_dim.keys()),
+                str(data_keys),
+            )
         )
 
         super(DummyDatasetMultipleDataKeys, self).__init__(
@@ -2037,7 +2039,7 @@ class LibriSpeechCorpus(CachedDataset2):
         """
         :param str path: dir, should contain "train-*/*/*/{*.flac,*.trans.txt}", or "train-*.zip"
         :param str prefix: "train", "dev", "test", "dev-clean", "dev-other", ...
-        :param str|list[str]|None orth_post_process: :func:`get_post_processor_function`, applied on orth
+        :param str|list[str]|function|None orth_post_process: :func:`get_post_processor_function`, applied on orth
         :param str|dict[str]|None targets: "bpe" or "chars" or None or dict for :func:`Vocabulary.create_vocab`
         :param dict[str]|None audio: options for :class:`ExtractAudioFeatures`
         :param dict[str]|None bpe: options for :class:`BytePairEncoding`
@@ -2134,9 +2136,7 @@ class LibriSpeechCorpus(CachedDataset2):
         import os
         import zipfile
 
-        transs = (
-            {}
-        )  # type: typing.Dict[typing.Tuple[str,int,int,int],str]  # (subdir, speaker-id, chapter-id, seq-id) -> transcription  # nopep8
+        transs: Dict[Tuple[str, int, int, int], str] = {}  # (subdir, speaker-id, chapter-id, seq-id) -> transcription
         if self.use_zip:
             for name, zip_file in self._zip_files.items():
                 assert isinstance(zip_file, zipfile.ZipFile)

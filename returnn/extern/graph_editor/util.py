@@ -12,8 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
-"""Utility functions for the graph_editor.
-"""
+"""Utility functions for the graph_editor."""
 
 from __future__ import annotations
 

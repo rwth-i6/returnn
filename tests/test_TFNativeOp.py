@@ -2144,17 +2144,13 @@ def _py_viterbi(am_scores, am_seq_len, edges, weights, start_end_states):
         :rtype: list[dict[int,(float,int)]]
         """
         start_idx, _ = start_end_states[:, sequence_idx]
-        states = defaultdict(
-            lambda: (zero_score, -1)
-        )  # type: typing.Dict[int,typing.Tuple[float,int]]  # state-idx -> score/edge  # nopep8
+        states = defaultdict(lambda: (zero_score, -1))  # type: typing.Dict[int,typing.Tuple[float,int]]  # state-idx -> score/edge  # nopep8
         states[start_idx] = (0.0, -1)
         res = []  # type: typing.List[typing.Dict[int,typing.Tuple[float,int]]]
         for t in range(n_time):
             if t >= am_seq_len[sequence_idx]:
                 break
-            scores = defaultdict(
-                list
-            )  # type: typing.Dict[int,typing.List[typing.Tuple[float,int]]]  # state-idx -> list[score/edge]  # nopep8
+            scores = defaultdict(list)  # type: typing.Dict[int,typing.List[typing.Tuple[float,int]]]  # state-idx -> list[score/edge]  # nopep8
             for edge_idx in range(n_edges):
                 from_idx, to_idx, emission_idx, sequence_idx_ = edges[:, edge_idx]
                 if sequence_idx_ != sequence_idx:

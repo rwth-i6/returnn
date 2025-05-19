@@ -705,7 +705,7 @@ def expand_env_vars(s: str) -> str:
             return delim
         if mo.group("invalid") is not None:
             i = mo.start("invalid")
-            raise ValueError(f"Invalid placeholder in string: {s[i:i+2]!r}...")
+            raise ValueError(f"Invalid placeholder in string: {s[i : i + 2]!r}...")
         raise ValueError(f"Unrecognized named group in pattern {pattern}")
 
     return pattern_.sub(_convert, s)
@@ -1811,7 +1811,6 @@ def json_remove_comments(string, strip_space=True):
     index = 0
 
     for match in re.finditer(tokenizer, string):
-
         if not (in_multi or in_single):
             tmp = string[index : match.start()]
             if not in_string and strip_space:
@@ -3153,42 +3152,53 @@ class LockFile:
         Acquires the lock.
         """
         import time
-        import errno
 
         wait_count = 0
         while True:
-            # Try to create directory if it does not exist.
-            try:
-                os.makedirs(self.directory)
-            except OSError as exc:
-                # Possible errors:
-                # ENOENT (No such file or directory), e.g. if some parent directory was deleted.
-                # EEXIST (File exists), if the dir already exists.
-                if exc.errno not in [errno.ENOENT, errno.EEXIST]:
-                    # Other error, so reraise.
-                    # Common ones are e.g.:
-                    # ENOSPC (No space left on device)
-                    # EACCES (Permission denied)
-                    raise
-                # Ignore those errors.
-            # Now try to create the lock.
-            try:
-                self.fd = os.open(self.lockfile, os.O_CREAT | os.O_EXCL | os.O_RDWR)
-                return
-            except OSError as exc:
-                # Possible errors:
-                # ENOENT (No such file or directory), e.g. if the directory was deleted.
-                # EEXIST (File exists), if the lock already exists.
-                if exc.errno not in [errno.ENOENT, errno.EEXIST]:
-                    raise  # Other error, so reraise.
-            # We did not get the lock.
-            # Check if it is a really old one.
-            self.maybe_remove_old_lockfile()
-            # Wait a bit, and then retry.
-            time.sleep(1)
+            if self.try_lock():
+                break
+            # We did not get the lock. Wait a bit, and then retry.
+            time.sleep(min(wait_count * 0.1, 1.0))
             wait_count += 1
             if wait_count == 10:
                 print("Waiting for lock-file: %s" % self.lockfile)
+
+    def try_lock(self) -> bool:
+        """
+        Tries to acquire the lock.
+
+        :return: whether the lock was acquired
+        """
+
+        import errno
+
+        # Try to create directory if it does not exist.
+        try:
+            os.makedirs(self.directory)
+        except OSError as exc:
+            # Possible errors:
+            # ENOENT (No such file or directory), e.g. if some parent directory was deleted.
+            # EEXIST (File exists), if the dir already exists.
+            if exc.errno not in [errno.ENOENT, errno.EEXIST]:
+                # Other error, so reraise.
+                # Common ones are e.g.:
+                # ENOSPC (No space left on device)
+                # EACCES (Permission denied)
+                raise
+            # Ignore those errors.
+
+        for _ in range(2):
+            # Now try to create the lock.
+            try:
+                self.fd = os.open(self.lockfile, os.O_CREAT | os.O_EXCL | os.O_RDWR)
+                return True
+            except OSError as exc:
+                if exc.errno not in [errno.ENOENT, errno.EEXIST]:
+                    raise  # raise any other error
+                # We did not get the lock.
+                # Remove potential stale lockfile before retrying.
+                self.maybe_remove_old_lockfile()
+        return False
 
     def unlock(self):
         """
@@ -3673,10 +3683,14 @@ def get_hostname():
 
 def is_running_on_cluster():
     """
-    :return: i6 specific. Whether we run on some of the cluster nodes.
+    :return: i6 / Slurm specific. Whether we run on some of the cluster nodes.
     :rtype: bool
     """
-    return get_hostname().startswith("cluster-cn-") or get_hostname().startswith("cn-")
+    return (
+        get_hostname().startswith("cluster-cn-")
+        or get_hostname().startswith("cn-")
+        or os.environ.get("SLURM_JOB_ID", None)
+    )
 
 
 start_time = time.time()
@@ -4285,7 +4299,7 @@ def cf(filename):
         return filename  # for debugging
     try:
         cached_fn = check_output(["cf", filename]).strip().decode("utf8")
-    except CalledProcessError:
+    except (CalledProcessError, OSError):
         if not _cf_msg_printed:
             print("Cache manager: Error occurred, using local file")
             _cf_msg_printed = True

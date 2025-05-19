@@ -123,7 +123,14 @@ class Parameter(Tensor[T]):
         from copy import deepcopy
 
         assert _copy_behavior == "copy_init"
-        res = self.__copy__()
+        res = type(self)(
+            dims=self.dims,
+            dtype=self.dtype,
+            trainable=self.trainable,
+            auxiliary=self.auxiliary,
+            non_critical_for_restore=self.non_critical_for_restore,
+            weight_decay=self.weight_decay,
+        )
         if isinstance(self.initial, rf.init.ParamInit):
             res.initial = deepcopy(self.initial, memo=memo)  # noqa
         else:
