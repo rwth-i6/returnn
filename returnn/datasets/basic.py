@@ -595,7 +595,7 @@ class Dataset:
             for i in range(1, num):
                 seq_index[i::num] += i * (num_seqs // num)
         elif seq_ordering_method == "reverse":
-            seq_index = range(num_seqs - 1, -1, -1)  # type: Union[range, typing.Sequence[int]]
+            seq_index: Union[range, Sequence[int]] = range(num_seqs - 1, -1, -1)
         elif seq_ordering_method in ["sorted", "sorted_reverse"]:
             assert get_seq_len
             reverse = -1 if seq_ordering_method == "sorted_reverse" else 1
@@ -1097,7 +1097,7 @@ class Dataset:
         if key in self.num_outputs:
             if self.num_outputs[key][1] <= 1:
                 return []
-            res_shape = [None] * (self.num_outputs[key][1] - 1)  # type: typing.List[typing.Union[None,int]]
+            res_shape: List[Union[None, int]] = [None] * (self.num_outputs[key][1] - 1)
             if not self.is_data_sparse(key):
                 res_shape[-1] = self.get_data_dim(key)
             return res_shape
