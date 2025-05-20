@@ -15,6 +15,7 @@ __all__ = [
 
 from typing import Optional, Union, Type, Callable, List, Dict
 import sys
+import re
 import numpy
 
 from returnn.util.basic import NotSpecified
@@ -58,6 +59,7 @@ class Vocabulary:
         num_labels: Optional[int] = None,
         seq_postfix: Optional[List[int]] = None,
         labels: Optional[Union[List[str], Callable[[], List[str]]]] = None,
+        single_whitespace_split: bool = False,
     ):
         """
         :param vocab_file:
@@ -76,6 +78,11 @@ class Vocabulary:
         :param num_labels: just for verification
         :param seq_postfix: labels will be added to the seq in self.get_seq
         :param labels:
+        :param single_whitespace_split:
+            Assume that the given text is encoded using ``" ".join(labels[i] for i in seq)``,
+            and this will undo that.
+            This makes a difference when there is whitespace itself in the vocab (in ``labels``).
+            If not enabled (the default), this will simply use ``str.split()``.
         """
         if vocab_file and not isinstance(vocab_file, str):  # sometimes it is a Path
             vocab_file = str(vocab_file)
@@ -131,6 +138,12 @@ class Vocabulary:
         self.control_symbol_ids = {name: self.to_id(label) for name, label in (control_symbols or {}).items()}
         self.user_defined_symbol_ids = {name: self.to_id(label) for name, label in (user_defined_symbols or {}).items()}
         self.seq_postfix = seq_postfix or []
+        # To be used with findall in get_seq.
+        self.decode_seq_token_re = (
+            re.compile("(%s|\\S+)(?: |$)" % "|".join(re.escape(v) for v in self.labels))
+            if single_whitespace_split
+            else None
+        )
 
     def __repr__(self):
         parts = [repr(self.vocab_file), "num_labels=%s" % self.num_labels]
@@ -317,7 +330,10 @@ class Vocabulary:
         :param sentence: assumed to be seq of vocab entries separated by whitespace
         :return: seq of label indices
         """
-        segments = sentence.split()
+        if self.decode_seq_token_re is not None:
+            segments = self.decode_seq_token_re.findall(sentence)
+        else:
+            segments = sentence.split()
         return self.get_seq_indices(segments) + self.seq_postfix
 
     def get_seq_indices(self, seq: List[str]) -> List[int]:
