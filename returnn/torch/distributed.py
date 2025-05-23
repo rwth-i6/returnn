@@ -126,9 +126,21 @@ class DistributedContext:
             **kwargs,
         )
 
+    def should_sync_now(self, *, epoch_step_idx: int) -> bool:
+        """
+        :param epoch_step_idx: current step index
+        :return: whether to sync the training processes in this step
+        """
+        if self._reduce_type == "grad":
+            return True
+        elif self._reduce_type == "param":
+            return (epoch_step_idx % self._param_sync_step) == (self._param_sync_step - 1)
+        else:
+            raise ValueError(f"invalid reduce_type {self._reduce_type}")
+
     def step_after_param_update(self, *, module: torch.nn.Module, epoch_step_idx: int):
         """one train step"""
-        if self._reduce_type == "param" and ((epoch_step_idx % self._param_sync_step) == (self._param_sync_step - 1)):
+        if self._reduce_type == "param" and self.should_sync_now(epoch_step_idx=epoch_step_idx):
             _sync_params_avg(module=module, sync_on_cpu=self._opts.get("sync_on_cpu", False))
 
 
