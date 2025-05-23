@@ -34,21 +34,21 @@ from returnn.util.basic import BackendEngine, BehaviorVersion
 
 # These imports are not directly used here, but make them available, as other code imports them from here.
 # noinspection PyUnresolvedReferences
-from returnn.util.debug import init_ipython_kernel, init_better_exchook, init_faulthandler, debug_shell
+from returnn.util.debug import init_ipython_kernel, init_better_exchook, init_faulthandler, debug_shell  # noqa: F401
 
 # Some external scripts import those functions from here, thus keep this here.
 # noinspection PyUnresolvedReferences
-from returnn.util.basic import init_thread_join_hack, describe_returnn_version
+from returnn.util.basic import init_thread_join_hack, describe_returnn_version  # noqa: F401
 
 if TYPE_CHECKING:
     import returnn.tf.engine
     import returnn.torch.engine
 
-config = None  # type: Optional[Config]
-engine = None  # type: Optional[Union[returnn.tf.engine.Engine, returnn.torch.engine.Engine]]
-train_data = None  # type: Optional[Dataset]
-dev_data = None  # type: Optional[Dataset]
-eval_data = None  # type: Optional[Dataset]
+config: Optional[Config] = None
+engine: Optional[Union[returnn.tf.engine.Engine, returnn.torch.engine.Engine]] = None
+train_data: Optional[Dataset] = None
+dev_data: Optional[Dataset] = None
+eval_data: Optional[Dataset] = None
 quit_returnn = False
 
 

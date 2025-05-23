@@ -1677,17 +1677,16 @@ def random_orthogonal(shape, gain=1.0, seed=None):
 
 
 # noinspection PyUnusedLocal
-def inplace_increment(x, idx, y):
+def inplace_increment(x: numpy.ndarray, idx: numpy.ndarray, y: Union[numpy.ndarray, float, int]) -> numpy.ndarray:
     """
     This basically does `x[idx] += y`.
     The difference to the Numpy version is that in case some index is there multiple
     times, it will only be incremented once (and it is not specified which one).
     See also theano.tensor.subtensor.AdvancedIncSubtensor documentation.
 
-    :param numpy.ndarray x:
-    :param numpy.ndarray idx:
-    :param numpy.ndarray y:
-    :rtype: numpy.ndarray
+    :param x:
+    :param idx:
+    :param y:
     """
     raise NotImplementedError("This feature was removed with dropped Theano support")
 
