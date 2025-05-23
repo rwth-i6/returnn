@@ -409,7 +409,9 @@ class Engine(EngineBase):
                 # the model between workers.
                 # This allows the different workers to progress independently between synchronizations.
                 if self._torch_distributed_ctx and (
-                    self._torch_distributed_ctx.should_sync_now() or step_idx == 0 or extern_data_raw is None
+                    self._torch_distributed_ctx.should_sync_now(epoch_step_idx=step_idx)
+                    or step_idx == 0
+                    or extern_data_raw is None
                 ):
                     # use all reduce to check if all workers have data, if at least one worker does not have data,
                     # all workers finish this epoch
