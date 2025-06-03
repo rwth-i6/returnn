@@ -20,7 +20,7 @@ from dataclasses import dataclass
 from collections import defaultdict
 from contextlib import contextmanager
 import json
-from threading import Thread, Event
+from threading import Event, Lock, Thread
 from returnn.config import Config, get_global_config
 from .basic import expand_env_vars, LockFile, human_bytes_size
 
@@ -525,21 +525,23 @@ class _TouchFilesThread(Thread):
         self.files = defaultdict(int)  # usage counter
         self.interval = interval
         self.cache_base_dir = cache_base_dir
+        self._lock = Lock()
         self._is_started = False  # careful: `_started` is already a member of the base class
 
     def run(self):
         """thread main loop"""
         while True:
             all_files = {}  # dict to have order deterministic
-            for filename in self.files.copy():  # copy dict under GIL to avoid modifications during iteration
-                all_files[filename] = True
-                all_files.update({k: True for k in _all_parent_dirs(filename, base_dir=self.cache_base_dir)})
-            for filename in all_files:
-                try:
-                    os.utime(filename, None)
-                except Exception as exc:
-                    print(f"FileCache: failed updating mtime of {filename}: {exc}")
-                    raise
+            with self._lock:
+                for filename in self.files.copy():  # copy dict under GIL to avoid modifications during iteration
+                    all_files[filename] = True
+                    all_files.update({k: True for k in _all_parent_dirs(filename, base_dir=self.cache_base_dir)})
+                for filename in all_files:
+                    try:
+                        os.utime(filename, None)
+                    except Exception as exc:
+                        print(f"FileCache: failed updating mtime of {filename}: {exc}")
+                        raise
             if self.stop.wait(self.interval):
                 return
 
@@ -556,6 +558,7 @@ class _TouchFilesThread(Thread):
             to_add = [to_add]
         assert isinstance(to_add, Iterable)
         self.start_once()
+        # safety: no need to hold lock here since we copy the files dict before every iteration
         for file in to_add:
             self.files[file] += 1
 
@@ -564,10 +567,11 @@ class _TouchFilesThread(Thread):
         if isinstance(to_remove, str):
             to_remove = [to_remove]
         assert isinstance(to_remove, Iterable)
-        for filename in to_remove:
-            self.files[filename] -= 1
-            if self.files[filename] <= 0:
-                del self.files[filename]
+        with self._lock:
+            for filename in to_remove:
+                self.files[filename] -= 1
+                if self.files[filename] <= 0:
+                    del self.files[filename]
 
     @contextmanager
     def files_added_context(self, files: Collection[str]):
