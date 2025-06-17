@@ -96,6 +96,10 @@ except NameError:  # Python3
 PY3 = sys.version_info[0] >= 3
 
 
+cfg_print_builtins = False
+cfg_print_not_found = False
+
+
 def parse_py_statement(line):
     """
     Parse Python statement into tokens.
@@ -111,6 +115,10 @@ def parse_py_statement(line):
     """
     state = 0
     cur_token = ""
+    str_prefix = None
+    str_is_f_string = False  # whether we are in an f-string
+    str_quote = None
+    f_str_expr_opening_brackets = 0
     spaces = " \t\n"
     ops = ".,;:+-*/%&!=|(){}[]^<>"
     i = 0
@@ -133,29 +141,36 @@ def parse_py_statement(line):
                 yield "op", c
             elif c == "#":
                 state = 6
-            elif c == '"':
+            elif c in "\"'":
                 state = 1
-            elif c == "'":
-                state = 2
+                str_prefix = None
+                str_is_f_string = False
+                str_quote = c
+                cur_token = ""
             else:
                 cur_token = c
-                state = 3
-        elif state == 1:  # string via "
+                state = 3  # identifier
+        elif state == 1:  # string
             if c == "\\":
-                state = 4
-            elif c == '"':
-                yield "str", cur_token
+                cur_token += _escape_char(line[i : i + 1])
+                i += 1
+            elif c == str_quote:
+                yield "str" if not str_prefix else "%s-str" % str_prefix, cur_token
                 cur_token = ""
                 state = 0
-            else:
-                cur_token += c
-        elif state == 2:  # string via '
-            if c == "\\":
-                state = 5
-            elif c == "'":
-                yield "str", cur_token
-                cur_token = ""
-                state = 0
+            elif str_is_f_string and c == "{":  # f-string
+                if line[i - 1 : i + 1] == "{{":
+                    cur_token += "{"
+                    i += 1
+                else:
+                    yield "str" if not str_prefix else "%s-str" % str_prefix, cur_token
+                    yield "f-str-expr-open", "{"
+                    cur_token = ""
+                    f_str_expr_opening_brackets = 0
+                    state = 4
+            elif str_is_f_string and c == "}" and line[i - 1 : i + 1] == "}}":
+                cur_token += "}"
+                i += 1
             else:
                 cur_token += c
         elif state == 3:  # identifier
@@ -164,20 +179,40 @@ def parse_py_statement(line):
                 cur_token = ""
                 state = 0
                 i -= 1
-            elif c == '"':  # identifier is string prefix
-                cur_token = ""
+            elif c in "\"'":  # identifier is string prefix
                 state = 1
-            elif c == "'":  # identifier is string prefix
+                str_prefix = cur_token
+                str_is_f_string = "f" in str_prefix or "F" in str_prefix
+                str_quote = c
                 cur_token = ""
-                state = 2
             else:
                 cur_token += c
-        elif state == 4:  # escape in "
-            cur_token += _escape_char(c)
-            state = 1
-        elif state == 5:  # escape in '
-            cur_token += _escape_char(c)
-            state = 2
+        elif state == 4:  # f-string expression (like state 0 but simplified)
+            if c in spaces:
+                pass
+            elif c in ops:
+                if f_str_expr_opening_brackets == 0 and c == "}":
+                    yield "f-str-expr-close", "}"
+                    state = 1  # back into the f-string
+                    cur_token = ""
+                else:
+                    yield "op", c
+                    if c in "([{":
+                        f_str_expr_opening_brackets += 1
+                    elif c in ")]}":
+                        if f_str_expr_opening_brackets > 0:
+                            f_str_expr_opening_brackets -= 1
+            else:
+                cur_token = c
+                state = 5  # identifier in f-string expression
+        elif state == 5:  # identifier in f-string expression (like state 3 but simplified)
+            if c in spaces + ops:
+                yield "id", cur_token
+                cur_token = ""
+                state = 4
+                i -= 1
+            else:
+                cur_token += c
         elif state == 6:  # comment
             cur_token += c
     if state == 3:
@@ -234,6 +269,7 @@ def set_linecache(filename, source):
     """
     import linecache
 
+    # noinspection PyTypeChecker
     linecache.cache[filename] = None, None, [line + "\n" for line in source.splitlines()], filename
 
 
@@ -245,7 +281,7 @@ def simple_debug_shell(globals, locals):
     :return: nothing
     """
     try:
-        import readline
+        import readline  # noqa: F401
     except ImportError:
         pass  # ignore
     compile_string_fn = "<simple_debug_shell input>"
@@ -253,7 +289,8 @@ def simple_debug_shell(globals, locals):
         try:
             s = raw_input("> ")
         except (KeyboardInterrupt, EOFError):
-            print("breaked debug shell: " + sys.exc_info()[0].__name__)
+            print("broke debug shell: " + sys.exc_info()[0].__name__)
+            s = None
             break
         if s.strip() == "":
             continue
@@ -307,9 +344,6 @@ def debug_shell(user_ns, user_global_ns, traceback=None, execWrapper=None):
     if not ipshell and traceback and have_ipython:
         # noinspection PyBroadException
         try:
-            # noinspection PyPackageRequirements,PyUnresolvedReferences
-            from IPython.core.debugger import Pdb
-
             # noinspection PyPackageRequirements,PyUnresolvedReferences
             from IPython.terminal.debugger import TerminalPdb
 
@@ -1123,6 +1157,8 @@ def format_tb(
                 output("(Exclude vars because we are on a GC stack.)")
     if with_vars is None:
         with_vars = True
+    locals_start_str = color("    locals:", color.fg_colors[0])
+
     # noinspection PyBroadException
     try:
         if limit is None:
@@ -1170,10 +1206,11 @@ def format_tb(
             if isframe(_tb):
                 f = _tb
             elif is_stack_summary(_tb):
-                if isinstance(_tb[0], ExtendedFrameSummary):
-                    f = _tb[0].tb_frame
+                _tb0 = _tb[0]
+                if isinstance(_tb0, ExtendedFrameSummary):
+                    f = _tb0.tb_frame
                 else:
-                    f = DummyFrame.from_frame_summary(_tb[0])
+                    f = DummyFrame.from_frame_summary(_tb0)
             else:
                 f = _tb.tb_frame
             if allLocals is not None:
@@ -1216,12 +1253,13 @@ def format_tb(
                     elif isinstance(f, DummyFrame) and not f.have_vars_available:
                         pass
                     else:
-                        with output.fold_text_ctx(color("    locals:", color.fg_colors[0])):
-                            already_printed_locals = set()  # type: typing.Set[typing.Tuple[str,...]]
+                        with output.fold_text_ctx(locals_start_str):
+                            already_covered_locals = set()  # type: typing.Set[typing.Tuple[str,...]]
+                            num_printed_locals = 0
                             for token_str in grep_full_py_identifiers(parse_py_statement(source_code)):
                                 splitted_token = tuple(token_str.split("."))
                                 for token in [splitted_token[0:i] for i in range(1, len(splitted_token) + 1)]:
-                                    if token in already_printed_locals:
+                                    if token in already_covered_locals:
                                         continue
                                     token_value = None
                                     token_value = _try_set(
@@ -1234,19 +1272,34 @@ def format_tb(
                                         color("<global> ", color.fg_colors[0]),
                                         lambda: format_py_obj(_resolve_identifier(f.f_globals, token)),
                                     )
+                                    if not token_value and (
+                                        (not cfg_print_not_found and not cfg_print_builtins)
+                                        or (not cfg_print_builtins and token[0] in f.f_builtins)
+                                    ):
+                                        already_covered_locals.add(token)
+                                        continue
                                     token_value = _try_set(
                                         token_value,
                                         color("<builtin> ", color.fg_colors[0]),
                                         lambda: format_py_obj(_resolve_identifier(f.f_builtins, token)),
                                     )
+                                    if not token_value and not cfg_print_not_found:
+                                        already_covered_locals.add(token)
+                                        continue
                                     token_value = token_value or color("<not found>", color.fg_colors[0])
                                     prefix = "      %s " % color(".", color.fg_colors[0], bold=True).join(
                                         token
                                     ) + color("= ", color.fg_colors[0], bold=True)
                                     output(prefix, token_value)
-                                    already_printed_locals.add(token)
-                            if len(already_printed_locals) == 0:
-                                output(color("       no locals", color.fg_colors[0]))
+                                    already_covered_locals.add(token)
+                                    num_printed_locals += 1
+                            if num_printed_locals == 0:
+                                if output.lines and output.lines[-1].endswith(locals_start_str + "\n"):
+                                    output.lines[-1] = output.lines[-1][: -len(locals_start_str) - 1]
+                                elif output.lines and output.lines[-1].endswith("\n"):
+                                    output.lines[-1] = output.lines[-1][:-1] + color(" none", color.fg_colors[0]) + "\n"
+                                else:
+                                    output(color("       no locals", color.fg_colors[0]))
                 else:
                     output(color("    -- code not available --", color.fg_colors[0]))
 
@@ -1685,10 +1738,11 @@ def iter_traceback(tb=None, enforce_most_recent_call_first=False):
         if is_frame(_tb):
             frame = _tb
         elif is_stack_summary(_tb):
-            if isinstance(_tb[0], ExtendedFrameSummary):
-                frame = _tb[0].tb_frame
+            _tb0 = _tb[0]
+            if isinstance(_tb0, ExtendedFrameSummary):
+                frame = _tb0.tb_frame
             else:
-                frame = DummyFrame.from_frame_summary(_tb[0])
+                frame = DummyFrame.from_frame_summary(_tb0)
         else:
             frame = _tb.tb_frame
         yield frame
