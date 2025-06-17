@@ -404,7 +404,10 @@ jobs:
         else
           pip install --user --progress-bar=off transformers==4.49.0
         fi
-        pip install --user --progress-bar=off Cython==3.0.10  # for ctc-segmentation
+        if [[ "${{matrix.python-version}}" == 3.8 ]]; then
+          # https://github.com/rwth-i6/returnn/issues/1729
+          pip install --user --progress-bar=off ctc-segmentation==1.6.6
+        fi
         pip install --user --progress-bar=off espnet
         # TorchAudio needed by ESPnet.
         # https://pytorch.org/audio/stable/installation.html#compatibility-matrix
