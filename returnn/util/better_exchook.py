@@ -290,7 +290,6 @@ def simple_debug_shell(globals, locals):
             s = raw_input("> ")
         except (KeyboardInterrupt, EOFError):
             print("broke debug shell: " + sys.exc_info()[0].__name__)
-            s = None
             break
         if s.strip() == "":
             continue
