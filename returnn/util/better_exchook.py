@@ -58,6 +58,7 @@ import threading
 import keyword
 import inspect
 import contextlib
+import types
 from weakref import WeakKeyDictionary
 
 try:
@@ -98,6 +99,9 @@ PY3 = sys.version_info[0] >= 3
 
 cfg_print_builtins = False
 cfg_print_not_found = False
+cfg_print_bound_methods = False
+cfg_print_modules = False
+cfg_print_module_functions = False
 
 
 def parse_py_statement(line):
@@ -1166,41 +1170,6 @@ def format_tb(
         n = 0
         _tb = tb
 
-        class NotFound(Exception):
-            """
-            Identifier not found.
-            """
-
-        def _resolve_identifier(namespace, keys):
-            """
-            :param dict[str,typing.Any] namespace:
-            :param typing.Sequence[str] keys:
-            :return: namespace[name[0]][name[1]]...
-            """
-            if keys[0] not in namespace:
-                raise NotFound()
-            obj = namespace[keys[0]]
-            for part in keys[1:]:
-                obj = getattr(obj, part)
-            return obj
-
-        # noinspection PyShadowingNames
-        def _try_set(old, prefix, func):
-            """
-            :param None|str old:
-            :param str prefix:
-            :param func:
-            :return: old
-            """
-            if old is not None:
-                return old
-            try:
-                return add_indent_lines(prefix, func())
-            except NotFound:
-                return old
-            except Exception as e:
-                return prefix + "!" + e.__class__.__name__ + ": " + str(e)
-
         while _tb is not None and (limit is None or n < limit):
             if isframe(_tb):
                 f = _tb
@@ -1260,38 +1229,65 @@ def format_tb(
                                 for token in [splitted_token[0:i] for i in range(1, len(splitted_token) + 1)]:
                                     if token in already_covered_locals:
                                         continue
-                                    token_value = None
-                                    token_value = _try_set(
-                                        token_value,
-                                        color("<local> ", color.fg_colors[0]),
-                                        lambda: format_py_obj(_resolve_identifier(f.f_locals, token)),
-                                    )
-                                    token_value = _try_set(
-                                        token_value,
-                                        color("<global> ", color.fg_colors[0]),
-                                        lambda: format_py_obj(_resolve_identifier(f.f_globals, token)),
-                                    )
-                                    if not token_value and (
-                                        (not cfg_print_not_found and not cfg_print_builtins)
-                                        or (not cfg_print_builtins and token[0] in f.f_builtins)
-                                    ):
-                                        already_covered_locals.add(token)
-                                        continue
-                                    token_value = _try_set(
-                                        token_value,
-                                        color("<builtin> ", color.fg_colors[0]),
-                                        lambda: format_py_obj(_resolve_identifier(f.f_builtins, token)),
-                                    )
-                                    if not token_value and not cfg_print_not_found:
-                                        already_covered_locals.add(token)
-                                        continue
-                                    token_value = token_value or color("<not found>", color.fg_colors[0])
+                                    already_covered_locals.add(token)
+                                    if token[0] in f.f_locals:
+                                        token_base_dict = f.f_locals
+                                        token_prefix_str = color("<local> ", color.fg_colors[0])
+                                    elif token[0] in f.f_globals:
+                                        token_base_dict = f.f_globals
+                                        token_prefix_str = color("<global> ", color.fg_colors[0])
+                                        if (
+                                            not cfg_print_module_functions
+                                            and len(token) == 1
+                                            and _is_module_function(token_base_dict, token[0], obj_is_dict=True)
+                                        ):
+                                            continue
+                                    elif token[0] in f.f_builtins:
+                                        if not cfg_print_builtins:
+                                            continue
+                                        token_base_dict = f.f_builtins
+                                        token_prefix_str = color("<builtin> ", color.fg_colors[0])
+                                    else:
+                                        if not cfg_print_not_found:
+                                            continue
+                                        token_base_dict = None
+                                        token_prefix_str = None
+
                                     prefix = "      %s " % color(".", color.fg_colors[0], bold=True).join(
                                         token
                                     ) + color("= ", color.fg_colors[0], bold=True)
-                                    output(prefix, token_value)
-                                    already_covered_locals.add(token)
+
+                                    if token_prefix_str is None:  # not found
+                                        token_repr = color("<not found>", color.fg_colors[0])
+                                    else:
+                                        try:
+                                            token_parent_obj = None
+                                            token_obj = token_base_dict[token[0]]
+                                            for attr in token[1:]:
+                                                token_parent_obj = token_obj
+                                                token_obj = getattr(token_obj, attr)
+                                        except Exception as e:
+                                            token_repr = token_prefix_str + "!" + e.__class__.__name__ + ": " + str(e)
+                                        else:  # found
+                                            if (
+                                                not cfg_print_bound_methods
+                                                and token_parent_obj is not None
+                                                and _is_bound_method(token_parent_obj, token[-1])
+                                            ):
+                                                continue
+                                            if not cfg_print_modules and isinstance(token_obj, types.ModuleType):
+                                                continue
+                                            if (
+                                                not cfg_print_module_functions
+                                                and token_parent_obj is not None
+                                                and _is_module_function(token_parent_obj, token[-1])
+                                            ):
+                                                continue
+                                            token_repr = add_indent_lines(token_prefix_str, format_py_obj(token_obj))
+
+                                    output(prefix, token_repr)
                                     num_printed_locals += 1
+
                             if num_printed_locals == 0:
                                 if output.lines and output.lines[-1].endswith(locals_start_str + "\n"):
                                     output.lines[-1] = output.lines[-1][: -len(locals_start_str) - 1]
@@ -1299,7 +1295,8 @@ def format_tb(
                                     output.lines[-1] = output.lines[-1][:-1] + color(" none", color.fg_colors[0]) + "\n"
                                 else:
                                     output(color("       no locals", color.fg_colors[0]))
-                else:
+
+                else:  # no source code available
                     output(color("    -- code not available --", color.fg_colors[0]))
 
             if clear_frames:
@@ -1834,6 +1831,39 @@ def _StackSummary_extract(frame_gen, limit=None, lookup_lines=True, capture_loca
         name = co.co_name
         result.append(ExtendedFrameSummary(frame=f, filename=filename, lineno=lineno, name=name, lookup_line=False))
     return result
+
+
+def _is_bound_method(obj, attr_name):
+    if not PY3:
+        return False  # not properly supported in Python 2
+
+    meth = getattr(obj, attr_name, None)
+    meth = inspect.unwrap(meth)
+
+    if isinstance(meth, types.MethodType):
+        if meth.__self__ is not obj:
+            return False
+        cls = type(obj)
+        func = getattr(cls, attr_name, None)
+        return meth.__func__ is func
+
+    elif isinstance(meth, (types.BuiltinMethodType, getattr(types, "MethodWrapperType", types.BuiltinMethodType))):
+        if meth.__self__ is not obj:
+            return False
+        return meth.__name__ == attr_name
+
+    else:
+        return False
+
+
+def _is_module_function(obj, attr_name, obj_is_dict=False):
+    if obj_is_dict:
+        func = obj.get(attr_name, None)
+    else:
+        if not isinstance(obj, types.ModuleType):
+            return False
+        func = getattr(obj, attr_name, None)
+    return isinstance(func, types.FunctionType)
 
 
 def install():
