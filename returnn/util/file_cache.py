@@ -9,7 +9,7 @@ See https://github.com/rwth-i6/returnn/issues/1519 for initial discussion.
 Main class is :class:`FileCache`.
 """
 
-from typing import Any, Collection, Iterable, List, Optional, Tuple, Union
+from typing import Any, Collection, Dict, Iterable, List, Optional, Tuple, Union
 import errno
 import os
 import pathlib
@@ -20,7 +20,7 @@ from dataclasses import dataclass
 from collections import defaultdict
 from contextlib import contextmanager
 import json
-from threading import Thread, Event
+from threading import Lock, Thread, Event
 from returnn.config import Config, get_global_config
 from .basic import expand_env_vars, LockFile, human_bytes_size
 
@@ -523,6 +523,7 @@ class _TouchFilesThread(Thread):
         super().__init__(daemon=True)
         self.stop = Event()
         self.files = defaultdict(int)  # usage counter
+        self.locks: Dict[str, Lock] = {}
         self.interval = interval
         self.cache_base_dir = cache_base_dir
         self._is_started = False  # careful: `_started` is already a member of the base class
@@ -530,16 +531,18 @@ class _TouchFilesThread(Thread):
     def run(self):
         """thread main loop"""
         while True:
-            all_files = {}  # dict to have order deterministic
-            for filename in self.files.copy():  # copy dict under GIL to avoid modifications during iteration
-                all_files[filename] = True
-                all_files.update({k: True for k in _all_parent_dirs(filename, base_dir=self.cache_base_dir)})
+            # copy dicts under GIL to avoid modifications during iteration
+            all_files = self.files.copy()
+            locks = self.locks.copy()
             for filename in all_files:
-                try:
-                    os.utime(filename, None)
-                except Exception as exc:
-                    print(f"FileCache: failed updating mtime of {filename}: {exc}")
-                    raise
+                with locks[filename]:
+                    if filename not in self.files:
+                        continue
+                    try:
+                        os.utime(filename, None)
+                    except Exception as exc:
+                        print(f"FileCache: failed updating mtime of {filename}: {exc}")
+                        raise
             if self.stop.wait(self.interval):
                 return
 
@@ -556,18 +559,24 @@ class _TouchFilesThread(Thread):
             to_add = [to_add]
         assert isinstance(to_add, Iterable)
         self.start_once()
-        for file in to_add:
+        # we track the parent directories as well and give them their own locks to be
+        # able to synchronize their deletion with the touch thread
+        for file in _files_with_parents(to_add, base_dir=self.cache_base_dir):
             self.files[file] += 1
+            if file not in self.locks:
+                self.locks[file] = Lock()
 
     def files_remove(self, to_remove: Union[str, Iterable[str]]):
         """remove"""
         if isinstance(to_remove, str):
             to_remove = [to_remove]
         assert isinstance(to_remove, Iterable)
-        for filename in to_remove:
-            self.files[filename] -= 1
-            if self.files[filename] <= 0:
-                del self.files[filename]
+        for file in _files_with_parents(to_remove, base_dir=self.cache_base_dir):
+            with self.locks[file]:
+                self.files[file] -= 1
+                if self.files[file] <= 0:
+                    del self.files[file]
+                    del self.locks[file]
 
     @contextmanager
     def files_added_context(self, files: Collection[str]):
@@ -588,3 +597,12 @@ def _all_parent_dirs(filename: str, *, base_dir: str) -> List[str]:
             break
         dirs.append(filename)
     return dirs
+
+
+def _files_with_parents(files: Iterable[str], *, base_dir: str) -> Dict[str, bool]:
+    res = {}  # dict to have order deterministic
+    for file in files:
+        res[file] = True
+        for file in _all_parent_dirs(file, base_dir=base_dir):
+            res[file] = True
+    return res
