@@ -102,6 +102,7 @@ cfg_print_not_found = False
 cfg_print_bound_methods = False
 cfg_print_modules = False
 cfg_print_module_functions = False
+cfg_print_module_classes = False
 
 
 def parse_py_statement(line):
@@ -1058,7 +1059,12 @@ class _OutputLinesCollector:
         :param typing.Any obj:
         :rtype: str
         """
-        s = repr(obj)
+        if isinstance(obj, types.FunctionType) and hasattr(obj, "__module__") and hasattr(obj, "__qualname__"):
+            s = "<function %s.%s>" % (obj.__module__, obj.__qualname__)
+        elif isinstance(obj, type) and hasattr(obj, "__module__") and hasattr(obj, "__qualname__"):
+            s = "<class %s.%s>" % (obj.__module__, obj.__qualname__)
+        else:
+            s = repr(obj)
         limit = output_limit()
         if len(s) > limit:
             if self.dom_term:
@@ -1089,18 +1095,24 @@ def format_tb(
     clear_frames=True,
 ):
     """
-    :param types.TracebackType|types.FrameType|StackSummary tb: traceback. if None, will use sys._getframe
+    Formats a traceback into a list of strings, each corresponding to one frame.
+
+    Replacement for traceback.format_tb.
+
+    :param types.TracebackType|types.FrameType|StackSummary tb: traceback. If None, will use sys._getframe
     :param int|None limit: limit the traceback to this number of frames. by default, will look at sys.tracebacklimit
     :param dict[str,typing.Any]|None allLocals: if set, will update it with all locals from all frames
     :param dict[str,typing.Any]|None allGlobals: if set, will update it with all globals from all frames
     :param bool withTitle:
     :param bool|None with_color: output with ANSI escape codes for color
-    :param bool with_vars: will print var content which are referenced in the source code line. by default enabled.
+    :param bool with_vars: will print var contents that are referenced in the source code line. by default enabled.
     :param bool clear_frames: whether to call frame.clear() after processing it.
         That will potentially fix some mem leaks regarding locals, so it can be important.
         Also see https://github.com/python/cpython/issues/113939.
-        However, any further access to frame locals will not work (e.g. if you want to use a debugger afterwards).
-    :return: list of strings (line-based)
+        However, any further access to frame locals will not work (e.g., if you want to use a debugger afterward).
+    :return: list of strings, each corresponding to one frame in the traceback.
+        Each string contains the file name, line number, function name, source code line, maybe relevant variables,
+        etc., and a final newline.
     :rtype: list[str]
     """
     color = Color(enable=with_color)
@@ -1242,6 +1254,12 @@ def format_tb(
                                             and _is_module_function(token_base_dict, token[0], obj_is_dict=True)
                                         ):
                                             continue
+                                        if (
+                                            not cfg_print_module_classes
+                                            and len(token) == 1
+                                            and _is_module_class(token_base_dict, token[0], obj_is_dict=True)
+                                        ):
+                                            continue
                                     elif token[0] in f.f_builtins:
                                         if not cfg_print_builtins:
                                             continue
@@ -1281,6 +1299,12 @@ def format_tb(
                                                 not cfg_print_module_functions
                                                 and token_parent_obj is not None
                                                 and _is_module_function(token_parent_obj, token[-1])
+                                            ):
+                                                continue
+                                            if (
+                                                not cfg_print_module_classes
+                                                and token_parent_obj is not None
+                                                and _is_module_class(token_parent_obj, token[-1])
                                             ):
                                                 continue
                                             token_repr = add_indent_lines(token_prefix_str, format_py_obj(token_obj))
@@ -1333,6 +1357,8 @@ def format_tb(
 
 def print_tb(tb, file=None, **kwargs):
     """
+    Prints the traceback to stderr, or the given file.
+
     Replacement for traceback.print_tb.
 
     :param types.TracebackType|types.FrameType|StackSummary tb:
@@ -1864,6 +1890,16 @@ def _is_module_function(obj, attr_name, obj_is_dict=False):
             return False
         func = getattr(obj, attr_name, None)
     return isinstance(func, types.FunctionType)
+
+
+def _is_module_class(obj, attr_name, obj_is_dict=False):
+    if obj_is_dict:
+        cls = obj.get(attr_name, None)
+    else:
+        if not isinstance(obj, types.ModuleType):
+            return False
+        cls = getattr(obj, attr_name, None)
+    return isinstance(cls, type)
 
 
 def install():
