@@ -41,8 +41,22 @@ class ReturnnDatasetResetMpSharedEpochCallback:
     def __init__(self, dataset: ReturnnDataset, epoch_mp_shared: torch.multiprocessing.Value):
         self.dataset = dataset
         self.epoch_mp_shared = epoch_mp_shared
+        self._sharding_config_set = False
 
     def __call__(self):
+        # Include local worker rank in the dataset sharding config
+        if not self._sharding_config_set:
+            worker_info = torch.utils.data.get_worker_info()
+            if worker_info is not None:
+                assert self.dataset.supports_sharding() or worker_info.num_workers == 1, (
+                    f"Using {worker_info.num_workers} torch data loading workers "
+                    "but dataset does not support sharding. This will result in repeated training data."
+                )
+                self.dataset.set_shard_idx_and_num_shards(
+                    self.dataset.shard_index + worker_info.id, self.dataset.num_shards * worker_info.num_workers
+                )
+            self._sharding_config_set = True
+
         # dataset is likely a copy of the original dataset, either in the main process or in a worker process
         # Use epoch_mp_shared to get the current epoch correctly in worked processes
         epoch = self.epoch_mp_shared.value or None
