@@ -798,10 +798,12 @@ def model_epoch_from_filename(filename):
             assert fn_with_ext_.endswith(potential_ext), "strange? %s, %s" % (filename, potential_ext)
             filename = fn_with_ext_[: -len(potential_ext)]
         break
-    m = re.match(".*\\.([0-9]+)", filename)
+    m = re.match(".*\\.([0-9]+)", os.path.basename(filename))
     if not m:
         return None
-    return int(m.groups()[0])
+    epoch = int(m.groups()[0])
+    assert epoch > 0
+    return epoch
 
 
 def deep_update_dict_values(d, key, new_value):
