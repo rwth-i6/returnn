@@ -152,6 +152,7 @@ class EngineBase:
         if load_model_epoch_filename:
             if load_epoch <= 0:
                 load_epoch = util.model_epoch_from_filename(load_model_epoch_filename)
+                assert load_epoch is None or load_epoch > 0
         else:
             if load_epoch > 0:  # ignore if load_epoch == 0
                 assert load_epoch in existing_models
