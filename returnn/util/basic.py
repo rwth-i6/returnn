@@ -790,7 +790,6 @@ def model_epoch_from_filename(filename):
     # We don't have it in the model, though.
     # For now, just parse it from filename.
     # If TF, and symlink, resolve until no symlink anymore (e.g. if we symlinked the best epoch).
-    file_basename = None
     for potential_ext in [".meta", ".pt"]:
         if not os.path.exists(filename + potential_ext):
             continue
@@ -798,15 +797,8 @@ def model_epoch_from_filename(filename):
             fn_with_ext_ = os.readlink(filename + potential_ext)
             assert fn_with_ext_.endswith(potential_ext), "strange? %s, %s" % (filename, potential_ext)
             filename = fn_with_ext_[: -len(potential_ext)]
-        file_basename = os.path.basename(filename + potential_ext)
         break
-    if file_basename is None:  # maybe the input filename already has an extension?
-        # noinspection PyBroadException
-        try:
-            file_basename = os.path.basename(filename)
-        except Exception:
-            return None
-    m = re.match(".*\\.([0-9]+)", file_basename)
+    m = re.match(".*\\.([0-9]+)", os.path.basename(filename))
     if not m:
         return None
     return int(m.groups()[0])
