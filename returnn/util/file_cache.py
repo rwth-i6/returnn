@@ -566,7 +566,7 @@ class _TouchFilesThread(Thread):
         # we track the parent directories as well and give them their own locks to be
         # able to synchronize their deletion with the touch thread
         files_to_iter = _files_with_parents(to_add, base_dir=self.cache_base_dir)
-        with self.files_lock:
+        with self.files_lock:  # to avoid that we end up with duplicate locks
             for file, count in files_to_iter.items():
                 self.files[file] += count
                 if file not in self.locks:
