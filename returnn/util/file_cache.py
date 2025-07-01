@@ -527,6 +527,7 @@ class _TouchFilesThread(Thread):
         super().__init__(daemon=True)
         self.stop = Event()
         self.files = defaultdict(int)  # usage counter
+        self.files_lock = Lock()  # lock for self.files/self.locks
         self.locks: Dict[str, Lock] = {}  # filename -> lock
         self.interval = interval
         self.cache_base_dir = cache_base_dir
@@ -535,8 +536,8 @@ class _TouchFilesThread(Thread):
     def run(self):
         """thread main loop"""
         while True:
-            # copy dicts under GIL to avoid modifications during iteration
-            locks = self.locks.copy()
+            with self.files_lock:
+                locks = self.locks.copy()
             for filename, lock in locks.items():
                 with lock:
                     if filename not in self.files:
@@ -564,10 +565,12 @@ class _TouchFilesThread(Thread):
         self.start_once()
         # we track the parent directories as well and give them their own locks to be
         # able to synchronize their deletion with the touch thread
-        for file, count in _files_with_parents(to_add, base_dir=self.cache_base_dir).items():
-            self.files[file] += count
-            if file not in self.locks:
-                self.locks[file] = Lock()
+        files_to_iter = _files_with_parents(to_add, base_dir=self.cache_base_dir)
+        with self.files_lock:
+            for file, count in files_to_iter.items():
+                self.files[file] += count
+                if file not in self.locks:
+                    self.locks[file] = Lock()
 
     def files_remove(self, to_remove: Union[str, Iterable[str]]):
         """remove"""
@@ -575,7 +578,7 @@ class _TouchFilesThread(Thread):
             to_remove = [to_remove]
         assert isinstance(to_remove, Iterable)
         for file, count in _files_with_parents(to_remove, base_dir=self.cache_base_dir).items():
-            with self.locks[file]:
+            with self.locks[file], self.files_lock:
                 self.files[file] -= count
                 if self.files[file] <= 0:
                     del self.files[file]
