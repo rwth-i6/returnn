@@ -13,7 +13,6 @@ from typing import Any, Collection, Iterable, List, Optional, Tuple, Union
 import errno
 import os
 import pathlib
-import platform
 import time
 import shutil
 import dataclasses
