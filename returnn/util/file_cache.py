@@ -523,7 +523,7 @@ class _TouchFilesThread(Thread):
         super().__init__(daemon=True)
         self.stop = Event()
         self.files = defaultdict(int)  # usage counter
-        self.locks: Dict[str, Lock] = {}
+        self.locks: Dict[str, Lock] = {}  # filename -> lock
         self.interval = interval
         self.cache_base_dir = cache_base_dir
         self._is_started = False  # careful: `_started` is already a member of the base class
@@ -532,10 +532,9 @@ class _TouchFilesThread(Thread):
         """thread main loop"""
         while True:
             # copy dicts under GIL to avoid modifications during iteration
-            all_files = self.files.copy()
             locks = self.locks.copy()
-            for filename in all_files:
-                with locks[filename]:
+            for filename, lock in locks.items():
+                with lock:
                     if filename not in self.files:
                         continue
                     try:
@@ -599,10 +598,10 @@ def _all_parent_dirs(filename: str, *, base_dir: str) -> List[str]:
     return dirs
 
 
-def _files_with_parents(files: Iterable[str], *, base_dir: str) -> Dict[str, bool]:
+def _files_with_parents(filenames: Iterable[str], *, base_dir: str) -> Dict[str, bool]:
     res = {}  # dict to have order deterministic
-    for file in files:
-        res[file] = True
-        for file in _all_parent_dirs(file, base_dir=base_dir):
-            res[file] = True
+    for fn in filenames:
+        res[fn] = True
+        for fn_ in _all_parent_dirs(fn, base_dir=base_dir):
+            res[fn_] = True
     return res
