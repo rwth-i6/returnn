@@ -471,16 +471,20 @@ def _copy_with_prealloc(src: str, dst: str):
             # Prealloc size + 1, see docstring for why.
             #
             # See also `_check_existing_copied_file_maybe_cleanup`.
-            if os.name == "posix":
+            try:
                 os.posix_fallocate(dst_file.fileno(), 0, file_size + 1)
-            else:
+            except AttributeError:
+                # posix_fallocate not available (non-Linux unixes), fallback to seek+write
                 dst_file.seek(file_size)
                 dst_file.write(b"\0")
                 dst_file.seek(0)
         with open(src, "rb") as src_file:
-            if os.name == "posix":
+            try:
                 os.posix_fadvise(src_file.fileno(), 0, file_size, os.POSIX_FADV_SEQUENTIAL)
                 os.posix_fadvise(dst_file.fileno(), 0, file_size, os.POSIX_FADV_SEQUENTIAL)
+            except AttributeError:
+                # posix_fadvise not available (non-Linux unixes)
+                pass
             shutil.copyfileobj(src_file, dst_file)
         dst_file.truncate(file_size)
 
