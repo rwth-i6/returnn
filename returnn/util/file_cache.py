@@ -536,8 +536,8 @@ class _TouchFilesThread(Thread):
     def run(self):
         """thread main loop"""
         while True:
-            with self.files_lock:
-                locks = self.locks.copy()
+            # locks dict copied under GIL
+            locks = self.locks.copy()
             for filename, lock in locks.items():
                 with lock:
                     if filename not in self.files:
