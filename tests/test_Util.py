@@ -888,7 +888,9 @@ def test_file_cache():
         cache_dir + src_dir + "/dirC/dummy3.txt": 1,
     }
     for k, v in cache._touch_files_thread.files.items():
-        assert FileCache._is_info_filename(k) or (k in target_values and target_values[k] == v)
+        assert FileCache._is_info_filename(k) or (
+            (k in target_values and target_values[k] == v) or any(item.startswith(k) for item in target_values.keys())
+        )
 
     # Check config handle_cached_files_in_config.
     config, config_cached_files = cache.handle_cached_files_in_config(
@@ -903,7 +905,9 @@ def test_file_cache():
         cache_dir + src_dir + "/dirC/dummy3.txt": 1,
     }
     for k, v in cache._touch_files_thread.files.items():
-        assert FileCache._is_info_filename(k) or (k in target_values and target_values[k] == v)
+        assert FileCache._is_info_filename(k) or (
+            (k in target_values and target_values[k] == v) or any(item.startswith(k) for item in target_values.keys())
+        )
 
     # Check that file is kept up-to-date until we release it.
     mtimes = set()

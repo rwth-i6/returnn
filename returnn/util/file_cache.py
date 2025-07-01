@@ -560,8 +560,8 @@ class _TouchFilesThread(Thread):
         self.start_once()
         # we track the parent directories as well and give them their own locks to be
         # able to synchronize their deletion with the touch thread
-        for file in _files_with_parents(to_add, base_dir=self.cache_base_dir):
-            self.files[file] += 1
+        for file, count in _files_with_parents(to_add, base_dir=self.cache_base_dir).items():
+            self.files[file] += count
             if file not in self.locks:
                 self.locks[file] = Lock()
 
@@ -570,9 +570,9 @@ class _TouchFilesThread(Thread):
         if isinstance(to_remove, str):
             to_remove = [to_remove]
         assert isinstance(to_remove, Iterable)
-        for file in _files_with_parents(to_remove, base_dir=self.cache_base_dir):
+        for file, count in _files_with_parents(to_remove, base_dir=self.cache_base_dir).items():
             with self.locks[file]:
-                self.files[file] -= 1
+                self.files[file] -= count
                 if self.files[file] <= 0:
                     del self.files[file]
                     del self.locks[file]
@@ -598,10 +598,10 @@ def _all_parent_dirs(filename: str, *, base_dir: str) -> List[str]:
     return dirs
 
 
-def _files_with_parents(filenames: Iterable[str], *, base_dir: str) -> Dict[str, bool]:
-    res = {}  # dict to have order deterministic
+def _files_with_parents(filenames: Iterable[str], *, base_dir: str) -> Dict[str, int]:
+    res = defaultdict(int)  # dict to have order deterministic
     for fn in filenames:
-        res[fn] = True
+        res[fn] += 1
         for fn_ in _all_parent_dirs(fn, base_dir=base_dir):
-            res[fn_] = True
+            res[fn_] += 1
     return res
