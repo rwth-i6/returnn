@@ -483,7 +483,7 @@ def _copy_with_prealloc(src: str, dst: str):
                 os.posix_fadvise(src_file.fileno(), 0, file_size, os.POSIX_FADV_SEQUENTIAL)
                 os.posix_fadvise(dst_file.fileno(), 0, file_size, os.POSIX_FADV_SEQUENTIAL)
             except AttributeError:
-                # posix_fallocate not available (non-Linux unixes)
+                # posix_fadvise not available (non-Linux unixes)
                 pass
             shutil.copyfileobj(src_file, dst_file)
         dst_file.truncate(file_size)
