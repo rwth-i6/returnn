@@ -9815,6 +9815,10 @@ class CombineLayer(LayerBase):
             assert kind == "eval" and eval_str
             return self._op_kind_eval(sources, eval_str=eval_str, eval_locals=eval_locals)
 
+        if hasattr(self, "_op_kind_%s" % kind):
+            func = getattr(self, "_op_kind_%s" % kind)
+            return func(sources)
+
         kind = {
             "+": "add",
             "-": "subtract",
@@ -9824,6 +9828,7 @@ class CombineLayer(LayerBase):
             "sub": "subtract",
             "mul": "multiply",
         }.get(kind, kind)
+
         if hasattr(tf, "math") and hasattr(tf.math, kind):
             tf_func = getattr(tf.math, kind)
         elif hasattr(tf, kind):
@@ -9833,11 +9838,8 @@ class CombineLayer(LayerBase):
         elif hasattr(tf, "experimental") and hasattr(tf.experimental, "numpy") and hasattr(tf.experimental.numpy, kind):
             tf_func = getattr(tf.experimental.numpy, kind)
         else:
-            tf_func = None
-        if tf_func:
-            return self._op_dense_fn(sources, tf_func, self.output)
-
-        return getattr(self, "_op_kind_%s" % kind)(sources)
+            raise ValueError(f"{self}: unknown kind {kind!r}")
+        return self._op_dense_fn(sources, tf_func, self.output)
 
 
 class EvalLayer(CombineLayer):
