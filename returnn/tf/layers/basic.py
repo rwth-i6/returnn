@@ -9830,6 +9830,8 @@ class CombineLayer(LayerBase):
             tf_func = getattr(tf, kind)
         elif hasattr(tf, "keras") and hasattr(tf.keras, "ops") and hasattr(tf.keras.ops, kind):
             tf_func = getattr(tf.keras.ops, kind)
+        elif hasattr(tf, "experimental") and hasattr(tf.experimental, "numpy") and hasattr(tf.experimental.numpy, kind):
+            tf_func = getattr(tf.keras.ops, kind)
         else:
             tf_func = None
         if tf_func:
