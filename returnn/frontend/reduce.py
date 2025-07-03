@@ -249,7 +249,7 @@ class RunningMean(rf.Module):
         """
 
         def _update_running_stats():
-            assert all(d in self.shape for d in x.dims)
+            assert all(d in x.dims for d in self.shape)
             x_ = rf.reduce_mean(x, axis=[d for d in x.dims if d not in self.shape])
             self.mean.assign_add(self.alpha * (x_ - self.mean))
 
