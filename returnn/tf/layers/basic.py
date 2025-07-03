@@ -9607,6 +9607,7 @@ class CombineLayer(LayerBase):
           `maximum`, `minimum`,
           `logical_and`, `logical_or`,
           `squared_difference`,
+          `logaddexp`,
           or `eval`,
           or any function in the tf.math or tf namespace.
         :param list[LayerBase] sources:
@@ -9827,6 +9828,8 @@ class CombineLayer(LayerBase):
             tf_func = getattr(tf.math, kind)
         elif hasattr(tf, kind):
             tf_func = getattr(tf, kind)
+        elif hasattr(tf, "keras") and hasattr(tf.keras.ops, kind):
+            tf_func = getattr(tf.keras.ops, kind)
         else:
             tf_func = None
         if tf_func:
@@ -10657,7 +10660,7 @@ class SearchSortedLayer(LayerBase):
         transposed_values_data = values_data.copy_transpose(perm=values_batch_axes + values_non_batch_axes)  # [B,F]
         x = transposed_sorted_data.placeholder  # [B,T]
         if transposed_sorted_data.dims[-1].need_masking():
-            from returnn.tf.util.basic import where_bc, sequence_mask
+            from returnn.tf.util.basic import where_bc
 
             seq_mask = transposed_sorted_data.get_sequence_mask_broadcast(axis=-1)
             x = where_bc(seq_mask, x, x.dtype.max)  # note: this is not correct if values contains x.dtype.max

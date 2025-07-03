@@ -99,6 +99,8 @@ def reduce_logsumexp(source: Tensor[T], *, axis: Union[Dim, Sequence[Dim]], use_
     """
     Reduce the tensor along the given axis
 
+    Also see :func:`log_add_exp`.
+
     :param source:
     :param axis:
     :param use_mask: if True (default), use the time mask (part of dim tag) to ignore padding frames

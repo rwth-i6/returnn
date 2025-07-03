@@ -220,7 +220,8 @@ class Backend(Generic[T]):
         """
         :param a:
         :param kind: "add", "sub", "mul", "truediv", "floordiv", "mod", "pow",
-            "maximum", "minimum", "logical_and", "logical_or", "squared_difference"
+            "maximum", "minimum", "logical_and", "logical_or", "squared_difference",
+            "logaddexp"
         :param b:
         :return: a `kind` b
         """

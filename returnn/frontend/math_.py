@@ -37,6 +37,7 @@ __all__ = [
     "logical_not",
     "opt_logical_or",
     "opt_logical_and",
+    "log_add_exp",
     "is_finite",
     "is_infinite",
     "is_neg_infinite",
@@ -173,7 +174,8 @@ def combine(
     """
     :param a:
     :param kind: "add"|"+", "sub"|"-", "mul"|"*", "truediv"|"/", "floordiv"|"//", "mod"|"%", "pow"|"**",
-        "max"|"maximum", "min"|"minimum", "logical_and", "logical_or", "squared_difference"
+        "max"|"maximum", "min"|"minimum", "logical_and", "logical_or", "squared_difference",
+        "logaddexp"
     :param b:
     :param allow_broadcast_all_sources: if True, it is allowed that neither a nor b has all dims of the result.
         Not needed when out_dims is specified explicitly.
@@ -362,6 +364,16 @@ def opt_logical_and(a: Union[Tensor, bool], b: Union[Tensor, bool]) -> Union[Ten
             return False
         return a
     return combine(a, "logical_and", b)
+
+
+def log_add_exp(a: Tensor, b: Tensor) -> Tensor:
+    """
+    Computes log(exp(a) + exp(b)) in a numerically stable way.
+    This is useful for log probabilities, e.g. in beam search.
+
+    See also: func:`reduce_logsumexp`.
+    """
+    return combine(a, "logaddexp", b)
 
 
 def is_finite(a: Tensor) -> Tensor:
