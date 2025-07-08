@@ -7,6 +7,7 @@ and some related helpers.
 
 from __future__ import annotations
 
+import enum
 from typing import (
     Iterable,
     Optional,
@@ -1154,6 +1155,12 @@ class StateTying:
         self.num_classes = len(self.class_map)
 
 
+# Not to be confused with i6_core.lib.corpus.LexiconStrategy
+class LexiconStrategy(enum.Enum):
+    PICK_FIRST = 0
+    PICK_RANDOM = 1
+
+
 class PhoneSeqGenerator:
     """
     Generates phone sequences.
@@ -1177,6 +1184,7 @@ class PhoneSeqGenerator:
         add_extra_begin_lemma: float = 1.0,
         extra_end_lemma: Optional[Dict[str, Any]] = None,
         add_extra_end_lemma: float = 1.0,
+        lexicon_strategy: LexiconStrategy = LexiconStrategy.PICK_RANDOM,
     ):
         """
         :param lexicon_file: lexicon XML file
@@ -1217,6 +1225,7 @@ class PhoneSeqGenerator:
         self.add_extra_begin_lemma = add_extra_begin_lemma
         self.extra_end_lemma = extra_end_lemma
         self.add_extra_end_lemma = add_extra_end_lemma
+        self.lexicon_strategy = lexicon_strategy
 
     def random_seed(self, seed: int):
         """Reset RNG via given seed"""
@@ -1284,7 +1293,12 @@ class PhoneSeqGenerator:
         """:return: space-separated phones"""
         phones = []
         for lemma in self._iter_orth_lemmas(orth):
-            phon = self.rnd.choice(lemma["phons"])
+            if self.lexicon_strategy == LexiconStrategy.PICK_FIRST:
+                phon = lemma["phons"][0]
+            elif self.lexicon_strategy == LexiconStrategy.PICK_RANDOM:
+                phon = self.rnd.choice(lemma["phons"])
+            else:
+                raise ValueError(f"Unknown lexicon strategy {self.lexicon_strategy}")
             phones.append(phon["phon"])
         return " ".join(phones)
 
@@ -1356,7 +1370,13 @@ class PhoneSeqGenerator:
         """
         allos: List[AllophoneState] = []
         for lemma in self._iter_orth_lemmas(orth):
-            phon = self.rnd.choice(lemma["phons"])  # space-separated phones in phon["phon"]
+            if self.lexicon_strategy == LexiconStrategy.PICK_FIRST:
+                phon = lemma["phons"][0]
+            elif self.lexicon_strategy == LexiconStrategy.PICK_RANDOM:
+                phon = self.rnd.choice(lemma["phons"])
+            else:
+                raise ValueError(f"Unknown lexicon strategy {self.lexicon_strategy}")
+            # space-separated phones in phon["phon"]
             l_allos = list(self._phones_to_allos(phon["phon"].split()))
             l_allos[0].mark_initial()
             l_allos[-1].mark_final()
