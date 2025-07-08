@@ -10,6 +10,7 @@ from __future__ import annotations
 import enum
 from typing import (
     Iterable,
+    Literal,
     Optional,
     Sequence,
     Union,
@@ -1155,12 +1156,6 @@ class StateTying:
         self.num_classes = len(self.class_map)
 
 
-# Not to be confused with i6_core.lib.corpus.LexiconStrategy
-class LexiconStrategy(enum.Enum):
-    PICK_FIRST = 0
-    PICK_RANDOM = 1
-
-
 class PhoneSeqGenerator:
     """
     Generates phone sequences.
@@ -1184,7 +1179,7 @@ class PhoneSeqGenerator:
         add_extra_begin_lemma: float = 1.0,
         extra_end_lemma: Optional[Dict[str, Any]] = None,
         add_extra_end_lemma: float = 1.0,
-        lexicon_strategy: LexiconStrategy = LexiconStrategy.PICK_RANDOM,
+        lexicon_strategy: Literal["random", "first"] = "random",
     ):
         """
         :param lexicon_file: lexicon XML file
@@ -1204,6 +1199,7 @@ class PhoneSeqGenerator:
         :param add_extra_begin_lemma:
         :param extra_end_lemma: just like ``extra_begin_lemma``, but for the end
         :param add_extra_end_lemma:
+        :param lexicon_strategy: "random" or "first". If "random", then lemmas are picked randomly if multiple pronunciations exist.
         """
         self.lexicon = Lexicon(lexicon_file)
         self.phonemes = sorted(self.lexicon.phonemes.keys(), key=lambda s: self.lexicon.phonemes[s]["index"])
@@ -1293,9 +1289,9 @@ class PhoneSeqGenerator:
         """:return: space-separated phones"""
         phones = []
         for lemma in self._iter_orth_lemmas(orth):
-            if self.lexicon_strategy == LexiconStrategy.PICK_FIRST:
+            if self.lexicon_strategy == "first":
                 phon = lemma["phons"][0]
-            elif self.lexicon_strategy == LexiconStrategy.PICK_RANDOM:
+            elif self.lexicon_strategy == "random":
                 phon = self.rnd.choice(lemma["phons"])
             else:
                 raise ValueError(f"Unknown lexicon strategy {self.lexicon_strategy}")
@@ -1370,9 +1366,9 @@ class PhoneSeqGenerator:
         """
         allos: List[AllophoneState] = []
         for lemma in self._iter_orth_lemmas(orth):
-            if self.lexicon_strategy == LexiconStrategy.PICK_FIRST:
+            if self.lexicon_strategy == "first":
                 phon = lemma["phons"][0]
-            elif self.lexicon_strategy == LexiconStrategy.PICK_RANDOM:
+            elif self.lexicon_strategy == "random":
                 phon = self.rnd.choice(lemma["phons"])
             else:
                 raise ValueError(f"Unknown lexicon strategy {self.lexicon_strategy}")
