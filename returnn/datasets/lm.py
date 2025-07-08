@@ -7,7 +7,6 @@ and some related helpers.
 
 from __future__ import annotations
 
-import enum
 from typing import (
     Iterable,
     Literal,
@@ -1199,7 +1198,8 @@ class PhoneSeqGenerator:
         :param add_extra_begin_lemma:
         :param extra_end_lemma: just like ``extra_begin_lemma``, but for the end
         :param add_extra_end_lemma:
-        :param lexicon_strategy: "random" or "first". If "random", then lemmas are picked randomly if multiple pronunciations exist.
+        :param lexicon_strategy: "random" or "first". If "random", then lemmas are picked randomly
+            if multiple pronunciations exist.
         """
         self.lexicon = Lexicon(lexicon_file)
         self.phonemes = sorted(self.lexicon.phonemes.keys(), key=lambda s: self.lexicon.phonemes[s]["index"])
