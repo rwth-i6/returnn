@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from typing import (
     Iterable,
+    Literal,
     Optional,
     Sequence,
     Union,
@@ -1177,6 +1178,7 @@ class PhoneSeqGenerator:
         add_extra_begin_lemma: float = 1.0,
         extra_end_lemma: Optional[Dict[str, Any]] = None,
         add_extra_end_lemma: float = 1.0,
+        phon_pick_strategy: Literal["random", "first"] = "random",
     ):
         """
         :param lexicon_file: lexicon XML file
@@ -1196,6 +1198,8 @@ class PhoneSeqGenerator:
         :param add_extra_begin_lemma:
         :param extra_end_lemma: just like ``extra_begin_lemma``, but for the end
         :param add_extra_end_lemma:
+        :param phon_pick_strategy: "random" or "first". If "random", then lemmas are picked randomly
+            if multiple pronunciations exist.
         """
         self.lexicon = Lexicon(lexicon_file)
         self.phonemes = sorted(self.lexicon.phonemes.keys(), key=lambda s: self.lexicon.phonemes[s]["index"])
@@ -1217,6 +1221,7 @@ class PhoneSeqGenerator:
         self.add_extra_begin_lemma = add_extra_begin_lemma
         self.extra_end_lemma = extra_end_lemma
         self.add_extra_end_lemma = add_extra_end_lemma
+        self.phon_pick_strategy = phon_pick_strategy
 
     def random_seed(self, seed: int):
         """Reset RNG via given seed"""
@@ -1284,7 +1289,12 @@ class PhoneSeqGenerator:
         """:return: space-separated phones"""
         phones = []
         for lemma in self._iter_orth_lemmas(orth):
-            phon = self.rnd.choice(lemma["phons"])
+            if self.phon_pick_strategy == "first":
+                phon = lemma["phons"][0]
+            elif self.phon_pick_strategy == "random":
+                phon = self.rnd.choice(lemma["phons"])
+            else:
+                raise ValueError(f"Unknown phon_pick_strategy {self.phon_pick_strategy}")
             phones.append(phon["phon"])
         return " ".join(phones)
 
@@ -1356,7 +1366,13 @@ class PhoneSeqGenerator:
         """
         allos: List[AllophoneState] = []
         for lemma in self._iter_orth_lemmas(orth):
-            phon = self.rnd.choice(lemma["phons"])  # space-separated phones in phon["phon"]
+            if self.phon_pick_strategy == "first":
+                phon = lemma["phons"][0]
+            elif self.phon_pick_strategy == "random":
+                phon = self.rnd.choice(lemma["phons"])
+            else:
+                raise ValueError(f"Unknown phon_pick_strategy {self.phon_pick_strategy}")
+            # space-separated phones in phon["phon"]
             l_allos = list(self._phones_to_allos(phon["phon"].split()))
             l_allos[0].mark_initial()
             l_allos[-1].mark_final()
