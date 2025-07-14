@@ -94,6 +94,10 @@ class MultiProcDataset(CachedDataset2):
             self._lazy_init()
         super().initialize()
 
+    def supports_sharding(self):
+        """this dataset supports sharding on the ``dedicated`` sharding method"""
+        return self._sharding_method == "dedicated"
+
     @property
     def _meta_info_cache(self):
         if not self.num_outputs:
@@ -144,7 +148,11 @@ class MultiProcDataset(CachedDataset2):
                     self._sharding_method,
                 )
             elif self._sharding_method == "dedicated":
-                sub_dataset = {**self.dataset, "_num_shards": self.num_workers, "_shard_index": i}
+                sub_dataset = {
+                    **self.dataset,
+                    "num_shards": self.num_workers * self.num_shards,
+                    "shard_index": (self.shard_index * self.num_workers) + i,
+                }
                 args = (
                     i,
                     sub_dataset,

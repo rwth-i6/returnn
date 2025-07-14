@@ -564,10 +564,9 @@ def create_ogg_zip_txt_only_dataset(*, text: str = "hello world", seq_tag: str =
 
 
 @contextlib.contextmanager
-def create_ogg_zip_txt_only_dataset_mult_seqs(*, seed: int = 1, num_seqs: int = 100, max_seq_len: int = 100):
+def create_ogg_zip_txt_only_dataset_mult_seqs_opts(*, seed: int = 1, num_seqs: int = 100, max_seq_len: int = 100):
     """create OggZipDataset"""
     import zipfile
-    from returnn.datasets.audio import OggZipDataset
 
     rnd = numpy.random.RandomState(seed)
 
@@ -596,6 +595,15 @@ def create_ogg_zip_txt_only_dataset_mult_seqs(*, seed: int = 1, num_seqs: int = 
             "audio": None,
             "targets": {"class": "CharacterTargets", "vocab_file": tmp_vocab_file.name, "seq_postfix": []},
         }
+        yield opts
+
+
+@contextlib.contextmanager
+def create_ogg_zip_txt_only_dataset_mult_seqs(*, seed: int = 1, num_seqs: int = 100, max_seq_len: int = 100):
+    """create OggZipDataset"""
+    from returnn.datasets.audio import OggZipDataset
+
+    with create_ogg_zip_txt_only_dataset_mult_seqs_opts(seed=seed, num_seqs=num_seqs, max_seq_len=max_seq_len) as opts:
         dataset = init_dataset(opts)
         assert isinstance(dataset, OggZipDataset)
         yield dataset
@@ -1302,6 +1310,18 @@ def test_MultiEpochDataset():
             outer_seq_idx += 1
         assert outer_seq_idx == len(seqs)
         assert sub_ep == outer_epoch * multi_epoch + 1 and sub_seq_idx == 0
+
+
+def test_dataset_sharding():
+    from returnn.datasets.audio import OggZipDataset
+
+    with create_ogg_zip_txt_only_dataset_mult_seqs_opts(num_seqs=10) as dataset_opts:
+        datasets = [init_dataset({**dataset_opts, "num_shards": 2, "shard_index": i}) for i in range(2)]
+        for dataset in datasets:
+            assert isinstance(dataset, OggZipDataset)
+            dataset.init_seq_order(epoch=1)
+            assert dataset.shard_index < dataset.num_shards == 2
+            assert dataset.num_seqs == 5
 
 
 if __name__ == "__main__":

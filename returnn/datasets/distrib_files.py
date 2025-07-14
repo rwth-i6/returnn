@@ -138,9 +138,8 @@ class DistributeFilesDataset(CachedDataset2):
         get_sub_epoch_dataset: Callable[[List[FileTree]], Dict[str, Any]],
         preload_next_n_sub_epochs: int = 1,
         buffer_size: int = 1,
-        distrib_shard_files: bool = False,
+        distrib_shard_files: Optional[bool] = None,
         _meta_info_cache: Optional[Dict[str, Any]] = None,
-        _distrib_info: Optional[Dict[str, int]] = None,
         **kwargs,
     ):
         """
@@ -153,10 +152,10 @@ class DistributeFilesDataset(CachedDataset2):
         :param get_sub_epoch_dataset: callable which returns a dataset dict for a given subset of files
         :param preload_next_n_sub_epochs: how many sub epoch datasets to preload
         :param buffer_size: buffer size for each worker, amount of seqs to prefetch
-        :param distrib_shard_files: set to true to shard the data across worker processes in
-            distributed training scenaria
+        :param distrib_shard_files: deprecated. Replaced by global config option ``dataset_distribution="shard"``.
+
+            Set to true to shard the data across worker processes in distributed training scenaria.
         :param _meta_info_cache: for internal use
-        :param _distrib_info: for internal use
         """
         super().__init__(**kwargs)
         self.files = files
@@ -172,21 +171,16 @@ class DistributeFilesDataset(CachedDataset2):
         self._workers: Dict[int, _WorkerProcParent] = {}  # epoch -> worker
         self._files_order_cache: Dict[int, List[List[FileTree]]] = {}  # full epoch (0-indexed) -> files order
 
-        self.distrib_shard_files = distrib_shard_files
-        if distrib_shard_files:
-            assert self._num_shards == 1 and self._shard_index == 0, (  # ensure defaults are set
-                f"{self}: Cannot use both dataset-sharding via properties _num_shards and _shard index "
-                f"and {self.__class__.__name__}'s own sharding implementation based on the trainings rank and size."
+        if distrib_shard_files is not None:
+            log.print_deprecation_warning(
+                f"{self.__class__.__name__}' `distrib_shard_files` config option is set. "
+                "Use global config option `dataset_distribution` instead "
+                "for the same behavior across more types of datasets."
             )
-            if _distrib_info:
-                # If we're in a child process `_get_rank_and_size()` no longer works,
-                # so we pass the info about the shards via a pickled property.
-                # See also Dataset.__reduce__.
-                self._shard_index = _distrib_info["_shard_index"]
-                self._num_shards = _distrib_info["_num_shards"]
-            else:
-                self._shard_index, self._num_shards = _get_rank_and_size()
-        assert 0 <= self._shard_index < self._num_shards
+            sharding_info = self._validate_global_config_and_get_sharding_info(distrib_shard_files)
+            if sharding_info is not None:
+                self.shard_index, self.num_shards = sharding_info
+        self.distrib_shard_files = distrib_shard_files
 
         if _meta_info_cache:
             # This allows to skip the lazy init in self.initialize().
@@ -209,10 +203,6 @@ class DistributeFilesDataset(CachedDataset2):
         return True
 
     @property
-    def _distrib_info(self):
-        return {"_num_shards": self._num_shards, "_shard_index": self._shard_index}
-
-    @property
     def _meta_info_cache(self):
         if not self.num_outputs:
             return None
@@ -224,9 +214,6 @@ class DistributeFilesDataset(CachedDataset2):
             "file_sizes": self._file_sizes,
             "files": self._files,
         }
-
-    def _uses_custom_distributed_sharding(self) -> bool:
-        return self._num_shards > 1
 
     def _lazy_init_file_list(self):
         """
@@ -332,11 +319,11 @@ class DistributeFilesDataset(CachedDataset2):
             else:
                 raise ValueError(f"{self}: seq_ordering {self.seq_ordering!r} not supported")
             file_bins = self._distribute_evenly_by_size(
-                num_bins=self._num_shards * self.partition_epoch,
+                num_bins=self.num_shards * self.partition_epoch,
                 file_sizes=self._file_sizes,
                 files_order=files_order_flat,
             )
-            self_index_base = self.partition_epoch * self._shard_index
+            self_index_base = self.partition_epoch * self.shard_index
             self_index_end = self_index_base + self.partition_epoch
             self._files_order_cache[full_epoch_0idx_] = file_bins[self_index_base:self_index_end]
 
@@ -370,6 +357,10 @@ class DistributeFilesDataset(CachedDataset2):
 
         dataset_dict = self.get_sub_epoch_dataset(files)
         dataset_dict = extend_dataset_dict_from_parent_dataset(dataset_dict, parent_dataset=self)
+        # We shard by splitting the files list into shards, the sub datasets must not shard any further by themselves
+        if self.num_shards > 1:
+            dataset_dict["num_shards"] = 1
+            dataset_dict["shard_index"] = 0
 
         flat_sub_dset = tree.flatten_with_path(dataset_dict)
 
@@ -494,38 +485,33 @@ class DistributeFilesDataset(CachedDataset2):
             self._lazy_init_num_outputs()
         return self._data_keys
 
+    @classmethod
+    def _validate_global_config_and_get_sharding_info(cls, distrib_shard_files: bool) -> Optional[Tuple[int, int]]:
+        from returnn.config import get_global_config
+
+        config = get_global_config(raise_exception=False)
+        if not config:
+            return
+
+        dd_cfg = config.typed_value("dataset_distribution", None)
+        if dd_cfg and (distrib_shard_files and dd_cfg != "shard") or (not distrib_shard_files and dd_cfg == "shard"):
+            raise ValueError(
+                f"{cls.__name__}: `distrib_shard_files` config ({distrib_shard_files}) mismatch "
+                f"with global config option `dataset_distribution` ({dd_cfg})."
+            )
+
+        if distrib_shard_files and dd_cfg is None:
+            # RETURNN will set sharding info on the dataset if the global config is set.
+            # If it's not set, however, we need to respect the existing `distrib_shard_files` property
+            # for backwards compatibility and load the sharding info ourselves.
+            return CachedDataset2._get_sharding_rank_and_size(config)
+
 
 def _get_key_for_file_tree(t: FileTree) -> str:
     """generates a deterministic key given a file tree"""
     import tree
 
     return ":".join(tree.flatten(t))
-
-
-def _get_rank_and_size() -> Tuple[int, int]:
-    """
-    :return: tuple (rank, size): the global rank and size for distributed trainings
-    """
-
-    from returnn.config import get_global_config
-
-    config = get_global_config(raise_exception=False)
-    if not config:
-        return 0, 1
-    if config.typed_value("torch_distributed") is not None:
-        import returnn.torch.distributed
-
-        ctx = returnn.torch.distributed.get_ctx(config=config)
-        return ctx.rank(), ctx.size()
-    elif config.is_true("use_horovod"):
-        assert config.bool("use_tensorflow", False) or config.value("backend", "").startswith("tensorflow")
-
-        import returnn.tf.horovod
-
-        ctx = returnn.tf.horovod.get_ctx(config=config)
-        return ctx.rank(), ctx.size()
-    else:
-        return 0, 1
 
 
 class _WorkerProcParent:
