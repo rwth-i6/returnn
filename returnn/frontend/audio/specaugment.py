@@ -26,10 +26,10 @@ def specaugment(
     """
     SpecAugment, https://arxiv.org/abs/1904.08779
     """
-    if not feature_dim:
+    if feature_dim is None:
         assert x.feature_dim
         feature_dim = x.feature_dim
-    if not max_consecutive_feature_dims:
+    if max_consecutive_feature_dims is None:
         max_consecutive_feature_dims = feature_dim.dimension // 5
     if global_train_step_dependent:
         with rf.set_default_device_ctx("cpu"):

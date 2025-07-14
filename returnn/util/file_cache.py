@@ -9,7 +9,7 @@ See https://github.com/rwth-i6/returnn/issues/1519 for initial discussion.
 Main class is :class:`FileCache`.
 """
 
-from typing import Any, Collection, Iterable, List, Optional, Tuple, Union
+from typing import Any, Collection, Dict, Iterable, List, Optional, Tuple, Union
 import errno
 import os
 import pathlib
@@ -20,7 +20,7 @@ from dataclasses import dataclass
 from collections import defaultdict
 from contextlib import contextmanager
 import json
-from threading import Thread, Event
+from threading import Lock, Thread, Event
 from returnn.config import Config, get_global_config
 from .basic import expand_env_vars, LockFile, human_bytes_size
 
@@ -471,16 +471,20 @@ def _copy_with_prealloc(src: str, dst: str):
             # Prealloc size + 1, see docstring for why.
             #
             # See also `_check_existing_copied_file_maybe_cleanup`.
-            if os.name == "posix":
+            try:
                 os.posix_fallocate(dst_file.fileno(), 0, file_size + 1)
-            else:
+            except AttributeError:
+                # posix_fallocate not available (non-Linux unixes), fallback to seek+write
                 dst_file.seek(file_size)
                 dst_file.write(b"\0")
                 dst_file.seek(0)
         with open(src, "rb") as src_file:
-            if os.name == "posix":
+            try:
                 os.posix_fadvise(src_file.fileno(), 0, file_size, os.POSIX_FADV_SEQUENTIAL)
                 os.posix_fadvise(dst_file.fileno(), 0, file_size, os.POSIX_FADV_SEQUENTIAL)
+            except AttributeError:
+                # posix_fadvise not available (non-Linux unixes)
+                pass
             shutil.copyfileobj(src_file, dst_file)
         dst_file.truncate(file_size)
 
@@ -523,6 +527,8 @@ class _TouchFilesThread(Thread):
         super().__init__(daemon=True)
         self.stop = Event()
         self.files = defaultdict(int)  # usage counter
+        self.files_lock = Lock()  # lock for self.files/self.locks
+        self.locks: Dict[str, Lock] = {}  # filename -> lock
         self.interval = interval
         self.cache_base_dir = cache_base_dir
         self._is_started = False  # careful: `_started` is already a member of the base class
@@ -530,16 +536,17 @@ class _TouchFilesThread(Thread):
     def run(self):
         """thread main loop"""
         while True:
-            all_files = {}  # dict to have order deterministic
-            for filename in self.files.copy():  # copy dict under GIL to avoid modifications during iteration
-                all_files[filename] = True
-                all_files.update({k: True for k in _all_parent_dirs(filename, base_dir=self.cache_base_dir)})
-            for filename in all_files:
-                try:
-                    os.utime(filename, None)
-                except Exception as exc:
-                    print(f"FileCache: failed updating mtime of {filename}: {exc}")
-                    raise
+            # locks dict copied under GIL
+            locks = self.locks.copy()
+            for filename, lock in locks.items():
+                with lock:
+                    if filename not in self.files:
+                        continue
+                    try:
+                        os.utime(filename, None)
+                    except Exception as exc:
+                        print(f"FileCache: failed updating mtime of {filename}: {exc}")
+                        raise
             if self.stop.wait(self.interval):
                 return
 
@@ -556,18 +563,26 @@ class _TouchFilesThread(Thread):
             to_add = [to_add]
         assert isinstance(to_add, Iterable)
         self.start_once()
-        for file in to_add:
-            self.files[file] += 1
+        # we track the parent directories as well and give them their own locks to be
+        # able to synchronize their deletion with the touch thread
+        files_to_iter = _files_with_parents(to_add, base_dir=self.cache_base_dir)
+        with self.files_lock:  # to avoid that we end up with duplicate locks
+            for file, count in files_to_iter.items():
+                self.files[file] += count
+                if file not in self.locks:
+                    self.locks[file] = Lock()
 
     def files_remove(self, to_remove: Union[str, Iterable[str]]):
         """remove"""
         if isinstance(to_remove, str):
             to_remove = [to_remove]
         assert isinstance(to_remove, Iterable)
-        for filename in to_remove:
-            self.files[filename] -= 1
-            if self.files[filename] <= 0:
-                del self.files[filename]
+        for file, count in _files_with_parents(to_remove, base_dir=self.cache_base_dir).items():
+            with self.locks[file], self.files_lock:
+                self.files[file] -= count
+                if self.files[file] <= 0:
+                    del self.files[file]
+                    del self.locks[file]
 
     @contextmanager
     def files_added_context(self, files: Collection[str]):
@@ -588,3 +603,12 @@ def _all_parent_dirs(filename: str, *, base_dir: str) -> List[str]:
             break
         dirs.append(filename)
     return dirs
+
+
+def _files_with_parents(filenames: Iterable[str], *, base_dir: str) -> Dict[str, int]:
+    res = defaultdict(int)  # dict to have order deterministic
+    for fn in filenames:
+        res[fn] += 1
+        for fn_ in _all_parent_dirs(fn, base_dir=base_dir):
+            res[fn_] += 1
+    return res

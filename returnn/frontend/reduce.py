@@ -99,6 +99,8 @@ def reduce_logsumexp(source: Tensor[T], *, axis: Union[Dim, Sequence[Dim]], use_
     """
     Reduce the tensor along the given axis
 
+    Also see :func:`log_add_exp`.
+
     :param source:
     :param axis:
     :param use_mask: if True (default), use the time mask (part of dim tag) to ignore padding frames
@@ -247,7 +249,7 @@ class RunningMean(rf.Module):
         """
 
         def _update_running_stats():
-            assert all(d in self.shape for d in x.dims)
+            assert all(d in x.dims for d in self.shape)
             x_ = rf.reduce_mean(x, axis=[d for d in x.dims if d not in self.shape])
             self.mean.assign_add(self.alpha * (x_ - self.mean))
 

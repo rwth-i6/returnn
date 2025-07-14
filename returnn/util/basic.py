@@ -798,10 +798,12 @@ def model_epoch_from_filename(filename):
             assert fn_with_ext_.endswith(potential_ext), "strange? %s, %s" % (filename, potential_ext)
             filename = fn_with_ext_[: -len(potential_ext)]
         break
-    m = re.match(".*\\.([0-9]+)", filename)
+    m = re.match(".*\\.([0-9]+)", os.path.basename(filename))
     if not m:
         return None
-    return int(m.groups()[0])
+    epoch = int(m.groups()[0])
+    assert epoch > 0
+    return epoch
 
 
 def deep_update_dict_values(d, key, new_value):
@@ -1677,17 +1679,16 @@ def random_orthogonal(shape, gain=1.0, seed=None):
 
 
 # noinspection PyUnusedLocal
-def inplace_increment(x, idx, y):
+def inplace_increment(x: numpy.ndarray, idx: numpy.ndarray, y: Union[numpy.ndarray, float, int]) -> numpy.ndarray:
     """
     This basically does `x[idx] += y`.
     The difference to the Numpy version is that in case some index is there multiple
     times, it will only be incremented once (and it is not specified which one).
     See also theano.tensor.subtensor.AdvancedIncSubtensor documentation.
 
-    :param numpy.ndarray x:
-    :param numpy.ndarray idx:
-    :param numpy.ndarray y:
-    :rtype: numpy.ndarray
+    :param x:
+    :param idx:
+    :param y:
     """
     raise NotImplementedError("This feature was removed with dropped Theano support")
 

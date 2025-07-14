@@ -1468,6 +1468,7 @@ static PyObject* _pyTensorCompareOrCombine(PyObject *self, PyObject *args, PyObj
         kindToCombineFunc["logical_and"] = TOp_And;
         kindToCombineFunc["logical_or"] = TOp_Or;
         kindToCombineFunc["squared_difference"] = TOp_SquaredDifference;
+        kindToCombineFunc["logaddexp"] = TOp_LogAddExp;
     }
 
     auto it = isCompare ? kindToCompareFunc.find(kind) : kindToCombineFunc.find(kind);

@@ -91,6 +91,24 @@ def test_squared_difference():
     run_model(extern_data, lambda *, epoch, step: _Net(), _forward_step)
 
 
+def test_log_add_exp():
+    time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
+    in_dim = Dim(7, name="in")
+    extern_data = TensorDict(
+        {
+            "a": Tensor("a", [batch_dim, time_dim, in_dim], dtype="float32"),
+            "b": Tensor("b", [in_dim], dtype="float32"),
+        }
+    )
+
+    # noinspection PyShadowingNames
+    def _forward_step(*, extern_data: TensorDict, **_):
+        out = rf.log_add_exp(extern_data["a"], extern_data["b"])
+        out.mark_as_default_output(shape=(batch_dim, time_dim, in_dim))
+
+    run_model(extern_data, lambda **_: rf.Module(), _forward_step)
+
+
 def test_abs_complex():
     time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
     in_dim = Dim(7, name="in")
