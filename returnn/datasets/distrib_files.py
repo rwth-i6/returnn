@@ -528,6 +528,8 @@ def _get_rank_and_size() -> Tuple[int, int]:
 
         ctx = returnn.tf.horovod.get_ctx(config=config)
         return ctx.rank(), ctx.size()
+    elif config.typed_value("__debug_dummy_distributed_rank_and_size") is not None:
+        return config.typed_value("__debug_dummy_distributed_rank_and_size")
     else:
         return 0, 1
 

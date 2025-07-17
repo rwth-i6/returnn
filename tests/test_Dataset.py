@@ -1130,7 +1130,6 @@ def test_DistributeFilesDataset_sharding():
     from returnn.datasets.distrib_files import DistributeFilesDataset
     from test_HDFDataset import generate_hdf_from_dummy
     from returnn.config import global_config_ctx, Config
-    import returnn.torch.distributed
 
     # Create a few HDF files such that we can easily verify the data later.
     hdf_files = []
@@ -1142,50 +1141,39 @@ def test_DistributeFilesDataset_sharding():
 
     # Setup some torch.distributed dummy environment.
     distrib_size = 2
-    os.environ["_RETURNN_TORCH_DISTRIBUTED_INIT_INFO"] = f"{{'rank': 1, 'size': {distrib_size}}}"
-    os.environ["LOCAL_RANK"] = "1"
-    os.environ["LOCAL_WORLD_SIZE"] = str(distrib_size)
-
-    try:
-        with global_config_ctx(Config({"torch_distributed": {}})):
-            partition_epoch = 5
-            assert len(hdf_files) % partition_epoch == 0  # just for easier testing here
-            dataset = init_dataset(
-                {
-                    "class": "DistributeFilesDataset",
-                    "files": hdf_files,
-                    "buffer_size": 100,
-                    "distrib_shard_files": True,
-                    "get_sub_epoch_dataset": _dfd_get_sub_epoch_dataset,
-                    "partition_epoch": partition_epoch,
-                    "seq_ordering": "random",
-                }
-            )
-            assert isinstance(dataset, DistributeFilesDataset)
-            assert dataset._num_shards == distrib_size and dataset._shard_index == 1
-            s = pickle.dumps(dataset)
-            dataset = pickle.loads(s)
-            assert isinstance(dataset, DistributeFilesDataset)
-            assert dataset._num_shards == distrib_size and dataset._shard_index == 1
-            global_seq_idx = 0
-            for sub_epoch in range(1, partition_epoch + 1):
-                print(f"Sub-epoch {sub_epoch}...")
-                dataset.init_seq_order(sub_epoch)
-                local_seq_idx = 0
-                while dataset.is_less_than_num_seqs(local_seq_idx):
-                    print(f"Sub-epoch {sub_epoch}, seq {local_seq_idx} (global seq {global_seq_idx})...")
-                    dataset.load_seqs(local_seq_idx, local_seq_idx + 1)
-                    data = dataset.get_data(local_seq_idx, "classes")
-                    assert data.ndim == 1 and data.shape[0] > 1
-                    local_seq_idx += 1
-                    global_seq_idx += 1
-            # assert global_seq_idx == len(hdf_files) * num_seqs // distrib_size  # TODO not sure...?
-
-    finally:
-        del os.environ["_RETURNN_TORCH_DISTRIBUTED_INIT_INFO"]
-        del os.environ["LOCAL_RANK"]
-        del os.environ["LOCAL_WORLD_SIZE"]
-        returnn.torch.distributed._ctx = None
+    with global_config_ctx(Config({"__debug_dummy_distributed_rank_and_size": (1, distrib_size)})):
+        partition_epoch = 5
+        assert len(hdf_files) % partition_epoch == 0  # just for easier testing here
+        dataset = init_dataset(
+            {
+                "class": "DistributeFilesDataset",
+                "files": hdf_files,
+                "buffer_size": 100,
+                "distrib_shard_files": True,
+                "get_sub_epoch_dataset": _dfd_get_sub_epoch_dataset,
+                "partition_epoch": partition_epoch,
+                "seq_ordering": "random",
+            }
+        )
+        assert isinstance(dataset, DistributeFilesDataset)
+        assert dataset._num_shards == distrib_size and dataset._shard_index == 1
+        s = pickle.dumps(dataset)
+        dataset = pickle.loads(s)
+        assert isinstance(dataset, DistributeFilesDataset)
+        assert dataset._num_shards == distrib_size and dataset._shard_index == 1
+        global_seq_idx = 0
+        for sub_epoch in range(1, partition_epoch + 1):
+            print(f"Sub-epoch {sub_epoch}...")
+            dataset.init_seq_order(sub_epoch)
+            local_seq_idx = 0
+            while dataset.is_less_than_num_seqs(local_seq_idx):
+                print(f"Sub-epoch {sub_epoch}, seq {local_seq_idx} (global seq {global_seq_idx})...")
+                dataset.load_seqs(local_seq_idx, local_seq_idx + 1)
+                data = dataset.get_data(local_seq_idx, "classes")
+                assert data.ndim == 1 and data.shape[0] > 1
+                local_seq_idx += 1
+                global_seq_idx += 1
+        # assert global_seq_idx == len(hdf_files) * num_seqs // distrib_size  # TODO not sure...?
 
 
 def test_PostprocessingDataset():
