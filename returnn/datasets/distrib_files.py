@@ -174,17 +174,21 @@ class DistributeFilesDataset(CachedDataset2):
 
         self.distrib_shard_files = distrib_shard_files
         if distrib_shard_files:
-            assert self._num_shards == 1 and self._shard_index == 0, (  # ensure defaults are set
-                f"{self}: Cannot use both dataset-sharding via properties _num_shards and _shard index "
-                f"and {self.__class__.__name__}'s own sharding implementation based on the trainings rank and size."
-            )
             if _distrib_info:
-                # If we're in a child process `_get_rank_and_size()` no longer works,
+                # We're in a child process.
+                # `_get_rank_and_size()` no longer works,
                 # so we pass the info about the shards via a pickled property.
                 # See also Dataset.__reduce__.
-                self._shard_index = _distrib_info["_shard_index"]
-                self._num_shards = _distrib_info["_num_shards"]
+                # _num_shards and _shard_index are already set, so just check.
+                assert (
+                    self._shard_index == _distrib_info["_shard_index"]
+                    and self._num_shards == _distrib_info["_num_shards"]
+                )
             else:
+                assert self._num_shards == 1 and self._shard_index == 0, (  # ensure defaults are set
+                    f"{self}: Cannot use both dataset-sharding via properties _num_shards and _shard index "
+                    f"and {self.__class__.__name__}'s own sharding implementation based on the trainings rank and size."
+                )
                 self._shard_index, self._num_shards = _get_rank_and_size()
         assert 0 <= self._shard_index < self._num_shards
 
