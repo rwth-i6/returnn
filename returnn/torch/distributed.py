@@ -41,6 +41,7 @@ class DistributedContext:
 
             # When no backend is specified, we set gloo for CPU tensors and nccl for CUDA tensors as backend.
             # torch 2.6.0 and onwards require explicitly setting the backends.
+            # See https://github.com/rwth-i6/returnn/issues/1724 for discussion.
             dist.init_process_group(backend=self._opts.get("backend", "cpu:gloo,cuda:nccl"))
             self._rank = dist.get_rank()
             self._size = dist.get_world_size()
