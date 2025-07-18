@@ -78,6 +78,7 @@ class DistributedContext:
         # This function here is called at the end in __init__,
         # and not all opts are used yet, so read them now,
         # such that the check in the end works.
+        self._opts.get("backend")
         if self._reduce_type == "grad":
             self._opts.get("class")
             self._opts.get("options")
