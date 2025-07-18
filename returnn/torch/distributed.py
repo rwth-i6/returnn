@@ -39,8 +39,8 @@ class DistributedContext:
         else:
             import torch.distributed as dist
 
-            # when no backend is specified, we set gloo for CPU tensors and nccl for CUDA tensors as backend
-            # by explicitly setting dispatching instruction, we avoid bug in newer pytorch version
+            # When no backend is specified, we set gloo for CPU tensors and nccl for CUDA tensors as backend.
+            # torch 2.6.0 and onwards require explicitly setting the backends.
             dist.init_process_group(backend=self._opts.get("backend", "cpu:gloo,cuda:nccl"))
             self._rank = dist.get_rank()
             self._size = dist.get_world_size()
