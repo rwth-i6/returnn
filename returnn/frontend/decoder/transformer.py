@@ -268,6 +268,7 @@ class TransformerDecoderLayer(rf.Module):
         ] = None,
         self_att_opts: Optional[Dict[str, Any]] = None,
         att_dropout: float = 0.1,
+        cross_att: Optional[Dict[str, Any]] = None,
         norm: Union[type, Dict[str, Any], rf.Module, Callable] = rf.LayerNorm,
     ):
         """
@@ -333,10 +334,10 @@ class TransformerDecoderLayer(rf.Module):
             raise TypeError(f"unexpected self_att type {self_att!r}")
         self.self_att_layer_norm = make_norm(norm, out_dim)
 
-        self.cross_att = None
+        self.cross_att: Optional[rf.CrossAttention] = None  # type might be inaccurate, but we expect this interface
         self.cross_att_layer_norm = None
         if encoder_dim is not None:
-            self.cross_att = rf.CrossAttention(
+            cross_att_opts = dict(
                 encoder_dim=self.encoder_dim,
                 query_in_dim=out_dim,
                 proj_dim=out_dim,
@@ -345,6 +346,12 @@ class TransformerDecoderLayer(rf.Module):
                 num_heads=num_heads,
                 att_dropout=att_dropout,
             )
+            if cross_att is None:
+                self.cross_att = rf.CrossAttention(**cross_att_opts)
+            elif isinstance(cross_att, dict):
+                self.cross_att = rf.build_from_dict(cross_att, **cross_att_opts)
+            else:
+                raise TypeError(f"unexpected cross_att type {cross_att!r}")
             self.cross_att_layer_norm = make_norm(norm, out_dim)
 
     def default_initial_state(self, *, batch_dims: Sequence[Dim]) -> rf.State:
