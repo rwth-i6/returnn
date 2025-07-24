@@ -470,14 +470,16 @@ def run_inspect(pycharm_dir, src_dir, skip_pycharm_inspect=False):
             print(content)
         fold_end()
 
-        fold_start("script.inspect.pycharm_jetbrains_client.vmoptions.content")
-        if os.path.exists("%s/bin/jetbrains_client.vmoptions" % pycharm_dir):
-            with open("%s/bin/jetbrains_client.vmoptions" % pycharm_dir) as f:
-                content = f.read()
-                print("Content of jetbrains_client.vmoptions:")
-                print(content)
+        fold_start("script.inspect.vmoptions.content")
+        fns = glob("%s/bin/*.vmoptions" % pycharm_dir)
+        if fns:
+            for fn in fns:
+                print("Content of %s:" % fn)
+                with open(fn) as f:
+                    content = f.read()
+                    print(content)
         else:
-            print("No jetbrains_client.vmoptions found, not printing content.")
+            print("No *.vmoptions found, not printing content.")
         fold_end()
 
         # Note: Will not run if PyCharm is already running.
