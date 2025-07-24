@@ -463,6 +463,23 @@ def run_inspect(pycharm_dir, src_dir, skip_pycharm_inspect=False):
 
     fold_start("script.inspect")
     if not skip_pycharm_inspect:
+        fold_start("script.inspect.pycharm_inspect.sh.content")
+        with open("%s/bin/inspect.sh" % pycharm_dir) as f:
+            content = f.read()
+            print("Content of inspect.sh:")
+            print(content)
+        fold_end()
+
+        fold_start("script.inspect.pycharm_jetbrains_client.vmoptions.content")
+        if os.path.exists("%s/bin/jetbrains_client.vmoptions" % pycharm_dir):
+            with open("%s/bin/jetbrains_client.vmoptions" % pycharm_dir) as f:
+                content = f.read()
+                print("Content of jetbrains_client.vmoptions:")
+                print(content)
+        else:
+            print("No jetbrains_client.vmoptions found, not printing content.")
+        fold_end()
+
         # Note: Will not run if PyCharm is already running.
         # Maybe we can find some workaround for this?
         # See here: https://stackoverflow.com/questions/55339010/run-pycharm-inspect-sh-even-if-pycharm-is-already-runn
