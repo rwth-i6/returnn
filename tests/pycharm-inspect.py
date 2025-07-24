@@ -113,7 +113,7 @@ def install_pycharm():
     print("Install PyCharm into:", pycharm_dir)
     sys.stdout.flush()
 
-    name = "pycharm-community-2022.3"
+    name = "pycharm-community-2025.4"
     fn = "%s.tar.gz" % name
 
     subprocess.check_call(
