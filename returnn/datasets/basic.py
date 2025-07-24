@@ -19,7 +19,6 @@ import os
 import math
 import numpy
 import functools
-import typing
 from typing import TYPE_CHECKING, Optional, Any, Set, Tuple, Union, Type, Dict, Sequence, List, Callable
 
 from returnn.log import log
@@ -428,9 +427,9 @@ class Dataset:
         """
         raise OptionalNotImplementedError
 
-    def get_num_timesteps(self):
+    def get_num_timesteps(self) -> Union[int, NumbersDict]:
         """
-        :rtype: int
+        :return: how much frames we have in total.
         """
         assert self._num_timesteps > 0
         return self._num_timesteps
@@ -559,7 +558,7 @@ class Dataset:
             for i in range(1, num):
                 seq_index[i::num] += i * (num_seqs // num)
         elif seq_ordering_method == "reverse":
-            seq_index = range(num_seqs - 1, -1, -1)  # type: Union[range, typing.Sequence[int]]
+            seq_index = range(num_seqs - 1, -1, -1)  # type: Union[range, Sequence[int]]
         elif seq_ordering_method in ["sorted", "sorted_reverse"]:
             assert get_seq_len
             reverse = -1 if seq_ordering_method == "sorted_reverse" else 1
@@ -748,12 +747,11 @@ class Dataset:
         """
         self.epoch = None
 
-    def get_current_seq_order(self):
+    def get_current_seq_order(self) -> Sequence[int]:
         """
         :return: many datasets use self.get_seq_order_for_epoch. this function would return the current seq order
           for the current epoch, after self.init_seq_order was called.
           Not all datasets implement this.
-        :rtype: typing.Sequence[int]
         """
         raise OptionalNotImplementedError
 
@@ -902,7 +900,7 @@ class Dataset:
         if self.seq_ordering == "default" and self.partition_epoch == 1:
             return seq_idx
         assert self.have_corpus_seq_idx()
-        raise NotImplemented
+        raise NotImplementedError
 
     def have_get_corpus_seq(self) -> bool:
         """
@@ -1061,7 +1059,7 @@ class Dataset:
         if key in self.num_outputs:
             if self.num_outputs[key][1] <= 1:
                 return []
-            res_shape = [None] * (self.num_outputs[key][1] - 1)  # type: typing.List[typing.Union[None,int]]
+            res_shape: List[Union[None, int]] = [None] * (self.num_outputs[key][1] - 1)
             if not self.is_data_sparse(key):
                 res_shape[-1] = self.get_data_dim(key)
             return res_shape

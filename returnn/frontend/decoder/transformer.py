@@ -349,7 +349,7 @@ class TransformerDecoderLayer(rf.Module):
             if cross_att is None:
                 self.cross_att = rf.CrossAttention(**cross_att_opts)
             elif isinstance(cross_att, dict):
-                self.cross_att = rf.build_from_dict(cross_att, **cross_att_opts)
+                self.cross_att: Optional[rf.CrossAttention] = rf.build_from_dict(cross_att, **cross_att_opts)
             else:
                 raise TypeError(f"unexpected cross_att type {cross_att!r}")
             self.cross_att_layer_norm = make_norm(norm, out_dim)
