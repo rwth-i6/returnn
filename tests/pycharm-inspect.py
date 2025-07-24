@@ -737,6 +737,7 @@ def main():
             "PyTypeCheckerInspection",  # too much false alarms: https://youtrack.jetbrains.com/issue/PY-34893
             # Not critical.
             "SpellCheckingInspection",  # way too much for now...
+            "GrazieInspection",  # grammar
             "PyClassHasNoInitInspection",  # not relevant?
             "PyMethodMayBeStaticInspection",  # not critical
         },
