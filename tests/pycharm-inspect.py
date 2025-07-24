@@ -483,8 +483,13 @@ def run_inspect(pycharm_dir, src_dir, skip_pycharm_inspect=False):
             for fn in fns:
                 print("Content of %s:" % fn)
                 with open(fn) as f:
-                    content = f.read()
-                    print(content)
+                    content = f.read().splitlines(keepends=True)
+                print("".join(content))
+                if any(line.startswith("-Xmx") for line in content):
+                    print("Note: Patching Xmx settings...")
+                    content = ["-Xmx4000m\n" if line.startswith("-Xmx") else line for line in content]
+                    with open(fn, "w") as f:
+                        f.write("".join(content))
         else:
             print("No *.vmoptions found, not printing content.")
         fold_end()
