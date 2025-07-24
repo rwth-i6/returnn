@@ -24,7 +24,6 @@ from typing import (
     cast,
     Generator,
 )
-import typing
 import os
 from io import IOBase
 import sys
@@ -1563,7 +1562,6 @@ class TranslationDataset(CachedDataset2):
             import returnn.util.better_exchook
 
             returnn.util.better_exchook.install()
-            from returnn.util.basic import AsyncThreadRun
 
             # First iterate once over the data to get the data len as fast as possible.
             data_len = 0
