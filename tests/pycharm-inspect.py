@@ -754,6 +754,8 @@ def main():
             "GrazieInspection",  # grammar
             "PyClassHasNoInitInspection",  # not relevant?
             "PyMethodMayBeStaticInspection",  # not critical
+            # Does not work correctly here?
+            "PyPackageRequirementsInspection",  # TODO only with newer PyCharm versions?
         },
         ignore_count_for_files=ignore_count_for_files,
     )
