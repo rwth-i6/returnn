@@ -11,14 +11,12 @@ See here:
 """
 
 import os
-import stat
 import sys
 import re
 import time
 import shutil
 import subprocess
 import tempfile
-import typing
 from glob import glob
 import argparse
 from xml.dom import minidom
@@ -115,8 +113,7 @@ def install_pycharm():
     print("Install PyCharm into:", pycharm_dir)
     sys.stdout.flush()
 
-    pycharm_version = (2020, 2)
-    name = "pycharm-community-%i.%i" % pycharm_version
+    name = "pycharm-community-2025.1.1"
     fn = "%s.tar.gz" % name
 
     subprocess.check_call(
