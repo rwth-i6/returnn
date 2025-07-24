@@ -470,6 +470,13 @@ def run_inspect(pycharm_dir, src_dir, skip_pycharm_inspect=False):
             print(content)
         fold_end()
 
+        fold_start("script.inspect.pycharm.sh.content")
+        with open("%s/bin/pycharm.sh" % pycharm_dir) as f:
+            content = f.read()
+            print("Content of pycharm.sh:")
+            print(content)
+        fold_end()
+
         fold_start("script.inspect.vmoptions.content")
         fns = glob("%s/bin/*.vmoptions" % pycharm_dir)
         if fns:
