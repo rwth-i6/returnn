@@ -626,7 +626,7 @@ def _worker_proc_loop(
 ):
     if sys.platform == "linux":
         with open("/proc/self/comm", "w") as f:
-            f.write(f"CFD worker {epoch}")
+            f.write(f"DFD worker {epoch}")
     better_exchook.setup_all()
 
     assert isinstance(epoch, int) and isinstance(buffer_size, int)
