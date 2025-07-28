@@ -3,6 +3,7 @@ Multi-processing dataset
 """
 
 from __future__ import annotations
+from collections import deque
 from typing import Optional, Any, Dict, List
 import sys
 import gc
@@ -234,7 +235,7 @@ class MultiProcDataset(CachedDataset2):
         dataset: Optional[Dataset] = None
 
         got_init_seq_order = False
-        cache = []  # type: List[DatasetSeq]
+        cache: deque[DatasetSeq] = deque()
         next_seq_idx = 0
 
         # noinspection PyShadowingNames
@@ -299,7 +300,7 @@ class MultiProcDataset(CachedDataset2):
                 elif msg == "get_data_seq":
                     seq_idx = kwargs["seq_idx"]
                     while cache and cache[0].seq_idx < seq_idx:
-                        cache.pop(0)
+                        cache.popleft()
                     res = _get(seq_idx)
                     parent_conn.send(("data_seq", res))
                 elif msg == "init":
@@ -372,11 +373,11 @@ class MultiProcDataset(CachedDataset2):
                         raise ValueError(f"{MultiProcDataset.__name__}: unknown sharding_method: {sharding_method}")
                     got_init_seq_order = True
                     next_seq_idx = 0
-                    cache[:] = []
+                    cache.clear()
                 elif msg == "finish_epoch":
                     got_init_seq_order = False
                     next_seq_idx = 0
-                    cache[:] = []
+                    cache.clear()
                     if dataset:
                         dataset.finish_epoch(**kwargs)
                     if kwargs["free_resources"]:

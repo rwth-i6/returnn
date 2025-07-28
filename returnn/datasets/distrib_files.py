@@ -6,6 +6,7 @@ https://github.com/rwth-i6/returnn/issues/1519
 
 from __future__ import annotations
 
+from collections import deque
 from typing import Union, Optional, Any, Callable, Sequence, Tuple, List, Dict
 import os
 import sys
@@ -636,7 +637,7 @@ def _worker_proc_loop(
     dataset = init_dataset(dataset_dict)
 
     got_init_seq_order = False
-    cache: List[DatasetSeq] = []
+    cache: deque[DatasetSeq] = deque()
     next_seq_idx = 0
 
     # noinspection PyShadowingNames
@@ -701,7 +702,7 @@ def _worker_proc_loop(
             elif msg == "get_data_seq":
                 seq_idx = kwargs["seq_idx"]
                 while cache and cache[0].seq_idx < seq_idx:
-                    cache.pop(0)
+                    cache.popleft()
                 res = _get(seq_idx)
                 parent_conn.send(("data_seq", res))
             elif msg == "init_seq_order":
@@ -714,7 +715,7 @@ def _worker_proc_loop(
                 parent_conn.send(("num_seqs", num_seqs))
                 got_init_seq_order = True
                 next_seq_idx = 0
-                cache[:] = []
+                cache.clear()
             else:
                 raise Exception(f"unknown msg {msg!r}")
     except KeyboardInterrupt:  # when parent dies
