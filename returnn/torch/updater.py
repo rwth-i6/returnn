@@ -113,6 +113,7 @@ class Updater:
         self._current_train_step = 0
         self._current_epoch = 1
         self._current_epoch_continuous = 0.0
+        self._num_invalid_gradients = 0
 
         self.learning_rate_function = self.config.typed_value("dynamic_learning_rate", None)
         if self.learning_rate_function is not None:
@@ -134,6 +135,9 @@ class Updater:
 
         self._grad_clip = self.config.float("gradient_clip", 0.0)
         self._grad_clip_global_norm = self.config.float("gradient_clip_global_norm", 0.0)
+        self._grad_clip_global_norm_invalid_gradient_threshold = self.config.int(
+            "gradient_clip_norm_invalid_gradient_threshold", None
+        )
         self._grad_noise = self.config.float("gradient_noise", 0.0)
 
         # Check other options we have in TF updater, which we might support here later as well,
@@ -223,13 +227,27 @@ class Updater:
             gradient_noise_(self.network.parameters(), self._grad_noise)
         if self._grad_clip:
             torch.nn.utils.clip_grad_value_(self.network.parameters(), self._grad_clip)
+
+        has_invalid_gradient = False
         if self._grad_clip_global_norm:
-            torch.nn.utils.clip_grad_norm_(self.network.parameters(), self._grad_clip_global_norm)
+            norm = torch.nn.utils.clip_grad_norm_(self.network.parameters(), self._grad_clip_global_norm)
+            if self._grad_clip_global_norm_invalid_gradient_threshold is not None:
+                has_invalid_gradient = torch.isnan(norm) or torch.isinf(norm)
+                if has_invalid_gradient:
+                    self._num_invalid_gradients += 1
+                    if self._num_invalid_gradients >= self._grad_clip_global_norm_invalid_gradient_threshold:
+                        raise RuntimeError(
+                            "Got %i invalid gradients in succession, abort training" % self._num_invalid_gradients
+                        )
+                else:
+                    self._num_invalid_gradients = 0
 
         if grad_scaler is not None:
-            grad_scaler.step(self.optimizer)
+            if not has_invalid_gradient:
+                grad_scaler.step(self.optimizer)
+            # updater needs to be called even if we discard the update due to an invalid gradient
             grad_scaler.update()
-        else:
+        elif not has_invalid_gradient:
             self.optimizer.step()
 
     def create_optimizer(self):
