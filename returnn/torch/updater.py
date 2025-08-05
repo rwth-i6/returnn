@@ -237,8 +237,11 @@ class Updater:
                     self._num_invalid_gradients += 1
                     if self._num_invalid_gradients >= self._grad_clip_global_norm_invalid_gradient_threshold:
                         raise RuntimeError(
-                            "Got %i invalid gradients in succession, abort training" % self._num_invalid_gradients
+                            f"Got {self._num_invalid_gradients} invalid gradients in succession, abort training"
                         )
+                    else:
+                        invalid_grads_left = self._grad_clip_global_norm_invalid_gradient_threshold - self._num_invalid_gradients
+                        print(f"Invalid gradient in step {step_idx}, skipping. {invalid_grads_left:02d} subsequent broken steps left until training is aborted.")
                 else:
                     self._num_invalid_gradients = 0
 
