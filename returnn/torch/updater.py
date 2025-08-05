@@ -135,9 +135,7 @@ class Updater:
 
         self._grad_clip = self.config.float("gradient_clip", 0.0)
         self._grad_clip_global_norm = self.config.float("gradient_clip_global_norm", 0.0)
-        self._grad_clip_global_norm_invalid_gradient_threshold = self.config.typed_value(
-            "gradient_clip_norm_invalid_gradient_threshold", None
-        )
+        self._num_allowed_invalid_gradient_steps = self.config.typed_value("_num_allowed_invalid_gradient_steps", None)
         self._grad_noise = self.config.float("gradient_noise", 0.0)
 
         # Check other options we have in TF updater, which we might support here later as well,
@@ -229,21 +227,25 @@ class Updater:
             torch.nn.utils.clip_grad_value_(self.network.parameters(), self._grad_clip)
 
         has_invalid_gradient = False
-        if self._grad_clip_global_norm:
-            norm = torch.nn.utils.clip_grad_norm_(self.network.parameters(), self._grad_clip_global_norm)
-            if self._grad_clip_global_norm_invalid_gradient_threshold is not None:
-                has_invalid_gradient = torch.isnan(norm) or torch.isinf(norm)
-                if has_invalid_gradient:
-                    self._num_invalid_gradients += 1
-                    if self._num_invalid_gradients >= self._grad_clip_global_norm_invalid_gradient_threshold:
-                        raise RuntimeError(
-                            f"Got {self._num_invalid_gradients} invalid gradients in succession, abort training"
-                        )
-                    else:
-                        invalid_grads_left = self._grad_clip_global_norm_invalid_gradient_threshold - self._num_invalid_gradients
-                        print(f"Invalid gradient in step {step_idx}, skipping. {invalid_grads_left:02d} subsequent broken steps left until training is aborted.")
+        if self._num_allowed_invalid_gradient_steps is not None:
+            if self._grad_clip_global_norm:
+                norm = torch.nn.utils.clip_grad_norm_(self.network.parameters(), self._grad_clip_global_norm)
+            else:
+                norm = torch.nn.utils.get_total_norm(self.network.parameters())
+            has_invalid_gradient = torch.isnan(norm) or torch.isinf(norm)
+            if has_invalid_gradient:
+                self._num_invalid_gradients += 1
+                if self._num_invalid_gradients >= self._num_allowed_invalid_gradient_steps:
+                    raise RuntimeError(
+                        f"Got {self._num_invalid_gradients} invalid gradients in succession, abort training"
+                    )
                 else:
-                    self._num_invalid_gradients = 0
+                    invalid_grads_left = self._num_allowed_invalid_gradient_steps - self._num_invalid_gradients
+                    print(
+                        f"Invalid gradient in step {step_idx}, skipping. {invalid_grads_left:02d} subsequent broken steps left until training is aborted."
+                    )
+            else:
+                self._num_invalid_gradients = 0
 
         if grad_scaler is not None:
             if not has_invalid_gradient:
