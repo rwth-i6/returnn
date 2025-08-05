@@ -135,7 +135,7 @@ class Updater:
 
         self._grad_clip = self.config.float("gradient_clip", 0.0)
         self._grad_clip_global_norm = self.config.float("gradient_clip_global_norm", 0.0)
-        self._grad_clip_global_norm_invalid_gradient_threshold = self.config.int(
+        self._grad_clip_global_norm_invalid_gradient_threshold = self.config.typed_value(
             "gradient_clip_norm_invalid_gradient_threshold", None
         )
         self._grad_noise = self.config.float("gradient_noise", 0.0)
