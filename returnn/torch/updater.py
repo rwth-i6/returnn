@@ -242,7 +242,8 @@ class Updater:
                 else:
                     invalid_grads_left = self._num_allowed_invalid_gradient_steps - self._num_invalid_gradients
                     print(
-                        f"Invalid gradient in step {step_idx}, skipping. {invalid_grads_left:02d} subsequent broken steps left until training is aborted."
+                        f"Invalid gradient in step {self._current_train_step}, skipping. {invalid_grads_left:02d} "
+                        f"subsequent broken steps left until training is aborted."
                     )
             else:
                 self._num_invalid_gradients = 0
