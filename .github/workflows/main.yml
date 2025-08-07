@@ -398,11 +398,13 @@ jobs:
         # Needed for some tests.
         # transformers 4.50 requires PyTorch >2.0, so stick to transformers 4.49 for now.
         # (https://github.com/rwth-i6/returnn/issues/1706)
+        # safetensors >=0.6 requires PyTorch >2.0, so stick to safetensors 0.5.3 for now.
+        # (https://github.com/rwth-i6/returnn/issues/1747)
         if [[ "${{matrix.python-version}}" == 3.8 ]]; then
           # Need older version for Python 3.8. Install whatever is available.
           pip install --user --progress-bar=off transformers
         else
-          pip install --user --progress-bar=off transformers==4.49.0
+          pip install --user --progress-bar=off safetensors==0.5.3 transformers==4.49.0
         fi
         if [[ "${{matrix.python-version}}" == 3.8 ]]; then
           # https://github.com/rwth-i6/returnn/issues/1729
