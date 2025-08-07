@@ -227,12 +227,12 @@ class Updater:
             gradient_noise_(self.network.parameters(), self._grad_noise)
         if self._grad_clip:
             torch.nn.utils.clip_grad_value_(self.network.parameters(), self._grad_clip)
+        if self._grad_clip_global_norm:
+            norm = torch.nn.utils.clip_grad_norm_(self.network.parameters(), self._grad_clip_global_norm)
 
         has_invalid_gradient = False
         if self._num_allowed_consec_invalid_gradient_steps is not None:
-            if self._grad_clip_global_norm:
-                norm = torch.nn.utils.clip_grad_norm_(self.network.parameters(), self._grad_clip_global_norm)
-            else:
+            if not self._grad_clip_global_norm:
                 norm = torch.nn.utils.get_total_norm(self.network.parameters())
             has_invalid_gradient = torch.isnan(norm) or torch.isinf(norm)
             if has_invalid_gradient:
