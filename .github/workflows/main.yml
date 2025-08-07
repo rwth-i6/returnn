@@ -18,7 +18,7 @@ jobs:
           - "3.10"
         torch-version:
           # Some code uses newer features.
-          - 2.0.0
+          - 2.8.0
         tf-version:
           - 2.10.0
 
