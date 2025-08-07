@@ -113,7 +113,7 @@ class Updater:
         self._current_train_step = 0
         self._current_epoch = 1
         self._current_epoch_continuous = 0.0
-        self._num_invalid_gradients = 0
+        self._num_consec_invalid_gradients_steps = 0
 
         self.learning_rate_function = self.config.typed_value("dynamic_learning_rate", None)
         if self.learning_rate_function is not None:
@@ -135,7 +135,9 @@ class Updater:
 
         self._grad_clip = self.config.float("gradient_clip", 0.0)
         self._grad_clip_global_norm = self.config.float("gradient_clip_global_norm", 0.0)
-        self._num_allowed_invalid_gradient_steps = self.config.typed_value("_num_allowed_invalid_gradient_steps", None)
+        self._num_allowed_consec_invalid_gradient_steps = self.config.typed_value(
+            "_num_allowed_consec_invalid_gradient_steps", None
+        )
         self._grad_noise = self.config.float("gradient_noise", 0.0)
 
         # Check other options we have in TF updater, which we might support here later as well,
@@ -227,31 +229,34 @@ class Updater:
             torch.nn.utils.clip_grad_value_(self.network.parameters(), self._grad_clip)
 
         has_invalid_gradient = False
-        if self._num_allowed_invalid_gradient_steps is not None:
+        if self._num_allowed_consec_invalid_gradient_steps is not None:
             if self._grad_clip_global_norm:
                 norm = torch.nn.utils.clip_grad_norm_(self.network.parameters(), self._grad_clip_global_norm)
             else:
                 norm = torch.nn.utils.get_total_norm(self.network.parameters())
             has_invalid_gradient = torch.isnan(norm) or torch.isinf(norm)
             if has_invalid_gradient:
-                self._num_invalid_gradients += 1
-                if self._num_invalid_gradients >= self._num_allowed_invalid_gradient_steps:
+                self._num_consec_invalid_gradients_steps += 1
+                if self._num_consec_invalid_gradients_steps >= self._num_allowed_consec_invalid_gradient_steps:
                     raise RuntimeError(
-                        f"Got {self._num_invalid_gradients} invalid gradients in succession, abort training"
+                        f"Got {self._num_consec_invalid_gradients_steps} invalid gradients in succession, abort training"
                     )
                 else:
-                    invalid_grads_left = self._num_allowed_invalid_gradient_steps - self._num_invalid_gradients
+                    invalid_grads_left = (
+                        self._num_allowed_consec_invalid_gradient_steps - self._num_consec_invalid_gradients_steps
+                    )
                     print(
-                        f"Invalid gradient in step {self._current_train_step}, skipping. {invalid_grads_left:02d} "
-                        f"subsequent broken steps left until training is aborted."
+                        f"Invalid gradient in step {self._current_train_step}, skipping. "
+                        f"{invalid_grads_left} subsequent broken steps left until training is aborted.",
+                        file=log.v2,
                     )
             else:
-                self._num_invalid_gradients = 0
+                self._num_consec_invalid_gradients_steps = 0
 
         if grad_scaler is not None:
             if not has_invalid_gradient:
                 grad_scaler.step(self.optimizer)
-            # updater needs to be called even if we discard the update due to an invalid gradient
+            # update needs to be called even if we discard the update due to an invalid gradient
             grad_scaler.update()
         elif not has_invalid_gradient:
             self.optimizer.step()
