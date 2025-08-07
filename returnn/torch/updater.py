@@ -237,7 +237,7 @@ class Updater:
             has_invalid_gradient = torch.isnan(norm) or torch.isinf(norm)
             if has_invalid_gradient:
                 self._num_consec_invalid_gradients_steps += 1
-                if self._num_consec_invalid_gradients_steps >= self._num_allowed_consec_invalid_gradient_steps:
+                if self._num_consec_invalid_gradients_steps > self._num_allowed_consec_invalid_gradient_steps:
                     raise RuntimeError(
                         f"Got {self._num_consec_invalid_gradients_steps} invalid gradients in succession, abort training"
                     )
