@@ -122,9 +122,9 @@ class Updater:
                 import inspect
 
                 signature = inspect.signature(self.learning_rate_function)
-                assert any([arg.kind == inspect.Parameter.VAR_KEYWORD for arg in signature.parameters.values()]), (
-                    "please specify **kwargs in dynamic_learning_rate for future compatibility"
-                )
+                assert any(
+                    [arg.kind == inspect.Parameter.VAR_KEYWORD for arg in signature.parameters.values()]
+                ), "please specify **kwargs in dynamic_learning_rate for future compatibility"
                 if "network" in signature.parameters:
                     raise ValueError("Torch updater: dynamic_learning_rate network is TF specific")
             else:
@@ -136,7 +136,7 @@ class Updater:
         self._grad_clip = self.config.float("gradient_clip", 0.0)
         self._grad_clip_global_norm = self.config.float("gradient_clip_global_norm", 0.0)
         self._num_allowed_consec_invalid_gradient_steps = self.config.typed_value(
-            "_num_allowed_consec_invalid_gradient_steps", None
+            "num_allowed_consec_invalid_gradient_steps", None
         )
         self._grad_noise = self.config.float("gradient_noise", 0.0)
 
@@ -229,10 +229,12 @@ class Updater:
             torch.nn.utils.clip_grad_value_(self.network.parameters(), self._grad_clip)
         if self._grad_clip_global_norm:
             norm = torch.nn.utils.clip_grad_norm_(self.network.parameters(), self._grad_clip_global_norm)
+        else:
+            norm = None
 
         has_invalid_gradient = False
         if self._num_allowed_consec_invalid_gradient_steps is not None:
-            if not self._grad_clip_global_norm:
+            if norm is None:
                 norm = torch.nn.utils.get_total_norm(self.network.parameters())
             has_invalid_gradient = torch.isnan(norm) or torch.isinf(norm)
             if has_invalid_gradient:

@@ -270,6 +270,7 @@ class Engine(EngineBase):
         self._updater.set_current_train_step(
             global_train_step=self.global_train_step, epoch=self.epoch, epoch_continuous=self.epoch - 1
         )
+        self._updater._num_consec_invalid_gradients_steps = 0
 
         self.learning_rate_control.epoch_data[self.epoch].meta.update(
             {
