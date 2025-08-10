@@ -212,6 +212,8 @@ class Updater:
             if the number of steps per epoch is known in advance.
         """
         self._current_train_step = global_train_step
+        if self._current_epoch != epoch:
+            self._num_consec_invalid_gradients_steps = 0
         self._current_epoch = epoch
         self._current_epoch_continuous = epoch_continuous
         self._update_effective_learning_rate()
