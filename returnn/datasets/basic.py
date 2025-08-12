@@ -578,7 +578,12 @@ class Dataset:
             rnd_seed = self._get_random_seed_for_epoch(epoch=epoch, num_epochs_fixed=nth)
             random_generator = numpy.random.RandomState(rnd_seed)
             seq_index = random_generator.randint(0, num_seqs, size=num_seqs)
-        elif seq_ordering_method == "sort_bin_shuffle" or seq_ordering_method.startswith("sort_bin_shuffle:"):
+        elif (
+            seq_ordering_method == "sort_bin_shuffle"
+            or seq_ordering_method.startswith("sort_bin_shuffle:")
+            or seq_ordering_method == "sort_bin_shuffle_x2"
+            or seq_ordering_method.startswith("sort_bin_shuffle_x2:")
+        ):
             # Shuffle seqs, sort by length, and shuffle bins (then shuffle seqs within each bin if sort_bin_shuffle_x2).
             assert get_seq_len
             tmp = seq_ordering_method.split(":")[1:]
