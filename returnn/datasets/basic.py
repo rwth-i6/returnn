@@ -564,14 +564,21 @@ class Dataset:
             reverse = -1 if seq_ordering_method == "sorted_reverse" else 1
             seq_lens = [reverse * get_seq_len(i) for i in range(num_seqs)]
             seq_index = numpy.argsort(seq_lens, kind="stable")
-        elif seq_ordering_method.startswith("random"):
-            tmp = seq_ordering_method.split(":")
+        elif seq_ordering_method == "random" or seq_ordering_method.startswith("random:"):
+            tmp = seq_ordering_method.split(":", 1)
             nth = int(tmp[1]) if len(tmp) > 1 else 1
             # Keep this deterministic! Use fixed seed.
             rnd_seed = self._get_random_seed_for_epoch(epoch=epoch, num_epochs_fixed=nth)
             random_generator = numpy.random.RandomState(rnd_seed)
             seq_index = random_generator.permutation(num_seqs)
-        elif seq_ordering_method.startswith("sort_bin_shuffle"):
+        elif seq_ordering_method == "random_sample" or seq_ordering_method.startswith("random_sample:"):
+            tmp = seq_ordering_method.split(":", 1)
+            nth = int(tmp[1]) if len(tmp) > 1 else 1
+            # Keep this deterministic! Use fixed seed.
+            rnd_seed = self._get_random_seed_for_epoch(epoch=epoch, num_epochs_fixed=nth)
+            random_generator = numpy.random.RandomState(rnd_seed)
+            seq_index = random_generator.randint(0, num_seqs, size=num_seqs)
+        elif seq_ordering_method == "sort_bin_shuffle" or seq_ordering_method.startswith("sort_bin_shuffle:"):
             # Shuffle seqs, sort by length, and shuffle bins (then shuffle seqs within each bin if sort_bin_shuffle_x2).
             assert get_seq_len
             tmp = seq_ordering_method.split(":")[1:]
@@ -602,7 +609,7 @@ class Dataset:
                     random_generator.shuffle(part)  # Shuffle within the bin.
                 out_index.append(part)
             seq_index = numpy.concatenate(out_index)
-        elif seq_ordering_method.startswith("laplace"):
+        elif seq_ordering_method == "laplace" or seq_ordering_method.startswith("laplace:"):
             assert get_seq_len
             tmp = seq_ordering_method.split(":")[1:]
             if len(tmp) == 0:
