@@ -861,3 +861,48 @@ def test_copy_compatible_to_empty():
             torch.testing.assert_close(out_raw, out.raw_tensor)
 
     run_model(extern_data, lambda **_kwargs: rf.Module(), _forward_step, test_tensorflow=False)
+
+
+def test_random_uniform_int():
+    batch_dim = Dim(3, name="batch")
+    feat_dim = Dim(5, name="feat")
+
+    # noinspection PyShadowingNames
+    def _forward_step(**_kwargs):
+        out = rf.random_uniform([batch_dim, feat_dim], dtype="int32", minval=-10, maxval=10)
+        out.mark_as_default_output(shape=[batch_dim, feat_dim])
+
+    run_model(TensorDict(), lambda **_kwargs: rf.Module(), _forward_step)
+
+
+def test_random_choice_with_replacement():
+    batch_dim = Dim(3, name="batch")
+    time_dim = Dim(7, name="time")
+    feat_dim = Dim(5, name="feat")
+
+    # noinspection PyShadowingNames
+    def _forward_step(**_kwargs):
+        probs = rf.softmax(rf.random_uniform([feat_dim], dtype="float32", minval=-1.0, maxval=1.0), axis=feat_dim)
+        out = rf.random_choice_with_replacement([batch_dim], probs=probs, axis=feat_dim)
+        assert out.dims == (batch_dim,) and out.sparse_dim == feat_dim
+        out.mark_as_default_output(shape=[batch_dim])
+
+        probs = rf.softmax(
+            rf.random_uniform([batch_dim, feat_dim], dtype="float32", minval=-1.0, maxval=1.0), axis=feat_dim
+        )
+        out = rf.random_choice_with_replacement([batch_dim], probs=probs, axis=feat_dim)
+        assert out.dims == (batch_dim,) and out.sparse_dim == feat_dim
+        out.mark_as_output("batched_no_new", shape=[batch_dim])
+
+        out = rf.random_choice_with_replacement([batch_dim, time_dim], probs=probs, axis=feat_dim)
+        assert out.dims == (batch_dim, time_dim) and out.sparse_dim == feat_dim
+        out.mark_as_output("batched_time", shape=[batch_dim, time_dim])
+
+        probs = rf.softmax(
+            rf.random_uniform([batch_dim, time_dim, feat_dim], dtype="float32", minval=-1.0, maxval=1.0), axis=feat_dim
+        )
+        out = rf.random_choice_with_replacement([batch_dim, time_dim], probs=probs, axis=feat_dim)
+        assert out.dims == (batch_dim, time_dim) and out.sparse_dim == feat_dim
+        out.mark_as_output("mult_common", shape=[batch_dim, time_dim])
+
+    run_model(TensorDict(), lambda **_kwargs: rf.Module(), _forward_step, test_tensorflow=False)

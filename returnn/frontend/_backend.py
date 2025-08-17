@@ -1154,6 +1154,13 @@ class Backend(Generic[T]):
         raise NotImplementedError
 
     @staticmethod
+    def random_choice_with_replacement(dims: Sequence[Dim], *, probs: Tensor, axis: Dim) -> Tensor:
+        """
+        random choice with replacement. See `rf.random_choice_with_replacement` for details.
+        """
+        raise NotImplementedError
+
+    @staticmethod
     def masked_select(
         tensor: Tensor, *, mask: Tensor, dims: Sequence[Dim], out_dim: Optional[Dim] = None
     ) -> Tuple[Tensor, Dim]:

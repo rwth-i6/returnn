@@ -1719,6 +1719,28 @@ class TorchBackend(Backend[torch.Tensor]):
         return out
 
     @staticmethod
+    def random_choice_with_replacement(dims: Sequence[Dim], *, probs: Tensor, axis: Dim) -> Tensor:
+        """random choice with replacement"""
+        assert all(d == axis or d in dims for d in probs.dims), (
+            f"random_choice_with_replacement: dims {dims} not compatible with probs {probs} and axis {axis}"
+        )
+        common_dims = [d for d in dims if d in probs.dims]
+        assert axis not in common_dims
+        probs = probs.copy_transpose(common_dims + [axis])
+        non_common_dims = [d for d in dims if d not in common_dims]
+        num_samples = prod([d.get_dim_value() for d in non_common_dims])
+        if len(common_dims) >= 2:
+            probs, flat_common_dim = rf.merge_dims(probs, dims=common_dims)
+        out_raw = torch.multinomial(probs.raw_tensor, num_samples=num_samples, replacement=True)
+        out_raw = out_raw.reshape(
+            [d.get_dim_value() for d in common_dims] + [d.get_dim_value() for d in non_common_dims]
+        )
+        out = rf.convert_to_tensor(out_raw, dims=common_dims + non_common_dims, sparse_dim=axis)
+        out = out.copy_transpose(dims)
+        out.name = "random_choice_with_replacement"
+        return out
+
+    @staticmethod
     def masked_select(
         tensor: Tensor, *, mask: Tensor, dims: Sequence[Dim], out_dim: Optional[Dim] = None
     ) -> Tuple[Tensor, Dim]:
