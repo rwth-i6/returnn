@@ -993,7 +993,10 @@ class TorchBackend(Backend[torch.Tensor]):
         if clip_to_valid:
             if axis.dyn_size_ext is not None:
                 indices = rf.clip_by_value(
-                    indices, 0, axis.get_dyn_size_ext_for_device(indices.device) - 1, allow_broadcast_all_sources=True
+                    indices,
+                    0,
+                    rf.cast(axis.get_dyn_size_ext_for_device(indices.device), indices.dtype) - 1,
+                    allow_broadcast_all_sources=True,
                 )
             else:
                 indices = indices.copy()
