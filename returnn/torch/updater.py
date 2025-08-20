@@ -571,11 +571,9 @@ class Updater:
         # Parameters without weight decay: biases + LayerNorm/Embedding layers.
         wd_params = set()
         no_wd_params = set()
-        blacklist_wd_modules: Any = optimizer_opts.pop("weight_decay_modules_blacklist", None)
-        if blacklist_wd_modules is None:
-            blacklist_wd_modules = (torch.nn.LayerNorm, torch.nn.Embedding)
-        else:
-            blacklist_wd_modules = _wrap_user_blacklist_wd_modules(blacklist_wd_modules)
+        blacklist_wd_modules = wrap_user_blacklist_wd_modules(
+            optimizer_opts.pop("weight_decay_modules_blacklist", None)
+        )
         custom_include_check = optimizer_opts.pop("weight_decay_custom_include_check", None)
         if custom_include_check:
             assert callable(custom_include_check), f"invalid weight_decay_custom_include_check {custom_include_check!r}"
@@ -622,9 +620,16 @@ class Updater:
         return optim_groups
 
 
-def _wrap_user_blacklist_wd_modules(
-    mods: Sequence[Union[str, Type[rf.Module], Type[torch.nn.Module]]],
+def wrap_user_blacklist_wd_modules(
+    mods: Optional[Sequence[Union[str, Type[rf.Module], Type[torch.nn.Module]]]],
 ) -> Tuple[type, ...]:
+    """
+    Wraps the user-provided blacklist_weight_decay_modules into a tuple of types.
+    This supports both pure PyTorch modules (e.g. "torch.nn.LayerNorm")
+    and RF modules (e.g. "rf.LayerNorm"), which can be specified as strings or types.
+    """
+    if mods is None:
+        return torch.nn.LayerNorm, torch.nn.Embedding
     assert isinstance(mods, (list, tuple)), f"invalid blacklist_weight_decay_modules {mods!r}"
     res = []
     for mod in mods:
