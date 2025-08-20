@@ -514,7 +514,11 @@ class Updater:
             assert callable(custom_param_groups), f"invalid param_groups_custom {custom_param_groups!r}"
             rf_model = wrapped_pt_module_to_rf_module(self.network)
             custom_param_groups_ = custom_param_groups(
-                model=self.network, rf_model=rf_model, optimizer_class=optim_class, optimizer_opts=optimizer_opts
+                model=self.network,
+                rf_model=rf_model,
+                optimizer_class=optim_class,
+                optimizer_opts=optimizer_opts,
+                **get_fwd_compat_kwargs(),
             )
             assert isinstance(custom_param_groups_, Iterable) and all(
                 isinstance(group, dict) for group in custom_param_groups_
