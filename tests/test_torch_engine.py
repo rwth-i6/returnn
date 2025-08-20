@@ -611,6 +611,99 @@ def test_updater_weight_decay_blacklist():
     assert params_by_wd[1e-3] == {"2.weight"}
 
 
+def test_updater_lr_multipliers():
+    from collections import defaultdict
+    from fnmatch import fnmatchcase
+    from typing import Dict, List, Set, Any
+    from returnn.util.basic import DictRefKeys, FrozenDict
+    from returnn.torch.updater import wrap_user_blacklist_wd_modules
+    from returnn.torch.frontend.bridge import wrapped_pt_module_to_rf_module
+
+    # noinspection PyShadowingNames
+    def _param_groups_custom(*, model: torch.nn.Module, optimizer_opts: Dict[str, Any], **_kwargs):
+        default_weight_decay = optimizer_opts.get("weight_decay", 0.0)
+
+        blacklist_wd_modules = wrap_user_blacklist_wd_modules(
+            optimizer_opts.pop("weight_decay_modules_blacklist", None)
+        )
+        lr_multipliers_by_patterns = optimizer_opts.pop("learning_rate_multipliers_by_patterns")
+
+        # Tracker of visited parameters to only add each parameter once, in case two modules share common parameters.
+        # We need the wrapper class RefIdEq because Parameters are compared by value and not by reference.
+        params_by_opts: defaultdict[FrozenDict, List[torch.nn.Parameter]] = defaultdict(list)
+        visited_params = DictRefKeys()
+        for module_name, module in model.named_modules():
+            module_name: str
+            module: torch.nn.Module
+            rf_module = wrapped_pt_module_to_rf_module(module)
+            for param_name, param in module.named_parameters(recurse=False):
+                param_name: str
+                param: torch.nn.Parameter
+                if param in visited_params:
+                    continue
+                visited_params[param] = True
+                full_param_name = "%s.%s" % (module_name, param_name) if module_name else param_name
+
+                opts = {}
+                if (
+                    param_name.endswith("bias")
+                    or isinstance(module, blacklist_wd_modules)
+                    or isinstance(rf_module, blacklist_wd_modules)
+                ):
+                    opts["weight_decay"] = 0.0
+                else:
+                    opts["weight_decay"] = default_weight_decay
+                for pattern, lr_multiplier in lr_multipliers_by_patterns.items():
+                    if fnmatchcase(full_param_name, pattern):
+                        if lr_multiplier != 1.0:
+                            opts["learning_rate_multiplier"] = lr_multiplier
+                        break
+                params_by_opts[FrozenDict(opts)].append(param)
+
+        return [{"params": params, **opts} for opts, params in params_by_opts.items()]
+
+    config = Config(
+        dict(
+            optimizer={
+                "class": "adamw",
+                "weight_decay": 1e-3,
+                "param_groups_custom": _param_groups_custom,
+                "learning_rate_multipliers_by_patterns": {"0.*": 1.0, "1.*": 0.5, "2.*": 0.1},
+            }
+        )
+    )
+    model = torch.nn.Sequential(
+        torch.nn.Embedding(10, 5),
+        torch.nn.LayerNorm(5),
+        torch.nn.Linear(5, 5),
+        torch.nn.ReLU(),
+    )
+    updater = Updater(config=config, network=model, device=torch.device("cpu"))
+    updater.create_optimizer()
+    updater.set_current_train_step(global_train_step=0, epoch=1)
+
+    param_to_name = DictRefKeys((param, name) for name, param in model.named_parameters())
+    opt = updater.get_optimizer()
+    param_names_by_opts: Dict[FrozenDict, Set[str]] = {}
+    for group in opt.param_groups:
+        group_opts = FrozenDict({k: group[k] for k in ["weight_decay", "lr"]})
+        assert group_opts not in param_names_by_opts  # unique
+        param_names_by_opts[group_opts] = {param_to_name[p] for p in group["params"]}
+    assert len(param_names_by_opts) == 4, "Expected 4 param groups"
+    for opts, ref_param_names in [
+        ({"weight_decay": 0.0, "lr": 1.0}, {"0.weight"}),
+        ({"weight_decay": 0.0, "lr": 0.5}, {"1.weight", "1.bias"}),
+        ({"weight_decay": 0.001, "lr": 0.1}, {"2.weight"}),
+        ({"weight_decay": 0.0, "lr": 0.1}, {"2.bias"}),
+    ]:
+        opts = FrozenDict(opts)
+        assert opts in param_names_by_opts, f"Expected param group with opts {opts} not found"
+        param_names = param_names_by_opts[opts]
+        assert param_names == ref_param_names, (
+            f"For opts {opts}, expected param names {ref_param_names} but got {param_names}"
+        )
+
+
 def test_optimizer_convert_aux_param():
     # See rf_module_to_pt_module aux_params_as_buffers option.
     # This causes a change in the optimizer state dict.
