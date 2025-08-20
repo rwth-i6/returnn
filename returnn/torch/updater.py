@@ -5,11 +5,10 @@ and model param update logic in general.
 
 from __future__ import annotations
 
-from typing import Optional, Union, Any, Type, Callable, Sequence, Iterable, Iterator, Set, Dict, List, Tuple
+from typing import Optional, Union, Any, Type, Callable, Sequence, Iterable, Set, Dict, List, Tuple
 import os
 import gc
 import torch
-import typing
 
 import returnn
 from returnn.log import log
@@ -130,8 +129,8 @@ class Updater:
             else:
                 raise NotImplementedError("not implemented for not callable dynamic_learning_rate")
 
-        self._optimizer_opts = None
-        self.optimizer = None  # type: typing.Optional[torch.optim.Optimizer]
+        self._optimizer_opts: Optional[Dict[str, Any]] = None
+        self.optimizer: Optional[torch.optim.Optimizer] = None
 
         self._grad_clip = self.config.float("gradient_clip", 0.0)
         self._grad_clip_global_norm = self.config.float("gradient_clip_global_norm", 0.0)
@@ -481,7 +480,7 @@ class Updater:
 
     def _get_optimizer_param_groups(
         self, optim_class: Type[torch.optim.Optimizer], optimizer_opts: Dict[str, Any]
-    ) -> Union[List[Dict[str, Any]], Iterator[torch.nn.Parameter]]:
+    ) -> Union[Iterable[Dict[str, Any]], Iterable[torch.nn.Parameter]]:
         """
         The weight_decay parameter from AdamW affects the weights of layers such as LayerNorm and Embedding.
         This function creates a blacklist of network modules and splits the optimizer groups in two:
@@ -514,10 +513,13 @@ class Updater:
         if custom_param_groups is not None:
             assert callable(custom_param_groups), f"invalid param_groups_custom {custom_param_groups!r}"
             rf_model = wrapped_pt_module_to_rf_module(self.network)
-            custom_param_groups = custom_param_groups(
+            custom_param_groups_ = custom_param_groups(
                 model=self.network, rf_model=rf_model, optimizer_class=optim_class, optimizer_opts=optimizer_opts
             )
-            return custom_param_groups
+            assert isinstance(custom_param_groups_, Iterable) and all(
+                isinstance(group, dict) for group in custom_param_groups_
+            ), f"invalid param_groups_custom {custom_param_groups!r} result {custom_param_groups_!r} type"
+            return custom_param_groups_
 
         network_params = self.network.parameters()
 
@@ -545,7 +547,7 @@ class Updater:
         # Parameters without weight decay: biases + LayerNorm/Embedding layers.
         wd_params = set()
         no_wd_params = set()
-        blacklist_wd_modules = optimizer_opts.pop("weight_decay_modules_blacklist", None)
+        blacklist_wd_modules: Any = optimizer_opts.pop("weight_decay_modules_blacklist", None)
         if blacklist_wd_modules is None:
             blacklist_wd_modules = (torch.nn.LayerNorm, torch.nn.Embedding)
         else:
