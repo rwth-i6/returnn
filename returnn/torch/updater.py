@@ -95,6 +95,8 @@ class Updater:
     Wraps a torch.optim.Optimizer, and extends it by some further functionality.
     """
 
+    _OptimizerParamGroupsExtraOpts = ("learning_rate_multiplier",)
+
     def __init__(self, *, config, network, device, initial_learning_rate=1.0):
         """
         :param returnn.config.Config config: config defining the training conditions.
@@ -131,6 +133,7 @@ class Updater:
 
         self._optimizer_opts: Optional[Dict[str, Any]] = None
         self.optimizer: Optional[torch.optim.Optimizer] = None
+        self._optimizer_param_groups_extra_opts: Optional[List[Dict[str, Any]]] = None
 
         self._grad_clip = self.config.float("gradient_clip", 0.0)
         self._grad_clip_global_norm = self.config.float("gradient_clip_global_norm", 0.0)
@@ -189,8 +192,15 @@ class Updater:
             )
             self._effective_learning_rate = float(lr)
         if self.optimizer:
-            for param_group in self.optimizer.param_groups:
-                param_group["lr"] = self._effective_learning_rate
+            if self._optimizer_param_groups_extra_opts:
+                assert len(self.optimizer.param_groups) == len(self._optimizer_param_groups_extra_opts)
+                lr_multiplies = [
+                    opts.get("learning_rate_multiplier", 1.0) for opts in self._optimizer_param_groups_extra_opts
+                ]
+            else:
+                lr_multiplies = [1.0] * len(self.optimizer.param_groups)
+            for i, param_group in enumerate(self.optimizer.param_groups):
+                param_group["lr"] = self._effective_learning_rate * lr_multiplies[i]
 
     def set_current_train_step(self, *, global_train_step: int, epoch: int, epoch_continuous: Optional[float] = None):
         """
@@ -273,7 +283,7 @@ class Updater:
         if optimizer_opts is None:
             raise ValueError("config field 'optimizer' needs to be set explicitely for the Torch backend")
         self._optimizer_opts = optimizer_opts
-        self.optimizer = self._create_optimizer(optimizer_opts)
+        self.optimizer, self._optimizer_param_groups_extra_opts = self._create_optimizer(optimizer_opts)
 
     def load_optimizer(self, filename):
         """
@@ -421,21 +431,20 @@ class Updater:
         """
         return self.optimizer
 
-    def _create_optimizer(self, optimizer_opts):
+    def _create_optimizer(self, optimizer_opts) -> Tuple[torch.optim.Optimizer, Optional[List[Dict[str, Any]]]]:
         """
         Returns a valid optimizer considering the dictionary given by the user in the config.
 
         :param dict[str]|str optimizer_opts: Optimizer configuration specified by the user.
             If it's a dict, it must contain "class" with the optimizer name or callable.
             If it's a str, it must be the optimizer name.
-        :return: A valid optimizer.
-        :rtype: torch.optim.Optimizer
+        :return: tuple (optimizer, optional optimizer_param_groups_extra_opts).
         """
         lr = self.learning_rate
 
         # If the parameter is already a valid optimizer, return it without further processing
         if isinstance(optimizer_opts, torch.optim.Optimizer):
-            return optimizer_opts
+            return optimizer_opts, None
         elif callable(optimizer_opts):
             optimizer_opts: Dict[str, Any] = {"class": optimizer_opts}
         else:
@@ -461,12 +470,23 @@ class Updater:
         lr = lr * opt_kwargs.pop("learning_rate_multiplier", 1.0)
         opt_kwargs["lr"] = lr
 
-        params_or_param_groups = self._get_optimizer_param_groups(optim_class, opt_kwargs)
-        optimizer = optim_class(params_or_param_groups, **opt_kwargs)
+        param_groups = self._get_optimizer_param_groups(optim_class, opt_kwargs)
+        param_groups = list(param_groups)
+        assert len(param_groups) > 0, "got an empty parameter list?"
+        if not isinstance(param_groups[0], dict):
+            param_groups = [{"params": param_groups}]
+        optimizer_param_groups_extra_opts: Optional[List[Dict[str, Any]]] = None
+        if any(any(key in group for key in self._OptimizerParamGroupsExtraOpts) for group in param_groups):
+            param_groups = [dict(group) for group in param_groups]  # copy to make sure we can modify it
+            optimizer_param_groups_extra_opts = [
+                {key: group.pop(key) for key in self._OptimizerParamGroupsExtraOpts if key in group}
+                for group in param_groups
+            ]
+        optimizer = optim_class(param_groups, **opt_kwargs)
         print("Optimizer: %s" % optimizer, file=log.v1)
         assert isinstance(optimizer, torch.optim.Optimizer)
 
-        return optimizer
+        return optimizer, optimizer_param_groups_extra_opts
 
     def _create_default_optimizer(self):
         """
