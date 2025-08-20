@@ -2459,8 +2459,12 @@ class DictRefKeys(Generic[K, V]):
     Like `dict`, but hash and equality of the keys
     """
 
-    def __init__(self):
+    def __init__(self, items: Union[None, Iterable[Tuple[K, V]], Dict[K, V]] = None, /, **kwargs):
         self._d = {}  # type: Dict[RefIdEq[K], V]
+        if items is not None:
+            self.update(items)
+        if kwargs:
+            self.update(kwargs)
 
     def __repr__(self):
         return "DictRefKeys(%s)" % ", ".join(["%r: %r" % (k, v) for (k, v) in self.items()])
@@ -2488,6 +2492,15 @@ class DictRefKeys(Generic[K, V]):
 
     def __contains__(self, item: K):
         return RefIdEq(item) in self._d
+
+    def update(self, other: Union[Dict[K, V], Iterable[Tuple[K, V]]], /):
+        """
+        :param other: dict or iterable of (key, value) tuples
+        """
+        if isinstance(other, dict):
+            other = other.items()
+        for k, v in other:
+            self[k] = v
 
 
 def make_dll_name(basename):

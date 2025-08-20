@@ -582,6 +582,35 @@ def test_load_optimizer_old_format():
         updater.load_optimizer(tmp_dir + "/model.opt.new_format.pt")
 
 
+def test_updater_weight_decay_blacklist():
+    from returnn.util.basic import DictRefKeys
+
+    # Don't specify weight_decay_modules_blacklist, so it should use the default,
+    # which should exclude Embedding and LayerNorm, and all biases.
+    # So this also tests that the default behavior does not change unexpectedly.
+    config = Config(dict(optimizer={"class": "adamw", "weight_decay": 1e-3}))
+    model = torch.nn.Sequential(
+        torch.nn.Embedding(10, 5),
+        torch.nn.LayerNorm(5),
+        torch.nn.Linear(5, 5),
+        torch.nn.ReLU(),
+    )
+    updater = Updater(config=config, network=model, device=torch.device("cpu"))
+    updater.create_optimizer()
+    updater.set_current_train_step(global_train_step=0, epoch=1)
+
+    opt = updater.get_optimizer()
+    assert isinstance(opt, torch.optim.AdamW)
+    assert len(opt.param_groups) == 2
+    groups_by_wd = {pg.get("weight_decay", 0.0): pg for pg in opt.param_groups}
+    assert set(groups_by_wd.keys()) == {0.0, 1e-3}
+    param_to_name = DictRefKeys((param, name) for name, param in model.named_parameters())
+    params_by_wd = {wd: set(map(param_to_name.__getitem__, group["params"])) for wd, group in groups_by_wd.items()}
+    print("params by wd:", params_by_wd)
+    assert params_by_wd[0.0] == {"0.weight", "1.weight", "1.bias", "2.bias"}
+    assert params_by_wd[1e-3] == {"2.weight"}
+
+
 def test_optimizer_convert_aux_param():
     # See rf_module_to_pt_module aux_params_as_buffers option.
     # This causes a change in the optimizer state dict.
