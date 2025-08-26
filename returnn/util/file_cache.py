@@ -390,6 +390,10 @@ class FileCache:
                 #   - https://github.com/rwth-i6/returnn/pull/1709
                 os.utime(dst_filename, None)
                 os.utime(info_file_name, None)
+                # Ensure we proactively make space for other users
+                # even in case we have all files ready on disk.
+                # See for discussion: https://github.com/rwth-i6/returnn/pull/1752.
+                self.cleanup(need_at_least_free_space_size=0)
                 return
 
             print(f"FileCache: Copy file {src_filename} to cache")
