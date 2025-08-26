@@ -390,6 +390,7 @@ class FileCache:
                 #   - https://github.com/rwth-i6/returnn/pull/1709
                 os.utime(dst_filename, None)
                 os.utime(info_file_name, None)
+                self.cleanup(need_at_least_free_space_size=0)
                 return
 
             print(f"FileCache: Copy file {src_filename} to cache")
