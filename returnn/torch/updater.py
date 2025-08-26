@@ -440,8 +440,6 @@ class Updater:
             If it's a str, it must be the optimizer name.
         :return: tuple (optimizer, optional optimizer_param_groups_extra_opts).
         """
-        lr = self.learning_rate
-
         # If the parameter is already a valid optimizer, return it without further processing
         if isinstance(optimizer_opts, torch.optim.Optimizer):
             return optimizer_opts, None
@@ -467,8 +465,9 @@ class Updater:
             opt_kwargs["eps"] = opt_kwargs.pop("epsilon")
         if "learning_rate" in opt_kwargs or "lr" in opt_kwargs:
             raise ValueError("'learning_rate' should be set outside of the 'optimizer' dict.")
-        lr = lr * opt_kwargs.pop("learning_rate_multiplier", 1.0)
-        opt_kwargs["lr"] = lr
+        # lr will anyway be updated in set_current_train_step / _update_effective_learning_rate,
+        # so this value doesn't really matter here
+        opt_kwargs["lr"] = self.learning_rate
 
         param_groups = self._get_optimizer_param_groups(optim_class, opt_kwargs)
         param_groups = list(param_groups)
