@@ -8,6 +8,8 @@ https://github.com/rwth-i6/returnn_common/issues/233
 
 from __future__ import annotations
 from typing import Optional, Union, Any, Tuple, List, Dict, Callable
+from types import FunctionType
+import functools
 import copy as _copy
 from returnn.tensor import Tensor, Dim
 import returnn.frontend as rf
@@ -298,7 +300,8 @@ class ConformerEncoder(ISeqDownsamplingEncoder):
         *,
         num_layers: int,
         input_layer: Optional[Union[ConformerConvSubsample, ISeqDownsamplingEncoder, rf.Module, Any]],
-        input_embedding_scale: float = 1.0,
+        input_embedding_scale: Optional[float] = None,
+        pos_enc: Union[None, Callable, Dict[str, Any], rf.Module] = None,
         input_dropout: float = 0.1,
         ff_dim: Dim = NotSpecified,
         ff_activation: Union[Callable[[Tensor], Tensor], Dict[str, Any], rf.Module] = NotSpecified,
@@ -317,8 +320,17 @@ class ConformerEncoder(ISeqDownsamplingEncoder):
         :param num_layers: the number of encoder layers
         :param input_layer: input/frontend/prenet with potential subsampling.
             (x, in_spatial_dim) -> (y, out_spatial_dim)
-        :param input_embedding_scale: applied after input_layer. 1.0 by default for historic reasons.
-            In std Transformer, also ESPnet E-Branchformer and Conformer, this is sqrt(out_dim).
+        :param input_embedding_scale: applied after input_layer.
+            1.0 by default for historic reasons if pos_enc is None,
+            else sqrt(out_dim) by default.
+            In std Transformer, also ESPnet E-Branchformer and Conformer, this is sqrt(out_dim),
+            which is relevant when you add positional encoding.
+        :param pos_enc: positional encoding, applied after input_embedding_scale.
+            None (no positional encoding) by default, unlike standard Transformer.
+            E.g. :func:`rf.sinusoidal_positional_encoding` for absolute pos enc.
+            Note, relative positional encoding is usually part of the attention layer,
+            e.g. :class:`rf.RelPosSelfAttention`,
+            and nothing needs to be set here.
         :param input_dropout: applied after input_projection(input_layer(x))
         :param ff_dim: the dimension of feed-forward layers. 2048 originally, or 4 times out_dim
         :param ff_activation: activation function for feed-forward network
@@ -357,7 +369,20 @@ class ConformerEncoder(ISeqDownsamplingEncoder):
             if input_layer
             else None
         )
+        if input_embedding_scale is None:
+            input_embedding_scale = (self.out_dim.dimension**0.5) if pos_enc is not None else 1.0
         self.input_embedding_scale = input_embedding_scale
+        if pos_enc is None:
+            pass
+        elif isinstance(pos_enc, dict):
+            pos_enc = rf.build_from_dict(pos_enc, feat_dim=self.out_dim)
+        elif isinstance(pos_enc, rf.Module):
+            pass
+        elif isinstance(pos_enc, FunctionType):
+            pos_enc = functools.partial(pos_enc, feat_dim=self.out_dim)
+        else:
+            raise TypeError(f"unexpected pos_enc type {pos_enc!r}")
+        self.pos_enc = pos_enc
         self.input_dropout = input_dropout
 
         if not encoder_layer or isinstance(encoder_layer, (dict, type)):
@@ -411,6 +436,8 @@ class ConformerEncoder(ISeqDownsamplingEncoder):
         x = self.input_projection(x_subsample) if self.input_projection else x_subsample
         if self.input_embedding_scale != 1.0:
             x = x * self.input_embedding_scale
+        if self.pos_enc is not None:
+            x = x + self.pos_enc(spatial_dim=out_spatial_dim)
         x = rf.dropout(x, self.input_dropout, axis=self.dropout_broadcast and self.out_dim)
         x = self.layers(x, spatial_dim=out_spatial_dim, collected_outputs=collected_outputs)
         return x, out_spatial_dim
