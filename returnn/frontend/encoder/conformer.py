@@ -364,11 +364,8 @@ class ConformerEncoder(ISeqDownsamplingEncoder):
         else:
             raise TypeError(f"unexpected input_layer {input_layer!r}")
         self.input_layer = input_layer
-        self.input_projection = (
-            rf.Linear(self.input_layer.out_dim if self.input_layer else self.in_dim, self.out_dim, with_bias=False)
-            if input_layer
-            else None
-        )
+        in_dim = self.input_layer.out_dim if self.input_layer else self.in_dim
+        self.input_projection = rf.Linear(in_dim, self.out_dim, with_bias=False) if in_dim != self.out_dim else None
         if input_embedding_scale is None:
             input_embedding_scale = (self.out_dim.dimension**0.5) if pos_enc is not None else 1.0
         self.input_embedding_scale = input_embedding_scale
