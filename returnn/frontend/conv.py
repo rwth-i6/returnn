@@ -862,8 +862,9 @@ def _consistent_same_padding(
         pad_right = (s - 1) * d - pad_left
         paddings.append((pad_left, pad_right))
     # We expect that masking was already done before (or we don't care about it), thus handle_dynamic_dims=False.
+    out_dims = [(left + middle + right) for middle, (left, right) in zip(in_spatial_dims, paddings)]
     source, in_spatial_dims = rf.pad(
-        source, axes=in_spatial_dims, padding=paddings, value=pad_value, handle_dynamic_dims=False
+        source, axes=in_spatial_dims, padding=paddings, value=pad_value, handle_dynamic_dims=False, out_dims=out_dims
     )
     return source, in_spatial_dims, 0
 
