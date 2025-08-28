@@ -2080,6 +2080,8 @@ class _DimMixin:
         :return: self + other. note that this is not commutative, i.e. different from other + self.
         :rtype: Dim
         """
+        if isinstance(other, int) and other == 0:
+            return self
         cache_key = ("add", other)
         cache = self.get_same_base()._make_extra().cache_dim_math
         cache_entry = cache.get(cache_key, None)
@@ -2098,6 +2100,8 @@ class _DimMixin:
         :return: other + self
         :rtype: Dim
         """
+        if isinstance(other, int) and other == 0:
+            return self
         cache_key = ("add_left", other)
         cache = self.get_same_base()._make_extra().cache_dim_math
         cache_entry = cache.get(cache_key, None)
@@ -2115,6 +2119,8 @@ class _DimMixin:
         :param Dim|int other:
         :rtype: Dim
         """
+        if isinstance(other, int) and other == 0:
+            return self
         return self.sub_right(other)
 
     def sub_right(self: Dim, other):
@@ -2123,6 +2129,8 @@ class _DimMixin:
         :return: self - other
         :rtype: Dim
         """
+        if isinstance(other, int) and other == 0:
+            return self
         cache_key = ("sub", other)
         cache = self.get_same_base()._make_extra().cache_dim_math
         cache_entry = cache.get(cache_key, None)
@@ -2141,6 +2149,8 @@ class _DimMixin:
         :return: (-other) + self
         :rtype: Dim
         """
+        if isinstance(other, int) and other == 0:
+            return self
         cache_key = ("sub_left", other)
         cache = self.get_same_base()._make_extra().cache_dim_math
         cache_entry = cache.get(cache_key, None)
@@ -2158,6 +2168,8 @@ class _DimMixin:
         :param Dim|int other:
         :rtype: Dim
         """
+        if isinstance(other, int) and other == 1:
+            return self
         cache_key = ("mul", other)
         cache = self.get_same_base()._make_extra().cache_dim_math
         cache_entry = cache.get(cache_key, None)
@@ -2175,6 +2187,8 @@ class _DimMixin:
         :param Dim|int other:
         :rtype: Dim
         """
+        if isinstance(other, int) and other == 1:
+            return self
         cache_key = ("mul_left", other)
         cache = self.get_same_base()._make_extra().cache_dim_math
         cache_entry = cache.get(cache_key, None)
@@ -2192,6 +2206,8 @@ class _DimMixin:
         :param Dim|int other:
         :rtype: Dim
         """
+        if isinstance(other, int) and other == 1:
+            return self
         cache_key = ("floordiv", other)
         cache = self.get_same_base()._make_extra().cache_dim_math
         cache_entry = cache.get(cache_key, None)
@@ -2209,6 +2225,8 @@ class _DimMixin:
         :param Dim|int other:
         :rtype: Dim
         """
+        if isinstance(other, int) and other == 1:
+            return self
         return self.div_right(other)
 
     def div_left(self: Dim, other):
@@ -2216,6 +2234,8 @@ class _DimMixin:
         :param Dim|int other:
         :rtype: Dim
         """
+        if isinstance(other, int) and other == 1:
+            return self
         cache_key = ("truediv_left", other)
         cache = self.get_same_base()._make_extra().cache_dim_math
         cache_entry = cache.get(cache_key, None)
@@ -2233,6 +2253,8 @@ class _DimMixin:
         :param Dim|int other:
         :rtype: Dim
         """
+        if isinstance(other, int) and other == 1:
+            return self
         cache_key = ("truediv", other)
         cache = self.get_same_base()._make_extra().cache_dim_math
         cache_entry = cache.get(cache_key, None)
@@ -2250,6 +2272,8 @@ class _DimMixin:
         :param Dim|int other:
         :rtype: Dim
         """
+        if isinstance(other, int) and other == 1:
+            return self
         cache_key = ("ceildiv_left", other)
         cache = self.get_same_base()._make_extra().cache_dim_math
         cache_entry = cache.get(cache_key, None)
@@ -2267,6 +2291,8 @@ class _DimMixin:
         :param Dim|int other:
         :rtype: Dim
         """
+        if isinstance(other, int) and other == 1:
+            return self
         cache_key = ("ceildiv", other)
         cache = self.get_same_base()._make_extra().cache_dim_math
         cache_entry = cache.get(cache_key, None)
