@@ -1264,7 +1264,6 @@ class _DimMixin:
                 raise TypeError(f"complete_dyn_size: _relu: unexpected type {type(a)}")
 
         y: Optional[_t.Tensor] = None  # resulting dyn size
-        y_max_value: Optional[_t.Tensor] = None  # resulting dyn size max value
         inputs = list(op.inputs)
         assert inputs
         for x_dim in inputs:
@@ -1275,8 +1274,6 @@ class _DimMixin:
             if x_dim.dyn_size_ext is None and x_dim.dimension is None:
                 return
             y = _bin_op(y, x_dim.dimension if x_dim.dimension is not None else x_dim.dyn_size_ext)
-            if not template_only and y.raw_tensor is not None:
-                y_max_value = _bin_op(y_max_value, x_dim.get_dim_value_tensor())
         assert y is not None, f"op {op}?"
         if self.dyn_size_ext is not None:
             assert self.dyn_size_ext.dim_tags == y.dim_tags
@@ -1286,9 +1283,14 @@ class _DimMixin:
             else:
                 self.batch = y.batch
         self.dyn_size_ext = y
-        if not template_only and y_max_value is not None:
-            assert y_max_value is not None and y_max_value.raw_tensor is not None
-            self._dyn_size_max_value = y_max_value
+        if not template_only and y.raw_tensor is not None:
+            # Note: Earlier, we had this wrong.
+            # It is not correct to replicate the same math (bin ops)
+            # on the dim values (_dyn_size_max_value of each dim).
+            # Consider sizes1=[2,3], sizes2=[5,4], and the op is "add".
+            # Then the result sizes would be [7,7], thus its max is 7,
+            # but max(sizes1)+max(sizes2)=3+5=8.
+            self._dyn_size_max_value = rf.reduce_max(y, axis=y.dims) if y.dims else y
         if tf and y.placeholder is not None:
             self.set_tag_on_size_tensor(y.placeholder)
 
