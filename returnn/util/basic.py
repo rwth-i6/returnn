@@ -5,7 +5,7 @@ Various generic utilities, which are shared across different backend engines.
 """
 
 from __future__ import annotations
-from typing import Optional, Union, Any, Generic, TypeVar, Sequence, Iterable, Tuple, Dict, List, Set, Callable
+from typing import Optional, Union, Any, Generic, TypeVar, Iterable, Tuple, Dict, List, Set, Callable
 
 import subprocess
 from subprocess import CalledProcessError
@@ -1693,15 +1693,17 @@ def inplace_increment(x: numpy.ndarray, idx: numpy.ndarray, y: Union[numpy.ndarr
     raise NotImplementedError("This feature was removed with dropped Theano support")
 
 
-def prod(ls: Union[Sequence[T], numpy.ndarray]) -> Union[int, T, float]:
+def prod(ls: Union[Iterable[T], numpy.ndarray]) -> Union[int, T, float]:
     """
     :param ls:
     :return: ls[0] * ls[1] * ...
     """
-    if len(ls) == 0:
+    it = iter(ls)
+    try:
+        x = next(it)
+    except StopIteration:
         return 1
-    x = ls[0]
-    for y in ls[1:]:
+    for y in it:
         x = x * y  # *= doesn't work because x might be a tensor, and for e.g. torch.Tensor this op is in-place
     return x
 
