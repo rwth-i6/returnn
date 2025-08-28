@@ -5,7 +5,7 @@ Various generic utilities, which are shared across different backend engines.
 """
 
 from __future__ import annotations
-from typing import Optional, Union, Any, Generic, TypeVar, Iterable, Tuple, Dict, List, Set, Callable
+from typing import Optional, Union, Any, Generic, TypeVar, Sequence, Iterable, Tuple, Dict, List, Set, Callable
 
 import subprocess
 from subprocess import CalledProcessError
@@ -1693,10 +1693,10 @@ def inplace_increment(x: numpy.ndarray, idx: numpy.ndarray, y: Union[numpy.ndarr
     raise NotImplementedError("This feature was removed with dropped Theano support")
 
 
-def prod(ls):
+def prod(ls: Union[Sequence[T], numpy.ndarray]) -> Union[int, T, float]:
     """
-    :param list[T]|tuple[T]|numpy.ndarray ls:
-    :rtype: T|int|float
+    :param ls:
+    :return: ls[0] * ls[1] * ...
     """
     if len(ls) == 0:
         return 1
