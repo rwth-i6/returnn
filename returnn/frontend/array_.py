@@ -505,7 +505,12 @@ def pad(
     if handle_dynamic_dims is None:
         handle_dynamic_dims = _pad_handle_dynamic_dims_default(axes, padding, mode=mode)
     if not out_dims:
-        out_dims = [left + middle + right for middle, (left, right) in zip(axes, padding)]
+        out_dims = [
+            (left + middle + right)
+            if handle_dynamic_dims or not _pad_need_dyn_dim_handling(middle, left, right, mode=mode)
+            else _pad_sum_dims_no_dyn_dim_handling(middle, left, right)
+            for middle, (left, right) in zip(axes, padding)
+        ]
     # noinspection PyProtectedMember
     return (
         source._raw_backend.pad(
@@ -569,6 +574,32 @@ def _pad_need_dyn_dim_handling(
     if mode != "circular" and isinstance(right, int) and right == 0:
         return False
     return True
+
+
+def _pad_sum_dims_no_dyn_dim_handling(
+    middle: Dim, left: Union[Dim, int, Tensor], right: Union[Dim, int, Tensor]
+) -> Dim:
+    """
+    This gets called when we need to handle dyn dims, but handle_dynamic_dims=False.
+    See also the same logic in :func:`concat`.
+    """
+    if isinstance(left, Dim):
+        left = left.get_dim_value_tensor()
+    elif isinstance(left, int):
+        pass
+    elif isinstance(left, Tensor):
+        assert left.dims == ()  # scalar
+    else:
+        raise TypeError(f"invalid left pad {left}")
+    if isinstance(right, Dim):
+        right = right.get_dim_value_tensor()
+    elif isinstance(right, int):
+        pass
+    elif isinstance(right, Tensor):
+        assert right.dims == ()  # scalar
+    else:
+        raise TypeError(f"invalid right pad {right}")
+    return Dim(left + middle.get_dim_value_tensor() + right, name="pad")
 
 
 def cum_concat_step(
