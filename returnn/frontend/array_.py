@@ -188,22 +188,18 @@ def merge_dims(
             return source, dims[0]
         return rf.replace_dim(source, in_dim=dims[0], out_dim=out_dim)
     if out_dim is None:
-        out_dim = dims[0]
-        reset_dyn_size = False
-        for d in dims[1:]:
-            reset_dyn_size |= d.need_masking() and out_dim.capacity != 1
-            out_dim = out_dim * d
-        if reset_dyn_size:
+        from returnn.util.basic import prod
+
+        if any(d.need_masking() for d in dims[1:]):
             # The dynamic sizes as calculated via dim math would not correctly describe how the tensor looks like.
             # This would then potentially discard some of the data in the tensor in subsequent operations,
             # when masking is applied.
             # Thus, discard the dynamic sizes, and just treat it as a flat dim with scalar dynamic size.
             # https://github.com/rwth-i6/returnn/issues/1694
-            out_dim_size = dims[0].get_dim_value_tensor()
-            for d in dims[1:]:
-                out_dim_size *= d.get_dim_value_tensor()
-            assert isinstance(out_dim_size, Tensor) and out_dim_size.dims == ()  # scalar
-            out_dim.dyn_size_ext = out_dim_size
+            # See also similar logic in :func:`concat`.
+            out_dim = Dim(prod(d.get_dim_value_tensor() for d in dims), name="merged")
+        else:
+            out_dim = prod(dims)
     # noinspection PyProtectedMember
     return source._raw_backend.merge_dims(source, dims=dims, out_dim=out_dim), out_dim
 
