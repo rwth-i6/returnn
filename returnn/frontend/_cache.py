@@ -6,7 +6,7 @@ One use case example is :func:`sinusoidal_positional_encoding` and :func:`relati
 """
 
 from __future__ import annotations
-from typing import Optional, Union, Any, Type, Callable, Tuple, Dict
+from typing import Optional, Union, Any, Type, Callable, Tuple, Dict, List
 from weakref import ref
 import tree
 from returnn.util.lru_cache import lru_cache
@@ -59,6 +59,8 @@ class Cache:
             if isinstance(key_item_orig, DimWrapper):
                 assert isinstance(key_item, DimWrapper)
                 dim_orig = key_item_orig.dim_ref()
+                if dim_orig is None:  # orig dim could be dead. but then it would not be used anyway
+                    continue
                 dim = key_item.dim_ref()
                 assert isinstance(dim_orig, Dim) and isinstance(dim, Dim)
                 dim_map[dim_orig] = dim
@@ -103,7 +105,7 @@ def _transform_key(
     key: Any, *, finalize_callback: Optional[Callable] = None, collected_dim_map: Optional[Dict[Dim, DimWrapper]] = None
 ) -> Tuple[Union[Type[Backend], ref[rf.RunCtx], _KeyItemType], ...]:
     backend = _get_backend(key)
-    keys_flat = [backend]
+    keys_flat: List[Any] = [backend]
     if not backend.executing_eagerly():
         # See comment above: If graph-mode, the cached value becomes invalid
         # when the current run ctx goes out of scope.
