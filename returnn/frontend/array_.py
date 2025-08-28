@@ -427,28 +427,39 @@ def concat(
         dims = sources[0][0].dims_set - {sources[0][1]}
         for src, dim in sources:
             assert src.dims_set - {dim} == dims, f"concat {sources}, need allow_broadcast=True"
+    need_handle_dynamic_dims = False
+    for src, dim in sources[:-1]:
+        if dim.need_masking():
+            need_handle_dynamic_dims = True
+    if handle_dynamic_dims is None:
+        handle_dynamic_dims = need_handle_dynamic_dims
     if not out_dim:
-        out_dim = sum(d for _, d in sources)
-    # noinspection PyProtectedMember
-    out = sources[0][0]._raw_backend.concat(*sources, allow_broadcast=allow_broadcast, out_dim=out_dim)
-    if handle_dynamic_dims is None or handle_dynamic_dims:
-        need_to_handle = False
-        for src, dim in sources[:-1]:
-            if dim.need_masking():
-                need_to_handle = True
-        if need_to_handle:
-            masks = []
-            for _, dim in sources:
-                masks.append(
-                    dim.get_mask(dim_order=(dim,) + dim.dyn_size_ext.dims, device=out.device)
-                    if dim.need_masking()
-                    else rf.constant(True, dims=[dim], device=out.device)
-                )
-            # noinspection PyProtectedMember
-            mask_concat = sources[0][0]._raw_backend.concat(
-                *[(mask, dim) for (_, dim), mask in zip(sources, masks)], allow_broadcast=True, out_dim=out_dim
+        if handle_dynamic_dims or not need_handle_dynamic_dims:
+            out_dim = sum(d for _, d in sources)
+        else:  # not handle_dynamic_dims but need_handle_dynamic_dims
+            # There are dynamic dims, but we don't want to handle them.
+            # So, summing the dims would be incorrect.
+            # Just add the dim values.
+            out_dim = Dim(sum(d.get_dim_value_tensor() for _, d in sources if d.dimension is not None), name="concat")
+    if handle_dynamic_dims:
+        out_non_masked_dim = Dim(sum(d.get_dim_value_tensor() for _, d in sources))
+        # noinspection PyProtectedMember
+        out = sources[0][0]._raw_backend.concat(*sources, allow_broadcast=allow_broadcast, out_dim=out_non_masked_dim)
+        masks = []
+        for _, dim in sources:
+            masks.append(
+                dim.get_mask(dim_order=(dim,) + dim.dyn_size_ext.dims, device=out.device)
+                if dim.need_masking()
+                else rf.constant(True, dims=[dim], device=out.device)
             )
-            out, out_dim = rf.masked_select(out, mask=mask_concat, dims=[out_dim])
+        # noinspection PyProtectedMember
+        mask_concat = sources[0][0]._raw_backend.concat(
+            *[(mask, dim) for (_, dim), mask in zip(sources, masks)], allow_broadcast=True, out_dim=out_non_masked_dim
+        )
+        out, _ = rf.masked_select(out, mask=mask_concat, dims=[out_non_masked_dim], out_dim=out_dim)
+    else:
+        # noinspection PyProtectedMember
+        out = sources[0][0]._raw_backend.concat(*sources, allow_broadcast=allow_broadcast, out_dim=out_dim)
     return out, out_dim
 
 
