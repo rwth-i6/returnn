@@ -223,7 +223,7 @@ def conv(
     """
     if any(in_spatial_dim.need_masking() for in_spatial_dim in in_spatial_dims):
         if use_mask is None:
-            use_mask = rf.use_mask_default(default=True, default_false_for_behavior_version_up_to=22)
+            use_mask = rf.use_mask_default(default=True, default_false_for_behavior_version_up_to=22, func_name="conv")
         if use_mask:
             source = source.copy_masked(0, dims=in_spatial_dims)
     for in_spatial_dim in in_spatial_dims:
@@ -391,7 +391,9 @@ def transposed_conv(
     """transposed conv"""
     if any(in_spatial_dim.need_masking() for in_spatial_dim in in_spatial_dims):
         if use_mask is None:
-            use_mask = rf.use_mask_default(default=True, default_false_for_behavior_version_up_to=22)
+            use_mask = rf.use_mask_default(
+                default=True, default_false_for_behavior_version_up_to=22, func_name="transposed_conv"
+            )
         if use_mask:
             source = source.copy_masked(0, dims=in_spatial_dims)
     if padding == "same" and _any_is_non_default(strides, default=1) and _should_use_consistent_same_padding():
@@ -503,7 +505,7 @@ def pool(
 
     if any(in_spatial_dim.need_masking() for in_spatial_dim in in_spatial_dims):
         if use_mask is None:
-            use_mask = rf.use_mask_default(default=True, default_false_for_behavior_version_up_to=22)
+            use_mask = rf.use_mask_default(default=True, default_false_for_behavior_version_up_to=22, func_name="pool")
         if use_mask:
             source = source.copy_masked({"max": float("-inf"), "avg": 0}[mode], dims=in_spatial_dims)
     else:

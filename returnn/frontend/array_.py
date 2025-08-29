@@ -341,7 +341,9 @@ def window(
     """
     if spatial_dim.need_masking():
         if use_mask is None:
-            use_mask = rf.use_mask_default(default=True, default_false_for_behavior_version_up_to=22)
+            use_mask = rf.use_mask_default(
+                default=True, default_false_for_behavior_version_up_to=22, func_name="window"
+            )
         if use_mask:
             source = source.copy_masked(0, dims=[spatial_dim])
     assert window_dim.dimension is not None
@@ -905,7 +907,9 @@ def scatter(
     indices_dim = indices_dim if isinstance(indices_dim, (list, tuple)) else [indices_dim]
     if any(dim.need_masking() for dim in indices_dim):
         if use_mask is None:
-            use_mask = rf.use_mask_default(default=True, default_false_for_behavior_version_up_to=22)
+            use_mask = rf.use_mask_default(
+                default=True, default_false_for_behavior_version_up_to=22, func_name="scatter"
+            )
         if use_mask:
             source = source.copy_masked(fill_value, dims=indices_dim)
     else:
