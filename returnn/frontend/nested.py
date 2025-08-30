@@ -115,7 +115,7 @@ def _mask(
                 return s
         if not allow_dim_extension or mask_value is None or (isinstance(mask_value, (int, float)) and mask_value == 0):
             if mask.dims_set.issubset(s.dims_set):
-                return rf.where(mask, s, mask_value)
+                return rf.where(mask, s, rf.cast(mask_value, s.dtype))
             assert not mask.dims_set.intersection(s.dims_set)  # not sure...
             return s
         assert isinstance(mask_value, (int, float, Tensor))
