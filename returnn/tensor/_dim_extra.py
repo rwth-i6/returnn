@@ -2425,7 +2425,6 @@ _BinOpStrs = {"add": "+", "mul": "*", "sub": "-", "floordiv": "//", "truediv": "
 
 
 def _math_get_dim_via_bin_op(dims: Sequence[Union[Dim, int]], op_kind: str) -> Dim:
-    assert op_kind in {"add", "mul"}
     dims = [d if isinstance(d, _d.Dim) else _make_constant_static_dim(d) for d in dims]
     if all(d.dimension is not None for d in dims):
         op = _BinOps[op_kind]
