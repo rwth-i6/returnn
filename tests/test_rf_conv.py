@@ -426,3 +426,22 @@ def test_avgpool1d_stride_padding_same():
             dyn_dim_max_sizes={time_dim: t},
             test_single_batch_entry=True,
         )
+
+
+def test_make_conv_out_spatial_dims_after_pad():
+    rf.select_backend_torch()
+    batch_dim = Dim(3, name="batch")
+    time1_dim = Dim(rf.convert_to_tensor([5, 6, 7], dims=[batch_dim], name="time1"))
+    time2_dim = Dim(rf.convert_to_tensor([20, 21, 22], dims=[batch_dim], name="time2"))
+    time3_dim = Dim(rf.convert_to_tensor([10, 11, 12], dims=[batch_dim], name="time3"))
+    in_spatial_dim = time1_dim + time2_dim + time3_dim
+    filter_size = 17
+    (out_spatial_dim,) = rf.make_conv_out_spatial_dims(
+        [in_spatial_dim], filter_size=filter_size, strides=1, padding="valid"
+    )
+    print("out_spatial_dim:", out_spatial_dim)
+    sizes = out_spatial_dim.dyn_size.numpy().tolist()
+    print("sizes:", sizes)
+    expected_sizes = (time1_dim.dyn_size + time2_dim.dyn_size + time3_dim.dyn_size - (filter_size - 1)).numpy().tolist()
+    print("expected_sizes:", expected_sizes)
+    assert sizes == expected_sizes
