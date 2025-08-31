@@ -6,6 +6,7 @@ or just rarely used attribs, such that we can save memory for the common case.
 from __future__ import annotations
 from typing import TYPE_CHECKING, Optional, Union, Any, Tuple, Sequence, MutableMapping, Dict, List, Set, Callable
 import weakref
+import operator
 
 from returnn.util.basic import Entity
 from returnn.util import basic as util
@@ -2411,16 +2412,36 @@ def _dim_or_const_equal(a: Union[Dim, int], b: Union[Dim, int]) -> bool:
         raise TypeError(f"unexpected a type {type(a)}")
 
 
+_BinOps = {
+    "add": operator.add,
+    "mul": operator.mul,
+    "sub": operator.sub,
+    "floordiv": operator.floordiv,
+    "truediv": operator.floordiv,
+    "ceildiv": lambda a, b: -(-a // b),
+}
+
+_BinOpStrs = {"add": "+", "mul": "*", "sub": "-", "floordiv": "//", "truediv": "/", "ceildiv": "/"}
+
+
 def _math_get_dim_via_bin_op(dims: Sequence[Union[Dim, int]], op_kind: str) -> Dim:
     assert op_kind in {"add", "mul"}
     dims = [d if isinstance(d, _d.Dim) else _make_constant_static_dim(d) for d in dims]
     if all(d.dimension is not None for d in dims):
-        dim_value = {"add": sum, "mul": util.prod}[op_kind](d.dimension for d in dims)
+        op = _BinOps[op_kind]
+        dim_value = dims[0].dimension
+        for d in dims[1:]:
+            dim_value = op(dim_value, d.dimension)
     else:
         dim_value = None
+    if all(d.is_constant_static_dim() for d in dims):
+        return _make_constant_static_dim(dim_value, kind=_get_merged_dim_kind(dims))
+    desc = _BinOpStrs[op_kind].join(_get_description(d) for d in dims)
+    if op_kind == "ceildiv":
+        desc = f"⌈{desc}⌉"
     return _d.Dim(
         kind=_get_merged_dim_kind(dims),
-        description={"add": "+", "mul": "*"}[op_kind].join(_get_description(d) for d in dims),
+        description=desc,
         dimension=dim_value,
         derived_from_op=Op(kind=op_kind, inputs=list(dims)),
         derived_from_tag=_representative_tag(dims),
