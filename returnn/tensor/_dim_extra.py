@@ -2258,7 +2258,7 @@ class _DimMixin:
         if cache_entry:
             cache_entry.complete_dyn_size()
             return cache_entry
-        res = _math_get_dim_via_bin_op([other, self], "truediv")
+        res = _math_get_dim_via_bin_op([self, other], "truediv_left")
         cache[cache_key] = res
         return res
 
@@ -2306,7 +2306,7 @@ class _DimMixin:
         if cache_entry:
             cache_entry.complete_dyn_size()
             return cache_entry
-        res = _math_get_dim_via_bin_op([other, self], "ceildiv")
+        res = _math_get_dim_via_bin_op([self, other], "ceildiv_left")
         cache[cache_key] = res
         return res
 
@@ -2418,10 +2418,21 @@ _BinOps = {
     "sub": operator.sub,
     "floordiv": operator.floordiv,
     "truediv": operator.floordiv,
+    "truediv_left": operator.floordiv,
     "ceildiv": lambda a, b: -(-a // b),
+    "ceildiv_left": lambda a, b: -(-a // b),
 }
 
-_BinOpStrs = {"add": "+", "mul": "*", "sub": "-", "floordiv": "//", "truediv": "/", "ceildiv": "/"}
+_BinOpStrs = {
+    "add": "+",
+    "mul": "*",
+    "sub": "-",
+    "floordiv": "//",
+    "truediv": "/",
+    "truediv_left": "/",
+    "ceildiv": "/",
+    "ceildiv_left": "/",
+}
 
 
 def _math_get_dim_via_bin_op(dims: Sequence[Union[Dim, int]], op_kind: str) -> Dim:
