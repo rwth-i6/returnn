@@ -2089,11 +2089,9 @@ class _DimMixin:
         if cache_entry:
             cache_entry.complete_dyn_size()
             return cache_entry
-        term = _OpLinearTerm.from_dim(self)
-        term.extend_add_sub_(other, kind="add", right=True)
-        dim = term.as_dim()
-        cache[cache_key] = dim
-        return dim
+        res = _math_get_dim_via_bin_op([self, other], "add")
+        cache[cache_key] = res
+        return res
 
     def __radd__(self: Dim, other):
         """
@@ -2109,11 +2107,9 @@ class _DimMixin:
         if cache_entry:
             cache_entry.complete_dyn_size()
             return cache_entry
-        term = _OpLinearTerm.from_dim(self)
-        term.extend_add_sub_(other, kind="add", right=False)
-        dim = term.as_dim()
-        cache[cache_key] = dim
-        return dim
+        res = _math_get_dim_via_bin_op([other, self], "add")
+        cache[cache_key] = res
+        return res
 
     def __sub__(self, other):
         """
@@ -2132,17 +2128,22 @@ class _DimMixin:
         """
         if isinstance(other, int) and other == 0:
             return self
+        if (
+            self.derived_from_op
+            and self.derived_from_op.kind == "add"
+            and len(self.derived_from_op.inputs) == 2
+            and _dim_or_const_equal(other, self.derived_from_op.inputs[1])
+        ):
+            return self.derived_from_op.inputs[0]
         cache_key = ("sub", other)
         cache = self.get_same_base()._make_extra().cache_dim_math
         cache_entry = cache.get(cache_key, None)
         if cache_entry:
             cache_entry.complete_dyn_size()
             return cache_entry
-        term = _OpLinearTerm.from_dim(self)
-        term.extend_add_sub_(other, kind="sub", right=True)
-        dim = term.as_dim()
-        cache[cache_key] = dim
-        return dim
+        res = self + (-other)
+        cache[cache_key] = res
+        return res
 
     def sub_left(self: Dim, other):
         """
@@ -2152,17 +2153,22 @@ class _DimMixin:
         """
         if isinstance(other, int) and other == 0:
             return self
+        if (
+            self.derived_from_op
+            and self.derived_from_op.kind == "add"
+            and len(self.derived_from_op.inputs) == 2
+            and _dim_or_const_equal(other, self.derived_from_op.inputs[0])
+        ):
+            return self.derived_from_op.inputs[1]
         cache_key = ("sub_left", other)
         cache = self.get_same_base()._make_extra().cache_dim_math
         cache_entry = cache.get(cache_key, None)
         if cache_entry:
             cache_entry.complete_dyn_size()
             return cache_entry
-        term = _OpLinearTerm.from_dim(self)
-        term.extend_add_sub_(other, kind="sub", right=False)
-        dim = term.as_dim()
-        cache[cache_key] = dim
-        return dim
+        res = (-other) + self
+        cache[cache_key] = res
+        return res
 
     def __mul__(self: Dim, other):
         """
@@ -2177,11 +2183,9 @@ class _DimMixin:
         if cache_entry:
             cache_entry.complete_dyn_size()
             return cache_entry
-        term = _OpLinearTerm.from_dim(self)
-        term.extend_mul_div_(other, kind="mul", right=True)
-        dim = term.as_dim()
-        cache[cache_key] = dim
-        return dim
+        res = _math_get_dim_via_bin_op([self, other], "mul")
+        cache[cache_key] = res
+        return res
 
     def __rmul__(self: Dim, other):
         """
@@ -2196,11 +2200,9 @@ class _DimMixin:
         if cache_entry:
             cache_entry.complete_dyn_size()
             return cache_entry
-        term = _OpLinearTerm.from_dim(self)
-        term.extend_mul_div_(other, kind="mul", right=False)
-        dim = term.as_dim()
-        cache[cache_key] = dim
-        return dim
+        res = _math_get_dim_via_bin_op([other, self], "mul")
+        cache[cache_key] = res
+        return res
 
     def __floordiv__(self: Dim, other):
         """
@@ -2209,17 +2211,22 @@ class _DimMixin:
         """
         if isinstance(other, int) and other == 1:
             return self
+        if (
+            self.derived_from_op
+            and self.derived_from_op.kind == "mul"
+            and len(self.derived_from_op.inputs) == 2
+            and _dim_or_const_equal(other, self.derived_from_op.inputs[1])
+        ):
+            return self.derived_from_op.inputs[0]
         cache_key = ("floordiv", other)
         cache = self.get_same_base()._make_extra().cache_dim_math
         cache_entry = cache.get(cache_key, None)
         if cache_entry:
             cache_entry.complete_dyn_size()
             return cache_entry
-        term = _OpLinearTerm.from_dim(self)
-        term.extend_mul_div_(other, kind="floordiv", right=True)
-        dim = term.as_dim()
-        cache[cache_key] = dim
-        return dim
+        res = _math_get_dim_via_bin_op([self, other], "floordiv")
+        cache[cache_key] = res
+        return res
 
     def __truediv__(self, other):
         """
@@ -2237,17 +2244,22 @@ class _DimMixin:
         """
         if isinstance(other, int) and other == 1:
             return self
+        if (
+            self.derived_from_op
+            and self.derived_from_op.kind == "mul"
+            and len(self.derived_from_op.inputs) == 2
+            and _dim_or_const_equal(other, self.derived_from_op.inputs[0])
+        ):
+            return self.derived_from_op.inputs[1]
         cache_key = ("truediv_left", other)
         cache = self.get_same_base()._make_extra().cache_dim_math
         cache_entry = cache.get(cache_key, None)
         if cache_entry:
             cache_entry.complete_dyn_size()
             return cache_entry
-        term = _OpLinearTerm.from_dim(self)
-        term.extend_mul_div_(other, kind="truediv", right=False)
-        dim = term.as_dim()
-        cache[cache_key] = dim
-        return dim
+        res = _math_get_dim_via_bin_op([other, self], "truediv")
+        cache[cache_key] = res
+        return res
 
     def div_right(self: Dim, other):
         """
@@ -2256,17 +2268,22 @@ class _DimMixin:
         """
         if isinstance(other, int) and other == 1:
             return self
+        if (
+            self.derived_from_op
+            and self.derived_from_op.kind == "mul"
+            and len(self.derived_from_op.inputs) == 2
+            and _dim_or_const_equal(other, self.derived_from_op.inputs[1])
+        ):
+            return self.derived_from_op.inputs[0]
         cache_key = ("truediv", other)
         cache = self.get_same_base()._make_extra().cache_dim_math
         cache_entry = cache.get(cache_key, None)
         if cache_entry:
             cache_entry.complete_dyn_size()
             return cache_entry
-        term = _OpLinearTerm.from_dim(self)
-        term.extend_mul_div_(other, kind="truediv", right=True)
-        dim = term.as_dim()
-        cache[cache_key] = dim
-        return dim
+        res = _math_get_dim_via_bin_op([self, other], "truediv")
+        cache[cache_key] = res
+        return res
 
     def ceildiv_left(self: Dim, other):
         """
@@ -2275,17 +2292,22 @@ class _DimMixin:
         """
         if isinstance(other, int) and other == 1:
             return self
+        if (
+            self.derived_from_op
+            and self.derived_from_op.kind == "mul"
+            and len(self.derived_from_op.inputs) == 2
+            and _dim_or_const_equal(other, self.derived_from_op.inputs[0])
+        ):
+            return self.derived_from_op.inputs[1]
         cache_key = ("ceildiv_left", other)
         cache = self.get_same_base()._make_extra().cache_dim_math
         cache_entry = cache.get(cache_key, None)
         if cache_entry:
             cache_entry.complete_dyn_size()
             return cache_entry
-        term = _OpLinearTerm.from_dim(self)
-        term.extend_mul_div_(other, kind="ceildiv", right=False)
-        dim = term.as_dim()
-        cache[cache_key] = dim
-        return dim
+        res = _math_get_dim_via_bin_op([other, self], "ceildiv")
+        cache[cache_key] = res
+        return res
 
     def ceildiv_right(self: Dim, other):
         """
@@ -2294,17 +2316,22 @@ class _DimMixin:
         """
         if isinstance(other, int) and other == 1:
             return self
+        if (
+            self.derived_from_op
+            and self.derived_from_op.kind == "mul"
+            and len(self.derived_from_op.inputs) == 2
+            and _dim_or_const_equal(other, self.derived_from_op.inputs[1])
+        ):
+            return self.derived_from_op.inputs[0]
         cache_key = ("ceildiv", other)
         cache = self.get_same_base()._make_extra().cache_dim_math
         cache_entry = cache.get(cache_key, None)
         if cache_entry:
             cache_entry.complete_dyn_size()
             return cache_entry
-        term = _OpLinearTerm.from_dim(self)
-        term.extend_mul_div_(other, kind="ceildiv", right=True)
-        dim = term.as_dim()
-        cache[cache_key] = dim
-        return dim
+        res = _math_get_dim_via_bin_op([self, other], "ceildiv")
+        cache[cache_key] = res
+        return res
 
     def __neg__(self):
         """
@@ -2347,6 +2374,7 @@ def _make_constant_static_dim(value, kind=None):
     :param Entity|None kind:
     :rtype: Dim
     """
+    assert isinstance(value, int)
     return _d.Dim(
         dimension=value,
         kind=kind or DimTypes.Unspecified,
@@ -2356,8 +2384,36 @@ def _make_constant_static_dim(value, kind=None):
     )
 
 
-def _math_get_dim_via_bin_op(dims: Sequence[Dim], op_kind: str) -> Dim:
+def _dim_or_const_equal(a: Union[Dim, int], b: Union[Dim, int]) -> bool:
+    if isinstance(a, int):
+        if isinstance(b, int):
+            return a == b
+        elif isinstance(b, _d.Dim):
+            return a == b.dimension and b.is_constant_static_dim()
+        else:
+            raise TypeError(f"unexpected b type {type(b)}")
+    elif isinstance(a, _d.Dim):
+        if a.is_constant_static_dim():
+            if isinstance(b, int):
+                return a.dimension == b
+            elif isinstance(b, _d.Dim):
+                return a.dimension == b.dimension and b.is_constant_static_dim()
+            else:
+                raise TypeError(f"unexpected b type {type(b)}")
+        else:
+            if isinstance(b, int):
+                return False
+            elif isinstance(b, _d.Dim):
+                return a == b
+            else:
+                raise TypeError(f"unexpected b type {type(b)}")
+    else:
+        raise TypeError(f"unexpected a type {type(a)}")
+
+
+def _math_get_dim_via_bin_op(dims: Sequence[Union[Dim, int]], op_kind: str) -> Dim:
     assert op_kind in {"add", "mul"}
+    dims = [d if isinstance(d, _d.Dim) else _make_constant_static_dim(d) for d in dims]
     if all(d.dimension is not None for d in dims):
         dim_value = {"add": sum, "mul": util.prod}[op_kind](d.dimension for d in dims)
     else:
@@ -2423,445 +2479,6 @@ def _get_description(dim, brackets=True):
                 return "(%s)" % dim.description
         return dim.description
     return "unnamed_%s_dim%s" % (dim.kind, dim.dimension if dim.dimension is not None else "?")
-
-
-class _OpMultTerm:
-    """
-    represents sth like a * b * c
-    """
-
-    @classmethod
-    def from_dim(cls, dim: Dim) -> _OpMultTerm:
-        """
-        :param dim:
-        :return: op mult term
-        """
-        dim = dim.get_same_base()
-        if dim.dimension == 1 and dim.is_constant_static_dim():
-            return cls.one()
-        if dim.derived_from_op and dim.derived_from_op.kind == "mul":
-            return cls(list(dim.derived_from_op.inputs))
-        return cls([dim])
-
-    @classmethod
-    def from_dim_factors(cls, dims: List[Dim]) -> _OpMultTerm:
-        """from dim factors"""
-        res = cls.one()
-        for d in dims:
-            res.extend_mul_div_(d, kind="mul", right=True)
-        return res
-
-    @classmethod
-    def one(cls) -> _OpMultTerm:
-        """1"""
-        return cls([])
-
-    def __init__(self, terms: List[Dim]):
-        self.terms = terms
-
-    def __hash__(self):
-        return hash(tuple(self.terms))
-
-    def __eq__(self, other):
-        """
-        :param _OpMultTerm other:
-        """
-        if isinstance(other, _OpMultTerm):
-            return self.terms == other.terms
-        return False
-
-    def __ne__(self, other):
-        return not self.__eq__(other)
-
-    def __repr__(self):
-        return "Dim._OpMultTerm(%r)" % (self.terms,)
-
-    @property
-    def dimension(self) -> Optional[int]:
-        """static dim or None"""
-        dim = 1
-        for part in self.terms:
-            if part.dimension is None:
-                return None
-            dim *= part.dimension
-        return dim
-
-    def base_term(self) -> Dim:
-        """base term (Dim)"""
-        assert self.terms
-        return self.terms[-1]
-
-    def is_one(self) -> bool:
-        """is 1"""
-        return not self.terms
-
-    def is_constant_static_dim(self) -> bool:
-        """is constant static dim"""
-        if not self.terms:
-            return True
-        return all(term.is_constant_static_dim() for term in self.terms)
-
-    def copy(self) -> _OpMultTerm:
-        """copy"""
-        return _OpMultTerm(list(self.terms))
-
-    def negative(self) -> _OpMultTerm:
-        """negative"""
-        if self.terms and self.terms[0].is_constant_static_dim() and self.terms[0].dimension == -1:
-            return _OpMultTerm(self.terms[1:])
-        res = self.copy()
-        res.extend_mul_div_(_make_constant_static_dim(-1), kind="mul", right=False)
-        return res
-
-    def divisible(self, other, right):
-        """
-        :param Dim other:
-        :param bool right:
-        :return: whether we can divide other, without remainder
-        :rtype: bool
-        """
-        if not self.terms:
-            return False
-        if other.derived_from_op and other.derived_from_op.kind == "mul":
-            tmp = self.copy()
-            for term in other.derived_from_op.inputs if right else reversed(other.derived_from_op.inputs):
-                if not tmp.divisible(term, right=right):
-                    return False
-                tmp.extend_mul_div_(term, kind="truediv", right=right)
-            return True
-        most_recent_term = self.terms[-1 if right else 0]
-        if other == most_recent_term:
-            return True
-        if most_recent_term.dimension is not None and other.dimension is not None:
-            if most_recent_term.dimension % other.dimension == 0:
-                return True
-        return False
-
-    def can_simplify(self, other, kind, right):
-        """
-        :param Dim other:
-        :param str kind:
-        :param bool right:
-        :return: whether we can simplify when applying this operation
-        :rtype: bool
-        """
-        if other.derived_from_op and other.derived_from_op.kind == "mul":
-            tmp = self.copy()
-            for term in other.derived_from_op.inputs if right else reversed(other.derived_from_op.inputs):
-                if not tmp.can_simplify(term, kind=kind, right=right):
-                    return False
-                tmp.extend_mul_div_(term, kind=kind, right=right)
-            return True
-        idx = self._simplify_term_idx(other, kind=kind, right=right)
-        return idx is not None
-
-    def _simplify_term_idx(self, other, kind, right):
-        """
-        :param Dim other:
-        :param str kind:
-        :param bool right:
-        :return: index of term to simplify
-        :rtype: int|None
-        """
-        if not self.terms:
-            return None
-        if kind == "mul":
-            # We want (b * a) // b != a.
-            # However, we want h * (2 * a // h) == 2 * a.
-            # So, for `mul`, and only for `mul`, check all terms, whether we can simplify some division-term.
-            for i, term in reversed(list(enumerate(self.terms))) if right else enumerate(self.terms):
-                assert isinstance(term, _d.Dim)
-                if term.derived_from_op:
-                    if term.derived_from_op.kind == "truediv_" + ("right" if right else "left"):
-                        if term.derived_from_op.inputs[-1] == other:
-                            return i
-                if other.derived_from_op:
-                    if other.derived_from_op.kind == "truediv_" + ("right" if not right else "left"):
-                        if other.derived_from_op.inputs[-1] == term:
-                            return i
-                if term.is_constant_static_dim() and other.is_constant_static_dim():
-                    return i
-        # For the last/first term, extra checks.
-        i = len(self.terms) - 1 if right else 0
-        term = self.terms[i]
-        if kind.endswith("div") and other == term:
-            return i
-        op_kind = kind + "_" + ("right" if right else "left")
-        if term.derived_from_op and term.derived_from_op.kind == op_kind:
-            return i
-        return None
-
-    def extend_mul_div_(self, other, kind, right):
-        """
-        :param Dim other:
-        :param str kind:
-        :param bool right:
-        """
-        assert kind in {"mul", "floordiv", "truediv", "ceildiv"}
-        if other.is_constant_static_dim() and other.dimension == 1:
-            return
-        if not self.terms:
-            if kind == "mul":
-                self.terms.append(other)
-            elif kind.endswith("div"):
-                self.terms = [_OpMultTerm.new_div_dim(self.as_dim(), other, kind=kind, right=right)]
-            return
-        if other.derived_from_op and other.derived_from_op.kind == "mul":
-            for term in other.derived_from_op.inputs if right else reversed(other.derived_from_op.inputs):
-                self.extend_mul_div_(term, kind=kind, right=right)
-            return
-        idx = self._simplify_term_idx(other, kind=kind, right=right)
-        if idx is not None:
-            term = self.terms[idx]
-            assert isinstance(term, _d.Dim)
-            if kind.endswith("div") and other == term:
-                self.terms.pop(idx)
-                return
-            if kind == "mul" and term.derived_from_op:
-                if term.derived_from_op.kind == "truediv_" + ("right" if right else "left"):
-                    if term.derived_from_op.inputs[-1] == other:
-                        self.terms[idx] = term.derived_from_op.inputs[0]
-                        return
-            if kind == "mul" and other.derived_from_op:
-                if other.derived_from_op.kind == "truediv_" + ("right" if not right else "left"):
-                    if other.derived_from_op.inputs[-1] == term:
-                        self.terms[idx] = other.derived_from_op.inputs[0]
-                        return
-            if term.is_constant_static_dim() and other.is_constant_static_dim():
-                if kind == "mul":
-                    if term.dimension * other.dimension == 1:
-                        self.terms.pop(idx)
-                        return
-                    self.terms[idx] = _make_constant_static_dim(term.dimension * other.dimension, kind=term.kind)
-                    return
-                if kind.endswith("div") and term.dimension % other.dimension == 0:
-                    self.terms[idx] = _make_constant_static_dim(term.dimension // other.dimension, kind=term.kind)
-                    return
-                # Fallback with generic handling.
-            op_kind = kind + "_" + ("right" if right else "left")
-            if kind.endswith("div") and term.derived_from_op and term.derived_from_op.kind == op_kind:
-                numerator = term.derived_from_op.inputs[0]
-                denominator = term.derived_from_op.inputs[1]
-                self.terms[idx] = _OpMultTerm.new_div_dim(numerator, denominator * other, kind=kind, right=right)
-                return
-        if kind.endswith("div"):
-            self.terms = [_OpMultTerm.new_div_dim(self.as_dim(), other, kind=kind, right=right)]
-            return
-        if kind == "mul":
-            if right:
-                self.terms.append(other)
-            else:
-                self.terms.insert(0, other)
-            return
-        assert False
-
-    @classmethod
-    def new_div_dim(cls, numerator, denominator, kind, right):
-        """
-        :param Dim numerator:
-        :param Dim denominator:
-        :param str kind: "floordiv" or "ceildiv" or "truediv"
-        :param bool right:
-        :rtype: Dim
-        """
-        dim_value = None
-        a = numerator.dimension
-        b = denominator.dimension
-        if a is not None and b is not None:
-            if kind == "floordiv":
-                dim_value = a // b
-            elif kind == "ceildiv":
-                dim_value = -(-a // b)
-                if a % b == 0 and right:
-                    kind = "floordiv"  # for nicer description, and does not matter
-            elif kind == "truediv":
-                if a % b != 0:
-                    raise ValueError(
-                        "%s truediv %s only allowed if the result is an integer" % (numerator, denominator)
-                    )
-                dim_value = a // b
-                if right:
-                    kind = "floordiv"  # for nicer description, and does not matter
-            else:
-                raise ValueError("invalid kind %r" % (kind,))
-        # noinspection PyProtectedMember
-        cache, cache_key, res = numerator._cache_dim_math_get(kind + ("" if right else "_left"), denominator)
-        if res:
-            return res
-        if kind == "floordiv" and right:
-            description = "%s//%s" % (_get_description(numerator), _get_description(denominator))
-        elif kind == "ceildiv" and right:
-            description = "⌈%s/%s⌉" % (_get_description(numerator), _get_description(denominator))
-        else:
-            description = "%s_%s(%s, %s)" % (
-                kind,
-                "right" if right else "left",
-                _get_description(numerator, brackets=False),
-                _get_description(denominator, brackets=False),
-            )
-        op_kind = kind
-        if a is not None and b is not None and a % b == 0:
-            op_kind = "truediv"  # makes some other checks simpler
-        op_kind += "_" + ("right" if right else "left")
-        res = _d.Dim(
-            description=description,
-            kind=numerator.kind,
-            dimension=dim_value,
-            derived_from_op=Op(kind=op_kind, inputs=[numerator, denominator]),
-            derived_from_tag=numerator,
-        )
-        cache[cache_key] = res
-        return res
-
-    def as_dim(self):
-        """
-        :rtype: Dim
-        """
-        if self.is_one():
-            return _make_constant_static_dim(1)
-        if len(self.terms) == 1:
-            return self.terms[0]
-        return _math_get_dim_via_bin_op(self.terms, "mul")
-
-
-class _OpLinearTerm:
-    """
-    Linear combination of :class:`_OpMultTerm`.
-    Represents sth like a * b + c of :class:`Dim`.
-    """
-
-    @classmethod
-    def from_dim(cls, dim: Dim) -> _OpLinearTerm:
-        """from dim"""
-        res = cls.zero()
-        res.extend_add_sub_(dim, kind="add", right=True)
-        return res
-
-    @classmethod
-    def zero(cls) -> _OpLinearTerm:
-        """0"""
-        return _OpLinearTerm([])
-
-    def __init__(self, terms: List[_OpMultTerm]):
-        self.terms = terms
-
-    def __hash__(self):
-        return hash(tuple(self.terms))
-
-    def __eq__(self, other):
-        if isinstance(other, _OpLinearTerm):
-            return self.terms == other.terms
-        return False
-
-    def __ne__(self, other):
-        return not self.__eq__(other)
-
-    def as_dim(self) -> Dim:
-        """as dim"""
-        if self.is_zero():
-            return _make_constant_static_dim(0)
-        if len(self.terms) == 1:
-            return self.terms[0].as_dim()
-        return _math_get_dim_via_bin_op([operand.as_dim() for operand in self.terms], "add")
-
-    def __repr__(self):
-        return "Dim._OpLinearTerm(%r)" % (self.terms,)
-
-    def is_zero(self):
-        """
-        :rtype: bool
-        """
-        return not self.terms
-
-    def extend_add_sub_(self, other, kind, right):
-        """
-        :param Dim|int other:
-        :param str kind: "add" or "sub"
-        :param bool right: or left. right means self + other, left means other + self
-        """
-        assert kind in {"add", "sub"}
-        other = self._make_dim(other, kind=kind)
-        if other.is_constant_static_dim() and other.dimension == 0:
-            return
-        if other.derived_from_op and other.derived_from_op.kind == "add":
-            for other_ in other.derived_from_op.inputs if right else reversed(other.derived_from_op.inputs):
-                self.extend_add_sub_(other_, kind=kind, right=right)
-            return
-        term = _OpMultTerm.from_dim(other)
-        neg_term = term.negative()
-        if kind == "sub":
-            term, neg_term = neg_term, term
-        most_recent_term = self.terms[-1 if right else 0] if self.terms else None
-        if most_recent_term:
-            if most_recent_term == neg_term:
-                self.terms.pop(-1 if right else 0)
-                return
-            if most_recent_term.is_constant_static_dim() and term.is_constant_static_dim():
-                self.terms[-1 if right else 0] = _OpMultTerm.from_dim(
-                    _make_constant_static_dim(most_recent_term.dimension + term.dimension, kind=other.kind)
-                )
-                return
-            if most_recent_term.terms and term.terms and most_recent_term.terms[-1] == term.terms[-1]:
-                # Merge terms
-                a = _OpMultTerm.from_dim_factors(most_recent_term.terms[:-1]).as_dim()
-                b = _OpMultTerm.from_dim_factors(term.terms[:-1]).as_dim()
-                if a.is_constant_static_dim() and not b.is_constant_static_dim():
-                    a = a.dimension
-                elif b.is_constant_static_dim() and not a.is_constant_static_dim():
-                    b = b.dimension
-                res = _OpMultTerm.from_dim((a + b) if right else (b + a))
-                res.extend_mul_div_(term.terms[-1], kind="mul", right=True)
-                self.terms[-1 if right else 0] = res
-                return
-        if right:
-            self.terms.append(term)
-        else:
-            self.terms.insert(0, term)
-
-    def extend_mul_div_(self, other, kind, right):
-        """
-        :param Dim|int other:
-        :param str kind: "mul" or "ceildiv"
-        :param bool right: or left. right means self * other, left means other * self
-        """
-        assert kind in {"mul", "floordiv", "truediv", "ceildiv"}
-        other = self._make_dim(other, kind=kind)
-        if kind == "mul" and right:
-            if not all(term.can_simplify(other, kind=kind, right=right) for term in self.terms):
-                # Do it the other way around
-                self.terms, other = _OpLinearTerm.from_dim(other).terms, self.as_dim()
-                right = False
-        if other.is_constant_static_dim() and other.dimension == 1:
-            return
-        if kind.endswith("div") and len(self.terms) >= 2:
-            if any(not term.divisible(other, right=right) for term in self.terms):
-                self.terms = [
-                    _OpMultTerm.from_dim(_OpMultTerm.new_div_dim(self.as_dim(), other, kind=kind, right=right))
-                ]
-                return
-        for term in self.terms:
-            term.extend_mul_div_(other, kind=kind, right=right)
-
-    def _make_dim(self, other, kind):
-        """
-        :param Dim|int other:
-        :param str kind:
-        :rtype: Dim
-        """
-        if isinstance(other, int):
-            base_tag = self.representative_tag()
-            return _make_constant_static_dim(other, kind=base_tag.kind if base_tag else None)
-        elif isinstance(other, _d.Dim):
-            return other.get_same_base()
-        else:
-            raise TypeError("%s %s %s invalid for type %s" % (self, kind, other, type(other)))
-
-    def representative_tag(self):
-        """
-        :rtype: Dim|None
-        """
-        terms = [_representative_tag(term.terms) for term in self.terms]
-        return _representative_tag([term for term in terms if term])
 
 
 def _get_merged_dim_kind(dim_tags: Sequence[Dim]) -> Entity:
