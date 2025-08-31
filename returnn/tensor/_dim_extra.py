@@ -5,7 +5,6 @@ or just rarely used attribs, such that we can save memory for the common case.
 
 from __future__ import annotations
 from typing import TYPE_CHECKING, Optional, Union, Any, Tuple, Sequence, MutableMapping, Dict, List, Set, Callable
-import operator
 import weakref
 
 from returnn.util.basic import Entity
@@ -2357,30 +2356,19 @@ def _make_constant_static_dim(value, kind=None):
     )
 
 
-def _math_get_dim_via_bin_op(a: Dim, b: Dim, op_kind: str) -> Dim:
+def _math_get_dim_via_bin_op(dims: Sequence[Dim], op_kind: str) -> Dim:
     assert op_kind in {"add", "mul"}
-    op_kind_ = op_kind
-    a_, b_ = a, b
-    if a.is_constant_static_dim() and not b.is_constant_static_dim():
-        op_kind_ = op_kind + "_left"
-        a_, b_ = b, a
-    # noinspection PyProtectedMember
-    cache, cache_key, res = a_._cache_dim_math_get(op_kind_, b_)
-    if res:
-        return res
-    if a.dimension is not None and b.dimension is not None:
-        dim_value = getattr(operator, op_kind)(a.dimension, b.dimension)
+    if all(d.dimension is not None for d in dims):
+        dim_value = {"add": sum, "mul": util.prod}[op_kind](d.dimension for d in dims)
     else:
         dim_value = None
-    res = _d.Dim(
-        kind=_get_merged_dim_kind((a, b)),
-        description=_get_description(a) + {"add": "+", "mul": "*"}[op_kind] + _get_description(b),
+    return _d.Dim(
+        kind=_get_merged_dim_kind(dims),
+        description={"add": "+", "mul": "*"}[op_kind].join(_get_description(d) for d in dims),
         dimension=dim_value,
-        derived_from_op=Op(kind=op_kind, inputs=[a, b]),
-        derived_from_tag=_representative_tag((a, b)),
+        derived_from_op=Op(kind=op_kind, inputs=list(dims)),
+        derived_from_tag=_representative_tag(dims),
     )
-    cache[cache_key] = res
-    return res
 
 
 class Op:
@@ -2733,10 +2721,7 @@ class _OpMultTerm:
             return _make_constant_static_dim(1)
         if len(self.terms) == 1:
             return self.terms[0]
-        res = self.terms[0]
-        for operand in self.terms[1:]:
-            res = _math_get_dim_via_bin_op(res, operand, "mul")
-        return res
+        return _math_get_dim_via_bin_op(self.terms, "mul")
 
 
 class _OpLinearTerm:
@@ -2777,10 +2762,7 @@ class _OpLinearTerm:
             return _make_constant_static_dim(0)
         if len(self.terms) == 1:
             return self.terms[0].as_dim()
-        res = self.terms[0].as_dim()
-        for operand in self.terms[1:]:
-            res = _math_get_dim_via_bin_op(res, operand.as_dim(), "add")
-        return res
+        return _math_get_dim_via_bin_op([operand.as_dim() for operand in self.terms], "add")
 
     def __repr__(self):
         return "Dim._OpLinearTerm(%r)" % (self.terms,)
@@ -2882,12 +2864,7 @@ class _OpLinearTerm:
         return _representative_tag([term for term in terms if term])
 
 
-def _get_merged_dim_kind(dim_tags):
-    """
-    :param list[Dim]|tuple[Dim] dim_tags:
-    :return: dim kind
-    :rtype: Entity
-    """
+def _get_merged_dim_kind(dim_tags: Sequence[Dim]) -> Entity:
     if any(tag.is_batch_dim() for tag in dim_tags):
         return DimTypes.Batch
     elif any(tag.is_feature_dim() for tag in dim_tags):
