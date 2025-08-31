@@ -5,8 +5,8 @@ or just rarely used attribs, such that we can save memory for the common case.
 
 from __future__ import annotations
 from typing import TYPE_CHECKING, Optional, Union, Any, Tuple, Sequence, MutableMapping, Dict, List, Set, Callable
-import weakref
 import operator
+import weakref
 
 from returnn.util.basic import Entity
 from returnn.util import basic as util
