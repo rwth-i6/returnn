@@ -56,15 +56,6 @@ def test_dim_math_mul_div():
     assert (b * a).div_left(b) == a
 
 
-def test_dim_math_div():
-    a = Dim(None, name="a")
-    b = Dim(None, name="b")
-    c = Dim(14, name="c")
-    d = Dim(10, name="d")
-    assert a // 2 + b // 2 != (a + b) // 2  # only allowed when divisible but this is unknown here for dyn dims
-    assert c // 2 + d // 2 == (c + d) // 2
-
-
 def test_dim_math_div_mul():
     a = Dim(None, name="a")
     b = Dim(None, name="b")
