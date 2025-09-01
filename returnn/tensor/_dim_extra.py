@@ -2582,7 +2582,7 @@ def _math_find_matching_mult(start: Dim, other: Union[int, Dim], *, right: bool)
     return None
 
 
-_DivKindToMeth = {
+_DivKindToMeth: Dict[str, Callable[[Dim, Dim], Dim]] = {
     "truediv": _DimMixin.div_right,
     "truediv_left": _DimMixin.div_left,
     "ceildiv": _DimMixin.ceildiv_right,
