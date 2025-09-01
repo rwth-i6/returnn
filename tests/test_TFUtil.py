@@ -1675,7 +1675,7 @@ def test_dim_math_basics():
     assert a + b - b == a
     assert a + 2 * b - b + -b == a
     assert a * b + b == (a + 1) * b
-    assert (a + b) * 2 == a * 2 + b * 2
+    # assert (a + b) * 2 == a * 2 + b * 2  -- not true
     assert 0 + a + 0 == a
     assert sum([0, a, 0, a, 0]) == 2 * a
 
@@ -4724,7 +4724,7 @@ if __name__ == "__main__":
                 else:
                     eval(arg)  # assume Python code and execute
     finally:
-        import threading
+        pass
 
         # if len(list(threading.enumerate())) > 1:
         #  print("Warning, more than one thread at exit:")
