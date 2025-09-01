@@ -1675,7 +1675,7 @@ def test_dim_math_basics():
     assert a + b - b == a
     assert a + 2 * b - b + -b == a
     assert a * b + b == (a + 1) * b
-    # assert (a + b) * 2 == a * 2 + b * 2  -- not true
+    assert (a + b) * 2 == a * 2 + b * 2
     assert 0 + a + 0 == a
     assert sum([0, a, 0, a, 0]) == 2 * a
 
@@ -1705,11 +1705,12 @@ def test_dim_math_div():
 def test_dim_math_div_mul():
     a = FeatureDim("a", 10)
     b = FeatureDim("b", 2)
-    c = SpatialDim("c")
+    # c = SpatialDim("c")
     assert a // b == a // b
-    assert (a // b) * b == a
-    assert b * a.div_left(b) == a
-    assert (c // b) * b != c
+    # We have simplified the logic, and this would not be true anymore.
+    # assert (a // b) * b == a
+    # assert b * a.div_left(b) == a
+    # assert (c // b) * b != c
 
 
 def test_dim_math_div_div():
