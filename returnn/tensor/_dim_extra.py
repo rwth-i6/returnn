@@ -2180,15 +2180,21 @@ class _DimMixin:
         :param Dim|int other:
         :rtype: Dim
         """
-        if _is_const_dim_value(other, 1):
+        if isinstance(other, _d.Dim) and other.is_constant_static_dim():
+            other = other.dimension  # makes matching easier
+        if isinstance(other, int) and other == 1:
             return self
+        if self.is_constant_static_dim() and isinstance(other, _d.Dim):
+            return self.dimension * other  # use rmul
         cache_key = ("mul", other)
         cache = self.get_same_base()._make_extra().cache_dim_math
         cache_entry = cache.get(cache_key, None)
         if cache_entry:
             cache_entry.complete_dyn_size()
             return cache_entry
-        res = _math_get_dim_via_bin_op([self, other], "mul")
+        res = _math_find_matching_mult(start=self, right=True, other=other)
+        if not res:
+            res = _math_get_dim_via_bin_op([self, other], "mul")
         cache[cache_key] = res
         return res
 
@@ -2205,7 +2211,9 @@ class _DimMixin:
         if cache_entry:
             cache_entry.complete_dyn_size()
             return cache_entry
-        res = _math_get_dim_via_bin_op([other, self], "mul")
+        res = _math_find_matching_mult(start=self, right=False, other=other)
+        if not res:
+            res = _math_get_dim_via_bin_op([other, self], "mul")
         cache[cache_key] = res
         return res
 
@@ -2540,6 +2548,18 @@ class _MathFindMatchingAdditive:
             cur = op.inputs[1 if self.right else 0]
             hist = op.inputs[0 if self.right else 1]
             history.append(hist)
+
+
+def _math_find_matching_mult(start: Dim, other: Union[int, Dim], *, right: bool) -> Optional[Dim]:
+    if (isinstance(other, int) or other.is_constant_static_dim()) and start.is_constant_static_dim():
+        return _math_get_dim_via_bin_op([start, other] if right else [other, start], "mul")
+    c_op = start.derived_from_op
+    if c_op and c_op.kind == "mul" and len(c_op.inputs) == 2:
+        if right:
+            return c_op.inputs[0] * (c_op.inputs[1] * other)
+        else:
+            return (other * c_op.inputs[0]) * c_op.inputs[1]
+    return None
 
 
 class Op:
