@@ -2203,7 +2203,9 @@ class _DimMixin:
         :param Dim|int other:
         :rtype: Dim
         """
-        if _is_const_dim_value(other, 1):
+        if isinstance(other, _d.Dim) and other.is_constant_static_dim():
+            other = other.dimension  # makes matching easier
+        if isinstance(other, int) and other == 1:
             return self
         cache_key = ("mul_left", other)
         cache = self.get_same_base()._make_extra().cache_dim_math
@@ -2222,7 +2224,9 @@ class _DimMixin:
         :param Dim|int other:
         :rtype: Dim
         """
-        if _is_const_dim_value(other, 1):
+        if isinstance(other, _d.Dim) and other.is_constant_static_dim():
+            other = other.dimension  # makes matching easier
+        if isinstance(other, int) and other == 1:
             return self
         if (
             self.derived_from_op
@@ -2237,7 +2241,9 @@ class _DimMixin:
         if cache_entry:
             cache_entry.complete_dyn_size()
             return cache_entry
-        res = _math_get_dim_via_bin_op([self, other], "floordiv")
+        res = _math_find_matching_div(start=self, right=True, other=other, kind="floordiv")
+        if not res:
+            res = _math_get_dim_via_bin_op([self, other], "floordiv")
         cache[cache_key] = res
         return res
 
@@ -2246,8 +2252,6 @@ class _DimMixin:
         :param Dim|int other:
         :rtype: Dim
         """
-        if isinstance(other, int) and other == 1:
-            return self
         return self.div_right(other)
 
     def div_left(self: Dim, other):
@@ -2255,7 +2259,9 @@ class _DimMixin:
         :param Dim|int other:
         :rtype: Dim
         """
-        if _is_const_dim_value(other, 1):
+        if isinstance(other, _d.Dim) and other.is_constant_static_dim():
+            other = other.dimension  # makes matching easier
+        if isinstance(other, int) and other == 1:
             return self
         if (
             self.derived_from_op
@@ -2270,7 +2276,9 @@ class _DimMixin:
         if cache_entry:
             cache_entry.complete_dyn_size()
             return cache_entry
-        res = _math_get_dim_via_bin_op([self, other], "truediv_left")
+        res = _math_find_matching_div(start=self, right=True, other=other, kind="truediv_left")
+        if not res:
+            res = _math_get_dim_via_bin_op([self, other], "truediv_left")
         cache[cache_key] = res
         return res
 
@@ -2279,7 +2287,9 @@ class _DimMixin:
         :param Dim|int other:
         :rtype: Dim
         """
-        if _is_const_dim_value(other, 1):
+        if isinstance(other, _d.Dim) and other.is_constant_static_dim():
+            other = other.dimension  # makes matching easier
+        if isinstance(other, int) and other == 1:
             return self
         if (
             self.derived_from_op
@@ -2294,7 +2304,9 @@ class _DimMixin:
         if cache_entry:
             cache_entry.complete_dyn_size()
             return cache_entry
-        res = _math_get_dim_via_bin_op([self, other], "truediv")
+        res = _math_find_matching_div(start=self, right=True, other=other, kind="truediv")
+        if not res:
+            res = _math_get_dim_via_bin_op([self, other], "truediv")
         cache[cache_key] = res
         return res
 
@@ -2303,7 +2315,9 @@ class _DimMixin:
         :param Dim|int other:
         :rtype: Dim
         """
-        if _is_const_dim_value(other, 1):
+        if isinstance(other, _d.Dim) and other.is_constant_static_dim():
+            other = other.dimension  # makes matching easier
+        if isinstance(other, int) and other == 1:
             return self
         if (
             self.derived_from_op
@@ -2318,7 +2332,9 @@ class _DimMixin:
         if cache_entry:
             cache_entry.complete_dyn_size()
             return cache_entry
-        res = _math_get_dim_via_bin_op([self, other], "ceildiv_left")
+        res = _math_find_matching_div(start=self, right=True, other=other, kind="ceildiv_left")
+        if not res:
+            res = _math_get_dim_via_bin_op([self, other], "ceildiv_left")
         cache[cache_key] = res
         return res
 
@@ -2327,7 +2343,9 @@ class _DimMixin:
         :param Dim|int other:
         :rtype: Dim
         """
-        if _is_const_dim_value(other, 1):
+        if isinstance(other, _d.Dim) and other.is_constant_static_dim():
+            other = other.dimension  # makes matching easier
+        if isinstance(other, int) and other == 1:
             return self
         if (
             self.derived_from_op
@@ -2342,7 +2360,9 @@ class _DimMixin:
         if cache_entry:
             cache_entry.complete_dyn_size()
             return cache_entry
-        res = _math_get_dim_via_bin_op([self, other], "ceildiv")
+        res = _math_find_matching_div(start=self, right=True, other=other, kind="ceildiv")
+        if not res:
+            res = _math_get_dim_via_bin_op([self, other], "ceildiv")
         cache[cache_key] = res
         return res
 
@@ -2559,6 +2579,25 @@ def _math_find_matching_mult(start: Dim, other: Union[int, Dim], *, right: bool)
             return c_op.inputs[0] * (c_op.inputs[1] * other)
         else:
             return (other * c_op.inputs[0]) * c_op.inputs[1]
+    return None
+
+
+_DivKindToMeth = {
+    "truediv": _DimMixin.div_right,
+    "truediv_left": _DimMixin.div_left,
+    "ceildiv": _DimMixin.ceildiv_right,
+    "ceildiv_left": _DimMixin.ceildiv_left,
+    "floordiv": _DimMixin.__floordiv__,
+}
+
+
+def _math_find_matching_div(start: Dim, other: Union[int, Dim], *, right: bool, kind: str) -> Optional[Dim]:
+    if (isinstance(other, int) or other.is_constant_static_dim()) and start.is_constant_static_dim():
+        return _math_get_dim_via_bin_op([start, other] if right else [other, start], kind)
+    c_op = start.derived_from_op
+    if c_op and c_op.kind == kind and len(c_op.inputs) == 2:
+        meth = _DivKindToMeth[kind]
+        return meth(c_op.inputs[0], c_op.inputs[1] * other if right else other * c_op.inputs[1])
     return None
 
 
