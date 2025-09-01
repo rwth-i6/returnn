@@ -8,6 +8,10 @@ import os
 import sys
 import gc
 import subprocess
+import signal
+import time
+import contextlib
+import multiprocessing
 import torch
 from returnn.util.better_exchook import better_exchook
 from returnn.util.basic import human_bytes_size
@@ -26,36 +30,39 @@ def print_available_devices(*, file: Optional[TextIO] = None):
         print("CUDA_VISIBLE_DEVICES is set to %r." % os.environ["CUDA_VISIBLE_DEVICES"], file=file)
         cuda_visible_devs = dict(enumerate([int(d) for d in os.environ["CUDA_VISIBLE_DEVICES"].split(",") if d]))
     else:
-        if torch.cuda.is_available():
-            print("CUDA_VISIBLE_DEVICES is not set.", file=file)
+        with timeout("torch.cuda.is_available()"):
+            if torch.cuda.is_available():
+                print("CUDA_VISIBLE_DEVICES is not set.", file=file)
 
-    if torch.cuda.is_available():
-        print("Available CUDA devices:")
-        count = torch.cuda.device_count()
-        if cuda_visible_devs is not None and len(cuda_visible_devs) != count:
-            print(
-                f"(Mismatch between CUDA device count {count}"
-                f" and CUDA_VISIBLE_DEVICES {cuda_visible_devs} count {len(cuda_visible_devs)}?)",
-                file=file,
-            )
-        for i in range(count):
-            print(f"  {i + 1}/{count}: cuda:{i}", file=file)
-            props = torch.cuda.get_device_properties(i)
-            print(f"       name: {props.name}", file=file)
-            print(f"       total_memory: {human_bytes_size(props.total_memory)}", file=file)
-            print(f"       capability: {props.major}.{props.minor}", file=file)
-            if cuda_visible_devs is not None:
-                if len(cuda_visible_devs) == count:
-                    dev_idx_s = cuda_visible_devs[i]
-                else:
-                    dev_idx_s = "?"
+    with timeout("torch.cuda.is_available()"):
+        if not torch.cuda.is_available():
+            print("(CUDA not available)", file=file)
+            return
+
+    print("Available CUDA devices:", file=file)
+    count = torch.cuda.device_count()
+    if cuda_visible_devs is not None and len(cuda_visible_devs) != count:
+        print(
+            f"(Mismatch between CUDA device count {count}"
+            f" and CUDA_VISIBLE_DEVICES {cuda_visible_devs} count {len(cuda_visible_devs)}?)",
+            file=file,
+        )
+    for i in range(count):
+        print(f"  {i + 1}/{count}: cuda:{i}", file=file)
+        props = torch.cuda.get_device_properties(i)
+        print(f"       name: {props.name}", file=file)
+        print(f"       total_memory: {human_bytes_size(props.total_memory)}", file=file)
+        print(f"       capability: {props.major}.{props.minor}", file=file)
+        if cuda_visible_devs is not None:
+            if len(cuda_visible_devs) == count:
+                dev_idx_s = cuda_visible_devs[i]
             else:
-                dev_idx_s = i
-            print(f"       device_index: {dev_idx_s}", file=file)
-        if not count:
-            print("  (None)")
-    else:
-        print("(CUDA not available)")
+                dev_idx_s = "?"
+        else:
+            dev_idx_s = i
+        print(f"       device_index: {dev_idx_s}", file=file)
+    if not count:
+        print("  (None)", file=file)
 
 
 def print_using_cuda_device_report(dev: Union[str, torch.device], *, file: Optional[TextIO] = None):
@@ -108,7 +115,7 @@ def diagnose_no_gpu() -> List[str]:
     except Exception as exc:
         print("nvidia-smi failed:", exc)
         better_exchook(*sys.exc_info(), debugshell=False)
-        res.append(f"nvidia-smi failed")
+        res.append("nvidia-smi failed")
 
     return res
 
@@ -152,4 +159,31 @@ def garbage_collect():
             f"alloc {human_bytes_size(torch.cuda.memory_allocated())}",
             f"reserved {human_bytes_size(torch.cuda.memory_reserved())}",
         ]
-        print(f"CUDA memory usage after triggered GC:", " ".join(stats))
+        print("CUDA memory usage after triggered GC:", " ".join(stats))
+
+
+@contextlib.contextmanager
+def timeout(info: str, *, seconds: int = 30):
+    """
+    Note: don't use signal handlers (e.g. signal.alarm) because unfortunately
+    potential hanging funcs will block the main thread and thus block the signal handler from executing.
+    Thus, we use a subprocess.
+
+    :param seconds:
+    :param info:
+    """
+    proc = multiprocessing.Process(
+        target=_timeout_handler, kwargs={"seconds": seconds, "proc_id": os.getpid(), "info": info}
+    )
+    proc.start()
+    try:
+        yield
+    finally:
+        proc.terminate()
+        proc.join()
+
+
+def _timeout_handler(*, seconds: Union[float, int], proc_id: int, info: str):
+    time.sleep(seconds)
+    print(f"ERROR: {info}: Timeout handler after {seconds} seconds, killing proc {proc_id}.", file=sys.stderr)
+    os.kill(proc_id, signal.SIGABRT)
