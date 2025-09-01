@@ -2082,7 +2082,7 @@ class _DimMixin:
         :return: self + other. note that this is not commutative, i.e. different from other + self.
         :rtype: Dim
         """
-        if isinstance(other, int) and other == 0:
+        if _is_const_dim_value(other, 0):
             return self
         cache_key = ("add", other)
         cache = self.get_same_base()._make_extra().cache_dim_math
@@ -2090,7 +2090,9 @@ class _DimMixin:
         if cache_entry:
             cache_entry.complete_dyn_size()
             return cache_entry
-        res = _math_get_dim_via_bin_op([self, other], "add")
+        res = _MathFindMatchingAdditive(start=self, right=True, other=other).search_and_maybe_replace()
+        if not res:
+            res = _math_get_dim_via_bin_op([self, other], "add")
         cache[cache_key] = res
         return res
 
@@ -2100,7 +2102,7 @@ class _DimMixin:
         :return: other + self
         :rtype: Dim
         """
-        if isinstance(other, int) and other == 0:
+        if _is_const_dim_value(other, 0):
             return self
         cache_key = ("add_left", other)
         cache = self.get_same_base()._make_extra().cache_dim_math
@@ -2108,7 +2110,9 @@ class _DimMixin:
         if cache_entry:
             cache_entry.complete_dyn_size()
             return cache_entry
-        res = _math_get_dim_via_bin_op([other, self], "add")
+        res = _MathFindMatchingAdditive(start=self, right=False, other=other).search_and_maybe_replace()
+        if not res:
+            res = _math_get_dim_via_bin_op([other, self], "add")
         cache[cache_key] = res
         return res
 
@@ -2117,7 +2121,7 @@ class _DimMixin:
         :param Dim|int other:
         :rtype: Dim
         """
-        if isinstance(other, int) and other == 0:
+        if _is_const_dim_value(other, 0):
             return self
         return self.sub_right(other)
 
@@ -2127,7 +2131,7 @@ class _DimMixin:
         :return: self - other
         :rtype: Dim
         """
-        if isinstance(other, int) and other == 0:
+        if _is_const_dim_value(other, 0):
             return self
         if (
             self.derived_from_op
@@ -2152,7 +2156,7 @@ class _DimMixin:
         :return: (-other) + self
         :rtype: Dim
         """
-        if isinstance(other, int) and other == 0:
+        if _is_const_dim_value(other, 0):
             return self
         if (
             self.derived_from_op
@@ -2176,7 +2180,7 @@ class _DimMixin:
         :param Dim|int other:
         :rtype: Dim
         """
-        if isinstance(other, int) and other == 1:
+        if _is_const_dim_value(other, 1):
             return self
         cache_key = ("mul", other)
         cache = self.get_same_base()._make_extra().cache_dim_math
@@ -2193,7 +2197,7 @@ class _DimMixin:
         :param Dim|int other:
         :rtype: Dim
         """
-        if isinstance(other, int) and other == 1:
+        if _is_const_dim_value(other, 1):
             return self
         cache_key = ("mul_left", other)
         cache = self.get_same_base()._make_extra().cache_dim_math
@@ -2210,7 +2214,7 @@ class _DimMixin:
         :param Dim|int other:
         :rtype: Dim
         """
-        if isinstance(other, int) and other == 1:
+        if _is_const_dim_value(other, 1):
             return self
         if (
             self.derived_from_op
@@ -2243,7 +2247,7 @@ class _DimMixin:
         :param Dim|int other:
         :rtype: Dim
         """
-        if isinstance(other, int) and other == 1:
+        if _is_const_dim_value(other, 1):
             return self
         if (
             self.derived_from_op
@@ -2267,7 +2271,7 @@ class _DimMixin:
         :param Dim|int other:
         :rtype: Dim
         """
-        if isinstance(other, int) and other == 1:
+        if _is_const_dim_value(other, 1):
             return self
         if (
             self.derived_from_op
@@ -2291,7 +2295,7 @@ class _DimMixin:
         :param Dim|int other:
         :rtype: Dim
         """
-        if isinstance(other, int) and other == 1:
+        if _is_const_dim_value(other, 1):
             return self
         if (
             self.derived_from_op
@@ -2315,7 +2319,7 @@ class _DimMixin:
         :param Dim|int other:
         :rtype: Dim
         """
-        if isinstance(other, int) and other == 1:
+        if _is_const_dim_value(other, 1):
             return self
         if (
             self.derived_from_op
@@ -2429,9 +2433,9 @@ _BinOpStrs = {
     "sub": "-",
     "floordiv": "//",
     "truediv": "/",
-    "truediv_left": "/",
+    "truediv_left": " /l ",
     "ceildiv": "/",
-    "ceildiv_left": "/",
+    "ceildiv_left": " /l ",
 }
 
 
@@ -2447,7 +2451,7 @@ def _math_get_dim_via_bin_op(dims: Sequence[Union[Dim, int]], op_kind: str) -> D
     if all(d.is_constant_static_dim() for d in dims):
         return _make_constant_static_dim(dim_value, kind=_get_merged_dim_kind(dims))
     desc = _BinOpStrs[op_kind].join(_get_description(d) for d in dims)
-    if op_kind == "ceildiv":
+    if op_kind.startswith("ceildiv"):
         desc = f"⌈{desc}⌉"
     return _d.Dim(
         kind=_get_merged_dim_kind(dims),
@@ -2456,6 +2460,86 @@ def _math_get_dim_via_bin_op(dims: Sequence[Union[Dim, int]], op_kind: str) -> D
         derived_from_op=Op(kind=op_kind, inputs=list(dims)),
         derived_from_tag=_representative_tag(dims),
     )
+
+
+def _is_const_dim_value(d: Union[Dim, int], value: int) -> bool:
+    if isinstance(d, int):
+        return d == value
+    elif isinstance(d, _d.Dim):
+        return d.is_constant_static_dim() and d.dimension == value
+    else:
+        raise TypeError(f"unexpected type {type(d)}")
+
+
+class _MathFindMatchingAdditive:
+    def __init__(self, start: Dim, *, max_depth: int = 2, right: bool, other: Union[int, Dim]):
+        self.start = start
+        self.max_depth = max_depth
+        self.right = right
+        self.other = other
+
+    def _check_and_maybe_replace(self, candidate: Dim) -> Optional[Dim]:
+        """
+        Check and return potential replacement for candidate, when adding `other` to it.
+        """
+        other = self.other
+        if isinstance(other, int) or other.is_constant_static_dim():
+            if candidate.is_constant_static_dim():
+                return _math_get_dim_via_bin_op([candidate, other] if self.right else [other, candidate], "add")
+            return None
+        if candidate == other:
+            return candidate.__rmul__(2)
+        c_op = candidate.derived_from_op
+        if c_op and c_op.kind == "mul" and len(c_op.inputs) == 2 and c_op.inputs[1] == other:
+            factor = (c_op.inputs[0] + 1) if self.right else (1 + c_op.inputs[0])
+            if factor.is_constant_static_dim():
+                if factor.dimension == 0:
+                    return factor
+                factor = factor.dimension
+            return factor * c_op.inputs[1]
+        o_op = other.derived_from_op
+        if not o_op or o_op.kind != "mul" or len(o_op.inputs) != 2:
+            return None
+        o_base, other = o_op.inputs  # continue checking this
+        if candidate == other:
+            factor = (1 + o_base) if self.right else (o_base + 1)
+            if factor.is_constant_static_dim():
+                if factor.dimension == 0:
+                    return factor
+                factor = factor.dimension
+            return factor * candidate
+        if c_op and c_op.kind == "mul" and len(c_op.inputs) == 2 and c_op.inputs[1] == other:
+            factor = (c_op.inputs[0] + o_base) if self.right else (o_base + c_op.inputs[0])
+            if factor.is_constant_static_dim():
+                if factor.dimension == 0:
+                    return factor
+                factor = factor.dimension
+            return factor * c_op.inputs[1]
+        return None
+
+    def search_and_maybe_replace(self) -> Optional[Dim]:
+        """search"""
+        cur = self.start
+        depth = 0
+        history = []
+        while True:
+            res_cur = self._check_and_maybe_replace(cur)
+            if res_cur:
+                if depth > 0 and res_cur.is_constant_static_dim() and res_cur.dimension == 0:
+                    res_cur = history.pop(-1)
+                res = res_cur
+                for h in reversed(history):
+                    res = _math_get_dim_via_bin_op([h, res] if self.right else [res, h], "add")
+                return res
+            depth += 1
+            if depth > self.max_depth:
+                return None
+            op = cur.derived_from_op
+            if not op or op.kind != "add" or len(op.inputs) != 2:
+                return None
+            cur = op.inputs[1 if self.right else 0]
+            hist = op.inputs[0 if self.right else 1]
+            history.append(hist)
 
 
 class Op:
