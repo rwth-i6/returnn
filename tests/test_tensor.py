@@ -18,6 +18,30 @@ def test_tensor():
     print(x)
 
 
+# Note: Some of the dim math tests are duplicated from test_TFUtil.py, and partly adapted.
+# But here they are TF-independent.
+
+
+def test_dim_math_basics():
+    a = Dim(None, name="a")
+    b = Dim(None, name="b")
+    assert a == a
+    assert (a + 2 - 2) == a
+    assert a + b == a + b
+    assert a + b != b + a  # not commutative
+    assert a * b == a * b
+    assert a * b != b * a  # not commutative
+    assert 2 * a == a + a
+    assert 3 * a == a + a + a
+    assert a * 2 != 2 * a
+    assert 2 * a + b == a + a + b
+    assert a + b - b == a
+    assert a + 2 * b - b + -b == a
+    assert a * b + b == (a + 1) * b
+    assert 0 + a + 0 == a
+    assert sum([0, a, 0, a, 0]) == 2 * a
+
+
 def test_dim_math_pad_window():
     rf.select_backend("numpy")
     batch_dim = Dim(3, name="batch")
