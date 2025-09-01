@@ -38,8 +38,54 @@ def test_dim_math_basics():
     assert a + b - b == a
     assert a + 2 * b - b + -b == a
     assert a * b + b == (a + 1) * b
+    assert (a + b) * 2 == a * 2 + b * 2
     assert 0 + a + 0 == a
     assert sum([0, a, 0, a, 0]) == 2 * a
+
+
+def test_dim_math_double_neg():
+    a = Dim(None, name="a")
+    assert --a == a
+
+
+def test_dim_math_mul_div():
+    a = Dim(None, name="a")
+    b = Dim(None, name="b")
+    assert (a * b) // b == a
+    assert (b * a) // b != a
+    assert (b * a).div_left(b) == a
+
+
+def test_dim_math_div():
+    a = Dim(None, name="a")
+    b = Dim(None, name="b")
+    c = Dim(14, name="c")
+    d = Dim(10, name="d")
+    assert a // 2 + b // 2 != (a + b) // 2  # only allowed when divisible but this is unknown here for dyn dims
+    assert c // 2 + d // 2 == (c + d) // 2
+
+
+def test_dim_math_div_mul():
+    a = Dim(None, name="a")
+    b = Dim(None, name="b")
+    assert a // b == a // b
+
+
+def test_dim_math_div_div():
+    a = Dim(None, name="a")
+    b = a.ceildiv_right(2)
+    b = b.ceildiv_right(3)
+    c = a.ceildiv_right(6)
+    print(a, b, c)
+    assert b == c
+
+
+def test_dim_math_pad_conv():
+    time = Dim(None, name="time")
+    padded = 2 + time + 2
+    assert padded == 2 + time + 2
+    conv_valid = (-2) + padded + (-2)
+    assert conv_valid == time
 
 
 def test_dim_math_pad_window():
