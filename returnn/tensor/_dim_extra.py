@@ -2184,7 +2184,7 @@ class _DimMixin:
             other = other.dimension  # makes matching easier
         if isinstance(other, int) and other == 1:
             return self
-        if self.is_constant_static_dim() and isinstance(other, _d.Dim):
+        if self.is_constant_static_dim() and isinstance(other, _d.Dim) and not other.is_constant_static_dim():
             return self.dimension * other  # use rmul
         cache_key = ("mul", other)
         cache = self.get_same_base()._make_extra().cache_dim_math
@@ -2577,8 +2577,9 @@ def _math_find_matching_mult(start: Dim, other: Union[int, Dim], *, right: bool)
     if c_op and c_op.kind == "mul" and len(c_op.inputs) == 2:
         if right:
             return c_op.inputs[0] * (c_op.inputs[1] * other)
-        else:
-            return (other * c_op.inputs[0]) * c_op.inputs[1]
+        # Don't do right=False -> (other * c_op.inputs[0]) * c_op.inputs[1],
+        # because this can lead to infinite recursions,
+        # and also we don't have a proper normalized form for multiplication.
     return None
 
 

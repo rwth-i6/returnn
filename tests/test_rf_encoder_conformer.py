@@ -6,6 +6,7 @@ from __future__ import annotations
 import _setup_test_env  # noqa
 from typing import Sequence
 from returnn.tensor import Tensor, Dim, TensorDict, batch_dim
+import returnn.frontend as rf
 from rf_utils import run_model
 
 
@@ -315,8 +316,6 @@ def test_e_branchformer():
     def _tensor(x: torch.Tensor, name: str, dims: Sequence[Dim]) -> Tensor:
         return rf.convert_to_tensor(x, name=name, dims=dims)
 
-    from returnn.frontend.conversions.espnet_e_branchformer import _reorder_rel_pos_emb_espnet_to_rf
-
     check_py_traces_rf_to_pt_equal(
         trace_rf.captured_locals,
         trace_espnet.captured_locals,
@@ -407,3 +406,31 @@ def test_e_branchformer():
     assert enc_seq_lens_raw.max() > 0
     assert torch.mean(enc_out.raw_tensor**2) > 0.1
     print("All matching!")
+
+
+def test_e_branchformer_custom_ff():
+    rf.select_backend_torch()
+
+    from returnn.frontend.encoder.conformer import ConformerEncoder
+    from returnn.frontend.encoder.e_branchformer import EBranchformerLayer
+
+    encoder = ConformerEncoder(
+        in_dim=Dim(7, name="in"),
+        input_layer=None,
+        num_layers=2,
+        out_dim=16,
+        encoder_layer=rf.build_dict(
+            EBranchformerLayer,
+            ff=rf.build_dict(
+                rf.encoder.conformer.ConformerPositionwiseFeedForward,
+                activation=rf.build_dict(rf.relu_square),
+                with_bias=False,
+            ),
+            num_heads=8,
+        ),
+    )
+    assert encoder.layers[0].cgmlp.linear_ff.out_dim == 2 * encoder.out_dim * 3
+    time_dim = Dim(11, name="time")
+    x = rf.random_normal((time_dim, encoder.in_dim))
+    y, _ = encoder(x, in_spatial_dim=time_dim)
+    y.verify_out_shape({time_dim, encoder.out_dim})

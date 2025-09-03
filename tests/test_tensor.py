@@ -48,6 +48,15 @@ def test_dim_math_double_neg():
     assert --a == a
 
 
+def test_dim_math_mul_rmul():
+    a = Dim(None, name="a")
+    b = a * 3
+    c = 2 * b
+    assert c == 2 * (a * 3)
+    assert c != a * 6
+    assert c == (2 * a) * 3
+
+
 def test_dim_math_mul_div():
     a = Dim(None, name="a")
     b = Dim(None, name="b")
