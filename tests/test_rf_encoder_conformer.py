@@ -218,19 +218,22 @@ def test_e_branchformer():
     #         espnet2.asr.layers.cgmlp.ConvolutionalGatingMLP.forward
     #         espnet.nets.pytorch_backend.transformer.positionwise_feed_forward.PositionwiseFeedForward.forward
     #   (CTC loss, Att-decoder)
-    with PyTracer(
-        [
-            ESPnetASRModel.forward,
-            ESPnetASRModel.encode,
-            EBranchformerEncoder.forward,
-            EBranchformerEncoderLayer.forward,
-            RelPositionMultiHeadedAttention.forward,
-            RelPositionalEncoding.forward,
-            ConvolutionalGatingMLP.forward,
-            ConvolutionalSpatialGatingUnit.forward,
-        ],
-        torch.Tensor,
-    ) as trace_espnet, torch.no_grad():
+    with (
+        PyTracer(
+            [
+                ESPnetASRModel.forward,
+                ESPnetASRModel.encode,
+                EBranchformerEncoder.forward,
+                EBranchformerEncoderLayer.forward,
+                RelPositionMultiHeadedAttention.forward,
+                RelPositionalEncoding.forward,
+                ConvolutionalGatingMLP.forward,
+                ConvolutionalSpatialGatingUnit.forward,
+            ],
+            torch.Tensor,
+        ) as trace_espnet,
+        torch.no_grad(),
+    ):
         loss, stats, weight = model(
             speech=raw_audio.raw_tensor,
             speech_lengths=raw_audio_spatial_dim.dyn_size,
@@ -292,16 +295,19 @@ def test_e_branchformer():
         assert isinstance(layer_rf, EBranchformerLayer)
         import_params_espnet_e_branchformer_layer_to_rf(layer, layer_rf)
 
-    with PyTracer(
-        [
-            ConformerEncoder.__call__,
-            EBranchformerLayer.__call__,
-            rf.RelPosSelfAttention.__call__,
-            rf.relative_positional_encoding,
-            FeedForwardConvGated.__call__,
-        ],
-        Tensor,
-    ) as trace_rf, torch.no_grad():
+    with (
+        PyTracer(
+            [
+                ConformerEncoder.__call__,
+                EBranchformerLayer.__call__,
+                rf.RelPosSelfAttention.__call__,
+                rf.relative_positional_encoding,
+                FeedForwardConvGated.__call__,
+            ],
+            Tensor,
+        ) as trace_rf,
+        torch.no_grad(),
+    ):
         # ESPnet E-Branchformer does not use masking properly. Keep it disabled here as well.
         with global_config_ctx(Config({"rf_use_mask": False})):
             enc_out, _ = model_rf(enc_in, in_spatial_dim=enc_spatial_dim)
