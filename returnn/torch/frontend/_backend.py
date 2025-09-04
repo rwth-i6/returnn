@@ -1641,6 +1641,8 @@ class TorchBackend(Backend[torch.Tensor]):
                 name=f"random_{distribution}", dims=dims, dtype=dtype, sparse_dim=sparse_dim, feature_dim=feature_dim
             )
             out.raw_tensor = torch.empty(shape, dtype=dtype_, device=device or rf.get_default_device())
+        if out.raw_tensor.device.type == "meta":
+            return out  # nothing more to do
         assert explicit_state is None  # not implemented otherwise
         generator = None  # using the global default from PT
         assert isinstance(static, bool)
