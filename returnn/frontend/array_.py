@@ -1312,6 +1312,7 @@ def top_p_mask(
     axis: Dim,
     p: Union[float, Tensor],
     one_more: bool = True,
+    min_tokens_to_keep: int = 1,
 ) -> Tensor:
     """
     Top-p filtering, e.g. as used in Nucleus sampling (https://arxiv.org/abs/1904.09751).
@@ -1321,6 +1322,8 @@ def top_p_mask(
     :param p: the probability mass to keep
     :param one_more: if True (default), keep also the first token above the threshold.
         (It's enabled by default to follow the behavior of the original implementation.)
+    :param min_tokens_to_keep: ensure to keep at least these many tokens (default 1)
+        With one_more=True, min_tokens_to_keep=1 is anyway guaranteed.
     :return: mask {probs_dims..., axis} of the top-p tokens.
         ``sum(probs[mask]) <= p``, or slightly more if ``one_more`` is True.
     """
@@ -1334,5 +1337,7 @@ def top_p_mask(
     if one_more:
         # keep also the first token above the threshold
         mask = rf.shift_right(mask, axis=sorted_dim, pad_value=True)
+    if min_tokens_to_keep > (1 if one_more else 0):
+        mask = mask | (rf.range_over_dim(sorted_dim, device=mask.device) < min_tokens_to_keep)
     mask = rf.scatter(mask, indices=sorted_indices, indices_dim=sorted_dim)
     return mask
