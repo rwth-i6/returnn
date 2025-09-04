@@ -440,3 +440,59 @@ def test_e_branchformer_custom_ff():
     x = rf.random_normal((time_dim, encoder.in_dim))
     y, _ = encoder(x, in_spatial_dim=time_dim)
     y.verify_out_shape({time_dim, encoder.out_dim})
+
+
+def test_e_branchformer_meta_dev_num_params():
+    from returnn.frontend.encoder.conformer import ConformerEncoder, ConformerEncoderLayer
+    from returnn.frontend.encoder.e_branchformer import EBranchformerLayer
+    from returnn.torch.frontend.bridge import rf_module_to_pt_module
+
+    rf.select_backend_torch()
+
+    in_dim = Dim(80, name="logmel")
+    num_layers = 16
+    dim = 1024
+
+    with rf.set_default_device_ctx("meta"):
+        conformer = ConformerEncoder(
+            in_dim=in_dim,
+            input_layer=None,
+            num_layers=num_layers,
+            out_dim=dim,
+            encoder_layer=rf.build_dict(
+                ConformerEncoderLayer,
+                ff=rf.build_dict(
+                    rf.encoder.conformer.ConformerPositionwiseFeedForward,
+                    activation=rf.build_dict(rf.relu_square),
+                    with_bias=False,
+                ),
+                num_heads=8,
+            ),
+        )
+        conformer_pt = rf_module_to_pt_module(conformer)
+        assert all(parameter.device.type == "meta" for parameter in conformer_pt.parameters())
+        num_params = sum(parameter.numel() for parameter in conformer_pt.parameters())
+        print(f"Conformer {num_layers}x{dim} net params #: {num_params}")
+        assert num_params == 403619840
+
+        dim_ = dim // 8 * 7
+        e_branchformer = ConformerEncoder(
+            in_dim=in_dim,
+            input_layer=None,
+            num_layers=num_layers,
+            out_dim=dim_,
+            encoder_layer=rf.build_dict(
+                EBranchformerLayer,
+                ff=rf.build_dict(
+                    rf.encoder.conformer.ConformerPositionwiseFeedForward,
+                    activation=rf.build_dict(rf.relu_square),
+                    with_bias=False,
+                ),
+                num_heads=8,
+            ),
+        )
+        e_branchformer_pt = rf_module_to_pt_module(e_branchformer)
+        assert all(parameter.device.type == "meta" for parameter in e_branchformer_pt.parameters())
+        num_params_ = sum(parameter.numel() for parameter in e_branchformer_pt.parameters())
+        print(f"E-Branchformer {num_layers}x{dim_} net params #: {num_params_}")
+        assert num_params_ == 413034496
