@@ -1572,6 +1572,7 @@ class TorchBackend(Backend[torch.Tensor]):
                 indices_out_raw = indices_raw % a.dimension
                 indices_raw = indices_raw // a.dimension
                 indices = values.copy_template(name=f"top_k_indices_{a.name or i}")
+                indices.feature_dim = None
                 indices.dtype = TorchBackend.get_dtype_name_raw(indices_out_raw)
                 indices.sparse_dim = a
                 indices.raw_tensor = indices_out_raw
@@ -1588,6 +1589,7 @@ class TorchBackend(Backend[torch.Tensor]):
         values = source.copy_template_replace_dim_tag(axis=axis_int, new_dim_tag=k_dim, name="top_k_values")
         values.raw_tensor = values_raw
         indices = source.copy_template_replace_dim_tag(axis=axis_int, new_dim_tag=k_dim, name="top_k_indices")
+        indices.feature_dim = None
         indices.dtype = TorchBackend.get_dtype_name_raw(indices_raw)
         indices.sparse_dim = axis
         indices.raw_tensor = indices_raw
