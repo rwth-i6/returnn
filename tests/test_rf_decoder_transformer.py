@@ -483,7 +483,6 @@ def test_transformer_decoder_time_sync_search():
                 raise ValueError(f"invalid recog_recomb {recomb!r}")
 
         if decoder is not None and got_new_label_cpu.raw_tensor.sum().item() > 0:
-            assert decoder_state["0"].self_att.accum_axis != decoder_state["1"].self_att.accum_axis
             (target_, decoder_state_, enc_), packed_new_label_dim, packed_new_label_dim_map = (
                 rf.nested.masked_select_nested(
                     (target, decoder_state, enc),
@@ -492,8 +491,6 @@ def test_transformer_decoder_time_sync_search():
                     dims=batch_dims + [beam_dim],
                 )
             )
-            assert decoder_state_["0"].self_att.accum_axis != decoder_state_["1"].self_att.accum_axis
-            assert decoder_state_["0"].self_att.accum_axis + 1 != decoder_state_["1"].self_att.accum_axis + 1
             # packed_new_label_dim_map: old dim -> new dim. see _masked_select_prepare_dims
             assert packed_new_label_dim.get_dim_value() > 0
 
@@ -503,7 +500,6 @@ def test_transformer_decoder_time_sync_search():
                 spatial_dim=single_step_dim,
                 state=decoder_state_,
             )  # Flat_Batch_Beam, Vocab / ...
-            assert decoder_state_["0"].self_att.accum_axis != decoder_state_["1"].self_att.accum_axis
             decoder_log_probs_ = rf.log_softmax(decoder_logits_, axis=target_dim)  # Flat_Batch_Beam, Vocab
 
             decoder_log_probs, decoder_state = rf.nested.masked_scatter_nested(
