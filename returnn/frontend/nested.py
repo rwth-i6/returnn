@@ -346,6 +346,7 @@ def _masked_scatter_merge_dims(
     merged_dim_map: Dict[Dim, Dim],
 ) -> T:
     if isinstance(s, Dim):
+        assert isinstance(backup, Dim)
         # This is slightly more complex than in the _masked_select case:
         # We need to merge the s and backup depending on the mask.
         if s in reverse_dim_map:

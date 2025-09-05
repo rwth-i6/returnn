@@ -43,6 +43,19 @@ def test_dim_math_basics():
     assert sum([0, a, 0, a, 0]) == 2 * a
 
 
+def test_dim_math_neq_after_inc():
+    a = Dim(0, name="a")
+    b = Dim(0, name="a")  # same name, but different instance, intentionally to trigger potential issues
+    assert a != b
+    assert a + 1 != b + 1
+    # Note: We had the bug that _representative_tag selected an auto-generated dim
+    # (the unnamed "1" dim is auto-generated),
+    # and that was used as derived_from_tag, and that triggered that the resulting dim was also auto-generated,
+    # and for auto-generated dims, we allow dim equality also by name.
+    # The fix was: _representative_tag will always prefer a non-auto-generated dim if there is any.
+    assert a + 1 + 1 != b + 1 + 1
+
+
 def test_dim_math_double_neg():
     a = Dim(None, name="a")
     assert --a == a
