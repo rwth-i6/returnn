@@ -1791,6 +1791,7 @@ class TorchBackend(Backend[torch.Tensor]):
             dims=(out_dim,) + tuple(remaining_dims),
             dtype=tensor.dtype,
             sparse_dim=tensor.sparse_dim,
+            feature_dim=tensor.feature_dim,
             raw_tensor=out_raw,
         )
         return out, out_dim
