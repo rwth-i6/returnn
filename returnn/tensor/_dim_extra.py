@@ -2670,7 +2670,9 @@ def _get_merged_dim_kind(dim_tags: Sequence[Dim]) -> Entity:
 
 
 def _representative_tag(terms: Sequence[Dim]) -> Optional[Dim]:
-    # Also see _OpLinearTerm.representative_tag().
+    if any(not term_.auto_generated for term_ in terms):
+        # Always prefer non-auto-generated.
+        terms = [term_ for term_ in terms if not term_.auto_generated]
     # First find any dynamic.
     for term_ in terms:
         if term_.is_dynamic_seq_length():
