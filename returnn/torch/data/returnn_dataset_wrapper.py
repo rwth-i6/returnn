@@ -23,14 +23,15 @@ class ReturnnDatasetResetDefaultEpochCounterCallback:
     Has an internal counter for the epoch, starting by default at epoch 1 (RETURNN convention).
     """
 
-    def __init__(self, dataset: ReturnnDataset, epoch: int = 0):
+    def __init__(self, dataset: ReturnnDataset, *, epoch0: int = 0):
         """
         :param dataset: RETURNN dataset.
-        :param epoch: Epoch from which the dataset sequence ordering should start.
+        :param epoch0: Epoch from which the dataset sequence ordering should start.
+            It will actually be epoch0+1 for the first epoch, since :func:`__call__` will increment it.
             By default 0 since next :func:`__call__` will increment, thus we start at epoch 1.
         """
         self.dataset = dataset
-        self.epoch = epoch
+        self.epoch = epoch0
 
     def __call__(self):
         # dataset is likely a copy of the original dataset, either in the main process or in a worker process
