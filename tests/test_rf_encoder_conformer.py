@@ -496,3 +496,25 @@ def test_e_branchformer_meta_dev_num_params():
         num_params_ = sum(parameter.numel() for parameter in e_branchformer_pt.parameters())
         print(f"E-Branchformer {num_layers}x{dim_} net params #: {num_params_}")
         assert num_params_ == 413034496
+
+        e_branchformer = ConformerEncoder(
+            in_dim=in_dim,
+            input_layer=None,
+            num_layers=num_layers,
+            out_dim=dim,
+            encoder_layer=rf.build_dict(
+                EBranchformerLayer,
+                ff=rf.build_dict(
+                    rf.encoder.conformer.ConformerPositionwiseFeedForward,
+                    ff_dim=dim * 2,
+                    activation=rf.build_dict(rf.relu_square),
+                    with_bias=False,
+                ),
+                num_heads=8,
+            ),
+        )
+        e_branchformer_pt = rf_module_to_pt_module(e_branchformer)
+        assert all(parameter.device.type == "meta" for parameter in e_branchformer_pt.parameters())
+        num_params_ = sum(parameter.numel() for parameter in e_branchformer_pt.parameters())
+        print(f"E-Branchformer {num_layers}x{dim} (FF: {dim}*2) net params #: {num_params_}")
+        assert num_params_ == 404930560
