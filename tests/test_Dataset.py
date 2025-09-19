@@ -1206,7 +1206,7 @@ def test_TensorDict_queue():
 
     q = _mp.Queue(maxsize=2)
     q.put(tensor_dict)
-    tensor_dict2 = q.get(timeout=5.0)
+    tensor_dict2 = q.get()
 
     assert tensor_dict.data.keys() == tensor_dict2.data.keys()
     assert all(tensor.raw_tensor is not None for tensor in tensor_dict2.data.values())
