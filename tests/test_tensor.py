@@ -120,6 +120,21 @@ def test_dim_math_pad_window():
     assert sizes == expected_sizes
 
 
+def test_Tensor_pickle():
+    import pickle
+
+    tensor = Tensor("data", dims=[Dim(10)], dtype="int32", raw_tensor=numpy.zeros((10,), dtype="int32"))
+
+    s = pickle.dumps(tensor)
+    tensor2: Tensor = pickle.loads(s)
+
+    assert tensor.name == tensor2.name
+    assert tensor.dtype == tensor2.dtype
+    assert tensor.raw_tensor is not None
+    assert tensor2.raw_tensor is not None
+    assert numpy.array_equal(tensor.raw_tensor, tensor2.raw_tensor)
+
+
 def test_TensorDict_pickle():
     import pickle
 
