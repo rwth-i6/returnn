@@ -166,7 +166,11 @@ class PostprocessingDataset(CachedDataset2):
             self.labels = self._dataset.labels.copy()
         # update only after _out_tensor_dict_template has been created from _in_tensor_dict_template
         self._in_tensor_dict_template.update(
-            {"complete_frac": {"dims": (), "dtype": "float32"}, "seq_tag": {"dims": (), "dtype": "string"}},
+            {
+                "complete_frac": {"dims": (), "dtype": "float32"},
+                "seq_idx": {"dims": (), "dtype": "int32"},
+                "seq_tag": {"dims": (), "dtype": "string"},
+            },
             auto_convert=True,
         )
         self.num_outputs = {
@@ -322,37 +326,14 @@ class PostprocessingDataset(CachedDataset2):
                         )
                 yield t_dict
 
-        data_iter = self._iterate_dataset()
-        if self._map_seq_stream is not None:
-            data_iter = self._map_seq_stream(data_iter, epoch=self.epoch, rng=self._rng, **util.get_fwd_compat_kwargs())
-            assert isinstance(data_iter, Iterator), (
-                f"map_seq_stream must produce an {Iterator.__name__}, but produced {type(data_iter).__name__}"
-            )
-        return _validate_tensor_dict_iter(data_iter)
+        def _apply_map_seq(inner: Iterator[TensorDict]) -> Iterator[TensorDict]:
+            for tensor_dict in inner:
+                seq_index = int(tensor_dict.data["seq_idx"].raw_tensor.item())
+                comp_frac_raw_tensor = (
+                    tensor_dict.data["complete_frac"].raw_tensor if "complete_frac" in tensor_dict.data else None
+                )
+                seq_tag_raw_tensor = tensor_dict.data["seq_tag"].raw_tensor
 
-    def _iterate_dataset(self) -> Iterator[TensorDict]:
-        """
-        :return: generator providing data samples in the form of a TensorDict
-        """
-        data_keys = self._dataset.get_data_keys()
-
-        seq_index = 0
-        while self._dataset.is_less_than_num_seqs(seq_index):
-            self._dataset.load_seqs(seq_index, seq_index + 1)
-
-            tensor_dict = self._in_tensor_dict_template.copy_template()
-            for data_key in data_keys:
-                tensor_dict.data[data_key].raw_tensor = self._dataset.get_data(seq_index, data_key)
-
-            complete_frac = self._dataset.get_complete_frac(seq_index, allow_only_lr_suitable=True)
-            comp_frac_raw_tensor = None
-            if complete_frac is not None:
-                comp_frac_raw_tensor = numpy.array(complete_frac, dtype=numpy.float32)
-                tensor_dict.data["complete_frac"].raw_tensor = comp_frac_raw_tensor
-            seq_tag_raw_tensor = str_to_numpy_array(self._dataset.get_tag(seq_index))
-            tensor_dict.data["seq_tag"].raw_tensor = seq_tag_raw_tensor
-
-            if self._map_seq is not None:
                 tensor_dict = self._map_seq(
                     tensor_dict, epoch=self.epoch, seq_idx=seq_index, rng=self._rng, **util.get_fwd_compat_kwargs()
                 )
@@ -377,6 +358,40 @@ class PostprocessingDataset(CachedDataset2):
                     assert tag_of_seq == seq_tag, (
                         f"seq tag mismath: {tag_of_seq} != {seq_tag} for seq index {seq_index} when seq list is given"
                     )
+                yield tensor_dict
+
+        data_iter = self._iterate_dataset()
+        if self._map_seq is not None:
+            data_iter = _apply_map_seq(data_iter)
+        if self._map_seq_stream is not None:
+            data_iter = self._map_seq_stream(data_iter, epoch=self.epoch, rng=self._rng, **util.get_fwd_compat_kwargs())
+            assert isinstance(data_iter, Iterator), (
+                f"map_seq_stream must produce an {Iterator.__name__}, but produced {type(data_iter).__name__}"
+            )
+        return _validate_tensor_dict_iter(data_iter)
+
+    def _iterate_dataset(self) -> Iterator[TensorDict]:
+        """
+        :return: generator providing data samples in the form of a TensorDict
+        """
+        data_keys = self._dataset.get_data_keys()
+
+        seq_index = 0
+        while self._dataset.is_less_than_num_seqs(seq_index):
+            self._dataset.load_seqs(seq_index, seq_index + 1)
+
+            tensor_dict = self._in_tensor_dict_template.copy_template()
+            for data_key in data_keys:
+                tensor_dict.data[data_key].raw_tensor = self._dataset.get_data(seq_index, data_key)
+
+            complete_frac = self._dataset.get_complete_frac(seq_index, allow_only_lr_suitable=True)
+            if complete_frac is not None:
+                comp_frac_raw_tensor = numpy.array(complete_frac, dtype=numpy.float32)
+                tensor_dict.data["complete_frac"].raw_tensor = comp_frac_raw_tensor
+            seq_idx_raw_tensor = numpy.array(seq_index, dtype=numpy.int32)
+            tensor_dict.data["seq_idx"].raw_tensor = seq_idx_raw_tensor
+            seq_tag_raw_tensor = str_to_numpy_array(self._dataset.get_tag(seq_index))
+            tensor_dict.data["seq_tag"].raw_tensor = seq_tag_raw_tensor
 
             yield tensor_dict
             seq_index += 1
