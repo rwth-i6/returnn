@@ -45,8 +45,14 @@ class PostprocessingDataset(CachedDataset2):
     SpecAugment or speed perturbation into the data loading pipeline.
 
     The integration into the data loading pipeline makes it easy to distribute the
-    data processing work across multiple CPU cores using `MultiProcDataset` and in
-    turn frees the GPU from data preprocessing tasks.
+    data processing work across multiple CPU cores and in turn frees the GPU from
+    data preprocessing tasks.
+
+    Multiprocessing can either be done using ``MultiProcDataset`` or by specifying
+    the ``num_workers`` parameter of this class.
+    The latter only applies parallelism to the post-processing functions themselves,
+    and does not duplicate the underlying dataset once per worker.
+    This is often fast enough and has the advantage of lower memory consumption.
 
     Example usage::
 
@@ -75,8 +81,8 @@ class PostprocessingDataset(CachedDataset2):
     The postprocessor functions operate on ``TensorDict``s, which have entries for
     all data keys in the underlying dataset.
 
-    There may also be additional "meta" entries in the tensor dicts, like ``complete_frac``
-    and ``seq_tag``.
+    There may also be additional "meta" entries in the tensor dicts, like ``complete_frac``,
+    ``seq_idx`` and ``seq_tag``.
     These should be copied over in a manner that is reasonable for the use case at hand and
     ensures forwards compatibility as well as reasonably possible.
 
@@ -141,6 +147,7 @@ class PostprocessingDataset(CachedDataset2):
         :param map_seq_stream_preserves_num_seqs: whether the function in map_seq_stream preserves the number of
             sequences, i.e. for every input sequence there is exactly one output sequence.
         :param buf_size: buffer size for each worker, number of seqs to prefetch.
+            Must be > 0. Only relevant when num_workers > 0.
         :param num_workers: number of worker processes to use for data postprocessing.
 
             This does not apply parallelism to the wrapped dataset, but only to the postprocessing step.
