@@ -570,6 +570,7 @@ class _MultiProcDataIter:
         util.try_run(self.dataset_thread.join)
 
     def __del__(self):
+        # noinspection PyBroadException
         try:
             self.stop()
         except Exception:
