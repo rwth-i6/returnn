@@ -588,7 +588,6 @@ class _TensorMixin(_TensorMixinBase):
 
     def __getstate__(self):
         d = {k: getattr(self, k) for k in self.__slots__}
-        d["_raw_tensor"] = None  # do not store the TF tensors
         return d
 
     def __setstate__(self, state):
