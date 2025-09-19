@@ -142,7 +142,13 @@ class PostprocessingDataset(CachedDataset2):
             sequences, i.e. for every input sequence there is exactly one output sequence.
         :param buf_size: buffer size for each worker, number of seqs to prefetch.
         :param num_workers: number of worker processes to use for data postprocessing.
+
             This does not apply parallelism to the wrapped dataset, but only to the postprocessing step.
+
+            Conceptually, this achieves similar results to using MultiProcDataset, but with potentially lower
+            memory consumption, since only the postprocessing step is parallelized and not the wrapped/underlying
+            source dataset that is postprocessed.
+
             When set to 0, postprocessing happens inline.
         :param kwargs: see :class:`CachedDataset2`, :class:`Dataset`
         """
