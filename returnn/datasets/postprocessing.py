@@ -4,19 +4,33 @@ Provides :class:`PostprocessingDataset`.
 
 from __future__ import annotations
 
+from collections import deque
 from itertools import islice
 import numpy
 from numpy.random import RandomState
-from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple, TypeVar
+import sys
+import threading
+from typing import Any, Callable, Dict, Iterator, List, Optional, Sequence, Tuple, TypeVar
 
 from returnn.datasets.basic import DatasetSeq
 from returnn.datasets.util.strings import str_to_numpy_array
 from returnn.datasets.util.vocabulary import Vocabulary
 from returnn.tensor import Tensor, TensorDict
 from returnn.tensor.dim import Dim
-from returnn.util import basic as util
+from returnn.util import basic as util, better_exchook
+from returnn.util.multi_proc_non_daemonic_spawn import NonDaemonicSpawnContext
+from returnn.config import SubProcCopyGlobalConfigPreInitFunc
 from .basic import init_dataset
 from .cached2 import CachedDataset2
+
+# noinspection PyProtectedMember
+from multiprocessing.connection import Connection as mpConnection
+
+# noinspection PyProtectedMember
+from multiprocessing.queues import Queue as mpQueue
+
+_mp = NonDaemonicSpawnContext(process_pre_init_func=SubProcCopyGlobalConfigPreInitFunc())
+
 
 __all__ = ["PostprocessingDataset", "LaplaceOrdering", "Sequential"]
 
@@ -93,11 +107,14 @@ class PostprocessingDataset(CachedDataset2):
 
     def __init__(
         self,
+        *,
         dataset: Dict[str, Any],
         map_seq: Optional[Callable] = None,
         map_seq_stream: Optional[Callable] = None,
         map_outputs: Optional[Dict[str, Any]] = None,
         map_seq_stream_preserves_num_seqs: Optional[bool] = None,
+        buf_size: int = 1,
+        num_workers: int = 0,
         **kwargs,
     ):
         """
@@ -123,6 +140,10 @@ class PostprocessingDataset(CachedDataset2):
             Example: `map_outputs={"data": {"dim": 42}}`
         :param map_seq_stream_preserves_num_seqs: whether the function in map_seq_stream preserves the number of
             sequences, i.e. for every input sequence there is exactly one output sequence.
+        :param buf_size: buffer size for each worker, number of seqs to prefetch.
+        :param num_workers: number of worker processes to use for data postprocessing.
+            This does not apply parallelism to the wrapped dataset, but only to the postprocessing step.
+            When set to 0, postprocessing happens inline.
         :param kwargs: see :class:`CachedDataset2`, :class:`Dataset`
         """
         super().__init__(**kwargs)
@@ -135,6 +156,10 @@ class PostprocessingDataset(CachedDataset2):
             raise ValueError(f"{self}: cannot set both map_seq and map_seq_stream")
         if map_seq and map_seq_stream_preserves_num_seqs is not None:
             raise ValueError(f"{self}: map_seq_stream_preserves_num_seqs is only allowed with map_seq_stream")
+        if buf_size < 1:
+            raise ValueError(f"{self}: buf_size must be >= 1, but got {buf_size}")
+        if num_workers < 0:
+            raise ValueError(f"{self}: num_workers must be >= 0, but got {num_workers}")
 
         self._dataset_def = dataset
         self._map_seq = map_seq
@@ -144,7 +169,8 @@ class PostprocessingDataset(CachedDataset2):
         assert map_seq_stream_preserves_num_seqs is None or isinstance(map_seq_stream_preserves_num_seqs, bool)
         self._map_seq_stream_preserves_num_seqs = map_seq_stream_preserves_num_seqs
         self._map_outputs = map_outputs
-        self._rng = RandomState(self._get_random_seed_for_epoch(0))
+        self._buf_size = buf_size
+        self._num_workers = num_workers
         self._seq_list_for_validation: Optional[List[str]] = None
 
         self._dataset = init_dataset(self._dataset_def, parent_dataset=self)
@@ -209,20 +235,46 @@ class PostprocessingDataset(CachedDataset2):
             self._num_seqs = 0
             return True
 
-        self._rng = RandomState(self._get_random_seed_for_epoch(epoch=epoch))
         assert self._dataset is not None
         self._dataset.init_seq_order(epoch=epoch, seq_list=seq_list, seq_order=seq_order)
-        self._data_iter = enumerate(
-            self._build_mapping_iter(
+        if self._num_workers > 0:
+            assert self._buf_size > 0
+            seq_queues = [_mp.Queue(maxsize=self._buf_size) for _ in range(self._num_workers)]
+            worker_procs = [
+                _WorkerProcParent(
+                    name=f"{self.__class__.__name__} {self.name} ep {epoch}",
+                    epoch=epoch,
+                    buffer_size=self._buf_size,
+                    map_seq=self._map_seq,
+                    map_seq_stream=self._map_seq_stream,
+                    out_tensor_dict_template=self._out_tensor_dict_template,
+                    rng_seed=self._get_random_seed_for_epoch(epoch=epoch * self._num_workers + i),
+                    seq_list=seq_list,
+                    seq_queue=seq_queue,
+                )
+                for i, seq_queue in enumerate(seq_queues)
+            ]
+            quit_event = threading.Event()
+            dataset_thread = threading.Thread(
+                target=self._distribute_seqs_to_children,
+                kwargs={"child_queues": seq_queues, "quit_event": quit_event},
+                name=f"{self.__class__.__name__} {self.name} dataset ep {epoch}",
+            )
+            dataset_thread.start()
+            data_iter = _MultiProcDataIter(
+                dataset_thread=dataset_thread, quit_event=quit_event, worker_procs=worker_procs
+            )
+        else:
+            data_iter = self._build_mapping_iter(
                 self._iterate_dataset(),
                 map_seq=self._map_seq,
                 map_seq_stream=self._map_seq_stream,
                 epoch=epoch,
                 out_tensor_dict_template=self._out_tensor_dict_template,
-                rng=self._rng,
+                rng=RandomState(self._get_random_seed_for_epoch(epoch=epoch)),
                 seq_list_for_validation=seq_list,
             )
-        )
+        self._data_iter = enumerate(data_iter)
         self._data_iter_produced_num_seqs = 0
         self._seq_list_for_validation = seq_list
         if self._map_seq_stream is None or self._map_seq_stream_preserves_num_seqs is True:
@@ -330,8 +382,8 @@ class PostprocessingDataset(CachedDataset2):
     def _build_mapping_iter(
         data_iter: Iterator[TensorDict],
         *,
-        map_seq: Optional[Callable[[TensorDict, int, int, RandomState], TensorDict]] = None,
-        map_seq_stream: Optional[Callable[[Iterator[TensorDict], int, RandomState], Iterator[TensorDict]]] = None,
+        map_seq: Optional[Callable] = None,
+        map_seq_stream: Optional[Callable] = None,
         epoch: int,
         out_tensor_dict_template: TensorDict,
         rng: RandomState,
@@ -394,7 +446,7 @@ class PostprocessingDataset(CachedDataset2):
                 f"map_seq must produce a {TensorDict.__name__}, but produced {type(tensor_dict).__name__}"
             )
 
-            # Re-adding the seq_tag/complete_frac here causes no harm in case they are dropped
+            # Re-adding the complete_frac/seq_idx/seq_tag here causes no harm in case they are dropped
             # since we don't add/drop any segments w/ the non-iterator postprocessing function.
             if "complete_frac" not in tensor_dict.data and comp_frac_raw_tensor is not None:
                 tensor_dict.data["complete_frac"] = Tensor(
@@ -414,6 +466,7 @@ class PostprocessingDataset(CachedDataset2):
 
             return tensor_dict
 
+        assert map_seq or map_seq_stream, "need to specify either map_seq or map_seq_stream"
         assert not (map_seq and map_seq_stream), "cannot set both map_seq and map_seq_stream"
         if map_seq is not None:
             data_iter = (_apply_map_seq(t_dict) for t_dict in data_iter)
@@ -441,6 +494,228 @@ class PostprocessingDataset(CachedDataset2):
             if labels and len(labels) == sparse_dim.dimension:
                 sparse_dim.vocab = Vocabulary.create_vocab_from_labels(self._dataset.labels[data_key])
         return Tensor(data_key, dims=dims, dtype=dtype, sparse_dim=sparse_dim)
+
+    def _distribute_seqs_to_children(self, *, child_queues: Sequence[mpQueue], quit_event: threading.Event):
+        num_workers = len(child_queues)
+        assert num_workers > 0
+        for seq_idx, tensor_dict in enumerate(self._iterate_dataset()):
+            if quit_event.is_set():
+                break
+            try:
+                child_queues[seq_idx % num_workers].put(tensor_dict, block=True)  # block for backpressure
+            except ValueError:
+                # queue is closed, i.e. the worker process died
+                break
+        for q in child_queues:
+            try:
+                q.put(None, block=True)  # signal end of data
+            except ValueError:
+                # queue is already closed, i.e. the worker process died
+                pass
+
+
+class _MultiProcDataIter:
+    """
+    Data iter that pulls from the worker processes and manages their lifetime.
+    """
+
+    def __init__(
+        self,
+        *,
+        dataset_thread: threading.Thread,
+        quit_event: threading.Event,
+        worker_procs: List[_WorkerProcParent],
+    ):
+        self.dataset_thread = dataset_thread
+        self.quit_event = quit_event
+        self.worker_procs = worker_procs
+
+        self._max_seq_idx: Optional[int] = None
+        self._seq_idx = 0
+
+    def __iter__(self):
+        return self
+
+    def __next__(self) -> Optional[TensorDict]:
+        if self.quit_event.is_set():
+            raise StopIteration
+
+        for _ in range(len(self.worker_procs)):
+            if self._max_seq_idx is not None and self._seq_idx >= self._max_seq_idx:
+                break
+            num_workers = len(self.worker_procs)
+            seq = self.worker_procs[self._seq_idx % num_workers].get_seq()
+            if seq is None and self._max_seq_idx is None:
+                self._max_seq_idx = self._seq_idx + num_workers  # drain the other workers
+            self._seq_idx += 1
+            if seq is not None:
+                return seq
+
+        # when we reach this point, all workers are exhausted and we stop
+        self.stop()
+        raise StopIteration
+
+    def stop(self):
+        if self.quit_event.is_set():
+            return
+        self.quit_event.set()
+        for wp in self.worker_procs:
+            wp.exit(join=True)
+        util.try_run(self.dataset_thread.join)
+
+    def __del__(self):
+        try:
+            self.stop()
+        except Exception:
+            pass
+
+
+class _WorkerProcParent:
+    def __init__(
+        self,
+        *,
+        name: str,
+        epoch: int,
+        buffer_size: int,
+        map_seq: Optional[Callable],
+        map_seq_stream: Optional[Callable],
+        out_tensor_dict_template: TensorDict,
+        rng_seed: int,
+        seq_list: Optional[List[str]],
+        seq_queue: mpQueue,
+    ):
+        parent_conn, child_conn = _mp.Pipe()
+        self.parent_conn = parent_conn
+
+        self.worker_proc = _mp.Process(
+            name=f"{name} worker ep {epoch}",
+            target=_worker_proc_loop,
+            args=(
+                epoch,
+                buffer_size,
+                map_seq,
+                map_seq_stream,
+                out_tensor_dict_template,
+                rng_seed,
+                seq_list,
+                child_conn,
+                seq_queue,
+            ),
+            daemon=True,
+        )
+        self.worker_proc.start()
+
+        # Make sure the child connection is closed here.
+        # It stays open in the child, until the child dies.
+        # When that happens, now any consecutive read on the pipe
+        # should yield an exception -- which is what we want,
+        # otherwise it would just hang.
+        child_conn.close()
+
+    def get_seq(self) -> Optional[DatasetSeq]:
+        """get_seq"""
+        self.parent_conn.send(("get_seq", {}))
+        msg, seq = self.parent_conn.recv()
+        assert msg == "seq"
+        return seq
+
+    def exit(self, *, join: bool = True):
+        """exit"""
+        self.parent_conn.send(("exit", {}))
+        if join:
+            self.worker_proc.join()
+
+    def __del__(self):
+        # noinspection PyBroadException
+        try:
+            self.exit(join=False)
+        except Exception:
+            pass
+        else:
+            util.try_run(self.worker_proc.join)
+
+
+def _worker_proc_loop(
+    epoch: int,
+    buffer_size: int,
+    map_seq: Optional[Callable],
+    map_seq_stream: Optional[Callable],
+    out_tensor_dict_template: TensorDict,
+    rng_seed: int,
+    seq_list: Optional[List[str]],
+    parent_conn: mpConnection,
+    seq_queue: mpQueue,
+):
+    if sys.platform == "linux":
+        with open("/proc/self/comm", "w") as f:
+            f.write(f"PP worker {epoch}")
+    better_exchook.setup_all()
+
+    assert isinstance(epoch, int)
+    assert isinstance(buffer_size, int)
+    assert buffer_size > 0
+    assert map_seq or map_seq_stream, "need to specify either map_seq or map_seq_stream"
+    assert not (map_seq and map_seq_stream), "cannot set both map_seq and map_seq_stream"
+    assert map_seq is None or isinstance(map_seq, Callable)
+    assert map_seq_stream is None or isinstance(map_seq_stream, Callable)
+    assert isinstance(out_tensor_dict_template, TensorDict)
+    assert isinstance(rng_seed, int)
+    assert isinstance(parent_conn, mpConnection)
+    assert isinstance(seq_queue, mpQueue)
+
+    cache: deque[TensorDict] = deque()
+
+    def _iter_queue(q: mpQueue) -> Iterator[TensorDict]:
+        while True:
+            try:
+                item = q.get(block=True)
+            except ValueError:
+                # queue is closed
+                break
+            if item is None:
+                break
+            yield item
+
+    data_iter = PostprocessingDataset._build_mapping_iter(
+        _iter_queue(seq_queue),
+        map_seq=map_seq,
+        map_seq_stream=map_seq_stream,
+        epoch=epoch,
+        out_tensor_dict_template=out_tensor_dict_template,
+        rng=RandomState(rng_seed),
+        seq_list_for_validation=seq_list,
+    )
+    assert isinstance(data_iter, Iterator)
+
+    def _add_to_cache():
+        nonlocal data_iter
+        try:
+            seq = next(data_iter)
+        except StopIteration:
+            data_iter = None
+            return False
+        cache.append(seq)
+        return True
+
+    try:
+        while True:
+            while not parent_conn.poll():
+                while data_iter is not None and len(cache) < buffer_size:
+                    if not _add_to_cache():
+                        break
+            msg, kwargs = parent_conn.recv()
+            if msg == "exit":
+                break
+            elif msg == "get_seq":
+                if not cache and data_iter is not None:
+                    _add_to_cache()
+                parent_conn.send(("seq", cache.popleft() if cache else None))
+            else:
+                raise Exception(f"unknown msg {msg!r}")
+    except KeyboardInterrupt:  # when parent dies
+        pass
+    except EOFError:  # when parent dies
+        pass
 
 
 class LaplaceOrdering(Callable[[Iterator[TensorDict]], Iterator[TensorDict]]):
