@@ -1176,6 +1176,42 @@ def test_DistributeFilesDataset_sharding():
         # assert global_seq_idx == len(hdf_files) * num_seqs // distrib_size  # TODO not sure...?
 
 
+def test_TensorDict_pickle():
+    import pickle
+    from returnn.tensor import Dim, Tensor, TensorDict
+
+    tensor_dict = TensorDict(
+        {"data": Tensor("data", dims=[Dim(10)], dtype="int32", raw_tensor=numpy.zeros((10,), dtype="int32"))}
+    )
+    assert all(tensor.raw_tensor is not None for tensor in tensor_dict.data.values())
+
+    s = pickle.dumps(tensor_dict)
+    tensor_dict2 = pickle.loads(s)
+
+    assert tensor_dict.data.keys() == tensor_dict2.data.keys()
+    assert all(tensor.raw_tensor is not None for tensor in tensor_dict2.data.values())
+
+
+def test_TensorDict_queue():
+    from returnn.config import SubProcCopyGlobalConfigPreInitFunc
+    from returnn.util.multi_proc_non_daemonic_spawn import NonDaemonicSpawnContext
+    from returnn.tensor import Dim, Tensor, TensorDict
+
+    _mp = NonDaemonicSpawnContext(process_pre_init_func=SubProcCopyGlobalConfigPreInitFunc())
+
+    tensor_dict = TensorDict(
+        {"data": Tensor("data", dims=[Dim(10)], dtype="int32", raw_tensor=numpy.zeros((10,), dtype="int32"))}
+    )
+    assert all(tensor.raw_tensor is not None for tensor in tensor_dict.data.values())
+
+    q = _mp.Queue(maxsize=2)
+    q.put(tensor_dict)
+    tensor_dict2 = q.get(timeout=5.0)
+
+    assert tensor_dict.data.keys() == tensor_dict2.data.keys()
+    assert all(tensor.raw_tensor is not None for tensor in tensor_dict2.data.values())
+
+
 def test_PostprocessingDataset():
     _demo_txt = "some utterance text that has a few words"
 
