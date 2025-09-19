@@ -212,7 +212,17 @@ class PostprocessingDataset(CachedDataset2):
         self._rng = RandomState(self._get_random_seed_for_epoch(epoch=epoch))
         assert self._dataset is not None
         self._dataset.init_seq_order(epoch=epoch, seq_list=seq_list, seq_order=seq_order)
-        self._data_iter = enumerate(self._build_mapping_iter())
+        self._data_iter = enumerate(
+            self._build_mapping_iter(
+                self._iterate_dataset(),
+                map_seq=self._map_seq,
+                map_seq_stream=self._map_seq_stream,
+                epoch=epoch,
+                out_tensor_dict_template=self._out_tensor_dict_template,
+                rng=self._rng,
+                seq_list_for_validation=seq_list,
+            )
+        )
         self._data_iter_produced_num_seqs = 0
         self._seq_list_for_validation = seq_list
         if self._map_seq_stream is None or self._map_seq_stream_preserves_num_seqs is True:
@@ -290,86 +300,6 @@ class PostprocessingDataset(CachedDataset2):
             seq = DatasetSeq(complete_frac=complete_frac, features=features, seq_idx=seq_idx, seq_tag=seq_tag)
             return seq
 
-    def _build_mapping_iter(self) -> Iterator[TensorDict]:
-        """
-        :return: an iterator applying both the segment level and across-segment transformations on the given dataset
-        """
-
-        def _validate_tensor_dict_iter(inner: Iterator[TensorDict]) -> Iterator[TensorDict]:
-            last_complete_frac = 0.0
-            for t_dict in inner:
-                assert isinstance(t_dict, TensorDict), (
-                    f"postprocessing mapper function must produce a {TensorDict.__name__}, "
-                    f"but got a {type(t_dict).__name__}"
-                )
-                if "complete_frac" in t_dict.data:  # sanity check complete_frac
-                    complete_frac = float(t_dict.data["complete_frac"].raw_tensor)
-                    assert 0.0 <= complete_frac <= 1.0, f"complete_frac must be in [0, 1], but got {complete_frac}"
-                    assert complete_frac >= last_complete_frac, (
-                        "complete_frac must be monotonically increasing, "
-                        f"but got {complete_frac} after {last_complete_frac}"
-                    )
-                    last_complete_frac = complete_frac
-                for data_key, out_t in self._out_tensor_dict_template.data.items():
-                    in_t = t_dict.data[data_key]
-                    assert in_t.ndim == out_t.batch_ndim, (
-                        f"Dim number mismatch for {data_key}: {in_t.ndim} != {out_t.batch_ndim}. "
-                        "Postprocessing data tensors must not have a batch dimension."
-                    )
-                    assert in_t.dtype == out_t.dtype, (
-                        f"dtype mismatch for {data_key}: '{in_t.dtype}' != '{out_t.dtype}'"
-                    )
-                    for i, (in_dim, out_shape) in enumerate(zip(in_t.dims, out_t.shape)):
-                        assert in_dim.dimension is None or in_dim.dimension == out_shape, (
-                            f"Dim {i} mismatch on {data_key}: "
-                            f"{in_dim.dimension} must either be `None` or equal {out_shape}"
-                        )
-                yield t_dict
-
-        def _apply_map_seq(inner: Iterator[TensorDict]) -> Iterator[TensorDict]:
-            for tensor_dict in inner:
-                seq_index = int(tensor_dict.data["seq_idx"].raw_tensor.item())
-                comp_frac_raw_tensor = (
-                    tensor_dict.data["complete_frac"].raw_tensor if "complete_frac" in tensor_dict.data else None
-                )
-                seq_tag_raw_tensor = tensor_dict.data["seq_tag"].raw_tensor
-
-                tensor_dict = self._map_seq(
-                    tensor_dict, epoch=self.epoch, seq_idx=seq_index, rng=self._rng, **util.get_fwd_compat_kwargs()
-                )
-                assert isinstance(tensor_dict, TensorDict), (
-                    f"map_seq must produce a {TensorDict.__name__}, but produced {type(tensor_dict).__name__}"
-                )
-
-                # Re-adding the seq_tag/complete_frac here causes no harm in case they are dropped
-                # since we don't add/drop any segments w/ the non-iterator postprocessing function.
-                if "complete_frac" not in tensor_dict.data and comp_frac_raw_tensor is not None:
-                    tensor_dict.data["complete_frac"] = Tensor(
-                        "complete_frac", dims=(), dtype="float32", raw_tensor=comp_frac_raw_tensor
-                    )
-                if "seq_tag" not in tensor_dict.data:
-                    tensor_dict.data["seq_tag"] = Tensor(
-                        "seq_tag", dims=(), dtype="string", raw_tensor=seq_tag_raw_tensor
-                    )
-
-                if self._seq_list_for_validation is not None:
-                    seq_tag = self._seq_list_for_validation[seq_index]
-                    tag_of_seq = tensor_dict.data["seq_tag"].raw_tensor.item()
-                    assert tag_of_seq == seq_tag, (
-                        f"seq tag mismath: {tag_of_seq} != {seq_tag} for seq index {seq_index} when seq list is given"
-                    )
-                yield tensor_dict
-
-        data_iter = self._iterate_dataset()
-        if self._map_seq is not None:
-            data_iter = _apply_map_seq(data_iter)
-        if self._map_seq_stream is not None:
-            data_iter = self._map_seq_stream(data_iter, epoch=self.epoch, rng=self._rng, **util.get_fwd_compat_kwargs())
-            assert isinstance(data_iter, Iterator), (
-                f"map_seq_stream must produce an {Iterator.__name__}, but produced {type(data_iter).__name__}"
-            )
-        return _validate_tensor_dict_iter(data_iter)
-
     def _iterate_dataset(self) -> Iterator[TensorDict]:
         """
         :return: generator providing data samples in the form of a TensorDict
@@ -395,6 +325,104 @@ class PostprocessingDataset(CachedDataset2):
 
             yield tensor_dict
             seq_index += 1
+
+    @staticmethod
+    def _build_mapping_iter(
+        data_iter: Iterator[TensorDict],
+        *,
+        map_seq: Optional[Callable[[TensorDict, int, int, RandomState], TensorDict]] = None,
+        map_seq_stream: Optional[Callable[[Iterator[TensorDict], int, RandomState], Iterator[TensorDict]]] = None,
+        epoch: int,
+        out_tensor_dict_template: TensorDict,
+        rng: RandomState,
+        seq_list_for_validation: Optional[List[str]] = None,
+    ) -> Iterator[TensorDict]:
+        """
+        Build an iterator applying the mapping functions on the given dataset iterator.
+
+        :param data_iter: iterator providing data samples in the form of a TensorDict
+        :param map_seq: see :class:`PostprocessingDataset`
+        :param map_seq_stream: see :class:`PostprocessingDataset`
+        :param epoch: current epoch number
+        :param out_tensor_dict_template: template for the output TensorDicts, used for validation
+        :param rng: random number generator to use
+        :param seq_list_for_validation: optional list of seq tags to validate against when processing the data
+        :return: an iterator applying both the segment level and across-segment transformations on the given dataset
+        """
+
+        def _validate_tensor_dict_iter(inner: Iterator[TensorDict]) -> Iterator[TensorDict]:
+            last_complete_frac = 0.0
+            for t_dict in inner:
+                assert isinstance(t_dict, TensorDict), (
+                    f"postprocessing mapper function must produce a {TensorDict.__name__}, "
+                    f"but got a {type(t_dict).__name__}"
+                )
+                if "complete_frac" in t_dict.data:  # sanity check complete_frac
+                    complete_frac = float(t_dict.data["complete_frac"].raw_tensor)
+                    assert 0.0 <= complete_frac <= 1.0, f"complete_frac must be in [0, 1], but got {complete_frac}"
+                    assert complete_frac >= last_complete_frac, (
+                        "complete_frac must be monotonically increasing, "
+                        f"but got {complete_frac} after {last_complete_frac}"
+                    )
+                    last_complete_frac = complete_frac
+                for data_key, out_t in out_tensor_dict_template.data.items():
+                    in_t = t_dict.data[data_key]
+                    assert in_t.ndim == out_t.batch_ndim, (
+                        f"Dim number mismatch for {data_key}: {in_t.ndim} != {out_t.batch_ndim}. "
+                        "Postprocessing data tensors must not have a batch dimension."
+                    )
+                    assert in_t.dtype == out_t.dtype, (
+                        f"dtype mismatch for {data_key}: '{in_t.dtype}' != '{out_t.dtype}'"
+                    )
+                    for i, (in_dim, out_shape) in enumerate(zip(in_t.dims, out_t.shape)):
+                        assert in_dim.dimension is None or in_dim.dimension == out_shape, (
+                            f"Dim {i} mismatch on {data_key}: "
+                            f"{in_dim.dimension} must either be `None` or equal {out_shape}"
+                        )
+                yield t_dict
+
+        def _apply_map_seq(tensor_dict: TensorDict) -> TensorDict:
+            comp_frac_raw_tensor = (
+                tensor_dict.data["complete_frac"].raw_tensor if "complete_frac" in tensor_dict.data else None
+            )
+            seq_index_raw = tensor_dict.data["seq_idx"].raw_tensor
+            seq_index = int(seq_index_raw.item())
+            seq_tag_raw_tensor = tensor_dict.data["seq_tag"].raw_tensor
+
+            tensor_dict = map_seq(tensor_dict, epoch=epoch, seq_idx=seq_index, rng=rng, **util.get_fwd_compat_kwargs())
+            assert isinstance(tensor_dict, TensorDict), (
+                f"map_seq must produce a {TensorDict.__name__}, but produced {type(tensor_dict).__name__}"
+            )
+
+            # Re-adding the seq_tag/complete_frac here causes no harm in case they are dropped
+            # since we don't add/drop any segments w/ the non-iterator postprocessing function.
+            if "complete_frac" not in tensor_dict.data and comp_frac_raw_tensor is not None:
+                tensor_dict.data["complete_frac"] = Tensor(
+                    "complete_frac", dims=(), dtype="float32", raw_tensor=comp_frac_raw_tensor
+                )
+            if "seq_idx" not in tensor_dict.data:
+                tensor_dict.data["seq_idx"] = Tensor("seq_idx", dims=(), dtype="int32", raw_tensor=seq_index_raw)
+            if "seq_tag" not in tensor_dict.data:
+                tensor_dict.data["seq_tag"] = Tensor("seq_tag", dims=(), dtype="string", raw_tensor=seq_tag_raw_tensor)
+
+            if seq_list_for_validation is not None:
+                seq_tag = seq_list_for_validation[seq_index]
+                tag_of_seq = tensor_dict.data["seq_tag"].raw_tensor.item()
+                assert tag_of_seq == seq_tag, (
+                    f"seq tag mismath: {tag_of_seq} != {seq_tag} for seq index {seq_index} when seq list is given"
+                )
+
+            return tensor_dict
+
+        assert not (map_seq and map_seq_stream), "cannot set both map_seq and map_seq_stream"
+        if map_seq is not None:
+            data_iter = (_apply_map_seq(t_dict) for t_dict in data_iter)
+        if map_seq_stream is not None:
+            data_iter = map_seq_stream(data_iter, epoch=epoch, rng=rng, **util.get_fwd_compat_kwargs())
+            assert isinstance(data_iter, Iterator), (
+                f"map_seq_stream must produce an {Iterator.__name__}, but produced {type(data_iter).__name__}"
+            )
+        return _validate_tensor_dict_iter(data_iter)
 
     def _make_tensor_template_from_input(self, data_key: str) -> Tensor:
         dtype = self._dataset.get_data_dtype(data_key)
