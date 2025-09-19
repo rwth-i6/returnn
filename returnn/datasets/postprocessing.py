@@ -4,19 +4,33 @@ Provides :class:`PostprocessingDataset`.
 
 from __future__ import annotations
 
+from collections import deque
 from itertools import islice
 import numpy
 from numpy.random import RandomState
-from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple, TypeVar
+import sys
+import threading
+from typing import Any, Callable, Dict, Iterator, List, Optional, Sequence, Tuple, TypeVar
 
 from returnn.datasets.basic import DatasetSeq
 from returnn.datasets.util.strings import str_to_numpy_array
 from returnn.datasets.util.vocabulary import Vocabulary
 from returnn.tensor import Tensor, TensorDict
 from returnn.tensor.dim import Dim
-from returnn.util import basic as util
+from returnn.util import basic as util, better_exchook
+from returnn.util.multi_proc_non_daemonic_spawn import NonDaemonicSpawnContext
+from returnn.config import SubProcCopyGlobalConfigPreInitFunc
 from .basic import init_dataset
 from .cached2 import CachedDataset2
+
+# noinspection PyProtectedMember
+from multiprocessing.connection import Connection as mpConnection
+
+# noinspection PyProtectedMember
+from multiprocessing.queues import Queue as mpQueue
+
+_mp = NonDaemonicSpawnContext(process_pre_init_func=SubProcCopyGlobalConfigPreInitFunc())
+
 
 __all__ = ["PostprocessingDataset", "LaplaceOrdering", "Sequential"]
 
@@ -31,8 +45,14 @@ class PostprocessingDataset(CachedDataset2):
     SpecAugment or speed perturbation into the data loading pipeline.
 
     The integration into the data loading pipeline makes it easy to distribute the
-    data processing work across multiple CPU cores using `MultiProcDataset` and in
-    turn frees the GPU from data preprocessing tasks.
+    data processing work across multiple CPU cores and in turn frees the GPU from
+    data preprocessing tasks.
+
+    Multiprocessing can either be done using ``MultiProcDataset`` or by specifying
+    the ``num_workers`` parameter of this class.
+    The latter only applies parallelism to the post-processing functions themselves,
+    and does not duplicate the underlying dataset once per worker.
+    This is often fast enough and has the advantage of lower memory consumption.
 
     Example usage::
 
@@ -61,8 +81,8 @@ class PostprocessingDataset(CachedDataset2):
     The postprocessor functions operate on ``TensorDict``s, which have entries for
     all data keys in the underlying dataset.
 
-    There may also be additional "meta" entries in the tensor dicts, like ``complete_frac``
-    and ``seq_tag``.
+    There may also be additional "meta" entries in the tensor dicts, like ``complete_frac``,
+    ``seq_idx`` and ``seq_tag``.
     These should be copied over in a manner that is reasonable for the use case at hand and
     ensures forwards compatibility as well as reasonably possible.
 
@@ -93,11 +113,14 @@ class PostprocessingDataset(CachedDataset2):
 
     def __init__(
         self,
+        *,
         dataset: Dict[str, Any],
         map_seq: Optional[Callable] = None,
         map_seq_stream: Optional[Callable] = None,
         map_outputs: Optional[Dict[str, Any]] = None,
         map_seq_stream_preserves_num_seqs: Optional[bool] = None,
+        buf_size: int = 1,
+        num_workers: int = 0,
         **kwargs,
     ):
         """
@@ -123,6 +146,17 @@ class PostprocessingDataset(CachedDataset2):
             Example: `map_outputs={"data": {"dim": 42}}`
         :param map_seq_stream_preserves_num_seqs: whether the function in map_seq_stream preserves the number of
             sequences, i.e. for every input sequence there is exactly one output sequence.
+        :param buf_size: buffer size for each worker, number of seqs to prefetch.
+            Must be > 0. Only relevant when num_workers > 0.
+        :param num_workers: number of worker processes to use for data postprocessing.
+
+            This does not apply parallelism to the wrapped dataset, but only to the postprocessing step.
+
+            Conceptually, this achieves similar results to using MultiProcDataset, but with potentially lower
+            memory consumption, since only the postprocessing step is parallelized and not the wrapped/underlying
+            source dataset that is postprocessed.
+
+            When set to 0, postprocessing happens inline.
         :param kwargs: see :class:`CachedDataset2`, :class:`Dataset`
         """
         super().__init__(**kwargs)
@@ -135,6 +169,10 @@ class PostprocessingDataset(CachedDataset2):
             raise ValueError(f"{self}: cannot set both map_seq and map_seq_stream")
         if map_seq and map_seq_stream_preserves_num_seqs is not None:
             raise ValueError(f"{self}: map_seq_stream_preserves_num_seqs is only allowed with map_seq_stream")
+        if buf_size < 1:
+            raise ValueError(f"{self}: buf_size must be >= 1, but got {buf_size}")
+        if num_workers < 0:
+            raise ValueError(f"{self}: num_workers must be >= 0, but got {num_workers}")
 
         self._dataset_def = dataset
         self._map_seq = map_seq
@@ -144,7 +182,8 @@ class PostprocessingDataset(CachedDataset2):
         assert map_seq_stream_preserves_num_seqs is None or isinstance(map_seq_stream_preserves_num_seqs, bool)
         self._map_seq_stream_preserves_num_seqs = map_seq_stream_preserves_num_seqs
         self._map_outputs = map_outputs
-        self._rng = RandomState(self._get_random_seed_for_epoch(0))
+        self._buf_size = buf_size
+        self._num_workers = num_workers
         self._seq_list_for_validation: Optional[List[str]] = None
 
         self._dataset = init_dataset(self._dataset_def, parent_dataset=self)
@@ -166,7 +205,11 @@ class PostprocessingDataset(CachedDataset2):
             self.labels = self._dataset.labels.copy()
         # update only after _out_tensor_dict_template has been created from _in_tensor_dict_template
         self._in_tensor_dict_template.update(
-            {"complete_frac": {"dims": (), "dtype": "float32"}, "seq_tag": {"dims": (), "dtype": "string"}},
+            {
+                "complete_frac": {"dims": (), "dtype": "float32"},
+                "seq_idx": {"dims": (), "dtype": "int32"},
+                "seq_tag": {"dims": (), "dtype": "string"},
+            },
             auto_convert=True,
         )
         self.num_outputs = {
@@ -205,10 +248,46 @@ class PostprocessingDataset(CachedDataset2):
             self._num_seqs = 0
             return True
 
-        self._rng = RandomState(self._get_random_seed_for_epoch(epoch=epoch))
         assert self._dataset is not None
         self._dataset.init_seq_order(epoch=epoch, seq_list=seq_list, seq_order=seq_order)
-        self._data_iter = enumerate(self._build_mapping_iter())
+        if self._num_workers > 0:
+            assert self._buf_size > 0
+            seq_queues = [_mp.Queue(maxsize=self._buf_size) for _ in range(self._num_workers)]
+            worker_procs = [
+                _WorkerProcParent(
+                    name=f"{self.__class__.__name__} {self.name} ep {epoch}",
+                    epoch=epoch,
+                    buffer_size=self._buf_size,
+                    map_seq=self._map_seq,
+                    map_seq_stream=self._map_seq_stream,
+                    out_tensor_dict_template=self._out_tensor_dict_template,
+                    rng_seed=self._get_random_seed_for_epoch(epoch=epoch * self._num_workers + i),
+                    seq_list=seq_list,
+                    seq_queue=seq_queue,
+                )
+                for i, seq_queue in enumerate(seq_queues)
+            ]
+            quit_event = threading.Event()
+            dataset_thread = threading.Thread(
+                target=self._distribute_seqs_to_children,
+                kwargs={"child_queues": seq_queues, "quit_event": quit_event},
+                name=f"{self.__class__.__name__} {self.name} dataset ep {epoch}",
+            )
+            dataset_thread.start()
+            data_iter = _MultiProcDataIter(
+                dataset_thread=dataset_thread, quit_event=quit_event, worker_procs=worker_procs
+            )
+        else:
+            data_iter = self._build_mapping_iter(
+                self._iterate_dataset(),
+                map_seq=self._map_seq,
+                map_seq_stream=self._map_seq_stream,
+                epoch=epoch,
+                out_tensor_dict_template=self._out_tensor_dict_template,
+                rng=RandomState(self._get_random_seed_for_epoch(epoch=epoch)),
+                seq_list_for_validation=seq_list,
+            )
+        self._data_iter = enumerate(data_iter)
         self._data_iter_produced_num_seqs = 0
         self._seq_list_for_validation = seq_list
         if self._map_seq_stream is None or self._map_seq_stream_preserves_num_seqs is True:
@@ -286,8 +365,53 @@ class PostprocessingDataset(CachedDataset2):
             seq = DatasetSeq(complete_frac=complete_frac, features=features, seq_idx=seq_idx, seq_tag=seq_tag)
             return seq
 
-    def _build_mapping_iter(self) -> Iterator[TensorDict]:
+    def _iterate_dataset(self) -> Iterator[TensorDict]:
         """
+        :return: generator providing data samples in the form of a TensorDict
+        """
+        data_keys = self._dataset.get_data_keys()
+
+        seq_index = 0
+        while self._dataset.is_less_than_num_seqs(seq_index):
+            self._dataset.load_seqs(seq_index, seq_index + 1)
+
+            tensor_dict = self._in_tensor_dict_template.copy_template()
+            for data_key in data_keys:
+                tensor_dict.data[data_key].raw_tensor = self._dataset.get_data(seq_index, data_key)
+
+            complete_frac = self._dataset.get_complete_frac(seq_index, allow_only_lr_suitable=True)
+            if complete_frac is not None:
+                comp_frac_raw_tensor = numpy.array(complete_frac, dtype=numpy.float32)
+                tensor_dict.data["complete_frac"].raw_tensor = comp_frac_raw_tensor
+            seq_idx_raw_tensor = numpy.array(seq_index, dtype=numpy.int32)
+            tensor_dict.data["seq_idx"].raw_tensor = seq_idx_raw_tensor
+            seq_tag_raw_tensor = str_to_numpy_array(self._dataset.get_tag(seq_index))
+            tensor_dict.data["seq_tag"].raw_tensor = seq_tag_raw_tensor
+
+            yield tensor_dict
+            seq_index += 1
+
+    @staticmethod
+    def _build_mapping_iter(
+        data_iter: Iterator[TensorDict],
+        *,
+        map_seq: Optional[Callable] = None,
+        map_seq_stream: Optional[Callable] = None,
+        epoch: int,
+        out_tensor_dict_template: TensorDict,
+        rng: RandomState,
+        seq_list_for_validation: Optional[List[str]] = None,
+    ) -> Iterator[TensorDict]:
+        """
+        Build an iterator applying the mapping functions on the given dataset iterator.
+
+        :param data_iter: iterator providing data samples in the form of a TensorDict
+        :param map_seq: see :class:`PostprocessingDataset`
+        :param map_seq_stream: see :class:`PostprocessingDataset`
+        :param epoch: current epoch number
+        :param out_tensor_dict_template: template for the output TensorDicts, used for validation
+        :param rng: random number generator to use
+        :param seq_list_for_validation: optional list of seq tags to validate against when processing the data
         :return: an iterator applying both the segment level and across-segment transformations on the given dataset
         """
 
@@ -306,7 +430,7 @@ class PostprocessingDataset(CachedDataset2):
                         f"but got {complete_frac} after {last_complete_frac}"
                     )
                     last_complete_frac = complete_frac
-                for data_key, out_t in self._out_tensor_dict_template.data.items():
+                for data_key, out_t in out_tensor_dict_template.data.items():
                     in_t = t_dict.data[data_key]
                     assert in_t.ndim == out_t.batch_ndim, (
                         f"Dim number mismatch for {data_key}: {in_t.ndim} != {out_t.batch_ndim}. "
@@ -322,64 +446,49 @@ class PostprocessingDataset(CachedDataset2):
                         )
                 yield t_dict
 
-        data_iter = self._iterate_dataset()
-        if self._map_seq_stream is not None:
-            data_iter = self._map_seq_stream(data_iter, epoch=self.epoch, rng=self._rng, **util.get_fwd_compat_kwargs())
+        def _apply_map_seq(tensor_dict: TensorDict) -> TensorDict:
+            comp_frac_raw_tensor = (
+                tensor_dict.data["complete_frac"].raw_tensor if "complete_frac" in tensor_dict.data else None
+            )
+            seq_index_raw = tensor_dict.data["seq_idx"].raw_tensor
+            seq_index = int(seq_index_raw.item())
+            seq_tag_raw_tensor = tensor_dict.data["seq_tag"].raw_tensor
+
+            tensor_dict = map_seq(tensor_dict, epoch=epoch, seq_idx=seq_index, rng=rng, **util.get_fwd_compat_kwargs())
+            assert isinstance(tensor_dict, TensorDict), (
+                f"map_seq must produce a {TensorDict.__name__}, but produced {type(tensor_dict).__name__}"
+            )
+
+            # Re-adding the complete_frac/seq_idx/seq_tag here causes no harm in case they are dropped
+            # since we don't add/drop any segments w/ the non-iterator postprocessing function.
+            if "complete_frac" not in tensor_dict.data and comp_frac_raw_tensor is not None:
+                tensor_dict.data["complete_frac"] = Tensor(
+                    "complete_frac", dims=(), dtype="float32", raw_tensor=comp_frac_raw_tensor
+                )
+            if "seq_idx" not in tensor_dict.data:
+                tensor_dict.data["seq_idx"] = Tensor("seq_idx", dims=(), dtype="int32", raw_tensor=seq_index_raw)
+            if "seq_tag" not in tensor_dict.data:
+                tensor_dict.data["seq_tag"] = Tensor("seq_tag", dims=(), dtype="string", raw_tensor=seq_tag_raw_tensor)
+
+            if seq_list_for_validation is not None:
+                seq_tag = seq_list_for_validation[seq_index]
+                tag_of_seq = tensor_dict.data["seq_tag"].raw_tensor.item()
+                assert tag_of_seq == seq_tag, (
+                    f"seq tag mismath: {tag_of_seq} != {seq_tag} for seq index {seq_index} when seq list is given"
+                )
+
+            return tensor_dict
+
+        assert map_seq or map_seq_stream, "need to specify either map_seq or map_seq_stream"
+        assert not (map_seq and map_seq_stream), "cannot set both map_seq and map_seq_stream"
+        if map_seq is not None:
+            data_iter = (_apply_map_seq(t_dict) for t_dict in data_iter)
+        if map_seq_stream is not None:
+            data_iter = map_seq_stream(data_iter, epoch=epoch, rng=rng, **util.get_fwd_compat_kwargs())
             assert isinstance(data_iter, Iterator), (
                 f"map_seq_stream must produce an {Iterator.__name__}, but produced {type(data_iter).__name__}"
             )
         return _validate_tensor_dict_iter(data_iter)
-
-    def _iterate_dataset(self) -> Iterator[TensorDict]:
-        """
-        :return: generator providing data samples in the form of a TensorDict
-        """
-        data_keys = self._dataset.get_data_keys()
-
-        seq_index = 0
-        while self._dataset.is_less_than_num_seqs(seq_index):
-            self._dataset.load_seqs(seq_index, seq_index + 1)
-
-            tensor_dict = self._in_tensor_dict_template.copy_template()
-            for data_key in data_keys:
-                tensor_dict.data[data_key].raw_tensor = self._dataset.get_data(seq_index, data_key)
-
-            complete_frac = self._dataset.get_complete_frac(seq_index, allow_only_lr_suitable=True)
-            comp_frac_raw_tensor = None
-            if complete_frac is not None:
-                comp_frac_raw_tensor = numpy.array(complete_frac, dtype=numpy.float32)
-                tensor_dict.data["complete_frac"].raw_tensor = comp_frac_raw_tensor
-            seq_tag_raw_tensor = str_to_numpy_array(self._dataset.get_tag(seq_index))
-            tensor_dict.data["seq_tag"].raw_tensor = seq_tag_raw_tensor
-
-            if self._map_seq is not None:
-                tensor_dict = self._map_seq(
-                    tensor_dict, epoch=self.epoch, seq_idx=seq_index, rng=self._rng, **util.get_fwd_compat_kwargs()
-                )
-                assert isinstance(tensor_dict, TensorDict), (
-                    f"map_seq must produce a {TensorDict.__name__}, but produced {type(tensor_dict).__name__}"
-                )
-
-                # Re-adding the seq_tag/complete_frac here causes no harm in case they are dropped
-                # since we don't add/drop any segments w/ the non-iterator postprocessing function.
-                if "complete_frac" not in tensor_dict.data and comp_frac_raw_tensor is not None:
-                    tensor_dict.data["complete_frac"] = Tensor(
-                        "complete_frac", dims=(), dtype="float32", raw_tensor=comp_frac_raw_tensor
-                    )
-                if "seq_tag" not in tensor_dict.data:
-                    tensor_dict.data["seq_tag"] = Tensor(
-                        "seq_tag", dims=(), dtype="string", raw_tensor=seq_tag_raw_tensor
-                    )
-
-                if self._seq_list_for_validation is not None:
-                    seq_tag = self._seq_list_for_validation[seq_index]
-                    tag_of_seq = tensor_dict.data["seq_tag"].raw_tensor.item()
-                    assert tag_of_seq == seq_tag, (
-                        f"seq tag mismath: {tag_of_seq} != {seq_tag} for seq index {seq_index} when seq list is given"
-                    )
-
-            yield tensor_dict
-            seq_index += 1
 
     def _make_tensor_template_from_input(self, data_key: str) -> Tensor:
         dtype = self._dataset.get_data_dtype(data_key)
@@ -398,6 +507,245 @@ class PostprocessingDataset(CachedDataset2):
             if labels and len(labels) == sparse_dim.dimension:
                 sparse_dim.vocab = Vocabulary.create_vocab_from_labels(self._dataset.labels[data_key])
         return Tensor(data_key, dims=dims, dtype=dtype, sparse_dim=sparse_dim)
+
+    def _distribute_seqs_to_children(self, *, child_queues: Sequence[mpQueue], quit_event: threading.Event):
+        num_workers = len(child_queues)
+        assert num_workers > 0
+
+        # TODO: should we hold a lock around the dataset while this thread is alive?
+        #
+        # This would help prevent issues when switching from one epoch to the next
+        # (where a new thread will be started).
+
+        for seq_idx, tensor_dict in enumerate(self._iterate_dataset()):
+            if quit_event.is_set():
+                break
+            try:
+                child_queues[seq_idx % num_workers].put(tensor_dict, block=True)  # block for backpressure
+            except ValueError:
+                # queue is closed, i.e. the worker process died
+                break
+        for q in child_queues:
+            try:
+                q.put(None, block=True)  # signal end of data
+            except ValueError:
+                # queue is already closed, i.e. the worker process died
+                pass
+
+
+class _MultiProcDataIter:
+    """
+    Data iter that pulls from the worker processes and manages their lifetime.
+    """
+
+    def __init__(
+        self,
+        *,
+        dataset_thread: threading.Thread,
+        quit_event: threading.Event,
+        worker_procs: List[_WorkerProcParent],
+    ):
+        self.dataset_thread = dataset_thread
+        self.quit_event = quit_event
+        self.worker_procs = worker_procs
+
+        self._max_seq_idx: Optional[int] = None
+        self._seq_idx = 0
+
+    def __iter__(self):
+        return self
+
+    def __next__(self) -> Optional[TensorDict]:
+        if self.quit_event.is_set():
+            raise StopIteration
+
+        for _ in range(len(self.worker_procs)):
+            if self._max_seq_idx is not None and self._seq_idx >= self._max_seq_idx:
+                break
+            num_workers = len(self.worker_procs)
+            seq = self.worker_procs[self._seq_idx % num_workers].get_seq()
+            if seq is None and self._max_seq_idx is None:
+                # TODO: this is wrong, we need to drain all workers until each of them is exhausted
+                # this is not neccessarily the case after just one more iteration through all workers.
+                #
+                # Consider the case where the underlying dataset has just 1 seq, but the workers repeat
+                # this seq 5 times. Then the first worker has 5 seqs, the others have 0.
+                # Right now we would stop after noticing the first worker that is exhausted,
+                # but the first one still has 4 more seqs to provide.
+                #
+                # just remove them from the list of worker procs when they are exhausted and only stop
+                # when the list is empty
+                self._max_seq_idx = self._seq_idx + num_workers  # drain the other workers
+            self._seq_idx += 1
+            if seq is not None:
+                return seq
+
+        # when we reach this point, all workers are exhausted and we stop
+        self.stop()
+        raise StopIteration
+
+    def stop(self):
+        if self.quit_event.is_set():
+            return
+        self.quit_event.set()
+        for wp in self.worker_procs:
+            wp.exit(join=True)
+        util.try_run(self.dataset_thread.join)
+
+    def __del__(self):
+        # noinspection PyBroadException
+        try:
+            self.stop()
+        except Exception:
+            pass
+
+
+class _WorkerProcParent:
+    def __init__(
+        self,
+        *,
+        name: str,
+        epoch: int,
+        buffer_size: int,
+        map_seq: Optional[Callable],
+        map_seq_stream: Optional[Callable],
+        out_tensor_dict_template: TensorDict,
+        rng_seed: int,
+        seq_list: Optional[List[str]],
+        seq_queue: mpQueue,
+    ):
+        parent_conn, child_conn = _mp.Pipe()
+        self.parent_conn = parent_conn
+
+        self.worker_proc = _mp.Process(
+            name=f"{name} worker ep {epoch}",
+            target=_worker_proc_loop,
+            args=(
+                epoch,
+                buffer_size,
+                map_seq,
+                map_seq_stream,
+                out_tensor_dict_template,
+                rng_seed,
+                seq_list,
+                child_conn,
+                seq_queue,
+            ),
+            daemon=True,
+        )
+        self.worker_proc.start()
+
+        # Make sure the child connection is closed here.
+        # It stays open in the child, until the child dies.
+        # When that happens, now any consecutive read on the pipe
+        # should yield an exception -- which is what we want,
+        # otherwise it would just hang.
+        child_conn.close()
+
+    def get_seq(self) -> Optional[DatasetSeq]:
+        """get_seq"""
+        self.parent_conn.send(("get_seq", {}))
+        msg, seq = self.parent_conn.recv()
+        assert msg == "seq"
+        return seq
+
+    def exit(self, *, join: bool = True):
+        """exit"""
+        self.parent_conn.send(("exit", {}))
+        if join:
+            self.worker_proc.join()
+
+    def __del__(self):
+        # noinspection PyBroadException
+        try:
+            self.exit(join=False)
+        except Exception:
+            pass
+        else:
+            util.try_run(self.worker_proc.join)
+
+
+def _worker_proc_loop(
+    epoch: int,
+    buffer_size: int,
+    map_seq: Optional[Callable],
+    map_seq_stream: Optional[Callable],
+    out_tensor_dict_template: TensorDict,
+    rng_seed: int,
+    seq_list: Optional[List[str]],
+    parent_conn: mpConnection,
+    seq_queue: mpQueue,
+):
+    if sys.platform == "linux":
+        with open("/proc/self/comm", "w") as f:
+            f.write(f"PP worker {epoch}")
+    better_exchook.setup_all()
+
+    assert isinstance(epoch, int)
+    assert isinstance(buffer_size, int)
+    assert buffer_size > 0
+    assert map_seq or map_seq_stream, "need to specify either map_seq or map_seq_stream"
+    assert not (map_seq and map_seq_stream), "cannot set both map_seq and map_seq_stream"
+    assert map_seq is None or isinstance(map_seq, Callable)
+    assert map_seq_stream is None or isinstance(map_seq_stream, Callable)
+    assert isinstance(out_tensor_dict_template, TensorDict)
+    assert isinstance(rng_seed, int)
+    assert isinstance(parent_conn, mpConnection)
+    assert isinstance(seq_queue, mpQueue)
+
+    cache: deque[TensorDict] = deque()
+
+    def _iter_queue(q: mpQueue) -> Iterator[TensorDict]:
+        while True:
+            try:
+                item = q.get(block=True)
+            except ValueError:
+                # queue is closed
+                break
+            if item is None:
+                break
+            yield item
+
+    data_iter = PostprocessingDataset._build_mapping_iter(
+        _iter_queue(seq_queue),
+        map_seq=map_seq,
+        map_seq_stream=map_seq_stream,
+        epoch=epoch,
+        out_tensor_dict_template=out_tensor_dict_template,
+        rng=RandomState(rng_seed),
+        seq_list_for_validation=seq_list,
+    )
+    assert isinstance(data_iter, Iterator)
+
+    def _add_to_cache():
+        nonlocal data_iter
+        try:
+            seq = next(data_iter)
+        except StopIteration:
+            data_iter = None
+            return False
+        cache.append(seq)
+        return True
+
+    try:
+        while True:
+            while not parent_conn.poll():
+                while data_iter is not None and len(cache) < buffer_size:
+                    if not _add_to_cache():
+                        break
+            msg, kwargs = parent_conn.recv()
+            if msg == "exit":
+                break
+            elif msg == "get_seq":
+                if not cache and data_iter is not None:
+                    _add_to_cache()
+                parent_conn.send(("seq", cache.popleft() if cache else None))
+            else:
+                raise Exception(f"unknown msg {msg!r}")
+    except KeyboardInterrupt:  # when parent dies
+        pass
+    except EOFError:  # when parent dies
+        pass
 
 
 class LaplaceOrdering(Callable[[Iterator[TensorDict]], Iterator[TensorDict]]):
