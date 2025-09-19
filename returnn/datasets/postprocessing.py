@@ -558,6 +558,16 @@ class _MultiProcDataIter:
             num_workers = len(self.worker_procs)
             seq = self.worker_procs[self._seq_idx % num_workers].get_seq()
             if seq is None and self._max_seq_idx is None:
+                # TODO: this is wrong, we need to drain all workers until each of them is exhausted
+                # this is not neccessarily the case after just one more iteration through all workers.
+                #
+                # Consider the case where the underlying dataset has just 1 seq, but the workers repeat
+                # this seq 5 times. Then the first worker has 5 seqs, the others have 0.
+                # Right now we would stop after noticing the first worker that is exhausted,
+                # but the first one still has 4 more seqs to provide.
+                #
+                # just remove them from the list of worker procs when they are exhausted and only stop
+                # when the list is empty
                 self._max_seq_idx = self._seq_idx + num_workers  # drain the other workers
             self._seq_idx += 1
             if seq is not None:
