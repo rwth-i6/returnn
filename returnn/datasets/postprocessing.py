@@ -498,6 +498,12 @@ class PostprocessingDataset(CachedDataset2):
     def _distribute_seqs_to_children(self, *, child_queues: Sequence[mpQueue], quit_event: threading.Event):
         num_workers = len(child_queues)
         assert num_workers > 0
+
+        # TODO: should we hold a lock around the dataset while this thread is alive?
+        #
+        # This would help prevent issues when switching from one epoch to the next
+        # (where a new thread will be started).
+
         for seq_idx, tensor_dict in enumerate(self._iterate_dataset()):
             if quit_event.is_set():
                 break
