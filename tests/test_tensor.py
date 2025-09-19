@@ -2,12 +2,13 @@
 tests for returnn.tensor
 """
 
+import numpy
 import _setup_test_env  # noqa
 import sys
 import unittest
 from returnn.util import better_exchook
 import returnn.frontend as rf
-from returnn.tensor import Tensor, Dim
+from returnn.tensor import Dim, Tensor, TensorDict
 
 
 def test_tensor():
@@ -117,6 +118,37 @@ def test_dim_math_pad_window():
     expected_sizes = (time1_dim.dyn_size + time2_dim.dyn_size + time3_dim.dyn_size - (filter_size - 1)).tolist()
     print("expected_sizes:", expected_sizes)
     assert sizes == expected_sizes
+
+
+def test_TensorDict_pickle():
+    import pickle
+
+    tensor_dict = TensorDict(
+        {"data": Tensor("data", dims=[Dim(10)], dtype="int32", raw_tensor=numpy.zeros((10,), dtype="int32"))}
+    )
+    assert all(tensor.raw_tensor is not None for tensor in tensor_dict.data.values())
+
+    s = pickle.dumps(tensor_dict)
+    tensor_dict2 = pickle.loads(s)
+
+    assert tensor_dict.data.keys() == tensor_dict2.data.keys()
+    assert all(tensor.raw_tensor is not None for tensor in tensor_dict2.data.values())
+
+
+def test_TensorDict_queue():
+    from multiprocessing import Queue
+
+    tensor_dict = TensorDict(
+        {"data": Tensor("data", dims=[Dim(10)], dtype="int32", raw_tensor=numpy.zeros((10,), dtype="int32"))}
+    )
+    assert all(tensor.raw_tensor is not None for tensor in tensor_dict.data.values())
+
+    q = Queue(maxsize=2)
+    q.put(tensor_dict)
+    tensor_dict2 = q.get()
+
+    assert tensor_dict.data.keys() == tensor_dict2.data.keys()
+    assert all(tensor.raw_tensor is not None for tensor in tensor_dict2.data.values())
 
 
 if __name__ == "__main__":
