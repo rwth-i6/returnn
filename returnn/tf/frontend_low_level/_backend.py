@@ -40,6 +40,9 @@ class TFBackend(Backend[tf.Tensor]):
 
     @staticmethod
     def should_pickle_tensor(raw_tensor: tf.Tensor) -> bool:
+        """
+        :return: whether the tensor should be included in a pickle or set to `None`.
+        """
         return not tf.is_symbolic_tensor(raw_tensor)  # TODO: correct?
 
     @staticmethod

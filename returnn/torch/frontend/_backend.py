@@ -86,6 +86,9 @@ class TorchBackend(Backend[torch.Tensor]):
 
     @staticmethod
     def should_pickle_tensor(raw_tensor: torch.Tensor) -> bool:
+        """
+        :return: whether the tensor should be included in a pickle or set to `None`.
+        """
         return True
 
     @staticmethod

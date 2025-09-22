@@ -69,7 +69,6 @@ class Backend(Generic[T]):
     @staticmethod
     def should_pickle_tensor(raw_tensor: T) -> bool:
         """
-        :param raw_tensor:
         :return: whether the tensor should be included in a pickle or set to `None`.
         """
         return False
