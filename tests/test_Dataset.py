@@ -1273,11 +1273,11 @@ def _repeat2(input_iter: Iterator[TensorDict], **kwargs) -> Iterator[TensorDict]
         yield tdict
 
 
-def test_PostprocessingDataset_multi_proc():
+def test_MultiProcPostprocessingDataset():
     _demo_txt = "some utterance text that has a few words"
     with create_ogg_zip_txt_only_dataset_opts(text=_demo_txt) as sub_ds_opts:
         ds_opts = {
-            "class": "PostprocessingDataset",
+            "class": "MultiProcPostprocessingDataset",
             "dataset": sub_ds_opts,
             "map_seq_stream": _repeat2,
             "buf_size": 1,
