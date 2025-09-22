@@ -265,7 +265,8 @@ class PostprocessingDataset(CachedDataset2):
                     map_seq=self._map_seq,
                     map_seq_stream=self._map_seq_stream,
                     out_tensor_dict_template=self._out_tensor_dict_template,
-                    rng_seed=self._get_random_seed_for_epoch(epoch=epoch * self._num_workers + i),
+                    rng_seed=self._get_random_seed_for_epoch(epoch=epoch) * self._num_workers * 6838594027
+                    + i * 30411167,
                     seq_list=seq_list,
                     seq_queue=seq_queue,
                 )
