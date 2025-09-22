@@ -44,20 +44,14 @@ class TFBackend(Backend[tf.Tensor]):
         :return: whether the tensor should be included in a pickle or set to `None`.
         """
 
+        from tensorflow.python.framework.ops import EagerTensor
+
         # Can not pickle symbolic TF tensors.
         #
         # See for discussion:
         #  - https://github.com/rwth-i6/returnn/issues/1541
         #  - https://github.com/rwth-i6/returnn/issues/1763
-        try:
-            return not tf.is_symbolic_tensor(raw_tensor)
-        except AttributeError:
-            pass
-
-        # tf.is_symbolic_tensor is not available in early TF2 versions.
-        from tensorflow.python.framework.ops import SymbolicTensor
-
-        return not isinstance(raw_tensor, SymbolicTensor)
+        return isinstance(raw_tensor, EagerTensor)
 
     @staticmethod
     def get_dtype_name_raw(raw_tensor: tf.Tensor) -> str:
