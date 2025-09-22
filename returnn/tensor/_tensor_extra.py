@@ -588,7 +588,12 @@ class _TensorMixin(_TensorMixinBase):
 
     def __getstate__(self):
         d = {k: getattr(self, k) for k in self.__slots__}
-        # d["_raw_tensor"] = None  # do not store the TF tensors
+        if (
+            self._raw_tensor is not None
+            and self._raw_backend is not None
+            and not self._raw_backend.should_pickle_tensor(self._raw_tensor)
+        ):
+            d["_raw_tensor"] = None
         return d
 
     def __setstate__(self, state):
