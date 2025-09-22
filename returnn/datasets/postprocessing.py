@@ -717,6 +717,8 @@ def _worker_proc_loop(
 
     def _add_to_cache():
         nonlocal data_iter
+        if data_iter is None:
+            return False
         try:
             seq = next(data_iter)
         except StopIteration:
@@ -728,14 +730,14 @@ def _worker_proc_loop(
     try:
         while True:
             while not parent_conn.poll():
-                while data_iter is not None and len(cache) < buffer_size:
+                while len(cache) < buffer_size:
                     if not _add_to_cache():
                         break
             msg, kwargs = parent_conn.recv()
             if msg == "exit":
                 break
             elif msg == "get_seq":
-                if not cache and data_iter is not None:
+                if not cache:
                     _add_to_cache()
                 parent_conn.send(("seq", cache.popleft() if cache else None))
             else:
