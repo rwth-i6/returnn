@@ -42,7 +42,7 @@ class MultiProcDataset(CachedDataset2):
         """
         :param dataset: the dataset to use
         :param num_workers: number of workers to use
-        :param buffer_size: buffer size for each worker, amount of seqs to prefetch
+        :param buffer_size: buffer size for each worker, number of seqs to prefetch
         :param sharding_method: which method to use for sharding the data across the worker procs.
             The default is ``seq_order``, which fetches the full list of seq indices,
             and then distributes shards of that to the other workers.

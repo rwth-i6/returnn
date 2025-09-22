@@ -153,7 +153,7 @@ class DistributeFilesDataset(CachedDataset2):
             or a JSON file containing a list of arbitarily nested (JSON) objects.
         :param get_sub_epoch_dataset: callable which returns a dataset dict for a given subset of files
         :param preload_next_n_sub_epochs: how many sub epoch datasets to preload
-        :param buffer_size: buffer size for each worker, amount of seqs to prefetch
+        :param buffer_size: buffer size for each worker, number of seqs to prefetch
         :param distrib_shard_files: set to true to shard the data across worker processes in
             distributed training scenaria
         :param _meta_info_cache: for internal use
