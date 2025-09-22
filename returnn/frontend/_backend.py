@@ -67,6 +67,14 @@ class Backend(Generic[T]):
         raise NotImplementedError
 
     @staticmethod
+    def should_pickle_tensor(raw_tensor: T) -> bool:
+        """
+        :param raw_tensor:
+        :return: whether the tensor should be included in a pickle or set to `None`.
+        """
+        return False
+
+    @staticmethod
     def cond(pred: Tensor, true_fn: Callable, false_fn: Callable):
         """
         cond: conditional execution.

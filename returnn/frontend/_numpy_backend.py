@@ -27,6 +27,10 @@ class NumpyBackend(Backend[numpy.ndarray]):
         return True
 
     @staticmethod
+    def should_pickle_tensor(raw_tensor: numpy.ndarray) -> bool:
+        return True
+
+    @staticmethod
     def get_dtype_name_raw(raw_tensor: numpy.ndarray) -> str:
         """
         :return: dtype of raw tensor, as string. e.g. "int64" etc.

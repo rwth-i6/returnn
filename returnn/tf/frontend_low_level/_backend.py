@@ -39,6 +39,10 @@ class TFBackend(Backend[tf.Tensor]):
         return tf.executing_eagerly()
 
     @staticmethod
+    def should_pickle_tensor(raw_tensor: tf.Tensor) -> bool:
+        return not tf.is_symbolic_tensor(raw_tensor)  # TODO: correct?
+
+    @staticmethod
     def get_dtype_name_raw(raw_tensor: tf.Tensor) -> str:
         """
         :return: dtype of raw tensor, as string
