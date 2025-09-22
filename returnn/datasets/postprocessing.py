@@ -584,15 +584,16 @@ class _MultiProcDataIter:
             raise StopIteration
 
         while True:
-            seq = self.worker_procs[self._worker_idx].get_seq()
+            if all(self._workers_exhausted):
+                break
+            worker_idx = self._worker_idx
             self._worker_idx = (self._worker_idx + 1) % len(self.worker_procs)
-            if seq is None:
-                self._workers_exhausted[self._worker_idx] = True
-                if all(self._workers_exhausted):
-                    break
-                else:
-                    continue
-            return seq
+            if self._workers_exhausted[worker_idx]:
+                continue
+            seq = self.worker_procs[worker_idx].get_seq()
+            if seq is not None:
+                return seq
+            self._workers_exhausted[worker_idx] = True
 
         # when we reach this point, all workers are exhausted and we stop
         self.stop()
