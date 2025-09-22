@@ -257,6 +257,7 @@ class PostprocessingDataset(CachedDataset2):
             if self._dataset_lock is None:
                 self._dataset_lock = threading.Lock()
             seq_queues = [_mp.Queue(maxsize=self._buf_size) for _ in range(self._num_workers)]
+            base_rng_seed = self._get_random_seed_for_epoch(epoch=epoch) * 6838594027 * self._num_workers
             worker_procs = [
                 _WorkerProcParent(
                     name=f"{self.__class__.__name__} {self.name} ep {epoch}",
@@ -265,8 +266,7 @@ class PostprocessingDataset(CachedDataset2):
                     map_seq=self._map_seq,
                     map_seq_stream=self._map_seq_stream,
                     out_tensor_dict_template=self._out_tensor_dict_template,
-                    rng_seed=self._get_random_seed_for_epoch(epoch=epoch) * self._num_workers * 6838594027
-                    + i * 30411167,
+                    rng_seed=(base_rng_seed + 30411167 * i) % (2**32 - 1),
                     seq_list=seq_list,
                     seq_queue=seq_queue,
                 )
