@@ -62,7 +62,7 @@ jobs:
 
         # Used in some tests.
         pip install --user --progress-bar=off transformers
-        pip install --user --progress-bar=off espnet
+        pip install --user --progress-bar=off "espnet==202506"  # last version w/ numpy<2
 
     - name: Test Python/Numpy/TF versions.
       run: |
@@ -410,7 +410,7 @@ jobs:
           # https://github.com/rwth-i6/returnn/issues/1729
           pip install --user --progress-bar=off ctc-segmentation==1.6.6 pyworld==0.3.4
         fi
-        pip install --user --progress-bar=off espnet
+        pip install --user --progress-bar=off "espnet==202506"  # last version w/ numpy<2
         # TorchAudio needed by ESPnet.
         # https://pytorch.org/audio/stable/installation.html#compatibility-matrix
         if [[ "${{matrix.torch-version}}" == 2.0.0 ]]; then
