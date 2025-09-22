@@ -252,8 +252,6 @@ class PostprocessingDataset(CachedDataset2):
             self._num_seqs = 0
             return True
 
-        assert self._dataset is not None
-        self._dataset.init_seq_order(epoch=epoch, seq_list=seq_list, seq_order=seq_order)
         if self._num_workers > 0:
             assert self._buf_size > 0
             if self._dataset_lock is None:
@@ -274,9 +272,17 @@ class PostprocessingDataset(CachedDataset2):
                 for i, seq_queue in enumerate(seq_queues)
             ]
             quit_event = threading.Event()
+            # dataset thread takes care of init_seq_order of the wrapped dataset
             dataset_thread = threading.Thread(
-                target=self._distribute_seqs_to_children,
-                kwargs={"child_queues": seq_queues, "dataset_lock": self._dataset_lock, "quit_event": quit_event},
+                target=self._init_and_distribute_seqs_to_children,
+                kwargs={
+                    "child_queues": seq_queues,
+                    "dataset_lock": self._dataset_lock,
+                    "epoch": epoch,
+                    "quit_event": quit_event,
+                    "seq_list": seq_list,
+                    "seq_order": seq_order,
+                },
                 name=f"{self.__class__.__name__} {self.name} dataset ep {epoch}",
             )
             dataset_thread.start()
@@ -286,6 +292,8 @@ class PostprocessingDataset(CachedDataset2):
                 dataset_thread=dataset_thread, quit_event=quit_event, worker_procs=worker_procs
             )
         else:
+            assert self._dataset is not None
+            self._dataset.init_seq_order(epoch=epoch, seq_list=seq_list, seq_order=seq_order)
             data_iter = _build_mapping_iter(
                 self._iterate_dataset(),
                 map_seq=self._map_seq,
@@ -417,11 +425,25 @@ class PostprocessingDataset(CachedDataset2):
                 sparse_dim.vocab = Vocabulary.create_vocab_from_labels(self._dataset.labels[data_key])
         return Tensor(data_key, dims=dims, dtype=dtype, sparse_dim=sparse_dim)
 
-    def _distribute_seqs_to_children(
-        self, *, child_queues: Sequence[mpQueue], dataset_lock: threading.Lock, quit_event: threading.Event
+    def _init_and_distribute_seqs_to_children(
+        self,
+        *,
+        child_queues: Sequence[mpQueue],
+        dataset_lock: threading.Lock,
+        epoch: int,
+        quit_event: threading.Event,
+        seq_list: Optional[List[str]] = None,
+        seq_order: Optional[List[int]] = None,
     ):
         assert len(child_queues) > 0
+
+        # Lock ensures that only one thread at a time accesses the wrapped dataset.
+        #
+        # This protects against issues while moving from one epoch to the next.
         with dataset_lock:
+            assert self._dataset is not None
+            self._dataset.init_seq_order(epoch=epoch, seq_list=seq_list, seq_order=seq_order)
+
             for seq_idx, tensor_dict in enumerate(self._iterate_dataset()):
                 if quit_event.is_set():
                     break
