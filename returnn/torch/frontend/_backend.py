@@ -85,13 +85,6 @@ class TorchBackend(Backend[torch.Tensor]):
                 torch.cuda.set_rng_state(torch.from_numpy(numpy.frombuffer(v, dtype="uint8")), i)
 
     @staticmethod
-    def should_pickle_tensor(raw_tensor: torch.Tensor) -> bool:
-        """
-        :return: whether the tensor should be included in a pickle or set to `None`.
-        """
-        return True
-
-    @staticmethod
     def get_dtype_name_raw(raw_tensor: torch.Tensor) -> str:
         """
         :return: dtype of raw tensor, as string
