@@ -71,7 +71,7 @@ class Backend(Generic[T]):
         """
         :return: whether the tensor should be included in a pickle or set to `None`.
         """
-        return False
+        return True
 
     @staticmethod
     def cond(pred: Tensor, true_fn: Callable, false_fn: Callable):
