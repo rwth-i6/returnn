@@ -182,8 +182,6 @@ class PostprocessingDataset(CachedDataset2):
         assert map_seq_stream_preserves_num_seqs is None or isinstance(map_seq_stream_preserves_num_seqs, bool)
         self._map_seq_stream_preserves_num_seqs = map_seq_stream_preserves_num_seqs
         self._map_outputs = map_outputs
-        self._buf_size = buf_size
-        self._num_workers = num_workers
         self._seq_list_for_validation: Optional[List[str]] = None
 
         self._dataset = init_dataset(self._dataset_def, parent_dataset=self)
@@ -192,6 +190,12 @@ class PostprocessingDataset(CachedDataset2):
             self._estimated_num_seqs = self._dataset.estimated_num_seqs
         self._data_iter: Optional[Iterator[Tuple[int, TensorDict]]] = None
         self._data_iter_produced_num_seqs = 0
+
+        self._buf_size = buf_size
+        # Ensures only one feeder thread at a time accesses the wrapped dataset. Only used if num_workers > 0.
+        self._dataset_lock: Optional[threading.Lock] = None
+        self._multi_proc_data_iter: Optional[_MultiProcDataIter] = None
+        self._num_workers = num_workers
 
         self._in_tensor_dict_template = TensorDict(
             {name: self._make_tensor_template_from_input(name) for name in self._dataset.get_data_keys()}
@@ -252,6 +256,8 @@ class PostprocessingDataset(CachedDataset2):
         self._dataset.init_seq_order(epoch=epoch, seq_list=seq_list, seq_order=seq_order)
         if self._num_workers > 0:
             assert self._buf_size > 0
+            if self._dataset_lock is None:
+                self._dataset_lock = threading.Lock()
             seq_queues = [_mp.Queue(maxsize=self._buf_size) for _ in range(self._num_workers)]
             worker_procs = [
                 _WorkerProcParent(
@@ -270,11 +276,13 @@ class PostprocessingDataset(CachedDataset2):
             quit_event = threading.Event()
             dataset_thread = threading.Thread(
                 target=self._distribute_seqs_to_children,
-                kwargs={"child_queues": seq_queues, "quit_event": quit_event},
+                kwargs={"child_queues": seq_queues, "dataset_lock": self._dataset_lock, "quit_event": quit_event},
                 name=f"{self.__class__.__name__} {self.name} dataset ep {epoch}",
             )
             dataset_thread.start()
-            data_iter = _MultiProcDataIter(
+            if self._multi_proc_data_iter is not None:
+                self._multi_proc_data_iter.stop()
+            data_iter = self._multi_proc_data_iter = _MultiProcDataIter(
                 dataset_thread=dataset_thread, quit_event=quit_event, worker_procs=worker_procs
             )
         else:
@@ -409,29 +417,25 @@ class PostprocessingDataset(CachedDataset2):
                 sparse_dim.vocab = Vocabulary.create_vocab_from_labels(self._dataset.labels[data_key])
         return Tensor(data_key, dims=dims, dtype=dtype, sparse_dim=sparse_dim)
 
-    def _distribute_seqs_to_children(self, *, child_queues: Sequence[mpQueue], quit_event: threading.Event):
-        num_workers = len(child_queues)
-        assert num_workers > 0
-
-        # TODO: should we hold a lock around the dataset while this thread is alive?
-        #
-        # This would help prevent issues when switching from one epoch to the next
-        # (where a new thread will be started).
-
-        for seq_idx, tensor_dict in enumerate(self._iterate_dataset()):
-            if quit_event.is_set():
-                break
-            try:
-                child_queues[seq_idx % num_workers].put(tensor_dict, block=True)  # block for backpressure
-            except ValueError:
-                # queue is closed, i.e. the worker process died
-                break
-        for q in child_queues:
-            try:
-                q.put(None, block=True)  # signal end of data
-            except ValueError:
-                # queue is already closed, i.e. the worker process died
-                pass
+    def _distribute_seqs_to_children(
+        self, *, child_queues: Sequence[mpQueue], dataset_lock: threading.Lock, quit_event: threading.Event
+    ):
+        assert len(child_queues) > 0
+        with dataset_lock:
+            for seq_idx, tensor_dict in enumerate(self._iterate_dataset()):
+                if quit_event.is_set():
+                    break
+                try:
+                    child_queues[seq_idx % len(child_queues)].put(tensor_dict, block=True)  # block for backpressure
+                except ValueError:
+                    # queue is closed, i.e. the worker process crashed for some reason -> stop
+                    break
+            for q in child_queues:
+                try:
+                    q.put(None, block=True)  # signal end of data
+                except ValueError:
+                    # queue is already closed, i.e. the worker process died
+                    pass
 
 
 def _build_mapping_iter(
@@ -544,10 +548,11 @@ class _MultiProcDataIter:
     ):
         self.dataset_thread = dataset_thread
         self.quit_event = quit_event
+        assert len(worker_procs) > 0
         self.worker_procs = worker_procs
 
-        self._max_seq_idx: Optional[int] = None
-        self._seq_idx = 0
+        self._workers_exhausted = [False for _ in range(len(worker_procs))]
+        self._worker_idx = 0
 
     def __iter__(self):
         return self
@@ -556,44 +561,35 @@ class _MultiProcDataIter:
         if self.quit_event.is_set():
             raise StopIteration
 
-        for _ in range(len(self.worker_procs)):
-            if self._max_seq_idx is not None and self._seq_idx >= self._max_seq_idx:
-                break
-            num_workers = len(self.worker_procs)
-            seq = self.worker_procs[self._seq_idx % num_workers].get_seq()
-            if seq is None and self._max_seq_idx is None:
-                # TODO: this is wrong, we need to drain all workers until each of them is exhausted
-                # this is not neccessarily the case after just one more iteration through all workers.
-                #
-                # Consider the case where the underlying dataset has just 1 seq, but the workers repeat
-                # this seq 5 times. Then the first worker has 5 seqs, the others have 0.
-                # Right now we would stop after noticing the first worker that is exhausted,
-                # but the first one still has 4 more seqs to provide.
-                #
-                # just remove them from the list of worker procs when they are exhausted and only stop
-                # when the list is empty
-                self._max_seq_idx = self._seq_idx + num_workers  # drain the other workers
-            self._seq_idx += 1
-            if seq is not None:
-                return seq
+        while True:
+            seq = self.worker_procs[self._worker_idx].get_seq()
+            self._worker_idx = (self._worker_idx + 1) % len(self.worker_procs)
+            if seq is None:
+                self._workers_exhausted[self._worker_idx] = True
+                if all(self._workers_exhausted):
+                    break
+                else:
+                    continue
+            return seq
 
         # when we reach this point, all workers are exhausted and we stop
         self.stop()
         raise StopIteration
 
-    def stop(self):
+    def stop(self, *, join=True):
         """Stop the worker processes and the dataset thread."""
         if self.quit_event.is_set():
             return
         self.quit_event.set()
         for wp in self.worker_procs:
-            wp.exit(join=True)
-        util.try_run(self.dataset_thread.join)
+            wp.exit(join=join)
+        if join:
+            util.try_run(self.dataset_thread.join)
 
     def __del__(self):
         # noinspection PyBroadException
         try:
-            self.stop()
+            self.stop(join=False)
         except Exception:
             pass
 
