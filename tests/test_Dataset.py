@@ -1284,13 +1284,15 @@ def test_MultiProcPostprocessingDataset():
             "num_workers": 2,
         }
         dataset = init_dataset(ds_opts)
-        dataset.init_seq_order(epoch=1)
-        assert dataset.have_seqs()
 
-        dataset.load_seqs(0, 2)
-        for i in range(2):
-            classes = dataset.get_data(i, "classes")
-            assert len(classes) > 0
+        for ep in range(1, 20 + 1):
+            dataset.init_seq_order(epoch=ep)
+            assert dataset.have_seqs()
+            dataset.load_seqs(0, 3)
+            for i in range(2):
+                classes = dataset.get_data(i, "classes")
+                assert len(classes) > 0
+            assert not dataset.is_less_than_num_seqs(2)
 
 
 def _post_process_map_seq_no_op(tdict: TensorDict, **_other) -> TensorDict:
