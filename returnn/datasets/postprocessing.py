@@ -12,6 +12,7 @@ import sys
 import threading
 from typing import Any, Callable, Dict, Iterator, List, Optional, Sequence, Tuple, TypeVar
 
+from returnn.config import SubProcCopyGlobalConfigPreInitFunc
 from returnn.datasets.basic import DatasetSeq
 from returnn.datasets.util.strings import str_to_numpy_array
 from returnn.datasets.util.vocabulary import Vocabulary
@@ -19,15 +20,11 @@ from returnn.tensor import Tensor, TensorDict
 from returnn.tensor.dim import Dim
 from returnn.util import basic as util, better_exchook
 from returnn.util.multi_proc_non_daemonic_spawn import NonDaemonicSpawnContext
-from returnn.config import SubProcCopyGlobalConfigPreInitFunc
 from .basic import Dataset, init_dataset
 from .cached2 import CachedDataset2
 
 # noinspection PyProtectedMember
 from multiprocessing.connection import Connection as mpConnection
-
-# noinspection PyProtectedMember
-from multiprocessing.queues import Queue as mpQueue
 
 _mp = NonDaemonicSpawnContext(process_pre_init_func=SubProcCopyGlobalConfigPreInitFunc())
 
@@ -516,27 +513,29 @@ class MultiProcPostprocessingDataset(PostprocessingDataset):
 
         assert self._buf_size > 0
         assert self._num_workers > 0
-        seq_queues = [_mp.Queue(maxsize=self._buf_size) for _ in range(self._num_workers)]
+        parent_conns, child_conns = zip(*[_mp.Pipe() for _ in range(self._num_workers)])
         base_rng_seed = self._get_random_seed_for_epoch(epoch=epoch) * 683859 * self._num_workers
         worker_procs = [
             _WorkerProcParent(
                 name=f"{self.__class__.__name__} {self.name} ep {epoch}",
                 epoch=epoch,
                 buffer_size=self._buf_size,
+                index=i,
                 map_seq=self._map_seq,
                 map_seq_stream=self._map_seq_stream,
                 out_tensor_dict_template=self._out_tensor_dict_template,
                 rng_seed=(base_rng_seed + 30411 * i) % (2**32 - 1),
                 seq_list=seq_list,
-                seq_queue=seq_queue,
+                seq_pipe=child_conn,
             )
-            for i, seq_queue in enumerate(seq_queues)
+            for i, child_conn in enumerate(child_conns)
         ]
         quit_event = threading.Event()
         dataset_thread = threading.Thread(
             target=self._init_seq_order_and_distribute_seqs_to_children,
             kwargs={
-                "child_queues": seq_queues,
+                "buf_size": self._buf_size,
+                "child_queues": parent_conns,
                 "dataset_lock": self._dataset_lock,
                 "epoch": epoch,
                 "quit_event": quit_event,
@@ -554,7 +553,8 @@ class MultiProcPostprocessingDataset(PostprocessingDataset):
     def _init_seq_order_and_distribute_seqs_to_children(
         self,
         *,
-        child_queues: Sequence[mpQueue],
+        buf_size: int,
+        child_queues: Sequence[mpConnection],
         dataset_lock: threading.Lock,
         epoch: int,
         quit_event: threading.Event,
@@ -565,6 +565,7 @@ class MultiProcPostprocessingDataset(PostprocessingDataset):
         Initialize the wrapped dataset and distribute the contained sequences to the child worker processes.
         """
 
+        assert buf_size > 0
         assert len(child_queues) > 0
 
         # Lock ensures that only one thread at a time accesses the wrapped dataset.
@@ -573,21 +574,27 @@ class MultiProcPostprocessingDataset(PostprocessingDataset):
         with dataset_lock:
             self._dataset.init_seq_order(epoch=epoch, seq_list=seq_list, seq_order=seq_order)
             data_iter = _iterate_dataset(self._dataset, in_tensor_dict_template=self._in_tensor_dict_template)
+            data_iter = enumerate(data_iter)
 
-            for seq_idx, tensor_dict in enumerate(data_iter):
+            for seq_idx, tensor_dict in data_iter:
                 if quit_event.is_set():
                     break
+                worker_idx = seq_idx % len(child_queues)
                 try:
-                    child_queues[seq_idx % len(child_queues)].put(tensor_dict, block=True)  # block for backpressure
-                except ValueError:
+                    msg, _ = child_queues[worker_idx].recv()
+                    assert msg == "get_seq"
+                    child_queues[worker_idx].send(("seq", tensor_dict))
+                except EOFError:
                     # queue is closed, i.e. the worker process crashed for some reason -> stop
                     break
             for q in child_queues:
                 try:
-                    q.put(None, block=True)  # signal end of data
-                except ValueError:
+                    q.send(("exit", None))  # signal end of data
+                except (BrokenPipeError, EOFError):
                     # queue is already closed, i.e. the worker process died
                     pass
+                finally:
+                    q.close()
 
 
 class _MultiProcDataIter:
@@ -657,30 +664,32 @@ class _WorkerProcParent:
         *,
         name: str,
         epoch: int,
+        index: int,
         buffer_size: int,
         map_seq: Optional[Callable],
         map_seq_stream: Optional[Callable],
         out_tensor_dict_template: TensorDict,
         rng_seed: int,
         seq_list: Optional[List[str]],
-        seq_queue: mpQueue,
+        seq_pipe: mpConnection,
     ):
         parent_conn, child_conn = _mp.Pipe()
         self.parent_conn = parent_conn
 
         self.worker_proc = _mp.Process(
-            name=f"{name} worker ep {epoch}",
+            name=f"{name} worker {index} ep {epoch}",
             target=_worker_proc_loop,
             args=(
                 epoch,
                 buffer_size,
+                index,
                 map_seq,
                 map_seq_stream,
                 out_tensor_dict_template,
                 rng_seed,
                 seq_list,
                 child_conn,
-                seq_queue,
+                seq_pipe,
             ),
             daemon=True,
         )
@@ -692,6 +701,10 @@ class _WorkerProcParent:
         # should yield an exception -- which is what we want,
         # otherwise it would just hang.
         child_conn.close()
+
+        # seq_pipe is owned by the child process,
+        # and so must be closed in the parent to avoid hangs
+        seq_pipe.close()
 
     def get_seq(self) -> Optional[DatasetSeq]:
         """get_seq"""
@@ -719,21 +732,23 @@ class _WorkerProcParent:
 def _worker_proc_loop(
     epoch: int,
     buffer_size: int,
+    index: int,
     map_seq: Optional[Callable],
     map_seq_stream: Optional[Callable],
     out_tensor_dict_template: TensorDict,
     rng_seed: int,
     seq_list: Optional[List[str]],
     parent_conn: mpConnection,
-    seq_queue: mpQueue,
+    feeder_conn: mpConnection,
 ):
     if sys.platform == "linux":
         with open("/proc/self/comm", "w") as f:
-            f.write(f"PP worker {epoch}")
+            f.write(f"PP worker {index} ep {epoch}")
     better_exchook.setup_all()
 
     assert isinstance(epoch, int)
     assert isinstance(buffer_size, int)
+    assert isinstance(index, int)
     assert buffer_size > 0
     assert map_seq or map_seq_stream, "need to specify either map_seq or map_seq_stream"
     assert not (map_seq and map_seq_stream), "cannot set both map_seq and map_seq_stream"
@@ -742,23 +757,28 @@ def _worker_proc_loop(
     assert isinstance(out_tensor_dict_template, TensorDict)
     assert isinstance(rng_seed, int)
     assert isinstance(parent_conn, mpConnection)
-    assert isinstance(seq_queue, mpQueue)
+    assert isinstance(feeder_conn, mpConnection)
 
     cache: deque[TensorDict] = deque()
 
-    def _iter_queue(q: mpQueue) -> Iterator[TensorDict]:
+    def _iter_pipe(q: mpConnection) -> Iterator[TensorDict]:
+        assert isinstance(q, mpConnection)
+
         while True:
             try:
-                item = q.get(block=True)
-            except ValueError:
+                q.send(("get_seq", None))
+                msg, item = q.recv()
+            except (BrokenPipeError, EOFError):
                 # queue is closed
                 break
-            if item is None:
+            assert msg in ("seq", "exit")
+            if msg == "exit" or item is None:
                 break
+            assert isinstance(item, TensorDict)
             yield item
 
     data_iter = _build_mapping_iter(
-        _iter_queue(seq_queue),
+        _iter_pipe(feeder_conn),
         map_seq=map_seq,
         map_seq_stream=map_seq_stream,
         epoch=epoch,
@@ -799,6 +819,9 @@ def _worker_proc_loop(
         pass
     except EOFError:  # when parent dies
         pass
+    finally:
+        feeder_conn.close()
+        parent_conn.close()
 
 
 class LaplaceOrdering(Callable[[Iterator[TensorDict]], Iterator[TensorDict]]):
