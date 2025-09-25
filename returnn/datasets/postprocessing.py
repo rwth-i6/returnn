@@ -821,10 +821,9 @@ def _worker_proc_loop(
 
     try:
         while True:
-            while not parent_conn.poll():
-                while len(cache) < buffer_size:
-                    if not _add_to_cache():
-                        break
+            while len(cache) < buffer_size and not parent_conn.poll():
+                if not _add_to_cache():
+                    break
             msg, kwargs = parent_conn.recv()
             if msg == "exit":
                 break
