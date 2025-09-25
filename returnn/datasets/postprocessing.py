@@ -411,6 +411,7 @@ class PostprocessingDataset(CachedDataset2):
 
         assert buf_size > 0
         assert len(child_queues) > 0
+        assert self._num_workers > 0
 
         def _any_q_ready() -> bool:
             ready, _, _ = select.select(child_queues, [], [])
