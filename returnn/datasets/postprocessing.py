@@ -119,7 +119,7 @@ class PostprocessingDataset(CachedDataset2):
         map_outputs: Optional[Dict[str, Any]] = None,
         map_seq_stream_preserves_num_seqs: Optional[bool] = None,
         buf_size: int = 1,
-        num_workers: int = 1,
+        num_workers: int = 0,
         **kwargs,
     ):
         """
