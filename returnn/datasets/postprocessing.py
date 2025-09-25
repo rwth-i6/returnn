@@ -30,7 +30,7 @@ from multiprocessing.connection import Connection as mpConnection
 _mp = NonDaemonicSpawnContext(process_pre_init_func=SubProcCopyGlobalConfigPreInitFunc())
 
 
-__all__ = ["PostprocessingDataset", "MultiProcPostprocessingDataset", "LaplaceOrdering", "Sequential"]
+__all__ = ["PostprocessingDataset", "LaplaceOrdering", "Sequential"]
 
 
 class PostprocessingDataset(CachedDataset2):
@@ -46,8 +46,9 @@ class PostprocessingDataset(CachedDataset2):
     data processing work across multiple CPU cores and in turn frees the GPU from
     data preprocessing tasks.
 
-    Multiprocessing can either be done using :class:``MultiProcDataset`` or via the subclass
-    :class:``MultiProcPostprocessingDataset``.
+    Multiprocessing can either be done using :class:``MultiProcDataset`` or by setting
+    `num_workers > 0` on this class.
+
     The latter only applies parallelism to the post-processing functions themselves,
     and does not duplicate the underlying dataset once per worker.
     This is often fast enough and has the advantage of lower memory consumption.
@@ -117,6 +118,8 @@ class PostprocessingDataset(CachedDataset2):
         map_seq_stream: Optional[Callable] = None,
         map_outputs: Optional[Dict[str, Any]] = None,
         map_seq_stream_preserves_num_seqs: Optional[bool] = None,
+        buf_size: int = 1,
+        num_workers: int = 1,
         **kwargs,
     ):
         """
@@ -142,6 +145,11 @@ class PostprocessingDataset(CachedDataset2):
             Example: `map_outputs={"data": {"dim": 42}}`
         :param map_seq_stream_preserves_num_seqs: whether the function in map_seq_stream preserves the number of
             sequences, i.e. for every input sequence there is exactly one output sequence.
+        :param buf_size: Buffer size for each worker, number of seqs to prefetch. Must be > 0.
+        :param num_workers: If > 0, configures the number of worker processes to use for data postprocessing.
+            Only the postprocessing is distributed across subprocesses,
+            the underlying dataset is only instantiated once.
+            This usually has lower memory consumption than using :class:``MultiProcDataset``.
         :param kwargs: see :class:`CachedDataset2`, :class:`Dataset`
         """
         super().__init__(**kwargs)
@@ -155,6 +163,11 @@ class PostprocessingDataset(CachedDataset2):
         if map_seq and map_seq_stream_preserves_num_seqs is not None:
             raise ValueError(f"{self}: map_seq_stream_preserves_num_seqs is only allowed with map_seq_stream")
 
+        if buf_size < 1:
+            raise ValueError(f"{self}: buf_size must be > 0, but got {buf_size}")
+        if num_workers < 0:
+            raise ValueError(f"{self}: num_workers must be >= 0, but got {num_workers}")
+
         self._dataset_def = dataset
         self._map_seq = map_seq
         self._map_seq_stream = map_seq_stream
@@ -164,6 +177,13 @@ class PostprocessingDataset(CachedDataset2):
         self._map_seq_stream_preserves_num_seqs = map_seq_stream_preserves_num_seqs
         self._map_outputs = map_outputs
         self._seq_list_for_validation: Optional[List[str]] = None
+
+        self._buf_size = buf_size
+        # Ensure only one feeder thread at a time accesses the wrapped dataset to
+        # prevent race conditions while moving from one epoch to the next.
+        self._dataset_lock = threading.Lock()
+        self._multi_proc_data_iter: Optional[_MultiProcDataIter] = None  # store for cleanup
+        self._num_workers = num_workers
 
         self._dataset = init_dataset(self._dataset_def, parent_dataset=self)
         if self._map_seq_stream is None or self._map_seq_stream_preserves_num_seqs is True:
@@ -223,21 +243,61 @@ class PostprocessingDataset(CachedDataset2):
             if seq_order is not None:
                 raise ValueError("map_seq_stream is set, cannot specify custom seq_order")
 
+        if self._multi_proc_data_iter is not None:
+            self._multi_proc_data_iter.stop()
+            self._multi_proc_data_iter = None
+
         if epoch is None and seq_list is None and seq_order is None:
             self._num_seqs = 0
             return True
 
-        assert self._dataset is not None
-        self._dataset.init_seq_order(epoch=epoch, seq_list=seq_list, seq_order=seq_order)
-        data_iter = _build_mapping_iter(
-            _iterate_dataset(self._dataset, in_tensor_dict_template=self._in_tensor_dict_template),
-            map_seq=self._map_seq,
-            map_seq_stream=self._map_seq_stream,
-            epoch=epoch,
-            out_tensor_dict_template=self._out_tensor_dict_template,
-            rng=RandomState(self._get_random_seed_for_epoch(epoch=epoch)),
-            seq_list_for_validation=seq_list,
-        )
+        if self._num_workers > 0:
+            parent_conns, child_conns = zip(*[_mp.Pipe() for _ in range(self._num_workers)])
+            base_rng_seed = self._get_random_seed_for_epoch(epoch=epoch) * 683859 * self._num_workers
+            worker_procs = [
+                _WorkerProcParent(
+                    name=f"{self.__class__.__name__} {self.name} ep {epoch}",
+                    epoch=epoch,
+                    buffer_size=self._buf_size,
+                    index=i,
+                    map_seq=self._map_seq,
+                    map_seq_stream=self._map_seq_stream,
+                    out_tensor_dict_template=self._out_tensor_dict_template,
+                    rng_seed=(base_rng_seed + 30411 * i) % (2**32 - 1),
+                    seq_list=seq_list,
+                    seq_pipe=child_conn,
+                )
+                for i, child_conn in enumerate(child_conns)
+            ]
+            quit_event = threading.Event()
+            dataset_thread = threading.Thread(
+                target=self._init_seq_order_and_distribute_seqs_to_children,
+                kwargs={
+                    "buf_size": self._buf_size,
+                    "child_queues": parent_conns,
+                    "dataset_lock": self._dataset_lock,
+                    "epoch": epoch,
+                    "quit_event": quit_event,
+                    "seq_list": seq_list,
+                    "seq_order": seq_order,
+                },
+                name=f"{self.__class__.__name__} {self.name} dataset ep {epoch}",
+            )
+            dataset_thread.start()
+            data_iter = self._multi_proc_data_iter = _MultiProcDataIter(
+                dataset_thread=dataset_thread, quit_event=quit_event, worker_procs=worker_procs
+            )
+        else:
+            self._dataset.init_seq_order(epoch=epoch, seq_list=seq_list, seq_order=seq_order)
+            data_iter = _build_mapping_iter(
+                _iterate_dataset(self._dataset, in_tensor_dict_template=self._in_tensor_dict_template),
+                map_seq=self._map_seq,
+                map_seq_stream=self._map_seq_stream,
+                epoch=epoch,
+                out_tensor_dict_template=self._out_tensor_dict_template,
+                rng=RandomState(self._get_random_seed_for_epoch(epoch=epoch)),
+                seq_list_for_validation=seq_list,
+            )
         self._data_iter = enumerate(data_iter)
         self._data_iter_produced_num_seqs = 0
         self._seq_list_for_validation = seq_list
@@ -333,6 +393,70 @@ class PostprocessingDataset(CachedDataset2):
             if labels and len(labels) == sparse_dim.dimension:
                 sparse_dim.vocab = Vocabulary.create_vocab_from_labels(self._dataset.labels[data_key])
         return Tensor(data_key, dims=dims, dtype=dtype, sparse_dim=sparse_dim)
+
+    def _init_seq_order_and_distribute_seqs_to_children(
+        self,
+        *,
+        buf_size: int,
+        child_queues: Sequence[mpConnection],
+        dataset_lock: threading.Lock,
+        epoch: int,
+        quit_event: threading.Event,
+        seq_list: Optional[List[str]] = None,
+        seq_order: Optional[List[int]] = None,
+    ):
+        """
+        Initialize the wrapped dataset and distribute the contained sequences to the child worker processes.
+        """
+
+        assert buf_size > 0
+        assert len(child_queues) > 0
+
+        def _any_q_ready() -> bool:
+            ready, _, _ = select.select(child_queues, [], [])
+            return len(ready) > 0
+
+        cache: deque[Tuple[int, TensorDict]] = deque()
+
+        # Lock ensures that only one thread at a time accesses the wrapped dataset.
+        # This protects against issues while moving from one epoch to the next.
+        with dataset_lock:
+            self._dataset.init_seq_order(epoch=epoch, seq_list=seq_list, seq_order=seq_order)
+            data_iter = _iterate_dataset(self._dataset, in_tensor_dict_template=self._in_tensor_dict_template)
+            data_iter = enumerate(data_iter)
+
+            def _add_to_cache() -> bool:
+                try:
+                    cache.append(next(data_iter))
+                    return True
+                except StopIteration:
+                    return False
+
+            while not quit_event.is_set():
+                while len(cache) < buf_size - 1 and not _any_q_ready():
+                    if not _add_to_cache():
+                        break
+                _add_to_cache()
+                if not cache:
+                    break
+                seq_idx, tensor_dict = cache.popleft()
+                worker_idx = seq_idx % len(child_queues)
+                try:
+                    msg, _ = child_queues[worker_idx].recv()
+                    assert msg == "get_seq"
+                    child_queues[worker_idx].send(("seq", tensor_dict))
+                except (BrokenPipeError, EOFError):
+                    # queue is closed, i.e. the worker process crashed for some reason -> stop
+                    break
+
+        for q in child_queues:
+            try:
+                q.send(("exit", None))  # signal end of data
+            except (BrokenPipeError, EOFError):
+                # queue is already closed, i.e. the worker process died
+                pass
+            finally:
+                q.close()
 
 
 def _iterate_dataset(dataset: Dataset, *, in_tensor_dict_template: TensorDict) -> Iterator[TensorDict]:
@@ -456,164 +580,6 @@ def _build_mapping_iter(
             f"map_seq_stream must produce an {Iterator.__name__}, but produced {type(data_iter).__name__}"
         )
     return _validate_tensor_dict_iter(data_iter)
-
-
-class MultiProcPostprocessingDataset(PostprocessingDataset):
-    """
-    Subclass of :class:`PostprocessingDataset` that parallelizes the post-processing using multiple processes.
-
-    The underlying dataset is only instantiated once, only the post-processing functions are parallelized.
-
-    Since it is usually the postprocessing itself and not the data loading from the underlying dataset
-    that is the bottleneck, it is often sufficient to only parallelize the postprocessing step.
-    The advantage is that this usually has lower memory consumption than using :class:``MultiProcDataset``.
-
-    The dataset interface is the same as for :class:`PostprocessingDataset`, with two additional parameters
-    to configure the multi-processing behavior.
-    """
-
-    def __init__(self, *args, buf_size: int = 1, num_workers: int = 1, **kwargs):
-        """
-        :param args: Same args as :class:``PostprocessingDataset``.
-        :param buf_size: Buffer size for each worker, number of seqs to prefetch. Must be > 0.
-        :param num_workers: Number of worker processes to use for data postprocessing. Must be > 0.
-        :param kwargs: Same args as :class:``PostprocessingDataset``.
-        """
-
-        super().__init__(*args, **kwargs)
-
-        if buf_size < 1:
-            raise ValueError(f"{self}: buf_size must be > 0, but got {buf_size}")
-        if num_workers < 1:
-            raise ValueError(f"{self}: num_workers must be > 0, but got {num_workers}")
-
-        self._buf_size = buf_size
-        # Ensure only one feeder thread at a time accesses the wrapped dataset to
-        # prevent race conditions while moving from one epoch to the next.
-        self._dataset_lock = threading.Lock()
-        self._multi_proc_data_iter: Optional[_MultiProcDataIter] = None  # store for cleanup
-        self._num_workers = num_workers
-
-    def init_seq_order(
-        self, epoch: Optional[int] = None, seq_list: Optional[List[str]] = None, seq_order: Optional[List[int]] = None
-    ):
-        """
-        :param epoch:
-        :param seq_list:
-        :param seq_order:
-        :return: whether the order changed (True is always safe to return)
-        """
-        super().init_seq_order(epoch=epoch, seq_list=seq_list, seq_order=seq_order)
-
-        if self._multi_proc_data_iter is not None:
-            self._multi_proc_data_iter.stop()
-            self._multi_proc_data_iter = None
-
-        if self._num_seqs == 0:
-            return True
-
-        assert self._buf_size > 0
-        assert self._num_workers > 0
-        parent_conns, child_conns = zip(*[_mp.Pipe() for _ in range(self._num_workers)])
-        base_rng_seed = self._get_random_seed_for_epoch(epoch=epoch) * 683859 * self._num_workers
-        worker_procs = [
-            _WorkerProcParent(
-                name=f"{self.__class__.__name__} {self.name} ep {epoch}",
-                epoch=epoch,
-                buffer_size=self._buf_size,
-                index=i,
-                map_seq=self._map_seq,
-                map_seq_stream=self._map_seq_stream,
-                out_tensor_dict_template=self._out_tensor_dict_template,
-                rng_seed=(base_rng_seed + 30411 * i) % (2**32 - 1),
-                seq_list=seq_list,
-                seq_pipe=child_conn,
-            )
-            for i, child_conn in enumerate(child_conns)
-        ]
-        quit_event = threading.Event()
-        dataset_thread = threading.Thread(
-            target=self._init_seq_order_and_distribute_seqs_to_children,
-            kwargs={
-                "buf_size": self._buf_size,
-                "child_queues": parent_conns,
-                "dataset_lock": self._dataset_lock,
-                "epoch": epoch,
-                "quit_event": quit_event,
-                "seq_list": seq_list,
-                "seq_order": seq_order,
-            },
-            name=f"{self.__class__.__name__} {self.name} dataset ep {epoch}",
-        )
-        dataset_thread.start()
-        data_iter = self._multi_proc_data_iter = _MultiProcDataIter(
-            dataset_thread=dataset_thread, quit_event=quit_event, worker_procs=worker_procs
-        )
-        self._data_iter = enumerate(data_iter)
-
-    def _init_seq_order_and_distribute_seqs_to_children(
-        self,
-        *,
-        buf_size: int,
-        child_queues: Sequence[mpConnection],
-        dataset_lock: threading.Lock,
-        epoch: int,
-        quit_event: threading.Event,
-        seq_list: Optional[List[str]] = None,
-        seq_order: Optional[List[int]] = None,
-    ):
-        """
-        Initialize the wrapped dataset and distribute the contained sequences to the child worker processes.
-        """
-
-        assert buf_size > 0
-        assert len(child_queues) > 0
-
-        def _any_q_ready() -> bool:
-            ready, _, _ = select.select(child_queues, [], [])
-            return len(ready) > 0
-
-        cache: deque[Tuple[int, TensorDict]] = deque()
-
-        # Lock ensures that only one thread at a time accesses the wrapped dataset.
-        # This protects against issues while moving from one epoch to the next.
-        with dataset_lock:
-            self._dataset.init_seq_order(epoch=epoch, seq_list=seq_list, seq_order=seq_order)
-            data_iter = _iterate_dataset(self._dataset, in_tensor_dict_template=self._in_tensor_dict_template)
-            data_iter = enumerate(data_iter)
-
-            def _add_to_cache() -> bool:
-                try:
-                    cache.append(next(data_iter))
-                    return True
-                except StopIteration:
-                    return False
-
-            while not quit_event.is_set():
-                while len(cache) < buf_size - 1 and not _any_q_ready():
-                    if not _add_to_cache():
-                        break
-                _add_to_cache()
-                if not cache:
-                    break
-                seq_idx, tensor_dict = cache.popleft()
-                worker_idx = seq_idx % len(child_queues)
-                try:
-                    msg, _ = child_queues[worker_idx].recv()
-                    assert msg == "get_seq"
-                    child_queues[worker_idx].send(("seq", tensor_dict))
-                except (BrokenPipeError, EOFError):
-                    # queue is closed, i.e. the worker process crashed for some reason -> stop
-                    break
-
-        for q in child_queues:
-            try:
-                q.send(("exit", None))  # signal end of data
-            except (BrokenPipeError, EOFError):
-                # queue is already closed, i.e. the worker process died
-                pass
-            finally:
-                q.close()
 
 
 class _MultiProcDataIter:
