@@ -606,14 +606,14 @@ class MultiProcPostprocessingDataset(PostprocessingDataset):
                     # queue is closed, i.e. the worker process crashed for some reason -> stop
                     break
 
-            for q in child_queues:
-                try:
-                    q.send(("exit", None))  # signal end of data
-                except (BrokenPipeError, EOFError):
-                    # queue is already closed, i.e. the worker process died
-                    pass
-                finally:
-                    q.close()
+        for q in child_queues:
+            try:
+                q.send(("exit", None))  # signal end of data
+            except (BrokenPipeError, EOFError):
+                # queue is already closed, i.e. the worker process died
+                pass
+            finally:
+                q.close()
 
 
 class _MultiProcDataIter:
