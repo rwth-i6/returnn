@@ -414,7 +414,7 @@ class PostprocessingDataset(CachedDataset2):
         assert self._num_workers > 0
 
         def _any_q_ready() -> bool:
-            ready, _, _ = select.select(child_queues, [], [])
+            ready, _, _ = select.select(child_queues, [], [], 0)
             return len(ready) > 0
 
         cache: deque[Tuple[int, TensorDict]] = deque()
