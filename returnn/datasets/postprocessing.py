@@ -8,6 +8,7 @@ from collections import deque
 from itertools import islice
 import numpy
 from numpy.random import RandomState
+import select
 import sys
 import threading
 from typing import Any, Callable, Dict, Iterator, List, Optional, Sequence, Tuple, TypeVar
@@ -568,17 +569,34 @@ class MultiProcPostprocessingDataset(PostprocessingDataset):
         assert buf_size > 0
         assert len(child_queues) > 0
 
+        def _any_q_ready() -> bool:
+            ready, _, _ = select.select(child_queues, [], [])
+            return len(ready) > 0
+
+        cache: deque[Tuple[int, TensorDict]] = deque()
+
         # Lock ensures that only one thread at a time accesses the wrapped dataset.
-        #
         # This protects against issues while moving from one epoch to the next.
         with dataset_lock:
             self._dataset.init_seq_order(epoch=epoch, seq_list=seq_list, seq_order=seq_order)
             data_iter = _iterate_dataset(self._dataset, in_tensor_dict_template=self._in_tensor_dict_template)
             data_iter = enumerate(data_iter)
 
-            for seq_idx, tensor_dict in data_iter:
-                if quit_event.is_set():
+            def _add_to_cache() -> bool:
+                try:
+                    cache.append(next(data_iter))
+                    return True
+                except StopIteration:
+                    return False
+
+            while not quit_event.is_set():
+                while len(cache) < buf_size - 1 and not _any_q_ready():
+                    if not _add_to_cache():
+                        break
+                _add_to_cache()
+                if not cache:
                     break
+                seq_idx, tensor_dict = cache.popleft()
                 worker_idx = seq_idx % len(child_queues)
                 try:
                     msg, _ = child_queues[worker_idx].recv()
@@ -587,6 +605,7 @@ class MultiProcPostprocessingDataset(PostprocessingDataset):
                 except EOFError:
                     # queue is closed, i.e. the worker process crashed for some reason -> stop
                     break
+
             for q in child_queues:
                 try:
                     q.send(("exit", None))  # signal end of data
