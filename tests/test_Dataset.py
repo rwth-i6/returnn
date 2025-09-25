@@ -1285,7 +1285,7 @@ def test_MultiProcPostprocessingDataset():
         }
         dataset = init_dataset(ds_opts)
 
-        for ep in range(1, 1 + 1):
+        for ep in range(1, 5 + 1):
             dataset.init_seq_order(epoch=ep)
             assert dataset.have_seqs()
             dataset.load_seqs(0, 3)
