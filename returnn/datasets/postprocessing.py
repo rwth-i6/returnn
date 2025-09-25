@@ -602,7 +602,7 @@ class MultiProcPostprocessingDataset(PostprocessingDataset):
                     msg, _ = child_queues[worker_idx].recv()
                     assert msg == "get_seq"
                     child_queues[worker_idx].send(("seq", tensor_dict))
-                except EOFError:
+                except (BrokenPipeError, EOFError):
                     # queue is closed, i.e. the worker process crashed for some reason -> stop
                     break
 
