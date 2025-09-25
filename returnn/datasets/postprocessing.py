@@ -753,12 +753,12 @@ def _worker_proc_loop(
         while True:
             try:
                 q.send(("get_seq", None))
-                msg, item = q.recv()
+                seq_msg, item = q.recv()
             except (BrokenPipeError, EOFError):
                 # queue is closed
                 break
-            assert msg in ("seq", "exit")
-            if msg == "exit" or item is None:
+            assert seq_msg in ("seq", "exit")
+            if seq_msg == "exit" or item is None:
                 break
             assert isinstance(item, TensorDict)
             yield item
