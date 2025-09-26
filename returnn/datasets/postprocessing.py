@@ -268,7 +268,7 @@ class PostprocessingDataset(CachedDataset2):
                     seq_pipe=child_conn,
                 )
             data_iter = self._multi_proc_data_iter = self._init_multi_proc_data_iter(
-                epoch=epoch, parent_conns=parent_conns, seq_list=seq_list, seq_order=seq_order
+                epoch=epoch, feeder_to_worker_conns=parent_conns, seq_list=seq_list, seq_order=seq_order
             )
         else:
             self._dataset.init_seq_order(epoch=epoch, seq_list=seq_list, seq_order=seq_order)
@@ -420,21 +420,21 @@ class PostprocessingDataset(CachedDataset2):
         self,
         *,
         epoch: int,
-        parent_conns: Sequence[mpConnection],
+        feeder_to_worker_conns: Sequence[mpConnection],
         seq_list: Optional[List[str]] = None,
         seq_order: Optional[List[int]] = None,
     ) -> _MultiProcDataIter:
-        assert len(parent_conns) == self._num_workers
+        assert len(feeder_to_worker_conns) == self._num_workers
 
         quit_event = threading.Event()
         dataset_thread = threading.Thread(
             target=self._init_seq_order_and_distribute_seqs_to_children,
             kwargs={
-                "child_queues": parent_conns,
                 "epoch": epoch,
                 "quit_event": quit_event,
                 "seq_list": seq_list,
                 "seq_order": seq_order,
+                "worker_conns": feeder_to_worker_conns,
             },
             name=f"{self.__class__.__name__} {self.name} dataset ep {epoch}",
         )
@@ -449,32 +449,32 @@ class PostprocessingDataset(CachedDataset2):
     def _init_seq_order_and_distribute_seqs_to_children(
         self,
         *,
-        child_queues: Sequence[mpConnection],
         epoch: int,
         quit_event: threading.Event,
         seq_list: Optional[List[str]] = None,
         seq_order: Optional[List[int]] = None,
+        worker_conns: Sequence[mpConnection],
     ):
         """
         Initialize the wrapped dataset and distribute the contained sequences to the child worker processes.
         """
 
         assert self._buf_size > 0
-        assert len(child_queues) > 0
+        assert len(worker_conns) > 0
         assert self._num_workers > 0
 
-        caches: List[deque[TensorDict]] = [deque() for _ in range(len(child_queues))]
+        caches: List[deque[TensorDict]] = [deque() for _ in range(len(worker_conns))]
 
-        def _any_q_ready() -> bool:
-            ready, _, _ = select.select(child_queues, [], [], 0)
+        def _any_conn_ready() -> bool:
+            ready, _, _ = select.select(worker_conns, [], [], 0)
             return len(ready) > 0
 
         def _maybe_distrib_seq(*, timeout=0.1):
             assert timeout >= 0.0
             # do not block indefinetely to periodically check the quit_event
-            ready_conns, _, _ = select.select(child_queues, [], [], timeout)
-            assert len(child_queues) == len(caches)
-            for child_queue, cache in zip(child_queues, caches):
+            ready_conns, _, _ = select.select(worker_conns, [], [], timeout)
+            assert len(worker_conns) == len(caches)
+            for child_queue, cache in zip(worker_conns, caches):
                 if child_queue not in ready_conns:
                     continue
                 msg, _ = child_queue.recv()
@@ -501,7 +501,7 @@ class PostprocessingDataset(CachedDataset2):
                 # fetch seqs until all caches have at least one seq,
                 # if no child is waiting for seqs also fill until buf_size
                 while any(len(cache) == 0 for cache in caches) or (
-                    sum(len(cache) for cache in caches) < self._buf_size and not _any_q_ready()
+                    sum(len(cache) for cache in caches) < self._buf_size and not _any_conn_ready()
                 ):
                     if not _add_to_cache():
                         break
@@ -513,7 +513,7 @@ class PostprocessingDataset(CachedDataset2):
                     # queue is closed, i.e. the worker process crashed for some reason -> stop
                     break
 
-        for queue in child_queues:
+        for queue in worker_conns:
             try:
                 queue.send(("seq", None))
             except (BrokenPipeError, EOFError):
