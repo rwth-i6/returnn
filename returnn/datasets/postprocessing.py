@@ -260,9 +260,6 @@ class PostprocessingDataset(CachedDataset2):
             for i, (worker, child_conn) in enumerate(zip(self._worker_procs, child_conns)):
                 worker.init_seq_order(
                     epoch=epoch,
-                    map_seq=self._map_seq,
-                    map_seq_stream=self._map_seq_stream,
-                    out_tensor_dict_template=self._out_tensor_dict_template,
                     rng_seed=(base_rng_seed + 30411 * i) % (2**32 - 1),
                     seq_list=seq_list,
                     seq_pipe=child_conn,
@@ -412,7 +409,14 @@ class PostprocessingDataset(CachedDataset2):
         if self._worker_procs is not None:
             return
         self._worker_procs = [
-            _WorkerProcParent(name=f"{self.__class__.__name__} {self.name} worker", buffer_size=self._buf_size, index=i)
+            _WorkerProcParent(
+                name=f"{self.__class__.__name__} {self.name} worker",
+                buffer_size=self._buf_size,
+                index=i,
+                map_seq=self._map_seq,
+                map_seq_stream=self._map_seq_stream,
+                out_tensor_dict_template=self._out_tensor_dict_template,
+            )
             for i in range(self._num_workers)
         ]
 
@@ -723,14 +727,23 @@ class _MultiProcDataIter:
 
 
 class _WorkerProcParent:
-    def __init__(self, *, name: str, index: int, buffer_size: int):
+    def __init__(
+        self,
+        *,
+        buffer_size: int,
+        index: int,
+        name: str,
+        map_seq: Optional[Callable],
+        map_seq_stream: Optional[Callable],
+        out_tensor_dict_template: TensorDict,
+    ):
         parent_conn, child_conn = _mp.Pipe()
         self.parent_conn = parent_conn
 
         self.worker_proc = _mp.Process(
             name=f"{name} worker {index}",
             target=_worker_proc_loop,
-            args=(buffer_size, index, child_conn),
+            args=(index, child_conn, buffer_size, map_seq, map_seq_stream, out_tensor_dict_template),
             daemon=True,
         )
         self.worker_proc.start()
@@ -746,23 +759,12 @@ class _WorkerProcParent:
         self,
         *,
         epoch: int,
-        map_seq: Optional[Callable],
-        map_seq_stream: Optional[Callable],
-        out_tensor_dict_template: TensorDict,
         rng_seed: int,
         seq_list: Optional[List[str]],
         seq_pipe: mpConnection,
     ):
         """init_seq_order"""
-        args = {
-            "epoch": epoch,
-            "map_seq": map_seq,
-            "map_seq_stream": map_seq_stream,
-            "out_tensor_dict_template": out_tensor_dict_template,
-            "rng_seed": rng_seed,
-            "seq_list": seq_list,
-            "seq_pipe": seq_pipe,
-        }
+        args = {"epoch": epoch, "rng_seed": rng_seed, "seq_list": seq_list, "seq_pipe": seq_pipe}
         self.parent_conn.send(("init_seq_order", args))
         msg, _ = self.parent_conn.recv()
         assert msg == "init_seq_order"
@@ -793,7 +795,14 @@ class _WorkerProcParent:
             util.try_run(self.worker_proc.join)
 
 
-def _worker_proc_loop(buffer_size: int, index: int, parent_conn: mpConnection):
+def _worker_proc_loop(
+    index: int,
+    parent_conn: mpConnection,
+    buffer_size: int,
+    map_seq: Optional[Callable],
+    map_seq_stream: Optional[Callable],
+    out_tensor_dict_template: TensorDict,
+):
     if sys.platform == "linux":
         with open("/proc/self/comm", "w") as f:
             f.write(f"PP worker {index}")
@@ -858,10 +867,10 @@ def _worker_proc_loop(buffer_size: int, index: int, parent_conn: mpConnection):
                 feeder_conn = kwargs["seq_pipe"]
                 data_iter = _build_mapping_iter(
                     _iter_pipe(feeder_conn),
-                    map_seq=kwargs["map_seq"],
-                    map_seq_stream=kwargs["map_seq_stream"],
                     epoch=epoch,
-                    out_tensor_dict_template=kwargs["out_tensor_dict_template"],
+                    map_seq=map_seq,
+                    map_seq_stream=map_seq_stream,
+                    out_tensor_dict_template=out_tensor_dict_template,
                     rng=RandomState(kwargs["rng_seed"]),
                     seq_list_for_validation=kwargs["seq_list"],
                 )
