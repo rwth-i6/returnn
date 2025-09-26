@@ -853,6 +853,8 @@ def _worker_proc_loop(buffer_size: int, index: int, parent_conn: mpConnection):
                 if sys.platform == "linux":
                     with open("/proc/self/comm", "w") as f:
                         f.write(f"PP worker {index} ep {epoch}")
+                if feeder_conn is not None:
+                    feeder_conn.close()
                 feeder_conn = kwargs["seq_pipe"]
                 data_iter = _build_mapping_iter(
                     _iter_pipe(feeder_conn),
