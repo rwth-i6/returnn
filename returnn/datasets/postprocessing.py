@@ -463,11 +463,22 @@ class PostprocessingDataset(CachedDataset2):
         assert len(child_queues) > 0
         assert self._num_workers > 0
 
+        caches: List[deque[TensorDict]] = [deque() for _ in range(len(child_queues))]
+
         def _any_q_ready() -> bool:
             ready, _, _ = select.select(child_queues, [], [], 0)
             return len(ready) > 0
 
-        cache: deque[Tuple[int, TensorDict]] = deque()
+        def _distrib_seq():
+            ready_conns, _, _ = select.select(child_queues, [], [])
+            assert len(child_queues) == len(caches)
+            for queue, cache in zip(child_queues, caches):
+                if queue not in ready_conns:
+                    continue
+                msg, _ = queue.recv()
+                assert msg == "get_seq"
+                tensor_dict = cache.popleft() if len(cache) > 0 else None
+                queue.send(("seq", tensor_dict))
 
         # Lock ensures that only one thread at a time accesses the wrapped dataset.
         # This protects against issues while moving from one epoch to the next.
@@ -478,36 +489,39 @@ class PostprocessingDataset(CachedDataset2):
 
             def _add_to_cache() -> bool:
                 try:
-                    cache.append(next(data_iter))
+                    idx, tensor_dict = next(data_iter)
+                    caches[idx % len(caches)].append(tensor_dict)
                     return True
                 except StopIteration:
                     return False
 
+            def _fill_cache_to_min() -> bool:
+                while any(len(c) == 0 for c in caches):
+                    if not _add_to_cache():
+                        return False
+                return True
+
             while not quit_event.is_set():
-                while len(cache) < self._buf_size - 1 and not _any_q_ready():
+                _fill_cache_to_min()
+                while sum(len(cache) for cache in caches) < self._buf_size and not _any_q_ready():
                     if not _add_to_cache():
                         break
-                _add_to_cache()
-                if not cache:
+                if all(len(c) == 0 for c in caches):
                     break
-                seq_idx, tensor_dict = cache.popleft()
-                worker_idx = seq_idx % len(child_queues)
                 try:
-                    msg, _ = child_queues[worker_idx].recv()
-                    assert msg == "get_seq"
-                    child_queues[worker_idx].send(("seq", tensor_dict))
+                    _distrib_seq()
                 except (BrokenPipeError, EOFError):
                     # queue is closed, i.e. the worker process crashed for some reason -> stop
                     break
 
-        for q in child_queues:
+        for queue in child_queues:
             try:
-                q.send(("exit", None))  # signal end of data
+                queue.send(("seq", None))
             except (BrokenPipeError, EOFError):
                 # queue is already closed, i.e. the worker process died
                 pass
             finally:
-                q.close()
+                queue.close()
 
 
 def _iterate_dataset(dataset: Dataset, *, in_tensor_dict_template: TensorDict) -> Iterator[TensorDict]:
@@ -796,8 +810,8 @@ def _worker_proc_loop(buffer_size: int, index: int, parent_conn: mpConnection):
             except (BrokenPipeError, EOFError):
                 # queue is closed
                 break
-            assert seq_msg in ("seq", "exit")
-            if seq_msg == "exit" or item is None:
+            assert seq_msg == "seq"
+            if item is None:
                 break
             assert isinstance(item, TensorDict)
             yield item
