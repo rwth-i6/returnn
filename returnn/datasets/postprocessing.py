@@ -471,6 +471,7 @@ class PostprocessingDataset(CachedDataset2):
 
         def _maybe_distrib_seq(*, timeout=0.1):
             assert timeout >= 0.0
+            # do not block indefinetely to periodically check the quit_event
             ready_conns, _, _ = select.select(child_queues, [], [], timeout)
             assert len(child_queues) == len(caches)
             for child_queue, cache in zip(child_queues, caches):
@@ -497,6 +498,8 @@ class PostprocessingDataset(CachedDataset2):
                     return False
 
             while not quit_event.is_set():
+                # fetch seqs until all caches have at least one seq,
+                # if no child is waiting for seqs also fill until buf_size
                 while any(len(cache) == 0 for cache in caches) or (
                     sum(len(cache) for cache in caches) < self._buf_size and not _any_q_ready()
                 ):
