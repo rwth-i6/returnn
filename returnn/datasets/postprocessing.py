@@ -301,6 +301,7 @@ class PostprocessingDataset(CachedDataset2):
             return
         got_exception = False
         for parent in self._worker_procs:
+            # noinspection PyBroadException
             try:
                 parent.exit(join=False)
             except Exception:
@@ -347,6 +348,7 @@ class PostprocessingDataset(CachedDataset2):
         return self._dataset.supports_sharding()
 
     def finish_epoch(self, *, free_resources=False):
+        """finish_epoch"""
         super().finish_epoch(free_resources=free_resources)
         if not free_resources:
             return
