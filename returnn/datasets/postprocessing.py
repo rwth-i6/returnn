@@ -469,7 +469,7 @@ class PostprocessingDataset(CachedDataset2):
             ready, _, _ = select.select(child_queues, [], [], 0)
             return len(ready) > 0
 
-        def _distrib_seq(*, timeout=0.1):
+        def _maybe_distrib_seq(*, timeout=0.1):
             assert timeout >= 0.0
             ready_conns, _, _ = select.select(child_queues, [], [], timeout)
             assert len(child_queues) == len(caches)
@@ -510,7 +510,7 @@ class PostprocessingDataset(CachedDataset2):
                 if all(len(c) == 0 for c in caches):
                     break
                 try:
-                    _distrib_seq()
+                    _maybe_distrib_seq()
                 except (BrokenPipeError, EOFError):
                     # queue is closed, i.e. the worker process crashed for some reason -> stop
                     break
