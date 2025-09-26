@@ -761,7 +761,7 @@ class _WorkerProcParent:
         # and so must be closed in the parent to avoid hangs
         seq_pipe.close()
 
-    def get_seq(self) -> Optional[DatasetSeq]:
+    def get_seq(self) -> Optional[TensorDict]:
         """get_seq"""
         self.parent_conn.send(("get_seq", {}))
         msg, seq = self.parent_conn.recv()
