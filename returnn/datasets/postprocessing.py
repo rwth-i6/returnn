@@ -660,6 +660,7 @@ class _MultiProcDataIter:
         assert len(worker_procs) > 0
         self.worker_procs = worker_procs
 
+        self._complete_frac = 0.0  # need to force monotonicity
         self._workers_exhausted = [False for _ in range(len(worker_procs))]
         self._worker_idx = 0
 
@@ -679,7 +680,7 @@ class _MultiProcDataIter:
                 continue
             seq = self.worker_procs[worker_idx].get_seq()
             if seq is not None:
-                return seq
+                return self._ensure_complete_frac_monotonic(seq)
             self._workers_exhausted[worker_idx] = True
 
         # when we reach this point, all workers are exhausted and we stop
@@ -693,6 +694,16 @@ class _MultiProcDataIter:
         self.quit_event.set()
         if join:
             util.try_run(self.dataset_thread.join)
+
+    def _ensure_complete_frac_monotonic(self, seq: TensorDict) -> TensorDict:
+        """Enforces monotonicity in complete_frac across all workers."""
+        if "complete_frac" not in seq.data:
+            return seq
+        complete_frac = float(seq.data["complete_frac"].raw_tensor)
+        assert 0.0 <= complete_frac <= 1.0, f"complete_frac must be in [0, 1], but got {complete_frac}"
+        self._complete_frac = max(complete_frac, self._complete_frac)
+        seq.data["complete_frac"].raw_tensor = numpy.array(self._complete_frac, dtype=numpy.float32)
+        return seq
 
     def __del__(self):
         # noinspection PyBroadException
