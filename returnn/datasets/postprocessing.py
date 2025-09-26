@@ -472,13 +472,13 @@ class PostprocessingDataset(CachedDataset2):
         def _distrib_seq():
             ready_conns, _, _ = select.select(child_queues, [], [])
             assert len(child_queues) == len(caches)
-            for queue, cache in zip(child_queues, caches):
-                if queue not in ready_conns:
+            for child_queue, cache in zip(child_queues, caches):
+                if child_queue not in ready_conns:
                     continue
-                msg, _ = queue.recv()
+                msg, _ = child_queue.recv()
                 assert msg == "get_seq"
                 tensor_dict = cache.popleft() if len(cache) > 0 else None
-                queue.send(("seq", tensor_dict))
+                child_queue.send(("seq", tensor_dict))
 
         # Lock ensures that only one thread at a time accesses the wrapped dataset.
         # This protects against issues while moving from one epoch to the next.
