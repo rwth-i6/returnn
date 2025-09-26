@@ -1274,25 +1274,36 @@ def _repeat2(input_iter: Iterator[TensorDict], **kwargs) -> Iterator[TensorDict]
 
 
 def test_MultiProcPostprocessingDataset():
-    _demo_txt = "some utterance text that has a few words"
-    with create_ogg_zip_txt_only_dataset_opts(text=_demo_txt) as sub_ds_opts:
-        ds_opts = {
-            "class": "PostprocessingDataset",
-            "dataset": sub_ds_opts,
-            "map_seq_stream": _repeat2,
-            "buf_size": 1,
-            "num_workers": 2,
-        }
-        dataset = init_dataset(ds_opts)
+    from test_HDFDataset import generate_hdf_from_dummy
 
-        for ep in range(1, 5 + 1):
-            dataset.init_seq_order(epoch=ep)
-            assert dataset.have_seqs()
-            dataset.load_seqs(0, 3)
-            for i in range(2):
-                classes = dataset.get_data(i, "classes")
-                assert len(classes) > 0
-            assert not dataset.is_less_than_num_seqs(2)
+    num_hdfs = 20
+    num_seqs = 23
+    total_num_seqs = num_hdfs * num_seqs
+    total_num_seqs_pp = 2 * total_num_seqs
+    # Create a few HDF files such that we can easily verify the data later.
+    hdf_files = [generate_hdf_from_dummy() for _ in range(num_hdfs)]
+
+    ds_opts = {
+        "class": "PostprocessingDataset",
+        "dataset": {
+            "class": "HDFDataset",
+            "files": hdf_files,
+            "seq_ordering": "default",
+        },
+        "map_seq_stream": _repeat2,
+        "buf_size": 1,
+        "num_workers": 2,
+    }
+    dataset = init_dataset(ds_opts)
+
+    for ep in range(1, 5 + 1):
+        dataset.init_seq_order(epoch=ep)
+        assert dataset.have_seqs()
+        dataset.load_seqs(0, total_num_seqs_pp + 1)
+        for i in range(total_num_seqs_pp):
+            classes = dataset.get_data(i, "classes")
+            assert len(classes) > 0
+        assert not dataset.is_less_than_num_seqs(total_num_seqs_pp + 1)
 
 
 def _post_process_map_seq_no_op(tdict: TensorDict, **_other) -> TensorDict:
