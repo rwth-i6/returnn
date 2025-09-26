@@ -648,7 +648,11 @@ def _build_mapping_iter(
 
 class _MultiProcDataIter:
     """
-    Data iter that pulls from the worker processes and manages their lifetime.
+    Data iter that pulls from the worker processes in a well-defined order and
+    manages the lifetime of the feeder thread.
+
+    Also ensures monotonicity of complete_frac, which would otherwise be no longer
+    guaranteed if there is more than one worker.
     """
 
     def __init__(
