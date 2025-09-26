@@ -496,15 +496,10 @@ class PostprocessingDataset(CachedDataset2):
                 except StopIteration:
                     return False
 
-            def _fill_cache_to_min() -> bool:
-                while any(len(c) == 0 for c in caches):
-                    if not _add_to_cache():
-                        return False
-                return True
-
             while not quit_event.is_set():
-                _fill_cache_to_min()
-                while sum(len(cache) for cache in caches) < self._buf_size and not _any_q_ready():
+                while any(len(cache) == 0 for cache in caches) or (
+                    sum(len(cache) for cache in caches) < self._buf_size and not _any_q_ready()
+                ):
                     if not _add_to_cache():
                         break
                 if all(len(c) == 0 for c in caches):
