@@ -691,7 +691,11 @@ class _MultiProcDataIter:
         raise StopIteration
 
     def stop(self, *, join=True):
-        """Stop the worker processes and the dataset thread."""
+        """
+        Stop the iterator and the dataset thread.
+
+        Once this is called, the iterator cannot be used anymore.
+        """
         if self.quit_event.is_set():
             return
         self.quit_event.set()
@@ -699,7 +703,9 @@ class _MultiProcDataIter:
             util.try_run(self.dataset_thread.join)
 
     def _ensure_complete_frac_monotonic(self, seq: TensorDict) -> TensorDict:
-        """Enforces monotonicity in complete_frac across all workers."""
+        """
+        Enforce monotonicity of `complete_frac` in the given `TensorDict`.
+        """
         if "complete_frac" not in seq.data:
             return seq
         complete_frac = float(seq.data["complete_frac"].raw_tensor)
