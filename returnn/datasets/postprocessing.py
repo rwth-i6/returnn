@@ -436,7 +436,7 @@ class PostprocessingDataset(CachedDataset2):
                 "seq_order": seq_order,
                 "worker_conns": feeder_to_worker_conns,
             },
-            name=f"{self.__class__.__name__} {self.name} dataset ep {epoch}",
+            name=f"{self.__class__.__name__} feeder ep {epoch}",
         )
         # parent_conns are not closed here, because they move to a different thread, not process,
         # and so they must remain open.
