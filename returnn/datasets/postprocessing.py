@@ -469,8 +469,9 @@ class PostprocessingDataset(CachedDataset2):
             ready, _, _ = select.select(child_queues, [], [], 0)
             return len(ready) > 0
 
-        def _distrib_seq():
-            ready_conns, _, _ = select.select(child_queues, [], [])
+        def _distrib_seq(*, timeout=0.1):
+            assert timeout > 0.0, "must not block indefinetely to check quit_event periodically"
+            ready_conns, _, _ = select.select(child_queues, [], [], timeout)
             assert len(child_queues) == len(caches)
             for child_queue, cache in zip(child_queues, caches):
                 if child_queue not in ready_conns:
