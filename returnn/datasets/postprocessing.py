@@ -424,7 +424,7 @@ class PostprocessingDataset(CachedDataset2):
             _WorkerProcParent(
                 name=f"{self.__class__.__name__} {self.name} worker",
                 buffer_size=self._buf_size,
-                gc_interval=self._gc_interval or max(self._buf_size, 100),
+                gc_interval=self._gc_interval if self._gc_interval is not None else max(self._buf_size, 100),
                 index=i,
                 map_seq=self._map_seq,
                 map_seq_stream=self._map_seq_stream,
