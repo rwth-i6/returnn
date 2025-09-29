@@ -151,7 +151,7 @@ class PostprocessingDataset(CachedDataset2):
         :param gc_interval: Specifies after how many seqs garbage collection should be called
             in the worker processes.
             If > 0, must be >= `buf_size`.
-            If <= 0, no explicit garbage collection is done. This can lead to suboptimal memory consumption in the workers.
+            If <= 0, no explicit garbage collection is done. This can lead to higher memory consumption in the workers.
             If None (default), uses a reasonable default (`buf_size`, but min 100 seqs).
         :param num_workers: If > 0, configures the number of worker processes to use for data postprocessing.
             Only the postprocessing is distributed across subprocesses,
