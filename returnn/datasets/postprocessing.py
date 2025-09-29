@@ -5,6 +5,7 @@ Provides :class:`PostprocessingDataset`.
 from __future__ import annotations
 
 from collections import deque
+import gc
 from itertools import islice
 import numpy
 from numpy.random import RandomState
@@ -119,6 +120,7 @@ class PostprocessingDataset(CachedDataset2):
         map_outputs: Optional[Dict[str, Any]] = None,
         map_seq_stream_preserves_num_seqs: Optional[bool] = None,
         buf_size: int = 1,
+        gc_interval: Optional[int] = None,
         num_workers: int = 0,
         **kwargs,
     ):
@@ -146,6 +148,11 @@ class PostprocessingDataset(CachedDataset2):
         :param map_seq_stream_preserves_num_seqs: whether the function in map_seq_stream preserves the number of
             sequences, i.e. for every input sequence there is exactly one output sequence.
         :param buf_size: Buffer size for each worker, number of seqs to prefetch. Must be > 0.
+        :param gc_interval: Specifies after how many seqs garbage collection should be called
+            in the worker processes.
+            If > 0, must be >= `buf_size`.
+            If <= 0, no explicit garbage collection is done. This can lead to suboptimal memory consumption in the workers.
+            If None (default), uses a reasonable default (`buf_size` seqs).
         :param num_workers: If > 0, configures the number of worker processes to use for data postprocessing.
             Only the postprocessing is distributed across subprocesses,
             the underlying dataset is only instantiated once.
@@ -165,6 +172,10 @@ class PostprocessingDataset(CachedDataset2):
 
         if buf_size < 1:
             raise ValueError(f"{self}: buf_size must be > 0, but got {buf_size}")
+        if gc_interval is not None and 0 < gc_interval < buf_size:
+            raise ValueError(
+                f"{self}: if gc_interval > 0, it must be >= buf_size, but got 0 < {gc_interval} < buf_size ({buf_size})"
+            )
         if num_workers < 0:
             raise ValueError(f"{self}: num_workers must be >= 0, but got {num_workers}")
 
@@ -189,6 +200,7 @@ class PostprocessingDataset(CachedDataset2):
         # Ensure only one feeder thread at a time accesses the wrapped dataset to
         # prevent race conditions while moving from one epoch to the next.
         self._dataset_lock = threading.Lock()
+        self._gc_interval = gc_interval
         self._multi_proc_data_iter: Optional[_MultiProcDataIter] = None  # store for cleanup
         self._num_workers = num_workers
         self._worker_procs: Optional[List[_WorkerProcParent]] = None
@@ -412,6 +424,7 @@ class PostprocessingDataset(CachedDataset2):
             _WorkerProcParent(
                 name=f"{self.__class__.__name__} {self.name} worker",
                 buffer_size=self._buf_size,
+                gc_interval=self._gc_interval or self._buf_size,
                 index=i,
                 map_seq=self._map_seq,
                 map_seq_stream=self._map_seq_stream,
@@ -731,6 +744,7 @@ class _WorkerProcParent:
         self,
         *,
         buffer_size: int,
+        gc_interval: int,
         index: int,
         name: str,
         map_seq: Optional[Callable],
@@ -743,7 +757,7 @@ class _WorkerProcParent:
         self.worker_proc = _mp.Process(
             name=f"{name} worker {index}",
             target=_worker_proc_loop,
-            args=(index, child_conn, buffer_size, map_seq, map_seq_stream, out_tensor_dict_template),
+            args=(index, child_conn, buffer_size, gc_interval, map_seq, map_seq_stream, out_tensor_dict_template),
             daemon=True,
         )
         self.worker_proc.start()
@@ -799,6 +813,7 @@ def _worker_proc_loop(
     index: int,
     parent_conn: mpConnection,
     buffer_size: int,
+    gc_interval: int,
     map_seq: Optional[Callable],
     map_seq_stream: Optional[Callable],
     out_tensor_dict_template: TensorDict,
@@ -809,6 +824,7 @@ def _worker_proc_loop(
     better_exchook.setup_all()
 
     assert isinstance(buffer_size, int) and buffer_size > 0
+    assert isinstance(gc_interval, int) and gc_interval >= buffer_size
     assert isinstance(index, int)
     assert isinstance(parent_conn, mpConnection)
 
@@ -866,7 +882,7 @@ def _worker_proc_loop(
                     feeder_conn.close()
                 feeder_conn = kwargs["seq_pipe"]
                 data_iter = _build_mapping_iter(
-                    _iter_pipe(feeder_conn),
+                    util.iter_with_gc(_iter_pipe(feeder_conn), gc_interval=gc_interval),
                     epoch=epoch,
                     map_seq=map_seq,
                     map_seq_stream=map_seq_stream,

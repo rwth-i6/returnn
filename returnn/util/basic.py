@@ -5,12 +5,13 @@ Various generic utilities, which are shared across different backend engines.
 """
 
 from __future__ import annotations
-from typing import Optional, Union, Any, Generic, TypeVar, Iterable, Tuple, Dict, List, Set, Callable
+from typing import Optional, Union, Any, Generic, TypeVar, Iterator, Iterable, Tuple, Dict, List, Set, Callable
 
 import subprocess
 from subprocess import CalledProcessError
 
 from collections import deque
+import gc
 import inspect
 import os
 import sys
@@ -4552,3 +4553,23 @@ def get_fwd_compat_kwargs() -> Dict[str, Any]:
     """
     i = fwd_compatibility_rng.integers(0, 100)
     return {f"__fwd_compat_random_arg_{i:03}": None}
+
+
+def iter_with_gc(iter: Iterable[T], *, gc_interval: int) -> Iterator[T]:
+    """
+    Iterate and call gc.collect() every `gc_interval` steps.
+
+    See https://github.com/rwth-i6/returnn/pull/1765#issuecomment-3346576978 for discussion.
+
+    :param iter: iterable
+    :param int gc_interval: call gc.collect() every `gc_interval` steps.
+        If <= 0, will not call gc.collect().
+    :return: iterator
+    """
+    if gc_interval <= 0:
+        yield from iter
+        return
+    for i, item in enumerate(iter):
+        if i > 0 and i % gc_interval == 0:
+            gc.collect()
+        yield item
