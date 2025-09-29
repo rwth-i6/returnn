@@ -1274,21 +1274,17 @@ def _repeat2(input_iter: Iterator[TensorDict], **kwargs) -> Iterator[TensorDict]
 
 
 def test_MultiProcPostprocessingDataset():
-    from test_HDFDataset import generate_hdf_from_dummy
-
-    num_hdfs = 20
-    num_seqs = 23
-    total_num_seqs = num_hdfs * num_seqs
+    total_num_seqs = 500
     total_num_seqs_pp = 2 * total_num_seqs
-    # Create a few HDF files such that we can easily verify the data later.
-    hdf_files = [generate_hdf_from_dummy() for _ in range(num_hdfs)]
 
     ds_opts = {
         "class": "PostprocessingDataset",
         "dataset": {
-            "class": "HDFDataset",
-            "files": hdf_files,
-            "seq_ordering": "default",
+            "class": "DummyDataset",
+            "input_dim": 13,
+            "output_dim": 7,
+            "num_seqs": total_num_seqs,
+            "seq_len": 17,
         },
         "map_seq_stream": _repeat2,
         "buf_size": 1,
@@ -1299,8 +1295,9 @@ def test_MultiProcPostprocessingDataset():
     for ep in range(1, 5 + 1):
         dataset.init_seq_order(epoch=ep)
         assert dataset.have_seqs()
-        dataset.load_seqs(0, total_num_seqs_pp + 1)
         for i in range(total_num_seqs_pp):
+            assert dataset.is_less_than_num_seqs(i)
+            dataset.load_seqs(i, i + 1)
             classes = dataset.get_data(i, "classes")
             assert len(classes) > 0
         assert not dataset.is_less_than_num_seqs(total_num_seqs_pp + 1)
