@@ -4555,21 +4555,21 @@ def get_fwd_compat_kwargs() -> Dict[str, Any]:
     return {f"__fwd_compat_random_arg_{i:03}": None}
 
 
-def iter_with_gc(iter: Iterable[T], *, gc_interval: int) -> Iterator[T]:
+def iter_with_gc(iterator: Iterable[T], *, gc_interval: int) -> Iterator[T]:
     """
     Iterate and call gc.collect() every `gc_interval` steps.
 
     See https://github.com/rwth-i6/returnn/pull/1765#issuecomment-3346576978 for discussion.
 
-    :param iter: iterable
+    :param iterator: iterable
     :param int gc_interval: call gc.collect() every `gc_interval` steps.
         If <= 0, will not call gc.collect().
     :return: iterator
     """
     if gc_interval <= 0:
-        yield from iter
+        yield from iterator
         return
-    for i, item in enumerate(iter):
+    for i, item in enumerate(iterator):
         if i > 0 and i % gc_interval == 0:
             gc.collect()
         yield item
