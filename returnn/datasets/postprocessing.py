@@ -5,7 +5,6 @@ Provides :class:`PostprocessingDataset`.
 from __future__ import annotations
 
 from collections import deque
-import gc
 from itertools import islice
 import numpy
 from numpy.random import RandomState
