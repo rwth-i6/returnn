@@ -239,7 +239,7 @@ def _infer_data_format_for_feature(
     import datasets
 
     labels = None
-    num_classes = 1
+    num_classes = None
     num_dims = 0
     while isinstance(feature, datasets.features.Sequence):
         num_dims += 1
