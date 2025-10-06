@@ -25,7 +25,12 @@ class HuggingFaceDataset(CachedDataset2):
 
     def __init__(
         self,
-        dataset_opts: Union[Dict[str, Any], str, Sequence[str]],
+        dataset_opts: Union[
+            Dict[str, Any],
+            str,
+            Sequence[str],
+            Callable[[], Union[Dict[str, Any], str, Sequence[str], datasets.Dataset]],
+        ],
         *,
         map_func: Optional[Callable[[datasets.Dataset], datasets.Dataset]] = None,
         rename_columns: Optional[Dict[str, str]] = None,
@@ -40,6 +45,8 @@ class HuggingFaceDataset(CachedDataset2):
         :param dataset_opts: either a dict of options for :func:`datasets.load_dataset`
             or a path to a local dataset for :func:`datasets.load_from_disk`,
             or a list of Arrow filenames to load with :func:`datasets.Dataset.from_file` and concatenate.
+            It can also be a callable returning one of the above,
+            or returning a :class:`datasets.Dataset` directly.
         :param map_func: optional function to apply to the dataset after loading
         :param rename_columns: if given, will rename these columns
         :param cast_columns: if given, will cast these columns to the specified types.
@@ -88,16 +95,19 @@ class HuggingFaceDataset(CachedDataset2):
         # noinspection PyUnresolvedReferences,PyPackageRequirements
         import datasets
 
-        if isinstance(self.dataset_opts, dict):
-            self.hf_dataset = datasets.load_dataset(**self.dataset_opts)
-        elif isinstance(self.dataset_opts, str):
-            self.hf_dataset = datasets.load_from_disk(self.dataset_opts)
-        elif isinstance(self.dataset_opts, (list, tuple)):
-            self.hf_dataset = datasets.concatenate_datasets(
-                [datasets.Dataset.from_file(fn) for fn in self.dataset_opts]
-            )
+        dataset_opts = self.dataset_opts
+        if callable(dataset_opts):
+            dataset_opts = dataset_opts()
+        if isinstance(dataset_opts, dict):
+            self.hf_dataset = datasets.load_dataset(**dataset_opts)
+        elif isinstance(dataset_opts, str):
+            self.hf_dataset = datasets.load_from_disk(dataset_opts)
+        elif isinstance(dataset_opts, (list, tuple)):
+            self.hf_dataset = datasets.concatenate_datasets([datasets.Dataset.from_file(fn) for fn in dataset_opts])
+        elif isinstance(dataset_opts, datasets.Dataset):
+            self.hf_dataset = dataset_opts
         else:
-            raise TypeError(f"{self}: invalid dataset_opts type {type(self.dataset_opts)}")
+            raise TypeError(f"{self}: invalid dataset_opts type {type(dataset_opts)}")
         assert isinstance(self.hf_dataset, datasets.Dataset), (
             f"{self}: Expected single dataset, got {type(self.hf_dataset)} {self.hf_dataset}. Specify split if needed."
         )
