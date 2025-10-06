@@ -25,7 +25,7 @@ class HuggingfaceDataset(CachedDataset2):
 
     def __init__(
         self,
-        dataset_opts: Union[Dict[str, Any], str],
+        dataset_opts: Union[Dict[str, Any], str, Sequence[str]],
         *,
         map_func: Optional[Callable[[datasets.Dataset], datasets.Dataset]] = None,
         rename_columns: Optional[Dict[str, str]] = None,
@@ -38,7 +38,8 @@ class HuggingfaceDataset(CachedDataset2):
     ):
         """
         :param dataset_opts: either a dict of options for :func:`datasets.load_dataset`
-            or a path to a local dataset for :func:`datasets.load_from_disk`
+            or a path to a local dataset for :func:`datasets.load_from_disk`,
+            or a list of Arrow filenames to load with :func:`datasets.Dataset.from_file` and concatenate.
         :param map_func: optional function to apply to the dataset after loading
         :param rename_columns: if given, will rename these columns
         :param cast_columns: if given, will cast these columns to the specified types.
@@ -87,8 +88,14 @@ class HuggingfaceDataset(CachedDataset2):
 
         if isinstance(self.dataset_opts, dict):
             self.hf_dataset = datasets.load_dataset(**self.dataset_opts)
-        else:
+        elif isinstance(self.dataset_opts, str):
             self.hf_dataset = datasets.load_from_disk(self.dataset_opts)
+        elif isinstance(self.dataset_opts, (list, tuple)):
+            self.hf_dataset = datasets.concatenate_datasets(
+                [datasets.Dataset.from_file(fn) for fn in self.dataset_opts]
+            )
+        else:
+            raise TypeError(f"{self}: invalid dataset_opts type {type(self.dataset_opts)}")
         assert isinstance(self.hf_dataset, datasets.Dataset), (
             f"{self}: Expected single dataset, got {type(self.hf_dataset)} {self.hf_dataset}. Specify split if needed."
         )

@@ -136,16 +136,23 @@ def test_HuggingfaceDataset_load_from_disk():
     assert dummy_iter_dataset(ds)
 
 
-def test_HuggingfaceDataset_single_arrow():
-    # TODO...
+def test_HuggingfaceDataset_single_arrows():
+    import datasets
+
+    datadir_path = _get_tmp_dir() + "/hf-dataset-save-to-disk"
+    hf_ds = datasets.Dataset.from_list([{"data": i} for i in range(100_000)])
+    hf_ds.save_to_disk(datadir_path, num_shards=100)
+
+    content = os.listdir(datadir_path)
+    print("Saved dir content:", content)
+    assert "state.json" in content
+    assert "dataset_info.json" in content
+    assert all(f"data-{i:05}-of-00100.arrow" in content for i in range(100))
+
     ds = HuggingfaceDataset(
-        [...],  # TODO...
-        seq_tag_column="id",
-        data_format={
-            "id": {"dtype": "int64", "shape": ()},
-            "startphrase": {"dtype": "string", "shape": ()},
-            "label": {"dtype": "int64", "shape": ()},
-        },
+        [f"{datadir_path}/data-{i:05}-of-00100.arrow" for i in range(0, 100, 5)],
+        seq_tag_column=None,
+        data_format={"data": {"dtype": "int64", "shape": ()}},
     )
     ds.initialize()
     assert dummy_iter_dataset(ds)
