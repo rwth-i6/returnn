@@ -524,6 +524,11 @@ class Engine(EngineBase):
                     # write losses/errors to tensorboard
                     for key, val in eval_info.items():
                         self._tensorboard_writer.add_scalar(f"train/{key}", val, global_step=self.global_train_step)
+                    self._tensorboard_writer.add_scalar(
+                        f"train/learning_rate",
+                        self._updater._effective_learning_rate,
+                        global_step=self.global_train_step,
+                    )
 
                 if self._stop_on_nonfinite_train_score:
                     if any(np.isinf(v) or np.isnan(v) for v in accumulated_losses_dict.values()):
