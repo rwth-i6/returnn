@@ -7,8 +7,10 @@ See https://github.com/rwth-i6/returnn/issues/1257 for some initial discussion.
 from __future__ import annotations
 from typing import TYPE_CHECKING, Optional, Union, Any, Callable, Sequence, Dict, List
 import numpy
+from returnn.tensor import Tensor
 from .basic import DatasetSeq
 from .cached2 import CachedDataset2
+from .util.vocabulary import Vocabulary
 from returnn.util.basic import OptionalNotImplementedError
 
 if TYPE_CHECKING:
@@ -28,7 +30,7 @@ class HuggingfaceDataset(CachedDataset2):
         map_func: Optional[Callable[[datasets.Dataset], datasets.Dataset]] = None,
         data_key: str = "data",
         seq_tag_column: Optional[str] = "id",
-        selected_columns: Optional[Sequence[str]] = None,
+        data_format: Dict[str, Dict[str, Any]],
         **kwargs,
     ):
         """
@@ -38,7 +40,10 @@ class HuggingfaceDataset(CachedDataset2):
         :param data_key: key (column name) in the dataset to use as input data
         :param seq_tag_column: key (column name) in the dataset to use as sequence tag.
             If None, will use the sequence index as tag.
-        :param selected_columns: list of keys in the dataset to use as features (if None, use all except seq_tag_key)
+        :param data_format:
+            For each column name (data key), specify the format,
+            as a dict with entries for "dim", "ndim", "shape", and/or "dtype",
+            compatible to :class:`Tensor`.
         """
         super().__init__(**kwargs)
 
@@ -48,13 +53,16 @@ class HuggingfaceDataset(CachedDataset2):
         self.hf_dataset: Optional[datasets.Dataset] = None
         self.data_key = data_key
         self.seq_tag_column: Optional[str] = seq_tag_column
-        self.selected_columns: Optional[Sequence[str]] = selected_columns
-        self.data_dtype: Dict[str, str] = {}
+        self.data_format: Dict[str, Tensor] = {k: _make_tensor_template(v, k) for k, v in data_format.items()}
 
-        self._seq_order = None
+        self.labels = {k: data.vocab.labels for k, data in self.data_format.items() if data.vocab}
+        self.num_outputs = {k: (data.dim, data.ndim) for k, data in self.data_format.items()}
+        self._seq_order: Optional[Sequence[int]] = None
 
-    def initialize(self):
-        """initialize"""
+    def _lazy_init(self):
+        if self.hf_dataset is not None:
+            return
+
         # Load the dataset
         # noinspection PyUnresolvedReferences,PyPackageRequirements
         import datasets
@@ -76,65 +84,32 @@ class HuggingfaceDataset(CachedDataset2):
                 f"{self}: seq_tag_column {self.seq_tag_column} must be of dtype string or int64,"
                 f" got {self.hf_dataset.features[self.seq_tag_column].dtype}"
             )
-        if self.selected_columns is None:
-            self.selected_columns = list(self.hf_dataset.features.keys())
-            if self.seq_tag_column in self.selected_columns:
-                self.selected_columns.remove(self.seq_tag_column)
 
         self.hf_dataset.set_format("numpy")
 
-        if self.seq_tag_column is not None:
-            assert self.seq_tag_column in self.hf_dataset.column_names
-
-        self.labels = {}
-        self.num_outputs = {}
-        for key in self.selected_columns:
+        for key, user_format in self.data_format.items():
             feature = self.hf_dataset.features[key]
-            num_classes = 1
-            spatial_dims = 0
-            while isinstance(feature, datasets.features.Sequence):
-                spatial_dims += 1
-                if feature.length != -1:
-                    num_classes = feature.length
-                feature = feature.feature
-            if isinstance(feature, datasets.features.ClassLabel):
-                self.labels[key] = feature.names
-                dtype = feature.dtype
-                num_classes = feature.num_classes  # noqa
-            elif isinstance(feature, datasets.features.Value):
-                dtype = feature.dtype
-            elif isinstance(feature, (datasets.features.Array2D, datasets.features.Array3D, datasets.features.Array4D)):
-                dtype = feature.dtype
-                num_classes = feature.shape[-1]
-                spatial_dims += len(feature.shape)
-            elif isinstance(feature, datasets.features.Audio):
-                if feature.decode:
-                    dtype = "float32"  # samples
-                else:
-                    dtype = "uint8"  # bytes
-                spatial_dims += 1  # time axis
-            else:
-                assert False, f"{self}: Column {key!r}, unsupported feature type {type(feature)} {feature}"
-
-            len_shape = spatial_dims
-            self.num_outputs[key] = (num_classes, len_shape)
-
-            self.data_dtype[key] = dtype
-
-        super().initialize()
+            inferred_format = _infer_data_format_for_feature(feature, f"{self}: column {key}: ")
+            for key_ in ["dim", "ndim", "dtype"]:
+                assert getattr(user_format, key_) == inferred_format[key_], (
+                    f"{self}: column {key}, user-specified {user_format}, {key_}:"
+                    f" user-specified {getattr(user_format, key_)} does not match inferred {inferred_format[key_]}"
+                )
+            if "vocab" in inferred_format and not user_format.vocab:
+                assert user_format.sparse, f"{self}: column {key}: user_format expected to be sparse, got {user_format}"
+                user_format.sparse_dim.vocab = Vocabulary.create_vocab(**inferred_format["vocab"])
+                self.labels[key] = user_format.vocab.labels
 
     def get_data_dim(self, key: str) -> int:
         """:return: data dimension for the given key"""
-        if key in self.num_outputs:
-            return self.num_outputs[key][0]
-        return super().get_data_dim(key)
+        return self.data_format[key].dim
 
     def get_data_dtype(self, key: str) -> str:
         """:return: dtype"""
-        return self.data_dtype[key]
+        return self.data_format[key].dtype
 
     def _get_seq_len(self, seq_idx: int):
-        return len(self.hf_dataset[seq_idx][self.data_key])
+        return len(self.hf_dataset[seq_idx][self.data_key])  # noqa
 
     @property
     def num_seqs(self) -> int:
@@ -196,7 +171,7 @@ class HuggingfaceDataset(CachedDataset2):
 
         dataset_item = self.hf_dataset[corpus_seq_idx]
         seq_tag = self._get_seq_tag(corpus_seq_idx, dataset_item)
-        features = {f: _ensure_numpy(dataset_item[f]) for f in self.selected_columns}
+        features = {f: _ensure_numpy(dataset_item[f]) for f in self.data_format}
         return DatasetSeq(seq_idx, features=features, seq_tag=seq_tag)
 
     def _get_seq_tag(self, corpus_seq_idx: int, dataset_item: Dict[str, Any]) -> str:
@@ -229,3 +204,62 @@ class HuggingfaceDataset(CachedDataset2):
         if isinstance(data, numpy.ndarray):
             data = data.tolist()
         return data
+
+
+def _infer_data_format_for_feature(
+    feature: Union[
+        datasets.features.Sequence,
+        datasets.features.ClassLabel,
+        datasets.features.Value,
+        datasets.features.Array2D,
+        datasets.features.Array3D,
+        datasets.features.Array4D,
+        datasets.features.Audio,
+    ],
+    exc_prefix: str = "",
+) -> Dict[str, Any]:
+    # noinspection PyUnresolvedReferences,PyPackageRequirements
+    import datasets
+
+    labels = None
+    num_classes = 1
+    num_dims = 0
+    while isinstance(feature, datasets.features.Sequence):
+        num_dims += 1
+        if feature.length != -1:
+            num_classes = feature.length
+        feature = feature.feature
+    if isinstance(feature, datasets.features.ClassLabel):
+        labels = feature.names
+        dtype = feature.dtype
+        num_classes = feature.num_classes  # noqa
+    elif isinstance(feature, datasets.features.Value):
+        dtype = feature.dtype
+    elif isinstance(feature, (datasets.features.Array2D, datasets.features.Array3D, datasets.features.Array4D)):
+        dtype = feature.dtype
+        num_classes = feature.shape[-1]
+        num_dims += len(feature.shape)
+    elif isinstance(feature, datasets.features.Audio):
+        if feature.decode:
+            dtype = "float32"  # samples
+        else:
+            dtype = "uint8"  # bytes
+        num_dims += 1  # time axis
+    else:
+        assert False, f"{exc_prefix}unsupported feature type {type(feature)} {feature}"
+
+    d = {"dim": num_classes, "ndim": num_dims, "dtype": dtype}
+    if labels:
+        d["sparse"] = True
+        d["vocab"] = {"vocab_file": None, "labels": labels, "unknown_label": None}
+    return d
+
+
+def _make_tensor_template(data: Union[Dict[str, Any], Tensor], name: str) -> Tensor:
+    if isinstance(data, Tensor):
+        data = data.copy(name)
+    else:
+        assert isinstance(data, dict)
+        data = Tensor(name, **data)
+    assert data.batch_dim_axis is None
+    return data
