@@ -6,6 +6,8 @@ See https://github.com/rwth-i6/returnn/issues/1257 for some initial discussion.
 
 from __future__ import annotations
 from typing import TYPE_CHECKING, Optional, Union, Any, Callable, Sequence, Dict, List
+import os
+import re
 import numpy
 from returnn.tensor import Tensor
 from .basic import DatasetSeq
@@ -301,6 +303,38 @@ class HuggingFaceDataset(CachedDataset2):
     def get_corpus_seq_idx(self, sorted_seq_idx: int) -> int:
         """:return: corpus seq idx"""
         return int(self._seq_order[sorted_seq_idx])
+
+
+def get_arrow_shard_files_from_hf_dataset_dir(hf_data_dir: Union[str, os.PathLike]) -> List[str]:
+    """
+    Given some HF datasets directory (created via :func:`datasets.save_to_disk`),
+    return the list of Arrow shard files (data-*-of-*.arrow).
+    This also verifies that the directory looks like a valid HF datasets directory.
+    The order of the returned list is by shard index.
+    Note that this does not load the dataset, just inspects the directory structure.
+
+    :param hf_data_dir: directory
+    :return: list of Arrow shard files
+    """
+    hf_data_dir = os.fspath(hf_data_dir)
+    content = os.listdir(hf_data_dir)
+    assert "state.json" in content, f"not a valid HF datasets dir: {hf_data_dir!r}"
+    assert "dataset_info.json" in content, f"not a valid HF datasets dir: {hf_data_dir!r}"
+    content = [fn for fn in content if fn.endswith(".arrow")]
+    assert content, f"no .arrow files found in {hf_data_dir!r}"
+    pat = re.compile("^data-([0-9]+)-of-([0-9]+).arrow$")
+    content = [pat.match(fn) for fn in content]
+    assert all(content), f"unexpected .arrow files in {hf_data_dir!r}, expected data-*-of-*.arrow, got {content}"
+    num_shards = int(content[0].group(2))
+    assert all(int(m.group(2)) == num_shards for m in content), (
+        f"mismatching number of shards in {hf_data_dir!r}, expected {num_shards}, got {[m.group(2) for m in content]}"
+    )
+    assert len(content) == num_shards, f"expected {num_shards} shard files in {hf_data_dir!r}, got {content}"
+    content_by_idx = {int(m.group(1)): m for m in content}
+    assert set(content_by_idx.keys()) == set(range(num_shards)), (
+        f"expected shard indices 0..{num_shards - 1} in {hf_data_dir!r}, got {sorted(content_by_idx.keys())}"
+    )
+    return [hf_data_dir + "/" + content_by_idx[i].group(0) for i in range(num_shards)]
 
 
 def _infer_data_format_for_feature(
