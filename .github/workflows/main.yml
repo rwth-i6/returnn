@@ -372,6 +372,8 @@ jobs:
         echo "Python ${{matrix.python-version}}"
         echo "pip: $(type pip)"
 
+        .github/workflows/_free_disk_space.sh
+
         pip install --user --progress-bar=off --upgrade pip setuptools wheel
 
         pip install --user --progress-bar=off pytest
@@ -420,6 +422,16 @@ jobs:
         else
           pip install --user --progress-bar=off torchaudio==${{matrix.torch-version}}
         fi
+
+        echo "Space usage after installing dependencies:"
+        df -h
+        echo "Local home dir usage:"
+        du -h -d1 ~
+        du -h -d1 ~/.local
+        echo "Cache dir sizes:"
+        du -h -d1 ~/.cache
+        echo "Clean up cache pip dir..."
+        rm -rf ~/.cache/pip || true
 
     - name: Test Python/Numpy/PyTorch versions.
       run: |
