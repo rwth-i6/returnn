@@ -26,17 +26,26 @@ class HuggingfaceDataset(CachedDataset2):
         dataset_opts: Union[Dict[str, Any], str],
         *,
         map_func: Optional[Callable[[datasets.Dataset], datasets.Dataset]] = None,
-        data_key="data",
-        seq_tag_key="id",
+        data_key: str = "data",
+        seq_tag_key: Optional[str] = "id",
         features=None,
         **kwargs,
     ):
+        """
+        :param dataset_opts: either a dict of options for :func:`datasets.load_dataset`
+            or a path to a local dataset for :func:`datasets.load_from_disk`
+        :param map_func: optional function to apply to the dataset after loading
+        :param data_key: key (column name) in the dataset to use as input data
+        :param seq_tag_key: key (column name) in the dataset to use as sequence tag.
+            If None, will use the sequence index as tag.
+        :param features: list of keys in the dataset to use as features (if None, use all except seq_tag_key)
+        """
         super().__init__(**kwargs)
 
         self.dataset_opts = dataset_opts
         self.map_func = map_func
 
-        self.hf_dataset = None
+        self.hf_dataset: Optional[datasets.Dataset] = None
         self.data_key = data_key
         self.seq_tag_key = seq_tag_key
         self.feature_keys = features
@@ -55,16 +64,19 @@ class HuggingfaceDataset(CachedDataset2):
         else:
             self.hf_dataset = datasets.load_from_disk(self.dataset_opts)
         assert isinstance(self.hf_dataset, datasets.Dataset), (
-            f"Expected a single dataset, got {type(self.hf_dataset)} {self.hf_dataset}"
+            f"{self}: Expected single dataset, got {type(self.hf_dataset)} {self.hf_dataset}. Specify split if needed."
         )
         if self.map_func is not None:
             self.hf_dataset = self.map_func(self.hf_dataset)
+        if self.seq_tag_key:
+            assert self.seq_tag_key in self.hf_dataset.features, (
+                f"{self}: seq_tag_key {self.seq_tag_key} not in dataset features {self.hf_dataset.features}"
+            )
+            assert self.hf_dataset.features[self.seq_tag_key].dtype == "string"
         if self.feature_keys is None:
             self.feature_keys = list(self.hf_dataset.features.keys())
-            if self.seq_tag_key is not None and self.seq_tag_key in self.feature_keys:
+            if self.seq_tag_key in self.feature_keys:
                 self.feature_keys.remove(self.seq_tag_key)
-            else:
-                assert False, "Dataset does not have a seq_tag"
 
         self.hf_dataset.set_format("numpy")
 
@@ -122,7 +134,7 @@ class HuggingfaceDataset(CachedDataset2):
 
     def get_tag(self, sorted_seq_idx: int) -> str:
         """:return: tag of the sequence"""
-        return self.hf_dataset[int(self.get_corpus_seq_idx(sorted_seq_idx))][self.seq_tag_key]
+        return self.hf_dataset[self.get_corpus_seq_idx(sorted_seq_idx)][self.seq_tag_key]
 
     def get_all_tags(self) -> List[str]:
         """:return: all tags"""
@@ -165,14 +177,19 @@ class HuggingfaceDataset(CachedDataset2):
     def _collect_single_seq(self, seq_idx: int) -> DatasetSeq:
         corpus_seq_idx = self.get_corpus_seq_idx(seq_idx)
 
-        def ensure_numpy(x):
+        def _ensure_numpy(x):
             if not isinstance(x, numpy.ndarray):
                 return numpy.array(x)
             return x
 
-        dataset_item = self.hf_dataset[int(corpus_seq_idx)]
-        features = {f: ensure_numpy(dataset_item[f]) for f in self.feature_keys}
-        return DatasetSeq(seq_idx, features=features, targets=None, seq_tag=dataset_item[self.seq_tag_key])
+        dataset_item = self.hf_dataset[corpus_seq_idx]
+        if self.seq_tag_key:
+            seq_tag = dataset_item[self.seq_tag_key]
+            assert isinstance(seq_tag, str)
+        else:
+            seq_tag = f"seq-{corpus_seq_idx}"
+        features = {f: _ensure_numpy(dataset_item[f]) for f in self.feature_keys}
+        return DatasetSeq(seq_idx, features=features, seq_tag=seq_tag)
 
     def get_current_seq_order(self) -> Sequence[int]:
         """:return: list of corpus seq idx"""
@@ -181,7 +198,7 @@ class HuggingfaceDataset(CachedDataset2):
 
     def get_corpus_seq_idx(self, sorted_seq_idx: int) -> int:
         """:return: corpus seq idx"""
-        return self._seq_order[sorted_seq_idx]
+        return int(self._seq_order[sorted_seq_idx])
 
     def can_serialize_data(self, key: str):
         """:return: whether we can serialize"""
