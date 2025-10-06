@@ -373,8 +373,9 @@ jobs:
         echo "pip: $(type pip)"
 
         df -h
-        df -h ~
         realpath ~
+        time du -h -d1 ~
+        time du -h -d1 ~/actions-runner
 
         pip install --user --progress-bar=off --upgrade pip setuptools wheel
 
