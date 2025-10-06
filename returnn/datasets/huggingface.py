@@ -48,6 +48,7 @@ class HuggingfaceDataset(CachedDataset2):
     def initialize(self):
         """initialize"""
         # Load the dataset
+        # noinspection PyUnresolvedReferences,PyPackageRequirements
         import datasets
 
         if isinstance(self.dataset_opts, dict):
