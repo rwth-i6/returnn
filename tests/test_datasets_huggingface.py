@@ -40,23 +40,39 @@ def test_HuggingfaceDataset_text1():
     ds = HuggingfaceDataset(
         {"path": "openai/gdpval", "split": "train"},
         seq_tag_column="task_id",
-        data_format={"prompt": {"dtype": "string"}, "sector": {"dtype": "string"}, "occupation": {"dtype": "string"}},
+        data_format={
+            "prompt": {"dtype": "string", "shape": ()},
+            "sector": {"dtype": "string", "shape": ()},
+            "occupation": {"dtype": "string", "shape": ()},
+        },
     )
     ds.initialize()
     assert dummy_iter_dataset(ds)
 
 
 def test_HuggingfaceDataset_text2():
-    ds = HuggingfaceDataset({"path": "lavita/medical-qa-shared-task-v1-toy", "split": "train"}, seq_tag_column="id")
+    ds = HuggingfaceDataset(
+        {"path": "lavita/medical-qa-shared-task-v1-toy", "split": "train"},
+        seq_tag_column="id",
+        data_format={
+            "id": {"dtype": "int64", "shape": ()},
+            "startphrase": {"dtype": "string", "shape": ()},
+            "label": {"dtype": "int64", "shape": ()},
+        },
+    )
     ds.initialize()
     assert dummy_iter_dataset(ds)
 
 
 def test_HuggingfaceDataset_pickle():
     ds = HuggingfaceDataset(
-        {"path": "openai/gdpval", "split": "train"},
-        seq_tag_column="task_id",
-        selected_columns=["prompt", "sector", "occupation"],
+        {"path": "lavita/medical-qa-shared-task-v1-toy", "split": "train"},
+        seq_tag_column="id",
+        data_format={
+            "id": {"dtype": "int64", "shape": ()},
+            "startphrase": {"dtype": "string", "shape": ()},
+            "label": {"dtype": "int64", "shape": ()},
+        },
     )
     ds.initialize()
     s = pickle.dumps(ds)
@@ -66,11 +82,20 @@ def test_HuggingfaceDataset_pickle():
 
 
 def test_HuggingfaceDataset_load_from_disk():
-    # TODO...
+    from datasets import load_dataset
+
+    datadir_path = _get_tmp_dir() + "/hf-dataset-save-to-disk"
+    hf_ds = load_dataset("lavita/medical-qa-shared-task-v1-toy", split="train")
+    hf_ds.save_to_disk(datadir_path)
+
     ds = HuggingfaceDataset(
-        {"path": "openai/gdpval", "split": "train"},
-        seq_tag_column="task_id",
-        selected_columns=["prompt", "sector", "occupation"],
+        datadir_path,
+        seq_tag_column="id",
+        data_format={
+            "id": {"dtype": "int64", "shape": ()},
+            "startphrase": {"dtype": "string", "shape": ()},
+            "label": {"dtype": "int64", "shape": ()},
+        },
     )
     ds.initialize()
     assert dummy_iter_dataset(ds)
@@ -79,9 +104,13 @@ def test_HuggingfaceDataset_load_from_disk():
 def test_HuggingfaceDataset_single_arrow():
     # TODO...
     ds = HuggingfaceDataset(
-        {"path": "openai/gdpval", "split": "train"},
-        seq_tag_column="task_id",
-        selected_columns=["prompt", "sector", "occupation"],
+        {"path": "lavita/medical-qa-shared-task-v1-toy", "split": "train"},
+        seq_tag_column="id",
+        data_format={
+            "id": {"dtype": "int64", "shape": ()},
+            "startphrase": {"dtype": "string", "shape": ()},
+            "label": {"dtype": "int64", "shape": ()},
+        },
     )
     ds.initialize()
     assert dummy_iter_dataset(ds)
