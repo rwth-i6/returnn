@@ -158,6 +158,8 @@ jobs:
       matrix:
         python-version:
           - "3.10"
+        torch-version:
+          - 2.0.0
         action:
           - TEST=datasets_huggingface
 
@@ -174,9 +176,9 @@ jobs:
         path: |
           ~/.cache
           ~/.local
-        key: cache-${{ runner.os }}-py${{ matrix.python-version }}-no-tf
+        key: cache-${{ runner.os }}-py${{ matrix.python-version }}-torch${{ matrix.torch-version }}
         restore-keys: |
-          cache-${{ runner.os }}-py${{ matrix.python-version }}-no-tf
+          cache-${{ runner.os }}-py${{ matrix.python-version }}-
 
     - name: Setup dependencies
       run: |
@@ -188,7 +190,11 @@ jobs:
 
         pip install --user pytest
 
-        pip install --user --progress-bar=off -r requirements.txt
+        # datasets >=4 needs torch to decode audio files
+        pip install --user --progress-bar=off dm-tree h5py
+        pip install --user --progress-bar=off "numpy<2"
+        pip install --user --progress-bar=off --upgrade torch==${{ matrix.torch-version }}
+        pip install --user --progress-bar=off lovely_tensors
 
         pip install --user --progress-bar=off datasets
 
