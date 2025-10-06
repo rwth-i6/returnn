@@ -11,6 +11,7 @@ from returnn.tensor import Tensor
 from .basic import DatasetSeq
 from .cached2 import CachedDataset2
 from .util.vocabulary import Vocabulary
+from .util.strings import str_to_numpy_array
 
 if TYPE_CHECKING:
     # noinspection PyUnresolvedReferences,PyPackageRequirements
@@ -119,11 +120,14 @@ class HuggingfaceDataset(CachedDataset2):
         for key, user_format in self.data_format.items():
             feature = self.hf_dataset.features[key]
             inferred_format = _infer_data_format_for_feature(feature, f"{self}: column {key}: ")
-            for key_ in ["dim", "ndim", "dtype"]:
-                assert getattr(user_format, key_) == inferred_format[key_], (
-                    f"{self}: column {key}, user-specified {user_format}, {key_}:"
-                    f" user-specified {getattr(user_format, key_)} does not match inferred {inferred_format[key_]}"
-                )
+            if user_format.vocab and inferred_format["dtype"] == "string":
+                pass  # allow to auto-tokenize strings when vocab is specified
+            else:
+                for key_ in ["dtype", "ndim", "dim"]:
+                    assert getattr(user_format, key_) == inferred_format[key_], (
+                        f"{self}: column {key}, user-specified {user_format}, {key_}:"
+                        f" user-specified {getattr(user_format, key_)} does not match inferred {inferred_format[key_]}"
+                    )
             if "vocab" in inferred_format and not user_format.vocab:
                 assert user_format.sparse, f"{self}: column {key}: user_format expected to be sparse, got {user_format}"
                 user_format.sparse_dim.vocab = Vocabulary.create_vocab(**inferred_format["vocab"])
@@ -223,6 +227,12 @@ class HuggingfaceDataset(CachedDataset2):
         def _ensure_numpy(k, x):
             if isinstance(x, numpy.ndarray):  # fast path
                 return x
+            if isinstance(x, str):
+                if self.data_format[k].dtype == "string":
+                    return str_to_numpy_array(x)
+                if self.data_format[k].vocab:
+                    return numpy.array(self.data_format[k].vocab.get_seq(x), dtype=self.data_format[k].dtype)
+                raise ValueError(f"{self}: column {k}: cannot convert string {x!r} to numpy array")
             feat = self.hf_dataset.features[k]
             if isinstance(feat, datasets.features.Audio):
                 assert isinstance(x, dict)
