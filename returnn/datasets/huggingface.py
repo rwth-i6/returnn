@@ -100,9 +100,25 @@ class HuggingfaceDataset(CachedDataset2):
                 user_format.sparse_dim.vocab = Vocabulary.create_vocab(**inferred_format["vocab"])
                 self.labels[key] = user_format.vocab.labels
 
+    def get_data_keys(self) -> List[str]:
+        """:return: list of data keys"""
+        return list(self.data_format.keys())
+
+    def get_target_list(self) -> List[str]:
+        """:return: list of target keys"""
+        return self.get_data_keys()  # it's somewhat arbitrary...
+
+    def get_data_shape(self, key: str) -> List[int]:
+        """:return: data shape for the given key"""
+        return list(self.data_format[key].shape)
+
     def get_data_dim(self, key: str) -> int:
         """:return: data dimension for the given key"""
         return self.data_format[key].dim
+
+    def is_data_sparse(self, key: str) -> bool:
+        """:return: whether the data is sparse for the given key"""
+        return self.data_format[key].sparse
 
     def get_data_dtype(self, key: str) -> str:
         """:return: dtype"""
@@ -125,7 +141,10 @@ class HuggingfaceDataset(CachedDataset2):
 
     def get_all_tags(self) -> List[str]:
         """:return: all tags"""
-        return list(self.hf_dataset[self.seq_tag_column])
+        if self.seq_tag_column:
+            return list(self.hf_dataset[self.seq_tag_column])
+        else:
+            return [f"seq-{i}" for i in range(self.hf_dataset.num_rows)]
 
     def init_seq_order(self, epoch: Optional[int] = None, seq_list=None, seq_order=None):
         """
