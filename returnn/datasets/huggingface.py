@@ -139,13 +139,11 @@ class HuggingfaceDataset(CachedDataset2):
 
         if seq_order:
             self._seq_order = seq_order
-            # TODO can we return False?
             return True
 
         if seq_list:
             all_tags = self.get_all_tags()
             self._seq_order = [all_tags.index(tag) for tag in seq_list]
-            # TODO can we return False?
             return True
 
         try:
