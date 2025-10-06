@@ -14,8 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-
-# File copied from here:
+# Script copied from here and adapted:
 # https://github.com/apache/flink/blob/02d30ace69dc18555a5085eccf70ee884e73a16e/tools/azure-pipelines/free_disk_space.sh
 
 # See here for discussion: https://github.com/rwth-i6/returnn/issues/1770
@@ -27,23 +26,23 @@ echo "==========================================================================
 echo "Space usage before installing dependencies:"
 df -h
 echo "Home realpath: $(realpath ~)"
-time du -h -d1 -x /
+echo "Listing space usage of home directory:"
 time du -h -d1 ~
 time du -h -d1 ~/actions-runner
 
-echo "Listing 100 largest packages"
+echo "Listing 100 largest packages:"
 dpkg-query -Wf '${Installed-Size}\t${Package}\n' | sort -n | tail -n 100
 
 echo "Removing large packages"
-sudo apt-get remove -y '^ghc-8.*'
-sudo apt-get remove -y '^dotnet-.*'
-sudo apt-get remove -y '^llvm-.*'
 sudo apt-get remove -y 'php.*'
-sudo apt-get remove -y azure-cli google-cloud-sdk hhvm google-chrome-stable firefox powershell mono-devel
+sudo apt-get remove -y azure-cli google-cloud-sdk hhvm microsoft-edge-stable google-chrome-stable firefox powershell mono-devel
 sudo apt-get autoremove -y
 sudo apt-get clean
 df -h
 echo "Removing large directories"
+
 # deleting 15GB
 rm -rf /usr/share/dotnet/
+
+echo "Space usage after cleanup:"
 df -h
