@@ -29,7 +29,7 @@ class HuggingfaceDataset(CachedDataset2):
         map_func: Optional[Callable[[datasets.Dataset], datasets.Dataset]] = None,
         data_key: str = "data",
         seq_tag_column: Optional[str] = "id",
-        cast_columns: Optional[Dict[str, str]] = None,
+        cast_columns: Optional[Dict[str, Dict[str, Any]]] = None,
         data_format: Dict[str, Dict[str, Any]],
         **kwargs,
     ):
