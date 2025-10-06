@@ -27,7 +27,7 @@ class HuggingfaceDataset(CachedDataset2):
         *,
         map_func: Optional[Callable[[datasets.Dataset], datasets.Dataset]] = None,
         data_key: str = "data",
-        seq_tag_key: Optional[str] = "id",
+        seq_tag_column: Optional[str] = "id",
         selected_columns: Optional[Sequence[str]] = None,
         **kwargs,
     ):
@@ -36,7 +36,7 @@ class HuggingfaceDataset(CachedDataset2):
             or a path to a local dataset for :func:`datasets.load_from_disk`
         :param map_func: optional function to apply to the dataset after loading
         :param data_key: key (column name) in the dataset to use as input data
-        :param seq_tag_key: key (column name) in the dataset to use as sequence tag.
+        :param seq_tag_column: key (column name) in the dataset to use as sequence tag.
             If None, will use the sequence index as tag.
         :param selected_columns: list of keys in the dataset to use as features (if None, use all except seq_tag_key)
         """
@@ -47,7 +47,7 @@ class HuggingfaceDataset(CachedDataset2):
 
         self.hf_dataset: Optional[datasets.Dataset] = None
         self.data_key = data_key
-        self.seq_tag_key: Optional[str] = seq_tag_key
+        self.seq_tag_column: Optional[str] = seq_tag_column
         self.selected_columns: Optional[Sequence[str]] = selected_columns
         self.data_dtype: Dict[str, str] = {}
 
@@ -68,20 +68,23 @@ class HuggingfaceDataset(CachedDataset2):
         )
         if self.map_func is not None:
             self.hf_dataset = self.map_func(self.hf_dataset)
-        if self.seq_tag_key:
-            assert self.seq_tag_key in self.hf_dataset.features, (
-                f"{self}: seq_tag_key {self.seq_tag_key} not in dataset features {self.hf_dataset.features}"
+        if self.seq_tag_column:
+            assert self.seq_tag_column in self.hf_dataset.features, (
+                f"{self}: seq_tag_column {self.seq_tag_column} not in dataset features {self.hf_dataset.features}"
             )
-            assert self.hf_dataset.features[self.seq_tag_key].dtype == "string"
+            assert self.hf_dataset.features[self.seq_tag_column].dtype == "string", (
+                f"{self}: seq_tag_column {self.seq_tag_column} must be of dtype string,"
+                f" got {self.hf_dataset.features[self.seq_tag_column]}"
+            )
         if self.selected_columns is None:
             self.selected_columns = list(self.hf_dataset.features.keys())
-            if self.seq_tag_key in self.selected_columns:
-                self.selected_columns.remove(self.seq_tag_key)
+            if self.seq_tag_column in self.selected_columns:
+                self.selected_columns.remove(self.seq_tag_column)
 
         self.hf_dataset.set_format("numpy")
 
-        if self.seq_tag_key is not None:
-            assert self.seq_tag_key in self.hf_dataset.column_names
+        if self.seq_tag_column is not None:
+            assert self.seq_tag_column in self.hf_dataset.column_names
 
         self.labels = {}
         self.num_outputs = {}
@@ -143,8 +146,8 @@ class HuggingfaceDataset(CachedDataset2):
         """:return: tag of the sequence"""
         corpus_seq_idx = self.get_corpus_seq_idx(sorted_seq_idx)
         dataset_item = self.hf_dataset[corpus_seq_idx]
-        if self.seq_tag_key:
-            seq_tag = dataset_item[self.seq_tag_key]
+        if self.seq_tag_column:
+            seq_tag = dataset_item[self.seq_tag_column]
             assert isinstance(seq_tag, str)
         else:
             seq_tag = f"seq-{corpus_seq_idx}"
@@ -152,7 +155,7 @@ class HuggingfaceDataset(CachedDataset2):
 
     def get_all_tags(self) -> List[str]:
         """:return: all tags"""
-        return list(self.hf_dataset[self.seq_tag_key])
+        return list(self.hf_dataset[self.seq_tag_column])
 
     def init_seq_order(self, epoch: Optional[int] = None, seq_list=None, seq_order=None):
         """
@@ -197,8 +200,8 @@ class HuggingfaceDataset(CachedDataset2):
             return x
 
         dataset_item = self.hf_dataset[corpus_seq_idx]
-        if self.seq_tag_key:
-            seq_tag = dataset_item[self.seq_tag_key]
+        if self.seq_tag_column:
+            seq_tag = dataset_item[self.seq_tag_column]
             assert isinstance(seq_tag, str)
         else:
             seq_tag = f"seq-{corpus_seq_idx}"

@@ -23,7 +23,7 @@ def _get_tmp_dir() -> str:
 _setup_hf_env()
 
 
-def test_HuggingfaceDataset():
-    ds = HuggingfaceDataset({"path": "datasets-examples/doc-audio-6", "split": "train"}, seq_tag_key=None)
+def test_HuggingfaceDataset_audio():
+    ds = HuggingfaceDataset({"path": "datasets-examples/doc-audio-6", "split": "train"}, seq_tag_column=None)
     ds.initialize()
     assert dummy_iter_dataset(ds)
