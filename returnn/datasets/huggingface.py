@@ -5,11 +5,15 @@ See https://github.com/rwth-i6/returnn/issues/1257 for some initial discussion.
 """
 
 from __future__ import annotations
-from typing import Optional, Sequence, Dict, List
+from typing import TYPE_CHECKING, Optional, Union, Any, Callable, Sequence, Dict, List
 import numpy
 from .basic import DatasetSeq
 from .cached2 import CachedDataset2
 from returnn.util.basic import OptionalNotImplementedError
+
+if TYPE_CHECKING:
+    # noinspection PyUnresolvedReferences,PyPackageRequirements
+    import datasets
 
 
 class HuggingfaceDataset(CachedDataset2):
@@ -19,10 +23,9 @@ class HuggingfaceDataset(CachedDataset2):
 
     def __init__(
         self,
+        dataset_opts: Union[Dict[str, Any], str],
         *,
-        dataset_opts,
-        map_func=None,
-        map_func_args=None,
+        map_func: Optional[Callable[[datasets.Dataset], datasets.Dataset]] = None,
         data_key="data",
         seq_tag_key="id",
         features=None,
@@ -30,20 +33,16 @@ class HuggingfaceDataset(CachedDataset2):
     ):
         super().__init__(**kwargs)
 
-        self._seq_order = None
-
         self.dataset_opts = dataset_opts
-
-        if map_func_args is not None:
-            map_func = map_func(**map_func_args)
         self.map_func = map_func
-        self.dataset = None
+
+        self.hf_dataset = None
         self.data_key = data_key
         self.seq_tag_key = seq_tag_key
-
         self.feature_keys = features
-
         self.data_dtype: Dict[str, str] = {}
+
+        self._seq_order = None
 
     def initialize(self):
         """initialize"""
@@ -52,28 +51,30 @@ class HuggingfaceDataset(CachedDataset2):
         import datasets
 
         if isinstance(self.dataset_opts, dict):
-            self.dataset = datasets.load_dataset(**self.dataset_opts)
+            self.hf_dataset = datasets.load_dataset(**self.dataset_opts)
         else:
-            self.dataset = datasets.load_from_disk(self.dataset_opts)
-            assert isinstance(self.dataset, datasets.Dataset)
+            self.hf_dataset = datasets.load_from_disk(self.dataset_opts)
+        assert isinstance(self.hf_dataset, datasets.Dataset), (
+            f"Expected a single dataset, got {type(self.hf_dataset)} {self.hf_dataset}"
+        )
         if self.map_func is not None:
-            self.dataset = self.map_func(self.dataset)
+            self.hf_dataset = self.map_func(self.hf_dataset)
         if self.feature_keys is None:
-            self.feature_keys = list(self.dataset.features.keys())
+            self.feature_keys = list(self.hf_dataset.features.keys())
             if self.seq_tag_key is not None and self.seq_tag_key in self.feature_keys:
                 self.feature_keys.remove(self.seq_tag_key)
             else:
                 assert False, "Dataset does not have a seq_tag"
 
-        self.dataset.set_format("numpy")
+        self.hf_dataset.set_format("numpy")
 
         if self.seq_tag_key is not None:
-            assert self.seq_tag_key in self.dataset.column_names
+            assert self.seq_tag_key in self.hf_dataset.column_names
 
         self.labels = {}
         self.num_outputs = {}
         for key in self.feature_keys:
-            feature = self.dataset.features[key]
+            feature = self.hf_dataset.features[key]
             num_classes = 1
             spatial_dims = 0
             while type(feature) is datasets.features.Sequence:
@@ -111,7 +112,7 @@ class HuggingfaceDataset(CachedDataset2):
         return self.data_dtype[key]
 
     def _get_seq_len(self, seq_idx: int):
-        return len(self.dataset[seq_idx][self.data_key])
+        return len(self.hf_dataset[seq_idx][self.data_key])
 
     @property
     def num_seqs(self) -> int:
@@ -121,11 +122,11 @@ class HuggingfaceDataset(CachedDataset2):
 
     def get_tag(self, sorted_seq_idx: int) -> str:
         """:return: tag of the sequence"""
-        return self.dataset[int(self.get_corpus_seq_idx(sorted_seq_idx))][self.seq_tag_key]
+        return self.hf_dataset[int(self.get_corpus_seq_idx(sorted_seq_idx))][self.seq_tag_key]
 
     def get_all_tags(self) -> List[str]:
         """:return: all tags"""
-        return list(self.dataset[self.seq_tag_key])
+        return list(self.hf_dataset[self.seq_tag_key])
 
     def init_seq_order(self, epoch: Optional[int] = None, seq_list=None, seq_order=None):
         """
@@ -150,13 +151,13 @@ class HuggingfaceDataset(CachedDataset2):
 
         try:
             self._seq_order = self.get_seq_order_for_epoch(
-                epoch=epoch, num_seqs=self.dataset.num_rows, get_seq_len=self._get_seq_len
+                epoch=epoch, num_seqs=self.hf_dataset.num_rows, get_seq_len=self._get_seq_len
             )
         except OptionalNotImplementedError:
             # only support seq_ordering that need no length here
             assert self.seq_ordering in ["default", "reverse", "random"]
             self._seq_order = self.get_seq_order_for_epoch(
-                epoch=epoch, num_seqs=self.dataset.num_rows, get_seq_len=None
+                epoch=epoch, num_seqs=self.hf_dataset.num_rows, get_seq_len=None
             )
 
         return True
@@ -169,14 +170,12 @@ class HuggingfaceDataset(CachedDataset2):
                 return numpy.array(x)
             return x
 
-        dataset_item = self.dataset[int(corpus_seq_idx)]
+        dataset_item = self.hf_dataset[int(corpus_seq_idx)]
         features = {f: ensure_numpy(dataset_item[f]) for f in self.feature_keys}
         return DatasetSeq(seq_idx, features=features, targets=None, seq_tag=dataset_item[self.seq_tag_key])
 
     def get_current_seq_order(self) -> Sequence[int]:
-        """
-        :return: list of corpus seq idx
-        """
+        """:return: list of corpus seq idx"""
         assert self._seq_order is not None
         return self._seq_order
 
