@@ -150,6 +150,61 @@ jobs:
         export ${{ matrix.action }}
         python -m pytest tests/test_$TEST.py
 
+  # Needs newer Python. Also install the extra datasets dependency only here.
+  hf-datasets-test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version:
+          - 3.10
+        action:
+          - TEST=datasets_huggingface
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - uses: actions/setup-python@v5
+      with:
+        python-version: ${{ matrix.python-version }}
+
+    - name: Cache dependencies
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cache
+          ~/.local
+        key: cache-${{ runner.os }}-py${{ matrix.python-version }}-no-tf
+        restore-keys: |
+          cache-${{ runner.os }}-py${{ matrix.python-version }}-no-tf
+
+    - name: Setup dependencies
+      run: |
+        echo "PATH=$PATH:~/.local/bin" >> $GITHUB_ENV
+        echo "Python ${{matrix.python-version}}"
+        echo "pip: $(type pip)"
+
+        pip install --user --upgrade pip setuptools wheel
+
+        pip install --user pytest
+
+        pip install --user --progress-bar=off -r requirements.txt
+
+        pip install --user --progress-bar=off datasets
+
+    - name: Test Python/Numpy.
+      run: |
+        echo "Python env: $(type python) $(python --version)"
+        python -c "import numpy; print('NumPy:', numpy.version.full_version)"
+
+        echo "Pytest env:"
+        python -m pytest -V
+
+    - name: Run test
+      run: |
+        export ${{ matrix.action }}
+        python -m pytest tests/test_$TEST.py
+
   tf-tests:
     runs-on: ubuntu-latest
     strategy:
