@@ -372,6 +372,10 @@ jobs:
         echo "Python ${{matrix.python-version}}"
         echo "pip: $(type pip)"
 
+        df -h
+        df -h ~
+        realpath ~
+
         pip install --user --progress-bar=off --upgrade pip setuptools wheel
 
         pip install --user --progress-bar=off pytest
