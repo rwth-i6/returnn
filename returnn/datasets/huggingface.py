@@ -11,7 +11,6 @@ from returnn.tensor import Tensor
 from .basic import DatasetSeq
 from .cached2 import CachedDataset2
 from .util.vocabulary import Vocabulary
-from returnn.util.basic import OptionalNotImplementedError
 
 if TYPE_CHECKING:
     # noinspection PyUnresolvedReferences,PyPackageRequirements
@@ -141,41 +140,39 @@ class HuggingfaceDataset(CachedDataset2):
 
     def get_all_tags(self) -> List[str]:
         """:return: all tags"""
+        self._lazy_init()
         if self.seq_tag_column:
             return list(self.hf_dataset[self.seq_tag_column])
         else:
             return [f"seq-{i}" for i in range(self.hf_dataset.num_rows)]
 
-    def init_seq_order(self, epoch: Optional[int] = None, seq_list=None, seq_order=None):
+    def init_seq_order(
+        self,
+        epoch: Optional[int] = None,
+        seq_list: Optional[Sequence[str]] = None,
+        seq_order: Optional[Sequence[int]] = None,
+    ) -> bool:
         """
-        :param int|None epoch:
-        :param list[str]|None seq_list: List of sequence tags, to set a predefined order.
-        :param list[int]|None seq_order: List of corpus sequence indices, to set a predefined order.
-        :rtype: bool
+        :param epoch:
+        :param seq_list: List of sequence tags, to set a predefined order.
+        :param seq_order: List of corpus sequence indices, to set a predefined order.
         :returns whether the order changed (True is always safe to return)
         """
         super().init_seq_order(epoch=epoch, seq_list=seq_list, seq_order=seq_order)
 
-        if seq_order:
+        if seq_order is not None:
             self._seq_order = seq_order
-            return True
-
-        if seq_list:
+        elif seq_list is not None:
             all_tags = self.get_all_tags()
             self._seq_order = [all_tags.index(tag) for tag in seq_list]
+        elif epoch is None:
+            self._seq_order = ()
             return True
-
-        try:
+        else:
+            self._lazy_init()
             self._seq_order = self.get_seq_order_for_epoch(
                 epoch=epoch, num_seqs=self.hf_dataset.num_rows, get_seq_len=self._get_seq_len
             )
-        except OptionalNotImplementedError:
-            # only support seq_ordering that need no length here
-            assert self.seq_ordering in ["default", "reverse", "random"]
-            self._seq_order = self.get_seq_order_for_epoch(
-                epoch=epoch, num_seqs=self.hf_dataset.num_rows, get_seq_len=None
-            )
-
         return True
 
     def _collect_single_seq(self, seq_idx: int) -> DatasetSeq:
