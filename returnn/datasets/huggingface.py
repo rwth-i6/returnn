@@ -28,7 +28,7 @@ class HuggingfaceDataset(CachedDataset2):
         map_func: Optional[Callable[[datasets.Dataset], datasets.Dataset]] = None,
         data_key: str = "data",
         seq_tag_key: Optional[str] = "id",
-        features=None,
+        selected_columns: Optional[Sequence[str]] = None,
         **kwargs,
     ):
         """
@@ -38,7 +38,7 @@ class HuggingfaceDataset(CachedDataset2):
         :param data_key: key (column name) in the dataset to use as input data
         :param seq_tag_key: key (column name) in the dataset to use as sequence tag.
             If None, will use the sequence index as tag.
-        :param features: list of keys in the dataset to use as features (if None, use all except seq_tag_key)
+        :param selected_columns: list of keys in the dataset to use as features (if None, use all except seq_tag_key)
         """
         super().__init__(**kwargs)
 
@@ -47,8 +47,8 @@ class HuggingfaceDataset(CachedDataset2):
 
         self.hf_dataset: Optional[datasets.Dataset] = None
         self.data_key = data_key
-        self.seq_tag_key = seq_tag_key
-        self.feature_keys = features
+        self.seq_tag_key: Optional[str] = seq_tag_key
+        self.selected_columns: Optional[Sequence[str]] = selected_columns
         self.data_dtype: Dict[str, str] = {}
 
         self._seq_order = None
@@ -73,10 +73,10 @@ class HuggingfaceDataset(CachedDataset2):
                 f"{self}: seq_tag_key {self.seq_tag_key} not in dataset features {self.hf_dataset.features}"
             )
             assert self.hf_dataset.features[self.seq_tag_key].dtype == "string"
-        if self.feature_keys is None:
-            self.feature_keys = list(self.hf_dataset.features.keys())
-            if self.seq_tag_key in self.feature_keys:
-                self.feature_keys.remove(self.seq_tag_key)
+        if self.selected_columns is None:
+            self.selected_columns = list(self.hf_dataset.features.keys())
+            if self.seq_tag_key in self.selected_columns:
+                self.selected_columns.remove(self.seq_tag_key)
 
         self.hf_dataset.set_format("numpy")
 
@@ -85,20 +85,20 @@ class HuggingfaceDataset(CachedDataset2):
 
         self.labels = {}
         self.num_outputs = {}
-        for key in self.feature_keys:
+        for key in self.selected_columns:
             feature = self.hf_dataset.features[key]
             num_classes = 1
             spatial_dims = 0
-            while type(feature) is datasets.features.Sequence:
+            while isinstance(feature, datasets.features.Sequence):
                 spatial_dims += 1
                 if feature.length != -1:
                     num_classes = feature.length
                 feature = feature.feature
-            if type(feature) is datasets.features.ClassLabel:
+            if isinstance(feature, datasets.features.ClassLabel):
                 self.labels[key] = feature.names
                 dtype = feature.dtype
-                num_classes = feature.num_classes
-            elif type(feature) is datasets.features.Value:
+                num_classes = feature.num_classes  # noqa
+            elif isinstance(feature, datasets.features.Value):
                 dtype = feature.dtype
             elif isinstance(feature, (datasets.features.Array2D, datasets.features.Array3D, datasets.features.Array4D)):
                 dtype = feature.dtype
@@ -111,7 +111,7 @@ class HuggingfaceDataset(CachedDataset2):
                     dtype = "uint8"  # bytes
                 spatial_dims += 1  # time axis
             else:
-                assert False, f"Unsupported feature type {type(feature)}"
+                assert False, f"{self}: Column {key!r}, unsupported feature type {type(feature)} {feature}"
 
             len_shape = spatial_dims
             self.num_outputs[key] = (num_classes, len_shape)
@@ -202,7 +202,7 @@ class HuggingfaceDataset(CachedDataset2):
             assert isinstance(seq_tag, str)
         else:
             seq_tag = f"seq-{corpus_seq_idx}"
-        features = {f: _ensure_numpy(dataset_item[f]) for f in self.feature_keys}
+        features = {f: _ensure_numpy(dataset_item[f]) for f in self.selected_columns}
         return DatasetSeq(seq_idx, features=features, seq_tag=seq_tag)
 
     def get_current_seq_order(self) -> Sequence[int]:
