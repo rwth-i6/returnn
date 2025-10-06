@@ -6,6 +6,7 @@ import tempfile
 import atexit
 import shutil
 import pickle
+import numpy
 from returnn.datasets.huggingface import HuggingfaceDataset
 from test_Dataset import dummy_iter_dataset
 
@@ -62,6 +63,25 @@ def test_HuggingfaceDataset_text2():
     )
     ds.initialize()
     assert dummy_iter_dataset(ds)
+
+
+def test_HuggingfaceDataset_text_tokenize():
+    ds = HuggingfaceDataset(
+        {"path": "lavita/medical-qa-shared-task-v1-toy", "split": "train"},
+        seq_tag_column="id",
+        data_format={
+            "id": {"dtype": "int64", "shape": ()},
+            "startphrase": {"dtype": "int32", "vocab": {"class": "Utf8ByteTargets"}},
+            "label": {"dtype": "int64", "shape": ()},
+        },
+    )
+    ds.initialize()
+    res = dummy_iter_dataset(ds)
+    txt = res[0].features["startphrase"]
+    print("startphrase:", txt)
+    assert isinstance(txt, numpy.ndarray) and txt.dtype == numpy.int32
+    txt_ = ds.data_format["startphrase"].vocab.get_seq_labels(txt)
+    print("startphrase labels:", txt_)
 
 
 def test_HuggingfaceDataset_pickle():
