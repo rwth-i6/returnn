@@ -304,8 +304,7 @@ class HuggingFaceDataset(CachedDataset2):
         if self.seq_tag_column:
             seq_tag = dataset_item[self.seq_tag_column]
             assert isinstance(seq_tag, (str, int, numpy.int64)), f"got {type(seq_tag)} {seq_tag!r}"
-            if not isinstance(seq_tag, str):
-                seq_tag = str(seq_tag)
+            seq_tag = str(seq_tag)
         else:
             seq_tag = f"seq-{corpus_seq_idx}"
         return seq_tag

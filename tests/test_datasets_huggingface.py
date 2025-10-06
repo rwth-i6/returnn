@@ -48,7 +48,9 @@ def test_HuggingFaceDataset_text1():
         },
     )
     ds.initialize()
-    assert dummy_iter_dataset(ds)
+    res = dummy_iter_dataset(ds)
+    print(repr(res[0].seq_tag))
+    assert type(res[0].seq_tag) is str
 
 
 def test_HuggingFaceDataset_text2():
