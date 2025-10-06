@@ -243,18 +243,6 @@ class HuggingfaceDataset(CachedDataset2):
         """:return: corpus seq idx"""
         return int(self._seq_order[sorted_seq_idx])
 
-    def can_serialize_data(self, key: str):
-        """:return: whether we can serialize"""
-        return True
-
-    def serialize_data(self, key: str, data: numpy.ndarray) -> str:
-        """serialize"""
-        if key in self.labels:
-            return super().serialize_data(key, data)
-        if isinstance(data, numpy.ndarray):
-            data = data.tolist()
-        return data
-
 
 def _infer_data_format_for_feature(
     feature: Union[
