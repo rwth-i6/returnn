@@ -51,6 +51,8 @@ class HuggingfaceDataset(CachedDataset2):
             as a dict with entries for "dim", "ndim", "shape", and/or "dtype",
             compatible to :class:`Tensor`.
             It can be a subset of the available columns.
+            If "vocab" is specified, and the underlying HF datasets column is of dtype "string",
+            it will automatically tokenize the string using the vocab.
         :param seq_tag_column: key (column name) in the dataset to use as sequence tag.
             If None, will use the sequence index as tag.
         :param sorting_seq_len_column_data: key (column name) in the dataset to use for sorting by sequence length.
