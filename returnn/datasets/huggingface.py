@@ -249,7 +249,7 @@ class HuggingfaceDataset(CachedDataset2):
                 raise ValueError(f"{self}: column {k}: cannot convert string {x!r} to numpy array")
             feat = self.hf_dataset.features[k]
             if isinstance(feat, datasets.features.Audio):
-                assert isinstance(x, dict)
+                assert isinstance(x, dict) or x.__class__.__name__ == "AudioDecoder"
                 if feat.decode:
                     x = x["array"]
                 else:
