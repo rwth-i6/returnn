@@ -83,6 +83,10 @@ class HuggingfaceDataset(CachedDataset2):
                 f"{self}: seq_tag_column {self.seq_tag_column} must be of dtype string or int64,"
                 f" got {self.hf_dataset.features[self.seq_tag_column].dtype}"
             )
+        selected_columns = list(self.data_format.keys())
+        if self.seq_tag_column and self.seq_tag_column not in selected_columns:
+            selected_columns.append(self.seq_tag_column)
+        self.hf_dataset = self.hf_dataset.select_columns(selected_columns)
 
         self.hf_dataset.set_format("numpy")
 
@@ -176,16 +180,30 @@ class HuggingfaceDataset(CachedDataset2):
         return True
 
     def _collect_single_seq(self, seq_idx: int) -> DatasetSeq:
+        # noinspection PyUnresolvedReferences,PyPackageRequirements
+        import datasets
+
         corpus_seq_idx = self.get_corpus_seq_idx(seq_idx)
 
-        def _ensure_numpy(x):
-            if not isinstance(x, numpy.ndarray):
-                return numpy.array(x)
-            return x
+        def _ensure_numpy(k, x):
+            if isinstance(x, numpy.ndarray):  # fast path
+                return x
+            feat = self.hf_dataset.features[k]
+            if isinstance(feat, datasets.features.Audio):
+                assert isinstance(x, dict)
+                if feat.decode:
+                    x = x["array"]
+                else:
+                    x = x["bytes"]
+            if isinstance(x, numpy.ndarray):  # fast path
+                return x
+            if isinstance(x, (bytes, bytearray)):
+                return numpy.frombuffer(x, dtype=self.data_format[k].dtype)
+            return numpy.array(x)
 
         dataset_item = self.hf_dataset[corpus_seq_idx]
         seq_tag = self._get_seq_tag(corpus_seq_idx, dataset_item)
-        features = {f: _ensure_numpy(dataset_item[f]) for f in self.data_format}
+        features = {k: _ensure_numpy(k, dataset_item[k]) for k in self.data_format}
         return DatasetSeq(seq_idx, features=features, seq_tag=seq_tag)
 
     def _get_seq_tag(self, corpus_seq_idx: int, dataset_item: Dict[str, Any]) -> str:
