@@ -10,6 +10,7 @@ import os
 import re
 import numpy
 from returnn.tensor import Tensor
+from returnn.util import file_cache
 from .basic import DatasetSeq
 from .cached2 import CachedDataset2
 from .util.vocabulary import Vocabulary
@@ -34,6 +35,7 @@ class HuggingFaceDataset(CachedDataset2):
             Callable[[], Union[Dict[str, Any], str, Sequence[str], datasets.Dataset]],
         ],
         *,
+        use_file_cache: bool = False,
         map_func: Optional[Callable[[datasets.Dataset], datasets.Dataset]] = None,
         rename_columns: Optional[Dict[str, str]] = None,
         cast_columns: Optional[Dict[str, Dict[str, Any]]] = None,
@@ -49,6 +51,8 @@ class HuggingFaceDataset(CachedDataset2):
             or a list of Arrow filenames to load with :func:`datasets.Dataset.from_file` and concatenate.
             It can also be a callable returning one of the above,
             or returning a :class:`datasets.Dataset` directly.
+        :param use_file_cache: if True, will cache the dataset files on local disk using :mod:`file_cache`.
+            This only works for dataset_opts which is a str or list of str (or callable returning that).
         :param map_func: optional function to apply to the dataset after loading
         :param rename_columns: if given, will rename these columns
         :param cast_columns: if given, will cast these columns to the specified types.
@@ -74,6 +78,7 @@ class HuggingFaceDataset(CachedDataset2):
         super().__init__(**kwargs)
 
         self.dataset_opts = dataset_opts
+        self.use_file_cache = use_file_cache
         self.map_func = map_func
         self.rename_columns = rename_columns
         self.cast_columns = cast_columns
@@ -100,6 +105,18 @@ class HuggingFaceDataset(CachedDataset2):
         dataset_opts = self.dataset_opts
         if callable(dataset_opts):
             dataset_opts = dataset_opts()
+        if self.use_file_cache:
+            assert isinstance(dataset_opts, (str, list, tuple)), (
+                f"{self}: with use_file_cache, dataset_opts must be str or list of str, got {type(dataset_opts)}"
+            )
+            cache = file_cache.get_instance()
+            if isinstance(dataset_opts, str):
+                dataset_opts = cache.get_file(dataset_opts)
+            elif isinstance(dataset_opts, (list, tuple)):
+                dataset_opts = [cache.get_file(fn) for fn in dataset_opts]
+            else:
+                raise TypeError(f"{self}: invalid dataset_opts type {type(dataset_opts)}")
+            self.set_file_cache(cache)
         if isinstance(dataset_opts, dict):
             self.hf_dataset = datasets.load_dataset(**dataset_opts)
         elif isinstance(dataset_opts, str):
