@@ -27,19 +27,17 @@ class HuggingfaceDataset(CachedDataset2):
         dataset_opts: Union[Dict[str, Any], str],
         *,
         map_func: Optional[Callable[[datasets.Dataset], datasets.Dataset]] = None,
-        data_key: str = "data",
-        seq_tag_column: Optional[str] = "id",
         cast_columns: Optional[Dict[str, Dict[str, Any]]] = None,
         data_format: Dict[str, Dict[str, Any]],
+        seq_tag_column: Optional[str] = "id",
+        sorting_seq_len_column_data: Optional[str] = None,
+        sorting_seq_len_column: Optional[str] = None,
         **kwargs,
     ):
         """
         :param dataset_opts: either a dict of options for :func:`datasets.load_dataset`
             or a path to a local dataset for :func:`datasets.load_from_disk`
         :param map_func: optional function to apply to the dataset after loading
-        :param data_key: key (column name) in the dataset to use as input data
-        :param seq_tag_column: key (column name) in the dataset to use as sequence tag.
-            If None, will use the sequence index as tag.
         :param cast_columns: if given, will cast these columns to the specified types.
             This is useful if the dataset has not the expected types.
             See :func:`datasets.Dataset.cast` for details.
@@ -48,6 +46,15 @@ class HuggingfaceDataset(CachedDataset2):
             For each column name (data key), specify the format,
             as a dict with entries for "dim", "ndim", "shape", and/or "dtype",
             compatible to :class:`Tensor`.
+        :param seq_tag_column: key (column name) in the dataset to use as sequence tag.
+            If None, will use the sequence index as tag.
+        :param data_key: key (column name) in the dataset to use as input data
+        :param sorting_seq_len_column_data: key (column name) in the dataset to use for sorting by sequence length.
+            It will take len(dataset[sorting_seq_len_column_data]) as sequence length (only for sorting/shuffling).
+        :param sorting_seq_len_column: key (column name) in the dataset to use for sorting by sequence length.
+            It will take the value of dataset[sorting_seq_len_column] as sequence length (only for sorting/shuffling).
+            E.g. some datasets provide "duration", "duration_ms", "wav_filesize" or similar such information
+            which can be used.
         """
         super().__init__(**kwargs)
 
@@ -55,8 +62,9 @@ class HuggingfaceDataset(CachedDataset2):
         self.map_func = map_func
 
         self.hf_dataset: Optional[datasets.Dataset] = None
-        self.data_key = data_key
         self.seq_tag_column: Optional[str] = seq_tag_column
+        self.sorting_seq_len_column_data = sorting_seq_len_column_data
+        self.sorting_seq_len_column = sorting_seq_len_column
         self.cast_columns = cast_columns
         self.data_format: Dict[str, Tensor] = {k: _make_tensor_template(v, k) for k, v in data_format.items()}
 
@@ -146,7 +154,16 @@ class HuggingfaceDataset(CachedDataset2):
         return self.data_format[key].dtype
 
     def _get_seq_len(self, seq_idx: int):
-        return len(self.hf_dataset[seq_idx][self.data_key])  # noqa
+        if self.sorting_seq_len_column:
+            v = self.hf_dataset[seq_idx][self.sorting_seq_len_column]
+            return int(v)  # noqa
+        elif self.sorting_seq_len_column_data:
+            v = self.hf_dataset[seq_idx][self.sorting_seq_len_column_data]
+            return len(v)  # noqa
+        raise ValueError(
+            f"{self}: sorting/shuffling by seq len not configured,"
+            f" need sorting_seq_len_column or sorting_seq_len_column_data"
+        )
 
     @property
     def num_seqs(self) -> int:
