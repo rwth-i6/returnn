@@ -106,16 +106,14 @@ class HuggingFaceDataset(CachedDataset2):
         if callable(dataset_opts):
             dataset_opts = dataset_opts()
         if self.use_file_cache:
-            assert isinstance(dataset_opts, (str, list, tuple)), (
+            assert isinstance(dataset_opts, (str, os.PathLike, list, tuple)), (
                 f"{self}: with use_file_cache, dataset_opts must be str or list of str, got {type(dataset_opts)}"
             )
+            if isinstance(dataset_opts, (str, os.PathLike)):
+                dataset_opts = get_arrow_shard_files_from_hf_dataset_dir(dataset_opts)
+            assert isinstance(dataset_opts, (list, tuple))
             cache = file_cache.get_instance()
-            if isinstance(dataset_opts, str):
-                dataset_opts = cache.get_file(dataset_opts)
-            elif isinstance(dataset_opts, (list, tuple)):
-                dataset_opts = [cache.get_file(fn) for fn in dataset_opts]
-            else:
-                raise TypeError(f"{self}: invalid dataset_opts type {type(dataset_opts)}")
+            dataset_opts = [cache.get_file(fn) for fn in dataset_opts]
             self.set_file_cache(cache)
         if isinstance(dataset_opts, dict):
             self.hf_dataset = datasets.load_dataset(**dataset_opts)
