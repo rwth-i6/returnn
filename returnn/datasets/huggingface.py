@@ -18,7 +18,7 @@ if TYPE_CHECKING:
     import datasets
 
 
-class HuggingfaceDataset(CachedDataset2):
+class HuggingFaceDataset(CachedDataset2):
     """
     HuggingFace dataset wrapper.
     """

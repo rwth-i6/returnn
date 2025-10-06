@@ -7,7 +7,7 @@ import atexit
 import shutil
 import pickle
 import numpy
-from returnn.datasets.huggingface import HuggingfaceDataset
+from returnn.datasets.huggingface import HuggingFaceDataset
 from test_Dataset import dummy_iter_dataset
 
 
@@ -25,8 +25,8 @@ def _get_tmp_dir() -> str:
 _setup_hf_env()
 
 
-def test_HuggingfaceDataset_audio():
-    ds = HuggingfaceDataset(
+def test_HuggingFaceDataset_audio():
+    ds = HuggingFaceDataset(
         {"path": "datasets-examples/doc-audio-6", "split": "train"},
         cast_columns={"audio": {"_type": "Audio", "sample_rate": 16_000}},
         data_format={"audio": {"dtype": "float32", "shape": [None]}},
@@ -37,8 +37,8 @@ def test_HuggingfaceDataset_audio():
     print(res[0].features["audio"])
 
 
-def test_HuggingfaceDataset_text1():
-    ds = HuggingfaceDataset(
+def test_HuggingFaceDataset_text1():
+    ds = HuggingFaceDataset(
         {"path": "openai/gdpval", "split": "train"},
         seq_tag_column="task_id",
         data_format={
@@ -51,8 +51,8 @@ def test_HuggingfaceDataset_text1():
     assert dummy_iter_dataset(ds)
 
 
-def test_HuggingfaceDataset_text2():
-    ds = HuggingfaceDataset(
+def test_HuggingFaceDataset_text2():
+    ds = HuggingFaceDataset(
         {"path": "lavita/medical-qa-shared-task-v1-toy", "split": "train"},
         seq_tag_column="id",
         data_format={
@@ -65,8 +65,8 @@ def test_HuggingfaceDataset_text2():
     assert dummy_iter_dataset(ds)
 
 
-def test_HuggingfaceDataset_rename_tokens():
-    ds = HuggingfaceDataset(
+def test_HuggingFaceDataset_rename_tokens():
+    ds = HuggingFaceDataset(
         {"path": "lavita/medical-qa-shared-task-v1-toy", "split": "train"},
         seq_tag_column="id",
         rename_columns={"startphrase": "text"},
@@ -80,8 +80,8 @@ def test_HuggingfaceDataset_rename_tokens():
     assert dummy_iter_dataset(ds)
 
 
-def test_HuggingfaceDataset_text_tokenize():
-    ds = HuggingfaceDataset(
+def test_HuggingFaceDataset_text_tokenize():
+    ds = HuggingFaceDataset(
         {"path": "lavita/medical-qa-shared-task-v1-toy", "split": "train"},
         seq_tag_column="id",
         data_format={
@@ -99,8 +99,8 @@ def test_HuggingfaceDataset_text_tokenize():
     print("startphrase labels:", txt_)
 
 
-def test_HuggingfaceDataset_pickle():
-    ds = HuggingfaceDataset(
+def test_HuggingFaceDataset_pickle():
+    ds = HuggingFaceDataset(
         {"path": "lavita/medical-qa-shared-task-v1-toy", "split": "train"},
         seq_tag_column="id",
         data_format={
@@ -112,18 +112,18 @@ def test_HuggingfaceDataset_pickle():
     ds.initialize()
     s = pickle.dumps(ds)
     ds = pickle.loads(s)
-    assert isinstance(ds, HuggingfaceDataset)
+    assert isinstance(ds, HuggingFaceDataset)
     assert dummy_iter_dataset(ds)
 
 
-def test_HuggingfaceDataset_load_from_disk():
+def test_HuggingFaceDataset_load_from_disk():
     from datasets import load_dataset
 
     datadir_path = _get_tmp_dir() + "/hf-dataset-save-to-disk"
     hf_ds = load_dataset("lavita/medical-qa-shared-task-v1-toy", split="train")
     hf_ds.save_to_disk(datadir_path)
 
-    ds = HuggingfaceDataset(
+    ds = HuggingFaceDataset(
         datadir_path,
         seq_tag_column="id",
         data_format={
@@ -136,7 +136,7 @@ def test_HuggingfaceDataset_load_from_disk():
     assert dummy_iter_dataset(ds)
 
 
-def test_HuggingfaceDataset_single_arrows():
+def test_HuggingFaceDataset_single_arrows():
     import datasets
 
     datadir_path = _get_tmp_dir() + "/hf-dataset-save-to-disk"
@@ -149,7 +149,7 @@ def test_HuggingfaceDataset_single_arrows():
     assert "dataset_info.json" in content
     assert all(f"data-{i:05}-of-00100.arrow" in content for i in range(100))
 
-    ds = HuggingfaceDataset(
+    ds = HuggingFaceDataset(
         [f"{datadir_path}/data-{i:05}-of-00100.arrow" for i in range(0, 100, 5)],
         seq_tag_column=None,
         data_format={"data": {"dtype": "int64", "shape": ()}},
