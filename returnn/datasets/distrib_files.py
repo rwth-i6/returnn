@@ -135,7 +135,7 @@ class DistributeFilesDataset(CachedDataset2):
     def __init__(
         self,
         *,
-        files: Union[List[FileTree], os.PathLike],
+        files: Union[List[FileTree], os.PathLike, Callable[[], List[FileTree]]],
         get_sub_epoch_dataset: Callable[[List[FileTree]], Dict[str, Any]],
         preload_next_n_sub_epochs: int = 1,
         buffer_size: int = 1,
@@ -151,6 +151,7 @@ class DistributeFilesDataset(CachedDataset2):
             can also be specified as a path to a .txt file containing one file per line,
             or a python file containing the repr of a list of arbitrarily nested python objects,
             or a JSON file containing a list of arbitarily nested (JSON) objects.
+            It can also be a callable which returns such a list.
         :param get_sub_epoch_dataset: callable which returns a dataset dict for a given subset of files
         :param preload_next_n_sub_epochs: how many sub epoch datasets to preload
         :param buffer_size: buffer size for each worker, number of seqs to prefetch
@@ -244,6 +245,11 @@ class DistributeFilesDataset(CachedDataset2):
             return
         if isinstance(self.files, list):
             self._files = self.files
+        elif callable(self.files):
+            self._files = self.files()
+            assert isinstance(self._files, list), (
+                f"{self}: callable files {self.files} must return a list, got {type(self._files)}"
+            )
         elif isinstance(self.files, (str, os.PathLike)):
             _, ext = os.path.splitext(self.files)
             assert ext, f"{self}: no file extension on file list file {self.files}"
