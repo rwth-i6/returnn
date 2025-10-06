@@ -719,7 +719,7 @@ class Engine(EngineBase):
             if self._tensorboard_writer:
                 # write losses/errors to tensorboard
                 for key, val in accumulated_losses_dict.items():
-                    self._tensorboard_writer.add_scalar(f"{dataset_name}/{key}", val, global_step=self.epoch)
+                    self._tensorboard_writer.add_scalar(f"{dataset_name}/{key}", val, global_step=self.global_train_step)
 
             self.learning_rate_control.set_epoch_error(
                 self.epoch, {f"{dataset_name}_loss_{k}": v for k, v in accumulated_losses_dict.items()}
