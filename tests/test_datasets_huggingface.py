@@ -16,7 +16,7 @@ def _setup_hf_env():
 
 def _get_tmp_dir() -> str:
     fn = tempfile.mkdtemp()
-    atexit.register(lambda: shutil.rmtree(fn))
+    atexit.register(shutil.rmtree, fn)
     return fn
 
 
