@@ -4,6 +4,8 @@ HuggingFace dataset wrapper
 See https://github.com/rwth-i6/returnn/issues/1257 for some initial discussion.
 """
 
+from __future__ import annotations
+from typing import Optional, Sequence, Dict, List
 import numpy
 from .basic import DatasetSeq
 from .cached2 import CachedDataset2
@@ -41,9 +43,10 @@ class HuggingfaceDataset(CachedDataset2):
 
         self.feature_keys = features
 
-        self.data_dtype = {}
+        self.data_dtype: Dict[str, str] = {}
 
     def initialize(self):
+        """initialize"""
         # Load the dataset
         import datasets
 
@@ -70,8 +73,7 @@ class HuggingfaceDataset(CachedDataset2):
         self.num_outputs = {}
         for key in self.feature_keys:
             feature = self.dataset.features[key]
-            dtype = None
-            num_classes = None
+            num_classes = 1
             spatial_dims = 0
             while type(feature) is datasets.features.Sequence:
                 spatial_dims += 1
@@ -92,35 +94,39 @@ class HuggingfaceDataset(CachedDataset2):
                 assert False, f"Unsupported feature type {type(feature)}"
 
             len_shape = spatial_dims
-            self.num_outputs[key] = [num_classes, len_shape]
+            self.num_outputs[key] = (num_classes, len_shape)
 
             self.data_dtype[key] = dtype
 
         super().initialize()
 
-    def get_data_dim(self, key):
+    def get_data_dim(self, key: str) -> int:
+        """:return: data dimension for the given key"""
         if key in self.num_outputs:
             return self.num_outputs[key][0]
         return super().get_data_dim(key)
 
-    def get_data_dtype(self, key):
+    def get_data_dtype(self, key: str) -> str:
         return self.data_dtype[key]
 
-    def _get_seq_len(self, seq_idx):
+    def _get_seq_len(self, seq_idx: int):
         return len(self.dataset[seq_idx][self.data_key])
 
     @property
-    def num_seqs(self):
+    def num_seqs(self) -> int:
+        """:return: number of sequences"""
         assert self._seq_order is not None, "num_seqs is only known after calling init_seq_order()"
         return len(self._seq_order)
 
-    def get_tag(self, sorted_seq_idx):
+    def get_tag(self, sorted_seq_idx: int) -> str:
+        """:return: tag of the sequence"""
         return self.dataset[int(self.get_corpus_seq_idx(sorted_seq_idx))][self.seq_tag_key]
 
-    def get_all_tags(self):
+    def get_all_tags(self) -> List[str]:
+        """:return: all tags"""
         return list(self.dataset[self.seq_tag_key])
 
-    def init_seq_order(self, epoch=None, seq_list=None, seq_order=None):
+    def init_seq_order(self, epoch: Optional[int] = None, seq_list=None, seq_order=None):
         """
         :param int|None epoch:
         :param list[str]|None seq_list: List of sequence tags, to set a predefined order.
@@ -128,7 +134,7 @@ class HuggingfaceDataset(CachedDataset2):
         :rtype: bool
         :returns whether the order changed (True is always safe to return)
         """
-        super(HuggingfaceDataset, self).init_seq_order(epoch=epoch, seq_list=seq_list, seq_order=seq_order)
+        super().init_seq_order(epoch=epoch, seq_list=seq_list, seq_order=seq_order)
 
         if seq_order:
             self._seq_order = seq_order
@@ -154,11 +160,7 @@ class HuggingfaceDataset(CachedDataset2):
 
         return True
 
-    def _collect_single_seq(self, seq_idx):
-        """
-        :param int seq_idx: sorted seq idx
-        :return:
-        """
+    def _collect_single_seq(self, seq_idx: int) -> DatasetSeq:
         corpus_seq_idx = self.get_corpus_seq_idx(seq_idx)
 
         def ensure_numpy(x):
@@ -170,25 +172,23 @@ class HuggingfaceDataset(CachedDataset2):
         features = {f: ensure_numpy(dataset_item[f]) for f in self.feature_keys}
         return DatasetSeq(seq_idx, features=features, targets=None, seq_tag=dataset_item[self.seq_tag_key])
 
-    def get_current_seq_order(self):
+    def get_current_seq_order(self) -> Sequence[int]:
         """
-        :rtype: list[int]
+        :return: list of corpus seq idx
         """
         assert self._seq_order is not None
         return self._seq_order
 
-    def get_corpus_seq_idx(self, sorted_seq_idx):
-        """
-        :param int sorted_seq_idx:
-        :return corpus_seq_idx
-        :rtype: int
-        """
+    def get_corpus_seq_idx(self, sorted_seq_idx: int) -> int:
+        """:return: corpus seq idx"""
         return self._seq_order[sorted_seq_idx]
 
-    def can_serialize_data(self, key):
+    def can_serialize_data(self, key: str):
+        """:return: whether we can serialize"""
         return True
 
-    def serialize_data(self, key, data):
+    def serialize_data(self, key: str, data: numpy.ndarray) -> str:
+        """serialize"""
         if key in self.labels:
             return super().serialize_data(key, data)
         if isinstance(data, numpy.ndarray):
