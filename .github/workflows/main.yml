@@ -190,11 +190,13 @@ jobs:
 
         pip install --user pytest
 
+        sudo apt-get install -y ffmpeg  # for torchcodec
+
         # datasets >=4 needs torch to decode audio files
         pip install --user --progress-bar=off dm-tree h5py
         pip install --user --progress-bar=off "numpy<2"
         pip install --user --progress-bar=off --upgrade torch==${{ matrix.torch-version }}
-        pip install --user --progress-bar=off torchcodec==0.7
+        pip install --user --progress-bar=off torchcodec==0.7  # for HF datasets
         pip install --user --progress-bar=off lovely_tensors
 
         pip install --user --progress-bar=off datasets
