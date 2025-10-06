@@ -325,7 +325,7 @@ class HuggingFaceDataset(CachedDataset2):
 def get_arrow_shard_files_from_hf_dataset_dir(hf_data_dir: Union[str, os.PathLike]) -> List[str]:
     """
     Given some HF datasets directory (created via :func:`datasets.save_to_disk`),
-    return the list of Arrow shard files (data-*-of-*.arrow).
+    return the list of Arrow shard files (``data-*-of-*.arrow``).
     This also verifies that the directory looks like a valid HF datasets directory.
     The order of the returned list is by shard index.
     Note that this does not load the dataset, just inspects the directory structure.
