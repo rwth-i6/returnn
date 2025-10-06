@@ -26,4 +26,4 @@ _setup_hf_env()
 def test_HuggingfaceDataset():
     ds = HuggingfaceDataset({"path": "datasets-examples/doc-audio-6", "split": "train"}, seq_tag_key=None)
     ds.initialize()
-    dummy_iter_dataset(ds)
+    assert dummy_iter_dataset(ds)
