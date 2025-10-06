@@ -123,7 +123,7 @@ jobs:
           ~/.local
         key: cache-${{ runner.os }}-py${{ matrix.python-version }}-no-tf
         restore-keys: |
-          cache-${{ runner.os }}-py${{ matrix.python-version }}-
+          cache-${{ runner.os }}-py${{ matrix.python-version }}-no-tf
 
     - name: Setup dependencies
       run: |
@@ -137,7 +137,7 @@ jobs:
 
         pip install --user --progress-bar=off -r requirements.txt
 
-    - name: Test Python/Numpy/TF versions.
+    - name: Test Python/Numpy.
       run: |
         echo "Python env: $(type python) $(python --version)"
         python -c "import numpy; print('NumPy:', numpy.version.full_version)"
