@@ -423,6 +423,13 @@ jobs:
           pip install --user --progress-bar=off torchaudio==${{matrix.torch-version}}
         fi
 
+        echo "Space usage after installing dependencies:"
+        df -h
+        echo "Cache dir sizes:"
+        du -h -d1 ~/.cache
+        echo "Clean up cache pip dir..."
+        rm -rf ~/.cache/pip || true
+
     - name: Test Python/Numpy/PyTorch versions.
       run: |
         echo "Python env: $(type python) $(python --version)"
