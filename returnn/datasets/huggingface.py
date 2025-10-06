@@ -28,6 +28,7 @@ class HuggingfaceDataset(CachedDataset2):
         dataset_opts: Union[Dict[str, Any], str],
         *,
         map_func: Optional[Callable[[datasets.Dataset], datasets.Dataset]] = None,
+        rename_columns: Optional[Dict[str, str]] = None,
         cast_columns: Optional[Dict[str, Dict[str, Any]]] = None,
         data_format: Dict[str, Dict[str, Any]],
         seq_tag_column: Optional[str] = "id",
@@ -39,6 +40,7 @@ class HuggingfaceDataset(CachedDataset2):
         :param dataset_opts: either a dict of options for :func:`datasets.load_dataset`
             or a path to a local dataset for :func:`datasets.load_from_disk`
         :param map_func: optional function to apply to the dataset after loading
+        :param rename_columns: if given, will rename these columns
         :param cast_columns: if given, will cast these columns to the specified types.
             This is useful if the dataset has not the expected types.
             See :func:`datasets.Dataset.cast` for details.
@@ -60,6 +62,7 @@ class HuggingfaceDataset(CachedDataset2):
 
         self.dataset_opts = dataset_opts
         self.map_func = map_func
+        self.rename_columns = rename_columns
         self.cast_columns = cast_columns
 
         self.data_format: Dict[str, Tensor] = {k: _make_tensor_template(v, k) for k, v in data_format.items()}
@@ -91,6 +94,9 @@ class HuggingfaceDataset(CachedDataset2):
 
         if self.map_func is not None:
             self.hf_dataset = self.map_func(self.hf_dataset)
+
+        if self.rename_columns:
+            self.hf_dataset = self.hf_dataset.rename_columns(self.rename_columns)
 
         if self.cast_columns:
             # Note: prefer cast_column, as this can avoid using `map`, i.e. be faster.

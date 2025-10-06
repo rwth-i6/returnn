@@ -65,6 +65,21 @@ def test_HuggingfaceDataset_text2():
     assert dummy_iter_dataset(ds)
 
 
+def test_HuggingfaceDataset_rename_tokens():
+    ds = HuggingfaceDataset(
+        {"path": "lavita/medical-qa-shared-task-v1-toy", "split": "train"},
+        seq_tag_column="id",
+        rename_columns={"startphrase": "text"},
+        data_format={
+            "id": {"dtype": "int64", "shape": ()},
+            "text": {"dtype": "string", "shape": ()},
+            "label": {"dtype": "int64", "shape": ()},
+        },
+    )
+    ds.initialize()
+    assert dummy_iter_dataset(ds)
+
+
 def test_HuggingfaceDataset_text_tokenize():
     ds = HuggingfaceDataset(
         {"path": "lavita/medical-qa-shared-task-v1-toy", "split": "train"},
@@ -124,7 +139,7 @@ def test_HuggingfaceDataset_load_from_disk():
 def test_HuggingfaceDataset_single_arrow():
     # TODO...
     ds = HuggingfaceDataset(
-        {"path": "lavita/medical-qa-shared-task-v1-toy", "split": "train"},
+        [...],  # TODO...
         seq_tag_column="id",
         data_format={
             "id": {"dtype": "int64", "shape": ()},
