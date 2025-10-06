@@ -138,6 +138,7 @@ class Engine(EngineBase):
             from torch.utils.tensorboard import SummaryWriter
 
             self._tensorboard_writer = SummaryWriter()
+            self._tensorboard_opts = config.typed_value("tensorboard_opts", {})
         else:
             self._tensorboard_writer = None
 
@@ -516,7 +517,10 @@ class Engine(EngineBase):
                     batch_size_info=_get_batch_size_info(extern_data) if self._log_batch_size else None,
                     log_memory_usage_device=self._device if self._log_memory_usage else None,
                 )
-                if self._tensorboard_writer:
+                if (
+                    self._tensorboard_writer
+                    and self.global_train_step % self._tensorboard_opts.get("log_every_n_train_steps", 100) == 0
+                ):
                     # write losses/errors to tensorboard
                     for key, val in eval_info.items():
                         self._tensorboard_writer.add_scalar(f"train/{key}", val, global_step=self.global_train_step)
