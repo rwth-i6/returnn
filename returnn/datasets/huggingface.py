@@ -277,6 +277,6 @@ def _make_tensor_template(data: Union[Dict[str, Any], Tensor], name: str) -> Ten
         data = data.copy(name)
     else:
         assert isinstance(data, dict)
-        data = Tensor(name, **data)
+        data = Tensor(name, batch_dim_axis=None, **data)
     assert data.batch_dim_axis is None
     return data
