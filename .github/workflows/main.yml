@@ -372,10 +372,7 @@ jobs:
         echo "Python ${{matrix.python-version}}"
         echo "pip: $(type pip)"
 
-        df -h
-        realpath ~
-        time du -h -d1 ~
-        time du -h -d1 ~/actions-runner
+        .github/workflows/_free_disk_space.sh
 
         pip install --user --progress-bar=off --upgrade pip setuptools wheel
 
