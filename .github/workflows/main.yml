@@ -425,6 +425,9 @@ jobs:
 
         echo "Space usage after installing dependencies:"
         df -h
+        echo "Local home dir usage:"
+        du -h -d1 ~
+        du -h -d1 ~/.local
         echo "Cache dir sizes:"
         du -h -d1 ~/.cache
         echo "Clean up cache pip dir..."

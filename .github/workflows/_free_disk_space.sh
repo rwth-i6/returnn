@@ -28,7 +28,9 @@ df -h
 echo "Home realpath: $(realpath ~)"
 echo "Listing space usage of home directory:"
 time du -h -d1 ~
+time du -h -d1 ~/.local
 time du -h -d1 ~/actions-runner
+time du -h -d1 ~/actions-runner/cached
 time du -h -d1 ~/work
 
 echo "Listing 100 largest packages:"
