@@ -129,6 +129,10 @@ class HuggingFaceDataset(CachedDataset2):
         selected_columns = list(self.data_format.keys())
         if self.seq_tag_column and self.seq_tag_column not in selected_columns:
             selected_columns.append(self.seq_tag_column)
+        if self.sorting_seq_len_column and self.sorting_seq_len_column not in selected_columns:
+            selected_columns.append(self.sorting_seq_len_column)
+        if self.sorting_seq_len_column_data and self.sorting_seq_len_column_data not in selected_columns:
+            selected_columns.append(self.sorting_seq_len_column_data)
         self.hf_dataset = self.hf_dataset.select_columns(selected_columns)
 
         self.hf_dataset.set_format("numpy")
