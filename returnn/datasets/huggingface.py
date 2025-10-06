@@ -104,6 +104,12 @@ class HuggingfaceDataset(CachedDataset2):
                 dtype = feature.dtype
                 num_classes = feature.shape[-1]
                 spatial_dims += len(feature.shape)
+            elif isinstance(feature, datasets.features.Audio):
+                if feature.decode:
+                    dtype = "float32"  # samples
+                else:
+                    dtype = "uint8"  # bytes
+                spatial_dims += 1  # time axis
             else:
                 assert False, f"Unsupported feature type {type(feature)}"
 
@@ -121,6 +127,7 @@ class HuggingfaceDataset(CachedDataset2):
         return super().get_data_dim(key)
 
     def get_data_dtype(self, key: str) -> str:
+        """:return: dtype"""
         return self.data_dtype[key]
 
     def _get_seq_len(self, seq_idx: int):
