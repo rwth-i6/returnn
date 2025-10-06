@@ -48,7 +48,6 @@ class HuggingfaceDataset(CachedDataset2):
             compatible to :class:`Tensor`.
         :param seq_tag_column: key (column name) in the dataset to use as sequence tag.
             If None, will use the sequence index as tag.
-        :param data_key: key (column name) in the dataset to use as input data
         :param sorting_seq_len_column_data: key (column name) in the dataset to use for sorting by sequence length.
             It will take len(dataset[sorting_seq_len_column_data]) as sequence length (only for sorting/shuffling).
         :param sorting_seq_len_column: key (column name) in the dataset to use for sorting by sequence length.
@@ -60,17 +59,18 @@ class HuggingfaceDataset(CachedDataset2):
 
         self.dataset_opts = dataset_opts
         self.map_func = map_func
+        self.cast_columns = cast_columns
 
-        self.hf_dataset: Optional[datasets.Dataset] = None
+        self.data_format: Dict[str, Tensor] = {k: _make_tensor_template(v, k) for k, v in data_format.items()}
         self.seq_tag_column: Optional[str] = seq_tag_column
         self.sorting_seq_len_column_data = sorting_seq_len_column_data
         self.sorting_seq_len_column = sorting_seq_len_column
-        self.cast_columns = cast_columns
-        self.data_format: Dict[str, Tensor] = {k: _make_tensor_template(v, k) for k, v in data_format.items()}
 
         self.labels = {k: data.vocab.labels for k, data in self.data_format.items() if data.vocab}
         self.num_outputs = {k: (data.dim, data.ndim) for k, data in self.data_format.items()}
-        self._seq_order: Optional[Sequence[int]] = None
+
+        self.hf_dataset: Optional[datasets.Dataset] = None  # lazily loaded, _lazy_init
+        self._seq_order: Optional[Sequence[int]] = None  # init_seq_order
 
     def _lazy_init(self):
         if self.hf_dataset is not None:
