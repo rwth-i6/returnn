@@ -5,6 +5,7 @@ import os
 import tempfile
 import atexit
 import shutil
+import pickle
 from returnn.datasets.huggingface import HuggingfaceDataset
 from test_Dataset import dummy_iter_dataset
 
@@ -24,6 +25,63 @@ _setup_hf_env()
 
 
 def test_HuggingfaceDataset_audio():
-    ds = HuggingfaceDataset({"path": "datasets-examples/doc-audio-6", "split": "train"}, seq_tag_column=None)
+    ds = HuggingfaceDataset(
+        {"path": "datasets-examples/doc-audio-6", "split": "train"},
+        cast_columns={"audio": {"_type": "Audio", "sample_rate": 16_000}},
+        data_format={"audio": {"dtype": "float32", "shape": [None]}},
+        seq_tag_column=None,
+    )
+    ds.initialize()
+    res = dummy_iter_dataset(ds)
+    print(res[0].features["audio"])
+
+
+def test_HuggingfaceDataset_text1():
+    ds = HuggingfaceDataset(
+        {"path": "openai/gdpval", "split": "train"},
+        seq_tag_column="task_id",
+        data_format={"prompt": {"dtype": "string"}, "sector": {"dtype": "string"}, "occupation": {"dtype": "string"}},
+    )
+    ds.initialize()
+    assert dummy_iter_dataset(ds)
+
+
+def test_HuggingfaceDataset_text2():
+    ds = HuggingfaceDataset({"path": "lavita/medical-qa-shared-task-v1-toy", "split": "train"}, seq_tag_column="id")
+    ds.initialize()
+    assert dummy_iter_dataset(ds)
+
+
+def test_HuggingfaceDataset_pickle():
+    ds = HuggingfaceDataset(
+        {"path": "openai/gdpval", "split": "train"},
+        seq_tag_column="task_id",
+        selected_columns=["prompt", "sector", "occupation"],
+    )
+    ds.initialize()
+    s = pickle.dumps(ds)
+    ds = pickle.loads(s)
+    assert isinstance(ds, HuggingfaceDataset)
+    assert dummy_iter_dataset(ds)
+
+
+def test_HuggingfaceDataset_load_from_disk():
+    # TODO...
+    ds = HuggingfaceDataset(
+        {"path": "openai/gdpval", "split": "train"},
+        seq_tag_column="task_id",
+        selected_columns=["prompt", "sector", "occupation"],
+    )
+    ds.initialize()
+    assert dummy_iter_dataset(ds)
+
+
+def test_HuggingfaceDataset_single_arrow():
+    # TODO...
+    ds = HuggingfaceDataset(
+        {"path": "openai/gdpval", "split": "train"},
+        seq_tag_column="task_id",
+        selected_columns=["prompt", "sector", "occupation"],
+    )
     ds.initialize()
     assert dummy_iter_dataset(ds)
