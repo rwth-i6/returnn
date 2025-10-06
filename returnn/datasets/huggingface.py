@@ -306,6 +306,7 @@ def _infer_data_format_for_feature(
     num_classes = None
     num_dims = 0
     while isinstance(feature, datasets.features.Sequence):
+        feature: datasets.features.List  # typing for HF datasets 4
         num_dims += 1
         if feature.length != -1:
             num_classes = feature.length
