@@ -72,9 +72,9 @@ class HuggingfaceDataset(CachedDataset2):
             assert self.seq_tag_column in self.hf_dataset.features, (
                 f"{self}: seq_tag_column {self.seq_tag_column} not in dataset features {self.hf_dataset.features}"
             )
-            assert self.hf_dataset.features[self.seq_tag_column].dtype == "string", (
-                f"{self}: seq_tag_column {self.seq_tag_column} must be of dtype string,"
-                f" got {self.hf_dataset.features[self.seq_tag_column]}"
+            assert self.hf_dataset.features[self.seq_tag_column].dtype in ("string", "int64"), (
+                f"{self}: seq_tag_column {self.seq_tag_column} must be of dtype string or int64,"
+                f" got {self.hf_dataset.features[self.seq_tag_column].dtype}"
             )
         if self.selected_columns is None:
             self.selected_columns = list(self.hf_dataset.features.keys())
@@ -146,12 +146,7 @@ class HuggingfaceDataset(CachedDataset2):
         """:return: tag of the sequence"""
         corpus_seq_idx = self.get_corpus_seq_idx(sorted_seq_idx)
         dataset_item = self.hf_dataset[corpus_seq_idx]
-        if self.seq_tag_column:
-            seq_tag = dataset_item[self.seq_tag_column]
-            assert isinstance(seq_tag, str)
-        else:
-            seq_tag = f"seq-{corpus_seq_idx}"
-        return seq_tag
+        return self._get_seq_tag(corpus_seq_idx, dataset_item)
 
     def get_all_tags(self) -> List[str]:
         """:return: all tags"""
@@ -200,13 +195,19 @@ class HuggingfaceDataset(CachedDataset2):
             return x
 
         dataset_item = self.hf_dataset[corpus_seq_idx]
-        if self.seq_tag_column:
-            seq_tag = dataset_item[self.seq_tag_column]
-            assert isinstance(seq_tag, str)
-        else:
-            seq_tag = f"seq-{corpus_seq_idx}"
+        seq_tag = self._get_seq_tag(corpus_seq_idx, dataset_item)
         features = {f: _ensure_numpy(dataset_item[f]) for f in self.selected_columns}
         return DatasetSeq(seq_idx, features=features, seq_tag=seq_tag)
+
+    def _get_seq_tag(self, corpus_seq_idx: int, dataset_item: Dict[str, Any]) -> str:
+        if self.seq_tag_column:
+            seq_tag = dataset_item[self.seq_tag_column]
+            assert isinstance(seq_tag, (str, int, numpy.int64)), f"got {type(seq_tag)} {seq_tag!r}"
+            if not isinstance(seq_tag, str):
+                seq_tag = str(seq_tag)
+        else:
+            seq_tag = f"seq-{corpus_seq_idx}"
+        return seq_tag
 
     def get_current_seq_order(self) -> Sequence[int]:
         """:return: list of corpus seq idx"""
