@@ -141,7 +141,14 @@ class HuggingfaceDataset(CachedDataset2):
 
     def get_tag(self, sorted_seq_idx: int) -> str:
         """:return: tag of the sequence"""
-        return self.hf_dataset[self.get_corpus_seq_idx(sorted_seq_idx)][self.seq_tag_key]
+        corpus_seq_idx = self.get_corpus_seq_idx(sorted_seq_idx)
+        dataset_item = self.hf_dataset[corpus_seq_idx]
+        if self.seq_tag_key:
+            seq_tag = dataset_item[self.seq_tag_key]
+            assert isinstance(seq_tag, str)
+        else:
+            seq_tag = f"seq-{corpus_seq_idx}"
+        return seq_tag
 
     def get_all_tags(self) -> List[str]:
         """:return: all tags"""
