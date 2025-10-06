@@ -29,6 +29,7 @@ class HuggingfaceDataset(CachedDataset2):
         map_func: Optional[Callable[[datasets.Dataset], datasets.Dataset]] = None,
         data_key: str = "data",
         seq_tag_column: Optional[str] = "id",
+        cast_columns: Optional[Dict[str, str]] = None,
         data_format: Dict[str, Dict[str, Any]],
         **kwargs,
     ):
@@ -39,6 +40,10 @@ class HuggingfaceDataset(CachedDataset2):
         :param data_key: key (column name) in the dataset to use as input data
         :param seq_tag_column: key (column name) in the dataset to use as sequence tag.
             If None, will use the sequence index as tag.
+        :param cast_columns: if given, will cast these columns to the specified types.
+            This is useful if the dataset has not the expected types.
+            See :func:`datasets.Dataset.cast` for details.
+            You can also e.g. enforce some sample_rate for audio, etc.
         :param data_format:
             For each column name (data key), specify the format,
             as a dict with entries for "dim", "ndim", "shape", and/or "dtype",
@@ -52,6 +57,7 @@ class HuggingfaceDataset(CachedDataset2):
         self.hf_dataset: Optional[datasets.Dataset] = None
         self.data_key = data_key
         self.seq_tag_column: Optional[str] = seq_tag_column
+        self.cast_columns = cast_columns
         self.data_format: Dict[str, Tensor] = {k: _make_tensor_template(v, k) for k, v in data_format.items()}
 
         self.labels = {k: data.vocab.labels for k, data in self.data_format.items() if data.vocab}
@@ -73,8 +79,19 @@ class HuggingfaceDataset(CachedDataset2):
         assert isinstance(self.hf_dataset, datasets.Dataset), (
             f"{self}: Expected single dataset, got {type(self.hf_dataset)} {self.hf_dataset}. Specify split if needed."
         )
+
         if self.map_func is not None:
             self.hf_dataset = self.map_func(self.hf_dataset)
+
+        if self.cast_columns:
+            # Note: prefer cast_column, as this can avoid using `map`, i.e. be faster.
+            for key, column_format in self.cast_columns.items():
+                assert key in self.hf_dataset.features, (
+                    f"{self}: cast_column {key} not in dataset features {self.hf_dataset.features}"
+                )
+                feat = datasets.features.features.generate_from_dict(column_format)
+                self.hf_dataset = self.hf_dataset.cast_column(key, feat)
+
         if self.seq_tag_column:
             assert self.seq_tag_column in self.hf_dataset.features, (
                 f"{self}: seq_tag_column {self.seq_tag_column} not in dataset features {self.hf_dataset.features}"
@@ -83,6 +100,7 @@ class HuggingfaceDataset(CachedDataset2):
                 f"{self}: seq_tag_column {self.seq_tag_column} must be of dtype string or int64,"
                 f" got {self.hf_dataset.features[self.seq_tag_column].dtype}"
             )
+
         selected_columns = list(self.data_format.keys())
         if self.seq_tag_column and self.seq_tag_column not in selected_columns:
             selected_columns.append(self.seq_tag_column)
