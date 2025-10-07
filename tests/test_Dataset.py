@@ -12,7 +12,7 @@ import tempfile
 import contextlib
 from returnn.datasets.generating import Task12AXDataset, DummyDataset, DummyDatasetMultipleSequenceLength
 from returnn.engine.batch import Batch
-from returnn.datasets.basic import Dataset, DatasetSeq, init_dataset
+from returnn.datasets.basic import Dataset, DatasetSeq, init_dataset, _get_seq_len_as_array
 from returnn.util.basic import NumbersDict
 from returnn.util import better_exchook
 
@@ -524,6 +524,26 @@ def test_get_seq_order_laplace_reference():
 
     assert len(seq_index) == num_seqs == len(seq_index_)
     assert seq_index == list(seq_index_)
+
+
+def test_get_seq_len_as_array():
+    with tempfile.NamedTemporaryFile(mode="wt", suffix=".npy", encoding="utf8") as tmp_seq_lens_file:
+        num_seqs = 3023
+        rnd = numpy.random.RandomState(42)
+        seq_lens = rnd.randint(1, 23, size=[num_seqs])
+
+        tmp_seq_lens_file.write(repr({f"seq-{i}": int(seq_lens[i]) for i in range(num_seqs)}))
+        tmp_seq_lens_file.write("\n")
+        tmp_seq_lens_file.flush()
+
+        dataset = Dataset()
+        dataset.epoch = 1
+        dataset.seq_ordering = "laplace:.100"
+        dataset._seq_order_seq_lens_file = tmp_seq_lens_file.name
+        dataset.get_all_tags = lambda: [f"seq-{i}" for i in range(num_seqs)]
+
+        seq_lens_ = _get_seq_len_as_array(dataset._get_seq_order_seq_lens_by_idx, num_seqs)
+        assert seq_lens_ is dataset._seq_order_seq_lens_by_idx
 
 
 @contextlib.contextmanager
