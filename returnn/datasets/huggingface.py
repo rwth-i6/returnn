@@ -353,7 +353,7 @@ def get_arrow_shard_files_from_hf_dataset_dir(hf_data_dir: Union[str, os.PathLik
     content = os.listdir(hf_data_dir)
     assert "state.json" in content, f"not a valid HF datasets dir: {hf_data_dir!r}"
     assert "dataset_info.json" in content, f"not a valid HF datasets dir: {hf_data_dir!r}"
-    content = [fn for fn in content if fn.endswith(".arrow")]
+    content = [fn for fn in content if fn.startswith("data-") and fn.endswith(".arrow")]
     assert content, f"no .arrow files found in {hf_data_dir!r}"
     pat = re.compile("^data-([0-9]+)-of-([0-9]+).arrow$")
     content = [pat.match(fn) for fn in content]
