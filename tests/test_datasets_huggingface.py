@@ -158,3 +158,20 @@ def test_HuggingFaceDataset_single_arrows():
     )
     ds.initialize()
     assert dummy_iter_dataset(ds)
+
+
+def test_HuggingFaceDataset_file_cache_with_sharded():
+    import datasets
+
+    datadir_path = _get_tmp_dir() + "/hf-dataset-save-to-disk"
+    hf_ds = datasets.Dataset.from_list([{"data": i} for i in range(100_000)])
+    hf_ds.save_to_disk(datadir_path, num_shards=100)
+
+    ds = HuggingFaceDataset(
+        datadir_path,
+        use_file_cache=True,
+        seq_tag_column=None,
+        data_format={"data": {"dtype": "int64", "shape": ()}},
+    )
+    ds.initialize()
+    assert dummy_iter_dataset(ds)
