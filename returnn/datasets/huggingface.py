@@ -207,14 +207,14 @@ class HuggingFaceDataset(CachedDataset2):
         return self.data_format[key].dtype
 
     def _get_seq_len(self, seq_idx: int) -> Union[int, float]:
-        if self._seq_order_seq_lens_by_idx:
+        if self._seq_order_seq_lens_by_idx is not None:
             self._get_seq_len = self._seq_order_seq_lens_by_idx.__getitem__  # faster
             return self._seq_order_seq_lens_by_idx[seq_idx]
         assert not self._seq_order_seq_lens_file  # not expected to call this
         if self.sorting_seq_len_column:
             self._seq_order_seq_lens_by_idx = numpy.array(self.hf_dataset[self.sorting_seq_len_column])
             self._get_seq_len = self._seq_order_seq_lens_by_idx.__getitem__  # faster
-            v = self.hf_dataset[seq_idx][self.sorting_seq_len_column]
+            v = self._seq_order_seq_lens_by_idx[seq_idx]
             return int(v)  # noqa
         if self.sorting_seq_len_column_data:
             v = self.hf_dataset[seq_idx][self.sorting_seq_len_column_data]
