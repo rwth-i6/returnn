@@ -362,11 +362,11 @@ def get_arrow_shard_files_from_hf_dataset_dir(hf_data_dir: Union[str, os.PathLik
         f"mismatching prefix in {hf_data_dir!r}, expected {prefix}, got {[m.group(1) for m in content]}"
     )
     num_shards = int(content[0].group(3))
-    assert all(int(m.group(2)) == num_shards for m in content), (
-        f"mismatching number of shards in {hf_data_dir!r}, expected {num_shards}, got {[m.group(2) for m in content]}"
+    assert all(int(m.group(3)) == num_shards for m in content), (
+        f"mismatching number of shards in {hf_data_dir!r}, expected {num_shards}, got {[m.group(3) for m in content]}"
     )
     assert len(content) == num_shards, f"expected {num_shards} shard files in {hf_data_dir!r}, got {content}"
-    content_by_idx = {int(m.group(1)): m for m in content}
+    content_by_idx = {int(m.group(2)): m for m in content}
     assert set(content_by_idx.keys()) == set(range(num_shards)), (
         f"expected shard indices 0..{num_shards - 1} in {hf_data_dir!r}, got {sorted(content_by_idx.keys())}"
     )
