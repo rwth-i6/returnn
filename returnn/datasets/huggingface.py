@@ -94,6 +94,7 @@ class HuggingFaceDataset(CachedDataset2):
 
         self.hf_dataset: Optional[datasets.Dataset] = None  # lazily loaded, _lazy_init
         self._seq_order: Optional[Sequence[int]] = None  # init_seq_order
+        self._seq_tags: Optional[List[str]] = None  # get_all_tags cache
 
     def _lazy_init(self):
         if self.hf_dataset is not None:
@@ -231,11 +232,15 @@ class HuggingFaceDataset(CachedDataset2):
 
     def get_all_tags(self) -> List[str]:
         """:return: all tags"""
+        if self._seq_tags is not None:
+            return self._seq_tags
         self._lazy_init()
         if self.seq_tag_column:
-            return list(self.hf_dataset[self.seq_tag_column])
+            res = list(map(str, self.hf_dataset[self.seq_tag_column]))
         else:
-            return [f"seq-{i}" for i in range(self.hf_dataset.num_rows)]
+            res = [f"seq-{i}" for i in range(self.hf_dataset.num_rows)]
+        self._seq_tags = res
+        return res
 
     def init_seq_order(
         self,
