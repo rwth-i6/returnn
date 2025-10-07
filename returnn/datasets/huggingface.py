@@ -31,8 +31,9 @@ class HuggingFaceDataset(CachedDataset2):
         dataset_opts: Union[
             Dict[str, Any],
             str,
-            Sequence[str],
-            Callable[[], Union[Dict[str, Any], str, Sequence[str], datasets.Dataset]],
+            os.PathLike,
+            Sequence[Union[str, os.PathLike]],
+            Callable[[], Union[Dict[str, Any], str, os.PathLike, Sequence[Union[str, os.PathLike]], datasets.Dataset]],
         ],
         *,
         use_file_cache: bool = False,
@@ -113,7 +114,7 @@ class HuggingFaceDataset(CachedDataset2):
                 dataset_opts = get_arrow_shard_files_from_hf_dataset_dir(dataset_opts)
             assert isinstance(dataset_opts, (list, tuple))
             cache = file_cache.get_instance()
-            dataset_opts = [cache.get_file(fn) for fn in dataset_opts]
+            dataset_opts = [cache.get_file(os.fspath(fn)) for fn in dataset_opts]
             self.set_file_cache(cache)
         if isinstance(dataset_opts, dict):
             self.hf_dataset = datasets.load_dataset(**dataset_opts)
