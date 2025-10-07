@@ -233,6 +233,7 @@ class HuggingFaceDataset(CachedDataset2):
     def get_tag(self, sorted_seq_idx: int) -> str:
         """:return: tag of the sequence"""
         corpus_seq_idx = self.get_corpus_seq_idx(sorted_seq_idx)
+        self._lazy_init()
         dataset_item = self.hf_dataset[corpus_seq_idx]
         return self._get_seq_tag(corpus_seq_idx, dataset_item)
 
@@ -276,7 +277,6 @@ class HuggingFaceDataset(CachedDataset2):
             self._seq_order = [all_tags.index(tag) for tag in seq_list]
         elif epoch is None:
             self._seq_order = ()
-            return True
         else:
             self._lazy_init()
             self._seq_order = self.get_seq_order_for_epoch(
@@ -314,6 +314,7 @@ class HuggingFaceDataset(CachedDataset2):
                 return numpy.frombuffer(x, dtype=self.data_format[k].dtype)
             return numpy.array(x)
 
+        self._lazy_init()
         dataset_item = self.hf_dataset[corpus_seq_idx]
         seq_tag = self._get_seq_tag(corpus_seq_idx, dataset_item)
         features = {k: _ensure_numpy(k, dataset_item[k]) for k in self.data_format}

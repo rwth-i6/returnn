@@ -7,6 +7,8 @@ import atexit
 import shutil
 import pickle
 import numpy
+
+from returnn.datasets import init_dataset
 from returnn.datasets.huggingface import HuggingFaceDataset
 from test_Dataset import dummy_iter_dataset
 
@@ -173,5 +175,27 @@ def test_HuggingFaceDataset_file_cache_with_sharded():
         seq_tag_column=None,
         data_format={"data": {"dtype": "int64", "shape": ()}},
     )
+    ds.initialize()
+    assert dummy_iter_dataset(ds)
+
+
+def test_HuggingFaceDataset_in_multi_proc():
+    ds_dict = {
+        "class": "HuggingFaceDataset",
+        "dataset_opts": {"path": "lavita/medical-qa-shared-task-v1-toy", "split": "train"},
+        "seq_tag_column": "id",
+        "data_format": {
+            "id": {"dtype": "int64", "shape": ()},
+            "startphrase": {"dtype": "string", "shape": ()},
+            "label": {"dtype": "int64", "shape": ()},
+        },
+    }
+    ds_dict = {
+        "class": "MultiProcDataset",
+        "num_workers": 2,
+        "buffer_size": 5,
+        "dataset": ds_dict,
+    }
+    ds = init_dataset(ds_dict)
     ds.initialize()
     assert dummy_iter_dataset(ds)
