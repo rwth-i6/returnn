@@ -242,6 +242,13 @@ class HuggingFaceDataset(CachedDataset2):
         self._seq_tags = res
         return res
 
+    def get_total_num_seqs(self, *, fast: bool = False) -> int:
+        """:return: total number of sequences in the dataset"""
+        if fast:
+            return super().get_total_num_seqs(fast=True)
+        self._lazy_init()
+        return self.hf_dataset.num_rows
+
     def init_seq_order(
         self,
         epoch: Optional[int] = None,
