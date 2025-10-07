@@ -353,12 +353,15 @@ def get_arrow_shard_files_from_hf_dataset_dir(hf_data_dir: Union[str, os.PathLik
     content = os.listdir(hf_data_dir)
     assert "state.json" in content, f"not a valid HF datasets dir: {hf_data_dir!r}"
     assert "dataset_info.json" in content, f"not a valid HF datasets dir: {hf_data_dir!r}"
-    content = [fn for fn in content if fn.startswith("data-") and fn.endswith(".arrow")]
-    assert content, f"no .arrow files found in {hf_data_dir!r}"
-    pat = re.compile("^data-([0-9]+)-of-([0-9]+).arrow$")
+    pat = re.compile("^(.*)-([0-9]+)-of-([0-9]+).arrow$")
     content = [pat.match(fn) for fn in content]
-    assert all(content), f"unexpected .arrow files in {hf_data_dir!r}, expected data-*-of-*.arrow, got {content}"
-    num_shards = int(content[0].group(2))
+    content = [m for m in content if m]
+    assert content, f"no matching .arrow files in {hf_data_dir!r} found, expected *-*-of-*.arrow"
+    prefix = content[0].group(1)
+    assert all(m.group(1) == prefix for m in content), (
+        f"mismatching prefix in {hf_data_dir!r}, expected {prefix}, got {[m.group(1) for m in content]}"
+    )
+    num_shards = int(content[0].group(3))
     assert all(int(m.group(2)) == num_shards for m in content), (
         f"mismatching number of shards in {hf_data_dir!r}, expected {num_shards}, got {[m.group(2) for m in content]}"
     )
