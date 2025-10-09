@@ -9607,6 +9607,7 @@ class CombineLayer(LayerBase):
           `maximum`, `minimum`,
           `logical_and`, `logical_or`,
           `squared_difference`,
+          `logaddexp`,
           or `eval`,
           or any function in the tf.math or tf namespace.
         :param list[LayerBase] sources:
@@ -9814,6 +9815,10 @@ class CombineLayer(LayerBase):
             assert kind == "eval" and eval_str
             return self._op_kind_eval(sources, eval_str=eval_str, eval_locals=eval_locals)
 
+        if hasattr(self, "_op_kind_%s" % kind):
+            func = getattr(self, "_op_kind_%s" % kind)
+            return func(sources)
+
         kind = {
             "+": "add",
             "-": "subtract",
@@ -9823,16 +9828,18 @@ class CombineLayer(LayerBase):
             "sub": "subtract",
             "mul": "multiply",
         }.get(kind, kind)
+
         if hasattr(tf, "math") and hasattr(tf.math, kind):
             tf_func = getattr(tf.math, kind)
         elif hasattr(tf, kind):
             tf_func = getattr(tf, kind)
+        elif hasattr(tf, "keras") and hasattr(tf.keras, "ops") and hasattr(tf.keras.ops, kind):
+            tf_func = getattr(tf.keras.ops, kind)
+        elif hasattr(tf, "experimental") and hasattr(tf.experimental, "numpy") and hasattr(tf.experimental.numpy, kind):
+            tf_func = getattr(tf.experimental.numpy, kind)
         else:
-            tf_func = None
-        if tf_func:
-            return self._op_dense_fn(sources, tf_func, self.output)
-
-        return getattr(self, "_op_kind_%s" % kind)(sources)
+            raise ValueError(f"{self}: unknown kind {kind!r}")
+        return self._op_dense_fn(sources, tf_func, self.output)
 
 
 class EvalLayer(CombineLayer):
@@ -10481,6 +10488,7 @@ class TopKLayer(LayerBase):
         self._sub_layers = {}
         for key, (v, a) in sub_outputs.items():
             sub_out_data = self.output.copy_template(name="%s/%s" % (self.name, key))
+            sub_out_data.feature_dim = None
             sub_out_data.dtype = "int32"
             sub_out_data.sparse_dim = a
             sub_out_data.placeholder = v
@@ -10520,6 +10528,7 @@ class TopKLayer(LayerBase):
         axis = [in_data.get_dim_tag_from_description(a) for a in axis]
         out_dims = [dim for dim in in_data.dim_tags if dim not in axis] + [k_dim]
         out_data = in_data.copy_template(name=name).copy_template_new_dim_tags(out_dims)
+        out_data.feature_dim = None
         if for_indices is not None:
             assert 0 <= for_indices < len(axis)
             out_data.dtype = "int32"
@@ -10657,7 +10666,7 @@ class SearchSortedLayer(LayerBase):
         transposed_values_data = values_data.copy_transpose(perm=values_batch_axes + values_non_batch_axes)  # [B,F]
         x = transposed_sorted_data.placeholder  # [B,T]
         if transposed_sorted_data.dims[-1].need_masking():
-            from returnn.tf.util.basic import where_bc, sequence_mask
+            from returnn.tf.util.basic import where_bc
 
             seq_mask = transposed_sorted_data.get_sequence_mask_broadcast(axis=-1)
             x = where_bc(seq_mask, x, x.dtype.max)  # note: this is not correct if values contains x.dtype.max

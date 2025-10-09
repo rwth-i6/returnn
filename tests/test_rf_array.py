@@ -411,6 +411,46 @@ def test_concat():
     run_model(extern_data, lambda *, epoch, step: _Net(), _forward_step)
 
 
+def test_concat_partly_dyn_dim():
+    time_static_dim = Dim(5, name="time_static")
+    time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
+    in_dim = Dim(7, name="in")
+    extern_data = TensorDict(
+        {
+            "left": Tensor("left", [batch_dim, time_static_dim, in_dim], dtype="float32"),
+            "right": Tensor("right", [batch_dim, time_dim, in_dim], dtype="float32"),
+        }
+    )
+
+    # noinspection PyShadowingNames
+    def _forward_step(*, extern_data: TensorDict, **_kwargs):
+        left, right = extern_data["left"], extern_data["right"]
+        out, out_time_dim = rf.concat((left, time_static_dim), (right, time_dim))
+        out.mark_as_default_output(shape=(batch_dim, out_time_dim, in_dim))
+
+    run_model(extern_data, lambda **_: rf.Module(), _forward_step)
+
+
+def test_concat_dyn_time():
+    time1_dim = Dim(Tensor("time1", [batch_dim], dtype="int32"))
+    time2_dim = Dim(Tensor("time2", [batch_dim], dtype="int32"))
+    extern_data = TensorDict(
+        {
+            "left": Tensor("left", [batch_dim, time1_dim], dtype="float32"),
+            "right": Tensor("right", [batch_dim, time2_dim], dtype="float32"),
+        }
+    )
+
+    # noinspection PyShadowingNames
+    def _forward_step(*, extern_data: TensorDict, **_kwargs):
+        left, right = extern_data["left"], extern_data["right"]
+        out, out_time_dim = rf.concat((left, time1_dim), (right, time2_dim))
+        out.mark_as_default_output(shape=(batch_dim, out_time_dim))
+
+    # test_single_batch_entry should test the interesting case.
+    run_model(extern_data, lambda **_: rf.Module(), _forward_step, test_tensorflow=False)
+
+
 def test_pad():
     time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
     in_dim = Dim(7, name="in")

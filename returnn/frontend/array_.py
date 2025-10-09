@@ -188,22 +188,18 @@ def merge_dims(
             return source, dims[0]
         return rf.replace_dim(source, in_dim=dims[0], out_dim=out_dim)
     if out_dim is None:
-        out_dim = dims[0]
-        reset_dyn_size = False
-        for d in dims[1:]:
-            reset_dyn_size |= d.need_masking() and out_dim.capacity != 1
-            out_dim = out_dim * d
-        if reset_dyn_size:
+        from returnn.util.basic import prod
+
+        if any(d.need_masking() for d in dims[1:]):
             # The dynamic sizes as calculated via dim math would not correctly describe how the tensor looks like.
             # This would then potentially discard some of the data in the tensor in subsequent operations,
             # when masking is applied.
             # Thus, discard the dynamic sizes, and just treat it as a flat dim with scalar dynamic size.
             # https://github.com/rwth-i6/returnn/issues/1694
-            out_dim_size = dims[0].get_dim_value_tensor()
-            for d in dims[1:]:
-                out_dim_size *= d.get_dim_value_tensor()
-            assert isinstance(out_dim_size, Tensor) and out_dim_size.dims == ()  # scalar
-            out_dim.dyn_size_ext = out_dim_size
+            # See also similar logic in :func:`concat`.
+            out_dim = Dim(prod(d.get_dim_value_tensor() for d in dims), name="merged")
+        else:
+            out_dim = prod(dims)
     # noinspection PyProtectedMember
     return source._raw_backend.merge_dims(source, dims=dims, out_dim=out_dim), out_dim
 
@@ -345,7 +341,9 @@ def window(
     """
     if spatial_dim.need_masking():
         if use_mask is None:
-            use_mask = rf.use_mask_default(default=True, default_false_for_behavior_version_up_to=22)
+            use_mask = rf.use_mask_default(
+                default=True, default_false_for_behavior_version_up_to=22, func_name="window"
+            )
         if use_mask:
             source = source.copy_masked(0, dims=[spatial_dim])
     assert window_dim.dimension is not None
@@ -427,13 +425,40 @@ def concat(
         dims = sources[0][0].dims_set - {sources[0][1]}
         for src, dim in sources:
             assert src.dims_set - {dim} == dims, f"concat {sources}, need allow_broadcast=True"
+    need_handle_dynamic_dims = False
+    for src, dim in sources[:-1]:
+        if dim.need_masking():
+            need_handle_dynamic_dims = True
+    if handle_dynamic_dims is None:
+        handle_dynamic_dims = need_handle_dynamic_dims
     if not out_dim:
-        out_dim = sum(d for _, d in sources)
-    if handle_dynamic_dims is None or handle_dynamic_dims:
-        for src, dim in sources[:-1]:
-            assert dim.is_static(), f"concat {sources}, dim {dim} is not static, not yet implemented..."
-    # noinspection PyProtectedMember
-    return sources[0][0]._raw_backend.concat(*sources, allow_broadcast=allow_broadcast, out_dim=out_dim), out_dim
+        if handle_dynamic_dims or not need_handle_dynamic_dims:
+            out_dim = sum(d for _, d in sources)
+        else:  # not handle_dynamic_dims but need_handle_dynamic_dims
+            # There are dynamic dims, but we don't want to handle them.
+            # So, summing the dims would be incorrect.
+            # Just add the dim values.
+            out_dim = Dim(sum(d.get_dim_value_tensor() for _, d in sources if d.dimension is not None), name="concat")
+    if handle_dynamic_dims:
+        out_non_masked_dim = Dim(sum(d.get_dim_value_tensor() for _, d in sources))
+        # noinspection PyProtectedMember
+        out = sources[0][0]._raw_backend.concat(*sources, allow_broadcast=allow_broadcast, out_dim=out_non_masked_dim)
+        masks = []
+        for _, dim in sources:
+            masks.append(
+                dim.get_mask(dim_order=(dim,) + dim.dyn_size_ext.dims, device=out.device)
+                if dim.need_masking()
+                else rf.constant(True, dims=[dim], device=out.device)
+            )
+        # noinspection PyProtectedMember
+        mask_concat = sources[0][0]._raw_backend.concat(
+            *[(mask, dim) for (_, dim), mask in zip(sources, masks)], allow_broadcast=True, out_dim=out_non_masked_dim
+        )
+        out, _ = rf.masked_select(out, mask=mask_concat, dims=[out_non_masked_dim], out_dim=out_dim)
+    else:
+        # noinspection PyProtectedMember
+        out = sources[0][0]._raw_backend.concat(*sources, allow_broadcast=allow_broadcast, out_dim=out_dim)
+    return out, out_dim
 
 
 def concat_features(*sources: Tensor, allow_broadcast=False) -> Tensor:
@@ -478,7 +503,12 @@ def pad(
     if handle_dynamic_dims is None:
         handle_dynamic_dims = _pad_handle_dynamic_dims_default(axes, padding, mode=mode)
     if not out_dims:
-        out_dims = [left + middle + right for middle, (left, right) in zip(axes, padding)]
+        out_dims = [
+            (left + middle + right)
+            if handle_dynamic_dims or not _pad_need_dyn_dim_handling(middle, left, right, mode=mode)
+            else _pad_sum_dims_no_dyn_dim_handling(middle, left, right)
+            for middle, (left, right) in zip(axes, padding)
+        ]
     # noinspection PyProtectedMember
     return (
         source._raw_backend.pad(
@@ -542,6 +572,32 @@ def _pad_need_dyn_dim_handling(
     if mode != "circular" and isinstance(right, int) and right == 0:
         return False
     return True
+
+
+def _pad_sum_dims_no_dyn_dim_handling(
+    middle: Dim, left: Union[Dim, int, Tensor], right: Union[Dim, int, Tensor]
+) -> Dim:
+    """
+    This gets called when we need to handle dyn dims, but handle_dynamic_dims=False.
+    See also the same logic in :func:`concat`.
+    """
+    if isinstance(left, Dim):
+        left = left.get_dim_value_tensor()
+    elif isinstance(left, int):
+        pass
+    elif isinstance(left, Tensor):
+        assert left.dims == ()  # scalar
+    else:
+        raise TypeError(f"invalid left pad {left}")
+    if isinstance(right, Dim):
+        right = right.get_dim_value_tensor()
+    elif isinstance(right, int):
+        pass
+    elif isinstance(right, Tensor):
+        assert right.dims == ()  # scalar
+    else:
+        raise TypeError(f"invalid right pad {right}")
+    return Dim(left + middle.get_dim_value_tensor() + right, name="pad")
 
 
 def cum_concat_step(
@@ -851,7 +907,9 @@ def scatter(
     indices_dim = indices_dim if isinstance(indices_dim, (list, tuple)) else [indices_dim]
     if any(dim.need_masking() for dim in indices_dim):
         if use_mask is None:
-            use_mask = rf.use_mask_default(default=True, default_false_for_behavior_version_up_to=22)
+            use_mask = rf.use_mask_default(
+                default=True, default_false_for_behavior_version_up_to=22, func_name="scatter"
+            )
         if use_mask:
             source = source.copy_masked(fill_value, dims=indices_dim)
     else:
@@ -1137,7 +1195,10 @@ def reverse_sequence(tensor: Tensor, *, axis: Dim, handle_dynamic_dims: bool = T
     if not handle_dynamic_dims or not axis.need_masking():
         # noinspection PyProtectedMember
         return tensor._raw_backend.flip_no_mask(tensor, axis=axis)
-    indices = rf.combine_bc(axis.get_size_tensor(), "-", rf.range_over_dim(axis)) - 1
+    indices = (
+        rf.combine_bc(axis.get_size_tensor(device=tensor.device), "-", rf.range_over_dim(axis, device=tensor.device))
+        - 1
+    )
     return rf.gather(tensor, indices=indices, axis=axis, clip_to_valid=True)
 
 
@@ -1251,6 +1312,7 @@ def top_p_mask(
     axis: Dim,
     p: Union[float, Tensor],
     one_more: bool = True,
+    min_tokens_to_keep: int = 1,
 ) -> Tensor:
     """
     Top-p filtering, e.g. as used in Nucleus sampling (https://arxiv.org/abs/1904.09751).
@@ -1260,6 +1322,8 @@ def top_p_mask(
     :param p: the probability mass to keep
     :param one_more: if True (default), keep also the first token above the threshold.
         (It's enabled by default to follow the behavior of the original implementation.)
+    :param min_tokens_to_keep: ensure to keep at least these many tokens (default 1)
+        With one_more=True, min_tokens_to_keep=1 is anyway guaranteed.
     :return: mask {probs_dims..., axis} of the top-p tokens.
         ``sum(probs[mask]) <= p``, or slightly more if ``one_more`` is True.
     """
@@ -1273,5 +1337,7 @@ def top_p_mask(
     if one_more:
         # keep also the first token above the threshold
         mask = rf.shift_right(mask, axis=sorted_dim, pad_value=True)
+    if min_tokens_to_keep > (1 if one_more else 0):
+        mask = mask | (rf.range_over_dim(sorted_dim, device=mask.device) < min_tokens_to_keep)
     mask = rf.scatter(mask, indices=sorted_indices, indices_dim=sorted_dim)
     return mask

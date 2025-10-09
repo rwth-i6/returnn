@@ -58,6 +58,7 @@ import threading
 import keyword
 import inspect
 import contextlib
+import types
 from weakref import WeakKeyDictionary
 
 try:
@@ -96,6 +97,14 @@ except NameError:  # Python3
 PY3 = sys.version_info[0] >= 3
 
 
+cfg_print_builtins = False
+cfg_print_not_found = False
+cfg_print_bound_methods = False
+cfg_print_modules = False
+cfg_print_module_functions = False
+cfg_print_module_classes = False
+
+
 def parse_py_statement(line):
     """
     Parse Python statement into tokens.
@@ -111,6 +120,10 @@ def parse_py_statement(line):
     """
     state = 0
     cur_token = ""
+    str_prefix = None
+    str_is_f_string = False  # whether we are in an f-string
+    str_quote = None
+    f_str_expr_opening_brackets = 0
     spaces = " \t\n"
     ops = ".,;:+-*/%&!=|(){}[]^<>"
     i = 0
@@ -133,29 +146,36 @@ def parse_py_statement(line):
                 yield "op", c
             elif c == "#":
                 state = 6
-            elif c == '"':
+            elif c in "\"'":
                 state = 1
-            elif c == "'":
-                state = 2
+                str_prefix = None
+                str_is_f_string = False
+                str_quote = c
+                cur_token = ""
             else:
                 cur_token = c
-                state = 3
-        elif state == 1:  # string via "
+                state = 3  # identifier
+        elif state == 1:  # string
             if c == "\\":
-                state = 4
-            elif c == '"':
-                yield "str", cur_token
+                cur_token += _escape_char(line[i : i + 1])
+                i += 1
+            elif c == str_quote:
+                yield "str" if not str_prefix else "%s-str" % str_prefix, cur_token
                 cur_token = ""
                 state = 0
-            else:
-                cur_token += c
-        elif state == 2:  # string via '
-            if c == "\\":
-                state = 5
-            elif c == "'":
-                yield "str", cur_token
-                cur_token = ""
-                state = 0
+            elif str_is_f_string and c == "{":  # f-string
+                if line[i - 1 : i + 1] == "{{":
+                    cur_token += "{"
+                    i += 1
+                else:
+                    yield "str" if not str_prefix else "%s-str" % str_prefix, cur_token
+                    yield "f-str-expr-open", "{"
+                    cur_token = ""
+                    f_str_expr_opening_brackets = 0
+                    state = 4
+            elif str_is_f_string and c == "}" and line[i - 1 : i + 1] == "}}":
+                cur_token += "}"
+                i += 1
             else:
                 cur_token += c
         elif state == 3:  # identifier
@@ -164,20 +184,40 @@ def parse_py_statement(line):
                 cur_token = ""
                 state = 0
                 i -= 1
-            elif c == '"':  # identifier is string prefix
-                cur_token = ""
+            elif c in "\"'":  # identifier is string prefix
                 state = 1
-            elif c == "'":  # identifier is string prefix
+                str_prefix = cur_token
+                str_is_f_string = "f" in str_prefix or "F" in str_prefix
+                str_quote = c
                 cur_token = ""
-                state = 2
             else:
                 cur_token += c
-        elif state == 4:  # escape in "
-            cur_token += _escape_char(c)
-            state = 1
-        elif state == 5:  # escape in '
-            cur_token += _escape_char(c)
-            state = 2
+        elif state == 4:  # f-string expression (like state 0 but simplified)
+            if c in spaces:
+                pass
+            elif c in ops:
+                if f_str_expr_opening_brackets == 0 and c == "}":
+                    yield "f-str-expr-close", "}"
+                    state = 1  # back into the f-string
+                    cur_token = ""
+                else:
+                    yield "op", c
+                    if c in "([{":
+                        f_str_expr_opening_brackets += 1
+                    elif c in ")]}":
+                        if f_str_expr_opening_brackets > 0:
+                            f_str_expr_opening_brackets -= 1
+            else:
+                cur_token = c
+                state = 5  # identifier in f-string expression
+        elif state == 5:  # identifier in f-string expression (like state 3 but simplified)
+            if c in spaces + ops:
+                yield "id", cur_token
+                cur_token = ""
+                state = 4
+                i -= 1
+            else:
+                cur_token += c
         elif state == 6:  # comment
             cur_token += c
     if state == 3:
@@ -234,6 +274,7 @@ def set_linecache(filename, source):
     """
     import linecache
 
+    # noinspection PyTypeChecker
     linecache.cache[filename] = None, None, [line + "\n" for line in source.splitlines()], filename
 
 
@@ -245,7 +286,7 @@ def simple_debug_shell(globals, locals):
     :return: nothing
     """
     try:
-        import readline
+        import readline  # noqa: F401
     except ImportError:
         pass  # ignore
     compile_string_fn = "<simple_debug_shell input>"
@@ -253,7 +294,7 @@ def simple_debug_shell(globals, locals):
         try:
             s = raw_input("> ")
         except (KeyboardInterrupt, EOFError):
-            print("breaked debug shell: " + sys.exc_info()[0].__name__)
+            print("broke debug shell: " + sys.exc_info()[0].__name__)
             break
         if s.strip() == "":
             continue
@@ -307,9 +348,6 @@ def debug_shell(user_ns, user_global_ns, traceback=None, execWrapper=None):
     if not ipshell and traceback and have_ipython:
         # noinspection PyBroadException
         try:
-            # noinspection PyPackageRequirements,PyUnresolvedReferences
-            from IPython.core.debugger import Pdb
-
             # noinspection PyPackageRequirements,PyUnresolvedReferences
             from IPython.terminal.debugger import TerminalPdb
 
@@ -1021,7 +1059,12 @@ class _OutputLinesCollector:
         :param typing.Any obj:
         :rtype: str
         """
-        s = repr(obj)
+        if isinstance(obj, types.FunctionType) and hasattr(obj, "__module__") and hasattr(obj, "__qualname__"):
+            s = "<function %s.%s>" % (obj.__module__, obj.__qualname__)
+        elif isinstance(obj, type) and hasattr(obj, "__module__") and hasattr(obj, "__qualname__"):
+            s = "<class %s.%s>" % (obj.__module__, obj.__qualname__)
+        else:
+            s = repr(obj)
         limit = output_limit()
         if len(s) > limit:
             if self.dom_term:
@@ -1052,18 +1095,24 @@ def format_tb(
     clear_frames=True,
 ):
     """
-    :param types.TracebackType|types.FrameType|StackSummary tb: traceback. if None, will use sys._getframe
+    Formats a traceback into a list of strings, each corresponding to one frame.
+
+    Replacement for traceback.format_tb.
+
+    :param types.TracebackType|types.FrameType|StackSummary tb: traceback. If None, will use sys._getframe
     :param int|None limit: limit the traceback to this number of frames. by default, will look at sys.tracebacklimit
     :param dict[str,typing.Any]|None allLocals: if set, will update it with all locals from all frames
     :param dict[str,typing.Any]|None allGlobals: if set, will update it with all globals from all frames
     :param bool withTitle:
     :param bool|None with_color: output with ANSI escape codes for color
-    :param bool with_vars: will print var content which are referenced in the source code line. by default enabled.
+    :param bool with_vars: will print var contents that are referenced in the source code line. by default enabled.
     :param bool clear_frames: whether to call frame.clear() after processing it.
         That will potentially fix some mem leaks regarding locals, so it can be important.
         Also see https://github.com/python/cpython/issues/113939.
-        However, any further access to frame locals will not work (e.g. if you want to use a debugger afterwards).
-    :return: list of strings (line-based)
+        However, any further access to frame locals will not work (e.g., if you want to use a debugger afterward).
+    :return: list of strings, each corresponding to one frame in the traceback.
+        Each string contains the file name, line number, function name, source code line, maybe relevant variables,
+        etc., and a final newline.
     :rtype: list[str]
     """
     color = Color(enable=with_color)
@@ -1123,6 +1172,8 @@ def format_tb(
                 output("(Exclude vars because we are on a GC stack.)")
     if with_vars is None:
         with_vars = True
+    locals_start_str = color("    locals:", color.fg_colors[0])
+
     # noinspection PyBroadException
     try:
         if limit is None:
@@ -1131,49 +1182,15 @@ def format_tb(
         n = 0
         _tb = tb
 
-        class NotFound(Exception):
-            """
-            Identifier not found.
-            """
-
-        def _resolve_identifier(namespace, keys):
-            """
-            :param dict[str,typing.Any] namespace:
-            :param typing.Sequence[str] keys:
-            :return: namespace[name[0]][name[1]]...
-            """
-            if keys[0] not in namespace:
-                raise NotFound()
-            obj = namespace[keys[0]]
-            for part in keys[1:]:
-                obj = getattr(obj, part)
-            return obj
-
-        # noinspection PyShadowingNames
-        def _try_set(old, prefix, func):
-            """
-            :param None|str old:
-            :param str prefix:
-            :param func:
-            :return: old
-            """
-            if old is not None:
-                return old
-            try:
-                return add_indent_lines(prefix, func())
-            except NotFound:
-                return old
-            except Exception as e:
-                return prefix + "!" + e.__class__.__name__ + ": " + str(e)
-
         while _tb is not None and (limit is None or n < limit):
             if isframe(_tb):
                 f = _tb
             elif is_stack_summary(_tb):
-                if isinstance(_tb[0], ExtendedFrameSummary):
-                    f = _tb[0].tb_frame
+                _tb0 = _tb[0]
+                if isinstance(_tb0, ExtendedFrameSummary):
+                    f = _tb0.tb_frame
                 else:
-                    f = DummyFrame.from_frame_summary(_tb[0])
+                    f = DummyFrame.from_frame_summary(_tb0)
             else:
                 f = _tb.tb_frame
             if allLocals is not None:
@@ -1216,38 +1233,94 @@ def format_tb(
                     elif isinstance(f, DummyFrame) and not f.have_vars_available:
                         pass
                     else:
-                        with output.fold_text_ctx(color("    locals:", color.fg_colors[0])):
-                            already_printed_locals = set()  # type: typing.Set[typing.Tuple[str,...]]
+                        with output.fold_text_ctx(locals_start_str):
+                            already_covered_locals = set()  # type: typing.Set[typing.Tuple[str,...]]
+                            num_printed_locals = 0
                             for token_str in grep_full_py_identifiers(parse_py_statement(source_code)):
                                 splitted_token = tuple(token_str.split("."))
                                 for token in [splitted_token[0:i] for i in range(1, len(splitted_token) + 1)]:
-                                    if token in already_printed_locals:
+                                    if token in already_covered_locals:
                                         continue
-                                    token_value = None
-                                    token_value = _try_set(
-                                        token_value,
-                                        color("<local> ", color.fg_colors[0]),
-                                        lambda: format_py_obj(_resolve_identifier(f.f_locals, token)),
-                                    )
-                                    token_value = _try_set(
-                                        token_value,
-                                        color("<global> ", color.fg_colors[0]),
-                                        lambda: format_py_obj(_resolve_identifier(f.f_globals, token)),
-                                    )
-                                    token_value = _try_set(
-                                        token_value,
-                                        color("<builtin> ", color.fg_colors[0]),
-                                        lambda: format_py_obj(_resolve_identifier(f.f_builtins, token)),
-                                    )
-                                    token_value = token_value or color("<not found>", color.fg_colors[0])
+                                    already_covered_locals.add(token)
+                                    if token[0] in f.f_locals:
+                                        token_base_dict = f.f_locals
+                                        token_prefix_str = color("<local> ", color.fg_colors[0])
+                                    elif token[0] in f.f_globals:
+                                        token_base_dict = f.f_globals
+                                        token_prefix_str = color("<global> ", color.fg_colors[0])
+                                        if (
+                                            not cfg_print_module_functions
+                                            and len(token) == 1
+                                            and _is_module_function(token_base_dict, token[0], obj_is_dict=True)
+                                        ):
+                                            continue
+                                        if (
+                                            not cfg_print_module_classes
+                                            and len(token) == 1
+                                            and _is_module_class(token_base_dict, token[0], obj_is_dict=True)
+                                        ):
+                                            continue
+                                    elif token[0] in f.f_builtins:
+                                        if not cfg_print_builtins:
+                                            continue
+                                        token_base_dict = f.f_builtins
+                                        token_prefix_str = color("<builtin> ", color.fg_colors[0])
+                                    else:
+                                        if not cfg_print_not_found:
+                                            continue
+                                        token_base_dict = None
+                                        token_prefix_str = None
+
                                     prefix = "      %s " % color(".", color.fg_colors[0], bold=True).join(
                                         token
                                     ) + color("= ", color.fg_colors[0], bold=True)
-                                    output(prefix, token_value)
-                                    already_printed_locals.add(token)
-                            if len(already_printed_locals) == 0:
-                                output(color("       no locals", color.fg_colors[0]))
-                else:
+
+                                    if token_prefix_str is None:  # not found
+                                        token_repr = color("<not found>", color.fg_colors[0])
+                                    else:
+                                        try:
+                                            token_parent_obj = None
+                                            token_obj = token_base_dict[token[0]]
+                                            for attr in token[1:]:
+                                                token_parent_obj = token_obj
+                                                token_obj = getattr(token_obj, attr)
+                                        except Exception as e:
+                                            token_repr = token_prefix_str + "!" + e.__class__.__name__ + ": " + str(e)
+                                        else:  # found
+                                            if (
+                                                not cfg_print_bound_methods
+                                                and token_parent_obj is not None
+                                                and _is_bound_method(token_parent_obj, token[-1])
+                                            ):
+                                                continue
+                                            if not cfg_print_modules and isinstance(token_obj, types.ModuleType):
+                                                continue
+                                            if (
+                                                not cfg_print_module_functions
+                                                and token_parent_obj is not None
+                                                and _is_module_function(token_parent_obj, token[-1])
+                                            ):
+                                                continue
+                                            if (
+                                                not cfg_print_module_classes
+                                                and token_parent_obj is not None
+                                                and _is_module_class(token_parent_obj, token[-1])
+                                            ):
+                                                continue
+                                            token_repr = add_indent_lines(token_prefix_str, format_py_obj(token_obj))
+
+                                    output(prefix, token_repr)
+                                    num_printed_locals += 1
+
+                            if num_printed_locals == 0:
+                                if output.lines and output.lines[-1].endswith(locals_start_str + "\n"):
+                                    output.lines[-1] = output.lines[-1][: -len(locals_start_str) - 1]
+                                elif output.lines and output.lines[-1].endswith("\n"):
+                                    output.lines[-1] = output.lines[-1][:-1] + color(" none", color.fg_colors[0]) + "\n"
+                                else:
+                                    output(color("       no locals", color.fg_colors[0]))
+
+                else:  # no source code available
                     output(color("    -- code not available --", color.fg_colors[0]))
 
             if clear_frames:
@@ -1284,6 +1357,8 @@ def format_tb(
 
 def print_tb(tb, file=None, **kwargs):
     """
+    Prints the traceback to stderr, or the given file.
+
     Replacement for traceback.print_tb.
 
     :param types.TracebackType|types.FrameType|StackSummary tb:
@@ -1685,10 +1760,11 @@ def iter_traceback(tb=None, enforce_most_recent_call_first=False):
         if is_frame(_tb):
             frame = _tb
         elif is_stack_summary(_tb):
-            if isinstance(_tb[0], ExtendedFrameSummary):
-                frame = _tb[0].tb_frame
+            _tb0 = _tb[0]
+            if isinstance(_tb0, ExtendedFrameSummary):
+                frame = _tb0.tb_frame
             else:
-                frame = DummyFrame.from_frame_summary(_tb[0])
+                frame = DummyFrame.from_frame_summary(_tb0)
         else:
             frame = _tb.tb_frame
         yield frame
@@ -1781,6 +1857,49 @@ def _StackSummary_extract(frame_gen, limit=None, lookup_lines=True, capture_loca
         name = co.co_name
         result.append(ExtendedFrameSummary(frame=f, filename=filename, lineno=lineno, name=name, lookup_line=False))
     return result
+
+
+def _is_bound_method(obj, attr_name):
+    if not PY3:
+        return False  # not properly supported in Python 2
+
+    meth = getattr(obj, attr_name, None)
+    meth = inspect.unwrap(meth)
+
+    if isinstance(meth, types.MethodType):
+        if meth.__self__ is not obj:
+            return False
+        cls = type(obj)
+        func = getattr(cls, attr_name, None)
+        return meth.__func__ is func
+
+    elif isinstance(meth, (types.BuiltinMethodType, getattr(types, "MethodWrapperType", types.BuiltinMethodType))):
+        if meth.__self__ is not obj:
+            return False
+        return meth.__name__ == attr_name
+
+    else:
+        return False
+
+
+def _is_module_function(obj, attr_name, obj_is_dict=False):
+    if obj_is_dict:
+        func = obj.get(attr_name, None)
+    else:
+        if not isinstance(obj, types.ModuleType):
+            return False
+        func = getattr(obj, attr_name, None)
+    return isinstance(func, types.FunctionType)
+
+
+def _is_module_class(obj, attr_name, obj_is_dict=False):
+    if obj_is_dict:
+        cls = obj.get(attr_name, None)
+    else:
+        if not isinstance(obj, types.ModuleType):
+            return False
+        cls = getattr(obj, attr_name, None)
+    return isinstance(cls, type)
 
 
 def install():

@@ -416,7 +416,14 @@ class Engine(EngineBase):
                     print("Time to get first batch data:", hms(step_begin_time - epoch_start_time), file=log.v5)
 
                 _has_data = torch.tensor([extern_data_raw is not None], dtype=torch.int8)
-                if self._torch_distributed_ctx:
+                # Sync only on first train step, when we have run out of data and every time we synchronize
+                # the model between workers.
+                # This allows the different workers to progress independently between synchronizations.
+                if self._torch_distributed_ctx and (
+                    self._torch_distributed_ctx.should_sync_now(epoch_step_idx=step_idx)
+                    or step_idx == 0
+                    or extern_data_raw is None
+                ):
                     # use all reduce to check if all workers have data, if at least one worker does not have data,
                     # all workers finish this epoch
                     torch.distributed.all_reduce(_has_data, op=torch.distributed.ReduceOp.MIN)

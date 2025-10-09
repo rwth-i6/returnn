@@ -67,6 +67,13 @@ class Backend(Generic[T]):
         raise NotImplementedError
 
     @staticmethod
+    def should_pickle_tensor(raw_tensor: T) -> bool:
+        """
+        :return: whether the tensor should be included in a pickle or set to `None`.
+        """
+        return True
+
+    @staticmethod
     def cond(pred: Tensor, true_fn: Callable, false_fn: Callable):
         """
         cond: conditional execution.
@@ -220,7 +227,8 @@ class Backend(Generic[T]):
         """
         :param a:
         :param kind: "add", "sub", "mul", "truediv", "floordiv", "mod", "pow",
-            "maximum", "minimum", "logical_and", "logical_or", "squared_difference"
+            "maximum", "minimum", "logical_and", "logical_or", "squared_difference",
+            "logaddexp"
         :param b:
         :return: a `kind` b
         """
@@ -1149,6 +1157,13 @@ class Backend(Generic[T]):
     ) -> Tensor:
         """
         random. See `rf.random` for details.
+        """
+        raise NotImplementedError
+
+    @staticmethod
+    def random_choice_with_replacement(dims: Sequence[Dim], *, probs: Tensor, axis: Dim) -> Tensor:
+        """
+        random choice with replacement. See `rf.random_choice_with_replacement` for details.
         """
         raise NotImplementedError
 

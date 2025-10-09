@@ -798,10 +798,12 @@ def model_epoch_from_filename(filename):
             assert fn_with_ext_.endswith(potential_ext), "strange? %s, %s" % (filename, potential_ext)
             filename = fn_with_ext_[: -len(potential_ext)]
         break
-    m = re.match(".*\\.([0-9]+)", filename)
+    m = re.match(".*\\.([0-9]+)", os.path.basename(filename))
     if not m:
         return None
-    return int(m.groups()[0])
+    epoch = int(m.groups()[0])
+    assert epoch > 0
+    return epoch
 
 
 def deep_update_dict_values(d, key, new_value):
@@ -1677,30 +1679,31 @@ def random_orthogonal(shape, gain=1.0, seed=None):
 
 
 # noinspection PyUnusedLocal
-def inplace_increment(x, idx, y):
+def inplace_increment(x: numpy.ndarray, idx: numpy.ndarray, y: Union[numpy.ndarray, float, int]) -> numpy.ndarray:
     """
     This basically does `x[idx] += y`.
     The difference to the Numpy version is that in case some index is there multiple
     times, it will only be incremented once (and it is not specified which one).
     See also theano.tensor.subtensor.AdvancedIncSubtensor documentation.
 
-    :param numpy.ndarray x:
-    :param numpy.ndarray idx:
-    :param numpy.ndarray y:
-    :rtype: numpy.ndarray
+    :param x:
+    :param idx:
+    :param y:
     """
     raise NotImplementedError("This feature was removed with dropped Theano support")
 
 
-def prod(ls):
+def prod(ls: Union[Iterable[T], numpy.ndarray]) -> Union[int, T, float]:
     """
-    :param list[T]|tuple[T]|numpy.ndarray ls:
-    :rtype: T|int|float
+    :param ls:
+    :return: ls[0] * ls[1] * ...
     """
-    if len(ls) == 0:
+    it = iter(ls)
+    try:
+        x = next(it)
+    except StopIteration:
         return 1
-    x = ls[0]
-    for y in ls[1:]:
+    for y in it:
         x = x * y  # *= doesn't work because x might be a tensor, and for e.g. torch.Tensor this op is in-place
     return x
 
@@ -2458,8 +2461,12 @@ class DictRefKeys(Generic[K, V]):
     Like `dict`, but hash and equality of the keys
     """
 
-    def __init__(self):
+    def __init__(self, items: Union[None, Iterable[Tuple[K, V]], Dict[K, V]] = None, /, **kwargs):
         self._d = {}  # type: Dict[RefIdEq[K], V]
+        if items is not None:
+            self.update(items)
+        if kwargs:
+            self.update(kwargs)
 
     def __repr__(self):
         return "DictRefKeys(%s)" % ", ".join(["%r: %r" % (k, v) for (k, v) in self.items()])
@@ -2487,6 +2494,15 @@ class DictRefKeys(Generic[K, V]):
 
     def __contains__(self, item: K):
         return RefIdEq(item) in self._d
+
+    def update(self, other: Union[Dict[K, V], Iterable[Tuple[K, V]]], /):
+        """
+        :param other: dict or iterable of (key, value) tuples
+        """
+        if isinstance(other, dict):
+            other = other.items()
+        for k, v in other:
+            self[k] = v
 
 
 def make_dll_name(basename):

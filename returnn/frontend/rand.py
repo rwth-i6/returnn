@@ -65,6 +65,7 @@ __all__ = [
     "random_normal",
     "random_truncated_normal",
     "random_choice_without_replacement",
+    "random_choice_with_replacement",
 ]
 
 
@@ -379,3 +380,16 @@ def random_choice_without_replacement(
     scores = log_probs + scores_random_sample
     _, indices, _ = rf.top_k(scores, k_dim=num_samples_dim, axis=axis)
     return indices
+
+
+def random_choice_with_replacement(dims: Sequence[Dim], *, probs: Tensor, axis: Dim) -> Tensor:
+    """
+    Randomly sample with replacement.
+
+    :param dims: {common_dims..., new_dims...}. Defines how many samples to draw. Defines the output shape.
+    :param probs: {common_dims..., axis}
+    :param axis: feature axis, where to sample from
+    :return: random indices shape dims -> axis.
+    """
+    # noinspection PyProtectedMember
+    return probs._raw_backend.random_choice_with_replacement(dims=dims, probs=probs, axis=axis)

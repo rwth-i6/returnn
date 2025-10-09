@@ -316,6 +316,7 @@ bool PyModuleState::_cachedOpInitTorch() {
     AddOp(TOp_Maximum, "clamp_min");
     AddOp(TOp_Minimum, "clamp_max");
     AddOpAlt(TOp_SquaredDifference, "squared_difference");
+    AddOp(TOp_LogAddExp, "logaddexp");
     AddOp(TOp_And, "logical_and");
     AddOp(TOp_Or, "logical_or");
     AddOp(TOp_Neg, "neg");
@@ -356,6 +357,7 @@ const char* rawOpName(RawOp op) {
         names[TOp_Maximum] = "maximum";
         names[TOp_Minimum] = "minimum";
         names[TOp_SquaredDifference] = "squared_difference";
+        names[TOp_LogAddExp] = "logaddexp";
         names[TOp_And] = "logical_and";
         names[TOp_Or] = "logical_or";
         // The names for the unary funcs matter:

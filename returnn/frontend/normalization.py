@@ -218,7 +218,7 @@ class BatchNorm(rf.Module):
 
         if any(d.need_masking() for d in source.dims if d != self.in_dim):
             if self.use_mask is None:
-                use_mask = rf.use_mask_default(default=True)
+                use_mask = rf.use_mask_default(default=True, func_name="BatchNorm")
             else:
                 use_mask = self.use_mask
         else:

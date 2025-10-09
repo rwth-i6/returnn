@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from typing import (
     Iterable,
+    Literal,
     Optional,
     Sequence,
     Union,
@@ -23,7 +24,6 @@ from typing import (
     cast,
     Generator,
 )
-import typing
 import os
 from io import IOBase
 import sys
@@ -85,6 +85,7 @@ class LmDataset(CachedDataset2):
         add_delayed_seq_data=False,
         delayed_seq_data_start_symbol="[START]",
         dtype: Optional[str] = None,
+        tag_prefix: Optional[str] = None,
         **kwargs,
     ):
         """
@@ -288,7 +289,9 @@ class LmDataset(CachedDataset2):
         self.num_outputs = {"data": [num_labels, 1]}
         self.num_inputs = num_labels
         self.seq_order = None
-        self._tag_prefix = "line-"  # sequence tag is "line-n", where n is the line number (to be compatible with translation)  # nopep8
+
+        # sequence tag is "line-n", where n is the line number (to be compatible with translation)
+        self.tag_prefix = tag_prefix or "line-"
         self.auto_replace_unknown_symbol = auto_replace_unknown_symbol
         self.log_auto_replace_unknown_symbols = log_auto_replace_unknown_symbols
         self.log_skipped_seqs = log_skipped_seqs
@@ -504,8 +507,8 @@ class LmDataset(CachedDataset2):
         elif seq_list is not None:
             # Might not be initialized. Can even do without init. Thus check seq_list_file.
             if self._seq_list_file is None:
-                assert all(s.startswith(self._tag_prefix) for s in seq_list)
-                self.seq_order = [int(s[len(self._tag_prefix) :]) for s in seq_list]
+                assert all(s.startswith(self.tag_prefix) for s in seq_list)
+                self.seq_order = [int(s[len(self.tag_prefix) :]) for s in seq_list]
             else:
                 # Need seq list for this. Just do the lazy init now.
                 self._lazy_init()
@@ -555,7 +558,7 @@ class LmDataset(CachedDataset2):
         if self._seq_list is not None:
             return self._seq_list
         num_seqs = self.get_total_num_seqs()
-        return [self._tag_prefix + str(line_nr) for line_nr in range(num_seqs)]
+        return [self.tag_prefix + str(line_nr) for line_nr in range(num_seqs)]
 
     def _reduce_log_skipped_seqs(self):
         if isinstance(self.log_skipped_seqs, bool):
@@ -594,7 +597,7 @@ class LmDataset(CachedDataset2):
             idx, offset, len_ = self._orths_offsets_and_lens[true_idx]
             orth = self._orth_mmaps[idx][offset : offset + len_].decode("utf8").strip()
             if self._seq_list is None:
-                seq_tag = self._tag_prefix + str(true_idx)
+                seq_tag = self.tag_prefix + str(true_idx)
             else:
                 seq_tag = self._seq_list[true_idx]
             self.next_orth_idx += 1
@@ -1174,6 +1177,7 @@ class PhoneSeqGenerator:
         add_extra_begin_lemma: float = 1.0,
         extra_end_lemma: Optional[Dict[str, Any]] = None,
         add_extra_end_lemma: float = 1.0,
+        phon_pick_strategy: Literal["random", "first"] = "random",
     ):
         """
         :param lexicon_file: lexicon XML file
@@ -1193,6 +1197,8 @@ class PhoneSeqGenerator:
         :param add_extra_begin_lemma:
         :param extra_end_lemma: just like ``extra_begin_lemma``, but for the end
         :param add_extra_end_lemma:
+        :param phon_pick_strategy: "random" or "first". If "random", then lemmas are picked randomly
+            if multiple pronunciations exist.
         """
         self.lexicon = Lexicon(lexicon_file)
         self.phonemes = sorted(self.lexicon.phonemes.keys(), key=lambda s: self.lexicon.phonemes[s]["index"])
@@ -1214,6 +1220,7 @@ class PhoneSeqGenerator:
         self.add_extra_begin_lemma = add_extra_begin_lemma
         self.extra_end_lemma = extra_end_lemma
         self.add_extra_end_lemma = add_extra_end_lemma
+        self.phon_pick_strategy = phon_pick_strategy
 
     def random_seed(self, seed: int):
         """Reset RNG via given seed"""
@@ -1281,7 +1288,12 @@ class PhoneSeqGenerator:
         """:return: space-separated phones"""
         phones = []
         for lemma in self._iter_orth_lemmas(orth):
-            phon = self.rnd.choice(lemma["phons"])
+            if self.phon_pick_strategy == "first":
+                phon = lemma["phons"][0]
+            elif self.phon_pick_strategy == "random":
+                phon = self.rnd.choice(lemma["phons"])
+            else:
+                raise ValueError(f"Unknown phon_pick_strategy {self.phon_pick_strategy}")
             phones.append(phon["phon"])
         return " ".join(phones)
 
@@ -1353,7 +1365,13 @@ class PhoneSeqGenerator:
         """
         allos: List[AllophoneState] = []
         for lemma in self._iter_orth_lemmas(orth):
-            phon = self.rnd.choice(lemma["phons"])  # space-separated phones in phon["phon"]
+            if self.phon_pick_strategy == "first":
+                phon = lemma["phons"][0]
+            elif self.phon_pick_strategy == "random":
+                phon = self.rnd.choice(lemma["phons"])
+            else:
+                raise ValueError(f"Unknown phon_pick_strategy {self.phon_pick_strategy}")
+            # space-separated phones in phon["phon"]
             l_allos = list(self._phones_to_allos(phon["phon"].split()))
             l_allos[0].mark_initial()
             l_allos[-1].mark_final()
@@ -1544,7 +1562,6 @@ class TranslationDataset(CachedDataset2):
             import returnn.util.better_exchook
 
             returnn.util.better_exchook.install()
-            from returnn.util.basic import AsyncThreadRun
 
             # First iterate once over the data to get the data len as fast as possible.
             data_len = 0

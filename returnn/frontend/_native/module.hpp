@@ -34,6 +34,7 @@ enum RawOp {
     TOp_Maximum,
     TOp_Minimum,
     TOp_SquaredDifference,
+    TOp_LogAddExp,
 
     TOp_And,
     TOp_Or,

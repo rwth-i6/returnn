@@ -32,6 +32,40 @@ def test_stft():
     run_model(extern_data, lambda *, epoch, step: rf.Module(), _forward_step)
 
 
+def test_stft_after_padding():
+    time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
+    pad_left_dim = Dim(Tensor("pad_left", [batch_dim], dtype="int32"))
+    pad_right_dim = Dim(Tensor("pad_right", [batch_dim], dtype="int32"))
+    extern_data = TensorDict(
+        {
+            "data": Tensor("data", [batch_dim, time_dim], dtype="float32"),
+            "left": Tensor("left", [batch_dim, pad_left_dim], dtype="float32"),
+            "right": Tensor("right", [batch_dim, pad_right_dim], dtype="float32"),
+        }
+    )
+
+    # noinspection PyShadowingNames
+    def _forward_step(*, extern_data: TensorDict, **_):
+        x, left, right = extern_data["data"], extern_data["left"], extern_data["right"]
+        x, spatial_dim = rf.concat((left, pad_left_dim), (x, time_dim), (right, pad_right_dim))
+        assert x.raw_tensor.shape[x.get_axis_from_description(spatial_dim)] == spatial_dim.get_dim_value()
+        out, out_spatial_dim, out_dim = rf.stft(
+            x, in_spatial_dim=spatial_dim, frame_step=3, frame_length=17, fft_length=32
+        )
+        assert out.raw_tensor.shape[out.get_axis_from_description(out_spatial_dim)] == out_spatial_dim.get_dim_value()
+        out.mark_as_default_output(shape=(batch_dim, out_spatial_dim, out_dim))
+
+    run_model(
+        extern_data,
+        lambda **_: rf.Module(),
+        _forward_step,
+        dyn_dim_min_sizes={time_dim: 50},
+        dyn_dim_max_sizes={time_dim: 100, pad_left_dim: 4, pad_right_dim: 4},
+        test_tensorflow=False,
+        test_single_batch_entry=False,
+    )
+
+
 def test_mel_filterbank():
     time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
     feat_dim = Dim(10, name="mel")

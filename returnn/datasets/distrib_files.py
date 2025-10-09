@@ -6,6 +6,7 @@ https://github.com/rwth-i6/returnn/issues/1519
 
 from __future__ import annotations
 
+from collections import deque
 from typing import Union, Optional, Any, Callable, Sequence, Tuple, List, Dict
 import os
 import sys
@@ -152,7 +153,7 @@ class DistributeFilesDataset(CachedDataset2):
             or a JSON file containing a list of arbitarily nested (JSON) objects.
         :param get_sub_epoch_dataset: callable which returns a dataset dict for a given subset of files
         :param preload_next_n_sub_epochs: how many sub epoch datasets to preload
-        :param buffer_size: buffer size for each worker, amount of seqs to prefetch
+        :param buffer_size: buffer size for each worker, number of seqs to prefetch
         :param distrib_shard_files: set to true to shard the data across worker processes in
             distributed training scenaria
         :param _meta_info_cache: for internal use
@@ -174,17 +175,21 @@ class DistributeFilesDataset(CachedDataset2):
 
         self.distrib_shard_files = distrib_shard_files
         if distrib_shard_files:
-            assert self._num_shards == 1 and self._shard_index == 0, (  # ensure defaults are set
-                f"{self}: Cannot use both dataset-sharding via properties _num_shards and _shard index "
-                f"and {self.__class__.__name__}'s own sharding implementation based on the trainings rank and size."
-            )
             if _distrib_info:
-                # If we're in a child process `_get_rank_and_size()` no longer works,
+                # We're in a child process.
+                # `_get_rank_and_size()` no longer works,
                 # so we pass the info about the shards via a pickled property.
                 # See also Dataset.__reduce__.
-                self._shard_index = _distrib_info["_shard_index"]
-                self._num_shards = _distrib_info["_num_shards"]
+                # _num_shards and _shard_index are already set, so just check.
+                assert (
+                    self._shard_index == _distrib_info["_shard_index"]
+                    and self._num_shards == _distrib_info["_num_shards"]
+                )
             else:
+                assert self._num_shards == 1 and self._shard_index == 0, (  # ensure defaults are set
+                    f"{self}: Cannot use both dataset-sharding via properties _num_shards and _shard index "
+                    f"and {self.__class__.__name__}'s own sharding implementation based on the trainings rank and size."
+                )
                 self._shard_index, self._num_shards = _get_rank_and_size()
         assert 0 <= self._shard_index < self._num_shards
 
@@ -524,6 +529,8 @@ def _get_rank_and_size() -> Tuple[int, int]:
 
         ctx = returnn.tf.horovod.get_ctx(config=config)
         return ctx.rank(), ctx.size()
+    elif config.typed_value("__debug_dummy_distributed_rank_and_size") is not None:
+        return config.typed_value("__debug_dummy_distributed_rank_and_size")
     else:
         return 0, 1
 
@@ -620,7 +627,7 @@ def _worker_proc_loop(
 ):
     if sys.platform == "linux":
         with open("/proc/self/comm", "w") as f:
-            f.write(f"CFD worker {epoch}")
+            f.write(f"DFD worker {epoch}")
     better_exchook.setup_all()
 
     assert isinstance(epoch, int) and isinstance(buffer_size, int)
@@ -630,7 +637,7 @@ def _worker_proc_loop(
     dataset = init_dataset(dataset_dict)
 
     got_init_seq_order = False
-    cache: List[DatasetSeq] = []
+    cache: deque[DatasetSeq] = deque()
     next_seq_idx = 0
 
     # noinspection PyShadowingNames
@@ -695,7 +702,7 @@ def _worker_proc_loop(
             elif msg == "get_data_seq":
                 seq_idx = kwargs["seq_idx"]
                 while cache and cache[0].seq_idx < seq_idx:
-                    cache.pop(0)
+                    cache.popleft()
                 res = _get(seq_idx)
                 parent_conn.send(("data_seq", res))
             elif msg == "init_seq_order":
@@ -708,7 +715,7 @@ def _worker_proc_loop(
                 parent_conn.send(("num_seqs", num_seqs))
                 got_init_seq_order = True
                 next_seq_idx = 0
-                cache[:] = []
+                cache.clear()
             else:
                 raise Exception(f"unknown msg {msg!r}")
     except KeyboardInterrupt:  # when parent dies

@@ -39,10 +39,10 @@ class DistributedContext:
         else:
             import torch.distributed as dist
 
-            # when no backend is specified, both gloo and nccl backends will be created
-            # the gloo backend will be used for collectives with CPU tensors and
-            # the nccl backend will be used for collectives with CUDA tensors
-            dist.init_process_group(backend=self._opts.get("backend", None))
+            # When no backend is specified, we set gloo for CPU tensors and nccl for CUDA tensors as backend.
+            # torch 2.6.0 and onwards require explicitly setting the backends.
+            # See https://github.com/rwth-i6/returnn/issues/1724 for discussion.
+            dist.init_process_group(backend=self._opts.get("backend", "cpu:gloo,cuda:nccl"))
             self._rank = dist.get_rank()
             self._size = dist.get_world_size()
             os.environ[env_var_name] = repr({"rank": self._rank, "size": self._size})
@@ -78,6 +78,7 @@ class DistributedContext:
         # This function here is called at the end in __init__,
         # and not all opts are used yet, so read them now,
         # such that the check in the end works.
+        self._opts.get("backend")
         if self._reduce_type == "grad":
             self._opts.get("class")
             self._opts.get("options")
@@ -126,9 +127,21 @@ class DistributedContext:
             **kwargs,
         )
 
+    def should_sync_now(self, *, epoch_step_idx: int) -> bool:
+        """
+        :param epoch_step_idx: current step index
+        :return: whether to sync the training processes in this step
+        """
+        if self._reduce_type == "grad":
+            return True
+        elif self._reduce_type == "param":
+            return (epoch_step_idx % self._param_sync_step) == (self._param_sync_step - 1)
+        else:
+            raise ValueError(f"invalid reduce_type {self._reduce_type}")
+
     def step_after_param_update(self, *, module: torch.nn.Module, epoch_step_idx: int):
         """one train step"""
-        if self._reduce_type == "param" and ((epoch_step_idx % self._param_sync_step) == (self._param_sync_step - 1)):
+        if self._reduce_type == "param" and self.should_sync_now(epoch_step_idx=epoch_step_idx):
             _sync_params_avg(module=module, sync_on_cpu=self._opts.get("sync_on_cpu", False))
 
 

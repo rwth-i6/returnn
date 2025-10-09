@@ -38,7 +38,7 @@ def test_dot_attention():
 
     class _Net(rf.Module):
         def __call__(self, q: Tensor, k: Tensor, v: Tensor) -> Tensor:
-            kv_axis = Dim(None, name=f"kv-axis")
+            kv_axis = Dim(None, name="kv-axis")
             k, _ = rf.replace_dim(k, in_dim=time_dim, out_dim=kv_axis)
             v, _ = rf.replace_dim(v, in_dim=time_dim, out_dim=kv_axis)
             return rf.dot_attention(q, k, v, axis=kv_axis, key_dim=key_dim)
@@ -604,7 +604,7 @@ def test_rel_pos_self_attention():
                     x_b = rf.gather(x, axis=batch_dim, indices=b)
                     assert batch_dim in axis.dyn_size_ext.dims  # current assumption...
                     seq_len = rf.gather(axis.dyn_size_ext, axis=batch_dim, indices=b)
-                    axis_b = Dim(seq_len)
+                    axis_b = Dim(seq_len, name=f"time_b{b}")
                     # Note: The current order (replace_dim and then slice) is somewhat dependent
                     # on the current internal behavior of gather and replace_dim,
                     # which might change at some point...

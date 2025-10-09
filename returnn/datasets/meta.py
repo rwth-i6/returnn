@@ -1990,9 +1990,13 @@ class VariableDataset(Dataset):
 class MultiEpochDataset(CachedDataset2):
     """
     It wraps some dataset, where one outer epoch corresponds to multiple epochs in the inner wrapped dataset.
+    I.e. one iteration through this dataset corresponds to multiple iterations through the inner dataset.
 
-    This can be useful when the inner dataset uses partition_epoch, and we want to cover the whole full epoch.
+    This can be useful for forwarding, when you want to do multiple iterations through the dataset.
+    This could be useful for clustering.
 
+    This can also be useful when the inner dataset uses (or must use) partition_epoch,
+    and we want to cover the whole full epoch:
     One specific example when the data is distributed over multiple files,
     and for reasonable performance, you want to have the data copied to the local disk,
     but all data together is too large to fit on the local disk.
@@ -2041,7 +2045,11 @@ class MultiEpochDataset(CachedDataset2):
         return self._dataset.get_all_tags()
 
     def get_total_num_seqs(self, *, fast: bool = False) -> int:
-        """total num seqs"""
+        """
+        Total num seqs.
+        Note that this is the total number of seqs in the inner dataset,
+        so without the multi-epoch handling.
+        """
         return self._dataset.get_total_num_seqs(fast=fast)
 
     def get_data_keys(self) -> List[str]:

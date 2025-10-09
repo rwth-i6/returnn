@@ -115,7 +115,7 @@ def _mask(
                 return s
         if not allow_dim_extension or mask_value is None or (isinstance(mask_value, (int, float)) and mask_value == 0):
             if mask.dims_set.issubset(s.dims_set):
-                return rf.where(mask, s, mask_value)
+                return rf.where(mask, s, rf.cast(mask_value, s.dtype))
             assert not mask.dims_set.intersection(s.dims_set)  # not sure...
             return s
         assert isinstance(mask_value, (int, float, Tensor))
@@ -160,6 +160,7 @@ def _gather_prepare_dims(s: T, *, indices: Tensor, dim_map: Dict[Dim, Dim]) -> T
             return new_dim
         return s
     # everything else ignored at this stage
+    return s
 
 
 def _gather(s: T, *, indices: Tensor, dim_map: Optional[Dict[Dim, Dim]] = None) -> T:
@@ -243,6 +244,7 @@ def _masked_select_prepare_dims(s, *, mask: Tensor, dims: Sequence[Dim], out_dim
         dim_map[s] = new_dim
         return new_dim
     # everything else ignored at this stage
+    return s
 
 
 def _masked_select(
@@ -344,6 +346,7 @@ def _masked_scatter_merge_dims(
     merged_dim_map: Dict[Dim, Dim],
 ) -> T:
     if isinstance(s, Dim):
+        assert isinstance(backup, Dim)
         # This is slightly more complex than in the _masked_select case:
         # We need to merge the s and backup depending on the mask.
         if s in reverse_dim_map:
@@ -351,7 +354,10 @@ def _masked_scatter_merge_dims(
         if s == backup:
             return s
         if s in merged_dim_map:
+            # If this assert fails, see e.g. https://github.com/rwth-i6/returnn/pull/1759 for an example.
+            assert backup in merged_dim_map, f"nested masked_scatter: mismatch of s {s} vs backup {backup}"
             return merged_dim_map[s]
+        assert backup not in merged_dim_map, f"nested masked_scatter: mismatch of s {s} vs backup {backup}"
         # Note: s/backup might even be static dims.
         new_size = _masked_scatter(
             s.get_size_tensor(),
@@ -370,6 +376,7 @@ def _masked_scatter_merge_dims(
         merged_dim_map[backup] = new_dim
         return new_dim
     # everything else ignored at this stage
+    return s
 
 
 def _masked_scatter(

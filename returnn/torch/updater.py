@@ -5,11 +5,10 @@ and model param update logic in general.
 
 from __future__ import annotations
 
-from typing import Optional, Union, Any, Type, Callable, Sequence, Iterable, Iterator, Set, Dict, List, Tuple
+from typing import Optional, Union, Any, Type, Callable, Sequence, Iterable, Set, Dict, List, Tuple
 import os
 import gc
 import torch
-import typing
 
 import returnn
 from returnn.log import log
@@ -96,6 +95,8 @@ class Updater:
     Wraps a torch.optim.Optimizer, and extends it by some further functionality.
     """
 
+    _OptimizerParamGroupsExtraOpts = ("learning_rate_multiplier",)
+
     def __init__(self, *, config, network, device, initial_learning_rate=1.0):
         """
         :param returnn.config.Config config: config defining the training conditions.
@@ -113,6 +114,7 @@ class Updater:
         self._current_train_step = 0
         self._current_epoch = 1
         self._current_epoch_continuous = 0.0
+        self._num_consec_invalid_gradients_steps = 0
 
         self.learning_rate_function = self.config.typed_value("dynamic_learning_rate", None)
         if self.learning_rate_function is not None:
@@ -129,11 +131,15 @@ class Updater:
             else:
                 raise NotImplementedError("not implemented for not callable dynamic_learning_rate")
 
-        self._optimizer_opts = None
-        self.optimizer = None  # type: typing.Optional[torch.optim.Optimizer]
+        self._optimizer_opts: Optional[Dict[str, Any]] = None
+        self.optimizer: Optional[torch.optim.Optimizer] = None
+        self._optimizer_param_groups_extra_opts: Optional[List[Dict[str, Any]]] = None
 
         self._grad_clip = self.config.float("gradient_clip", 0.0)
         self._grad_clip_global_norm = self.config.float("gradient_clip_global_norm", 0.0)
+        self._num_allowed_consec_invalid_gradient_steps = self.config.typed_value(
+            "num_allowed_consec_invalid_gradient_steps", None
+        )
         self._grad_noise = self.config.float("gradient_noise", 0.0)
 
         # Check other options we have in TF updater, which we might support here later as well,
@@ -186,8 +192,15 @@ class Updater:
             )
             self._effective_learning_rate = float(lr)
         if self.optimizer:
-            for param_group in self.optimizer.param_groups:
-                param_group["lr"] = self._effective_learning_rate
+            if self._optimizer_param_groups_extra_opts:
+                assert len(self.optimizer.param_groups) == len(self._optimizer_param_groups_extra_opts)
+                lr_multiplies = [
+                    opts.get("learning_rate_multiplier", 1.0) for opts in self._optimizer_param_groups_extra_opts
+                ]
+            else:
+                lr_multiplies = [1.0] * len(self.optimizer.param_groups)
+            for i, param_group in enumerate(self.optimizer.param_groups):
+                param_group["lr"] = self._effective_learning_rate * lr_multiplies[i]
 
     def set_current_train_step(self, *, global_train_step: int, epoch: int, epoch_continuous: Optional[float] = None):
         """
@@ -208,6 +221,8 @@ class Updater:
             if the number of steps per epoch is known in advance.
         """
         self._current_train_step = global_train_step
+        if self._current_epoch != epoch:
+            self._num_consec_invalid_gradients_steps = 0
         self._current_epoch = epoch
         self._current_epoch_continuous = epoch_continuous
         self._update_effective_learning_rate()
@@ -224,12 +239,40 @@ class Updater:
         if self._grad_clip:
             torch.nn.utils.clip_grad_value_(self.network.parameters(), self._grad_clip)
         if self._grad_clip_global_norm:
-            torch.nn.utils.clip_grad_norm_(self.network.parameters(), self._grad_clip_global_norm)
+            norm = torch.nn.utils.clip_grad_norm_(self.network.parameters(), self._grad_clip_global_norm)
+        else:
+            norm = None
+
+        has_invalid_gradient = False
+        if self._num_allowed_consec_invalid_gradient_steps is not None:
+            if norm is None:
+                norm = torch.nn.utils.get_total_norm(self.network.parameters())
+            has_invalid_gradient = torch.isnan(norm) or torch.isinf(norm)
+            if has_invalid_gradient:
+                self._num_consec_invalid_gradients_steps += 1
+                if self._num_consec_invalid_gradients_steps > self._num_allowed_consec_invalid_gradient_steps:
+                    raise RuntimeError(
+                        f"Got {self._num_consec_invalid_gradients_steps} invalid gradients in succession, "
+                        f"abort training"
+                    )
+                else:
+                    invalid_grads_left = (
+                        self._num_allowed_consec_invalid_gradient_steps - self._num_consec_invalid_gradients_steps
+                    )
+                    print(
+                        f"Invalid gradient in step {self._current_train_step}, skipping. "
+                        f"{invalid_grads_left} subsequent broken steps left until training is aborted.",
+                        file=log.v2,
+                    )
+            else:
+                self._num_consec_invalid_gradients_steps = 0
 
         if grad_scaler is not None:
-            grad_scaler.step(self.optimizer)
+            if not has_invalid_gradient:
+                grad_scaler.step(self.optimizer)
+            # update needs to be called even if we discard the update due to an invalid gradient
             grad_scaler.update()
-        else:
+        elif not has_invalid_gradient:
             self.optimizer.step()
 
     def create_optimizer(self):
@@ -240,7 +283,7 @@ class Updater:
         if optimizer_opts is None:
             raise ValueError("config field 'optimizer' needs to be set explicitely for the Torch backend")
         self._optimizer_opts = optimizer_opts
-        self.optimizer = self._create_optimizer(optimizer_opts)
+        self.optimizer, self._optimizer_param_groups_extra_opts = self._create_optimizer(optimizer_opts)
 
     def load_optimizer(self, filename):
         """
@@ -388,21 +431,18 @@ class Updater:
         """
         return self.optimizer
 
-    def _create_optimizer(self, optimizer_opts):
+    def _create_optimizer(self, optimizer_opts) -> Tuple[torch.optim.Optimizer, Optional[List[Dict[str, Any]]]]:
         """
         Returns a valid optimizer considering the dictionary given by the user in the config.
 
         :param dict[str]|str optimizer_opts: Optimizer configuration specified by the user.
             If it's a dict, it must contain "class" with the optimizer name or callable.
             If it's a str, it must be the optimizer name.
-        :return: A valid optimizer.
-        :rtype: torch.optim.Optimizer
+        :return: tuple (optimizer, optional optimizer_param_groups_extra_opts).
         """
-        lr = self.learning_rate
-
         # If the parameter is already a valid optimizer, return it without further processing
         if isinstance(optimizer_opts, torch.optim.Optimizer):
-            return optimizer_opts
+            return optimizer_opts, None
         elif callable(optimizer_opts):
             optimizer_opts: Dict[str, Any] = {"class": optimizer_opts}
         else:
@@ -425,15 +465,27 @@ class Updater:
             opt_kwargs["eps"] = opt_kwargs.pop("epsilon")
         if "learning_rate" in opt_kwargs or "lr" in opt_kwargs:
             raise ValueError("'learning_rate' should be set outside of the 'optimizer' dict.")
-        lr = lr * opt_kwargs.pop("learning_rate_multiplier", 1.0)
-        opt_kwargs["lr"] = lr
+        # lr will anyway be updated in set_current_train_step / _update_effective_learning_rate,
+        # so this value doesn't really matter here
+        opt_kwargs["lr"] = self.learning_rate
 
-        params_or_param_groups = self._get_optimizer_param_groups(optim_class, opt_kwargs)
-        optimizer = optim_class(params_or_param_groups, **opt_kwargs)
+        param_groups = self._get_optimizer_param_groups(optim_class, opt_kwargs)
+        param_groups = list(param_groups)
+        assert len(param_groups) > 0, "got an empty parameter list?"
+        if not isinstance(param_groups[0], dict):
+            param_groups = [{"params": param_groups}]
+        optimizer_param_groups_extra_opts: Optional[List[Dict[str, Any]]] = None
+        if any(any(key in group for key in self._OptimizerParamGroupsExtraOpts) for group in param_groups):
+            param_groups = [dict(group) for group in param_groups]  # copy to make sure we can modify it
+            optimizer_param_groups_extra_opts = [
+                {key: group.pop(key) for key in self._OptimizerParamGroupsExtraOpts if key in group}
+                for group in param_groups
+            ]
+        optimizer = optim_class(param_groups, **opt_kwargs)
         print("Optimizer: %s" % optimizer, file=log.v1)
         assert isinstance(optimizer, torch.optim.Optimizer)
 
-        return optimizer
+        return optimizer, optimizer_param_groups_extra_opts
 
     def _create_default_optimizer(self):
         """
@@ -447,7 +499,7 @@ class Updater:
 
     def _get_optimizer_param_groups(
         self, optim_class: Type[torch.optim.Optimizer], optimizer_opts: Dict[str, Any]
-    ) -> Union[List[Dict[str, Any]], Iterator[torch.nn.Parameter]]:
+    ) -> Union[Iterable[Dict[str, Any]], Iterable[torch.nn.Parameter]]:
         """
         The weight_decay parameter from AdamW affects the weights of layers such as LayerNorm and Embedding.
         This function creates a blacklist of network modules and splits the optimizer groups in two:
@@ -480,10 +532,17 @@ class Updater:
         if custom_param_groups is not None:
             assert callable(custom_param_groups), f"invalid param_groups_custom {custom_param_groups!r}"
             rf_model = wrapped_pt_module_to_rf_module(self.network)
-            custom_param_groups = custom_param_groups(
-                model=self.network, rf_model=rf_model, optimizer_class=optim_class, optimizer_opts=optimizer_opts
+            custom_param_groups_ = custom_param_groups(
+                model=self.network,
+                rf_model=rf_model,
+                optimizer_class=optim_class,
+                optimizer_opts=optimizer_opts,
+                **get_fwd_compat_kwargs(),
             )
-            return custom_param_groups
+            assert isinstance(custom_param_groups_, Iterable) and all(
+                isinstance(group, dict) for group in custom_param_groups_
+            ), f"invalid param_groups_custom {custom_param_groups!r} result {custom_param_groups_!r} type"
+            return custom_param_groups_
 
         network_params = self.network.parameters()
 
@@ -511,11 +570,9 @@ class Updater:
         # Parameters without weight decay: biases + LayerNorm/Embedding layers.
         wd_params = set()
         no_wd_params = set()
-        blacklist_wd_modules = optimizer_opts.pop("weight_decay_modules_blacklist", None)
-        if blacklist_wd_modules is None:
-            blacklist_wd_modules = (torch.nn.LayerNorm, torch.nn.Embedding)
-        else:
-            blacklist_wd_modules = _wrap_user_blacklist_wd_modules(blacklist_wd_modules)
+        blacklist_wd_modules = wrap_user_blacklist_wd_modules(
+            optimizer_opts.pop("weight_decay_modules_blacklist", None)
+        )
         custom_include_check = optimizer_opts.pop("weight_decay_custom_include_check", None)
         if custom_include_check:
             assert callable(custom_include_check), f"invalid weight_decay_custom_include_check {custom_include_check!r}"
@@ -562,9 +619,16 @@ class Updater:
         return optim_groups
 
 
-def _wrap_user_blacklist_wd_modules(
-    mods: Sequence[Union[str, Type[rf.Module], Type[torch.nn.Module]]],
+def wrap_user_blacklist_wd_modules(
+    mods: Optional[Sequence[Union[str, Type[rf.Module], Type[torch.nn.Module]]]],
 ) -> Tuple[type, ...]:
+    """
+    Wraps the user-provided blacklist_weight_decay_modules into a tuple of types.
+    This supports both pure PyTorch modules (e.g. "torch.nn.LayerNorm")
+    and RF modules (e.g. "rf.LayerNorm"), which can be specified as strings or types.
+    """
+    if mods is None:
+        return torch.nn.LayerNorm, torch.nn.Embedding
     assert isinstance(mods, (list, tuple)), f"invalid blacklist_weight_decay_modules {mods!r}"
     res = []
     for mod in mods:

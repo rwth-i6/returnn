@@ -1120,9 +1120,63 @@ def test_DistributeFilesDataset():
     assert global_seq_idx == num_hdf_files * num_seqs
 
 
-def test_PostprocessingDataset():
-    from returnn.tensor.tensor_dict import TensorDict
+def _dfd_get_sub_epoch_dataset(files_subepoch: List[str]) -> Dict[str, Any]:
+    return {"class": "HDFDataset", "files": files_subepoch, "seq_ordering": "default"}
 
+
+def test_DistributeFilesDataset_sharding():
+    # https://github.com/rwth-i6/returnn/issues/1678
+    import pickle
+    from returnn.datasets.distrib_files import DistributeFilesDataset
+    from test_HDFDataset import generate_hdf_from_dummy
+    from returnn.config import global_config_ctx, Config
+
+    # Create a few HDF files such that we can easily verify the data later.
+    hdf_files = []
+    # num_seqs = 23
+    for hdf_idx in range(20):
+        hdf_files.append(generate_hdf_from_dummy())
+
+    # Test to load via DistributeFilesDataset.
+
+    # Setup some torch.distributed dummy environment.
+    distrib_size = 2
+    with global_config_ctx(Config({"__debug_dummy_distributed_rank_and_size": (1, distrib_size)})):
+        partition_epoch = 5
+        assert len(hdf_files) % partition_epoch == 0  # just for easier testing here
+        dataset = init_dataset(
+            {
+                "class": "DistributeFilesDataset",
+                "files": hdf_files,
+                "buffer_size": 100,
+                "distrib_shard_files": True,
+                "get_sub_epoch_dataset": _dfd_get_sub_epoch_dataset,
+                "partition_epoch": partition_epoch,
+                "seq_ordering": "random",
+            }
+        )
+        assert isinstance(dataset, DistributeFilesDataset)
+        assert dataset._num_shards == distrib_size and dataset._shard_index == 1
+        s = pickle.dumps(dataset)
+        dataset = pickle.loads(s)
+        assert isinstance(dataset, DistributeFilesDataset)
+        assert dataset._num_shards == distrib_size and dataset._shard_index == 1
+        global_seq_idx = 0
+        for sub_epoch in range(1, partition_epoch + 1):
+            print(f"Sub-epoch {sub_epoch}...")
+            dataset.init_seq_order(sub_epoch)
+            local_seq_idx = 0
+            while dataset.is_less_than_num_seqs(local_seq_idx):
+                print(f"Sub-epoch {sub_epoch}, seq {local_seq_idx} (global seq {global_seq_idx})...")
+                dataset.load_seqs(local_seq_idx, local_seq_idx + 1)
+                data = dataset.get_data(local_seq_idx, "classes")
+                assert data.ndim == 1 and data.shape[0] > 1
+                local_seq_idx += 1
+                global_seq_idx += 1
+        # assert global_seq_idx == len(hdf_files) * num_seqs // distrib_size  # TODO not sure...?
+
+
+def test_PostprocessingDataset():
     _demo_txt = "some utterance text that has a few words"
 
     def _add_1337_to_classes(tdict: TensorDict, **kwargs) -> TensorDict:

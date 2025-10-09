@@ -18,7 +18,7 @@ jobs:
           - "3.10"
         torch-version:
           # Some code uses newer features.
-          - 2.0.0
+          - 2.8.0
         tf-version:
           - 2.10.0
 
@@ -62,7 +62,7 @@ jobs:
 
         # Used in some tests.
         pip install --user --progress-bar=off transformers
-        pip install --user --progress-bar=off espnet
+        pip install --user --progress-bar=off "espnet==202506"  # last version w/ numpy<2
 
     - name: Test Python/Numpy/TF versions.
       run: |
@@ -377,7 +377,7 @@ jobs:
         pip install --user --progress-bar=off pytest
 
         pip install --user --progress-bar=off dm-tree h5py
-        pip install --user --progress-bar=off "numpy<2"
+        pip install --user --progress-bar=off numpy==1.23.5  # for ESPnet, ctc-segmentation, etc
         pip install --user --progress-bar=off scipy  # for some tests
 
         pip install --user --progress-bar=off --upgrade torch==${{ matrix.torch-version }}
@@ -398,13 +398,19 @@ jobs:
         # Needed for some tests.
         # transformers 4.50 requires PyTorch >2.0, so stick to transformers 4.49 for now.
         # (https://github.com/rwth-i6/returnn/issues/1706)
+        # safetensors >=0.6 requires PyTorch >2.0, so stick to safetensors 0.5.3 for now.
+        # (https://github.com/rwth-i6/returnn/issues/1747)
         if [[ "${{matrix.python-version}}" == 3.8 ]]; then
           # Need older version for Python 3.8. Install whatever is available.
           pip install --user --progress-bar=off transformers
         else
-          pip install --user --progress-bar=off transformers==4.49.0
+          pip install --user --progress-bar=off safetensors==0.5.3 transformers==4.49.0
         fi
-        pip install --user --progress-bar=off espnet
+        if [[ "${{matrix.python-version}}" == 3.8 ]]; then
+          # https://github.com/rwth-i6/returnn/issues/1729
+          pip install --user --progress-bar=off ctc-segmentation==1.6.6 pyworld==0.3.4
+        fi
+        pip install --user --progress-bar=off "espnet==202506"  # last version w/ numpy<2
         # TorchAudio needed by ESPnet.
         # https://pytorch.org/audio/stable/installation.html#compatibility-matrix
         if [[ "${{matrix.torch-version}}" == 2.0.0 ]]; then

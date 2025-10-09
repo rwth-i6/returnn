@@ -46,6 +46,13 @@ class ReturnnLayersBackend(Backend[Layer]):
         return False
 
     @staticmethod
+    def should_pickle_tensor(raw_tensor: Layer) -> bool:
+        """
+        :return: whether the tensor should be included in a pickle or set to `None`.
+        """
+        return False
+
+    @staticmethod
     def get_tensor_dependencies(x: Tensor[Layer]) -> Sequence[Tensor]:
         """get tensor inputs"""
         deps: List[Tensor] = []
