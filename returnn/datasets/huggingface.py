@@ -90,7 +90,7 @@ class HuggingFaceDataset(CachedDataset2):
         self.sorting_seq_len_column = sorting_seq_len_column
 
         self.labels = {k: data.vocab.labels for k, data in self.data_format.items() if data.vocab}
-        self.num_outputs = {k: (data.dim, data.ndim) for k, data in self.data_format.items()}
+        self.num_outputs = {k: (data.dim or 1, data.ndim) for k, data in self.data_format.items()}
 
         self.hf_dataset: Optional[datasets.Dataset] = None  # lazily loaded, _lazy_init
         self._seq_order: Optional[Sequence[int]] = None  # init_seq_order
