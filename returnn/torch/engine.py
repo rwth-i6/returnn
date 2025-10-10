@@ -533,7 +533,7 @@ class Engine(EngineBase):
                         self._tensorboard_writer.add_scalar(f"train/{key}", val, global_step=self.global_train_step)
                     self._tensorboard_writer.add_scalar(
                         f"train/learning_rate",
-                        self._updater._effective_learning_rate,
+                        self._updater.get_effective_learning_rate(),
                         global_step=self.global_train_step,
                     )
 
