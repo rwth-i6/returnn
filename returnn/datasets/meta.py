@@ -1348,7 +1348,11 @@ class CombinedDataset(CachedDataset2):
         if dataset_data_key is not None:
             return dataset.get_data(dataset_seq_idx, dataset_data_key)
         else:
-            return numpy.array([], self.data_dtypes[data_key])
+            data_dim = self.data_dims[data_key]
+            if data_dim[1] == 1:
+                # sparse data
+                return numpy.zeros((0,), dtype=self.data_dtypes[data_key])
+            return numpy.zeros((0, data_dim[0]), dtype=self.data_dtypes[data_key])
 
     def _collect_single_seq(self, seq_idx):
         """
