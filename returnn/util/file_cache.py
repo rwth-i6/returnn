@@ -455,6 +455,10 @@ class FileCache:
 
 
 class CleanupResult:
+    """
+    Result from :func:`FileCache.cleanup`.
+    """
+
     def __init__(self, *, freed: int = 0, abort_reason: Optional[str] = None):
         self.freed = freed
         self.abort_reason = abort_reason
