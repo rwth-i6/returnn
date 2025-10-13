@@ -275,6 +275,8 @@ def _masked_select(
             return s
         assert s in dim_map
         return dim_map[s]
+    if s is None:
+        return None
     raise TypeError(f"_masked_select: unexpected type ({type(s)})")
 
 
@@ -420,6 +422,9 @@ def _masked_scatter(
         if s in merged_dim_map:
             return merged_dim_map[s]
         return s
+    if s is None:
+        assert backup is None
+        return None
     raise TypeError(f"_masked_scatter: unexpected type ({type(s)})")
 
 
