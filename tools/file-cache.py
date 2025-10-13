@@ -7,6 +7,7 @@ File cache utility.
 from __future__ import annotations
 
 import _setup_returnn_env  # noqa
+import sys
 import os
 import shutil
 import argparse
@@ -72,6 +73,9 @@ def main():
         ),
     )
     print("cache dir:", cache.cache_directory)
+    if not os.path.exists(cache.cache_directory):
+        print("Cache dir does not exist.")
+        sys.exit(1)
 
     disk_usage = shutil.disk_usage(cache.cache_directory)
     print(
