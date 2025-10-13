@@ -442,6 +442,8 @@ jobs:
 
         pip install --user --progress-bar=off pytest
 
+        sudo apt-get install -y libsndfile1  # soundfile, librosa, ESPnet
+
         pip install --user --progress-bar=off dm-tree h5py
         pip install --user --progress-bar=off numpy==1.23.5  # for ESPnet, ctc-segmentation, etc
         pip install --user --progress-bar=off scipy  # for some tests
