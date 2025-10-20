@@ -13,7 +13,7 @@ import sys
 import numpy
 from returnn.log import log
 from returnn.util import better_exchook
-from returnn.util.basic import override_env_var, try_run
+from returnn.util.basic import override_env_var, try_run, OptionalNotImplementedError
 from returnn.util.literal_py_to_pickle import literal_eval
 from returnn.util.multi_proc_non_daemonic_spawn import NonDaemonicSpawnContext
 from returnn.config import SubProcCopyGlobalConfigPreInitFunc
@@ -505,6 +505,15 @@ class DistributeFilesDataset(CachedDataset2):
             self._lazy_init_num_outputs()
         return self._data_keys
 
+    def get_all_tags(self) -> List[str]:
+        """get all tags"""
+        if self.partition_epoch > 1:
+            raise OptionalNotImplementedError(f"{self} get_all_tags not supported for partition_epoch > 1")
+        if self.epoch is None:
+            # Need to init the worker.
+            self.init_seq_order(epoch=1)
+        return self._workers[self.epoch].get_all_tags()
+
 
 def _get_key_for_file_tree(t: FileTree) -> str:
     """generates a deterministic key given a file tree"""
@@ -606,6 +615,14 @@ class _WorkerProcParent:
         self.parent_conn.send(("get_data_seq", {"seq_idx": seq_idx}))
         msg, data = self.parent_conn.recv()
         assert msg == "data_seq"
+        return data
+
+    def get_all_tags(self) -> List[str]:
+        """get all tags"""
+        self._lazy_wait_for_init_seq_order()
+        self.parent_conn.send(("get_all_tags", {}))
+        msg, data = self.parent_conn.recv()
+        assert msg == "all_tags"
         return data
 
     def exit(self, *, join: bool = True):
@@ -722,6 +739,9 @@ def _worker_proc_loop(
                 got_init_seq_order = True
                 next_seq_idx = 0
                 cache.clear()
+            elif msg == "get_all_tags":
+                tags = dataset.get_all_tags()
+                parent_conn.send(("all_tags", tags))
             else:
                 raise Exception(f"unknown msg {msg!r}")
     except KeyboardInterrupt:  # when parent dies
