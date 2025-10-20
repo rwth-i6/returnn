@@ -623,6 +623,8 @@ class _WorkerProcParent:
         self.parent_conn.send(("get_all_tags", {}))
         msg, data = self.parent_conn.recv()
         assert msg == "all_tags"
+        if isinstance(data, Exception):
+            raise data
         return data
 
     def exit(self, *, join: bool = True):
@@ -740,8 +742,12 @@ def _worker_proc_loop(
                 next_seq_idx = 0
                 cache.clear()
             elif msg == "get_all_tags":
-                tags = dataset.get_all_tags()
-                parent_conn.send(("all_tags", tags))
+                try:
+                    tags = dataset.get_all_tags()
+                except Exception as exc:
+                    parent_conn.send(("all_tags", exc))
+                else:
+                    parent_conn.send(("all_tags", tags))
             else:
                 raise Exception(f"unknown msg {msg!r}")
     except KeyboardInterrupt:  # when parent dies
