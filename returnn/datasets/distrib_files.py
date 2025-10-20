@@ -514,6 +514,15 @@ class DistributeFilesDataset(CachedDataset2):
             self.init_seq_order(epoch=1)
         return self._workers[self.epoch].get_all_tags()
 
+    def get_total_num_seqs(self, *, fast: bool = False) -> int:
+        """get total num seqs"""
+        if self.partition_epoch > 1:
+            raise OptionalNotImplementedError(f"{self} get_total_num_seqs not supported for partition_epoch > 1")
+        if self.epoch is None:
+            # Need to init the worker.
+            self.init_seq_order(epoch=1)
+        return self._workers[self.epoch].get_total_num_seqs(fast=fast)
+
 
 def _get_key_for_file_tree(t: FileTree) -> str:
     """generates a deterministic key given a file tree"""
@@ -623,6 +632,16 @@ class _WorkerProcParent:
         self.parent_conn.send(("get_all_tags", {}))
         msg, data = self.parent_conn.recv()
         assert msg == "all_tags"
+        if isinstance(data, Exception):
+            raise data
+        return data
+
+    def get_total_num_seqs(self, **kwargs) -> int:
+        """get total num seqs"""
+        self._lazy_wait_for_init_seq_order()
+        self.parent_conn.send(("get_total_num_seqs", kwargs))
+        msg, data = self.parent_conn.recv()
+        assert msg == "total_num_seqs"
         if isinstance(data, Exception):
             raise data
         return data
@@ -748,6 +767,13 @@ def _worker_proc_loop(
                     parent_conn.send(("all_tags", exc))
                 else:
                     parent_conn.send(("all_tags", tags))
+            elif msg == "get_total_num_seqs":
+                try:
+                    total_num_seqs = dataset.get_total_num_seqs(**kwargs)
+                except Exception as exc:
+                    parent_conn.send(("total_num_seqs", exc))
+                else:
+                    parent_conn.send(("total_num_seqs", total_num_seqs))
             else:
                 raise Exception(f"unknown msg {msg!r}")
     except KeyboardInterrupt:  # when parent dies
