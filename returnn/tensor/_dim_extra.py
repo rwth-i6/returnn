@@ -163,6 +163,9 @@ class _DimMixin:
     def _handle_extra_kwargs(self: Dim, *, dyn_size: Optional[_t.RawTensorType] = None, **kwargs):
         if kwargs:
             self._extra = _DimExtra(dim=self, **kwargs)
+            if self._extra.vocab and self.size is None:
+                self.size = self._extra.vocab.num_labels
+                self.capacity = self.capacity or self.size
         if dyn_size is not None:
             self.dyn_size = dyn_size
         if self.derived_from_op and self.is_dynamic():
