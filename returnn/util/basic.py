@@ -557,8 +557,9 @@ def get_tensorflow_version_tuple() -> Tuple[int, ...]:
     import tensorflow as tf  # noqa
     import re
 
-    # noinspection Pep8CodeStyle
-    return tuple([int(re.sub("(-rc[0-9]|-dev[0-9]*)(\+selfbuilt)?", "", s)) for s in tf.__version__.split(".")])
+    return tuple(
+        [int(re.sub("(-rc[0-9]|-dev[0-9]*)(\+selfbuilt)?", "", s)) for s in tf.__version__.split(".")]  # nopep8
+    )
 
 
 class ReportImportedDevModules:
