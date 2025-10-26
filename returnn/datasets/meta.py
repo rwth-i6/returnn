@@ -1348,11 +1348,10 @@ class CombinedDataset(CachedDataset2):
         if dataset_data_key is not None:
             return dataset.get_data(dataset_seq_idx, dataset_data_key)
         else:
-            data_dim = self.data_dims[data_key]
-            if data_dim[1] == 1:
-                # sparse data
-                return numpy.zeros((0,), dtype=self.data_dtypes[data_key])
-            return numpy.zeros((0, data_dim[0]), dtype=self.data_dtypes[data_key])
+            shape: List[int] = [0] * self.num_outputs[data_key][1]
+            if shape and not self.is_data_sparse(data_key):
+                shape[-1] = self.get_data_dim(data_key)
+            return numpy.zeros(shape, dtype=self.data_dtypes[data_key])
 
     def _collect_single_seq(self, seq_idx):
         """
