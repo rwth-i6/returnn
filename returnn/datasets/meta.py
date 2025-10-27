@@ -1294,8 +1294,10 @@ class CombinedDataset(CachedDataset2):
                 complete_fracs_and_ds_idx = [
                     (
                         self.datasets[self.dataset_idx2key_map[j]].get_complete_frac(
-                            self.used_num_seqs_per_subset[j], allow_only_lr_suitable=True
-                        ),
+                            self.used_num_seqs_per_subset[j] - 1, allow_only_lr_suitable=True
+                        )
+                        if self.used_num_seqs_per_subset[j] > 0
+                        else 0.0,
                         j,
                     )
                     for j in range(len(self.datasets))
