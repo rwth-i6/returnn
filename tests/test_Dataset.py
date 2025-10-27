@@ -906,6 +906,89 @@ def test_MetaDataset():
         assert len(classes) == len(_demo_txt) + 1
 
 
+def test_CombinedDataset():
+    seq_len = 11
+    num_seqs = [10, 5]
+    num_sub_ds = len(num_seqs)
+    max_idx = num_sub_ds * max(num_seqs) * seq_len
+    keys = [f"data{ds_idx}" for ds_idx in range(num_sub_ds)]
+    data = [
+        [
+            numpy.array(
+                [ds_idx * max(num_seqs) * seq_len + seq_idx * seq_len + t for t in range(seq_len)],
+                dtype="int32",
+            )
+            for seq_idx in range(num_seqs[ds_idx])
+        ]
+        for ds_idx in range(num_sub_ds)
+    ]
+    data_flat = sum(data, [])
+    assert len(data_flat) == sum(num_seqs)
+    assert len(set(int(v[0]) for v in data_flat)) == sum(num_seqs)  # unique
+    n_tgt_dim = max_idx
+    sub_ds_dicts = [
+        {
+            "class": "StaticDataset",
+            "data": [{keys[ds_idx]: values} for values in data[ds_idx]],
+            "output_dim": {keys[ds_idx]: (n_tgt_dim, 1)},
+        }
+        for ds_idx in range(num_sub_ds)
+    ]
+
+    combined_ds_opts = {
+        "class": "CombinedDataset",
+        "datasets": {str(ds_idx): sub_ds_dicts[ds_idx] for ds_idx in range(num_sub_ds)},
+        "data_map": {(str(ds_idx), keys[ds_idx]): keys[ds_idx] for ds_idx in range(num_sub_ds)},
+    }
+    dataset = init_dataset(combined_ds_opts)
+    print("CombinedDataset:", dataset)
+
+    print("Testing default seq ordering...")
+    assert dataset.seq_ordering == "default"
+    seqs = dummy_iter_dataset(dataset)
+    assert len(seqs) == sum(num_seqs)
+    cur_ds_idx = 0
+    cur_sub_seq_idx = 0
+    for i, seq in enumerate(seqs):
+        assert all(seq.features[keys[cur_ds_idx]] == data[cur_ds_idx][cur_sub_seq_idx])
+        assert set(seq.features.keys()) == set(keys)
+        assert all(seq.features[other_key].shape == (0,) for other_key in keys if other_key != keys[cur_ds_idx])
+        cur_sub_seq_idx += 1
+        if cur_sub_seq_idx >= num_seqs[cur_ds_idx]:
+            cur_ds_idx += 1
+            cur_sub_seq_idx = 0
+    assert cur_ds_idx == num_sub_ds and cur_sub_seq_idx == 0
+
+    print("Testing random_dataset seq ordering...")
+    dataset.seq_ordering = "random_dataset"
+    seqs = dummy_iter_dataset(dataset)
+    assert len(seqs) == sum(num_seqs)
+    beginnings = []
+    for i, seq in enumerate(seqs):
+        relevant_keys = [k for k in keys if seq.features[k].shape[0] > 0]
+        assert len(relevant_keys) == 1
+        k = relevant_keys[0]
+        beginnings.append(int(seq.features[k][0]))
+    assert len(set(beginnings)) == sum(num_seqs)  # unique, see above
+
+    print("Testing interleave seq ordering...")
+    dataset.seq_ordering = "interleave"
+    seqs = dummy_iter_dataset(dataset)
+    assert len(seqs) == sum(num_seqs)
+    beginnings = []
+    visited_num_seqs = [0] * num_sub_ds
+    for i, seq in enumerate(seqs):
+        relevant_ds_idx = [i for i, k in enumerate(keys) if seq.features[k].shape[0] > 0]
+        assert len(relevant_ds_idx) == 1
+        ds_idx = relevant_ds_idx[0]
+        complete_fracs = [visited_num_seqs[j] / num_seqs[j] for j in range(num_sub_ds)]
+        assert complete_fracs[ds_idx] == min(complete_fracs)
+        beginnings.append(int(seq.features[keys[ds_idx]][0]))
+        visited_num_seqs[ds_idx] += 1
+    assert len(set(beginnings)) == sum(num_seqs)  # unique, see above
+    assert visited_num_seqs == num_seqs
+
+
 def test_MapDatasetWrapper():
     from returnn.datasets.map import MapDatasetBase
 
