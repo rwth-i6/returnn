@@ -1422,7 +1422,16 @@ class CombinedDataset(CachedDataset2):
         seq_tag = dataset.get_tag(dataset_seq_idx)
         features = self._get_data(dataset_key, dataset_seq_idx, "data")
         targets = {target: self._get_data(dataset_key, dataset_seq_idx, target) for target in self.target_list}
-        return DatasetSeq(seq_idx=seq_idx, seq_tag=seq_tag, features=features, targets=targets)
+        complete_frac = None
+        if self.seq_ordering == "interleave":
+            # In the interleave case, by design, this should be monotonically increasing,
+            # as per how we select the next seq in _expand_dataset_seq_idxs.
+            complete_frac = dataset.get_complete_frac(dataset_seq_idx, allow_only_lr_suitable=True)
+        # In other cases, complete_frac is not so straightforward.
+        # In the case that the total num seqs is known, then it's anyway not necessary.
+        return DatasetSeq(
+            seq_idx=seq_idx, complete_frac=complete_frac, seq_tag=seq_tag, features=features, targets=targets
+        )
 
     def is_less_than_num_seqs(self, n: int) -> bool:
         """
