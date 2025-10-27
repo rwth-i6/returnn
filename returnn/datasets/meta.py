@@ -964,7 +964,6 @@ class CombinedDataset(CachedDataset2):
         self.dataset_keys = set([m[0] for m in data_map.keys()])  # type: typing.Set[str]
         self.dataset_idx2key_map = dict(enumerate(sorted(self.dataset_keys)))  # idx -> dataset-key
         self.data_keys = set(data_map.values())  # type: typing.Set[str]
-        assert "data" in self.data_keys
         self.target_list = sorted(self.data_keys - {"data"})
 
         # Build target lookup table that maps from dataset_key and data_key (data key used by CombinedDataset)
@@ -994,8 +993,7 @@ class CombinedDataset(CachedDataset2):
         if data_dims:
             data_dims = convert_data_dims(data_dims)
             self.data_dims = data_dims
-            assert "data" in data_dims
-            for key in self.target_list:
+            for key in self.data_keys:
                 assert key in data_dims
         else:
             self.data_dims = {}
@@ -1009,7 +1007,7 @@ class CombinedDataset(CachedDataset2):
             if dataset_data_key in dataset.labels:
                 self.labels[data_key] = dataset.labels[dataset_data_key]
 
-        self.num_inputs = self.data_dims["data"][0]
+        self.num_inputs = self.data_dims["data"][0] if "data" in self.data_dims else 0
         self.num_outputs = self.data_dims
 
         self.data_dtypes = {
@@ -1420,8 +1418,7 @@ class CombinedDataset(CachedDataset2):
         dataset = self.datasets[dataset_key]
 
         seq_tag = dataset.get_tag(dataset_seq_idx)
-        features = self._get_data(dataset_key, dataset_seq_idx, "data")
-        targets = {target: self._get_data(dataset_key, dataset_seq_idx, target) for target in self.target_list}
+        features = {key: self._get_data(dataset_key, dataset_seq_idx, key) for key in self.data_keys}
         complete_frac = None
         if self.seq_ordering == "interleave":
             # In the interleave case, by design, this should be monotonically increasing,
@@ -1429,9 +1426,7 @@ class CombinedDataset(CachedDataset2):
             complete_frac = dataset.get_complete_frac(dataset_seq_idx, allow_only_lr_suitable=True)
         # In other cases, complete_frac is not so straightforward.
         # In the case that the total num seqs is known, then it's anyway not necessary.
-        return DatasetSeq(
-            seq_idx=seq_idx, complete_frac=complete_frac, seq_tag=seq_tag, features=features, targets=targets
-        )
+        return DatasetSeq(seq_idx=seq_idx, complete_frac=complete_frac, seq_tag=seq_tag, features=features)
 
     def is_less_than_num_seqs(self, n: int) -> bool:
         """
