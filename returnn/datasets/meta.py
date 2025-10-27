@@ -1031,7 +1031,7 @@ class CombinedDataset(CachedDataset2):
         """
 
         assert seq_list is None and seq_order is None, "seq_list and seq_order not supported for %s" % self.__class__
-        need_reinit = self.epoch is None or self.epoch != epoch
+        need_reinit = self.epoch is None or self.epoch != epoch or self.expected_load_seq_start > 0
         num_seqs_saved = self._num_seqs
         super(CombinedDataset, self).init_seq_order(
             epoch=epoch, seq_list=seq_list, seq_order=seq_order
