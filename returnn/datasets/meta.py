@@ -1437,6 +1437,12 @@ class CombinedDataset(CachedDataset2):
         else:
             return self._expand_dataset_seq_idxs(n - len(self.dataset_sorted_seq_idx_list) + 1)
 
+    def get_data_keys(self) -> List[str]:
+        """data keys"""
+        if "data" in self.data_keys:
+            return ["data"] + sorted(self.data_keys - {"data"})
+        return sorted(self.data_keys)
+
     def get_target_list(self):
         """
         :rtype: list[str]
