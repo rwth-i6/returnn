@@ -434,6 +434,7 @@ class FileCache:
                     # https://github.com/rwth-i6/returnn/issues/1785
                     if os.path.exists(dst_tmp_filename):
                         os.remove(dst_tmp_filename)
+                    os.remove(info_file_name)
                     raise
                 os.rename(dst_tmp_filename, dst_filename)
 
