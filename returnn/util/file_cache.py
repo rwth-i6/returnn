@@ -428,7 +428,7 @@ class FileCache:
 
                 try:
                     _copy_with_prealloc(src_filename, dst_tmp_filename)
-                except Exception as exc:
+                except Exception:
                     # Cleanup if it was created already.
                     # That avoids some of the ambiguity of the existence of the .copy file.
                     # https://github.com/rwth-i6/returnn/issues/1785
