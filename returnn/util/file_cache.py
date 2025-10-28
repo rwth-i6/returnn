@@ -426,7 +426,15 @@ class FileCache:
                 orig_mtime_ns = os.stat(src_filename).st_mtime_ns
                 FileInfo(mtime_ns=orig_mtime_ns).save(info_file_name)
 
-                _copy_with_prealloc(src_filename, dst_tmp_filename)
+                try:
+                    _copy_with_prealloc(src_filename, dst_tmp_filename)
+                except Exception as exc:
+                    # Cleanup if it was created already.
+                    # That avoids some the ambiguity of the existence of the .copy file.
+                    # https://github.com/rwth-i6/returnn/issues/1785
+                    if os.path.exists(dst_tmp_filename):
+                        os.remove(dst_tmp_filename)
+                    raise exc
                 os.rename(dst_tmp_filename, dst_filename)
 
     @staticmethod
