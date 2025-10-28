@@ -430,7 +430,7 @@ class FileCache:
                     _copy_with_prealloc(src_filename, dst_tmp_filename)
                 except Exception as exc:
                     # Cleanup if it was created already.
-                    # That avoids some the ambiguity of the existence of the .copy file.
+                    # That avoids some of the ambiguity of the existence of the .copy file.
                     # https://github.com/rwth-i6/returnn/issues/1785
                     if os.path.exists(dst_tmp_filename):
                         os.remove(dst_tmp_filename)
