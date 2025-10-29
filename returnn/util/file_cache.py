@@ -436,7 +436,10 @@ class FileCache:
                         os.remove(dst_tmp_filename)
                     except FileNotFoundError:
                         pass
-                    os.remove(info_file_name)
+                    try:
+                        os.remove(info_file_name)
+                    except FileNotFoundError:  # not really expected here, but safe to ignore
+                        pass
                     raise
                 os.rename(dst_tmp_filename, dst_filename)
 
