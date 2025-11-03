@@ -711,6 +711,7 @@ class LmDataset(CachedDataset2):
                 self._orth_files = None
 
             self._seq_list = None
+            self._seq_index_by_tag = None
 
 
 def _is_bliss(filename):
