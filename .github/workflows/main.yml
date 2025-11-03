@@ -190,6 +190,7 @@ jobs:
 
         pip install --user pytest
 
+        sudo apt-get update
         sudo apt-get install -y ffmpeg  # for torchcodec
 
         # datasets >=4 needs torch to decode audio files
