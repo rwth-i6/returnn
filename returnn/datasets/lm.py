@@ -694,24 +694,26 @@ class LmDataset(CachedDataset2):
             self.next_seq_idx = seq_idx + 1
             return DatasetSeq(seq_idx=seq_idx, features=data, targets=targets, seq_tag=seq_tag)
 
-    def finish_epoch(self, *, free_resources=False):
+    def finish_epoch(self, *, free_resources: bool = False):
         super().finish_epoch(free_resources=free_resources)
 
-        if free_resources:
-            self._orths_offsets_and_lens = None
-            if self._orth_mmaps is not None:
-                for m in self._orth_mmaps:
-                    if m is not None:
-                        m.close()
-                self._orth_mmaps = None
-            if self._orth_files is not None:
-                for f in self._orth_files:
-                    if f is not None:
-                        f.close()
-                self._orth_files = None
+        if not free_resources:
+            return
 
-            self._seq_list = None
-            self._seq_index_by_tag = None
+        self._orths_offsets_and_lens = None
+        if self._orth_mmaps is not None:
+            for m in self._orth_mmaps:
+                if m is not None:
+                    m.close()
+            self._orth_mmaps = None
+        if self._orth_files is not None:
+            for f in self._orth_files:
+                if f is not None:
+                    f.close()
+            self._orth_files = None
+
+        self._seq_list = None
+        self._seq_index_by_tag = None
 
 
 def _is_bliss(filename):
