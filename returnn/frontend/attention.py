@@ -483,6 +483,7 @@ class RelPosSelfAttention(SelfAttentionBase):
         matrix_bd = _rel_pos_enc_shift(matrix_bd, axis, pos_emb_spatial_dim, hist_dim)
 
         scores = matrix_ac + matrix_bd  # (batch, head, time1, time2)
+        matrix_ac = matrix_bd = None  # possibly free memory
         scores *= self.key_dim_per_head.dimension**-0.5
         att_weights = rf.softmax(scores, axis=hist_dim)
         att_weights = rf.dropout(att_weights, self.att_dropout, axis=self.att_dropout_broadcast and hist_dim)

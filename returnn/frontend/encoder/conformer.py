@@ -273,6 +273,7 @@ class ConformerEncoderLayer(rf.Module):
         x_mhsa = self.self_att(x_mhsa_ln, axis=spatial_dim)
         x_mhsa = rf.dropout(x_mhsa, self.dropout, axis=self.dropout_broadcast and self.out_dim)
         x_mhsa_out = x_mhsa + x_ffn1_out
+        x_mhsa = None  # possibly free memory
 
         # Conv
         x_conv_ln = self.conv_layer_norm(x_mhsa_out)
