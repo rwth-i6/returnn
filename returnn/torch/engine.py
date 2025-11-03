@@ -930,7 +930,12 @@ class Engine(EngineBase):
             if not os.path.exists(filename) and os.path.exists(model_epoch_filename):
                 filename = model_epoch_filename
             print("Load model %s" % (filename,), file=log.v4)
-            checkpoint_state = torch.load(filename, map_location=self._device)
+            if filename.endswith(".safetensors"):
+                from safetensors.torch import load_file as safetensors_load
+
+                checkpoint_state = safetensors_load(filename, device=self._device)
+            else:
+                checkpoint_state = torch.load(filename, map_location=self._device)
             if epoch is None:
                 epoch = checkpoint_state.get("epoch", self._start_epoch or 1)
             step = checkpoint_state.get("step", 1)
