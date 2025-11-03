@@ -4,17 +4,9 @@ Provides :class:`CachedDataset2`.
 
 from __future__ import annotations
 import numpy
-import typing
-from typing import Optional
+from typing import Optional, List
 from threading import Condition
 from .basic import Dataset, DatasetSeq
-
-try:
-    # noinspection PyCompatibility
-    from _thread import interrupt_main
-except ImportError:
-    # noinspection PyUnresolvedReferences,PyCompatibility
-    from thread import interrupt_main
 
 
 class CachedDataset2(Dataset):
@@ -36,7 +28,7 @@ class CachedDataset2(Dataset):
         self._num_timesteps = None
         self.epoch = None
         self.reached_final_seq = False
-        self.added_data = []  # type: typing.List[DatasetSeq]
+        self.added_data: List[DatasetSeq] = []
         self.expected_load_seq_start = 0
         self._num_timesteps_accumulated = 0
 

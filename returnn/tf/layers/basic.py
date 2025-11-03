@@ -10488,6 +10488,7 @@ class TopKLayer(LayerBase):
         self._sub_layers = {}
         for key, (v, a) in sub_outputs.items():
             sub_out_data = self.output.copy_template(name="%s/%s" % (self.name, key))
+            sub_out_data.feature_dim = None
             sub_out_data.dtype = "int32"
             sub_out_data.sparse_dim = a
             sub_out_data.placeholder = v
@@ -10527,6 +10528,7 @@ class TopKLayer(LayerBase):
         axis = [in_data.get_dim_tag_from_description(a) for a in axis]
         out_dims = [dim for dim in in_data.dim_tags if dim not in axis] + [k_dim]
         out_data = in_data.copy_template(name=name).copy_template_new_dim_tags(out_dims)
+        out_data.feature_dim = None
         if for_indices is not None:
             assert 0 <= for_indices < len(axis)
             out_data.dtype = "int32"

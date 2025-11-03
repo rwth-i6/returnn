@@ -48,6 +48,26 @@ def tf_scope():
         yield session
 
 
+class RunModelException(Exception):
+    """run model exception"""
+
+
+class NonFiniteValuesException(RunModelException):
+    """non-finite values exception"""
+
+
+class CompareResultsMismatchException(RunModelException):
+    """compare results exception"""
+
+
+class CompareResultsMismatchTfVsPtException(CompareResultsMismatchException):
+    """compare results TF vs PT exception"""
+
+
+class CompareResultsMismatchSingleVsMultiBatchException(CompareResultsMismatchException):
+    """compare results single vs multi batch exception"""
+
+
 def run_model(
     extern_data: TensorDict,
     get_model: rf.GetModelFunc,
@@ -85,7 +105,7 @@ def run_model(
                 lambda: (_run_model_torch(extern_data, get_model, forward_step), None)[-1],
                 stop_reporting_after_first_inf_nan=False,
             )
-            raise Exception(f"Non-finite values in output: {non_finite_outputs}. See log above.")
+            raise NonFiniteValuesException(f"Non-finite values in output: {non_finite_outputs}. See log above.")
 
     if test_single_batch_entry and batch_dim in extern_data_dims:
         dyn_dims = [
@@ -146,7 +166,7 @@ def run_model(
         if not numpy.allclose(v_pt, v_tf, atol=1e-5, rtol=1e-5):
             print(f"  PT:\n{v_pt}")
             print(f"  TF:\n{v_tf}")
-            raise Exception(f"output {k!r} differs")
+            raise CompareResultsMismatchTfVsPtException(f"output {k!r} differs")
     return out_pt
 
 
@@ -300,9 +320,10 @@ def _run_model_torch_single_batch(
         # Slice the raw ref output to be able to match it to the raw single output.
         ref_output_raw = ref_output_.raw_tensor[_get_slices(output_)]
         single_output_raw = output_.raw_tensor
-        numpy.testing.assert_allclose(
-            ref_output_raw, single_output_raw, atol=1e-5, rtol=1e-5, err_msg=f"output {key!r} differs"
-        )
+        if not numpy.allclose(ref_output_raw, single_output_raw, atol=1e-5, rtol=1e-5):
+            print(f"  Batched:\n{ref_output_raw}")
+            print(f"  Single:\n{single_output_raw}")
+            raise CompareResultsMismatchSingleVsMultiBatchException(f"output {key!r} differs")
 
     # Recover original data.
     extern_data.reset_content()

@@ -801,7 +801,7 @@ class SubProcCopyGlobalConfigPreInitFunc:
         from returnn.log import log
         from returnn import __old_mod_loader__
 
-        better_exchook.install()
+        better_exchook.setup_all()
         __old_mod_loader__.disable_lazy_mod_loads()
 
         if self.global_config:

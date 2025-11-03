@@ -7,14 +7,13 @@ from __future__ import annotations
 from typing import Optional, Union, Any, Sequence, List, Tuple, Dict
 import numpy
 import sys
-import typing
 
 from returnn.util.basic import class_idx_seq_to_1_of_k, CollectionReadCheckCovered
 from returnn.log import log
 from returnn.tensor import Tensor, Dim, TensorDict
 
 from .util.feature_extraction import ExtractAudioFeatures
-from .util.vocabulary import *
+from .util.vocabulary import Vocabulary, BytePairEncoding, CharacterTargets
 from .audio import OggZipDataset  # noqa # for API compatibility
 from .basic import Dataset, DatasetSeq, convert_data_dims
 from .cached2 import CachedDataset2
@@ -1165,11 +1164,9 @@ class StaticDataset(CachedDataset2):
         """supports sorting"""
         return True
 
-    def _collect_single_seq(self, seq_idx):
-        """
-        :param int seq_idx:
-        :rtype: DatasetSeq
-        """
+    def _collect_single_seq(self, seq_idx: int) -> Optional[DatasetSeq]:
+        if seq_idx >= len(self._seq_order):
+            return None
         corpus_seq_idx = self._seq_order[seq_idx]
         data = self.data[corpus_seq_idx]
         return DatasetSeq(
@@ -1278,12 +1275,6 @@ class CopyTaskDataset(GeneratingDataset):
         seq = [self.random.randint(0, self.nsymbols) for _ in range(seq_len)]
         seq_np = numpy.array(seq, dtype="int8")
         return DatasetSeq(seq_idx=seq_idx, features=seq_np, targets={"classes": seq_np})
-
-
-# Multiple external sources where we could write automatic wrappers:
-# * https://github.com/tensorflow/datasets
-# * tf.contrib.keras.datasets, https://www.tensorflow.org/api_docs/python/tf/keras/datasets
-# * nltk.corpus
 
 
 class TimitDataset(CachedDataset2):
@@ -1553,7 +1544,7 @@ class TimitDataset(CachedDataset2):
 
         self._random_permute_audio = CollectionReadCheckCovered.from_bool_or_dict(random_permute_audio)
 
-        self._seq_order = None  # type: typing.Optional[typing.Sequence[int]]
+        self._seq_order: Optional[Sequence[int]] = None
         self._init_timit()
 
         self._audio_data = {}  # seq_tag -> (audio, sample_rate). loaded by self._reader_thread_main
@@ -1927,8 +1918,8 @@ class BlissDataset(CachedDataset2):
         self._with_delta = with_delta
         self.num_inputs *= 1 + with_delta
         self._bpe_file = open(bpe_file, "r")
-        self._seqs = []  # type: typing.List[BlissDataset.SeqInfo]
-        self._vocab = {}  # type: typing.Dict[str,int]  # set in self._parse_vocab
+        self._seqs: List[BlissDataset.SeqInfo] = []
+        self._vocab: Dict[str, int] = {}  # set in self._parse_vocab
         self._parse_bliss_xml(filename=path)
         # TODO: loading audio like in TimitDataset, and in parallel
         self._bpe = BytePairEncoding(vocab_file=vocab_file, bpe_file=bpe_file)
@@ -2100,7 +2091,7 @@ class LibriSpeechCorpus(CachedDataset2):
             self.targets = CharacterTargets(**chars)
         elif targets is None:
             assert bpe is None and chars is None
-            self.targets = None  # type: typing.Optional[Vocabulary]
+            self.targets: Optional[Vocabulary] = None
         else:
             raise Exception("invalid targets %r. provide bpe or chars" % targets)
         if self.targets:
@@ -2128,7 +2119,7 @@ class LibriSpeechCorpus(CachedDataset2):
             self._reference_seq_order = seqs
             self.transs = {s: self.transs[s] for s in seqs}
         self.epoch_wise_filter = epoch_wise_filter
-        self._seq_order = None  # type: typing.Optional[typing.Sequence[int]]
+        self._seq_order: Optional[Sequence[int]] = None
         self.init_seq_order()
 
     def _collect_trans(self):
@@ -2294,9 +2285,9 @@ class LibriSpeechCorpus(CachedDataset2):
         """:return: whether this dataset supports sharding"""
         return True
 
-    def get_current_seq_order(self):
+    def get_current_seq_order(self) -> Sequence[int]:
         """
-        :rtype: typing.Sequence[int]
+        :return: seq order of current epoch
         """
         assert self._seq_order is not None
         return self._seq_order
@@ -2446,7 +2437,7 @@ class Enwik8Corpus(CachedDataset2):
         self._batch_num_seqs = batch_num_seqs
         self._random = numpy.random.RandomState(1)  # seed will be set in init_seq_order
         self._seq_starts = numpy.arange(0, len(self._data) - 1, seq_len)
-        self._seq_order = None  # type: typing.Optional[typing.Sequence[int]]
+        self._seq_order: Optional[Sequence[int]] = None
 
     def get_data_dtype(self, key):
         """

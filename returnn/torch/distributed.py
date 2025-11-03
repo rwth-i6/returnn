@@ -39,10 +39,10 @@ class DistributedContext:
         else:
             import torch.distributed as dist
 
-            # when no backend is specified, both gloo and nccl backends will be created
-            # the gloo backend will be used for collectives with CPU tensors and
-            # the nccl backend will be used for collectives with CUDA tensors
-            dist.init_process_group(backend=self._opts.get("backend", None))
+            # When no backend is specified, we set gloo for CPU tensors and nccl for CUDA tensors as backend.
+            # torch 2.6.0 and onwards require explicitly setting the backends.
+            # See https://github.com/rwth-i6/returnn/issues/1724 for discussion.
+            dist.init_process_group(backend=self._opts.get("backend", "cpu:gloo,cuda:nccl"))
             self._rank = dist.get_rank()
             self._size = dist.get_world_size()
             os.environ[env_var_name] = repr({"rank": self._rank, "size": self._size})
@@ -78,6 +78,7 @@ class DistributedContext:
         # This function here is called at the end in __init__,
         # and not all opts are used yet, so read them now,
         # such that the check in the end works.
+        self._opts.get("backend")
         if self._reduce_type == "grad":
             self._opts.get("class")
             self._opts.get("options")

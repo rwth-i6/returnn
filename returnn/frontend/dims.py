@@ -3,7 +3,7 @@ Utilities for dimension tags, dimensions, axes.
 """
 
 from __future__ import annotations
-from typing import Optional, Union, TypeVar, Sequence, Tuple
+from typing import TYPE_CHECKING, Optional, Union, TypeVar, Sequence, Tuple
 from returnn.tensor import Tensor, Dim
 import returnn.frontend as rf
 from ._backend import get_backend_by_tensor, global_backend
@@ -24,6 +24,9 @@ __all__ = [
     "last_frame_position_of_dim",
     "use_mask_default",
 ]
+
+if TYPE_CHECKING:
+    from returnn.config import Config
 
 
 def range_over_dim(dim: Dim, *, dtype: Optional[str] = None, device: Optional[str] = None) -> Tensor[T]:
@@ -309,7 +312,10 @@ def last_frame_position_of_dim(
 
 
 def use_mask_default(
-    *, default: Optional[bool] = None, default_false_for_behavior_version_up_to: Optional[int] = None
+    *,
+    default: Optional[bool] = None,
+    default_false_for_behavior_version_up_to: Optional[int] = None,
+    func_name: Optional[str] = None,
 ) -> Optional[bool]:
     """
     Check the global RETURNN config for the ``rf_use_mask``
@@ -324,20 +330,20 @@ def use_mask_default(
         and if this is set, and the behavior version is less or equal,
         then return False by default, i.e. do not use the mask by default, if it is not defined in the config.
         This takes precedence over `default`.
+    :param func_name: if specified, also check
     :return: what to use for the ``use_mask`` argument by default
     """
     from returnn.config import get_global_config
 
     config = get_global_config(raise_exception=False)
-    config_value = None
     if config:
-        if "rf_use_mask" in config.typed_dict:
-            config_value = config.typed_dict["rf_use_mask"]
-            assert config_value is None or isinstance(config_value, bool)
-        elif "rf_use_mask" in config.dict:
-            config_value = config.bool("rf_use_mask", None)
-    if config_value is not None:
-        return config_value
+        config_value = _get_opt_bool_from_config(config, "rf_use_mask")
+        if config_value is not None:
+            return config_value
+        if func_name:
+            config_value = _get_opt_bool_from_config(config, f"rf_use_mask_{func_name}")
+            if config_value is not None:
+                return config_value
 
     if default_false_for_behavior_version_up_to is not None:
         from returnn.util.basic import BehaviorVersion
@@ -345,3 +351,13 @@ def use_mask_default(
         if BehaviorVersion.get() <= default_false_for_behavior_version_up_to:
             return False
     return default
+
+
+def _get_opt_bool_from_config(config: Config, key: str) -> Optional[bool]:
+    if key in config.typed_dict:
+        config_value = config.typed_dict[key]
+        assert config_value is None or isinstance(config_value, bool)
+        return config_value
+    elif key in config.dict:
+        return config.bool(key, None)
+    return None

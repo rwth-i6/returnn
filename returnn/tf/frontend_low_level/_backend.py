@@ -39,6 +39,21 @@ class TFBackend(Backend[tf.Tensor]):
         return tf.executing_eagerly()
 
     @staticmethod
+    def should_pickle_tensor(raw_tensor: tf.Tensor) -> bool:
+        """
+        :return: whether the tensor should be included in a pickle or set to `None`.
+        """
+
+        from tensorflow.python.framework.ops import EagerTensor
+
+        # Can not pickle symbolic TF tensors.
+        #
+        # See for discussion:
+        #  - https://github.com/rwth-i6/returnn/issues/1541
+        #  - https://github.com/rwth-i6/returnn/issues/1763
+        return isinstance(raw_tensor, EagerTensor)
+
+    @staticmethod
     def get_dtype_name_raw(raw_tensor: tf.Tensor) -> str:
         """
         :return: dtype of raw tensor, as string

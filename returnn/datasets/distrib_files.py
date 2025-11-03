@@ -6,13 +6,14 @@ https://github.com/rwth-i6/returnn/issues/1519
 
 from __future__ import annotations
 
+from collections import deque
 from typing import Union, Optional, Any, Callable, Sequence, Tuple, List, Dict
 import os
 import sys
 import numpy
 from returnn.log import log
 from returnn.util import better_exchook
-from returnn.util.basic import override_env_var, try_run
+from returnn.util.basic import override_env_var, try_run, OptionalNotImplementedError
 from returnn.util.literal_py_to_pickle import literal_eval
 from returnn.util.multi_proc_non_daemonic_spawn import NonDaemonicSpawnContext
 from returnn.config import SubProcCopyGlobalConfigPreInitFunc
@@ -134,7 +135,7 @@ class DistributeFilesDataset(CachedDataset2):
     def __init__(
         self,
         *,
-        files: Union[List[FileTree], os.PathLike],
+        files: Union[List[FileTree], os.PathLike, Callable[[], List[FileTree]]],
         get_sub_epoch_dataset: Callable[[List[FileTree]], Dict[str, Any]],
         preload_next_n_sub_epochs: int = 1,
         buffer_size: int = 1,
@@ -150,9 +151,10 @@ class DistributeFilesDataset(CachedDataset2):
             can also be specified as a path to a .txt file containing one file per line,
             or a python file containing the repr of a list of arbitrarily nested python objects,
             or a JSON file containing a list of arbitarily nested (JSON) objects.
+            It can also be a callable which returns such a list.
         :param get_sub_epoch_dataset: callable which returns a dataset dict for a given subset of files
         :param preload_next_n_sub_epochs: how many sub epoch datasets to preload
-        :param buffer_size: buffer size for each worker, amount of seqs to prefetch
+        :param buffer_size: buffer size for each worker, number of seqs to prefetch
         :param distrib_shard_files: set to true to shard the data across worker processes in
             distributed training scenaria
         :param _meta_info_cache: for internal use
@@ -174,17 +176,21 @@ class DistributeFilesDataset(CachedDataset2):
 
         self.distrib_shard_files = distrib_shard_files
         if distrib_shard_files:
-            assert self._num_shards == 1 and self._shard_index == 0, (  # ensure defaults are set
-                f"{self}: Cannot use both dataset-sharding via properties _num_shards and _shard index "
-                f"and {self.__class__.__name__}'s own sharding implementation based on the trainings rank and size."
-            )
             if _distrib_info:
-                # If we're in a child process `_get_rank_and_size()` no longer works,
+                # We're in a child process.
+                # `_get_rank_and_size()` no longer works,
                 # so we pass the info about the shards via a pickled property.
                 # See also Dataset.__reduce__.
-                self._shard_index = _distrib_info["_shard_index"]
-                self._num_shards = _distrib_info["_num_shards"]
+                # _num_shards and _shard_index are already set, so just check.
+                assert (
+                    self._shard_index == _distrib_info["_shard_index"]
+                    and self._num_shards == _distrib_info["_num_shards"]
+                )
             else:
+                assert self._num_shards == 1 and self._shard_index == 0, (  # ensure defaults are set
+                    f"{self}: Cannot use both dataset-sharding via properties _num_shards and _shard index "
+                    f"and {self.__class__.__name__}'s own sharding implementation based on the trainings rank and size."
+                )
                 self._shard_index, self._num_shards = _get_rank_and_size()
         assert 0 <= self._shard_index < self._num_shards
 
@@ -239,6 +245,11 @@ class DistributeFilesDataset(CachedDataset2):
             return
         if isinstance(self.files, list):
             self._files = self.files
+        elif callable(self.files):
+            self._files = self.files()
+            assert isinstance(self._files, list), (
+                f"{self}: callable files {self.files} must return a list, got {type(self._files)}"
+            )
         elif isinstance(self.files, (str, os.PathLike)):
             _, ext = os.path.splitext(self.files)
             assert ext, f"{self}: no file extension on file list file {self.files}"
@@ -494,6 +505,24 @@ class DistributeFilesDataset(CachedDataset2):
             self._lazy_init_num_outputs()
         return self._data_keys
 
+    def get_all_tags(self) -> List[str]:
+        """get all tags"""
+        if self.partition_epoch > 1:
+            raise OptionalNotImplementedError(f"{self} get_all_tags not supported for partition_epoch > 1")
+        if self.epoch is None:
+            # Need to init the worker.
+            self.init_seq_order(epoch=1)
+        return self._workers[self.epoch].get_all_tags()
+
+    def get_total_num_seqs(self, *, fast: bool = False) -> int:
+        """get total num seqs"""
+        if self.partition_epoch > 1:
+            raise OptionalNotImplementedError(f"{self} get_total_num_seqs not supported for partition_epoch > 1")
+        if self.epoch is None:
+            # Need to init the worker.
+            self.init_seq_order(epoch=1)
+        return self._workers[self.epoch].get_total_num_seqs(fast=fast)
+
 
 def _get_key_for_file_tree(t: FileTree) -> str:
     """generates a deterministic key given a file tree"""
@@ -524,6 +553,8 @@ def _get_rank_and_size() -> Tuple[int, int]:
 
         ctx = returnn.tf.horovod.get_ctx(config=config)
         return ctx.rank(), ctx.size()
+    elif config.typed_value("__debug_dummy_distributed_rank_and_size") is not None:
+        return config.typed_value("__debug_dummy_distributed_rank_and_size")
     else:
         return 0, 1
 
@@ -595,6 +626,26 @@ class _WorkerProcParent:
         assert msg == "data_seq"
         return data
 
+    def get_all_tags(self) -> List[str]:
+        """get all tags"""
+        self._lazy_wait_for_init_seq_order()
+        self.parent_conn.send(("get_all_tags", {}))
+        msg, data = self.parent_conn.recv()
+        assert msg == "all_tags"
+        if isinstance(data, Exception):
+            raise data
+        return data
+
+    def get_total_num_seqs(self, **kwargs) -> int:
+        """get total num seqs"""
+        self._lazy_wait_for_init_seq_order()
+        self.parent_conn.send(("get_total_num_seqs", kwargs))
+        msg, data = self.parent_conn.recv()
+        assert msg == "total_num_seqs"
+        if isinstance(data, Exception):
+            raise data
+        return data
+
     def exit(self, *, join: bool = True):
         """exit"""
         self._lazy_wait_for_init_seq_order()
@@ -620,7 +671,7 @@ def _worker_proc_loop(
 ):
     if sys.platform == "linux":
         with open("/proc/self/comm", "w") as f:
-            f.write(f"CFD worker {epoch}")
+            f.write(f"DFD worker {epoch}")
     better_exchook.setup_all()
 
     assert isinstance(epoch, int) and isinstance(buffer_size, int)
@@ -630,7 +681,7 @@ def _worker_proc_loop(
     dataset = init_dataset(dataset_dict)
 
     got_init_seq_order = False
-    cache: List[DatasetSeq] = []
+    cache: deque[DatasetSeq] = deque()
     next_seq_idx = 0
 
     # noinspection PyShadowingNames
@@ -695,7 +746,7 @@ def _worker_proc_loop(
             elif msg == "get_data_seq":
                 seq_idx = kwargs["seq_idx"]
                 while cache and cache[0].seq_idx < seq_idx:
-                    cache.pop(0)
+                    cache.popleft()
                 res = _get(seq_idx)
                 parent_conn.send(("data_seq", res))
             elif msg == "init_seq_order":
@@ -708,7 +759,21 @@ def _worker_proc_loop(
                 parent_conn.send(("num_seqs", num_seqs))
                 got_init_seq_order = True
                 next_seq_idx = 0
-                cache[:] = []
+                cache.clear()
+            elif msg == "get_all_tags":
+                try:
+                    tags = dataset.get_all_tags()
+                except Exception as exc:
+                    parent_conn.send(("all_tags", exc))
+                else:
+                    parent_conn.send(("all_tags", tags))
+            elif msg == "get_total_num_seqs":
+                try:
+                    total_num_seqs = dataset.get_total_num_seqs(**kwargs)
+                except Exception as exc:
+                    parent_conn.send(("total_num_seqs", exc))
+                else:
+                    parent_conn.send(("total_num_seqs", total_num_seqs))
             else:
                 raise Exception(f"unknown msg {msg!r}")
     except KeyboardInterrupt:  # when parent dies

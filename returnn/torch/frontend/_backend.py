@@ -993,7 +993,10 @@ class TorchBackend(Backend[torch.Tensor]):
         if clip_to_valid:
             if axis.dyn_size_ext is not None:
                 indices = rf.clip_by_value(
-                    indices, 0, axis.get_dyn_size_ext_for_device(indices.device) - 1, allow_broadcast_all_sources=True
+                    indices,
+                    0,
+                    rf.cast(axis.get_dyn_size_ext_for_device(indices.device), indices.dtype) - 1,
+                    allow_broadcast_all_sources=True,
                 )
             else:
                 indices = indices.copy()
@@ -1569,6 +1572,7 @@ class TorchBackend(Backend[torch.Tensor]):
                 indices_out_raw = indices_raw % a.dimension
                 indices_raw = indices_raw // a.dimension
                 indices = values.copy_template(name=f"top_k_indices_{a.name or i}")
+                indices.feature_dim = None
                 indices.dtype = TorchBackend.get_dtype_name_raw(indices_out_raw)
                 indices.sparse_dim = a
                 indices.raw_tensor = indices_out_raw
@@ -1585,6 +1589,7 @@ class TorchBackend(Backend[torch.Tensor]):
         values = source.copy_template_replace_dim_tag(axis=axis_int, new_dim_tag=k_dim, name="top_k_values")
         values.raw_tensor = values_raw
         indices = source.copy_template_replace_dim_tag(axis=axis_int, new_dim_tag=k_dim, name="top_k_indices")
+        indices.feature_dim = None
         indices.dtype = TorchBackend.get_dtype_name_raw(indices_raw)
         indices.sparse_dim = axis
         indices.raw_tensor = indices_raw
@@ -1636,6 +1641,8 @@ class TorchBackend(Backend[torch.Tensor]):
                 name=f"random_{distribution}", dims=dims, dtype=dtype, sparse_dim=sparse_dim, feature_dim=feature_dim
             )
             out.raw_tensor = torch.empty(shape, dtype=dtype_, device=device or rf.get_default_device())
+        if out.raw_tensor.device.type == "meta":
+            return out  # nothing more to do
         assert explicit_state is None  # not implemented otherwise
         generator = None  # using the global default from PT
         assert isinstance(static, bool)
@@ -1719,6 +1726,28 @@ class TorchBackend(Backend[torch.Tensor]):
         return out
 
     @staticmethod
+    def random_choice_with_replacement(dims: Sequence[Dim], *, probs: Tensor, axis: Dim) -> Tensor:
+        """random choice with replacement"""
+        assert all(d == axis or d in dims for d in probs.dims), (
+            f"random_choice_with_replacement: dims {dims} not compatible with probs {probs} and axis {axis}"
+        )
+        common_dims = [d for d in dims if d in probs.dims]
+        assert axis not in common_dims
+        probs = probs.copy_transpose(common_dims + [axis])
+        non_common_dims = [d for d in dims if d not in common_dims]
+        num_samples = prod([d.get_dim_value() for d in non_common_dims])
+        if len(common_dims) >= 2:
+            probs, flat_common_dim = rf.merge_dims(probs, dims=common_dims)
+        out_raw = torch.multinomial(probs.raw_tensor, num_samples=num_samples, replacement=True)
+        out_raw = out_raw.reshape(
+            [d.get_dim_value() for d in common_dims] + [d.get_dim_value() for d in non_common_dims]
+        )
+        out = rf.convert_to_tensor(out_raw, dims=common_dims + non_common_dims, sparse_dim=axis)
+        out = out.copy_transpose(dims)
+        out.name = "random_choice_with_replacement"
+        return out
+
+    @staticmethod
     def masked_select(
         tensor: Tensor, *, mask: Tensor, dims: Sequence[Dim], out_dim: Optional[Dim] = None
     ) -> Tuple[Tensor, Dim]:
@@ -1762,6 +1791,7 @@ class TorchBackend(Backend[torch.Tensor]):
             dims=(out_dim,) + tuple(remaining_dims),
             dtype=tensor.dtype,
             sparse_dim=tensor.sparse_dim,
+            feature_dim=tensor.feature_dim,
             raw_tensor=out_raw,
         )
         return out, out_dim

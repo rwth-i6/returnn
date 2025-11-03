@@ -557,7 +557,9 @@ def get_tensorflow_version_tuple() -> Tuple[int, ...]:
     import tensorflow as tf  # noqa
     import re
 
-    return tuple([int(re.sub("(-rc[0-9]|-dev[0-9]*)", "", s)) for s in tf.__version__.split(".")])
+    # Remove unwanted suffixes from the TF version string (e.g. "2.20.0-dev0+selfbuilt")
+    filtered_version = [re.sub("(-rc[0-9]|-dev[0-9]*)(\\+selfbuilt)?", "", s) for s in tf.__version__.split(".")]
+    return tuple(int(v) for v in filtered_version)
 
 
 class ReportImportedDevModules:
@@ -1693,15 +1695,17 @@ def inplace_increment(x: numpy.ndarray, idx: numpy.ndarray, y: Union[numpy.ndarr
     raise NotImplementedError("This feature was removed with dropped Theano support")
 
 
-def prod(ls):
+def prod(ls: Union[Iterable[T], numpy.ndarray]) -> Union[int, T, float]:
     """
-    :param list[T]|tuple[T]|numpy.ndarray ls:
-    :rtype: T|int|float
+    :param ls:
+    :return: ls[0] * ls[1] * ...
     """
-    if len(ls) == 0:
+    it = iter(ls)
+    try:
+        x = next(it)
+    except StopIteration:
         return 1
-    x = ls[0]
-    for y in ls[1:]:
+    for y in it:
         x = x * y  # *= doesn't work because x might be a tensor, and for e.g. torch.Tensor this op is in-place
     return x
 
@@ -2459,8 +2463,12 @@ class DictRefKeys(Generic[K, V]):
     Like `dict`, but hash and equality of the keys
     """
 
-    def __init__(self):
+    def __init__(self, items: Union[None, Iterable[Tuple[K, V]], Dict[K, V]] = None, /, **kwargs):
         self._d = {}  # type: Dict[RefIdEq[K], V]
+        if items is not None:
+            self.update(items)
+        if kwargs:
+            self.update(kwargs)
 
     def __repr__(self):
         return "DictRefKeys(%s)" % ", ".join(["%r: %r" % (k, v) for (k, v) in self.items()])
@@ -2488,6 +2496,15 @@ class DictRefKeys(Generic[K, V]):
 
     def __contains__(self, item: K):
         return RefIdEq(item) in self._d
+
+    def update(self, other: Union[Dict[K, V], Iterable[Tuple[K, V]]], /):
+        """
+        :param other: dict or iterable of (key, value) tuples
+        """
+        if isinstance(other, dict):
+            other = other.items()
+        for k, v in other:
+            self[k] = v
 
 
 def make_dll_name(basename):

@@ -100,7 +100,7 @@ class TextDictDataset(CachedDataset2):
             print(f"{self}: Warning: literal_py_to_pickle.literal_eval failed:", file=log.v3)
             print(f"  {type(exc).__name__}: {exc}", file=log.v3)
             print("  Fallback to eval...", file=log.v3)
-            data: Dict[str, Any] = eval(txt)
+            data: Dict[str, Any] = eval(txt, {"nan": float("nan"), "inf": float("inf")})
         assert data is not None
         assert isinstance(data, dict)
         assert len(data) > 0

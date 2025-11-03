@@ -9,6 +9,7 @@ See https://github.com/rwth-i6/returnn/issues/1519 for initial discussion.
 Main class is :class:`FileCache`.
 """
 
+from __future__ import annotations
 from typing import Any, Collection, Dict, Iterable, List, Optional, Tuple, Union
 import errno
 import os
@@ -143,12 +144,12 @@ class FileCache:
             filenames = [filenames]
         self._touch_files_thread.files_remove(fn_ for fn in filenames for fn_ in [fn, self._get_info_filename(fn)])
 
-    def cleanup(self, *, need_at_least_free_space_size: int = 0):
+    def cleanup(self, *, need_at_least_free_space_size: int = 0) -> CleanupResult:
         """
         Cleanup cache directory.
         """
         if not os.path.exists(self.cache_directory):
-            return
+            return CleanupResult(abort_reason="cache directory does not exist")
         disk_usage = shutil.disk_usage(self.cache_directory)
         want_free_space_size = max(
             int(self._cleanup_disk_usage_wanted_multiplier * need_at_least_free_space_size),
@@ -164,7 +165,13 @@ class FileCache:
         cur_time = time.time()
         # If we have enough free space, and we did a full cleanup recently, we don't need to do anything.
         if want_free_space_size <= disk_usage.free and cur_time - last_full_cleanup < 60 * 10:
-            return
+            return CleanupResult(
+                abort_reason=(
+                    f"enough free space"
+                    f" ({human_bytes_size(want_free_space_size)} < {human_bytes_size(disk_usage.free)})"
+                    f" and recent cleanup ({(cur_time - last_full_cleanup) / 60:.1f} minutes ago)"
+                )
+            )
         # immediately update the file's timestamp to reduce racyness between worker processes
         # Path().touch() also creates the file if it doesn't exist yet
         pathlib.Path(cleanup_timestamp_file).touch(exist_ok=True)
@@ -319,6 +326,8 @@ class FileCache:
             except Exception as exc:
                 print(f"FileCache: Error while removing empty dir {root}: {type(exc).__name__}: {exc}")
 
+        return CleanupResult(freed=cur_expected_free - disk_usage.free)
+
     def handle_cached_files_in_config(self, config: Any) -> Tuple[Any, List[str]]:
         """
         :param config: some config, e.g. dict, or any nested structure
@@ -390,6 +399,10 @@ class FileCache:
                 #   - https://github.com/rwth-i6/returnn/pull/1709
                 os.utime(dst_filename, None)
                 os.utime(info_file_name, None)
+                # Ensure we proactively make space for other users
+                # even in case we have all files ready on disk.
+                # See for discussion: https://github.com/rwth-i6/returnn/pull/1752.
+                self.cleanup(need_at_least_free_space_size=0)
                 return
 
             print(f"FileCache: Copy file {src_filename} to cache")
@@ -413,7 +426,21 @@ class FileCache:
                 orig_mtime_ns = os.stat(src_filename).st_mtime_ns
                 FileInfo(mtime_ns=orig_mtime_ns).save(info_file_name)
 
-                _copy_with_prealloc(src_filename, dst_tmp_filename)
+                try:
+                    _copy_with_prealloc(src_filename, dst_tmp_filename)
+                except Exception:
+                    # Cleanup if it was created already.
+                    # That avoids some of the ambiguity of the existence of the .copy file.
+                    # https://github.com/rwth-i6/returnn/issues/1785
+                    try:
+                        os.remove(dst_tmp_filename)
+                    except FileNotFoundError:
+                        pass
+                    try:
+                        os.remove(info_file_name)
+                    except FileNotFoundError:  # not really expected here, but safe to ignore
+                        pass
+                    raise
                 os.rename(dst_tmp_filename, dst_filename)
 
     @staticmethod
@@ -439,6 +466,21 @@ class FileCache:
             os.remove(dst_filename)
             return False
         return True
+
+
+class CleanupResult:
+    """
+    Result from :func:`FileCache.cleanup`.
+    """
+
+    def __init__(self, *, freed: int = 0, abort_reason: Optional[str] = None):
+        self.freed = freed
+        self.abort_reason = abort_reason
+
+    def __repr__(self):
+        if self.abort_reason:
+            return f"CleanupResult(abort_reason={self.abort_reason})"
+        return f"CleanupResult(freed={human_bytes_size(self.freed)})"
 
 
 def get_instance(config: Optional[Config] = None) -> FileCache:

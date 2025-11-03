@@ -11,14 +11,12 @@ See here:
 """
 
 import os
-import stat
 import sys
 import re
 import time
 import shutil
 import subprocess
 import tempfile
-import typing
 from glob import glob
 import argparse
 from xml.dom import minidom
@@ -115,8 +113,7 @@ def install_pycharm():
     print("Install PyCharm into:", pycharm_dir)
     sys.stdout.flush()
 
-    pycharm_version = (2020, 2)
-    name = "pycharm-community-%i.%i" % pycharm_version
+    name = "pycharm-community-2020.2"
     fn = "%s.tar.gz" % name
 
     subprocess.check_call(
@@ -466,6 +463,37 @@ def run_inspect(pycharm_dir, src_dir, skip_pycharm_inspect=False):
 
     fold_start("script.inspect")
     if not skip_pycharm_inspect:
+        fold_start("script.inspect.pycharm_inspect.sh.content")
+        with open("%s/bin/inspect.sh" % pycharm_dir) as f:
+            content = f.read()
+            print("Content of inspect.sh:")
+            print(content)
+        fold_end()
+
+        fold_start("script.inspect.pycharm.sh.content")
+        with open("%s/bin/pycharm.sh" % pycharm_dir) as f:
+            content = f.read()
+            print("Content of pycharm.sh:")
+            print(content)
+        fold_end()
+
+        fold_start("script.inspect.vmoptions.content")
+        fns = glob("%s/bin/*.vmoptions" % pycharm_dir)
+        if fns:
+            for fn in fns:
+                print("Content of %s:" % fn)
+                with open(fn) as f:
+                    content = f.read().splitlines(keepends=True)
+                print("".join(content))
+                if any(line.startswith("-Xmx") for line in content):
+                    print("Note: Patching Xmx settings...")
+                    content = ["-Xmx4000m\n" if line.startswith("-Xmx") else line for line in content]
+                    with open(fn, "w") as f:
+                        f.write("".join(content))
+        else:
+            print("No *.vmoptions found, not printing content.")
+        fold_end()
+
         # Note: Will not run if PyCharm is already running.
         # Maybe we can find some workaround for this?
         # See here: https://stackoverflow.com/questions/55339010/run-pycharm-inspect-sh-even-if-pycharm-is-already-runn
@@ -723,8 +751,11 @@ def main():
             "PyTypeCheckerInspection",  # too much false alarms: https://youtrack.jetbrains.com/issue/PY-34893
             # Not critical.
             "SpellCheckingInspection",  # way too much for now...
+            "GrazieInspection",  # grammar
             "PyClassHasNoInitInspection",  # not relevant?
             "PyMethodMayBeStaticInspection",  # not critical
+            # Does not work correctly here?
+            "PyPackageRequirementsInspection",  # TODO only with newer PyCharm versions?
         },
         ignore_count_for_files=ignore_count_for_files,
     )

@@ -16,7 +16,7 @@ T = TypeVar("T")
 
 
 def setup_post_hook_on_method(
-    obj: Any,
+    obj: T,
     attr: str,
     hook: Callable[[T, Tuple[Any, ...], Dict[str, Any], Any], Optional[Any]],
     *,
@@ -40,7 +40,7 @@ class MethodWithHooks:
     """
 
     @classmethod
-    def get(cls, obj: Any, attr: str) -> MethodWithHooks:
+    def get(cls, obj: T, attr: str) -> MethodWithHooks:
         """get existing or init new :class:`MethodWithHooks`"""
         method = getattr(obj, attr)
         if not isinstance(method, MethodWithHooks):
@@ -56,7 +56,7 @@ class MethodWithHooks:
             method.setup()
         return method
 
-    def __init__(self, obj: Any, attr: str):
+    def __init__(self, obj: T, attr: str):
         """
         :param obj:
         :param attr:

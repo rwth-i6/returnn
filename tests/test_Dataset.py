@@ -12,7 +12,7 @@ import tempfile
 import contextlib
 from returnn.datasets.generating import Task12AXDataset, DummyDataset, DummyDatasetMultipleSequenceLength
 from returnn.engine.batch import Batch
-from returnn.datasets.basic import Dataset, DatasetSeq, init_dataset
+from returnn.datasets.basic import Dataset, DatasetSeq, init_dataset, _get_seq_len_as_array
 from returnn.util.basic import NumbersDict
 from returnn.util import better_exchook
 
@@ -526,6 +526,26 @@ def test_get_seq_order_laplace_reference():
     assert seq_index == list(seq_index_)
 
 
+def test_get_seq_len_as_array():
+    with tempfile.NamedTemporaryFile(mode="wt", suffix=".npy", encoding="utf8") as tmp_seq_lens_file:
+        num_seqs = 3023
+        rnd = numpy.random.RandomState(42)
+        seq_lens = rnd.randint(1, 23, size=[num_seqs])
+
+        tmp_seq_lens_file.write(repr({f"seq-{i}": int(seq_lens[i]) for i in range(num_seqs)}))
+        tmp_seq_lens_file.write("\n")
+        tmp_seq_lens_file.flush()
+
+        dataset = Dataset()
+        dataset.epoch = 1
+        dataset.seq_ordering = "laplace:.100"
+        dataset._seq_order_seq_lens_file = tmp_seq_lens_file.name
+        dataset.get_all_tags = lambda: [f"seq-{i}" for i in range(num_seqs)]
+
+        seq_lens_ = _get_seq_len_as_array(dataset._get_seq_order_seq_lens_by_idx, num_seqs)
+        assert seq_lens_ is dataset._seq_order_seq_lens_by_idx
+
+
 @contextlib.contextmanager
 def create_ogg_zip_txt_only_dataset_opts(*, text: str = "hello world", seq_tag: str = "sequence0.wav"):
     """create OggZipDataset dict using temp data, consisting of a single sequence with text only"""
@@ -886,6 +906,89 @@ def test_MetaDataset():
         assert len(classes) == len(_demo_txt) + 1
 
 
+def test_CombinedDataset():
+    seq_len = 11
+    num_seqs = [10, 5]
+    num_sub_ds = len(num_seqs)
+    max_idx = num_sub_ds * max(num_seqs) * seq_len
+    keys = [f"data{ds_idx}" for ds_idx in range(num_sub_ds)]
+    data = [
+        [
+            numpy.array(
+                [ds_idx * max(num_seqs) * seq_len + seq_idx * seq_len + t for t in range(seq_len)],
+                dtype="int32",
+            )
+            for seq_idx in range(num_seqs[ds_idx])
+        ]
+        for ds_idx in range(num_sub_ds)
+    ]
+    data_flat = sum(data, [])
+    assert len(data_flat) == sum(num_seqs)
+    assert len(set(int(v[0]) for v in data_flat)) == sum(num_seqs)  # unique
+    n_tgt_dim = max_idx
+    sub_ds_dicts = [
+        {
+            "class": "StaticDataset",
+            "data": [{keys[ds_idx]: values} for values in data[ds_idx]],
+            "output_dim": {keys[ds_idx]: (n_tgt_dim, 1)},
+        }
+        for ds_idx in range(num_sub_ds)
+    ]
+
+    combined_ds_opts = {
+        "class": "CombinedDataset",
+        "datasets": {str(ds_idx): sub_ds_dicts[ds_idx] for ds_idx in range(num_sub_ds)},
+        "data_map": {(str(ds_idx), keys[ds_idx]): keys[ds_idx] for ds_idx in range(num_sub_ds)},
+    }
+    dataset = init_dataset(combined_ds_opts)
+    print("CombinedDataset:", dataset)
+
+    print("Testing default seq ordering...")
+    assert dataset.seq_ordering == "default"
+    seqs = dummy_iter_dataset(dataset)
+    assert len(seqs) == sum(num_seqs)
+    cur_ds_idx = 0
+    cur_sub_seq_idx = 0
+    for i, seq in enumerate(seqs):
+        assert all(seq.features[keys[cur_ds_idx]] == data[cur_ds_idx][cur_sub_seq_idx])
+        assert set(seq.features.keys()) == set(keys)
+        assert all(seq.features[other_key].shape == (0,) for other_key in keys if other_key != keys[cur_ds_idx])
+        cur_sub_seq_idx += 1
+        if cur_sub_seq_idx >= num_seqs[cur_ds_idx]:
+            cur_ds_idx += 1
+            cur_sub_seq_idx = 0
+    assert cur_ds_idx == num_sub_ds and cur_sub_seq_idx == 0
+
+    print("Testing random_dataset seq ordering...")
+    dataset.seq_ordering = "random_dataset"
+    seqs = dummy_iter_dataset(dataset)
+    assert len(seqs) == sum(num_seqs)
+    beginnings = []
+    for i, seq in enumerate(seqs):
+        relevant_keys = [k for k in keys if seq.features[k].shape[0] > 0]
+        assert len(relevant_keys) == 1
+        k = relevant_keys[0]
+        beginnings.append(int(seq.features[k][0]))
+    assert len(set(beginnings)) == sum(num_seqs)  # unique, see above
+
+    print("Testing interleave seq ordering...")
+    dataset.seq_ordering = "interleave"
+    seqs = dummy_iter_dataset(dataset)
+    assert len(seqs) == sum(num_seqs)
+    beginnings = []
+    visited_num_seqs = [0] * num_sub_ds
+    for i, seq in enumerate(seqs):
+        relevant_ds_idx = [i for i, k in enumerate(keys) if seq.features[k].shape[0] > 0]
+        assert len(relevant_ds_idx) == 1
+        ds_idx = relevant_ds_idx[0]
+        complete_fracs = [visited_num_seqs[j] / num_seqs[j] for j in range(num_sub_ds)]
+        assert complete_fracs[ds_idx] == min(complete_fracs)
+        beginnings.append(int(seq.features[keys[ds_idx]][0]))
+        visited_num_seqs[ds_idx] += 1
+    assert len(set(beginnings)) == sum(num_seqs)  # unique, see above
+    assert visited_num_seqs == num_seqs
+
+
 def test_MapDatasetWrapper():
     from returnn.datasets.map import MapDatasetBase
 
@@ -1120,9 +1223,63 @@ def test_DistributeFilesDataset():
     assert global_seq_idx == num_hdf_files * num_seqs
 
 
-def test_PostprocessingDataset():
-    from returnn.tensor.tensor_dict import TensorDict
+def _dfd_get_sub_epoch_dataset(files_subepoch: List[str]) -> Dict[str, Any]:
+    return {"class": "HDFDataset", "files": files_subepoch, "seq_ordering": "default"}
 
+
+def test_DistributeFilesDataset_sharding():
+    # https://github.com/rwth-i6/returnn/issues/1678
+    import pickle
+    from returnn.datasets.distrib_files import DistributeFilesDataset
+    from test_HDFDataset import generate_hdf_from_dummy
+    from returnn.config import global_config_ctx, Config
+
+    # Create a few HDF files such that we can easily verify the data later.
+    hdf_files = []
+    # num_seqs = 23
+    for hdf_idx in range(20):
+        hdf_files.append(generate_hdf_from_dummy())
+
+    # Test to load via DistributeFilesDataset.
+
+    # Setup some torch.distributed dummy environment.
+    distrib_size = 2
+    with global_config_ctx(Config({"__debug_dummy_distributed_rank_and_size": (1, distrib_size)})):
+        partition_epoch = 5
+        assert len(hdf_files) % partition_epoch == 0  # just for easier testing here
+        dataset = init_dataset(
+            {
+                "class": "DistributeFilesDataset",
+                "files": hdf_files,
+                "buffer_size": 100,
+                "distrib_shard_files": True,
+                "get_sub_epoch_dataset": _dfd_get_sub_epoch_dataset,
+                "partition_epoch": partition_epoch,
+                "seq_ordering": "random",
+            }
+        )
+        assert isinstance(dataset, DistributeFilesDataset)
+        assert dataset._num_shards == distrib_size and dataset._shard_index == 1
+        s = pickle.dumps(dataset)
+        dataset = pickle.loads(s)
+        assert isinstance(dataset, DistributeFilesDataset)
+        assert dataset._num_shards == distrib_size and dataset._shard_index == 1
+        global_seq_idx = 0
+        for sub_epoch in range(1, partition_epoch + 1):
+            print(f"Sub-epoch {sub_epoch}...")
+            dataset.init_seq_order(sub_epoch)
+            local_seq_idx = 0
+            while dataset.is_less_than_num_seqs(local_seq_idx):
+                print(f"Sub-epoch {sub_epoch}, seq {local_seq_idx} (global seq {global_seq_idx})...")
+                dataset.load_seqs(local_seq_idx, local_seq_idx + 1)
+                data = dataset.get_data(local_seq_idx, "classes")
+                assert data.ndim == 1 and data.shape[0] > 1
+                local_seq_idx += 1
+                global_seq_idx += 1
+        # assert global_seq_idx == len(hdf_files) * num_seqs // distrib_size  # TODO not sure...?
+
+
+def test_PostprocessingDataset():
     _demo_txt = "some utterance text that has a few words"
 
     def _add_1337_to_classes(tdict: TensorDict, **kwargs) -> TensorDict:

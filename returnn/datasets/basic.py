@@ -19,7 +19,7 @@ import os
 import math
 import numpy
 import functools
-import typing
+import types
 from typing import TYPE_CHECKING, Optional, Any, Set, Tuple, Union, Type, Dict, Sequence, List, Callable
 
 from returnn.log import log
@@ -155,7 +155,7 @@ class Dataset:
         self.seq_tags_filter = set(self._load_seq_list_file(seq_list_filter_file)) if seq_list_filter_file else None
         self.unique_seq_tags = unique_seq_tags
         self._seq_order_seq_lens_file = seq_order_seq_lens_file
-        self._seq_order_seq_lens_by_idx = None
+        self._seq_order_seq_lens_by_idx: Optional[Sequence[Union[int, float]]] = None
         # There is probably no use case for combining the two, so avoid potential misconfiguration.
         assert self.partition_epoch == 1 or self.repeat_epoch == 1, (
             "Combining partition_epoch and repeat_epoch is prohibited."
@@ -428,9 +428,9 @@ class Dataset:
         """
         raise OptionalNotImplementedError
 
-    def get_num_timesteps(self):
+    def get_num_timesteps(self) -> Union[int, NumbersDict]:
         """
-        :rtype: int
+        :return: how much frames we have in total.
         """
         assert self._num_timesteps > 0
         return self._num_timesteps
@@ -487,12 +487,8 @@ class Dataset:
         """
         raise NotImplementedError
 
-    def _get_seq_order_seq_lens_by_idx(self, seq_idx):
-        """
-        :param int seq_idx:
-        :rtype: int
-        """
-        if not self._seq_order_seq_lens_by_idx:
+    def _get_seq_order_seq_lens_by_idx(self, seq_idx: int) -> Union[int, float]:
+        if self._seq_order_seq_lens_by_idx is None:
             assert self._seq_order_seq_lens_file
             if self._seq_order_seq_lens_file.endswith(".gz"):
                 import gzip
@@ -503,11 +499,12 @@ class Dataset:
             seq_lens = eval(raw)
             assert isinstance(seq_lens, dict)
             all_tags = self.get_all_tags()
-            self._seq_order_seq_lens_by_idx = [seq_lens[tag] for tag in all_tags]
+            self._seq_order_seq_lens_by_idx = numpy.array([seq_lens[tag] for tag in all_tags])
+        self._get_seq_order_seq_lens_by_idx = self._seq_order_seq_lens_by_idx.__getitem__  # faster
         return self._seq_order_seq_lens_by_idx[seq_idx]
 
     def get_seq_order_for_epoch(
-        self, epoch: Optional[int], num_seqs: int, get_seq_len: Optional[Callable[[int], int]] = None
+        self, epoch: Optional[int], num_seqs: int, get_seq_len: Optional[Callable[[int], Union[int, float]]] = None
     ) -> Sequence[int]:
         """
         Returns the order of the given epoch.
@@ -516,7 +513,7 @@ class Dataset:
 
         :param epoch: for 'random', this determines the random seed
         :param num_seqs:
-        :param get_seq_len: function (originalSeqIdx: int) -> int
+        :param get_seq_len: function (originalSeqIdx: int) -> int|float
         :return: the order for the given epoch. such that seq_idx -> underlying idx
         """
         if epoch is None:
@@ -559,20 +556,33 @@ class Dataset:
             for i in range(1, num):
                 seq_index[i::num] += i * (num_seqs // num)
         elif seq_ordering_method == "reverse":
-            seq_index = range(num_seqs - 1, -1, -1)  # type: Union[range, typing.Sequence[int]]
+            seq_index = range(num_seqs - 1, -1, -1)  # type: Union[range, Sequence[int]]
         elif seq_ordering_method in ["sorted", "sorted_reverse"]:
             assert get_seq_len
-            reverse = -1 if seq_ordering_method == "sorted_reverse" else 1
-            seq_lens = [reverse * get_seq_len(i) for i in range(num_seqs)]
+            seq_lens = _get_seq_len_as_array(get_seq_len, num_seqs)
+            if seq_ordering_method == "sorted_reverse":
+                seq_lens = -seq_lens
             seq_index = numpy.argsort(seq_lens, kind="stable")
-        elif seq_ordering_method.startswith("random"):
-            tmp = seq_ordering_method.split(":")
+        elif seq_ordering_method == "random" or seq_ordering_method.startswith("random:"):
+            tmp = seq_ordering_method.split(":", 1)
             nth = int(tmp[1]) if len(tmp) > 1 else 1
             # Keep this deterministic! Use fixed seed.
             rnd_seed = self._get_random_seed_for_epoch(epoch=epoch, num_epochs_fixed=nth)
             random_generator = numpy.random.RandomState(rnd_seed)
             seq_index = random_generator.permutation(num_seqs)
-        elif seq_ordering_method.startswith("sort_bin_shuffle"):
+        elif seq_ordering_method == "random_sample" or seq_ordering_method.startswith("random_sample:"):
+            tmp = seq_ordering_method.split(":", 1)
+            nth = int(tmp[1]) if len(tmp) > 1 else 1
+            # Keep this deterministic! Use fixed seed.
+            rnd_seed = self._get_random_seed_for_epoch(epoch=epoch, num_epochs_fixed=nth)
+            random_generator = numpy.random.RandomState(rnd_seed)
+            seq_index = random_generator.randint(0, num_seqs, size=num_seqs)
+        elif (
+            seq_ordering_method == "sort_bin_shuffle"
+            or seq_ordering_method.startswith("sort_bin_shuffle:")
+            or seq_ordering_method == "sort_bin_shuffle_x2"
+            or seq_ordering_method.startswith("sort_bin_shuffle_x2:")
+        ):
             # Shuffle seqs, sort by length, and shuffle bins (then shuffle seqs within each bin if sort_bin_shuffle_x2).
             assert get_seq_len
             tmp = seq_ordering_method.split(":")[1:]
@@ -603,7 +613,7 @@ class Dataset:
                     random_generator.shuffle(part)  # Shuffle within the bin.
                 out_index.append(part)
             seq_index = numpy.concatenate(out_index)
-        elif seq_ordering_method.startswith("laplace"):
+        elif seq_ordering_method == "laplace" or seq_ordering_method.startswith("laplace:"):
             assert get_seq_len
             tmp = seq_ordering_method.split(":")[1:]
             if len(tmp) == 0:
@@ -617,7 +627,7 @@ class Dataset:
                 nth = 1
             else:
                 nth = int(tmp[1])
-            seq_lens = numpy.array([get_seq_len(i) for i in range(num_seqs)])
+            seq_lens = _get_seq_len_as_array(get_seq_len, num_seqs)
             rnd_seed = self._get_random_seed_for_epoch(epoch=epoch, num_epochs_fixed=nth)
             random_generator = numpy.random.RandomState(rnd_seed)
             seq_index = random_generator.permutation(num_seqs)  # type: Union[numpy.ndarray, List[int]]
@@ -748,12 +758,11 @@ class Dataset:
         """
         self.epoch = None
 
-    def get_current_seq_order(self):
+    def get_current_seq_order(self) -> Sequence[int]:
         """
         :return: many datasets use self.get_seq_order_for_epoch. this function would return the current seq order
           for the current epoch, after self.init_seq_order was called.
           Not all datasets implement this.
-        :rtype: typing.Sequence[int]
         """
         raise OptionalNotImplementedError
 
@@ -902,7 +911,7 @@ class Dataset:
         if self.seq_ordering == "default" and self.partition_epoch == 1:
             return seq_idx
         assert self.have_corpus_seq_idx()
-        raise NotImplemented
+        raise NotImplementedError
 
     def have_get_corpus_seq(self) -> bool:
         """
@@ -1061,7 +1070,7 @@ class Dataset:
         if key in self.num_outputs:
             if self.num_outputs[key][1] <= 1:
                 return []
-            res_shape = [None] * (self.num_outputs[key][1] - 1)  # type: typing.List[typing.Union[None,int]]
+            res_shape: List[Union[None, int]] = [None] * (self.num_outputs[key][1] - 1)
             if not self.is_data_sparse(key):
                 res_shape[-1] = self.get_data_dim(key)
             return res_shape
@@ -1491,6 +1500,7 @@ def get_dataset_class(name: Union[str, Type[Dataset]]) -> Optional[Type[Dataset]
         "distrib_files",
         "postprocessing",
         "text_dict",
+        "huggingface",
     ]
     for mod_name in mod_names:
         mod = import_module("returnn.datasets.%s" % mod_name)
@@ -1747,3 +1757,19 @@ def set_config_extern_data_from_dataset(config, dataset):
         "extern_data",
         {key: _data_kwargs_from_dataset_key(dataset=dataset, key=key) for key in dataset.get_data_keys()},
     )
+
+
+def _get_seq_len_as_array(get_seq_len: Callable[[int], Union[int, float]], num_seqs: int) -> numpy.ndarray:
+    if num_seqs == 0:
+        return numpy.zeros((0,), dtype=numpy.int32)
+    if isinstance(get_seq_len, (types.BuiltinMethodType, types.MethodWrapperType, types.MethodType)):
+        # Call it once. This might trigger some caching.
+        get_seq_len(0)
+        # Get it again. This might now get us a different (cached) function, e.g. array.__getitem__.
+        get_seq_len = getattr(get_seq_len.__self__, get_seq_len.__name__)
+        assert isinstance(get_seq_len, (types.BuiltinMethodType, types.MethodWrapperType, types.MethodType))
+        obj = get_seq_len.__self__
+        if isinstance(obj, numpy.ndarray) and get_seq_len.__name__ == "__getitem__":
+            assert obj.shape == (num_seqs,)
+            return obj
+    return numpy.array([get_seq_len(i) for i in range(num_seqs)])
