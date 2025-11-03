@@ -1030,7 +1030,12 @@ class Engine(EngineBase):
                         print("(No relevant parameters matching.)", file=log.v3)
                     continue
                 print(f"Pre-load weights for key '{preload_key}' from {opts['filename']}", file=log.v3)
-                preload_model_state = torch.load(opts["filename"], map_location=self._device)
+                if opts["filename"].endswith(".safetensors"):
+                    from safetensors.torch import load_file as safetensors_load
+
+                    preload_model_state = safetensors_load(opts["filename"], device=self._device)
+                else:
+                    preload_model_state = torch.load(opts["filename"], map_location=self._device)
                 if opts.get("checkpoint_key", "model") is not None:
                     # This can be used if an external checkpoint saves a checkpoint a different structure that just the
                     # model state dict. E.g., if a checkpoint is created using
