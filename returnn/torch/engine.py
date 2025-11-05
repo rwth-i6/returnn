@@ -1073,6 +1073,28 @@ class Engine(EngineBase):
                 preload_model_state_keys = set(preload_model_state.keys())
                 loaded_state_keys.update(preload_model_state.keys())
                 missing_keys.difference_update(preload_model_state.keys())
+
+                custom_missing_load_func = opts.get("custom_missing_load_func")
+                if custom_missing_load_func:
+                    custom_missing_vars_map = {}
+                    for var_name in missing_keys_preload:
+                        var_shape = self._pt_model.state_dict()[var_name].shape
+                        var_val = custom_missing_load_func(
+                            name=var_name,
+                            shape=var_shape,
+                            preload_model_state=preload_model_state,
+                            **util.get_fwd_compat_kwargs(),
+                        )
+                        if var_val is not None:
+                            assert var_val.shape == var_shape
+                            custom_missing_vars_map[var_name] = var_val
+                    preload_model_state.update(custom_missing_vars_map)
+                    missing_keys_preload, unexpected_keys_preload = self._pt_model.load_state_dict(
+                        preload_model_state, strict=False
+                    )
+                    loaded_state_keys.update(preload_model_state.keys())
+                    missing_keys.difference_update(preload_model_state.keys())
+
                 del preload_model_state
                 gc.collect()
 
