@@ -712,7 +712,7 @@ class HuggingFaceTokenizer(Vocabulary):
         self.tokenizer = transformers.AutoTokenizer.from_pretrained(
             huggingface_repo_dir, trust_remote_code=True
         )
-        super(QwenTokenizer, self).__init__(
+        super().__init__(
             vocab_file=None,
             seq_postfix=None,
             unknown_label=self.tokenizer.unk_token_id,
