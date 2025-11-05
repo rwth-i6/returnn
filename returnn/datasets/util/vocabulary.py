@@ -699,23 +699,18 @@ class HuggingFaceTokenizer(Vocabulary):
     Uses the `AutoTokenizer` class from the `transformers` package.
     """
 
-    def __init__(self, **opts):
+    def __init__(self, *, huggingface_repo_dir: str):
         """
         :param str huggingface_repo_dir: the directory containing the `tokenizer_config.json` file.
         """
         import transformers  # noqa
 
-        assert len(opts) == 1 and "huggingface_repo_dir" in opts, "Unexpected options."
-        opts = opts.copy()
-        for k in ["huggingface_repo_dir"]:
-            if k in opts:
-                # Make sure it is a string. (Could be e.g. Sis Path.)
-                opts[k] = str(opts[k])
-        self._opts = opts
-        opts = opts.copy()
-        self._cache_key = opts["huggingface_repo_dir"]
+        # Make sure it is a string. (Could be e.g. Sis Path.)
+        huggingface_repo_dir = str(huggingface_repo_dir)
+        self._opts = {"huggingface_repo_dir": huggingface_repo_dir}
+        self._cache_key = huggingface_repo_dir
         self.tokenizer = transformers.AutoTokenizer.from_pretrained(
-            opts["huggingface_repo_dir"], trust_remote_code=True
+            huggingface_repo_dir, trust_remote_code=True
         )
         super(QwenTokenizer, self).__init__(
             vocab_file=None,
