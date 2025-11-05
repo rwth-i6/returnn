@@ -709,9 +709,7 @@ class HuggingFaceTokenizer(Vocabulary):
         huggingface_repo_dir = str(huggingface_repo_dir)
         self._opts = {"huggingface_repo_dir": huggingface_repo_dir}
         self._cache_key = huggingface_repo_dir
-        self.tokenizer = transformers.AutoTokenizer.from_pretrained(
-            huggingface_repo_dir, trust_remote_code=True
-        )
+        self.tokenizer = transformers.AutoTokenizer.from_pretrained(huggingface_repo_dir, trust_remote_code=True)
         super().__init__(
             vocab_file=None,
             seq_postfix=None,
