@@ -1073,6 +1073,7 @@ class Engine(EngineBase):
                             name=var_name,
                             shape=var_shape,
                             preload_model_state=preload_model_state,
+                            **util.get_fwd_compat_kwargs(),
                         )
                         if var_val is not None:
                             assert var_val.shape == var_shape
