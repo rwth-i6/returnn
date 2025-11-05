@@ -2311,6 +2311,46 @@ class TorchBackend(Backend[torch.Tensor]):
 
         return out, (new_state_h, new_state_c)
 
+    @classmethod
+    def scaled_dot_product_attention(
+        cls,
+        query: _TT,
+        key: _TT,
+        value: _TT,
+        *,
+        attention_mask: Optional[_TT] = None,
+        dropout: float = 0.0,
+        key_dim: Dim,
+        axis: Dim,
+        is_causal: bool = False,
+        scale: Optional[float] = None,
+    ):
+        """
+        Scaled dot-product attention.
+        :return: attention output
+        """
+        if axis.dyn_size_ext is not None and any([d not in key.dims_set for d in axis.dyn_size_ext.dims]):
+            # the legacy CausalSelfAttention implementation uses an axis Dim which depends on another Dimension
+            # in the query. Thus the key/value matrices are only well-defined once they are multiplied with the query matrix...
+            # in this case, we just fall back to the old implementation
+            return super().scaled_dot_product_attention(
+                query=query,
+                key=key,
+                value=value,
+                attention_mask=attention_mask,
+                dropout=dropout,
+                key_dim=key_dim,
+                axis=axis,
+                is_causal=is_causal,
+                scale=scale,
+            )
+
+        # TODO...
+
+        if value.feature_dim in att.dims:
+            att.feature_dim = value.feature_dim
+        return att
+
     TensorArrayType = List[Tensor]
 
     @staticmethod

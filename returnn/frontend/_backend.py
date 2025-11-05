@@ -1328,6 +1328,64 @@ class Backend(Generic[T]):
         """
         raise NotImplementedError
 
+    @classmethod
+    def scaled_dot_product_attention(
+        cls,
+        query: Tensor,
+        key: Tensor,
+        value: Tensor,
+        *,
+        attention_mask: Optional[Tensor] = None,
+        dropout: float = 0.0,
+        key_dim: Dim,
+        axis: Dim,
+        is_causal: bool = False,
+        scale: Optional[float] = None,
+    ):
+        """
+        Scaled dot-product attention.
+
+        :param query:
+        :param key:
+        :param value:
+        :param attention_mask:
+        :param dropout:
+        :param key_dim: Embedding dimension of key (and query)
+        :param axis: Spatial axis of key/value to attend over
+        :param is_causal: Special case when the attention mask should be causal (e.g. for auto-regressive decoding).
+            Allows for more efficient implementation in some backends.
+        :param scale: Scaling factor applied prior to softmax
+        :return: attention output
+        """
+
+        query *= key_dim.dimension**-0.5 if scale is None else scale
+
+        if is_causal:
+            assert attention_mask is None
+            assert axis in query.dims_set, "query and key/value must share the same spatial axis for causal attention"
+            hist_dim = Dim(rf.range_over_dim(axis, device="cpu") + 1, name=f"{axis.description}:kv")
+            key, _ = rf.replace_dim(key, in_dim=axis, out_dim=hist_dim)
+            value, _ = rf.replace_dim(value, in_dim=axis, out_dim=hist_dim)
+            axis = hist_dim
+
+        attn_bias = None
+        if attention_mask is not None:
+            if attention_mask.dtype == "bool":
+                attn_bias = rf.where(attention_mask, 0.0, float("-inf"))
+            else:
+                attn_bias = attention_mask  # assume float-like
+
+        energy = rf.matmul(query, key, reduce=key_dim)  # [.., Q_len, K_len]
+        if attn_bias is not None:
+            energy = energy + attn_bias
+        att_weights = rf.softmax(energy, axis=axis)  # [.., Q_len, K_len]
+        att_weights = rf.dropout(att_weights, dropout)  # No broadcasting
+        # no need for mask because softmax already set those weights to zero
+        att = rf.matmul(att_weights, value, reduce=axis, use_mask=False)
+        if value.feature_dim in att.dims:
+            att.feature_dim = value.feature_dim
+        return att
+
     # For eager-based backends, this is a reasonable default implementation and type.
     TensorArrayType = List[Tensor]
 
