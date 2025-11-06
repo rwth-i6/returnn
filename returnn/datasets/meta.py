@@ -1295,10 +1295,12 @@ class CombinedDataset(CachedDataset2):
                 complete_fracs_and_ds_idx = [
                     (
                         self.datasets[self.dataset_idx2key_map[j]].get_complete_frac(
-                            self.used_num_seqs_per_subset[j] - 1, allow_only_lr_suitable=True
+                            self.used_num_seqs_per_subset[j], allow_only_lr_suitable=True
                         )
-                        if self.used_num_seqs_per_subset[j] > 0
-                        else 0.0,
+                        if self.datasets[self.dataset_idx2key_map[j]].is_less_than_num_seqs(
+                            self.used_num_seqs_per_subset[j]
+                        )
+                        else float("inf"),
                         j,
                     )
                     for j in range(len(self.datasets))
@@ -1310,9 +1312,7 @@ class CombinedDataset(CachedDataset2):
                 # Sort by complete frac, i.e. datasets with the lowest complete frac first.
                 complete_fracs_and_ds_idx.sort()
                 for complete_frac, dataset_idx in complete_fracs_and_ds_idx:
-                    if self.datasets[self.dataset_idx2key_map[dataset_idx]].is_less_than_num_seqs(
-                        self.used_num_seqs_per_subset[dataset_idx]
-                    ):
+                    if complete_frac < float("inf"):
                         break
                 else:
                     return False  # No dataset has remaining data

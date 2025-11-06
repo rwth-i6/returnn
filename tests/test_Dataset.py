@@ -976,17 +976,16 @@ def test_CombinedDataset():
     seqs = dummy_iter_dataset(dataset)
     assert len(seqs) == sum(num_seqs)
     beginnings = []
-    visited_num_seqs = [0] * num_sub_ds
+    ds_indices = []
     for i, seq in enumerate(seqs):
         relevant_ds_idx = [i for i, k in enumerate(keys) if seq.features[k].shape[0] > 0]
         assert len(relevant_ds_idx) == 1
         ds_idx = relevant_ds_idx[0]
-        complete_fracs = [visited_num_seqs[j] / num_seqs[j] for j in range(num_sub_ds)]
-        assert complete_fracs[ds_idx] == min(complete_fracs)
+        ds_indices.append(ds_idx)
         beginnings.append(int(seq.features[keys[ds_idx]][0]))
-        visited_num_seqs[ds_idx] += 1
     assert len(set(beginnings)) == sum(num_seqs)  # unique, see above
-    assert visited_num_seqs == num_seqs
+    assert len(ds_indices) == sum(num_seqs)
+    assert ds_indices == [0, 0, 1] * 5
 
 
 def test_MapDatasetWrapper():
