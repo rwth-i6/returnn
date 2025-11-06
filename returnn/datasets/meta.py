@@ -961,6 +961,7 @@ class CombinedDataset(CachedDataset2):
         super(CombinedDataset, self).__init__(**kwargs)
         assert self.shuffle_frames_of_nseqs == 0  # not implemented. anyway only for non-recurrent nets
 
+        self.data_map = data_map
         self.dataset_keys = set([m[0] for m in data_map.keys()])  # type: typing.Set[str]
         self.dataset_idx2key_map = dict(enumerate(sorted(self.dataset_keys)))  # idx -> dataset-key
         self.data_keys = set(data_map.values())  # type: typing.Set[str]
