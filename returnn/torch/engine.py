@@ -532,7 +532,7 @@ class Engine(EngineBase):
                     for key, val in eval_info.items():
                         self._tensorboard_writer.add_scalar(f"train/{key}", val, global_step=self.global_train_step)
                     self._tensorboard_writer.add_scalar(
-                        f"train/learning_rate",
+                        "train/learning_rate",
                         self._updater.get_effective_learning_rate(),
                         global_step=self.global_train_step,
                     )
@@ -930,12 +930,7 @@ class Engine(EngineBase):
             if not os.path.exists(filename) and os.path.exists(model_epoch_filename):
                 filename = model_epoch_filename
             print("Load model %s" % (filename,), file=log.v4)
-            if filename.endswith(".safetensors"):
-                from safetensors.torch import load_file as safetensors_load
-
-                checkpoint_state = safetensors_load(filename, device=self._device)
-            else:
-                checkpoint_state = torch.load(filename, map_location=self._device)
+            checkpoint_state = _torch_load(filename, device=self._device)
             if epoch is None:
                 epoch = checkpoint_state.get("epoch", self._start_epoch or 1)
             step = checkpoint_state.get("step", 1)
@@ -1035,12 +1030,7 @@ class Engine(EngineBase):
                         print("(No relevant parameters matching.)", file=log.v3)
                     continue
                 print(f"Pre-load weights for key '{preload_key}' from {opts['filename']}", file=log.v3)
-                if opts["filename"].endswith(".safetensors"):
-                    from safetensors.torch import load_file as safetensors_load
-
-                    preload_model_state = safetensors_load(opts["filename"], device=self._device)
-                else:
-                    preload_model_state = torch.load(opts["filename"], map_location=self._device)
+                preload_model_state = _torch_load(opts["filename"], device=self._device)
                 if opts.get("checkpoint_key", "model") is not None:
                     # This can be used if an external checkpoint saves a checkpoint a different structure that just the
                     # model state dict. E.g., if a checkpoint is created using
@@ -1732,3 +1722,15 @@ def _get_total_grad_norm(model: torch.nn.Module, p: float) -> float:
             p=p,
         ).item()
     )
+
+
+def _torch_load(filename: Union[str, os.PathLike], *, device: str) -> Dict[str, Any]:
+    # Might resolve PtCheckpoint or Sisyphus Path objects or so.
+    filename = os.fspath(filename)
+
+    if filename.endswith(".safetensors"):
+        from safetensors.torch import load_file as safetensors_load
+
+        return safetensors_load(filename, device=device)
+
+    return torch.load(filename, map_location=device)
