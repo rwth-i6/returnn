@@ -1337,8 +1337,9 @@ class Backend(Generic[T]):
         *,
         attention_mask: Optional[Tensor] = None,
         dropout: float = 0.0,
-        key_dim: Dim,
-        axis: Dim,
+        embed_dim: Dim,
+        kv_spatial_dim: Dim,
+        query_spatial_dim: Dim,
         is_causal: bool = False,
         scale: Optional[float] = None,
     ):
@@ -1350,23 +1351,26 @@ class Backend(Generic[T]):
         :param value:
         :param attention_mask:
         :param dropout:
-        :param key_dim: Embedding dimension of key (and query)
-        :param axis: Spatial axis of key/value to attend over
+        :param embed_dim: Embedding dimension of key (and query)
+        :param kv_spatial_dim: Spatial axis of key/value to attend over
+        :param query_spatial_dim: Spatial axis of query
         :param is_causal: Special case when the attention mask should be causal (e.g. for auto-regressive decoding).
             Allows for more efficient implementation in some backends.
         :param scale: Scaling factor applied prior to softmax
         :return: attention output
         """
 
-        query *= key_dim.dimension**-0.5 if scale is None else scale
+        query *= embed_dim.dimension**-0.5 if scale is None else scale
 
         if is_causal:
             assert attention_mask is None
-            assert axis in query.dims_set, "query and key/value must share the same spatial axis for causal attention"
-            hist_dim = Dim(rf.range_over_dim(axis, device="cpu") + 1, name=f"{axis.description}:kv")
-            key, _ = rf.replace_dim(key, in_dim=axis, out_dim=hist_dim)
-            value, _ = rf.replace_dim(value, in_dim=axis, out_dim=hist_dim)
-            axis = hist_dim
+            assert kv_spatial_dim in query.dims_set, (
+                "query and key/value must share the same spatial axis for causal attention"
+            )
+            hist_dim = Dim(rf.range_over_dim(kv_spatial_dim, device="cpu") + 1, name=f"{kv_spatial_dim.description}:kv")
+            key, _ = rf.replace_dim(key, in_dim=kv_spatial_dim, out_dim=hist_dim)
+            value, _ = rf.replace_dim(value, in_dim=kv_spatial_dim, out_dim=hist_dim)
+            kv_spatial_dim = hist_dim
 
         attn_bias = None
         if attention_mask is not None:
@@ -1375,13 +1379,13 @@ class Backend(Generic[T]):
             else:
                 attn_bias = attention_mask  # assume float-like
 
-        energy = rf.matmul(query, key, reduce=key_dim)  # [.., Q_len, K_len]
+        energy = rf.matmul(query, key, reduce=embed_dim)  # [.., Q_spatial, K_spatial]
         if attn_bias is not None:
             energy = energy + attn_bias
-        att_weights = rf.softmax(energy, axis=axis)  # [.., Q_len, K_len]
+        att_weights = rf.softmax(energy, axis=kv_spatial_dim)  # [.., Q_spatial, K_spatial]
         att_weights = rf.dropout(att_weights, dropout)  # No broadcasting
-        # no need for mask because softmax already set those weights to zero
-        att = rf.matmul(att_weights, value, reduce=axis, use_mask=False)
+        # no need for mask because softmax already sets those weights to zero
+        att = rf.matmul(att_weights, value, reduce=kv_spatial_dim, use_mask=False)
         if value.feature_dim in att.dims:
             att.feature_dim = value.feature_dim
         return att
