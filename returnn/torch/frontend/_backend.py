@@ -2320,8 +2320,9 @@ class TorchBackend(Backend[torch.Tensor]):
         *,
         attention_mask: Optional[_TT] = None,
         dropout: float = 0.0,
-        key_dim: Dim,
-        axis: Dim,
+        embed_dim: Dim,
+        kv_spatial_dim: Dim,
+        query_spatial_dim: Dim,
         is_causal: bool = False,
         scale: Optional[float] = None,
     ):
@@ -2329,23 +2330,59 @@ class TorchBackend(Backend[torch.Tensor]):
         Scaled dot-product attention.
         :return: attention output
         """
-        if axis.dyn_size_ext is not None and any([d not in key.dims_set for d in axis.dyn_size_ext.dims]):
-            # the legacy CausalSelfAttention implementation uses an axis Dim which depends on another Dimension
-            # in the query. Thus the key/value matrices are only well-defined once they are multiplied with the query matrix...
-            # in this case, we just fall back to the old implementation
+        if kv_spatial_dim.dyn_size_ext is not None and any(
+            [d not in key.dims_set for d in kv_spatial_dim.dyn_size_ext.dims]
+        ):
+            # the legacy CausalSelfAttention implementation has a Dimension in the key which depends on another Dimension
+            # that only exists in the query matrix.
+            # Therefore the key/value matrices are only well-defined once they are multiplied with the query matrix...
+            # In this case, we just fall back to the old implementation to not break old setups.
             return super().scaled_dot_product_attention(
                 query=query,
                 key=key,
                 value=value,
                 attention_mask=attention_mask,
                 dropout=dropout,
-                key_dim=key_dim,
-                axis=axis,
+                embed_dim=embed_dim,
+                kv_spatial_dim=kv_spatial_dim,
+                query_spatial_dim=query_spatial_dim,
                 is_causal=is_causal,
                 scale=scale,
             )
 
-        # TODO...
+        query_raw = query.raw_tensor
+        key_raw = key.raw_tensor
+        value_raw = value.raw_tensor
+
+        # this assumes the head and embed dims are the same across all matrices
+        # but torch can also handle different shapes (see documentation)
+        batch_dims = query.remaining_dims([embed_dim, query_spatial_dim])
+        assert set(batch_dims) == set(key.remaining_dims([embed_dim, kv_spatial_dim]))
+        assert set(batch_dims) == set(value.remaining_dims([embed_dim, kv_spatial_dim]))
+        query_raw = torch.permute(
+            query_raw, [query.get_axis_from_description(d) for d in batch_dims + [query_spatial_dim, embed_dim]]
+        )
+        key_raw = torch.permute(
+            key_raw, [key.get_axis_from_description(d) for d in batch_dims + [kv_spatial_dim, embed_dim]]
+        )
+        value_raw = torch.permute(
+            value_raw, [value.get_axis_from_description(d) for d in batch_dims + [kv_spatial_dim, embed_dim]]
+        )
+
+        attention_mask_raw = None
+        if attention_mask is not None:
+            attention_mask_raw = attention_mask.raw_tensor
+            # TODO shape
+
+        att = torch.nn.functional.scaled_dot_product_attention(
+            query_raw,
+            key_raw,
+            value_raw,
+            attn_mask=attention_mask_raw,
+            dropout_p=dropout if rf.get_run_ctx().is_train_flag_enabled(func=rf.dropout) else 0.0,
+            is_causal=is_causal,
+            scale=scale,
+        )
 
         if value.feature_dim in att.dims:
             att.feature_dim = value.feature_dim
