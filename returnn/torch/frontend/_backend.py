@@ -2320,7 +2320,7 @@ class TorchBackend(Backend[torch.Tensor]):
         *,
         attention_mask: Optional[_TT] = None,
         dropout: float = 0.0,
-        embed_dim: Dim,
+        qk_embed_dim: Dim,
         kv_spatial_dim: Dim,
         query_spatial_dim: Dim,
         is_causal: bool = False,
@@ -2343,7 +2343,7 @@ class TorchBackend(Backend[torch.Tensor]):
                 value=value,
                 attention_mask=attention_mask,
                 dropout=dropout,
-                embed_dim=embed_dim,
+                qk_embed_dim=qk_embed_dim,
                 kv_spatial_dim=kv_spatial_dim,
                 query_spatial_dim=query_spatial_dim,
                 is_causal=is_causal,
@@ -2356,25 +2356,39 @@ class TorchBackend(Backend[torch.Tensor]):
 
         # this assumes the head and embed dims are the same across all matrices
         # but torch can also handle different shapes (see documentation)
-        batch_dims = query.remaining_dims([embed_dim, query_spatial_dim])
-        assert set(batch_dims) == set(key.remaining_dims([embed_dim, kv_spatial_dim]))
-        assert set(batch_dims) == set(value.remaining_dims([embed_dim, kv_spatial_dim]))
+        v_embed_dim = qk_embed_dim  # but keep this for clarity, in case we want to extend it later
+        if value.feature_dim is not None:
+            assert value.feature_dim == v_embed_dim  # maybe unnecessary check?
+        batch_dims = query.remaining_dims([qk_embed_dim, query_spatial_dim])
+        assert set(batch_dims) == set(key.remaining_dims([qk_embed_dim, kv_spatial_dim]))
+        assert set(batch_dims) == set(value.remaining_dims([v_embed_dim, kv_spatial_dim]))
         query_raw = torch.permute(
-            query_raw, [query.get_axis_from_description(d) for d in batch_dims + [query_spatial_dim, embed_dim]]
+            query_raw, [query.get_axis_from_description(d) for d in batch_dims + [query_spatial_dim, qk_embed_dim]]
         )
         key_raw = torch.permute(
-            key_raw, [key.get_axis_from_description(d) for d in batch_dims + [kv_spatial_dim, embed_dim]]
+            key_raw, [key.get_axis_from_description(d) for d in batch_dims + [kv_spatial_dim, qk_embed_dim]]
         )
         value_raw = torch.permute(
-            value_raw, [value.get_axis_from_description(d) for d in batch_dims + [kv_spatial_dim, embed_dim]]
+            value_raw, [value.get_axis_from_description(d) for d in batch_dims + [kv_spatial_dim, v_embed_dim]]
         )
 
         attention_mask_raw = None
         if attention_mask is not None:
+            assert not is_causal, "cannot combine attention_mask and is_causal"
             attention_mask_raw = attention_mask.raw_tensor
-            # TODO shape
+            # assumes that query and kv spatial dim are present in the attention mask,
+            # this requirement could be relaxed...
+            att_mask_batch_dims = attention_mask.remaining_dims([query_spatial_dim, kv_spatial_dim])
 
-        att = torch.nn.functional.scaled_dot_product_attention(
+            attention_mask_raw = torch.permute(
+                attention_mask_raw,
+                [
+                    attention_mask.get_axis_from_description(d)
+                    for d in att_mask_batch_dims + [query_spatial_dim, kv_spatial_dim]
+                ],
+            )
+
+        att_raw = torch.nn.functional.scaled_dot_product_attention(
             query_raw,
             key_raw,
             value_raw,
@@ -2383,6 +2397,12 @@ class TorchBackend(Backend[torch.Tensor]):
             is_causal=is_causal,
             scale=scale,
         )
+        att = query.copy_template_replace_dim_tag(
+            axis=query.get_axis_from_description(qk_embed_dim),
+            new_dim_tag=v_embed_dim,
+            name="scaled_dot_product_attention",
+        )
+        att.raw_tensor = att_raw
 
         if value.feature_dim in att.dims:
             att.feature_dim = value.feature_dim
