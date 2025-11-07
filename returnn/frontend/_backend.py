@@ -1337,7 +1337,8 @@ class Backend(Generic[T]):
         *,
         attention_mask: Optional[Tensor] = None,
         dropout: float = 0.0,
-        embed_dim: Dim,
+        v_embed_dim: Dim,
+        qk_embed_dim: Dim,
         kv_spatial_dim: Dim,
         query_spatial_dim: Dim,
         is_causal: bool = False,
@@ -1351,7 +1352,8 @@ class Backend(Generic[T]):
         :param value:
         :param attention_mask:
         :param dropout:
-        :param embed_dim: Embedding dimension of key (and query)
+        :param v_embed_dim: Embedding dimension of value
+        :param qk_embed_dim: Embedding dimension of key and query
         :param kv_spatial_dim: Spatial axis of key/value to attend over
         :param query_spatial_dim: Spatial axis of query
         :param is_causal: Special case when the attention mask should be causal (e.g. for auto-regressive decoding).
@@ -1360,7 +1362,7 @@ class Backend(Generic[T]):
         :return: attention output
         """
 
-        query *= embed_dim.dimension**-0.5 if scale is None else scale
+        query *= qk_embed_dim.dimension**-0.5 if scale is None else scale
 
         if is_causal:
             assert attention_mask is None
@@ -1379,7 +1381,7 @@ class Backend(Generic[T]):
             else:
                 attn_bias = attention_mask  # assume float-like
 
-        energy = rf.matmul(query, key, reduce=embed_dim)  # [.., Q_spatial, K_spatial]
+        energy = rf.matmul(query, key, reduce=qk_embed_dim)  # [.., Q_spatial, K_spatial]
         if attn_bias is not None:
             energy = energy + attn_bias
         att_weights = rf.softmax(energy, axis=kv_spatial_dim)  # [.., Q_spatial, K_spatial]
