@@ -491,31 +491,32 @@ class MetaDataset(CachedDataset2):
         :return: list of all seq tags, of the whole dataset, without partition epoch
         :rtype: list[str]
         """
-        if self.seq_list_original is not None:
-            return self.seq_list_original[self.default_dataset_key]
-        elif self._seq_list_file is None:
+        if self._seq_list_file is None:
             return self.datasets[self.default_dataset_key].get_all_tags()
-        else:
-            self._lazy_init_seq_list()
-            return self.seq_list_original[self.default_dataset_key]
+        self._lazy_init_seq_list()
+        assert self.seq_list_original is not None
+        return self.seq_list_original[self.default_dataset_key]
 
     def get_total_num_seqs(self, *, fast: bool = False) -> int:
         """
+        :param fast: if True, might raise an exception if not possible to get fast.
         :return: total number of seqs, without partition epoch
         """
-        if self.seq_list_original is not None:
-            return len(self.seq_list_original[self.default_dataset_key])
-        elif self._seq_list_file is None:
-            return self.datasets[self.default_dataset_key].get_total_num_seqs()
-        else:
-            self._lazy_init_seq_list()
-            return len(self.seq_list_original[self.default_dataset_key])
+        if self._seq_list_file is None:
+            return self.datasets[self.default_dataset_key].get_total_num_seqs(fast=fast)
+        if fast and self.seq_list_original is None:
+            raise OptionalNotImplementedError(f"{self} get_total_num_seqs, seq list not loaded yet")
+        self._lazy_init_seq_list()
+        assert self.seq_list_original is not None
+        return len(self.seq_list_original[self.default_dataset_key])
 
     def get_num_timesteps(self):
         """num timesteps"""
         if self._num_timesteps is None and self._seq_lens_file:
             self._lazy_init_seq_lens()
             self._num_timesteps = sum([self._seq_lens[s] for s in self.get_all_tags()], start=NumbersDict())
+        if self._seq_list_file is None:
+            return self.datasets[self.default_dataset_key].get_num_timesteps()
         return super().get_num_timesteps()
 
     def finish_epoch(self, *, free_resources: bool = False):
