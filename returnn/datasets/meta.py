@@ -371,6 +371,15 @@ class MetaDataset(CachedDataset2):
         self._lazy_init_seq_list()
         self.tag_idx = {tag: idx for (idx, tag) in enumerate(self.seq_list_original[self.default_dataset_key])}
 
+    def _lazy_init_seq_lens(self):
+        if self._seq_lens is not None:
+            return
+        assert self._seq_lens_file
+        seq_lens = load_json(filename=self._seq_lens_file)
+        assert isinstance(seq_lens, dict)
+        # dict[str,NumbersDict], seq-tag -> data-key -> len
+        self._seq_lens = {tag: NumbersDict(lens) for (tag, lens) in seq_lens.items()}
+
     def _get_dataset_seq_length(self, seq_idx: int):
         if not self.orig_seq_order_is_initialized:
             self._lazy_init_seq_list()
@@ -425,7 +434,7 @@ class MetaDataset(CachedDataset2):
             seq_order_dataset.init_seq_order(epoch=epoch)
             seq_index = seq_order_dataset.get_current_seq_order()
         else:
-            if self._seq_lens:
+            if self._seq_lens_file:
 
                 def get_seq_len(s):
                     """
@@ -433,6 +442,7 @@ class MetaDataset(CachedDataset2):
                     :rtype: int
                     """
                     self._lazy_init_seq_list()
+                    self._lazy_init_seq_lens()
                     return self._seq_lens[self.seq_list_original[self.default_dataset_key][s]]["data"]
 
             elif self._seq_order_seq_lens_file:
@@ -457,7 +467,7 @@ class MetaDataset(CachedDataset2):
         """supports sorting"""
         if self.seq_order_control_dataset:
             return self.datasets[self.seq_order_control_dataset].supports_seq_order_sorting()
-        if self._seq_lens or self._seq_order_seq_lens_file:
+        if self._seq_lens_file or self._seq_order_seq_lens_file:
             return True
         return False
 
@@ -504,10 +514,7 @@ class MetaDataset(CachedDataset2):
     def get_num_timesteps(self):
         """num timesteps"""
         if self._num_timesteps is None and self._seq_lens_file:
-            seq_lens = load_json(filename=self._seq_lens_file)
-            assert isinstance(seq_lens, dict)
-            # dict[str,NumbersDict], seq-tag -> data-key -> len
-            self._seq_lens = {tag: NumbersDict(l) for (tag, l) in seq_lens.items()}
+            self._lazy_init_seq_lens()
             self._num_timesteps = sum([self._seq_lens[s] for s in self.get_all_tags()], start=NumbersDict())
         return super().get_num_timesteps()
 
@@ -573,7 +580,8 @@ class MetaDataset(CachedDataset2):
         :param int sorted_seq_idx:
         :rtype: NumbersDict
         """
-        if self._seq_lens:
+        if self._seq_lens_file:
+            self._lazy_init_seq_lens()
             return self._seq_lens[self.get_tag(sorted_seq_idx)]
         return super(MetaDataset, self).get_seq_length(sorted_seq_idx)
 
