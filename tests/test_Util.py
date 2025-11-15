@@ -615,11 +615,11 @@ def test_import_wrong_pkg_py_import():
     del sys.modules[mod_name]
 
     try:
-        import returnn_import.github_com.rwth_i6.returnn_experiments.v20210302153450_10beb9d1c57e
+        import returnn_import.github_com.rwth_i6.returnn_experiments.v20210302153450_10beb9d1c57e as _mod
     except MissingExplicitImport as exc:  # but *not* a normal ImportError
         print("Got expected exception:", exc)
     else:
-        raise Exception("We expected an import error exception but got nothing.")
+        raise Exception(f"We expected an import error exception but got nothing and module {_mod}")
 
 
 def test_literal_py_to_pickle():
