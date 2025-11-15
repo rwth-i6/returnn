@@ -143,7 +143,7 @@ jobs:
         python -c "import numpy; print('NumPy:', numpy.version.full_version)"
 
         echo "Pytest env:"
-        python -m pytest -V
+        python -m pytest --version
 
     - name: Run test
       run: |
@@ -208,7 +208,7 @@ jobs:
         python -c "import numpy; print('NumPy:', numpy.version.full_version)"
 
         echo "Pytest env:"
-        python -m pytest -V
+        python -m pytest --version
 
     - name: Run test
       run: |
@@ -301,7 +301,7 @@ jobs:
         python -c "import tensorflow as tf; assert tf.__version__ == '${{ matrix.tf-version }}'"
 
         echo "Pytest env:"
-        python -m pytest -V
+        python -m pytest --version
 
     - name: Run test
       run: |
@@ -370,7 +370,7 @@ jobs:
         python -c "import torch; assert (torch.__version__ + '+').startswith('${{ matrix.torch-version }}+')"
 
         echo "Pytest env:"
-        python -m pytest -V
+        python -m pytest --version
 
     - name: Run test
       run: |
@@ -511,7 +511,7 @@ jobs:
         python -c "import tensorflow as tf; assert tf.__version__ == '${{ matrix.tf-version }}'"
 
         echo "Pytest env:"
-        python -m pytest -V
+        python -m pytest --version
 
     - name: Run test
       run: |
