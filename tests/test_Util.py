@@ -200,6 +200,22 @@ def test_NumbersDict_eq_2():
     assert a != 5
 
 
+def test_NumbersDict_add0():
+    a = NumbersDict(numbers_dict={"data": 3, "classes": 2}, broadcast_value=1)
+    b = NumbersDict() + a
+    assert isinstance(b, NumbersDict)
+    assert b.value == 1
+    assert b.dict == {"data": 3, "classes": 2}
+
+
+def test_NumbersDict_add0a():
+    a = NumbersDict(numbers_dict={"data": 3, "classes": 2})
+    b = NumbersDict() + a
+    assert isinstance(b, NumbersDict)
+    assert b.value is None
+    assert b.dict == {"data": 3, "classes": 2}
+
+
 def test_NumbersDict_mul():
     a = NumbersDict(numbers_dict={"data": 3, "classes": 2}, broadcast_value=1)
     b = a * 2
