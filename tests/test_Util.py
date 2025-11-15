@@ -21,7 +21,7 @@ my_dir = os.path.dirname(os.path.realpath(__file__))
 
 
 def _sig_alarm_handler(signum, frame):
-    raise Exception(f"Alarm (timeout) signal handler")
+    raise Exception("Alarm (timeout) signal handler")
 
 
 signal.signal(signal.SIGALRM, _sig_alarm_handler)
