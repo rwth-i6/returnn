@@ -253,21 +253,12 @@ class MetaDataset(CachedDataset2):
         }
 
         self._seq_list_file = seq_list_file
-        self.seq_list_original = self._load_seq_list(seq_list_file)
-
-        self.tag_idx = {tag: idx for (idx, tag) in enumerate(self.seq_list_original[self.default_dataset_key])}
+        self.seq_list_original: Optional[Dict[str, List[str]]] = None
+        self.tag_idx: Optional[Dict[str, int]] = None
 
         self._seq_lens: Optional[Dict[str, NumbersDict]] = None
         self._num_timesteps: Optional[NumbersDict] = None
         self._seq_lens_file = seq_lens_file
-        if seq_lens_file:
-            seq_lens = load_json(filename=seq_lens_file)
-            assert isinstance(seq_lens, dict)
-            # dict[str,NumbersDict], seq-tag -> data-key -> len
-            self._seq_lens = {tag: NumbersDict(l) for (tag, l) in seq_lens.items()}
-            self._num_timesteps = sum(
-                [self._seq_lens[s] for s in self.seq_list_original[self.default_dataset_key]], start=NumbersDict()
-            )
 
         if data_dims:
             data_dims = convert_data_dims(data_dims)
@@ -289,14 +280,14 @@ class MetaDataset(CachedDataset2):
         self.num_outputs = self.data_dims
 
         self.orig_seq_order_is_initialized = False
+        self._current_seq_order: List[int] = []
         self.seq_list_ordered: Optional[Dict[str, List[str]]] = None
 
-    def _load_seq_list(self, seq_list_file: Optional[Union[str, Dict[str, str]]] = None) -> Dict[str, List[str]]:
-        """
-        :param seq_list_file:
-        :return: dict: dataset key -> seq list
-        """
-        if not seq_list_file:
+    def _lazy_init_seq_list(self):
+        if self.seq_list_original is not None:
+            return
+
+        if not self._seq_list_file:
             # We create a sequence list from all the sequences of the default dataset
             # and hope that it also applies to the
             # other datasets.
@@ -349,15 +340,15 @@ class MetaDataset(CachedDataset2):
                         break  # only print one
                 del seq_list_set
                 raise Exception("Dataset %r is missing seqs." % key)
-        elif isinstance(seq_list_file, str):
-            seq_list = Dataset._load_seq_list_file(seq_list_file, expect_list=False)
-        elif isinstance(seq_list_file, dict):
+        elif isinstance(self._seq_list_file, str):
+            seq_list = Dataset._load_seq_list_file(self._seq_list_file, expect_list=False)
+        elif isinstance(self._seq_list_file, dict):
             for key in self.dataset_keys:
-                if key not in seq_list_file:
+                if key not in self._seq_list_file:
                     raise ValueError(f"seq_list_file does not contain all datasets, missing {key}")
-            seq_list = {key: Dataset._load_seq_list_file(seq_list_file[key]) for key in self.dataset_keys}
+            seq_list = {key: Dataset._load_seq_list_file(self._seq_list_file[key]) for key in self.dataset_keys}
         else:
-            raise TypeError(f"unexpected seq_list_file type {type(seq_list_file)}")
+            raise TypeError(f"unexpected seq_list_file type {type(self._seq_list_file)}")
 
         if isinstance(seq_list, list):
             # Use same seq list for all datasets
@@ -371,10 +362,18 @@ class MetaDataset(CachedDataset2):
 
         for key in self.dataset_keys:
             assert len(seq_list[key]) == len(seq_list[self.default_dataset_key])
-        return seq_list
+
+        self.seq_list_original = seq_list
+
+    def _lazy_init_tag_idx(self):
+        if self.tag_idx is not None:
+            return
+        self._lazy_init_seq_list()
+        self.tag_idx = {tag: idx for (idx, tag) in enumerate(self.seq_list_original[self.default_dataset_key])}
 
     def _get_dataset_seq_length(self, seq_idx: int):
         if not self.orig_seq_order_is_initialized:
+            self._lazy_init_seq_list()
             # To use get_seq_length() we first have to init the sequence order once in original order.
             # If sequence lengths are not needed by get_seq_order_for_epoch this is never executed.
             self.datasets[self.default_dataset_key].init_seq_order(
@@ -398,6 +397,7 @@ class MetaDataset(CachedDataset2):
             self.epoch is None
             or self.epoch != epoch
             or self.seq_list_ordered is None
+            or not self._current_seq_order
             or seq_list is not None
             or seq_order is not None
             or self.expected_load_seq_start > 0
@@ -407,16 +407,17 @@ class MetaDataset(CachedDataset2):
             # This is called via initialize() with epoch=None, just to init some other things.
             # We are not expected to have prepared any real epoch here.
             self._num_seqs = 0
+            self._current_seq_order = []
             return True
 
         if not need_reinit:
-            self._num_seqs = len(self.seq_list_ordered[self.default_dataset_key])
             return False
 
         seq_order_dataset = None
         if seq_order is not None:
             seq_index = seq_order
         elif seq_list is not None:
+            self._lazy_init_tag_idx()
             seq_index = [self.tag_idx[tag] for tag in seq_list]
         elif self.seq_order_control_dataset:
             seq_order_dataset = self.datasets[self.seq_order_control_dataset]
@@ -431,6 +432,7 @@ class MetaDataset(CachedDataset2):
                     :param int s:
                     :rtype: int
                     """
+                    self._lazy_init_seq_list()
                     return self._seq_lens[self.seq_list_original[self.default_dataset_key][s]]["data"]
 
             elif self._seq_order_seq_lens_file:
@@ -440,6 +442,8 @@ class MetaDataset(CachedDataset2):
                 get_seq_len = self._get_dataset_seq_length
             seq_index = self.get_seq_order_for_epoch(epoch, self.get_total_num_seqs(), get_seq_len)
         self._num_seqs = len(seq_index)
+        self._current_seq_order = seq_index
+        self._lazy_init_seq_list()
         self.seq_list_ordered = {key: [ls[s] for s in seq_index] for (key, ls) in self.seq_list_original.items()}
 
         for dataset_key, dataset in self.datasets.items():
@@ -470,20 +474,44 @@ class MetaDataset(CachedDataset2):
         :return: current seq order for the current epoch, after self.init_seq_order was called.
         :rtype: list[int]
         """
-        return [self.tag_idx[tag] for tag in self.seq_list_ordered[self.default_dataset_key]]
+        return self._current_seq_order
 
     def get_all_tags(self):
         """
         :return: list of all seq tags, of the whole dataset, without partition epoch
         :rtype: list[str]
         """
-        return self.seq_list_original[self.default_dataset_key]
+        if self.seq_list_original is not None:
+            return self.seq_list_original[self.default_dataset_key]
+        elif self._seq_list_file is None:
+            return self.datasets[self.default_dataset_key].get_all_tags()
+        else:
+            self._lazy_init_seq_list()
+            return self.seq_list_original[self.default_dataset_key]
 
     def get_total_num_seqs(self, *, fast: bool = False) -> int:
         """
         :return: total number of seqs, without partition epoch
         """
-        return len(self.seq_list_original[self.default_dataset_key])
+        if self.seq_list_original is not None:
+            return len(self.seq_list_original[self.default_dataset_key])
+        elif self._seq_list_file is None:
+            return self.datasets[self.default_dataset_key].get_total_num_seqs()
+        else:
+            self._lazy_init_seq_list()
+            return len(self.seq_list_original[self.default_dataset_key])
+
+    def get_num_timesteps(self):
+        """num timesteps"""
+        if self._num_timesteps is None and self._seq_lens_file:
+            seq_lens = load_json(filename=self._seq_lens_file)
+            assert isinstance(seq_lens, dict)
+            # dict[str,NumbersDict], seq-tag -> data-key -> len
+            self._seq_lens = {tag: NumbersDict(l) for (tag, l) in seq_lens.items()}
+            self._num_timesteps = sum(
+                [self._seq_lens[s] for s in self.get_all_tags()], start=NumbersDict()
+            )
+        return super().get_num_timesteps()
 
     def finish_epoch(self, *, free_resources: bool = False):
         """
@@ -509,8 +537,9 @@ class MetaDataset(CachedDataset2):
         if start_ < end:
             for dataset_key in self.dataset_keys:
                 self.datasets[dataset_key].load_seqs(start_, end)
-                for seq_idx in range(start_, end):
-                    self._check_dataset_seq(dataset_key, seq_idx)
+                if self.seq_list_ordered is not None:
+                    for seq_idx in range(start_, end):
+                        self._check_dataset_seq(dataset_key, seq_idx)
         super(MetaDataset, self)._load_seqs(start=start, end=end)
 
     def _check_dataset_seq(self, dataset_key, seq_idx):
@@ -537,7 +566,7 @@ class MetaDataset(CachedDataset2):
         :type seq_idx: int
         :rtype: DatasetSeq
         """
-        seq_tag = self.seq_list_ordered[self.default_dataset_key][seq_idx]
+        seq_tag = self.get_tag(seq_idx)
         features = {data_key: self._get_data(seq_idx, data_key) for data_key in self.data_keys}
         return DatasetSeq(seq_idx=seq_idx, seq_tag=seq_tag, features=features)
 
@@ -547,6 +576,7 @@ class MetaDataset(CachedDataset2):
         :rtype: NumbersDict
         """
         if self._seq_lens:
+            self._lazy_init_seq_list()
             return self._seq_lens[self.seq_list_ordered[self.default_dataset_key][sorted_seq_idx]]
         return super(MetaDataset, self).get_seq_length(sorted_seq_idx)
 
@@ -555,7 +585,10 @@ class MetaDataset(CachedDataset2):
         :param int sorted_seq_idx:
         :rtype: str
         """
-        return self.seq_list_ordered[self.default_dataset_key][sorted_seq_idx]
+        if self.seq_list_ordered is not None:
+            return self.seq_list_ordered[self.default_dataset_key][sorted_seq_idx]
+        else:
+            return self.datasets[self.default_dataset_key].get_tag(sorted_seq_idx)
 
     def get_complete_frac(self, sorted_seq_idx: int, **kwargs) -> Optional[float]:
         """
