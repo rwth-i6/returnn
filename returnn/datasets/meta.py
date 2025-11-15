@@ -508,9 +508,7 @@ class MetaDataset(CachedDataset2):
             assert isinstance(seq_lens, dict)
             # dict[str,NumbersDict], seq-tag -> data-key -> len
             self._seq_lens = {tag: NumbersDict(l) for (tag, l) in seq_lens.items()}
-            self._num_timesteps = sum(
-                [self._seq_lens[s] for s in self.get_all_tags()], start=NumbersDict()
-            )
+            self._num_timesteps = sum([self._seq_lens[s] for s in self.get_all_tags()], start=NumbersDict())
         return super().get_num_timesteps()
 
     def finish_epoch(self, *, free_resources: bool = False):
