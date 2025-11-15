@@ -382,6 +382,9 @@ class MetaDataset(CachedDataset2):
             )
             self.orig_seq_order_is_initialized = True
 
+        # Warning: This is not correct in the general case.
+        # get_seq_length needs to have load_seqs called beforehand per API contract.
+        # For some datasets, it might anyway work.
         return self.datasets[self.default_dataset_key].get_seq_length(seq_idx)["data"]
 
     def init_seq_order(self, epoch=None, seq_list=None, seq_order=None):
