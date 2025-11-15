@@ -303,6 +303,7 @@ class MetaDataset(CachedDataset2):
             # other datasets.
             # This can only work if all datasets have the same tag format and the sequences in the other
             # datasets are a subset of those in the default dataset.
+            # (But the order does not matter.)
             default_dataset = self.datasets[self.default_dataset_key]
             assert isinstance(default_dataset, Dataset)
             print(
@@ -360,6 +361,7 @@ class MetaDataset(CachedDataset2):
             raise TypeError(f"unexpected seq_list_file type {type(seq_list_file)}")
 
         if isinstance(seq_list, list):
+            # Use same seq list for all datasets
             seq_list = {key: seq_list for key in self.dataset_keys}
         elif isinstance(seq_list, dict):
             for key in self.dataset_keys:
