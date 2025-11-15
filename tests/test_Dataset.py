@@ -906,6 +906,52 @@ def test_MetaDataset():
         assert len(classes) == len(_demo_txt) + 1
 
 
+def test_MetaDataset_LmDataset_lazy_init():
+    # https://github.com/rwth-i6/returnn/issues/1793
+    from returnn.datasets.lm import LmDataset
+
+    with tempfile.NamedTemporaryFile("wt", suffix=".txt") as txt_file:
+        txt_file.write("Hello world\n")
+        txt_file.write("Next line\n")
+        txt_file.flush()
+
+        orig_lazy_init = LmDataset._lazy_init
+
+        try:
+
+            def _wrapped_lazy_init(self):
+                print(f"{self} lazy init...")
+                raise Exception("we want to test that lazy init is not called")
+
+            LmDataset._lazy_init = _wrapped_lazy_init
+
+            dataset = init_dataset(
+                {
+                    "class": "MetaDataset",
+                    "datasets": {
+                        "base": {
+                            "class": "LmDataset",
+                            "corpus_file": txt_file.name,
+                            "use_cache_manager": True,
+                            "skip_empty_lines": False,
+                            "orth_vocab": {"class": "Utf8ByteTargets"},
+                            "seq_end_symbol": None,
+                            "unknown_symbol": None,
+                            "partition_epoch": 2,
+                            "seq_ordering": "laplace:.10",
+                        }
+                    },
+                    "data_map": {"data": ("base", "data")},
+                    "seq_order_control_dataset": "base",
+                }
+            )
+            print("Dataset:", dataset)
+            print("len info:", dataset.len_info(fast=True))
+
+        finally:
+            LmDataset._lazy_init = orig_lazy_init
+
+
 def test_CombinedDataset():
     seq_len = 11
     num_seqs = [10, 5]
