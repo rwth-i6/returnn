@@ -574,8 +574,7 @@ class MetaDataset(CachedDataset2):
         :rtype: NumbersDict
         """
         if self._seq_lens:
-            self._lazy_init_seq_list()
-            return self._seq_lens[self.seq_list_ordered[self.default_dataset_key][sorted_seq_idx]]
+            return self._seq_lens[self.get_tag(sorted_seq_idx)]
         return super(MetaDataset, self).get_seq_length(sorted_seq_idx)
 
     def get_tag(self, sorted_seq_idx):
