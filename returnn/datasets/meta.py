@@ -254,9 +254,6 @@ class MetaDataset(CachedDataset2):
 
         self._seq_list_file = seq_list_file
         self.seq_list_original = self._load_seq_list(seq_list_file)
-        self.num_total_seqs = len(self.seq_list_original[self.default_dataset_key])
-        for key in self.dataset_keys:
-            assert len(self.seq_list_original[key]) == self.num_total_seqs
 
         self.tag_idx = {tag: idx for (idx, tag) in enumerate(self.seq_list_original[self.default_dataset_key])}
 
@@ -372,6 +369,8 @@ class MetaDataset(CachedDataset2):
         else:
             raise TypeError(f"unexpected seq_list type {type(seq_list)}")
 
+        for key in self.dataset_keys:
+            assert len(seq_list[key]) == len(seq_list[self.default_dataset_key])
         return seq_list
 
     def _get_dataset_seq_length(self, seq_idx: int):
@@ -436,7 +435,7 @@ class MetaDataset(CachedDataset2):
             else:
                 self.orig_seq_order_is_initialized = False
                 get_seq_len = self._get_dataset_seq_length
-            seq_index = self.get_seq_order_for_epoch(epoch, self.num_total_seqs, get_seq_len)
+            seq_index = self.get_seq_order_for_epoch(epoch, self.get_total_num_seqs(), get_seq_len)
         self._num_seqs = len(seq_index)
         self.seq_list_ordered = {key: [ls[s] for s in seq_index] for (key, ls) in self.seq_list_original.items()}
 
@@ -481,7 +480,7 @@ class MetaDataset(CachedDataset2):
         """
         :return: total number of seqs, without partition epoch
         """
-        return self.num_total_seqs
+        return len(self.seq_list_original[self.default_dataset_key])
 
     def finish_epoch(self, *, free_resources: bool = False):
         """
