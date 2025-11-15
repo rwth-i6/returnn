@@ -268,7 +268,9 @@ class MetaDataset(CachedDataset2):
             assert isinstance(seq_lens, dict)
             # dict[str,NumbersDict], seq-tag -> data-key -> len
             self._seq_lens = {tag: NumbersDict(l) for (tag, l) in seq_lens.items()}
-            self._num_timesteps = sum([self._seq_lens[s] for s in self.seq_list_original[self.default_dataset_key]])
+            self._num_timesteps = sum(
+                [self._seq_lens[s] for s in self.seq_list_original[self.default_dataset_key]], start=NumbersDict()
+            )
 
         if data_dims:
             data_dims = convert_data_dims(data_dims)
