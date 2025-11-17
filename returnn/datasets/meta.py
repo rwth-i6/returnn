@@ -1357,7 +1357,7 @@ class CombinedDataset(CachedDataset2):
                 # Sort by complete frac, i.e. datasets with the lowest complete frac first.
                 complete_fracs_and_ds_idx.sort()
                 for complete_frac, dataset_idx in complete_fracs_and_ds_idx:
-                    if complete_frac < float("inf"):
+                    if complete_frac < 1:
                         break
                 else:
                     return False  # No dataset has remaining data
