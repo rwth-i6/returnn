@@ -1294,6 +1294,10 @@ class CombinedDataset(CachedDataset2):
         # Cur meaning for the next sequence to be added to dataset_sorted_seq_idx_list.
         seq_idx = self.used_num_seqs_per_subset[dataset_idx]
         cur_start, cur_end = self._sub_dataset_cur_loaded_seq_range[dataset_idx]
+        
+        if not self.datasets[self.dataset_idx2key_map[dataset_idx]].is_less_than_num_seqs(seq_idx):
+            return False
+        
         if seq_idx >= cur_end:
             self._sub_dataset_load_seqs(dataset_idx, cur_start, seq_idx + 1)
             return True
@@ -1357,7 +1361,7 @@ class CombinedDataset(CachedDataset2):
                 # Sort by complete frac, i.e. datasets with the lowest complete frac first.
                 complete_fracs_and_ds_idx.sort()
                 for complete_frac, dataset_idx in complete_fracs_and_ds_idx:
-                    if complete_frac < 1:
+                    if complete_frac < float("inf"):
                         break
                 else:
                     return False  # No dataset has remaining data
