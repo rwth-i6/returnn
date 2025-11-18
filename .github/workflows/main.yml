@@ -62,7 +62,8 @@ jobs:
 
         # Used in some tests.
         pip install --user --progress-bar=off transformers
-        pip install --user --progress-bar=off "espnet==202506"  # last version w/ numpy<2
+        # Install ESPnet. Fix Torch version (https://github.com/rwth-i6/returnn/issues/1770#issuecomment-3536630432).
+        pip install --user --progress-bar=off "espnet==202506" "torch==${{ matrix.torch-version }}"  # last version w/ numpy<2
 
     - name: Test Python/Numpy/TF versions.
       run: |
@@ -123,7 +124,7 @@ jobs:
           ~/.local
         key: cache-${{ runner.os }}-py${{ matrix.python-version }}-no-tf
         restore-keys: |
-          cache-${{ runner.os }}-py${{ matrix.python-version }}-
+          cache-${{ runner.os }}-py${{ matrix.python-version }}-no-tf
 
     - name: Setup dependencies
       run: |
@@ -137,13 +138,78 @@ jobs:
 
         pip install --user --progress-bar=off -r requirements.txt
 
-    - name: Test Python/Numpy/TF versions.
+    - name: Test Python/Numpy.
       run: |
         echo "Python env: $(type python) $(python --version)"
         python -c "import numpy; print('NumPy:', numpy.version.full_version)"
 
         echo "Pytest env:"
-        python -m pytest -V
+        python -m pytest --version
+
+    - name: Run test
+      run: |
+        export ${{ matrix.action }}
+        python -m pytest tests/test_$TEST.py
+
+  # Needs newer Python. Also install the extra datasets dependency only here.
+  hf-datasets-test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version:
+          - "3.10"
+        torch-version:
+          - 2.8.0
+        action:
+          - TEST=datasets_huggingface
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - uses: actions/setup-python@v5
+      with:
+        python-version: ${{ matrix.python-version }}
+
+    - name: Cache dependencies
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cache
+          ~/.local
+        key: cache-${{ runner.os }}-py${{ matrix.python-version }}-torch${{ matrix.torch-version }}
+        restore-keys: |
+          cache-${{ runner.os }}-py${{ matrix.python-version }}-
+
+    - name: Setup dependencies
+      run: |
+        echo "PATH=$PATH:~/.local/bin" >> $GITHUB_ENV
+        echo "Python ${{matrix.python-version}}"
+        echo "pip: $(type pip)"
+
+        pip install --user --upgrade pip setuptools wheel
+
+        pip install --user pytest
+
+        sudo apt-get update
+        sudo apt-get install -y ffmpeg  # for torchcodec
+
+        # datasets >=4 needs torch to decode audio files
+        pip install --user --progress-bar=off dm-tree h5py
+        pip install --user --progress-bar=off "numpy<2"
+        pip install --user --progress-bar=off --upgrade torch==${{ matrix.torch-version }}
+        pip install --user --progress-bar=off torchcodec==0.7  # for HF datasets
+        pip install --user --progress-bar=off lovely_tensors
+
+        pip install --user --progress-bar=off datasets
+
+    - name: Test Python/Numpy.
+      run: |
+        echo "Python env: $(type python) $(python --version)"
+        python -c "import numpy; print('NumPy:', numpy.version.full_version)"
+
+        echo "Pytest env:"
+        python -m pytest --version
 
     - name: Run test
       run: |
@@ -236,7 +302,7 @@ jobs:
         python -c "import tensorflow as tf; assert tf.__version__ == '${{ matrix.tf-version }}'"
 
         echo "Pytest env:"
-        python -m pytest -V
+        python -m pytest --version
 
     - name: Run test
       run: |
@@ -305,7 +371,7 @@ jobs:
         python -c "import torch; assert (torch.__version__ + '+').startswith('${{ matrix.torch-version }}+')"
 
         echo "Pytest env:"
-        python -m pytest -V
+        python -m pytest --version
 
     - name: Run test
       run: |
@@ -378,6 +444,8 @@ jobs:
 
         pip install --user --progress-bar=off pytest
 
+        sudo apt-get install -y libsndfile1  # soundfile, librosa, ESPnet
+
         pip install --user --progress-bar=off dm-tree h5py
         pip install --user --progress-bar=off numpy==1.23.5  # for ESPnet, ctc-segmentation, etc
         pip install --user --progress-bar=off scipy  # for some tests
@@ -412,7 +480,8 @@ jobs:
           # https://github.com/rwth-i6/returnn/issues/1729
           pip install --user --progress-bar=off ctc-segmentation==1.6.6 pyworld==0.3.4
         fi
-        pip install --user --progress-bar=off "espnet==202506"  # last version w/ numpy<2
+        # Install ESPnet. Fix Torch version (https://github.com/rwth-i6/returnn/issues/1770#issuecomment-3536630432).
+        pip install --user --progress-bar=off "espnet==202506" "torch==${{ matrix.torch-version }}"  # last version w/ numpy<2
         # TorchAudio needed by ESPnet.
         # https://pytorch.org/audio/stable/installation.html#compatibility-matrix
         if [[ "${{matrix.torch-version}}" == 2.0.0 ]]; then
@@ -444,7 +513,7 @@ jobs:
         python -c "import tensorflow as tf; assert tf.__version__ == '${{ matrix.tf-version }}'"
 
         echo "Pytest env:"
-        python -m pytest -V
+        python -m pytest --version
 
     - name: Run test
       run: |

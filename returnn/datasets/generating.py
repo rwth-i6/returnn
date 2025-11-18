@@ -1164,11 +1164,9 @@ class StaticDataset(CachedDataset2):
         """supports sorting"""
         return True
 
-    def _collect_single_seq(self, seq_idx):
-        """
-        :param int seq_idx:
-        :rtype: DatasetSeq
-        """
+    def _collect_single_seq(self, seq_idx: int) -> Optional[DatasetSeq]:
+        if seq_idx >= len(self._seq_order):
+            return None
         corpus_seq_idx = self._seq_order[seq_idx]
         data = self.data[corpus_seq_idx]
         return DatasetSeq(

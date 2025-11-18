@@ -21,7 +21,7 @@ my_dir = os.path.dirname(os.path.realpath(__file__))
 
 
 def _sig_alarm_handler(signum, frame):
-    raise Exception(f"Alarm (timeout) signal handler")
+    raise Exception("Alarm (timeout) signal handler")
 
 
 signal.signal(signal.SIGALRM, _sig_alarm_handler)
@@ -198,6 +198,22 @@ def test_NumbersDict_eq_2():
     a = NumbersDict(10)
     assert a == 10
     assert a != 5
+
+
+def test_NumbersDict_add0():
+    a = NumbersDict(numbers_dict={"data": 3, "classes": 2}, broadcast_value=1)
+    b = NumbersDict() + a
+    assert isinstance(b, NumbersDict)
+    assert b.value == 1
+    assert b.dict == {"data": 3, "classes": 2}
+
+
+def test_NumbersDict_add0a():
+    a = NumbersDict(numbers_dict={"data": 3, "classes": 2})
+    b = NumbersDict() + a
+    assert isinstance(b, NumbersDict)
+    assert b.value is None
+    assert b.dict == {"data": 3, "classes": 2}
 
 
 def test_NumbersDict_mul():
@@ -599,11 +615,11 @@ def test_import_wrong_pkg_py_import():
     del sys.modules[mod_name]
 
     try:
-        import returnn_import.github_com.rwth_i6.returnn_experiments.v20210302153450_10beb9d1c57e
+        import returnn_import.github_com.rwth_i6.returnn_experiments.v20210302153450_10beb9d1c57e as _mod
     except MissingExplicitImport as exc:  # but *not* a normal ImportError
         print("Got expected exception:", exc)
     else:
-        raise Exception("We expected an import error exception but got nothing.")
+        raise Exception(f"We expected an import error exception but got nothing and module {_mod}")
 
 
 def test_literal_py_to_pickle():

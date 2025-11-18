@@ -1093,6 +1093,7 @@ def format_tb(
     with_color=None,
     with_vars=None,
     clear_frames=True,
+    colorize=None,
 ):
     """
     Formats a traceback into a list of strings, each corresponding to one frame.
@@ -1110,11 +1111,14 @@ def format_tb(
         That will potentially fix some mem leaks regarding locals, so it can be important.
         Also see https://github.com/python/cpython/issues/113939.
         However, any further access to frame locals will not work (e.g., if you want to use a debugger afterward).
+    :param colorize: for compat with Python >=3.13, currently ignored
     :return: list of strings, each corresponding to one frame in the traceback.
         Each string contains the file name, line number, function name, source code line, maybe relevant variables,
         etc., and a final newline.
     :rtype: list[str]
     """
+    if colorize is not None and with_color is None:
+        with_color = colorize
     color = Color(enable=with_color)
     output = _OutputLinesCollector(color=color)
 

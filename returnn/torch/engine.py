@@ -134,6 +134,14 @@ class Engine(EngineBase):
         self._forward_auto_split_batch_on_oom = config.bool("forward_auto_split_batch_on_oom", False)
         self._stop_on_nonfinite_train_score = config.bool("stop_on_nonfinite_train_score", True)
 
+        if config.bool("use_tensorboard", False):
+            from torch.utils.tensorboard import SummaryWriter
+
+            self._tensorboard_writer = SummaryWriter()
+            self._tensorboard_opts = config.typed_value("tensorboard_opts", {})
+        else:
+            self._tensorboard_writer = None
+
         default_float_dtype = config.value("default_float_dtype", None)
         if default_float_dtype is not None:
             assert isinstance(default_float_dtype, str)
@@ -256,6 +264,9 @@ class Engine(EngineBase):
             self.set_epoch(self.epoch + 1)
             self.init_train_epoch()
             self.train_epoch()
+
+        if self._tensorboard_writer:
+            self._tensorboard_writer.close()
 
         print(f"Finished training at epoch {self.epoch}, global train step {self.global_train_step}", file=log.v3)
 
@@ -513,6 +524,18 @@ class Engine(EngineBase):
                     batch_size_info=_get_batch_size_info(extern_data) if self._log_batch_size else None,
                     log_memory_usage_device=self._device if self._log_memory_usage else None,
                 )
+                if (
+                    self._tensorboard_writer
+                    and self.global_train_step % self._tensorboard_opts.get("log_every_n_train_steps", 100) == 0
+                ):
+                    # write losses/errors to tensorboard
+                    for key, val in eval_info.items():
+                        self._tensorboard_writer.add_scalar(f"train/{key}", val, global_step=self.global_train_step)
+                    self._tensorboard_writer.add_scalar(
+                        "train/learning_rate",
+                        self._updater.get_effective_learning_rate(),
+                        global_step=self.global_train_step,
+                    )
 
                 if self._stop_on_nonfinite_train_score:
                     if any(np.isinf(v) or np.isnan(v) for v in accumulated_losses_dict.values()):
@@ -702,11 +725,19 @@ class Engine(EngineBase):
                         start_elapsed=step_end_time - eval_start_time,
                         log_memory_usage_device=self._device if self._log_memory_usage else None,
                     )
+
                     step_idx += 1
 
             assert step_idx > 0, f"No data in dataset {dataset_name!r}."
             accumulated_losses_dict = accumulated_losses_dict / accumulated_inv_norm_factors_dict
             accumulated_losses_dict = self._maybe_extend_losses_info(accumulated_losses_dict)
+
+            if self._tensorboard_writer:
+                # write losses/errors to tensorboard
+                for key, val in accumulated_losses_dict.items():
+                    self._tensorboard_writer.add_scalar(
+                        f"{dataset_name}/{key}", val, global_step=self.global_train_step
+                    )
 
             self.learning_rate_control.set_epoch_error(
                 self.epoch, {f"{dataset_name}_loss_{k}": v for k, v in accumulated_losses_dict.items()}
@@ -899,7 +930,7 @@ class Engine(EngineBase):
             if not os.path.exists(filename) and os.path.exists(model_epoch_filename):
                 filename = model_epoch_filename
             print("Load model %s" % (filename,), file=log.v4)
-            checkpoint_state = torch.load(filename, map_location=self._device)
+            checkpoint_state = _torch_load(filename, device=self._device)
             if epoch is None:
                 epoch = checkpoint_state.get("epoch", self._start_epoch or 1)
             step = checkpoint_state.get("step", 1)
@@ -999,7 +1030,7 @@ class Engine(EngineBase):
                         print("(No relevant parameters matching.)", file=log.v3)
                     continue
                 print(f"Pre-load weights for key '{preload_key}' from {opts['filename']}", file=log.v3)
-                preload_model_state = torch.load(opts["filename"], map_location=self._device)
+                preload_model_state = _torch_load(opts["filename"], device=self._device)
                 if opts.get("checkpoint_key", "model") is not None:
                     # This can be used if an external checkpoint saves a checkpoint a different structure that just the
                     # model state dict. E.g., if a checkpoint is created using
@@ -1032,6 +1063,28 @@ class Engine(EngineBase):
                 preload_model_state_keys = set(preload_model_state.keys())
                 loaded_state_keys.update(preload_model_state.keys())
                 missing_keys.difference_update(preload_model_state.keys())
+
+                custom_missing_load_func = opts.get("custom_missing_load_func")
+                if custom_missing_load_func:
+                    custom_missing_vars_map = {}
+                    for var_name in missing_keys_preload:
+                        var_shape = self._pt_model.state_dict()[var_name].shape
+                        var_val = custom_missing_load_func(
+                            name=var_name,
+                            shape=var_shape,
+                            preload_model_state=preload_model_state,
+                            **util.get_fwd_compat_kwargs(),
+                        )
+                        if var_val is not None:
+                            assert var_val.shape == var_shape
+                            custom_missing_vars_map[var_name] = var_val
+                    preload_model_state.update(custom_missing_vars_map)
+                    missing_keys_preload, unexpected_keys_preload = self._pt_model.load_state_dict(
+                        preload_model_state, strict=False
+                    )
+                    loaded_state_keys.update(preload_model_state.keys())
+                    missing_keys.difference_update(preload_model_state.keys())
+
                 del preload_model_state
                 gc.collect()
 
@@ -1669,3 +1722,15 @@ def _get_total_grad_norm(model: torch.nn.Module, p: float) -> float:
             p=p,
         ).item()
     )
+
+
+def _torch_load(filename: Union[str, os.PathLike], *, device: str) -> Dict[str, Any]:
+    # Might resolve PtCheckpoint or Sisyphus Path objects or so.
+    filename = os.fspath(filename)
+
+    if filename.endswith(".safetensors"):
+        from safetensors.torch import load_file as safetensors_load
+
+        return safetensors_load(filename, device=device)
+
+    return torch.load(filename, map_location=device)

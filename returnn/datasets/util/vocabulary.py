@@ -11,6 +11,7 @@ __all__ = [
     "SentencePieces",
     "CharacterTargets",
     "Utf8ByteTargets",
+    "HuggingFaceTokenizer",
 ]
 
 from typing import Optional, Union, Type, Callable, List, Dict
@@ -691,3 +692,92 @@ class Utf8ByteTargets(Vocabulary):
             assert ((seq >= 0) & (seq < 256)).all(), f"invalid byte value, must be within 0-255: {seq}"
             seq = seq.astype(numpy.uint8)
         return bytearray(seq).decode(encoding="utf8")
+
+
+class HuggingFaceTokenizer(Vocabulary):
+    """
+    Uses the `AutoTokenizer` class from the `transformers` package.
+    """
+
+    def __init__(self, *, huggingface_repo_dir: str):
+        """
+        :param str huggingface_repo_dir: the directory containing the `tokenizer_config.json` file.
+        """
+        import transformers  # noqa
+
+        # Make sure it is a string. (Could be e.g. Sis Path.)
+        huggingface_repo_dir = str(huggingface_repo_dir)
+        self._opts = {"huggingface_repo_dir": huggingface_repo_dir}
+        self._cache_key = huggingface_repo_dir
+        self.tokenizer = transformers.AutoTokenizer.from_pretrained(huggingface_repo_dir, trust_remote_code=True)
+        super().__init__(
+            vocab_file=None,
+            seq_postfix=None,
+            unknown_label=self.tokenizer.unk_token_id,
+            eos_label=self.tokenizer.eos_token_id,
+            bos_label=self.tokenizer.bos_token_id,
+            pad_label=self.tokenizer.pad_token_id,
+        )
+
+    def __repr__(self):
+        return "%s(%r)" % (self.__class__.__name__, self._opts)
+
+    def _parse_vocab(self):
+        self.num_labels = len(self.tokenizer)
+        # Do not load labels/vocab here. This is not really needed.
+
+    @property
+    def labels(self) -> List[str]:
+        """list of labels"""
+        if self._cache_key and self._cache_key in self._cache:
+            self._vocab, self._labels = self._cache[self._cache_key]
+            assert self.num_labels == len(self._vocab) == len(self._labels)
+        else:
+            self._labels = [self.tokenizer._convert_id_to_token(i) for i in range(self.num_labels)]  # noqa
+            self._vocab = {label: i for (i, label) in enumerate(self._labels)}
+            if self._cache_key:
+                self._cache[self._cache_key] = (self._vocab, self._labels)
+        return self._labels
+
+    def is_id_valid(self, idx: int) -> bool:
+        """
+        :param idx:
+        """
+        return 0 <= idx < len(self.tokenizer)
+
+    def id_to_label(self, idx: int, default: Union[str, Type[KeyError], None] = KeyError) -> Optional[str]:
+        """
+        :param idx:
+        :param default:
+        """
+        if default is not KeyError and not self.is_id_valid(idx):
+            return default
+        return self.tokenizer.convert_ids_to_tokens(idx)
+
+    def label_to_id(self, label: str, default: Union[int, Type[KeyError], None] = KeyError) -> Optional[int]:
+        """
+        :param label:
+        :param default:
+        """
+        res = self.tokenizer.convert_token_to_id(label)
+        if res == self.unknown_label_id or res < 0 or res is None:
+            # It could be that the label really is the unknown-label, or it could be that the label is unknown.
+            if label == self.id_to_label(self.unknown_label_id):
+                return self.unknown_label_id
+            if default is KeyError:
+                raise KeyError("label %r not found" % label)
+            return default
+        return res
+
+    def get_seq(self, sentence: str) -> List[int]:
+        """
+        :param sentence: assumed to be seq of vocab entries separated by whitespace
+        """
+        return self.tokenizer(sentence)["input_ids"]
+
+    def get_seq_labels(self, seq):
+        """
+        :param list[int]|numpy.ndarray seq: 1D sequence
+        :rtype: str
+        """
+        return self.tokenizer.decode(seq, skip_special_tokens=True)
