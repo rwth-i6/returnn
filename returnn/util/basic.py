@@ -365,12 +365,9 @@ def get_checkpoint_filepattern(filepath):
     :return: CheckpointLoader compatible filepattern
     :rtype: str
     """
-    if filepath.endswith(".meta"):
-        return filepath[: -len(".meta")]
-    elif filepath.endswith(".index"):
-        return filepath[: -len(".index")]
-    elif filepath.endswith(".pt"):
-        return filepath[: -len(".pt")]
+    for ext in [".meta", ".index", ".pt"]:
+        if filepath.endswith(ext):
+            return filepath[: -len(ext)]
     return filepath
 
 
