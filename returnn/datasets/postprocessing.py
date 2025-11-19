@@ -475,7 +475,7 @@ class PostprocessingDataset(CachedDataset2):
 
         def _maybe_distrib_seq(*, timeout=0.1):
             assert timeout >= 0.0
-            # do not block indefinetely to periodically check the quit_event
+            # do not block indefinitely to periodically check the quit_event
             ready_conns, _, _ = select.select(worker_conns, [], [], timeout)
             assert len(worker_conns) == len(caches)
             for child_queue, cache in zip(worker_conns, caches):
