@@ -1351,7 +1351,7 @@ def test_PostprocessingDataset():
 
     count = 0
 
-    def _repeat2(input_iter: Iterator[TensorDict], **kwargs) -> Iterator[TensorDict]:
+    def _repeat2_and_count(input_iter: Iterator[TensorDict], **kwargs) -> Iterator[TensorDict]:
         nonlocal count
 
         for tdict in input_iter:
@@ -1364,7 +1364,7 @@ def test_PostprocessingDataset():
         ds_opts = {
             "class": "PostprocessingDataset",
             "dataset": sub_ds_opts,
-            "map_seq_stream": _repeat2,
+            "map_seq_stream": _repeat2_and_count,
         }
         dataset = init_dataset(ds_opts)
         dataset.init_seq_order(epoch=1)
@@ -1413,6 +1413,42 @@ def test_PostprocessingDataset():
 
     func = Sequential(lambda x: x * 10, lambda y: y + 1)
     assert func(2) == 21
+
+
+def _repeat2(input_iter: Iterator[TensorDict], **kwargs) -> Iterator[TensorDict]:
+    for tdict in input_iter:
+        yield tdict
+        yield tdict
+
+
+def test_MultiProcPostprocessingDataset():
+    total_num_seqs = 500
+    total_num_seqs_pp = 2 * total_num_seqs
+
+    ds_opts = {
+        "class": "PostprocessingDataset",
+        "dataset": {
+            "class": "DummyDataset",
+            "input_dim": 13,
+            "output_dim": 7,
+            "num_seqs": total_num_seqs,
+            "seq_len": 17,
+        },
+        "map_seq_stream": _repeat2,
+        "buf_size": 1,
+        "num_workers": 2,
+    }
+    dataset = init_dataset(ds_opts)
+
+    for ep in range(1, 5 + 1):
+        dataset.init_seq_order(epoch=ep)
+        assert dataset.have_seqs()
+        for i in range(total_num_seqs_pp):
+            assert dataset.is_less_than_num_seqs(i)
+            dataset.load_seqs(i, i + 1)
+            classes = dataset.get_data(i, "classes")
+            assert len(classes) > 0
+        assert not dataset.is_less_than_num_seqs(total_num_seqs_pp + 1)
 
 
 def _post_process_map_seq_no_op(tdict: TensorDict, **_other) -> TensorDict:
