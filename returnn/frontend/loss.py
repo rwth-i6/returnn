@@ -3,11 +3,12 @@ Loss functions
 """
 
 from __future__ import annotations
+from typing import Optional, Tuple
 from returnn.tensor import Tensor, Dim
 import returnn.frontend as rf
 
 
-__all__ = ["cross_entropy", "ctc_loss", "edit_distance"]
+__all__ = ["cross_entropy", "ctc_loss", "ctc_greedy_decode", "edit_distance"]
 
 
 def cross_entropy(
@@ -91,6 +92,44 @@ def ctc_loss(
         blank_index=blank_index,
         max_approx=max_approx,
     )
+
+
+def ctc_greedy_decode(
+    logits: Tensor,
+    *,
+    in_spatial_dim: Dim,
+    blank_index: int,
+    out_spatial_dim: Optional[Dim] = None,
+    target_dim: Optional[Dim] = None,
+    wb_target_dim: Optional[Dim] = None,
+) -> Tuple[Tensor, Dim]:
+    """
+    Greedy CTC decode.
+
+    :return: (labels, out_spatial_dim)
+    """
+    if wb_target_dim is None:
+        assert logits.feature_dim
+        wb_target_dim = logits.feature_dim
+
+    labels = rf.reduce_argmax(logits, axis=wb_target_dim)
+    labels = rf.cast(labels, "int32")
+
+    labels_shifted = rf.shift_right(labels, axis=in_spatial_dim, pad_value=blank_index)
+    mask_repeat = labels != labels_shifted
+    labels, out_spatial_dim = rf.masked_select(
+        labels,
+        mask=(labels != blank_index) & mask_repeat,
+        dims=[in_spatial_dim],
+        out_dim=out_spatial_dim,
+    )
+
+    if target_dim:
+        # Set correct sparse_dim. Only currently implemented if blank comes after.
+        assert target_dim.dimension == blank_index
+        labels.sparse_dim = target_dim
+
+    return labels, out_spatial_dim
 
 
 def edit_distance(a: Tensor, a_spatial_dim: Dim, b: Tensor, b_spatial_dim: Dim, *, dtype: str = "int32") -> Tensor:
