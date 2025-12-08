@@ -725,6 +725,7 @@ class CrossAttention(rf.Module):
         """
         Transformer encoder output. This is intended as an initial API suggestion.
         """
+        assert axis in encoder.dims
         k, v = self.forward_kv(encoder)
         return rf.State(k=k, v=v, kv_axis=axis)
 
