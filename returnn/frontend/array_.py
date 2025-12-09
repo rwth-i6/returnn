@@ -54,6 +54,7 @@ __all__ = [
     "one_hot",
     "top_k_mask",
     "top_p_mask",
+    "repeat",
 ]
 
 
@@ -1341,3 +1342,43 @@ def top_p_mask(
         mask = mask | (rf.range_over_dim(sorted_dim, device=mask.device) < min_tokens_to_keep)
     mask = rf.scatter(mask, indices=sorted_indices, indices_dim=sorted_dim)
     return mask
+
+
+def repeat(
+    values: Tensor, *, in_spatial_dim: Dim, repeats: Tensor, out_spatial_dim: Optional[Dim] = None
+) -> Tuple[Tensor, Dim]:
+    """
+    Repeats certain elements in a tensor along a given spatial dimension.
+    0 repeats means to remove that element.
+
+    This can be used to implement duration-based expansion, e.g. in text-to-speech.
+
+    :param values: [common..., values..., in_spatial_dim]
+    :param in_spatial_dim:
+    :param repeats: [common..., repeats..., in_spatial_dim] -> int32 durations / number of repetitions for each element
+    :param out_spatial_dim:
+    :return: expanded_values: [common..., values..., repeats..., out_spatial_dim], out_spatial_dim
+    """
+    # Similar to masked_select
+    repeats = repeats.copy_masked(0, dims=[in_spatial_dim])
+    idxs = rf.cumsum(repeats, spatial_dim=in_spatial_dim)  # [batch...,in_spatial_dim] -> idx in out_spatial_dim + 1
+    new_size = rf.gather(idxs, indices=in_spatial_dim.get_dim_value_tensor() - 1, axis=in_spatial_dim)  # [batch...]
+    if out_spatial_dim is None:
+        out_spatial_dim = Dim(new_size, name="repeat")
+    elif out_spatial_dim.dyn_size_ext is None:
+        out_spatial_dim.dyn_size_ext = new_size
+    elif out_spatial_dim.dyn_size_ext is not None and out_spatial_dim.dyn_size_ext.raw_tensor is None:
+        out_spatial_dim.dyn_size_ext.raw_tensor = new_size.raw_tensor
+    out_spatial_dim_ext = out_spatial_dim + 1
+    rel_idx_counts = rf.scatter(
+        rf.expand_dims(rf.ones((), device=values.device, dtype="int32"), dims=idxs.dims),
+        indices=idxs,
+        indices_dim=in_spatial_dim,
+        out_dim=out_spatial_dim_ext,
+    )
+    # rel_idx_counts: [batch...,out_spatial_dim+1] -> count of how many times each index was selected
+    idxs_ = rf.cumsum(rel_idx_counts, spatial_dim=out_spatial_dim_ext)
+    # idxs_: [batch...,out_spatial_dim+1] -> idx in in_spatial_dim
+    idxs_, _ = rf.slice(idxs_, axis=out_spatial_dim_ext, size=out_spatial_dim)  # remove last element
+    # idxs_: [batch...,out_spatial_dim] -> idx in in_spatial_dim (potentially with invalid indices in padded area)
+    return rf.gather(values, indices=idxs_, axis=in_spatial_dim, clip_to_valid=True), out_spatial_dim

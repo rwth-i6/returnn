@@ -938,3 +938,76 @@ def test_cast_sparse():
         rf.cast(x, "float32").mark_as_output("float", shape=[batch_dim, time_dim])
 
     run_model(extern_data, lambda *, epoch, step: rf.Module(), _forward_step)
+
+
+def test_repeat():
+    time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
+    in_dim = Dim(3, name="in")
+    extern_data = TensorDict(
+        {
+            "data": Tensor("data", [batch_dim, time_dim, in_dim], dtype="float32"),
+            "repeats": Tensor("repeats", [batch_dim, time_dim], dtype="int32"),
+        }
+    )
+
+    # noinspection PyShadowingNames,PyUnusedLocal
+    def _forward_step(*, extern_data: TensorDict, **_other):
+        x = extern_data["data"]
+        repeats = rf.abs(extern_data["repeats"]) % 4
+        x.mark_as_output("data", shape=(batch_dim, time_dim, in_dim))
+        repeats.mark_as_output("repeats", shape=(batch_dim, time_dim))
+        out, out_spatial_dim = rf.repeat(x, repeats=repeats, in_spatial_dim=time_dim)
+        out.mark_as_default_output(shape=(batch_dim, out_spatial_dim, in_dim))
+
+    run_model(extern_data, lambda **_any: rf.Module(), _forward_step)
+
+    # Again but with 2D data.
+    extern_data = TensorDict(
+        {
+            "data": Tensor("data", [batch_dim, time_dim], dtype="int32"),
+            "repeats": Tensor("repeats", [batch_dim, time_dim], dtype="int32"),
+        }
+    )
+
+    # noinspection PyShadowingNames,PyUnusedLocal
+    def _forward_step(*, extern_data: TensorDict, **_other):
+        x = extern_data["data"]
+        repeats = rf.abs(extern_data["repeats"]) % 4
+        x.mark_as_output("data", shape=(batch_dim, time_dim))
+        repeats.mark_as_output("repeats", shape=(batch_dim, time_dim))
+        out, out_spatial_dim = rf.repeat(x, repeats=repeats, in_spatial_dim=time_dim)
+        out.mark_as_default_output(shape=(batch_dim, out_spatial_dim))
+
+    # Iterate over a few random seeds.
+    # Make sure we covered some relevant cases.
+    have_intermediate_zero = False
+    have_leading_zero = False
+    have_trailing_zero = False
+    for seed in range(42, 45):
+        res = run_model(extern_data, lambda **_any: rf.Module(), _forward_step, data_rnd_seed=seed)
+        num_batch = res["data"].raw_tensor.shape[0]
+        print(f"Seed {seed}, num_batch {num_batch}")
+        for b in range(num_batch):
+            in_seq_len = res["data"].dims[1].dyn_size_ext.raw_tensor[b]
+            out_seq_len = res["output"].dims[1].dyn_size_ext.raw_tensor[b]
+            data_b = res["data"].raw_tensor[b, :in_seq_len]
+            repeats_b = res["repeats"].raw_tensor[b, :in_seq_len]
+            if len(repeats_b) > 0 and repeats_b[0] == 0:
+                have_leading_zero = True
+            if len(repeats_b) > 0 and repeats_b[-1] == 0:
+                have_trailing_zero = True
+            if len(repeats_b) > 2 and any(
+                repeats_b[i] == 0 and repeats_b[i - 1] != 0 and repeats_b[i + 1] != 0
+                for i in range(1, len(repeats_b) - 2)
+            ):
+                have_intermediate_zero = True
+            out_b = res["output"].raw_tensor[b, :out_seq_len]
+            print(f" Batch {b}: data {data_b}, repeats {repeats_b}, out {out_b}")
+            out_idx = 0
+            for t in range(data_b.shape[0]):
+                repeat_count = repeats_b[t]
+                for _ in range(repeat_count):
+                    assert out_b[out_idx] == data_b[t]
+                    out_idx += 1
+            assert out_idx == out_b.shape[0]
+    assert have_intermediate_zero and have_leading_zero and have_trailing_zero

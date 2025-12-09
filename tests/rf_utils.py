@@ -78,13 +78,14 @@ def run_model(
     test_tensorflow: bool = True,
     allow_inf_nan_in_output: bool = False,
     test_single_batch_entry: bool = True,
+    data_rnd_seed: int = 42,
 ) -> TensorDict:
     """run"""
     print(f"* run_model with dyn_dim_max_sizes={dyn_dim_max_sizes!r}")
     extern_data_dims = extern_data.all_dims()
     extern_data.reset_content()
     tensor_dict_fill_random_numpy_(
-        extern_data, dyn_dim_max_sizes=dyn_dim_max_sizes, dyn_dim_min_sizes=dyn_dim_min_sizes
+        extern_data, dyn_dim_max_sizes=dyn_dim_max_sizes, dyn_dim_min_sizes=dyn_dim_min_sizes, rnd=data_rnd_seed
     )
 
     print("** run with PyTorch backend")
@@ -128,7 +129,7 @@ def run_model(
         print("** TensorFlow disabled (RETURNN_DISABLE_TF)")
         return out_pt
 
-    assert tf, "TensorFlow not available"
+    assert tf, "TensorFlow not available. (set RETURNN_DISABLE_TF=1 if you want to test PyTorch only)"
     print("** run with TensorFlow-net-dict backend")
     with rfl.ReturnnLayersBackend.random_journal_replay(random_journal):
         out_tf = _run_model_net_dict_tf(extern_data, get_model, forward_step)
