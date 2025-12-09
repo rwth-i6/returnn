@@ -959,7 +959,7 @@ def test_repeat():
         out, out_spatial_dim = rf.repeat(x, repeats=repeats, in_spatial_dim=time_dim)
         out.mark_as_default_output(shape=(batch_dim, out_spatial_dim, in_dim))
 
-    run_model(extern_data, lambda **_any: rf.Module(), _forward_step)
+    run_model(extern_data, lambda **_any: rf.Module(), _forward_step, test_tensorflow=False)
 
     # Again but with 2D data.
     extern_data = TensorDict(
@@ -984,7 +984,9 @@ def test_repeat():
     have_leading_zero = False
     have_trailing_zero = False
     for seed in range(42, 45):
-        res = run_model(extern_data, lambda **_any: rf.Module(), _forward_step, data_rnd_seed=seed)
+        res = run_model(
+            extern_data, lambda **_any: rf.Module(), _forward_step, data_rnd_seed=seed, test_tensorflow=False
+        )
         num_batch = res["data"].raw_tensor.shape[0]
         print(f"Seed {seed}, num_batch {num_batch}")
         for b in range(num_batch):
