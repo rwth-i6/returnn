@@ -45,6 +45,8 @@ jobs:
         echo "Python ${{matrix.python-version}}"
         echo "pip: $(type pip)"
 
+        .github/workflows/_free_disk_space.sh
+
         pip install --user --progress-bar=off --upgrade pip setuptools wheel
 
         pip install --user --progress-bar=off pytest
@@ -186,6 +188,8 @@ jobs:
         echo "PATH=$PATH:~/.local/bin" >> $GITHUB_ENV
         echo "Python ${{matrix.python-version}}"
         echo "pip: $(type pip)"
+
+        .github/workflows/_free_disk_space.sh
 
         pip install --user --upgrade pip setuptools wheel
 
