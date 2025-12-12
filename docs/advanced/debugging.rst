@@ -22,8 +22,8 @@ Random config options which can always be enabled without loosing performance:
 
 Random config options which will cause slower training or require more memory:
 
-* ``debug_add_check_numerics_ops = True``: See below.
-* ``debug_add_check_numerics_on_output = True``: See below.
+* ``debug_add_check_numerics_ops = True``: TF specific. See below.
+* ``debug_add_check_numerics_on_output = True``: TF specific. See below.
 
 Random other config options:
 
@@ -32,6 +32,7 @@ Random other config options:
 * ``startup_callback``: Function callback, will run early at init,
   can be used to setup potential other debugging utilities.
 * ``debug_shell_in_runner = True``: TF: Get an interactive shell right before the session runs a step.
+* ``debug_shell_before_train_loop = True``: PT: Get an interactive shell before the training loop starts.
 
 
 Test case
@@ -78,6 +79,7 @@ For example, to use tfdbg, try this is the config:
 
 
 .. _debug_interactive:
+
 
 Interactive debugging
 ---------------------
