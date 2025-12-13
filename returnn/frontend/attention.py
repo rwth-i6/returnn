@@ -454,7 +454,7 @@ class RelPosSelfAttention(SelfAttentionBase):
             pos_emb, pos_emb_spatial_dim = self.learned_pos_emb(query_spatial_dim=axis, key_value_spatial_dim=axis)
         else:
             pos_emb, pos_emb_spatial_dim = relative_positional_encoding(
-                query_spatial_dim=axis, key_value_spatial_dim=axis, feat_dim=self.pos_emb_feat_dim
+                query_spatial_dim=axis, key_value_spatial_dim=axis, feat_dim=self.pos_emb_feat_dim, device=source.device
             )
         if self.pos_emb_dropout:
             pos_emb = rf.dropout(pos_emb, self.pos_emb_dropout)
@@ -610,7 +610,10 @@ class RelPosCausalSelfAttention(CausalSelfAttention):
             pos_emb, pos_emb_spatial_dim = self.learned_pos_emb(query_spatial_dim=axis, key_value_spatial_dim=hist_dim)
         else:
             pos_emb, pos_emb_spatial_dim = relative_positional_encoding(
-                query_spatial_dim=axis, key_value_spatial_dim=hist_dim, feat_dim=self.pos_emb_feat_dim
+                query_spatial_dim=axis,
+                key_value_spatial_dim=hist_dim,
+                feat_dim=self.pos_emb_feat_dim,
+                device=source.device,
             )
         # pos_emb_spatial_dim is 2*time1-1 if axis!=single_step_dim, else time1
         if self.pos_emb_dropout:
@@ -813,7 +816,9 @@ class LearnedRelativePositionalEncoding(rf.Module):
         :return: tensor of shape [spatial_dim * 2 - 1, feat_dim], and the out spatial dim (spatial_dim * 2 - 1).
             In the center is the rel pos i-j=0. All to the right are for i-j>0, all to the left for i-j<0.
         """
-        indices, out_spatial_dim = _make_indices(query_spatial_dim, key_value_spatial_dim, query_offset)
+        indices, out_spatial_dim = _make_indices(
+            query_spatial_dim, key_value_spatial_dim, query_offset, device=self.pos_emb.device
+        )
         indices = rf.clip_by_value(indices, -self.clipping, 0 if self.causal else self.clipping)
         # Shift values to be >= 0. Each integer still uniquely identifies a relative position difference.
         indices = indices + self.clipping
@@ -853,8 +858,9 @@ def _make_indices(
     query_spatial_dim: Dim,
     key_value_spatial_dim: Dim,
     query_offset: Optional[Union[int, Tensor]] = None,
+    device: Optional[str] = None,
 ) -> Tuple[Tensor, Dim]:
-    kv_pos_vec = rf.range_over_dim(key_value_spatial_dim)  # [kv_len]
+    kv_pos_vec = rf.range_over_dim(key_value_spatial_dim, device=device)  # [kv_len]
 
     # See also RelativePositionalEncodingLayer
     if query_spatial_dim == single_step_dim:
@@ -867,7 +873,7 @@ def _make_indices(
         query_offset = key_value_spatial_dim.get_size_tensor() - 1
     else:
         query_spatial_dim_m1 = query_spatial_dim - 1
-        q_pos_vec = rf.range_over_dim(query_spatial_dim_m1)  # [q_len-1]
+        q_pos_vec = rf.range_over_dim(query_spatial_dim_m1, device=device)  # [q_len-1]
 
         # The masking in the output is quite custom (left+right masking), so our seq lens don't make sense,
         # and might even cause to fail some tests (that e.g. max(q_seq_len+k_seq_len-1) == shape).
@@ -904,6 +910,7 @@ def relative_positional_encoding(
     feat_dim: Dim,
     query_offset: int = 0,
     dtype: Optional[str] = None,
+    device: Optional[str] = None,
 ) -> Tuple[Tensor, Dim]:
     """
     Implements relative positional encoding, Transformer-XL style (https://arxiv.org/abs/1901.02860),
@@ -926,7 +933,9 @@ def relative_positional_encoding(
     """
     if not dtype:
         dtype = rf.get_default_float_dtype()
-    cache_key = (query_spatial_dim, key_value_spatial_dim, feat_dim, query_offset, dtype)
+    if not device:
+        device = rf.get_default_device()
+    cache_key = (query_spatial_dim, key_value_spatial_dim, feat_dim, query_offset, dtype, device)
     cache_entry = _relative_positional_encoding_cache.get(cache_key)
     if cache_entry is not None:
         return cache_entry
@@ -934,7 +943,7 @@ def relative_positional_encoding(
 
     with rf.control_flow_ctx(None):
         # See also RelativePositionalEncodingLayer, LearnedRelativePositionalEncoding
-        indices, out_spatial_dim = _make_indices(query_spatial_dim, key_value_spatial_dim, query_offset)
+        indices, out_spatial_dim = _make_indices(query_spatial_dim, key_value_spatial_dim, query_offset, device=device)
 
         feat2_dim = feat_dim.div_left(2)
         div_term = rf.exp(rf.range_over_dim(feat2_dim, dtype=dtype) * -(2.0 * math.log(1e4) / feat_dim.dimension))
