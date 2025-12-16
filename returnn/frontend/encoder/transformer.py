@@ -79,6 +79,8 @@ class TransformerEncoder(rf.Module):
         self.model_dim = model_dim
         self.embed_dim = embed_dim
 
+        self.out_dim = self.model_dim  # alias. consistency, compatibility
+
         if input_embedding is None or isinstance(input_embedding, rf.Module):
             pass
         elif isinstance(input_embedding, type):
