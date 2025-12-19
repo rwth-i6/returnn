@@ -487,8 +487,7 @@ class TorchBackend(Backend[torch.Tensor]):
                 assert value.dims == ()
                 value = value.raw_tensor
             out = source.copy_template_new_dim_tags(
-                [out_dims[axes.index(dim)] if dim in axes else dim for dim in source.dim_tags],
-                keep_special_axes=True,
+                [out_dims[axes.index(dim)] if dim in axes else dim for dim in source.dim_tags], keep_special_axes=True
             )
             out.raw_tensor = torch.nn.functional.pad(source.raw_tensor, pad=raw_pad, mode=mode, value=value)
         else:  # Fallback to concat.
@@ -498,10 +497,7 @@ class TorchBackend(Backend[torch.Tensor]):
             ext_dim = Dim(1, name="ext")
             value_ext = rf.expand_dim(value, ext_dim)
             out = TorchBackend.concat(
-                (source, axes[0]),
-                (value_ext, ext_dim),
-                allow_broadcast=True,
-                out_dim=out_dims[0],
+                (source, axes[0]), (value_ext, ext_dim), allow_broadcast=True, out_dim=out_dims[0]
             )
         if any(dim.need_masking() for dim in out_dims) and handle_dynamic_dims:
             if all(right == 0 for right in raw_pad[1::2]) and mode != "circular":
@@ -693,8 +689,7 @@ class TorchBackend(Backend[torch.Tensor]):
         logits_raw_shape = logits_raw.shape  # [T, B..., C]
         if len(batch_dims) != 1:
             logits_raw = torch.reshape(
-                logits_raw,
-                logits_raw.shape[:1] + (batch_n_elems,) + logits_raw.shape[-1:],
+                logits_raw, logits_raw.shape[:1] + (batch_n_elems,) + logits_raw.shape[-1:]
             )  # [T, B', C]
             input_lengths = torch.reshape(input_lengths, (batch_n_elems,))  # [B']
         if logits_normalized:

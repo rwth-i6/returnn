@@ -512,9 +512,7 @@ class RelPosSelfAttention(SelfAttentionBase):
         self.linear_pos = None
         if with_linear_pos:
             self.linear_pos = rf.Linear(
-                self.in_dim,
-                self.key_dim_total if separate_pos_emb_per_head else self.key_dim_per_head,
-                with_bias=False,
+                self.in_dim, self.key_dim_total if separate_pos_emb_per_head else self.key_dim_per_head, with_bias=False
             )
         self.learned_pos_emb = None
         if learnable_pos_emb:
@@ -684,11 +682,7 @@ class RelPosCausalSelfAttention(CausalSelfAttention):
         self.pos_emb_dropout = pos_emb_dropout
 
     def __call__(
-        self,
-        source: Tensor,
-        *,
-        axis: Dim,
-        state: Optional[CausalSelfAttentionState] = None,
+        self, source: Tensor, *, axis: Dim, state: Optional[CausalSelfAttentionState] = None
     ) -> Tuple[Tensor, CausalSelfAttentionState]:
         """forward"""
         q, k, v = self.forward_qkv(source)
@@ -1023,15 +1017,7 @@ def relative_positional_encoding(
         dtype = rf.get_default_float_dtype()
     if not device:
         device = rf.get_default_device()
-
-    cache_key = (
-        query_spatial_dim,
-        key_value_spatial_dim,
-        feat_dim,
-        query_offset,
-        dtype,
-        device,
-    )
+    cache_key = (query_spatial_dim, key_value_spatial_dim, feat_dim, query_offset, dtype, device)
     cache_entry = _relative_positional_encoding_cache.get(cache_key)
     if cache_entry is not None:
         return cache_entry
