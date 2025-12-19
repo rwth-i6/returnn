@@ -2416,7 +2416,8 @@ class TorchBackend(Backend[torch.Tensor]):
             for i, b_dim in enumerate(batch_dims):
                 if b_dim not in kv_spat_dyn_dims:
                     attention_mask_raw = attention_mask_raw.unsqueeze(i)
-        assert not query_spatial_dim.is_dynamic()
+        # dont need to check query spatial dim for is_dynamic, as we assign that dim to the result tensor so
+        # downstream code automatically handles it
 
         # print(
         #     "sdpa att mask",
