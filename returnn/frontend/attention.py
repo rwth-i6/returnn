@@ -59,6 +59,7 @@ def scaled_dot_product_attention(
     :param scale: Scaling factor applied prior to softmax
     :return: attention output
     """
+    # noinspection PyProtectedMember
     return query._raw_backend.scaled_dot_product_attention(
         query,
         key,
@@ -103,6 +104,7 @@ def dot_attention(
     """
     assert axis in keys.dims_set
     assert axis not in query.dims_set
+    assert att_dropout_broadcast is None or not att_dropout_broadcast
     # print(f"keys dims: {keys.dims}, query dims: {query.dims}, values dims: {values.dims}")
     query_non_batch_dims = query.remaining_dims(keys.dims_set - {axis})
     if len(query_non_batch_dims) == 0:

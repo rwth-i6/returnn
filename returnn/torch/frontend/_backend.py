@@ -2331,7 +2331,7 @@ class TorchBackend(Backend[torch.Tensor]):
         Scaled dot-product attention.
         :return: attention output
         """
-        import sys
+        # import sys
 
         if (  # kv_spatial_dim and query dims are co-dependent, legacy causalselfattention code relies on this...
             kv_spatial_dim.dyn_size_ext is not None
@@ -2340,8 +2340,8 @@ class TorchBackend(Backend[torch.Tensor]):
             # or sys.gettrace() is not None
         ):
             # print("falling back to legacy impl", file=sys.stderr)
-            # the legacy CausalSelfAttention implementation has a Dimension in the key which depends on another Dimension
-            # that only exists in the query matrix.
+            # the legacy CausalSelfAttention implementation has a Dimension in the key which depends
+            # on another Dimension that only exists in the query matrix.
             # Therefore the key/value matrices are only well-defined once they are multiplied with the query matrix...
             # In this case, we just fall back to the old implementation to not break old setups.
             return super().scaled_dot_product_attention(
