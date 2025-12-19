@@ -231,11 +231,7 @@ class SelfAttentionBase(rf.Module):
         q, k, v = rf.split(
             qkv,
             axis=self.qkv_dim_per_head,
-            out_dims=(
-                self.key_dim_per_head,
-                self.key_dim_per_head,
-                self.value_dim_per_head,
-            ),
+            out_dims=(self.key_dim_per_head, self.key_dim_per_head, self.value_dim_per_head),
         )
         return q, k, v
 
@@ -250,11 +246,7 @@ class SelfAttentionBase(rf.Module):
             att_dropout=self.att_dropout,
             att_dropout_broadcast=self.att_dropout_broadcast,
         )
-        output, _ = rf.merge_dims(
-            att,
-            dims=(self.num_heads, self.value_dim_per_head),
-            out_dim=self.value_dim_total,
-        )
+        output, _ = rf.merge_dims(att, dims=(self.num_heads, self.value_dim_per_head), out_dim=self.value_dim_total)
         if self.proj:
             output = self.proj(output)
         return output
@@ -347,13 +339,7 @@ class CausalSelfAttentionState(rf.State):
     State for :class:`StepwiseCausalSelfAttention`.
     """
 
-    def __init__(
-        self,
-        *_args,
-        k_accum: Tensor = None,
-        v_accum: Tensor = None,
-        accum_axis: Dim = None,
-    ):
+    def __init__(self, *_args, k_accum: Tensor = None, v_accum: Tensor = None, accum_axis: Dim = None):
         """
         :param k_accum: accumulated keys
         :param v_accum: accumulated values
@@ -426,11 +412,7 @@ class RotaryPosCausalSelfAttention(CausalSelfAttention):
         q = _apply_rope(
             q,
             (
-                rf.gather(
-                    pos_enc,
-                    axis=hist_dim,
-                    indices=rf.last_frame_position_of_dim(hist_dim),
-                )
+                rf.gather(pos_enc, axis=hist_dim, indices=rf.last_frame_position_of_dim(hist_dim))
                 if axis == single_step_dim
                 else rf.replace_dim(pos_enc, in_dim=hist_dim, out_dim=axis)[0]
             ),
@@ -556,21 +538,14 @@ class RelPosSelfAttention(SelfAttentionBase):
             pos_emb, pos_emb_spatial_dim = self.learned_pos_emb(query_spatial_dim=axis, key_value_spatial_dim=axis)
         else:
             pos_emb, pos_emb_spatial_dim = relative_positional_encoding(
-                query_spatial_dim=axis,
-                key_value_spatial_dim=axis,
-                feat_dim=self.pos_emb_feat_dim,
-                device=source.device,
+                query_spatial_dim=axis, key_value_spatial_dim=axis, feat_dim=self.pos_emb_feat_dim, device=source.device
             )
         if self.pos_emb_dropout:
             pos_emb = rf.dropout(pos_emb, self.pos_emb_dropout)
         if self.linear_pos is not None:
             pos_emb = self.linear_pos(pos_emb)
         if self.separate_pos_emb_per_head:
-            pos_emb = rf.split_dims(
-                pos_emb,
-                axis=self.key_dim_total,
-                dims=(self.num_heads, self.key_dim_per_head),
-            )
+            pos_emb = rf.split_dims(pos_emb, axis=self.key_dim_total, dims=(self.num_heads, self.key_dim_per_head))
         # pos_emb: (head, 2*time1-1, d_k)
 
         q, k, v = self.forward_qkv(source)
@@ -599,11 +574,7 @@ class RelPosSelfAttention(SelfAttentionBase):
         # Masking not needed because softmax should already have masked,
         # so we have 0.0 att weights for padded frames.
         att = rf.matmul(att_weights, v, reduce=hist_dim, use_mask=False)
-        output, _ = rf.merge_dims(
-            att,
-            dims=(self.num_heads, self.value_dim_per_head),
-            out_dim=self.value_dim_total,
-        )
+        output, _ = rf.merge_dims(att, dims=(self.num_heads, self.value_dim_per_head), out_dim=self.value_dim_total)
         if self.proj:
             output = self.proj(output)
         return output
@@ -694,9 +665,7 @@ class RelPosCausalSelfAttention(CausalSelfAttention):
         self.linear_pos = None
         if with_linear_pos:
             self.linear_pos = rf.Linear(
-                self.in_dim,
-                self.key_dim_total if separate_pos_emb_per_head else self.key_dim_per_head,
-                with_bias=False,
+                self.in_dim, self.key_dim_total if separate_pos_emb_per_head else self.key_dim_per_head, with_bias=False
             )
         self.learned_pos_emb = None
         if learnable_pos_emb:
@@ -740,11 +709,7 @@ class RelPosCausalSelfAttention(CausalSelfAttention):
         if self.linear_pos is not None:
             pos_emb = self.linear_pos(pos_emb)
         if self.separate_pos_emb_per_head:
-            pos_emb = rf.split_dims(
-                pos_emb,
-                axis=self.key_dim_total,
-                dims=(self.num_heads, self.key_dim_per_head),
-            )
+            pos_emb = rf.split_dims(pos_emb, axis=self.key_dim_total, dims=(self.num_heads, self.key_dim_per_head))
         # pos_emb: (head, 2*time1-1, d_k)
 
         q_with_bias_u = (q + self.pos_bias_u) if self.pos_bias_u is not None else q  # (batch, head, time1, d_k)
@@ -768,11 +733,7 @@ class RelPosCausalSelfAttention(CausalSelfAttention):
         # Masking not needed because softmax should already have masked,
         # so we have 0.0 att weights for padded frames.
         att = rf.matmul(att_weights, v, reduce=hist_dim, use_mask=False)
-        output, _ = rf.merge_dims(
-            att,
-            dims=(self.num_heads, self.value_dim_per_head),
-            out_dim=self.value_dim_total,
-        )
+        output, _ = rf.merge_dims(att, dims=(self.num_heads, self.value_dim_per_head), out_dim=self.value_dim_total)
         if self.proj:
             output = self.proj(output)
         return output, new_state
@@ -900,11 +861,7 @@ class CrossAttention(rf.Module):
             att_dropout=self.att_dropout,
             att_dropout_broadcast=self.att_dropout_broadcast,
         )
-        output, _ = rf.merge_dims(
-            att,
-            dims=(self.num_heads, self.value_dim_per_head),
-            out_dim=self.value_dim_total,
-        )
+        output, _ = rf.merge_dims(att, dims=(self.num_heads, self.value_dim_per_head), out_dim=self.value_dim_total)
         if self.proj:
             output = self.proj(output)
         return output
@@ -919,14 +876,7 @@ class LearnedRelativePositionalEncoding(rf.Module):
     https://github.com/rwth-i6/returnn_common/wiki/Relative-positional-encoding
     """
 
-    def __init__(
-        self,
-        feat_dim: Dim,
-        *,
-        clipping: int = 16,
-        dtype: Optional[str] = None,
-        causal: bool = False,
-    ):
+    def __init__(self, feat_dim: Dim, *, clipping: int = 16, dtype: Optional[str] = None, causal: bool = False):
         """
         :param feat_dim: feature dim, for the emb matrix and output
         :param clipping: max distance to consider. emb matrix shape is [2 * clipping + 1, feat_dim] if not causal,
@@ -1027,10 +977,7 @@ def _make_indices(
         # The min value is with kv_pos=0, q_pos=q_len-1: -(q_len-1)
         # The max value is with kv_pos=kv_len-1, q_pos=0: k_len-1
         indices, _ = rf.concat(
-            (
-                q_pos_vec - query_spatial_dim_m1.get_dim_value_tensor(),
-                query_spatial_dim_m1,
-            ),
+            (q_pos_vec - query_spatial_dim_m1.get_dim_value_tensor(), query_spatial_dim_m1),
             (kv_pos_vec, key_value_spatial_dim),
             out_dim=out_spatial_dim,
             handle_dynamic_dims=False,
@@ -1074,7 +1021,6 @@ def relative_positional_encoding(
     """
     if not dtype:
         dtype = rf.get_default_float_dtype()
-
     if not device:
         device = rf.get_default_device()
 
