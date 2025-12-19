@@ -2311,6 +2311,147 @@ class TorchBackend(Backend[torch.Tensor]):
 
         return out, (new_state_h, new_state_c)
 
+    @classmethod
+    def scaled_dot_product_attention(
+        cls,
+        query: _TT,
+        key: _TT,
+        value: _TT,
+        *,
+        attention_mask: Optional[_TT] = None,
+        dropout: float = 0.0,
+        v_embed_dim: Dim,
+        qk_embed_dim: Dim,
+        kv_spatial_dim: Dim,
+        query_spatial_dim: Dim,
+        is_causal: bool = False,
+        scale: Optional[float] = None,
+    ):
+        """
+        Scaled dot-product attention.
+        :return: attention output
+        """
+        # import sys
+
+        if (  # kv_spatial_dim and query dims are co-dependent, legacy causalselfattention code relies on this...
+            kv_spatial_dim.dyn_size_ext is not None
+            and any([d not in key.dims_set for d in kv_spatial_dim.dyn_size_ext.dims])
+            # if we are tracing, we likely want to access energy and att weights variables...
+            # or sys.gettrace() is not None
+        ):
+            # print("falling back to legacy impl", file=sys.stderr)
+            # the legacy CausalSelfAttention implementation has a Dimension in the key which depends
+            # on another Dimension that only exists in the query matrix.
+            # Therefore the key/value matrices are only well-defined once they are multiplied with the query matrix...
+            # In this case, we just fall back to the old implementation to not break old setups.
+            return super().scaled_dot_product_attention(
+                query=query,
+                key=key,
+                value=value,
+                attention_mask=attention_mask,
+                dropout=dropout,
+                v_embed_dim=v_embed_dim,
+                qk_embed_dim=qk_embed_dim,
+                kv_spatial_dim=kv_spatial_dim,
+                query_spatial_dim=query_spatial_dim,
+                is_causal=is_causal,
+                scale=scale,
+            )
+        # print("using new torch sdpa with query dims", query, " and key", key, "value", value, file=sys.stderr)
+        # print("kv spatial dim", kv_spatial_dim, " ", kv_spatial_dim.dyn_size_ext, file=sys.stderr)
+
+        query_raw = query.raw_tensor
+        key_raw = key.raw_tensor
+        value_raw = value.raw_tensor
+
+        if value.feature_dim is not None:
+            assert value.feature_dim == v_embed_dim  # maybe unnecessary check?
+        batch_dims = query.remaining_dims([qk_embed_dim, query_spatial_dim])
+        assert set(batch_dims) == set(key.remaining_dims([qk_embed_dim, kv_spatial_dim]))
+        assert set(batch_dims) == set(value.remaining_dims([v_embed_dim, kv_spatial_dim]))
+        query_raw = torch.permute(
+            query_raw,
+            [query.get_axis_from_description(d) for d in batch_dims + [query_spatial_dim, qk_embed_dim]],
+        )
+        key_raw = torch.permute(
+            key_raw,
+            [key.get_axis_from_description(d) for d in batch_dims + [kv_spatial_dim, qk_embed_dim]],
+        )
+        value_raw = torch.permute(
+            value_raw,
+            [value.get_axis_from_description(d) for d in batch_dims + [kv_spatial_dim, v_embed_dim]],
+        )
+
+        attention_mask_raw = None
+        if attention_mask is not None:
+            assert not is_causal, "cannot combine attention_mask and is_causal"
+            attention_mask_raw = attention_mask.raw_tensor
+            # assumes that query and kv spatial dim are present in the attention mask,
+            # this requirement could be relaxed...
+            att_mask_batch_dims = attention_mask.remaining_dims([query_spatial_dim, kv_spatial_dim])
+            assert set(att_mask_batch_dims).issubset(set(batch_dims))
+            # order
+            att_mask_batch_dims = [d for d in batch_dims if d in att_mask_batch_dims]
+
+            attention_mask_raw = torch.permute(
+                attention_mask_raw,
+                [
+                    attention_mask.get_axis_from_description(d)
+                    for d in att_mask_batch_dims + [query_spatial_dim, kv_spatial_dim]
+                ],
+            )
+            # we totally ignore kv_spatial_dim dyn_sizes here... TODO
+            assert not kv_spatial_dim.is_dynamic()
+        elif kv_spatial_dim.is_dynamic() and kv_spatial_dim.dyn_size_ext is not None:
+            # no attention mask, but we know that some keys/values are padding
+            # create mask based on that
+            kv_spat_dyn_dims = kv_spatial_dim.dyn_size_ext.dims_set
+            assert kv_spat_dyn_dims.issubset(set(batch_dims))
+            attention_mask_raw: torch.Tensor = kv_spatial_dim.get_mask(
+                dim_order=[*[d for d in batch_dims if d in kv_spat_dyn_dims], kv_spatial_dim]
+            ).raw_tensor
+            # insert 1 dim at -2 (for query_spatial_dim)
+            attention_mask_raw = attention_mask_raw.unsqueeze(-2)
+            # now add all other batch dims
+            for i, b_dim in enumerate(batch_dims):
+                if b_dim not in kv_spat_dyn_dims:
+                    attention_mask_raw = attention_mask_raw.unsqueeze(i)
+        # dont need to check query spatial dim for is_dynamic, as we assign that dim to the result tensor so
+        # downstream code automatically handles it
+
+        # print(
+        #     "sdpa att mask",
+        #     attention_mask_raw,
+        #     "dropout",
+        #     rf.get_run_ctx().is_train_flag_enabled(func=rf.dropout),
+        #     file=sys.stderr,
+        # )
+
+        # print("query_raw shape:", query_raw, file=sys.stderr)
+        # print("key_raw shape:", key_raw, file=sys.stderr)
+        # print("value_raw shape:", value_raw, file=sys.stderr)
+        att_raw = torch.nn.functional.scaled_dot_product_attention(
+            query_raw,
+            key_raw,
+            value_raw,
+            attn_mask=attention_mask_raw,
+            dropout_p=dropout if rf.get_run_ctx().is_train_flag_enabled(func=rf.dropout) else 0.0,
+            is_causal=is_causal,
+            # scale is only available in PyTorch 2.1+, some tests still run 2.0
+            **({"scale": scale} if scale is not None else {}),
+        )
+
+        # print("att_raw", att_raw, file=sys.stderr)
+        att = rf.convert_to_tensor(
+            att_raw,
+            dims=batch_dims + [query_spatial_dim, v_embed_dim],
+            name="scaled_dot_product_attention",
+        )
+
+        if value.feature_dim in att.dims:
+            att.feature_dim = value.feature_dim
+        return att
+
     TensorArrayType = List[Tensor]
 
     @staticmethod

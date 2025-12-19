@@ -11,6 +11,7 @@ from returnn.frontend._cache import Cache
 
 
 __all__ = [
+    "scaled_dot_product_attention",
     "dot_attention",
     "SelfAttentionBase",
     "SelfAttention",
@@ -25,6 +26,53 @@ __all__ = [
     "relative_positional_encoding",
     "sinusoidal_positional_encoding",
 ]
+
+
+def scaled_dot_product_attention(
+    query: Tensor,
+    key: Tensor,
+    value: Tensor,
+    *,
+    attention_mask: Optional[Tensor] = None,
+    dropout: float = 0.0,
+    v_embed_dim: Dim,
+    qk_embed_dim: Dim,
+    kv_spatial_dim: Dim,
+    query_spatial_dim: Dim,
+    is_causal: bool = False,
+    scale: Optional[float] = None,
+):
+    """
+    Scaled dot-product attention.
+
+    :param query:
+    :param key:
+    :param value:
+    :param attention_mask:
+    :param dropout:
+    :param v_embed_dim: Embedding dimension of value
+    :param qk_embed_dim: Embedding dimension of key (and query)
+    :param kv_spatial_dim: Spatial axis of key/value to attend over
+    :param query_spatial_dim: Spatial axis of query
+    :param is_causal: Special case when the attention mask should be causal (e.g. for auto-regressive decoding).
+        Allows for more efficient implementation in some backends.
+    :param scale: Scaling factor applied prior to softmax
+    :return: attention output
+    """
+    # noinspection PyProtectedMember
+    return query._raw_backend.scaled_dot_product_attention(
+        query,
+        key,
+        value,
+        attention_mask=attention_mask,
+        dropout=dropout,
+        v_embed_dim=v_embed_dim,
+        qk_embed_dim=qk_embed_dim,
+        kv_spatial_dim=kv_spatial_dim,
+        query_spatial_dim=query_spatial_dim,
+        is_causal=is_causal,
+        scale=scale,
+    )
 
 
 def dot_attention(
@@ -54,17 +102,53 @@ def dot_attention(
         normally not wanted. disabled by default since behavior version 19.
     :return: like values but with axis removed, and maybe any additional axes from query
     """
-    query *= key_dim.dimension**-0.5
-    energy = rf.matmul(query, keys, reduce=key_dim)
-    att_weights = rf.softmax(energy, axis=axis)
-    if att_dropout_broadcast is None:
-        att_dropout_broadcast = _att_dropout_broadcast_default()
-    att_weights = rf.dropout(att_weights, att_dropout, axis=att_dropout_broadcast and axis)
-    # Masking not needed because softmax should already have masked,
-    # so we have 0.0 att weights for padded frames.
-    att = rf.matmul(att_weights, values, reduce=axis, use_mask=False)
-    if values.feature_dim in att.dims:
-        att.feature_dim = values.feature_dim
+    assert axis in keys.dims_set
+    assert axis not in query.dims_set
+    assert att_dropout_broadcast is None or not att_dropout_broadcast
+    # print(f"keys dims: {keys.dims}, query dims: {query.dims}, values dims: {values.dims}")
+    query_non_batch_dims = query.remaining_dims(keys.dims_set - {axis})
+    if len(query_non_batch_dims) == 0:
+        query_spatial = Dim(1, name="dot_att_query_spatial_dummy")
+        query = rf.expand_dim(query, dim=query_spatial)
+    else:
+        assert len(query_non_batch_dims) == 1, f"qspat={query_non_batch_dims}, q={query.dims}, k={keys.dims}"
+        query_spatial = query_non_batch_dims[0]
+
+    v_embed_dim = values.feature_dim
+    if v_embed_dim is None:
+        if key_dim in values.dims_set:
+            v_embed_dim = key_dim
+        else:
+            relevant_dims = values.dims_set - keys.dims_set
+            if len(relevant_dims) == 1:
+                v_embed_dim = list(relevant_dims)[0]
+            else:
+                raise ValueError(f"Cannot infer v_embed_dim from values.dims={values.dims}, keys.dims={keys.dims}")
+
+    att = scaled_dot_product_attention(
+        query,
+        keys,
+        values,
+        dropout=att_dropout,
+        v_embed_dim=v_embed_dim,
+        qk_embed_dim=key_dim,
+        kv_spatial_dim=axis,
+        query_spatial_dim=query_spatial,
+        is_causal=False,
+    )
+    if len(query_non_batch_dims) == 0:
+        att = rf.squeeze(att, axis=query_spatial)
+    # query *= key_dim.dimension**-0.5
+    # energy = rf.matmul(query, keys, reduce=key_dim)
+    # att_weights = rf.softmax(energy, axis=axis)
+    # if att_dropout_broadcast is None:
+    #     att_dropout_broadcast = _att_dropout_broadcast_default()
+    # att_weights = rf.dropout(att_weights, att_dropout, axis=att_dropout_broadcast and axis)
+    # # Masking not needed because softmax should already have masked,
+    # # so we have 0.0 att weights for padded frames.
+    # att = rf.matmul(att_weights, values, reduce=axis, use_mask=False)
+    # if values.feature_dim in att.dims:
+    #     att.feature_dim = values.feature_dim
     return att
 
 
