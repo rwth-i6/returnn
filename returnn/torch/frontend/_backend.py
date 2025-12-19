@@ -2333,13 +2333,12 @@ class TorchBackend(Backend[torch.Tensor]):
         """
         import sys
 
-        if (
-            (  # kv_spatial_dim and query dims are co-dependent, legacy causalselfattention code relies on this...
-                kv_spatial_dim.dyn_size_ext is not None
-                and any([d not in key.dims_set for d in kv_spatial_dim.dyn_size_ext.dims])
-            )
-            or sys.gettrace() is not None
-        ):  # if we are tracing, we likely want to access energy and att weights variables...
+        if (  # kv_spatial_dim and query dims are co-dependent, legacy causalselfattention code relies on this...
+            kv_spatial_dim.dyn_size_ext is not None
+            and any([d not in key.dims_set for d in kv_spatial_dim.dyn_size_ext.dims])
+            # if we are tracing, we likely want to access energy and att weights variables...
+            # or sys.gettrace() is not None
+        ):
             print("falling back to legacy impl", file=sys.stderr)
             # the legacy CausalSelfAttention implementation has a Dimension in the key which depends on another Dimension
             # that only exists in the query matrix.
@@ -2358,8 +2357,8 @@ class TorchBackend(Backend[torch.Tensor]):
                 is_causal=is_causal,
                 scale=scale,
             )
-        print("using new torch sdpa with query dims", query, " and key", key, "value", value, file=sys.stderr)
-        print("kv spatial dim", kv_spatial_dim, " ", kv_spatial_dim.dyn_size_ext, file=sys.stderr)
+        # print("using new torch sdpa with query dims", query, " and key", key, "value", value, file=sys.stderr)
+        # print("kv spatial dim", kv_spatial_dim, " ", kv_spatial_dim.dyn_size_ext, file=sys.stderr)
 
         query_raw = query.raw_tensor
         key_raw = key.raw_tensor
@@ -2434,7 +2433,8 @@ class TorchBackend(Backend[torch.Tensor]):
             attn_mask=attention_mask_raw,
             dropout_p=dropout if rf.get_run_ctx().is_train_flag_enabled(func=rf.dropout) else 0.0,
             is_causal=is_causal,
-            scale=scale,
+            # scale is only available in PyTorch 2.1+, tests still run 2.0
+            **({"scale": scale} if scale is not None else {}),
         )
 
         print("att_raw", att_raw, file=sys.stderr)
