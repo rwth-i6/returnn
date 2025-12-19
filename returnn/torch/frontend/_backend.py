@@ -2334,9 +2334,13 @@ class TorchBackend(Backend[torch.Tensor]):
         import sys
 
         if (
-            kv_spatial_dim.dyn_size_ext is not None
-            and any([d not in key.dims_set for d in kv_spatial_dim.dyn_size_ext.dims])
-        ) or sys.gettrace() is not None:
+            (  # kv_spatial_dim and query dims are co-dependent, legacy causalselfattention code relies on this...
+                kv_spatial_dim.dyn_size_ext is not None
+                and any([d not in key.dims_set for d in kv_spatial_dim.dyn_size_ext.dims])
+            )
+            or sys.gettrace() is not None
+        ):  # if we are tracing, we likely want to access energy and att weights variables...
+            print("falling back to legacy impl", file=sys.stderr)
             # the legacy CausalSelfAttention implementation has a Dimension in the key which depends on another Dimension
             # that only exists in the query matrix.
             # Therefore the key/value matrices are only well-defined once they are multiplied with the query matrix...
@@ -2354,6 +2358,8 @@ class TorchBackend(Backend[torch.Tensor]):
                 is_causal=is_causal,
                 scale=scale,
             )
+        print("using new torch sdpa with query dims", query, " and key", key, "value", value, file=sys.stderr)
+        print("kv spatial dim", kv_spatial_dim, " ", kv_spatial_dim.dyn_size_ext, file=sys.stderr)
 
         query_raw = query.raw_tensor
         key_raw = key.raw_tensor
@@ -2384,6 +2390,9 @@ class TorchBackend(Backend[torch.Tensor]):
             # assumes that query and kv spatial dim are present in the attention mask,
             # this requirement could be relaxed...
             att_mask_batch_dims = attention_mask.remaining_dims([query_spatial_dim, kv_spatial_dim])
+            assert set(att_mask_batch_dims).issubset(set(batch_dims))
+            # order
+            att_mask_batch_dims = [d for d in batch_dims if d in att_mask_batch_dims]
 
             attention_mask_raw = torch.permute(
                 attention_mask_raw,
@@ -2392,7 +2401,32 @@ class TorchBackend(Backend[torch.Tensor]):
                     for d in att_mask_batch_dims + [query_spatial_dim, kv_spatial_dim]
                 ],
             )
+            # we totally ignore kv_spatial_dim dyn_sizes here... TODO
+        elif kv_spatial_dim.is_dynamic() and kv_spatial_dim.dyn_size_ext is not None:
+            # no attention mask, but we know that some keys/values are padding
+            # create mask based on that
+            kv_spat_dyn_dims = kv_spatial_dim.dyn_size_ext.dims_set
+            assert kv_spat_dyn_dims.issubset(set(batch_dims))
+            attention_mask_raw: torch.Tensor = kv_spatial_dim.get_mask(
+                dim_order=[*[d for d in batch_dims if d in kv_spat_dyn_dims], kv_spatial_dim]
+            ).raw_tensor
+            # insert 1 dim at -2 (for query_spatial_dim)
+            attention_mask_raw = attention_mask_raw.unsqueeze(-2)
+            # now add all other batch dims
+            for i, b_dim in enumerate(batch_dims):
+                if b_dim not in kv_spat_dyn_dims:
+                    attention_mask_raw = attention_mask_raw.unsqueeze(i)
+        print(
+            "sdpa att mask",
+            attention_mask_raw,
+            "dropout",
+            rf.get_run_ctx().is_train_flag_enabled(func=rf.dropout),
+            file=sys.stderr,
+        )
 
+        print("query_raw shape:", query_raw, file=sys.stderr)
+        print("key_raw shape:", key_raw, file=sys.stderr)
+        print("value_raw shape:", value_raw, file=sys.stderr)
         att_raw = torch.nn.functional.scaled_dot_product_attention(
             query_raw,
             key_raw,
@@ -2402,6 +2436,8 @@ class TorchBackend(Backend[torch.Tensor]):
             is_causal=is_causal,
             scale=scale,
         )
+
+        print("att_raw", att_raw, file=sys.stderr)
         att = rf.convert_to_tensor(
             att_raw,
             dims=batch_dims + [query_spatial_dim, v_embed_dim],
