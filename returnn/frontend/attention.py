@@ -24,6 +24,7 @@ __all__ = [
     "LearnedRelativePositionalEncoding",
     "relative_positional_encoding",
     "sinusoidal_positional_encoding",
+    "sinusoidal_encoding",
 ]
 
 
@@ -997,7 +998,6 @@ def sinusoidal_positional_encoding(
     cache_entry = _sinusoidal_positional_encoding_cache.get(cache_key)
     if cache_entry is not None:
         return cache_entry
-    import math
 
     with rf.control_flow_ctx(None):
         # See also RelativePositionalEncodingLayer, LearnedRelativePositionalEncoding
@@ -1008,24 +1008,47 @@ def sinusoidal_positional_encoding(
             indices = rf.range_over_dim(spatial_dim, device=device)  # [len]
             if offset is not None:
                 indices = indices + offset
-        indices = rf.copy_to_device(indices, device)
-
-        feat2_dim = feat_dim.div_left(2)
-        div_term = rf.exp(
-            rf.range_over_dim(feat2_dim, dtype=dtype, device=device) * -(math.log(base) / (feat2_dim.dimension - 1))
-        )
-        arg_sin = rf.combine_bc(rf.cast(indices, dtype), "*", div_term)
-        arg_cos = arg_sin + math.pi / 2.0
-        arg, feat_dim_ = rf.concat((arg_sin, feat2_dim), (arg_cos, feat2_dim))
-        arg, feat_dim_ = rf.replace_dim(arg, in_dim=feat_dim_, out_dim=feat_dim)
-        emb = rf.sin(arg)
+        emb = sinusoidal_encoding(indices, feat_dim=feat_dim, dtype=dtype)
         emb.verify_out_shape(
             {feat_dim} | indices.dims_set | ({spatial_dim} if spatial_dim != single_step_dim else set()),
             allow_missing_implicit_dims=True,
         )
-        emb.feature_dim = feat_dim
         _sinusoidal_positional_encoding_cache.set(cache_key, emb)
         return emb
+
+
+def sinusoidal_encoding(
+    indices: Tensor,
+    *,
+    feat_dim: Dim,
+    base: Union[int, float] = 1e4,
+    dtype: Optional[str] = None,
+) -> Tensor:
+    """
+
+    :param indices: [...], to be encoded
+    :param feat_dim:
+    :param base: base for the angles
+    :param dtype: data type
+    :return: tensor of shape [..., feat_dim]
+    """
+    import math
+
+    if not dtype:
+        dtype = rf.get_default_float_dtype()
+
+    device = indices.device
+    feat2_dim = feat_dim.div_left(2)
+    div_term = rf.exp(
+        rf.range_over_dim(feat2_dim, dtype=dtype, device=device) * -(math.log(base) / (feat2_dim.dimension - 1))
+    )
+    arg_sin = rf.combine_bc(rf.cast(indices, dtype), "*", div_term)
+    arg_cos = arg_sin + math.pi / 2.0
+    arg, feat_dim_ = rf.concat((arg_sin, feat2_dim), (arg_cos, feat2_dim))
+    arg, feat_dim_ = rf.replace_dim(arg, in_dim=feat_dim_, out_dim=feat_dim)
+    emb = rf.sin(arg)
+    emb.feature_dim = feat_dim
+    return emb
 
 
 _att_dropout_broadcast_shown_warning = False
