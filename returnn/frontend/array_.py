@@ -85,6 +85,10 @@ def convert_to_tensor(
     :return: tensor
     """
     if isinstance(value, Tensor):  # fast path
+        if device and value.device != device:
+            value = rf.copy_to_device(value, device)
+        if dtype and value.dtype != dtype:
+            value = rf.cast(value, dtype=dtype)
         return value
     if isinstance(value, (tuple, list)):
         value = numpy.array(value, dtype=dtype)
