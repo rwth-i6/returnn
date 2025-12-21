@@ -314,7 +314,7 @@ def test_rope_causal_self_att():
     in_.name = "input"
 
     with PyTracer(
-        [rf.RotaryPosCausalSelfAttention.__call__, rf.sinusoidal_positional_encoding, rf.dot_attention, rf_apply_rope],
+        [rf.RotaryPosCausalSelfAttention.__call__, rf.sinusoidal_encoding, rf.dot_attention, rf_apply_rope],
         (Tensor, Dim),
     ) as trace_rf:
         out_rf, _ = model_rf(in_, axis=seq_dim, state=model_rf.default_initial_state(batch_dims=[batch_dim]))
@@ -377,18 +377,18 @@ def test_rope_causal_self_att():
                 ),
             ),
             (
-                (rf.sinusoidal_positional_encoding, 0, "div_term", 0),
+                (rf.sinusoidal_encoding, 0, "div_term", 0),
                 (LlamaRotaryEmbedding.forward, 0, "inv_freq_expanded", 0),
                 lambda x, *, name, **_: rf.convert_to_tensor(
                     x[0, :, 0], dims=[model_rf.key_dim_per_head.div_left(2)], name=name
                 ),
             ),
             (
-                (rf.sinusoidal_positional_encoding, 0, "arg_sin", 0),
+                (rf.sinusoidal_encoding, 0, "arg_sin", 0),
                 (LlamaRotaryEmbedding.forward, 0, "freqs", 0),
                 lambda x, *, name, resolve_dim, **_: rf.convert_to_tensor(
                     x[0],
-                    dims=(resolve_dim("spatial_dim"), model_rf.key_dim_per_head.div_left(2)),
+                    dims=(resolve_dim("arg_sin.dims[0]"), model_rf.key_dim_per_head.div_left(2)),
                     name=name,
                 ),
             ),

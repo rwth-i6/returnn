@@ -1008,7 +1008,7 @@ def sinusoidal_positional_encoding(
             indices = rf.range_over_dim(spatial_dim, device=device)  # [len]
             if offset is not None:
                 indices = indices + offset
-        emb = sinusoidal_encoding(indices, feat_dim=feat_dim, dtype=dtype)
+        emb = sinusoidal_encoding(indices, base=base, feat_dim=feat_dim, dtype=dtype)
         emb.verify_out_shape(
             {feat_dim} | indices.dims_set | ({spatial_dim} if spatial_dim != single_step_dim else set()),
             allow_missing_implicit_dims=True,

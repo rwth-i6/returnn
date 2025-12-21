@@ -704,7 +704,7 @@ def check_py_traces_rf_to_pt_equal(
     """
     import random
     import torch
-    from returnn.tensor import Tensor, Dim
+    from returnn.tensor import Dim
     import returnn.frontend as rf
 
     # noinspection PyProtectedMember
@@ -715,8 +715,17 @@ def check_py_traces_rf_to_pt_equal(
     def _get_entry(trace, func, i, name, j):
         return trace[func][i][name][j]
 
+    def _get_entry_attr(trace, func, i, name, j):
+        name, attr = name.split(".", 1)
+        obj = trace[func][i][name][j]
+        return eval(f"{name}.{attr}", {name: obj})
+
     def _resolve_dim(dim: Union[Dim, str]) -> Dim:
         if isinstance(dim, Dim):
+            return dim
+        elif isinstance(dim, str) and "." in dim:
+            dim = _get_entry_attr(trace_rf, *check_rf[:2], dim, -1)
+            assert isinstance(dim, Dim)
             return dim
         elif isinstance(dim, str):
             dim = _get_entry(trace_rf, *check_rf[:2], dim, -1)
@@ -763,7 +772,7 @@ def check_py_traces_rf_to_pt_equal(
             if len(indices) > 5:
                 msgs.append("  non-matching ...")
             non_matching.append("\n".join(msgs_prefix + msgs))
-            print(f"  mismatch!")
+            print("  mismatch!")
             for msg in msgs:
                 print(msg)
 
