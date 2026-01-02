@@ -550,6 +550,7 @@ class OpMaker:
             from returnn.util.basic import find_sgemm_libs_from_runtime
 
             libs = find_sgemm_libs_from_runtime()
+            libs = [fn for fn in libs if "libtorch" not in fn]  # torch seems to expose this symbol
             if libs:
                 numpy_libs = [fn for fn in libs if "/numpy/.libs/" in fn]
                 if numpy_libs:
