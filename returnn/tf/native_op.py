@@ -528,78 +528,30 @@ class OpMaker:
     def _make_mod(self):
         if self.cache_key in self.mod_cache:
             return self.mod_cache[self.cache_key]
-        from returnn.util.basic import find_lib
 
-        # Note about BLAS linkage:
-        # TensorFlow (or its Eigen lib) likely has linked against some BLAS lib itself.
-        # For our CPU code, we directly call some BLAS functions such as `sgemm_`.
-        # On platforms where there is a flat namespace (e.g. Mac),
-        # it probably is not needed to explicitly link it again for this module.
-        # In other cases, it's probably needed, but it's not so clear which lib has the
-        # right symbols (e.g. the `sgemm_` symbol).
+        # Note about BLAS / matmul:
+        # Earlier, we assumed that TensorFlow/Eigen used BLAS internally,
+        # and our code directly called BLAS sgemm_, so we needed to link directly to BLAS.
+        # Now, by default, we use the underlying Eigen library,
+        # which is the same code path that TF also uses for CPU matmul.
+        # Only if an explicit BLAS library is specified, we use that instead.
         ld_flags = []
-        have_blas_lib = False
+        c_macro_defines = {}
 
         if self.blas_lib is not None and os.path.exists(self.blas_lib):
             path = os.path.dirname(self.blas_lib)
             if path == "":
                 path = "."
             ld_flags += ["-L%s" % path, "-l:%s" % os.path.basename(self.blas_lib)]
-            have_blas_lib = True
-        if not have_blas_lib and self.search_for_runtime_blas:
-            from returnn.util.basic import find_sgemm_libs_from_runtime
+            c_macro_defines["HAVE_CUSTOM_BLAS"] = "1"
 
-            libs = find_sgemm_libs_from_runtime()
-            libs = [fn for fn in libs if "libtorch" not in fn]  # torch seems to expose this symbol
-            if libs:
-                numpy_libs = [fn for fn in libs if "/numpy/.libs/" in fn]
-                if numpy_libs:
-                    # Prefer Numpy; move to front.
-                    libs = numpy_libs + [fn for fn in libs if fn not in numpy_libs]
-                if self.blas_lib is not None:
-                    libs = [lib for lib in libs if self.blas_lib in lib]
-                for fn in libs:
-                    ld_flags += ["-L%s" % os.path.dirname(fn), "-l:%s" % os.path.basename(fn)]
-                    have_blas_lib = True
-        if not have_blas_lib and self.search_for_numpy_blas:
-            # Find related Numpy libs.
-            # Numpy usually comes with OpenBlas, and Numpy is probably loaded anyway.
-            # Even do this before the other libs below, as it is likely
-            # that this OpenBlas lib is correctly initialized already.
-            import numpy
-
-            numpy_dir = os.path.dirname(numpy.__file__)
-            if os.path.exists("%s/.libs" % numpy_dir):
-                ld_flags += ["-L%s/.libs" % numpy_dir]
-                from glob import glob
-
-                for f in glob("%s/.libs/*.so" % numpy_dir):
-                    f = os.path.basename(f)
-                    if self.blas_lib is not None and self.blas_lib not in f:
-                        continue
-                    if f.startswith("lib"):
-                        f = f[3:]
-                    if f.endswith(".so"):
-                        f = f[:-3]
-                    ld_flags += ["-l%s" % f]
-                    have_blas_lib = True
-        if not have_blas_lib and self.search_for_system_blas:
-            # Try to just link against blas/f77blas
-            # (both can potentially have the symbol) if it finds the lib.
-            if find_lib("blas"):
-                ld_flags += ["-lblas"]
-                have_blas_lib = True
-            if find_lib("f77blas"):
-                ld_flags += ["-lf77blas"]
-                have_blas_lib = True
-        if not have_blas_lib:
-            print("WARNING: OpMaker: no BLAS lib found")
         comp = tf_util.OpCodeCompiler(
             base_name=self.name,
             code_version=self.description.code_version,
             code=self._make_code(),
             include_deps=[self.support_native_op_cpp_filename],
             ld_flags=ld_flags,
+            c_macro_defines=c_macro_defines,
             use_cuda_if_available=self.with_cuda,
             log_stream=self.log_stream,
             **dict(self.compiler_opts),

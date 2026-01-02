@@ -410,6 +410,9 @@ static void tf_cuda_sgemm_batched(
 
 
 #else  // CUDA
+
+#ifdef HAVE_CUSTOM_BLAS
+
 /*
     // matrices are in column-major form
 	int sgemm_(char *transa, char *transb,
@@ -427,6 +430,75 @@ static void tf_cuda_sgemm_batched(
 		sgemm_(&transa, &transb, \
 			&m_, &n_, &k_, alpha, A, &lda_, B, &ldb_, beta, C, &ldc_); \
 	}
+
+#else  // HAVE_CUSTOM_BLAS
+
+template<typename T>
+static void tf_cpu_sgemm(
+    OpKernelContext* context,
+    char transa_, char transb_,
+    int m, int n, int k,
+    const T* alpha_ptr, const T* a_ptr, int lda,
+    const T* b_ptr, int ldb, const T* beta_ptr,
+    T* c_ptr, int ldc)
+{
+    if (m <= 0 || n <= 0 || k <= 0) return;
+
+    auto d = context->eigen_cpu_device();
+    const T alpha = *alpha_ptr;
+    const T beta = *beta_ptr;
+
+    bool transa = (transa_ == 'T' || transa_ == 't' || transa_ == 'C' || transa_ == 'c');
+    bool transb = (transb_ == 'T' || transb_ == 't' || transb_ == 'C' || transb_ == 'c');
+
+    // 1. Map as COLUMN-MAJOR
+    // Physical rows (height) for the Map is always the leading dimension (lda, ldb, ldc)
+    typedef Eigen::TensorMap<Eigen::Tensor<const T, 2, Eigen::ColMajor>, Eigen::Unaligned> ConstMap;
+    typedef Eigen::TensorMap<Eigen::Tensor<T, 2, Eigen::ColMajor>, Eigen::Unaligned> MutableMap;
+
+    // Logical height/width of slices before any transposition
+    int a_slice_rows = transa ? k : m;
+    int a_slice_cols = transa ? m : k;
+    int b_slice_rows = transb ? n : k;
+    int b_slice_cols = transb ? k : n;
+
+    // Map and Slice
+    auto a = ConstMap(a_ptr, lda, a_slice_cols).slice(
+        Eigen::array<Eigen::Index, 2>({0, 0}),
+        Eigen::array<Eigen::Index, 2>({(Eigen::Index)a_slice_rows, (Eigen::Index)a_slice_cols}));
+
+    auto b = ConstMap(b_ptr, ldb, b_slice_cols).slice(
+        Eigen::array<Eigen::Index, 2>({0, 0}),
+        Eigen::array<Eigen::Index, 2>({(Eigen::Index)b_slice_rows, (Eigen::Index)b_slice_cols}));
+
+    auto c = MutableMap(c_ptr, ldc, n).slice(
+        Eigen::array<Eigen::Index, 2>({0, 0}),
+        Eigen::array<Eigen::Index, 2>({(Eigen::Index)m, (Eigen::Index)n}));
+
+    // 2. Define Contraction Pairs based on Transposition
+    // Column-Major Matrix Mult: (M x K) * (K x N)
+    // Standard: Contract Axis 1 of A with Axis 0 of B
+    // If A is Transposed: A is (K x M), contract Axis 0 of A
+    // If B is Transposed: B is (N x K), contract Axis 1 of B
+    Eigen::array<Eigen::IndexPair<int>, 1> pairs;
+    pairs[0] = Eigen::IndexPair<int>(transa ? 0 : 1, transb ? 1 : 0);
+
+    // 3. Execution
+    if (alpha == T(1) && beta == T(0)) {
+        c.device(d) = a.contract(b, pairs);
+    } else if (alpha == T(1) && beta == T(1)) {
+        c.device(d) += a.contract(b, pairs);
+    } else {
+        c.device(d) = a.contract(b, pairs) * alpha + c * beta;
+    }
+}
+
+#define Ndarray_sgemm(\
+	transpose_A, transpose_B, \
+	m, n, k, alpha, A, lda, B, ldb, beta, C, ldc) \
+    tf_cpu_sgemm<float>(context, transpose_A, transpose_B, m, n, k, alpha, A, lda, B, ldb, beta, C, ldc);
+
+#endif  // HAVE_CUSTOM_BLAS
 #endif  // CUDA
 
 // See Context struct below.
