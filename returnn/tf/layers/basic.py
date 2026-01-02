@@ -7371,7 +7371,7 @@ class TransposedConvLayer(_ConcatInputLayer):
         """
         from returnn.tf.util.basic import get_initializer, get_activation_function, get_shape
 
-        super(TransposedConvLayer, self).__init__(**kwargs)
+        super(TransposedConvLayer, self).__init__(in_dim=in_dim, **kwargs)
         out_dim  # noqa  # via get_out_data_from_opts
         assert not self.input_data.sparse
         assert self.input_data.have_batch_axis()

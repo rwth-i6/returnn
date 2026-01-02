@@ -424,6 +424,39 @@ class TransposedConv1d(_TransposedConv):
 
     nd = 1
 
+    def __init__(
+        self,
+        in_dim: Dim,
+        out_dim: Dim,
+        filter_size: Union[int, Dim],
+        *,
+        padding: str,
+        remove_padding: int = 0,
+        output_padding: Optional[int] = None,
+        strides: Optional[int] = None,
+        with_bias: bool = True,
+    ):
+        """
+        :param in_dim:
+        :param out_dim:
+        :param filter_size:
+        :param strides: specifies the upscaling. by default, same as filter_size
+        :param padding: "same" or "valid"
+        :param remove_padding:
+        :param output_padding:
+        :param with_bias: whether to add a bias. enabled by default
+        """
+        super().__init__(
+            in_dim=in_dim,
+            out_dim=out_dim,
+            filter_size=[filter_size],
+            padding=padding,
+            remove_padding=remove_padding,
+            output_padding=output_padding,
+            strides=[strides] if strides is not None else None,
+            with_bias=with_bias,
+        )
+
     __call__ = _ConvOrTransposedConv._call_nd1
 
 

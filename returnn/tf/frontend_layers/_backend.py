@@ -1067,14 +1067,16 @@ class ReturnnLayersBackend(Backend[Layer]):
                 s = filter_size[i].dimension if not strides else strides[i]
                 if filter_size[i].dimension == s == 1 or (s == 1 and padding.lower() == "same"):
                     out_spatial_dims[i] = in_spatial_dims[i]
-        layer_dict = {
+        assert all(size.is_static() for size in filter_size)
+        layer_dict: Dict[str, Any] = {
             "class": "transposed_conv",
             "from": source,
             "in_dim": in_dim,
             "in_spatial_dims": in_spatial_dims,
             "out_dim": out_dim,
             "out_spatial_dims": out_spatial_dims,
-            "filter_size": filter_size,
+            "filter_size": [size.dimension for size in filter_size],
+            "filter_perm": list(filter_size) + [out_dim, in_dim],
             "padding": padding,
         }
         if remove_padding:
