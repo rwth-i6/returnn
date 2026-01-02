@@ -2784,6 +2784,10 @@ class CudaEnv:
             self.cuda_path = None
             if self.verbose_find_cuda:
                 print("CUDA disabled via env DISABLE_CUDA.")
+        elif os.environ.get("CUDA_VISIBLE_DEVICES", None) in ["", "-1"]:
+            self.cuda_path = None
+            if self.verbose_find_cuda:
+                print(f"CUDA disabled via env CUDA_VISIBLE_DEVICES={os.environ['CUDA_VISIBLE_DEVICES']!r}.")
         else:
             self.cuda_path = self._find_cuda_path()
             if self.verbose_find_cuda:
