@@ -4428,7 +4428,7 @@ def help_on_tf_exception(
                     data = extern_data.data[data_key]
                     info += ", %s" % data
             print("  %r: %s" % (key, info), file=file)
-            if data and data.sparse:
+            if data is not None and data.sparse:
                 if v_minmax[0] < 0 or v_minmax[1] >= data.dim:
                     print("  WARNING, invalid label for data", data, file=file)
     elif feed_dict is None:
